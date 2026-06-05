@@ -11,6 +11,7 @@ Current implementation target:
 - TypeScript admin/control UI
 - declarative service provider manifests
 - OpenClaw-native `clawrouter-` key routing
+- Cloudflare KV-backed key policy and revocation
 
 ## Provider Registry
 
@@ -38,3 +39,30 @@ Validate the catalog with:
 ```sh
 cargo run -p clawrouter -- provider compile providers/*.provider.yaml
 ```
+
+## Edge Proxy
+
+The Worker currently exposes:
+
+- `GET /v1/health`
+- `GET /v1/providers`
+- `GET /v1/key/inspect`
+- `POST /v1/chat/completions`
+- `POST /v1/responses`
+- `POST /v1/embeddings`
+
+OpenAI-compatible proxy requests route by the request body `model` field, for
+example `openai/gpt-5.5-mini`. Before an upstream provider secret is used, the
+Worker checks `POLICY_KV` at `keys/<kid>` for:
+
+```json
+{
+  "enabled": true,
+  "secretSha256": "<sha256 of key secret>",
+  "providers": ["openai"]
+}
+```
+
+Flip `enabled` to `false` to revoke a key without rotating upstream provider
+credentials. See `docs/deploy-cloudflare.md` for Cloudflare provisioning,
+deployment, key registration, and smoke commands.

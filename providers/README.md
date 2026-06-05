@@ -43,6 +43,7 @@ capabilities:
 endpoints:
   rest:
     path: /v1/${path}
+    pathParams: [path]
     requestFormat: example.rest
     responseFormat: example.rest
 billing:

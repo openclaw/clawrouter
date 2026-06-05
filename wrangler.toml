@@ -1,5 +1,5 @@
 name = "clawrouter-edge"
-main = "crates/edge/build/worker/shim.mjs"
+main = "crates/edge/build/index.js"
 compatibility_date = "2026-06-05"
 
 [build]
@@ -8,8 +8,3 @@ command = "cargo install -q worker-build --version 0.8.3 && ${HOME}/.cargo/bin/w
 [[queues.producers]]
 binding = "USAGE_QUEUE"
 queue = "clawrouter-usage"
-
-[[kv_namespaces]]
-binding = "POLICY_KV"
-id = "00000000000000000000000000000000"
-preview_id = "00000000000000000000000000000000"

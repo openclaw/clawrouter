@@ -39,16 +39,26 @@ pub fn parse_proxy_key(input: &str) -> Result<ProxyKeyParts, KeyError> {
 
 fn parse_dash_key(rest: &str, mode: KeyMode) -> Result<ProxyKeyParts, KeyError> {
     let (kid, secret) = rest.split_once('-').ok_or(KeyError::Malformed)?;
-    finish(mode, kid, secret)
+    finish(mode, kid, secret, b'-')
 }
 
 fn parse_underscore_key(rest: &str, mode: KeyMode) -> Result<ProxyKeyParts, KeyError> {
     let (kid, secret) = rest.split_once('_').ok_or(KeyError::Malformed)?;
-    finish(mode, kid, secret)
+    finish(mode, kid, secret, b'_')
 }
 
-fn finish(mode: KeyMode, kid: &str, secret: &str) -> Result<ProxyKeyParts, KeyError> {
-    if kid.len() < 4 || secret.len() < 8 || !is_tokenish(kid) || !is_tokenish(secret) {
+fn finish(
+    mode: KeyMode,
+    kid: &str,
+    secret: &str,
+    kid_delimiter: u8,
+) -> Result<ProxyKeyParts, KeyError> {
+    if kid.len() < 4
+        || secret.len() < 8
+        || !is_tokenish(kid)
+        || kid.bytes().any(|b| b == kid_delimiter)
+        || !is_tokenish(secret)
+    {
         return Err(KeyError::Malformed);
     }
     Ok(ProxyKeyParts {
@@ -89,6 +99,22 @@ mod tests {
         assert_eq!(
             parse_proxy_key("sk-not-clawrouter").unwrap_err(),
             KeyError::UnsupportedPrefix
+        );
+    }
+
+    #[test]
+    fn rejects_dash_delimited_kid_with_dash() {
+        assert_eq!(
+            parse_proxy_key("clawrouter-live-ab-12cd-secret_1234").unwrap_err(),
+            KeyError::Malformed
+        );
+    }
+
+    #[test]
+    fn rejects_underscore_delimited_kid_with_underscore() {
+        assert_eq!(
+            parse_proxy_key("ocpk_test_ab_12cd_secret-1234").unwrap_err(),
+            KeyError::Malformed
         );
     }
 }

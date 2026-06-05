@@ -5,10 +5,15 @@
   "scripts": {
     "check": "pnpm --dir admin check && cargo test --workspace",
     "build": "pnpm --dir admin build && cargo build --workspace",
-    "provider:compile": "cargo run -p clawrouter -- provider compile providers/*.provider.yaml"
+    "provider:compile": "cargo run -p clawrouter -- provider compile providers/*.provider.yaml",
+    "cf:config": "node scripts/render-wrangler-config.mjs",
+    "cf:provision": "node scripts/provision-cloudflare.mjs",
+    "cf:deploy": "pnpm cf:config && wrangler deploy --config .wrangler.generated.toml",
+    "cf:key:put": "node scripts/key-put.mjs",
+    "cf:key:revoke": "node scripts/key-revoke.mjs",
+    "cf:smoke": "node scripts/smoke-deployed.mjs"
   },
   "devDependencies": {
     "wrangler": "^4.98.0"
   }
 }
-
