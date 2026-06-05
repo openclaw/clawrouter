@@ -16,3 +16,7 @@ class_name = "BudgetLedgerObject"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["BudgetLedgerObject"]
+
+[[routes]]
+pattern = "clawrouter.openclaw.ai"
+custom_domain = true

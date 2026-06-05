@@ -26,6 +26,9 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     if req.method() == Method::Options && cors_enabled_path(url.path()) {
         return cors_preflight();
     }
+    if req.method() == Method::Get && matches!(url.path(), "/" | "/v1") {
+        return service_index().and_then(with_cors);
+    }
     if req.method() == Method::Get && url.path() == "/v1/health" {
         return Response::from_json(&serde_json::json!({
             "ok": true,
@@ -65,6 +68,26 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         }
     }))
     .map(|resp| resp.with_status(404))
+}
+
+fn service_index() -> Result<Response> {
+    Response::from_json(&serde_json::json!({
+        "ok": true,
+        "service": "clawrouter-edge",
+        "runtime": "rust-wasm",
+        "endpoints": {
+            "health": "/v1/health",
+            "providers": "/v1/providers",
+            "keyInspect": "/v1/key/inspect",
+            "openaiCompatible": [
+                "/v1/chat/completions",
+                "/v1/responses",
+                "/v1/embeddings",
+                "/v1/images/generations"
+            ],
+            "manifestProxy": "/v1/proxy/{provider}/{endpoint}"
+        }
+    }))
 }
 
 async fn proxy_openai_compatible(mut req: Request, env: Env, path: &str) -> Result<Response> {
