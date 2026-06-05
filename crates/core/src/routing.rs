@@ -11,6 +11,9 @@ pub fn match_model(pattern: &str, model: &str) -> bool {
     if pattern == "*" || pattern == model {
         return true;
     }
+    if pattern.ends_with('/') {
+        return model.starts_with(pattern);
+    }
     let parts: Vec<&str> = pattern.split('*').collect();
     if parts.len() == 1 {
         return pattern == model;
@@ -36,8 +39,11 @@ mod tests {
 
     #[test]
     fn matches_provider_prefixes() {
+        assert!(match_model("openai/", "openai/gpt-5.5-mini"));
+        assert!(match_model("tavily/", "tavily/search"));
         assert!(match_model("openai/gpt-*", "openai/gpt-5.5-mini"));
         assert!(match_model("minimax/*", "minimax/MiniMax-M3"));
+        assert!(!match_model("openai/", "openrouter/auto"));
         assert!(!match_model("openai/*", "tavily/search"));
     }
 }
