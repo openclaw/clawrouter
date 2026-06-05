@@ -35,6 +35,7 @@ capabilities:
 endpoints:
   universal:
     path: /v1/${account}/${gateway}
+    pathParams: [account, gateway]
     requestFormat: cloudflare_ai_gateway.universal
     responseFormat: provider.native
     streaming: sse

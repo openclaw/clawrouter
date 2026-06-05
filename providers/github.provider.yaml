@@ -32,6 +32,7 @@ capabilities:
 endpoints:
   rest:
     path: /${path}
+    pathParams: [path]
     requestFormat: github.rest
     responseFormat: github.rest
     timeoutMs: 120000

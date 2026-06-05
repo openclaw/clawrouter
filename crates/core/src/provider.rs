@@ -339,6 +339,12 @@ pub enum ProviderError {
     MissingCapabilities(String),
     #[error("provider {provider} endpoint {endpoint} path must start with /")]
     InvalidEndpointPath { provider: String, endpoint: String },
+    #[error("provider {provider} endpoint {endpoint} path parameter {param} is not declared")]
+    MissingPathParam {
+        provider: String,
+        endpoint: String,
+        param: String,
+    },
     #[error("provider {provider} capability {capability} references missing endpoint {endpoint}")]
     MissingEndpoint {
         provider: String,
@@ -385,6 +391,19 @@ pub fn validate_provider_manifest(manifest: &ProviderManifest) -> Result<(), Pro
                 provider: manifest.id.clone(),
                 endpoint: endpoint_id.clone(),
             });
+        }
+        for param in template_placeholders(&endpoint.path) {
+            if !endpoint
+                .path_params
+                .iter()
+                .any(|declared| declared == &param)
+            {
+                return Err(ProviderError::MissingPathParam {
+                    provider: manifest.id.clone(),
+                    endpoint: endpoint_id.clone(),
+                    param,
+                });
+            }
         }
     }
     let capability_ids: BTreeSet<_> = manifest
@@ -566,6 +585,23 @@ fn effective_capability_methods(
         .get(&capability.endpoint)
         .map(|endpoint| vec![endpoint.method.clone()])
         .unwrap_or_else(|| vec![default_post()])
+}
+
+fn template_placeholders(template: &str) -> Vec<String> {
+    let mut params = Vec::new();
+    let mut rest = template;
+    while let Some(start) = rest.find("${") {
+        let after_start = &rest[start + 2..];
+        let Some(end) = after_start.find('}') else {
+            break;
+        };
+        let param = &after_start[..end];
+        if !param.is_empty() {
+            params.push(param.to_string());
+        }
+        rest = &after_start[end + 1..];
+    }
+    params
 }
 
 #[cfg(test)]
@@ -781,5 +817,35 @@ endpoints:
             vec!["POST"]
         );
         assert_eq!(snapshot.providers[0].capabilities[0].methods, vec!["POST"]);
+    }
+
+    #[test]
+    fn rejects_undeclared_path_template_params() {
+        let manifest: ProviderManifest = serde_yaml::from_str(
+            r#"
+schema: clawrouter.service-provider.v1
+id: bad-path
+displayName: Bad Path
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://example.com
+capabilities:
+  - id: tool.invoke
+    endpoint: rest
+endpoints:
+  rest:
+    path: /v1/${path}
+    requestFormat: rest_json
+    responseFormat: rest_json
+"#,
+        )
+        .unwrap();
+        let error = validate_provider_manifest(&manifest).unwrap_err();
+        assert!(matches!(error, ProviderError::MissingPathParam { .. }));
     }
 }
