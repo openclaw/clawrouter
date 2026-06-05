@@ -249,8 +249,16 @@ pub struct CompiledProvider {
     pub adapter: AdapterConfig,
     pub capabilities: Vec<String>,
     pub endpoints: Vec<CompiledEndpoint>,
-    pub models: Vec<String>,
+    pub models: Vec<CompiledModel>,
     pub meter: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompiledModel {
+    pub id: String,
+    pub upstream: String,
+    pub capabilities: Vec<String>,
+    pub pricing_ref: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -268,7 +276,15 @@ pub struct ProviderSnapshot {
     pub version: String,
     pub providers: Vec<CompiledProvider>,
     pub capability_index: BTreeMap<String, Vec<String>>,
-    pub model_index: BTreeMap<String, String>,
+    pub model_index: BTreeMap<String, ModelRoute>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct ModelRoute {
+    pub provider: String,
+    pub upstream: String,
+    pub capabilities: Vec<String>,
+    pub pricing_ref: Option<String>,
 }
 
 #[derive(Debug, Error)]
@@ -382,7 +398,15 @@ pub fn compile_provider_snapshot(
             if !seen_models.insert(model.id.clone()) {
                 return Err(ProviderError::DuplicateModel(model.id.clone()));
             }
-            model_index.insert(model.id.clone(), manifest.id.clone());
+            model_index.insert(
+                model.id.clone(),
+                ModelRoute {
+                    provider: manifest.id.clone(),
+                    upstream: model.upstream.clone(),
+                    capabilities: model.capabilities.clone(),
+                    pricing_ref: model.pricing_ref.clone(),
+                },
+            );
         }
         let endpoints = manifest
             .endpoints
@@ -421,7 +445,12 @@ pub fn compile_provider_snapshot(
                 .models
                 .entries
                 .iter()
-                .map(|model| model.id.clone())
+                .map(|model| CompiledModel {
+                    id: model.id.clone(),
+                    upstream: model.upstream.clone(),
+                    capabilities: model.capabilities.clone(),
+                    pricing_ref: model.pricing_ref.clone(),
+                })
                 .collect(),
             meter: manifest.billing.meter.clone(),
         });
@@ -492,7 +521,8 @@ models:
         .unwrap();
         let snapshot = compile_provider_snapshot(&[manifest]).unwrap();
         assert_eq!(snapshot.capability_index["web.search"], vec!["tavily"]);
-        assert_eq!(snapshot.model_index["tavily/search"], "tavily");
+        assert_eq!(snapshot.model_index["tavily/search"].provider, "tavily");
+        assert_eq!(snapshot.model_index["tavily/search"].upstream, "search");
     }
 
     #[test]
