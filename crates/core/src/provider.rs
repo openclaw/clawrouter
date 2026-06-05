@@ -3,6 +3,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProviderManifest {
     pub schema: String,
     pub id: String,
@@ -73,6 +74,7 @@ pub enum ServiceKind {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ServiceBinding {
     #[serde(default)]
     pub platform: Option<String>,
@@ -87,13 +89,14 @@ pub struct ServiceBinding {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AuthConfig {
     #[serde(default)]
     pub schemes: Vec<AuthScheme>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(tag = "type", rename_all = "snake_case")]
+#[serde(tag = "type", rename_all = "snake_case", deny_unknown_fields)]
 pub enum AuthScheme {
     Bearer {
         header: String,
@@ -128,6 +131,7 @@ pub enum AuthScheme {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct RoutingConfig {
     #[serde(rename = "nativePrefixes", default)]
     pub native_prefixes: Vec<String>,
@@ -140,6 +144,7 @@ pub struct RoutingConfig {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AdapterConfig {
     #[serde(default)]
     pub request: Option<String>,
@@ -158,6 +163,7 @@ pub struct AdapterConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Capability {
     pub id: String,
     pub endpoint: String,
@@ -166,6 +172,7 @@ pub struct Capability {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Endpoint {
     pub path: String,
     #[serde(default = "default_post")]
@@ -189,12 +196,14 @@ pub struct Endpoint {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ModelCatalog {
     #[serde(default)]
     pub entries: Vec<ModelEntry>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ModelEntry {
     pub id: String,
     pub upstream: String,
@@ -205,6 +214,7 @@ pub struct ModelEntry {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct BillingConfig {
     #[serde(default)]
     pub meter: Option<String>,
@@ -215,6 +225,7 @@ pub struct BillingConfig {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct MeterCounter {
     pub name: String,
     pub source: String,
@@ -223,12 +234,14 @@ pub struct MeterCounter {
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ProviderTests {
     #[serde(default)]
     pub fixtures: Vec<TestFixture>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct TestFixture {
     pub name: String,
     pub request: String,
@@ -576,5 +589,36 @@ models:
             error,
             ProviderError::MissingModelCapability { .. }
         ));
+    }
+
+    #[test]
+    fn rejects_unknown_manifest_fields() {
+        let error = serde_yaml::from_str::<ProviderManifest>(
+            r#"
+schema: clawrouter.service-provider.v1
+id: typo
+displayName: Typo
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://example.com
+routing:
+  modelPrefix: [typo/]
+capabilities:
+  - id: llm.chat
+    endpoint: chat
+endpoints:
+  chat:
+    path: /v1/chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+"#,
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("unknown field"));
     }
 }
