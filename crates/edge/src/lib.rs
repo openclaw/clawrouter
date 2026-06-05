@@ -14,26 +14,40 @@ use worker::*;
 const PROVIDER_SNAPSHOT: &str = include_str!(concat!(env!("OUT_DIR"), "/provider-snapshot.json"));
 static USAGE_EVENT_COUNTER: AtomicU64 = AtomicU64::new(0);
 const MAX_SQL_BUDGET_MICROS: u64 = 9_007_199_254_740_991;
+const CORS_ALLOW_ORIGIN: &str = "*";
+const CORS_ALLOW_METHODS: &str = "GET,POST,PUT,OPTIONS";
+const CORS_ALLOW_HEADERS: &str = "authorization,content-type,x-request-id";
+const CORS_MAX_AGE: &str = "600";
 type HmacSha256 = Hmac<Sha256>;
 
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     let url = req.url()?;
+    if req.method() == Method::Options && cors_enabled_path(url.path()) {
+        return cors_preflight();
+    }
     if req.method() == Method::Get && url.path() == "/v1/health" {
         return Response::from_json(&serde_json::json!({
             "ok": true,
             "service": "clawrouter-edge",
             "runtime": "rust-wasm"
-        }));
+        }))
+        .and_then(with_cors);
     }
 
     if req.method() == Method::Get && url.path() == "/v1/providers" {
         let snapshot = provider_snapshot()?;
-        return Response::from_json(&snapshot);
+        return Response::from_json(&snapshot).and_then(with_cors);
+    }
+
+    if url.path().starts_with("/v1/admin/") {
+        return admin_api(req, env, url.path()).await.and_then(with_cors);
     }
 
     if url.path() == "/v1/key/inspect" {
-        return inspect_proxy_key(req.headers(), &env).await;
+        return inspect_proxy_key(req.headers(), &env)
+            .await
+            .and_then(with_cors);
     }
 
     if req.method() == Method::Post && is_openai_compatible_path(url.path()) {
@@ -301,7 +315,7 @@ async fn proxy_manifest_endpoint(mut req: Request, env: Env, path: &str) -> Resu
     Ok(response)
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct KeyPolicy {
     enabled: bool,
@@ -313,6 +327,33 @@ struct KeyPolicy {
     #[serde(default)]
     monthly_budget_micros: Option<u64>,
     #[serde(default)]
+    request_cost_micros: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AdminKeyPolicyRequest {
+    secret_sha256: String,
+    #[serde(default)]
+    providers: Vec<String>,
+    #[serde(default)]
+    tenant_id: Option<String>,
+    #[serde(default)]
+    monthly_budget_micros: Option<u64>,
+    #[serde(default)]
+    request_cost_micros: Option<u64>,
+    #[serde(default = "default_true")]
+    enabled: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AdminKeyPolicyResponse {
+    kid: String,
+    enabled: bool,
+    providers: Vec<String>,
+    tenant_id: Option<String>,
+    monthly_budget_micros: Option<u64>,
     request_cost_micros: Option<u64>,
 }
 
@@ -335,6 +376,91 @@ struct AuthorizedKey {
 enum AuthOutcome {
     Allowed(AuthorizedKey),
     Denied(Response),
+}
+
+async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
+    if let Some(response) = authorize_admin(req.headers(), &env)? {
+        return Ok(response);
+    }
+    let kv = match env.kv("POLICY_KV") {
+        Ok(kv) => kv,
+        Err(_) => {
+            return json_error(
+                "policy_store_unavailable",
+                "POLICY_KV binding is required for admin requests",
+                503,
+            );
+        }
+    };
+
+    if req.method() == Method::Get && path == "/v1/admin/keys" {
+        let entries = list_admin_key_policies(&kv).await?;
+        return Response::from_json(&serde_json::json!({ "keys": entries }));
+    }
+
+    let Some(rest) = path.strip_prefix("/v1/admin/keys/") else {
+        return json_error("route_not_found", "route not found", 404);
+    };
+    if req.method() == Method::Put {
+        let kid = match validate_admin_kid(rest) {
+            Ok(kid) => kid,
+            Err(message) => return json_error("invalid_admin_key", message, 400),
+        };
+        let request = match serde_json::from_str::<AdminKeyPolicyRequest>(&req.text().await?) {
+            Ok(request) => request,
+            Err(error) => {
+                return json_error(
+                    "invalid_admin_request",
+                    &format!("request body must be a JSON policy: {error}"),
+                    400,
+                );
+            }
+        };
+        let policy = match request.try_into_policy() {
+            Ok(policy) => policy,
+            Err(message) => return json_error("invalid_admin_policy", message, 400),
+        };
+        if let Err(message) = validate_policy_providers(&policy) {
+            return json_error("invalid_admin_policy", &message, 400);
+        }
+        let value = serde_json::to_string(&policy)?;
+        kv.put(&format!("keys/{kid}"), value)
+            .map_err(|error| Error::RustError(format!("failed to prepare key policy: {error}")))?
+            .execute()
+            .await
+            .map_err(|error| Error::RustError(format!("failed to write key policy: {error}")))?;
+        return Response::from_json(&admin_policy_response(&kid, &policy));
+    }
+
+    if req.method() == Method::Post {
+        let Some(kid) = rest.strip_suffix("/revoke") else {
+            return json_error("route_not_found", "route not found", 404);
+        };
+        let kid = match validate_admin_kid(kid.trim_end_matches('/')) {
+            Ok(kid) => kid,
+            Err(message) => return json_error("invalid_admin_key", message, 400),
+        };
+        let Some(record) = kv
+            .get(&format!("keys/{kid}"))
+            .text()
+            .await
+            .map_err(|error| Error::RustError(format!("failed to read key policy: {error}")))?
+        else {
+            return json_error("unknown_proxy_key", "proxy key is not registered", 404);
+        };
+        let mut policy = serde_json::from_str::<KeyPolicy>(&record)
+            .map_err(|error| Error::RustError(format!("key policy is invalid JSON: {error}")))?;
+        policy.enabled = false;
+        let value = serde_json::to_string(&policy)?;
+        kv.put(&format!("keys/{kid}"), value)
+            .map_err(|error| Error::RustError(format!("failed to prepare key policy: {error}")))?
+            .execute()
+            .await
+            .map_err(|error| Error::RustError(format!("failed to write key policy: {error}")))?;
+        return Response::from_json(&admin_policy_response(&kid, &policy));
+    }
+
+    json_error("method_not_allowed", "admin method is not allowed", 405)
 }
 
 async fn inspect_proxy_key(headers: &Headers, env: &Env) -> Result<Response> {
@@ -384,6 +510,182 @@ fn key_verification(secret: &str, policy: &KeyPolicy) -> &'static str {
     (sha256_hex(secret) == policy.secret_sha256)
         .then_some("verified")
         .unwrap_or("invalid_secret")
+}
+
+impl AdminKeyPolicyRequest {
+    fn try_into_policy(self) -> std::result::Result<KeyPolicy, &'static str> {
+        if !is_sha256_hex(&self.secret_sha256) {
+            return Err("secretSha256 must be a 64-character hex string");
+        }
+        if self.providers.is_empty() {
+            return Err("providers must contain at least one provider id");
+        }
+        if let Some(value) = self.monthly_budget_micros {
+            validate_admin_budget(value, "monthlyBudgetMicros")?;
+        }
+        if let Some(value) = self.request_cost_micros {
+            validate_admin_budget(value, "requestCostMicros")?;
+        }
+        Ok(KeyPolicy {
+            enabled: self.enabled,
+            secret_sha256: self.secret_sha256.to_ascii_lowercase(),
+            providers: self.providers,
+            tenant_id: self.tenant_id,
+            monthly_budget_micros: self.monthly_budget_micros,
+            request_cost_micros: self.request_cost_micros,
+        })
+    }
+}
+
+fn validate_admin_budget(value: u64, name: &'static str) -> std::result::Result<(), &'static str> {
+    (value <= MAX_SQL_BUDGET_MICROS)
+        .then_some(())
+        .ok_or(match name {
+            "monthlyBudgetMicros" => "monthlyBudgetMicros exceeds the durable ledger limit",
+            "requestCostMicros" => "requestCostMicros exceeds the durable ledger limit",
+            _ => "budget value exceeds the durable ledger limit",
+        })
+}
+
+fn validate_policy_providers(policy: &KeyPolicy) -> std::result::Result<(), String> {
+    if policy.providers.is_empty() {
+        return Ok(());
+    }
+    let snapshot = provider_snapshot().map_err(|error| error.to_string())?;
+    for provider_id in &policy.providers {
+        if !snapshot
+            .providers
+            .iter()
+            .any(|provider| provider.id == *provider_id)
+        {
+            return Err(format!("unknown provider `{provider_id}`"));
+        }
+    }
+    Ok(())
+}
+
+fn validate_admin_kid(value: &str) -> std::result::Result<String, &'static str> {
+    if value.len() < 4
+        || value.contains('/')
+        || !value
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_')
+    {
+        return Err(
+            "key id must be at least 4 alphanumeric or underscore characters and must not contain `-` or `/`",
+        );
+    }
+    Ok(value.to_string())
+}
+
+fn is_sha256_hex(value: &str) -> bool {
+    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+}
+
+fn admin_policy_response(kid: &str, policy: &KeyPolicy) -> AdminKeyPolicyResponse {
+    AdminKeyPolicyResponse {
+        kid: kid.to_string(),
+        enabled: policy.enabled,
+        providers: policy.providers.clone(),
+        tenant_id: policy.tenant_id.clone(),
+        monthly_budget_micros: policy.monthly_budget_micros,
+        request_cost_micros: policy.request_cost_micros,
+    }
+}
+
+async fn list_admin_key_policies(kv: &KvStore) -> Result<Vec<AdminKeyPolicyResponse>> {
+    let mut entries = Vec::new();
+    let mut cursor = None;
+    loop {
+        let mut request = kv.list().prefix("keys/".to_string()).limit(1000);
+        if let Some(next_cursor) = cursor.take() {
+            request = request.cursor(next_cursor);
+        }
+        let list = request
+            .execute()
+            .await
+            .map_err(|error| Error::RustError(format!("failed to list key policies: {error}")))?;
+        for key in list.keys {
+            let Some(kid) = key.name.strip_prefix("keys/") else {
+                continue;
+            };
+            let Some(record) =
+                kv.get(&key.name).text().await.map_err(|error| {
+                    Error::RustError(format!("failed to read key policy: {error}"))
+                })?
+            else {
+                continue;
+            };
+            let policy = serde_json::from_str::<KeyPolicy>(&record).map_err(|error| {
+                Error::RustError(format!("key policy is invalid JSON: {error}"))
+            })?;
+            entries.push(admin_policy_response(kid, &policy));
+        }
+        if list.list_complete {
+            break;
+        }
+        let Some(next_cursor) = list.cursor else {
+            break;
+        };
+        cursor = Some(next_cursor);
+    }
+    entries.sort_by(|a, b| a.kid.cmp(&b.kid));
+    Ok(entries)
+}
+
+fn authorize_admin(headers: &Headers, env: &Env) -> Result<Option<Response>> {
+    let expected_hash = match admin_token_hash(env) {
+        Ok(value) => value,
+        Err(_) => {
+            return json_error(
+                "admin_auth_unconfigured",
+                "CLAWROUTER_ADMIN_TOKEN_SHA256 is required for admin requests",
+                503,
+            )
+            .map(Some);
+        }
+    };
+    if !is_sha256_hex(&expected_hash) {
+        return json_error(
+            "admin_auth_misconfigured",
+            "CLAWROUTER_ADMIN_TOKEN_SHA256 must be a 64-character hex string",
+            500,
+        )
+        .map(Some);
+    }
+    let auth = headers.get("authorization")?.unwrap_or_default();
+    let token = auth.strip_prefix("Bearer ").unwrap_or("");
+    if token.is_empty()
+        || !constant_time_eq(&sha256_hex(token), &expected_hash.to_ascii_lowercase())
+    {
+        return json_error(
+            "invalid_admin_token",
+            "a valid ClawRouter admin token is required",
+            401,
+        )
+        .map(Some);
+    }
+    Ok(None)
+}
+
+fn admin_token_hash(env: &Env) -> Result<String> {
+    if let Ok(secret) = env.secret("CLAWROUTER_ADMIN_TOKEN_SHA256") {
+        return Ok(secret.to_string());
+    }
+    env.var("CLAWROUTER_ADMIN_TOKEN_SHA256")
+        .map(|value| value.to_string())
+}
+
+fn constant_time_eq(left: &str, right: &str) -> bool {
+    if left.len() != right.len() {
+        return false;
+    }
+    let diff = left
+        .as_bytes()
+        .iter()
+        .zip(right.as_bytes())
+        .fold(0_u8, |acc, (a, b)| acc | (a ^ b));
+    diff == 0
 }
 
 fn default_true() -> bool {
@@ -1878,6 +2180,31 @@ fn json_error(code: &str, message: &str, status: u16) -> Result<Response> {
     .map(|response| response.with_status(status))
 }
 
+fn cors_preflight() -> Result<Response> {
+    with_cors(Response::empty()?.with_status(204))
+}
+
+fn cors_enabled_path(path: &str) -> bool {
+    matches!(path, "/v1/health" | "/v1/providers" | "/v1/key/inspect")
+        || path.starts_with("/v1/admin/")
+}
+
+fn with_cors(mut response: Response) -> Result<Response> {
+    response
+        .headers_mut()
+        .set("access-control-allow-origin", CORS_ALLOW_ORIGIN)?;
+    response
+        .headers_mut()
+        .set("access-control-allow-methods", CORS_ALLOW_METHODS)?;
+    response
+        .headers_mut()
+        .set("access-control-allow-headers", CORS_ALLOW_HEADERS)?;
+    response
+        .headers_mut()
+        .set("access-control-max-age", CORS_MAX_AGE)?;
+    Ok(response)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2098,6 +2425,93 @@ mod tests {
         assert!(inspect_policy_for_response("verified", &policy).is_some());
         assert!(inspect_policy_for_response("invalid_secret", &policy).is_none());
         assert_eq!(policy.request_cost_micros, Some(10));
+    }
+
+    #[test]
+    fn admin_policy_validation_accepts_known_provider_hashes() {
+        let request = AdminKeyPolicyRequest {
+            enabled: true,
+            secret_sha256: sha256_hex("secret"),
+            providers: vec!["openai".to_string(), "tavily".to_string()],
+            tenant_id: Some("team_docs".to_string()),
+            monthly_budget_micros: Some(100),
+            request_cost_micros: Some(10),
+        };
+        let policy = request.try_into_policy().unwrap();
+        validate_policy_providers(&policy).unwrap();
+        let response = admin_policy_response("svc_docs", &policy);
+        assert_eq!(response.kid, "svc_docs");
+        assert!(response.enabled);
+        assert_eq!(response.providers, vec!["openai", "tavily"]);
+        assert_eq!(response.monthly_budget_micros, Some(100));
+        assert_eq!(response.request_cost_micros, Some(10));
+    }
+
+    #[test]
+    fn admin_policy_validation_rejects_bad_hashes_and_unknown_providers() {
+        let bad_hash = AdminKeyPolicyRequest {
+            enabled: true,
+            secret_sha256: "not-a-hash".to_string(),
+            providers: vec!["openai".to_string()],
+            tenant_id: None,
+            monthly_budget_micros: None,
+            request_cost_micros: None,
+        };
+        assert_eq!(
+            bad_hash.try_into_policy().unwrap_err(),
+            "secretSha256 must be a 64-character hex string"
+        );
+
+        let no_providers = AdminKeyPolicyRequest {
+            enabled: true,
+            secret_sha256: sha256_hex("secret"),
+            providers: Vec::new(),
+            tenant_id: None,
+            monthly_budget_micros: None,
+            request_cost_micros: None,
+        };
+        assert_eq!(
+            no_providers.try_into_policy().unwrap_err(),
+            "providers must contain at least one provider id"
+        );
+
+        let unknown_provider = KeyPolicy {
+            enabled: true,
+            secret_sha256: sha256_hex("secret"),
+            providers: vec!["not-real".to_string()],
+            tenant_id: None,
+            monthly_budget_micros: None,
+            request_cost_micros: None,
+        };
+        assert_eq!(
+            validate_policy_providers(&unknown_provider).unwrap_err(),
+            "unknown provider `not-real`"
+        );
+    }
+
+    #[test]
+    fn admin_key_ids_and_token_hashes_are_strict() {
+        assert_eq!(validate_admin_kid("svc_docs").unwrap(), "svc_docs");
+        assert!(validate_admin_kid("bad/key").is_err());
+        assert!(validate_admin_kid("svc-docs").is_err());
+        assert!(is_sha256_hex(&sha256_hex("admin")));
+        assert!(constant_time_eq(&sha256_hex("admin"), &sha256_hex("admin")));
+        assert!(!constant_time_eq(
+            &sha256_hex("admin"),
+            &sha256_hex("other")
+        ));
+    }
+
+    #[test]
+    fn cors_policy_allows_admin_browser_clients() {
+        assert_eq!(CORS_ALLOW_ORIGIN, "*");
+        assert_eq!(CORS_ALLOW_METHODS, "GET,POST,PUT,OPTIONS");
+        assert!(CORS_ALLOW_HEADERS.contains("authorization"));
+        assert!(CORS_ALLOW_HEADERS.contains("content-type"));
+        assert!(cors_enabled_path("/v1/admin/keys"));
+        assert!(cors_enabled_path("/v1/providers"));
+        assert!(!cors_enabled_path("/v1/chat/completions"));
+        assert!(!cors_enabled_path("/v1/proxy/tavily/search"));
     }
 
     #[test]

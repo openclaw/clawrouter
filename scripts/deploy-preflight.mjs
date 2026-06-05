@@ -8,6 +8,7 @@ import {
 const requiredDeployEnv = [
   "CLOUDFLARE_API_TOKEN",
   "CLOUDFLARE_ACCOUNT_ID",
+  "CLAWROUTER_ADMIN_TOKEN_SHA256",
   "CLAWROUTER_POLICY_KV_ID",
 ];
 
@@ -16,6 +17,12 @@ for (const name of requiredDeployEnv) {
   if (!process.env[name]) {
     errors.push(`missing required deploy env: ${name}`);
   }
+}
+if (
+  process.env.CLAWROUTER_ADMIN_TOKEN_SHA256 &&
+  !/^[a-fA-F0-9]{64}$/.test(process.env.CLAWROUTER_ADMIN_TOKEN_SHA256)
+) {
+  errors.push("CLAWROUTER_ADMIN_TOKEN_SHA256 must be a 64-character hex string");
 }
 
 const plan = buildProviderSmokePlan(compileProviderSnapshot());

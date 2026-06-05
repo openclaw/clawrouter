@@ -26,6 +26,7 @@ Set these GitHub Actions secrets for workflow deploys:
 ```text
 CLOUDFLARE_API_TOKEN
 CLOUDFLARE_ACCOUNT_ID
+CLAWROUTER_ADMIN_TOKEN_SHA256
 CLAWROUTER_POLICY_KV_ID
 CLAWROUTER_POLICY_KV_PREVIEW_ID
 CLAWROUTER_SMOKE_KEY
@@ -35,6 +36,9 @@ CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY # optional smoke-only upstream k
 Provider API keys are Cloudflare Worker secrets, not GitHub repository files:
 
 ```sh
+export CLAWROUTER_ADMIN_TOKEN=...
+export CLAWROUTER_ADMIN_TOKEN_SHA256=$(printf '%s' "$CLAWROUTER_ADMIN_TOKEN" | shasum -a 256 | awk '{print $1}')
+printf '%s' "$CLAWROUTER_ADMIN_TOKEN_SHA256" | pnpm exec wrangler secret put CLAWROUTER_ADMIN_TOKEN_SHA256 --config .wrangler.generated.toml
 pnpm exec wrangler secret put OPENAI_API_KEY --config .wrangler.generated.toml
 ```
 
@@ -106,6 +110,25 @@ proxy smoke key with access to every selected provider.
 
 `CLAWROUTER_SMOKE_OPENAI=1` remains supported as a shortcut for
 `CLAWROUTER_SMOKE_LIVE_PROVIDERS=openai`.
+
+## Admin API
+
+Admin requests use `Authorization: Bearer <admin-token>`. The Worker compares
+the SHA-256 hash of that token with `CLAWROUTER_ADMIN_TOKEN_SHA256`; the raw
+admin token is never configured in the Worker.
+
+```text
+GET /v1/admin/keys
+PUT /v1/admin/keys/<kid>
+POST /v1/admin/keys/<kid>/revoke
+```
+
+`PUT /v1/admin/keys/<kid>` accepts the same policy shape as `pnpm cf:key:put`,
+but with `secretSha256` instead of a raw key secret. The TypeScript admin UI
+hashes generated key secrets in the browser before calling the API.
+Admin-created key ids must use alphanumeric or underscore characters because the
+issued live key format is `clawrouter-live-<kid>-<secret>`. Admin policies must
+select at least one provider; use the CLI path for deliberate all-provider keys.
 
 ## Keys and Revocation
 

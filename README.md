@@ -51,6 +51,9 @@ The Worker currently exposes:
 - `POST /v1/responses`
 - `POST /v1/embeddings`
 - `POST /v1/proxy/<provider>/<endpoint>`
+- `GET /v1/admin/keys`
+- `PUT /v1/admin/keys/<kid>`
+- `POST /v1/admin/keys/<kid>/revoke`
 
 OpenAI-compatible proxy requests route by the request body `model` field, for
 example `openai/gpt-5.5-mini`. Before an upstream provider secret is used, the
@@ -69,6 +72,11 @@ Worker checks `POLICY_KV` at `keys/<kid>` for:
 Flip `enabled` to `false` to revoke a key without rotating upstream provider
 credentials. See `docs/deploy-cloudflare.md` for Cloudflare provisioning,
 deployment, key registration, and smoke commands.
+
+Admin endpoints require `Authorization: Bearer <admin-token>` and compare that
+token to the configured `CLAWROUTER_ADMIN_TOKEN_SHA256` hash. The TypeScript
+admin UI hashes generated proxy key secrets in-browser before storing policy in
+`POLICY_KV`.
 
 Generic REST/tool proxy requests are manifest-driven:
 
