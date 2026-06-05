@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+use std::time::{SystemTime, UNIX_EPOCH};
 use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -25,6 +26,8 @@ pub enum BudgetReset {
 pub struct Reservation {
     pub id: String,
     pub policy_id: String,
+    #[serde(default)]
+    pub window_key: String,
     pub reserved_micros: u64,
 }
 
@@ -67,11 +70,27 @@ impl BudgetLedger {
         reservation_id: impl Into<String>,
         requested_micros: u64,
     ) -> BudgetDecision {
+        self.reserve_at(
+            policy,
+            reservation_id,
+            requested_micros,
+            current_unix_seconds(),
+        )
+    }
+
+    pub fn reserve_at(
+        &mut self,
+        policy: &BudgetPolicy,
+        reservation_id: impl Into<String>,
+        requested_micros: u64,
+        unix_seconds: u64,
+    ) -> BudgetDecision {
         let reservation_id = reservation_id.into();
         if self.active_reservations.contains_key(&reservation_id) {
             return BudgetDecision::DuplicateReservation { reservation_id };
         }
-        let current = self.spent(policy.id.as_str()) + self.reserved(policy.id.as_str());
+        let window_key = budget_window_key(policy, unix_seconds);
+        let current = self.spent_in_window(&window_key) + self.reserved_in_window(&window_key);
         let remaining = policy.hard_limit_micros.saturating_sub(current);
         if requested_micros > remaining {
             return BudgetDecision::Denied {
@@ -80,10 +99,11 @@ impl BudgetLedger {
                 requested_micros,
             };
         }
-        *self.reserved.entry(policy.id.clone()).or_default() += requested_micros;
+        *self.reserved.entry(window_key.clone()).or_default() += requested_micros;
         let reservation = Reservation {
             id: reservation_id,
             policy_id: policy.id.clone(),
+            window_key,
             reserved_micros: requested_micros,
         };
         self.active_reservations
@@ -105,11 +125,11 @@ impl BudgetLedger {
             .active_reservations
             .remove(&reservation.id)
             .ok_or_else(|| BudgetError::UnknownReservation(reservation.id.clone()))?;
-        let reserved = self.reserved.entry(active.policy_id.clone()).or_default();
+        let reserved = self.reserved.entry(active.window_key.clone()).or_default();
         *reserved = reserved.saturating_sub(active.reserved_micros);
         let charged_micros = actual_micros;
         let overage_micros = actual_micros.saturating_sub(active.reserved_micros);
-        let spent = self.spent.entry(active.policy_id.clone()).or_default();
+        let spent = self.spent.entry(active.window_key.clone()).or_default();
         *spent = spent.saturating_add(charged_micros);
         Ok(BudgetSettlement {
             charged_micros,
@@ -118,16 +138,64 @@ impl BudgetLedger {
     }
 
     pub fn spent(&self, policy_id: &str) -> u64 {
-        self.spent.get(policy_id).copied().unwrap_or_default()
+        let prefix = budget_window_prefix(policy_id);
+        self.spent
+            .iter()
+            .filter(|(key, _)| key.starts_with(&prefix))
+            .map(|(_, value)| *value)
+            .sum()
     }
 
     pub fn reserved(&self, policy_id: &str) -> u64 {
-        self.reserved.get(policy_id).copied().unwrap_or_default()
+        let prefix = budget_window_prefix(policy_id);
+        self.reserved
+            .iter()
+            .filter(|(key, _)| key.starts_with(&prefix))
+            .map(|(_, value)| *value)
+            .sum()
+    }
+
+    pub fn spent_for_policy_at(&self, policy: &BudgetPolicy, unix_seconds: u64) -> u64 {
+        self.spent_in_window(&budget_window_key(policy, unix_seconds))
+    }
+
+    pub fn reserved_for_policy_at(&self, policy: &BudgetPolicy, unix_seconds: u64) -> u64 {
+        self.reserved_in_window(&budget_window_key(policy, unix_seconds))
     }
 
     pub fn active_reservation_ids(&self) -> BTreeSet<String> {
         self.active_reservations.keys().cloned().collect()
     }
+
+    fn spent_in_window(&self, window_key: &str) -> u64 {
+        self.spent.get(window_key).copied().unwrap_or_default()
+    }
+
+    fn reserved_in_window(&self, window_key: &str) -> u64 {
+        self.reserved.get(window_key).copied().unwrap_or_default()
+    }
+}
+
+fn current_unix_seconds() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or_default()
+}
+
+fn budget_window_key(policy: &BudgetPolicy, unix_seconds: u64) -> String {
+    let window = match policy.reset {
+        BudgetReset::Hour => unix_seconds / 3_600,
+        BudgetReset::Day => unix_seconds / 86_400,
+        BudgetReset::Week => unix_seconds / 604_800,
+        BudgetReset::Month => unix_seconds / 2_592_000,
+        BudgetReset::Never => 0,
+    };
+    format!("{}{}", budget_window_prefix(&policy.id), window)
+}
+
+fn budget_window_prefix(policy_id: &str) -> String {
+    format!("{policy_id}\x1f")
 }
 
 #[cfg(test)]
@@ -156,7 +224,7 @@ mod tests {
             reset: BudgetReset::Day,
         };
         let mut ledger = BudgetLedger::default();
-        let BudgetDecision::Allowed(reservation) = ledger.reserve(&policy, "r1", 50) else {
+        let BudgetDecision::Allowed(reservation) = ledger.reserve_at(&policy, "r1", 50, 0) else {
             panic!("expected reservation");
         };
         let settlement = ledger.finalize(&reservation, 25);
@@ -180,7 +248,7 @@ mod tests {
             reset: BudgetReset::Day,
         };
         let mut ledger = BudgetLedger::default();
-        let BudgetDecision::Allowed(reservation) = ledger.reserve(&policy, "r1", 100) else {
+        let BudgetDecision::Allowed(reservation) = ledger.reserve_at(&policy, "r1", 100, 0) else {
             panic!("expected reservation");
         };
         let settlement = ledger.finalize(&reservation, 1_000);
@@ -194,7 +262,7 @@ mod tests {
         assert_eq!(ledger.spent("budget_docs"), 1_000);
         assert_eq!(ledger.reserved("budget_docs"), 0);
         assert!(matches!(
-            ledger.reserve(&policy, "r2", 1),
+            ledger.reserve_at(&policy, "r2", 1, 0),
             BudgetDecision::Denied { .. }
         ));
     }
@@ -207,10 +275,10 @@ mod tests {
             reset: BudgetReset::Day,
         };
         let mut ledger = BudgetLedger::default();
-        let BudgetDecision::Allowed(first) = ledger.reserve(&policy, "r1", 50) else {
+        let BudgetDecision::Allowed(first) = ledger.reserve_at(&policy, "r1", 50, 0) else {
             panic!("expected reservation");
         };
-        let BudgetDecision::Allowed(second) = ledger.reserve(&policy, "r2", 50) else {
+        let BudgetDecision::Allowed(second) = ledger.reserve_at(&policy, "r2", 50, 0) else {
             panic!("expected reservation");
         };
         assert_eq!(ledger.finalize(&first, 50).charged_micros, 50);
@@ -223,5 +291,29 @@ mod tests {
             ledger.active_reservation_ids(),
             BTreeSet::from([second.id.clone()])
         );
+    }
+
+    #[test]
+    fn reset_windows_allow_new_period_reservations() {
+        let policy = BudgetPolicy {
+            id: "budget_docs".to_string(),
+            hard_limit_micros: 100,
+            reset: BudgetReset::Day,
+        };
+        let mut ledger = BudgetLedger::default();
+        let BudgetDecision::Allowed(reservation) = ledger.reserve_at(&policy, "r1", 100, 0) else {
+            panic!("expected reservation");
+        };
+        ledger.finalize(&reservation, 100);
+        assert!(matches!(
+            ledger.reserve_at(&policy, "r2", 1, 0),
+            BudgetDecision::Denied { .. }
+        ));
+        assert!(matches!(
+            ledger.reserve_at(&policy, "r3", 100, 86_400),
+            BudgetDecision::Allowed(_)
+        ));
+        assert_eq!(ledger.spent_for_policy_at(&policy, 0), 100);
+        assert_eq!(ledger.spent_for_policy_at(&policy, 86_400), 0);
     }
 }
