@@ -7,6 +7,7 @@
     "build": "pnpm --dir admin build && cargo build --workspace",
     "provider:compile": "cargo run -p clawrouter -- provider compile providers/*.provider.yaml",
     "provider:smoke-plan": "node scripts/provider-smoke-plan.mjs --strict",
+    "cf:preflight": "node scripts/deploy-preflight.mjs",
     "cf:config": "node scripts/render-wrangler-config.mjs",
     "cf:provision": "node scripts/provision-cloudflare.mjs",
     "cf:deploy": "pnpm cf:config && wrangler deploy --config .wrangler.generated.toml",

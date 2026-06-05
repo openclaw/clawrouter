@@ -1,4 +1,9 @@
-import { buildProviderSmokePlan, runLiveProviderSmokes, summarizePlan } from "./provider-smoke-plan.mjs";
+import {
+  buildProviderSmokePlan,
+  liveProviderList,
+  runLiveProviderSmokes,
+  summarizePlan,
+} from "./provider-smoke-plan.mjs";
 
 const baseUrl = required(process.env.CLAWROUTER_BASE_URL, "CLAWROUTER_BASE_URL").replace(/\/$/, "");
 const smokeKey = process.env.CLAWROUTER_SMOKE_KEY;
@@ -47,15 +52,4 @@ function required(value, name) {
     throw new Error(`${name} is required`);
   }
   return value;
-}
-
-function liveProviderList() {
-  const providers = (process.env.CLAWROUTER_SMOKE_LIVE_PROVIDERS ?? "")
-    .split(",")
-    .map((provider) => provider.trim())
-    .filter(Boolean);
-  if (process.env.CLAWROUTER_SMOKE_OPENAI === "1" && !providers.includes("openai")) {
-    providers.push("openai");
-  }
-  return providers;
 }

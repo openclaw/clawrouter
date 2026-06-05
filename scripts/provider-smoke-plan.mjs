@@ -49,6 +49,16 @@ export async function runLiveProviderSmokes({ baseUrl, smokeKey, plan, liveProvi
   if (!baseUrl || !smokeKey || liveProviders.length === 0) {
     return [];
   }
+  const selected = selectLiveProviderPlans(plan, liveProviders);
+  const results = [];
+  for (const provider of selected) {
+    const result = await runProviderTarget(baseUrl, smokeKey, provider);
+    results.push(result);
+  }
+  return results;
+}
+
+export function selectLiveProviderPlans(plan, liveProviders) {
   const allowAll = liveProviders.includes("all");
   if (!allowAll) {
     const planById = new Map(plan.providers.map((provider) => [provider.id, provider]));
@@ -57,15 +67,17 @@ export async function runLiveProviderSmokes({ baseUrl, smokeKey, plan, liveProvi
       throw new Error(`unknown or unsmokable live providers: ${invalid.join(",")}`);
     }
   }
-  const selected = plan.providers.filter((provider) => {
+  return plan.providers.filter((provider) => {
     return provider.target && (allowAll || liveProviders.includes(provider.id));
   });
-  const results = [];
-  for (const provider of selected) {
-    const result = await runProviderTarget(baseUrl, smokeKey, provider);
-    results.push(result);
+}
+
+export function liveProviderList(env = process.env) {
+  const providers = splitCsv(env.CLAWROUTER_SMOKE_LIVE_PROVIDERS);
+  if (env.CLAWROUTER_SMOKE_OPENAI === "1" && !providers.includes("openai")) {
+    providers.push("openai");
   }
-  return results;
+  return providers;
 }
 
 export function compileProviderSnapshot() {

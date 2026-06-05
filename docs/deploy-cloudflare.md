@@ -29,6 +29,7 @@ CLOUDFLARE_ACCOUNT_ID
 CLAWROUTER_POLICY_KV_ID
 CLAWROUTER_POLICY_KV_PREVIEW_ID
 CLAWROUTER_SMOKE_KEY
+CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY # optional smoke-only upstream key
 ```
 
 Provider API keys are Cloudflare Worker secrets, not GitHub repository files:
@@ -69,7 +70,9 @@ Render a deployable Wrangler config:
 
 ```sh
 export CLOUDFLARE_ACCOUNT_ID=...
+export CLOUDFLARE_API_TOKEN=...
 export CLAWROUTER_POLICY_KV_ID=...
+pnpm cf:preflight
 pnpm cf:config
 ```
 
@@ -96,6 +99,10 @@ Live upstream provider calls are opt-in:
 export CLAWROUTER_SMOKE_LIVE_PROVIDERS=openai,tavily
 pnpm cf:smoke
 ```
+
+For GitHub Actions deploys, set the same value in the `live_providers`
+workflow-dispatch input. `all` runs every provider smoke target and requires a
+proxy smoke key with access to every selected provider.
 
 `CLAWROUTER_SMOKE_OPENAI=1` remains supported as a shortcut for
 `CLAWROUTER_SMOKE_LIVE_PROVIDERS=openai`.
