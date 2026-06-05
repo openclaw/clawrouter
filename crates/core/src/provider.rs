@@ -335,6 +335,8 @@ pub enum ProviderError {
     MissingDefaultBaseUrl(String),
     #[error("provider {0} has no endpoints")]
     MissingEndpoints(String),
+    #[error("provider {0} has no capabilities")]
+    MissingCapabilities(String),
     #[error("provider {provider} endpoint {endpoint} path must start with /")]
     InvalidEndpointPath { provider: String, endpoint: String },
     #[error("provider {provider} capability {capability} references missing endpoint {endpoint}")]
@@ -373,6 +375,9 @@ pub fn validate_provider_manifest(manifest: &ProviderManifest) -> Result<(), Pro
     }
     if manifest.endpoints.is_empty() {
         return Err(ProviderError::MissingEndpoints(manifest.id.clone()));
+    }
+    if manifest.capabilities.is_empty() {
+        return Err(ProviderError::MissingCapabilities(manifest.id.clone()));
     }
     for (endpoint_id, endpoint) in &manifest.endpoints {
         if !endpoint.path.starts_with('/') {
@@ -425,13 +430,14 @@ pub fn compile_provider_snapshot(
             return Err(ProviderError::DuplicateProvider(manifest.id.clone()));
         }
         for capability in &manifest.capabilities {
+            let methods = effective_capability_methods(manifest, capability);
             capability_index
                 .entry(capability.id.clone())
                 .or_default()
                 .push(CapabilityRoute {
                     provider: manifest.id.clone(),
                     endpoint: capability.endpoint.clone(),
-                    methods: capability.methods.clone(),
+                    methods,
                 });
         }
         for model in &manifest.models.entries {
@@ -502,7 +508,7 @@ pub fn compile_provider_snapshot(
                 .map(|cap| CompiledCapability {
                     id: cap.id.clone(),
                     endpoint: cap.endpoint.clone(),
-                    methods: cap.methods.clone(),
+                    methods: effective_capability_methods(manifest, cap),
                 })
                 .collect(),
             endpoints,
@@ -546,6 +552,20 @@ fn auth_scheme_id(scheme: &AuthScheme) -> String {
         AuthScheme::SigV4 { service, .. } => format!("sigv4:{service}"),
         AuthScheme::CloudflareBinding => "cloudflare_binding".to_string(),
     }
+}
+
+fn effective_capability_methods(
+    manifest: &ProviderManifest,
+    capability: &Capability,
+) -> Vec<String> {
+    if !capability.methods.is_empty() {
+        return capability.methods.clone();
+    }
+    manifest
+        .endpoints
+        .get(&capability.endpoint)
+        .map(|endpoint| vec![endpoint.method.clone()])
+        .unwrap_or_else(|| vec![default_post()])
 }
 
 #[cfg(test)]
@@ -699,5 +719,67 @@ endpoints:
         )
         .unwrap_err();
         assert!(error.to_string().contains("unknown field"));
+    }
+
+    #[test]
+    fn rejects_manifest_without_capabilities() {
+        let manifest: ProviderManifest = serde_yaml::from_str(
+            r#"
+schema: clawrouter.service-provider.v1
+id: no-caps
+displayName: No Caps
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://example.com
+capabilities: []
+endpoints:
+  chat:
+    path: /v1/chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+"#,
+        )
+        .unwrap();
+        let error = validate_provider_manifest(&manifest).unwrap_err();
+        assert!(matches!(error, ProviderError::MissingCapabilities(_)));
+    }
+
+    #[test]
+    fn defaults_capability_methods_from_endpoint() {
+        let manifest: ProviderManifest = serde_yaml::from_str(
+            r#"
+schema: clawrouter.service-provider.v1
+id: default-method
+displayName: Default Method
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://example.com
+capabilities:
+  - id: llm.chat
+    endpoint: chat
+endpoints:
+  chat:
+    path: /v1/chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+"#,
+        )
+        .unwrap();
+        let snapshot = compile_provider_snapshot(&[manifest]).unwrap();
+        assert_eq!(
+            snapshot.capability_index["llm.chat"][0].methods,
+            vec!["POST"]
+        );
+        assert_eq!(snapshot.providers[0].capabilities[0].methods, vec!["POST"]);
     }
 }
