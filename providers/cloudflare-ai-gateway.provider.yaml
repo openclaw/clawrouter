@@ -7,15 +7,15 @@ service:
   platform: cloudflare-ai-gateway
   kind: gateway_platform
   upstreamService: cloudflare
-  configKeys: [CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_AI_GATEWAY_ID]
+  configKeys: [CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_AI_GATEWAY_ID, CLOUDFLARE_API_TOKEN]
 auth:
   schemes:
     - type: bearer
-      header: Authorization
+      header: cf-aig-authorization
       format: "Bearer ${secret}"
-      secretKind: api_key
+      secretKind: api_token
 baseUrls:
-  default: https://gateway.ai.cloudflare.com
+  default: https://gateway.ai.cloudflare.com/v1/${account_id}/${gateway_id}
 routing:
   nativePrefixes: [clawrouter-cloudflare, cloudflare-ai-gateway]
   modelPrefixes: [cloudflare-ai-gateway/]
@@ -34,8 +34,7 @@ capabilities:
     methods: [POST]
 endpoints:
   universal:
-    path: /v1/${account}/${gateway}
-    pathParams: [account, gateway]
+    path: /
     requestFormat: cloudflare_ai_gateway.universal
     responseFormat: provider.native
     streaming: sse

@@ -46,6 +46,23 @@ pnpm exec wrangler secret put AWS_SESSION_TOKEN --config .wrangler.generated.tom
 pnpm exec wrangler secret put AWS_REGION --config .wrangler.generated.toml
 ```
 
+Cloudflare AI Gateway needs the gateway coordinates plus the API token used for
+gateway authentication. The manifest binds account and gateway IDs from Worker
+config, not caller-supplied path parameters.
+
+```sh
+pnpm exec wrangler secret put CLOUDFLARE_ACCOUNT_ID --config .wrangler.generated.toml
+pnpm exec wrangler secret put CLOUDFLARE_AI_GATEWAY_ID --config .wrangler.generated.toml
+pnpm exec wrangler secret put CLOUDFLARE_API_TOKEN --config .wrangler.generated.toml
+```
+
+For a Cloudflare AI Gateway live smoke, configure the gateway with provider
+defaults or pass an upstream OpenAI key only to the smoke runner:
+
+```sh
+export CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY=...
+```
+
 ## Render and Deploy
 
 Render a deployable Wrangler config:
@@ -61,6 +78,27 @@ Deploy:
 ```sh
 pnpm cf:deploy
 ```
+
+## Smoke
+
+The deployed smoke checks health, provider snapshot size, key inspection when a
+smoke key is present, and that every provider has an executable smoke target:
+
+```sh
+export CLAWROUTER_BASE_URL=https://...
+export CLAWROUTER_SMOKE_KEY=clawrouter-live-svc_docs-...
+pnpm cf:smoke
+```
+
+Live upstream provider calls are opt-in:
+
+```sh
+export CLAWROUTER_SMOKE_LIVE_PROVIDERS=openai,tavily
+pnpm cf:smoke
+```
+
+`CLAWROUTER_SMOKE_OPENAI=1` remains supported as a shortcut for
+`CLAWROUTER_SMOKE_LIVE_PROVIDERS=openai`.
 
 ## Keys and Revocation
 

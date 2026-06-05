@@ -93,3 +93,16 @@ or from request path params:
   `oauth/<kid>/<tokenRef>` or `oauth/tenants/<tenant>/<tokenRef>`.
 - SigV4 providers are executable when `service.configKeys` declares access key,
   secret key, and region bindings. Session tokens are optional.
+
+## Smoke Coverage
+
+Run this after adding or changing providers:
+
+```sh
+pnpm provider:smoke-plan
+```
+
+The smoke planner compiles `providers/*.provider.yaml`, derives one executable
+smoke target per provider, and fails if any provider lacks a route plan. It does
+not call upstream APIs; deployed live calls are opt-in through
+`CLAWROUTER_SMOKE_LIVE_PROVIDERS`.
