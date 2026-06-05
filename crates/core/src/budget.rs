@@ -37,6 +37,12 @@ pub enum BudgetDecision {
     },
 }
 
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BudgetSettlement {
+    pub charged_micros: u64,
+    pub overage_micros: u64,
+}
+
 #[derive(Debug, Default)]
 pub struct BudgetLedger {
     spent: BTreeMap<String, u64>,
@@ -67,13 +73,20 @@ impl BudgetLedger {
         })
     }
 
-    pub fn finalize(&mut self, reservation: &Reservation, actual_micros: u64) {
+    pub fn finalize(&mut self, reservation: &Reservation, actual_micros: u64) -> BudgetSettlement {
         let reserved = self
             .reserved
             .entry(reservation.policy_id.clone())
             .or_default();
         *reserved = reserved.saturating_sub(reservation.reserved_micros);
-        *self.spent.entry(reservation.policy_id.clone()).or_default() += actual_micros;
+        let charged_micros = actual_micros.min(reservation.reserved_micros);
+        let overage_micros = actual_micros.saturating_sub(charged_micros);
+        let spent = self.spent.entry(reservation.policy_id.clone()).or_default();
+        *spent = spent.saturating_add(charged_micros);
+        BudgetSettlement {
+            charged_micros,
+            overage_micros,
+        }
     }
 
     pub fn spent(&self, policy_id: &str) -> u64 {
@@ -114,8 +127,38 @@ mod tests {
         let BudgetDecision::Allowed(reservation) = ledger.reserve(&policy, "r1", 50) else {
             panic!("expected reservation");
         };
-        ledger.finalize(&reservation, 25);
+        let settlement = ledger.finalize(&reservation, 25);
+        assert_eq!(
+            settlement,
+            BudgetSettlement {
+                charged_micros: 25,
+                overage_micros: 0
+            }
+        );
         assert_eq!(ledger.spent("budget_docs"), 25);
+        assert_eq!(ledger.reserved("budget_docs"), 0);
+    }
+
+    #[test]
+    fn caps_finalized_usage_to_reservation() {
+        let policy = BudgetPolicy {
+            id: "budget_docs".to_string(),
+            hard_limit_micros: 100,
+            reset: BudgetReset::Day,
+        };
+        let mut ledger = BudgetLedger::default();
+        let BudgetDecision::Allowed(reservation) = ledger.reserve(&policy, "r1", 100) else {
+            panic!("expected reservation");
+        };
+        let settlement = ledger.finalize(&reservation, 1_000);
+        assert_eq!(
+            settlement,
+            BudgetSettlement {
+                charged_micros: 100,
+                overage_micros: 900
+            }
+        );
+        assert_eq!(ledger.spent("budget_docs"), 100);
         assert_eq!(ledger.reserved("budget_docs"), 0);
     }
 }
