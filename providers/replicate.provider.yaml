@@ -1,0 +1,55 @@
+schema: clawrouter.service-provider.v1
+id: replicate
+displayName: Replicate
+status: stable
+class: rest_json
+service:
+  platform: replicate
+  kind: tool_provider
+  upstreamService: replicate
+  configKeys: [REPLICATE_API_TOKEN]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_token
+baseUrls:
+  default: https://api.replicate.com
+routing:
+  nativePrefixes: [clawrouter-replicate, replicate]
+  modelPrefixes: [replicate/]
+adapter:
+  request: replicate
+  response: replicate
+  error: replicate_error
+capabilities:
+  - id: media.predict
+    endpoint: predictions
+    methods: [POST]
+  - id: media.prediction.read
+    endpoint: prediction
+    methods: [GET]
+endpoints:
+  predictions:
+    path: /v1/predictions
+    requestFormat: replicate.prediction_create
+    responseFormat: replicate.prediction
+    timeoutMs: 120000
+  prediction:
+    path: /v1/predictions/${prediction_id}
+    method: GET
+    pathParams: [prediction_id]
+    requestFormat: replicate.prediction_get
+    responseFormat: replicate.prediction
+    timeoutMs: 120000
+models:
+  entries:
+    - id: replicate/predictions
+      upstream: predictions
+      capabilities: [media.predict, media.prediction.read]
+      pricingRef: replicate-predictions
+billing:
+  meter: clawrouter.requests
+  dimensions: [provider, endpoint, key, service, subject]
+

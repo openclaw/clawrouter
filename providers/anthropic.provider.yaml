@@ -1,0 +1,55 @@
+schema: clawrouter.service-provider.v1
+id: anthropic
+displayName: Anthropic
+status: stable
+class: anthropic_compatible
+service:
+  platform: anthropic
+  kind: model_provider
+  upstreamService: anthropic
+  configKeys: [ANTHROPIC_API_KEY]
+auth:
+  schemes:
+    - type: api_key
+      header: x-api-key
+      secretKind: api_key
+baseUrls:
+  default: https://api.anthropic.com
+routing:
+  nativePrefixes: [clawrouter-anthropic, anthropic]
+  modelPrefixes: [anthropic/]
+adapter:
+  request: anthropic
+  response: anthropic
+  stream: anthropic_sse
+  error: anthropic_error
+  injectHeaders:
+    anthropic-version: "2023-06-01"
+capabilities:
+  - id: llm.messages
+    endpoint: messages
+    methods: [POST]
+endpoints:
+  messages:
+    path: /v1/messages
+    requestFormat: anthropic.messages
+    responseFormat: anthropic.messages
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: anthropic/default
+      upstream: claude-sonnet
+      capabilities: [llm.messages]
+      pricingRef: anthropic-default
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
+  counters:
+    - name: input_tokens
+      source: usage.input_tokens
+      unit: token
+    - name: output_tokens
+      source: usage.output_tokens
+      unit: token
+

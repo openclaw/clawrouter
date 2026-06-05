@@ -1,0 +1,61 @@
+schema: clawrouter.service-provider.v1
+id: openrouter
+displayName: OpenRouter
+status: stable
+class: openai_compatible
+service:
+  platform: openrouter
+  kind: gateway_platform
+  upstreamService: openrouter
+  configKeys: [OPENROUTER_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://openrouter.ai/api
+routing:
+  nativePrefixes: [clawrouter-openrouter, openrouter]
+  modelPrefixes: [openrouter/]
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+  injectHeaders:
+    HTTP-Referer: ${site_url}
+    X-Title: ClawRouter
+capabilities:
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+endpoints:
+  chat_completions:
+    path: /v1/chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: openrouter/auto
+      upstream: openrouter/auto
+      capabilities: [llm.chat]
+      pricingRef: openrouter-auto
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
+  counters:
+    - name: input_tokens
+      source: usage.prompt_tokens
+      unit: token
+    - name: output_tokens
+      source: usage.completion_tokens
+      unit: token
+tests:
+  fixtures:
+    - name: chat-basic
+      request: providers/_fixtures/openrouter/chat-basic.request.json
+      response: providers/_fixtures/openrouter/chat-basic.response.json

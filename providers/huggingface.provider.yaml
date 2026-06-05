@@ -1,0 +1,47 @@
+schema: clawrouter.service-provider.v1
+id: huggingface
+displayName: Hugging Face
+status: stable
+class: rest_json
+service:
+  platform: huggingface
+  kind: model_provider
+  upstreamService: inference
+  configKeys: [HUGGINGFACE_API_TOKEN]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_token
+baseUrls:
+  default: https://api-inference.huggingface.co
+routing:
+  nativePrefixes: [clawrouter-huggingface, huggingface]
+  modelPrefixes: [huggingface/]
+adapter:
+  request: huggingface
+  response: huggingface
+  stream: sse
+  error: huggingface_error
+capabilities:
+  - id: llm.invoke
+    endpoint: model
+    methods: [POST]
+endpoints:
+  model:
+    path: /models/${model}
+    pathParams: [model]
+    requestFormat: huggingface.inference
+    responseFormat: huggingface.inference
+    timeoutMs: 600000
+models:
+  entries:
+    - id: huggingface/model
+      upstream: ${model}
+      capabilities: [llm.invoke]
+      pricingRef: huggingface-model
+billing:
+  meter: clawrouter.requests
+  dimensions: [provider, model, key, service, subject]
+

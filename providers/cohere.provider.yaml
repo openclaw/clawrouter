@@ -1,0 +1,55 @@
+schema: clawrouter.service-provider.v1
+id: cohere
+displayName: Cohere
+status: stable
+class: rest_json
+service:
+  platform: cohere
+  kind: model_provider
+  upstreamService: cohere
+  configKeys: [COHERE_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://api.cohere.com
+routing:
+  nativePrefixes: [clawrouter-cohere, cohere]
+  modelPrefixes: [cohere/]
+adapter:
+  request: cohere
+  response: cohere
+  stream: cohere_sse
+  error: cohere_error
+capabilities:
+  - id: llm.chat
+    endpoint: chat
+    methods: [POST]
+  - id: llm.embeddings
+    endpoint: embed
+    methods: [POST]
+endpoints:
+  chat:
+    path: /v2/chat
+    requestFormat: cohere.chat
+    responseFormat: cohere.chat
+    streaming: sse
+    timeoutMs: 600000
+  embed:
+    path: /v2/embed
+    requestFormat: cohere.embed
+    responseFormat: cohere.embed
+    timeoutMs: 120000
+models:
+  entries:
+    - id: cohere/default
+      upstream: cohere
+      capabilities: [llm.chat, llm.embeddings]
+      pricingRef: cohere-default
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
+

@@ -1,0 +1,59 @@
+schema: clawrouter.service-provider.v1
+id: azure-openai
+displayName: Azure OpenAI
+status: stable
+class: openai_compatible
+service:
+  platform: azure
+  kind: model_provider
+  upstreamService: azure-openai
+  configKeys: [AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT]
+auth:
+  schemes:
+    - type: api_key
+      header: api-key
+      secretKind: api_key
+baseUrls:
+  default: https://${resource}.openai.azure.com
+routing:
+  nativePrefixes: [clawrouter-azure-openai, azure-openai]
+  modelPrefixes: [azure-openai/]
+  baseUrlParam: endpoint
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+  injectQuery:
+    api-version: ${api_version}
+capabilities:
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+  - id: llm.embeddings
+    endpoint: embeddings
+    methods: [POST]
+endpoints:
+  chat_completions:
+    path: /openai/deployments/${deployment}/chat/completions
+    pathParams: [deployment]
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+  embeddings:
+    path: /openai/deployments/${deployment}/embeddings
+    pathParams: [deployment]
+    requestFormat: openai.embeddings
+    responseFormat: openai.embeddings
+    timeoutMs: 120000
+models:
+  entries:
+    - id: azure-openai/deployment
+      upstream: ${deployment}
+      capabilities: [llm.chat, llm.embeddings]
+      pricingRef: azure-openai-deployment
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, deployment, key, service, subject]
+

@@ -1,0 +1,47 @@
+schema: clawrouter.service-provider.v1
+id: xai
+displayName: xAI
+status: stable
+class: openai_compatible
+service:
+  platform: xai
+  kind: model_provider
+  upstreamService: xai
+  configKeys: [XAI_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://api.x.ai
+routing:
+  nativePrefixes: [clawrouter-xai, xai]
+  modelPrefixes: [xai/]
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+endpoints:
+  chat_completions:
+    path: /v1/chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: xai/default
+      upstream: grok
+      capabilities: [llm.chat]
+      pricingRef: xai-default
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
+

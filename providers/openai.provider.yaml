@@ -1,0 +1,81 @@
+schema: clawrouter.service-provider.v1
+id: openai
+displayName: OpenAI
+status: stable
+class: openai_compatible
+service:
+  platform: openai
+  kind: model_provider
+  upstreamService: openai
+  configKeys: [OPENAI_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://api.openai.com
+routing:
+  nativePrefixes: [clawrouter-openai, openai]
+  modelPrefixes: [openai/]
+  baseUrlParam: base_url
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+  passthroughHeaders: [OpenAI-Organization, OpenAI-Project]
+capabilities:
+  - id: llm.responses
+    endpoint: responses
+    methods: [POST]
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+  - id: llm.embeddings
+    endpoint: embeddings
+    methods: [POST]
+endpoints:
+  responses:
+    path: /v1/responses
+    requestFormat: openai.responses
+    responseFormat: openai.responses
+    streaming: sse
+    timeoutMs: 600000
+  chat_completions:
+    path: /v1/chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+  embeddings:
+    path: /v1/embeddings
+    requestFormat: openai.embeddings
+    responseFormat: openai.embeddings
+    timeoutMs: 120000
+models:
+  entries:
+    - id: openai/gpt-5.5-mini
+      upstream: gpt-5.5-mini
+      capabilities: [llm.responses, llm.chat]
+      pricingRef: openai-gpt-5.5-mini
+    - id: openai/text-embedding-3-large
+      upstream: text-embedding-3-large
+      capabilities: [llm.embeddings]
+      pricingRef: openai-text-embedding-3-large
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
+  counters:
+    - name: input_tokens
+      source: usage.input_tokens
+      unit: token
+    - name: output_tokens
+      source: usage.output_tokens
+      unit: token
+tests:
+  fixtures:
+    - name: chat-basic
+      request: providers/_fixtures/openai/chat-basic.request.json
+      response: providers/_fixtures/openai/chat-basic.response.json

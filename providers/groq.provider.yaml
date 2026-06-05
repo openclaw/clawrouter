@@ -1,0 +1,47 @@
+schema: clawrouter.service-provider.v1
+id: groq
+displayName: Groq
+status: stable
+class: openai_compatible
+service:
+  platform: groq
+  kind: model_provider
+  upstreamService: groq
+  configKeys: [GROQ_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://api.groq.com/openai
+routing:
+  nativePrefixes: [clawrouter-groq, groq]
+  modelPrefixes: [groq/]
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+endpoints:
+  chat_completions:
+    path: /v1/chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: groq/default
+      upstream: groq
+      capabilities: [llm.chat]
+      pricingRef: groq-default
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
+

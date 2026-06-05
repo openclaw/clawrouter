@@ -1,0 +1,56 @@
+schema: clawrouter.service-provider.v1
+id: google-gemini
+displayName: Google Gemini
+status: stable
+class: rest_json
+service:
+  platform: google
+  kind: model_provider
+  upstreamService: gemini
+  configKeys: [GOOGLE_API_KEY]
+auth:
+  schemes:
+    - type: api_key
+      header: x-goog-api-key
+      secretKind: api_key
+baseUrls:
+  default: https://generativelanguage.googleapis.com
+routing:
+  nativePrefixes: [clawrouter-google, google, gemini]
+  modelPrefixes: [google/, gemini/]
+adapter:
+  request: google_gemini
+  response: google_gemini
+  stream: google_sse
+  error: google_error
+capabilities:
+  - id: llm.generate
+    endpoint: generate_content
+    methods: [POST]
+  - id: llm.stream
+    endpoint: stream_generate_content
+    methods: [POST]
+endpoints:
+  generate_content:
+    path: /v1beta/models/${model}:generateContent
+    pathParams: [model]
+    requestFormat: google.generate_content
+    responseFormat: google.generate_content
+    timeoutMs: 600000
+  stream_generate_content:
+    path: /v1beta/models/${model}:streamGenerateContent
+    pathParams: [model]
+    requestFormat: google.generate_content
+    responseFormat: google.stream_generate_content
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: google/gemini-default
+      upstream: gemini
+      capabilities: [llm.generate, llm.stream]
+      pricingRef: google-gemini-default
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
+

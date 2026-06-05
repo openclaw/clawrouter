@@ -1,0 +1,56 @@
+schema: clawrouter.service-provider.v1
+id: aws-bedrock
+displayName: AWS Bedrock
+status: experimental
+class: custom_adapter
+service:
+  platform: aws
+  kind: model_provider
+  upstreamService: bedrock
+  configKeys: [AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION]
+auth:
+  schemes:
+    - type: sig_v4
+      service: bedrock
+      regionParam: region
+baseUrls:
+  default: https://bedrock-runtime.${region}.amazonaws.com
+routing:
+  nativePrefixes: [clawrouter-aws-bedrock, bedrock]
+  modelPrefixes: [bedrock/, aws-bedrock/]
+adapter:
+  request: aws_bedrock
+  response: aws_bedrock
+  stream: aws_eventstream
+  error: aws_error
+capabilities:
+  - id: llm.invoke
+    endpoint: invoke_model
+    methods: [POST]
+  - id: llm.stream
+    endpoint: invoke_model_stream
+    methods: [POST]
+endpoints:
+  invoke_model:
+    path: /model/${model}/invoke
+    pathParams: [model]
+    requestFormat: aws_bedrock.invoke
+    responseFormat: aws_bedrock.invoke
+    timeoutMs: 600000
+  invoke_model_stream:
+    path: /model/${model}/invoke-with-response-stream
+    pathParams: [model]
+    requestFormat: aws_bedrock.invoke
+    responseFormat: aws_bedrock.eventstream
+    streaming: aws_eventstream
+    timeoutMs: 600000
+models:
+  entries:
+    - id: bedrock/model
+      upstream: ${model}
+      capabilities: [llm.invoke, llm.stream]
+      pricingRef: aws-bedrock-model
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject, region]
+
