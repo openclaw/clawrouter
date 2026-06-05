@@ -289,9 +289,14 @@ pub struct CompiledEndpoint {
     pub id: String,
     pub method: String,
     pub path: String,
+    pub auth: Option<String>,
+    pub headers: BTreeMap<String, String>,
+    pub query: BTreeMap<String, String>,
+    pub path_params: Vec<String>,
     pub request_format: String,
     pub response_format: String,
     pub streaming: Option<String>,
+    pub timeout_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -449,9 +454,14 @@ pub fn compile_provider_snapshot(
                 id: id.clone(),
                 method: endpoint.method.clone(),
                 path: endpoint.path.clone(),
+                auth: endpoint.auth.clone(),
+                headers: endpoint.headers.clone(),
+                query: endpoint.query.clone(),
+                path_params: endpoint.path_params.clone(),
                 request_format: endpoint.request_format.clone(),
                 response_format: endpoint.response_format.clone(),
                 streaming: endpoint.streaming.clone(),
+                timeout_ms: endpoint.timeout_ms,
             })
             .collect();
         providers.push(CompiledProvider {
@@ -553,8 +563,10 @@ capabilities:
 endpoints:
   search:
     path: /search
+    pathParams: [query]
     requestFormat: tavily.search
     responseFormat: tavily.search
+    timeoutMs: 120000
 models:
   entries:
     - id: tavily/search
@@ -581,6 +593,11 @@ billing:
         );
         assert_eq!(snapshot.model_index["tavily/search"].provider, "tavily");
         assert_eq!(snapshot.model_index["tavily/search"].upstream, "search");
+        assert_eq!(
+            snapshot.providers[0].endpoints[0].path_params,
+            vec!["query"]
+        );
+        assert_eq!(snapshot.providers[0].endpoints[0].timeout_ms, Some(120000));
         assert_eq!(
             snapshot.providers[0].routing.model_prefixes,
             vec!["tavily/"]
