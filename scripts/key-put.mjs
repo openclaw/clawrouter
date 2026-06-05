@@ -8,12 +8,20 @@ const providers = args.providers ? args.providers.split(",").filter(Boolean) : [
 const binding = args.binding ?? "POLICY_KV";
 const config = args.config ?? ".wrangler.generated.toml";
 const enabled = args.disabled ? false : true;
+const tenantId = args.tenant ?? "default";
+const monthlyBudgetMicros = args["monthly-budget-micros"]
+  ? Number(args["monthly-budget-micros"])
+  : undefined;
 
 const policy = {
   enabled,
   secretSha256: createHash("sha256").update(secret).digest("hex"),
   providers,
+  tenantId,
 };
+if (monthlyBudgetMicros !== undefined) {
+  policy.monthlyBudgetMicros = monthlyBudgetMicros;
+}
 
 run("pnpm", [
   "exec",

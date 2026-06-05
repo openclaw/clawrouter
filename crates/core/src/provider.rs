@@ -256,6 +256,7 @@ pub struct CompiledProvider {
     pub class: ProviderClass,
     pub service_platform: String,
     pub service_kind: ServiceKind,
+    pub config_keys: Vec<String>,
     pub auth: AuthConfig,
     pub auth_schemes: Vec<String>,
     pub base_urls: BTreeMap<String, String>,
@@ -515,6 +516,7 @@ pub fn compile_provider_snapshot(
                 .clone()
                 .unwrap_or_else(|| manifest.id.clone()),
             service_kind: manifest.service.kind.clone(),
+            config_keys: manifest.service.config_keys.clone(),
             auth: manifest.auth.clone(),
             auth_schemes: manifest.auth.schemes.iter().map(auth_scheme_id).collect(),
             base_urls: manifest.base_urls.clone(),

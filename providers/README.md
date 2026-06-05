@@ -64,3 +64,20 @@ billing:
   the declarative format cannot express the provider.
 - `billing.meter` and `billing.counters` produce OpenMeter/Lago/Meteroid style
   event dimensions without hard-coding provider logic.
+
+## Edge Support Rules
+
+Every valid manifest is listed in `GET /v1/providers` and compiled into the
+admin/provider snapshot. The live Worker only executes a manifest endpoint when
+the edge can resolve it without deployment-specific placeholders outside the
+request path:
+
+- `baseUrls.default`, `adapter.injectHeaders`, `adapter.injectQuery`,
+  `endpoint.headers`, and `endpoint.query` must be concrete strings.
+- `endpoint.path` may contain `${name}` placeholders when the endpoint declares
+  matching `pathParams`; callers pass those as single safe path segments.
+- bearer, header API key, query API key, and Cloudflare binding auth are
+  executable today.
+- OAuth and SigV4 providers stay cataloged for admin, policy, and OAuth mapping,
+  but return `provider_endpoint_not_supported` until token storage/signing is
+  wired into the edge runtime.

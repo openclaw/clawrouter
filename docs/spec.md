@@ -39,3 +39,15 @@ The intended add-provider path is:
 3. Run `cargo run -p clawrouter -- provider compile providers/*.provider.yaml`.
 4. Add a Rust/Wasm adapter only if the declarative families cannot represent the
    upstream contract.
+
+The provider catalog is broader than the live executable edge path. Cataloged
+providers are available to admin, policy, OAuth mapping, and billing metadata.
+The Worker executes an endpoint only when `baseUrls.default`, injected
+headers/query values, and endpoint header/query defaults are concrete at deploy
+time. Endpoint path placeholders are allowed and resolved from request
+`pathParams`.
+
+Bearer, header API key, query API key, and Cloudflare binding auth are supported
+in the edge path today. OAuth and SigV4 manifests remain valid service-provider
+definitions, but require the OAuth token store or signing adapter before live
+proxy execution.

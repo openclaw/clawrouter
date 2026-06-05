@@ -76,6 +76,60 @@ pnpm cf:key:revoke -- --kid svc_docs
 The edge runtime checks `POLICY_KV` on proxy requests. Setting `enabled: false`
 revokes access without rotating upstream provider credentials.
 
+The stored policy shape is:
+
+```json
+{
+  "enabled": true,
+  "secretSha256": "<sha256 of key secret>",
+  "providers": ["openai", "tavily"],
+  "tenantId": "default",
+  "monthlyBudgetMicros": 100000000
+}
+```
+
+`providers` is an allowlist. An empty list allows every configured provider.
+`monthlyBudgetMicros: 0` denies requests immediately; non-zero budget enforcement
+is reserved for the Durable Object budget ledger path.
+
+## Proxy Routes
+
+OpenAI-compatible calls use normal OpenAI paths and route by `model`:
+
+```sh
+curl "$CLAWROUTER_BASE_URL/v1/chat/completions" \
+  -H "authorization: Bearer $CLAWROUTER_KEY" \
+  -H "content-type: application/json" \
+  --data '{"model":"openai/gpt-5.5-mini","messages":[{"role":"user","content":"ok"}]}'
+```
+
+Manifest REST/tool calls use:
+
+```text
+POST /v1/proxy/<provider>/<endpoint>
+```
+
+The JSON body can contain:
+
+```json
+{
+  "method": "GET",
+  "pathParams": { "path": "repos/openclaw/clawrouter" },
+  "query": { "per_page": 10 },
+  "body": { "query": "openclaw" }
+}
+```
+
+`method` must be allowed by the endpoint’s provider manifest. `pathParams`
+replace `${name}` segments from the manifest endpoint path and must be single
+safe path segments; `/`, `?`, `#`, `.`, and `..` are rejected. `query` merges
+with manifest query defaults and injected query values.
+
+The live Worker rejects manifest endpoints that still need unresolved deployment
+templates in base URLs, injected headers/query values, or endpoint header/query
+defaults. OAuth and SigV4 providers are cataloged but return
+`provider_endpoint_not_supported` until token storage/signing is wired.
+
 ## Smoke
 
 Validate a deployed Worker:

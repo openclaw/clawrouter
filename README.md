@@ -50,6 +50,7 @@ The Worker currently exposes:
 - `POST /v1/chat/completions`
 - `POST /v1/responses`
 - `POST /v1/embeddings`
+- `POST /v1/proxy/<provider>/<endpoint>`
 
 OpenAI-compatible proxy requests route by the request body `model` field, for
 example `openai/gpt-5.5-mini`. Before an upstream provider secret is used, the
@@ -59,10 +60,27 @@ Worker checks `POLICY_KV` at `keys/<kid>` for:
 {
   "enabled": true,
   "secretSha256": "<sha256 of key secret>",
-  "providers": ["openai"]
+  "providers": ["openai"],
+  "tenantId": "team_docs",
+  "monthlyBudgetMicros": 100000000
 }
 ```
 
 Flip `enabled` to `false` to revoke a key without rotating upstream provider
 credentials. See `docs/deploy-cloudflare.md` for Cloudflare provisioning,
 deployment, key registration, and smoke commands.
+
+Generic REST/tool proxy requests are manifest-driven:
+
+```sh
+curl "$CLAWROUTER_BASE_URL/v1/proxy/tavily/search" \
+  -H "authorization: Bearer $CLAWROUTER_KEY" \
+  -H "content-type: application/json" \
+  --data '{"body":{"query":"openclaw"},"query":{"topic":"news"}}'
+```
+
+The Worker resolves `provider` and `endpoint` from the compiled provider
+snapshot, applies manifest path/query/header/auth mapping, forwards the request,
+and emits a usage event to `USAGE_QUEUE` when the binding is available.
+OAuth, SigV4, and deployment-templated providers are still cataloged, but the
+edge path rejects them until the required token/signing/runtime mapping exists.

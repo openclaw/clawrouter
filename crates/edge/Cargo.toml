@@ -14,7 +14,7 @@ serde_json.workspace = true
 serde.workspace = true
 sha2 = "0.10"
 wasm-bindgen = "0.2"
-worker = "0.8.3"
+worker = { version = "0.8.3", features = ["queue"] }
 
 [build-dependencies]
 clawrouter-core.workspace = true
