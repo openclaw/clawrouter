@@ -29,24 +29,7 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     }
 
     if url.path() == "/v1/key/inspect" {
-        let auth = req.headers().get("authorization")?.unwrap_or_default();
-        let token = auth.strip_prefix("Bearer ").unwrap_or("");
-        return match parse_proxy_key(token) {
-            Ok(parts) => Response::from_json(&serde_json::json!({
-                "kid": parts.kid,
-                "mode": format!("{:?}", parts.mode).to_lowercase(),
-                "syntaxValid": true,
-                "verified": false,
-                "verification": "not_implemented"
-            })),
-            Err(error) => Response::from_json(&serde_json::json!({
-                "error": {
-                    "code": "invalid_key_syntax",
-                    "message": error.to_string()
-                }
-            }))
-            .map(|resp| resp.with_status(400)),
-        };
+        return inspect_proxy_key(req.headers(), &env).await;
     }
 
     if req.method() == Method::Post && is_openai_compatible_path(url.path()) {
@@ -260,6 +243,81 @@ struct AuthorizedKey {
 enum AuthOutcome {
     Allowed(AuthorizedKey),
     Denied(Response),
+}
+
+async fn inspect_proxy_key(headers: &Headers, env: &Env) -> Result<Response> {
+    let auth = headers.get("authorization")?.unwrap_or_default();
+    let token = auth.strip_prefix("Bearer ").unwrap_or("");
+    let key = match parse_proxy_key(token) {
+        Ok(parts) => parts,
+        Err(error) => {
+            return Response::from_json(&serde_json::json!({
+                "error": {
+                    "code": "invalid_key_syntax",
+                    "message": error.to_string()
+                }
+            }))
+            .map(|resp| resp.with_status(400));
+        }
+    };
+    let Ok(kv) = env.kv("POLICY_KV") else {
+        return key_inspection_response(&key.kid, &format!("{:?}", key.mode), None, None);
+    };
+    let record = kv
+        .get(&format!("keys/{}", key.kid))
+        .text()
+        .await
+        .map_err(|error| Error::RustError(format!("failed to read key policy: {error}")))?;
+    let Some(record) = record else {
+        return key_inspection_response(
+            &key.kid,
+            &format!("{:?}", key.mode),
+            None,
+            Some("unknown_proxy_key"),
+        );
+    };
+    let policy = serde_json::from_str::<KeyPolicy>(&record)
+        .map_err(|error| Error::RustError(format!("key policy is invalid JSON: {error}")))?;
+    let verification = key_verification(&key.secret, &policy);
+    let verified_policy = inspect_policy_for_response(verification, &policy);
+    key_inspection_response(
+        &key.kid,
+        &format!("{:?}", key.mode),
+        verified_policy,
+        Some(verification),
+    )
+}
+
+fn key_verification(secret: &str, policy: &KeyPolicy) -> &'static str {
+    (sha256_hex(secret) == policy.secret_sha256)
+        .then_some("verified")
+        .unwrap_or("invalid_secret")
+}
+
+fn inspect_policy_for_response<'a>(
+    verification: &str,
+    policy: &'a KeyPolicy,
+) -> Option<&'a KeyPolicy> {
+    (verification == "verified").then_some(policy)
+}
+
+fn key_inspection_response(
+    kid: &str,
+    mode: &str,
+    policy: Option<&KeyPolicy>,
+    verification: Option<&str>,
+) -> Result<Response> {
+    Response::from_json(&serde_json::json!({
+        "kid": kid,
+        "mode": mode.to_lowercase(),
+        "syntaxValid": true,
+        "verified": verification == Some("verified"),
+        "verification": verification.unwrap_or("policy_store_unavailable"),
+        "enabled": policy.map(|policy| policy.enabled),
+        "providers": policy.map(|policy| &policy.providers),
+        "tenantId": policy.and_then(|policy| policy.tenant_id.as_deref()),
+        "monthlyBudgetMicros": policy.and_then(|policy| policy.monthly_budget_micros)
+    }))
 }
 
 async fn authorize_proxy_key(
@@ -976,6 +1034,22 @@ mod tests {
     fn manifest_proxy_parse_errors_are_client_errors() {
         let error = parse_proxy_request("{not json").unwrap_err();
         assert!(error.contains("invalid JSON"));
+    }
+
+    #[test]
+    fn key_verification_matches_registered_secret_hash() {
+        let policy = KeyPolicy {
+            enabled: true,
+            secret_sha256: sha256_hex("secret"),
+            providers: vec!["openai".to_string()],
+            tenant_id: Some("team_docs".to_string()),
+            monthly_budget_micros: Some(100),
+        };
+
+        assert_eq!(key_verification("secret", &policy), "verified");
+        assert_eq!(key_verification("wrong", &policy), "invalid_secret");
+        assert!(inspect_policy_for_response("verified", &policy).is_some());
+        assert!(inspect_policy_for_response("invalid_secret", &policy).is_none());
     }
 
     #[test]

@@ -76,6 +76,17 @@ pnpm cf:key:revoke -- --kid svc_docs
 The edge runtime checks `POLICY_KV` on proxy requests. Setting `enabled: false`
 revokes access without rotating upstream provider credentials.
 
+Inspect a key without making an upstream provider call:
+
+```sh
+curl "$CLAWROUTER_BASE_URL/v1/key/inspect" \
+  -H "authorization: Bearer $CLAWROUTER_KEY"
+```
+
+When `POLICY_KV` is bound, the response verifies syntax, registration, secret
+hash, enabled state, tenant, budget, and provider allowlist. The endpoint never
+returns the key secret or stored secret hash.
+
 The stored policy shape is:
 
 ```json
