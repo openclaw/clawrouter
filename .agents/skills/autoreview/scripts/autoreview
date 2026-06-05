@@ -346,9 +346,19 @@ def bounded_field(text: str, limit: int) -> str:
     return text[: max(0, limit - len(suffix))] + suffix
 
 
-def read_text(path: Path, limit: int = 40_000) -> str:
+def read_text(path: Path, limit: int = 40_000, *, root: Path | None = None) -> str:
     try:
-        data = path.read_bytes()
+        stat = path.lstat()
+        if path.is_symlink():
+            return "[symlink omitted]"
+        resolved = path.resolve(strict=True)
+        if root is not None and not is_within(resolved, root.resolve()):
+            return "[outside repository omitted]"
+        if not resolved.is_file():
+            return "[non-regular file omitted]"
+        read_limit = max(limit * 4, 1)
+        with resolved.open("rb") as handle:
+            data = handle.read(read_limit + 1)
     except OSError as exc:
         return f"[unreadable: {exc}]"
     if b"\0" in data:
@@ -373,7 +383,7 @@ def local_bundle(repo: Path) -> str:
         parts.append("# Untracked Files")
         for rel in untracked:
             path = repo / rel
-            parts.append(f"## {rel}\n{read_text(path)}")
+            parts.append(f"## {rel}\n{read_text(path, root=repo)}")
     return "\n\n".join(parts)
 
 
