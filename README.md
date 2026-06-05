@@ -40,6 +40,16 @@ Validate the catalog with:
 cargo run -p clawrouter -- provider compile providers/*.provider.yaml
 ```
 
+Before a real Cloudflare deploy, run:
+
+```sh
+pnpm cf:doctor
+```
+
+It checks Wrangler auth, required GitHub Actions secret names, local deploy env,
+provider binding coverage, and the all-provider smoke plan without printing
+secret values.
+
 ## Edge Proxy
 
 The Worker currently exposes:

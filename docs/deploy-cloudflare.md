@@ -33,6 +33,19 @@ CLAWROUTER_SMOKE_KEY
 CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY # optional smoke-only upstream key
 ```
 
+Check the deploy surface without printing secret values:
+
+```sh
+pnpm cf:doctor
+```
+
+The doctor verifies local deploy env, Wrangler auth, required GitHub Actions
+secret names, the provider smoke plan, and provider binding coverage. It reports
+provider env names that are missing locally; those same provider bindings must be
+configured as Worker secrets or vars before enabling every provider live.
+Install the GitHub CLI as `gh`, or set `CLAWROUTER_GITHUB_CLI` when using a
+wrapper binary.
+
 Provider API keys are Cloudflare Worker secrets, not GitHub repository files:
 
 ```sh
