@@ -1,0 +1,47 @@
+schema: clawrouter.service-provider.v1
+id: perplexity
+displayName: Perplexity
+status: stable
+class: openai_compatible
+service:
+  platform: perplexity
+  kind: model_provider
+  upstreamService: perplexity
+  configKeys: [PERPLEXITY_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://api.perplexity.ai
+routing:
+  nativePrefixes: [clawrouter-perplexity, perplexity]
+  modelPrefixes: [perplexity/]
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+endpoints:
+  chat_completions:
+    path: /chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: perplexity/default
+      upstream: sonar
+      capabilities: [llm.chat]
+      pricingRef: perplexity-default
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
+

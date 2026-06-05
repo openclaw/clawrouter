@@ -1,0 +1,5 @@
+{
+  "model": "minimax/MiniMax-M3",
+  "messages": [{ "role": "user", "content": "ping" }]
+}
+

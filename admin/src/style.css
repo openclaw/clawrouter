@@ -1,0 +1,320 @@
+:root {
+  color: #17201b;
+  background: #f7f8f6;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  min-height: 36px;
+  border: 1px solid #17201b;
+  background: #17201b;
+  color: #ffffff;
+  border-radius: 6px;
+  padding: 8px 12px;
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+input {
+  width: 100%;
+  min-width: 0;
+  min-height: 36px;
+  border: 1px solid #cfd7d1;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #17201b;
+  padding: 8px 10px;
+}
+
+label span,
+th,
+.muted,
+.metric span {
+  color: #637066;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+}
+
+.muted {
+  max-width: 360px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.shell {
+  max-width: 1320px;
+  margin: 0 auto;
+  padding: 28px;
+}
+
+.topbar,
+.controls,
+.panelHeader,
+.metrics,
+.actions,
+.inline {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+}
+
+.topbar,
+.panelHeader,
+.metrics,
+.actions {
+  justify-content: space-between;
+}
+
+h1,
+h2,
+p {
+  margin: 0;
+}
+
+h1 {
+  font-size: 28px;
+}
+
+h2 {
+  font-size: 18px;
+}
+
+p {
+  color: #637066;
+  margin-top: 4px;
+}
+
+.role,
+.status {
+  border-radius: 999px;
+  padding: 4px 9px;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.role,
+.status.active {
+  background: #dcece2;
+}
+
+.status.revoked {
+  background: #ffd9d4;
+}
+
+.controls {
+  margin-top: 24px;
+  padding: 16px 0;
+  border-top: 1px solid #e1e5df;
+  border-bottom: 1px solid #e1e5df;
+}
+
+.controls label {
+  flex: 1;
+  min-width: 180px;
+}
+
+.metrics {
+  margin: 24px 0;
+}
+
+.metric {
+  flex: 1;
+  min-width: 0;
+  min-height: 82px;
+  background: #ffffff;
+  border: 1px solid #e1e5df;
+  border-radius: 8px;
+  padding: 16px;
+}
+
+.metric strong {
+  display: block;
+  overflow-wrap: anywhere;
+  font-size: 24px;
+  margin-top: 4px;
+}
+
+.grid {
+  display: grid;
+  grid-template-columns: minmax(340px, 420px) minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.panel {
+  background: #ffffff;
+  border: 1px solid #e1e5df;
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.panelHeader {
+  min-height: 58px;
+  padding: 16px;
+  border-bottom: 1px solid #e1e5df;
+}
+
+.keyForm {
+  padding-bottom: 16px;
+}
+
+.formGrid {
+  display: grid;
+  gap: 12px;
+  padding: 16px;
+}
+
+.formGrid label,
+.controls label {
+  display: grid;
+  gap: 6px;
+}
+
+.inline button {
+  flex: 0 0 auto;
+}
+
+.providerPicker {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  max-height: 260px;
+  overflow: auto;
+  padding: 0 16px 16px;
+}
+
+.check {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-height: 32px;
+}
+
+.check input {
+  min-height: 18px;
+}
+
+.check span {
+  overflow: hidden;
+  color: #17201b;
+  font-size: 13px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.actions,
+.issuedKey {
+  margin: 0 16px;
+}
+
+.issuedKey {
+  display: block;
+  overflow-wrap: anywhere;
+  margin-top: 12px;
+  border: 1px solid #cfd7d1;
+  border-radius: 6px;
+  background: #f7f8f6;
+  padding: 10px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  font-size: 13px;
+}
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+th,
+td {
+  text-align: left;
+  padding: 13px 16px;
+  border-bottom: 1px solid #edf0eb;
+  font-size: 14px;
+  vertical-align: top;
+}
+
+td {
+  overflow-wrap: anywhere;
+}
+
+.providerPanel {
+  margin-top: 18px;
+}
+
+.providerGrid {
+  display: grid;
+}
+
+.providerRow {
+  display: grid;
+  grid-template-columns: minmax(160px, 1.1fr) minmax(150px, 0.8fr) minmax(130px, 0.7fr) minmax(
+      240px,
+      1.6fr
+    );
+  gap: 12px;
+  padding: 13px 16px;
+  border-bottom: 1px solid #edf0eb;
+  font-size: 14px;
+}
+
+.providerRow span,
+.providerRow strong {
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 900px) {
+  .controls,
+  .topbar,
+  .metrics {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .grid {
+    grid-template-columns: 1fr;
+  }
+
+  .providerRow {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 560px) {
+  .shell {
+    padding: 18px;
+  }
+
+  .providerPicker {
+    grid-template-columns: 1fr;
+  }
+
+  th,
+  td {
+    padding: 11px 12px;
+  }
+}

@@ -1,0 +1,24 @@
+[package]
+name = "clawrouter-edge"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+clawrouter-core.workspace = true
+hmac = "0.12"
+js-sys = "0.3"
+serde_json.workspace = true
+serde.workspace = true
+sha2 = "0.10"
+wasm-bindgen = "0.2"
+worker = { version = "0.8.3", features = ["queue"] }
+
+[build-dependencies]
+clawrouter-core.workspace = true
+serde_json.workspace = true
+serde_yaml.workspace = true

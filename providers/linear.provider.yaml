@@ -1,0 +1,45 @@
+schema: clawrouter.service-provider.v1
+id: linear
+displayName: Linear
+status: experimental
+class: oauth_rest_json
+service:
+  platform: linear
+  kind: oauth_platform
+  upstreamService: linear
+  oauthProvider: linear
+auth:
+  schemes:
+    - type: oauth
+      provider: linear
+      scopes: [read, write]
+      tokenRef: oauth.linear.access_token
+baseUrls:
+  default: https://api.linear.app
+routing:
+  nativePrefixes: [clawrouter-linear, linear]
+  serviceParam: service
+adapter:
+  request: graphql_json
+  response: graphql_json
+  error: linear_error
+capabilities:
+  - id: tool.invoke
+    endpoint: graphql
+    methods: [POST]
+endpoints:
+  graphql:
+    path: /graphql
+    requestFormat: graphql.request
+    responseFormat: graphql.response
+    timeoutMs: 120000
+models:
+  entries:
+    - id: linear/graphql
+      upstream: graphql
+      capabilities: [tool.invoke]
+      pricingRef: linear-graphql
+billing:
+  meter: clawrouter.requests
+  dimensions: [provider, endpoint, key, service, subject]
+

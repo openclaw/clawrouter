@@ -1,0 +1,58 @@
+schema: clawrouter.service-provider.v1
+id: minimax
+displayName: MiniMax
+status: stable
+class: openai_compatible
+service:
+  platform: minimax
+  kind: model_provider
+  upstreamService: minimax
+  configKeys: [MINIMAX_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://api.minimax.io
+routing:
+  nativePrefixes: [clawrouter-minimax, minimax]
+  modelPrefixes: [minimax/]
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+endpoints:
+  chat_completions:
+    path: /v1/chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: minimax/MiniMax-M3
+      upstream: MiniMax-M3
+      capabilities: [llm.chat]
+      pricingRef: minimax-m3
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
+  counters:
+    - name: input_tokens
+      source: usage.prompt_tokens
+      unit: token
+    - name: output_tokens
+      source: usage.completion_tokens
+      unit: token
+tests:
+  fixtures:
+    - name: chat-basic
+      request: providers/_fixtures/minimax/chat-basic.request.json
+      response: providers/_fixtures/minimax/chat-basic.response.json

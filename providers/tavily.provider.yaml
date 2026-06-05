@@ -1,0 +1,73 @@
+schema: clawrouter.service-provider.v1
+id: tavily
+displayName: Tavily
+status: stable
+class: rest_json
+service:
+  platform: tavily
+  kind: tool_provider
+  upstreamService: tavily
+  configKeys: [TAVILY_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://api.tavily.com
+routing:
+  nativePrefixes: [clawrouter-tavily, tavily]
+  modelPrefixes: [tavily/]
+adapter:
+  request: rest_json
+  response: rest_json
+  error: tavily_error
+capabilities:
+  - id: web.search
+    endpoint: search
+    methods: [POST]
+  - id: web.extract
+    endpoint: extract
+    methods: [POST]
+  - id: web.crawl
+    endpoint: crawl
+    methods: [POST]
+endpoints:
+  search:
+    path: /search
+    requestFormat: tavily.search
+    responseFormat: tavily.search
+    timeoutMs: 120000
+  extract:
+    path: /extract
+    requestFormat: tavily.extract
+    responseFormat: tavily.extract
+    timeoutMs: 120000
+  crawl:
+    path: /crawl
+    requestFormat: tavily.crawl
+    responseFormat: tavily.crawl
+    timeoutMs: 300000
+models:
+  entries:
+    - id: tavily/search
+      upstream: search
+      capabilities: [web.search]
+      pricingRef: tavily-search
+    - id: tavily/extract
+      upstream: extract
+      capabilities: [web.extract]
+      pricingRef: tavily-extract
+billing:
+  meter: clawrouter.requests
+  dimensions: [provider, endpoint, key, service, subject]
+  counters:
+    - name: request
+      source: request.count
+      unit: request
+tests:
+  fixtures:
+    - name: search-basic
+      request: providers/_fixtures/tavily/search-basic.request.json
+      response: providers/_fixtures/tavily/search-basic.response.json

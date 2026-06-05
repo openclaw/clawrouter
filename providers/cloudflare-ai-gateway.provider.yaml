@@ -1,0 +1,59 @@
+schema: clawrouter.service-provider.v1
+id: cloudflare-ai-gateway
+displayName: Cloudflare AI Gateway
+status: experimental
+class: cloudflare_ai_gateway
+service:
+  platform: cloudflare-ai-gateway
+  kind: gateway_platform
+  upstreamService: cloudflare
+  configKeys: [CLOUDFLARE_ACCOUNT_ID, CLOUDFLARE_AI_GATEWAY_ID, CLOUDFLARE_API_TOKEN]
+auth:
+  schemes:
+    - type: bearer
+      header: cf-aig-authorization
+      format: "Bearer ${secret}"
+      secretKind: api_token
+baseUrls:
+  default: https://gateway.ai.cloudflare.com/v1/${account_id}/${gateway_id}
+routing:
+  nativePrefixes: [clawrouter-cloudflare, cloudflare-ai-gateway]
+  modelPrefixes: [cloudflare-ai-gateway/]
+  baseUrlParam: base_url
+adapter:
+  request: cloudflare_ai_gateway
+  response: provider_native
+  stream: provider_sse
+  error: cloudflare_error
+capabilities:
+  - id: llm.chat
+    endpoint: universal
+    methods: [POST]
+  - id: llm.responses
+    endpoint: universal
+    methods: [POST]
+endpoints:
+  universal:
+    path: /
+    requestFormat: cloudflare_ai_gateway.universal
+    responseFormat: provider.native
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: cloudflare-ai-gateway/auto
+      upstream: auto
+      capabilities: [llm.chat, llm.responses]
+      pricingRef: cloudflare-ai-gateway-auto
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
+  counters:
+    - name: request
+      source: request.count
+      unit: request
+tests:
+  fixtures:
+    - name: universal-basic
+      request: providers/_fixtures/cloudflare-ai-gateway/universal-basic.request.json
+      response: providers/_fixtures/cloudflare-ai-gateway/universal-basic.response.json

@@ -1,0 +1,55 @@
+schema: clawrouter.service-provider.v1
+id: mistral
+displayName: Mistral AI
+status: stable
+class: openai_compatible
+service:
+  platform: mistral
+  kind: model_provider
+  upstreamService: mistral
+  configKeys: [MISTRAL_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://api.mistral.ai
+routing:
+  nativePrefixes: [clawrouter-mistral, mistral]
+  modelPrefixes: [mistral/]
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+  - id: llm.embeddings
+    endpoint: embeddings
+    methods: [POST]
+endpoints:
+  chat_completions:
+    path: /v1/chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+  embeddings:
+    path: /v1/embeddings
+    requestFormat: openai.embeddings
+    responseFormat: openai.embeddings
+    timeoutMs: 120000
+models:
+  entries:
+    - id: mistral/default
+      upstream: mistral
+      capabilities: [llm.chat]
+      pricingRef: mistral-default
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
+

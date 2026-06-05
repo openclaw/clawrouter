@@ -1,0 +1,257 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://openclaw.ai/schemas/clawrouter/service-provider.v1.json",
+  "title": "ClawRouter Service Provider Manifest",
+  "type": "object",
+  "required": ["schema", "id", "displayName", "auth", "baseUrls", "capabilities", "endpoints"],
+  "additionalProperties": false,
+  "properties": {
+    "schema": { "const": "clawrouter.service-provider.v1" },
+    "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9-]*$" },
+    "displayName": { "type": "string" },
+    "description": { "type": "string" },
+    "tags": { "type": "array", "items": { "type": "string" } },
+    "status": { "enum": ["experimental", "stable", "deprecated", "disabled"] },
+    "class": {
+      "enum": [
+        "openai_compatible",
+        "anthropic_compatible",
+        "rest_json",
+        "rest_form",
+        "oauth_rest_json",
+        "cloudflare_ai_gateway",
+        "custom_adapter"
+      ]
+    },
+    "service": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "platform": { "type": "string" },
+        "kind": {
+          "enum": [
+            "api_provider",
+            "model_provider",
+            "tool_provider",
+            "oauth_platform",
+            "metering_platform",
+            "gateway_platform"
+          ]
+        },
+        "upstreamService": { "type": "string" },
+        "oauthProvider": { "type": "string" },
+        "configKeys": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "auth": {
+      "type": "object",
+      "required": ["schemes"],
+      "additionalProperties": false,
+      "properties": {
+        "schemes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/authScheme" },
+          "minItems": 1
+        }
+      }
+    },
+    "baseUrls": {
+      "type": "object",
+      "required": ["default"],
+      "additionalProperties": { "type": "string" }
+    },
+    "routing": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "nativePrefixes": { "type": "array", "items": { "type": "string" } },
+        "modelPrefixes": { "type": "array", "items": { "type": "string" } },
+        "baseUrlParam": { "type": "string" },
+        "serviceParam": { "type": "string" }
+      }
+    },
+    "adapter": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "request": { "type": "string" },
+        "response": { "type": "string" },
+        "stream": { "type": "string" },
+        "error": { "type": "string" },
+        "passthroughHeaders": { "type": "array", "items": { "type": "string" } },
+        "injectHeaders": { "type": "object", "additionalProperties": { "type": "string" } },
+        "injectQuery": { "type": "object", "additionalProperties": { "type": "string" } }
+      }
+    },
+    "capabilities": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/capability" },
+      "minItems": 1
+    },
+    "endpoints": {
+      "type": "object",
+      "additionalProperties": { "$ref": "#/$defs/endpoint" },
+      "minProperties": 1
+    },
+    "models": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "entries": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/model" }
+        }
+      }
+    },
+    "billing": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "meter": { "type": "string" },
+        "dimensions": { "type": "array", "items": { "type": "string" } },
+        "counters": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/meterCounter" }
+        }
+      }
+    },
+    "tests": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "fixtures": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/fixture" }
+        }
+      }
+    }
+  },
+  "$defs": {
+    "authScheme": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "header", "format", "secretKind"],
+          "properties": {
+            "type": { "const": "bearer" },
+            "header": { "type": "string" },
+            "format": { "type": "string" },
+            "secretKind": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "header", "secretKind"],
+          "properties": {
+            "type": { "const": "api_key" },
+            "header": { "type": "string" },
+            "secretKind": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "param", "secretKind"],
+          "properties": {
+            "type": { "const": "query_api_key" },
+            "param": { "type": "string" },
+            "secretKind": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "scopes"],
+          "properties": {
+            "type": { "const": "oauth" },
+            "provider": { "type": "string" },
+            "scopes": { "type": "array", "items": { "type": "string" } },
+            "tokenRef": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type", "service"],
+          "properties": {
+            "type": { "const": "sig_v4" },
+            "service": { "type": "string" },
+            "regionParam": { "type": "string" }
+          },
+          "additionalProperties": false
+        },
+        {
+          "type": "object",
+          "required": ["type"],
+          "properties": {
+            "type": { "const": "cloudflare_binding" }
+          },
+          "additionalProperties": false
+        }
+      ]
+    },
+    "capability": {
+      "type": "object",
+      "required": ["id", "endpoint"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "endpoint": { "type": "string" },
+        "methods": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "endpoint": {
+      "type": "object",
+      "required": ["path", "requestFormat", "responseFormat"],
+      "additionalProperties": false,
+      "properties": {
+        "path": { "type": "string", "pattern": "^/" },
+        "method": { "type": "string" },
+        "auth": { "type": "string" },
+        "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+        "query": { "type": "object", "additionalProperties": { "type": "string" } },
+        "pathParams": { "type": "array", "items": { "type": "string" } },
+        "pathParamStyles": {
+          "type": "object",
+          "additionalProperties": { "enum": ["segment", "relative_path"] }
+        },
+        "requestFormat": { "type": "string" },
+        "responseFormat": { "type": "string" },
+        "streaming": { "type": "string" },
+        "timeoutMs": { "type": "integer", "minimum": 1 }
+      }
+    },
+    "model": {
+      "type": "object",
+      "required": ["id", "upstream"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string" },
+        "upstream": { "type": "string" },
+        "capabilities": { "type": "array", "items": { "type": "string" } },
+        "pricingRef": { "type": "string" }
+      }
+    },
+    "meterCounter": {
+      "type": "object",
+      "required": ["name", "source"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "source": { "type": "string" },
+        "unit": { "type": "string" }
+      }
+    },
+    "fixture": {
+      "type": "object",
+      "required": ["name", "request", "response"],
+      "additionalProperties": false,
+      "properties": {
+        "name": { "type": "string" },
+        "request": { "type": "string" },
+        "response": { "type": "string" }
+      }
+    }
+  }
+}

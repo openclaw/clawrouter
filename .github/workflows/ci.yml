@@ -1,0 +1,52 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+      - feat/**
+
+jobs:
+  rust:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - run: cargo test --workspace
+      - run: cargo build -p clawrouter-edge --target wasm32-unknown-unknown
+      - run: cargo run -p clawrouter -- provider compile providers/*.provider.yaml > /tmp/provider-snapshot.json
+
+  admin:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.5.1
+      - run: pnpm install --frozen-lockfile=false
+      - run: pnpm --dir admin check
+      - run: pnpm --dir admin build
+
+  worker-package:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.5.1
+      - run: pnpm install --frozen-lockfile=false
+      - run: pnpm provider:smoke-plan
+      - run: CLAWROUTER_STRICT_CONFIG=0 pnpm cf:config
+      - run: pnpm exec wrangler deploy --dry-run --config .wrangler.generated.toml

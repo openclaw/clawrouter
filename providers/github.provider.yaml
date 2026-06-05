@@ -1,0 +1,58 @@
+schema: clawrouter.service-provider.v1
+id: github
+displayName: GitHub
+status: experimental
+class: oauth_rest_json
+service:
+  platform: github
+  kind: oauth_platform
+  upstreamService: github
+  oauthProvider: github
+auth:
+  schemes:
+    - type: oauth
+      provider: github
+      scopes: [repo, read:org]
+      tokenRef: oauth.github.access_token
+baseUrls:
+  default: https://api.github.com
+routing:
+  nativePrefixes: [clawrouter-github, github]
+  serviceParam: service
+adapter:
+  request: rest_json
+  response: rest_json
+  error: github_error
+  injectHeaders:
+    X-GitHub-Api-Version: "2022-11-28"
+capabilities:
+  - id: tool.invoke
+    endpoint: rest
+    methods: [GET, POST, PATCH, PUT, DELETE]
+endpoints:
+  rest:
+    path: /${path}
+    pathParams: [path]
+    pathParamStyles:
+      path: relative_path
+    requestFormat: github.rest
+    responseFormat: github.rest
+    timeoutMs: 120000
+models:
+  entries:
+    - id: github/rest
+      upstream: rest
+      capabilities: [tool.invoke]
+      pricingRef: github-rest
+billing:
+  meter: clawrouter.requests
+  dimensions: [provider, endpoint, key, service, subject]
+  counters:
+    - name: request
+      source: request.count
+      unit: request
+tests:
+  fixtures:
+    - name: repo-basic
+      request: providers/_fixtures/github/repo-basic.request.json
+      response: providers/_fixtures/github/repo-basic.response.json

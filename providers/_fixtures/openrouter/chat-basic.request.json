@@ -1,0 +1,5 @@
+{
+  "model": "openrouter/auto",
+  "messages": [{ "role": "user", "content": "ping" }]
+}
+

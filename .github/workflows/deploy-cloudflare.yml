@@ -1,0 +1,57 @@
+name: Deploy Cloudflare
+
+on:
+  workflow_dispatch:
+    inputs:
+      worker_url:
+        description: "Optional deployed Worker URL to smoke-test after deploy"
+        required: false
+        type: string
+      smoke_openai:
+        description: "Run OpenAI-compatible proxy smoke; requires CLAWROUTER_SMOKE_KEY and OPENAI_API_KEY secrets"
+        required: false
+        default: false
+        type: boolean
+      live_providers:
+        description: "Comma-separated provider ids for live upstream smoke, or all"
+        required: false
+        default: ""
+        type: string
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLOUDFLARE_ACCOUNT_ID }}
+      CLAWROUTER_ADMIN_TOKEN_SHA256: ${{ secrets.CLAWROUTER_ADMIN_TOKEN_SHA256 }}
+      CLAWROUTER_POLICY_KV_ID: ${{ secrets.CLAWROUTER_POLICY_KV_ID }}
+      CLAWROUTER_POLICY_KV_PREVIEW_ID: ${{ secrets.CLAWROUTER_POLICY_KV_PREVIEW_ID }}
+      CLAWROUTER_USAGE_QUEUE: ${{ vars.CLAWROUTER_USAGE_QUEUE || 'clawrouter-usage' }}
+      CLAWROUTER_WORKER_NAME: ${{ vars.CLAWROUTER_WORKER_NAME || 'clawrouter-edge' }}
+      CLAWROUTER_BASE_URL: ${{ inputs.worker_url }}
+      CLAWROUTER_SMOKE_KEY: ${{ secrets.CLAWROUTER_SMOKE_KEY }}
+      CLAWROUTER_SMOKE_OPENAI: ${{ inputs.smoke_openai && '1' || '0' }}
+      CLAWROUTER_SMOKE_LIVE_PROVIDERS: ${{ inputs.live_providers }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.5.1
+      - run: pnpm install --frozen-lockfile=false
+      - run: pnpm cf:preflight
+      - run: cargo test --workspace
+      - run: pnpm --dir admin check
+      - run: pnpm --dir admin build
+      - run: pnpm cf:config
+      - run: pnpm exec wrangler deploy --config .wrangler.generated.toml
+      - if: ${{ inputs.worker_url != '' }}
+        env:
+          CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY: ${{ secrets.CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY }}
+        run: pnpm cf:smoke
