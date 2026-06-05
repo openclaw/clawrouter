@@ -9,6 +9,8 @@ Cloudflare KV so access can be revoked without a redeploy.
 - `USAGE_QUEUE`: metered usage events.
 - provider secrets such as `OPENAI_API_KEY`, `OPENROUTER_API_KEY`,
   `MINIMAX_API_KEY`, and `TAVILY_API_KEY`.
+- provider config vars declared by manifests, such as `OPENROUTER_SITE_URL`,
+  `AZURE_OPENAI_ENDPOINT`, and `AZURE_OPENAI_API_VERSION`.
 
 ## Provision
 
@@ -137,8 +139,8 @@ safe path segments; `/`, `?`, `#`, `.`, and `..` are rejected. `query` merges
 with manifest query defaults and injected query values.
 
 The live Worker rejects manifest endpoints that still need unresolved deployment
-templates in base URLs, injected headers/query values, or endpoint header/query
-defaults. OAuth and SigV4 providers are cataloged but return
+templates that are not declared in `service.configKeys`. OAuth and SigV4
+providers are cataloged but return
 `provider_endpoint_not_supported` until token storage/signing is wired.
 
 ## Smoke

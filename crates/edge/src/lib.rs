@@ -5,6 +5,7 @@ use clawrouter_core::{
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
+use std::collections::BTreeMap;
 use std::sync::atomic::{AtomicU64, Ordering};
 use wasm_bindgen::JsValue;
 use worker::*;
@@ -89,7 +90,14 @@ async fn proxy_openai_compatible(mut req: Request, env: Env, path: &str) -> Resu
     if let Some(response) = preflight_budget(&auth.policy, route.provider, capability)? {
         return Ok(response);
     }
-    let upstream_url = upstream_url(route.provider, endpoint)?;
+    let upstream_url =
+        match openai_upstream_url(route.provider, endpoint, &env, &route.upstream_model) {
+            Ok(url) => url,
+            Err(OpenAiProxyUrlError::Client(message)) => {
+                return json_error("invalid_model", &message, 400);
+            }
+            Err(OpenAiProxyUrlError::Runtime(error)) => return Err(error),
+        };
     body["model"] = Value::String(route.upstream_model.clone());
     let upstream_body = serde_json::to_string(&body)?;
 
@@ -409,7 +417,11 @@ fn select_model_route<'a>(
         if !supports_openai_compatible_proxy(provider) {
             continue;
         }
-        if let Some(model_entry) = provider.models.iter().find(|entry| entry.id == model) {
+        if let Some(model_entry) = provider
+            .models
+            .iter()
+            .find(|entry| entry.id == model && !contains_template(&entry.upstream))
+        {
             return Some(SelectedRoute {
                 provider,
                 upstream_model: model_entry.upstream.clone(),
@@ -440,7 +452,8 @@ fn supports_openai_compatible_proxy(provider: &CompiledProvider) -> bool {
     provider.class == ProviderClass::OpenaiCompatible
         && provider.adapter.request.as_deref() == Some("openai")
         && provider.adapter.response.as_deref() == Some("openai")
-        && !contains_template(
+        && templates_supported_by_config(
+            provider,
             provider
                 .base_urls
                 .get("default")
@@ -450,17 +463,17 @@ fn supports_openai_compatible_proxy(provider: &CompiledProvider) -> bool {
         && provider
             .endpoints
             .iter()
-            .all(|endpoint| !contains_template(&endpoint.path))
+            .all(openai_endpoint_path_supported)
         && provider
             .adapter
             .inject_query
             .values()
-            .all(|value| !contains_template(value))
+            .all(|value| templates_supported_by_config(provider, value))
         && provider
             .adapter
             .inject_headers
             .values()
-            .all(|value| !contains_template(value))
+            .all(|value| templates_supported_by_config(provider, value))
         && supports_edge_auth(provider)
 }
 
@@ -495,22 +508,69 @@ fn capability_for_path(capabilities: &[String], request_path: &str) -> Option<&'
         .then_some(capability)
 }
 
-fn upstream_url(provider: &CompiledProvider, endpoint: &CompiledEndpoint) -> Result<String> {
+fn openai_upstream_url(
+    provider: &CompiledProvider,
+    endpoint: &CompiledEndpoint,
+    env: &Env,
+    upstream_model: &str,
+) -> std::result::Result<String, OpenAiProxyUrlError> {
     let base = provider.base_urls.get("default").ok_or_else(|| {
-        Error::RustError(format!(
+        OpenAiProxyUrlError::Runtime(Error::RustError(format!(
             "provider `{}` has no default base URL",
             provider.id
-        ))
+        )))
     })?;
-    Ok(format!("{}{}", base.trim_end_matches('/'), endpoint.path))
+    let base =
+        resolve_template_value(provider, base, Some(env)).map_err(OpenAiProxyUrlError::Runtime)?;
+    let path = openai_endpoint_path(endpoint, upstream_model)?;
+    let mut url = format!("{}{}", base.trim_end_matches('/'), path);
+    let query = resolved_template_map(provider, &provider.adapter.inject_query, Some(env))
+        .map_err(OpenAiProxyUrlError::Runtime)?;
+    append_query(&mut url, query);
+    Ok(url)
 }
 
 fn contains_template(value: &str) -> bool {
     value.contains("${")
 }
 
+fn openai_endpoint_path_supported(endpoint: &CompiledEndpoint) -> bool {
+    let placeholders = template_placeholders(&endpoint.path);
+    placeholders.is_empty()
+        || (endpoint.path_params.len() == 1
+            && placeholders
+                .iter()
+                .all(|name| endpoint.path_params.iter().any(|param| param == name)))
+}
+
+#[derive(Debug)]
+enum OpenAiProxyUrlError {
+    Client(String),
+    Runtime(Error),
+}
+
+fn openai_endpoint_path(
+    endpoint: &CompiledEndpoint,
+    upstream_model: &str,
+) -> std::result::Result<String, OpenAiProxyUrlError> {
+    if endpoint.path_params.is_empty() {
+        return Ok(endpoint.path.clone());
+    }
+    if endpoint.path_params.len() != 1 {
+        return Err(OpenAiProxyUrlError::Runtime(Error::RustError(format!(
+            "provider endpoint `{}` needs more than one OpenAI path parameter",
+            endpoint.id
+        ))));
+    }
+    let param = &endpoint.path_params[0];
+    let value =
+        path_param_segment(endpoint, param, upstream_model).map_err(OpenAiProxyUrlError::Client)?;
+    Ok(endpoint.path.replace(&format!("${{{param}}}"), &value))
+}
+
 fn supports_manifest_proxy(provider: &CompiledProvider, endpoint: &CompiledEndpoint) -> bool {
-    !contains_template(
+    templates_supported_by_config(
+        provider,
         provider
             .base_urls
             .get("default")
@@ -520,20 +580,20 @@ fn supports_manifest_proxy(provider: &CompiledProvider, endpoint: &CompiledEndpo
         .adapter
         .inject_headers
         .values()
-        .all(|value| !contains_template(value))
+        .all(|value| templates_supported_by_config(provider, value))
         && provider
             .adapter
             .inject_query
             .values()
-            .all(|value| !contains_template(value))
+            .all(|value| templates_supported_by_config(provider, value))
         && endpoint
             .headers
             .values()
-            .all(|value| !contains_template(value))
+            .all(|value| templates_supported_by_config(provider, value))
         && endpoint
             .query
             .values()
-            .all(|value| !contains_template(value))
+            .all(|value| templates_supported_by_config(provider, value))
         && supports_edge_auth(provider)
 }
 
@@ -600,30 +660,26 @@ fn manifest_upstream_url(
             path_param_segment(endpoint, param, value).map_err(ManifestProxyError::Client)?;
         path = path.replace(&format!("${{{param}}}"), &value);
     }
+    let base = resolve_template_value(provider, base, env).map_err(ManifestProxyError::Runtime)?;
     let mut url = format!("{}{}", base.trim_end_matches('/'), path);
-    let mut query = endpoint.query.clone();
+    let mut query = resolved_template_map(provider, &endpoint.query, env)
+        .map_err(ManifestProxyError::Runtime)?;
     for (name, value) in &proxy.query {
         if let Some(value) = query_value(value) {
             query.insert(name.clone(), value);
         }
     }
-    for (name, value) in &provider.adapter.inject_query {
-        query.insert(name.clone(), value.clone());
+    for (name, value) in resolved_template_map(provider, &provider.adapter.inject_query, env)
+        .map_err(ManifestProxyError::Runtime)?
+    {
+        query.insert(name, value);
     }
     if let Some((param, secret)) =
         query_api_key(provider, env).map_err(ManifestProxyError::Runtime)?
     {
         query.insert(param, secret);
     }
-    if !query.is_empty() {
-        let pairs = query
-            .iter()
-            .map(|(name, value)| format!("{}={}", encode_component(name), encode_component(value)))
-            .collect::<Vec<_>>()
-            .join("&");
-        url.push('?');
-        url.push_str(&pairs);
-    }
+    append_query(&mut url, query);
     Ok(url)
 }
 
@@ -635,11 +691,13 @@ fn provider_headers(
 ) -> Result<Headers> {
     let headers = Headers::new();
     headers.set("content-type", "application/json")?;
-    for (name, value) in &provider.adapter.inject_headers {
-        headers.set(name, value)?;
+    for (name, value) in
+        resolved_template_map(provider, &provider.adapter.inject_headers, Some(env))?
+    {
+        headers.set(&name, &value)?;
     }
-    for (name, value) in &endpoint.headers {
-        headers.set(name, value)?;
+    for (name, value) in resolved_template_map(provider, &endpoint.headers, Some(env))? {
+        headers.set(&name, &value)?;
     }
     for header in &provider.adapter.passthrough_headers {
         if let Some(value) = incoming.get(header)? {
@@ -685,6 +743,128 @@ fn provider_secret(env: &Env, provider: &CompiledProvider, secret_kind: &str) ->
         "missing Cloudflare secret for provider `{}`",
         provider.id
     )))
+}
+
+fn resolve_template_value(
+    provider: &CompiledProvider,
+    value: &str,
+    env: Option<&Env>,
+) -> Result<String> {
+    let placeholders = template_placeholders(value);
+    if placeholders.is_empty() {
+        return Ok(value.to_string());
+    }
+    let Some(env) = env else {
+        return Err(Error::RustError(format!(
+            "provider `{}` requires runtime config for `{value}`",
+            provider.id
+        )));
+    };
+    let mut resolved = value.to_string();
+    for placeholder in placeholders {
+        let replacement = provider_config_value(env, provider, &placeholder)?;
+        resolved = resolved.replace(&format!("${{{placeholder}}}"), &replacement);
+    }
+    Ok(resolved)
+}
+
+fn resolved_template_map(
+    provider: &CompiledProvider,
+    values: &BTreeMap<String, String>,
+    env: Option<&Env>,
+) -> Result<BTreeMap<String, String>> {
+    values
+        .iter()
+        .map(|(name, value)| {
+            resolve_template_value(provider, value, env).map(|value| (name.clone(), value))
+        })
+        .collect()
+}
+
+fn provider_config_value(env: &Env, provider: &CompiledProvider, name: &str) -> Result<String> {
+    for binding in template_binding_candidates(provider, name) {
+        if let Ok(var) = env.var(&binding) {
+            return Ok(var.to_string());
+        }
+        if let Ok(secret) = env.secret(&binding) {
+            return Ok(secret.to_string());
+        }
+    }
+    Err(Error::RustError(format!(
+        "missing Cloudflare config value `{name}` for provider `{}`",
+        provider.id
+    )))
+}
+
+fn templates_supported_by_config(provider: &CompiledProvider, value: &str) -> bool {
+    template_placeholders(value)
+        .iter()
+        .all(|name| template_has_config_key(provider, name))
+}
+
+fn template_has_config_key(provider: &CompiledProvider, name: &str) -> bool {
+    template_binding_candidates(provider, name)
+        .iter()
+        .any(|candidate| provider.config_keys.iter().any(|key| key == candidate))
+}
+
+fn template_binding_candidates(provider: &CompiledProvider, name: &str) -> Vec<String> {
+    let normalized_name = normalize_binding_segment(name);
+    let mut candidates = Vec::new();
+    push_declared_template_candidate(provider, &mut candidates, &normalized_name);
+    push_declared_template_candidate(
+        provider,
+        &mut candidates,
+        &format!(
+            "{}_{}",
+            normalize_binding_segment(&provider.id),
+            normalized_name
+        ),
+    );
+    push_declared_template_candidate(
+        provider,
+        &mut candidates,
+        &format!(
+            "{}_{}",
+            normalize_binding_segment(&provider.service_platform),
+            normalized_name
+        ),
+    );
+    for key in &provider.config_keys {
+        if key == &normalized_name || key.ends_with(&format!("_{normalized_name}")) {
+            push_unique_candidate(&mut candidates, key);
+        }
+    }
+    candidates
+}
+
+fn push_declared_template_candidate(
+    provider: &CompiledProvider,
+    candidates: &mut Vec<String>,
+    candidate: &str,
+) {
+    if provider.config_keys.iter().any(|key| key == candidate) {
+        push_unique_candidate(candidates, candidate);
+    }
+}
+
+fn push_unique_candidate(candidates: &mut Vec<String>, candidate: &str) {
+    if !candidates.iter().any(|existing| existing == candidate) {
+        candidates.push(candidate.to_string());
+    }
+}
+
+fn normalize_binding_segment(value: &str) -> String {
+    value
+        .chars()
+        .map(|ch| {
+            if ch.is_ascii_alphanumeric() {
+                ch.to_ascii_uppercase()
+            } else {
+                '_'
+            }
+        })
+        .collect()
 }
 
 fn secret_binding_candidates(provider: &CompiledProvider, secret_kind: &str) -> Vec<String> {
@@ -877,6 +1057,36 @@ fn query_value(value: &Value) -> Option<String> {
     }
 }
 
+fn append_query(url: &mut String, query: BTreeMap<String, String>) {
+    if query.is_empty() {
+        return;
+    }
+    let pairs = query
+        .iter()
+        .map(|(name, value)| format!("{}={}", encode_component(name), encode_component(value)))
+        .collect::<Vec<_>>()
+        .join("&");
+    url.push('?');
+    url.push_str(&pairs);
+}
+
+fn template_placeholders(template: &str) -> Vec<String> {
+    let mut params = Vec::new();
+    let mut rest = template;
+    while let Some(start) = rest.find("${") {
+        let after_start = &rest[start + 2..];
+        let Some(end) = after_start.find('}') else {
+            break;
+        };
+        let param = &after_start[..end];
+        if !param.is_empty() {
+            params.push(param.to_string());
+        }
+        rest = &after_start[end + 1..];
+    }
+    params
+}
+
 fn encode_component(value: &str) -> String {
     value
         .bytes()
@@ -935,13 +1145,15 @@ mod tests {
     #[test]
     fn openai_proxy_excludes_template_and_non_openai_adapters() {
         let snapshot = provider_snapshot().unwrap();
-        assert!(select_model_route(&snapshot, "azure-openai/my-deployment").is_none());
+        let route = select_model_route(&snapshot, "azure-openai/my-deployment").unwrap();
+        assert_eq!(route.provider.id, "azure-openai");
+        assert_eq!(route.upstream_model, "my-deployment");
         assert!(select_model_route(&snapshot, "cohere/default").is_none());
         assert!(select_model_route(&snapshot, "cloudflare-ai-gateway/auto").is_none());
     }
 
     #[test]
-    fn openai_proxy_support_filter_requires_openai_adapter_without_templates() {
+    fn openai_proxy_support_filter_allows_config_backed_templates() {
         let snapshot = provider_snapshot().unwrap();
         let openai = snapshot
             .providers
@@ -954,22 +1166,59 @@ mod tests {
             .find(|provider| provider.id == "azure-openai")
             .unwrap();
         assert!(supports_openai_compatible_proxy(openai));
-        assert!(!supports_openai_compatible_proxy(azure));
+        assert!(supports_openai_compatible_proxy(azure));
+        assert_eq!(
+            openai_endpoint_path(
+                azure
+                    .endpoints
+                    .iter()
+                    .find(|endpoint| endpoint.id == "chat_completions")
+                    .unwrap(),
+                "docs-deployment"
+            )
+            .unwrap(),
+            "/openai/deployments/docs-deployment/chat/completions"
+        );
     }
 
     #[test]
-    fn openai_proxy_support_filter_rejects_templated_headers() {
+    fn openai_path_params_reject_slashy_model_suffixes_as_client_errors() {
+        let snapshot = provider_snapshot().unwrap();
+        let azure = snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.id == "azure-openai")
+            .unwrap();
+        let endpoint = azure
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.id == "chat_completions")
+            .unwrap();
+        let error = openai_endpoint_path(endpoint, "bad/deployment").unwrap_err();
+        match error {
+            OpenAiProxyUrlError::Client(message) => {
+                assert!(message.contains("safe path segment"));
+            }
+            OpenAiProxyUrlError::Runtime(_) => panic!("expected client error"),
+        }
+    }
+
+    #[test]
+    fn openai_proxy_support_filter_accepts_declared_templated_headers() {
         let snapshot = provider_snapshot().unwrap();
         let openrouter = snapshot
             .providers
             .iter()
             .find(|provider| provider.id == "openrouter")
             .unwrap();
-        assert!(!supports_openai_compatible_proxy(openrouter));
+        assert!(supports_openai_compatible_proxy(openrouter));
+        assert!(template_binding_candidates(openrouter, "site_url")
+            .iter()
+            .any(|binding| binding == "OPENROUTER_SITE_URL"));
     }
 
     #[test]
-    fn manifest_proxy_rejects_unresolved_base_templates() {
+    fn manifest_proxy_accepts_config_backed_base_templates() {
         let snapshot = provider_snapshot().unwrap();
         let provider = snapshot
             .providers
@@ -981,7 +1230,22 @@ mod tests {
             .iter()
             .find(|endpoint| endpoint.id == "chat_completions")
             .unwrap();
-        assert!(!supports_manifest_proxy(provider, endpoint));
+        assert!(supports_manifest_proxy(provider, endpoint));
+    }
+
+    #[test]
+    fn template_resolution_uses_declared_config_keys_only() {
+        let snapshot = provider_snapshot().unwrap();
+        let azure = snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.id == "azure-openai")
+            .unwrap();
+        let endpoint_candidates = template_binding_candidates(azure, "endpoint");
+        assert_eq!(endpoint_candidates, vec!["AZURE_OPENAI_ENDPOINT"]);
+        assert!(!endpoint_candidates
+            .iter()
+            .any(|key| key == "AZURE_ENDPOINT"));
     }
 
     #[test]

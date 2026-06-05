@@ -22,6 +22,7 @@ class: rest_json
 service:
   platform: example
   kind: api_provider
+  configKeys: [EXAMPLE_API_KEY, EXAMPLE_SITE_URL]
 auth:
   schemes:
     - type: bearer
@@ -68,14 +69,18 @@ billing:
 ## Edge Support Rules
 
 Every valid manifest is listed in `GET /v1/providers` and compiled into the
-admin/provider snapshot. The live Worker only executes a manifest endpoint when
-the edge can resolve it without deployment-specific placeholders outside the
-request path:
+admin/provider snapshot. The live Worker executes a manifest endpoint when the
+edge can resolve its deployment-specific placeholders from `service.configKeys`
+or from request path params:
 
 - `baseUrls.default`, `adapter.injectHeaders`, `adapter.injectQuery`,
-  `endpoint.headers`, and `endpoint.query` must be concrete strings.
+  `endpoint.headers`, and `endpoint.query` may contain `${name}` placeholders
+  when `service.configKeys` declares a matching binding such as
+  `EXAMPLE_NAME`, `EXAMPLE_SITE_URL`, or `EXAMPLE_API_VERSION`.
 - `endpoint.path` may contain `${name}` placeholders when the endpoint declares
   matching `pathParams`; callers pass those as single safe path segments.
+- OpenAI-compatible providers may use one endpoint path param, such as Azure
+  OpenAI’s deployment name; ClawRouter fills it from the routed model suffix.
 - bearer, header API key, query API key, and Cloudflare binding auth are
   executable today.
 - OAuth and SigV4 providers stay cataloged for admin, policy, and OAuth mapping,

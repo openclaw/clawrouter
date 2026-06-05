@@ -7,7 +7,7 @@ service:
   platform: openrouter
   kind: gateway_platform
   upstreamService: openrouter
-  configKeys: [OPENROUTER_API_KEY]
+  configKeys: [OPENROUTER_API_KEY, OPENROUTER_SITE_URL]
 auth:
   schemes:
     - type: bearer
