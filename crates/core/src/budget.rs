@@ -90,7 +90,9 @@ impl BudgetLedger {
             return BudgetDecision::DuplicateReservation { reservation_id };
         }
         let window_key = budget_window_key(policy, unix_seconds);
-        let current = self.spent_in_window(&window_key) + self.reserved_in_window(&window_key);
+        let current = self
+            .spent_in_window(&window_key)
+            .saturating_add(self.reserved_in_window(&window_key));
         let remaining = policy.hard_limit_micros.saturating_sub(current);
         if requested_micros > remaining {
             return BudgetDecision::Denied {
@@ -99,7 +101,8 @@ impl BudgetLedger {
                 requested_micros,
             };
         }
-        *self.reserved.entry(window_key.clone()).or_default() += requested_micros;
+        let reserved = self.reserved.entry(window_key.clone()).or_default();
+        *reserved = reserved.saturating_add(requested_micros);
         let reservation = Reservation {
             id: reservation_id,
             policy_id: policy.id.clone(),
@@ -187,8 +190,8 @@ fn budget_window_key(policy: &BudgetPolicy, unix_seconds: u64) -> String {
     let window = match policy.reset {
         BudgetReset::Hour => unix_seconds / 3_600,
         BudgetReset::Day => unix_seconds / 86_400,
-        BudgetReset::Week => unix_seconds / 604_800,
-        BudgetReset::Month => unix_seconds / 2_592_000,
+        BudgetReset::Week => calendar_week_window(unix_seconds),
+        BudgetReset::Month => calendar_month_window(unix_seconds),
         BudgetReset::Never => 0,
     };
     format!("{}{}", budget_window_prefix(&policy.id), window)
@@ -196,6 +199,31 @@ fn budget_window_key(policy: &BudgetPolicy, unix_seconds: u64) -> String {
 
 fn budget_window_prefix(policy_id: &str) -> String {
     format!("{policy_id}\x1f")
+}
+
+fn calendar_week_window(unix_seconds: u64) -> u64 {
+    let days = unix_seconds / 86_400;
+    (days + 3) / 7
+}
+
+fn calendar_month_window(unix_seconds: u64) -> u64 {
+    let days = (unix_seconds / 86_400) as i64;
+    let (year, month, _) = civil_from_unix_days(days);
+    (year as u64) * 12 + u64::from(month)
+}
+
+fn civil_from_unix_days(days: i64) -> (i32, u32, u32) {
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let day = doy - (153 * mp + 2) / 5 + 1;
+    let month = mp + if mp < 10 { 3 } else { -9 };
+    let year = y + if month <= 2 { 1 } else { 0 };
+    (year as i32, month as u32, day as u32)
 }
 
 #[cfg(test)]
@@ -315,5 +343,31 @@ mod tests {
         ));
         assert_eq!(ledger.spent_for_policy_at(&policy, 0), 100);
         assert_eq!(ledger.spent_for_policy_at(&policy, 86_400), 0);
+    }
+
+    #[test]
+    fn month_windows_reset_on_calendar_months() {
+        let policy = BudgetPolicy {
+            id: "budget_docs".to_string(),
+            hard_limit_micros: 100,
+            reset: BudgetReset::Month,
+        };
+        let mut ledger = BudgetLedger::default();
+        let feb_29_2024 = 1_709_164_800;
+        let mar_01_2024 = 1_709_251_200;
+        let BudgetDecision::Allowed(reservation) =
+            ledger.reserve_at(&policy, "r1", 100, feb_29_2024)
+        else {
+            panic!("expected reservation");
+        };
+        ledger.finalize(&reservation, 100);
+        assert!(matches!(
+            ledger.reserve_at(&policy, "r2", 1, feb_29_2024),
+            BudgetDecision::Denied { .. }
+        ));
+        assert!(matches!(
+            ledger.reserve_at(&policy, "r3", 100, mar_01_2024),
+            BudgetDecision::Allowed(_)
+        ));
     }
 }
