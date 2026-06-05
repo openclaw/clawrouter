@@ -288,6 +288,7 @@ pub struct CompiledModel {
 pub struct CompiledEndpoint {
     pub id: String,
     pub method: String,
+    pub methods: Vec<String>,
     pub path: String,
     pub auth: Option<String>,
     pub headers: BTreeMap<String, String>,
@@ -447,12 +448,26 @@ pub fn compile_provider_snapshot(
                 },
             );
         }
+        let mut endpoint_methods: BTreeMap<String, BTreeSet<String>> = BTreeMap::new();
+        for capability in &manifest.capabilities {
+            let methods = endpoint_methods
+                .entry(capability.endpoint.clone())
+                .or_default();
+            for method in &capability.methods {
+                methods.insert(method.clone());
+            }
+        }
         let endpoints = manifest
             .endpoints
             .iter()
             .map(|(id, endpoint)| CompiledEndpoint {
                 id: id.clone(),
                 method: endpoint.method.clone(),
+                methods: endpoint_methods
+                    .get(id)
+                    .map(|methods| methods.iter().cloned().collect())
+                    .filter(|methods: &Vec<String>| !methods.is_empty())
+                    .unwrap_or_else(|| vec![endpoint.method.clone()]),
                 path: endpoint.path.clone(),
                 auth: endpoint.auth.clone(),
                 headers: endpoint.headers.clone(),
@@ -559,7 +574,7 @@ routing:
 capabilities:
   - id: web.search
     endpoint: search
-    methods: [POST]
+    methods: [GET, POST]
 endpoints:
   search:
     path: /search
@@ -588,7 +603,7 @@ billing:
             CapabilityRoute {
                 provider: "tavily".to_string(),
                 endpoint: "search".to_string(),
-                methods: vec!["POST".to_string()]
+                methods: vec!["GET".to_string(), "POST".to_string()]
             }
         );
         assert_eq!(snapshot.model_index["tavily/search"].provider, "tavily");
@@ -596,6 +611,10 @@ billing:
         assert_eq!(
             snapshot.providers[0].endpoints[0].path_params,
             vec!["query"]
+        );
+        assert_eq!(
+            snapshot.providers[0].endpoints[0].methods,
+            vec!["GET", "POST"]
         );
         assert_eq!(snapshot.providers[0].endpoints[0].timeout_ms, Some(120000));
         assert_eq!(
