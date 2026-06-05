@@ -79,8 +79,8 @@ impl BudgetLedger {
             .entry(reservation.policy_id.clone())
             .or_default();
         *reserved = reserved.saturating_sub(reservation.reserved_micros);
-        let charged_micros = actual_micros.min(reservation.reserved_micros);
-        let overage_micros = actual_micros.saturating_sub(charged_micros);
+        let charged_micros = actual_micros;
+        let overage_micros = actual_micros.saturating_sub(reservation.reserved_micros);
         let spent = self.spent.entry(reservation.policy_id.clone()).or_default();
         *spent = spent.saturating_add(charged_micros);
         BudgetSettlement {
@@ -140,7 +140,7 @@ mod tests {
     }
 
     #[test]
-    fn caps_finalized_usage_to_reservation() {
+    fn records_actual_usage_when_settlement_exceeds_reservation() {
         let policy = BudgetPolicy {
             id: "budget_docs".to_string(),
             hard_limit_micros: 100,
@@ -154,11 +154,15 @@ mod tests {
         assert_eq!(
             settlement,
             BudgetSettlement {
-                charged_micros: 100,
+                charged_micros: 1_000,
                 overage_micros: 900
             }
         );
-        assert_eq!(ledger.spent("budget_docs"), 100);
+        assert_eq!(ledger.spent("budget_docs"), 1_000);
         assert_eq!(ledger.reserved("budget_docs"), 0);
+        assert!(matches!(
+            ledger.reserve(&policy, "r2", 1),
+            BudgetDecision::Denied { .. }
+        ));
     }
 }
