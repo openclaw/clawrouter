@@ -46,7 +46,5 @@ The Worker executes an endpoint when deployment templates are backed by declared
 `service.configKeys`, endpoint path placeholders are backed by request
 `pathParams`, and auth can be resolved from Worker secrets/config or `POLICY_KV`.
 
-Bearer, header API key, query API key, Cloudflare binding auth, and KV-backed
-OAuth grants are supported in the edge path today. SigV4 manifests remain valid
-service-provider definitions, but require the signing adapter before live proxy
-execution.
+Bearer, header API key, query API key, Cloudflare binding auth, KV-backed OAuth
+grants, and AWS SigV4 signing are supported in the edge path today.

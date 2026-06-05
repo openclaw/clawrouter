@@ -10,7 +10,7 @@ Cloudflare KV so access can be revoked without a redeploy.
 - provider secrets such as `OPENAI_API_KEY`, `OPENROUTER_API_KEY`,
   `MINIMAX_API_KEY`, and `TAVILY_API_KEY`.
 - provider config vars declared by manifests, such as `OPENROUTER_SITE_URL`,
-  `AZURE_OPENAI_ENDPOINT`, and `AZURE_OPENAI_API_VERSION`.
+  `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_VERSION`, and `AWS_REGION`.
 
 ## Provision
 
@@ -34,6 +34,15 @@ Provider API keys are Cloudflare Worker secrets, not GitHub repository files:
 
 ```sh
 pnpm exec wrangler secret put OPENAI_API_KEY --config .wrangler.generated.toml
+```
+
+AWS Bedrock uses SigV4. Bind these values before enabling the Bedrock provider:
+
+```sh
+pnpm exec wrangler secret put AWS_ACCESS_KEY_ID --config .wrangler.generated.toml
+pnpm exec wrangler secret put AWS_SECRET_ACCESS_KEY --config .wrangler.generated.toml
+pnpm exec wrangler secret put AWS_SESSION_TOKEN --config .wrangler.generated.toml # optional
+pnpm exec wrangler secret put AWS_REGION --config .wrangler.generated.toml
 ```
 
 ## Render and Deploy
@@ -175,8 +184,7 @@ paths, empty segments, `.`, `..`, query strings, and fragments are rejected.
 `query` merges with manifest query defaults and injected query values.
 
 The live Worker rejects manifest endpoints that still need unresolved deployment
-templates that are not declared in `service.configKeys`. SigV4 providers are
-cataloged but return `provider_endpoint_not_supported` until signing is wired.
+templates that are not declared in `service.configKeys`.
 
 ## Smoke
 

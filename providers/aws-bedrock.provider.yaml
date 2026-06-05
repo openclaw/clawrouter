@@ -7,7 +7,7 @@ service:
   platform: aws
   kind: model_provider
   upstreamService: bedrock
-  configKeys: [AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION]
+  configKeys: [AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_SESSION_TOKEN, AWS_REGION]
 auth:
   schemes:
     - type: sig_v4
@@ -53,4 +53,3 @@ models:
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject, region]
-

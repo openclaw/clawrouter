@@ -2,6 +2,7 @@ use clawrouter_core::{
     parse_proxy_key, AuthScheme, CompiledEndpoint, CompiledProvider, PathParamStyle, ProviderClass,
     ProviderSnapshot, UsageEvent, UsageStatus,
 };
+use hmac::{Hmac, Mac};
 use serde::Deserialize;
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
@@ -12,6 +13,7 @@ use worker::*;
 
 const PROVIDER_SNAPSHOT: &str = include_str!(concat!(env!("OUT_DIR"), "/provider-snapshot.json"));
 static USAGE_EVENT_COUNTER: AtomicU64 = AtomicU64::new(0);
+type HmacSha256 = Hmac<Sha256>;
 
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
@@ -101,7 +103,20 @@ async fn proxy_openai_compatible(mut req: Request, env: Env, path: &str) -> Resu
     body["model"] = Value::String(route.upstream_model.clone());
     let upstream_body = serde_json::to_string(&body)?;
 
-    let headers = match provider_headers(req.headers(), &env, route.provider, endpoint, &auth).await
+    let header_context = HeaderRequestContext {
+        method: "POST",
+        url: &upstream_url,
+        body: Some(&upstream_body),
+    };
+    let headers = match provider_headers(
+        req.headers(),
+        &env,
+        route.provider,
+        endpoint,
+        &auth,
+        header_context,
+    )
+    .await
     {
         Ok(headers) => headers,
         Err(HeaderBuildError::Client {
@@ -213,7 +228,24 @@ async fn proxy_manifest_endpoint(mut req: Request, env: Env, path: &str) -> Resu
         }
         Err(ManifestProxyError::Runtime(error)) => return Err(error),
     };
-    let headers = match provider_headers(req.headers(), &env, provider, endpoint, &auth).await {
+    let upstream_body = method_allows_body(&upstream_method)
+        .then(|| serde_json::to_string(&proxy.body.unwrap_or(Value::Object(Map::new()))))
+        .transpose()?;
+    let header_context = HeaderRequestContext {
+        method: &upstream_method,
+        url: &upstream_url,
+        body: upstream_body.as_deref(),
+    };
+    let headers = match provider_headers(
+        req.headers(),
+        &env,
+        provider,
+        endpoint,
+        &auth,
+        header_context,
+    )
+    .await
+    {
         Ok(headers) => headers,
         Err(HeaderBuildError::Client {
             code,
@@ -226,9 +258,7 @@ async fn proxy_manifest_endpoint(mut req: Request, env: Env, path: &str) -> Resu
     let mut init = RequestInit::new();
     init.with_method(method_from_str(&upstream_method)?)
         .with_headers(headers);
-    if method_allows_body(&upstream_method) {
-        let upstream_body =
-            serde_json::to_string(&proxy.body.unwrap_or(Value::Object(Map::new())))?;
+    if let Some(upstream_body) = upstream_body {
         init.with_body(Some(JsValue::from_str(&upstream_body)));
     }
     let upstream_req = Request::new_with_init(&upstream_url, &init)?;
@@ -650,7 +680,15 @@ fn supports_edge_auth(provider: &CompiledProvider) -> bool {
             provider.as_deref().is_some_and(|value| !value.is_empty())
                 || token_ref.as_deref().is_some_and(|value| !value.is_empty())
         }
-        AuthScheme::SigV4 { .. } => false,
+        AuthScheme::SigV4 {
+            service,
+            region_param,
+        } => {
+            !service.is_empty()
+                && template_has_config_key(provider, "access_key_id")
+                && template_has_config_key(provider, "secret_access_key")
+                && template_has_config_key(provider, region_param.as_deref().unwrap_or("region"))
+        }
     })
 }
 
@@ -737,12 +775,20 @@ enum HeaderBuildError {
     Runtime(Error),
 }
 
+#[derive(Clone, Copy)]
+struct HeaderRequestContext<'a> {
+    method: &'a str,
+    url: &'a str,
+    body: Option<&'a str>,
+}
+
 async fn provider_headers(
     incoming: &Headers,
     env: &Env,
     provider: &CompiledProvider,
     endpoint: &CompiledEndpoint,
     auth: &AuthorizedKey,
+    context: HeaderRequestContext<'_>,
 ) -> std::result::Result<Headers, HeaderBuildError> {
     let headers = Headers::new();
     headers
@@ -770,7 +816,7 @@ async fn provider_headers(
                 .map_err(HeaderBuildError::Runtime)?;
         }
     }
-    apply_auth_headers(&headers, env, provider, auth).await?;
+    apply_auth_headers(&headers, env, provider, auth, context).await?;
     Ok(headers)
 }
 
@@ -908,6 +954,22 @@ fn provider_config_value(env: &Env, provider: &CompiledProvider, name: &str) -> 
     )))
 }
 
+fn optional_provider_config_value(
+    env: &Env,
+    provider: &CompiledProvider,
+    name: &str,
+) -> Option<String> {
+    for binding in template_binding_candidates(provider, name) {
+        if let Ok(var) = env.var(&binding) {
+            return Some(var.to_string());
+        }
+        if let Ok(secret) = env.secret(&binding) {
+            return Some(secret.to_string());
+        }
+    }
+    None
+}
+
 fn templates_supported_by_config(provider: &CompiledProvider, value: &str) -> bool {
     template_placeholders(value)
         .iter()
@@ -1013,6 +1075,7 @@ async fn apply_auth_headers(
     env: &Env,
     provider: &CompiledProvider,
     auth: &AuthorizedKey,
+    context: HeaderRequestContext<'_>,
 ) -> std::result::Result<(), HeaderBuildError> {
     for scheme in &provider.auth.schemes {
         match scheme {
@@ -1067,11 +1130,19 @@ async fn apply_auth_headers(
                     .map_err(HeaderBuildError::Runtime)?;
                 return Ok(());
             }
-            AuthScheme::SigV4 { .. } => {
-                return Err(HeaderBuildError::Runtime(Error::RustError(format!(
-                    "provider `{}` requires SigV4 signing, which is not wired yet",
-                    provider.id
-                ))));
+            AuthScheme::SigV4 {
+                service,
+                region_param,
+            } => {
+                let signed =
+                    sigv4_headers(env, provider, service, region_param.as_deref(), context)
+                        .map_err(HeaderBuildError::Runtime)?;
+                for (name, value) in signed {
+                    headers
+                        .set(&name, &value)
+                        .map_err(HeaderBuildError::Runtime)?;
+                }
+                return Ok(());
             }
             AuthScheme::CloudflareBinding => return Ok(()),
         }
@@ -1194,6 +1265,146 @@ fn dedupe_preserving_order(values: &mut Vec<String>) {
         }
     }
     *values = deduped;
+}
+
+fn sigv4_headers(
+    env: &Env,
+    provider: &CompiledProvider,
+    service: &str,
+    region_param: Option<&str>,
+    context: HeaderRequestContext<'_>,
+) -> Result<BTreeMap<String, String>> {
+    let access_key_id = provider_config_value(env, provider, "access_key_id")?;
+    let secret_access_key = provider_config_value(env, provider, "secret_access_key")?;
+    let region = provider_config_value(env, provider, region_param.unwrap_or("region"))?;
+    let session_token = optional_provider_config_value(env, provider, "session_token");
+    sigv4_headers_at(
+        &access_key_id,
+        &secret_access_key,
+        session_token.as_deref(),
+        &region,
+        service,
+        context,
+        &aws_amz_date_now()?,
+    )
+}
+
+fn sigv4_headers_at(
+    access_key_id: &str,
+    secret_access_key: &str,
+    session_token: Option<&str>,
+    region: &str,
+    service: &str,
+    context: HeaderRequestContext<'_>,
+    amz_date: &str,
+) -> Result<BTreeMap<String, String>> {
+    let (host, canonical_uri, canonical_query) = sigv4_url_parts(context.url)?;
+    let date_stamp = amz_date
+        .get(0..8)
+        .ok_or_else(|| Error::RustError("invalid SigV4 date".to_string()))?;
+    let payload_hash = sha256_hex(context.body.unwrap_or(""));
+    let mut canonical_headers = BTreeMap::from([
+        ("host".to_string(), host.clone()),
+        ("x-amz-content-sha256".to_string(), payload_hash.clone()),
+        ("x-amz-date".to_string(), amz_date.to_string()),
+    ]);
+    if let Some(session_token) = session_token.filter(|value| !value.is_empty()) {
+        canonical_headers.insert(
+            "x-amz-security-token".to_string(),
+            session_token.to_string(),
+        );
+    }
+    let signed_headers = canonical_headers
+        .keys()
+        .map(String::as_str)
+        .collect::<Vec<_>>()
+        .join(";");
+    let canonical_header_block = canonical_headers
+        .iter()
+        .map(|(name, value)| format!("{name}:{}\n", value.trim()))
+        .collect::<String>();
+    let canonical_request = format!(
+        "{}\n{}\n{}\n{}\n{}\n{}",
+        context.method,
+        canonical_uri,
+        canonical_query,
+        canonical_header_block,
+        signed_headers,
+        payload_hash
+    );
+    let credential_scope = format!("{date_stamp}/{region}/{service}/aws4_request");
+    let string_to_sign = format!(
+        "AWS4-HMAC-SHA256\n{}\n{}\n{}",
+        amz_date,
+        credential_scope,
+        sha256_hex(&canonical_request)
+    );
+    let signing_key = sigv4_signing_key(secret_access_key, date_stamp, region, service)?;
+    let signature = bytes_to_hex(&hmac_sha256(&signing_key, &string_to_sign)?);
+    let authorization = format!(
+        "AWS4-HMAC-SHA256 Credential={}/{}, SignedHeaders={}, Signature={}",
+        access_key_id, credential_scope, signed_headers, signature
+    );
+
+    let mut headers = BTreeMap::from([
+        ("authorization".to_string(), authorization),
+        ("x-amz-content-sha256".to_string(), payload_hash),
+        ("x-amz-date".to_string(), amz_date.to_string()),
+    ]);
+    if let Some(session_token) = session_token.filter(|value| !value.is_empty()) {
+        headers.insert(
+            "x-amz-security-token".to_string(),
+            session_token.to_string(),
+        );
+    }
+    Ok(headers)
+}
+
+fn sigv4_signing_key(
+    secret_access_key: &str,
+    date_stamp: &str,
+    region: &str,
+    service: &str,
+) -> Result<Vec<u8>> {
+    let date_key = hmac_sha256(format!("AWS4{secret_access_key}").as_bytes(), date_stamp)?;
+    let region_key = hmac_sha256(&date_key, region)?;
+    let service_key = hmac_sha256(&region_key, service)?;
+    hmac_sha256(&service_key, "aws4_request")
+}
+
+fn hmac_sha256(key: &[u8], data: &str) -> Result<Vec<u8>> {
+    let mut mac = HmacSha256::new_from_slice(key)
+        .map_err(|error| Error::RustError(format!("failed to initialize HMAC: {error}")))?;
+    mac.update(data.as_bytes());
+    Ok(mac.finalize().into_bytes().to_vec())
+}
+
+fn sigv4_url_parts(url: &str) -> Result<(String, String, String)> {
+    let without_scheme = url
+        .strip_prefix("https://")
+        .ok_or_else(|| Error::RustError("SigV4 upstream URL must use https".to_string()))?;
+    let (host, path_query) = without_scheme
+        .split_once('/')
+        .map(|(host, rest)| (host, format!("/{rest}")))
+        .unwrap_or((without_scheme, "/".to_string()));
+    let (path, query) = path_query
+        .split_once('?')
+        .map(|(path, query)| (path.to_string(), query.to_string()))
+        .unwrap_or((path_query, String::new()));
+    Ok((host.to_ascii_lowercase(), path, query))
+}
+
+fn aws_amz_date_now() -> Result<String> {
+    let iso: String = js_sys::Date::new_0().to_iso_string().into();
+    let date = iso
+        .get(0..10)
+        .ok_or_else(|| Error::RustError("failed to format AWS date".to_string()))?
+        .replace('-', "");
+    let time = iso
+        .get(11..19)
+        .ok_or_else(|| Error::RustError("failed to format AWS time".to_string()))?
+        .replace(':', "");
+    Ok(format!("{date}T{time}Z"))
 }
 
 fn query_api_key(
@@ -1366,8 +1577,12 @@ fn encode_component(value: &str) -> String {
 
 fn sha256_hex(input: &str) -> String {
     let digest = Sha256::digest(input.as_bytes());
-    let mut output = String::with_capacity(digest.len() * 2);
-    for byte in digest {
+    bytes_to_hex(&digest)
+}
+
+fn bytes_to_hex(bytes: &[u8]) -> String {
+    let mut output = String::with_capacity(bytes.len() * 2);
+    for byte in bytes {
         output.push_str(&format!("{byte:02x}"));
     }
     output
@@ -1527,6 +1742,28 @@ mod tests {
             .find(|endpoint| endpoint.id == "rest")
             .unwrap();
         assert!(supports_manifest_proxy(provider, endpoint));
+    }
+
+    #[test]
+    fn manifest_proxy_supports_sigv4_when_configured() {
+        let snapshot = provider_snapshot().unwrap();
+        let provider = snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.id == "aws-bedrock")
+            .unwrap();
+        let endpoint = provider
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.id == "invoke_model")
+            .unwrap();
+        assert!(supports_manifest_proxy(provider, endpoint));
+        assert!(template_binding_candidates(provider, "access_key_id")
+            .iter()
+            .any(|binding| binding == "AWS_ACCESS_KEY_ID"));
+        assert!(template_binding_candidates(provider, "secret_access_key")
+            .iter()
+            .any(|binding| binding == "AWS_SECRET_ACCESS_KEY"));
     }
 
     #[test]
@@ -1743,6 +1980,40 @@ mod tests {
         assert!(!method_allows_body("HEAD"));
         assert!(method_allows_body("POST"));
         assert!(method_allows_body("PATCH"));
+    }
+
+    #[test]
+    fn sigv4_headers_include_canonical_aws_fields() {
+        let context = HeaderRequestContext {
+            method: "POST",
+            url: "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude/invoke",
+            body: Some(r#"{"inputText":"ok"}"#),
+        };
+        let headers = sigv4_headers_at(
+            "AKIDEXAMPLE",
+            "wJalrXUtnFEMI/K7MDENG+bPxRfiCYEXAMPLEKEY",
+            Some("session-token"),
+            "us-east-1",
+            "bedrock",
+            context,
+            "20260605T010203Z",
+        )
+        .unwrap();
+
+        assert_eq!(headers["x-amz-date"], "20260605T010203Z");
+        assert_eq!(headers["x-amz-security-token"], "session-token");
+        assert!(headers["authorization"]
+            .contains("Credential=AKIDEXAMPLE/20260605/us-east-1/bedrock/aws4_request"));
+        assert!(headers["authorization"]
+            .contains("SignedHeaders=host;x-amz-content-sha256;x-amz-date;x-amz-security-token"));
+        assert_eq!(
+            sigv4_url_parts(context.url).unwrap(),
+            (
+                "bedrock-runtime.us-east-1.amazonaws.com".to_string(),
+                "/model/anthropic.claude/invoke".to_string(),
+                String::new()
+            )
+        );
     }
 
     #[test]

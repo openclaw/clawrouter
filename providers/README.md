@@ -91,6 +91,5 @@ or from request path params:
   executable today.
 - OAuth-backed REST providers are executable when `POLICY_KV` has a grant at
   `oauth/<kid>/<tokenRef>` or `oauth/tenants/<tenant>/<tokenRef>`.
-- SigV4 providers stay cataloged for admin, policy, and billing metadata, but
-  return `provider_endpoint_not_supported` until signing is wired into the edge
-  runtime.
+- SigV4 providers are executable when `service.configKeys` declares access key,
+  secret key, and region bindings. Session tokens are optional.
