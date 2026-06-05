@@ -1,0 +1,14 @@
+{
+  "name": "clawrouter-workspace",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "check": "pnpm --dir admin check && cargo test --workspace",
+    "build": "pnpm --dir admin build && cargo build --workspace",
+    "provider:compile": "cargo run -p clawrouter -- provider compile providers/*.provider.yaml"
+  },
+  "devDependencies": {
+    "wrangler": "^4.98.0"
+  }
+}
+
