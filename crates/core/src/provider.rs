@@ -243,8 +243,10 @@ pub struct CompiledProvider {
     pub class: ProviderClass,
     pub service_platform: String,
     pub service_kind: ServiceKind,
+    pub auth: AuthConfig,
     pub auth_schemes: Vec<String>,
     pub base_urls: BTreeMap<String, String>,
+    pub routing: RoutingConfig,
     pub native_prefixes: Vec<String>,
     pub adapter: AdapterConfig,
     pub capabilities: Vec<String>,
@@ -431,8 +433,10 @@ pub fn compile_provider_snapshot(
                 .clone()
                 .unwrap_or_else(|| manifest.id.clone()),
             service_kind: manifest.service.kind.clone(),
+            auth: manifest.auth.clone(),
             auth_schemes: manifest.auth.schemes.iter().map(auth_scheme_id).collect(),
             base_urls: manifest.base_urls.clone(),
+            routing: manifest.routing.clone(),
             native_prefixes: manifest.routing.native_prefixes.clone(),
             adapter: manifest.adapter.clone(),
             capabilities: manifest
@@ -502,6 +506,9 @@ auth:
       secretKind: api_key
 baseUrls:
   default: https://api.tavily.com
+routing:
+  nativePrefixes: [clawrouter-tavily]
+  modelPrefixes: [tavily/]
 capabilities:
   - id: web.search
     endpoint: search
@@ -523,6 +530,14 @@ models:
         assert_eq!(snapshot.capability_index["web.search"], vec!["tavily"]);
         assert_eq!(snapshot.model_index["tavily/search"].provider, "tavily");
         assert_eq!(snapshot.model_index["tavily/search"].upstream, "search");
+        assert_eq!(
+            snapshot.providers[0].routing.model_prefixes,
+            vec!["tavily/"]
+        );
+        assert!(matches!(
+            snapshot.providers[0].auth.schemes[0],
+            AuthScheme::Bearer { .. }
+        ));
     }
 
     #[test]
