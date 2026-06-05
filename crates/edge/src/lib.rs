@@ -3,7 +3,7 @@ use clawrouter_core::{
     ProviderSnapshot, UsageEvent, UsageStatus,
 };
 use hmac::{Hmac, Mac};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::BTreeMap;
@@ -13,6 +13,7 @@ use worker::*;
 
 const PROVIDER_SNAPSHOT: &str = include_str!(concat!(env!("OUT_DIR"), "/provider-snapshot.json"));
 static USAGE_EVENT_COUNTER: AtomicU64 = AtomicU64::new(0);
+const MAX_SQL_BUDGET_MICROS: u64 = 9_007_199_254_740_991;
 type HmacSha256 = Hmac<Sha256>;
 
 #[event(fetch)]
@@ -89,8 +90,16 @@ async fn proxy_openai_compatible(mut req: Request, env: Env, path: &str) -> Resu
     };
     let request_id = request_id(req.headers(), "openai");
     let capability = capability_for_path(&route.capabilities, path).unwrap_or("llm.unknown");
-    if let Some(response) = preflight_budget(&auth.policy, route.provider, capability)? {
+    if let Some(response) = preflight_static_budget(&auth.policy)? {
         return Ok(response);
+    }
+    if let Err(error) = openai_endpoint_path(endpoint, &route.upstream_model) {
+        match error {
+            OpenAiProxyUrlError::Client(message) => {
+                return json_error("invalid_model", &message, 400);
+            }
+            OpenAiProxyUrlError::Runtime(error) => return Err(error),
+        }
     }
     let upstream_url =
         match openai_upstream_url(route.provider, endpoint, &env, &route.upstream_model) {
@@ -126,6 +135,10 @@ async fn proxy_openai_compatible(mut req: Request, env: Env, path: &str) -> Resu
         }) => return json_error(code, message, status),
         Err(HeaderBuildError::Runtime(error)) => return Err(error),
     };
+    let budget = match preflight_budget(&env, &auth, capability, &request_id).await? {
+        BudgetPreflight::Allowed(budget) => budget,
+        BudgetPreflight::Denied(response) => return Ok(response),
+    };
 
     let mut init = RequestInit::new();
     init.with_method(Method::Post)
@@ -141,6 +154,7 @@ async fn proxy_openai_compatible(mut req: Request, env: Env, path: &str) -> Resu
             capability,
             model: Some(model.as_str()),
             request_id: &request_id,
+            budget,
             status: usage_status(response.status_code()),
         },
     )
@@ -188,11 +202,10 @@ async fn proxy_manifest_endpoint(mut req: Request, env: Env, path: &str) -> Resu
         AuthOutcome::Allowed(auth) => auth,
         AuthOutcome::Denied(response) => return Ok(response),
     };
-    if let Some(response) = preflight_budget(&auth.policy, provider, capability)? {
+    let request_id = request_id(req.headers(), endpoint_id);
+    if let Some(response) = preflight_static_budget(&auth.policy)? {
         return Ok(response);
     }
-
-    let request_id = request_id(req.headers(), endpoint_id);
     let raw_body = req.text().await?;
     let proxy = match parse_proxy_request(&raw_body) {
         Ok(proxy) => proxy,
@@ -220,6 +233,11 @@ async fn proxy_manifest_endpoint(mut req: Request, env: Env, path: &str) -> Resu
             "provider endpoint requires edge support that is not configured yet",
             501,
         );
+    }
+    if let Err(ManifestProxyError::Client(message)) =
+        validate_manifest_path_params(endpoint, &proxy)
+    {
+        return json_error("invalid_proxy_request", &message, 400);
     }
     let upstream_url = match manifest_upstream_url(provider, endpoint, &proxy, Some(&env)) {
         Ok(url) => url,
@@ -254,6 +272,10 @@ async fn proxy_manifest_endpoint(mut req: Request, env: Env, path: &str) -> Resu
         }) => return json_error(code, message, status),
         Err(HeaderBuildError::Runtime(error)) => return Err(error),
     };
+    let budget = match preflight_budget(&env, &auth, capability, &request_id).await? {
+        BudgetPreflight::Allowed(budget) => budget,
+        BudgetPreflight::Denied(response) => return Ok(response),
+    };
 
     let mut init = RequestInit::new();
     init.with_method(method_from_str(&upstream_method)?)
@@ -271,6 +293,7 @@ async fn proxy_manifest_endpoint(mut req: Request, env: Env, path: &str) -> Resu
             capability,
             model: None,
             request_id: &request_id,
+            budget,
             status: usage_status(response.status_code()),
         },
     )
@@ -289,6 +312,8 @@ struct KeyPolicy {
     tenant_id: Option<String>,
     #[serde(default)]
     monthly_budget_micros: Option<u64>,
+    #[serde(default)]
+    request_cost_micros: Option<u64>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -763,6 +788,22 @@ fn manifest_upstream_url(
     }
     append_query(&mut url, query);
     Ok(url)
+}
+
+fn validate_manifest_path_params(
+    endpoint: &CompiledEndpoint,
+    proxy: &ManifestProxyRequest,
+) -> std::result::Result<(), ManifestProxyError> {
+    for param in &endpoint.path_params {
+        let Some(value) = proxy.path_params.get(param).and_then(Value::as_str) else {
+            return Err(ManifestProxyError::Client(format!(
+                "endpoint `{}` requires path param `{param}`",
+                endpoint.id
+            )));
+        };
+        path_param_value(endpoint, param, value).map_err(ManifestProxyError::Client)?;
+    }
+    Ok(())
 }
 
 #[derive(Debug)]
@@ -1455,15 +1496,251 @@ fn secret_binding_name(provider_id: &str, secret_kind: &str) -> String {
     }
 }
 
-fn preflight_budget(
-    policy: &KeyPolicy,
-    _provider: &CompiledProvider,
-    _capability: &str,
-) -> Result<Option<Response>> {
+#[derive(Clone, Copy, Debug, Default)]
+struct BudgetUsage {
+    reserved_cost_micros: u64,
+    actual_cost_micros: u64,
+}
+
+enum BudgetPreflight {
+    Allowed(BudgetUsage),
+    Denied(Response),
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BudgetReserveRequest {
+    policy_id: String,
+    window_key: String,
+    limit_micros: u64,
+    cost_micros: u64,
+    request_id: String,
+    capability: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BudgetReserveResponse {
+    allowed: bool,
+    policy_id: String,
+    window_key: String,
+    charged_micros: u64,
+    spent_micros: u64,
+    remaining_micros: u64,
+}
+
+#[derive(Debug, Deserialize)]
+struct BudgetSpendRow {
+    spent_micros: i64,
+}
+
+#[durable_object]
+pub struct BudgetLedgerObject {
+    state: State,
+    _env: Env,
+}
+
+impl DurableObject for BudgetLedgerObject {
+    fn new(state: State, env: Env) -> Self {
+        Self { state, _env: env }
+    }
+
+    async fn fetch(&self, mut req: Request) -> Result<Response> {
+        let url = req.url()?;
+        if req.method() != Method::Post || url.path() != "/reserve" {
+            return json_error("route_not_found", "route not found", 404);
+        }
+        let body = req.text().await?;
+        let request = serde_json::from_str::<BudgetReserveRequest>(&body).map_err(|error| {
+            Error::RustError(format!("budget request is invalid JSON: {error}"))
+        })?;
+        reserve_budget_in_object(&self.state, request)
+    }
+}
+
+fn preflight_static_budget(policy: &KeyPolicy) -> Result<Option<Response>> {
     if policy.monthly_budget_micros == Some(0) {
         return json_error("budget_exhausted", "proxy key budget is exhausted", 402).map(Some);
     }
     Ok(None)
+}
+
+async fn preflight_budget(
+    env: &Env,
+    auth: &AuthorizedKey,
+    capability: &str,
+    request_id: &str,
+) -> Result<BudgetPreflight> {
+    let Some(limit_micros) = auth.policy.monthly_budget_micros else {
+        return Ok(BudgetPreflight::Allowed(BudgetUsage::default()));
+    };
+    if limit_micros == 0 {
+        return json_error("budget_exhausted", "proxy key budget is exhausted", 402)
+            .map(BudgetPreflight::Denied);
+    }
+
+    let cost_micros = auth.policy.request_cost_micros.unwrap_or(1);
+    if cost_micros == 0 {
+        return Ok(BudgetPreflight::Allowed(BudgetUsage::default()));
+    }
+    if limit_micros > MAX_SQL_BUDGET_MICROS || cost_micros > MAX_SQL_BUDGET_MICROS {
+        return json_error(
+            "invalid_budget_policy",
+            "budget micros exceed the supported Durable Object SQL integer range",
+            500,
+        )
+        .map(BudgetPreflight::Denied);
+    }
+
+    let Ok(namespace) = env.durable_object("BUDGET_LEDGER") else {
+        return json_error(
+            "budget_store_unavailable",
+            "BUDGET_LEDGER Durable Object binding is required for budgeted proxy keys",
+            503,
+        )
+        .map(BudgetPreflight::Denied);
+    };
+
+    let tenant_id = tenant_id(auth);
+    let policy_id = budget_policy_id(&tenant_id, &auth.kid);
+    let request = BudgetReserveRequest {
+        window_key: current_month_window_key(&policy_id)?,
+        policy_id,
+        limit_micros,
+        cost_micros,
+        request_id: request_id.to_string(),
+        capability: capability.to_string(),
+    };
+    let response = reserve_budget(namespace, &tenant_id, &auth.kid, &request).await?;
+    if response.allowed {
+        return Ok(BudgetPreflight::Allowed(BudgetUsage {
+            reserved_cost_micros: response.charged_micros,
+            actual_cost_micros: response.charged_micros,
+        }));
+    }
+
+    json_error("budget_exhausted", "proxy key budget is exhausted", 402)
+        .map(BudgetPreflight::Denied)
+}
+
+async fn reserve_budget(
+    namespace: ObjectNamespace,
+    tenant_id: &str,
+    kid: &str,
+    request: &BudgetReserveRequest,
+) -> Result<BudgetReserveResponse> {
+    let stub = namespace.get_by_name(&budget_object_name(tenant_id, kid))?;
+    let body = serde_json::to_string(request)?;
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post)
+        .with_body(Some(JsValue::from_str(&body)));
+    let req = Request::new_with_init("https://clawrouter.internal/reserve", &init)?;
+    let mut response = stub.fetch_with_request(req).await?;
+    let status = response.status_code();
+    let text = response.text().await?;
+    if !(200..=299).contains(&status) {
+        return Err(Error::RustError(format!(
+            "budget ledger rejected reservation with HTTP {status}: {text}"
+        )));
+    }
+    serde_json::from_str::<BudgetReserveResponse>(&text).map_err(|error| {
+        Error::RustError(format!("budget ledger response is invalid JSON: {error}"))
+    })
+}
+
+fn reserve_budget_in_object(state: &State, request: BudgetReserveRequest) -> Result<Response> {
+    let sql = state.storage().sql();
+    sql.exec(
+        "CREATE TABLE IF NOT EXISTS budget_windows (
+            window_key TEXT PRIMARY KEY,
+            policy_id TEXT NOT NULL,
+            spent_micros INTEGER NOT NULL
+        )",
+        None,
+    )?;
+    let spent_micros = sql
+        .exec_raw(
+            "SELECT spent_micros FROM budget_windows WHERE window_key = ? LIMIT 1",
+            raw_bindings(vec![JsValue::from_str(&request.window_key)]),
+        )?
+        .to_array::<BudgetSpendRow>()?
+        .first()
+        .map(|row| row.spent_micros.max(0) as u64)
+        .unwrap_or_default();
+    let remaining_micros = request.limit_micros.saturating_sub(spent_micros);
+    if request.cost_micros > remaining_micros {
+        return Response::from_json(&BudgetReserveResponse {
+            allowed: false,
+            policy_id: request.policy_id,
+            window_key: request.window_key,
+            charged_micros: 0,
+            spent_micros,
+            remaining_micros,
+        });
+    }
+
+    let next_spent = spent_micros.saturating_add(request.cost_micros);
+    let next_spent_sql = sql_budget_number(next_spent, "spent_micros")?;
+    let remaining_after = request.limit_micros.saturating_sub(next_spent);
+    sql.exec_raw(
+        "INSERT INTO budget_windows (window_key, policy_id, spent_micros)
+            VALUES (?, ?, ?)
+            ON CONFLICT(window_key) DO UPDATE SET spent_micros = excluded.spent_micros",
+        raw_bindings(vec![
+            JsValue::from_str(&request.window_key),
+            JsValue::from_str(&request.policy_id),
+            next_spent_sql.clone(),
+        ]),
+    )?;
+
+    Response::from_json(&BudgetReserveResponse {
+        allowed: true,
+        policy_id: request.policy_id,
+        window_key: request.window_key,
+        charged_micros: request.cost_micros,
+        spent_micros: next_spent,
+        remaining_micros: remaining_after,
+    })
+}
+
+fn raw_bindings(values: Vec<JsValue>) -> Option<Vec<JsValue>> {
+    Some(values)
+}
+
+fn sql_budget_number(value: u64, field: &str) -> Result<JsValue> {
+    validate_budget_number(value, field).map(JsValue::from_f64)
+}
+
+fn validate_budget_number(value: u64, field: &str) -> Result<f64> {
+    if value > MAX_SQL_BUDGET_MICROS {
+        return Err(Error::RustError(format!(
+            "budget field `{field}` exceeds Durable Object SQL integer range"
+        )));
+    }
+    Ok(value as f64)
+}
+
+fn tenant_id(auth: &AuthorizedKey) -> String {
+    auth.policy
+        .tenant_id
+        .clone()
+        .unwrap_or_else(|| "default".to_string())
+}
+
+fn budget_policy_id(tenant_id: &str, kid: &str) -> String {
+    format!("{tenant_id}/{kid}")
+}
+
+fn budget_object_name(tenant_id: &str, kid: &str) -> String {
+    format!("{tenant_id}:{kid}")
+}
+
+fn current_month_window_key(policy_id: &str) -> Result<String> {
+    let iso: String = js_sys::Date::new_0().to_iso_string().into();
+    let month = iso
+        .get(0..7)
+        .ok_or_else(|| Error::RustError("failed to format budget month".to_string()))?;
+    Ok(format!("{policy_id}/{month}"))
 }
 
 struct UsageRecord<'a> {
@@ -1472,6 +1749,7 @@ struct UsageRecord<'a> {
     capability: &'a str,
     model: Option<&'a str>,
     request_id: &'a str,
+    budget: BudgetUsage,
     status: UsageStatus,
 }
 
@@ -1493,6 +1771,8 @@ async fn enqueue_usage(env: &Env, record: UsageRecord<'_>) {
         record.capability.to_string(),
     );
     event.model = record.model.map(str::to_string);
+    event.reserved_cost_micros = record.budget.reserved_cost_micros;
+    event.actual_cost_micros = record.budget.actual_cost_micros;
     event.status = record.status;
     let _ = queue.send(event).await;
 }
@@ -1810,12 +2090,41 @@ mod tests {
             providers: vec!["openai".to_string()],
             tenant_id: Some("team_docs".to_string()),
             monthly_budget_micros: Some(100),
+            request_cost_micros: Some(10),
         };
 
         assert_eq!(key_verification("secret", &policy), "verified");
         assert_eq!(key_verification("wrong", &policy), "invalid_secret");
         assert!(inspect_policy_for_response("verified", &policy).is_some());
         assert!(inspect_policy_for_response("invalid_secret", &policy).is_none());
+        assert_eq!(policy.request_cost_micros, Some(10));
+    }
+
+    #[test]
+    fn budget_names_are_stable_per_tenant_key() {
+        assert_eq!(
+            budget_policy_id("team_docs", "svc_docs"),
+            "team_docs/svc_docs"
+        );
+        assert_eq!(
+            budget_object_name("team_docs", "svc_docs"),
+            "team_docs:svc_docs"
+        );
+    }
+
+    #[test]
+    fn budget_spend_rows_accept_sql_column_names() {
+        let row = serde_json::from_value::<BudgetSpendRow>(serde_json::json!({
+            "spent_micros": 42
+        }))
+        .unwrap();
+        assert_eq!(row.spent_micros, 42);
+    }
+
+    #[test]
+    fn budget_sql_integer_conversion_is_checked() {
+        assert_eq!(validate_budget_number(42, "spent_micros").unwrap(), 42.0);
+        assert!(validate_budget_number(MAX_SQL_BUDGET_MICROS + 1, "spent_micros").is_err());
     }
 
     #[test]
@@ -1936,6 +2245,7 @@ mod tests {
                 providers: vec!["github".to_string()],
                 tenant_id: Some("team_docs".to_string()),
                 monthly_budget_micros: None,
+                request_cost_micros: None,
             },
         };
 

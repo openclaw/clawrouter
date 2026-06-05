@@ -7,6 +7,7 @@ Cloudflare KV so access can be revoked without a redeploy.
 
 - `POLICY_KV`: key and policy records.
 - `USAGE_QUEUE`: metered usage events.
+- `BUDGET_LEDGER`: SQLite-backed Durable Object budget ledger.
 - provider secrets such as `OPENAI_API_KEY`, `OPENROUTER_API_KEY`,
   `MINIMAX_API_KEY`, and `TAVILY_API_KEY`.
 - provider config vars declared by manifests, such as `OPENROUTER_SITE_URL`,
@@ -72,7 +73,12 @@ clawrouter-live-<kid>-<secret>
 Register a key policy:
 
 ```sh
-pnpm cf:key:put -- --kid svc_docs --secret '<secret>' --providers openai,tavily
+pnpm cf:key:put -- \
+  --kid svc_docs \
+  --secret '<secret>' \
+  --providers openai,tavily \
+  --monthly-budget-micros 100000000 \
+  --request-cost-micros 1000
 ```
 
 This stores only `secretSha256`, enabled state, and provider allowlist in
@@ -106,13 +112,17 @@ The stored policy shape is:
   "secretSha256": "<sha256 of key secret>",
   "providers": ["openai", "tavily"],
   "tenantId": "default",
-  "monthlyBudgetMicros": 100000000
+  "monthlyBudgetMicros": 100000000,
+  "requestCostMicros": 1000
 }
 ```
 
 `providers` is an allowlist. An empty list allows every configured provider.
-`monthlyBudgetMicros: 0` denies requests immediately; non-zero budget enforcement
-is reserved for the Durable Object budget ledger path.
+`monthlyBudgetMicros: 0` denies requests immediately. A non-zero
+`monthlyBudgetMicros` uses the `BUDGET_LEDGER` Durable Object before upstream
+calls and charges `requestCostMicros` per accepted request. If
+`requestCostMicros` is omitted, ClawRouter charges one micro unit per request so
+budget enforcement still works for keys with a monthly budget.
 
 ## OAuth Grants
 

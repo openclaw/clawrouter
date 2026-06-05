@@ -8,3 +8,11 @@ command = "cargo install -q worker-build --version 0.8.3 && ${HOME}/.cargo/bin/w
 [[queues.producers]]
 binding = "USAGE_QUEUE"
 queue = "clawrouter-usage"
+
+[[durable_objects.bindings]]
+name = "BUDGET_LEDGER"
+class_name = "BudgetLedgerObject"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["BudgetLedgerObject"]

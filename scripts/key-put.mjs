@@ -10,7 +10,10 @@ const config = args.config ?? ".wrangler.generated.toml";
 const enabled = args.disabled ? false : true;
 const tenantId = args.tenant ?? "default";
 const monthlyBudgetMicros = args["monthly-budget-micros"]
-  ? Number(args["monthly-budget-micros"])
+  ? parseNonNegativeInteger(args["monthly-budget-micros"], "--monthly-budget-micros")
+  : undefined;
+const requestCostMicros = args["request-cost-micros"]
+  ? parseNonNegativeInteger(args["request-cost-micros"], "--request-cost-micros")
   : undefined;
 
 const policy = {
@@ -21,6 +24,9 @@ const policy = {
 };
 if (monthlyBudgetMicros !== undefined) {
   policy.monthlyBudgetMicros = monthlyBudgetMicros;
+}
+if (requestCostMicros !== undefined) {
+  policy.requestCostMicros = requestCostMicros;
 }
 
 run("pnpm", [
@@ -62,6 +68,17 @@ function required(value, name) {
     throw new Error(`${name} is required`);
   }
   return value;
+}
+
+function parseNonNegativeInteger(value, name) {
+  if (!/^(0|[1-9][0-9]*)$/.test(value)) {
+    throw new Error(`${name} must be a non-negative integer`);
+  }
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed)) {
+    throw new Error(`${name} must be less than or equal to Number.MAX_SAFE_INTEGER`);
+  }
+  return parsed;
 }
 
 function run(command, args) {
