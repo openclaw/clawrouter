@@ -105,6 +105,40 @@ The stored policy shape is:
 `monthlyBudgetMicros: 0` denies requests immediately; non-zero budget enforcement
 is reserved for the Durable Object budget ledger path.
 
+## OAuth Grants
+
+OAuth-backed providers such as GitHub, Linear, Notion, and Slack read access
+tokens from `POLICY_KV`. Register a grant for one proxy key:
+
+```sh
+printf '%s' "$GITHUB_TOKEN" | pnpm cf:oauth:put -- \
+  --kid svc_docs \
+  --token-ref oauth.github.access_token \
+  --access-token-stdin
+```
+
+Tenant-wide grants are also supported:
+
+```sh
+pnpm cf:oauth:put -- \
+  --tenant default \
+  --token-ref oauth.slack.bot_token \
+  --access-token-env SLACK_BOT_TOKEN
+```
+
+This stores a grant at `oauth/<kid>/<tokenRef>` or
+`oauth/tenants/<tenant>/<tokenRef>`. Active grant records contain `enabled`,
+`accessToken`, and `tokenType`; the token is never printed by the helper.
+
+Revoke a grant without deleting audit history:
+
+```sh
+pnpm cf:oauth:revoke -- --kid svc_docs --token-ref oauth.github.access_token
+```
+
+Revocation overwrites the grant with a disabled tombstone and removes the stored
+access token.
+
 ## Proxy Routes
 
 OpenAI-compatible calls use normal OpenAI paths and route by `model`:
@@ -134,14 +168,15 @@ The JSON body can contain:
 ```
 
 `method` must be allowed by the endpoint’s provider manifest. `pathParams`
-replace `${name}` segments from the manifest endpoint path and must be single
-safe path segments; `/`, `?`, `#`, `.`, and `..` are rejected. `query` merges
-with manifest query defaults and injected query values.
+replace `${name}` segments from the manifest endpoint path. Params are single
+safe path segments by default. Provider manifests may opt a param into
+`relative_path` for REST paths such as `repos/openclaw/clawrouter`; absolute
+paths, empty segments, `.`, `..`, query strings, and fragments are rejected.
+`query` merges with manifest query defaults and injected query values.
 
 The live Worker rejects manifest endpoints that still need unresolved deployment
-templates that are not declared in `service.configKeys`. OAuth and SigV4
-providers are cataloged but return
-`provider_endpoint_not_supported` until token storage/signing is wired.
+templates that are not declared in `service.configKeys`. SigV4 providers are
+cataloged but return `provider_endpoint_not_supported` until signing is wired.
 
 ## Smoke
 

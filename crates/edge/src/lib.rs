@@ -1,5 +1,5 @@
 use clawrouter_core::{
-    parse_proxy_key, AuthScheme, CompiledEndpoint, CompiledProvider, ProviderClass,
+    parse_proxy_key, AuthScheme, CompiledEndpoint, CompiledProvider, PathParamStyle, ProviderClass,
     ProviderSnapshot, UsageEvent, UsageStatus,
 };
 use serde::Deserialize;
@@ -101,7 +101,16 @@ async fn proxy_openai_compatible(mut req: Request, env: Env, path: &str) -> Resu
     body["model"] = Value::String(route.upstream_model.clone());
     let upstream_body = serde_json::to_string(&body)?;
 
-    let headers = provider_headers(req.headers(), &env, route.provider, endpoint)?;
+    let headers = match provider_headers(req.headers(), &env, route.provider, endpoint, &auth).await
+    {
+        Ok(headers) => headers,
+        Err(HeaderBuildError::Client {
+            code,
+            message,
+            status,
+        }) => return json_error(code, message, status),
+        Err(HeaderBuildError::Runtime(error)) => return Err(error),
+    };
 
     let mut init = RequestInit::new();
     init.with_method(Method::Post)
@@ -204,13 +213,22 @@ async fn proxy_manifest_endpoint(mut req: Request, env: Env, path: &str) -> Resu
         }
         Err(ManifestProxyError::Runtime(error)) => return Err(error),
     };
-    let upstream_body = serde_json::to_string(&proxy.body.unwrap_or(Value::Object(Map::new())))?;
-    let headers = provider_headers(req.headers(), &env, provider, endpoint)?;
+    let headers = match provider_headers(req.headers(), &env, provider, endpoint, &auth).await {
+        Ok(headers) => headers,
+        Err(HeaderBuildError::Client {
+            code,
+            message,
+            status,
+        }) => return json_error(code, message, status),
+        Err(HeaderBuildError::Runtime(error)) => return Err(error),
+    };
 
     let mut init = RequestInit::new();
     init.with_method(method_from_str(&upstream_method)?)
         .with_headers(headers);
-    if upstream_method != "GET" {
+    if method_allows_body(&upstream_method) {
+        let upstream_body =
+            serde_json::to_string(&proxy.body.unwrap_or(Value::Object(Map::new())))?;
         init.with_body(Some(JsValue::from_str(&upstream_body)));
     }
     let upstream_req = Request::new_with_init(&upstream_url, &init)?;
@@ -241,6 +259,17 @@ struct KeyPolicy {
     tenant_id: Option<String>,
     #[serde(default)]
     monthly_budget_micros: Option<u64>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OAuthTokenRecord {
+    #[serde(default = "default_true")]
+    enabled: bool,
+    #[serde(default, alias = "access_token")]
+    access_token: Option<String>,
+    #[serde(default = "default_oauth_token_type", alias = "token_type")]
+    token_type: String,
 }
 
 struct AuthorizedKey {
@@ -300,6 +329,14 @@ fn key_verification(secret: &str, policy: &KeyPolicy) -> &'static str {
     (sha256_hex(secret) == policy.secret_sha256)
         .then_some("verified")
         .unwrap_or("invalid_secret")
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_oauth_token_type() -> String {
+    "Bearer".to_string()
 }
 
 fn inspect_policy_for_response<'a>(
@@ -564,7 +601,7 @@ fn openai_endpoint_path(
     }
     let param = &endpoint.path_params[0];
     let value =
-        path_param_segment(endpoint, param, upstream_model).map_err(OpenAiProxyUrlError::Client)?;
+        path_param_value(endpoint, param, upstream_model).map_err(OpenAiProxyUrlError::Client)?;
     Ok(endpoint.path.replace(&format!("${{{param}}}"), &value))
 }
 
@@ -605,7 +642,15 @@ fn supports_edge_auth(provider: &CompiledProvider) -> bool {
             provider_has_secret_candidate(provider, secret_kind)
         }
         AuthScheme::CloudflareBinding => true,
-        AuthScheme::OAuth { .. } | AuthScheme::SigV4 { .. } => false,
+        AuthScheme::OAuth {
+            provider,
+            token_ref,
+            ..
+        } => {
+            provider.as_deref().is_some_and(|value| !value.is_empty())
+                || token_ref.as_deref().is_some_and(|value| !value.is_empty())
+        }
+        AuthScheme::SigV4 { .. } => false,
     })
 }
 
@@ -656,8 +701,7 @@ fn manifest_upstream_url(
                 endpoint.id
             )));
         };
-        let value =
-            path_param_segment(endpoint, param, value).map_err(ManifestProxyError::Client)?;
+        let value = path_param_value(endpoint, param, value).map_err(ManifestProxyError::Client)?;
         path = path.replace(&format!("${{{param}}}"), &value);
     }
     let base = resolve_template_value(provider, base, env).map_err(ManifestProxyError::Runtime)?;
@@ -683,29 +727,66 @@ fn manifest_upstream_url(
     Ok(url)
 }
 
-fn provider_headers(
+#[derive(Debug)]
+enum HeaderBuildError {
+    Client {
+        code: &'static str,
+        message: &'static str,
+        status: u16,
+    },
+    Runtime(Error),
+}
+
+async fn provider_headers(
     incoming: &Headers,
     env: &Env,
     provider: &CompiledProvider,
     endpoint: &CompiledEndpoint,
-) -> Result<Headers> {
+    auth: &AuthorizedKey,
+) -> std::result::Result<Headers, HeaderBuildError> {
     let headers = Headers::new();
-    headers.set("content-type", "application/json")?;
+    headers
+        .set("content-type", "application/json")
+        .map_err(HeaderBuildError::Runtime)?;
     for (name, value) in
-        resolved_template_map(provider, &provider.adapter.inject_headers, Some(env))?
+        resolved_template_map(provider, &provider.adapter.inject_headers, Some(env))
+            .map_err(HeaderBuildError::Runtime)?
     {
-        headers.set(&name, &value)?;
+        headers
+            .set(&name, &value)
+            .map_err(HeaderBuildError::Runtime)?;
     }
-    for (name, value) in resolved_template_map(provider, &endpoint.headers, Some(env))? {
-        headers.set(&name, &value)?;
+    for (name, value) in resolved_template_map(provider, &endpoint.headers, Some(env))
+        .map_err(HeaderBuildError::Runtime)?
+    {
+        headers
+            .set(&name, &value)
+            .map_err(HeaderBuildError::Runtime)?;
     }
     for header in &provider.adapter.passthrough_headers {
-        if let Some(value) = incoming.get(header)? {
-            headers.set(header, &value)?;
+        if let Some(value) = incoming.get(header).map_err(HeaderBuildError::Runtime)? {
+            headers
+                .set(header, &value)
+                .map_err(HeaderBuildError::Runtime)?;
         }
     }
-    apply_auth_headers(&headers, env, provider)?;
+    apply_auth_headers(&headers, env, provider, auth).await?;
     Ok(headers)
+}
+
+fn path_param_value(
+    endpoint: &CompiledEndpoint,
+    param: &str,
+    value: &str,
+) -> std::result::Result<String, String> {
+    match endpoint
+        .path_param_styles
+        .get(param)
+        .unwrap_or(&PathParamStyle::Segment)
+    {
+        PathParamStyle::Segment => path_param_segment(endpoint, param, value),
+        PathParamStyle::RelativePath => relative_path_param(endpoint, param, value),
+    }
 }
 
 fn path_param_segment(
@@ -728,6 +809,37 @@ fn path_param_segment(
         ));
     }
     Ok(encode_component(value))
+}
+
+fn relative_path_param(
+    endpoint: &CompiledEndpoint,
+    param: &str,
+    value: &str,
+) -> std::result::Result<String, String> {
+    if value.is_empty()
+        || value.starts_with('/')
+        || value.ends_with('/')
+        || value.contains('\\')
+        || value.contains('?')
+        || value.contains('#')
+        || value.chars().any(char::is_control)
+    {
+        return Err(format!(
+            "endpoint `{}` path param `{param}` must be a safe relative path",
+            endpoint.id
+        ));
+    }
+    let mut encoded = Vec::new();
+    for segment in value.split('/') {
+        if segment.is_empty() || segment == "." || segment == ".." {
+            return Err(format!(
+                "endpoint `{}` path param `{param}` must be a safe relative path",
+                endpoint.id
+            ));
+        }
+        encoded.push(encode_component(segment));
+    }
+    Ok(encoded.join("/"))
 }
 
 fn provider_secret(env: &Env, provider: &CompiledProvider, secret_kind: &str) -> Result<String> {
@@ -896,7 +1008,12 @@ fn provider_has_secret_candidate(provider: &CompiledProvider, secret_kind: &str)
         .any(|candidate| provider.config_keys.iter().any(|key| key == candidate))
 }
 
-fn apply_auth_headers(headers: &Headers, env: &Env, provider: &CompiledProvider) -> Result<()> {
+async fn apply_auth_headers(
+    headers: &Headers,
+    env: &Env,
+    provider: &CompiledProvider,
+    auth: &AuthorizedKey,
+) -> std::result::Result<(), HeaderBuildError> {
     for scheme in &provider.auth.schemes {
         match scheme {
             AuthScheme::Bearer {
@@ -904,36 +1021,179 @@ fn apply_auth_headers(headers: &Headers, env: &Env, provider: &CompiledProvider)
                 format,
                 secret_kind,
             } => {
-                let secret = provider_secret(env, provider, secret_kind)?;
-                headers.set(header, &format.replace("${secret}", &secret))?;
+                let secret = provider_secret(env, provider, secret_kind)
+                    .map_err(HeaderBuildError::Runtime)?;
+                headers
+                    .set(header, &format.replace("${secret}", &secret))
+                    .map_err(HeaderBuildError::Runtime)?;
                 return Ok(());
             }
             AuthScheme::ApiKey {
                 header,
                 secret_kind,
             } => {
-                headers.set(header, &provider_secret(env, provider, secret_kind)?)?;
+                let secret = provider_secret(env, provider, secret_kind)
+                    .map_err(HeaderBuildError::Runtime)?;
+                headers
+                    .set(header, &secret)
+                    .map_err(HeaderBuildError::Runtime)?;
                 return Ok(());
             }
             AuthScheme::QueryApiKey { .. } => {
                 return Ok(());
             }
-            AuthScheme::OAuth { .. } => {
-                return Err(Error::RustError(format!(
-                    "provider `{}` requires OAuth token storage, which is not wired yet",
-                    provider.id
-                )));
+            AuthScheme::OAuth {
+                provider: oauth_provider,
+                token_ref,
+                ..
+            } => {
+                let token = oauth_token(
+                    env,
+                    provider,
+                    auth,
+                    oauth_provider.as_deref(),
+                    token_ref.as_deref(),
+                )
+                .await?;
+                headers
+                    .set(
+                        "authorization",
+                        &format!(
+                            "{} {}",
+                            token.token_type,
+                            token.access_token.as_deref().unwrap_or_default()
+                        ),
+                    )
+                    .map_err(HeaderBuildError::Runtime)?;
+                return Ok(());
             }
             AuthScheme::SigV4 { .. } => {
-                return Err(Error::RustError(format!(
+                return Err(HeaderBuildError::Runtime(Error::RustError(format!(
                     "provider `{}` requires SigV4 signing, which is not wired yet",
                     provider.id
-                )));
+                ))));
             }
             AuthScheme::CloudflareBinding => return Ok(()),
         }
     }
     Ok(())
+}
+
+async fn oauth_token(
+    env: &Env,
+    provider: &CompiledProvider,
+    auth: &AuthorizedKey,
+    oauth_provider: Option<&str>,
+    token_ref: Option<&str>,
+) -> std::result::Result<OAuthTokenRecord, HeaderBuildError> {
+    let kv = env.kv("POLICY_KV").map_err(|_| HeaderBuildError::Client {
+        code: "policy_store_unavailable",
+        message: "POLICY_KV binding is required for OAuth-backed proxy requests",
+        status: 503,
+    })?;
+    for key in oauth_token_keys(provider, auth, oauth_provider, token_ref) {
+        let record = kv.get(&key).text().await.map_err(|error| {
+            HeaderBuildError::Runtime(Error::RustError(format!(
+                "failed to read OAuth token grant: {error}"
+            )))
+        })?;
+        let Some(record) = record else {
+            continue;
+        };
+        let token = parse_oauth_token_record(&record).map_err(HeaderBuildError::Runtime)?;
+        if !token.enabled {
+            return Err(HeaderBuildError::Client {
+                code: "oauth_grant_revoked",
+                message: "OAuth grant is revoked for this proxy key",
+                status: 403,
+            });
+        }
+        if !token
+            .access_token
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty())
+        {
+            return Err(HeaderBuildError::Client {
+                code: "oauth_grant_invalid",
+                message: "OAuth grant is missing an access token",
+                status: 403,
+            });
+        }
+        return Ok(token);
+    }
+    Err(HeaderBuildError::Client {
+        code: "oauth_grant_missing",
+        message: "OAuth grant is not registered for this proxy key",
+        status: 403,
+    })
+}
+
+fn parse_oauth_token_record(raw: &str) -> Result<OAuthTokenRecord> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(Error::RustError("OAuth token grant is empty".to_string()));
+    }
+    if !trimmed.starts_with('{') {
+        return Ok(OAuthTokenRecord {
+            enabled: true,
+            access_token: Some(trimmed.to_string()),
+            token_type: default_oauth_token_type(),
+        });
+    }
+    serde_json::from_str(trimmed)
+        .map_err(|error| Error::RustError(format!("OAuth token grant is invalid JSON: {error}")))
+}
+
+fn oauth_token_keys(
+    provider: &CompiledProvider,
+    auth: &AuthorizedKey,
+    oauth_provider: Option<&str>,
+    token_ref: Option<&str>,
+) -> Vec<String> {
+    let mut keys = Vec::new();
+    if let Some(token_ref) = token_ref.filter(|value| !value.is_empty()) {
+        keys.push(format!("oauth/{}/{}", auth.kid, token_ref));
+        if let Some(tenant) = auth
+            .policy
+            .tenant_id
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            keys.push(format!("oauth/tenants/{tenant}/{token_ref}"));
+        }
+    }
+    if let Some(oauth_provider) = oauth_provider.filter(|value| !value.is_empty()) {
+        keys.push(format!("oauth/{}/{}", auth.kid, oauth_provider));
+        if let Some(tenant) = auth
+            .policy
+            .tenant_id
+            .as_deref()
+            .filter(|value| !value.is_empty())
+        {
+            keys.push(format!("oauth/tenants/{tenant}/{oauth_provider}"));
+        }
+    }
+    keys.push(format!("oauth/{}/{}", auth.kid, provider.id));
+    if let Some(tenant) = auth
+        .policy
+        .tenant_id
+        .as_deref()
+        .filter(|value| !value.is_empty())
+    {
+        keys.push(format!("oauth/tenants/{tenant}/{}", provider.id));
+    }
+    dedupe_preserving_order(&mut keys);
+    keys
+}
+
+fn dedupe_preserving_order(values: &mut Vec<String>) {
+    let mut deduped = Vec::with_capacity(values.len());
+    for value in values.drain(..) {
+        if !deduped.iter().any(|existing| existing == &value) {
+            deduped.push(value);
+        }
+    }
+    *values = deduped;
 }
 
 fn query_api_key(
@@ -957,12 +1217,17 @@ fn query_api_key(
 fn method_from_str(method: &str) -> Result<Method> {
     match method {
         "GET" => Ok(Method::Get),
+        "HEAD" => Ok(Method::Head),
         "POST" => Ok(Method::Post),
         "PUT" => Ok(Method::Put),
         "PATCH" => Ok(Method::Patch),
         "DELETE" => Ok(Method::Delete),
         _ => Err(Error::RustError(format!("unsupported method `{method}`"))),
     }
+}
+
+fn method_allows_body(method: &str) -> bool {
+    !matches!(method, "GET" | "HEAD")
 }
 
 fn secret_binding_name(provider_id: &str, secret_kind: &str) -> String {
@@ -1249,7 +1514,7 @@ mod tests {
     }
 
     #[test]
-    fn manifest_proxy_rejects_oauth_until_token_storage_exists() {
+    fn manifest_proxy_supports_oauth_with_token_refs() {
         let snapshot = provider_snapshot().unwrap();
         let provider = snapshot
             .providers
@@ -1261,7 +1526,7 @@ mod tests {
             .iter()
             .find(|endpoint| endpoint.id == "rest")
             .unwrap();
-        assert!(!supports_manifest_proxy(provider, endpoint));
+        assert!(supports_manifest_proxy(provider, endpoint));
     }
 
     #[test]
@@ -1364,7 +1629,7 @@ mod tests {
     }
 
     #[test]
-    fn manifest_proxy_rejects_path_params_that_escape_segments() {
+    fn manifest_proxy_encodes_declared_relative_path_params() {
         let snapshot = provider_snapshot().unwrap();
         let provider = snapshot
             .providers
@@ -1384,13 +1649,100 @@ mod tests {
             )]),
             ..ManifestProxyRequest::default()
         };
+        let url = manifest_upstream_url(provider, endpoint, &proxy, None).unwrap();
+        assert_eq!(url, "https://api.github.com/repos/openclaw/clawrouter");
+    }
+
+    #[test]
+    fn manifest_proxy_rejects_relative_paths_that_escape() {
+        let snapshot = provider_snapshot().unwrap();
+        let provider = snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.id == "github")
+            .unwrap();
+        let endpoint = provider
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.id == "rest")
+            .unwrap();
+        let proxy = ManifestProxyRequest {
+            method: Some("GET".to_string()),
+            path_params: Map::from_iter([(
+                "path".to_string(),
+                Value::String("repos/../secrets".to_string()),
+            )]),
+            ..ManifestProxyRequest::default()
+        };
         let error = manifest_upstream_url(provider, endpoint, &proxy, None).unwrap_err();
         match error {
             ManifestProxyError::Client(message) => {
-                assert!(message.contains("safe path segment"));
+                assert!(message.contains("safe relative path"));
             }
             ManifestProxyError::Runtime(_) => panic!("expected client error"),
         }
+    }
+
+    #[test]
+    fn oauth_token_keys_prefer_key_token_ref_before_fallbacks() {
+        let snapshot = provider_snapshot().unwrap();
+        let provider = snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.id == "github")
+            .unwrap();
+        let auth = AuthorizedKey {
+            kid: "svc_docs".to_string(),
+            policy: KeyPolicy {
+                enabled: true,
+                secret_sha256: sha256_hex("secret"),
+                providers: vec!["github".to_string()],
+                tenant_id: Some("team_docs".to_string()),
+                monthly_budget_micros: None,
+            },
+        };
+
+        assert_eq!(
+            oauth_token_keys(
+                provider,
+                &auth,
+                Some("github"),
+                Some("oauth.github.access_token")
+            ),
+            vec![
+                "oauth/svc_docs/oauth.github.access_token",
+                "oauth/tenants/team_docs/oauth.github.access_token",
+                "oauth/svc_docs/github",
+                "oauth/tenants/team_docs/github",
+            ]
+        );
+    }
+
+    #[test]
+    fn oauth_token_records_accept_json_or_raw_tokens() {
+        let json = parse_oauth_token_record(
+            r#"{"enabled":true,"accessToken":"gho_test","tokenType":"Bearer"}"#,
+        )
+        .unwrap();
+        assert_eq!(json.access_token.as_deref(), Some("gho_test"));
+        assert_eq!(json.token_type, "Bearer");
+
+        let raw = parse_oauth_token_record("xoxb-test").unwrap();
+        assert_eq!(raw.access_token.as_deref(), Some("xoxb-test"));
+        assert_eq!(raw.token_type, "Bearer");
+        let tombstone =
+            parse_oauth_token_record(r#"{"enabled":false,"tokenType":"Bearer"}"#).unwrap();
+        assert!(!tombstone.enabled);
+        assert_eq!(tombstone.access_token, None);
+        assert!(parse_oauth_token_record("   ").is_err());
+    }
+
+    #[test]
+    fn manifest_proxy_omits_bodies_for_get_and_head() {
+        assert!(!method_allows_body("GET"));
+        assert!(!method_allows_body("HEAD"));
+        assert!(method_allows_body("POST"));
+        assert!(method_allows_body("PATCH"));
     }
 
     #[test]

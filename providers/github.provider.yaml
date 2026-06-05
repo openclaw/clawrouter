@@ -33,6 +33,8 @@ endpoints:
   rest:
     path: /${path}
     pathParams: [path]
+    pathParamStyles:
+      path: relative_path
     requestFormat: github.rest
     responseFormat: github.rest
     timeoutMs: 120000

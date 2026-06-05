@@ -11,6 +11,8 @@
     "cf:deploy": "pnpm cf:config && wrangler deploy --config .wrangler.generated.toml",
     "cf:key:put": "node scripts/key-put.mjs",
     "cf:key:revoke": "node scripts/key-revoke.mjs",
+    "cf:oauth:put": "node scripts/oauth-put.mjs",
+    "cf:oauth:revoke": "node scripts/oauth-revoke.mjs",
     "cf:smoke": "node scripts/smoke-deployed.mjs"
   },
   "devDependencies": {

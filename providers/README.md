@@ -45,6 +45,8 @@ endpoints:
   rest:
     path: /v1/${path}
     pathParams: [path]
+    pathParamStyles:
+      path: relative_path
     requestFormat: example.rest
     responseFormat: example.rest
 billing:
@@ -78,11 +80,17 @@ or from request path params:
   when `service.configKeys` declares a matching binding such as
   `EXAMPLE_NAME`, `EXAMPLE_SITE_URL`, or `EXAMPLE_API_VERSION`.
 - `endpoint.path` may contain `${name}` placeholders when the endpoint declares
-  matching `pathParams`; callers pass those as single safe path segments.
+  matching `pathParams`; callers pass those as single safe path segments by
+  default.
+- `pathParamStyles.<name>: relative_path` allows slash-delimited REST paths and
+  still rejects absolute paths, empty segments, `.`, `..`, query strings, and
+  fragments.
 - OpenAI-compatible providers may use one endpoint path param, such as Azure
   OpenAI’s deployment name; ClawRouter fills it from the routed model suffix.
 - bearer, header API key, query API key, and Cloudflare binding auth are
   executable today.
-- OAuth and SigV4 providers stay cataloged for admin, policy, and OAuth mapping,
-  but return `provider_endpoint_not_supported` until token storage/signing is
-  wired into the edge runtime.
+- OAuth-backed REST providers are executable when `POLICY_KV` has a grant at
+  `oauth/<kid>/<tokenRef>` or `oauth/tenants/<tenant>/<tokenRef>`.
+- SigV4 providers stay cataloged for admin, policy, and billing metadata, but
+  return `provider_endpoint_not_supported` until signing is wired into the edge
+  runtime.

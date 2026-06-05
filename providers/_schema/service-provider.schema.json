@@ -212,6 +212,10 @@
         "headers": { "type": "object", "additionalProperties": { "type": "string" } },
         "query": { "type": "object", "additionalProperties": { "type": "string" } },
         "pathParams": { "type": "array", "items": { "type": "string" } },
+        "pathParamStyles": {
+          "type": "object",
+          "additionalProperties": { "enum": ["segment", "relative_path"] }
+        },
         "requestFormat": { "type": "string" },
         "responseFormat": { "type": "string" },
         "streaming": { "type": "string" },

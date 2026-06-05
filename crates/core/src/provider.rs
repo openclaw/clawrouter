@@ -185,6 +185,8 @@ pub struct Endpoint {
     pub query: BTreeMap<String, String>,
     #[serde(rename = "pathParams", default)]
     pub path_params: Vec<String>,
+    #[serde(rename = "pathParamStyles", default)]
+    pub path_param_styles: BTreeMap<String, PathParamStyle>,
     #[serde(rename = "requestFormat")]
     pub request_format: String,
     #[serde(rename = "responseFormat")]
@@ -193,6 +195,14 @@ pub struct Endpoint {
     pub streaming: Option<String>,
     #[serde(rename = "timeoutMs", default)]
     pub timeout_ms: Option<u64>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PathParamStyle {
+    #[default]
+    Segment,
+    RelativePath,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -295,6 +305,7 @@ pub struct CompiledEndpoint {
     pub headers: BTreeMap<String, String>,
     pub query: BTreeMap<String, String>,
     pub path_params: Vec<String>,
+    pub path_param_styles: BTreeMap<String, PathParamStyle>,
     pub request_format: String,
     pub response_format: String,
     pub streaming: Option<String>,
@@ -406,6 +417,19 @@ pub fn validate_provider_manifest(manifest: &ProviderManifest) -> Result<(), Pro
                 });
             }
         }
+        for param in endpoint.path_param_styles.keys() {
+            if !endpoint
+                .path_params
+                .iter()
+                .any(|declared| declared == param)
+            {
+                return Err(ProviderError::MissingPathParam {
+                    provider: manifest.id.clone(),
+                    endpoint: endpoint_id.clone(),
+                    param: param.clone(),
+                });
+            }
+        }
     }
     let capability_ids: BTreeSet<_> = manifest
         .capabilities
@@ -499,6 +523,7 @@ pub fn compile_provider_snapshot(
                 headers: endpoint.headers.clone(),
                 query: endpoint.query.clone(),
                 path_params: endpoint.path_params.clone(),
+                path_param_styles: endpoint.path_param_styles.clone(),
                 request_format: endpoint.request_format.clone(),
                 response_format: endpoint.response_format.clone(),
                 streaming: endpoint.streaming.clone(),
@@ -842,6 +867,39 @@ capabilities:
 endpoints:
   rest:
     path: /v1/${path}
+    requestFormat: rest_json
+    responseFormat: rest_json
+"#,
+        )
+        .unwrap();
+        let error = validate_provider_manifest(&manifest).unwrap_err();
+        assert!(matches!(error, ProviderError::MissingPathParam { .. }));
+    }
+
+    #[test]
+    fn rejects_undeclared_path_param_styles() {
+        let manifest: ProviderManifest = serde_yaml::from_str(
+            r#"
+schema: clawrouter.service-provider.v1
+id: bad-path-style
+displayName: Bad Path Style
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://example.com
+capabilities:
+  - id: tool.invoke
+    endpoint: rest
+endpoints:
+  rest:
+    path: /v1/${path}
+    pathParams: [path]
+    pathParamStyles:
+      other: relative_path
     requestFormat: rest_json
     responseFormat: rest_json
 "#,

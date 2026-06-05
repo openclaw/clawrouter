@@ -42,12 +42,11 @@ The intended add-provider path is:
 
 The provider catalog is broader than the live executable edge path. Cataloged
 providers are available to admin, policy, OAuth mapping, and billing metadata.
-The Worker executes an endpoint only when `baseUrls.default`, injected
-headers/query values, and endpoint header/query defaults are concrete at deploy
-time. Endpoint path placeholders are allowed and resolved from request
-`pathParams`.
+The Worker executes an endpoint when deployment templates are backed by declared
+`service.configKeys`, endpoint path placeholders are backed by request
+`pathParams`, and auth can be resolved from Worker secrets/config or `POLICY_KV`.
 
-Bearer, header API key, query API key, and Cloudflare binding auth are supported
-in the edge path today. OAuth and SigV4 manifests remain valid service-provider
-definitions, but require the OAuth token store or signing adapter before live
-proxy execution.
+Bearer, header API key, query API key, Cloudflare binding auth, and KV-backed
+OAuth grants are supported in the edge path today. SigV4 manifests remain valid
+service-provider definitions, but require the signing adapter before live proxy
+execution.
