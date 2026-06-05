@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
+use thiserror::Error;
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BudgetPolicy {
@@ -35,6 +36,9 @@ pub enum BudgetDecision {
         remaining_micros: u64,
         requested_micros: u64,
     },
+    DuplicateReservation {
+        reservation_id: String,
+    },
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -43,10 +47,17 @@ pub struct BudgetSettlement {
     pub overage_micros: u64,
 }
 
+#[derive(Debug, Error, PartialEq, Eq)]
+pub enum BudgetError {
+    #[error("reservation {0} is not active")]
+    UnknownReservation(String),
+}
+
 #[derive(Debug, Default)]
 pub struct BudgetLedger {
     spent: BTreeMap<String, u64>,
     reserved: BTreeMap<String, u64>,
+    active_reservations: BTreeMap<String, Reservation>,
 }
 
 impl BudgetLedger {
@@ -56,6 +67,10 @@ impl BudgetLedger {
         reservation_id: impl Into<String>,
         requested_micros: u64,
     ) -> BudgetDecision {
+        let reservation_id = reservation_id.into();
+        if self.active_reservations.contains_key(&reservation_id) {
+            return BudgetDecision::DuplicateReservation { reservation_id };
+        }
         let current = self.spent(policy.id.as_str()) + self.reserved(policy.id.as_str());
         let remaining = policy.hard_limit_micros.saturating_sub(current);
         if requested_micros > remaining {
@@ -66,27 +81,40 @@ impl BudgetLedger {
             };
         }
         *self.reserved.entry(policy.id.clone()).or_default() += requested_micros;
-        BudgetDecision::Allowed(Reservation {
-            id: reservation_id.into(),
+        let reservation = Reservation {
+            id: reservation_id,
             policy_id: policy.id.clone(),
             reserved_micros: requested_micros,
-        })
+        };
+        self.active_reservations
+            .insert(reservation.id.clone(), reservation.clone());
+        BudgetDecision::Allowed(reservation)
     }
 
     pub fn finalize(&mut self, reservation: &Reservation, actual_micros: u64) -> BudgetSettlement {
-        let reserved = self
-            .reserved
-            .entry(reservation.policy_id.clone())
-            .or_default();
-        *reserved = reserved.saturating_sub(reservation.reserved_micros);
+        self.try_finalize(reservation, actual_micros)
+            .expect("reservation must be active")
+    }
+
+    pub fn try_finalize(
+        &mut self,
+        reservation: &Reservation,
+        actual_micros: u64,
+    ) -> Result<BudgetSettlement, BudgetError> {
+        let active = self
+            .active_reservations
+            .remove(&reservation.id)
+            .ok_or_else(|| BudgetError::UnknownReservation(reservation.id.clone()))?;
+        let reserved = self.reserved.entry(active.policy_id.clone()).or_default();
+        *reserved = reserved.saturating_sub(active.reserved_micros);
         let charged_micros = actual_micros;
-        let overage_micros = actual_micros.saturating_sub(reservation.reserved_micros);
-        let spent = self.spent.entry(reservation.policy_id.clone()).or_default();
+        let overage_micros = actual_micros.saturating_sub(active.reserved_micros);
+        let spent = self.spent.entry(active.policy_id.clone()).or_default();
         *spent = spent.saturating_add(charged_micros);
-        BudgetSettlement {
+        Ok(BudgetSettlement {
             charged_micros,
             overage_micros,
-        }
+        })
     }
 
     pub fn spent(&self, policy_id: &str) -> u64 {
@@ -95,6 +123,10 @@ impl BudgetLedger {
 
     pub fn reserved(&self, policy_id: &str) -> u64 {
         self.reserved.get(policy_id).copied().unwrap_or_default()
+    }
+
+    pub fn active_reservation_ids(&self) -> BTreeSet<String> {
+        self.active_reservations.keys().cloned().collect()
     }
 }
 
@@ -137,6 +169,7 @@ mod tests {
         );
         assert_eq!(ledger.spent("budget_docs"), 25);
         assert_eq!(ledger.reserved("budget_docs"), 0);
+        assert!(ledger.active_reservation_ids().is_empty());
     }
 
     #[test]
@@ -164,5 +197,31 @@ mod tests {
             ledger.reserve(&policy, "r2", 1),
             BudgetDecision::Denied { .. }
         ));
+    }
+
+    #[test]
+    fn rejects_duplicate_reservation_finalization() {
+        let policy = BudgetPolicy {
+            id: "budget_docs".to_string(),
+            hard_limit_micros: 100,
+            reset: BudgetReset::Day,
+        };
+        let mut ledger = BudgetLedger::default();
+        let BudgetDecision::Allowed(first) = ledger.reserve(&policy, "r1", 50) else {
+            panic!("expected reservation");
+        };
+        let BudgetDecision::Allowed(second) = ledger.reserve(&policy, "r2", 50) else {
+            panic!("expected reservation");
+        };
+        assert_eq!(ledger.finalize(&first, 50).charged_micros, 50);
+        assert_eq!(
+            ledger.try_finalize(&first, 50),
+            Err(BudgetError::UnknownReservation("r1".to_string()))
+        );
+        assert_eq!(ledger.reserved("budget_docs"), 50);
+        assert_eq!(
+            ledger.active_reservation_ids(),
+            BTreeSet::from([second.id.clone()])
+        );
     }
 }
