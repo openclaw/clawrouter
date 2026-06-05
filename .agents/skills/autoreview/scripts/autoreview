@@ -388,7 +388,6 @@ def local_bundle(repo: Path) -> str:
 
 
 def branch_bundle(repo: Path, base_ref: str) -> str:
-    git(repo, "fetch", "origin", "--quiet", check=False)
     return "\n\n".join(
         [
             "# Branch Diff",
@@ -452,6 +451,7 @@ def load_datasets(args: argparse.Namespace) -> str:
 
 def build_prompt(repo: Path, target: str, target_ref: str | None, bundle: str, extra_prompt: str, datasets: str) -> str:
     target_line = f"{target} {target_ref}" if target_ref else target
+    repo_label = repo.name or "repository"
     return textwrap.dedent(
         f"""
         You are a senior code reviewer. Review the provided git change bundle only.
@@ -473,7 +473,7 @@ def build_prompt(repo: Path, target: str, target_ref: str | None, bundle: str, e
         - If there are no actionable findings, return an empty findings array and mark the patch correct.
 
         Review target: {target_line}
-        Repository: {repo}
+        Repository: {repo_label}
 
         {extra_prompt}
 
