@@ -47,4 +47,5 @@ jobs:
         with:
           version: 11.5.1
       - run: pnpm install --frozen-lockfile=false
-      - run: pnpm exec wrangler deploy --dry-run
+      - run: CLAWROUTER_STRICT_CONFIG=0 pnpm cf:config
+      - run: pnpm exec wrangler deploy --dry-run --config .wrangler.generated.toml
