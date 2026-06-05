@@ -262,10 +262,18 @@ pub struct CompiledProvider {
     pub routing: RoutingConfig,
     pub native_prefixes: Vec<String>,
     pub adapter: AdapterConfig,
-    pub capabilities: Vec<String>,
+    pub capabilities: Vec<CompiledCapability>,
     pub endpoints: Vec<CompiledEndpoint>,
     pub models: Vec<CompiledModel>,
+    pub billing: BillingConfig,
     pub meter: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CompiledCapability {
+    pub id: String,
+    pub endpoint: String,
+    pub methods: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -290,8 +298,15 @@ pub struct CompiledEndpoint {
 pub struct ProviderSnapshot {
     pub version: String,
     pub providers: Vec<CompiledProvider>,
-    pub capability_index: BTreeMap<String, Vec<String>>,
+    pub capability_index: BTreeMap<String, Vec<CapabilityRoute>>,
     pub model_index: BTreeMap<String, ModelRoute>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct CapabilityRoute {
+    pub provider: String,
+    pub endpoint: String,
+    pub methods: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -395,7 +410,7 @@ pub fn compile_provider_snapshot(
     let mut seen = BTreeSet::new();
     let mut seen_models = BTreeSet::new();
     let mut providers = Vec::new();
-    let mut capability_index: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    let mut capability_index: BTreeMap<String, Vec<CapabilityRoute>> = BTreeMap::new();
     let mut model_index = BTreeMap::new();
 
     for manifest in manifests {
@@ -407,7 +422,11 @@ pub fn compile_provider_snapshot(
             capability_index
                 .entry(capability.id.clone())
                 .or_default()
-                .push(manifest.id.clone());
+                .push(CapabilityRoute {
+                    provider: manifest.id.clone(),
+                    endpoint: capability.endpoint.clone(),
+                    methods: capability.methods.clone(),
+                });
         }
         for model in &manifest.models.entries {
             if !seen_models.insert(model.id.clone()) {
@@ -455,7 +474,11 @@ pub fn compile_provider_snapshot(
             capabilities: manifest
                 .capabilities
                 .iter()
-                .map(|cap| cap.id.clone())
+                .map(|cap| CompiledCapability {
+                    id: cap.id.clone(),
+                    endpoint: cap.endpoint.clone(),
+                    methods: cap.methods.clone(),
+                })
                 .collect(),
             endpoints,
             models: manifest
@@ -469,6 +492,7 @@ pub fn compile_provider_snapshot(
                     pricing_ref: model.pricing_ref.clone(),
                 })
                 .collect(),
+            billing: manifest.billing.clone(),
             meter: manifest.billing.meter.clone(),
         });
     }
@@ -536,11 +560,25 @@ models:
     - id: tavily/search
       upstream: search
       capabilities: [web.search]
+billing:
+  meter: clawrouter.requests
+  dimensions: [provider, endpoint]
+  counters:
+    - name: request
+      source: request.count
+      unit: request
 "#,
         )
         .unwrap();
         let snapshot = compile_provider_snapshot(&[manifest]).unwrap();
-        assert_eq!(snapshot.capability_index["web.search"], vec!["tavily"]);
+        assert_eq!(
+            snapshot.capability_index["web.search"][0],
+            CapabilityRoute {
+                provider: "tavily".to_string(),
+                endpoint: "search".to_string(),
+                methods: vec!["POST".to_string()]
+            }
+        );
         assert_eq!(snapshot.model_index["tavily/search"].provider, "tavily");
         assert_eq!(snapshot.model_index["tavily/search"].upstream, "search");
         assert_eq!(
@@ -551,6 +589,11 @@ models:
             snapshot.providers[0].auth.schemes[0],
             AuthScheme::Bearer { .. }
         ));
+        assert_eq!(
+            snapshot.providers[0].billing.dimensions,
+            vec!["provider", "endpoint"]
+        );
+        assert_eq!(snapshot.providers[0].billing.counters[0].name, "request");
     }
 
     #[test]
