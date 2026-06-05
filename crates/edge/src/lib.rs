@@ -24,17 +24,19 @@ async fn fetch(req: Request, _env: Env, _ctx: Context) -> Result<Response> {
         let token = auth.strip_prefix("Bearer ").unwrap_or("");
         return match parse_proxy_key(token) {
             Ok(parts) => Response::from_json(&serde_json::json!({
-                "ok": true,
                 "kid": parts.kid,
-                "mode": format!("{:?}", parts.mode).to_lowercase()
+                "mode": format!("{:?}", parts.mode).to_lowercase(),
+                "syntaxValid": true,
+                "verified": false,
+                "verification": "not_implemented"
             })),
             Err(error) => Response::from_json(&serde_json::json!({
                 "error": {
-                    "code": "unauthorized",
+                    "code": "invalid_key_syntax",
                     "message": error.to_string()
                 }
             }))
-            .map(|resp| resp.with_status(401)),
+            .map(|resp| resp.with_status(400)),
         };
     }
 
