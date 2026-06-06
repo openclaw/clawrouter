@@ -340,19 +340,10 @@ function destinationUris(app) {
 function defaultAccessPaths() {
   return [
     "/dashboard",
-    "/playground",
-    "/admin",
-    "/account",
-    "/routes",
-    "/console",
     "/v1/session",
     "/v1/me",
     "/v1/usage",
     "/v1/admin/*",
-    "/api/session",
-    "/api/me",
-    "/api/usage",
-    "/api/admin/*",
   ];
 }
 
