@@ -3,12 +3,14 @@ use clawrouter_core::{
     ProviderSnapshot, UsageEvent, UsageStatus,
 };
 use hmac::{Hmac, Mac};
+use js_sys::{Array, Function, Object, Promise, Reflect, Uint8Array};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
-use wasm_bindgen::JsValue;
+use wasm_bindgen::{JsCast, JsValue};
+use wasm_bindgen_futures::JsFuture;
 use worker::*;
 
 const PROVIDER_SNAPSHOT: &str = include_str!(concat!(env!("OUT_DIR"), "/provider-snapshot.json"));
@@ -150,7 +152,7 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
     <div class="wrap top">
       <div>
         <h1>ClawRouter</h1>
-        <p>Provider routing, proxy keys, tenant budgets, and account usage.</p>
+        <p>Provider routing, Cloudflare Access admin sessions, proxy keys, tenant budgets, and account usage.</p>
       </div>
       <nav>
         <button data-view="dashboard" class="active">Dashboard</button>
@@ -162,7 +164,7 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
   </header>
   <main class="wrap">
     <section class="toolbar">
-      <label>Admin token<input id="adminToken" type="password" autocomplete="off" placeholder="required for admin views"></label>
+      <label>Admin token<input id="adminToken" type="password" autocomplete="off" placeholder="optional bearer fallback"></label>
       <label>Proxy key<input id="proxyKey" type="password" autocomplete="off" placeholder="required for account views"></label>
       <button id="refresh" class="primary">Refresh</button>
     </section>
@@ -220,7 +222,7 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
       "/console": "dashboard",
       "/dashboard": "dashboard"
     })[window.location.pathname] || "dashboard";
-    const state = { view: initialView, service: null, providers: null, routes: null };
+    const state = { view: initialView, service: null, session: null, providers: null, routes: null };
     const $ = (id) => document.getElementById(id);
     const status = (text, bad = false) => {
       $("status").textContent = text;
@@ -262,7 +264,7 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
         metric("providers", providers.length),
         metric("openai compatible", routes.openaiCompatible.length),
         metric("manifest routes", routes.manifestProxy.length),
-        metric("admin API", "/v1/admin")
+        metric("session", state.session?.authenticated ? `${state.session.role} · ${state.session.email}` : "not signed in")
       ].join("");
       const classes = providers.reduce((acc, provider) => {
         acc[provider.class] = (acc[provider.class] || 0) + 1;
@@ -329,7 +331,7 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
       try {
         status("loading");
         state.service = await api("/");
-        [state.providers, state.routes] = await Promise.all([api("/v1/providers"), api("/v1/routes")]);
+        [state.session, state.providers, state.routes] = await Promise.all([api("/v1/session"), api("/v1/providers"), api("/v1/routes")]);
         renderDashboard();
         renderRoutes();
         if (state.view === "admin") await renderAdmin();
@@ -393,6 +395,12 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         return Response::from_json(&route_catalog(&snapshot)).and_then(with_cors);
     }
 
+    if req.method() == Method::Get && api_path == "/v1/session" {
+        return session_profile(req.headers(), &env)
+            .await
+            .and_then(with_cors);
+    }
+
     if req.method() == Method::Get && api_path == "/v1/me" {
         return user_profile(req.headers(), &env).await.and_then(with_cors);
     }
@@ -443,6 +451,7 @@ fn service_index() -> Result<Response> {
             "health": "/v1/health",
             "providers": "/v1/providers",
             "routes": "/v1/routes",
+            "session": "/v1/session",
             "me": "/v1/me",
             "usage": "/v1/usage",
             "keyInspect": "/v1/key/inspect",
@@ -452,6 +461,7 @@ fn service_index() -> Result<Response> {
             "adminKeys": "/v1/admin/keys",
             "apiAliases": {
                 "routes": ["/api/route", "/api/routes"],
+                "session": "/api/session",
                 "me": "/api/me",
                 "usage": "/api/usage",
                 "admin": "/api/admin/*"
@@ -483,6 +493,7 @@ fn accepts_html(headers: &Headers) -> Result<bool> {
 fn canonical_api_path(path: &str) -> String {
     match path {
         "/api/route" | "/api/routes" => "/v1/routes".to_string(),
+        "/api/session" => "/v1/session".to_string(),
         "/api/me" => "/v1/me".to_string(),
         "/api/usage" => "/v1/usage".to_string(),
         _ if path.starts_with("/api/admin/") => format!("/v1{}", path.trim_start_matches("/api")),
@@ -913,6 +924,70 @@ struct AdminUsageRow {
     budget: BudgetStatusView,
 }
 
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum AccessRole {
+    Admin,
+    User,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccessSession {
+    authenticated: bool,
+    auth: &'static str,
+    role: AccessRole,
+    email: String,
+    subject: Option<String>,
+    tenant_id: String,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AccessUserRecord {
+    role: AccessRole,
+    #[serde(default)]
+    tenant_id: Option<String>,
+    #[serde(default)]
+    enabled: Option<bool>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum AccessAud {
+    One(String),
+    Many(Vec<String>),
+}
+
+#[derive(Debug, Deserialize)]
+struct AccessJwtPayload {
+    aud: Option<AccessAud>,
+    email: Option<String>,
+    exp: Option<u64>,
+    iss: Option<String>,
+    nbf: Option<u64>,
+    sub: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AccessJwtHeader {
+    alg: Option<String>,
+    kid: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AccessCerts {
+    keys: Vec<AccessPublicJwk>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AccessPublicJwk {
+    kid: Option<String>,
+    kty: Option<String>,
+    n: Option<String>,
+    e: Option<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct OAuthTokenRecord {
@@ -934,8 +1009,23 @@ enum AuthOutcome {
     Denied(Response),
 }
 
+async fn session_profile(headers: &Headers, env: &Env) -> Result<Response> {
+    if let Some(session) = verified_access_session(headers, env).await? {
+        return Response::from_json(&session);
+    }
+    Response::from_json(&serde_json::json!({
+        "authenticated": false,
+        "auth": "none",
+        "role": "user",
+        "email": null,
+        "subject": null,
+        "tenantId": null
+    }))
+}
+
 async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
-    if let Some(response) = authorize_admin(req.headers(), &env)? {
+    let url = req.url()?;
+    if let Some(response) = authorize_admin(&req.method(), req.headers(), &url, &env).await? {
         return Ok(response);
     }
     let kv = match env.kv("POLICY_KV") {
@@ -1039,6 +1129,210 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
     }
 
     json_error("method_not_allowed", "admin method is not allowed", 405)
+}
+
+async fn verified_access_session(headers: &Headers, env: &Env) -> Result<Option<AccessSession>> {
+    let Some(payload) = verified_access_payload(headers, env).await? else {
+        return Ok(None);
+    };
+    let Some(email) = payload
+        .email
+        .as_deref()
+        .map(str::trim)
+        .filter(|email| !email.is_empty())
+    else {
+        return Ok(None);
+    };
+    let normalized_email = email.to_ascii_lowercase();
+    let Some((role, tenant_id)) = access_role_for_email(env, &normalized_email).await? else {
+        return Ok(None);
+    };
+    Ok(Some(AccessSession {
+        authenticated: true,
+        auth: "cloudflare_access",
+        role,
+        email: normalized_email,
+        subject: payload.sub,
+        tenant_id,
+    }))
+}
+
+async fn verified_access_payload(headers: &Headers, env: &Env) -> Result<Option<AccessJwtPayload>> {
+    let jwt = headers.get("cf-access-jwt-assertion")?.unwrap_or_default();
+    let team_domain =
+        normalized_access_team_domain(&optional_env_value(env, "CLAWROUTER_ACCESS_TEAM_DOMAIN")?);
+    let expected_aud = optional_env_value(env, "CLAWROUTER_ACCESS_AUD")?;
+    if jwt.is_empty() || team_domain.is_empty() || expected_aud.is_empty() {
+        return Ok(None);
+    }
+    let Some((encoded_header, encoded_payload, encoded_signature)) = split_jwt(&jwt) else {
+        return Ok(None);
+    };
+    let Some(header_bytes) = access_jwt_part(encoded_header) else {
+        return Ok(None);
+    };
+    let header = match serde_json::from_slice::<AccessJwtHeader>(&header_bytes) {
+        Ok(header) => header,
+        Err(_) => return Ok(None),
+    };
+    if header.alg.as_deref() != Some("RS256") {
+        return Ok(None);
+    }
+    let Some(kid) = header.kid.as_deref().filter(|kid| !kid.is_empty()) else {
+        return Ok(None);
+    };
+    let cert = match access_cert(&team_domain, kid).await? {
+        Some(cert) => cert,
+        None => return Ok(None),
+    };
+    let Some(signature) = access_jwt_part(encoded_signature) else {
+        return Ok(None);
+    };
+    if !verify_access_signature(
+        &cert,
+        format!("{encoded_header}.{encoded_payload}").as_bytes(),
+        &signature,
+    )
+    .await?
+    {
+        return Ok(None);
+    }
+    let Some(payload_bytes) = access_jwt_part(encoded_payload) else {
+        return Ok(None);
+    };
+    let payload = match serde_json::from_slice::<AccessJwtPayload>(&payload_bytes) {
+        Ok(payload) => payload,
+        Err(_) => return Ok(None),
+    };
+    if valid_access_payload(&payload, &team_domain, &expected_aud) {
+        Ok(Some(payload))
+    } else {
+        Ok(None)
+    }
+}
+
+async fn access_cert(team_domain: &str, kid: &str) -> Result<Option<AccessPublicJwk>> {
+    let mut init = RequestInit::new();
+    init.with_method(Method::Get);
+    let request = Request::new_with_init(
+        &format!("https://{team_domain}/cdn-cgi/access/certs"),
+        &init,
+    )?;
+    let mut response = Fetch::Request(request).send().await?;
+    if response.status_code() != 200 {
+        return Ok(None);
+    }
+    let certs = response.json::<AccessCerts>().await?;
+    Ok(certs
+        .keys
+        .into_iter()
+        .find(|key| key.kid.as_deref() == Some(kid)))
+}
+
+async fn verify_access_signature(
+    cert: &AccessPublicJwk,
+    signing_input: &[u8],
+    signature: &[u8],
+) -> Result<bool> {
+    if cert.kty.as_deref() != Some("RSA") {
+        return Ok(false);
+    }
+    let Some(n) = cert.n.as_deref() else {
+        return Ok(false);
+    };
+    let Some(e) = cert.e.as_deref() else {
+        return Ok(false);
+    };
+    let jwk = Object::new();
+    js_set(&jwk, "kty", "RSA")?;
+    js_set(&jwk, "n", n)?;
+    js_set(&jwk, "e", e)?;
+    js_set(&jwk, "alg", "RS256")?;
+    js_set(&jwk, "ext", true)?;
+
+    let algorithm = Object::new();
+    js_set(&algorithm, "name", "RSASSA-PKCS1-v1_5")?;
+    js_set(&algorithm, "hash", "SHA-256")?;
+
+    let usages = Array::new();
+    usages.push(&JsValue::from_str("verify"));
+    let subtle = subtle_crypto()?;
+    let import_key = js_function(&subtle, "importKey")?;
+    let key_promise = import_key
+        .call5(
+            &subtle,
+            &JsValue::from_str("jwk"),
+            &jwk,
+            &algorithm,
+            &JsValue::FALSE,
+            &usages,
+        )
+        .map_err(js_error)?;
+    let key = JsFuture::from(Promise::from(key_promise))
+        .await
+        .map_err(js_error)?;
+
+    let verify = js_function(&subtle, "verify")?;
+    let signature = Uint8Array::from(signature);
+    let data = Uint8Array::from(signing_input);
+    let verified = verify
+        .call4(&subtle, &algorithm, &key, &signature, &data)
+        .map_err(js_error)?;
+    Ok(JsFuture::from(Promise::from(verified))
+        .await
+        .map_err(js_error)?
+        .as_bool()
+        .unwrap_or(false))
+}
+
+fn valid_access_payload(payload: &AccessJwtPayload, team_domain: &str, expected_aud: &str) -> bool {
+    let now = js_sys::Date::now() as u64 / 1000;
+    access_audiences(payload)
+        .iter()
+        .any(|audience| *audience == expected_aud)
+        && payload.iss.as_deref() == Some(&format!("https://{team_domain}"))
+        && payload.exp.is_some_and(|exp| exp > now)
+        && payload.nbf.is_none_or(|nbf| nbf <= now)
+}
+
+fn access_audiences(payload: &AccessJwtPayload) -> Vec<&str> {
+    match payload.aud.as_ref() {
+        Some(AccessAud::One(audience)) => vec![audience.as_str()],
+        Some(AccessAud::Many(audiences)) => audiences.iter().map(String::as_str).collect(),
+        None => Vec::new(),
+    }
+}
+
+async fn access_role_for_email(env: &Env, email: &str) -> Result<Option<(AccessRole, String)>> {
+    if let Ok(kv) = env.kv("POLICY_KV") {
+        if let Some(record) = kv
+            .get(&format!("access/users/{email}"))
+            .text()
+            .await
+            .map_err(|error| Error::RustError(format!("failed to read access user: {error}")))?
+        {
+            let user = serde_json::from_str::<AccessUserRecord>(&record).map_err(|error| {
+                Error::RustError(format!("access user is invalid JSON: {error}"))
+            })?;
+            if user.enabled.unwrap_or(true) {
+                return Ok(Some((
+                    user.role,
+                    user.tenant_id
+                        .filter(|tenant| !tenant.trim().is_empty())
+                        .unwrap_or_else(|| default_access_tenant(env)),
+                )));
+            }
+            return Ok(None);
+        }
+    }
+    let role = if csv_env_contains(env, "CLAWROUTER_ACCESS_ADMIN_EMAILS", email)?
+        || email_domain_matches(env, email)?
+    {
+        AccessRole::Admin
+    } else {
+        AccessRole::User
+    };
+    Ok(Some((role, default_access_tenant(env))))
 }
 
 async fn user_profile(headers: &Headers, env: &Env) -> Result<Response> {
@@ -1337,39 +1631,86 @@ async fn list_admin_key_policies(kv: &KvStore) -> Result<Vec<AdminKeyPolicyRespo
     Ok(entries)
 }
 
-fn authorize_admin(headers: &Headers, env: &Env) -> Result<Option<Response>> {
-    let expected_hash = match admin_token_hash(env) {
-        Ok(value) => value,
-        Err(_) => {
+async fn authorize_admin(
+    method: &Method,
+    headers: &Headers,
+    url: &Url,
+    env: &Env,
+) -> Result<Option<Response>> {
+    let auth = headers.get("authorization")?.unwrap_or_default();
+    let token = auth.strip_prefix("Bearer ").unwrap_or("");
+    if !token.is_empty() {
+        let expected_hash = match admin_token_hash(env) {
+            Ok(value) => value,
+            Err(_) => {
+                return json_error(
+                    "admin_auth_unconfigured",
+                    "CLAWROUTER_ADMIN_TOKEN_SHA256 is required for bearer admin requests",
+                    503,
+                )
+                .map(Some);
+            }
+        };
+        if !is_sha256_hex(&expected_hash) {
             return json_error(
-                "admin_auth_unconfigured",
-                "CLAWROUTER_ADMIN_TOKEN_SHA256 is required for admin requests",
-                503,
+                "admin_auth_misconfigured",
+                "CLAWROUTER_ADMIN_TOKEN_SHA256 must be a 64-character hex string",
+                500,
             )
             .map(Some);
         }
-    };
-    if !is_sha256_hex(&expected_hash) {
-        return json_error(
-            "admin_auth_misconfigured",
-            "CLAWROUTER_ADMIN_TOKEN_SHA256 must be a 64-character hex string",
-            500,
-        )
-        .map(Some);
+        if constant_time_eq(&sha256_hex(token), &expected_hash.to_ascii_lowercase()) {
+            return Ok(None);
+        }
     }
-    let auth = headers.get("authorization")?.unwrap_or_default();
-    let token = auth.strip_prefix("Bearer ").unwrap_or("");
-    if token.is_empty()
-        || !constant_time_eq(&sha256_hex(token), &expected_hash.to_ascii_lowercase())
-    {
-        return json_error(
-            "invalid_admin_token",
-            "a valid ClawRouter admin token is required",
-            401,
-        )
-        .map(Some);
+
+    if let Some(session) = verified_access_session(headers, env).await? {
+        return if session.role == AccessRole::Admin {
+            if access_admin_csrf_allowed(method, headers, url)? {
+                Ok(None)
+            } else {
+                json_error(
+                    "admin_csrf_required",
+                    "Cloudflare Access admin mutations require a same-origin browser request",
+                    403,
+                )
+                .map(Some)
+            }
+        } else {
+            json_error(
+                "access_admin_required",
+                "Cloudflare Access user does not have the admin role",
+                403,
+            )
+            .map(Some)
+        };
     }
-    Ok(None)
+
+    json_error(
+        "admin_auth_required",
+        "a valid ClawRouter admin token or Cloudflare Access admin session is required",
+        401,
+    )
+    .map(Some)
+}
+
+fn access_admin_csrf_allowed(method: &Method, headers: &Headers, url: &Url) -> Result<bool> {
+    if method == &Method::Get || method == &Method::Head || method == &Method::Options {
+        return Ok(true);
+    }
+    let origin = headers.get("origin")?.unwrap_or_default();
+    if !origin.is_empty() {
+        return Ok(origin == request_origin(url));
+    }
+    let fetch_site = headers.get("sec-fetch-site")?.unwrap_or_default();
+    Ok(matches!(
+        fetch_site.as_str(),
+        "same-origin" | "same-site" | "none"
+    ))
+}
+
+fn request_origin(url: &Url) -> String {
+    url.origin().ascii_serialization()
 }
 
 fn admin_token_hash(env: &Env) -> Result<String> {
@@ -1390,6 +1731,133 @@ fn constant_time_eq(left: &str, right: &str) -> bool {
         .zip(right.as_bytes())
         .fold(0_u8, |acc, (a, b)| acc | (a ^ b));
     diff == 0
+}
+
+fn optional_env_value(env: &Env, name: &str) -> Result<String> {
+    if let Ok(secret) = env.secret(name) {
+        return Ok(secret.to_string().trim().to_string());
+    }
+    Ok(env
+        .var(name)
+        .map(|value| value.to_string().trim().to_string())
+        .unwrap_or_default())
+}
+
+fn default_access_tenant(env: &Env) -> String {
+    optional_env_value(env, "CLAWROUTER_ACCESS_DEFAULT_TENANT")
+        .ok()
+        .filter(|value| !value.is_empty())
+        .unwrap_or_else(|| "default".to_string())
+}
+
+fn csv_env_contains(env: &Env, name: &str, needle: &str) -> Result<bool> {
+    Ok(optional_env_value(env, name)?
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .any(|value| value.eq_ignore_ascii_case(needle)))
+}
+
+fn email_domain_matches(env: &Env, email: &str) -> Result<bool> {
+    let Some((_, domain)) = email.rsplit_once('@') else {
+        return Ok(false);
+    };
+    Ok(optional_env_value(env, "CLAWROUTER_ACCESS_ADMIN_DOMAINS")?
+        .split(',')
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .any(|value| value.eq_ignore_ascii_case(domain)))
+}
+
+fn normalized_access_team_domain(value: &str) -> String {
+    let mut trimmed = value.trim();
+    if trimmed.is_empty() {
+        return String::new();
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    if lower.starts_with("https://") {
+        trimmed = &trimmed["https://".len()..];
+    } else if lower.starts_with("http://") {
+        trimmed = &trimmed["http://".len()..];
+    }
+    for separator in ['/', '?', '#'] {
+        if let Some(index) = trimmed.find(separator) {
+            trimmed = &trimmed[..index];
+        }
+    }
+    trimmed.to_ascii_lowercase()
+}
+
+fn split_jwt(value: &str) -> Option<(&str, &str, &str)> {
+    let mut parts = value.split('.');
+    let header = parts.next()?;
+    let payload = parts.next()?;
+    let signature = parts.next()?;
+    parts
+        .next()
+        .is_none()
+        .then_some((header, payload, signature))
+}
+
+fn access_jwt_part(value: &str) -> Option<Vec<u8>> {
+    base64_url_decode(value).ok()
+}
+
+fn subtle_crypto() -> Result<JsValue> {
+    let crypto = Reflect::get(&js_sys::global(), &JsValue::from_str("crypto")).map_err(js_error)?;
+    Reflect::get(&crypto, &JsValue::from_str("subtle")).map_err(js_error)
+}
+
+fn js_function(object: &JsValue, name: &str) -> Result<Function> {
+    Reflect::get(object, &JsValue::from_str(name))
+        .map_err(js_error)?
+        .dyn_into::<Function>()
+        .map_err(js_error)
+}
+
+fn js_set<T: Into<JsValue>>(object: &Object, name: &str, value: T) -> Result<()> {
+    Reflect::set(object, &JsValue::from_str(name), &value.into())
+        .map_err(js_error)?
+        .then_some(())
+        .ok_or_else(|| Error::RustError(format!("failed to set JavaScript property `{name}`")))
+}
+
+fn js_error(error: JsValue) -> Error {
+    Error::RustError(
+        error
+            .as_string()
+            .unwrap_or_else(|| "JavaScript runtime error".to_string()),
+    )
+}
+
+fn base64_url_decode(value: &str) -> Result<Vec<u8>> {
+    let mut bits = 0_u32;
+    let mut bit_count = 0_u8;
+    let mut out = Vec::with_capacity(value.len() * 3 / 4);
+    for byte in value.bytes() {
+        if byte == b'=' {
+            break;
+        }
+        let sextet = match byte {
+            b'A'..=b'Z' => byte - b'A',
+            b'a'..=b'z' => byte - b'a' + 26,
+            b'0'..=b'9' => byte - b'0' + 52,
+            b'-' | b'+' => 62,
+            b'_' | b'/' => 63,
+            _ => {
+                return Err(Error::RustError(
+                    "invalid base64url-encoded value".to_string(),
+                ))
+            }
+        };
+        bits = (bits << 6) | u32::from(sextet);
+        bit_count += 6;
+        if bit_count >= 8 {
+            bit_count -= 8;
+            out.push(((bits >> bit_count) & 0xff) as u8);
+        }
+    }
+    Ok(out)
 }
 
 fn default_true() -> bool {
@@ -3077,7 +3545,13 @@ fn cors_preflight() -> Result<Response> {
 fn cors_enabled_path(path: &str) -> bool {
     matches!(
         path,
-        "/v1/health" | "/v1/providers" | "/v1/routes" | "/v1/me" | "/v1/usage" | "/v1/key/inspect"
+        "/v1/health"
+            | "/v1/providers"
+            | "/v1/routes"
+            | "/v1/session"
+            | "/v1/me"
+            | "/v1/usage"
+            | "/v1/key/inspect"
     ) || path.starts_with("/v1/admin/")
 }
 
@@ -3515,6 +3989,7 @@ mod tests {
         assert!(cors_enabled_path("/v1/admin/keys"));
         assert!(cors_enabled_path("/v1/providers"));
         assert!(cors_enabled_path("/v1/routes"));
+        assert!(cors_enabled_path("/v1/session"));
         assert!(cors_enabled_path("/v1/me"));
         assert!(cors_enabled_path("/v1/usage"));
         assert!(!cors_enabled_path("/v1/chat/completions"));
@@ -3534,6 +4009,7 @@ mod tests {
     fn api_aliases_map_to_canonical_v1_routes() {
         assert_eq!(canonical_api_path("/api/route"), "/v1/routes");
         assert_eq!(canonical_api_path("/api/routes"), "/v1/routes");
+        assert_eq!(canonical_api_path("/api/session"), "/v1/session");
         assert_eq!(canonical_api_path("/api/me"), "/v1/me");
         assert_eq!(canonical_api_path("/api/usage"), "/v1/usage");
         assert_eq!(
@@ -3541,6 +4017,34 @@ mod tests {
             "/v1/admin/overview"
         );
         assert_eq!(canonical_api_path("/v1/providers"), "/v1/providers");
+    }
+
+    #[test]
+    fn access_helpers_normalize_and_decode_cloudflare_jwts() {
+        assert_eq!(
+            normalized_access_team_domain("https://Team.Example.cloudflareaccess.com/path"),
+            "team.example.cloudflareaccess.com"
+        );
+        assert_eq!(split_jwt("a.b.c"), Some(("a", "b", "c")));
+        assert_eq!(split_jwt("a.b.c.d"), None);
+        assert_eq!(
+            String::from_utf8(base64_url_decode("eyJyb2xlIjoiYWRtaW4ifQ").unwrap()).unwrap(),
+            r#"{"role":"admin"}"#
+        );
+        assert!(access_jwt_part("*").is_none());
+
+        let payload = AccessJwtPayload {
+            aud: Some(AccessAud::Many(vec![
+                "first".to_string(),
+                "second".to_string(),
+            ])),
+            email: None,
+            exp: None,
+            iss: None,
+            nbf: None,
+            sub: None,
+        };
+        assert_eq!(access_audiences(&payload), vec!["first", "second"]);
     }
 
     #[test]

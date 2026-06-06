@@ -10,6 +10,13 @@ const kvId = process.env.CLAWROUTER_POLICY_KV_ID;
 const kvPreviewId = process.env.CLAWROUTER_POLICY_KV_PREVIEW_ID ?? kvId;
 const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
 const strict = process.env.CLAWROUTER_STRICT_CONFIG !== "0";
+const workerVars = [
+  "CLAWROUTER_ACCESS_TEAM_DOMAIN",
+  "CLAWROUTER_ACCESS_AUD",
+  "CLAWROUTER_ACCESS_ADMIN_EMAILS",
+  "CLAWROUTER_ACCESS_ADMIN_DOMAINS",
+  "CLAWROUTER_ACCESS_DEFAULT_TENANT",
+];
 
 if (strict && !kvId) {
   throw new Error("CLAWROUTER_POLICY_KV_ID is required to render deploy config");
@@ -30,6 +37,17 @@ preview_id = "${kvPreviewId}"
 }
 if (accountId && !/^account_id = /m.test(config)) {
   config = config.replace(/^name = .+$/m, (line) => `${line}\naccount_id = "${accountId}"`);
+}
+
+const renderedVars = workerVars
+  .filter((name) => process.env[name])
+  .map((name) => `${name} = ${JSON.stringify(process.env[name])}`);
+if (renderedVars.length > 0) {
+  config = `${config.trimEnd()}
+
+[vars]
+${renderedVars.join("\n")}
+`;
 }
 
 mkdirSync(dirname(target), { recursive: true });

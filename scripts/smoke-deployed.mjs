@@ -19,6 +19,10 @@ const routes = await expectOk(`${baseUrl}/v1/routes`, "route catalog");
 expectRouteCatalog(routes, "route catalog");
 const aliasedRoutes = await expectOk(`${baseUrl}/api/route`, "route catalog alias");
 expectRouteCatalog(aliasedRoutes, "route catalog alias");
+const session = await expectOk(`${baseUrl}/v1/session`, "session");
+if (typeof session.authenticated !== "boolean" || typeof session.role !== "string") {
+  throw new Error("session response is missing authenticated/role fields");
+}
 const plan = buildProviderSmokePlan(providers);
 if (plan.targetCount !== plan.providerCount) {
   throw new Error(`provider smoke plan is incomplete: ${plan.targetCount}/${plan.providerCount}`);

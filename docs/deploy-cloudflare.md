@@ -33,6 +33,17 @@ CLAWROUTER_SMOKE_KEY
 CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY # optional smoke-only upstream key
 ```
 
+Set these GitHub Actions variables when the console is protected by Cloudflare
+Access:
+
+```text
+CLAWROUTER_ACCESS_TEAM_DOMAIN
+CLAWROUTER_ACCESS_AUD
+CLAWROUTER_ACCESS_ADMIN_EMAILS        # comma-separated admin emails
+CLAWROUTER_ACCESS_ADMIN_DOMAINS       # optional comma-separated admin domains
+CLAWROUTER_ACCESS_DEFAULT_TENANT      # optional, defaults to default
+```
+
 Check the deploy surface without printing secret values:
 
 ```sh
@@ -124,11 +135,36 @@ proxy smoke key with access to every selected provider.
 `CLAWROUTER_SMOKE_OPENAI=1` remains supported as a shortcut for
 `CLAWROUTER_SMOKE_LIVE_PROVIDERS=openai`.
 
+## Cloudflare Access Console
+
+Protect the Worker route with a Cloudflare Access application, then set
+`CLAWROUTER_ACCESS_TEAM_DOMAIN` to the team domain and `CLAWROUTER_ACCESS_AUD`
+to the Access application audience tag. ClawRouter verifies the
+`cf-access-jwt-assertion` signature against the team certs endpoint before it
+trusts the email or role.
+
+Access users are `user` by default. Admins are resolved from
+`access/users/<email>` in `POLICY_KV`, then from `CLAWROUTER_ACCESS_ADMIN_EMAILS`
+or `CLAWROUTER_ACCESS_ADMIN_DOMAINS`.
+
+```json
+{
+  "role": "admin",
+  "tenantId": "openclaw",
+  "enabled": true
+}
+```
+
+`GET /v1/session` reports the verified Access session. The admin UI can call
+admin routes through the same-origin Access session; the admin bearer token is
+only a fallback for automation or emergency access.
+
 ## Admin API
 
-Admin requests use `Authorization: Bearer <admin-token>`. The Worker compares
-the SHA-256 hash of that token with `CLAWROUTER_ADMIN_TOKEN_SHA256`; the raw
-admin token is never configured in the Worker.
+Admin requests use either a verified Cloudflare Access admin session or
+`Authorization: Bearer <admin-token>`. For bearer auth, the Worker compares the
+SHA-256 hash of that token with `CLAWROUTER_ADMIN_TOKEN_SHA256`; the raw admin
+token is never configured in the Worker.
 
 ```text
 GET /v1/admin/keys
