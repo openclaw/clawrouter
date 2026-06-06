@@ -149,8 +149,10 @@ pnpm cf:deploy
 
 ## Smoke
 
-The deployed smoke checks health, provider snapshot size, key inspection when a
-smoke key is present, and that every provider has an executable smoke target:
+The deployed smoke checks health, root-to-dashboard redirect behavior, that the
+dashboard and session paths are gated before the Worker can return console HTML
+or fallback JSON, provider snapshot size, key inspection when a smoke key is
+present, and that every provider has an executable smoke target:
 
 ```sh
 export CLAWROUTER_BASE_URL=https://...
