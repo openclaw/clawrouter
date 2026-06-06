@@ -143,6 +143,11 @@ to the Access application audience tag. ClawRouter verifies the
 `cf-access-jwt-assertion` signature against the team certs endpoint before it
 trusts the email or role.
 
+The browser console is fail-closed in the Worker. `/`, `/dashboard`, `/admin`,
+`/account`, `/routes`, and `/console` only render after a verified Cloudflare
+Access session. Public and client-facing surfaces stay under the API paths such
+as `/v1`, `/v1/health`, `/v1/providers`, `/v1/routes`, and proxy endpoints.
+
 Access users are `user` by default. Admins are resolved from
 `access/users/<email>` in `POLICY_KV`, then from `CLAWROUTER_ACCESS_ADMIN_EMAILS`
 or `CLAWROUTER_ACCESS_ADMIN_DOMAINS`.

@@ -410,7 +410,7 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
     async function refresh() {
       try {
         status("loading");
-        state.service = await api("/");
+        state.service = await api("/v1");
         [state.session, state.providers, state.routes] = await Promise.all([api("/v1/session"), api("/v1/providers"), api("/v1/routes")]);
         renderDashboard();
         renderRoutes();
@@ -447,14 +447,14 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     if req.method() == Method::Options && cors_enabled_path(&api_path) {
         return cors_preflight();
     }
-    if req.method() == Method::Get && request_path == "/" && accepts_html(req.headers())? {
-        return interface_shell();
+    if req.method() == Method::Get && request_path == "/" {
+        return protected_interface_shell(req.headers(), &env).await;
     }
-    if req.method() == Method::Get && matches!(url.path(), "/" | "/v1") {
+    if req.method() == Method::Get && url.path() == "/v1" {
         return service_index().and_then(with_cors);
     }
     if req.method() == Method::Get && interface_path(url.path()) {
-        return interface_shell();
+        return protected_interface_shell(req.headers(), &env).await;
     }
     if req.method() == Method::Get && url.path() == "/v1/health" {
         return Response::from_json(&serde_json::json!({
@@ -563,13 +563,6 @@ fn interface_path(path: &str) -> bool {
     )
 }
 
-fn accepts_html(headers: &Headers) -> Result<bool> {
-    let accept = headers.get("accept")?.unwrap_or_default();
-    Ok(accept
-        .split(',')
-        .any(|value| value.trim().starts_with("text/html")))
-}
-
 fn canonical_api_path(path: &str) -> String {
     match path {
         "/api/route" | "/api/routes" => "/v1/routes".to_string(),
@@ -579,6 +572,17 @@ fn canonical_api_path(path: &str) -> String {
         _ if path.starts_with("/api/admin/") => format!("/v1{}", path.trim_start_matches("/api")),
         _ => path.to_string(),
     }
+}
+
+async fn protected_interface_shell(headers: &Headers, env: &Env) -> Result<Response> {
+    if verified_access_session(headers, env).await?.is_some() {
+        return interface_shell();
+    }
+    json_error(
+        "access_session_required",
+        "ClawRouter console requires a verified Cloudflare Access session",
+        401,
+    )
 }
 
 fn interface_shell() -> Result<Response> {
