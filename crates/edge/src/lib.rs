@@ -82,6 +82,14 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       gap: 16px;
       min-height: 74px;
       padding: 14px 0;
+      min-width: 0;
+    }
+    .top > *,
+    .consoleIntro > *,
+    .toolbar > *,
+    .grid > * {
+      min-width: 0;
+      max-width: 100%;
     }
     .brand {
       display: flex;
@@ -89,6 +97,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       gap: 13px;
       min-width: 0;
     }
+    .brand > div { min-width: 0; }
     .brandmark {
       width: 42px;
       height: 42px;
@@ -167,6 +176,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       line-height: 1.02;
       text-transform: none;
       letter-spacing: 0;
+      overflow-wrap: anywhere;
     }
     .heroPanel p { max-width: 720px; }
     .quickPanel {
@@ -189,6 +199,11 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     }
     .quickItem:last-child { border-bottom: 0; padding-bottom: 0; }
     .quickItem strong { color: var(--ink); font-weight: 750; }
+    .quickItem strong {
+      min-width: 0;
+      text-align: right;
+      overflow-wrap: anywhere;
+    }
     .toolbar {
       display: grid;
       grid-template-columns: 1fr 1fr auto;
@@ -269,9 +284,13 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       border-radius: 9px;
       background: var(--icon-bg, var(--surface-3));
       color: var(--icon-fg, var(--ink));
-      font-size: 11px;
-      font-weight: 850;
-      letter-spacing: 0;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.12);
+      overflow: hidden;
+    }
+    .providerIcon svg {
+      width: 22px;
+      height: 22px;
+      display: block;
     }
     .providerCard strong,
     .providerCard span {
@@ -281,6 +300,13 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       white-space: nowrap;
     }
     .providerCard span { color: var(--faint); font-size: 12px; }
+    .providerMeta {
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      flex-wrap: wrap;
+      margin-top: 3px;
+    }
     .providerInline {
       display: inline-grid;
       grid-template-columns: 28px minmax(0, 1fr);
@@ -293,6 +319,39 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       height: 28px;
       border-radius: 7px;
       font-size: 10px;
+    }
+    .sr {
+      position: absolute;
+      width: 1px;
+      height: 1px;
+      overflow: hidden;
+      clip: rect(0, 0, 0, 0);
+      white-space: nowrap;
+    }
+    .serviceChip,
+    .capabilityPill {
+      display: inline-flex;
+      align-items: center;
+      gap: 5px;
+      min-height: 24px;
+      padding: 0 8px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(255,255,255,.03);
+      color: var(--muted);
+      font-size: 12px;
+      font-weight: 650;
+      white-space: nowrap;
+    }
+    .serviceChip svg {
+      width: 13px;
+      height: 13px;
+      color: var(--blue);
+    }
+    .capabilityPills {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
     }
     .providerChecks {
       display: grid;
@@ -315,6 +374,19 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     .check input {
       width: 16px;
       min-height: 16px;
+    }
+    .check .providerInline {
+      min-width: 0;
+      grid-template-columns: 24px minmax(0, 1fr);
+    }
+    .check .providerIcon {
+      width: 24px;
+      height: 24px;
+      border-radius: 6px;
+    }
+    .check .providerIcon svg {
+      width: 17px;
+      height: 17px;
     }
     .result {
       min-height: 238px;
@@ -410,33 +482,74 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       color: var(--faint);
       font-size: 12px;
     }
+    .issuedKey {
+      display: grid;
+      gap: 8px;
+      word-break: break-word;
+    }
+    .issuedKey code {
+      display: inline-block;
+      max-width: 100%;
+    }
     .hidden { display: none; }
     @media (max-width: 820px) {
+      .wrap {
+        width: calc(100vw - 96px);
+        max-width: 720px;
+        margin-left: auto;
+        margin-right: auto;
+      }
       .top, .toolbar { grid-template-columns: 1fr; display: grid; }
       .consoleIntro { grid-template-columns: 1fr; }
       .brand { align-items: flex-start; }
-      nav { width: 100%; }
-      nav button { flex: 1 1 46%; }
-      .panel, .third { grid-column: 1 / -1; }
-      .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
-      .form { grid-template-columns: 1fr; }
-    }
-    @media (max-width: 520px) {
-      .wrap { width: min(100vw - 20px, 1180px); }
-      .top { gap: 12px; }
-      .brand p:not(.eyebrow) { display: none; }
       nav {
+        width: 100%;
         display: grid;
-        grid-template-columns: repeat(2, minmax(0, 1fr));
+        grid-template-columns: 1fr;
         border-radius: 16px;
       }
       nav button {
+        width: 100%;
+        min-width: 0;
+        max-width: 100%;
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
+      .panel, .third { grid-column: 1 / -1; }
+      .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .form { grid-template-columns: 1fr; }
+      .providerInline { min-width: 0; }
+      .quickItem {
+        display: grid;
+        grid-template-columns: 1fr;
+      }
+      .quickItem strong { text-align: left; }
+    }
+    @media (max-width: 520px) {
+      .wrap {
+        width: calc(100vw - 96px);
+        max-width: 300px;
+        margin-left: clamp(12px, calc((100vw - 300px) / 2), 45px);
+        margin-right: clamp(12px, calc((100vw - 300px) / 2), 45px);
+      }
+      .top { gap: 12px; }
+      .brand p:not(.eyebrow) { display: none; }
+      nav { max-width: 100%; overflow: hidden; }
+      nav button {
+        width: 100%;
+        max-width: 100%;
         min-width: 0;
         padding: 0 6px;
         font-size: 13px;
+        overflow: hidden;
+        text-overflow: ellipsis;
       }
       .metrics { grid-template-columns: 1fr; }
       .brandmark { display: none; }
+      .panel { padding: 12px; border-radius: 10px; }
+      .providerCloud { grid-template-columns: 1fr; }
+      .actions { justify-content: stretch; }
+      .actions button { flex: 1 1 auto; min-width: 0; }
     }
   </style>
 </head>
@@ -501,6 +614,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         <div class="form">
           <label class="full">Search models<input id="modelSearch" autocomplete="off" placeholder="filter by model or provider"></label>
           <label class="full">Model<select id="playgroundModel"></select></label>
+          <p id="playgroundModelCount" class="hint full">loading models</p>
           <label>Endpoint<select id="playgroundEndpoint">
             <option value="/v1/chat/completions">Chat completions</option>
             <option value="/v1/responses">Responses</option>
@@ -547,7 +661,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
             <button type="submit" class="primary">Save policy</button>
           </div>
         </div>
-        <p id="issuedKey"></p>
+        <div id="issuedKey" class="issuedKey hint"></div>
       </form>
       <form id="accessUserForm" class="panel">
         <h2>Assign Access Role</h2>
@@ -640,19 +754,51 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     const metric = (label, value) => `<div class="metric"><strong>${esc(value)}</strong><span>${esc(label)}</span></div>`;
     const row = (items) => `<tr>${items.map((item) => `<td>${cell(item)}</td>`).join("")}</tr>`;
     const table = (heads, rows) => `<table><thead><tr>${heads.map((head) => `<th>${esc(head)}</th>`).join("")}</tr></thead><tbody>${rows.join("") || row([raw(`<span class="status">no rows</span>`)])}</tbody></table>`;
+    const icon = (body) => `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
     const providerStyles = {
-      anthropic: ["A", "#171717", "#f2efe7"], openai: ["OA", "#10261f", "#d5ffe6"], openrouter: ["OR", "#241a36", "#f2defc"],
-      "google-gemini": ["G", "#18253d", "#d9e8ff"], "azure-openai": ["AZ", "#102235", "#cae9ff"], "aws-bedrock": ["AWS", "#33230f", "#ffdc9a"],
-      cohere: ["CO", "#202817", "#e8f8c8"], deepseek: ["DS", "#111d33", "#dce8ff"], fireworks: ["FW", "#351b13", "#ffd0bb"],
-      groq: ["GQ", "#311417", "#ffd8dd"], huggingface: ["HF", "#332b10", "#ffe38f"], linear: ["LN", "#1c1b2f", "#dedcff"],
-      minimax: ["MM", "#2e171d", "#ffdbe3"], mistral: ["MI", "#33230d", "#ffe0a3"], notion: ["NO", "#f1eee5", "#111111"],
-      perplexity: ["PX", "#0f2b2d", "#caffff"], replicate: ["RP", "#151515", "#f8f8f2"], slack: ["SL", "#231b31", "#f4ddff"],
-      tavily: ["TV", "#10291d", "#c9ffd8"], together: ["TG", "#162331", "#d4ecff"], xai: ["xAI", "#101010", "#f3f3ef"],
-      github: ["GH", "#15191f", "#eef3f8"], "cloudflare-ai-gateway": ["CF", "#35200f", "#ffd6a5"]
+      anthropic: ["#171717", "#f2efe7", icon(`<path d="M6 18L12 5l6 13"/><path d="M8.4 13.5h7.2"/>`)],
+      "aws-bedrock": ["#33230f", "#ffdc9a", icon(`<path d="M5 8.5l7-4 7 4-7 4-7-4Z"/><path d="M5 8.5v7l7 4 7-4v-7"/><path d="M12 12.5v7"/>`)],
+      "azure-openai": ["#102235", "#cae9ff", icon(`<path d="M5 17.5 11.4 5l2.5 7.2"/><path d="M10 15h8.4L14.3 7"/>`)],
+      "cloudflare-ai-gateway": ["#35200f", "#ffd6a5", icon(`<path d="M7.5 16.5h9a3 3 0 0 0 .6-5.94A4.7 4.7 0 0 0 8.2 9.2 3.7 3.7 0 0 0 7.5 16.5Z"/><path d="M10 12h4.5l-2 3.5"/>`)],
+      cohere: ["#202817", "#e8f8c8", icon(`<circle cx="8" cy="8" r="3.2"/><circle cx="15.5" cy="9.5" r="3.4"/><circle cx="11.5" cy="16" r="3.6"/>`)],
+      deepseek: ["#111d33", "#dce8ff", icon(`<path d="M5 12c2.2-4.4 7.6-6.2 13.5-5.2-1 6.3-5.3 10.4-11.8 10.8"/><path d="M8 17.5c1.2-2.8 3.6-4.8 7.3-5.9"/><circle cx="16.2" cy="8.5" r=".8" fill="currentColor" stroke="none"/>`)],
+      fireworks: ["#351b13", "#ffd0bb", icon(`<path d="M12 5v4"/><path d="M12 15v4"/><path d="M5 12h4"/><path d="M15 12h4"/><path d="m7.2 7.2 2.8 2.8"/><path d="m14 14 2.8 2.8"/><path d="m16.8 7.2-2.8 2.8"/><path d="m10 14-2.8 2.8"/><circle cx="12" cy="12" r="1.6"/>`)],
+      github: ["#15191f", "#eef3f8", icon(`<circle cx="12" cy="12" r="7"/><path d="M8 15.5c1.2 1 2.5 1.5 4 1.5s2.8-.5 4-1.5"/><path d="M8.5 10.2h7"/><path d="M9.2 7.5 11 9l2-1.5 1.8 1.5"/>`)],
+      "google-gemini": ["#18253d", "#d9e8ff", icon(`<path d="M12 3.8 14.4 9l5.2 2.4-5.2 2.4L12 19.2 9.6 13.8 4.4 11.4 9.6 9 12 3.8Z"/>`)],
+      groq: ["#311417", "#ffd8dd", icon(`<path d="M13 3 5.5 13h5.2L9 21l9.5-12h-5.8L13 3Z"/>`)],
+      huggingface: ["#332b10", "#ffe38f", icon(`<circle cx="8.3" cy="10" r="1" fill="currentColor" stroke="none"/><circle cx="15.7" cy="10" r="1" fill="currentColor" stroke="none"/><path d="M7 15c2.5 2.2 7.5 2.2 10 0"/><path d="M5.5 9.5c-.7-2.4.4-4 2.2-4"/><path d="M18.5 9.5c.7-2.4-.4-4-2.2-4"/><path d="M5.5 12.3c0 4 2.6 7 6.5 7s6.5-3 6.5-7"/>`)],
+      linear: ["#1c1b2f", "#dedcff", icon(`<path d="m6 16 10-10"/><path d="m6 11 5-5"/><path d="m11 18 7-7"/><path d="M5 21h14"/>`)],
+      minimax: ["#2e171d", "#ffdbe3", icon(`<path d="M4 17V7l5 6 3-4 3 4 5-6v10"/><path d="M4 17h16"/>`)],
+      mistral: ["#33230d", "#ffe0a3", icon(`<path d="M4 17h3V9h3v8h4V9h3v8h3"/><path d="M7 9V6h3v3"/><path d="M14 9V6h3v3"/>`)],
+      notion: ["#f1eee5", "#111111", icon(`<rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 16V8l6 8V8"/>`)],
+      openai: ["#10261f", "#d5ffe6", icon(`<path d="M12 4.2a3.1 3.1 0 0 1 3.1 2.2 3.2 3.2 0 0 1 3.1 5.1 3.1 3.1 0 0 1-1.5 5.6 3.2 3.2 0 0 1-5 1.8 3.2 3.2 0 0 1-5.1-2.1 3.2 3.2 0 0 1-2.9-5.2A3.2 3.2 0 0 1 5.4 6.5 3.2 3.2 0 0 1 12 4.2Z"/><path d="M8.5 9.4 12 7.4l3.5 2"/><path d="M8.5 14.6 12 16.6l3.5-2"/><path d="M12 7.4v9.2"/>`)],
+      openrouter: ["#241a36", "#f2defc", icon(`<path d="M4.5 12h13.5"/><path d="m13.5 7 4.5 5-4.5 5"/><path d="M6.5 7.5h3"/><path d="M6.5 16.5h3"/>`)],
+      perplexity: ["#0f2b2d", "#caffff", icon(`<path d="M6 6h12v12H6z"/><path d="M6 12h12"/><path d="m9 9 3 3-3 3"/><path d="m15 9-3 3 3 3"/>`)],
+      replicate: ["#151515", "#f8f8f2", icon(`<rect x="5" y="5" width="10" height="10" rx="1.5"/><rect x="9" y="9" width="10" height="10" rx="1.5"/><path d="M15 5h4v4"/>`)],
+      slack: ["#231b31", "#f4ddff", icon(`<path d="M8 5v6"/><path d="M16 13v6"/><path d="M5 16h6"/><path d="M13 8h6"/><path d="M8 16v1.5A2.5 2.5 0 0 1 5.5 20"/><path d="M16 8V6.5A2.5 2.5 0 0 1 18.5 4"/><path d="M8 8H6.5A2.5 2.5 0 0 1 4 5.5"/><path d="M16 16h1.5A2.5 2.5 0 0 1 20 18.5"/>`)],
+      tavily: ["#10291d", "#c9ffd8", icon(`<circle cx="12" cy="12" r="7.2"/><path d="m14.8 9.2-2 5.6-3.6 1 2-5.6 3.6-1Z"/><circle cx="12" cy="12" r=".9" fill="currentColor" stroke="none"/>`)],
+      together: ["#162331", "#d4ecff", icon(`<circle cx="7" cy="8" r="2"/><circle cx="17" cy="8" r="2"/><circle cx="12" cy="17" r="2"/><path d="M8.7 9.1 11 15"/><path d="M15.3 9.1 13 15"/><path d="M9 8h6"/>`)],
+      xai: ["#101010", "#f3f3ef", icon(`<path d="m6 6 12 12"/><path d="M18 6 6 18"/><path d="M14 6h4v4"/>`)]
     };
+    const serviceGlyphs = {
+      model_provider: icon(`<path d="M7 8h10"/><path d="M7 12h10"/><path d="M7 16h6"/><rect x="4" y="5" width="16" height="14" rx="2"/>`),
+      oauth_platform: icon(`<path d="M8.5 12a3.5 3.5 0 1 1 3.2 3.49"/><path d="M12 15.5V19"/><path d="M9.5 19h5"/>`),
+      gateway_platform: icon(`<path d="M4 12h7"/><path d="M13 12h7"/><path d="M10 8l4 4-4 4"/>`),
+      search_provider: icon(`<circle cx="10.5" cy="10.5" r="5"/><path d="m15 15 4 4"/>`)
+    };
+    function compactLabel(value) {
+      return String(value || "service").replace(/_/g, " ");
+    }
     function providerIcon(provider) {
-      const [label, bg, fg] = providerStyles[provider.id] || [provider.id.slice(0, 2).toUpperCase(), "#202520", "#f2f4ef"];
-      return `<span class="providerIcon" style="--icon-bg:${bg};--icon-fg:${fg}">${esc(label)}</span>`;
+      const [bg, fg, glyph] = providerStyles[provider.id] || ["#202520", "#f2f4ef", icon(`<circle cx="12" cy="12" r="7"/><path d="M8.5 12h7"/><path d="M12 8.5v7"/>`)];
+      return `<span class="providerIcon" style="--icon-bg:${bg};--icon-fg:${fg}">${glyph}<span class="sr">${esc(provider.display_name || provider.id)}</span></span>`;
+    }
+    function serviceChip(kind) {
+      const glyph = serviceGlyphs[kind] || serviceGlyphs.model_provider;
+      return raw(`<span class="serviceChip">${glyph}${esc(compactLabel(kind))}</span>`);
+    }
+    function capabilityPills(capabilities) {
+      return raw(`<span class="capabilityPills">${(capabilities || []).map((capability) => `<span class="capabilityPill">${esc(capability)}</span>`).join("") || `<span class="capabilityPill">model.invoke</span>`}</span>`);
     }
     function providerById(id) {
       return (state.providers?.providers || []).find((provider) => provider.id === id) || { id, display_name: id, class: "service", service_kind: "api" };
@@ -662,7 +808,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       return raw(`<span class="providerInline">${providerIcon(provider)}<span>${esc(provider.display_name || provider.id)}</span></span>`);
     }
     function providerCard(provider) {
-      return `<div class="providerCard">${providerIcon(provider)}<div><strong>${esc(provider.display_name || provider.id)}</strong><span>${esc(provider.class)} · ${esc(provider.service_kind)}</span></div></div>`;
+      return `<div class="providerCard">${providerIcon(provider)}<div><strong>${esc(provider.display_name || provider.id)}</strong><div class="providerMeta">${serviceChip(provider.service_kind).html}<span>${esc(provider.class)}</span></div></div></div>`;
     }
     function budgetBar(budget) {
       if (!budget || !budget.configured || budget.limitMicros == null) {
@@ -698,7 +844,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         acc[provider.class] = (acc[provider.class] || 0) + 1;
         return acc;
       }, {});
-      $("providerClasses").innerHTML = table(["class", "providers"], Object.entries(classes).map(([name, count]) => row([name, count])));
+      $("providerClasses").innerHTML = table(["class", "providers"], Object.entries(classes).map(([name, count]) => row([compactLabel(name), count])));
       $("routeSummary").innerHTML = table(["surface", "count"], [
         row(["OpenAI-compatible", routes.openaiCompatible.length]),
         row(["manifest proxy", routes.manifestProxy.length])
@@ -710,10 +856,10 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     function renderRoutes() {
       const routes = state.routes || { openaiCompatible: [], manifestProxy: [] };
       const rows = [
-        ...routes.openaiCompatible.map((route) => row([providerInline(route.provider), "OpenAI-compatible", route.endpoints.join(", "), String(route.models.length)])),
-        ...routes.manifestProxy.map((route) => row([providerInline(route.provider), route.endpoint, code(route.route), route.methods.join(", ")]))
+        ...routes.openaiCompatible.map((route) => row([providerInline(route.provider), serviceChip(providerById(route.provider).service_kind), route.endpoints.join(", "), String(route.models.length)])),
+        ...routes.manifestProxy.map((route) => row([providerInline(route.provider), serviceChip(providerById(route.provider).service_kind), code(route.route), route.methods.join(", ")]))
       ];
-      $("routesTable").innerHTML = table(["provider", "route", "surface", "models/methods"], rows);
+      $("routesTable").innerHTML = table(["provider", "kind", "surface", "models/methods"], rows);
     }
     async function renderAdmin() {
       const [overview, users, usage, keys, accessUsers] = await Promise.all([
@@ -734,7 +880,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         tenant.tenantId,
         tenant.keys,
         tenant.activeKeys,
-        tenant.providers.join(", ")
+        raw(tenant.providers.map((id) => providerInline(id).html).join(""))
       ])));
       $("adminUsage").innerHTML = table(["key", "tenant", "usage", "remaining", "ledger"], usage.keys.map((key) => row([
         code(key.kid),
@@ -758,12 +904,16 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       document.querySelectorAll("[data-fill-key]").forEach((button) => {
         button.addEventListener("click", () => fillKeyForm(keys.keys.find((key) => key.kid === button.dataset.fillKey)));
       });
-      $("accessUsers").innerHTML = table(["email", "role", "tenant", "status"], accessUsers.users.map((user) => row([
+      $("accessUsers").innerHTML = table(["email", "role", "tenant", "status", "actions"], accessUsers.users.map((user) => row([
         code(user.email),
         user.role,
         user.tenantId || "default",
-        user.enabled ? raw(`<span class="status good">enabled</span>`) : raw(`<span class="status bad">disabled</span>`)
+        user.enabled ? raw(`<span class="status good">enabled</span>`) : raw(`<span class="status bad">disabled</span>`),
+        raw(`<span class="tableActions"><button class="ghost" data-fill-access-user="${esc(user.email)}">edit</button></span>`)
       ])));
+      document.querySelectorAll("[data-fill-access-user]").forEach((button) => {
+        button.addEventListener("click", () => fillAccessUserForm(accessUsers.users.find((user) => user.email === button.dataset.fillAccessUser)));
+      });
     }
     async function renderAccount() {
       const [me, usage] = await Promise.all([api("/v1/me", "proxy"), api("/v1/usage", "proxy")]);
@@ -799,12 +949,13 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     }
     function renderProviderControls() {
       const providers = state.providers?.providers || [];
-      $("keyProviders").innerHTML = providers.map((provider) => `<label class="check"><input type="checkbox" value="${esc(provider.id)}" ${["openai", "openrouter"].includes(provider.id) ? "checked" : ""}><span>${esc(provider.id)}</span></label>`).join("");
+      $("keyProviders").innerHTML = providers.map((provider) => `<label class="check"><input type="checkbox" value="${esc(provider.id)}" ${["openai", "openrouter"].includes(provider.id) ? "checked" : ""}>${providerInline(provider.id).html}</label>`).join("");
     }
     function renderPlaygroundOptions() {
       const filter = $("modelSearch").value.trim().toLowerCase();
       const models = openaiModels().filter((model) => !filter || model.id.toLowerCase().includes(filter) || model.provider.toLowerCase().includes(filter));
       $("playgroundModel").innerHTML = models.map((model) => `<option value="${esc(model.id)}" data-provider="${esc(model.provider)}">${esc(model.id)}</option>`).join("");
+      $("playgroundModelCount").textContent = `${models.length} routed models`;
       renderPlaygroundPreview();
     }
     function selectedPlaygroundModel() {
@@ -823,7 +974,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         row(["provider", providerInline(model.provider)]),
         row(["model", code(model.id)]),
         row(["endpoint", code($("playgroundEndpoint").value)]),
-        row(["capabilities", (model.capabilities || []).join(", ") || "model.invoke"]),
+        row(["capabilities", capabilityPills(model.capabilities)]),
         row(["provider endpoints", (route?.endpoints || []).join(", ")])
       ]);
     }
@@ -840,6 +991,14 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       });
       $("issuedKey").textContent = "editing policy; secret stays unchanged unless you generate or enter a new secret";
       status(`editing ${key.kid}`);
+    }
+    function fillAccessUserForm(user) {
+      if (!user) return;
+      $("accessEmail").value = user.email;
+      $("accessRole").value = user.role;
+      $("accessTenant").value = user.tenantId || "default";
+      $("accessEnabled").value = user.enabled ? "true" : "false";
+      status(`editing role ${user.email}`);
     }
     async function revokeKey(kid) {
       if (!kid) return;
@@ -871,7 +1030,10 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         headers: { "content-type": "application/json" },
         body: JSON.stringify(policy)
       });
-      $("issuedKey").textContent = secret ? `issued: clawrouter-live-${kid}-${secret}` : "saved policy; existing secret unchanged";
+      const issued = `clawrouter-live-${kid}-${secret}`;
+      $("issuedKey").innerHTML = secret
+        ? `<span>issued</span><code>${esc(issued)}</code><div class="actions"><button type="button" class="ghost" data-copy-issued="${esc(issued)}">Copy token</button></div>`
+        : "saved policy; existing secret unchanged";
       await renderAdmin();
     }
     async function saveAccessUser(event) {
@@ -887,6 +1049,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         })
       });
       await renderAdmin();
+      status(`saved role ${email}`);
     }
     async function runPlayground(event) {
       event.preventDefault();
@@ -955,6 +1118,25 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       status(error.message || String(error), true);
     }));
     $("generateKeySecret").addEventListener("click", () => { $("keySecret").value = generateSecret(); });
+    document.addEventListener("click", async (event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const button = target?.closest("[data-copy-issued]");
+      if (!button) return;
+      const token = button.dataset.copyIssued;
+      if (navigator.clipboard) {
+        await navigator.clipboard.writeText(token);
+      } else {
+        const scratch = document.createElement("textarea");
+        scratch.value = token;
+        scratch.style.position = "fixed";
+        scratch.style.opacity = "0";
+        document.body.appendChild(scratch);
+        scratch.select();
+        document.execCommand("copy");
+        scratch.remove();
+      }
+      status("copied issued token");
+    });
     syncView();
     refresh();
   </script>
