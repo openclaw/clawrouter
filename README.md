@@ -62,6 +62,8 @@ The Worker currently exposes:
 - `POST /v1/embeddings`
 - `POST /v1/proxy/<provider>/<endpoint>`
 - `GET /v1/admin/keys`
+- `GET /v1/admin/access-users`
+- `PUT /v1/admin/access-users/<email>`
 - `PUT /v1/admin/keys/<kid>`
 - `POST /v1/admin/keys/<kid>/revoke`
 
@@ -85,8 +87,9 @@ deployment, key registration, and smoke commands.
 
 Admin endpoints accept a verified Cloudflare Access admin session or
 `Authorization: Bearer <admin-token>` against `CLAWROUTER_ADMIN_TOKEN_SHA256`.
-The TypeScript admin UI hashes generated proxy key secrets in-browser before
-storing policy in `POLICY_KV`.
+The browser console hashes generated proxy key secrets in-browser before
+storing policy in `POLICY_KV`, can assign Access users to `user` or `admin`
+roles, and includes a proxy-key playground for OpenAI-compatible model routes.
 
 Generic REST/tool proxy requests are manifest-driven:
 

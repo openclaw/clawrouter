@@ -143,10 +143,11 @@ to the Access application audience tag. ClawRouter verifies the
 `cf-access-jwt-assertion` signature against the team certs endpoint before it
 trusts the email or role.
 
-The browser console is fail-closed in the Worker. `/`, `/dashboard`, `/admin`,
-`/account`, `/routes`, and `/console` only render after a verified Cloudflare
-Access session. Public and client-facing surfaces stay under the API paths such
-as `/v1`, `/v1/health`, `/v1/providers`, `/v1/routes`, and proxy endpoints.
+The browser console is fail-closed in the Worker. `/`, `/dashboard`,
+`/playground`, `/admin`, `/account`, `/routes`, and `/console` only render after
+a verified Cloudflare Access session. Public and client-facing surfaces stay
+under the API paths such as `/v1`, `/v1/health`, `/v1/providers`, `/v1/routes`,
+and proxy endpoints.
 
 Access users are `user` by default. Admins are resolved from
 `access/users/<email>` in `POLICY_KV`, then from `CLAWROUTER_ACCESS_ADMIN_EMAILS`
@@ -164,6 +165,28 @@ or `CLAWROUTER_ACCESS_ADMIN_DOMAINS`.
 admin routes through the same-origin Access session; the admin bearer token is
 only a fallback for automation or emergency access.
 
+Admins can assign explicit Access users in the console or API:
+
+```text
+GET /v1/admin/access-users
+PUT /v1/admin/access-users/<email>
+```
+
+The record is stored in `POLICY_KV` at `access/users/<email>`:
+
+```json
+{
+  "role": "admin",
+  "tenantId": "openclaw",
+  "enabled": true
+}
+```
+
+The console also exposes a playground for OpenAI-compatible routes. It requires
+a proxy key in the browser and sends requests to `/v1/chat/completions` or
+`/v1/responses`; upstream calls still obey the key policy provider allowlist and
+budget limits.
+
 ## Admin API
 
 Admin requests use either a verified Cloudflare Access admin session or
@@ -173,6 +196,8 @@ token is never configured in the Worker.
 
 ```text
 GET /v1/admin/keys
+GET /v1/admin/access-users
+PUT /v1/admin/access-users/<email>
 PUT /v1/admin/keys/<kid>
 POST /v1/admin/keys/<kid>/revoke
 ```

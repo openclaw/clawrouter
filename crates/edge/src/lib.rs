@@ -21,7 +21,7 @@ const CORS_ALLOW_METHODS: &str = "GET,POST,PUT,OPTIONS";
 const CORS_ALLOW_HEADERS: &str = "authorization,content-type,x-request-id";
 const CORS_MAX_AGE: &str = "600";
 type HmacSha256 = Hmac<Sha256>;
-const INTERFACE_HTML: &str = r#"<!doctype html>
+const INTERFACE_HTML: &str = r##"<!doctype html>
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -57,6 +57,7 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
       background-size: 34px 34px, 34px 34px, auto, auto;
       color: var(--ink);
       line-height: 1.45;
+      overflow-x: hidden;
     }
     header {
       border-bottom: 1px solid var(--line);
@@ -116,7 +117,7 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
       border-radius: 999px;
       background: var(--surface);
     }
-    button, input, select {
+    button, input, select, textarea {
       font: inherit;
       border: 1px solid var(--line);
       border-radius: 8px;
@@ -156,6 +157,13 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
     }
     label { display: grid; gap: 5px; color: var(--faint); font-size: 12px; font-weight: 650; }
     input, select { min-height: 38px; padding: 0 10px; width: 100%; }
+    textarea {
+      min-height: 132px;
+      width: 100%;
+      resize: vertical;
+      padding: 10px;
+      line-height: 1.45;
+    }
     input:focus-visible, button:focus-visible {
       outline: 2px solid rgba(231, 248, 200, .34);
       outline-offset: 2px;
@@ -176,6 +184,86 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
       box-shadow: var(--shadow);
     }
     .wide { grid-column: 1 / -1; }
+    .third { grid-column: span 4; }
+    .stack { display: grid; gap: 12px; }
+    .form {
+      display: grid;
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .full { grid-column: 1 / -1; }
+    .actions {
+      display: flex;
+      align-items: center;
+      justify-content: flex-end;
+      gap: 8px;
+      flex-wrap: wrap;
+    }
+    .providerCloud {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(185px, 1fr));
+      gap: 8px;
+    }
+    .providerCard {
+      display: grid;
+      grid-template-columns: 34px minmax(0, 1fr);
+      gap: 10px;
+      align-items: center;
+      min-height: 58px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 10px;
+      background: rgba(8, 9, 8, .42);
+    }
+    .providerIcon {
+      width: 34px;
+      height: 34px;
+      display: grid;
+      place-items: center;
+      border-radius: 9px;
+      background: var(--icon-bg, var(--surface-3));
+      color: var(--icon-fg, var(--ink));
+      font-size: 11px;
+      font-weight: 850;
+      letter-spacing: 0;
+    }
+    .providerCard strong,
+    .providerCard span {
+      display: block;
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .providerCard span { color: var(--faint); font-size: 12px; }
+    .providerChecks {
+      display: grid;
+      grid-template-columns: repeat(auto-fill, minmax(126px, 1fr));
+      gap: 7px;
+      max-height: 170px;
+      overflow: auto;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 8px;
+      background: rgba(8, 9, 8, .35);
+    }
+    .check {
+      grid-template-columns: 16px minmax(0, 1fr);
+      align-items: center;
+      color: var(--ink);
+      font-size: 12px;
+      font-weight: 600;
+    }
+    .check input {
+      width: 16px;
+      min-height: 16px;
+    }
+    .result {
+      min-height: 238px;
+      max-height: 460px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
     .metrics {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -224,17 +312,31 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
       font-size: 13px;
     }
     .bad { color: var(--warn); border-color: color-mix(in oklch, var(--warn), white 50%); }
+    .good { color: var(--accent); border-color: rgba(231, 248, 200, .36); }
     .hidden { display: none; }
     @media (max-width: 820px) {
       .top, .toolbar { grid-template-columns: 1fr; display: grid; }
       .brand { align-items: flex-start; }
       nav { width: 100%; }
       nav button { flex: 1 1 46%; }
-      .panel { grid-column: 1 / -1; }
+      .panel, .third { grid-column: 1 / -1; }
       .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .form { grid-template-columns: 1fr; }
     }
     @media (max-width: 520px) {
       .wrap { width: min(100vw - 20px, 1180px); }
+      .top { gap: 12px; }
+      .brand p:not(.eyebrow) { display: none; }
+      nav {
+        display: grid;
+        grid-template-columns: repeat(2, minmax(0, 1fr));
+        border-radius: 16px;
+      }
+      nav button {
+        min-width: 0;
+        padding: 0 6px;
+        font-size: 13px;
+      }
       .metrics { grid-template-columns: 1fr; }
       .brandmark { display: none; }
     }
@@ -253,6 +355,7 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
       </div>
       <nav aria-label="console views">
         <button data-view="dashboard" class="active">Dashboard</button>
+        <button data-view="playground">Playground</button>
         <button data-view="admin">Admin</button>
         <button data-view="account">Account</button>
         <button data-view="routes">Routes</button>
@@ -279,12 +382,67 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
         <h2>Configured Routes</h2>
         <div id="routeSummary"></div>
       </div>
+      <div class="panel wide">
+        <h2>Provider Network</h2>
+        <div id="providerCloud" class="providerCloud"></div>
+      </div>
+    </section>
+    <section id="playground" class="view grid hidden">
+      <form id="playgroundForm" class="panel">
+        <h2>Model Playground</h2>
+        <div class="form">
+          <label class="full">Model<select id="playgroundModel"></select></label>
+          <label>Endpoint<select id="playgroundEndpoint">
+            <option value="/v1/chat/completions">Chat completions</option>
+            <option value="/v1/responses">Responses</option>
+          </select></label>
+          <label>Max tokens<input id="playgroundMaxTokens" inputmode="numeric" value="128"></label>
+          <label class="full">Prompt<textarea id="playgroundPrompt">Say hello from ClawRouter in one short sentence.</textarea></label>
+          <div class="actions full">
+            <button type="submit" class="primary">Run model</button>
+          </div>
+        </div>
+      </form>
+      <div class="panel">
+        <h2>Response</h2>
+        <pre id="playgroundResult" class="result">select a model, enter a proxy key, and run a request.</pre>
+      </div>
     </section>
     <section id="admin" class="view grid hidden">
       <div class="panel wide">
         <h2>Admin Overview</h2>
         <div id="adminMetrics" class="metrics"></div>
       </div>
+      <form id="keyForm" class="panel">
+        <h2>Issue Proxy Key</h2>
+        <div class="form">
+          <label>Key id<input id="keyKid" value="svc_docs"></label>
+          <label>Secret<input id="keySecret" type="password" autocomplete="off" placeholder="generated if empty"></label>
+          <label>Tenant<input id="keyTenant" value="default"></label>
+          <label>Monthly micros<input id="keyMonthlyBudget" inputmode="numeric" value="100000000"></label>
+          <label>Request micros<input id="keyRequestCost" inputmode="numeric" value="1000"></label>
+          <label>Status<select id="keyEnabled"><option value="true">active</option><option value="false">disabled</option></select></label>
+          <div class="full">
+            <label>Provider allowlist</label>
+            <div id="keyProviders" class="providerChecks"></div>
+          </div>
+          <div class="actions full">
+            <button id="generateKeySecret" type="button">Generate secret</button>
+            <button type="submit" class="primary">Save policy</button>
+          </div>
+        </div>
+        <p id="issuedKey"></p>
+      </form>
+      <form id="accessUserForm" class="panel">
+        <h2>Assign Access Role</h2>
+        <div class="form">
+          <label class="full">Email<input id="accessEmail" type="email" placeholder="user@example.com"></label>
+          <label>Role<select id="accessRole"><option value="user">user</option><option value="admin">admin</option></select></label>
+          <label>Tenant<input id="accessTenant" value="default"></label>
+          <label>Status<select id="accessEnabled"><option value="true">enabled</option><option value="false">disabled</option></select></label>
+          <div class="actions full"><button type="submit" class="primary">Save role</button></div>
+        </div>
+      </form>
       <div class="panel">
         <h2>Users / Tenants</h2>
         <div id="adminUsers"></div>
@@ -292,6 +450,14 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
       <div class="panel">
         <h2>Usage</h2>
         <div id="adminUsage"></div>
+      </div>
+      <div class="panel wide">
+        <h2>Key Policies</h2>
+        <div id="adminKeys"></div>
+      </div>
+      <div class="panel wide">
+        <h2>Access Roles</h2>
+        <div id="accessUsers"></div>
       </div>
     </section>
     <section id="account" class="view grid hidden">
@@ -315,11 +481,12 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
     const initialView = ({
       "/admin": "admin",
       "/account": "account",
+      "/playground": "playground",
       "/routes": "routes",
       "/console": "dashboard",
       "/dashboard": "dashboard"
     })[window.location.pathname] || "dashboard";
-    const state = { view: initialView, service: null, session: null, providers: null, routes: null };
+    const state = { view: initialView, service: null, session: null, providers: null, routes: null, admin: null };
     const $ = (id) => document.getElementById(id);
     const status = (text, bad = false) => {
       $("status").textContent = text;
@@ -330,8 +497,10 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
       const token = kind === "admin" ? $("adminToken").value.trim() : $("proxyKey").value.trim();
       return token ? { authorization: `Bearer ${token}` } : {};
     };
-    async function api(path, kind) {
-      const response = await fetch(path, { headers: authHeaders(kind) });
+    async function api(path, kind, init = {}) {
+      const headers = new Headers(init.headers || {});
+      Object.entries(authHeaders(kind)).forEach(([key, value]) => headers.set(key, value));
+      const response = await fetch(path, { ...init, headers });
       const text = await response.text();
       const data = text ? JSON.parse(text) : {};
       if (!response.ok) {
@@ -354,6 +523,25 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
     const metric = (label, value) => `<div class="metric"><strong>${esc(value)}</strong><span>${esc(label)}</span></div>`;
     const row = (items) => `<tr>${items.map((item) => `<td>${cell(item)}</td>`).join("")}</tr>`;
     const table = (heads, rows) => `<table><thead><tr>${heads.map((head) => `<th>${esc(head)}</th>`).join("")}</tr></thead><tbody>${rows.join("") || row([raw(`<span class="status">no rows</span>`)])}</tbody></table>`;
+    const providerStyles = {
+      anthropic: ["A", "#171717", "#f2efe7"], openai: ["OA", "#10261f", "#d5ffe6"], openrouter: ["OR", "#241a36", "#f2defc"],
+      "google-gemini": ["G", "#18253d", "#d9e8ff"], "azure-openai": ["AZ", "#102235", "#cae9ff"], "aws-bedrock": ["AWS", "#33230f", "#ffdc9a"],
+      cohere: ["CO", "#202817", "#e8f8c8"], deepseek: ["DS", "#111d33", "#dce8ff"], fireworks: ["FW", "#351b13", "#ffd0bb"],
+      groq: ["GQ", "#311417", "#ffd8dd"], huggingface: ["HF", "#332b10", "#ffe38f"], linear: ["LN", "#1c1b2f", "#dedcff"],
+      minimax: ["MM", "#2e171d", "#ffdbe3"], mistral: ["MI", "#33230d", "#ffe0a3"], notion: ["NO", "#f1eee5", "#111111"],
+      perplexity: ["PX", "#0f2b2d", "#caffff"], replicate: ["RP", "#151515", "#f8f8f2"], slack: ["SL", "#231b31", "#f4ddff"],
+      tavily: ["TV", "#10291d", "#c9ffd8"], together: ["TG", "#162331", "#d4ecff"], xai: ["xAI", "#101010", "#f3f3ef"],
+      github: ["GH", "#15191f", "#eef3f8"], "cloudflare-ai-gateway": ["CF", "#35200f", "#ffd6a5"]
+    };
+    function providerIcon(provider) {
+      const [label, bg, fg] = providerStyles[provider.id] || [provider.id.slice(0, 2).toUpperCase(), "#202520", "#f2f4ef"];
+      return `<span class="providerIcon" style="--icon-bg:${bg};--icon-fg:${fg}">${esc(label)}</span>`;
+    }
+    function providerCard(provider) {
+      return `<div class="providerCard">${providerIcon(provider)}<div><strong>${esc(provider.display_name || provider.id)}</strong><span>${esc(provider.class)} · ${esc(provider.service_kind)}</span></div></div>`;
+    }
+    const openaiRoutes = () => state.routes?.openaiCompatible || [];
+    const openaiModels = () => openaiRoutes().flatMap((route) => route.models.map((model) => ({ ...model, provider: route.provider })));
     function renderDashboard() {
       const providers = state.providers?.providers || [];
       const routes = state.routes || { openaiCompatible: [], manifestProxy: [] };
@@ -372,6 +560,9 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
         row(["OpenAI-compatible", routes.openaiCompatible.length]),
         row(["manifest proxy", routes.manifestProxy.length])
       ]);
+      $("providerCloud").innerHTML = providers.map(providerCard).join("");
+      renderProviderControls();
+      renderPlaygroundOptions();
     }
     function renderRoutes() {
       const routes = state.routes || { openaiCompatible: [], manifestProxy: [] };
@@ -382,11 +573,14 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
       $("routesTable").innerHTML = table(["provider", "route", "surface", "models/methods"], rows);
     }
     async function renderAdmin() {
-      const [overview, users, usage] = await Promise.all([
+      const [overview, users, usage, keys, accessUsers] = await Promise.all([
         api("/v1/admin/overview", "admin"),
         api("/v1/admin/users", "admin"),
-        api("/v1/admin/usage", "admin")
+        api("/v1/admin/usage", "admin"),
+        api("/v1/admin/keys", "admin"),
+        api("/v1/admin/access-users", "admin")
       ]);
+      state.admin = { overview, users, usage, keys, accessUsers };
       $("adminMetrics").innerHTML = [
         metric("keys", overview.keysTotal),
         metric("active keys", overview.keysActive),
@@ -406,6 +600,20 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
         number(key.budget.spentMicros),
         number(key.budget.remainingMicros),
         key.budget.ledger
+      ])));
+      $("adminKeys").innerHTML = table(["key", "tenant", "providers", "budget", "request", "status"], keys.keys.map((key) => row([
+        code(key.kid),
+        key.tenantId || "default",
+        key.providers.join(", "),
+        money(key.monthlyBudgetMicros),
+        number(key.requestCostMicros),
+        key.enabled ? raw(`<span class="status good">active</span>`) : raw(`<span class="status bad">disabled</span>`)
+      ])));
+      $("accessUsers").innerHTML = table(["email", "role", "tenant", "status"], accessUsers.users.map((user) => row([
+        code(user.email),
+        user.role,
+        user.tenantId || "default",
+        user.enabled ? raw(`<span class="status good">enabled</span>`) : raw(`<span class="status bad">disabled</span>`)
       ])));
     }
     async function renderAccount() {
@@ -431,12 +639,92 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
         [state.session, state.providers, state.routes] = await Promise.all([api("/v1/session"), api("/v1/providers"), api("/v1/routes")]);
         renderDashboard();
         renderRoutes();
+        renderPlaygroundOptions();
         if (state.view === "admin") await renderAdmin();
         if (state.view === "account") await renderAccount();
         status("loaded");
       } catch (error) {
         status(error.message || String(error), true);
       }
+    }
+    function renderProviderControls() {
+      const providers = state.providers?.providers || [];
+      $("keyProviders").innerHTML = providers.map((provider) => `<label class="check"><input type="checkbox" value="${esc(provider.id)}" ${["openai", "openrouter"].includes(provider.id) ? "checked" : ""}><span>${esc(provider.id)}</span></label>`).join("");
+    }
+    function renderPlaygroundOptions() {
+      const models = openaiModels();
+      $("playgroundModel").innerHTML = models.map((model) => `<option value="${esc(model.id)}">${esc(model.id)}</option>`).join("");
+    }
+    async function saveKey(event) {
+      event.preventDefault();
+      const kid = $("keyKid").value.trim();
+      const secret = $("keySecret").value.trim() || generateSecret();
+      $("keySecret").value = secret;
+      const providers = Array.from(document.querySelectorAll("#keyProviders input:checked")).map((input) => input.value);
+      if (!providers.length) throw new Error("select at least one provider");
+      const policy = {
+        enabled: $("keyEnabled").value === "true",
+        secretSha256: await sha256Hex(secret),
+        providers,
+        tenantId: $("keyTenant").value.trim() || "default",
+        monthlyBudgetMicros: optionalNumber($("keyMonthlyBudget").value),
+        requestCostMicros: optionalNumber($("keyRequestCost").value)
+      };
+      await api(`/v1/admin/keys/${encodeURIComponent(kid)}`, "admin", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(policy)
+      });
+      $("issuedKey").textContent = `issued: clawrouter-live-${kid}-${secret}`;
+      await renderAdmin();
+    }
+    async function saveAccessUser(event) {
+      event.preventDefault();
+      const email = $("accessEmail").value.trim().toLowerCase();
+      await api(`/v1/admin/access-users/${encodeURIComponent(email)}`, "admin", {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          role: $("accessRole").value,
+          tenantId: $("accessTenant").value.trim() || "default",
+          enabled: $("accessEnabled").value === "true"
+        })
+      });
+      await renderAdmin();
+    }
+    async function runPlayground(event) {
+      event.preventDefault();
+      const endpoint = $("playgroundEndpoint").value;
+      const model = $("playgroundModel").value;
+      const prompt = $("playgroundPrompt").value;
+      const maxTokens = optionalNumber($("playgroundMaxTokens").value);
+      $("playgroundResult").textContent = "running...";
+      const body = endpoint === "/v1/responses"
+        ? { model, input: prompt, max_output_tokens: maxTokens }
+        : { model, messages: [{ role: "user", content: prompt }], max_tokens: maxTokens };
+      const response = await api(endpoint, "proxy", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body)
+      });
+      $("playgroundResult").textContent = JSON.stringify(response, null, 2);
+    }
+    async function sha256Hex(value) {
+      const data = new TextEncoder().encode(value);
+      const digest = await crypto.subtle.digest("SHA-256", data);
+      return Array.from(new Uint8Array(digest)).map((byte) => byte.toString(16).padStart(2, "0")).join("");
+    }
+    function generateSecret() {
+      const bytes = new Uint8Array(24);
+      crypto.getRandomValues(bytes);
+      return btoa(String.fromCharCode(...bytes)).replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
+    }
+    function optionalNumber(value) {
+      const trimmed = String(value || "").trim();
+      if (!trimmed) return undefined;
+      const parsed = Number(trimmed);
+      if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error(`${trimmed} is not a non-negative safe integer`);
+      return parsed;
     }
     function syncView() {
       document.querySelectorAll("nav button").forEach((item) => item.classList.toggle("active", item.dataset.view === state.view));
@@ -450,11 +738,18 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
       });
     });
     $("refresh").addEventListener("click", refresh);
+    $("keyForm").addEventListener("submit", (event) => saveKey(event).catch((error) => status(error.message || String(error), true)));
+    $("accessUserForm").addEventListener("submit", (event) => saveAccessUser(event).catch((error) => status(error.message || String(error), true)));
+    $("playgroundForm").addEventListener("submit", (event) => runPlayground(event).catch((error) => {
+      $("playgroundResult").textContent = error.message || String(error);
+      status(error.message || String(error), true);
+    }));
+    $("generateKeySecret").addEventListener("click", () => { $("keySecret").value = generateSecret(); });
     syncView();
     refresh();
   </script>
 </body>
-</html>"#;
+</html>"##;
 
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
@@ -541,6 +836,7 @@ fn service_index() -> Result<Response> {
         "interface": {
             "root": "/",
             "dashboard": "/dashboard",
+            "playground": "/playground",
             "admin": "/admin",
             "account": "/account"
         },
@@ -555,6 +851,7 @@ fn service_index() -> Result<Response> {
             "adminOverview": "/v1/admin/overview",
             "adminUsers": "/v1/admin/users",
             "adminUsage": "/v1/admin/usage",
+            "adminAccessUsers": "/v1/admin/access-users",
             "adminKeys": "/v1/admin/keys",
             "apiAliases": {
                 "routes": ["/api/route", "/api/routes"],
@@ -576,7 +873,7 @@ fn service_index() -> Result<Response> {
 fn interface_path(path: &str) -> bool {
     matches!(
         path,
-        "/dashboard" | "/admin" | "/account" | "/console" | "/routes"
+        "/dashboard" | "/playground" | "/admin" | "/account" | "/console" | "/routes"
     )
 }
 
@@ -1043,7 +1340,7 @@ struct AccessSession {
     tenant_id: String,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AccessUserRecord {
     role: AccessRole,
@@ -1051,6 +1348,15 @@ struct AccessUserRecord {
     tenant_id: Option<String>,
     #[serde(default)]
     enabled: Option<bool>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AdminAccessUserResponse {
+    email: String,
+    role: AccessRole,
+    tenant_id: String,
+    enabled: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1160,6 +1466,38 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             rows.push(admin_usage_row(&env, entry).await?);
         }
         return Response::from_json(&serde_json::json!({ "keys": rows }));
+    }
+
+    if req.method() == Method::Get && path == "/v1/admin/access-users" {
+        let users = list_admin_access_users(&kv, &env).await?;
+        return Response::from_json(&serde_json::json!({ "users": users }));
+    }
+
+    if let Some(email) = path.strip_prefix("/v1/admin/access-users/") {
+        if req.method() != Method::Put {
+            return json_error("method_not_allowed", "admin method is not allowed", 405);
+        }
+        let email = match decode_access_user_email(email) {
+            Ok(email) => email,
+            Err(message) => return json_error("invalid_access_user", message, 400),
+        };
+        let request = match serde_json::from_str::<AccessUserRecord>(&req.text().await?) {
+            Ok(request) => request,
+            Err(error) => {
+                return json_error(
+                    "invalid_access_user_request",
+                    &format!("request body must be a JSON access user record: {error}"),
+                    400,
+                );
+            }
+        };
+        let value = serde_json::to_string(&request)?;
+        kv.put(&format!("access/users/{email}"), value)
+            .map_err(|error| Error::RustError(format!("failed to prepare access user: {error}")))?
+            .execute()
+            .await
+            .map_err(|error| Error::RustError(format!("failed to write access user: {error}")))?;
+        return Response::from_json(&access_user_response(&email, request, &env));
     }
 
     if req.method() == Method::Get && path == "/v1/admin/keys" {
@@ -1730,6 +2068,110 @@ async fn list_admin_key_policies(kv: &KvStore) -> Result<Vec<AdminKeyPolicyRespo
     }
     entries.sort_by(|a, b| a.kid.cmp(&b.kid));
     Ok(entries)
+}
+
+async fn list_admin_access_users(kv: &KvStore, env: &Env) -> Result<Vec<AdminAccessUserResponse>> {
+    let mut users = Vec::new();
+    let mut cursor = None;
+    loop {
+        let mut request = kv.list().prefix("access/users/".to_string()).limit(1000);
+        if let Some(next_cursor) = cursor.take() {
+            request = request.cursor(next_cursor);
+        }
+        let list = request
+            .execute()
+            .await
+            .map_err(|error| Error::RustError(format!("failed to list access users: {error}")))?;
+        for key in list.keys {
+            let Some(email) = key.name.strip_prefix("access/users/") else {
+                continue;
+            };
+            let Some(record) = kv.get(&key.name).text().await.map_err(|error| {
+                Error::RustError(format!("failed to read access user: {error}"))
+            })?
+            else {
+                continue;
+            };
+            let user = serde_json::from_str::<AccessUserRecord>(&record).map_err(|error| {
+                Error::RustError(format!("access user is invalid JSON: {error}"))
+            })?;
+            users.push(access_user_response(email, user, env));
+        }
+        if list.list_complete {
+            break;
+        }
+        let Some(next_cursor) = list.cursor else {
+            break;
+        };
+        cursor = Some(next_cursor);
+    }
+    users.sort_by(|a, b| a.email.cmp(&b.email));
+    Ok(users)
+}
+
+fn access_user_response(
+    email: &str,
+    record: AccessUserRecord,
+    env: &Env,
+) -> AdminAccessUserResponse {
+    AdminAccessUserResponse {
+        email: email.to_string(),
+        role: record.role,
+        tenant_id: record
+            .tenant_id
+            .filter(|tenant| !tenant.trim().is_empty())
+            .unwrap_or_else(|| default_access_tenant(env)),
+        enabled: record.enabled.unwrap_or(true),
+    }
+}
+
+fn decode_access_user_email(value: &str) -> std::result::Result<String, &'static str> {
+    let decoded = percent_decode_path_segment(value).ok_or("email path segment is malformed")?;
+    let email = decoded.trim().to_ascii_lowercase();
+    if email.len() > 254
+        || email.contains('/')
+        || email.bytes().any(|byte| byte.is_ascii_whitespace())
+        || email.matches('@').count() != 1
+    {
+        return Err("email must be a single normalized address without spaces or slashes");
+    }
+    let Some((local, domain)) = email.split_once('@') else {
+        return Err("email must contain @");
+    };
+    if local.is_empty() || domain.is_empty() || !domain.contains('.') {
+        return Err("email must include a local part and domain");
+    }
+    Ok(email)
+}
+
+fn percent_decode_path_segment(value: &str) -> Option<String> {
+    let bytes = value.as_bytes();
+    let mut decoded = Vec::with_capacity(bytes.len());
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            if index + 2 >= bytes.len() {
+                return None;
+            }
+            let high = hex_value(bytes[index + 1])?;
+            let low = hex_value(bytes[index + 2])?;
+            decoded.push((high << 4) | low);
+            index += 3;
+        } else {
+            decoded.push(bytes[index]);
+            index += 1;
+        }
+    }
+    String::from_utf8(decoded).ok()
+}
+
+fn hex_value(byte: u8) -> Option<u8> {
+    match byte {
+        b'0'..=b'9' => Some(byte - b'0'),
+        b'a'..=b'f' => Some(byte - b'a' + 10),
+        b'A'..=b'F' => Some(byte - b'A' + 10),
+        _ => None,
+    }
 }
 
 async fn authorize_admin(
@@ -4100,6 +4542,7 @@ mod tests {
     #[test]
     fn interface_routes_use_the_embedded_shell() {
         assert!(interface_path("/dashboard"));
+        assert!(interface_path("/playground"));
         assert!(interface_path("/admin"));
         assert!(interface_path("/account"));
         assert!(interface_path("/routes"));
@@ -4146,6 +4589,18 @@ mod tests {
             sub: None,
         };
         assert_eq!(access_audiences(&payload), vec!["first", "second"]);
+    }
+
+    #[test]
+    fn access_user_email_segments_are_strictly_decoded() {
+        assert_eq!(
+            decode_access_user_email("Ops%2Bdocs%40Example.com").unwrap(),
+            "ops+docs@example.com"
+        );
+        assert!(decode_access_user_email("ops%ZZexample.com").is_err());
+        assert!(decode_access_user_email("ops/example.com").is_err());
+        assert!(decode_access_user_email("ops@example").is_err());
+        assert_eq!(percent_decode_path_segment("a%2Fb").unwrap(), "a/b");
     }
 
     #[test]
