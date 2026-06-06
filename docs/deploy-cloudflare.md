@@ -49,7 +49,9 @@ destinations are
 `/dashboard`, `/playground`, `/admin`, `/account`, `/routes`, `/console`,
 `/v1/session`, `/v1/me`, `/v1/usage`, `/v1/admin/*`, and matching `/api/*`
 aliases; override them with `CLAWROUTER_ACCESS_PATHS` only if the API contract
-changes.
+changes. Do not add `/` on the shared API hostname: Cloudflare Access path
+inheritance would protect the public `/v1/*` API too. Root reaches Access by
+redirecting to `/dashboard`.
 Set `CLAWROUTER_ACCESS_IDP_IDS` to one identity provider to enable automatic
 redirect to that provider; otherwise Access shows its normal login selector.
 When `-- --set-github-vars` is used, managed admin variables are deleted from
