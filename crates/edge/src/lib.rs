@@ -31,29 +31,32 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
   <style>
     :root {
       color-scheme: dark;
-      --bg: #080908;
-      --surface: #0d0f0e;
-      --surface-2: #121614;
-      --surface-3: #171d1a;
-      --ink: #f2f4ef;
-      --muted: #a3aaa1;
-      --faint: #6e766f;
-      --line: #242b27;
-      --line-strong: #39423d;
-      --accent: #e7f8c8;
-      --accent-soft: #243323;
-      --accent-ink: #10140e;
-      --warn: #ff8b68;
-      --shadow: 0 18px 54px rgba(0, 0, 0, .34);
+      --bg: #050506;
+      --surface: #0d0e10;
+      --surface-2: #141519;
+      --surface-3: #1a1c21;
+      --ink: #f4f1ea;
+      --muted: #b8b1a4;
+      --faint: #7e7a71;
+      --line: #27292f;
+      --line-strong: #41434c;
+      --accent: #f5d46f;
+      --accent-soft: #2c2613;
+      --accent-ink: #171309;
+      --blue: #9cc8ff;
+      --green: #92e6b5;
+      --warn: #ff9a76;
+      --shadow: 0 18px 54px rgba(0, 0, 0, .42);
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
       font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background:
-        linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px),
-        radial-gradient(circle at 75% -15%, rgba(231, 248, 200, .10), transparent 34%),
+        linear-gradient(rgba(255,255,255,.021) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.021) 1px, transparent 1px),
+        radial-gradient(circle at 82% -18%, rgba(245, 212, 111, .13), transparent 34%),
+        radial-gradient(circle at -10% 28%, rgba(156, 200, 255, .08), transparent 28%),
         var(--bg);
       background-size: 34px 34px, 34px 34px, auto, auto;
       color: var(--ink);
@@ -62,7 +65,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     }
     header {
       border-bottom: 1px solid var(--line);
-      background: rgba(8, 9, 8, .88);
+      background: rgba(5, 5, 6, .9);
       backdrop-filter: blur(18px);
       position: sticky;
       top: 0;
@@ -92,8 +95,8 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       display: grid;
       place-items: center;
       border: 1px solid var(--line);
-      border-radius: 10px;
-      background: linear-gradient(180deg, var(--surface-3), var(--surface));
+      border-radius: 8px;
+      background: linear-gradient(180deg, #24262c, var(--surface));
       color: var(--accent);
       font-weight: 800;
       box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
@@ -144,6 +147,48 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       border-color: var(--ink);
     }
     main { padding: 18px 0 42px; }
+    .consoleIntro {
+      display: grid;
+      grid-template-columns: minmax(0, 1.4fr) minmax(320px, .6fr);
+      gap: 14px;
+      margin-bottom: 14px;
+    }
+    .heroPanel {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 18px;
+      background: linear-gradient(135deg, rgba(245, 212, 111, .10), rgba(13, 14, 16, .92) 48%, rgba(156, 200, 255, .08));
+      box-shadow: var(--shadow);
+    }
+    .heroPanel h2 {
+      margin: 0;
+      color: var(--ink);
+      font-size: clamp(24px, 3vw, 38px);
+      line-height: 1.02;
+      text-transform: none;
+      letter-spacing: 0;
+    }
+    .heroPanel p { max-width: 720px; }
+    .quickPanel {
+      border: 1px solid var(--line);
+      border-radius: 12px;
+      padding: 14px;
+      background: rgba(13, 14, 16, .86);
+      box-shadow: var(--shadow);
+    }
+    .quickPanel h2 { margin-bottom: 10px; }
+    .quickList { display: grid; gap: 8px; }
+    .quickItem {
+      display: flex;
+      justify-content: space-between;
+      gap: 12px;
+      border-bottom: 1px solid var(--line);
+      padding-bottom: 8px;
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .quickItem:last-child { border-bottom: 0; padding-bottom: 0; }
+    .quickItem strong { color: var(--ink); font-weight: 750; }
     .toolbar {
       display: grid;
       grid-template-columns: 1fr 1fr auto;
@@ -236,6 +281,19 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       white-space: nowrap;
     }
     .providerCard span { color: var(--faint); font-size: 12px; }
+    .providerInline {
+      display: inline-grid;
+      grid-template-columns: 28px minmax(0, 1fr);
+      align-items: center;
+      gap: 8px;
+      min-width: 160px;
+    }
+    .providerInline .providerIcon {
+      width: 28px;
+      height: 28px;
+      border-radius: 7px;
+      font-size: 10px;
+    }
     .providerChecks {
       display: grid;
       grid-template-columns: repeat(auto-fill, minmax(126px, 1fr));
@@ -292,6 +350,20 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     }
     tbody tr:hover { background: rgba(231, 248, 200, .035); }
     th { color: var(--faint); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+    .tableActions {
+      display: flex;
+      gap: 6px;
+      flex-wrap: wrap;
+    }
+    .ghost {
+      background: transparent;
+      color: var(--muted);
+    }
+    .danger {
+      background: #2d1712;
+      border-color: #6b2e21;
+      color: #ffd1c4;
+    }
     code {
       background: #0a0d0b;
       border: 1px solid var(--line);
@@ -314,9 +386,34 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     }
     .bad { color: var(--warn); border-color: color-mix(in oklch, var(--warn), white 50%); }
     .good { color: var(--accent); border-color: rgba(231, 248, 200, .36); }
+    .soft { color: var(--blue); border-color: rgba(156, 200, 255, .34); }
+    .bar {
+      display: grid;
+      gap: 5px;
+      min-width: 160px;
+    }
+    .barTrack {
+      height: 7px;
+      border-radius: 999px;
+      background: #202228;
+      overflow: hidden;
+      border: 1px solid var(--line);
+    }
+    .barFill {
+      display: block;
+      height: 100%;
+      width: var(--bar, 0%);
+      background: linear-gradient(90deg, var(--green), var(--accent));
+    }
+    .hint {
+      margin-top: 10px;
+      color: var(--faint);
+      font-size: 12px;
+    }
     .hidden { display: none; }
     @media (max-width: 820px) {
       .top, .toolbar { grid-template-columns: 1fr; display: grid; }
+      .consoleIntro { grid-template-columns: 1fr; }
       .brand { align-items: flex-start; }
       nav { width: 100%; }
       nav button { flex: 1 1 46%; }
@@ -364,6 +461,16 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     </div>
   </header>
   <main class="wrap">
+    <section class="consoleIntro">
+      <div class="heroPanel">
+        <h2>Route models, services, budgets, and users from one control plane.</h2>
+        <p>Use the user surfaces for key inspection, playground calls, and usage. Use admin for Access roles, tenant-scoped proxy keys, provider allowlists, and hard spend limits.</p>
+      </div>
+      <div class="quickPanel">
+        <h2>Current Session</h2>
+        <div id="sessionQuick" class="quickList"></div>
+      </div>
+    </section>
     <section class="toolbar">
       <label>Admin token<input id="adminToken" type="password" autocomplete="off" placeholder="optional bearer fallback"></label>
       <label>Proxy key<input id="proxyKey" type="password" autocomplete="off" placeholder="required for account views"></label>
@@ -392,18 +499,26 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       <form id="playgroundForm" class="panel">
         <h2>Model Playground</h2>
         <div class="form">
+          <label class="full">Search models<input id="modelSearch" autocomplete="off" placeholder="filter by model or provider"></label>
           <label class="full">Model<select id="playgroundModel"></select></label>
           <label>Endpoint<select id="playgroundEndpoint">
             <option value="/v1/chat/completions">Chat completions</option>
             <option value="/v1/responses">Responses</option>
           </select></label>
           <label>Max tokens<input id="playgroundMaxTokens" inputmode="numeric" value="128"></label>
+          <label>Temperature<input id="playgroundTemperature" inputmode="decimal" value="0.7"></label>
+          <label class="full">System message<textarea id="playgroundSystem">You are concise and useful.</textarea></label>
           <label class="full">Prompt<textarea id="playgroundPrompt">Say hello from ClawRouter in one short sentence.</textarea></label>
           <div class="actions full">
             <button type="submit" class="primary">Run model</button>
           </div>
         </div>
       </form>
+      <div class="panel">
+        <h2>Route Preview</h2>
+        <div id="playgroundPreview"></div>
+        <p class="hint">Calls use the proxy key above and go through the same policy, provider allowlist, budget preflight, and usage queue as production API traffic.</p>
+      </div>
       <div class="panel">
         <h2>Response</h2>
         <pre id="playgroundResult" class="result">select a model, enter a proxy key, and run a request.</pre>
@@ -455,6 +570,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       <div class="panel wide">
         <h2>Key Policies</h2>
         <div id="adminKeys"></div>
+        <p class="hint">Saving a key stores only the SHA-256 hash of the generated secret. Copy the issued token when it is shown; it cannot be recovered later.</p>
       </div>
       <div class="panel wide">
         <h2>Access Roles</h2>
@@ -538,8 +654,33 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       const [label, bg, fg] = providerStyles[provider.id] || [provider.id.slice(0, 2).toUpperCase(), "#202520", "#f2f4ef"];
       return `<span class="providerIcon" style="--icon-bg:${bg};--icon-fg:${fg}">${esc(label)}</span>`;
     }
+    function providerById(id) {
+      return (state.providers?.providers || []).find((provider) => provider.id === id) || { id, display_name: id, class: "service", service_kind: "api" };
+    }
+    function providerInline(id) {
+      const provider = providerById(id);
+      return raw(`<span class="providerInline">${providerIcon(provider)}<span>${esc(provider.display_name || provider.id)}</span></span>`);
+    }
     function providerCard(provider) {
       return `<div class="providerCard">${providerIcon(provider)}<div><strong>${esc(provider.display_name || provider.id)}</strong><span>${esc(provider.class)} · ${esc(provider.service_kind)}</span></div></div>`;
+    }
+    function budgetBar(budget) {
+      if (!budget || !budget.configured || budget.limitMicros == null) {
+        return raw(`<span class="status soft">unlimited</span>`);
+      }
+      const spent = budget.spentMicros || 0;
+      const limit = Math.max(1, budget.limitMicros);
+      const pct = Math.min(100, Math.round((spent / limit) * 100));
+      return raw(`<span class="bar"><span>${money(spent)} / ${money(limit)}</span><span class="barTrack"><span class="barFill" style="--bar:${pct}%"></span></span></span>`);
+    }
+    function renderSessionQuick() {
+      const session = state.session;
+      const proxyKey = $("proxyKey").value.trim();
+      $("sessionQuick").innerHTML = [
+        `<div class="quickItem"><span>Access</span><strong>${esc(session?.authenticated ? `${session.role} · ${session.email}` : "not signed in")}</strong></div>`,
+        `<div class="quickItem"><span>Admin</span><strong>${esc($("adminToken").value.trim() ? "bearer fallback set" : session?.role === "admin" ? "Access admin" : "not available")}</strong></div>`,
+        `<div class="quickItem"><span>Proxy key</span><strong>${esc(proxyKey ? "ready" : "required for playground/account")}</strong></div>`
+      ].join("");
     }
     const openaiRoutes = () => state.routes?.openaiCompatible || [];
     const openaiModels = () => openaiRoutes().flatMap((route) => route.models.map((model) => ({ ...model, provider: route.provider })));
@@ -552,6 +693,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         metric("manifest routes", routes.manifestProxy.length),
         metric("session", state.session?.authenticated ? `${state.session.role} · ${state.session.email}` : "not signed in")
       ].join("");
+      renderSessionQuick();
       const classes = providers.reduce((acc, provider) => {
         acc[provider.class] = (acc[provider.class] || 0) + 1;
         return acc;
@@ -568,8 +710,8 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     function renderRoutes() {
       const routes = state.routes || { openaiCompatible: [], manifestProxy: [] };
       const rows = [
-        ...routes.openaiCompatible.map((route) => row([route.provider, "openai", route.endpoints.join(", "), String(route.models.length)])),
-        ...routes.manifestProxy.map((route) => row([route.provider, route.endpoint, code(route.route), route.methods.join(", ")]))
+        ...routes.openaiCompatible.map((route) => row([providerInline(route.provider), "OpenAI-compatible", route.endpoints.join(", "), String(route.models.length)])),
+        ...routes.manifestProxy.map((route) => row([providerInline(route.provider), route.endpoint, code(route.route), route.methods.join(", ")]))
       ];
       $("routesTable").innerHTML = table(["provider", "route", "surface", "models/methods"], rows);
     }
@@ -594,22 +736,28 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         tenant.activeKeys,
         tenant.providers.join(", ")
       ])));
-      $("adminUsage").innerHTML = table(["key", "tenant", "budget", "spent", "remaining", "ledger"], usage.keys.map((key) => row([
+      $("adminUsage").innerHTML = table(["key", "tenant", "usage", "remaining", "ledger"], usage.keys.map((key) => row([
         code(key.kid),
         key.tenantId,
-        money(key.monthlyBudgetMicros),
-        number(key.budget.spentMicros),
-        number(key.budget.remainingMicros),
+        budgetBar(key.budget),
+        money(key.budget.remainingMicros),
         key.budget.ledger
       ])));
-      $("adminKeys").innerHTML = table(["key", "tenant", "providers", "budget", "request", "status"], keys.keys.map((key) => row([
+      $("adminKeys").innerHTML = table(["key", "tenant", "providers", "budget", "request", "status", "actions"], keys.keys.map((key) => row([
         code(key.kid),
         key.tenantId || "default",
-        key.providers.join(", "),
+        raw(key.providers.map((id) => providerInline(id).html).join("")),
         money(key.monthlyBudgetMicros),
         number(key.requestCostMicros),
-        key.enabled ? raw(`<span class="status good">active</span>`) : raw(`<span class="status bad">disabled</span>`)
+        key.enabled ? raw(`<span class="status good">active</span>`) : raw(`<span class="status bad">disabled</span>`),
+        raw(`<span class="tableActions"><button class="ghost" data-fill-key="${esc(key.kid)}">edit</button><button class="danger" data-revoke-key="${esc(key.kid)}" ${key.enabled ? "" : "disabled"}>revoke</button></span>`)
       ])));
+      document.querySelectorAll("[data-revoke-key]").forEach((button) => {
+        button.addEventListener("click", () => revokeKey(button.dataset.revokeKey).catch((error) => status(error.message || String(error), true)));
+      });
+      document.querySelectorAll("[data-fill-key]").forEach((button) => {
+        button.addEventListener("click", () => fillKeyForm(keys.keys.find((key) => key.kid === button.dataset.fillKey)));
+      });
       $("accessUsers").innerHTML = table(["email", "role", "tenant", "status"], accessUsers.users.map((user) => row([
         code(user.email),
         user.role,
@@ -623,9 +771,10 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         row(["key", code(me.key.kid)]),
         row(["tenant", me.key.tenantId]),
         row(["enabled", String(me.key.enabled)]),
-        row(["providers", me.key.providers.join(", ")])
+        row(["providers", raw(me.key.providers.map((id) => providerInline(id).html).join(""))])
       ]);
       $("usage").innerHTML = table(["field", "value"], [
+        row(["usage", budgetBar(usage.budget)]),
         row(["monthly budget", money(usage.budget.limitMicros)]),
         row(["spent", number(usage.budget.spentMicros)]),
         row(["remaining", number(usage.budget.remainingMicros)]),
@@ -653,30 +802,76 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       $("keyProviders").innerHTML = providers.map((provider) => `<label class="check"><input type="checkbox" value="${esc(provider.id)}" ${["openai", "openrouter"].includes(provider.id) ? "checked" : ""}><span>${esc(provider.id)}</span></label>`).join("");
     }
     function renderPlaygroundOptions() {
-      const models = openaiModels();
-      $("playgroundModel").innerHTML = models.map((model) => `<option value="${esc(model.id)}">${esc(model.id)}</option>`).join("");
+      const filter = $("modelSearch").value.trim().toLowerCase();
+      const models = openaiModels().filter((model) => !filter || model.id.toLowerCase().includes(filter) || model.provider.toLowerCase().includes(filter));
+      $("playgroundModel").innerHTML = models.map((model) => `<option value="${esc(model.id)}" data-provider="${esc(model.provider)}">${esc(model.id)}</option>`).join("");
+      renderPlaygroundPreview();
+    }
+    function selectedPlaygroundModel() {
+      const selected = $("playgroundModel").selectedOptions[0];
+      if (!selected) return null;
+      return openaiModels().find((model) => model.id === selected.value && model.provider === selected.dataset.provider) || null;
+    }
+    function renderPlaygroundPreview() {
+      const model = selectedPlaygroundModel();
+      if (!model) {
+        $("playgroundPreview").innerHTML = `<span class="status">no model route</span>`;
+        return;
+      }
+      const route = openaiRoutes().find((item) => item.provider === model.provider);
+      $("playgroundPreview").innerHTML = table(["field", "value"], [
+        row(["provider", providerInline(model.provider)]),
+        row(["model", code(model.id)]),
+        row(["endpoint", code($("playgroundEndpoint").value)]),
+        row(["capabilities", (model.capabilities || []).join(", ") || "model.invoke"]),
+        row(["provider endpoints", (route?.endpoints || []).join(", ")])
+      ]);
+    }
+    function fillKeyForm(key) {
+      if (!key) return;
+      $("keyKid").value = key.kid;
+      $("keySecret").value = "";
+      $("keyTenant").value = key.tenantId || "default";
+      $("keyMonthlyBudget").value = key.monthlyBudgetMicros ?? "";
+      $("keyRequestCost").value = key.requestCostMicros ?? "";
+      $("keyEnabled").value = key.enabled ? "true" : "false";
+      document.querySelectorAll("#keyProviders input").forEach((input) => {
+        input.checked = key.providers.includes(input.value);
+      });
+      $("issuedKey").textContent = "editing policy; secret stays unchanged unless you generate or enter a new secret";
+      status(`editing ${key.kid}`);
+    }
+    async function revokeKey(kid) {
+      if (!kid) return;
+      await api(`/v1/admin/keys/${encodeURIComponent(kid)}/revoke`, "admin", { method: "POST" });
+      await renderAdmin();
+      status(`revoked ${kid}`);
     }
     async function saveKey(event) {
       event.preventDefault();
       const kid = $("keyKid").value.trim();
-      const secret = $("keySecret").value.trim() || generateSecret();
-      $("keySecret").value = secret;
+      const existing = state.admin?.keys?.keys?.find((key) => key.kid === kid);
+      let secret = $("keySecret").value.trim();
+      if (!secret && !existing) {
+        secret = generateSecret();
+        $("keySecret").value = secret;
+      }
       const providers = Array.from(document.querySelectorAll("#keyProviders input:checked")).map((input) => input.value);
       if (!providers.length) throw new Error("select at least one provider");
       const policy = {
         enabled: $("keyEnabled").value === "true",
-        secretSha256: await sha256Hex(secret),
         providers,
         tenantId: $("keyTenant").value.trim() || "default",
         monthlyBudgetMicros: optionalNumber($("keyMonthlyBudget").value),
         requestCostMicros: optionalNumber($("keyRequestCost").value)
       };
+      if (secret) policy.secretSha256 = await sha256Hex(secret);
       await api(`/v1/admin/keys/${encodeURIComponent(kid)}`, "admin", {
         method: "PUT",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(policy)
       });
-      $("issuedKey").textContent = `issued: clawrouter-live-${kid}-${secret}`;
+      $("issuedKey").textContent = secret ? `issued: clawrouter-live-${kid}-${secret}` : "saved policy; existing secret unchanged";
       await renderAdmin();
     }
     async function saveAccessUser(event) {
@@ -698,11 +893,13 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       const endpoint = $("playgroundEndpoint").value;
       const model = $("playgroundModel").value;
       const prompt = $("playgroundPrompt").value;
+      const system = $("playgroundSystem").value.trim();
       const maxTokens = optionalNumber($("playgroundMaxTokens").value);
+      const temperature = optionalDecimal($("playgroundTemperature").value);
       $("playgroundResult").textContent = "running...";
       const body = endpoint === "/v1/responses"
-        ? { model, input: prompt, max_output_tokens: maxTokens }
-        : { model, messages: [{ role: "user", content: prompt }], max_tokens: maxTokens };
+        ? { model, input: prompt, instructions: system || undefined, max_output_tokens: maxTokens, temperature }
+        : { model, messages: [...(system ? [{ role: "system", content: system }] : []), { role: "user", content: prompt }], max_tokens: maxTokens, temperature };
       const response = await api(endpoint, "proxy", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -727,6 +924,13 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error(`${trimmed} is not a non-negative safe integer`);
       return parsed;
     }
+    function optionalDecimal(value) {
+      const trimmed = String(value || "").trim();
+      if (!trimmed) return undefined;
+      const parsed = Number(trimmed);
+      if (!Number.isFinite(parsed) || parsed < 0 || parsed > 2) throw new Error(`${trimmed} is not a decimal between 0 and 2`);
+      return parsed;
+    }
     function syncView() {
       document.querySelectorAll("nav button").forEach((item) => item.classList.toggle("active", item.dataset.view === state.view));
       document.querySelectorAll(".view").forEach((view) => view.classList.toggle("hidden", view.id !== state.view));
@@ -739,6 +943,11 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       });
     });
     $("refresh").addEventListener("click", refresh);
+    $("adminToken").addEventListener("input", renderSessionQuick);
+    $("proxyKey").addEventListener("input", renderSessionQuick);
+    $("modelSearch").addEventListener("input", renderPlaygroundOptions);
+    $("playgroundModel").addEventListener("change", renderPlaygroundPreview);
+    $("playgroundEndpoint").addEventListener("change", renderPlaygroundPreview);
     $("keyForm").addEventListener("submit", (event) => saveKey(event).catch((error) => status(error.message || String(error), true)));
     $("accessUserForm").addEventListener("submit", (event) => saveAccessUser(event).catch((error) => status(error.message || String(error), true)));
     $("playgroundForm").addEventListener("submit", (event) => runPlayground(event).catch((error) => {
@@ -1241,7 +1450,8 @@ struct KeyPolicy {
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 struct AdminKeyPolicyRequest {
-    secret_sha256: String,
+    #[serde(default)]
+    secret_sha256: Option<String>,
     #[serde(default)]
     providers: Vec<String>,
     #[serde(default)]
@@ -1533,7 +1743,12 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 );
             }
         };
-        let policy = match request.try_into_policy() {
+        let existing_secret_sha256 = if request.secret_sha256.is_none() {
+            existing_key_secret_sha256(&kv, &kid).await?
+        } else {
+            None
+        };
+        let policy = match request.try_into_policy(existing_secret_sha256) {
             Ok(policy) => policy,
             Err(message) => return json_error("invalid_admin_policy", message, 400),
         };
@@ -1862,10 +2077,17 @@ fn key_verification(secret: &str, policy: &KeyPolicy) -> &'static str {
 }
 
 impl AdminKeyPolicyRequest {
-    fn try_into_policy(self) -> std::result::Result<KeyPolicy, &'static str> {
-        if !is_sha256_hex(&self.secret_sha256) {
-            return Err("secretSha256 must be a 64-character hex string");
-        }
+    fn try_into_policy(
+        self,
+        existing_secret_sha256: Option<String>,
+    ) -> std::result::Result<KeyPolicy, &'static str> {
+        let secret_sha256 = match self.secret_sha256 {
+            Some(secret_sha256) if is_sha256_hex(&secret_sha256) => secret_sha256,
+            Some(_) => return Err("secretSha256 must be a 64-character hex string"),
+            None => existing_secret_sha256
+                .filter(|value| is_sha256_hex(value))
+                .ok_or("secretSha256 is required for new proxy keys")?,
+        };
         if self.providers.is_empty() {
             return Err("providers must contain at least one provider id");
         }
@@ -1877,7 +2099,7 @@ impl AdminKeyPolicyRequest {
         }
         Ok(KeyPolicy {
             enabled: self.enabled,
-            secret_sha256: self.secret_sha256.to_ascii_lowercase(),
+            secret_sha256: secret_sha256.to_ascii_lowercase(),
             providers: self.providers,
             tenant_id: self.tenant_id,
             monthly_budget_micros: self.monthly_budget_micros,
@@ -2038,6 +2260,20 @@ fn sum_optional_micros(values: impl Iterator<Item = Option<u64>>) -> u64 {
     values.fold(0_u64, |sum, value| {
         sum.saturating_add(value.unwrap_or_default())
     })
+}
+
+async fn existing_key_secret_sha256(kv: &KvStore, kid: &str) -> Result<Option<String>> {
+    let Some(record) = kv
+        .get(&format!("keys/{kid}"))
+        .text()
+        .await
+        .map_err(|error| Error::RustError(format!("failed to read key policy: {error}")))?
+    else {
+        return Ok(None);
+    };
+    let policy = serde_json::from_str::<KeyPolicy>(&record)
+        .map_err(|error| Error::RustError(format!("key policy is invalid JSON: {error}")))?;
+    Ok(Some(policy.secret_sha256))
 }
 
 async fn list_admin_key_policies(kv: &KvStore) -> Result<Vec<AdminKeyPolicyResponse>> {
@@ -4416,13 +4652,13 @@ mod tests {
     fn admin_policy_validation_accepts_known_provider_hashes() {
         let request = AdminKeyPolicyRequest {
             enabled: true,
-            secret_sha256: sha256_hex("secret"),
+            secret_sha256: Some(sha256_hex("secret")),
             providers: vec!["openai".to_string(), "tavily".to_string()],
             tenant_id: Some("team_docs".to_string()),
             monthly_budget_micros: Some(100),
             request_cost_micros: Some(10),
         };
-        let policy = request.try_into_policy().unwrap();
+        let policy = request.try_into_policy(None).unwrap();
         validate_policy_providers(&policy).unwrap();
         let response = admin_policy_response("svc_docs", &policy);
         assert_eq!(response.kid, "svc_docs");
@@ -4430,6 +4666,36 @@ mod tests {
         assert_eq!(response.providers, vec!["openai", "tavily"]);
         assert_eq!(response.monthly_budget_micros, Some(100));
         assert_eq!(response.request_cost_micros, Some(10));
+    }
+
+    #[test]
+    fn admin_policy_edits_can_preserve_existing_secret_hash() {
+        let existing_hash = sha256_hex("existing");
+        let request = AdminKeyPolicyRequest {
+            enabled: true,
+            secret_sha256: None,
+            providers: vec!["openai".to_string()],
+            tenant_id: Some("team_docs".to_string()),
+            monthly_budget_micros: Some(200),
+            request_cost_micros: Some(20),
+        };
+        let policy = request
+            .try_into_policy(Some(existing_hash.clone()))
+            .unwrap();
+        assert_eq!(policy.secret_sha256, existing_hash);
+
+        let new_key = AdminKeyPolicyRequest {
+            enabled: true,
+            secret_sha256: None,
+            providers: vec!["openai".to_string()],
+            tenant_id: None,
+            monthly_budget_micros: None,
+            request_cost_micros: None,
+        };
+        assert_eq!(
+            new_key.try_into_policy(None).unwrap_err(),
+            "secretSha256 is required for new proxy keys"
+        );
     }
 
     #[test]
@@ -4482,27 +4748,27 @@ mod tests {
     fn admin_policy_validation_rejects_bad_hashes_and_unknown_providers() {
         let bad_hash = AdminKeyPolicyRequest {
             enabled: true,
-            secret_sha256: "not-a-hash".to_string(),
+            secret_sha256: Some("not-a-hash".to_string()),
             providers: vec!["openai".to_string()],
             tenant_id: None,
             monthly_budget_micros: None,
             request_cost_micros: None,
         };
         assert_eq!(
-            bad_hash.try_into_policy().unwrap_err(),
+            bad_hash.try_into_policy(None).unwrap_err(),
             "secretSha256 must be a 64-character hex string"
         );
 
         let no_providers = AdminKeyPolicyRequest {
             enabled: true,
-            secret_sha256: sha256_hex("secret"),
+            secret_sha256: Some(sha256_hex("secret")),
             providers: Vec::new(),
             tenant_id: None,
             monthly_budget_micros: None,
             request_cost_micros: None,
         };
         assert_eq!(
-            no_providers.try_into_policy().unwrap_err(),
+            no_providers.try_into_policy(None).unwrap_err(),
             "providers must contain at least one provider id"
         );
 
