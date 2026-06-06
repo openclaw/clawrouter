@@ -364,6 +364,32 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       padding: 8px;
       background: rgba(8, 9, 8, .35);
     }
+    .presetGrid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 8px;
+      margin-top: 4px;
+    }
+    .presetButton {
+      min-height: 84px;
+      padding: 10px;
+      text-align: left;
+      background: rgba(8, 9, 8, .42);
+    }
+    .presetButton strong,
+    .presetButton span {
+      display: block;
+      overflow-wrap: anywhere;
+    }
+    .presetButton strong {
+      color: var(--ink);
+      margin-bottom: 4px;
+    }
+    .presetButton span {
+      color: var(--faint);
+      font-size: 12px;
+      line-height: 1.35;
+    }
     .check {
       grid-template-columns: 16px minmax(0, 1fr);
       align-items: center;
@@ -518,6 +544,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       .panel, .third { grid-column: 1 / -1; }
       .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .form { grid-template-columns: 1fr; }
+      .presetGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .providerInline { min-width: 0; }
       .quickItem {
         display: grid;
@@ -548,6 +575,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       .brandmark { display: none; }
       .panel { padding: 12px; border-radius: 10px; }
       .providerCloud { grid-template-columns: 1fr; }
+      .presetGrid { grid-template-columns: 1fr; }
       .actions { justify-content: stretch; }
       .actions button { flex: 1 1 auto; min-width: 0; }
     }
@@ -647,11 +675,22 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         <h2>Issue Proxy Key</h2>
         <div class="form">
           <label>Key id<input id="keyKid" value="svc_docs"></label>
+          <label>Token role<select id="keyTokenRole">
+            <option value="">custom</option>
+            <option value="sandbox">sandbox</option>
+            <option value="user">user</option>
+            <option value="service">service</option>
+            <option value="ops">ops</option>
+          </select></label>
           <label>Secret<input id="keySecret" type="password" autocomplete="off" placeholder="generated if empty"></label>
           <label>Tenant<input id="keyTenant" value="default"></label>
           <label>Monthly micros<input id="keyMonthlyBudget" inputmode="numeric" value="100000000"></label>
           <label>Request micros<input id="keyRequestCost" inputmode="numeric" value="1000"></label>
           <label>Status<select id="keyEnabled"><option value="true">active</option><option value="false">disabled</option></select></label>
+          <div class="full">
+            <label>Role presets</label>
+            <div id="keyRolePresets" class="presetGrid"></div>
+          </div>
           <div class="full">
             <label>Provider allowlist</label>
             <div id="keyProviders" class="providerChecks"></div>
@@ -889,8 +928,9 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         money(key.budget.remainingMicros),
         key.budget.ledger
       ])));
-      $("adminKeys").innerHTML = table(["key", "tenant", "providers", "budget", "request", "status", "actions"], keys.keys.map((key) => row([
+      $("adminKeys").innerHTML = table(["key", "role", "tenant", "providers", "budget", "request", "status", "actions"], keys.keys.map((key) => row([
         code(key.kid),
+        key.tokenRole || "custom",
         key.tenantId || "default",
         raw(key.providers.map((id) => providerInline(id).html).join("")),
         money(key.monthlyBudgetMicros),
@@ -920,6 +960,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       $("profile").innerHTML = table(["field", "value"], [
         row(["key", code(me.key.kid)]),
         row(["tenant", me.key.tenantId]),
+        row(["role", me.key.tokenRole || "custom"]),
         row(["enabled", String(me.key.enabled)]),
         row(["providers", raw(me.key.providers.map((id) => providerInline(id).html).join(""))])
       ]);
@@ -950,6 +991,21 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     function renderProviderControls() {
       const providers = state.providers?.providers || [];
       $("keyProviders").innerHTML = providers.map((provider) => `<label class="check"><input type="checkbox" value="${esc(provider.id)}" ${["openai", "openrouter"].includes(provider.id) ? "checked" : ""}>${providerInline(provider.id).html}</label>`).join("");
+      renderRolePresets();
+    }
+    const rolePresets = {
+      sandbox: { label: "Sandbox", budget: "5000000", request: "500", providers: ["openai", "openrouter"] },
+      user: { label: "User", budget: "50000000", request: "1000", providers: ["openai", "openrouter", "anthropic", "google-gemini", "tavily"] },
+      service: { label: "Service", budget: "250000000", request: "1000", providers: [] },
+      ops: { label: "Ops", budget: "", request: "0", providers: [] }
+    };
+    function renderRolePresets() {
+      const available = new Set((state.providers?.providers || []).map((provider) => provider.id));
+      $("keyRolePresets").innerHTML = Object.entries(rolePresets).map(([role, preset]) => {
+        const providerCount = preset.providers.length ? preset.providers.filter((id) => available.has(id)).length : available.size;
+        const budget = preset.budget ? money(Number(preset.budget)) : "unlimited";
+        return `<button type="button" class="presetButton" data-apply-role="${esc(role)}"><strong>${esc(preset.label)}</strong><span>${esc(budget)} monthly · ${esc(preset.request || "0")} micros/request · ${providerCount} providers</span></button>`;
+      }).join("");
     }
     function renderPlaygroundOptions() {
       const filter = $("modelSearch").value.trim().toLowerCase();
@@ -981,6 +1037,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     function fillKeyForm(key) {
       if (!key) return;
       $("keyKid").value = key.kid;
+      $("keyTokenRole").value = key.tokenRole || "";
       $("keySecret").value = "";
       $("keyTenant").value = key.tenantId || "default";
       $("keyMonthlyBudget").value = key.monthlyBudgetMicros ?? "";
@@ -1021,6 +1078,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         enabled: $("keyEnabled").value === "true",
         providers,
         tenantId: $("keyTenant").value.trim() || "default",
+        tokenRole: $("keyTokenRole").value,
         monthlyBudgetMicros: optionalNumber($("keyMonthlyBudget").value),
         requestCostMicros: optionalNumber($("keyRequestCost").value)
       };
@@ -1118,6 +1176,22 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       status(error.message || String(error), true);
     }));
     $("generateKeySecret").addEventListener("click", () => { $("keySecret").value = generateSecret(); });
+    document.addEventListener("click", (event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const button = target?.closest("[data-apply-role]");
+      if (!button) return;
+      const role = button.dataset.applyRole;
+      const preset = rolePresets[role];
+      if (!preset) return;
+      $("keyTokenRole").value = role;
+      $("keyMonthlyBudget").value = preset.budget;
+      $("keyRequestCost").value = preset.request;
+      const allowed = new Set(preset.providers.length ? preset.providers : (state.providers?.providers || []).map((provider) => provider.id));
+      document.querySelectorAll("#keyProviders input").forEach((input) => {
+        input.checked = allowed.has(input.value);
+      });
+      status(`applied ${role} limits`);
+    });
     document.addEventListener("click", async (event) => {
       const target = event.target instanceof Element ? event.target : null;
       const button = target?.closest("[data-copy-issued]");
@@ -1624,6 +1698,8 @@ struct KeyPolicy {
     #[serde(default)]
     tenant_id: Option<String>,
     #[serde(default)]
+    token_role: Option<String>,
+    #[serde(default)]
     monthly_budget_micros: Option<u64>,
     #[serde(default)]
     request_cost_micros: Option<u64>,
@@ -1639,6 +1715,8 @@ struct AdminKeyPolicyRequest {
     #[serde(default)]
     tenant_id: Option<String>,
     #[serde(default)]
+    token_role: Option<String>,
+    #[serde(default)]
     monthly_budget_micros: Option<u64>,
     #[serde(default)]
     request_cost_micros: Option<u64>,
@@ -1653,6 +1731,7 @@ struct AdminKeyPolicyResponse {
     enabled: bool,
     providers: Vec<String>,
     tenant_id: Option<String>,
+    token_role: Option<String>,
     monthly_budget_micros: Option<u64>,
     request_cost_micros: Option<u64>,
 }
@@ -1664,6 +1743,7 @@ struct KeyProfileResponse {
     enabled: bool,
     providers: Vec<String>,
     tenant_id: String,
+    token_role: Option<String>,
     monthly_budget_micros: Option<u64>,
     request_cost_micros: Option<u64>,
 }
@@ -1719,6 +1799,7 @@ struct AdminUsageRow {
     tenant_id: String,
     enabled: bool,
     providers: Vec<String>,
+    token_role: Option<String>,
     monthly_budget_micros: Option<u64>,
     request_cost_micros: Option<u64>,
     budget: BudgetStatusView,
@@ -2279,11 +2360,13 @@ impl AdminKeyPolicyRequest {
         if let Some(value) = self.request_cost_micros {
             validate_admin_budget(value, "requestCostMicros")?;
         }
+        let token_role = normalize_token_role(self.token_role)?;
         Ok(KeyPolicy {
             enabled: self.enabled,
             secret_sha256: secret_sha256.to_ascii_lowercase(),
             providers: self.providers,
             tenant_id: self.tenant_id,
+            token_role,
             monthly_budget_micros: self.monthly_budget_micros,
             request_cost_micros: self.request_cost_micros,
         })
@@ -2298,6 +2381,28 @@ fn validate_admin_budget(value: u64, name: &'static str) -> std::result::Result<
             "requestCostMicros" => "requestCostMicros exceeds the durable ledger limit",
             _ => "budget value exceeds the durable ledger limit",
         })
+}
+
+fn normalize_token_role(
+    value: Option<String>,
+) -> std::result::Result<Option<String>, &'static str> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value.len() > 32
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_' || byte == b'-')
+    {
+        return Err(
+            "tokenRole must be 32 or fewer ASCII letters, numbers, underscores, or hyphens",
+        );
+    }
+    Ok(Some(value.to_ascii_lowercase()))
 }
 
 fn validate_policy_providers(policy: &KeyPolicy) -> std::result::Result<(), String> {
@@ -2341,6 +2446,7 @@ fn admin_policy_response(kid: &str, policy: &KeyPolicy) -> AdminKeyPolicyRespons
         enabled: policy.enabled,
         providers: policy.providers.clone(),
         tenant_id: policy.tenant_id.clone(),
+        token_role: policy.token_role.clone(),
         monthly_budget_micros: policy.monthly_budget_micros,
         request_cost_micros: policy.request_cost_micros,
     }
@@ -2352,6 +2458,7 @@ fn key_profile_response(auth: &AuthorizedKey) -> KeyProfileResponse {
         enabled: auth.policy.enabled,
         providers: auth.policy.providers.clone(),
         tenant_id: tenant_id(auth),
+        token_role: auth.policy.token_role.clone(),
         monthly_budget_micros: auth.policy.monthly_budget_micros,
         request_cost_micros: auth.policy.request_cost_micros,
     }
@@ -2425,6 +2532,7 @@ async fn admin_usage_row(env: &Env, entry: AdminKeyPolicyResponse) -> Result<Adm
         tenant_id,
         enabled: entry.enabled,
         providers: entry.providers,
+        token_role: entry.token_role,
         monthly_budget_micros: entry.monthly_budget_micros,
         request_cost_micros: entry.request_cost_micros,
         budget,
@@ -2861,7 +2969,9 @@ fn key_inspection_response(
         "enabled": policy.map(|policy| policy.enabled),
         "providers": policy.map(|policy| &policy.providers),
         "tenantId": policy.and_then(|policy| policy.tenant_id.as_deref()),
-        "monthlyBudgetMicros": policy.and_then(|policy| policy.monthly_budget_micros)
+        "tokenRole": policy.and_then(|policy| policy.token_role.as_deref()),
+        "monthlyBudgetMicros": policy.and_then(|policy| policy.monthly_budget_micros),
+        "requestCostMicros": policy.and_then(|policy| policy.request_cost_micros)
     }))
 }
 
@@ -4819,6 +4929,7 @@ mod tests {
             secret_sha256: sha256_hex("secret"),
             providers: vec!["openai".to_string()],
             tenant_id: Some("team_docs".to_string()),
+            token_role: Some("service".to_string()),
             monthly_budget_micros: Some(100),
             request_cost_micros: Some(10),
         };
@@ -4837,6 +4948,7 @@ mod tests {
             secret_sha256: Some(sha256_hex("secret")),
             providers: vec!["openai".to_string(), "tavily".to_string()],
             tenant_id: Some("team_docs".to_string()),
+            token_role: Some("User".to_string()),
             monthly_budget_micros: Some(100),
             request_cost_micros: Some(10),
         };
@@ -4846,8 +4958,26 @@ mod tests {
         assert_eq!(response.kid, "svc_docs");
         assert!(response.enabled);
         assert_eq!(response.providers, vec!["openai", "tavily"]);
+        assert_eq!(response.token_role.as_deref(), Some("user"));
         assert_eq!(response.monthly_budget_micros, Some(100));
         assert_eq!(response.request_cost_micros, Some(10));
+    }
+
+    #[test]
+    fn admin_policy_validation_rejects_invalid_token_role_metadata() {
+        let request = AdminKeyPolicyRequest {
+            enabled: true,
+            secret_sha256: Some(sha256_hex("secret")),
+            providers: vec!["openai".to_string()],
+            tenant_id: Some("team_docs".to_string()),
+            token_role: Some("bad role!".to_string()),
+            monthly_budget_micros: Some(100),
+            request_cost_micros: Some(10),
+        };
+        assert_eq!(
+            request.try_into_policy(None).unwrap_err(),
+            "tokenRole must be 32 or fewer ASCII letters, numbers, underscores, or hyphens"
+        );
     }
 
     #[test]
@@ -4858,6 +4988,7 @@ mod tests {
             secret_sha256: None,
             providers: vec!["openai".to_string()],
             tenant_id: Some("team_docs".to_string()),
+            token_role: Some("service".to_string()),
             monthly_budget_micros: Some(200),
             request_cost_micros: Some(20),
         };
@@ -4871,6 +5002,7 @@ mod tests {
             secret_sha256: None,
             providers: vec!["openai".to_string()],
             tenant_id: None,
+            token_role: None,
             monthly_budget_micros: None,
             request_cost_micros: None,
         };
@@ -4888,6 +5020,7 @@ mod tests {
                 enabled: true,
                 providers: vec!["openai".to_string(), "tavily".to_string()],
                 tenant_id: Some("team_docs".to_string()),
+                token_role: Some("user".to_string()),
                 monthly_budget_micros: Some(100),
                 request_cost_micros: Some(10),
             },
@@ -4896,6 +5029,7 @@ mod tests {
                 enabled: false,
                 providers: vec!["openai".to_string()],
                 tenant_id: Some("team_docs".to_string()),
+                token_role: Some("ops".to_string()),
                 monthly_budget_micros: Some(200),
                 request_cost_micros: None,
             },
@@ -4904,6 +5038,7 @@ mod tests {
                 enabled: true,
                 providers: vec!["github".to_string()],
                 tenant_id: None,
+                token_role: Some("service".to_string()),
                 monthly_budget_micros: None,
                 request_cost_micros: Some(5),
             },
@@ -4933,6 +5068,7 @@ mod tests {
             secret_sha256: Some("not-a-hash".to_string()),
             providers: vec!["openai".to_string()],
             tenant_id: None,
+            token_role: None,
             monthly_budget_micros: None,
             request_cost_micros: None,
         };
@@ -4946,6 +5082,7 @@ mod tests {
             secret_sha256: Some(sha256_hex("secret")),
             providers: Vec::new(),
             tenant_id: None,
+            token_role: None,
             monthly_budget_micros: None,
             request_cost_micros: None,
         };
@@ -4959,6 +5096,7 @@ mod tests {
             secret_sha256: sha256_hex("secret"),
             providers: vec!["not-real".to_string()],
             tenant_id: None,
+            token_role: None,
             monthly_budget_micros: None,
             request_cost_micros: None,
         };
@@ -5226,6 +5364,7 @@ mod tests {
                 secret_sha256: sha256_hex("secret"),
                 providers: vec!["github".to_string()],
                 tenant_id: Some("team_docs".to_string()),
+                token_role: Some("service".to_string()),
                 monthly_budget_micros: None,
                 request_cost_micros: None,
             },

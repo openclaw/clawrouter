@@ -268,6 +268,9 @@ hashes generated key secrets in the browser before calling the API.
 Admin-created key ids must use alphanumeric or underscore characters because the
 issued live key format is `clawrouter-live-<kid>-<secret>`. Admin policies must
 select at least one provider; use the CLI path for deliberate all-provider keys.
+The console also stores `tokenRole` metadata from role presets such as
+`sandbox`, `user`, `service`, and `ops`; enforcement still comes from the saved
+provider allowlist and budget fields.
 
 ## Keys and Revocation
 
@@ -319,17 +322,20 @@ The stored policy shape is:
   "secretSha256": "<sha256 of key secret>",
   "providers": ["openai", "tavily"],
   "tenantId": "default",
+  "tokenRole": "service",
   "monthlyBudgetMicros": 100000000,
   "requestCostMicros": 1000
 }
 ```
 
-`providers` is an allowlist. An empty list allows every configured provider.
-`monthlyBudgetMicros: 0` denies requests immediately. A non-zero
-`monthlyBudgetMicros` uses the `BUDGET_LEDGER` Durable Object before upstream
-calls and charges `requestCostMicros` per accepted request. If
-`requestCostMicros` is omitted, ClawRouter charges one micro unit per request so
-budget enforcement still works for keys with a monthly budget.
+`providers` is an allowlist. The admin API requires at least one provider; a raw
+stored policy with an empty list allows every configured provider and should be
+reserved for deliberate CLI/operator use. `monthlyBudgetMicros: 0` denies
+requests immediately. A non-zero `monthlyBudgetMicros` uses the `BUDGET_LEDGER`
+Durable Object before upstream calls and charges `requestCostMicros` per
+accepted request. If `requestCostMicros` is omitted, ClawRouter charges one
+micro unit per request so budget enforcement still works for keys with a
+monthly budget.
 
 ## OAuth Grants
 

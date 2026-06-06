@@ -100,6 +100,7 @@ Worker checks `POLICY_KV` at `keys/<kid>` for:
   "secretSha256": "<sha256 of key secret>",
   "providers": ["openai"],
   "tenantId": "team_docs",
+  "tokenRole": "service",
   "monthlyBudgetMicros": 100000000
 }
 ```
@@ -112,7 +113,8 @@ Admin endpoints accept a verified Cloudflare Access admin session or
 `Authorization: Bearer <admin-token>` against `CLAWROUTER_ADMIN_TOKEN_SHA256`.
 The browser console hashes generated proxy key secrets in-browser before
 storing policy in `POLICY_KV`, can assign Access users to `user` or `admin`
-roles, and includes a proxy-key playground for OpenAI-compatible model routes.
+roles, offers proxy-key role presets with provider and budget limits, and
+includes a proxy-key playground for OpenAI-compatible model routes.
 
 Generic REST/tool proxy requests are manifest-driven:
 
