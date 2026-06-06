@@ -49,4 +49,7 @@ jobs:
       - run: pnpm install --frozen-lockfile=false
       - run: pnpm provider:smoke-plan
       - run: CLAWROUTER_STRICT_CONFIG=0 pnpm cf:config
-      - run: pnpm exec wrangler deploy --dry-run --config .wrangler.generated.toml
+      - run: pnpm exec wrangler deploy --dry-run --outdir /tmp/clawrouter-worker-dry-run --config .wrangler.generated.toml
+        timeout-minutes: 5
+        env:
+          WRANGLER_SEND_METRICS: "false"
