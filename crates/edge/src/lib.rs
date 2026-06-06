@@ -421,6 +421,39 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       white-space: pre-wrap;
       word-break: break-word;
     }
+    .requestPanel {
+      display: grid;
+      gap: 10px;
+    }
+    .requestTabs {
+      display: inline-flex;
+      width: fit-content;
+      max-width: 100%;
+      gap: 4px;
+      padding: 3px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: rgba(8, 9, 8, .44);
+    }
+    .requestTabs button {
+      min-height: 30px;
+      border-color: transparent;
+      border-radius: 999px;
+      background: transparent;
+      color: var(--muted);
+    }
+    .requestTabs button.active {
+      background: var(--ink);
+      color: var(--accent-ink);
+      border-color: var(--ink);
+    }
+    .requestPreview {
+      min-height: 238px;
+      max-height: 460px;
+      overflow: auto;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
     .metrics {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
@@ -693,6 +726,20 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         <div id="playgroundPreview"></div>
         <p class="hint">Calls use the proxy key above and go through the same policy, provider allowlist, budget preflight, and usage queue as production API traffic.</p>
       </div>
+      <div class="panel requestPanel">
+        <div class="actions">
+          <h2>Request</h2>
+          <div class="requestTabs" aria-label="request preview type">
+            <button type="button" class="active" data-request-mode="json">JSON</button>
+            <button type="button" data-request-mode="curl">curl</button>
+          </div>
+        </div>
+        <pre id="playgroundRequest" class="requestPreview">select a model to preview the request body.</pre>
+        <div class="actions">
+          <button type="button" class="ghost" data-copy-playground="json">Copy JSON</button>
+          <button type="button" class="ghost" data-copy-playground="curl">Copy curl</button>
+        </div>
+      </div>
       <div class="panel">
         <h2>Response</h2>
         <pre id="playgroundResult" class="result">select a model, enter a proxy key, and run a request.</pre>
@@ -796,7 +843,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       "/console": "dashboard",
       "/dashboard": "dashboard"
     })[window.location.pathname] || "dashboard";
-    const state = { view: initialView, service: null, session: null, providers: null, routes: null, admin: null };
+    const state = { view: initialView, service: null, session: null, providers: null, routes: null, admin: null, requestMode: "json" };
     const $ = (id) => document.getElementById(id);
     const status = (text, bad = false) => {
       $("status").textContent = text;
@@ -1094,6 +1141,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       const model = selectedPlaygroundModel();
       if (!model) {
         $("playgroundPreview").innerHTML = `<span class="status">no model route</span>`;
+        renderPlaygroundRequest();
         return;
       }
       const route = openaiRoutes().find((item) => item.provider === model.provider);
@@ -1104,6 +1152,46 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         row(["capabilities", capabilityPills(model.capabilities)]),
         row(["provider endpoints", (route?.endpoints || []).join(", ")])
       ]);
+      renderPlaygroundRequest();
+    }
+    function playgroundPayload() {
+      const endpoint = $("playgroundEndpoint").value;
+      const model = $("playgroundModel").value;
+      const prompt = $("playgroundPrompt").value;
+      const system = $("playgroundSystem").value.trim();
+      const maxTokens = optionalNumber($("playgroundMaxTokens").value);
+      const temperature = optionalDecimal($("playgroundTemperature").value);
+      return endpoint === "/v1/responses"
+        ? { model, input: prompt, instructions: system || undefined, max_output_tokens: maxTokens, temperature }
+        : { model, messages: [...(system ? [{ role: "system", content: system }] : []), { role: "user", content: prompt }], max_tokens: maxTokens, temperature };
+    }
+    function compactJson(value) {
+      return JSON.stringify(value, (key, item) => item === undefined ? undefined : item, 2);
+    }
+    function shellQuote(value) {
+      return `'${String(value).replace(/'/g, `'\\''`)}'`;
+    }
+    function playgroundCurl() {
+      const endpoint = $("playgroundEndpoint").value;
+      const url = `${window.location.origin}${endpoint}`;
+      return [
+        `curl ${shellQuote(url)} \\`,
+        `  -H "authorization: Bearer $CLAWROUTER_PROXY_KEY" \\`,
+        `  -H 'content-type: application/json' \\`,
+        `  -d ${shellQuote(compactJson(playgroundPayload()))}`
+      ].join("\n");
+    }
+    function renderPlaygroundRequest() {
+      document.querySelectorAll("[data-request-mode]").forEach((button) => button.classList.toggle("active", button.dataset.requestMode === state.requestMode));
+      if (!selectedPlaygroundModel()) {
+        $("playgroundRequest").textContent = "select a model to preview the request.";
+        return;
+      }
+      try {
+        $("playgroundRequest").textContent = state.requestMode === "curl" ? playgroundCurl() : compactJson(playgroundPayload());
+      } catch (error) {
+        $("playgroundRequest").textContent = error.message || String(error);
+      }
     }
     function fillKeyForm(key) {
       if (!key) return;
@@ -1183,15 +1271,11 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     async function runPlayground(event) {
       event.preventDefault();
       const endpoint = $("playgroundEndpoint").value;
-      const model = $("playgroundModel").value;
-      const prompt = $("playgroundPrompt").value;
-      const system = $("playgroundSystem").value.trim();
-      const maxTokens = optionalNumber($("playgroundMaxTokens").value);
-      const temperature = optionalDecimal($("playgroundTemperature").value);
+      if (!selectedPlaygroundModel()) {
+        throw new Error("select a model before running.");
+      }
+      const body = playgroundPayload();
       $("playgroundResult").textContent = "running...";
-      const body = endpoint === "/v1/responses"
-        ? { model, input: prompt, instructions: system || undefined, max_output_tokens: maxTokens, temperature }
-        : { model, messages: [...(system ? [{ role: "system", content: system }] : []), { role: "user", content: prompt }], max_tokens: maxTokens, temperature };
       const response = await api(endpoint, "proxy", {
         method: "POST",
         headers: { "content-type": "application/json" },
@@ -1240,6 +1324,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     $("modelSearch").addEventListener("input", renderPlaygroundOptions);
     $("playgroundModel").addEventListener("change", renderPlaygroundPreview);
     $("playgroundEndpoint").addEventListener("change", renderPlaygroundPreview);
+    ["playgroundMaxTokens", "playgroundTemperature", "playgroundSystem", "playgroundPrompt"].forEach((id) => $(id).addEventListener("input", renderPlaygroundRequest));
     $("keyForm").addEventListener("submit", (event) => saveKey(event).catch((error) => status(error.message || String(error), true)));
     $("accessUserForm").addEventListener("submit", (event) => saveAccessUser(event).catch((error) => status(error.message || String(error), true)));
     $("inspectKeyForm").addEventListener("submit", (event) => inspectKey(event).catch((error) => status(error.message || String(error), true)));
@@ -1283,6 +1368,38 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       }
       status("copied issued token");
     });
+    document.addEventListener("click", async (event) => {
+      const target = event.target instanceof Element ? event.target : null;
+      const modeButton = target?.closest("[data-request-mode]");
+      if (modeButton) {
+        state.requestMode = modeButton.dataset.requestMode;
+        renderPlaygroundRequest();
+        return;
+      }
+      const copyButton = target?.closest("[data-copy-playground]");
+      if (!copyButton) return;
+      if (!selectedPlaygroundModel()) {
+        status("select a model before copying", true);
+        return;
+      }
+      const value = copyButton.dataset.copyPlayground === "curl" ? playgroundCurl() : compactJson(playgroundPayload());
+      await copyText(value);
+      status(`copied ${copyButton.dataset.copyPlayground}`);
+    });
+    async function copyText(value) {
+      if (navigator.clipboard) {
+        await navigator.clipboard.writeText(value);
+        return;
+      }
+      const scratch = document.createElement("textarea");
+      scratch.value = value;
+      scratch.style.position = "fixed";
+      scratch.style.opacity = "0";
+      document.body.appendChild(scratch);
+      scratch.select();
+      document.execCommand("copy");
+      scratch.remove();
+    }
     syncView();
     refresh();
   </script>
