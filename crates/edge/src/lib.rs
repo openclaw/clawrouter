@@ -30,25 +30,30 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
   <style>
     :root {
       color-scheme: light;
-      --bg: #f6f5ef;
-      --ink: #151515;
-      --muted: #69675f;
-      --line: #d8d3c5;
-      --panel: #ffffff;
-      --accent: #0f766e;
-      --accent-2: #a33b20;
-      --soft: #eef7f5;
+      --bg: #f5f3ea;
+      --ink: #171713;
+      --muted: #69685f;
+      --faint: #918f84;
+      --line: #d9d4c4;
+      --line-strong: #b8b09d;
+      --panel: #fffdf7;
+      --panel-2: #ebe7da;
+      --accent: #0d6f65;
+      --accent-ink: #f7fffc;
+      --warn: #a33b20;
+      --shadow: 0 14px 34px rgba(44, 38, 25, .08);
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-family: Avenir Next, Avenir, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background: var(--bg);
       color: var(--ink);
+      line-height: 1.45;
     }
     header {
       border-bottom: 1px solid var(--line);
-      background: #fffaf0;
+      background: linear-gradient(180deg, #fffaf0 0%, #fbf7eb 100%);
     }
     .wrap {
       width: min(1180px, calc(100vw - 32px));
@@ -59,38 +64,87 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
       align-items: center;
       justify-content: space-between;
       gap: 16px;
-      min-height: 86px;
+      min-height: 94px;
+      padding: 18px 0;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: 13px;
+      min-width: 0;
+    }
+    .brandmark {
+      width: 42px;
+      height: 42px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--line-strong);
+      border-radius: 8px;
+      background: var(--ink);
+      color: #f5ead3;
+      font-weight: 800;
+    }
+    .eyebrow {
+      margin: 0 0 4px;
+      color: var(--accent);
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .08em;
     }
     h1 { margin: 0; font-size: 28px; line-height: 1; }
     h2 { margin: 0 0 14px; font-size: 15px; text-transform: uppercase; letter-spacing: .06em; }
     p { margin: 6px 0 0; color: var(--muted); }
-    nav { display: flex; gap: 8px; flex-wrap: wrap; }
+    nav {
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+      padding: 4px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(255, 253, 247, .72);
+    }
     button, input, select {
       font: inherit;
       border: 1px solid var(--line);
       border-radius: 8px;
-      background: #fff;
+      background: #fffdf8;
       color: var(--ink);
     }
     button {
       min-height: 38px;
-      padding: 0 13px;
+      padding: 0 12px;
       cursor: pointer;
+      transition: background .16s ease, border-color .16s ease, color .16s ease, transform .16s ease;
+    }
+    button:hover { transform: translateY(-1px); border-color: var(--line-strong); }
+    nav button {
+      border-color: transparent;
+      background: transparent;
     }
     button.active, button.primary {
       background: var(--accent);
-      color: white;
+      color: var(--accent-ink);
       border-color: var(--accent);
     }
-    main { padding: 24px 0 36px; }
+    main { padding: 20px 0 36px; }
     .toolbar {
       display: grid;
       grid-template-columns: 1fr 1fr auto;
       gap: 10px;
-      margin-bottom: 18px;
+      align-items: end;
+      margin-bottom: 10px;
+      padding: 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: rgba(255, 253, 247, .62);
     }
-    label { display: grid; gap: 5px; color: var(--muted); font-size: 12px; }
+    label { display: grid; gap: 5px; color: var(--muted); font-size: 12px; font-weight: 650; }
     input, select { min-height: 38px; padding: 0 10px; width: 100%; }
+    input:focus-visible, button:focus-visible {
+      outline: 2px solid color-mix(in oklch, var(--accent), white 32%);
+      outline-offset: 2px;
+    }
     .grid {
       display: grid;
       grid-template-columns: repeat(12, 1fr);
@@ -103,6 +157,8 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
       border-radius: 8px;
       padding: 16px;
       min-width: 0;
+      overflow-x: auto;
+      box-shadow: var(--shadow);
     }
     .wide { grid-column: 1 / -1; }
     .metrics {
@@ -113,15 +169,16 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
     .metric {
       border: 1px solid var(--line);
       border-radius: 8px;
-      padding: 12px;
-      background: var(--soft);
+      padding: 13px 14px;
+      background: var(--panel-2);
     }
     .metric strong { display: block; font-size: 23px; line-height: 1.1; }
-    .metric span { color: var(--muted); font-size: 12px; }
+    .metric span { color: var(--muted); font-size: 12px; font-weight: 650; }
     table {
       width: 100%;
       border-collapse: collapse;
       font-size: 13px;
+      min-width: 520px;
     }
     th, td {
       padding: 9px 8px;
@@ -137,24 +194,47 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
       padding: 2px 5px;
       word-break: break-word;
     }
-    .status { color: var(--muted); font-size: 13px; }
-    .bad { color: var(--accent-2); }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      margin: 0 0 16px;
+      padding: 0 9px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--panel);
+      color: var(--muted);
+      font-size: 13px;
+    }
+    .bad { color: var(--warn); border-color: color-mix(in oklch, var(--warn), white 50%); }
     .hidden { display: none; }
     @media (max-width: 820px) {
       .top, .toolbar { grid-template-columns: 1fr; display: grid; }
+      .brand { align-items: flex-start; }
+      nav { width: 100%; }
+      nav button { flex: 1 1 46%; }
       .panel { grid-column: 1 / -1; }
       .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+    @media (max-width: 520px) {
+      .wrap { width: min(100vw - 20px, 1180px); }
+      .metrics { grid-template-columns: 1fr; }
+      .brandmark { display: none; }
     }
   </style>
 </head>
 <body>
   <header>
     <div class="wrap top">
-      <div>
-        <h1>ClawRouter</h1>
-        <p>Provider routing, Cloudflare Access admin sessions, proxy keys, tenant budgets, and account usage.</p>
+      <div class="brand">
+        <div class="brandmark">CR</div>
+        <div>
+          <p class="eyebrow">edge control plane</p>
+          <h1>ClawRouter</h1>
+          <p>Provider routing, admin sessions, proxy keys, tenant budgets, and usage.</p>
+        </div>
       </div>
-      <nav>
+      <nav aria-label="console views">
         <button data-view="dashboard" class="active">Dashboard</button>
         <button data-view="admin">Admin</button>
         <button data-view="account">Account</button>
