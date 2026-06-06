@@ -26,6 +26,9 @@ console.log("Set these as GitHub Actions secrets before workflow deploy:");
 console.log("CLOUDFLARE_API_TOKEN=<redacted>");
 console.log("CLOUDFLARE_ACCOUNT_ID=<account id>");
 console.log(`CLAWROUTER_POLICY_KV_ID=${parsed.id}`);
+console.log("");
+console.log("Then provision the Cloudflare Access gate for the browser console:");
+console.log("pnpm cf:access");
 
 function run(command, args, options = {}) {
   const result = spawnSync(command, args, {

@@ -20,6 +20,7 @@ const CORS_ALLOW_ORIGIN: &str = "*";
 const CORS_ALLOW_METHODS: &str = "GET,POST,PUT,OPTIONS";
 const CORS_ALLOW_HEADERS: &str = "authorization,content-type,x-request-id";
 const CORS_MAX_AGE: &str = "600";
+const ROOT_REDIRECT_PATH: &str = "/dashboard";
 type HmacSha256 = Hmac<Sha256>;
 const INTERFACE_HTML: &str = r##"<!doctype html>
 <html lang="en">
@@ -760,7 +761,7 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         return cors_preflight();
     }
     if req.method() == Method::Get && request_path == "/" {
-        return protected_interface_shell(req.headers(), &env).await;
+        return redirect_to(ROOT_REDIRECT_PATH);
     }
     if req.method() == Method::Get && url.path() == "/v1" {
         return service_index().and_then(with_cors);
@@ -901,6 +902,15 @@ async fn protected_interface_shell(headers: &Headers, env: &Env) -> Result<Respo
 
 fn interface_shell() -> Result<Response> {
     let mut response = Response::from_html(INTERFACE_HTML)?;
+    response
+        .headers_mut()
+        .set("cache-control", "no-store, max-age=0")?;
+    Ok(response)
+}
+
+fn redirect_to(location: &str) -> Result<Response> {
+    let mut response = Response::empty()?.with_status(302);
+    response.headers_mut().set("location", location)?;
     response
         .headers_mut()
         .set("cache-control", "no-store, max-age=0")?;
@@ -4547,6 +4557,11 @@ mod tests {
         assert!(interface_path("/account"));
         assert!(interface_path("/routes"));
         assert!(!interface_path("/v1/admin/keys"));
+    }
+
+    #[test]
+    fn root_redirect_points_to_dashboard() {
+        assert_eq!(ROOT_REDIRECT_PATH, "/dashboard");
     }
 
     #[test]

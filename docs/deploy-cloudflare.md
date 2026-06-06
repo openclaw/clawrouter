@@ -21,6 +21,43 @@ Authenticate Wrangler first, then create the runtime resources:
 pnpm cf:provision
 ```
 
+Protect the browser console with Cloudflare Access before treating the custom
+domain as ready:
+
+```sh
+export CLOUDFLARE_ACCOUNT_ID=...
+export CLOUDFLARE_API_TOKEN=... # must be able to manage Zero Trust Access apps/policies
+export CLAWROUTER_ACCESS_ALLOWED_DOMAINS=openclaw.ai
+export CLAWROUTER_ACCESS_ADMIN_EMAILS=you@example.com
+pnpm cf:access
+```
+
+`pnpm cf:access` creates or updates a self-hosted Access application for the
+console and session/admin paths on `clawrouter.openclaw.ai`, installs an allow
+policy, and prints the
+`CLAWROUTER_ACCESS_TEAM_DOMAIN` and `CLAWROUTER_ACCESS_AUD` values that the
+Worker uses to verify Access JWTs. Add `-- --dry-run` to inspect the plan
+without calling Cloudflare, or `-- --set-github-vars` to write the non-secret
+GitHub Actions variables after provisioning.
+`CLAWROUTER_ACCESS_ALLOWED_*` controls who can pass Cloudflare Access;
+`CLAWROUTER_ACCESS_ADMIN_*` controls who is an admin inside ClawRouter.
+`CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS` creates a separate Service Auth
+(`non_identity`) policy for automation. The default path-scoped Access
+destinations are
+`/dashboard`, `/playground`, `/admin`, `/account`, `/routes`, `/console`,
+`/v1/session`, `/v1/me`, `/v1/usage`, `/v1/admin/*`, and matching `/api/*`
+aliases; override them with `CLAWROUTER_ACCESS_PATHS` only if the API contract
+changes.
+Set `CLAWROUTER_ACCESS_IDP_IDS` to one identity provider to enable automatic
+redirect to that provider; otherwise Access shows its normal login selector.
+When `-- --set-github-vars` is used, managed admin variables are deleted from
+GitHub if the corresponding local admin list is empty.
+
+For safety, provisioning refuses to report success when the target Access
+application already has extra policies, because a stale broad policy could keep
+granting access. Remove the extra policies first, or set
+`CLAWROUTER_ACCESS_KEEP_EXTRA_POLICIES=1` when those policies are intentional.
+
 Set these GitHub Actions secrets for workflow deploys:
 
 ```text
@@ -137,17 +174,25 @@ proxy smoke key with access to every selected provider.
 
 ## Cloudflare Access Console
 
-Protect the Worker route with a Cloudflare Access application, then set
+Protect the Worker route with a Cloudflare Access application. Use
+`pnpm cf:access` for the standard `clawrouter.openclaw.ai` route, then set
 `CLAWROUTER_ACCESS_TEAM_DOMAIN` to the team domain and `CLAWROUTER_ACCESS_AUD`
-to the Access application audience tag. ClawRouter verifies the
-`cf-access-jwt-assertion` signature against the team certs endpoint before it
-trusts the email or role.
+to the Access application audience tag before deploying. ClawRouter verifies
+the `cf-access-jwt-assertion` signature against the team certs endpoint before
+it trusts the email or role.
 
-The browser console is fail-closed in the Worker. `/`, `/dashboard`,
-`/playground`, `/admin`, `/account`, `/routes`, and `/console` only render after
-a verified Cloudflare Access session. Public and client-facing surfaces stay
-under the API paths such as `/v1`, `/v1/health`, `/v1/providers`, `/v1/routes`,
-and proxy endpoints.
+The browser console is fail-closed in the Worker. `/` redirects to
+`/dashboard`; `/dashboard`, `/playground`, `/admin`, `/account`, `/routes`, and
+`/console` only render after a verified Cloudflare Access session. Public and
+client-facing surfaces stay under the API paths such as `/v1`, `/v1/health`,
+`/v1/providers`, `/v1/routes`, and proxy endpoints.
+
+After Access is configured, an unauthenticated request to `/` should be handled
+by the Worker with a redirect to `/dashboard`, and `/dashboard` should be
+handled by Cloudflare Access before it reaches the Worker. A raw `401` JSON
+response with `access_session_required` on `/dashboard` means the Access
+application is not protecting the console path or the Worker was deployed
+without the Access team/AUD vars.
 
 Access users are `user` by default. Admins are resolved from
 `access/users/<email>` in `POLICY_KV`, then from `CLAWROUTER_ACCESS_ADMIN_EMAILS`

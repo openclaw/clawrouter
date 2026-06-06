@@ -50,6 +50,23 @@ It checks Wrangler auth, required GitHub Actions secret names, local deploy env,
 provider binding coverage, and the all-provider smoke plan without printing
 secret values.
 
+The browser console is meant to sit behind Cloudflare Access. Provision that
+edge gate with:
+
+```sh
+CLOUDFLARE_ACCOUNT_ID=... \
+CLOUDFLARE_API_TOKEN=... \
+CLAWROUTER_ACCESS_ALLOWED_DOMAINS=openclaw.ai \
+CLAWROUTER_ACCESS_ADMIN_EMAILS=you@example.com \
+pnpm cf:access
+```
+
+Then redeploy with the printed `CLAWROUTER_ACCESS_TEAM_DOMAIN` and
+`CLAWROUTER_ACCESS_AUD` values. `/` redirects to the Access-protected
+`/dashboard` path, while public `/v1` catalog and proxy routes stay normal. A
+ClawRouter `access_session_required` JSON body on `/dashboard` means the Access
+app is not in front of the console path yet.
+
 ## Edge Proxy
 
 The Worker currently exposes:
