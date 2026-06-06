@@ -360,8 +360,13 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     let url = req.url()?;
-    if req.method() == Method::Options && cors_enabled_path(url.path()) {
+    let request_path = url.path().to_string();
+    let api_path = canonical_api_path(&request_path);
+    if req.method() == Method::Options && cors_enabled_path(&api_path) {
         return cors_preflight();
+    }
+    if req.method() == Method::Get && request_path == "/" && accepts_html(req.headers())? {
+        return interface_shell();
     }
     if req.method() == Method::Get && matches!(url.path(), "/" | "/v1") {
         return service_index().and_then(with_cors);
@@ -383,21 +388,21 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         return Response::from_json(&snapshot).and_then(with_cors);
     }
 
-    if req.method() == Method::Get && url.path() == "/v1/routes" {
+    if req.method() == Method::Get && api_path == "/v1/routes" {
         let snapshot = provider_snapshot()?;
         return Response::from_json(&route_catalog(&snapshot)).and_then(with_cors);
     }
 
-    if req.method() == Method::Get && url.path() == "/v1/me" {
+    if req.method() == Method::Get && api_path == "/v1/me" {
         return user_profile(req.headers(), &env).await.and_then(with_cors);
     }
 
-    if req.method() == Method::Get && url.path() == "/v1/usage" {
+    if req.method() == Method::Get && api_path == "/v1/usage" {
         return user_usage(req.headers(), &env).await.and_then(with_cors);
     }
 
-    if url.path().starts_with("/v1/admin/") {
-        return admin_api(req, env, url.path()).await.and_then(with_cors);
+    if api_path.starts_with("/v1/admin/") {
+        return admin_api(req, env, &api_path).await.and_then(with_cors);
     }
 
     if url.path() == "/v1/key/inspect" {
@@ -429,6 +434,7 @@ fn service_index() -> Result<Response> {
         "service": "clawrouter-edge",
         "runtime": "rust-wasm",
         "interface": {
+            "root": "/",
             "dashboard": "/dashboard",
             "admin": "/admin",
             "account": "/account"
@@ -444,6 +450,12 @@ fn service_index() -> Result<Response> {
             "adminUsers": "/v1/admin/users",
             "adminUsage": "/v1/admin/usage",
             "adminKeys": "/v1/admin/keys",
+            "apiAliases": {
+                "routes": ["/api/route", "/api/routes"],
+                "me": "/api/me",
+                "usage": "/api/usage",
+                "admin": "/api/admin/*"
+            },
             "openaiCompatible": [
                 "/v1/chat/completions",
                 "/v1/responses",
@@ -459,6 +471,23 @@ fn interface_path(path: &str) -> bool {
         path,
         "/dashboard" | "/admin" | "/account" | "/console" | "/routes"
     )
+}
+
+fn accepts_html(headers: &Headers) -> Result<bool> {
+    let accept = headers.get("accept")?.unwrap_or_default();
+    Ok(accept
+        .split(',')
+        .any(|value| value.trim().starts_with("text/html")))
+}
+
+fn canonical_api_path(path: &str) -> String {
+    match path {
+        "/api/route" | "/api/routes" => "/v1/routes".to_string(),
+        "/api/me" => "/v1/me".to_string(),
+        "/api/usage" => "/v1/usage".to_string(),
+        _ if path.starts_with("/api/admin/") => format!("/v1{}", path.trim_start_matches("/api")),
+        _ => path.to_string(),
+    }
 }
 
 fn interface_shell() -> Result<Response> {
@@ -3499,6 +3528,19 @@ mod tests {
         assert!(interface_path("/account"));
         assert!(interface_path("/routes"));
         assert!(!interface_path("/v1/admin/keys"));
+    }
+
+    #[test]
+    fn api_aliases_map_to_canonical_v1_routes() {
+        assert_eq!(canonical_api_path("/api/route"), "/v1/routes");
+        assert_eq!(canonical_api_path("/api/routes"), "/v1/routes");
+        assert_eq!(canonical_api_path("/api/me"), "/v1/me");
+        assert_eq!(canonical_api_path("/api/usage"), "/v1/usage");
+        assert_eq!(
+            canonical_api_path("/api/admin/overview"),
+            "/v1/admin/overview"
+        );
+        assert_eq!(canonical_api_path("/v1/providers"), "/v1/providers");
     }
 
     #[test]

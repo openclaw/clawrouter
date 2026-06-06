@@ -9,10 +9,16 @@ const baseUrl = required(process.env.CLAWROUTER_BASE_URL, "CLAWROUTER_BASE_URL")
 const smokeKey = process.env.CLAWROUTER_SMOKE_KEY;
 
 await expectOk(`${baseUrl}/v1/health`, "health");
+await expectHtml(`${baseUrl}/`, "root console");
+await expectHtml(`${baseUrl}/dashboard`, "dashboard console");
 const providers = await expectOk(`${baseUrl}/v1/providers`, "providers");
 if (!Array.isArray(providers.providers) || providers.providers.length < 20) {
   throw new Error("provider snapshot is unexpectedly small");
 }
+const routes = await expectOk(`${baseUrl}/v1/routes`, "route catalog");
+expectRouteCatalog(routes, "route catalog");
+const aliasedRoutes = await expectOk(`${baseUrl}/api/route`, "route catalog alias");
+expectRouteCatalog(aliasedRoutes, "route catalog alias");
 const plan = buildProviderSmokePlan(providers);
 if (plan.targetCount !== plan.providerCount) {
   throw new Error(`provider smoke plan is incomplete: ${plan.targetCount}/${plan.providerCount}`);
@@ -45,6 +51,33 @@ async function expectOk(url, name) {
     throw new Error(`${name} failed with ${response.status}`);
   }
   return response.json();
+}
+
+async function expectHtml(url, name) {
+  const response = await fetch(url, { headers: { accept: "text/html" } });
+  if (!response.ok) {
+    throw new Error(`${name} failed with ${response.status}`);
+  }
+  const contentType = response.headers.get("content-type") ?? "";
+  if (!contentType.includes("text/html")) {
+    throw new Error(`${name} returned ${contentType || "no content-type"}, expected text/html`);
+  }
+  const body = await response.text();
+  if (!body.includes("ClawRouter")) {
+    throw new Error(`${name} did not return the ClawRouter console`);
+  }
+}
+
+function expectRouteCatalog(catalog, name) {
+  if (!Array.isArray(catalog.openaiCompatible) || catalog.openaiCompatible.length === 0) {
+    throw new Error(`${name} is missing OpenAI-compatible routes`);
+  }
+  if (!Array.isArray(catalog.manifestProxy) || catalog.manifestProxy.length === 0) {
+    throw new Error(`${name} is missing manifest proxy routes`);
+  }
+  if (!catalog.manifestProxy.some((route) => route.route === "/v1/proxy/tavily/search")) {
+    throw new Error(`${name} is missing the Tavily manifest route`);
+  }
 }
 
 function required(value, name) {
