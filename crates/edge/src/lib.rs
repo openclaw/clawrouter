@@ -29,34 +29,45 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
   <title>ClawRouter Console</title>
   <style>
     :root {
-      color-scheme: light;
-      --bg: #f5f3ea;
-      --ink: #171713;
-      --muted: #69685f;
-      --faint: #918f84;
-      --line: #d9d4c4;
-      --line-strong: #b8b09d;
-      --panel: #fffdf7;
-      --panel-2: #ebe7da;
-      --accent: #0d6f65;
-      --accent-ink: #f7fffc;
-      --warn: #a33b20;
-      --shadow: 0 14px 34px rgba(44, 38, 25, .08);
+      color-scheme: dark;
+      --bg: #080908;
+      --surface: #0d0f0e;
+      --surface-2: #121614;
+      --surface-3: #171d1a;
+      --ink: #f2f4ef;
+      --muted: #a3aaa1;
+      --faint: #6e766f;
+      --line: #242b27;
+      --line-strong: #39423d;
+      --accent: #e7f8c8;
+      --accent-soft: #243323;
+      --accent-ink: #10140e;
+      --warn: #ff8b68;
+      --shadow: 0 18px 54px rgba(0, 0, 0, .34);
     }
     * { box-sizing: border-box; }
     body {
       margin: 0;
-      font-family: Avenir Next, Avenir, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      background: var(--bg);
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background:
+        linear-gradient(rgba(255,255,255,.025) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(255,255,255,.025) 1px, transparent 1px),
+        radial-gradient(circle at 75% -15%, rgba(231, 248, 200, .10), transparent 34%),
+        var(--bg);
+      background-size: 34px 34px, 34px 34px, auto, auto;
       color: var(--ink);
       line-height: 1.45;
     }
     header {
       border-bottom: 1px solid var(--line);
-      background: linear-gradient(180deg, #fffaf0 0%, #fbf7eb 100%);
+      background: rgba(8, 9, 8, .88);
+      backdrop-filter: blur(18px);
+      position: sticky;
+      top: 0;
+      z-index: 2;
     }
     .wrap {
-      width: min(1180px, calc(100vw - 32px));
+      width: min(1240px, calc(100vw - 32px));
       margin: 0 auto;
     }
     .top {
@@ -64,8 +75,8 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
       align-items: center;
       justify-content: space-between;
       gap: 16px;
-      min-height: 94px;
-      padding: 18px 0;
+      min-height: 74px;
+      padding: 14px 0;
     }
     .brand {
       display: flex;
@@ -78,37 +89,38 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
       height: 42px;
       display: grid;
       place-items: center;
-      border: 1px solid var(--line-strong);
-      border-radius: 8px;
-      background: var(--ink);
-      color: #f5ead3;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      background: linear-gradient(180deg, var(--surface-3), var(--surface));
+      color: var(--accent);
       font-weight: 800;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
     }
     .eyebrow {
       margin: 0 0 4px;
-      color: var(--accent);
+      color: var(--faint);
       font-size: 11px;
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: .08em;
     }
-    h1 { margin: 0; font-size: 28px; line-height: 1; }
-    h2 { margin: 0 0 14px; font-size: 15px; text-transform: uppercase; letter-spacing: .06em; }
+    h1 { margin: 0; font-size: 24px; line-height: 1; letter-spacing: 0; }
+    h2 { margin: 0 0 14px; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
     p { margin: 6px 0 0; color: var(--muted); }
     nav {
       display: flex;
       gap: 4px;
       flex-wrap: wrap;
-      padding: 4px;
+      padding: 3px;
       border: 1px solid var(--line);
-      border-radius: 10px;
-      background: rgba(255, 253, 247, .72);
+      border-radius: 999px;
+      background: var(--surface);
     }
     button, input, select {
       font: inherit;
       border: 1px solid var(--line);
       border-radius: 8px;
-      background: #fffdf8;
+      background: var(--surface-2);
       color: var(--ink);
     }
     button {
@@ -121,28 +133,31 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
     nav button {
       border-color: transparent;
       background: transparent;
+      color: var(--muted);
+      border-radius: 999px;
     }
     button.active, button.primary {
-      background: var(--accent);
+      background: var(--ink);
       color: var(--accent-ink);
-      border-color: var(--accent);
+      border-color: var(--ink);
     }
-    main { padding: 20px 0 36px; }
+    main { padding: 18px 0 42px; }
     .toolbar {
       display: grid;
       grid-template-columns: 1fr 1fr auto;
       gap: 10px;
       align-items: end;
-      margin-bottom: 10px;
-      padding: 12px;
+      margin-bottom: 12px;
+      padding: 10px;
       border: 1px solid var(--line);
-      border-radius: 10px;
-      background: rgba(255, 253, 247, .62);
+      border-radius: 12px;
+      background: rgba(13, 15, 14, .82);
+      box-shadow: var(--shadow);
     }
-    label { display: grid; gap: 5px; color: var(--muted); font-size: 12px; font-weight: 650; }
+    label { display: grid; gap: 5px; color: var(--faint); font-size: 12px; font-weight: 650; }
     input, select { min-height: 38px; padding: 0 10px; width: 100%; }
     input:focus-visible, button:focus-visible {
-      outline: 2px solid color-mix(in oklch, var(--accent), white 32%);
+      outline: 2px solid rgba(231, 248, 200, .34);
       outline-offset: 2px;
     }
     .grid {
@@ -152,9 +167,9 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
     }
     .panel {
       grid-column: span 6;
-      background: var(--panel);
+      background: linear-gradient(180deg, rgba(23, 29, 26, .92), rgba(13, 15, 14, .94));
       border: 1px solid var(--line);
-      border-radius: 8px;
+      border-radius: 12px;
       padding: 16px;
       min-width: 0;
       overflow-x: auto;
@@ -168,12 +183,12 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
     }
     .metric {
       border: 1px solid var(--line);
-      border-radius: 8px;
+      border-radius: 10px;
       padding: 13px 14px;
-      background: var(--panel-2);
+      background: var(--surface);
     }
-    .metric strong { display: block; font-size: 23px; line-height: 1.1; }
-    .metric span { color: var(--muted); font-size: 12px; font-weight: 650; }
+    .metric strong { display: block; font-size: 25px; line-height: 1.1; letter-spacing: 0; }
+    .metric span { color: var(--faint); font-size: 12px; font-weight: 650; }
     table {
       width: 100%;
       border-collapse: collapse;
@@ -181,18 +196,20 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
       min-width: 520px;
     }
     th, td {
-      padding: 9px 8px;
+      padding: 10px 8px;
       border-bottom: 1px solid var(--line);
       text-align: left;
       vertical-align: top;
     }
-    th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+    tbody tr:hover { background: rgba(231, 248, 200, .035); }
+    th { color: var(--faint); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
     code {
-      background: #f1efe6;
+      background: #0a0d0b;
       border: 1px solid var(--line);
       border-radius: 6px;
       padding: 2px 5px;
       word-break: break-word;
+      color: #dbeec8;
     }
     .status {
       display: inline-flex;
@@ -202,7 +219,7 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
       padding: 0 9px;
       border: 1px solid var(--line);
       border-radius: 999px;
-      background: var(--panel);
+      background: var(--surface);
       color: var(--muted);
       font-size: 13px;
     }
@@ -229,9 +246,9 @@ const INTERFACE_HTML: &str = r#"<!doctype html>
       <div class="brand">
         <div class="brandmark">CR</div>
         <div>
-          <p class="eyebrow">edge control plane</p>
+          <p class="eyebrow">gateway console</p>
           <h1>ClawRouter</h1>
-          <p>Provider routing, admin sessions, proxy keys, tenant budgets, and usage.</p>
+          <p>Model routing, proxy keys, tenant budgets, and usage controls.</p>
         </div>
       </div>
       <nav aria-label="console views">
