@@ -346,7 +346,9 @@ function defaultAccessPaths() {
 function normalizeAccessPath(value) {
   const path = value.trim();
   if (!path || path === "/") {
-    throw new Error("do not protect bare / with Cloudflare Access; root redirects to /dashboard");
+    throw new Error(
+      "do not protect / with Cloudflare Access on the API hostname; root redirects to /dashboard, and /dashboard is Access-protected",
+    );
   }
   return path.startsWith("/") ? path : `/${path}`;
 }
@@ -415,6 +417,7 @@ function printPlan({ app, policies, teamDomain, aud, created, updated }) {
   console.log("");
   console.log("Expected live root check after redeploy:");
   console.log(`curl -sS -D - -o /dev/null https://${host}/`);
+  console.log("Root should 302 to /dashboard; Cloudflare Access should challenge /dashboard.");
 }
 
 function syncGitHubVariable(repoName, name, value) {
