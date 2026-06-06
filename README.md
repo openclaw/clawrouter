@@ -83,10 +83,10 @@ Flip `enabled` to `false` to revoke a key without rotating upstream provider
 credentials. See `docs/deploy-cloudflare.md` for Cloudflare provisioning,
 deployment, key registration, and smoke commands.
 
-Admin endpoints require `Authorization: Bearer <admin-token>` and compare that
-token to the configured `CLAWROUTER_ADMIN_TOKEN_SHA256` hash. The TypeScript
-admin UI hashes generated proxy key secrets in-browser before storing policy in
-`POLICY_KV`.
+Admin endpoints accept a verified Cloudflare Access admin session or
+`Authorization: Bearer <admin-token>` against `CLAWROUTER_ADMIN_TOKEN_SHA256`.
+The TypeScript admin UI hashes generated proxy key secrets in-browser before
+storing policy in `POLICY_KV`.
 
 Generic REST/tool proxy requests are manifest-driven:
 

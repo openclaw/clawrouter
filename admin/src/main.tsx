@@ -30,6 +30,14 @@ interface KeyListResponse {
   keys: KeyPolicy[];
 }
 
+interface SessionResponse {
+  authenticated: boolean;
+  auth: string;
+  role: "admin" | "user";
+  email?: string | null;
+  tenantId?: string | null;
+}
+
 interface AdminForm {
   kid: string;
   secret: string;
@@ -51,6 +59,7 @@ const defaultForm: AdminForm = {
 function App() {
   const [baseUrl, setBaseUrl] = useState(() => window.location.origin);
   const [adminToken, setAdminToken] = useState("");
+  const [session, setSession] = useState<SessionResponse | null>(null);
   const [providers, setProviders] = useState<ProviderRow[]>([]);
   const [keys, setKeys] = useState<KeyPolicy[]>([]);
   const [form, setForm] = useState<AdminForm>(defaultForm);
@@ -68,10 +77,12 @@ function App() {
   async function refresh() {
     try {
       setStatus("loading");
-      const [providerData, keyData] = await Promise.all([
+      const [sessionData, providerData, keyData] = await Promise.all([
+        request<SessionResponse>(baseUrl, "/v1/session"),
         request<ProviderResponse>(baseUrl, "/v1/providers"),
         request<KeyListResponse>(baseUrl, "/v1/admin/keys", adminToken),
       ]);
+      setSession(sessionData);
       setProviders(providerData.providers);
       setKeys(keyData.keys);
       setStatus("loaded");
@@ -154,7 +165,9 @@ function App() {
           <h1>ClawRouter</h1>
           <p>Provider keys, OAuth grants, budgets, and service routing.</p>
         </div>
-        <span className="role">admin</span>
+        <span className="role">
+          {session?.authenticated ? `${session.role} · ${session.email ?? "access"}` : "not signed in"}
+        </span>
       </header>
 
       <section className="controls" aria-label="connection">
@@ -163,7 +176,7 @@ function App() {
           <input value={baseUrl} onChange={(event) => setBaseUrl(event.target.value)} />
         </label>
         <label>
-          <span>admin token</span>
+          <span>admin token fallback</span>
           <input
             value={adminToken}
             onChange={(event) => setAdminToken(event.target.value)}
@@ -339,7 +352,11 @@ async function request<T>(
   if (adminToken) {
     headers.set("authorization", `Bearer ${adminToken}`);
   }
-  const response = await fetch(`${baseUrl.replace(/\/$/, "")}${path}`, { ...init, headers });
+  const response = await fetch(`${baseUrl.replace(/\/$/, "")}${path}`, {
+    ...init,
+    credentials: "same-origin",
+    headers,
+  });
   if (!response.ok) {
     const text = await response.text();
     throw new Error(text || `${path} failed with ${response.status}`);

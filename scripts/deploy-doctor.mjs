@@ -27,7 +27,15 @@ const optionalRepoSecrets = [
   "CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY",
 ];
 
-const optionalRepoVars = ["CLAWROUTER_USAGE_QUEUE", "CLAWROUTER_WORKER_NAME"];
+const optionalRepoVars = [
+  "CLAWROUTER_USAGE_QUEUE",
+  "CLAWROUTER_WORKER_NAME",
+  "CLAWROUTER_ACCESS_TEAM_DOMAIN",
+  "CLAWROUTER_ACCESS_AUD",
+  "CLAWROUTER_ACCESS_ADMIN_EMAILS",
+  "CLAWROUTER_ACCESS_ADMIN_DOMAINS",
+  "CLAWROUTER_ACCESS_DEFAULT_TENANT",
+];
 const repo = process.env.CLAWROUTER_GITHUB_REPO ?? "openclaw/clawrouter";
 const githubCli = selectGitHubCli();
 const errors = [];

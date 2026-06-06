@@ -14,8 +14,9 @@ hmac = "0.12"
 js-sys = "0.3"
 serde_json.workspace = true
 serde.workspace = true
-sha2 = "0.10"
+sha2 = { version = "0.10", features = ["oid"] }
 wasm-bindgen = "0.2"
+wasm-bindgen-futures = "0.4"
 worker = { version = "0.8.3", features = ["queue"] }
 
 [build-dependencies]
