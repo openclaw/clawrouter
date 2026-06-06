@@ -17,6 +17,41 @@ on:
         required: false
         default: ""
         type: string
+      provision_access:
+        description: "Provision/update the Cloudflare Access console app before deploy"
+        required: false
+        default: false
+        type: boolean
+      access_domain:
+        description: "Hostname for the Cloudflare Access console app"
+        required: false
+        default: "clawrouter.openclaw.ai"
+        type: string
+      access_allowed_emails:
+        description: "Comma-separated emails allowed through Cloudflare Access"
+        required: false
+        default: ""
+        type: string
+      access_allowed_domains:
+        description: "Comma-separated email domains allowed through Cloudflare Access"
+        required: false
+        default: "openclaw.ai"
+        type: string
+      access_admin_emails:
+        description: "Comma-separated emails treated as ClawRouter admins"
+        required: false
+        default: ""
+        type: string
+      access_admin_domains:
+        description: "Comma-separated email domains treated as ClawRouter admins"
+        required: false
+        default: ""
+        type: string
+      access_idp_ids:
+        description: "Optional comma-separated Cloudflare Access identity provider ids"
+        required: false
+        default: ""
+        type: string
 
 jobs:
   deploy:
@@ -34,6 +69,9 @@ jobs:
       CLAWROUTER_ACCESS_ADMIN_EMAILS: ${{ vars.CLAWROUTER_ACCESS_ADMIN_EMAILS }}
       CLAWROUTER_ACCESS_ADMIN_DOMAINS: ${{ vars.CLAWROUTER_ACCESS_ADMIN_DOMAINS }}
       CLAWROUTER_ACCESS_DEFAULT_TENANT: ${{ vars.CLAWROUTER_ACCESS_DEFAULT_TENANT }}
+      CLAWROUTER_ACCESS_ALLOWED_EMAILS: ${{ inputs.access_allowed_emails }}
+      CLAWROUTER_ACCESS_ALLOWED_DOMAINS: ${{ inputs.access_allowed_domains }}
+      CLAWROUTER_ACCESS_IDP_IDS: ${{ inputs.access_idp_ids }}
       CLAWROUTER_BASE_URL: ${{ inputs.worker_url }}
       CLAWROUTER_SMOKE_KEY: ${{ secrets.CLAWROUTER_SMOKE_KEY }}
       CLAWROUTER_SMOKE_OPENAI: ${{ inputs.smoke_openai && '1' || '0' }}
@@ -54,6 +92,13 @@ jobs:
       - run: cargo test --workspace
       - run: pnpm --dir admin check
       - run: pnpm --dir admin build
+      - if: ${{ inputs.provision_access }}
+        env:
+          CLAWROUTER_ACCESS_DOMAIN: ${{ inputs.access_domain }}
+          CLAWROUTER_BASE_URL: ""
+          CLAWROUTER_ACCESS_ADMIN_EMAILS: ${{ inputs.access_admin_emails || vars.CLAWROUTER_ACCESS_ADMIN_EMAILS }}
+          CLAWROUTER_ACCESS_ADMIN_DOMAINS: ${{ inputs.access_admin_domains || vars.CLAWROUTER_ACCESS_ADMIN_DOMAINS }}
+        run: pnpm cf:access -- --write-github-env
       - run: pnpm cf:config
       - run: pnpm exec wrangler deploy --config .wrangler.generated.toml
       - if: ${{ inputs.worker_url != '' }}

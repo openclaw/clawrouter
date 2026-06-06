@@ -1,4 +1,6 @@
 import { spawnSync } from "node:child_process";
+import { randomUUID } from "node:crypto";
+import { appendFileSync } from "node:fs";
 
 const args = parseArgs(process.argv.slice(2));
 
@@ -39,6 +41,7 @@ const autoRedirect =
   (requestedAutoRedirect !== "0" && allowedIdps.length === 1);
 const repo = process.env.CLAWROUTER_GITHUB_REPO?.trim() || "openclaw/clawrouter";
 const setGitHubVars = Boolean(args["set-github-vars"]);
+const writeGitHubEnv = Boolean(args["write-github-env"]);
 const keepExtraPolicies = process.env.CLAWROUTER_ACCESS_KEEP_EXTRA_POLICIES === "1";
 
 const humanInclude = buildHumanPolicyInclude({
@@ -175,6 +178,16 @@ if (setGitHubVars) {
   syncGitHubVariable(repo, "CLAWROUTER_ACCESS_DEFAULT_TENANT", defaultTenant);
   syncGitHubVariable(repo, "CLAWROUTER_ACCESS_ADMIN_EMAILS", adminEmails.join(","));
   syncGitHubVariable(repo, "CLAWROUTER_ACCESS_ADMIN_DOMAINS", adminDomains.join(","));
+}
+
+if (writeGitHubEnv) {
+  writeGitHubEnvironment({
+    CLAWROUTER_ACCESS_TEAM_DOMAIN: teamDomain,
+    CLAWROUTER_ACCESS_AUD: aud,
+    CLAWROUTER_ACCESS_DEFAULT_TENANT: defaultTenant,
+    CLAWROUTER_ACCESS_ADMIN_EMAILS: adminEmails.join(","),
+    CLAWROUTER_ACCESS_ADMIN_DOMAINS: adminDomains.join(","),
+  });
 }
 
 printPlan({
@@ -436,4 +449,27 @@ function syncGitHubVariable(repoName, name, value) {
     }
     throw new Error(output);
   }
+}
+
+function writeGitHubEnvironment(values) {
+  const file = process.env.GITHUB_ENV;
+  if (!file) {
+    throw new Error("--write-github-env requires GITHUB_ENV");
+  }
+  const lines = [];
+  for (const [name, value] of Object.entries(values)) {
+    const delimiter = uniqueGitHubEnvDelimiter(value || "");
+    lines.push(`${name}<<${delimiter}`);
+    lines.push(value || "");
+    lines.push(delimiter);
+  }
+  appendFileSync(file, `${lines.join("\n")}\n`);
+}
+
+function uniqueGitHubEnvDelimiter(value) {
+  let delimiter = "";
+  do {
+    delimiter = `CLAWROUTER_ENV_${randomUUID().replaceAll("-", "_")}`;
+  } while (value.includes(delimiter));
+  return delimiter;
 }

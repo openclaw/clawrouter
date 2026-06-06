@@ -38,7 +38,9 @@ policy, and prints the
 `CLAWROUTER_ACCESS_TEAM_DOMAIN` and `CLAWROUTER_ACCESS_AUD` values that the
 Worker uses to verify Access JWTs. Add `-- --dry-run` to inspect the plan
 without calling Cloudflare, or `-- --set-github-vars` to write the non-secret
-GitHub Actions variables after provisioning.
+GitHub Actions variables after provisioning. In GitHub Actions,
+`-- --write-github-env` writes those same values into `GITHUB_ENV` so the
+current deploy job renders and deploys a Worker that can verify Access JWTs.
 `CLAWROUTER_ACCESS_ALLOWED_*` controls who can pass Cloudflare Access;
 `CLAWROUTER_ACCESS_ADMIN_*` controls who is an admin inside ClawRouter.
 `CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS` creates a separate Service Auth
@@ -80,6 +82,15 @@ CLAWROUTER_ACCESS_ADMIN_EMAILS        # comma-separated admin emails
 CLAWROUTER_ACCESS_ADMIN_DOMAINS       # optional comma-separated admin domains
 CLAWROUTER_ACCESS_DEFAULT_TENANT      # optional, defaults to default
 ```
+
+The `Deploy Cloudflare` workflow can provision Access and deploy in one run
+when `CLOUDFLARE_API_TOKEN` has Zero Trust Access application/policy
+permissions. Dispatch it with `provision_access=true`, set the allowlist inputs
+such as `access_allowed_domains=openclaw.ai`, set `access_domain` if the console
+host is not `clawrouter.openclaw.ai`, and optionally set `access_admin_emails`
+or `access_admin_domains`. The workflow runs
+`pnpm cf:access -- --write-github-env` before rendering the Wrangler config, so
+the newly created Access audience tag is included in the deployed Worker.
 
 Check the deploy surface without printing secret values:
 
