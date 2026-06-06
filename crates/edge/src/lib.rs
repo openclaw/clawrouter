@@ -438,7 +438,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       width: 100%;
       border-collapse: collapse;
       font-size: 13px;
-      min-width: 520px;
+      min-width: min(520px, 100%);
     }
     th, td {
       padding: 10px 8px;
@@ -517,6 +517,37 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       display: inline-block;
       max-width: 100%;
     }
+    .inlineForm {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: 8px;
+      align-items: end;
+    }
+    .inspectorSummary {
+      display: grid;
+      gap: 10px;
+    }
+    .verdict {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      border: 1px solid var(--line);
+      border-radius: 10px;
+      padding: 12px;
+      background: rgba(8, 9, 8, .42);
+    }
+    .verdict strong {
+      font-size: 18px;
+      overflow-wrap: anywhere;
+    }
+    .verdict span {
+      color: var(--faint);
+      font-size: 12px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+    }
     .hidden { display: none; }
     @media (max-width: 820px) {
       .wrap {
@@ -526,6 +557,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         margin-right: auto;
       }
       .top, .toolbar { grid-template-columns: 1fr; display: grid; }
+      .inlineForm { grid-template-columns: 1fr; }
       .consoleIntro { grid-template-columns: 1fr; }
       .brand { align-items: flex-start; }
       nav {
@@ -731,6 +763,14 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       </div>
     </section>
     <section id="account" class="view grid hidden">
+      <form id="inspectKeyForm" class="panel wide">
+        <h2>Inspect Proxy Key</h2>
+        <div class="inlineForm">
+          <label>Token<input id="inspectKeyInput" type="password" autocomplete="off" placeholder="paste a clawrouter-live key or use the toolbar proxy key"></label>
+          <button type="submit" class="primary">Inspect key</button>
+        </div>
+        <div id="keyInspection" class="inspectorSummary hint">paste a proxy key to verify registration, role, provider allowlist, and budget policy before sending traffic.</div>
+      </form>
       <div class="panel">
         <h2>Profile</h2>
         <div id="profile"></div>
@@ -957,6 +997,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     }
     async function renderAccount() {
       const [me, usage] = await Promise.all([api("/v1/me", "proxy"), api("/v1/usage", "proxy")]);
+      if (!$("inspectKeyInput").value.trim()) $("inspectKeyInput").value = $("proxyKey").value.trim();
       $("profile").innerHTML = table(["field", "value"], [
         row(["key", code(me.key.kid)]),
         row(["tenant", me.key.tenantId]),
@@ -972,6 +1013,36 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         row(["request cost", number(usage.key.requestCostMicros)]),
         row(["ledger", usage.budget.ledger])
       ]);
+    }
+    function renderKeyInspection(result) {
+      const verified = result.verified === true;
+      const registered = result.verification !== "unknown_proxy_key" && result.verification !== "policy_store_unavailable";
+      const enabled = result.enabled;
+      $("keyInspection").className = "inspectorSummary";
+      $("keyInspection").innerHTML = [
+        `<div class="verdict"><div><span>${esc(result.mode || "key")}</span><strong>${verified ? "verified" : registered ? "not verified" : "not registered"}</strong></div>${verified && enabled !== false ? `<span class="status good">usable</span>` : `<span class="status bad">${esc(result.verification || "invalid")}</span>`}</div>`,
+        table(["field", "value"], [
+          row(["key id", code(result.kid || "unknown")]),
+          row(["verification", result.verification || "unknown"]),
+          row(["enabled", result.enabled == null ? "unknown" : String(result.enabled)]),
+          row(["tenant", result.tenantId || "unknown"]),
+          row(["role", result.tokenRole || "custom"]),
+          row(["providers", raw((result.providers || []).map((id) => providerInline(id).html).join("") || `<span class="status">unknown</span>`)]),
+          row(["monthly budget", money(result.monthlyBudgetMicros)]),
+          row(["request cost", number(result.requestCostMicros)])
+        ])
+      ].join("");
+    }
+    async function inspectKey(event) {
+      event.preventDefault();
+      const token = $("inspectKeyInput").value.trim() || $("proxyKey").value.trim();
+      if (!token) throw new Error("paste a proxy key to inspect");
+      $("inspectKeyInput").value = token;
+      const result = await api("/v1/key/inspect", null, {
+        headers: { authorization: `Bearer ${token}` }
+      });
+      renderKeyInspection(result);
+      status(result.verified ? `verified ${result.kid}` : `inspection returned ${result.verification}`);
     }
     async function refresh() {
       try {
@@ -1171,6 +1242,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     $("playgroundEndpoint").addEventListener("change", renderPlaygroundPreview);
     $("keyForm").addEventListener("submit", (event) => saveKey(event).catch((error) => status(error.message || String(error), true)));
     $("accessUserForm").addEventListener("submit", (event) => saveAccessUser(event).catch((error) => status(error.message || String(error), true)));
+    $("inspectKeyForm").addEventListener("submit", (event) => inspectKey(event).catch((error) => status(error.message || String(error), true)));
     $("playgroundForm").addEventListener("submit", (event) => runPlayground(event).catch((error) => {
       $("playgroundResult").textContent = error.message || String(error);
       status(error.message || String(error), true);
