@@ -65,7 +65,8 @@ Then redeploy with the printed `CLAWROUTER_ACCESS_TEAM_DOMAIN` and
 `CLAWROUTER_ACCESS_AUD` values. `/` redirects to the Access-protected
 `/dashboard` path, while public `/v1` catalog and proxy routes stay normal. A
 ClawRouter `access_session_required` JSON body on `/dashboard` means the Access
-app is not in front of the console path yet.
+app is not in front of the console path yet, and `pnpm cf:smoke` treats that as
+a failed deployment smoke.
 
 ## Edge Proxy
 

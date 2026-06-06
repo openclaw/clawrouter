@@ -9,8 +9,8 @@ const baseUrl = required(process.env.CLAWROUTER_BASE_URL, "CLAWROUTER_BASE_URL")
 const smokeKey = process.env.CLAWROUTER_SMOKE_KEY;
 
 await expectOk(`${baseUrl}/v1/health`, "health");
-await expectHtml(`${baseUrl}/`, "root console");
-await expectHtml(`${baseUrl}/dashboard`, "dashboard console");
+await expectRedirect(`${baseUrl}/`, "root redirect", "/dashboard");
+await expectAccessGate(`${baseUrl}/dashboard`, "dashboard access gate");
 const providers = await expectOk(`${baseUrl}/v1/providers`, "providers");
 if (!Array.isArray(providers.providers) || providers.providers.length < 20) {
   throw new Error("provider snapshot is unexpectedly small");
@@ -19,10 +19,7 @@ const routes = await expectOk(`${baseUrl}/v1/routes`, "route catalog");
 expectRouteCatalog(routes, "route catalog");
 const aliasedRoutes = await expectOk(`${baseUrl}/api/route`, "route catalog alias");
 expectRouteCatalog(aliasedRoutes, "route catalog alias");
-const session = await expectOk(`${baseUrl}/v1/session`, "session");
-if (typeof session.authenticated !== "boolean" || typeof session.role !== "string") {
-  throw new Error("session response is missing authenticated/role fields");
-}
+await expectAccessGate(`${baseUrl}/v1/session`, "session access gate");
 const plan = buildProviderSmokePlan(providers);
 if (plan.targetCount !== plan.providerCount) {
   throw new Error(`provider smoke plan is incomplete: ${plan.targetCount}/${plan.providerCount}`);
@@ -57,19 +54,45 @@ async function expectOk(url, name) {
   return response.json();
 }
 
-async function expectHtml(url, name) {
-  const response = await fetch(url, { headers: { accept: "text/html" } });
-  if (!response.ok) {
-    throw new Error(`${name} failed with ${response.status}`);
+async function expectRedirect(url, name, location) {
+  const response = await fetch(url, { redirect: "manual" });
+  if (response.status < 300 || response.status >= 400) {
+    throw new Error(`${name} returned ${response.status}, expected redirect`);
   }
+  const actual = response.headers.get("location") ?? "";
+  if (actual !== location) {
+    throw new Error(`${name} redirected to ${actual || "<missing>"}, expected ${location}`);
+  }
+}
+
+async function expectAccessGate(url, name) {
+  const response = await fetch(url, {
+    headers: { accept: "text/html,application/json" },
+    redirect: "manual",
+  });
   const contentType = response.headers.get("content-type") ?? "";
-  if (!contentType.includes("text/html")) {
-    throw new Error(`${name} returned ${contentType || "no content-type"}, expected text/html`);
-  }
   const body = await response.text();
-  if (!body.includes("ClawRouter")) {
-    throw new Error(`${name} did not return the ClawRouter console`);
+  if (contentType.includes("application/json")) {
+    let json = null;
+    try {
+      json = JSON.parse(body);
+    } catch {}
+    if (json?.error?.code === "access_session_required") {
+      throw new Error(
+        `${name} reached ClawRouter's fallback 401; Cloudflare Access is not protecting the console path`,
+      );
+    }
   }
+  if (response.ok && contentType.includes("text/html") && body.includes("ClawRouter")) {
+    throw new Error(`${name} returned the ClawRouter console without Cloudflare Access`);
+  }
+  if (response.status >= 300 && response.status < 400) {
+    return;
+  }
+  if ((response.status === 401 || response.status === 403) && !body.includes("ClawRouter")) {
+    return;
+  }
+  throw new Error(`${name} returned ${response.status}, expected Cloudflare Access challenge`);
 }
 
 function expectRouteCatalog(catalog, name) {
