@@ -6,7 +6,7 @@ use hmac::{Hmac, Mac};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicU64, Ordering};
 use wasm_bindgen::JsValue;
 use worker::*;
@@ -19,6 +19,343 @@ const CORS_ALLOW_METHODS: &str = "GET,POST,PUT,OPTIONS";
 const CORS_ALLOW_HEADERS: &str = "authorization,content-type,x-request-id";
 const CORS_MAX_AGE: &str = "600";
 type HmacSha256 = Hmac<Sha256>;
+const INTERFACE_HTML: &str = r#"<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>ClawRouter Console</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --bg: #f6f5ef;
+      --ink: #151515;
+      --muted: #69675f;
+      --line: #d8d3c5;
+      --panel: #ffffff;
+      --accent: #0f766e;
+      --accent-2: #a33b20;
+      --soft: #eef7f5;
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0;
+      font-family: Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      background: var(--bg);
+      color: var(--ink);
+    }
+    header {
+      border-bottom: 1px solid var(--line);
+      background: #fffaf0;
+    }
+    .wrap {
+      width: min(1180px, calc(100vw - 32px));
+      margin: 0 auto;
+    }
+    .top {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 16px;
+      min-height: 86px;
+    }
+    h1 { margin: 0; font-size: 28px; line-height: 1; }
+    h2 { margin: 0 0 14px; font-size: 15px; text-transform: uppercase; letter-spacing: .06em; }
+    p { margin: 6px 0 0; color: var(--muted); }
+    nav { display: flex; gap: 8px; flex-wrap: wrap; }
+    button, input, select {
+      font: inherit;
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      background: #fff;
+      color: var(--ink);
+    }
+    button {
+      min-height: 38px;
+      padding: 0 13px;
+      cursor: pointer;
+    }
+    button.active, button.primary {
+      background: var(--accent);
+      color: white;
+      border-color: var(--accent);
+    }
+    main { padding: 24px 0 36px; }
+    .toolbar {
+      display: grid;
+      grid-template-columns: 1fr 1fr auto;
+      gap: 10px;
+      margin-bottom: 18px;
+    }
+    label { display: grid; gap: 5px; color: var(--muted); font-size: 12px; }
+    input, select { min-height: 38px; padding: 0 10px; width: 100%; }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(12, 1fr);
+      gap: 14px;
+    }
+    .panel {
+      grid-column: span 6;
+      background: var(--panel);
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 16px;
+      min-width: 0;
+    }
+    .wide { grid-column: 1 / -1; }
+    .metrics {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .metric {
+      border: 1px solid var(--line);
+      border-radius: 8px;
+      padding: 12px;
+      background: var(--soft);
+    }
+    .metric strong { display: block; font-size: 23px; line-height: 1.1; }
+    .metric span { color: var(--muted); font-size: 12px; }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+    th, td {
+      padding: 9px 8px;
+      border-bottom: 1px solid var(--line);
+      text-align: left;
+      vertical-align: top;
+    }
+    th { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+    code {
+      background: #f1efe6;
+      border: 1px solid var(--line);
+      border-radius: 6px;
+      padding: 2px 5px;
+      word-break: break-word;
+    }
+    .status { color: var(--muted); font-size: 13px; }
+    .bad { color: var(--accent-2); }
+    .hidden { display: none; }
+    @media (max-width: 820px) {
+      .top, .toolbar { grid-template-columns: 1fr; display: grid; }
+      .panel { grid-column: 1 / -1; }
+      .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    }
+  </style>
+</head>
+<body>
+  <header>
+    <div class="wrap top">
+      <div>
+        <h1>ClawRouter</h1>
+        <p>Provider routing, proxy keys, tenant budgets, and account usage.</p>
+      </div>
+      <nav>
+        <button data-view="dashboard" class="active">Dashboard</button>
+        <button data-view="admin">Admin</button>
+        <button data-view="account">Account</button>
+        <button data-view="routes">Routes</button>
+      </nav>
+    </div>
+  </header>
+  <main class="wrap">
+    <section class="toolbar">
+      <label>Admin token<input id="adminToken" type="password" autocomplete="off" placeholder="required for admin views"></label>
+      <label>Proxy key<input id="proxyKey" type="password" autocomplete="off" placeholder="required for account views"></label>
+      <button id="refresh" class="primary">Refresh</button>
+    </section>
+    <p id="status" class="status">idle</p>
+    <section id="dashboard" class="view grid">
+      <div class="panel wide">
+        <h2>Service</h2>
+        <div id="serviceMetrics" class="metrics"></div>
+      </div>
+      <div class="panel">
+        <h2>Provider Classes</h2>
+        <div id="providerClasses"></div>
+      </div>
+      <div class="panel">
+        <h2>Configured Routes</h2>
+        <div id="routeSummary"></div>
+      </div>
+    </section>
+    <section id="admin" class="view grid hidden">
+      <div class="panel wide">
+        <h2>Admin Overview</h2>
+        <div id="adminMetrics" class="metrics"></div>
+      </div>
+      <div class="panel">
+        <h2>Users / Tenants</h2>
+        <div id="adminUsers"></div>
+      </div>
+      <div class="panel">
+        <h2>Usage</h2>
+        <div id="adminUsage"></div>
+      </div>
+    </section>
+    <section id="account" class="view grid hidden">
+      <div class="panel">
+        <h2>Profile</h2>
+        <div id="profile"></div>
+      </div>
+      <div class="panel">
+        <h2>Budget</h2>
+        <div id="usage"></div>
+      </div>
+    </section>
+    <section id="routes" class="view grid hidden">
+      <div class="panel wide">
+        <h2>Route Catalog</h2>
+        <div id="routesTable"></div>
+      </div>
+    </section>
+  </main>
+  <script>
+    const initialView = ({
+      "/admin": "admin",
+      "/account": "account",
+      "/routes": "routes",
+      "/console": "dashboard",
+      "/dashboard": "dashboard"
+    })[window.location.pathname] || "dashboard";
+    const state = { view: initialView, service: null, providers: null, routes: null };
+    const $ = (id) => document.getElementById(id);
+    const status = (text, bad = false) => {
+      $("status").textContent = text;
+      $("status").className = bad ? "status bad" : "status";
+    };
+    const authHeaders = (kind) => {
+      if (kind !== "admin" && kind !== "proxy") return {};
+      const token = kind === "admin" ? $("adminToken").value.trim() : $("proxyKey").value.trim();
+      return token ? { authorization: `Bearer ${token}` } : {};
+    };
+    async function api(path, kind) {
+      const response = await fetch(path, { headers: authHeaders(kind) });
+      const text = await response.text();
+      const data = text ? JSON.parse(text) : {};
+      if (!response.ok) {
+        throw new Error(data.error?.message || `${path} failed with ${response.status}`);
+      }
+      return data;
+    }
+    const esc = (value) => String(value ?? "").replace(/[&<>"']/g, (char) => ({
+      "&": "&amp;",
+      "<": "&lt;",
+      ">": "&gt;",
+      "\"": "&quot;",
+      "'": "&#39;"
+    })[char]);
+    const raw = (html) => ({ html });
+    const code = (value) => raw(`<code>${esc(value)}</code>`);
+    const cell = (item) => item && typeof item === "object" && "html" in item ? item.html : esc(item);
+    const money = (value) => value == null ? "none" : `$${(value / 1000000).toFixed(2)}`;
+    const number = (value) => value == null ? "none" : new Intl.NumberFormat().format(value);
+    const metric = (label, value) => `<div class="metric"><strong>${esc(value)}</strong><span>${esc(label)}</span></div>`;
+    const row = (items) => `<tr>${items.map((item) => `<td>${cell(item)}</td>`).join("")}</tr>`;
+    const table = (heads, rows) => `<table><thead><tr>${heads.map((head) => `<th>${esc(head)}</th>`).join("")}</tr></thead><tbody>${rows.join("") || row([raw(`<span class="status">no rows</span>`)])}</tbody></table>`;
+    function renderDashboard() {
+      const providers = state.providers?.providers || [];
+      const routes = state.routes || { openaiCompatible: [], manifestProxy: [] };
+      $("serviceMetrics").innerHTML = [
+        metric("providers", providers.length),
+        metric("openai compatible", routes.openaiCompatible.length),
+        metric("manifest routes", routes.manifestProxy.length),
+        metric("admin API", "/v1/admin")
+      ].join("");
+      const classes = providers.reduce((acc, provider) => {
+        acc[provider.class] = (acc[provider.class] || 0) + 1;
+        return acc;
+      }, {});
+      $("providerClasses").innerHTML = table(["class", "providers"], Object.entries(classes).map(([name, count]) => row([name, count])));
+      $("routeSummary").innerHTML = table(["surface", "count"], [
+        row(["OpenAI-compatible", routes.openaiCompatible.length]),
+        row(["manifest proxy", routes.manifestProxy.length])
+      ]);
+    }
+    function renderRoutes() {
+      const routes = state.routes || { openaiCompatible: [], manifestProxy: [] };
+      const rows = [
+        ...routes.openaiCompatible.map((route) => row([route.provider, "openai", route.endpoints.join(", "), String(route.models.length)])),
+        ...routes.manifestProxy.map((route) => row([route.provider, route.endpoint, code(route.route), route.methods.join(", ")]))
+      ];
+      $("routesTable").innerHTML = table(["provider", "route", "surface", "models/methods"], rows);
+    }
+    async function renderAdmin() {
+      const [overview, users, usage] = await Promise.all([
+        api("/v1/admin/overview", "admin"),
+        api("/v1/admin/users", "admin"),
+        api("/v1/admin/usage", "admin")
+      ]);
+      $("adminMetrics").innerHTML = [
+        metric("keys", overview.keysTotal),
+        metric("active keys", overview.keysActive),
+        metric("tenants", overview.tenantsTotal),
+        metric("monthly budget", money(overview.monthlyBudgetMicros))
+      ].join("");
+      $("adminUsers").innerHTML = table(["tenant", "keys", "active", "providers"], users.tenants.map((tenant) => row([
+        tenant.tenantId,
+        tenant.keys,
+        tenant.activeKeys,
+        tenant.providers.join(", ")
+      ])));
+      $("adminUsage").innerHTML = table(["key", "tenant", "budget", "spent", "remaining", "ledger"], usage.keys.map((key) => row([
+        code(key.kid),
+        key.tenantId,
+        money(key.monthlyBudgetMicros),
+        number(key.budget.spentMicros),
+        number(key.budget.remainingMicros),
+        key.budget.ledger
+      ])));
+    }
+    async function renderAccount() {
+      const [me, usage] = await Promise.all([api("/v1/me", "proxy"), api("/v1/usage", "proxy")]);
+      $("profile").innerHTML = table(["field", "value"], [
+        row(["key", code(me.key.kid)]),
+        row(["tenant", me.key.tenantId]),
+        row(["enabled", String(me.key.enabled)]),
+        row(["providers", me.key.providers.join(", ")])
+      ]);
+      $("usage").innerHTML = table(["field", "value"], [
+        row(["monthly budget", money(usage.budget.limitMicros)]),
+        row(["spent", number(usage.budget.spentMicros)]),
+        row(["remaining", number(usage.budget.remainingMicros)]),
+        row(["request cost", number(usage.key.requestCostMicros)]),
+        row(["ledger", usage.budget.ledger])
+      ]);
+    }
+    async function refresh() {
+      try {
+        status("loading");
+        state.service = await api("/");
+        [state.providers, state.routes] = await Promise.all([api("/v1/providers"), api("/v1/routes")]);
+        renderDashboard();
+        renderRoutes();
+        if (state.view === "admin") await renderAdmin();
+        if (state.view === "account") await renderAccount();
+        status("loaded");
+      } catch (error) {
+        status(error.message || String(error), true);
+      }
+    }
+    function syncView() {
+      document.querySelectorAll("nav button").forEach((item) => item.classList.toggle("active", item.dataset.view === state.view));
+      document.querySelectorAll(".view").forEach((view) => view.classList.toggle("hidden", view.id !== state.view));
+    }
+    document.querySelectorAll("nav button").forEach((button) => {
+      button.addEventListener("click", async () => {
+        state.view = button.dataset.view;
+        syncView();
+        await refresh();
+      });
+    });
+    $("refresh").addEventListener("click", refresh);
+    syncView();
+    refresh();
+  </script>
+</body>
+</html>"#;
 
 #[event(fetch)]
 async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
@@ -28,6 +365,9 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     }
     if req.method() == Method::Get && matches!(url.path(), "/" | "/v1") {
         return service_index().and_then(with_cors);
+    }
+    if req.method() == Method::Get && interface_path(url.path()) {
+        return interface_shell();
     }
     if req.method() == Method::Get && url.path() == "/v1/health" {
         return Response::from_json(&serde_json::json!({
@@ -41,6 +381,19 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     if req.method() == Method::Get && url.path() == "/v1/providers" {
         let snapshot = provider_snapshot()?;
         return Response::from_json(&snapshot).and_then(with_cors);
+    }
+
+    if req.method() == Method::Get && url.path() == "/v1/routes" {
+        let snapshot = provider_snapshot()?;
+        return Response::from_json(&route_catalog(&snapshot)).and_then(with_cors);
+    }
+
+    if req.method() == Method::Get && url.path() == "/v1/me" {
+        return user_profile(req.headers(), &env).await.and_then(with_cors);
+    }
+
+    if req.method() == Method::Get && url.path() == "/v1/usage" {
+        return user_usage(req.headers(), &env).await.and_then(with_cors);
     }
 
     if url.path().starts_with("/v1/admin/") {
@@ -75,19 +428,103 @@ fn service_index() -> Result<Response> {
         "ok": true,
         "service": "clawrouter-edge",
         "runtime": "rust-wasm",
+        "interface": {
+            "dashboard": "/dashboard",
+            "admin": "/admin",
+            "account": "/account"
+        },
         "endpoints": {
             "health": "/v1/health",
             "providers": "/v1/providers",
+            "routes": "/v1/routes",
+            "me": "/v1/me",
+            "usage": "/v1/usage",
             "keyInspect": "/v1/key/inspect",
+            "adminOverview": "/v1/admin/overview",
+            "adminUsers": "/v1/admin/users",
+            "adminUsage": "/v1/admin/usage",
+            "adminKeys": "/v1/admin/keys",
             "openaiCompatible": [
                 "/v1/chat/completions",
                 "/v1/responses",
-                "/v1/embeddings",
-                "/v1/images/generations"
+                "/v1/embeddings"
             ],
             "manifestProxy": "/v1/proxy/{provider}/{endpoint}"
         }
     }))
+}
+
+fn interface_path(path: &str) -> bool {
+    matches!(
+        path,
+        "/dashboard" | "/admin" | "/account" | "/console" | "/routes"
+    )
+}
+
+fn interface_shell() -> Result<Response> {
+    let mut response = Response::from_html(INTERFACE_HTML)?;
+    response
+        .headers_mut()
+        .set("cache-control", "no-store, max-age=0")?;
+    Ok(response)
+}
+
+fn route_catalog(snapshot: &ProviderSnapshot) -> Value {
+    let openai_compatible = snapshot
+        .providers
+        .iter()
+        .filter(|provider| supports_openai_compatible_proxy(provider))
+        .map(|provider| {
+            let provider_capabilities = provider
+                .capabilities
+                .iter()
+                .map(|capability| capability.id.clone())
+                .collect::<Vec<_>>();
+            serde_json::json!({
+                "provider": provider.id,
+                "models": provider.models.iter().map(|model| {
+                    serde_json::json!({
+                        "id": &model.id,
+                        "capabilities": &model.capabilities,
+                        "endpoints": openai_compatible_endpoint_paths(provider, &model.capabilities)
+                    })
+                }).collect::<Vec<_>>(),
+                "modelPrefixes": &provider.routing.model_prefixes,
+                "endpoints": openai_compatible_endpoint_paths(provider, &provider_capabilities)
+            })
+        })
+        .collect::<Vec<_>>();
+    let manifest_proxy = snapshot
+        .providers
+        .iter()
+        .flat_map(|provider| {
+            provider.endpoints.iter().map(move |endpoint| {
+                serde_json::json!({
+                    "provider": provider.id,
+                    "endpoint": endpoint.id,
+                    "route": format!("/v1/proxy/{}/{}", provider.id, endpoint.id),
+                    "methods": &endpoint.methods,
+                    "streaming": &endpoint.streaming
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+
+    serde_json::json!({
+        "version": "clawrouter.route-catalog.v1",
+        "openaiCompatible": openai_compatible,
+        "manifestProxy": manifest_proxy
+    })
+}
+
+fn openai_compatible_endpoint_paths(
+    provider: &CompiledProvider,
+    capabilities: &[String],
+) -> Vec<&'static str> {
+    ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"]
+        .into_iter()
+        .filter(|path| select_endpoint(provider, capabilities, path).is_some())
+        .collect()
 }
 
 async fn proxy_openai_compatible(mut req: Request, env: Env, path: &str) -> Result<Response> {
@@ -369,7 +806,7 @@ struct AdminKeyPolicyRequest {
     enabled: bool,
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AdminKeyPolicyResponse {
     kid: String,
@@ -378,6 +815,73 @@ struct AdminKeyPolicyResponse {
     tenant_id: Option<String>,
     monthly_budget_micros: Option<u64>,
     request_cost_micros: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct KeyProfileResponse {
+    kid: String,
+    enabled: bool,
+    providers: Vec<String>,
+    tenant_id: String,
+    monthly_budget_micros: Option<u64>,
+    request_cost_micros: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BudgetStatusView {
+    configured: bool,
+    ledger: &'static str,
+    window_key: Option<String>,
+    limit_micros: Option<u64>,
+    spent_micros: Option<u64>,
+    remaining_micros: Option<u64>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AdminOverviewResponse {
+    keys_total: usize,
+    keys_active: usize,
+    tenants_total: usize,
+    provider_count: usize,
+    openai_compatible_providers: usize,
+    manifest_routes: usize,
+    monthly_budget_micros: u64,
+    request_cost_micros: u64,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AdminTenantSummary {
+    tenant_id: String,
+    keys: usize,
+    active_keys: usize,
+    providers: Vec<String>,
+    monthly_budget_micros: u64,
+    request_cost_micros: u64,
+}
+
+#[derive(Debug, Default)]
+struct TenantAccumulator {
+    keys: usize,
+    active_keys: usize,
+    providers: BTreeSet<String>,
+    monthly_budget_micros: u64,
+    request_cost_micros: u64,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AdminUsageRow {
+    kid: String,
+    tenant_id: String,
+    enabled: bool,
+    providers: Vec<String>,
+    monthly_budget_micros: Option<u64>,
+    request_cost_micros: Option<u64>,
+    budget: BudgetStatusView,
 }
 
 #[derive(Debug, Deserialize)]
@@ -415,6 +919,28 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             );
         }
     };
+
+    if req.method() == Method::Get && path == "/v1/admin/overview" {
+        let entries = list_admin_key_policies(&kv).await?;
+        let snapshot = provider_snapshot()?;
+        return Response::from_json(&admin_overview(&entries, &snapshot));
+    }
+
+    if req.method() == Method::Get && path == "/v1/admin/users" {
+        let entries = list_admin_key_policies(&kv).await?;
+        return Response::from_json(&serde_json::json!({
+            "tenants": admin_tenant_summaries(&entries)
+        }));
+    }
+
+    if req.method() == Method::Get && path == "/v1/admin/usage" {
+        let entries = list_admin_key_policies(&kv).await?;
+        let mut rows = Vec::new();
+        for entry in entries {
+            rows.push(admin_usage_row(&env, entry).await?);
+        }
+        return Response::from_json(&serde_json::json!({ "keys": rows }));
+    }
 
     if req.method() == Method::Get && path == "/v1/admin/keys" {
         let entries = list_admin_key_policies(&kv).await?;
@@ -484,6 +1010,34 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
     }
 
     json_error("method_not_allowed", "admin method is not allowed", 405)
+}
+
+async fn user_profile(headers: &Headers, env: &Env) -> Result<Response> {
+    let auth = match authorize_proxy_key_identity(headers, env).await? {
+        AuthOutcome::Allowed(auth) => auth,
+        AuthOutcome::Denied(response) => return Ok(response),
+    };
+    Response::from_json(&serde_json::json!({
+        "key": key_profile_response(&auth)
+    }))
+}
+
+async fn user_usage(headers: &Headers, env: &Env) -> Result<Response> {
+    let auth = match authorize_proxy_key_identity(headers, env).await? {
+        AuthOutcome::Allowed(auth) => auth,
+        AuthOutcome::Denied(response) => return Ok(response),
+    };
+    let budget = budget_status_for_key(
+        env,
+        &tenant_id(&auth),
+        &auth.kid,
+        auth.policy.monthly_budget_micros,
+    )
+    .await?;
+    Response::from_json(&serde_json::json!({
+        "key": key_profile_response(&auth),
+        "budget": budget
+    }))
 }
 
 async fn inspect_proxy_key(headers: &Headers, env: &Env) -> Result<Response> {
@@ -614,6 +1168,104 @@ fn admin_policy_response(kid: &str, policy: &KeyPolicy) -> AdminKeyPolicyRespons
         monthly_budget_micros: policy.monthly_budget_micros,
         request_cost_micros: policy.request_cost_micros,
     }
+}
+
+fn key_profile_response(auth: &AuthorizedKey) -> KeyProfileResponse {
+    KeyProfileResponse {
+        kid: auth.kid.clone(),
+        enabled: auth.policy.enabled,
+        providers: auth.policy.providers.clone(),
+        tenant_id: tenant_id(auth),
+        monthly_budget_micros: auth.policy.monthly_budget_micros,
+        request_cost_micros: auth.policy.request_cost_micros,
+    }
+}
+
+fn admin_overview(
+    entries: &[AdminKeyPolicyResponse],
+    snapshot: &ProviderSnapshot,
+) -> AdminOverviewResponse {
+    let route_catalog = route_catalog(snapshot);
+    AdminOverviewResponse {
+        keys_total: entries.len(),
+        keys_active: entries.iter().filter(|entry| entry.enabled).count(),
+        tenants_total: admin_tenant_summaries(entries).len(),
+        provider_count: snapshot.providers.len(),
+        openai_compatible_providers: route_catalog
+            .get("openaiCompatible")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or_default(),
+        manifest_routes: route_catalog
+            .get("manifestProxy")
+            .and_then(Value::as_array)
+            .map(Vec::len)
+            .unwrap_or_default(),
+        monthly_budget_micros: sum_optional_micros(
+            entries.iter().map(|entry| entry.monthly_budget_micros),
+        ),
+        request_cost_micros: sum_optional_micros(
+            entries.iter().map(|entry| entry.request_cost_micros),
+        ),
+    }
+}
+
+fn admin_tenant_summaries(entries: &[AdminKeyPolicyResponse]) -> Vec<AdminTenantSummary> {
+    let mut tenants = BTreeMap::<String, TenantAccumulator>::new();
+    for entry in entries {
+        let tenant_id = response_tenant_id(entry);
+        let summary = tenants.entry(tenant_id).or_default();
+        summary.keys += 1;
+        if entry.enabled {
+            summary.active_keys += 1;
+        }
+        summary.monthly_budget_micros = summary
+            .monthly_budget_micros
+            .saturating_add(entry.monthly_budget_micros.unwrap_or_default());
+        summary.request_cost_micros = summary
+            .request_cost_micros
+            .saturating_add(entry.request_cost_micros.unwrap_or_default());
+        summary.providers.extend(entry.providers.iter().cloned());
+    }
+    tenants
+        .into_iter()
+        .map(|(tenant_id, summary)| AdminTenantSummary {
+            tenant_id,
+            keys: summary.keys,
+            active_keys: summary.active_keys,
+            providers: summary.providers.into_iter().collect(),
+            monthly_budget_micros: summary.monthly_budget_micros,
+            request_cost_micros: summary.request_cost_micros,
+        })
+        .collect()
+}
+
+async fn admin_usage_row(env: &Env, entry: AdminKeyPolicyResponse) -> Result<AdminUsageRow> {
+    let tenant_id = response_tenant_id(&entry);
+    let budget =
+        budget_status_for_key(env, &tenant_id, &entry.kid, entry.monthly_budget_micros).await?;
+    Ok(AdminUsageRow {
+        kid: entry.kid,
+        tenant_id,
+        enabled: entry.enabled,
+        providers: entry.providers,
+        monthly_budget_micros: entry.monthly_budget_micros,
+        request_cost_micros: entry.request_cost_micros,
+        budget,
+    })
+}
+
+fn response_tenant_id(entry: &AdminKeyPolicyResponse) -> String {
+    entry
+        .tenant_id
+        .clone()
+        .unwrap_or_else(|| "default".to_string())
+}
+
+fn sum_optional_micros(values: impl Iterator<Item = Option<u64>>) -> u64 {
+    values.fold(0_u64, |sum, value| {
+        sum.saturating_add(value.unwrap_or_default())
+    })
 }
 
 async fn list_admin_key_policies(kv: &KvStore) -> Result<Vec<AdminKeyPolicyResponse>> {
@@ -750,6 +1402,18 @@ async fn authorize_proxy_key(
     env: &Env,
     provider_id: &str,
 ) -> Result<AuthOutcome> {
+    authorize_proxy_key_for_provider(headers, env, Some(provider_id)).await
+}
+
+async fn authorize_proxy_key_identity(headers: &Headers, env: &Env) -> Result<AuthOutcome> {
+    authorize_proxy_key_for_provider(headers, env, None).await
+}
+
+async fn authorize_proxy_key_for_provider(
+    headers: &Headers,
+    env: &Env,
+    provider_id: Option<&str>,
+) -> Result<AuthOutcome> {
     let auth = headers.get("authorization")?.unwrap_or_default();
     let token = auth.strip_prefix("Bearer ").unwrap_or("");
     let key = match parse_proxy_key(token) {
@@ -793,13 +1457,15 @@ async fn authorize_proxy_key(
         return json_error("invalid_proxy_key", "proxy key secret is invalid", 401)
             .map(AuthOutcome::Denied);
     }
-    if !policy.providers.is_empty() && !policy.providers.iter().any(|id| id == provider_id) {
-        return json_error(
-            "provider_not_allowed",
-            "proxy key is not allowed to use this provider",
-            403,
-        )
-        .map(AuthOutcome::Denied);
+    if let Some(provider_id) = provider_id {
+        if !policy.providers.is_empty() && !policy.providers.iter().any(|id| id == provider_id) {
+            return json_error(
+                "provider_not_allowed",
+                "proxy key is not allowed to use this provider",
+                403,
+            )
+            .map(AuthOutcome::Denied);
+        }
     }
     Ok(AuthOutcome::Allowed(AuthorizedKey {
         kid: key.kid,
@@ -1854,6 +2520,16 @@ struct BudgetReserveResponse {
     remaining_micros: u64,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BudgetStatusResponse {
+    policy_id: String,
+    window_key: String,
+    limit_micros: u64,
+    spent_micros: u64,
+    remaining_micros: u64,
+}
+
 #[derive(Debug, Deserialize)]
 struct BudgetSpendRow {
     spent_micros: i64,
@@ -1872,6 +2548,28 @@ impl DurableObject for BudgetLedgerObject {
 
     async fn fetch(&self, mut req: Request) -> Result<Response> {
         let url = req.url()?;
+        if req.method() == Method::Get && url.path() == "/status" {
+            let Some(policy_id) = query_param(&url, "policy_id") else {
+                return json_error("invalid_budget_request", "policy_id is required", 400);
+            };
+            let Some(window_key) = query_param(&url, "window_key") else {
+                return json_error("invalid_budget_request", "window_key is required", 400);
+            };
+            let Some(limit_micros) = query_param(&url, "limit_micros") else {
+                return json_error("invalid_budget_request", "limit_micros is required", 400);
+            };
+            let limit_micros = match limit_micros.parse::<u64>() {
+                Ok(limit_micros) => limit_micros,
+                Err(_) => {
+                    return json_error(
+                        "invalid_budget_request",
+                        "limit_micros must be an unsigned integer",
+                        400,
+                    );
+                }
+            };
+            return budget_status_in_object(&self.state, policy_id, window_key, limit_micros);
+        }
         if req.method() != Method::Post || url.path() != "/reserve" {
             return json_error("route_not_found", "route not found", 404);
         }
@@ -1973,6 +2671,108 @@ async fn reserve_budget(
     })
 }
 
+async fn budget_status_for_key(
+    env: &Env,
+    tenant_id: &str,
+    kid: &str,
+    limit_micros: Option<u64>,
+) -> Result<BudgetStatusView> {
+    let Some(limit_micros) = limit_micros else {
+        return Ok(BudgetStatusView {
+            configured: false,
+            ledger: "unmetered",
+            window_key: None,
+            limit_micros: None,
+            spent_micros: None,
+            remaining_micros: None,
+        });
+    };
+
+    let policy_id = budget_policy_id(tenant_id, kid);
+    let window_key = current_month_window_key(&policy_id)?;
+    if limit_micros > MAX_SQL_BUDGET_MICROS {
+        return Ok(BudgetStatusView {
+            configured: true,
+            ledger: "invalid_policy",
+            window_key: Some(window_key),
+            limit_micros: Some(limit_micros),
+            spent_micros: None,
+            remaining_micros: None,
+        });
+    }
+    if limit_micros == 0 {
+        return Ok(BudgetStatusView {
+            configured: true,
+            ledger: "blocked",
+            window_key: Some(window_key),
+            limit_micros: Some(0),
+            spent_micros: Some(0),
+            remaining_micros: Some(0),
+        });
+    }
+
+    let Ok(namespace) = env.durable_object("BUDGET_LEDGER") else {
+        return Ok(BudgetStatusView {
+            configured: true,
+            ledger: "unavailable",
+            window_key: Some(window_key),
+            limit_micros: Some(limit_micros),
+            spent_micros: None,
+            remaining_micros: None,
+        });
+    };
+    let status = fetch_budget_status(
+        namespace,
+        tenant_id,
+        kid,
+        &policy_id,
+        &window_key,
+        limit_micros,
+    )
+    .await?;
+    Ok(BudgetStatusView {
+        configured: true,
+        ledger: "durable_object",
+        window_key: Some(status.window_key),
+        limit_micros: Some(status.limit_micros),
+        spent_micros: Some(status.spent_micros),
+        remaining_micros: Some(status.remaining_micros),
+    })
+}
+
+async fn fetch_budget_status(
+    namespace: ObjectNamespace,
+    tenant_id: &str,
+    kid: &str,
+    policy_id: &str,
+    window_key: &str,
+    limit_micros: u64,
+) -> Result<BudgetStatusResponse> {
+    let stub = namespace.get_by_name(&budget_object_name(tenant_id, kid))?;
+    let url = format!(
+        "https://clawrouter.internal/status?policy_id={}&window_key={}&limit_micros={}",
+        encode_component(policy_id),
+        encode_component(window_key),
+        limit_micros
+    );
+    let mut init = RequestInit::new();
+    init.with_method(Method::Get);
+    let req = Request::new_with_init(&url, &init)?;
+    let mut response = stub.fetch_with_request(req).await?;
+    let status = response.status_code();
+    let text = response.text().await?;
+    if !(200..=299).contains(&status) {
+        return Err(Error::RustError(format!(
+            "budget ledger rejected status request with HTTP {status}: {text}"
+        )));
+    }
+    serde_json::from_str::<BudgetStatusResponse>(&text).map_err(|error| {
+        Error::RustError(format!(
+            "budget ledger status response is invalid JSON: {error}"
+        ))
+    })
+}
+
 fn reserve_budget_in_object(state: &State, request: BudgetReserveRequest) -> Result<Response> {
     let sql = state.storage().sql();
     sql.exec(
@@ -2025,6 +2825,39 @@ fn reserve_budget_in_object(state: &State, request: BudgetReserveRequest) -> Res
         charged_micros: request.cost_micros,
         spent_micros: next_spent,
         remaining_micros: remaining_after,
+    })
+}
+
+fn budget_status_in_object(
+    state: &State,
+    policy_id: String,
+    window_key: String,
+    limit_micros: u64,
+) -> Result<Response> {
+    let sql = state.storage().sql();
+    sql.exec(
+        "CREATE TABLE IF NOT EXISTS budget_windows (
+            window_key TEXT PRIMARY KEY,
+            policy_id TEXT NOT NULL,
+            spent_micros INTEGER NOT NULL
+        )",
+        None,
+    )?;
+    let spent_micros = sql
+        .exec_raw(
+            "SELECT spent_micros FROM budget_windows WHERE window_key = ? LIMIT 1",
+            raw_bindings(vec![JsValue::from_str(&window_key)]),
+        )?
+        .to_array::<BudgetSpendRow>()?
+        .first()
+        .map(|row| row.spent_micros.max(0) as u64)
+        .unwrap_or_default();
+    Response::from_json(&BudgetStatusResponse {
+        policy_id,
+        window_key,
+        limit_micros,
+        spent_micros,
+        remaining_micros: limit_micros.saturating_sub(spent_micros),
     })
 }
 
@@ -2138,6 +2971,11 @@ fn query_value(value: &Value) -> Option<String> {
     }
 }
 
+fn query_param(url: &Url, name: &str) -> Option<String> {
+    url.query_pairs()
+        .find_map(|(key, value)| (key == name).then(|| value.to_string()))
+}
+
 fn append_query(url: &mut String, query: BTreeMap<String, String>) {
     if query.is_empty() {
         return;
@@ -2208,8 +3046,10 @@ fn cors_preflight() -> Result<Response> {
 }
 
 fn cors_enabled_path(path: &str) -> bool {
-    matches!(path, "/v1/health" | "/v1/providers" | "/v1/key/inspect")
-        || path.starts_with("/v1/admin/")
+    matches!(
+        path,
+        "/v1/health" | "/v1/providers" | "/v1/routes" | "/v1/me" | "/v1/usage" | "/v1/key/inspect"
+    ) || path.starts_with("/v1/admin/")
 }
 
 fn with_cors(mut response: Response) -> Result<Response> {
@@ -2397,6 +3237,72 @@ mod tests {
     }
 
     #[test]
+    fn route_catalog_lists_proxy_surfaces() {
+        let snapshot = provider_snapshot().unwrap();
+        let catalog = route_catalog(&snapshot);
+        let openai_routes = catalog
+            .get("openaiCompatible")
+            .and_then(Value::as_array)
+            .unwrap();
+        let manifest_routes = catalog
+            .get("manifestProxy")
+            .and_then(Value::as_array)
+            .unwrap();
+
+        assert!(openai_routes
+            .iter()
+            .any(|route| route.get("provider").and_then(Value::as_str) == Some("openai")));
+        assert!(manifest_routes.iter().any(|route| {
+            route.get("provider").and_then(Value::as_str) == Some("tavily")
+                && route.get("endpoint").and_then(Value::as_str) == Some("search")
+                && route.get("route").and_then(Value::as_str) == Some("/v1/proxy/tavily/search")
+        }));
+
+        for route in openai_routes {
+            let provider_id = route.get("provider").and_then(Value::as_str).unwrap();
+            let provider = snapshot
+                .providers
+                .iter()
+                .find(|provider| provider.id == provider_id)
+                .unwrap();
+            let provider_capabilities = provider
+                .capabilities
+                .iter()
+                .map(|capability| capability.id.clone())
+                .collect::<Vec<_>>();
+            for endpoint in route
+                .get("endpoints")
+                .and_then(Value::as_array)
+                .unwrap()
+                .iter()
+                .map(Value::as_str)
+            {
+                assert!(
+                    select_endpoint(provider, &provider_capabilities, endpoint.unwrap()).is_some()
+                );
+            }
+            for model in route.get("models").and_then(Value::as_array).unwrap() {
+                let capabilities = model
+                    .get("capabilities")
+                    .and_then(Value::as_array)
+                    .unwrap()
+                    .iter()
+                    .map(|value| value.as_str().unwrap().to_string())
+                    .collect::<Vec<_>>();
+                for endpoint in model
+                    .get("endpoints")
+                    .and_then(Value::as_array)
+                    .unwrap()
+                    .iter()
+                    .map(Value::as_str)
+                {
+                    assert!(select_endpoint(provider, &capabilities, endpoint.unwrap()).is_some());
+                }
+            }
+        }
+    }
+
+    #[test]
     fn manifest_proxy_uses_manifest_secret_bindings() {
         let snapshot = provider_snapshot().unwrap();
         let huggingface = snapshot
@@ -2471,6 +3377,52 @@ mod tests {
     }
 
     #[test]
+    fn admin_overview_and_tenants_are_derived_from_key_policies() {
+        let entries = vec![
+            AdminKeyPolicyResponse {
+                kid: "svc_docs".to_string(),
+                enabled: true,
+                providers: vec!["openai".to_string(), "tavily".to_string()],
+                tenant_id: Some("team_docs".to_string()),
+                monthly_budget_micros: Some(100),
+                request_cost_micros: Some(10),
+            },
+            AdminKeyPolicyResponse {
+                kid: "svc_ops".to_string(),
+                enabled: false,
+                providers: vec!["openai".to_string()],
+                tenant_id: Some("team_docs".to_string()),
+                monthly_budget_micros: Some(200),
+                request_cost_micros: None,
+            },
+            AdminKeyPolicyResponse {
+                kid: "svc_default".to_string(),
+                enabled: true,
+                providers: vec!["github".to_string()],
+                tenant_id: None,
+                monthly_budget_micros: None,
+                request_cost_micros: Some(5),
+            },
+        ];
+        let tenants = admin_tenant_summaries(&entries);
+        let docs = tenants
+            .iter()
+            .find(|tenant| tenant.tenant_id == "team_docs")
+            .unwrap();
+        assert_eq!(docs.keys, 2);
+        assert_eq!(docs.active_keys, 1);
+        assert_eq!(docs.providers, vec!["openai", "tavily"]);
+        assert_eq!(docs.monthly_budget_micros, 300);
+
+        let overview = admin_overview(&entries, &provider_snapshot().unwrap());
+        assert_eq!(overview.keys_total, 3);
+        assert_eq!(overview.keys_active, 2);
+        assert_eq!(overview.tenants_total, 2);
+        assert_eq!(overview.monthly_budget_micros, 300);
+        assert_eq!(overview.request_cost_micros, 15);
+    }
+
+    #[test]
     fn admin_policy_validation_rejects_bad_hashes_and_unknown_providers() {
         let bad_hash = AdminKeyPolicyRequest {
             enabled: true,
@@ -2533,8 +3485,20 @@ mod tests {
         assert!(CORS_ALLOW_HEADERS.contains("content-type"));
         assert!(cors_enabled_path("/v1/admin/keys"));
         assert!(cors_enabled_path("/v1/providers"));
+        assert!(cors_enabled_path("/v1/routes"));
+        assert!(cors_enabled_path("/v1/me"));
+        assert!(cors_enabled_path("/v1/usage"));
         assert!(!cors_enabled_path("/v1/chat/completions"));
         assert!(!cors_enabled_path("/v1/proxy/tavily/search"));
+    }
+
+    #[test]
+    fn interface_routes_use_the_embedded_shell() {
+        assert!(interface_path("/dashboard"));
+        assert!(interface_path("/admin"));
+        assert!(interface_path("/account"));
+        assert!(interface_path("/routes"));
+        assert!(!interface_path("/v1/admin/keys"));
     }
 
     #[test]
@@ -2562,6 +3526,22 @@ mod tests {
     fn budget_sql_integer_conversion_is_checked() {
         assert_eq!(validate_budget_number(42, "spent_micros").unwrap(), 42.0);
         assert!(validate_budget_number(MAX_SQL_BUDGET_MICROS + 1, "spent_micros").is_err());
+    }
+
+    #[test]
+    fn budget_status_serializes_for_console_usage() {
+        let status = BudgetStatusView {
+            configured: true,
+            ledger: "durable_object",
+            window_key: Some("team_docs/svc_docs/2026-06".to_string()),
+            limit_micros: Some(100),
+            spent_micros: Some(40),
+            remaining_micros: Some(60),
+        };
+        let value = serde_json::to_value(status).unwrap();
+        assert_eq!(value["ledger"], "durable_object");
+        assert_eq!(value["limitMicros"], 100);
+        assert_eq!(value["remainingMicros"], 60);
     }
 
     #[test]
