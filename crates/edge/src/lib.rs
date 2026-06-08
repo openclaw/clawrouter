@@ -14,6 +14,7 @@ use wasm_bindgen_futures::JsFuture;
 use worker::*;
 
 const PROVIDER_SNAPSHOT: &str = include_str!(concat!(env!("OUT_DIR"), "/provider-snapshot.json"));
+const PROVIDER_ICONS: &str = include_str!("provider-icons.json");
 static USAGE_EVENT_COUNTER: AtomicU64 = AtomicU64::new(0);
 const MAX_SQL_BUDGET_MICROS: u64 = 9_007_199_254_740_991;
 const CORS_ALLOW_ORIGIN: &str = "*";
@@ -277,19 +278,65 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       background: rgba(8, 9, 8, .42);
     }
     .providerIcon {
+      position: relative;
+      isolation: isolate;
       width: 34px;
       height: 34px;
       display: grid;
       place-items: center;
       border-radius: 9px;
-      background: var(--icon-bg, var(--surface-3));
+      border: 1px solid color-mix(in srgb, var(--icon-fg, var(--ink)) 13%, transparent);
+      background:
+        radial-gradient(circle at 32% 16%, color-mix(in srgb, var(--icon-fg, var(--ink)) 18%, transparent), transparent 42%),
+        linear-gradient(145deg, color-mix(in srgb, var(--icon-bg, var(--surface-3)) 78%, #ffffff 6%), color-mix(in srgb, var(--icon-bg, var(--surface-3)) 82%, #000000 24%));
       color: var(--icon-fg, var(--ink));
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.12);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,.13),
+        inset 0 -10px 18px rgba(0,0,0,.18),
+        0 10px 26px color-mix(in srgb, var(--icon-bg, #000000) 34%, transparent);
       overflow: hidden;
+    }
+    .providerIcon::before {
+      content: "";
+      position: absolute;
+      inset: 1px;
+      z-index: -1;
+      border-radius: inherit;
+      background: linear-gradient(180deg, rgba(255,255,255,.14), transparent 52%);
+      pointer-events: none;
+    }
+    .providerIcon::after {
+      content: "";
+      position: absolute;
+      inset: auto 6px 5px;
+      height: 1px;
+      background: color-mix(in srgb, var(--icon-fg, var(--ink)) 34%, transparent);
+      opacity: .65;
+      pointer-events: none;
     }
     .providerIcon svg {
       width: 22px;
       height: 22px;
+      display: block;
+      fill: currentColor;
+      filter: drop-shadow(0 1px 0 rgba(0,0,0,.28));
+    }
+    .providerIcon svg * {
+      fill: currentColor !important;
+      fill-opacity: 1 !important;
+      opacity: 1 !important;
+      stroke: none !important;
+    }
+    .providerIcon.fallback svg * {
+      fill: none !important;
+      stroke: currentColor !important;
+    }
+    .providerIcon.fallback svg circle[fill],
+    .providerIcon.fallback svg path[fill] {
+      fill: currentColor !important;
+      stroke: none !important;
+    }
+    .providerIcon .sr {
       display: block;
     }
     .providerCard strong,
@@ -880,44 +927,51 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     const metric = (label, value) => `<div class="metric"><strong>${esc(value)}</strong><span>${esc(label)}</span></div>`;
     const row = (items) => `<tr>${items.map((item) => `<td>${cell(item)}</td>`).join("")}</tr>`;
     const table = (heads, rows) => `<table><thead><tr>${heads.map((head) => `<th>${esc(head)}</th>`).join("")}</tr></thead><tbody>${rows.join("") || row([raw(`<span class="status">no rows</span>`)])}</tbody></table>`;
-    const icon = (body) => `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
-    const providerStyles = {
-      anthropic: ["#171717", "#f2efe7", icon(`<path d="M6 18L12 5l6 13"/><path d="M8.4 13.5h7.2"/>`)],
-      "aws-bedrock": ["#33230f", "#ffdc9a", icon(`<path d="M5 8.5l7-4 7 4-7 4-7-4Z"/><path d="M5 8.5v7l7 4 7-4v-7"/><path d="M12 12.5v7"/>`)],
-      "azure-openai": ["#102235", "#cae9ff", icon(`<path d="M5 17.5 11.4 5l2.5 7.2"/><path d="M10 15h8.4L14.3 7"/>`)],
-      "cloudflare-ai-gateway": ["#35200f", "#ffd6a5", icon(`<path d="M7.5 16.5h9a3 3 0 0 0 .6-5.94A4.7 4.7 0 0 0 8.2 9.2 3.7 3.7 0 0 0 7.5 16.5Z"/><path d="M10 12h4.5l-2 3.5"/>`)],
-      cohere: ["#202817", "#e8f8c8", icon(`<circle cx="8" cy="8" r="3.2"/><circle cx="15.5" cy="9.5" r="3.4"/><circle cx="11.5" cy="16" r="3.6"/>`)],
-      deepseek: ["#111d33", "#dce8ff", icon(`<path d="M5 12c2.2-4.4 7.6-6.2 13.5-5.2-1 6.3-5.3 10.4-11.8 10.8"/><path d="M8 17.5c1.2-2.8 3.6-4.8 7.3-5.9"/><circle cx="16.2" cy="8.5" r=".8" fill="currentColor" stroke="none"/>`)],
-      fireworks: ["#351b13", "#ffd0bb", icon(`<path d="M12 5v4"/><path d="M12 15v4"/><path d="M5 12h4"/><path d="M15 12h4"/><path d="m7.2 7.2 2.8 2.8"/><path d="m14 14 2.8 2.8"/><path d="m16.8 7.2-2.8 2.8"/><path d="m10 14-2.8 2.8"/><circle cx="12" cy="12" r="1.6"/>`)],
-      github: ["#15191f", "#eef3f8", icon(`<circle cx="12" cy="12" r="7"/><path d="M8 15.5c1.2 1 2.5 1.5 4 1.5s2.8-.5 4-1.5"/><path d="M8.5 10.2h7"/><path d="M9.2 7.5 11 9l2-1.5 1.8 1.5"/>`)],
-      "google-gemini": ["#18253d", "#d9e8ff", icon(`<path d="M12 3.8 14.4 9l5.2 2.4-5.2 2.4L12 19.2 9.6 13.8 4.4 11.4 9.6 9 12 3.8Z"/>`)],
-      groq: ["#311417", "#ffd8dd", icon(`<path d="M13 3 5.5 13h5.2L9 21l9.5-12h-5.8L13 3Z"/>`)],
-      huggingface: ["#332b10", "#ffe38f", icon(`<circle cx="8.3" cy="10" r="1" fill="currentColor" stroke="none"/><circle cx="15.7" cy="10" r="1" fill="currentColor" stroke="none"/><path d="M7 15c2.5 2.2 7.5 2.2 10 0"/><path d="M5.5 9.5c-.7-2.4.4-4 2.2-4"/><path d="M18.5 9.5c.7-2.4-.4-4-2.2-4"/><path d="M5.5 12.3c0 4 2.6 7 6.5 7s6.5-3 6.5-7"/>`)],
-      linear: ["#1c1b2f", "#dedcff", icon(`<path d="m6 16 10-10"/><path d="m6 11 5-5"/><path d="m11 18 7-7"/><path d="M5 21h14"/>`)],
-      minimax: ["#2e171d", "#ffdbe3", icon(`<path d="M4 17V7l5 6 3-4 3 4 5-6v10"/><path d="M4 17h16"/>`)],
-      mistral: ["#33230d", "#ffe0a3", icon(`<path d="M4 17h3V9h3v8h4V9h3v8h3"/><path d="M7 9V6h3v3"/><path d="M14 9V6h3v3"/>`)],
-      notion: ["#f1eee5", "#111111", icon(`<rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 16V8l6 8V8"/>`)],
-      openai: ["#10261f", "#d5ffe6", icon(`<path d="M12 4.2a3.1 3.1 0 0 1 3.1 2.2 3.2 3.2 0 0 1 3.1 5.1 3.1 3.1 0 0 1-1.5 5.6 3.2 3.2 0 0 1-5 1.8 3.2 3.2 0 0 1-5.1-2.1 3.2 3.2 0 0 1-2.9-5.2A3.2 3.2 0 0 1 5.4 6.5 3.2 3.2 0 0 1 12 4.2Z"/><path d="M8.5 9.4 12 7.4l3.5 2"/><path d="M8.5 14.6 12 16.6l3.5-2"/><path d="M12 7.4v9.2"/>`)],
-      openrouter: ["#241a36", "#f2defc", icon(`<path d="M4.5 12h13.5"/><path d="m13.5 7 4.5 5-4.5 5"/><path d="M6.5 7.5h3"/><path d="M6.5 16.5h3"/>`)],
-      perplexity: ["#0f2b2d", "#caffff", icon(`<path d="M6 6h12v12H6z"/><path d="M6 12h12"/><path d="m9 9 3 3-3 3"/><path d="m15 9-3 3 3 3"/>`)],
-      replicate: ["#151515", "#f8f8f2", icon(`<rect x="5" y="5" width="10" height="10" rx="1.5"/><rect x="9" y="9" width="10" height="10" rx="1.5"/><path d="M15 5h4v4"/>`)],
-      slack: ["#231b31", "#f4ddff", icon(`<path d="M8 5v6"/><path d="M16 13v6"/><path d="M5 16h6"/><path d="M13 8h6"/><path d="M8 16v1.5A2.5 2.5 0 0 1 5.5 20"/><path d="M16 8V6.5A2.5 2.5 0 0 1 18.5 4"/><path d="M8 8H6.5A2.5 2.5 0 0 1 4 5.5"/><path d="M16 16h1.5A2.5 2.5 0 0 1 20 18.5"/>`)],
-      tavily: ["#10291d", "#c9ffd8", icon(`<circle cx="12" cy="12" r="7.2"/><path d="m14.8 9.2-2 5.6-3.6 1 2-5.6 3.6-1Z"/><circle cx="12" cy="12" r=".9" fill="currentColor" stroke="none"/>`)],
-      together: ["#162331", "#d4ecff", icon(`<circle cx="7" cy="8" r="2"/><circle cx="17" cy="8" r="2"/><circle cx="12" cy="17" r="2"/><path d="M8.7 9.1 11 15"/><path d="M15.3 9.1 13 15"/><path d="M9 8h6"/>`)],
-      xai: ["#101010", "#f3f3ef", icon(`<path d="m6 6 12 12"/><path d="M18 6 6 18"/><path d="M14 6h4v4"/>`)]
+    const strokeIcon = (body) => `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
+    const providerIconManifest = __CLAWROUTER_PROVIDER_ICONS__;
+    const providerMarks = providerIconManifest.icons || {};
+    const providerSkins = {
+      anthropic: ["#171717", "#f2efe7"],
+      "aws-bedrock": ["#33230f", "#ffdc9a"],
+      "azure-openai": ["#102235", "#cae9ff"],
+      "cloudflare-ai-gateway": ["#35200f", "#ffd6a5"],
+      cohere: ["#202817", "#e8f8c8"],
+      deepseek: ["#111d33", "#dce8ff"],
+      fireworks: ["#351b13", "#ffd0bb"],
+      github: ["#15191f", "#eef3f8"],
+      "google-gemini": ["#18253d", "#d9e8ff"],
+      groq: ["#311417", "#ffd8dd"],
+      huggingface: ["#332b10", "#ffe38f"],
+      linear: ["#1c1b2f", "#dedcff"],
+      minimax: ["#2e171d", "#ffdbe3"],
+      mistral: ["#33230d", "#ffe0a3"],
+      notion: ["#f1eee5", "#111111"],
+      openai: ["#10261f", "#d5ffe6"],
+      openrouter: ["#241a36", "#f2defc"],
+      perplexity: ["#0f2b2d", "#caffff"],
+      replicate: ["#151515", "#f8f8f2"],
+      slack: ["#231b31", "#f4ddff"],
+      tavily: ["#10291d", "#c9ffd8"],
+      together: ["#162331", "#d4ecff"],
+      xai: ["#101010", "#f3f3ef"]
     };
     const serviceGlyphs = {
-      model_provider: icon(`<path d="M7 8h10"/><path d="M7 12h10"/><path d="M7 16h6"/><rect x="4" y="5" width="16" height="14" rx="2"/>`),
-      oauth_platform: icon(`<path d="M8.5 12a3.5 3.5 0 1 1 3.2 3.49"/><path d="M12 15.5V19"/><path d="M9.5 19h5"/>`),
-      gateway_platform: icon(`<path d="M4 12h7"/><path d="M13 12h7"/><path d="M10 8l4 4-4 4"/>`),
-      search_provider: icon(`<circle cx="10.5" cy="10.5" r="5"/><path d="m15 15 4 4"/>`)
+      model_provider: strokeIcon(`<path d="M7 8h10"/><path d="M7 12h10"/><path d="M7 16h6"/><rect x="4" y="5" width="16" height="14" rx="2"/>`),
+      oauth_platform: strokeIcon(`<path d="M8.5 12a3.5 3.5 0 1 1 3.2 3.49"/><path d="M12 15.5V19"/><path d="M9.5 19h5"/>`),
+      gateway_platform: strokeIcon(`<path d="M4 12h7"/><path d="M13 12h7"/><path d="M10 8l4 4-4 4"/>`),
+      search_provider: strokeIcon(`<circle cx="10.5" cy="10.5" r="5"/><path d="m15 15 4 4"/>`)
     };
     function compactLabel(value) {
       return String(value || "service").replace(/_/g, " ");
     }
     function providerIcon(provider) {
-      const [bg, fg, glyph] = providerStyles[provider.id] || ["#202520", "#f2f4ef", icon(`<circle cx="12" cy="12" r="7"/><path d="M8.5 12h7"/><path d="M12 8.5v7"/>`)];
-      return `<span class="providerIcon" style="--icon-bg:${bg};--icon-fg:${fg}">${glyph}<span class="sr">${esc(provider.display_name || provider.id)}</span></span>`;
+      const [bg, fg] = providerSkins[provider.id] || ["#202520", "#f2f4ef"];
+      const mark = providerMarks[provider.id];
+      const glyph = mark
+        ? `<svg viewBox="${esc(mark.viewBox || "0 0 24 24")}" aria-hidden="true">${mark.body}</svg>`
+        : strokeIcon(`<circle cx="12" cy="12" r="7"/><path d="M8.5 12h7"/><path d="M12 8.5v7"/>`);
+      const className = mark ? "providerIcon" : "providerIcon fallback";
+      return `<span class="${className}" style="--icon-bg:${bg};--icon-fg:${fg}" data-provider="${esc(provider.id)}">${glyph}<span class="sr">${esc(provider.display_name || provider.id)}</span></span>`;
     }
     function serviceChip(kind) {
       const glyph = serviceGlyphs[kind] || serviceGlyphs.model_provider;
@@ -1555,7 +1609,8 @@ async fn protected_interface_shell(headers: &Headers, env: &Env) -> Result<Respo
 }
 
 fn interface_shell() -> Result<Response> {
-    let mut response = Response::from_html(INTERFACE_HTML)?;
+    let html = INTERFACE_HTML.replace("__CLAWROUTER_PROVIDER_ICONS__", PROVIDER_ICONS);
+    let mut response = Response::from_html(html)?;
     response
         .headers_mut()
         .set("cache-control", "no-store, max-age=0")?;
@@ -5332,6 +5387,31 @@ mod tests {
         assert!(interface_path("/account"));
         assert!(interface_path("/routes"));
         assert!(!interface_path("/v1/admin/keys"));
+    }
+
+    #[test]
+    fn provider_icon_manifest_covers_all_bundled_providers() {
+        let icons = serde_json::from_str::<Value>(PROVIDER_ICONS).unwrap();
+        let icons = icons.get("icons").and_then(Value::as_object).unwrap();
+        let snapshot = provider_snapshot().unwrap();
+
+        for provider in snapshot.providers {
+            let icon = icons
+                .get(&provider.id)
+                .unwrap_or_else(|| panic!("missing provider icon for {}", provider.id));
+            assert!(
+                icon.get("viewBox").and_then(Value::as_str).is_some(),
+                "provider icon {} is missing a viewBox",
+                provider.id
+            );
+            assert!(
+                icon.get("body")
+                    .and_then(Value::as_str)
+                    .is_some_and(|body| body.contains("<path")),
+                "provider icon {} is missing SVG path data",
+                provider.id
+            );
+        }
     }
 
     #[test]
