@@ -32,24 +32,30 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
   <style>
     :root {
       color-scheme: light;
-      --bg: #f4f4f1;
-      --paper: #fbfbf8;
+      --bg: #f6f6f3;
+      --paper: #fafaf7;
       --surface: #ffffff;
-      --surface-2: #f0f0ec;
-      --surface-3: #e7e7e1;
-      --ink: #171714;
-      --muted: #5e5e57;
-      --faint: #68685f;
-      --line: #d8d8cf;
-      --line-strong: #aaa99e;
-      --accent: #11110f;
-      --accent-soft: #ecece7;
-      --accent-ink: #fbfbf8;
-      --green: #34785a;
+      --surface-2: #f3f3ef;
+      --surface-3: #e9e9e3;
+      --ink: #171712;
+      --muted: #5c5c54;
+      --faint: #6d6d64;
+      --line: #ddddd4;
+      --line-strong: #b9b8ad;
+      --accent: #181814;
+      --accent-soft: #e9e5ff;
+      --accent-ink: #fbfbf7;
+      --lavender: #eadfff;
+      --lavender-strong: #d7c4ff;
+      --lavender-ink: #4d3278;
+      --lime: #dcff69;
+      --lime-soft: #f0ffd2;
+      --lime-ink: #2f3a04;
+      --green: #3d7a4f;
       --warn: #9a4a28;
       --danger: #9d2f23;
       --blue: #426b83;
-      --shadow: 0 1px 0 rgba(23, 23, 20, .04), 0 18px 48px rgba(23, 23, 20, .08);
+      --shadow: 0 1px 0 rgba(23, 23, 18, .04), 0 18px 44px rgba(23, 23, 18, .07);
       --radius: 8px;
       --radius-sm: 6px;
       --space-1: 4px;
@@ -66,9 +72,9 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       min-height: 100vh;
       font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background:
-        radial-gradient(circle at 12% -14%, rgba(23, 23, 20, .11), transparent 30vw),
-        radial-gradient(circle at 85% 8%, rgba(23, 23, 20, .08), transparent 28vw),
-        linear-gradient(115deg, rgba(23, 23, 20, .035), transparent 42%),
+        radial-gradient(circle at 8% -10%, rgba(234, 223, 255, .78), transparent 31vw),
+        radial-gradient(circle at 100% 7%, rgba(220, 255, 105, .22), transparent 24vw),
+        linear-gradient(115deg, rgba(23, 23, 18, .025), transparent 48%),
         linear-gradient(var(--bg), var(--bg));
       color: var(--ink);
       font-size: 14px;
@@ -84,10 +90,10 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       z-index: -1;
       pointer-events: none;
       background-image:
-        linear-gradient(rgba(23, 23, 20, .035) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(23, 23, 20, .03) 1px, transparent 1px);
+        linear-gradient(rgba(23, 23, 18, .028) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(23, 23, 18, .024) 1px, transparent 1px);
       background-size: 28px 28px;
-      mask-image: linear-gradient(180deg, rgba(0,0,0,.85), transparent 460px);
+      mask-image: linear-gradient(180deg, rgba(0,0,0,.75), transparent 520px);
     }
     button, input, select, textarea {
       font: inherit;
@@ -173,7 +179,11 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       font-weight: 650;
     }
     .appShell {
+      display: grid;
+      grid-template-columns: 252px minmax(0, 1fr);
       min-height: 100vh;
+      padding: var(--space-4);
+      gap: var(--space-4);
     }
     .appShell * { min-width: 0; }
     .appShell > *,
@@ -192,16 +202,19 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     }
     .sidebar {
       position: sticky;
-      top: 0;
+      top: var(--space-4);
       z-index: 10;
       display: grid;
-      grid-template-columns: auto minmax(340px, 1fr) minmax(320px, 520px);
-      gap: var(--space-4);
-      align-items: center;
-      padding: 10px var(--space-5);
-      border-bottom: 1px solid var(--line);
-      background: color-mix(in srgb, var(--paper) 92%, transparent);
-      backdrop-filter: blur(18px) saturate(1.2);
+      grid-template-rows: auto auto 1fr auto;
+      gap: var(--space-5);
+      align-self: start;
+      min-height: calc(100vh - 32px);
+      padding: var(--space-4);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: color-mix(in srgb, var(--surface) 88%, transparent);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px) saturate(1.08);
     }
     .brand {
       display: flex;
@@ -230,34 +243,33 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       letter-spacing: .06em;
     }
     nav {
-      display: flex;
-      gap: 6px;
-      align-items: center;
+      display: grid;
+      gap: var(--space-2);
+      align-content: start;
       min-width: 0;
-      overflow-x: auto;
-      scrollbar-width: thin;
     }
     nav button {
-      flex: 0 0 auto;
-      min-height: 32px;
-      padding: 0 10px;
+      width: 100%;
+      min-height: 38px;
+      justify-content: flex-start;
+      padding: 0 12px;
       background: transparent;
       color: var(--muted);
       border-color: transparent;
     }
     nav button.active {
-      background: var(--accent);
-      color: var(--accent-ink);
-      border-color: var(--accent);
+      background: var(--lavender);
+      color: var(--lavender-ink);
+      border-color: color-mix(in srgb, var(--lavender-strong) 60%, var(--line));
     }
     .authDock {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+      grid-template-columns: 1fr;
       gap: var(--space-2);
       align-items: end;
+      align-self: end;
     }
-    .authDock button { min-width: 86px; }
-    .authDock .status { grid-column: 1 / -1; }
+    .authDock button { width: 100%; }
     .status {
       display: inline-flex;
       align-items: center;
@@ -267,7 +279,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       padding: 0 9px;
       border: 1px solid var(--line);
       border-radius: 999px;
-      background: var(--surface);
+      background: var(--lime-soft);
       color: var(--muted);
       font-size: .8rem;
       overflow-wrap: anywhere;
@@ -279,7 +291,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       flex: 0 0 auto;
       margin-right: 7px;
       border-radius: 50%;
-      background: var(--faint);
+      background: var(--lime);
     }
     .status.bad { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 42%, var(--line)); }
     .status.bad::before { background: var(--warn); }
@@ -289,7 +301,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     .status.soft::before { background: var(--blue); }
     .content {
       min-width: 0;
-      padding: var(--space-5);
+      padding: var(--space-2) 0 0;
     }
     .contentInner {
       width: min(1320px, 100%);
@@ -298,16 +310,22 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     .topbar {
       display: grid;
       grid-template-columns: minmax(0, 1fr) minmax(280px, 390px);
-      gap: var(--space-4);
+      gap: var(--space-5);
       align-items: stretch;
-      margin-bottom: var(--space-4);
+      margin-bottom: var(--space-5);
     }
     .pageTitle {
       display: grid;
       align-content: end;
       gap: var(--space-2);
       min-height: 104px;
-      padding: var(--space-3) 2px;
+      padding: var(--space-5);
+      border: 1px solid color-mix(in srgb, var(--lavender-strong) 56%, var(--line));
+      border-radius: var(--radius);
+      background:
+        radial-gradient(circle at 12% 14%, rgba(220, 255, 105, .34), transparent 22%),
+        linear-gradient(135deg, var(--lavender), #f9f7ff 62%, var(--surface));
+      box-shadow: var(--shadow);
     }
     .pageTitle h2 {
       max-width: 780px;
@@ -441,6 +459,11 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     }
     .providerCard:first-child { border-top: 0; }
     .providerCard:hover { background: var(--surface-2); }
+    .providerCard:nth-child(3n + 1) .capabilityPill:last-child {
+      background: var(--lime-soft);
+      border-color: color-mix(in srgb, var(--lime) 70%, var(--line));
+      color: var(--lime-ink);
+    }
     .providerTitle {
       display: grid;
       gap: 2px;
@@ -657,9 +680,9 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       color: var(--muted);
     }
     .requestTabs button.active {
-      background: var(--accent);
-      color: var(--accent-ink);
-      border-color: var(--accent);
+      background: var(--lavender);
+      color: var(--lavender-ink);
+      border-color: var(--lavender-strong);
     }
     .requestPreview {
       min-height: 238px;
@@ -678,7 +701,8 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     .metric {
       min-height: 82px;
       padding: var(--space-4);
-      background: var(--paper);
+      background:
+        linear-gradient(180deg, color-mix(in srgb, var(--surface) 88%, var(--lavender) 12%), var(--paper));
       border-left: 1px solid var(--line);
     }
     .metric:first-child { border-left: 0; }
@@ -750,7 +774,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       display: block;
       height: 100%;
       width: var(--bar, 0%);
-      background: var(--accent);
+      background: var(--lime);
     }
     .hint {
       color: var(--faint);
@@ -810,16 +834,27 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       }
     }
     @media (max-width: 1160px) {
-      .sidebar {
+      .appShell {
         grid-template-columns: 1fr;
+      }
+      .sidebar {
+        position: static;
+        min-height: 0;
+        grid-template-rows: auto auto auto;
         align-items: stretch;
       }
       nav {
+        display: flex;
+        overflow-x: auto;
         padding-bottom: 2px;
       }
+      nav button { width: auto; flex: 0 0 auto; }
       .authDock {
         grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+        align-self: stretch;
       }
+      .authDock button { width: auto; }
+      .authDock .status { grid-column: 1 / -1; }
       .topbar { grid-template-columns: 1fr; }
       .pageTitle { min-height: auto; }
     }
@@ -869,7 +904,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       }
       .brandmark { display: none; }
       .pageTitle {
-        padding: 0;
+        padding: var(--space-4);
         min-height: auto;
       }
       .pageTitle h2 { font-size: 1.45rem; }
