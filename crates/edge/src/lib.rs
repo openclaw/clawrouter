@@ -2198,7 +2198,7 @@ async fn proxy_openai_compatible(
             OpenAiProxyUrlError::Client(message) => {
                 return json_error("invalid_model", &message, 400);
             }
-            OpenAiProxyUrlError::Runtime(error) => return Err(error),
+            OpenAiProxyUrlError::Runtime(error) => return provider_runtime_error_response(error),
         }
     }
     let upstream_url =
@@ -2207,7 +2207,9 @@ async fn proxy_openai_compatible(
             Err(OpenAiProxyUrlError::Client(message)) => {
                 return json_error("invalid_model", &message, 400);
             }
-            Err(OpenAiProxyUrlError::Runtime(error)) => return Err(error),
+            Err(OpenAiProxyUrlError::Runtime(error)) => {
+                return provider_runtime_error_response(error);
+            }
         };
     body["model"] = Value::String(route.upstream_model.clone());
     let upstream_body = serde_json::to_string(&body)?;
@@ -2233,7 +2235,7 @@ async fn proxy_openai_compatible(
             message,
             status,
         }) => return json_error(code, message, status),
-        Err(HeaderBuildError::Runtime(error)) => return Err(error),
+        Err(HeaderBuildError::Runtime(error)) => return provider_runtime_error_response(error),
     };
     let budget = match preflight_budget(&env, &auth, capability, &request_id).await? {
         BudgetPreflight::Allowed(budget) => budget,
@@ -2344,7 +2346,7 @@ async fn proxy_manifest_endpoint(mut req: Request, env: Env, path: &str) -> Resu
         Err(ManifestProxyError::Client(message)) => {
             return json_error("invalid_proxy_request", &message, 400);
         }
-        Err(ManifestProxyError::Runtime(error)) => return Err(error),
+        Err(ManifestProxyError::Runtime(error)) => return provider_runtime_error_response(error),
     };
     let upstream_body = method_allows_body(&upstream_method)
         .then(|| serde_json::to_string(&proxy.body.unwrap_or(Value::Object(Map::new()))))
@@ -2370,7 +2372,7 @@ async fn proxy_manifest_endpoint(mut req: Request, env: Env, path: &str) -> Resu
             message,
             status,
         }) => return json_error(code, message, status),
-        Err(HeaderBuildError::Runtime(error)) => return Err(error),
+        Err(HeaderBuildError::Runtime(error)) => return provider_runtime_error_response(error),
     };
     let budget = match preflight_budget(&env, &auth, capability, &request_id).await? {
         BudgetPreflight::Allowed(budget) => budget,
@@ -4395,6 +4397,21 @@ fn provider_config_value(env: &Env, provider: &CompiledProvider, name: &str) -> 
     )))
 }
 
+fn provider_runtime_error_response(error: Error) -> Result<Response> {
+    if let Some(message) = provider_runtime_config_error_message(&error) {
+        return json_error("provider_not_configured", &message, 503);
+    }
+    Err(error)
+}
+
+fn provider_runtime_config_error_message(error: &Error) -> Option<String> {
+    let message = error.to_string();
+    (message.starts_with("missing Cloudflare config value")
+        || message.starts_with("missing Cloudflare secret")
+        || message.contains("requires runtime config"))
+    .then_some(message)
+}
+
 fn optional_provider_config_value(
     env: &Env,
     provider: &CompiledProvider,
@@ -6101,6 +6118,19 @@ mod tests {
         assert_eq!(record.role, AccessRole::User);
         assert_eq!(record.tenant_id.as_deref(), Some("default"));
         assert_eq!(record.enabled, None);
+    }
+
+    #[test]
+    fn provider_config_errors_are_client_visible() {
+        let missing_secret =
+            Error::RustError("missing Cloudflare secret for provider `openai`".to_string());
+        assert_eq!(
+            provider_runtime_config_error_message(&missing_secret).as_deref(),
+            Some("missing Cloudflare secret for provider `openai`")
+        );
+
+        let unrelated = Error::RustError("upstream response was malformed".to_string());
+        assert!(provider_runtime_config_error_message(&unrelated).is_none());
     }
 
     #[test]
