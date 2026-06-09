@@ -46,10 +46,9 @@ endpoints:
 models:
   entries:
     - id: mistral/default
-      upstream: mistral
+      upstream: mistral-small-latest
       capabilities: [llm.chat]
       pricingRef: mistral-default
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
-

@@ -39,7 +39,7 @@ endpoints:
 models:
   entries:
     - id: anthropic/default
-      upstream: claude-sonnet
+      upstream: claude-sonnet-4-5-20250929
       capabilities: [llm.messages]
       pricingRef: anthropic-default
 billing:
@@ -52,4 +52,3 @@ billing:
     - name: output_tokens
       source: usage.output_tokens
       unit: token
-

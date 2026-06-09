@@ -132,7 +132,7 @@ function smokeTarget(provider, env) {
         body: {
           model,
           messages: [{ role: "user", content: "reply with ok" }],
-          max_tokens: 8,
+          max_tokens: 16,
         },
       };
     }
@@ -410,8 +410,8 @@ function sampleBody(provider, endpoint, method, env) {
   }
   if (provider.id === "anthropic") {
     return {
-      model: "claude-sonnet",
-      max_tokens: 8,
+      model: provider.models.find((model) => !model.upstream.includes("${"))?.upstream,
+      max_tokens: 16,
       messages: [{ role: "user", content: "reply with ok" }],
     };
   }

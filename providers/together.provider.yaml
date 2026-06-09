@@ -38,10 +38,9 @@ endpoints:
 models:
   entries:
     - id: together/default
-      upstream: together
+      upstream: meta-llama/Llama-3.3-70B-Instruct-Turbo
       capabilities: [llm.chat]
       pricingRef: together-default
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
-
