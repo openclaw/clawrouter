@@ -341,8 +341,6 @@ function defaultAccessPaths() {
   return [
     "/dashboard",
     "/v1/session",
-    "/v1/me",
-    "/v1/usage",
     "/v1/playground/*",
     "/v1/admin/*",
   ];
