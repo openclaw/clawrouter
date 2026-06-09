@@ -779,7 +779,7 @@ struct EntitlementProviderRow {
     readiness: ProviderReadinessRow,
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct OAuthGrantRecord {
     key: String,
     enabled: bool,
@@ -922,29 +922,28 @@ async fn access_entitlements(headers: &Headers, env: &Env) -> Result<Response> {
     let snapshot = provider_snapshot()?;
     let entries = list_key_policy_records(&kv).await?;
     let grants = list_oauth_grants(&kv).await?;
-    let readiness = provider_readiness_rows(&snapshot, env, &grants);
-    let readiness_by_id = readiness
-        .into_iter()
-        .map(|row| (row.id.clone(), row))
-        .collect::<BTreeMap<_, _>>();
     let providers = snapshot
         .providers
         .iter()
-        .filter_map(|provider| {
-            let matching_policies = entries
+        .map(|provider| {
+            let matching_entries = entries
                 .iter()
                 .filter(|entry| access_policy_allows(&entry.policy, &session, &provider.id))
+                .collect::<Vec<_>>();
+            let matching_policies = matching_entries
+                .iter()
                 .map(|entry| entry.kid.clone())
                 .collect::<Vec<_>>();
-            let readiness = readiness_by_id.get(&provider.id)?.clone();
-            Some(EntitlementProviderRow {
+            let scoped_grants = entitlement_oauth_grants(&grants, &matching_entries);
+            let readiness = provider_readiness_row(provider, env, &scoped_grants);
+            EntitlementProviderRow {
                 provider: provider.id.clone(),
                 display_name: provider.display_name.clone(),
                 service_kind: enum_label(&provider.service_kind),
                 allowed: !matching_policies.is_empty(),
                 policies: matching_policies,
                 readiness,
-            })
+            }
         })
         .collect();
     Response::from_json(&EntitlementsResponse { session, providers })
@@ -1818,9 +1817,39 @@ fn provider_optional_config_keys(provider: &CompiledProvider) -> Vec<String> {
     provider
         .config_keys
         .iter()
-        .filter(|key| key.as_str() == "AWS_SESSION_TOKEN")
+        .filter(|key| {
+            matches!(
+                key.as_str(),
+                "AWS_SESSION_TOKEN" | "AZURE_OPENAI_COMPLETION_TOKEN_DEPLOYMENTS"
+            )
+        })
         .cloned()
         .collect()
+}
+
+fn entitlement_oauth_grants(
+    grants: &[OAuthGrantRecord],
+    entries: &[&KeyPolicyEntry],
+) -> Vec<OAuthGrantRecord> {
+    grants
+        .iter()
+        .filter(|grant| {
+            entries
+                .iter()
+                .any(|entry| oauth_grant_applies_to_policy_entry(grant, entry))
+        })
+        .cloned()
+        .collect()
+}
+
+fn oauth_grant_applies_to_policy_entry(grant: &OAuthGrantRecord, entry: &KeyPolicyEntry) -> bool {
+    if grant.key.starts_with(&format!("oauth/{}/", entry.kid)) {
+        return true;
+    }
+    let tenant = entry.policy.tenant_id.as_deref().unwrap_or("default");
+    grant
+        .key
+        .starts_with(&format!("oauth/tenants/{tenant}/"))
 }
 
 fn runtime_binding_present(env: &Env, name: &str) -> bool {
@@ -4255,6 +4284,10 @@ mod tests {
         assert!(!endpoint_candidates
             .iter()
             .any(|key| key == "AZURE_ENDPOINT"));
+        let optional = provider_optional_config_keys(azure);
+        assert!(optional
+            .iter()
+            .any(|key| key == "AZURE_OPENAI_COMPLETION_TOKEN_DEPLOYMENTS"));
     }
 
     #[test]
@@ -4858,6 +4891,54 @@ mod tests {
         ];
 
         assert_eq!(provider_oauth_grant_count(github, &grants), 1);
+    }
+
+    #[test]
+    fn entitlement_oauth_grants_are_scoped_to_matching_policies() {
+        let grants = vec![
+            OAuthGrantRecord {
+                key: "oauth/svc_docs/github".to_string(),
+                enabled: true,
+                has_access_token: true,
+            },
+            OAuthGrantRecord {
+                key: "oauth/tenants/research/github".to_string(),
+                enabled: true,
+                has_access_token: true,
+            },
+            OAuthGrantRecord {
+                key: "oauth/svc_other/github".to_string(),
+                enabled: true,
+                has_access_token: true,
+            },
+        ];
+        let docs = KeyPolicyEntry {
+            kid: "svc_docs".to_string(),
+            policy: KeyPolicy {
+                enabled: true,
+                secret_sha256: "hash".to_string(),
+                providers: vec!["github".to_string()],
+                tenant_id: Some("team_docs".to_string()),
+                token_role: None,
+                monthly_budget_micros: None,
+                request_cost_micros: None,
+            },
+        };
+        let research = KeyPolicyEntry {
+            kid: "svc_research".to_string(),
+            policy: KeyPolicy {
+                tenant_id: Some("research".to_string()),
+                ..docs.policy.clone()
+            },
+        };
+
+        let scoped = entitlement_oauth_grants(&grants, &[&docs, &research]);
+        assert_eq!(scoped.len(), 2);
+        assert!(scoped.iter().any(|grant| grant.key == "oauth/svc_docs/github"));
+        assert!(scoped
+            .iter()
+            .any(|grant| grant.key == "oauth/tenants/research/github"));
+        assert!(!scoped.iter().any(|grant| grant.key == "oauth/svc_other/github"));
     }
 
     #[test]
