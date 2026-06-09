@@ -161,6 +161,7 @@ interface PlaygroundForm {
 }
 
 const demo = demoData();
+const demoServiceRoute = demo.routes.manifestProxy.find((route) => route.provider === "tavily") ?? demo.routes.manifestProxy[0];
 const emptyRoutes: RouteCatalog = { openaiCompatible: [], manifestProxy: [] };
 const emptySession: SessionResponse = { authenticated: false, auth: "access", role: "user", email: null, tenantId: "default" };
 
@@ -224,9 +225,9 @@ function App() {
     mode: "model",
     model: catalogModels(demo.routes)[0]?.id ?? "",
     endpoint: "/v1/chat/completions",
-    serviceRoute: routeKey(demo.routes.manifestProxy[0]),
-    serviceMethod: demo.routes.manifestProxy[0]?.methods[0] ?? "POST",
-    servicePath: "repos/openclaw/openclaw",
+    serviceRoute: routeKey(demoServiceRoute),
+    serviceMethod: demoServiceRoute?.methods[0] ?? "POST",
+    servicePath: "search",
     servicePayload: '{\n  "query": "test"\n}',
     system: "You are concise and useful.",
     prompt: "Say hello from ClawRouter in one short sentence.",
@@ -422,7 +423,7 @@ function App() {
     try {
       setPlaygroundError("");
       setStatus("running playground");
-      const guard = playgroundBlocker(playground, selectedModel, selectedServiceRoute, accessByProvider, providerReadiness, demoMode);
+      const guard = playgroundBlocker(playground, selectedModel, selectedServiceRoute, accessByProvider, providerReadiness);
       if (guard) throw new Error(guard);
       const payload = playgroundPayload(playground);
       if (demoMode) {
@@ -574,7 +575,6 @@ function App() {
             selectedServiceRoute={selectedServiceRoute}
             accessByProvider={accessByProvider}
             readinessByProvider={providerReadiness}
-            demoMode={demoMode}
             requestMode={requestMode}
             setRequestMode={setRequestMode}
             result={playgroundResult}
@@ -727,7 +727,7 @@ function PolicyChips({ policies }: { policies: KeyPolicy[] }) {
   );
 }
 
-function PlaygroundScreen({ form, setForm, models, selected, serviceRoutes, selectedServiceRoute, accessByProvider, readinessByProvider, demoMode, requestMode, setRequestMode, result, error, onRun, busy }: {
+function PlaygroundScreen({ form, setForm, models, selected, serviceRoutes, selectedServiceRoute, accessByProvider, readinessByProvider, requestMode, setRequestMode, result, error, onRun, busy }: {
   form: PlaygroundForm;
   setForm: (form: PlaygroundForm) => void;
   models: CatalogModel[];
@@ -736,7 +736,6 @@ function PlaygroundScreen({ form, setForm, models, selected, serviceRoutes, sele
   selectedServiceRoute?: RouteCatalog["manifestProxy"][number];
   accessByProvider: Map<string, ProviderAccess>;
   readinessByProvider: Record<string, ProviderReadiness>;
-  demoMode: boolean;
   requestMode: "json" | "curl";
   setRequestMode: (mode: "json" | "curl") => void;
   result: string;
@@ -745,7 +744,7 @@ function PlaygroundScreen({ form, setForm, models, selected, serviceRoutes, sele
   busy: boolean;
 }) {
   const request = playgroundRequestPreview(form, requestMode, selectedServiceRoute);
-  const blocker = playgroundBlocker(form, selected, selectedServiceRoute, accessByProvider, readinessByProvider, demoMode);
+  const blocker = playgroundBlocker(form, selected, selectedServiceRoute, accessByProvider, readinessByProvider);
   const selectedProvider = form.mode === "model" ? selected?.provider : selectedServiceRoute?.provider;
   const selectedAccess = selectedProvider ? accessByProvider.get(selectedProvider) : undefined;
   const selectedReadiness = selectedProvider ? readinessByProvider[selectedProvider] : undefined;
@@ -1316,11 +1315,11 @@ function playgroundRequestPreview(form: PlaygroundForm, mode: "json" | "curl", r
   }
 }
 
-function playgroundBlocker(form: PlaygroundForm, model: CatalogModel | undefined, route: RouteCatalog["manifestProxy"][number] | undefined, accessByProvider: Map<string, ProviderAccess>, readinessByProvider: Record<string, ProviderReadiness>, demoMode: boolean) {
+function playgroundBlocker(form: PlaygroundForm, model: CatalogModel | undefined, route: RouteCatalog["manifestProxy"][number] | undefined, accessByProvider: Map<string, ProviderAccess>, readinessByProvider: Record<string, ProviderReadiness>) {
   if (form.mode === "model" && !model) return "select a model";
   if (form.mode === "service" && !route) return "select a service route";
   const provider = form.mode === "model" ? model?.provider : route?.provider;
-  if (!provider || demoMode) return null;
+  if (!provider) return null;
   const access = accessByProvider.get(provider);
   if (!access?.allowed) return "Cloudflare Access identity is not granted this provider";
   const readiness = readinessByProvider[provider];
