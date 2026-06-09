@@ -210,14 +210,15 @@ response with `access_session_required` on `/dashboard` means the Access
 application is not protecting the console path or the Worker was deployed
 without the Access team/AUD vars.
 
-Access users are `user` by default. Admins are resolved from
-`access/users/<email>` in `POLICY_KV`, then from `CLAWROUTER_ACCESS_ADMIN_EMAILS`
-or `CLAWROUTER_ACCESS_ADMIN_DOMAINS`.
+Access users are materialized automatically on sign-in as enabled `user`
+records. Admins are resolved only from `CLAWROUTER_ACCESS_ADMIN_EMAILS` or
+`CLAWROUTER_ACCESS_ADMIN_DOMAINS`; `access/users/<email>` records do not grant
+admin rights.
 
 ```json
 {
-  "role": "admin",
-  "tenantId": "openclaw",
+  "role": "user",
+  "tenantId": "default",
   "enabled": true
 }
 ```
@@ -226,7 +227,8 @@ or `CLAWROUTER_ACCESS_ADMIN_DOMAINS`.
 admin routes through the same-origin Access session; the admin bearer token is
 only a fallback for automation or emergency access.
 
-Admins can assign explicit Access users in the console or API:
+Admins can inspect materialized Access users and update tenant/status in the
+console or API:
 
 ```text
 GET /v1/admin/access-users
@@ -237,8 +239,8 @@ The record is stored in `POLICY_KV` at `access/users/<email>`:
 
 ```json
 {
-  "role": "admin",
-  "tenantId": "openclaw",
+  "role": "user",
+  "tenantId": "default",
   "enabled": true
 }
 ```

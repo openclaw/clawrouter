@@ -148,8 +148,8 @@ const defaultPolicy: PolicyForm = {
 
 const defaultAccess: AccessForm = {
   email: "admin@example.com",
-  role: "admin",
-  tenantId: "openclaw",
+  role: "user",
+  tenantId: "default",
   enabled: true,
 };
 
@@ -318,7 +318,7 @@ function App() {
       await request<AccessUser>(gatewayOrigin, `/v1/admin/access-users/${encodeURIComponent(email)}`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ role: next.role, tenantId: next.tenantId, enabled: next.enabled }),
+        body: JSON.stringify({ tenantId: next.tenantId, enabled: next.enabled }),
       });
       await refresh();
       setStatus("saved user");
@@ -781,15 +781,14 @@ function UsersScreen({ users, selected, policies, services, form, setForm, error
       </section>
       <aside className="inspector">
         <form onSubmit={onSave}>
-          <InspectorHeader icon={Users} title="User grants" subtitle={selected?.email ?? "new user"} />
+          <InspectorHeader icon={Users} title="Access user" subtitle={selected?.email ?? "new user"} />
           {error ? <InlineError message={error} /> : null}
           <div className="formGrid compact">
             <label className="full"><span>email</span><input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} /></label>
-            <label><span>role</span><select value={form.role} onChange={(event) => setForm({ ...form, role: event.target.value as AccessRole })}><option value="user">user</option><option value="admin">admin</option></select></label>
             <label><span>tenant</span><input value={form.tenantId} onChange={(event) => setForm({ ...form, tenantId: event.target.value })} /></label>
             <label><span>status</span><select value={form.enabled ? "enabled" : "disabled"} onChange={(event) => setForm({ ...form, enabled: event.target.value === "enabled" })}><option value="enabled">enabled</option><option value="disabled">disabled</option></select></label>
           </div>
-          <dl className="facts"><dt>effective services</dt><dd>{selectedAccess.services.length}</dd><dt>active policies</dt><dd>{selectedAccess.policies.length}</dd><dt>tenant</dt><dd>{selected?.tenantId ?? form.tenantId}</dd></dl>
+          <dl className="facts"><dt>effective services</dt><dd>{selectedAccess.services.length}</dd><dt>active policies</dt><dd>{selectedAccess.policies.length}</dd><dt>role</dt><dd>{selected?.role ?? "user"}</dd><dt>tenant</dt><dd>{selected?.tenantId ?? form.tenantId}</dd></dl>
           <div className="sectionTitle">Tenant policies</div>
           <div className="miniList">{selectedAccess.policies.length ? selectedAccess.policies.map((policy) => <button type="button" key={policy.kid} onClick={() => onOpenPolicy(policy)}>{policy.kid}<span>{policy.providers.length} services</span></button>) : <p>No active policy grants this tenant access.</p>}</div>
           <div className="sectionTitle">Effective access</div>
