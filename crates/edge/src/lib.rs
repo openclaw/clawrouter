@@ -15,6 +15,7 @@ use worker::*;
 
 const PROVIDER_SNAPSHOT: &str = include_str!(concat!(env!("OUT_DIR"), "/provider-snapshot.json"));
 const PROVIDER_ICONS: &str = include_str!("provider-icons.json");
+include!(concat!(env!("OUT_DIR"), "/admin-assets.rs"));
 static USAGE_EVENT_COUNTER: AtomicU64 = AtomicU64::new(0);
 const MAX_SQL_BUDGET_MICROS: u64 = 9_007_199_254_740_991;
 const CORS_ALLOW_ORIGIN: &str = "*";
@@ -1882,6 +1883,11 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     if req.method() == Method::Get && url.path() == "/v1" {
         return service_index().and_then(with_cors);
     }
+    if req.method() == Method::Get {
+        if let Some(response) = admin_asset_response(url.path())? {
+            return Ok(response);
+        }
+    }
     if req.method() == Method::Get && interface_path(url.path()) {
         return protected_interface_shell(req.headers(), &env).await;
     }
@@ -1928,8 +1934,29 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             .and_then(with_cors);
     }
 
+    if req.method() == Method::Post {
+        if let Some(playground_path) = api_path.strip_prefix("/v1/playground") {
+            if is_openai_compatible_path(playground_path) {
+                if !access_admin_csrf_allowed(&req.method(), req.headers(), &url)? {
+                    return json_error(
+                        "access_csrf_required",
+                        "Cloudflare Access playground requests require a same-origin browser request",
+                        403,
+                    );
+                }
+                return proxy_openai_compatible(
+                    req,
+                    env,
+                    playground_path,
+                    ProxyAuthMode::AccessSession,
+                )
+                .await;
+            }
+        }
+    }
+
     if req.method() == Method::Post && is_openai_compatible_path(url.path()) {
-        return proxy_openai_compatible(req, env, url.path()).await;
+        return proxy_openai_compatible(req, env, url.path(), ProxyAuthMode::ProxyKey).await;
     }
 
     if req.method() == Method::Post && url.path().starts_with("/v1/proxy/") {
@@ -2017,12 +2044,35 @@ async fn protected_interface_shell(headers: &Headers, env: &Env) -> Result<Respo
 }
 
 fn interface_shell() -> Result<Response> {
+    if let Some(html) = ADMIN_INDEX_HTML {
+        let mut response = Response::from_html(html)?;
+        response
+            .headers_mut()
+            .set("cache-control", "no-store, max-age=0")?;
+        return Ok(response);
+    }
     let html = INTERFACE_HTML.replace("__CLAWROUTER_PROVIDER_ICONS__", PROVIDER_ICONS);
     let mut response = Response::from_html(html)?;
     response
         .headers_mut()
         .set("cache-control", "no-store, max-age=0")?;
     Ok(response)
+}
+
+fn admin_asset_response(path: &str) -> Result<Option<Response>> {
+    let Some((_, content_type, bytes)) = ADMIN_ASSETS
+        .iter()
+        .copied()
+        .find(|(asset_path, _, _)| *asset_path == path)
+    else {
+        return Ok(None);
+    };
+    let mut response = Response::from_bytes(bytes.to_vec())?;
+    response.headers_mut().set("content-type", content_type)?;
+    response
+        .headers_mut()
+        .set("cache-control", "public, max-age=31536000, immutable")?;
+    Ok(Some(response))
 }
 
 fn redirect_to(location: &str) -> Result<Response> {
@@ -2092,7 +2142,18 @@ fn openai_compatible_endpoint_paths(
         .collect()
 }
 
-async fn proxy_openai_compatible(mut req: Request, env: Env, path: &str) -> Result<Response> {
+#[derive(Clone, Copy)]
+enum ProxyAuthMode {
+    ProxyKey,
+    AccessSession,
+}
+
+async fn proxy_openai_compatible(
+    mut req: Request,
+    env: Env,
+    path: &str,
+    auth_mode: ProxyAuthMode,
+) -> Result<Response> {
     let snapshot = provider_snapshot()?;
     let raw_body = req.text().await?;
     let mut body = serde_json::from_str::<Value>(&raw_body).map_err(|error| {
@@ -2123,7 +2184,7 @@ async fn proxy_openai_compatible(mut req: Request, env: Env, path: &str) -> Resu
             404,
         );
     };
-    let auth = match authorize_proxy_key(req.headers(), &env, &route.provider.id).await? {
+    let auth = match authorize_request(req.headers(), &env, &route.provider.id, auth_mode).await? {
         AuthOutcome::Allowed(auth) => auth,
         AuthOutcome::Denied(response) => return Ok(response),
     };
@@ -2549,6 +2610,12 @@ struct AuthorizedKey {
 enum AuthOutcome {
     Allowed(AuthorizedKey),
     Denied(Response),
+}
+
+#[derive(Debug)]
+struct KeyPolicyEntry {
+    kid: String,
+    policy: KeyPolicy,
 }
 
 async fn session_profile(headers: &Headers, env: &Env) -> Result<Response> {
@@ -3219,6 +3286,16 @@ async fn existing_key_secret_sha256(kv: &KvStore, kid: &str) -> Result<Option<St
 }
 
 async fn list_admin_key_policies(kv: &KvStore) -> Result<Vec<AdminKeyPolicyResponse>> {
+    let mut entries = list_key_policy_records(kv)
+        .await?
+        .into_iter()
+        .map(|entry| admin_policy_response(&entry.kid, &entry.policy))
+        .collect::<Vec<_>>();
+    entries.sort_by(|a, b| a.kid.cmp(&b.kid));
+    Ok(entries)
+}
+
+async fn list_key_policy_records(kv: &KvStore) -> Result<Vec<KeyPolicyEntry>> {
     let mut entries = Vec::new();
     let mut cursor = None;
     loop {
@@ -3244,7 +3321,10 @@ async fn list_admin_key_policies(kv: &KvStore) -> Result<Vec<AdminKeyPolicyRespo
             let policy = serde_json::from_str::<KeyPolicy>(&record).map_err(|error| {
                 Error::RustError(format!("key policy is invalid JSON: {error}"))
             })?;
-            entries.push(admin_policy_response(kid, &policy));
+            entries.push(KeyPolicyEntry {
+                kid: kid.to_string(),
+                policy,
+            });
         }
         if list.list_complete {
             break;
@@ -3635,6 +3715,18 @@ async fn authorize_proxy_key(
     authorize_proxy_key_for_provider(headers, env, Some(provider_id)).await
 }
 
+async fn authorize_request(
+    headers: &Headers,
+    env: &Env,
+    provider_id: &str,
+    mode: ProxyAuthMode,
+) -> Result<AuthOutcome> {
+    match mode {
+        ProxyAuthMode::ProxyKey => authorize_proxy_key(headers, env, provider_id).await,
+        ProxyAuthMode::AccessSession => authorize_access_session(headers, env, provider_id).await,
+    }
+}
+
 async fn authorize_proxy_key_identity(headers: &Headers, env: &Env) -> Result<AuthOutcome> {
     authorize_proxy_key_for_provider(headers, env, None).await
 }
@@ -3701,6 +3793,58 @@ async fn authorize_proxy_key_for_provider(
         kid: key.kid,
         policy,
     }))
+}
+
+async fn authorize_access_session(
+    headers: &Headers,
+    env: &Env,
+    provider_id: &str,
+) -> Result<AuthOutcome> {
+    let Some(session) = verified_access_session(headers, env).await? else {
+        return json_error(
+            "access_session_required",
+            "playground requests require a verified Cloudflare Access session",
+            401,
+        )
+        .map(AuthOutcome::Denied);
+    };
+    let kv = match env.kv("POLICY_KV") {
+        Ok(kv) => kv,
+        Err(_) => {
+            return json_error(
+                "policy_store_unavailable",
+                "POLICY_KV binding is required for Access playground requests",
+                503,
+            )
+            .map(AuthOutcome::Denied);
+        }
+    };
+    for entry in list_key_policy_records(&kv).await? {
+        if access_policy_allows(&entry.policy, &session, provider_id) {
+            return Ok(AuthOutcome::Allowed(AuthorizedKey {
+                kid: entry.kid,
+                policy: entry.policy,
+            }));
+        }
+    }
+    json_error(
+        "provider_not_allowed",
+        "Cloudflare Access user is not allowed to use this provider",
+        403,
+    )
+    .map(AuthOutcome::Denied)
+}
+
+fn access_policy_allows(policy: &KeyPolicy, session: &AccessSession, provider_id: &str) -> bool {
+    if !policy.enabled {
+        return false;
+    }
+    if session.role != AccessRole::Admin
+        && policy.tenant_id.as_deref().unwrap_or("default") != session.tenant_id
+    {
+        return false;
+    }
+    policy.providers.is_empty() || policy.providers.iter().any(|id| id == provider_id)
 }
 
 fn provider_snapshot() -> Result<ProviderSnapshot> {
@@ -5662,6 +5806,41 @@ mod tests {
             new_key.try_into_policy(None).unwrap_err(),
             "secretSha256 is required for new proxy keys"
         );
+    }
+
+    #[test]
+    fn access_playground_matches_session_tenant_policies() {
+        let policy = KeyPolicy {
+            enabled: true,
+            secret_sha256: sha256_hex("secret"),
+            providers: vec!["openai".to_string()],
+            tenant_id: Some("team_docs".to_string()),
+            token_role: Some("user".to_string()),
+            monthly_budget_micros: Some(100),
+            request_cost_micros: Some(10),
+        };
+        let user = AccessSession {
+            authenticated: true,
+            auth: "cloudflare_access",
+            role: AccessRole::User,
+            email: "writer@example.com".to_string(),
+            subject: None,
+            tenant_id: "team_docs".to_string(),
+        };
+        let other_tenant = AccessSession {
+            tenant_id: "research".to_string(),
+            ..user.clone()
+        };
+        let admin = AccessSession {
+            role: AccessRole::Admin,
+            tenant_id: "ops".to_string(),
+            ..user.clone()
+        };
+
+        assert!(access_policy_allows(&policy, &user, "openai"));
+        assert!(!access_policy_allows(&policy, &user, "anthropic"));
+        assert!(!access_policy_allows(&policy, &other_tenant, "openai"));
+        assert!(access_policy_allows(&policy, &admin, "openai"));
     }
 
     #[test]

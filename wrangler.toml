@@ -4,7 +4,7 @@ compatibility_date = "2026-06-05"
 keep_vars = true
 
 [build]
-command = "cargo install -q worker-build --version 0.8.3 && ${HOME}/.cargo/bin/worker-build --release crates/edge"
+command = "pnpm --dir admin build && cargo install -q worker-build --version 0.8.3 && ${HOME}/.cargo/bin/worker-build --release crates/edge"
 
 [[queues.producers]]
 binding = "USAGE_QUEUE"

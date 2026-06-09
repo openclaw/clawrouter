@@ -63,10 +63,12 @@ pnpm cf:access
 
 Then redeploy with the printed `CLAWROUTER_ACCESS_TEAM_DOMAIN` and
 `CLAWROUTER_ACCESS_AUD` values. `/` redirects to the Access-protected
-`/dashboard` path, while public `/v1` catalog and proxy routes stay normal. A
-ClawRouter `access_session_required` JSON body on `/dashboard` means the Access
-app is not in front of the console path yet, and `pnpm cf:smoke` treats that as
-a failed deployment smoke.
+`/dashboard` path, while public `/v1` catalog and proxy routes stay normal.
+The Access app must also protect `/v1/playground/*` so browser playground calls
+carry a verified Access session. A ClawRouter `access_session_required` JSON
+body on `/dashboard` or `/v1/playground/*` means the Access app is not in front
+of the console path yet, and `pnpm cf:smoke` treats that as a failed deployment
+smoke.
 
 The `Deploy Cloudflare` workflow can do the Access step too: dispatch it with
 `provision_access=true` after adding a `CLOUDFLARE_API_TOKEN` that can manage
@@ -114,7 +116,8 @@ Admin endpoints accept a verified Cloudflare Access admin session or
 The browser console hashes generated proxy key secrets in-browser before
 storing policy in `POLICY_KV`, can assign Access users to `user` or `admin`
 roles, offers proxy-key role presets with provider and budget limits, and
-includes a proxy-key playground for OpenAI-compatible model routes.
+includes a Cloudflare Access-backed playground for OpenAI-compatible model
+routes.
 
 Generic REST/tool proxy requests are manifest-driven:
 
