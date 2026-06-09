@@ -7,7 +7,13 @@ service:
   platform: azure
   kind: model_provider
   upstreamService: azure-openai
-  configKeys: [AZURE_OPENAI_API_KEY, AZURE_OPENAI_ENDPOINT, AZURE_OPENAI_API_VERSION]
+  configKeys:
+    [
+      AZURE_OPENAI_API_KEY,
+      AZURE_OPENAI_ENDPOINT,
+      AZURE_OPENAI_API_VERSION,
+      AZURE_OPENAI_COMPLETION_TOKEN_DEPLOYMENTS,
+    ]
 auth:
   schemes:
     - type: api_key
@@ -26,6 +32,12 @@ adapter:
   error: openai_error
   injectQuery:
     api-version: ${api_version}
+  requestTransforms:
+    renameFields:
+      - from: max_tokens
+        to: max_completion_tokens
+        paths: [/v1/chat/completions]
+        upstreamConfig: completion_token_deployments
 capabilities:
   - id: llm.chat
     endpoint: chat_completions

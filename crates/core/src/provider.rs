@@ -160,6 +160,28 @@ pub struct AdapterConfig {
     pub inject_headers: BTreeMap<String, String>,
     #[serde(rename = "injectQuery", default)]
     pub inject_query: BTreeMap<String, String>,
+    #[serde(rename = "requestTransforms", default)]
+    pub request_transforms: RequestTransforms,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RequestTransforms {
+    #[serde(rename = "renameFields", default)]
+    pub rename_fields: Vec<FieldRenameTransform>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FieldRenameTransform {
+    pub from: String,
+    pub to: String,
+    #[serde(default)]
+    pub paths: Vec<String>,
+    #[serde(default)]
+    pub upstreams: Vec<String>,
+    #[serde(rename = "upstreamConfig", default)]
+    pub upstream_config: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

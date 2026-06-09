@@ -2212,6 +2212,13 @@ async fn proxy_openai_compatible(
             }
         };
     body["model"] = Value::String(route.upstream_model.clone());
+    normalize_openai_proxy_body(
+        route.provider,
+        path,
+        &route.upstream_model,
+        Some(&env),
+        &mut body,
+    );
     let upstream_body = serde_json::to_string(&body)?;
 
     let header_context = HeaderRequestContext {
@@ -4002,6 +4009,66 @@ fn capability_for_path(capabilities: &[String], request_path: &str) -> Option<&'
         .then_some(capability)
 }
 
+fn normalize_openai_proxy_body(
+    provider: &CompiledProvider,
+    path: &str,
+    upstream_model: &str,
+    env: Option<&Env>,
+    body: &mut Value,
+) {
+    let Some(object) = body.as_object_mut() else {
+        return;
+    };
+    for transform in &provider.adapter.request_transforms.rename_fields {
+        if !transform.paths.is_empty() && !transform.paths.iter().any(|candidate| candidate == path)
+        {
+            continue;
+        }
+        if !request_transform_matches_upstream(provider, transform, upstream_model, env) {
+            continue;
+        }
+        let Some(value) = object.remove(&transform.from) else {
+            continue;
+        };
+        object.entry(transform.to.clone()).or_insert(value);
+    }
+}
+
+fn request_transform_matches_upstream(
+    provider: &CompiledProvider,
+    transform: &clawrouter_core::provider::FieldRenameTransform,
+    upstream_model: &str,
+    env: Option<&Env>,
+) -> bool {
+    if transform.upstreams.is_empty() && transform.upstream_config.is_none() {
+        return true;
+    }
+    if transform
+        .upstreams
+        .iter()
+        .any(|candidate| candidate == upstream_model)
+    {
+        return true;
+    }
+    let Some(config_name) = transform.upstream_config.as_deref() else {
+        return false;
+    };
+    let Some(env) = env else {
+        return false;
+    };
+    optional_provider_config_value(env, provider, config_name)
+        .map(|configured| {
+            split_config_list(&configured).any(|candidate| candidate == upstream_model)
+        })
+        .unwrap_or(false)
+}
+
+fn split_config_list(value: &str) -> impl Iterator<Item = &str> {
+    value
+        .split(|ch: char| ch == ',' || ch == ';' || ch.is_ascii_whitespace())
+        .filter(|candidate| !candidate.is_empty())
+}
+
 fn openai_upstream_url(
     provider: &CompiledProvider,
     endpoint: &CompiledEndpoint,
@@ -5597,6 +5664,66 @@ mod tests {
         assert!(template_binding_candidates(openrouter, "site_url")
             .iter()
             .any(|binding| binding == "OPENROUTER_SITE_URL"));
+    }
+
+    #[test]
+    fn azure_openai_chat_requests_use_completion_token_limit() {
+        let snapshot = provider_snapshot().unwrap();
+        let provider = snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.id == "azure-openai")
+            .unwrap();
+        let mut body = serde_json::json!({
+            "model": "gpt-54-mini-live",
+            "messages": [{"role": "user", "content": "reply with ok"}],
+            "max_tokens": 16
+        });
+        let mut provider = provider.clone();
+        provider.adapter.request_transforms.rename_fields[0].upstreams =
+            vec!["gpt-54-mini-live".to_string()];
+        provider.adapter.request_transforms.rename_fields[0].upstream_config = None;
+
+        normalize_openai_proxy_body(
+            &provider,
+            "/v1/chat/completions",
+            "gpt-54-mini-live",
+            None,
+            &mut body,
+        );
+        assert!(body.get("max_tokens").is_none());
+        assert_eq!(body["max_completion_tokens"], 16);
+
+        let mut explicit_body = serde_json::json!({
+            "model": "gpt-54-mini-live",
+            "messages": [{"role": "user", "content": "reply with ok"}],
+            "max_tokens": 16,
+            "max_completion_tokens": 32
+        });
+        normalize_openai_proxy_body(
+            &provider,
+            "/v1/chat/completions",
+            "gpt-54-mini-live",
+            None,
+            &mut explicit_body,
+        );
+        assert!(explicit_body.get("max_tokens").is_none());
+        assert_eq!(explicit_body["max_completion_tokens"], 32);
+
+        let mut generic_body = serde_json::json!({
+            "model": "old-chat-deployment",
+            "messages": [{"role": "user", "content": "reply with ok"}],
+            "max_tokens": 16
+        });
+        normalize_openai_proxy_body(
+            &provider,
+            "/v1/chat/completions",
+            "old-chat-deployment",
+            None,
+            &mut generic_body,
+        );
+        assert_eq!(generic_body["max_tokens"], 16);
+        assert!(generic_body.get("max_completion_tokens").is_none());
     }
 
     #[test]

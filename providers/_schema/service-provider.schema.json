@@ -80,7 +80,17 @@
         "error": { "type": "string" },
         "passthroughHeaders": { "type": "array", "items": { "type": "string" } },
         "injectHeaders": { "type": "object", "additionalProperties": { "type": "string" } },
-        "injectQuery": { "type": "object", "additionalProperties": { "type": "string" } }
+        "injectQuery": { "type": "object", "additionalProperties": { "type": "string" } },
+        "requestTransforms": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "renameFields": {
+              "type": "array",
+              "items": { "$ref": "#/$defs/fieldRenameTransform" }
+            }
+          }
+        }
       }
     },
     "capabilities": {
@@ -241,6 +251,18 @@
         "name": { "type": "string" },
         "source": { "type": "string" },
         "unit": { "type": "string" }
+      }
+    },
+    "fieldRenameTransform": {
+      "type": "object",
+      "required": ["from", "to"],
+      "additionalProperties": false,
+      "properties": {
+        "from": { "type": "string" },
+        "to": { "type": "string" },
+        "paths": { "type": "array", "items": { "type": "string" } },
+        "upstreams": { "type": "array", "items": { "type": "string" } },
+        "upstreamConfig": { "type": "string" }
       }
     },
     "fixture": {
