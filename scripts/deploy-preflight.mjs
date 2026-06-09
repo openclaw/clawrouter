@@ -55,6 +55,8 @@ if (liveProviders.length > 0) {
   }
 }
 
+await checkCloudflarePermissions();
+
 if (errors.length > 0) {
   console.error("clawrouter deploy preflight failed:");
   for (const error of errors) {
@@ -68,4 +70,85 @@ console.log(
 );
 if (selectedProviders.length > 0) {
   console.log(`live provider smoke enabled: ${selectedProviders.map((p) => p.id).join(",")}`);
+}
+
+async function checkCloudflarePermissions() {
+  const token = process.env.CLOUDFLARE_API_TOKEN?.trim();
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
+  const namespaceId = process.env.CLAWROUTER_POLICY_KV_ID?.trim();
+  const workerName = process.env.CLAWROUTER_WORKER_NAME?.trim() || "clawrouter-edge";
+  if (!token || !accountId || !namespaceId) {
+    return;
+  }
+
+  await checkCloudflareWorkerRead({ token, accountId, workerName });
+  if (process.env.CLAWROUTER_PREFLIGHT_SKIP_KV_WRITE === "1") {
+    console.log("cloudflare kv token: skipped write probe");
+    return;
+  }
+  await checkCloudflareKvWrite({ token, accountId, namespaceId });
+}
+
+async function checkCloudflareWorkerRead({ token, accountId, workerName }) {
+  const response = await cloudflareFetch(
+    token,
+    `/accounts/${accountId}/workers/services/${workerName}`,
+  );
+  if (response.ok && response.body.success !== false) {
+    console.log(`cloudflare worker token: can read ${workerName}`);
+    return;
+  }
+  if (response.status === 404) {
+    console.log(`cloudflare worker token: ${workerName} does not exist yet`);
+    return;
+  }
+  errors.push(
+    `CLOUDFLARE_API_TOKEN cannot read Worker ${workerName}: ${firstCloudflareError(response)}`,
+  );
+}
+
+async function checkCloudflareKvWrite({ token, accountId, namespaceId }) {
+  const key = `__clawrouter_preflight_${Date.now()}`;
+  const encodedKey = encodeURIComponent(key);
+  const path = `/accounts/${accountId}/storage/kv/namespaces/${namespaceId}/values/${encodedKey}`;
+  const put = await cloudflareFetch(token, path, {
+    method: "PUT",
+    headers: { "content-type": "text/plain" },
+    body: "ok",
+  });
+  if (!put.ok || put.body.success === false) {
+    errors.push(`CLOUDFLARE_API_TOKEN cannot write POLICY_KV: ${firstCloudflareError(put)}`);
+    return;
+  }
+  const deleted = await cloudflareFetch(token, path, { method: "DELETE" });
+  if (!deleted.ok || deleted.body.success === false) {
+    errors.push(
+      `CLOUDFLARE_API_TOKEN wrote POLICY_KV but could not delete probe key: ${firstCloudflareError(deleted)}`,
+    );
+    return;
+  }
+  console.log("cloudflare kv token: can write POLICY_KV");
+}
+
+async function cloudflareFetch(token, path, init = {}) {
+  let response;
+  let body;
+  try {
+    response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
+      ...init,
+      headers: {
+        ...(init.headers ?? {}),
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    body = await response.json().catch(() => ({}));
+  } catch (error) {
+    errors.push(`could not reach Cloudflare API: ${error.message}`);
+    return { ok: false, status: 0, body: {} };
+  }
+  return { ok: response.ok, status: response.status, body };
+}
+
+function firstCloudflareError(response) {
+  return response.body.errors?.[0]?.message ?? `HTTP ${response.status}`;
 }

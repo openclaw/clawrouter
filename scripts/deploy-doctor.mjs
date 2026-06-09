@@ -51,6 +51,7 @@ checkLocalEnv();
 checkLiveProviderReadiness(plan);
 checkWranglerAuth();
 await checkCloudflareWorkerPermission();
+await checkCloudflareKvPermission();
 checkGitHubRepository(repo);
 printProviderConfig(plan);
 
@@ -180,6 +181,70 @@ async function checkCloudflareWorkerPermission() {
   errors.push(
     `CLOUDFLARE_API_TOKEN cannot read Worker ${workerName}: ${firstError?.message ?? `HTTP ${response.status}`}`,
   );
+}
+
+async function checkCloudflareKvPermission() {
+  if (
+    process.env.CLAWROUTER_DOCTOR_SKIP_CLOUDFLARE_API === "1" ||
+    process.env.CLAWROUTER_DOCTOR_SKIP_CLOUDFLARE_KV === "1"
+  ) {
+    warnings.push("skipped Cloudflare KV permission check");
+    return;
+  }
+  const token = process.env.CLOUDFLARE_API_TOKEN?.trim();
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
+  const namespaceId = process.env.CLAWROUTER_POLICY_KV_ID?.trim();
+  if (!token || !accountId || !namespaceId) {
+    return;
+  }
+  const key = `__clawrouter_doctor_${Date.now()}`;
+  const path = `/accounts/${accountId}/storage/kv/namespaces/${namespaceId}/values/${encodeURIComponent(key)}`;
+  const put = await cloudflareRequest(token, path, {
+    method: "PUT",
+    headers: { "content-type": "text/plain" },
+    body: "ok",
+  });
+  if (put.status === 0) {
+    return;
+  }
+  if (!put.ok || put.body.success === false) {
+    errors.push(`CLOUDFLARE_API_TOKEN cannot write POLICY_KV: ${cloudflareError(put)}`);
+    return;
+  }
+  const deleted = await cloudflareRequest(token, path, { method: "DELETE" });
+  if (deleted.status === 0) {
+    return;
+  }
+  if (!deleted.ok || deleted.body.success === false) {
+    errors.push(
+      `CLOUDFLARE_API_TOKEN wrote POLICY_KV but could not delete probe key: ${cloudflareError(deleted)}`,
+    );
+    return;
+  }
+  console.log("cloudflare kv token: can write POLICY_KV");
+}
+
+async function cloudflareRequest(token, path, init = {}) {
+  let response;
+  let body;
+  try {
+    response = await fetch(`https://api.cloudflare.com/client/v4${path}`, {
+      ...init,
+      headers: {
+        ...(init.headers ?? {}),
+        Authorization: `Bearer ${token}`,
+      },
+    });
+    body = await response.json().catch(() => ({}));
+  } catch (error) {
+    warnings.push(`could not reach Cloudflare API: ${error.message}`);
+    return { ok: false, status: 0, body: {} };
+  }
+  return { ok: response.ok, status: response.status, body };
+}
+
+function cloudflareError(response) {
+  return response.body.errors?.[0]?.message ?? `HTTP ${response.status}`;
 }
 
 function checkGitHubRepository(repo) {
