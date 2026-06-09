@@ -14,6 +14,7 @@ use wasm_bindgen_futures::JsFuture;
 use worker::*;
 
 const PROVIDER_SNAPSHOT: &str = include_str!(concat!(env!("OUT_DIR"), "/provider-snapshot.json"));
+const PROVIDER_ICONS: &str = include_str!("provider-icons.json");
 static USAGE_EVENT_COUNTER: AtomicU64 = AtomicU64::new(0);
 const MAX_SQL_BUDGET_MICROS: u64 = 9_007_199_254_740_991;
 const CORS_ALLOW_ORIGIN: &str = "*";
@@ -30,282 +31,519 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
   <title>ClawRouter Console</title>
   <style>
     :root {
-      color-scheme: dark;
-      --bg: #050506;
-      --surface: #0d0e10;
-      --surface-2: #141519;
-      --surface-3: #1a1c21;
-      --ink: #f4f1ea;
-      --muted: #b8b1a4;
-      --faint: #7e7a71;
-      --line: #27292f;
-      --line-strong: #41434c;
-      --accent: #f5d46f;
-      --accent-soft: #2c2613;
-      --accent-ink: #171309;
-      --blue: #9cc8ff;
-      --green: #92e6b5;
-      --warn: #ff9a76;
-      --shadow: 0 18px 54px rgba(0, 0, 0, .42);
+      color-scheme: light;
+      --bg: #f6f6f3;
+      --paper: #fafaf7;
+      --surface: #ffffff;
+      --surface-2: #f3f3ef;
+      --surface-3: #e9e9e3;
+      --ink: #171712;
+      --muted: #5c5c54;
+      --faint: #6d6d64;
+      --line: #ddddd4;
+      --line-strong: #b9b8ad;
+      --accent: #181814;
+      --accent-soft: #e9e5ff;
+      --accent-ink: #fbfbf7;
+      --lavender: #eadfff;
+      --lavender-strong: #d7c4ff;
+      --lavender-ink: #4d3278;
+      --lime: #dcff69;
+      --lime-soft: #f0ffd2;
+      --lime-ink: #2f3a04;
+      --green: #3d7a4f;
+      --warn: #9a4a28;
+      --danger: #9d2f23;
+      --blue: #426b83;
+      --shadow: 0 1px 0 rgba(23, 23, 18, .04), 0 18px 44px rgba(23, 23, 18, .07);
+      --radius: 8px;
+      --radius-sm: 6px;
+      --space-1: 4px;
+      --space-2: 8px;
+      --space-3: 12px;
+      --space-4: 16px;
+      --space-5: 24px;
+      --space-6: 36px;
     }
     * { box-sizing: border-box; }
+    html { min-width: 320px; background: var(--bg); }
     body {
       margin: 0;
+      min-height: 100vh;
       font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background:
-        linear-gradient(rgba(255,255,255,.021) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255,255,255,.021) 1px, transparent 1px),
-        radial-gradient(circle at 82% -18%, rgba(245, 212, 111, .13), transparent 34%),
-        radial-gradient(circle at -10% 28%, rgba(156, 200, 255, .08), transparent 28%),
-        var(--bg);
-      background-size: 34px 34px, 34px 34px, auto, auto;
+        radial-gradient(circle at 8% -10%, rgba(234, 223, 255, .78), transparent 31vw),
+        radial-gradient(circle at 100% 7%, rgba(220, 255, 105, .22), transparent 24vw),
+        linear-gradient(115deg, rgba(23, 23, 18, .025), transparent 48%),
+        linear-gradient(var(--bg), var(--bg));
       color: var(--ink);
+      font-size: 14px;
       line-height: 1.45;
       overflow-x: hidden;
+      font-kerning: normal;
+      text-rendering: geometricPrecision;
     }
-    header {
-      border-bottom: 1px solid var(--line);
-      background: rgba(5, 5, 6, .9);
-      backdrop-filter: blur(18px);
-      position: sticky;
-      top: 0;
-      z-index: 2;
-    }
-    .wrap {
-      width: min(1240px, calc(100vw - 32px));
-      margin: 0 auto;
-    }
-    .top {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-      min-height: 74px;
-      padding: 14px 0;
-      min-width: 0;
-    }
-    .top > *,
-    .consoleIntro > *,
-    .toolbar > *,
-    .grid > * {
-      min-width: 0;
-      max-width: 100%;
-    }
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 13px;
-      min-width: 0;
-    }
-    .brand > div { min-width: 0; }
-    .brandmark {
-      width: 42px;
-      height: 42px;
-      display: grid;
-      place-items: center;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: linear-gradient(180deg, #24262c, var(--surface));
-      color: var(--accent);
-      font-weight: 800;
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
-    }
-    .eyebrow {
-      margin: 0 0 4px;
-      color: var(--faint);
-      font-size: 11px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: .08em;
-    }
-    h1 { margin: 0; font-size: 24px; line-height: 1; letter-spacing: 0; }
-    h2 { margin: 0 0 14px; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
-    p { margin: 6px 0 0; color: var(--muted); }
-    nav {
-      display: flex;
-      gap: 4px;
-      flex-wrap: wrap;
-      padding: 3px;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      background: var(--surface);
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(23, 23, 18, .028) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(23, 23, 18, .024) 1px, transparent 1px);
+      background-size: 28px 28px;
+      mask-image: linear-gradient(180deg, rgba(0,0,0,.75), transparent 520px);
     }
     button, input, select, textarea {
       font: inherit;
       border: 1px solid var(--line);
-      border-radius: 8px;
-      background: var(--surface-2);
+      border-radius: var(--radius-sm);
+      background: var(--surface);
       color: var(--ink);
     }
     button {
-      min-height: 38px;
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      min-height: 34px;
       padding: 0 12px;
       cursor: pointer;
-      transition: background .16s ease, border-color .16s ease, color .16s ease, transform .16s ease;
+      font-weight: 650;
+      transition: background .14s ease, border-color .14s ease, color .14s ease, transform .14s ease;
     }
-    button:hover { transform: translateY(-1px); border-color: var(--line-strong); }
-    nav button {
-      border-color: transparent;
-      background: transparent;
-      color: var(--muted);
-      border-radius: 999px;
+    button:hover {
+      border-color: var(--line-strong);
+      background: var(--surface-2);
     }
-    button.active, button.primary {
-      background: var(--ink);
+    button:active { transform: translateY(1px); }
+    button:disabled {
+      cursor: not-allowed;
+      opacity: .5;
+      transform: none;
+    }
+    button.active,
+    button.primary {
+      background: var(--accent);
       color: var(--accent-ink);
-      border-color: var(--ink);
+      border-color: var(--accent);
     }
-    main { padding: 18px 0 42px; }
-    .consoleIntro {
-      display: grid;
-      grid-template-columns: minmax(0, 1.4fr) minmax(320px, .6fr);
-      gap: 14px;
-      margin-bottom: 14px;
+    input, select {
+      min-height: 36px;
+      width: 100%;
+      padding: 0 10px;
     }
-    .heroPanel {
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 18px;
-      background: linear-gradient(135deg, rgba(245, 212, 111, .10), rgba(13, 14, 16, .92) 48%, rgba(156, 200, 255, .08));
-      box-shadow: var(--shadow);
-    }
-    .heroPanel h2 {
-      margin: 0;
-      color: var(--ink);
-      font-size: clamp(24px, 3vw, 38px);
-      line-height: 1.02;
-      text-transform: none;
-      letter-spacing: 0;
-      overflow-wrap: anywhere;
-    }
-    .heroPanel p { max-width: 720px; }
-    .quickPanel {
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 14px;
-      background: rgba(13, 14, 16, .86);
-      box-shadow: var(--shadow);
-    }
-    .quickPanel h2 { margin-bottom: 10px; }
-    .quickList { display: grid; gap: 8px; }
-    .quickItem {
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
-      border-bottom: 1px solid var(--line);
-      padding-bottom: 8px;
-      color: var(--muted);
-      font-size: 13px;
-    }
-    .quickItem:last-child { border-bottom: 0; padding-bottom: 0; }
-    .quickItem strong { color: var(--ink); font-weight: 750; }
-    .quickItem strong {
-      min-width: 0;
-      text-align: right;
-      overflow-wrap: anywhere;
-    }
-    .toolbar {
-      display: grid;
-      grid-template-columns: 1fr 1fr auto;
-      gap: 10px;
-      align-items: end;
-      margin-bottom: 12px;
-      padding: 10px;
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      background: rgba(13, 15, 14, .82);
-      box-shadow: var(--shadow);
-    }
-    label { display: grid; gap: 5px; color: var(--faint); font-size: 12px; font-weight: 650; }
-    input, select { min-height: 38px; padding: 0 10px; width: 100%; }
     textarea {
       min-height: 132px;
       width: 100%;
       resize: vertical;
       padding: 10px;
-      line-height: 1.45;
+      line-height: 1.5;
     }
-    input:focus-visible, button:focus-visible {
-      outline: 2px solid rgba(231, 248, 200, .34);
+    input:focus-visible,
+    select:focus-visible,
+    textarea:focus-visible,
+    button:focus-visible {
+      outline: 2px solid var(--accent);
       outline-offset: 2px;
+    }
+    h1, h2, h3, p { margin: 0; }
+    h1 {
+      font-size: 1.02rem;
+      line-height: 1.1;
+      letter-spacing: 0;
+    }
+    h2 {
+      color: var(--ink);
+      font-size: 1rem;
+      font-weight: 760;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+    h3 {
+      color: var(--faint);
+      font-size: .72rem;
+      font-weight: 760;
+      letter-spacing: .06em;
+      text-transform: uppercase;
+    }
+    p {
+      color: var(--muted);
+      max-width: 72ch;
+    }
+    label {
+      display: grid;
+      gap: 6px;
+      color: var(--muted);
+      font-size: .78rem;
+      font-weight: 650;
+    }
+    .appShell {
+      display: grid;
+      grid-template-columns: 252px minmax(0, 1fr);
+      min-height: 100vh;
+      padding: var(--space-4);
+      gap: var(--space-4);
+    }
+    .appShell * { min-width: 0; }
+    .appShell > *,
+    .content,
+    .contentInner,
+    .sidebar,
+    nav,
+    .topbar > *,
+    .pageTitle,
+    .quickPanel,
+    .view,
+    .panel,
+    .grid > * {
+      min-width: 0;
+      max-width: 100%;
+    }
+    .sidebar {
+      position: sticky;
+      top: var(--space-4);
+      z-index: 10;
+      display: grid;
+      grid-template-rows: auto auto 1fr auto;
+      gap: var(--space-5);
+      align-self: start;
+      min-height: calc(100vh - 32px);
+      padding: var(--space-4);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      background: color-mix(in srgb, var(--surface) 88%, transparent);
+      box-shadow: var(--shadow);
+      backdrop-filter: blur(18px) saturate(1.08);
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      min-width: 0;
+    }
+    .brand > div { min-width: 0; }
+    .brandmark {
+      width: 32px;
+      height: 32px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--accent);
+      border-radius: 7px;
+      background: var(--accent);
+      color: var(--accent-ink);
+      font-size: .72rem;
+      font-weight: 820;
+    }
+    .eyebrow {
+      color: var(--faint);
+      font-size: .68rem;
+      font-weight: 760;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+    }
+    nav {
+      display: grid;
+      gap: var(--space-2);
+      align-content: start;
+      min-width: 0;
+    }
+    nav button {
+      width: 100%;
+      min-height: 38px;
+      justify-content: flex-start;
+      padding: 0 12px;
+      background: transparent;
+      color: var(--muted);
+      border-color: transparent;
+    }
+    nav button.active {
+      background: var(--lavender);
+      color: var(--lavender-ink);
+      border-color: color-mix(in srgb, var(--lavender-strong) 60%, var(--line));
+    }
+    .authDock {
+      display: grid;
+      grid-template-columns: 1fr;
+      gap: var(--space-2);
+      align-items: end;
+      align-self: end;
+    }
+    .authDock button { width: 100%; }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      min-height: 24px;
+      width: fit-content;
+      max-width: 100%;
+      padding: 0 9px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--lime-soft);
+      color: var(--muted);
+      font-size: .8rem;
+      overflow-wrap: anywhere;
+    }
+    .status::before {
+      content: "";
+      width: 6px;
+      height: 6px;
+      flex: 0 0 auto;
+      margin-right: 7px;
+      border-radius: 50%;
+      background: var(--lime);
+    }
+    .status.bad { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 42%, var(--line)); }
+    .status.bad::before { background: var(--warn); }
+    .status.good { color: var(--green); border-color: color-mix(in srgb, var(--green) 42%, var(--line)); }
+    .status.good::before { background: var(--green); }
+    .status.soft { color: var(--blue); border-color: color-mix(in srgb, var(--blue) 38%, var(--line)); }
+    .status.soft::before { background: var(--blue); }
+    .content {
+      min-width: 0;
+      padding: var(--space-2) 0 0;
+    }
+    .contentInner {
+      width: min(1320px, 100%);
+      margin: 0 auto;
+    }
+    .topbar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(280px, 390px);
+      gap: var(--space-5);
+      align-items: stretch;
+      margin-bottom: var(--space-5);
+    }
+    .pageTitle {
+      display: grid;
+      align-content: end;
+      gap: var(--space-2);
+      min-height: 104px;
+      padding: var(--space-5);
+      border: 1px solid color-mix(in srgb, var(--lavender-strong) 56%, var(--line));
+      border-radius: var(--radius);
+      background:
+        radial-gradient(circle at 12% 14%, rgba(220, 255, 105, .34), transparent 22%),
+        linear-gradient(135deg, var(--lavender), #f9f7ff 62%, var(--surface));
+      box-shadow: var(--shadow);
+    }
+    .pageTitle h2 {
+      max-width: 780px;
+      font-size: clamp(1.35rem, 3vw, 2.35rem);
+      line-height: 1;
+      letter-spacing: 0;
+      overflow-wrap: anywhere;
+    }
+    .quickPanel {
+      display: grid;
+      align-content: start;
+      gap: var(--space-3);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: var(--space-4);
+      background: var(--surface);
+      box-shadow: var(--shadow);
+    }
+    .quickList { display: grid; gap: 0; }
+    .quickItem {
+      display: grid;
+      grid-template-columns: minmax(78px, auto) minmax(0, 1fr);
+      gap: var(--space-3);
+      border-top: 1px solid var(--line);
+      padding: 9px 0;
+      color: var(--muted);
+      font-size: .84rem;
+    }
+    .quickItem:first-child { border-top: 0; padding-top: 0; }
+    .quickItem:last-child { padding-bottom: 0; }
+    .quickItem strong {
+      min-width: 0;
+      color: var(--ink);
+      font-weight: 720;
+      text-align: right;
+      overflow-wrap: anywhere;
+    }
+    .view {
+      display: grid;
+      gap: var(--space-4);
     }
     .grid {
       display: grid;
-      grid-template-columns: repeat(12, 1fr);
-      gap: 14px;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap: var(--space-4);
     }
+    .viewIntro {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: var(--space-4);
+      align-items: end;
+      padding: 0 2px var(--space-1);
+    }
+    .viewIntro h2 {
+      margin-bottom: var(--space-1);
+      font-size: 1.1rem;
+    }
+    .viewIntro p { font-size: .92rem; }
     .panel {
       grid-column: span 6;
-      background: linear-gradient(180deg, rgba(23, 29, 26, .92), rgba(13, 15, 14, .94));
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 16px;
       min-width: 0;
       overflow-x: auto;
+      display: grid;
+      gap: var(--space-4);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: var(--space-4);
+      background: var(--surface);
       box-shadow: var(--shadow);
     }
     .wide { grid-column: 1 / -1; }
     .third { grid-column: span 4; }
-    .stack { display: grid; gap: 12px; }
+    .stack { display: grid; gap: var(--space-3); }
+    .panelHeader {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: var(--space-3);
+    }
+    .panelHeader h2 { margin: 0; }
+    .panelHeader p {
+      margin-top: var(--space-1);
+      color: var(--faint);
+      font-size: .84rem;
+    }
+    .registryHeader {
+      align-items: end;
+    }
+    .toolbar {
+      display: flex;
+      gap: var(--space-2);
+      align-items: end;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .toolbar label {
+      min-width: 168px;
+    }
     .form {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 10px;
+      gap: var(--space-3);
     }
     .full { grid-column: 1 / -1; }
     .actions {
       display: flex;
       align-items: center;
       justify-content: flex-end;
-      gap: 8px;
+      gap: var(--space-2);
       flex-wrap: wrap;
     }
     .providerCloud {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(185px, 1fr));
-      gap: 8px;
+      gap: 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+      background: var(--surface);
     }
     .providerCard {
       display: grid;
-      grid-template-columns: 34px minmax(0, 1fr);
-      gap: 10px;
+      grid-template-columns: 40px minmax(190px, 1fr) minmax(220px, auto);
+      gap: var(--space-3);
       align-items: center;
-      min-height: 58px;
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 10px;
-      background: rgba(8, 9, 8, .42);
+      min-height: 64px;
+      padding: var(--space-3);
+      border-top: 1px solid var(--line);
+      background: var(--surface);
+      transition: background .14s ease;
+    }
+    .providerCard:first-child { border-top: 0; }
+    .providerCard:hover { background: var(--surface-2); }
+    .providerCard:nth-child(3n + 1) .capabilityPill:last-child {
+      background: var(--lime-soft);
+      border-color: color-mix(in srgb, var(--lime) 70%, var(--line));
+      color: var(--lime-ink);
+    }
+    .providerTitle {
+      display: grid;
+      gap: 2px;
+    }
+    .providerTitle strong,
+    .providerTitle span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .providerTitle strong { font-weight: 760; }
+    .providerTitle span {
+      color: var(--faint);
+      font-size: .78rem;
     }
     .providerIcon {
-      width: 34px;
-      height: 34px;
+      position: relative;
+      isolation: isolate;
+      width: 36px;
+      height: 36px;
       display: grid;
       place-items: center;
-      border-radius: 9px;
-      background: var(--icon-bg, var(--surface-3));
+      border-radius: var(--radius-sm);
+      border: 1px solid color-mix(in srgb, var(--icon-fg, var(--ink)) 18%, transparent);
+      background:
+        radial-gradient(circle at 28% 14%, color-mix(in srgb, var(--icon-fg, var(--ink)) 22%, transparent), transparent 44%),
+        linear-gradient(145deg, color-mix(in srgb, var(--icon-bg, var(--surface-3)) 88%, #ffffff 8%), color-mix(in srgb, var(--icon-bg, var(--surface-3)) 76%, #000000 18%));
       color: var(--icon-fg, var(--ink));
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.12);
+      box-shadow:
+        inset 0 1px 0 rgba(255,255,255,.2),
+        inset 0 -10px 18px rgba(0,0,0,.14);
       overflow: hidden;
+    }
+    .providerIcon::before {
+      content: "";
+      position: absolute;
+      inset: 1px;
+      z-index: -1;
+      border-radius: inherit;
+      background: linear-gradient(180deg, rgba(255,255,255,.18), transparent 54%);
+      pointer-events: none;
+    }
+    .providerIcon::after {
+      content: "";
+      position: absolute;
+      inset: auto 6px 5px;
+      height: 1px;
+      background: color-mix(in srgb, var(--icon-fg, var(--ink)) 34%, transparent);
+      opacity: .55;
+      pointer-events: none;
     }
     .providerIcon svg {
       width: 22px;
       height: 22px;
       display: block;
+      fill: currentColor;
+      filter: drop-shadow(0 1px 0 rgba(0,0,0,.2));
     }
-    .providerCard strong,
-    .providerCard span {
-      display: block;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
+    .providerIcon svg * {
+      fill: currentColor !important;
+      fill-opacity: 1 !important;
+      opacity: 1 !important;
+      stroke: none !important;
     }
-    .providerCard span { color: var(--faint); font-size: 12px; }
+    .providerIcon.fallback svg * {
+      fill: none !important;
+      stroke: currentColor !important;
+    }
+    .providerIcon.fallback svg circle[fill],
+    .providerIcon.fallback svg path[fill] {
+      fill: currentColor !important;
+      stroke: none !important;
+    }
+    .providerIcon .sr { display: block; }
     .providerMeta {
       display: flex;
-      gap: 6px;
+      gap: var(--space-2);
       align-items: center;
       flex-wrap: wrap;
-      margin-top: 3px;
+      justify-content: flex-end;
     }
     .providerInline {
       display: inline-grid;
@@ -337,16 +575,16 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       padding: 0 8px;
       border: 1px solid var(--line);
       border-radius: 999px;
-      background: rgba(255,255,255,.03);
+      background: var(--surface-2);
       color: var(--muted);
-      font-size: 12px;
+      font-size: .78rem;
       font-weight: 650;
       white-space: nowrap;
     }
     .serviceChip svg {
       width: 13px;
       height: 13px;
-      color: var(--blue);
+      color: var(--muted);
     }
     .capabilityPills {
       display: flex;
@@ -355,26 +593,25 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     }
     .providerChecks {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(126px, 1fr));
-      gap: 7px;
-      max-height: 170px;
+      grid-template-columns: repeat(auto-fill, minmax(145px, 1fr));
+      gap: var(--space-2);
+      max-height: 224px;
       overflow: auto;
       border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 8px;
-      background: rgba(8, 9, 8, .35);
+      border-radius: var(--radius-sm);
+      padding: var(--space-2);
+      background: var(--paper);
     }
     .presetGrid {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 8px;
-      margin-top: 4px;
+      gap: var(--space-2);
     }
     .presetButton {
-      min-height: 84px;
-      padding: 10px;
+      min-height: 78px;
+      padding: var(--space-3);
       text-align: left;
-      background: rgba(8, 9, 8, .42);
+      background: var(--paper);
     }
     .presetButton strong,
     .presetButton span {
@@ -387,14 +624,14 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     }
     .presetButton span {
       color: var(--faint);
-      font-size: 12px;
+      font-size: .78rem;
       line-height: 1.35;
     }
     .check {
       grid-template-columns: 16px minmax(0, 1fr);
       align-items: center;
       color: var(--ink);
-      font-size: 12px;
+      font-size: .8rem;
       font-weight: 600;
     }
     .check input {
@@ -423,7 +660,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     }
     .requestPanel {
       display: grid;
-      gap: 10px;
+      gap: var(--space-3);
     }
     .requestTabs {
       display: inline-flex;
@@ -433,19 +670,19 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       padding: 3px;
       border: 1px solid var(--line);
       border-radius: 999px;
-      background: rgba(8, 9, 8, .44);
+      background: var(--paper);
     }
     .requestTabs button {
-      min-height: 30px;
+      min-height: 28px;
       border-color: transparent;
       border-radius: 999px;
       background: transparent;
       color: var(--muted);
     }
     .requestTabs button.active {
-      background: var(--ink);
-      color: var(--accent-ink);
-      border-color: var(--ink);
+      background: var(--lavender);
+      color: var(--lavender-ink);
+      border-color: var(--lavender-strong);
     }
     .requestPreview {
       min-height: 238px;
@@ -457,20 +694,31 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     .metrics {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 10px;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
     }
     .metric {
-      border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 13px 14px;
-      background: var(--surface);
+      min-height: 82px;
+      padding: var(--space-4);
+      background:
+        linear-gradient(180deg, color-mix(in srgb, var(--surface) 88%, var(--lavender) 12%), var(--paper));
+      border-left: 1px solid var(--line);
     }
-    .metric strong { display: block; font-size: 25px; line-height: 1.1; letter-spacing: 0; }
-    .metric span { color: var(--faint); font-size: 12px; font-weight: 650; }
+    .metric:first-child { border-left: 0; }
+    .metric strong {
+      display: block;
+      font-size: 1.45rem;
+      line-height: 1;
+      letter-spacing: 0;
+      font-variant-numeric: tabular-nums;
+      overflow-wrap: anywhere;
+    }
+    .metric span { color: var(--faint); font-size: .78rem; font-weight: 680; }
     table {
       width: 100%;
       border-collapse: collapse;
-      font-size: 13px;
+      font-size: .86rem;
       min-width: min(520px, 100%);
     }
     th, td {
@@ -479,8 +727,13 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       text-align: left;
       vertical-align: top;
     }
-    tbody tr:hover { background: rgba(231, 248, 200, .035); }
-    th { color: var(--faint); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+    tbody tr:hover { background: var(--paper); }
+    th {
+      color: var(--faint);
+      font-size: .68rem;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+    }
     .tableActions {
       display: flex;
       gap: 6px;
@@ -491,33 +744,20 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       color: var(--muted);
     }
     .danger {
-      background: #2d1712;
-      border-color: #6b2e21;
-      color: #ffd1c4;
+      background: #fff0ed;
+      border-color: #d99b90;
+      color: var(--danger);
     }
     code {
-      background: #0a0d0b;
+      background: var(--paper);
       border: 1px solid var(--line);
       border-radius: 6px;
       padding: 2px 5px;
       word-break: break-word;
-      color: #dbeec8;
+      color: var(--ink);
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: .86em;
     }
-    .status {
-      display: inline-flex;
-      align-items: center;
-      min-height: 28px;
-      margin: 0 0 16px;
-      padding: 0 9px;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      background: var(--surface);
-      color: var(--muted);
-      font-size: 13px;
-    }
-    .bad { color: var(--warn); border-color: color-mix(in oklch, var(--warn), white 50%); }
-    .good { color: var(--accent); border-color: rgba(231, 248, 200, .36); }
-    .soft { color: var(--blue); border-color: rgba(156, 200, 255, .34); }
     .bar {
       display: grid;
       gap: 5px;
@@ -526,7 +766,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     .barTrack {
       height: 7px;
       border-radius: 999px;
-      background: #202228;
+      background: var(--surface-3);
       overflow: hidden;
       border: 1px solid var(--line);
     }
@@ -534,16 +774,20 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       display: block;
       height: 100%;
       width: var(--bar, 0%);
-      background: linear-gradient(90deg, var(--green), var(--accent));
+      background: var(--lime);
     }
     .hint {
-      margin-top: 10px;
       color: var(--faint);
-      font-size: 12px;
+      font-size: .8rem;
+    }
+    .emptyState {
+      padding: var(--space-5);
+      color: var(--muted);
+      background: var(--paper);
     }
     .issuedKey {
       display: grid;
-      gap: 8px;
+      gap: var(--space-2);
       word-break: break-word;
     }
     .issuedKey code {
@@ -553,157 +797,249 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     .inlineForm {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
-      gap: 8px;
+      gap: var(--space-2);
       align-items: end;
     }
     .inspectorSummary {
       display: grid;
-      gap: 10px;
+      gap: var(--space-3);
     }
     .verdict {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 12px;
+      gap: var(--space-3);
       border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 12px;
-      background: rgba(8, 9, 8, .42);
+      border-radius: var(--radius);
+      padding: var(--space-3);
+      background: var(--paper);
     }
     .verdict strong {
-      font-size: 18px;
+      font-size: 1.05rem;
       overflow-wrap: anywhere;
     }
     .verdict span {
       color: var(--faint);
-      font-size: 12px;
+      font-size: .74rem;
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: .06em;
     }
     .hidden { display: none; }
-    @media (max-width: 820px) {
-      .wrap {
-        width: calc(100vw - 96px);
-        max-width: 720px;
-        margin-left: auto;
-        margin-right: auto;
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        transition-duration: .01ms !important;
+        animation-duration: .01ms !important;
+        scroll-behavior: auto !important;
       }
-      .top, .toolbar { grid-template-columns: 1fr; display: grid; }
-      .inlineForm { grid-template-columns: 1fr; }
-      .consoleIntro { grid-template-columns: 1fr; }
-      .brand { align-items: flex-start; }
+    }
+    @media (max-width: 1160px) {
+      .appShell {
+        grid-template-columns: 1fr;
+      }
+      .sidebar {
+        position: static;
+        min-height: 0;
+        grid-template-rows: auto auto auto;
+        align-items: stretch;
+      }
       nav {
-        width: 100%;
+        display: flex;
+        overflow-x: auto;
+        padding-bottom: 2px;
+      }
+      nav button { width: auto; flex: 0 0 auto; }
+      .authDock {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+        align-self: stretch;
+      }
+      .authDock button { width: auto; }
+      .authDock .status { grid-column: 1 / -1; }
+      .topbar { grid-template-columns: 1fr; }
+      .pageTitle { min-height: auto; }
+    }
+    @media (max-width: 820px) {
+      .sidebar,
+      .content { padding-inline: var(--space-3); }
+      .content { padding-top: var(--space-4); }
+      .authDock { grid-template-columns: 1fr; }
+      .authDock button { width: 100%; }
+      .viewIntro,
+      .panelHeader,
+      .registryHeader {
         display: grid;
         grid-template-columns: 1fr;
-        border-radius: 16px;
       }
-      nav button {
-        width: 100%;
+      .toolbar {
+        justify-content: stretch;
+      }
+      .toolbar label {
         min-width: 0;
-        max-width: 100%;
-        overflow: hidden;
-        text-overflow: ellipsis;
+        flex: 1 1 160px;
       }
+      .inlineForm { grid-template-columns: 1fr; }
       .panel, .third { grid-column: 1 / -1; }
       .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .metric:nth-child(odd) { border-left: 0; }
+      .metric:nth-child(n + 3) { border-top: 1px solid var(--line); }
       .form { grid-template-columns: 1fr; }
       .presetGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .providerInline { min-width: 0; }
-      .quickItem {
-        display: grid;
-        grid-template-columns: 1fr;
+      .providerCard {
+        grid-template-columns: 36px minmax(0, 1fr);
       }
-      .quickItem strong { text-align: left; }
+      .providerMeta {
+        grid-column: 2;
+        justify-content: flex-start;
+      }
     }
     @media (max-width: 520px) {
-      .wrap {
-        width: calc(100vw - 96px);
-        max-width: 300px;
-        margin-left: clamp(12px, calc((100vw - 300px) / 2), 45px);
-        margin-right: clamp(12px, calc((100vw - 300px) / 2), 45px);
-      }
-      .top { gap: 12px; }
-      .brand p:not(.eyebrow) { display: none; }
-      nav { max-width: 100%; overflow: hidden; }
-      nav button {
+      .appShell,
+      .sidebar,
+      .content,
+      .contentInner {
         width: 100%;
-        max-width: 100%;
-        min-width: 0;
-        padding: 0 6px;
-        font-size: 13px;
-        overflow: hidden;
-        text-overflow: ellipsis;
+        max-width: 100vw;
+        overflow-x: hidden;
       }
-      .metrics { grid-template-columns: 1fr; }
       .brandmark { display: none; }
-      .panel { padding: 12px; border-radius: 10px; }
-      .providerCloud { grid-template-columns: 1fr; }
+      .pageTitle {
+        padding: var(--space-4);
+        min-height: auto;
+      }
+      .pageTitle h2 { font-size: 1.45rem; }
+      .quickItem { grid-template-columns: 1fr; }
+      .quickItem strong { text-align: left; }
+      .metrics { grid-template-columns: 1fr; }
+      .metric {
+        border-left: 0;
+        border-top: 1px solid var(--line);
+      }
+      .metric:first-child { border-top: 0; }
+      .panel {
+        padding: var(--space-3);
+        border-radius: var(--radius-sm);
+      }
       .presetGrid { grid-template-columns: 1fr; }
       .actions { justify-content: stretch; }
       .actions button { flex: 1 1 auto; min-width: 0; }
+      .requestTabs { width: 100%; }
+      .requestTabs button { flex: 1; }
+      table {
+        min-width: 520px;
+      }
+      .panel {
+        overflow-x: auto;
+      }
+      .providerInline {
+        grid-template-columns: 24px minmax(0, 1fr);
+      }
+      .providerInline span:last-child {
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
     }
   </style>
 </head>
 <body>
-  <header>
-    <div class="wrap top">
+  <div class="appShell">
+    <aside class="sidebar">
       <div class="brand">
         <div class="brandmark">CR</div>
         <div>
           <p class="eyebrow">gateway console</p>
           <h1>ClawRouter</h1>
-          <p>Model routing, proxy keys, tenant budgets, and usage controls.</p>
         </div>
       </div>
       <nav aria-label="console views">
-        <button data-view="dashboard" class="active">Dashboard</button>
+        <button data-view="dashboard" class="active">Registry</button>
         <button data-view="playground">Playground</button>
-        <button data-view="admin">Admin</button>
+        <button data-view="admin">Policy</button>
         <button data-view="account">Account</button>
         <button data-view="routes">Routes</button>
       </nav>
-    </div>
-  </header>
-  <main class="wrap">
-    <section class="consoleIntro">
-      <div class="heroPanel">
-        <h2>Route models, services, budgets, and users from one control plane.</h2>
-        <p>Use the user surfaces for key inspection, playground calls, and usage. Use admin for Access roles, tenant-scoped proxy keys, provider allowlists, and hard spend limits.</p>
-      </div>
-      <div class="quickPanel">
-        <h2>Current Session</h2>
-        <div id="sessionQuick" class="quickList"></div>
-      </div>
-    </section>
-    <section class="toolbar">
-      <label>Admin token<input id="adminToken" type="password" autocomplete="off" placeholder="optional bearer fallback"></label>
-      <label>Proxy key<input id="proxyKey" type="password" autocomplete="off" placeholder="required for account views"></label>
+      <section class="authDock" aria-label="credentials">
+      <label>Admin token<input id="adminToken" type="password" autocomplete="off" placeholder="fallback bearer token"></label>
+      <label>Proxy key<input id="proxyKey" type="password" autocomplete="off" placeholder="playground and account"></label>
       <button id="refresh" class="primary">Refresh</button>
-    </section>
-    <p id="status" class="status">idle</p>
-    <section id="dashboard" class="view grid">
-      <div class="panel wide">
-        <h2>Service</h2>
-        <div id="serviceMetrics" class="metrics"></div>
-      </div>
-      <div class="panel">
-        <h2>Provider Classes</h2>
-        <div id="providerClasses"></div>
-      </div>
-      <div class="panel">
-        <h2>Configured Routes</h2>
-        <div id="routeSummary"></div>
-      </div>
-      <div class="panel wide">
-        <h2>Provider Network</h2>
-        <div id="providerCloud" class="providerCloud"></div>
-      </div>
-    </section>
-    <section id="playground" class="view grid hidden">
-      <form id="playgroundForm" class="panel">
-        <h2>Model Playground</h2>
+        <p id="status" class="status">idle</p>
+      </section>
+    </aside>
+    <main class="content">
+      <div class="contentInner">
+        <section class="topbar">
+          <div class="pageTitle">
+            <p class="eyebrow">edge control plane</p>
+            <h2>Provider registry, routes, and key policy.</h2>
+            <p>One surface for manifests, OpenAI-compatible routes, Cloudflare Access roles, and budget enforcement.</p>
+          </div>
+          <div class="quickPanel">
+            <h3>Session</h3>
+            <div id="sessionQuick" class="quickList"></div>
+          </div>
+        </section>
+        <section id="dashboard" class="view grid">
+          <div class="viewIntro">
+            <div>
+              <h2>Registry</h2>
+              <p>Live provider manifest inventory and advertised route surfaces.</p>
+            </div>
+          </div>
+          <div class="panel wide">
+            <div class="panelHeader registryHeader">
+              <div>
+                <h2>Providers</h2>
+                <p id="providerCount">Filter by name, id, service kind, or route class.</p>
+              </div>
+              <div class="toolbar" aria-label="provider filters">
+                <label>Search<input id="providerFilter" autocomplete="off" placeholder="openai, oauth, gateway"></label>
+                <label>Kind<select id="providerKindFilter"><option value="">all kinds</option></select></label>
+              </div>
+            </div>
+            <div id="providerCloud" class="providerCloud"></div>
+          </div>
+          <div class="panel">
+            <div class="panelHeader">
+              <div>
+                <h2>Edge snapshot</h2>
+                <p>Counts returned by the live API.</p>
+              </div>
+            </div>
+            <div id="serviceMetrics" class="metrics"></div>
+          </div>
+          <div class="panel">
+            <div class="panelHeader">
+              <div>
+                <h2>Route surfaces</h2>
+                <p>Published OpenAI-compatible and manifest proxy routes.</p>
+              </div>
+            </div>
+            <div id="routeSummary"></div>
+          </div>
+          <div class="panel wide">
+            <div class="panelHeader">
+              <div>
+                <h2>Provider classes</h2>
+                <p>Manifest taxonomy across the installed registry.</p>
+              </div>
+            </div>
+            <div id="providerClasses"></div>
+          </div>
+        </section>
+        <section id="playground" class="view grid hidden">
+          <div class="viewIntro">
+            <div>
+              <h2>Playground</h2>
+              <p>Send test traffic through the same route, allowlist, budget, and usage path as production calls.</p>
+            </div>
+          </div>
+          <form id="playgroundForm" class="panel">
+            <div class="panelHeader">
+              <div>
+                <h2>Model request</h2>
+                <p>Select a routed model and payload shape.</p>
+              </div>
+            </div>
         <div class="form">
           <label class="full">Search models<input id="modelSearch" autocomplete="off" placeholder="filter by model or provider"></label>
           <label class="full">Model<select id="playgroundModel"></select></label>
@@ -722,9 +1058,13 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         </div>
       </form>
       <div class="panel">
-        <h2>Route Preview</h2>
+        <div class="panelHeader">
+          <div>
+            <h2>Route preview</h2>
+            <p>Resolved provider and endpoint.</p>
+          </div>
+        </div>
         <div id="playgroundPreview"></div>
-        <p class="hint">Calls use the proxy key above and go through the same policy, provider allowlist, budget preflight, and usage queue as production API traffic.</p>
       </div>
       <div class="panel requestPanel">
         <div class="actions">
@@ -741,17 +1081,38 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         </div>
       </div>
       <div class="panel">
-        <h2>Response</h2>
+        <div class="panelHeader">
+          <div>
+            <h2>Response</h2>
+            <p>Raw upstream-compatible result.</p>
+          </div>
+        </div>
         <pre id="playgroundResult" class="result">select a model, enter a proxy key, and run a request.</pre>
       </div>
     </section>
     <section id="admin" class="view grid hidden">
+      <div class="viewIntro">
+        <div>
+          <h2>Admin</h2>
+          <p>Access role assignment, proxy key policy, provider allowlists, and budget controls.</p>
+        </div>
+      </div>
       <div class="panel wide">
-        <h2>Admin Overview</h2>
+        <div class="panelHeader">
+          <div>
+            <h2>Admin overview</h2>
+            <p>Policy and budget totals.</p>
+          </div>
+        </div>
         <div id="adminMetrics" class="metrics"></div>
       </div>
       <form id="keyForm" class="panel">
-        <h2>Issue Proxy Key</h2>
+        <div class="panelHeader">
+          <div>
+            <h2>Issue proxy key</h2>
+            <p>Save tenant policy and allowlisted providers.</p>
+          </div>
+        </div>
         <div class="form">
           <label>Key id<input id="keyKid" value="svc_docs"></label>
           <label>Token role<select id="keyTokenRole">
@@ -782,7 +1143,12 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         <div id="issuedKey" class="issuedKey hint"></div>
       </form>
       <form id="accessUserForm" class="panel">
-        <h2>Assign Access Role</h2>
+        <div class="panelHeader">
+          <div>
+            <h2>Assign Access role</h2>
+            <p>Map Cloudflare Access identity to tenant role.</p>
+          </div>
+        </div>
         <div class="form">
           <label class="full">Email<input id="accessEmail" type="email" placeholder="user@example.com"></label>
           <label>Role<select id="accessRole"><option value="user">user</option><option value="admin">admin</option></select></label>
@@ -792,26 +1158,57 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         </div>
       </form>
       <div class="panel">
-        <h2>Users / Tenants</h2>
+        <div class="panelHeader">
+          <div>
+            <h2>Users / tenants</h2>
+            <p>Tenant-level key coverage.</p>
+          </div>
+        </div>
         <div id="adminUsers"></div>
       </div>
       <div class="panel">
-        <h2>Usage</h2>
+        <div class="panelHeader">
+          <div>
+            <h2>Usage</h2>
+            <p>Ledger and remaining budget.</p>
+          </div>
+        </div>
         <div id="adminUsage"></div>
       </div>
       <div class="panel wide">
-        <h2>Key Policies</h2>
+        <div class="panelHeader">
+          <div>
+            <h2>Key policies</h2>
+            <p>Stored key policy never exposes saved secrets.</p>
+          </div>
+        </div>
         <div id="adminKeys"></div>
         <p class="hint">Saving a key stores only the SHA-256 hash of the generated secret. Copy the issued token when it is shown; it cannot be recovered later.</p>
       </div>
       <div class="panel wide">
-        <h2>Access Roles</h2>
+        <div class="panelHeader">
+          <div>
+            <h2>Access roles</h2>
+            <p>Cloudflare Access users with ClawRouter tenant policy.</p>
+          </div>
+        </div>
         <div id="accessUsers"></div>
       </div>
     </section>
     <section id="account" class="view grid hidden">
+      <div class="viewIntro">
+        <div>
+          <h2>Account</h2>
+          <p>Inspect a proxy key, profile, and budget state.</p>
+        </div>
+      </div>
       <form id="inspectKeyForm" class="panel wide">
-        <h2>Inspect Proxy Key</h2>
+        <div class="panelHeader">
+          <div>
+            <h2>Inspect proxy key</h2>
+            <p>Verify registration, tenant, provider allowlist, and budget before traffic goes out.</p>
+          </div>
+        </div>
         <div class="inlineForm">
           <label>Token<input id="inspectKeyInput" type="password" autocomplete="off" placeholder="paste a clawrouter-live key or use the toolbar proxy key"></label>
           <button type="submit" class="primary">Inspect key</button>
@@ -819,21 +1216,44 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         <div id="keyInspection" class="inspectorSummary hint">paste a proxy key to verify registration, role, provider allowlist, and budget policy before sending traffic.</div>
       </form>
       <div class="panel">
-        <h2>Profile</h2>
+        <div class="panelHeader">
+          <div>
+            <h2>Profile</h2>
+            <p>Resolved key identity.</p>
+          </div>
+        </div>
         <div id="profile"></div>
       </div>
       <div class="panel">
-        <h2>Budget</h2>
+        <div class="panelHeader">
+          <div>
+            <h2>Budget</h2>
+            <p>Current monthly usage window.</p>
+          </div>
+        </div>
         <div id="usage"></div>
       </div>
     </section>
     <section id="routes" class="view grid hidden">
+      <div class="viewIntro">
+        <div>
+          <h2>Routes</h2>
+          <p>OpenAI-compatible and manifest proxy route catalog.</p>
+        </div>
+      </div>
       <div class="panel wide">
-        <h2>Route Catalog</h2>
+        <div class="panelHeader">
+          <div>
+            <h2>Route catalog</h2>
+            <p>Provider, service kind, surface, and model/method count.</p>
+          </div>
+        </div>
         <div id="routesTable"></div>
       </div>
     </section>
-  </main>
+      </div>
+    </main>
+  </div>
   <script>
     const initialView = ({
       "/admin": "admin",
@@ -880,44 +1300,51 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     const metric = (label, value) => `<div class="metric"><strong>${esc(value)}</strong><span>${esc(label)}</span></div>`;
     const row = (items) => `<tr>${items.map((item) => `<td>${cell(item)}</td>`).join("")}</tr>`;
     const table = (heads, rows) => `<table><thead><tr>${heads.map((head) => `<th>${esc(head)}</th>`).join("")}</tr></thead><tbody>${rows.join("") || row([raw(`<span class="status">no rows</span>`)])}</tbody></table>`;
-    const icon = (body) => `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
-    const providerStyles = {
-      anthropic: ["#171717", "#f2efe7", icon(`<path d="M6 18L12 5l6 13"/><path d="M8.4 13.5h7.2"/>`)],
-      "aws-bedrock": ["#33230f", "#ffdc9a", icon(`<path d="M5 8.5l7-4 7 4-7 4-7-4Z"/><path d="M5 8.5v7l7 4 7-4v-7"/><path d="M12 12.5v7"/>`)],
-      "azure-openai": ["#102235", "#cae9ff", icon(`<path d="M5 17.5 11.4 5l2.5 7.2"/><path d="M10 15h8.4L14.3 7"/>`)],
-      "cloudflare-ai-gateway": ["#35200f", "#ffd6a5", icon(`<path d="M7.5 16.5h9a3 3 0 0 0 .6-5.94A4.7 4.7 0 0 0 8.2 9.2 3.7 3.7 0 0 0 7.5 16.5Z"/><path d="M10 12h4.5l-2 3.5"/>`)],
-      cohere: ["#202817", "#e8f8c8", icon(`<circle cx="8" cy="8" r="3.2"/><circle cx="15.5" cy="9.5" r="3.4"/><circle cx="11.5" cy="16" r="3.6"/>`)],
-      deepseek: ["#111d33", "#dce8ff", icon(`<path d="M5 12c2.2-4.4 7.6-6.2 13.5-5.2-1 6.3-5.3 10.4-11.8 10.8"/><path d="M8 17.5c1.2-2.8 3.6-4.8 7.3-5.9"/><circle cx="16.2" cy="8.5" r=".8" fill="currentColor" stroke="none"/>`)],
-      fireworks: ["#351b13", "#ffd0bb", icon(`<path d="M12 5v4"/><path d="M12 15v4"/><path d="M5 12h4"/><path d="M15 12h4"/><path d="m7.2 7.2 2.8 2.8"/><path d="m14 14 2.8 2.8"/><path d="m16.8 7.2-2.8 2.8"/><path d="m10 14-2.8 2.8"/><circle cx="12" cy="12" r="1.6"/>`)],
-      github: ["#15191f", "#eef3f8", icon(`<circle cx="12" cy="12" r="7"/><path d="M8 15.5c1.2 1 2.5 1.5 4 1.5s2.8-.5 4-1.5"/><path d="M8.5 10.2h7"/><path d="M9.2 7.5 11 9l2-1.5 1.8 1.5"/>`)],
-      "google-gemini": ["#18253d", "#d9e8ff", icon(`<path d="M12 3.8 14.4 9l5.2 2.4-5.2 2.4L12 19.2 9.6 13.8 4.4 11.4 9.6 9 12 3.8Z"/>`)],
-      groq: ["#311417", "#ffd8dd", icon(`<path d="M13 3 5.5 13h5.2L9 21l9.5-12h-5.8L13 3Z"/>`)],
-      huggingface: ["#332b10", "#ffe38f", icon(`<circle cx="8.3" cy="10" r="1" fill="currentColor" stroke="none"/><circle cx="15.7" cy="10" r="1" fill="currentColor" stroke="none"/><path d="M7 15c2.5 2.2 7.5 2.2 10 0"/><path d="M5.5 9.5c-.7-2.4.4-4 2.2-4"/><path d="M18.5 9.5c.7-2.4-.4-4-2.2-4"/><path d="M5.5 12.3c0 4 2.6 7 6.5 7s6.5-3 6.5-7"/>`)],
-      linear: ["#1c1b2f", "#dedcff", icon(`<path d="m6 16 10-10"/><path d="m6 11 5-5"/><path d="m11 18 7-7"/><path d="M5 21h14"/>`)],
-      minimax: ["#2e171d", "#ffdbe3", icon(`<path d="M4 17V7l5 6 3-4 3 4 5-6v10"/><path d="M4 17h16"/>`)],
-      mistral: ["#33230d", "#ffe0a3", icon(`<path d="M4 17h3V9h3v8h4V9h3v8h3"/><path d="M7 9V6h3v3"/><path d="M14 9V6h3v3"/>`)],
-      notion: ["#f1eee5", "#111111", icon(`<rect x="5" y="5" width="14" height="14" rx="2"/><path d="M9 16V8l6 8V8"/>`)],
-      openai: ["#10261f", "#d5ffe6", icon(`<path d="M12 4.2a3.1 3.1 0 0 1 3.1 2.2 3.2 3.2 0 0 1 3.1 5.1 3.1 3.1 0 0 1-1.5 5.6 3.2 3.2 0 0 1-5 1.8 3.2 3.2 0 0 1-5.1-2.1 3.2 3.2 0 0 1-2.9-5.2A3.2 3.2 0 0 1 5.4 6.5 3.2 3.2 0 0 1 12 4.2Z"/><path d="M8.5 9.4 12 7.4l3.5 2"/><path d="M8.5 14.6 12 16.6l3.5-2"/><path d="M12 7.4v9.2"/>`)],
-      openrouter: ["#241a36", "#f2defc", icon(`<path d="M4.5 12h13.5"/><path d="m13.5 7 4.5 5-4.5 5"/><path d="M6.5 7.5h3"/><path d="M6.5 16.5h3"/>`)],
-      perplexity: ["#0f2b2d", "#caffff", icon(`<path d="M6 6h12v12H6z"/><path d="M6 12h12"/><path d="m9 9 3 3-3 3"/><path d="m15 9-3 3 3 3"/>`)],
-      replicate: ["#151515", "#f8f8f2", icon(`<rect x="5" y="5" width="10" height="10" rx="1.5"/><rect x="9" y="9" width="10" height="10" rx="1.5"/><path d="M15 5h4v4"/>`)],
-      slack: ["#231b31", "#f4ddff", icon(`<path d="M8 5v6"/><path d="M16 13v6"/><path d="M5 16h6"/><path d="M13 8h6"/><path d="M8 16v1.5A2.5 2.5 0 0 1 5.5 20"/><path d="M16 8V6.5A2.5 2.5 0 0 1 18.5 4"/><path d="M8 8H6.5A2.5 2.5 0 0 1 4 5.5"/><path d="M16 16h1.5A2.5 2.5 0 0 1 20 18.5"/>`)],
-      tavily: ["#10291d", "#c9ffd8", icon(`<circle cx="12" cy="12" r="7.2"/><path d="m14.8 9.2-2 5.6-3.6 1 2-5.6 3.6-1Z"/><circle cx="12" cy="12" r=".9" fill="currentColor" stroke="none"/>`)],
-      together: ["#162331", "#d4ecff", icon(`<circle cx="7" cy="8" r="2"/><circle cx="17" cy="8" r="2"/><circle cx="12" cy="17" r="2"/><path d="M8.7 9.1 11 15"/><path d="M15.3 9.1 13 15"/><path d="M9 8h6"/>`)],
-      xai: ["#101010", "#f3f3ef", icon(`<path d="m6 6 12 12"/><path d="M18 6 6 18"/><path d="M14 6h4v4"/>`)]
+    const strokeIcon = (body) => `<svg viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="1.85" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`;
+    const providerIconManifest = __CLAWROUTER_PROVIDER_ICONS__;
+    const providerMarks = providerIconManifest.icons || {};
+    const providerSkins = {
+      anthropic: ["#171717", "#f2efe7"],
+      "aws-bedrock": ["#33230f", "#ffdc9a"],
+      "azure-openai": ["#102235", "#cae9ff"],
+      "cloudflare-ai-gateway": ["#35200f", "#ffd6a5"],
+      cohere: ["#202817", "#e8f8c8"],
+      deepseek: ["#111d33", "#dce8ff"],
+      fireworks: ["#351b13", "#ffd0bb"],
+      github: ["#15191f", "#eef3f8"],
+      "google-gemini": ["#18253d", "#d9e8ff"],
+      groq: ["#311417", "#ffd8dd"],
+      huggingface: ["#332b10", "#ffe38f"],
+      linear: ["#1c1b2f", "#dedcff"],
+      minimax: ["#2e171d", "#ffdbe3"],
+      mistral: ["#33230d", "#ffe0a3"],
+      notion: ["#f1eee5", "#111111"],
+      openai: ["#10261f", "#d5ffe6"],
+      openrouter: ["#241a36", "#f2defc"],
+      perplexity: ["#0f2b2d", "#caffff"],
+      replicate: ["#151515", "#f8f8f2"],
+      slack: ["#231b31", "#f4ddff"],
+      tavily: ["#10291d", "#c9ffd8"],
+      together: ["#162331", "#d4ecff"],
+      xai: ["#101010", "#f3f3ef"]
     };
     const serviceGlyphs = {
-      model_provider: icon(`<path d="M7 8h10"/><path d="M7 12h10"/><path d="M7 16h6"/><rect x="4" y="5" width="16" height="14" rx="2"/>`),
-      oauth_platform: icon(`<path d="M8.5 12a3.5 3.5 0 1 1 3.2 3.49"/><path d="M12 15.5V19"/><path d="M9.5 19h5"/>`),
-      gateway_platform: icon(`<path d="M4 12h7"/><path d="M13 12h7"/><path d="M10 8l4 4-4 4"/>`),
-      search_provider: icon(`<circle cx="10.5" cy="10.5" r="5"/><path d="m15 15 4 4"/>`)
+      model_provider: strokeIcon(`<path d="M7 8h10"/><path d="M7 12h10"/><path d="M7 16h6"/><rect x="4" y="5" width="16" height="14" rx="2"/>`),
+      oauth_platform: strokeIcon(`<path d="M8.5 12a3.5 3.5 0 1 1 3.2 3.49"/><path d="M12 15.5V19"/><path d="M9.5 19h5"/>`),
+      gateway_platform: strokeIcon(`<path d="M4 12h7"/><path d="M13 12h7"/><path d="M10 8l4 4-4 4"/>`),
+      search_provider: strokeIcon(`<circle cx="10.5" cy="10.5" r="5"/><path d="m15 15 4 4"/>`)
     };
     function compactLabel(value) {
       return String(value || "service").replace(/_/g, " ");
     }
     function providerIcon(provider) {
-      const [bg, fg, glyph] = providerStyles[provider.id] || ["#202520", "#f2f4ef", icon(`<circle cx="12" cy="12" r="7"/><path d="M8.5 12h7"/><path d="M12 8.5v7"/>`)];
-      return `<span class="providerIcon" style="--icon-bg:${bg};--icon-fg:${fg}">${glyph}<span class="sr">${esc(provider.display_name || provider.id)}</span></span>`;
+      const [bg, fg] = providerSkins[provider.id] || ["#202520", "#f2f4ef"];
+      const mark = providerMarks[provider.id];
+      const glyph = mark
+        ? `<svg viewBox="${esc(mark.viewBox || "0 0 24 24")}" aria-hidden="true">${mark.body}</svg>`
+        : strokeIcon(`<circle cx="12" cy="12" r="7"/><path d="M8.5 12h7"/><path d="M12 8.5v7"/>`);
+      const className = mark ? "providerIcon" : "providerIcon fallback";
+      return `<span class="${className}" style="--icon-bg:${bg};--icon-fg:${fg}" data-provider="${esc(provider.id)}">${glyph}<span class="sr">${esc(provider.display_name || provider.id)}</span></span>`;
     }
     function serviceChip(kind) {
       const glyph = serviceGlyphs[kind] || serviceGlyphs.model_provider;
@@ -934,7 +1361,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       return raw(`<span class="providerInline">${providerIcon(provider)}<span>${esc(provider.display_name || provider.id)}</span></span>`);
     }
     function providerCard(provider) {
-      return `<div class="providerCard">${providerIcon(provider)}<div><strong>${esc(provider.display_name || provider.id)}</strong><div class="providerMeta">${serviceChip(provider.service_kind).html}<span>${esc(provider.class)}</span></div></div></div>`;
+      return `<div class="providerCard">${providerIcon(provider)}<div class="providerTitle"><strong>${esc(provider.display_name || provider.id)}</strong><span>${esc(provider.id)}</span></div><div class="providerMeta">${serviceChip(provider.service_kind).html}<span class="capabilityPill">${esc(compactLabel(provider.class))}</span></div></div>`;
     }
     function budgetBar(budget) {
       if (!budget || !budget.configured || budget.limitMicros == null) {
@@ -956,6 +1383,38 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     }
     const openaiRoutes = () => state.routes?.openaiCompatible || [];
     const openaiModels = () => openaiRoutes().flatMap((route) => route.models.map((model) => ({ ...model, provider: route.provider })));
+    function providerSearchText(provider) {
+      return [
+        provider.id,
+        provider.display_name,
+        provider.class,
+        provider.service_kind
+      ].filter(Boolean).join(" ").toLowerCase();
+    }
+    function renderProviderKindFilter(providers) {
+      const select = $("providerKindFilter");
+      if (!select) return;
+      const current = select.value;
+      const kinds = [...new Set(providers.map((provider) => provider.service_kind).filter(Boolean))].sort();
+      select.innerHTML = [`<option value="">all kinds</option>`, ...kinds.map((kind) => `<option value="${esc(kind)}">${esc(compactLabel(kind))}</option>`)].join("");
+      if ([...select.options].some((option) => option.value === current)) {
+        select.value = current;
+      }
+    }
+    function renderProviderNetwork() {
+      const providers = state.providers?.providers || [];
+      const query = ($("providerFilter")?.value || "").trim().toLowerCase();
+      const kind = $("providerKindFilter")?.value || "";
+      const filtered = providers.filter((provider) => {
+        if (kind && provider.service_kind !== kind) return false;
+        if (!query) return true;
+        return providerSearchText(provider).includes(query);
+      });
+      $("providerCount").textContent = `${filtered.length} of ${providers.length} providers`;
+      $("providerCloud").innerHTML = filtered.length
+        ? filtered.map(providerCard).join("")
+        : `<div class="emptyState">No providers match the current filter.</div>`;
+    }
     function renderDashboard() {
       const providers = state.providers?.providers || [];
       const routes = state.routes || { openaiCompatible: [], manifestProxy: [] };
@@ -963,7 +1422,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         metric("providers", providers.length),
         metric("openai compatible", routes.openaiCompatible.length),
         metric("manifest routes", routes.manifestProxy.length),
-        metric("session", state.session?.authenticated ? `${state.session.role} · ${state.session.email}` : "not signed in")
+        metric("session", state.session?.authenticated ? state.session.role : "not signed in")
       ].join("");
       renderSessionQuick();
       const classes = providers.reduce((acc, provider) => {
@@ -975,7 +1434,8 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         row(["OpenAI-compatible", routes.openaiCompatible.length]),
         row(["manifest proxy", routes.manifestProxy.length])
       ]);
-      $("providerCloud").innerHTML = providers.map(providerCard).join("");
+      renderProviderKindFilter(providers);
+      renderProviderNetwork();
       renderProviderControls();
       renderPlaygroundOptions();
     }
@@ -1321,6 +1781,8 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     $("refresh").addEventListener("click", refresh);
     $("adminToken").addEventListener("input", renderSessionQuick);
     $("proxyKey").addEventListener("input", renderSessionQuick);
+    $("providerFilter").addEventListener("input", renderProviderNetwork);
+    $("providerKindFilter").addEventListener("change", renderProviderNetwork);
     $("modelSearch").addEventListener("input", renderPlaygroundOptions);
     $("playgroundModel").addEventListener("change", renderPlaygroundPreview);
     $("playgroundEndpoint").addEventListener("change", renderPlaygroundPreview);
@@ -1555,7 +2017,8 @@ async fn protected_interface_shell(headers: &Headers, env: &Env) -> Result<Respo
 }
 
 fn interface_shell() -> Result<Response> {
-    let mut response = Response::from_html(INTERFACE_HTML)?;
+    let html = INTERFACE_HTML.replace("__CLAWROUTER_PROVIDER_ICONS__", PROVIDER_ICONS);
+    let mut response = Response::from_html(html)?;
     response
         .headers_mut()
         .set("cache-control", "no-store, max-age=0")?;
@@ -5332,6 +5795,31 @@ mod tests {
         assert!(interface_path("/account"));
         assert!(interface_path("/routes"));
         assert!(!interface_path("/v1/admin/keys"));
+    }
+
+    #[test]
+    fn provider_icon_manifest_covers_all_bundled_providers() {
+        let icons = serde_json::from_str::<Value>(PROVIDER_ICONS).unwrap();
+        let icons = icons.get("icons").and_then(Value::as_object).unwrap();
+        let snapshot = provider_snapshot().unwrap();
+
+        for provider in snapshot.providers {
+            let icon = icons
+                .get(&provider.id)
+                .unwrap_or_else(|| panic!("missing provider icon for {}", provider.id));
+            assert!(
+                icon.get("viewBox").and_then(Value::as_str).is_some(),
+                "provider icon {} is missing a viewBox",
+                provider.id
+            );
+            assert!(
+                icon.get("body")
+                    .and_then(Value::as_str)
+                    .is_some_and(|body| body.contains("<path")),
+                "provider icon {} is missing SVG path data",
+                provider.id
+            );
+        }
     }
 
     #[test]
