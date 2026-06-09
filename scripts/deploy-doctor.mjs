@@ -50,6 +50,7 @@ if (plan.targetCount !== plan.providerCount) {
 checkLocalEnv();
 checkLiveProviderReadiness(plan);
 checkWranglerAuth();
+await checkCloudflareWorkerPermission();
 checkGitHubRepository(repo);
 printProviderConfig(plan);
 
@@ -142,6 +143,43 @@ function checkWranglerAuth() {
     return;
   }
   console.log("wrangler auth: ok");
+}
+
+async function checkCloudflareWorkerPermission() {
+  if (process.env.CLAWROUTER_DOCTOR_SKIP_CLOUDFLARE_API === "1") {
+    warnings.push("skipped Cloudflare Worker permission check");
+    return;
+  }
+  const token = process.env.CLOUDFLARE_API_TOKEN?.trim();
+  const accountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
+  const workerName = process.env.CLAWROUTER_WORKER_NAME?.trim() || "clawrouter-edge";
+  if (!token || !accountId) {
+    return;
+  }
+  let response;
+  let body;
+  try {
+    response = await fetch(
+      `https://api.cloudflare.com/client/v4/accounts/${accountId}/workers/services/${workerName}`,
+      { headers: { Authorization: `Bearer ${token}` } },
+    );
+    body = await response.json().catch(() => ({}));
+  } catch (error) {
+    warnings.push(`could not reach Cloudflare Workers API: ${error.message}`);
+    return;
+  }
+  if (response.ok && body.success !== false) {
+    console.log(`cloudflare worker token: can read ${workerName}`);
+    return;
+  }
+  const firstError = body.errors?.[0];
+  if (response.status === 404) {
+    warnings.push(`Cloudflare Worker ${workerName} does not exist yet`);
+    return;
+  }
+  errors.push(
+    `CLOUDFLARE_API_TOKEN cannot read Worker ${workerName}: ${firstError?.message ?? `HTTP ${response.status}`}`,
+  );
 }
 
 function checkGitHubRepository(repo) {

@@ -1,9 +1,12 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const args = parseArgs(process.argv.slice(2));
 const kid = required(args.kid, "--kid");
-const secret = required(args.secret, "--secret");
+const secret = readSecret(args);
 const providers = args.providers ? args.providers.split(",").filter(Boolean) : [];
 const binding = args.binding ?? "POLICY_KV";
 const config = args.config ?? ".wrangler.generated.toml";
@@ -29,19 +32,28 @@ if (requestCostMicros !== undefined) {
   policy.requestCostMicros = requestCostMicros;
 }
 
-run("pnpm", [
-  "exec",
-  "wrangler",
-  "kv",
-  "key",
-  "put",
-  `keys/${kid}`,
-  JSON.stringify(policy),
-  "--binding",
-  binding,
-  "--config",
-  config,
-]);
+const policyPath = writeSecretJson(policy);
+
+try {
+  run("pnpm", [
+    "exec",
+    "wrangler",
+    "kv",
+    "key",
+    "put",
+    `keys/${kid}`,
+    "--path",
+    policyPath,
+    "--binding",
+    binding,
+    "--config",
+    config,
+    ...kvTargetArgs(args),
+  ]);
+} finally {
+  rmSync(policyPath, { force: true });
+  rmSync(join(policyPath, ".."), { force: true, recursive: true });
+}
 
 console.log(`stored key policy for ${kid}; secret was not printed`);
 
@@ -70,6 +82,24 @@ function required(value, name) {
   return value;
 }
 
+function readSecret(args) {
+  if (args.secret) {
+    throw new Error(
+      "--secret would expose the proxy secret in process argv; use --secret-stdin, --secret-env, or --secret-file",
+    );
+  }
+  if (args["secret-env"]) {
+    return required(process.env[args["secret-env"]], `env ${args["secret-env"]}`);
+  }
+  if (args["secret-file"]) {
+    return required(readFileSync(args["secret-file"], "utf8").trim(), "--secret-file");
+  }
+  if (args["secret-stdin"]) {
+    return required(readFileSync(0, "utf8").trim(), "stdin secret");
+  }
+  throw new Error("--secret-stdin, --secret-env, or --secret-file is required");
+}
+
 function parseNonNegativeInteger(value, name) {
   if (!/^(0|[1-9][0-9]*)$/.test(value)) {
     throw new Error(`${name} must be a non-negative integer`);
@@ -84,6 +114,20 @@ function parseNonNegativeInteger(value, name) {
 function run(command, args) {
   const result = spawnSync(command, args, { encoding: "utf8", stdio: "inherit" });
   if (result.status !== 0) {
-    throw new Error(`${command} ${args.join(" ")} failed`);
+    throw new Error(`${command} failed`);
   }
+}
+
+function writeSecretJson(value) {
+  const dir = mkdtempSync(join(tmpdir(), "clawrouter-key-"));
+  const path = join(dir, "policy.json");
+  writeFileSync(path, JSON.stringify(value), { encoding: "utf8", mode: 0o600 });
+  return path;
+}
+
+function kvTargetArgs(args) {
+  if (args.local) {
+    return ["--preview", "false"];
+  }
+  return ["--remote", "--preview", "false"];
 }

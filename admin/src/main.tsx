@@ -747,7 +747,7 @@ function PoliciesScreen({ keys, selected, providers, form, setForm, issuedKey, e
                     <button type="button" className="buttonSecondary" onClick={() => onSetProviderGroup(groupIds, true)}>All</button>
                     <button type="button" className="buttonSecondary" onClick={() => onSetProviderGroup(groupIds, false)}>None</button>
                   </div>
-                  <div className="serviceMatrix">{group.providers.map((provider) => <label key={provider.id}><input type="checkbox" checked={form.providers.includes(provider.id)} onChange={() => onToggleProvider(provider.id)} /><span>{provider.id}</span><small>{kindLabel(provider.service_kind)}</small></label>)}</div>
+                  <div className="serviceMatrix">{group.providers.map((provider) => <label key={provider.id} title={provider.id}><input type="checkbox" checked={form.providers.includes(provider.id)} onChange={() => onToggleProvider(provider.id)} /><span>{provider.display_name}</span><small>{provider.id}</small></label>)}</div>
                 </section>
               );
             }) : <p>No services match this filter.</p>}

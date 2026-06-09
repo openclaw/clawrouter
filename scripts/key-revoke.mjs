@@ -1,4 +1,7 @@
 import { spawnSync } from "node:child_process";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 const args = parseArgs(process.argv.slice(2));
 const kid = required(args.kid, "--kid");
@@ -16,23 +19,33 @@ const existing = run("pnpm", [
   binding,
   "--config",
   config,
+  ...kvTargetArgs(args),
 ]);
 const policy = JSON.parse(existing.stdout);
 policy.enabled = false;
 
-run("pnpm", [
-  "exec",
-  "wrangler",
-  "kv",
-  "key",
-  "put",
-  `keys/${kid}`,
-  JSON.stringify(policy),
-  "--binding",
-  binding,
-  "--config",
-  config,
-]);
+const policyPath = writeSecretJson(policy);
+
+try {
+  run("pnpm", [
+    "exec",
+    "wrangler",
+    "kv",
+    "key",
+    "put",
+    `keys/${kid}`,
+    "--path",
+    policyPath,
+    "--binding",
+    binding,
+    "--config",
+    config,
+    ...kvTargetArgs(args),
+  ]);
+} finally {
+  rmSync(policyPath, { force: true });
+  rmSync(join(policyPath, ".."), { force: true, recursive: true });
+}
 
 console.log(`revoked key policy for ${kid}`);
 
@@ -64,7 +77,21 @@ function required(value, name) {
 function run(command, args) {
   const result = spawnSync(command, args, { encoding: "utf8" });
   if (result.status !== 0) {
-    throw new Error(result.stderr || `${command} ${args.join(" ")} failed`);
+    throw new Error(result.stderr || `${command} failed`);
   }
   return result;
+}
+
+function writeSecretJson(value) {
+  const dir = mkdtempSync(join(tmpdir(), "clawrouter-key-"));
+  const path = join(dir, "policy.json");
+  writeFileSync(path, JSON.stringify(value), { encoding: "utf8", mode: 0o600 });
+  return path;
+}
+
+function kvTargetArgs(args) {
+  if (args.local) {
+    return ["--preview", "false"];
+  }
+  return ["--remote", "--preview", "false"];
 }

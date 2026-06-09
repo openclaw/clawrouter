@@ -38,6 +38,7 @@ try {
     binding,
     "--config",
     config,
+    ...kvTargetArgs(args),
   ]);
 } finally {
   rmSync(grantPath, { force: true });
@@ -92,7 +93,7 @@ function readAccessToken(args) {
 function run(command, args) {
   const result = spawnSync(command, args, { encoding: "utf8", stdio: "inherit" });
   if (result.status !== 0) {
-    throw new Error(`${command} ${args.join(" ")} failed`);
+    throw new Error(`${command} failed`);
   }
 }
 
@@ -101,4 +102,11 @@ function writeSecretJson(value) {
   const path = join(dir, "grant.json");
   writeFileSync(path, JSON.stringify(value), { encoding: "utf8", mode: 0o600 });
   return path;
+}
+
+function kvTargetArgs(args) {
+  if (args.local) {
+    return ["--preview", "false"];
+  }
+  return ["--remote", "--preview", "false"];
 }

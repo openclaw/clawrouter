@@ -1192,15 +1192,19 @@ pre {
   overflow: hidden;
   color: var(--foreground-strong);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 500;
   text-overflow: ellipsis;
   text-transform: none;
   white-space: nowrap;
 }
 
 .serviceMatrix small {
+  min-width: 0;
+  overflow: hidden;
   color: var(--muted);
   font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 @media (max-width: 1180px) {

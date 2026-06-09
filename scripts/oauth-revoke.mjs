@@ -26,6 +26,7 @@ const existing = run("pnpm", [
   binding,
   "--config",
   config,
+  ...kvTargetArgs(args),
 ]);
 
 const grant = revokeGrant(existing.stdout);
@@ -45,6 +46,7 @@ try {
     binding,
     "--config",
     config,
+    ...kvTargetArgs(args),
   ]);
 } finally {
   rmSync(grantPath, { force: true });
@@ -96,10 +98,17 @@ function required(value, name) {
   return value;
 }
 
+function kvTargetArgs(args) {
+  if (args.local) {
+    return ["--preview", "false"];
+  }
+  return ["--remote", "--preview", "false"];
+}
+
 function run(command, args) {
   const result = spawnSync(command, args, { encoding: "utf8" });
   if (result.status !== 0) {
-    throw new Error(result.stderr || `${command} ${args.join(" ")} failed`);
+    throw new Error(result.stderr || `${command} failed`);
   }
   return result;
 }

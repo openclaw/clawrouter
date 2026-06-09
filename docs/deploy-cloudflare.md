@@ -285,9 +285,9 @@ clawrouter-live-<kid>-<secret>
 Register a key policy:
 
 ```sh
-pnpm cf:key:put -- \
+printf '%s' "$CLAWROUTER_PROXY_SECRET" | pnpm cf:key:put -- \
   --kid svc_docs \
-  --secret '<secret>' \
+  --secret-stdin \
   --providers openai,tavily \
   --monthly-budget-micros 100000000 \
   --request-cost-micros 1000
