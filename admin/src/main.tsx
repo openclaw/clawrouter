@@ -21,6 +21,23 @@ import providerIconManifest from "../../crates/edge/src/provider-icons.json";
 import "./style.css";
 
 type View = "catalog" | "playground" | "policies" | "users" | "usage";
+
+const pathViews: Record<string, View> = {
+  "/": "catalog",
+  "/admin": "policies",
+  "/catalog": "catalog",
+  "/console": "catalog",
+  "/dashboard": "catalog",
+  "/playground": "playground",
+  "/policies": "policies",
+  "/routes": "catalog",
+  "/usage": "usage",
+  "/users": "users",
+};
+
+function initialViewFromPath(): View {
+  return pathViews[window.location.pathname] ?? "catalog";
+}
 type AccessRole = "admin" | "user";
 type IconComponent = React.ComponentType<React.SVGProps<SVGSVGElement>>;
 type BrandIcon = { label?: string; title?: string; viewBox?: string; body?: string };
@@ -199,7 +216,7 @@ const navItems: Array<{ id: View; label: string; icon: IconComponent }> = [
 ];
 
 function App() {
-  const [view, setView] = useState<View>("catalog");
+  const [view, setView] = useState<View>(initialViewFromPath);
   const gatewayOrigin = window.location.origin;
   const allowDemo = isLocalDemoAllowed();
   const [session, setSession] = useState<SessionResponse>(allowDemo ? demo.session : emptySession);
