@@ -934,8 +934,7 @@ async fn access_entitlements(headers: &Headers, env: &Env) -> Result<Response> {
                 .iter()
                 .map(|entry| entry.kid.clone())
                 .collect::<Vec<_>>();
-            let selected_entry = matching_entries.first().copied().into_iter().collect::<Vec<_>>();
-            let scoped_grants = entitlement_oauth_grants(&grants, &selected_entry);
+            let scoped_grants = entitlement_oauth_grants(&grants, &matching_entries);
             let readiness = provider_readiness_row(provider, env, &scoped_grants);
             EntitlementProviderRow {
                 provider: provider.id.clone(),
@@ -1753,11 +1752,7 @@ fn provider_readiness_row(
         .cloned()
         .collect::<Vec<_>>();
     let config_present = missing_config.is_empty();
-    let oauth_grant_required = provider
-        .auth
-        .schemes
-        .iter()
-        .any(|scheme| matches!(scheme, AuthScheme::OAuth { .. }));
+    let oauth_grant_required = provider_requires_oauth(provider);
     let oauth_grant_count = if oauth_grant_required {
         provider_oauth_grant_count(provider, grants)
     } else {
@@ -1848,9 +1843,34 @@ fn oauth_grant_applies_to_policy_entry(grant: &OAuthGrantRecord, entry: &KeyPoli
         return true;
     }
     let tenant = entry.policy.tenant_id.as_deref().unwrap_or("default");
-    grant
-        .key
-        .starts_with(&format!("oauth/tenants/{tenant}/"))
+    grant.key.starts_with(&format!("oauth/tenants/{tenant}/"))
+}
+
+fn provider_requires_oauth(provider: &CompiledProvider) -> bool {
+    provider
+        .auth
+        .schemes
+        .iter()
+        .any(|scheme| matches!(scheme, AuthScheme::OAuth { .. }))
+}
+
+fn select_access_policy_for_provider<'a>(
+    provider: Option<&CompiledProvider>,
+    entries: &'a [&'a KeyPolicyEntry],
+    grants: &[OAuthGrantRecord],
+) -> Option<&'a KeyPolicyEntry> {
+    let first_entry = entries.first().copied()?;
+    if provider.is_some_and(provider_requires_oauth) {
+        if let Some(grant_entry) = provider.and_then(|provider| {
+            entries.iter().copied().find(|entry| {
+                let scoped_grants = entitlement_oauth_grants(grants, &[*entry]);
+                provider_oauth_grant_count(provider, &scoped_grants) > 0
+            })
+        }) {
+            return Some(grant_entry);
+        }
+    }
+    Some(first_entry)
 }
 
 fn runtime_binding_present(env: &Env, name: &str) -> bool {
@@ -1888,7 +1908,8 @@ fn provider_oauth_refs(provider: &CompiledProvider) -> Vec<String> {
             if let Some(token_ref) = token_ref.as_deref().filter(|value| !value.is_empty()) {
                 refs.push(format!("/{token_ref}"));
             }
-            if let Some(oauth_provider) = oauth_provider.as_deref().filter(|value| !value.is_empty())
+            if let Some(oauth_provider) =
+                oauth_provider.as_deref().filter(|value| !value.is_empty())
             {
                 refs.push(format!("/{oauth_provider}"));
             }
@@ -2402,20 +2423,36 @@ async fn authorize_access_session(
             .map(AuthOutcome::Denied);
         }
     };
-    for entry in list_key_policy_records(&kv).await? {
-        if access_policy_allows(&entry.policy, &session, provider_id) {
-            return Ok(AuthOutcome::Allowed(AuthorizedKey {
-                kid: entry.kid,
-                policy: entry.policy,
-            }));
-        }
-    }
-    json_error(
-        "provider_not_allowed",
-        "Cloudflare Access user is not allowed to use this provider",
-        403,
-    )
-    .map(AuthOutcome::Denied)
+    let entries = list_key_policy_records(&kv).await?;
+    let matching_entries = entries
+        .iter()
+        .filter(|entry| access_policy_allows(&entry.policy, &session, provider_id))
+        .collect::<Vec<_>>();
+    let Some(first_entry) = matching_entries.first().copied() else {
+        return json_error(
+            "provider_not_allowed",
+            "Cloudflare Access user is not allowed to use this provider",
+            403,
+        )
+        .map(AuthOutcome::Denied);
+    };
+    let snapshot = provider_snapshot()?;
+    let provider = snapshot
+        .providers
+        .iter()
+        .find(|provider| provider.id == provider_id);
+    let grants = if provider.is_some_and(provider_requires_oauth) {
+        let grants = list_oauth_grants(&kv).await?;
+        grants
+    } else {
+        Vec::new()
+    };
+    let selected_entry = select_access_policy_for_provider(provider, &matching_entries, &grants)
+        .unwrap_or(first_entry);
+    return Ok(AuthOutcome::Allowed(AuthorizedKey {
+        kid: selected_entry.kid.clone(),
+        policy: selected_entry.policy.clone(),
+    }));
 }
 
 fn access_policy_allows(policy: &KeyPolicy, session: &AccessSession, provider_id: &str) -> bool {
@@ -4743,10 +4780,7 @@ mod tests {
         assert_eq!(canonical_api_path("/api/route"), "/v1/routes");
         assert_eq!(canonical_api_path("/api/routes"), "/v1/routes");
         assert_eq!(canonical_api_path("/api/session"), "/v1/session");
-        assert_eq!(
-            canonical_api_path("/api/entitlements"),
-            "/v1/entitlements"
-        );
+        assert_eq!(canonical_api_path("/api/entitlements"), "/v1/entitlements");
         assert_eq!(canonical_api_path("/api/me"), "/v1/me");
         assert_eq!(canonical_api_path("/api/usage"), "/v1/usage");
         assert_eq!(
@@ -4871,7 +4905,9 @@ mod tests {
 
         let refs = provider_oauth_refs(github);
 
-        assert!(refs.iter().any(|value| value == "/oauth.github.access_token"));
+        assert!(refs
+            .iter()
+            .any(|value| value == "/oauth.github.access_token"));
         assert!(refs.iter().any(|value| value == "/github"));
     }
 
@@ -4945,11 +4981,54 @@ mod tests {
 
         let scoped = entitlement_oauth_grants(&grants, &[&docs, &research]);
         assert_eq!(scoped.len(), 2);
-        assert!(scoped.iter().any(|grant| grant.key == "oauth/svc_docs/github"));
+        assert!(scoped
+            .iter()
+            .any(|grant| grant.key == "oauth/svc_docs/github"));
         assert!(scoped
             .iter()
             .any(|grant| grant.key == "oauth/tenants/research/github"));
-        assert!(!scoped.iter().any(|grant| grant.key == "oauth/svc_other/github"));
+        assert!(!scoped
+            .iter()
+            .any(|grant| grant.key == "oauth/svc_other/github"));
+    }
+
+    #[test]
+    fn access_policy_selection_prefers_oauth_grant_backed_policy() {
+        let snapshot = provider_snapshot().unwrap();
+        let github = snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.id == "github")
+            .unwrap();
+        let docs = KeyPolicyEntry {
+            kid: "svc_docs".to_string(),
+            policy: KeyPolicy {
+                enabled: true,
+                secret_sha256: "hash".to_string(),
+                providers: vec!["github".to_string()],
+                tenant_id: Some("team_docs".to_string()),
+                token_role: None,
+                monthly_budget_micros: None,
+                request_cost_micros: None,
+            },
+        };
+        let research = KeyPolicyEntry {
+            kid: "svc_research".to_string(),
+            policy: KeyPolicy {
+                tenant_id: Some("research".to_string()),
+                ..docs.policy.clone()
+            },
+        };
+        let grants = vec![OAuthGrantRecord {
+            key: "oauth/svc_research/github".to_string(),
+            enabled: true,
+            has_access_token: true,
+        }];
+
+        let entries = [&docs, &research];
+        let selected = select_access_policy_for_provider(Some(github), &entries, &grants).unwrap();
+
+        assert_eq!(selected.kid, "svc_research");
     }
 
     #[test]
