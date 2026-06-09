@@ -45,11 +45,12 @@ current deploy job renders and deploys a Worker that can verify Access JWTs.
 `CLAWROUTER_ACCESS_ADMIN_*` controls who is an admin inside ClawRouter.
 `CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS` creates a separate Service Auth
 (`non_identity`) policy for automation. The default path-scoped Access
-destinations are `/dashboard`, `/v1/session`, `/v1/playground/*`, and
-`/v1/admin/*`. This stays within Cloudflare's per-application destination limit
-while still protecting the console entrypoint and the Access-backed session,
-playground, and admin APIs. Override them with `CLAWROUTER_ACCESS_PATHS` only if the API
-contract changes. Do not add `/` on the shared API hostname: Cloudflare Access
+destinations are `/dashboard`, `/v1/session`, `/v1/entitlements`,
+`/v1/playground/*`, and `/v1/admin/*`. This stays within Cloudflare's
+per-application destination limit while still protecting the console entrypoint
+and the Access-backed session, entitlement, playground, and admin APIs. Override
+them with `CLAWROUTER_ACCESS_PATHS` only if the API contract changes. Do not add
+`/` on the shared API hostname: Cloudflare Access
 path inheritance would protect the public `/v1/*` API too. Root reaches Access
 by redirecting to `/dashboard`.
 Set `CLAWROUTER_ACCESS_IDP_IDS` to one identity provider to enable automatic
@@ -223,9 +224,10 @@ admin rights.
 }
 ```
 
-`GET /v1/session` reports the verified Access session. The admin UI can call
-admin routes through the same-origin Access session; the admin bearer token is
-only a fallback for automation or emergency access.
+`GET /v1/session` reports the verified Access session. `GET /v1/entitlements`
+materializes the current user's provider access and readiness. The admin UI can
+call admin routes through the same-origin Access session; the admin bearer token
+is only a fallback for automation or emergency access.
 
 Admins can inspect materialized Access users and update tenant/status in the
 console or API:
@@ -246,8 +248,11 @@ The record is stored in `POLICY_KV` at `access/users/<email>`:
 ```
 
 The console also exposes a Cloudflare Access-backed playground for
-OpenAI-compatible routes. It sends requests through `/v1/playground/*`; upstream
-calls still obey stored policy provider allowlists and budget limits.
+OpenAI-compatible routes and manifest-proxy service routes. Model playground
+calls send requests through `/v1/playground/*`; service playground calls send to
+the selected `/v1/proxy/<provider>/<endpoint>` route. Upstream calls still obey
+stored policy provider allowlists, provider readiness, OAuth grants, and budget
+limits.
 
 ## Admin API
 
@@ -259,6 +264,7 @@ token is never configured in the Worker.
 ```text
 GET /v1/admin/keys
 GET /v1/admin/access-users
+GET /v1/admin/provider-status
 PUT /v1/admin/access-users/<email>
 PUT /v1/admin/keys/<kid>
 POST /v1/admin/keys/<kid>/revoke
@@ -273,6 +279,11 @@ select at least one provider; use the CLI path for deliberate all-provider keys.
 The console also stores `tokenRole` metadata from role presets such as
 `sandbox`, `user`, `service`, and `ops`; enforcement still comes from the saved
 provider allowlist and budget fields.
+
+Access user records are not role-grant records. Cloudflare Access creates the
+identity, `access/users/<email>` stores tenant/status, and ClawRouter admin
+rights come from the Access admin email/domain allowlist configured on the
+Worker.
 
 ## Keys and Revocation
 

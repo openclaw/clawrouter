@@ -64,10 +64,11 @@ pnpm cf:access
 Then redeploy with the printed `CLAWROUTER_ACCESS_TEAM_DOMAIN` and
 `CLAWROUTER_ACCESS_AUD` values. `/` redirects to the Access-protected
 `/dashboard` path, while public `/v1` catalog and proxy routes stay normal.
-The Access app must also protect `/v1/playground/*` so browser playground calls
-carry a verified Access session. A ClawRouter `access_session_required` JSON
-body on `/dashboard` or `/v1/playground/*` means the Access app is not in front
-of the console path yet, and `pnpm cf:smoke` treats that as a failed deployment
+The Access app must also protect `/v1/entitlements` and `/v1/playground/*` so
+browser catalog and playground calls carry a verified Access session. A
+ClawRouter `access_session_required` JSON body on `/dashboard`,
+`/v1/entitlements`, or `/v1/playground/*` means the Access app is not in front of
+that console path yet, and `pnpm cf:smoke` treats that as a failed deployment
 smoke.
 
 The `Deploy Cloudflare` workflow can do the Access step too: dispatch it with
@@ -81,6 +82,7 @@ The Worker currently exposes:
 
 - `GET /v1/health`
 - `GET /v1/providers`
+- `GET /v1/entitlements`
 - `GET /v1/key/inspect`
 - `POST /v1/chat/completions`
 - `POST /v1/responses`
@@ -88,6 +90,7 @@ The Worker currently exposes:
 - `POST /v1/proxy/<provider>/<endpoint>`
 - `GET /v1/admin/keys`
 - `GET /v1/admin/access-users`
+- `GET /v1/admin/provider-status`
 - `PUT /v1/admin/access-users/<email>`
 - `PUT /v1/admin/keys/<kid>`
 - `POST /v1/admin/keys/<kid>/revoke`
@@ -114,10 +117,11 @@ deployment, key registration, and smoke commands.
 Admin endpoints accept a verified Cloudflare Access admin session or
 `Authorization: Bearer <admin-token>` against `CLAWROUTER_ADMIN_TOKEN_SHA256`.
 The browser console hashes generated proxy key secrets in-browser before
-storing policy in `POLICY_KV`, can assign Access users to `user` or `admin`
-roles, offers proxy-key role presets with provider and budget limits, and
-includes a Cloudflare Access-backed playground for OpenAI-compatible model
-routes.
+storing policy in `POLICY_KV`, can assign Access users to tenants and enabled
+states, offers proxy-key role presets with provider and budget limits, shows
+provider readiness, and includes a Cloudflare Access-backed playground for model
+and manifest-proxy service routes. Admin rights come from the Access admin
+allowlist, not editable user rows.
 
 Generic REST/tool proxy requests are manifest-driven:
 
