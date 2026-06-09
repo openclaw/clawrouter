@@ -32,171 +32,306 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
   <style>
     :root {
       color-scheme: dark;
-      --bg: #050506;
-      --surface: #0d0e10;
-      --surface-2: #141519;
-      --surface-3: #1a1c21;
-      --ink: #f4f1ea;
-      --muted: #b8b1a4;
-      --faint: #7e7a71;
-      --line: #27292f;
-      --line-strong: #41434c;
-      --accent: #f5d46f;
-      --accent-soft: #2c2613;
-      --accent-ink: #171309;
-      --blue: #9cc8ff;
-      --green: #92e6b5;
+      --bg: #060706;
+      --bg-elevated: #090a09;
+      --surface: #0d0f0e;
+      --surface-2: #131613;
+      --surface-3: #191d19;
+      --surface-warm: #17140e;
+      --ink: #f7f3ea;
+      --muted: #c1b9aa;
+      --faint: #837d70;
+      --line: #252923;
+      --line-strong: #404738;
+      --accent: #f4d35e;
+      --accent-soft: #302711;
+      --accent-ink: #151106;
+      --blue: #8ab4ff;
+      --green: #86e7b6;
       --warn: #ff9a76;
-      --shadow: 0 18px 54px rgba(0, 0, 0, .42);
+      --danger: #ff735c;
+      --shadow: 0 24px 80px rgba(0, 0, 0, .44);
+      --radius: 10px;
+      --radius-sm: 7px;
+      --space-1: 4px;
+      --space-2: 8px;
+      --space-3: 12px;
+      --space-4: 16px;
+      --space-5: 20px;
+      --space-6: 28px;
+      --space-7: 40px;
     }
     * { box-sizing: border-box; }
+    html { min-width: 320px; }
     body {
       margin: 0;
-      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      min-height: 100vh;
+      font-family: "Sohne", "Geist", "Aptos", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background:
-        linear-gradient(rgba(255,255,255,.021) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(255,255,255,.021) 1px, transparent 1px),
-        radial-gradient(circle at 82% -18%, rgba(245, 212, 111, .13), transparent 34%),
-        radial-gradient(circle at -10% 28%, rgba(156, 200, 255, .08), transparent 28%),
+        linear-gradient(rgba(247, 243, 234, .018) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(247, 243, 234, .018) 1px, transparent 1px),
+        linear-gradient(180deg, rgba(244, 211, 94, .045), transparent 280px),
         var(--bg);
-      background-size: 34px 34px, 34px 34px, auto, auto;
+      background-size: 32px 32px, 32px 32px, auto;
       color: var(--ink);
-      line-height: 1.45;
+      font-size: 15px;
+      line-height: 1.5;
       overflow-x: hidden;
-    }
-    header {
-      border-bottom: 1px solid var(--line);
-      background: rgba(5, 5, 6, .9);
-      backdrop-filter: blur(18px);
-      position: sticky;
-      top: 0;
-      z-index: 2;
-    }
-    .wrap {
-      width: min(1240px, calc(100vw - 32px));
-      margin: 0 auto;
-    }
-    .top {
-      display: flex;
-      align-items: center;
-      justify-content: space-between;
-      gap: 16px;
-      min-height: 74px;
-      padding: 14px 0;
-      min-width: 0;
-    }
-    .top > *,
-    .consoleIntro > *,
-    .toolbar > *,
-    .grid > * {
-      min-width: 0;
-      max-width: 100%;
-    }
-    .brand {
-      display: flex;
-      align-items: center;
-      gap: 13px;
-      min-width: 0;
-    }
-    .brand > div { min-width: 0; }
-    .brandmark {
-      width: 42px;
-      height: 42px;
-      display: grid;
-      place-items: center;
-      border: 1px solid var(--line);
-      border-radius: 8px;
-      background: linear-gradient(180deg, #24262c, var(--surface));
-      color: var(--accent);
-      font-weight: 800;
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
-    }
-    .eyebrow {
-      margin: 0 0 4px;
-      color: var(--faint);
-      font-size: 11px;
-      font-weight: 700;
-      text-transform: uppercase;
-      letter-spacing: .08em;
-    }
-    h1 { margin: 0; font-size: 24px; line-height: 1; letter-spacing: 0; }
-    h2 { margin: 0 0 14px; font-size: 12px; text-transform: uppercase; letter-spacing: .08em; color: var(--muted); }
-    p { margin: 6px 0 0; color: var(--muted); }
-    nav {
-      display: flex;
-      gap: 4px;
-      flex-wrap: wrap;
-      padding: 3px;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      background: var(--surface);
+      font-kerning: normal;
+      text-rendering: geometricPrecision;
     }
     button, input, select, textarea {
       font: inherit;
       border: 1px solid var(--line);
-      border-radius: 8px;
+      border-radius: var(--radius-sm);
       background: var(--surface-2);
       color: var(--ink);
     }
     button {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
       min-height: 38px;
-      padding: 0 12px;
+      padding: 0 13px;
       cursor: pointer;
-      transition: background .16s ease, border-color .16s ease, color .16s ease, transform .16s ease;
+      transition: background .16s ease, border-color .16s ease, color .16s ease, transform .16s ease, box-shadow .16s ease;
     }
-    button:hover { transform: translateY(-1px); border-color: var(--line-strong); }
-    nav button {
-      border-color: transparent;
-      background: transparent;
-      color: var(--muted);
-      border-radius: 999px;
+    button:hover {
+      transform: translateY(-1px);
+      border-color: var(--line-strong);
+      background: #191c18;
     }
-    button.active, button.primary {
+    button:disabled {
+      cursor: not-allowed;
+      opacity: .5;
+      transform: none;
+    }
+    button.active,
+    button.primary {
       background: var(--ink);
       color: var(--accent-ink);
       border-color: var(--ink);
+      box-shadow: 0 12px 34px rgba(247, 243, 234, .08);
     }
-    main { padding: 18px 0 42px; }
-    .consoleIntro {
-      display: grid;
-      grid-template-columns: minmax(0, 1.4fr) minmax(320px, .6fr);
-      gap: 14px;
-      margin-bottom: 14px;
+    input, select {
+      min-height: 40px;
+      width: 100%;
+      padding: 0 11px;
     }
-    .heroPanel {
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 18px;
-      background: linear-gradient(135deg, rgba(245, 212, 111, .10), rgba(13, 14, 16, .92) 48%, rgba(156, 200, 255, .08));
-      box-shadow: var(--shadow);
+    textarea {
+      min-height: 138px;
+      width: 100%;
+      resize: vertical;
+      padding: 11px;
+      line-height: 1.5;
     }
-    .heroPanel h2 {
-      margin: 0;
-      color: var(--ink);
-      font-size: clamp(24px, 3vw, 38px);
-      line-height: 1.02;
-      text-transform: none;
+    input:focus-visible,
+    select:focus-visible,
+    textarea:focus-visible,
+    button:focus-visible {
+      outline: 2px solid color-mix(in srgb, var(--accent) 68%, transparent);
+      outline-offset: 2px;
+    }
+    h1, h2, h3, p { margin: 0; }
+    h1 {
+      font-size: 1.45rem;
+      line-height: 1.08;
       letter-spacing: 0;
+    }
+    h2 {
+      color: var(--ink);
+      font-size: .96rem;
+      font-weight: 760;
+      line-height: 1.2;
+      letter-spacing: 0;
+    }
+    h3 {
+      color: var(--muted);
+      font-size: .78rem;
+      font-weight: 720;
+      letter-spacing: .08em;
+      text-transform: uppercase;
+    }
+    p {
+      color: var(--muted);
+      max-width: 72ch;
+    }
+    label {
+      display: grid;
+      gap: var(--space-2);
+      color: var(--faint);
+      font-size: .78rem;
+      font-weight: 680;
+    }
+    .appShell {
+      display: grid;
+      grid-template-columns: 264px minmax(0, 1fr);
+      min-height: 100vh;
+    }
+    .appShell * { min-width: 0; }
+    .appShell > *,
+    .content,
+    .contentInner,
+    .sidebar,
+    nav,
+    .topbar > *,
+    .pageTitle,
+    .quickPanel,
+    .view,
+    .panel,
+    .grid > * {
+      min-width: 0;
+      max-width: 100%;
+    }
+    .sidebar {
+      position: sticky;
+      top: 0;
+      height: 100vh;
+      display: grid;
+      grid-template-rows: auto 1fr auto;
+      gap: var(--space-6);
+      padding: var(--space-5);
+      border-right: 1px solid var(--line);
+      background: linear-gradient(180deg, rgba(13, 15, 14, .96), rgba(6, 7, 6, .98));
+      box-shadow: 18px 0 60px rgba(0, 0, 0, .28);
+      z-index: 5;
+    }
+    .brand {
+      display: flex;
+      align-items: center;
+      gap: var(--space-3);
+      min-width: 0;
+    }
+    .brand > div { min-width: 0; }
+    .brandmark {
+      width: 38px;
+      height: 38px;
+      display: grid;
+      place-items: center;
+      border: 1px solid var(--line);
+      border-radius: var(--radius-sm);
+      background: linear-gradient(180deg, #242013, var(--surface));
+      color: var(--accent);
+      font-weight: 860;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
+    }
+    .eyebrow {
+      color: var(--faint);
+      font-size: .68rem;
+      font-weight: 760;
+      text-transform: uppercase;
+      letter-spacing: .12em;
+    }
+    nav {
+      display: grid;
+      gap: var(--space-2);
+      align-content: start;
+    }
+    nav button {
+      width: 100%;
+      justify-content: flex-start;
+      text-align: left;
+      background: transparent;
+      color: var(--muted);
+      border-color: transparent;
+      border-radius: var(--radius-sm);
+    }
+    nav button::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      display: inline-block;
+      margin-right: 9px;
+      border-radius: 50%;
+      background: var(--line-strong);
+      vertical-align: 1px;
+    }
+    nav button.active {
+      background: color-mix(in srgb, var(--accent) 12%, transparent);
+      color: var(--ink);
+      border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+    }
+    nav button.active::before { background: var(--accent); }
+    .authDock {
+      display: grid;
+      gap: var(--space-3);
+      padding-top: var(--space-4);
+      border-top: 1px solid var(--line);
+    }
+    .authDock button { width: 100%; }
+    .status {
+      display: inline-flex;
+      align-items: center;
+      min-height: 28px;
+      width: fit-content;
+      max-width: 100%;
+      padding: 0 10px;
+      border: 1px solid var(--line);
+      border-radius: 999px;
+      background: var(--surface);
+      color: var(--muted);
+      font-size: .82rem;
       overflow-wrap: anywhere;
     }
-    .heroPanel p { max-width: 720px; }
+    .status::before {
+      content: "";
+      width: 7px;
+      height: 7px;
+      margin-right: 7px;
+      border-radius: 50%;
+      background: var(--faint);
+    }
+    .status.bad { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 38%, var(--line)); }
+    .status.bad::before { background: var(--warn); }
+    .status.good { color: var(--green); border-color: color-mix(in srgb, var(--green) 38%, var(--line)); }
+    .status.good::before { background: var(--green); }
+    .status.soft { color: var(--blue); border-color: color-mix(in srgb, var(--blue) 34%, var(--line)); }
+    .status.soft::before { background: var(--blue); }
+    .content {
+      min-width: 0;
+      padding: var(--space-6);
+    }
+    .contentInner {
+      width: min(1380px, 100%);
+      margin: 0 auto;
+    }
+    .topbar {
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) minmax(320px, 440px);
+      gap: var(--space-5);
+      align-items: start;
+      margin-bottom: var(--space-6);
+    }
+    .pageTitle {
+      display: grid;
+      gap: var(--space-2);
+      min-width: 0;
+    }
+    .pageTitle h2 {
+      max-width: 820px;
+      font-size: 2.25rem;
+      line-height: .98;
+      letter-spacing: -.01em;
+      overflow-wrap: anywhere;
+    }
     .quickPanel {
+      display: grid;
+      gap: var(--space-3);
       border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 14px;
-      background: rgba(13, 14, 16, .86);
+      border-radius: var(--radius);
+      padding: var(--space-4);
+      background: linear-gradient(180deg, rgba(19, 22, 19, .88), rgba(9, 10, 9, .92));
       box-shadow: var(--shadow);
     }
-    .quickPanel h2 { margin-bottom: 10px; }
-    .quickList { display: grid; gap: 8px; }
+    .quickList { display: grid; gap: var(--space-2); }
     .quickItem {
-      display: flex;
-      justify-content: space-between;
-      gap: 12px;
+      display: grid;
+      grid-template-columns: minmax(82px, auto) minmax(0, 1fr);
+      gap: var(--space-3);
       border-bottom: 1px solid var(--line);
-      padding-bottom: 8px;
+      padding-bottom: var(--space-2);
       color: var(--muted);
-      font-size: 13px;
+      font-size: .84rem;
     }
     .quickItem:last-child { border-bottom: 0; padding-bottom: 0; }
     .quickItem strong { color: var(--ink); font-weight: 750; }
@@ -205,86 +340,99 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       text-align: right;
       overflow-wrap: anywhere;
     }
-    .toolbar {
+    .view {
       display: grid;
-      grid-template-columns: 1fr 1fr auto;
-      gap: 10px;
-      align-items: end;
-      margin-bottom: 12px;
-      padding: 10px;
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      background: rgba(13, 15, 14, .82);
-      box-shadow: var(--shadow);
-    }
-    label { display: grid; gap: 5px; color: var(--faint); font-size: 12px; font-weight: 650; }
-    input, select { min-height: 38px; padding: 0 10px; width: 100%; }
-    textarea {
-      min-height: 132px;
-      width: 100%;
-      resize: vertical;
-      padding: 10px;
-      line-height: 1.45;
-    }
-    input:focus-visible, button:focus-visible {
-      outline: 2px solid rgba(231, 248, 200, .34);
-      outline-offset: 2px;
+      gap: var(--space-5);
     }
     .grid {
       display: grid;
-      grid-template-columns: repeat(12, 1fr);
-      gap: 14px;
+      grid-template-columns: repeat(12, minmax(0, 1fr));
+      gap: var(--space-4);
     }
+    .viewIntro {
+      grid-column: 1 / -1;
+      display: grid;
+      grid-template-columns: minmax(0, 1fr) auto;
+      gap: var(--space-4);
+      align-items: end;
+      padding-bottom: var(--space-2);
+      border-bottom: 1px solid var(--line);
+    }
+    .viewIntro h2 {
+      margin-bottom: var(--space-1);
+      font-size: 1.35rem;
+    }
+    .viewIntro p { font-size: .95rem; }
     .panel {
       grid-column: span 6;
-      background: linear-gradient(180deg, rgba(23, 29, 26, .92), rgba(13, 15, 14, .94));
-      border: 1px solid var(--line);
-      border-radius: 12px;
-      padding: 16px;
       min-width: 0;
       overflow-x: auto;
+      display: grid;
+      gap: var(--space-4);
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      padding: var(--space-4);
+      background: linear-gradient(180deg, rgba(19, 22, 19, .9), rgba(10, 11, 10, .92));
       box-shadow: var(--shadow);
     }
     .wide { grid-column: 1 / -1; }
     .third { grid-column: span 4; }
-    .stack { display: grid; gap: 12px; }
+    .stack { display: grid; gap: var(--space-3); }
+    .panelHeader {
+      display: flex;
+      align-items: start;
+      justify-content: space-between;
+      gap: var(--space-3);
+    }
+    .panelHeader h2 { margin: 0; }
+    .panelHeader p {
+      margin-top: var(--space-1);
+      color: var(--faint);
+      font-size: .84rem;
+    }
     .form {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
-      gap: 10px;
+      gap: var(--space-3);
     }
     .full { grid-column: 1 / -1; }
     .actions {
       display: flex;
       align-items: center;
       justify-content: flex-end;
-      gap: 8px;
+      gap: var(--space-2);
       flex-wrap: wrap;
     }
     .providerCloud {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(185px, 1fr));
-      gap: 8px;
+      grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
+      gap: var(--space-3);
     }
     .providerCard {
       display: grid;
-      grid-template-columns: 34px minmax(0, 1fr);
-      gap: 10px;
+      grid-template-columns: 36px minmax(0, 1fr);
+      gap: var(--space-3);
       align-items: center;
-      min-height: 58px;
+      min-height: 72px;
       border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 10px;
-      background: rgba(8, 9, 8, .42);
+      border-radius: var(--radius);
+      padding: var(--space-3);
+      background: rgba(8, 9, 8, .58);
+      transition: border-color .16s ease, transform .16s ease, background .16s ease;
+    }
+    .providerCard:hover {
+      transform: translateY(-1px);
+      border-color: var(--line-strong);
+      background: rgba(15, 17, 15, .88);
     }
     .providerIcon {
       position: relative;
       isolation: isolate;
-      width: 34px;
-      height: 34px;
+      width: 36px;
+      height: 36px;
       display: grid;
       place-items: center;
-      border-radius: 9px;
+      border-radius: var(--radius-sm);
       border: 1px solid color-mix(in srgb, var(--icon-fg, var(--ink)) 13%, transparent);
       background:
         radial-gradient(circle at 32% 16%, color-mix(in srgb, var(--icon-fg, var(--ink)) 18%, transparent), transparent 42%),
@@ -346,13 +494,13 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       text-overflow: ellipsis;
       white-space: nowrap;
     }
-    .providerCard span { color: var(--faint); font-size: 12px; }
+    .providerCard span { color: var(--faint); font-size: .78rem; }
     .providerMeta {
       display: flex;
-      gap: 6px;
+      gap: var(--space-2);
       align-items: center;
       flex-wrap: wrap;
-      margin-top: 3px;
+      margin-top: var(--space-1);
     }
     .providerInline {
       display: inline-grid;
@@ -386,7 +534,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       border-radius: 999px;
       background: rgba(255,255,255,.03);
       color: var(--muted);
-      font-size: 12px;
+      font-size: .78rem;
       font-weight: 650;
       white-space: nowrap;
     }
@@ -402,24 +550,23 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     }
     .providerChecks {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(126px, 1fr));
-      gap: 7px;
-      max-height: 170px;
+      grid-template-columns: repeat(auto-fill, minmax(145px, 1fr));
+      gap: var(--space-2);
+      max-height: 224px;
       overflow: auto;
       border: 1px solid var(--line);
-      border-radius: 8px;
-      padding: 8px;
+      border-radius: var(--radius-sm);
+      padding: var(--space-2);
       background: rgba(8, 9, 8, .35);
     }
     .presetGrid {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 8px;
-      margin-top: 4px;
+      gap: var(--space-2);
     }
     .presetButton {
       min-height: 84px;
-      padding: 10px;
+      padding: var(--space-3);
       text-align: left;
       background: rgba(8, 9, 8, .42);
     }
@@ -434,14 +581,14 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     }
     .presetButton span {
       color: var(--faint);
-      font-size: 12px;
+      font-size: .78rem;
       line-height: 1.35;
     }
     .check {
       grid-template-columns: 16px minmax(0, 1fr);
       align-items: center;
       color: var(--ink);
-      font-size: 12px;
+      font-size: .8rem;
       font-weight: 600;
     }
     .check input {
@@ -470,7 +617,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     }
     .requestPanel {
       display: grid;
-      gap: 10px;
+      gap: var(--space-3);
     }
     .requestTabs {
       display: inline-flex;
@@ -504,20 +651,28 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     .metrics {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: 10px;
+      gap: var(--space-3);
     }
     .metric {
       border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 13px 14px;
-      background: var(--surface);
+      border-radius: var(--radius);
+      padding: var(--space-4);
+      background: linear-gradient(180deg, rgba(8, 9, 8, .82), rgba(14, 16, 14, .72));
+      min-height: 88px;
     }
-    .metric strong { display: block; font-size: 25px; line-height: 1.1; letter-spacing: 0; }
-    .metric span { color: var(--faint); font-size: 12px; font-weight: 650; }
+    .metric strong {
+      display: block;
+      font-size: 1.75rem;
+      line-height: 1;
+      letter-spacing: 0;
+      font-variant-numeric: tabular-nums;
+      overflow-wrap: anywhere;
+    }
+    .metric span { color: var(--faint); font-size: .78rem; font-weight: 680; }
     table {
       width: 100%;
       border-collapse: collapse;
-      font-size: 13px;
+      font-size: .86rem;
       min-width: min(520px, 100%);
     }
     th, td {
@@ -527,7 +682,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       vertical-align: top;
     }
     tbody tr:hover { background: rgba(231, 248, 200, .035); }
-    th { color: var(--faint); font-size: 11px; text-transform: uppercase; letter-spacing: .06em; }
+    th { color: var(--faint); font-size: .68rem; text-transform: uppercase; letter-spacing: .08em; }
     .tableActions {
       display: flex;
       gap: 6px;
@@ -549,22 +704,9 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       padding: 2px 5px;
       word-break: break-word;
       color: #dbeec8;
+      font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+      font-size: .86em;
     }
-    .status {
-      display: inline-flex;
-      align-items: center;
-      min-height: 28px;
-      margin: 0 0 16px;
-      padding: 0 9px;
-      border: 1px solid var(--line);
-      border-radius: 999px;
-      background: var(--surface);
-      color: var(--muted);
-      font-size: 13px;
-    }
-    .bad { color: var(--warn); border-color: color-mix(in oklch, var(--warn), white 50%); }
-    .good { color: var(--accent); border-color: rgba(231, 248, 200, .36); }
-    .soft { color: var(--blue); border-color: rgba(156, 200, 255, .34); }
     .bar {
       display: grid;
       gap: 5px;
@@ -584,13 +726,12 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       background: linear-gradient(90deg, var(--green), var(--accent));
     }
     .hint {
-      margin-top: 10px;
       color: var(--faint);
-      font-size: 12px;
+      font-size: .8rem;
     }
     .issuedKey {
       display: grid;
-      gap: 8px;
+      gap: var(--space-2);
       word-break: break-word;
     }
     .issuedKey code {
@@ -600,108 +741,138 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     .inlineForm {
       display: grid;
       grid-template-columns: minmax(0, 1fr) auto;
-      gap: 8px;
+      gap: var(--space-2);
       align-items: end;
     }
     .inspectorSummary {
       display: grid;
-      gap: 10px;
+      gap: var(--space-3);
     }
     .verdict {
       display: flex;
       align-items: center;
       justify-content: space-between;
-      gap: 12px;
+      gap: var(--space-3);
       border: 1px solid var(--line);
-      border-radius: 10px;
-      padding: 12px;
+      border-radius: var(--radius);
+      padding: var(--space-3);
       background: rgba(8, 9, 8, .42);
     }
     .verdict strong {
-      font-size: 18px;
+      font-size: 1.15rem;
       overflow-wrap: anywhere;
     }
     .verdict span {
       color: var(--faint);
-      font-size: 12px;
+      font-size: .74rem;
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: .06em;
     }
     .hidden { display: none; }
-    @media (max-width: 820px) {
-      .wrap {
-        width: calc(100vw - 96px);
-        max-width: 720px;
-        margin-left: auto;
-        margin-right: auto;
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after {
+        transition-duration: .01ms !important;
+        animation-duration: .01ms !important;
+        scroll-behavior: auto !important;
       }
-      .top, .toolbar { grid-template-columns: 1fr; display: grid; }
-      .inlineForm { grid-template-columns: 1fr; }
-      .consoleIntro { grid-template-columns: 1fr; }
-      .brand { align-items: flex-start; }
+    }
+    @media (max-width: 1040px) {
+      .appShell { grid-template-columns: 1fr; }
+      .sidebar {
+        position: static;
+        height: auto;
+        grid-template-rows: auto auto auto;
+        gap: var(--space-4);
+        padding: var(--space-4);
+        border-right: 0;
+        border-bottom: 1px solid var(--line);
+      }
       nav {
-        width: 100%;
-        display: grid;
-        grid-template-columns: 1fr;
-        border-radius: 16px;
+        grid-template-columns: repeat(5, minmax(0, 1fr));
       }
       nav button {
-        width: 100%;
-        min-width: 0;
-        max-width: 100%;
-        overflow: hidden;
-        text-overflow: ellipsis;
+        text-align: center;
+        justify-content: center;
       }
+      nav button::before { display: none; }
+      .authDock {
+        grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
+        align-items: end;
+        padding-top: var(--space-3);
+      }
+      .authDock .status { grid-column: 1 / -1; }
+      .content { padding: var(--space-5); }
+      .topbar { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 820px) {
+      .content { padding: var(--space-4); }
+      .pageTitle h2 { font-size: 1.8rem; }
+      .viewIntro { grid-template-columns: 1fr; }
+      .inlineForm { grid-template-columns: 1fr; }
       .panel, .third { grid-column: 1 / -1; }
       .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .form { grid-template-columns: 1fr; }
       .presetGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .providerInline { min-width: 0; }
-      .quickItem {
-        display: grid;
-        grid-template-columns: 1fr;
-      }
-      .quickItem strong { text-align: left; }
+      .authDock { grid-template-columns: 1fr; }
     }
     @media (max-width: 520px) {
-      .wrap {
-        width: calc(100vw - 96px);
-        max-width: 300px;
-        margin-left: clamp(12px, calc((100vw - 300px) / 2), 45px);
-        margin-right: clamp(12px, calc((100vw - 300px) / 2), 45px);
-      }
-      .top { gap: 12px; }
-      .brand p:not(.eyebrow) { display: none; }
-      nav { max-width: 100%; overflow: hidden; }
-      nav button {
+      .appShell,
+      .sidebar,
+      .content,
+      .contentInner {
         width: 100%;
-        max-width: 100%;
-        min-width: 0;
-        padding: 0 6px;
-        font-size: 13px;
-        overflow: hidden;
-        text-overflow: ellipsis;
+        max-width: 100vw;
+        overflow-x: hidden;
       }
-      .metrics { grid-template-columns: 1fr; }
+      .sidebar { padding: var(--space-3); }
+      .content { padding: var(--space-3); }
       .brandmark { display: none; }
-      .panel { padding: 12px; border-radius: 10px; }
+      nav { grid-template-columns: 1fr; }
+      nav button {
+        justify-content: flex-start;
+        text-align: left;
+      }
+      nav button::before { display: inline-block; }
+      .pageTitle h2 { font-size: 1.45rem; }
+      .quickItem { grid-template-columns: 1fr; }
+      .quickItem strong { text-align: left; }
+      .metrics { grid-template-columns: 1fr; }
+      .panel {
+        padding: var(--space-3);
+        border-radius: var(--radius-sm);
+      }
       .providerCloud { grid-template-columns: 1fr; }
       .presetGrid { grid-template-columns: 1fr; }
       .actions { justify-content: stretch; }
       .actions button { flex: 1 1 auto; min-width: 0; }
+      .requestTabs { width: 100%; }
+      .requestTabs button { flex: 1; }
+      table {
+        min-width: 520px;
+      }
+      .panel {
+        overflow-x: auto;
+      }
+      .providerInline {
+        grid-template-columns: 24px minmax(0, 1fr);
+      }
+      .providerInline span:last-child {
+        overflow: hidden;
+        text-overflow: ellipsis;
+      }
     }
   </style>
 </head>
 <body>
-  <header>
-    <div class="wrap top">
+  <div class="appShell">
+    <aside class="sidebar">
       <div class="brand">
         <div class="brandmark">CR</div>
         <div>
           <p class="eyebrow">gateway console</p>
           <h1>ClawRouter</h1>
-          <p>Model routing, proxy keys, tenant budgets, and usage controls.</p>
         </div>
       </div>
       <nav aria-label="console views">
@@ -711,46 +882,84 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         <button data-view="account">Account</button>
         <button data-view="routes">Routes</button>
       </nav>
-    </div>
-  </header>
-  <main class="wrap">
-    <section class="consoleIntro">
-      <div class="heroPanel">
-        <h2>Route models, services, budgets, and users from one control plane.</h2>
-        <p>Use the user surfaces for key inspection, playground calls, and usage. Use admin for Access roles, tenant-scoped proxy keys, provider allowlists, and hard spend limits.</p>
-      </div>
-      <div class="quickPanel">
-        <h2>Current Session</h2>
-        <div id="sessionQuick" class="quickList"></div>
-      </div>
-    </section>
-    <section class="toolbar">
+      <section class="authDock" aria-label="credentials">
       <label>Admin token<input id="adminToken" type="password" autocomplete="off" placeholder="optional bearer fallback"></label>
       <label>Proxy key<input id="proxyKey" type="password" autocomplete="off" placeholder="required for account views"></label>
       <button id="refresh" class="primary">Refresh</button>
-    </section>
-    <p id="status" class="status">idle</p>
-    <section id="dashboard" class="view grid">
-      <div class="panel wide">
-        <h2>Service</h2>
-        <div id="serviceMetrics" class="metrics"></div>
-      </div>
-      <div class="panel">
-        <h2>Provider Classes</h2>
-        <div id="providerClasses"></div>
-      </div>
-      <div class="panel">
-        <h2>Configured Routes</h2>
-        <div id="routeSummary"></div>
-      </div>
-      <div class="panel wide">
-        <h2>Provider Network</h2>
-        <div id="providerCloud" class="providerCloud"></div>
-      </div>
-    </section>
-    <section id="playground" class="view grid hidden">
-      <form id="playgroundForm" class="panel">
-        <h2>Model Playground</h2>
+        <p id="status" class="status">idle</p>
+      </section>
+    </aside>
+    <main class="content">
+      <div class="contentInner">
+        <section class="topbar">
+          <div class="pageTitle">
+            <p class="eyebrow">model routing control plane</p>
+            <h2>Route traffic, issue keys, and audit provider access.</h2>
+            <p>Provider manifests, OpenAI-compatible routes, Access roles, and budget policy in one operator surface.</p>
+          </div>
+          <div class="quickPanel">
+            <h3>Current session</h3>
+            <div id="sessionQuick" class="quickList"></div>
+          </div>
+        </section>
+        <section id="dashboard" class="view grid">
+          <div class="viewIntro">
+            <div>
+              <h2>Dashboard</h2>
+              <p>Service health, routing shape, and provider coverage.</p>
+            </div>
+          </div>
+          <div class="panel wide">
+            <div class="panelHeader">
+              <div>
+                <h2>Service</h2>
+                <p>Live snapshot from the edge API.</p>
+              </div>
+            </div>
+            <div id="serviceMetrics" class="metrics"></div>
+          </div>
+          <div class="panel">
+            <div class="panelHeader">
+              <div>
+                <h2>Provider classes</h2>
+                <p>Manifest taxonomy.</p>
+              </div>
+            </div>
+            <div id="providerClasses"></div>
+          </div>
+          <div class="panel">
+            <div class="panelHeader">
+              <div>
+                <h2>Configured routes</h2>
+                <p>API surfaces currently advertised.</p>
+              </div>
+            </div>
+            <div id="routeSummary"></div>
+          </div>
+          <div class="panel wide">
+            <div class="panelHeader">
+              <div>
+                <h2>Provider network</h2>
+                <p>Available providers, service kind, and route class.</p>
+              </div>
+            </div>
+            <div id="providerCloud" class="providerCloud"></div>
+          </div>
+        </section>
+        <section id="playground" class="view grid hidden">
+          <div class="viewIntro">
+            <div>
+              <h2>Playground</h2>
+              <p>Send test traffic through the same route, allowlist, budget, and usage path as production calls.</p>
+            </div>
+          </div>
+          <form id="playgroundForm" class="panel">
+            <div class="panelHeader">
+              <div>
+                <h2>Model request</h2>
+                <p>Select a routed model and payload shape.</p>
+              </div>
+            </div>
         <div class="form">
           <label class="full">Search models<input id="modelSearch" autocomplete="off" placeholder="filter by model or provider"></label>
           <label class="full">Model<select id="playgroundModel"></select></label>
@@ -769,9 +978,13 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         </div>
       </form>
       <div class="panel">
-        <h2>Route Preview</h2>
+        <div class="panelHeader">
+          <div>
+            <h2>Route preview</h2>
+            <p>Resolved provider and endpoint.</p>
+          </div>
+        </div>
         <div id="playgroundPreview"></div>
-        <p class="hint">Calls use the proxy key above and go through the same policy, provider allowlist, budget preflight, and usage queue as production API traffic.</p>
       </div>
       <div class="panel requestPanel">
         <div class="actions">
@@ -788,17 +1001,38 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         </div>
       </div>
       <div class="panel">
-        <h2>Response</h2>
+        <div class="panelHeader">
+          <div>
+            <h2>Response</h2>
+            <p>Raw upstream-compatible result.</p>
+          </div>
+        </div>
         <pre id="playgroundResult" class="result">select a model, enter a proxy key, and run a request.</pre>
       </div>
     </section>
     <section id="admin" class="view grid hidden">
+      <div class="viewIntro">
+        <div>
+          <h2>Admin</h2>
+          <p>Access role assignment, proxy key policy, provider allowlists, and budget controls.</p>
+        </div>
+      </div>
       <div class="panel wide">
-        <h2>Admin Overview</h2>
+        <div class="panelHeader">
+          <div>
+            <h2>Admin overview</h2>
+            <p>Policy and budget totals.</p>
+          </div>
+        </div>
         <div id="adminMetrics" class="metrics"></div>
       </div>
       <form id="keyForm" class="panel">
-        <h2>Issue Proxy Key</h2>
+        <div class="panelHeader">
+          <div>
+            <h2>Issue proxy key</h2>
+            <p>Save tenant policy and allowlisted providers.</p>
+          </div>
+        </div>
         <div class="form">
           <label>Key id<input id="keyKid" value="svc_docs"></label>
           <label>Token role<select id="keyTokenRole">
@@ -829,7 +1063,12 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         <div id="issuedKey" class="issuedKey hint"></div>
       </form>
       <form id="accessUserForm" class="panel">
-        <h2>Assign Access Role</h2>
+        <div class="panelHeader">
+          <div>
+            <h2>Assign Access role</h2>
+            <p>Map Cloudflare Access identity to tenant role.</p>
+          </div>
+        </div>
         <div class="form">
           <label class="full">Email<input id="accessEmail" type="email" placeholder="user@example.com"></label>
           <label>Role<select id="accessRole"><option value="user">user</option><option value="admin">admin</option></select></label>
@@ -839,26 +1078,57 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         </div>
       </form>
       <div class="panel">
-        <h2>Users / Tenants</h2>
+        <div class="panelHeader">
+          <div>
+            <h2>Users / tenants</h2>
+            <p>Tenant-level key coverage.</p>
+          </div>
+        </div>
         <div id="adminUsers"></div>
       </div>
       <div class="panel">
-        <h2>Usage</h2>
+        <div class="panelHeader">
+          <div>
+            <h2>Usage</h2>
+            <p>Ledger and remaining budget.</p>
+          </div>
+        </div>
         <div id="adminUsage"></div>
       </div>
       <div class="panel wide">
-        <h2>Key Policies</h2>
+        <div class="panelHeader">
+          <div>
+            <h2>Key policies</h2>
+            <p>Stored key policy never exposes saved secrets.</p>
+          </div>
+        </div>
         <div id="adminKeys"></div>
         <p class="hint">Saving a key stores only the SHA-256 hash of the generated secret. Copy the issued token when it is shown; it cannot be recovered later.</p>
       </div>
       <div class="panel wide">
-        <h2>Access Roles</h2>
+        <div class="panelHeader">
+          <div>
+            <h2>Access roles</h2>
+            <p>Cloudflare Access users with ClawRouter tenant policy.</p>
+          </div>
+        </div>
         <div id="accessUsers"></div>
       </div>
     </section>
     <section id="account" class="view grid hidden">
+      <div class="viewIntro">
+        <div>
+          <h2>Account</h2>
+          <p>Inspect a proxy key, profile, and budget state.</p>
+        </div>
+      </div>
       <form id="inspectKeyForm" class="panel wide">
-        <h2>Inspect Proxy Key</h2>
+        <div class="panelHeader">
+          <div>
+            <h2>Inspect proxy key</h2>
+            <p>Verify registration, tenant, provider allowlist, and budget before traffic goes out.</p>
+          </div>
+        </div>
         <div class="inlineForm">
           <label>Token<input id="inspectKeyInput" type="password" autocomplete="off" placeholder="paste a clawrouter-live key or use the toolbar proxy key"></label>
           <button type="submit" class="primary">Inspect key</button>
@@ -866,21 +1136,44 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         <div id="keyInspection" class="inspectorSummary hint">paste a proxy key to verify registration, role, provider allowlist, and budget policy before sending traffic.</div>
       </form>
       <div class="panel">
-        <h2>Profile</h2>
+        <div class="panelHeader">
+          <div>
+            <h2>Profile</h2>
+            <p>Resolved key identity.</p>
+          </div>
+        </div>
         <div id="profile"></div>
       </div>
       <div class="panel">
-        <h2>Budget</h2>
+        <div class="panelHeader">
+          <div>
+            <h2>Budget</h2>
+            <p>Current monthly usage window.</p>
+          </div>
+        </div>
         <div id="usage"></div>
       </div>
     </section>
     <section id="routes" class="view grid hidden">
+      <div class="viewIntro">
+        <div>
+          <h2>Routes</h2>
+          <p>OpenAI-compatible and manifest proxy route catalog.</p>
+        </div>
+      </div>
       <div class="panel wide">
-        <h2>Route Catalog</h2>
+        <div class="panelHeader">
+          <div>
+            <h2>Route catalog</h2>
+            <p>Provider, service kind, surface, and model/method count.</p>
+          </div>
+        </div>
         <div id="routesTable"></div>
       </div>
     </section>
-  </main>
+      </div>
+    </main>
+  </div>
   <script>
     const initialView = ({
       "/admin": "admin",
@@ -1017,7 +1310,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         metric("providers", providers.length),
         metric("openai compatible", routes.openaiCompatible.length),
         metric("manifest routes", routes.manifestProxy.length),
-        metric("session", state.session?.authenticated ? `${state.session.role} · ${state.session.email}` : "not signed in")
+        metric("session", state.session?.authenticated ? state.session.role : "not signed in")
       ].join("");
       renderSessionQuick();
       const classes = providers.reduce((acc, provider) => {
