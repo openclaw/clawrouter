@@ -452,12 +452,12 @@ function App() {
         return;
       }
       const method = "POST";
-      const result = await request<unknown>(gatewayOrigin, playgroundAccessEndpoint(playground, selectedServiceRoute), {
+      const result = await playgroundRequest(gatewayOrigin, playgroundAccessEndpoint(playground, selectedServiceRoute), {
         method,
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),
       });
-      setPlaygroundResult(JSON.stringify(result, null, 2));
+      setPlaygroundResult(result);
       setStatus("playground ready");
     } catch (error) {
       const message = errorMessage(error);
@@ -1103,6 +1103,29 @@ async function request<T>(baseUrl: string, path: string, init: RequestInit = {})
   if (!response.ok) throw new Error((await response.text()) || `${path} failed with ${response.status}`);
   if (!(response.headers.get("content-type") ?? "").includes("application/json")) throw new Error(`${path} returned a non-JSON response from ${baseUrl}`);
   return response.json() as Promise<T>;
+}
+
+async function playgroundRequest(baseUrl: string, path: string, init: RequestInit = {}): Promise<string> {
+  const headers = new Headers(init.headers);
+  const response = await fetch(`${baseUrl.replace(/\/$/, "")}${path}`, { ...init, credentials: "same-origin", headers });
+  const contentType = response.headers.get("content-type") ?? "";
+  const body = await response.arrayBuffer();
+  const text = isTextualResponse(contentType) ? new TextDecoder().decode(body) : "";
+  if (!response.ok) throw new Error(text.trim() || `${path} failed with ${response.status}`);
+  if (response.status === 204 || body.byteLength === 0) return `HTTP ${response.status} ${response.statusText || "No Content"}`.trim();
+  if (contentType.includes("application/json") || contentType.includes("+json")) {
+    try {
+      return JSON.stringify(JSON.parse(text), null, 2);
+    } catch {
+      return text;
+    }
+  }
+  if (text) return text;
+  return `HTTP ${response.status} ${response.statusText || "OK"}\n${contentType || "binary"} response (${body.byteLength} bytes)`;
+}
+
+function isTextualResponse(contentType: string) {
+  return /(^text\/|json|xml|html|csv|yaml|graphql|javascript)/i.test(contentType);
 }
 
 function readinessMap(readiness: ProviderReadiness[]) {
