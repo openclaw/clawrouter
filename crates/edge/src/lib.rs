@@ -1854,7 +1854,17 @@ fn oauth_grant_applies_to_policy_entry(grant: &OAuthGrantRecord, entry: &KeyPoli
 }
 
 fn runtime_binding_present(env: &Env, name: &str) -> bool {
-    env.var(name).is_ok() || env.secret(name).is_ok()
+    if let Ok(var) = env.var(name) {
+        if !var.to_string().trim().is_empty() {
+            return true;
+        }
+    }
+    if let Ok(secret) = env.secret(name) {
+        if !secret.to_string().trim().is_empty() {
+            return true;
+        }
+    }
+    false
 }
 
 fn provider_oauth_grant_count(provider: &CompiledProvider, grants: &[OAuthGrantRecord]) -> usize {

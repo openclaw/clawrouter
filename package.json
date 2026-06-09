@@ -13,7 +13,7 @@
     "cf:config": "node scripts/render-wrangler-config.mjs",
     "cf:provision": "node scripts/provision-cloudflare.mjs",
     "cf:access": "node scripts/provision-access.mjs",
-    "cf:deploy": "pnpm cf:config && wrangler deploy --config .wrangler.generated.toml",
+    "cf:deploy": "pnpm --dir admin build && pnpm cf:config && wrangler deploy --config .wrangler.generated.toml",
     "cf:key:put": "node scripts/key-put.mjs",
     "cf:key:revoke": "node scripts/key-revoke.mjs",
     "cf:oauth:put": "node scripts/oauth-put.mjs",
