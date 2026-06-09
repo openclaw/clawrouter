@@ -934,7 +934,8 @@ async fn access_entitlements(headers: &Headers, env: &Env) -> Result<Response> {
                 .iter()
                 .map(|entry| entry.kid.clone())
                 .collect::<Vec<_>>();
-            let scoped_grants = entitlement_oauth_grants(&grants, &matching_entries);
+            let selected_entry = matching_entries.first().copied().into_iter().collect::<Vec<_>>();
+            let scoped_grants = entitlement_oauth_grants(&grants, &selected_entry);
             let readiness = provider_readiness_row(provider, env, &scoped_grants);
             EntitlementProviderRow {
                 provider: provider.id.clone(),
