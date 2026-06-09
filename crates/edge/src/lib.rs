@@ -1916,6 +1916,12 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
             .and_then(with_cors);
     }
 
+    if req.method() == Method::Get && api_path == "/v1/entitlements" {
+        return access_entitlements(req.headers(), &env)
+            .await
+            .and_then(with_cors);
+    }
+
     if req.method() == Method::Get && api_path == "/v1/me" {
         return user_profile(req.headers(), &env).await.and_then(with_cors);
     }
@@ -1989,6 +1995,7 @@ fn service_index() -> Result<Response> {
             "providers": "/v1/providers",
             "routes": "/v1/routes",
             "session": "/v1/session",
+            "entitlements": "/v1/entitlements",
             "me": "/v1/me",
             "usage": "/v1/usage",
             "keyInspect": "/v1/key/inspect",
@@ -2025,6 +2032,7 @@ fn canonical_api_path(path: &str) -> String {
     match path {
         "/api/route" | "/api/routes" => "/v1/routes".to_string(),
         "/api/session" => "/v1/session".to_string(),
+        "/api/entitlements" => "/v1/entitlements".to_string(),
         "/api/me" => "/v1/me".to_string(),
         "/api/usage" => "/v1/usage".to_string(),
         _ if path.starts_with("/api/admin/") => format!("/v1{}", path.trim_start_matches("/api")),
@@ -2527,6 +2535,58 @@ struct AdminUsageRow {
     budget: BudgetStatusView,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderReadinessResponse {
+    providers: Vec<ProviderReadinessRow>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderReadinessRow {
+    id: String,
+    display_name: String,
+    class: String,
+    service_kind: String,
+    required_config: Vec<String>,
+    optional_config: Vec<String>,
+    missing_config: Vec<String>,
+    config_present: bool,
+    oauth_grant_required: bool,
+    oauth_grant_count: usize,
+    openai_compatible: bool,
+    manifest_routes: usize,
+    model_count: usize,
+    executable: bool,
+    status: String,
+    reasons: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EntitlementsResponse {
+    session: AccessSession,
+    providers: Vec<EntitlementProviderRow>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct EntitlementProviderRow {
+    provider: String,
+    display_name: String,
+    service_kind: String,
+    allowed: bool,
+    policies: Vec<String>,
+    readiness: ProviderReadinessRow,
+}
+
+#[derive(Debug)]
+struct OAuthGrantRecord {
+    key: String,
+    enabled: bool,
+    has_access_token: bool,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum AccessRole {
@@ -2642,6 +2702,55 @@ async fn session_profile(headers: &Headers, env: &Env) -> Result<Response> {
     }))
 }
 
+async fn access_entitlements(headers: &Headers, env: &Env) -> Result<Response> {
+    let Some(session) = verified_access_session(headers, env).await? else {
+        return json_error(
+            "access_session_required",
+            "entitlements require a verified Cloudflare Access session",
+            401,
+        );
+    };
+    let kv = match env.kv("POLICY_KV") {
+        Ok(kv) => kv,
+        Err(_) => {
+            return json_error(
+                "policy_store_unavailable",
+                "POLICY_KV binding is required for Access entitlements",
+                503,
+            );
+        }
+    };
+    let snapshot = provider_snapshot()?;
+    let entries = list_key_policy_records(&kv).await?;
+    let grants = list_oauth_grants(&kv).await?;
+    let readiness = provider_readiness_rows(&snapshot, env, &grants);
+    let readiness_by_id = readiness
+        .into_iter()
+        .map(|row| (row.id.clone(), row))
+        .collect::<BTreeMap<_, _>>();
+    let providers = snapshot
+        .providers
+        .iter()
+        .filter_map(|provider| {
+            let matching_policies = entries
+                .iter()
+                .filter(|entry| access_policy_allows(&entry.policy, &session, &provider.id))
+                .map(|entry| entry.kid.clone())
+                .collect::<Vec<_>>();
+            let readiness = readiness_by_id.get(&provider.id)?.clone();
+            Some(EntitlementProviderRow {
+                provider: provider.id.clone(),
+                display_name: provider.display_name.clone(),
+                service_kind: enum_label(&provider.service_kind),
+                allowed: !matching_policies.is_empty(),
+                policies: matching_policies,
+                readiness,
+            })
+        })
+        .collect();
+    Response::from_json(&EntitlementsResponse { session, providers })
+}
+
 async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
     let url = req.url()?;
     if let Some(response) = authorize_admin(&req.method(), req.headers(), &url, &env).await? {
@@ -2683,6 +2792,14 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
     if req.method() == Method::Get && path == "/v1/admin/access-users" {
         let users = list_admin_access_users(&kv, &env).await?;
         return Response::from_json(&serde_json::json!({ "users": users }));
+    }
+
+    if req.method() == Method::Get && path == "/v1/admin/provider-status" {
+        let snapshot = provider_snapshot()?;
+        let grants = list_oauth_grants(&kv).await?;
+        return Response::from_json(&ProviderReadinessResponse {
+            providers: provider_readiness_rows(&snapshot, &env, &grants),
+        });
     }
 
     if let Some(email) = path.strip_prefix("/v1/admin/access-users/") {
@@ -3365,6 +3482,189 @@ async fn list_key_policy_records(kv: &KvStore) -> Result<Vec<KeyPolicyEntry>> {
     }
     entries.sort_by(|a, b| a.kid.cmp(&b.kid));
     Ok(entries)
+}
+
+async fn list_oauth_grants(kv: &KvStore) -> Result<Vec<OAuthGrantRecord>> {
+    let mut grants = Vec::new();
+    let mut cursor = None;
+    loop {
+        let mut request = kv.list().prefix("oauth/".to_string()).limit(1000);
+        if let Some(next_cursor) = cursor.take() {
+            request = request.cursor(next_cursor);
+        }
+        let list = request
+            .execute()
+            .await
+            .map_err(|error| Error::RustError(format!("failed to list OAuth grants: {error}")))?;
+        for key in list.keys {
+            let Some(record) = kv.get(&key.name).text().await.map_err(|error| {
+                Error::RustError(format!("failed to read OAuth grant: {error}"))
+            })?
+            else {
+                continue;
+            };
+            let token = parse_oauth_token_record(&record)?;
+            grants.push(OAuthGrantRecord {
+                key: key.name,
+                enabled: token.enabled,
+                has_access_token: token
+                    .access_token
+                    .as_deref()
+                    .is_some_and(|value| !value.trim().is_empty()),
+            });
+        }
+        if list.list_complete {
+            break;
+        }
+        let Some(next_cursor) = list.cursor else {
+            break;
+        };
+        cursor = Some(next_cursor);
+    }
+    Ok(grants)
+}
+
+fn provider_readiness_rows(
+    snapshot: &ProviderSnapshot,
+    env: &Env,
+    grants: &[OAuthGrantRecord],
+) -> Vec<ProviderReadinessRow> {
+    snapshot
+        .providers
+        .iter()
+        .map(|provider| provider_readiness_row(provider, env, grants))
+        .collect()
+}
+
+fn provider_readiness_row(
+    provider: &CompiledProvider,
+    env: &Env,
+    grants: &[OAuthGrantRecord],
+) -> ProviderReadinessRow {
+    let optional_config = provider_optional_config_keys(provider);
+    let required_config = provider
+        .config_keys
+        .iter()
+        .filter(|key| !optional_config.iter().any(|optional| optional == *key))
+        .cloned()
+        .collect::<Vec<_>>();
+    let missing_config = required_config
+        .iter()
+        .filter(|key| !runtime_binding_present(env, key))
+        .cloned()
+        .collect::<Vec<_>>();
+    let config_present = missing_config.is_empty();
+    let oauth_grant_required = provider
+        .auth
+        .schemes
+        .iter()
+        .any(|scheme| matches!(scheme, AuthScheme::OAuth { .. }));
+    let oauth_grant_count = if oauth_grant_required {
+        provider_oauth_grant_count(provider, grants)
+    } else {
+        0
+    };
+    let openai_compatible = supports_openai_compatible_proxy(provider);
+    let manifest_routes = provider
+        .endpoints
+        .iter()
+        .filter(|endpoint| supports_manifest_proxy(provider, endpoint))
+        .count();
+    let has_route = openai_compatible || manifest_routes > 0;
+    let executable =
+        has_route && config_present && (!oauth_grant_required || oauth_grant_count > 0);
+    let mut reasons = Vec::new();
+    if !has_route {
+        reasons.push("no executable edge route".to_string());
+    }
+    if !missing_config.is_empty() {
+        reasons.push(format!("missing {}", missing_config.join(", ")));
+    }
+    if oauth_grant_required && oauth_grant_count == 0 {
+        reasons.push("OAuth grant required".to_string());
+    }
+    let status = if executable {
+        "ready"
+    } else if !missing_config.is_empty() {
+        "missing_config"
+    } else if oauth_grant_required && oauth_grant_count == 0 {
+        "grant_required"
+    } else if has_route {
+        "declared"
+    } else {
+        "unsupported"
+    };
+
+    ProviderReadinessRow {
+        id: provider.id.clone(),
+        display_name: provider.display_name.clone(),
+        class: enum_label(&provider.class),
+        service_kind: enum_label(&provider.service_kind),
+        required_config,
+        optional_config,
+        missing_config,
+        config_present,
+        oauth_grant_required,
+        oauth_grant_count,
+        openai_compatible,
+        manifest_routes,
+        model_count: provider.models.len(),
+        executable,
+        status: status.to_string(),
+        reasons,
+    }
+}
+
+fn provider_optional_config_keys(provider: &CompiledProvider) -> Vec<String> {
+    provider
+        .config_keys
+        .iter()
+        .filter(|key| key.as_str() == "AWS_SESSION_TOKEN")
+        .cloned()
+        .collect()
+}
+
+fn runtime_binding_present(env: &Env, name: &str) -> bool {
+    env.var(name).is_ok() || env.secret(name).is_ok()
+}
+
+fn provider_oauth_grant_count(provider: &CompiledProvider, grants: &[OAuthGrantRecord]) -> usize {
+    let refs = provider_oauth_refs(provider);
+    grants
+        .iter()
+        .filter(|grant| grant.enabled && grant.has_access_token)
+        .filter(|grant| refs.iter().any(|token_ref| grant.key.ends_with(token_ref)))
+        .count()
+}
+
+fn provider_oauth_refs(provider: &CompiledProvider) -> Vec<String> {
+    let mut refs = Vec::new();
+    for scheme in &provider.auth.schemes {
+        if let AuthScheme::OAuth {
+            provider: oauth_provider,
+            token_ref,
+            ..
+        } = scheme
+        {
+            if let Some(token_ref) = token_ref.as_deref().filter(|value| !value.is_empty()) {
+                refs.push(format!("/{token_ref}"));
+            }
+            if let Some(oauth_provider) = oauth_provider.as_deref().filter(|value| !value.is_empty())
+            {
+                refs.push(format!("/{oauth_provider}"));
+            }
+        }
+    }
+    refs.push(format!("/{}", provider.id));
+    dedupe_preserving_order(&mut refs);
+    refs
+}
+
+fn enum_label<T: Serialize>(value: &T) -> String {
+    serde_json::to_value(value)
+        .ok()
+        .and_then(|value| value.as_str().map(str::to_string))
+        .unwrap_or_else(|| "unknown".to_string())
 }
 
 async fn list_admin_access_users(kv: &KvStore, env: &Env) -> Result<Vec<AdminAccessUserResponse>> {
@@ -5545,6 +5845,7 @@ fn cors_enabled_path(path: &str) -> bool {
             | "/v1/providers"
             | "/v1/routes"
             | "/v1/session"
+            | "/v1/entitlements"
             | "/v1/me"
             | "/v1/usage"
             | "/v1/key/inspect"
@@ -6139,6 +6440,7 @@ mod tests {
         assert!(cors_enabled_path("/v1/providers"));
         assert!(cors_enabled_path("/v1/routes"));
         assert!(cors_enabled_path("/v1/session"));
+        assert!(cors_enabled_path("/v1/entitlements"));
         assert!(cors_enabled_path("/v1/me"));
         assert!(cors_enabled_path("/v1/usage"));
         assert!(!cors_enabled_path("/v1/chat/completions"));
@@ -6190,6 +6492,10 @@ mod tests {
         assert_eq!(canonical_api_path("/api/route"), "/v1/routes");
         assert_eq!(canonical_api_path("/api/routes"), "/v1/routes");
         assert_eq!(canonical_api_path("/api/session"), "/v1/session");
+        assert_eq!(
+            canonical_api_path("/api/entitlements"),
+            "/v1/entitlements"
+        );
         assert_eq!(canonical_api_path("/api/me"), "/v1/me");
         assert_eq!(canonical_api_path("/api/usage"), "/v1/usage");
         assert_eq!(
@@ -6301,6 +6607,50 @@ mod tests {
         assert_eq!(value["ledger"], "durable_object");
         assert_eq!(value["limitMicros"], 100);
         assert_eq!(value["remainingMicros"], 60);
+    }
+
+    #[test]
+    fn provider_oauth_refs_cover_token_ref_and_provider_fallbacks() {
+        let snapshot = provider_snapshot().unwrap();
+        let github = snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.id == "github")
+            .unwrap();
+
+        let refs = provider_oauth_refs(github);
+
+        assert!(refs.iter().any(|value| value == "/oauth.github.access_token"));
+        assert!(refs.iter().any(|value| value == "/github"));
+    }
+
+    #[test]
+    fn provider_oauth_grant_count_requires_enabled_token_records() {
+        let snapshot = provider_snapshot().unwrap();
+        let github = snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.id == "github")
+            .unwrap();
+        let grants = vec![
+            OAuthGrantRecord {
+                key: "oauth/svc_docs/oauth.github.access_token".to_string(),
+                enabled: true,
+                has_access_token: true,
+            },
+            OAuthGrantRecord {
+                key: "oauth/tenants/default/github".to_string(),
+                enabled: false,
+                has_access_token: true,
+            },
+            OAuthGrantRecord {
+                key: "oauth/svc_docs/github".to_string(),
+                enabled: true,
+                has_access_token: false,
+            },
+        ];
+
+        assert_eq!(provider_oauth_grant_count(github, &grants), 1);
     }
 
     #[test]
