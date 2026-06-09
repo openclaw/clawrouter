@@ -2,7 +2,10 @@ import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
-const DEFAULT_OPTIONAL_CONFIG_KEYS = new Set(["AWS_SESSION_TOKEN"]);
+const DEFAULT_OPTIONAL_CONFIG_KEYS = new Set([
+  "AWS_SESSION_TOKEN",
+  "AZURE_OPENAI_COMPLETION_TOKEN_DEPLOYMENTS",
+]);
 
 export function buildProviderSmokePlan(snapshot, env = process.env) {
   const providers = Array.isArray(snapshot?.providers) ? snapshot.providers : [];
