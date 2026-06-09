@@ -31,76 +31,86 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
   <title>ClawRouter Console</title>
   <style>
     :root {
-      color-scheme: dark;
-      --bg: #060706;
-      --bg-elevated: #090a09;
-      --surface: #0d0f0e;
-      --surface-2: #131613;
-      --surface-3: #191d19;
-      --surface-warm: #17140e;
-      --ink: #f7f3ea;
-      --muted: #c1b9aa;
-      --faint: #837d70;
-      --line: #252923;
-      --line-strong: #404738;
-      --accent: #f4d35e;
-      --accent-soft: #302711;
-      --accent-ink: #151106;
-      --blue: #8ab4ff;
-      --green: #86e7b6;
-      --warn: #ff9a76;
-      --danger: #ff735c;
-      --shadow: 0 24px 80px rgba(0, 0, 0, .44);
-      --radius: 10px;
-      --radius-sm: 7px;
+      color-scheme: light;
+      --bg: #f4f4f1;
+      --paper: #fbfbf8;
+      --surface: #ffffff;
+      --surface-2: #f0f0ec;
+      --surface-3: #e7e7e1;
+      --ink: #171714;
+      --muted: #5e5e57;
+      --faint: #68685f;
+      --line: #d8d8cf;
+      --line-strong: #aaa99e;
+      --accent: #11110f;
+      --accent-soft: #ecece7;
+      --accent-ink: #fbfbf8;
+      --green: #34785a;
+      --warn: #9a4a28;
+      --danger: #9d2f23;
+      --blue: #426b83;
+      --shadow: 0 1px 0 rgba(23, 23, 20, .04), 0 18px 48px rgba(23, 23, 20, .08);
+      --radius: 8px;
+      --radius-sm: 6px;
       --space-1: 4px;
       --space-2: 8px;
       --space-3: 12px;
       --space-4: 16px;
-      --space-5: 20px;
-      --space-6: 28px;
-      --space-7: 40px;
+      --space-5: 24px;
+      --space-6: 36px;
     }
     * { box-sizing: border-box; }
-    html { min-width: 320px; }
+    html { min-width: 320px; background: var(--bg); }
     body {
       margin: 0;
       min-height: 100vh;
-      font-family: "Sohne", "Geist", "Aptos", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      font-family: ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
       background:
-        linear-gradient(rgba(247, 243, 234, .018) 1px, transparent 1px),
-        linear-gradient(90deg, rgba(247, 243, 234, .018) 1px, transparent 1px),
-        linear-gradient(180deg, rgba(244, 211, 94, .045), transparent 280px),
-        var(--bg);
-      background-size: 32px 32px, 32px 32px, auto;
+        radial-gradient(circle at 12% -14%, rgba(23, 23, 20, .11), transparent 30vw),
+        radial-gradient(circle at 85% 8%, rgba(23, 23, 20, .08), transparent 28vw),
+        linear-gradient(115deg, rgba(23, 23, 20, .035), transparent 42%),
+        linear-gradient(var(--bg), var(--bg));
       color: var(--ink);
-      font-size: 15px;
-      line-height: 1.5;
+      font-size: 14px;
+      line-height: 1.45;
       overflow-x: hidden;
       font-kerning: normal;
       text-rendering: geometricPrecision;
+    }
+    body::before {
+      content: "";
+      position: fixed;
+      inset: 0;
+      z-index: -1;
+      pointer-events: none;
+      background-image:
+        linear-gradient(rgba(23, 23, 20, .035) 1px, transparent 1px),
+        linear-gradient(90deg, rgba(23, 23, 20, .03) 1px, transparent 1px);
+      background-size: 28px 28px;
+      mask-image: linear-gradient(180deg, rgba(0,0,0,.85), transparent 460px);
     }
     button, input, select, textarea {
       font: inherit;
       border: 1px solid var(--line);
       border-radius: var(--radius-sm);
-      background: var(--surface-2);
+      background: var(--surface);
       color: var(--ink);
     }
     button {
       display: inline-flex;
       align-items: center;
       justify-content: center;
-      min-height: 38px;
-      padding: 0 13px;
+      min-height: 34px;
+      padding: 0 12px;
       cursor: pointer;
-      transition: background .16s ease, border-color .16s ease, color .16s ease, transform .16s ease, box-shadow .16s ease;
+      font-weight: 650;
+      transition: background .14s ease, border-color .14s ease, color .14s ease, transform .14s ease;
     }
     button:hover {
-      transform: translateY(-1px);
       border-color: var(--line-strong);
-      background: #191c18;
+      background: var(--surface-2);
     }
+    button:active { transform: translateY(1px); }
     button:disabled {
       cursor: not-allowed;
       opacity: .5;
@@ -108,48 +118,47 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     }
     button.active,
     button.primary {
-      background: var(--ink);
+      background: var(--accent);
       color: var(--accent-ink);
-      border-color: var(--ink);
-      box-shadow: 0 12px 34px rgba(247, 243, 234, .08);
+      border-color: var(--accent);
     }
     input, select {
-      min-height: 40px;
+      min-height: 36px;
       width: 100%;
-      padding: 0 11px;
+      padding: 0 10px;
     }
     textarea {
-      min-height: 138px;
+      min-height: 132px;
       width: 100%;
       resize: vertical;
-      padding: 11px;
+      padding: 10px;
       line-height: 1.5;
     }
     input:focus-visible,
     select:focus-visible,
     textarea:focus-visible,
     button:focus-visible {
-      outline: 2px solid color-mix(in srgb, var(--accent) 68%, transparent);
+      outline: 2px solid var(--accent);
       outline-offset: 2px;
     }
     h1, h2, h3, p { margin: 0; }
     h1 {
-      font-size: 1.45rem;
-      line-height: 1.08;
+      font-size: 1.02rem;
+      line-height: 1.1;
       letter-spacing: 0;
     }
     h2 {
       color: var(--ink);
-      font-size: .96rem;
+      font-size: 1rem;
       font-weight: 760;
       line-height: 1.2;
       letter-spacing: 0;
     }
     h3 {
-      color: var(--muted);
-      font-size: .78rem;
-      font-weight: 720;
-      letter-spacing: .08em;
+      color: var(--faint);
+      font-size: .72rem;
+      font-weight: 760;
+      letter-spacing: .06em;
       text-transform: uppercase;
     }
     p {
@@ -158,14 +167,12 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     }
     label {
       display: grid;
-      gap: var(--space-2);
-      color: var(--faint);
+      gap: 6px;
+      color: var(--muted);
       font-size: .78rem;
-      font-weight: 680;
+      font-weight: 650;
     }
     .appShell {
-      display: grid;
-      grid-template-columns: 264px minmax(0, 1fr);
       min-height: 100vh;
     }
     .appShell * { min-width: 0; }
@@ -186,15 +193,15 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     .sidebar {
       position: sticky;
       top: 0;
-      height: 100vh;
+      z-index: 10;
       display: grid;
-      grid-template-rows: auto 1fr auto;
-      gap: var(--space-6);
-      padding: var(--space-5);
-      border-right: 1px solid var(--line);
-      background: linear-gradient(180deg, rgba(13, 15, 14, .96), rgba(6, 7, 6, .98));
-      box-shadow: 18px 0 60px rgba(0, 0, 0, .28);
-      z-index: 5;
+      grid-template-columns: auto minmax(340px, 1fr) minmax(320px, 520px);
+      gap: var(--space-4);
+      align-items: center;
+      padding: 10px var(--space-5);
+      border-bottom: 1px solid var(--line);
+      background: color-mix(in srgb, var(--paper) 92%, transparent);
+      backdrop-filter: blur(18px) saturate(1.2);
     }
     .brand {
       display: flex;
@@ -204,145 +211,143 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     }
     .brand > div { min-width: 0; }
     .brandmark {
-      width: 38px;
-      height: 38px;
+      width: 32px;
+      height: 32px;
       display: grid;
       place-items: center;
-      border: 1px solid var(--line);
-      border-radius: var(--radius-sm);
-      background: linear-gradient(180deg, #242013, var(--surface));
-      color: var(--accent);
-      font-weight: 860;
-      box-shadow: inset 0 1px 0 rgba(255,255,255,.08);
+      border: 1px solid var(--accent);
+      border-radius: 7px;
+      background: var(--accent);
+      color: var(--accent-ink);
+      font-size: .72rem;
+      font-weight: 820;
     }
     .eyebrow {
       color: var(--faint);
       font-size: .68rem;
       font-weight: 760;
       text-transform: uppercase;
-      letter-spacing: .12em;
+      letter-spacing: .06em;
     }
     nav {
-      display: grid;
-      gap: var(--space-2);
-      align-content: start;
+      display: flex;
+      gap: 6px;
+      align-items: center;
+      min-width: 0;
+      overflow-x: auto;
+      scrollbar-width: thin;
     }
     nav button {
-      width: 100%;
-      justify-content: flex-start;
-      text-align: left;
+      flex: 0 0 auto;
+      min-height: 32px;
+      padding: 0 10px;
       background: transparent;
       color: var(--muted);
       border-color: transparent;
-      border-radius: var(--radius-sm);
-    }
-    nav button::before {
-      content: "";
-      width: 7px;
-      height: 7px;
-      display: inline-block;
-      margin-right: 9px;
-      border-radius: 50%;
-      background: var(--line-strong);
-      vertical-align: 1px;
     }
     nav button.active {
-      background: color-mix(in srgb, var(--accent) 12%, transparent);
-      color: var(--ink);
-      border-color: color-mix(in srgb, var(--accent) 28%, transparent);
+      background: var(--accent);
+      color: var(--accent-ink);
+      border-color: var(--accent);
     }
-    nav button.active::before { background: var(--accent); }
     .authDock {
       display: grid;
-      gap: var(--space-3);
-      padding-top: var(--space-4);
-      border-top: 1px solid var(--line);
+      grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) auto;
+      gap: var(--space-2);
+      align-items: end;
     }
-    .authDock button { width: 100%; }
+    .authDock button { min-width: 86px; }
+    .authDock .status { grid-column: 1 / -1; }
     .status {
       display: inline-flex;
       align-items: center;
-      min-height: 28px;
+      min-height: 24px;
       width: fit-content;
       max-width: 100%;
-      padding: 0 10px;
+      padding: 0 9px;
       border: 1px solid var(--line);
       border-radius: 999px;
       background: var(--surface);
       color: var(--muted);
-      font-size: .82rem;
+      font-size: .8rem;
       overflow-wrap: anywhere;
     }
     .status::before {
       content: "";
-      width: 7px;
-      height: 7px;
+      width: 6px;
+      height: 6px;
+      flex: 0 0 auto;
       margin-right: 7px;
       border-radius: 50%;
       background: var(--faint);
     }
-    .status.bad { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 38%, var(--line)); }
+    .status.bad { color: var(--warn); border-color: color-mix(in srgb, var(--warn) 42%, var(--line)); }
     .status.bad::before { background: var(--warn); }
-    .status.good { color: var(--green); border-color: color-mix(in srgb, var(--green) 38%, var(--line)); }
+    .status.good { color: var(--green); border-color: color-mix(in srgb, var(--green) 42%, var(--line)); }
     .status.good::before { background: var(--green); }
-    .status.soft { color: var(--blue); border-color: color-mix(in srgb, var(--blue) 34%, var(--line)); }
+    .status.soft { color: var(--blue); border-color: color-mix(in srgb, var(--blue) 38%, var(--line)); }
     .status.soft::before { background: var(--blue); }
     .content {
       min-width: 0;
-      padding: var(--space-6);
+      padding: var(--space-5);
     }
     .contentInner {
-      width: min(1380px, 100%);
+      width: min(1320px, 100%);
       margin: 0 auto;
     }
     .topbar {
       display: grid;
-      grid-template-columns: minmax(0, 1fr) minmax(320px, 440px);
-      gap: var(--space-5);
-      align-items: start;
-      margin-bottom: var(--space-6);
+      grid-template-columns: minmax(0, 1fr) minmax(280px, 390px);
+      gap: var(--space-4);
+      align-items: stretch;
+      margin-bottom: var(--space-4);
     }
     .pageTitle {
       display: grid;
+      align-content: end;
       gap: var(--space-2);
-      min-width: 0;
+      min-height: 104px;
+      padding: var(--space-3) 2px;
     }
     .pageTitle h2 {
-      max-width: 820px;
-      font-size: 2.25rem;
-      line-height: .98;
-      letter-spacing: -.01em;
+      max-width: 780px;
+      font-size: clamp(1.35rem, 3vw, 2.35rem);
+      line-height: 1;
+      letter-spacing: 0;
       overflow-wrap: anywhere;
     }
     .quickPanel {
       display: grid;
+      align-content: start;
       gap: var(--space-3);
       border: 1px solid var(--line);
       border-radius: var(--radius);
       padding: var(--space-4);
-      background: linear-gradient(180deg, rgba(19, 22, 19, .88), rgba(9, 10, 9, .92));
+      background: var(--surface);
       box-shadow: var(--shadow);
     }
-    .quickList { display: grid; gap: var(--space-2); }
+    .quickList { display: grid; gap: 0; }
     .quickItem {
       display: grid;
-      grid-template-columns: minmax(82px, auto) minmax(0, 1fr);
+      grid-template-columns: minmax(78px, auto) minmax(0, 1fr);
       gap: var(--space-3);
-      border-bottom: 1px solid var(--line);
-      padding-bottom: var(--space-2);
+      border-top: 1px solid var(--line);
+      padding: 9px 0;
       color: var(--muted);
       font-size: .84rem;
     }
-    .quickItem:last-child { border-bottom: 0; padding-bottom: 0; }
-    .quickItem strong { color: var(--ink); font-weight: 750; }
+    .quickItem:first-child { border-top: 0; padding-top: 0; }
+    .quickItem:last-child { padding-bottom: 0; }
     .quickItem strong {
       min-width: 0;
+      color: var(--ink);
+      font-weight: 720;
       text-align: right;
       overflow-wrap: anywhere;
     }
     .view {
       display: grid;
-      gap: var(--space-5);
+      gap: var(--space-4);
     }
     .grid {
       display: grid;
@@ -355,14 +360,13 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       grid-template-columns: minmax(0, 1fr) auto;
       gap: var(--space-4);
       align-items: end;
-      padding-bottom: var(--space-2);
-      border-bottom: 1px solid var(--line);
+      padding: 0 2px var(--space-1);
     }
     .viewIntro h2 {
       margin-bottom: var(--space-1);
-      font-size: 1.35rem;
+      font-size: 1.1rem;
     }
-    .viewIntro p { font-size: .95rem; }
+    .viewIntro p { font-size: .92rem; }
     .panel {
       grid-column: span 6;
       min-width: 0;
@@ -372,7 +376,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       border: 1px solid var(--line);
       border-radius: var(--radius);
       padding: var(--space-4);
-      background: linear-gradient(180deg, rgba(19, 22, 19, .9), rgba(10, 11, 10, .92));
+      background: var(--surface);
       box-shadow: var(--shadow);
     }
     .wide { grid-column: 1 / -1; }
@@ -390,6 +394,19 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       color: var(--faint);
       font-size: .84rem;
     }
+    .registryHeader {
+      align-items: end;
+    }
+    .toolbar {
+      display: flex;
+      gap: var(--space-2);
+      align-items: end;
+      flex-wrap: wrap;
+      justify-content: flex-end;
+    }
+    .toolbar label {
+      min-width: 168px;
+    }
     .form {
       display: grid;
       grid-template-columns: repeat(2, minmax(0, 1fr));
@@ -405,25 +422,39 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     }
     .providerCloud {
       display: grid;
-      grid-template-columns: repeat(auto-fill, minmax(210px, 1fr));
-      gap: var(--space-3);
+      gap: 0;
+      border: 1px solid var(--line);
+      border-radius: var(--radius);
+      overflow: hidden;
+      background: var(--surface);
     }
     .providerCard {
       display: grid;
-      grid-template-columns: 36px minmax(0, 1fr);
+      grid-template-columns: 40px minmax(190px, 1fr) minmax(220px, auto);
       gap: var(--space-3);
       align-items: center;
-      min-height: 72px;
-      border: 1px solid var(--line);
-      border-radius: var(--radius);
+      min-height: 64px;
       padding: var(--space-3);
-      background: rgba(8, 9, 8, .58);
-      transition: border-color .16s ease, transform .16s ease, background .16s ease;
+      border-top: 1px solid var(--line);
+      background: var(--surface);
+      transition: background .14s ease;
     }
-    .providerCard:hover {
-      transform: translateY(-1px);
-      border-color: var(--line-strong);
-      background: rgba(15, 17, 15, .88);
+    .providerCard:first-child { border-top: 0; }
+    .providerCard:hover { background: var(--surface-2); }
+    .providerTitle {
+      display: grid;
+      gap: 2px;
+    }
+    .providerTitle strong,
+    .providerTitle span {
+      overflow: hidden;
+      text-overflow: ellipsis;
+      white-space: nowrap;
+    }
+    .providerTitle strong { font-weight: 760; }
+    .providerTitle span {
+      color: var(--faint);
+      font-size: .78rem;
     }
     .providerIcon {
       position: relative;
@@ -433,15 +464,14 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       display: grid;
       place-items: center;
       border-radius: var(--radius-sm);
-      border: 1px solid color-mix(in srgb, var(--icon-fg, var(--ink)) 13%, transparent);
+      border: 1px solid color-mix(in srgb, var(--icon-fg, var(--ink)) 18%, transparent);
       background:
-        radial-gradient(circle at 32% 16%, color-mix(in srgb, var(--icon-fg, var(--ink)) 18%, transparent), transparent 42%),
-        linear-gradient(145deg, color-mix(in srgb, var(--icon-bg, var(--surface-3)) 78%, #ffffff 6%), color-mix(in srgb, var(--icon-bg, var(--surface-3)) 82%, #000000 24%));
+        radial-gradient(circle at 28% 14%, color-mix(in srgb, var(--icon-fg, var(--ink)) 22%, transparent), transparent 44%),
+        linear-gradient(145deg, color-mix(in srgb, var(--icon-bg, var(--surface-3)) 88%, #ffffff 8%), color-mix(in srgb, var(--icon-bg, var(--surface-3)) 76%, #000000 18%));
       color: var(--icon-fg, var(--ink));
       box-shadow:
-        inset 0 1px 0 rgba(255,255,255,.13),
-        inset 0 -10px 18px rgba(0,0,0,.18),
-        0 10px 26px color-mix(in srgb, var(--icon-bg, #000000) 34%, transparent);
+        inset 0 1px 0 rgba(255,255,255,.2),
+        inset 0 -10px 18px rgba(0,0,0,.14);
       overflow: hidden;
     }
     .providerIcon::before {
@@ -450,7 +480,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       inset: 1px;
       z-index: -1;
       border-radius: inherit;
-      background: linear-gradient(180deg, rgba(255,255,255,.14), transparent 52%);
+      background: linear-gradient(180deg, rgba(255,255,255,.18), transparent 54%);
       pointer-events: none;
     }
     .providerIcon::after {
@@ -459,7 +489,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       inset: auto 6px 5px;
       height: 1px;
       background: color-mix(in srgb, var(--icon-fg, var(--ink)) 34%, transparent);
-      opacity: .65;
+      opacity: .55;
       pointer-events: none;
     }
     .providerIcon svg {
@@ -467,7 +497,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       height: 22px;
       display: block;
       fill: currentColor;
-      filter: drop-shadow(0 1px 0 rgba(0,0,0,.28));
+      filter: drop-shadow(0 1px 0 rgba(0,0,0,.2));
     }
     .providerIcon svg * {
       fill: currentColor !important;
@@ -484,23 +514,13 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       fill: currentColor !important;
       stroke: none !important;
     }
-    .providerIcon .sr {
-      display: block;
-    }
-    .providerCard strong,
-    .providerCard span {
-      display: block;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      white-space: nowrap;
-    }
-    .providerCard span { color: var(--faint); font-size: .78rem; }
+    .providerIcon .sr { display: block; }
     .providerMeta {
       display: flex;
       gap: var(--space-2);
       align-items: center;
       flex-wrap: wrap;
-      margin-top: var(--space-1);
+      justify-content: flex-end;
     }
     .providerInline {
       display: inline-grid;
@@ -532,7 +552,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       padding: 0 8px;
       border: 1px solid var(--line);
       border-radius: 999px;
-      background: rgba(255,255,255,.03);
+      background: var(--surface-2);
       color: var(--muted);
       font-size: .78rem;
       font-weight: 650;
@@ -541,7 +561,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     .serviceChip svg {
       width: 13px;
       height: 13px;
-      color: var(--blue);
+      color: var(--muted);
     }
     .capabilityPills {
       display: flex;
@@ -557,7 +577,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       border: 1px solid var(--line);
       border-radius: var(--radius-sm);
       padding: var(--space-2);
-      background: rgba(8, 9, 8, .35);
+      background: var(--paper);
     }
     .presetGrid {
       display: grid;
@@ -565,10 +585,10 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       gap: var(--space-2);
     }
     .presetButton {
-      min-height: 84px;
+      min-height: 78px;
       padding: var(--space-3);
       text-align: left;
-      background: rgba(8, 9, 8, .42);
+      background: var(--paper);
     }
     .presetButton strong,
     .presetButton span {
@@ -627,19 +647,19 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       padding: 3px;
       border: 1px solid var(--line);
       border-radius: 999px;
-      background: rgba(8, 9, 8, .44);
+      background: var(--paper);
     }
     .requestTabs button {
-      min-height: 30px;
+      min-height: 28px;
       border-color: transparent;
       border-radius: 999px;
       background: transparent;
       color: var(--muted);
     }
     .requestTabs button.active {
-      background: var(--ink);
+      background: var(--accent);
       color: var(--accent-ink);
-      border-color: var(--ink);
+      border-color: var(--accent);
     }
     .requestPreview {
       min-height: 238px;
@@ -651,18 +671,20 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     .metrics {
       display: grid;
       grid-template-columns: repeat(4, minmax(0, 1fr));
-      gap: var(--space-3);
-    }
-    .metric {
       border: 1px solid var(--line);
       border-radius: var(--radius);
-      padding: var(--space-4);
-      background: linear-gradient(180deg, rgba(8, 9, 8, .82), rgba(14, 16, 14, .72));
-      min-height: 88px;
+      overflow: hidden;
     }
+    .metric {
+      min-height: 82px;
+      padding: var(--space-4);
+      background: var(--paper);
+      border-left: 1px solid var(--line);
+    }
+    .metric:first-child { border-left: 0; }
     .metric strong {
       display: block;
-      font-size: 1.75rem;
+      font-size: 1.45rem;
       line-height: 1;
       letter-spacing: 0;
       font-variant-numeric: tabular-nums;
@@ -681,8 +703,13 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       text-align: left;
       vertical-align: top;
     }
-    tbody tr:hover { background: rgba(231, 248, 200, .035); }
-    th { color: var(--faint); font-size: .68rem; text-transform: uppercase; letter-spacing: .08em; }
+    tbody tr:hover { background: var(--paper); }
+    th {
+      color: var(--faint);
+      font-size: .68rem;
+      text-transform: uppercase;
+      letter-spacing: .06em;
+    }
     .tableActions {
       display: flex;
       gap: 6px;
@@ -693,17 +720,17 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       color: var(--muted);
     }
     .danger {
-      background: #2d1712;
-      border-color: #6b2e21;
-      color: #ffd1c4;
+      background: #fff0ed;
+      border-color: #d99b90;
+      color: var(--danger);
     }
     code {
-      background: #0a0d0b;
+      background: var(--paper);
       border: 1px solid var(--line);
       border-radius: 6px;
       padding: 2px 5px;
       word-break: break-word;
-      color: #dbeec8;
+      color: var(--ink);
       font-family: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
       font-size: .86em;
     }
@@ -715,7 +742,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     .barTrack {
       height: 7px;
       border-radius: 999px;
-      background: #202228;
+      background: var(--surface-3);
       overflow: hidden;
       border: 1px solid var(--line);
     }
@@ -723,11 +750,16 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       display: block;
       height: 100%;
       width: var(--bar, 0%);
-      background: linear-gradient(90deg, var(--green), var(--accent));
+      background: var(--accent);
     }
     .hint {
       color: var(--faint);
       font-size: .8rem;
+    }
+    .emptyState {
+      padding: var(--space-5);
+      color: var(--muted);
+      background: var(--paper);
     }
     .issuedKey {
       display: grid;
@@ -756,10 +788,10 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       border: 1px solid var(--line);
       border-radius: var(--radius);
       padding: var(--space-3);
-      background: rgba(8, 9, 8, .42);
+      background: var(--paper);
     }
     .verdict strong {
-      font-size: 1.15rem;
+      font-size: 1.05rem;
       overflow-wrap: anywhere;
     }
     .verdict span {
@@ -777,45 +809,54 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         scroll-behavior: auto !important;
       }
     }
-    @media (max-width: 1040px) {
-      .appShell { grid-template-columns: 1fr; }
+    @media (max-width: 1160px) {
       .sidebar {
-        position: static;
-        height: auto;
-        grid-template-rows: auto auto auto;
-        gap: var(--space-4);
-        padding: var(--space-4);
-        border-right: 0;
-        border-bottom: 1px solid var(--line);
+        grid-template-columns: 1fr;
+        align-items: stretch;
       }
       nav {
-        grid-template-columns: repeat(5, minmax(0, 1fr));
+        padding-bottom: 2px;
       }
-      nav button {
-        text-align: center;
-        justify-content: center;
-      }
-      nav button::before { display: none; }
       .authDock {
         grid-template-columns: repeat(2, minmax(0, 1fr)) auto;
-        align-items: end;
-        padding-top: var(--space-3);
       }
-      .authDock .status { grid-column: 1 / -1; }
-      .content { padding: var(--space-5); }
       .topbar { grid-template-columns: 1fr; }
+      .pageTitle { min-height: auto; }
     }
     @media (max-width: 820px) {
-      .content { padding: var(--space-4); }
-      .pageTitle h2 { font-size: 1.8rem; }
-      .viewIntro { grid-template-columns: 1fr; }
+      .sidebar,
+      .content { padding-inline: var(--space-3); }
+      .content { padding-top: var(--space-4); }
+      .authDock { grid-template-columns: 1fr; }
+      .authDock button { width: 100%; }
+      .viewIntro,
+      .panelHeader,
+      .registryHeader {
+        display: grid;
+        grid-template-columns: 1fr;
+      }
+      .toolbar {
+        justify-content: stretch;
+      }
+      .toolbar label {
+        min-width: 0;
+        flex: 1 1 160px;
+      }
       .inlineForm { grid-template-columns: 1fr; }
       .panel, .third { grid-column: 1 / -1; }
       .metrics { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .metric:nth-child(odd) { border-left: 0; }
+      .metric:nth-child(n + 3) { border-top: 1px solid var(--line); }
       .form { grid-template-columns: 1fr; }
       .presetGrid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
       .providerInline { min-width: 0; }
-      .authDock { grid-template-columns: 1fr; }
+      .providerCard {
+        grid-template-columns: 36px minmax(0, 1fr);
+      }
+      .providerMeta {
+        grid-column: 2;
+        justify-content: flex-start;
+      }
     }
     @media (max-width: 520px) {
       .appShell,
@@ -826,24 +867,24 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         max-width: 100vw;
         overflow-x: hidden;
       }
-      .sidebar { padding: var(--space-3); }
-      .content { padding: var(--space-3); }
       .brandmark { display: none; }
-      nav { grid-template-columns: 1fr; }
-      nav button {
-        justify-content: flex-start;
-        text-align: left;
+      .pageTitle {
+        padding: 0;
+        min-height: auto;
       }
-      nav button::before { display: inline-block; }
       .pageTitle h2 { font-size: 1.45rem; }
       .quickItem { grid-template-columns: 1fr; }
       .quickItem strong { text-align: left; }
       .metrics { grid-template-columns: 1fr; }
+      .metric {
+        border-left: 0;
+        border-top: 1px solid var(--line);
+      }
+      .metric:first-child { border-top: 0; }
       .panel {
         padding: var(--space-3);
         border-radius: var(--radius-sm);
       }
-      .providerCloud { grid-template-columns: 1fr; }
       .presetGrid { grid-template-columns: 1fr; }
       .actions { justify-content: stretch; }
       .actions button { flex: 1 1 auto; min-width: 0; }
@@ -876,15 +917,15 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         </div>
       </div>
       <nav aria-label="console views">
-        <button data-view="dashboard" class="active">Dashboard</button>
+        <button data-view="dashboard" class="active">Registry</button>
         <button data-view="playground">Playground</button>
-        <button data-view="admin">Admin</button>
+        <button data-view="admin">Policy</button>
         <button data-view="account">Account</button>
         <button data-view="routes">Routes</button>
       </nav>
       <section class="authDock" aria-label="credentials">
-      <label>Admin token<input id="adminToken" type="password" autocomplete="off" placeholder="optional bearer fallback"></label>
-      <label>Proxy key<input id="proxyKey" type="password" autocomplete="off" placeholder="required for account views"></label>
+      <label>Admin token<input id="adminToken" type="password" autocomplete="off" placeholder="fallback bearer token"></label>
+      <label>Proxy key<input id="proxyKey" type="password" autocomplete="off" placeholder="playground and account"></label>
       <button id="refresh" class="primary">Refresh</button>
         <p id="status" class="status">idle</p>
       </section>
@@ -893,27 +934,40 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       <div class="contentInner">
         <section class="topbar">
           <div class="pageTitle">
-            <p class="eyebrow">model routing control plane</p>
-            <h2>Route traffic, issue keys, and audit provider access.</h2>
-            <p>Provider manifests, OpenAI-compatible routes, Access roles, and budget policy in one operator surface.</p>
+            <p class="eyebrow">edge control plane</p>
+            <h2>Provider registry, routes, and key policy.</h2>
+            <p>One surface for manifests, OpenAI-compatible routes, Cloudflare Access roles, and budget enforcement.</p>
           </div>
           <div class="quickPanel">
-            <h3>Current session</h3>
+            <h3>Session</h3>
             <div id="sessionQuick" class="quickList"></div>
           </div>
         </section>
         <section id="dashboard" class="view grid">
           <div class="viewIntro">
             <div>
-              <h2>Dashboard</h2>
-              <p>Service health, routing shape, and provider coverage.</p>
+              <h2>Registry</h2>
+              <p>Live provider manifest inventory and advertised route surfaces.</p>
             </div>
           </div>
           <div class="panel wide">
+            <div class="panelHeader registryHeader">
+              <div>
+                <h2>Providers</h2>
+                <p id="providerCount">Filter by name, id, service kind, or route class.</p>
+              </div>
+              <div class="toolbar" aria-label="provider filters">
+                <label>Search<input id="providerFilter" autocomplete="off" placeholder="openai, oauth, gateway"></label>
+                <label>Kind<select id="providerKindFilter"><option value="">all kinds</option></select></label>
+              </div>
+            </div>
+            <div id="providerCloud" class="providerCloud"></div>
+          </div>
+          <div class="panel">
             <div class="panelHeader">
               <div>
-                <h2>Service</h2>
-                <p>Live snapshot from the edge API.</p>
+                <h2>Edge snapshot</h2>
+                <p>Counts returned by the live API.</p>
               </div>
             </div>
             <div id="serviceMetrics" class="metrics"></div>
@@ -921,17 +975,8 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
           <div class="panel">
             <div class="panelHeader">
               <div>
-                <h2>Provider classes</h2>
-                <p>Manifest taxonomy.</p>
-              </div>
-            </div>
-            <div id="providerClasses"></div>
-          </div>
-          <div class="panel">
-            <div class="panelHeader">
-              <div>
-                <h2>Configured routes</h2>
-                <p>API surfaces currently advertised.</p>
+                <h2>Route surfaces</h2>
+                <p>Published OpenAI-compatible and manifest proxy routes.</p>
               </div>
             </div>
             <div id="routeSummary"></div>
@@ -939,11 +984,11 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
           <div class="panel wide">
             <div class="panelHeader">
               <div>
-                <h2>Provider network</h2>
-                <p>Available providers, service kind, and route class.</p>
+                <h2>Provider classes</h2>
+                <p>Manifest taxonomy across the installed registry.</p>
               </div>
             </div>
-            <div id="providerCloud" class="providerCloud"></div>
+            <div id="providerClasses"></div>
           </div>
         </section>
         <section id="playground" class="view grid hidden">
@@ -1281,7 +1326,7 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
       return raw(`<span class="providerInline">${providerIcon(provider)}<span>${esc(provider.display_name || provider.id)}</span></span>`);
     }
     function providerCard(provider) {
-      return `<div class="providerCard">${providerIcon(provider)}<div><strong>${esc(provider.display_name || provider.id)}</strong><div class="providerMeta">${serviceChip(provider.service_kind).html}<span>${esc(provider.class)}</span></div></div></div>`;
+      return `<div class="providerCard">${providerIcon(provider)}<div class="providerTitle"><strong>${esc(provider.display_name || provider.id)}</strong><span>${esc(provider.id)}</span></div><div class="providerMeta">${serviceChip(provider.service_kind).html}<span class="capabilityPill">${esc(compactLabel(provider.class))}</span></div></div>`;
     }
     function budgetBar(budget) {
       if (!budget || !budget.configured || budget.limitMicros == null) {
@@ -1303,6 +1348,38 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     }
     const openaiRoutes = () => state.routes?.openaiCompatible || [];
     const openaiModels = () => openaiRoutes().flatMap((route) => route.models.map((model) => ({ ...model, provider: route.provider })));
+    function providerSearchText(provider) {
+      return [
+        provider.id,
+        provider.display_name,
+        provider.class,
+        provider.service_kind
+      ].filter(Boolean).join(" ").toLowerCase();
+    }
+    function renderProviderKindFilter(providers) {
+      const select = $("providerKindFilter");
+      if (!select) return;
+      const current = select.value;
+      const kinds = [...new Set(providers.map((provider) => provider.service_kind).filter(Boolean))].sort();
+      select.innerHTML = [`<option value="">all kinds</option>`, ...kinds.map((kind) => `<option value="${esc(kind)}">${esc(compactLabel(kind))}</option>`)].join("");
+      if ([...select.options].some((option) => option.value === current)) {
+        select.value = current;
+      }
+    }
+    function renderProviderNetwork() {
+      const providers = state.providers?.providers || [];
+      const query = ($("providerFilter")?.value || "").trim().toLowerCase();
+      const kind = $("providerKindFilter")?.value || "";
+      const filtered = providers.filter((provider) => {
+        if (kind && provider.service_kind !== kind) return false;
+        if (!query) return true;
+        return providerSearchText(provider).includes(query);
+      });
+      $("providerCount").textContent = `${filtered.length} of ${providers.length} providers`;
+      $("providerCloud").innerHTML = filtered.length
+        ? filtered.map(providerCard).join("")
+        : `<div class="emptyState">No providers match the current filter.</div>`;
+    }
     function renderDashboard() {
       const providers = state.providers?.providers || [];
       const routes = state.routes || { openaiCompatible: [], manifestProxy: [] };
@@ -1322,7 +1399,8 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
         row(["OpenAI-compatible", routes.openaiCompatible.length]),
         row(["manifest proxy", routes.manifestProxy.length])
       ]);
-      $("providerCloud").innerHTML = providers.map(providerCard).join("");
+      renderProviderKindFilter(providers);
+      renderProviderNetwork();
       renderProviderControls();
       renderPlaygroundOptions();
     }
@@ -1668,6 +1746,8 @@ const INTERFACE_HTML: &str = r##"<!doctype html>
     $("refresh").addEventListener("click", refresh);
     $("adminToken").addEventListener("input", renderSessionQuick);
     $("proxyKey").addEventListener("input", renderSessionQuick);
+    $("providerFilter").addEventListener("input", renderProviderNetwork);
+    $("providerKindFilter").addEventListener("change", renderProviderNetwork);
     $("modelSearch").addEventListener("input", renderPlaygroundOptions);
     $("playgroundModel").addEventListener("change", renderPlaygroundPreview);
     $("playgroundEndpoint").addEventListener("change", renderPlaygroundPreview);
