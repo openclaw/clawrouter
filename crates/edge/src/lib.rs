@@ -136,6 +136,22 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                 )
                 .await;
             }
+            if playground_path.starts_with("/proxy/") {
+                if !access_admin_csrf_allowed(&req.method(), req.headers(), &url)? {
+                    return json_error(
+                        "access_csrf_required",
+                        "Cloudflare Access playground requests require a same-origin browser request",
+                        403,
+                    );
+                }
+                return proxy_manifest_endpoint(
+                    req,
+                    env,
+                    &format!("/v1{playground_path}"),
+                    ProxyAuthMode::AccessSession,
+                )
+                .await;
+            }
         }
     }
 
@@ -144,7 +160,7 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     }
 
     if req.method() == Method::Post && url.path().starts_with("/v1/proxy/") {
-        return proxy_manifest_endpoint(req, env, url.path()).await;
+        return proxy_manifest_endpoint(req, env, url.path(), ProxyAuthMode::ProxyKey).await;
     }
 
     Response::from_json(&serde_json::json!({
@@ -304,6 +320,7 @@ fn route_catalog(snapshot: &ProviderSnapshot) -> Value {
                     "endpoint": endpoint.id,
                     "route": format!("/v1/proxy/{}/{}", provider.id, endpoint.id),
                     "methods": &endpoint.methods,
+                    "pathParams": &endpoint.path_params,
                     "streaming": &endpoint.streaming
                 })
             })
@@ -456,7 +473,12 @@ async fn proxy_openai_compatible(
     Ok(response)
 }
 
-async fn proxy_manifest_endpoint(mut req: Request, env: Env, path: &str) -> Result<Response> {
+async fn proxy_manifest_endpoint(
+    mut req: Request,
+    env: Env,
+    path: &str,
+    mode: ProxyAuthMode,
+) -> Result<Response> {
     let snapshot = provider_snapshot()?;
     let Some(rest) = path.strip_prefix("/v1/proxy/") else {
         return json_error("route_not_found", "route not found", 404);
@@ -492,7 +514,7 @@ async fn proxy_manifest_endpoint(mut req: Request, env: Env, path: &str) -> Resu
         .find(|capability| capability.endpoint == endpoint.id)
         .map(|capability| capability.id.as_str())
         .unwrap_or("tool.invoke");
-    let auth = match authorize_proxy_key(req.headers(), &env, &provider.id).await? {
+    let auth = match authorize_request(req.headers(), &env, &provider.id, mode).await? {
         AuthOutcome::Allowed(auth) => auth,
         AuthOutcome::Denied(response) => return Ok(response),
     };
@@ -4293,6 +4315,14 @@ mod tests {
             route.get("provider").and_then(Value::as_str) == Some("tavily")
                 && route.get("endpoint").and_then(Value::as_str) == Some("search")
                 && route.get("route").and_then(Value::as_str) == Some("/v1/proxy/tavily/search")
+        }));
+        assert!(manifest_routes.iter().any(|route| {
+            route.get("provider").and_then(Value::as_str) == Some("github")
+                && route.get("endpoint").and_then(Value::as_str) == Some("rest")
+                && route
+                    .get("pathParams")
+                    .and_then(Value::as_array)
+                    .is_some_and(|params| params.iter().any(|param| param.as_str() == Some("path")))
         }));
 
         for route in openai_routes {

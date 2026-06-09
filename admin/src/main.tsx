@@ -50,6 +50,7 @@ interface RouteCatalog {
     endpoint: string;
     route: string;
     methods: string[];
+    pathParams?: string[];
     streaming?: boolean | null;
   }>;
 }
@@ -425,7 +426,7 @@ function App() {
       setStatus("running playground");
       const guard = playgroundBlocker(playground, selectedModel, selectedServiceRoute, accessByProvider, providerReadiness);
       if (guard) throw new Error(guard);
-      const payload = playgroundPayload(playground);
+      const payload = playgroundPayload(playground, selectedServiceRoute);
       if (demoMode) {
         setPlaygroundResult(JSON.stringify(playground.mode === "model"
           ? { provider: selectedModel?.provider, model: selectedModel?.id, output: "Hello from ClawRouter demo mode." }
@@ -433,11 +434,11 @@ function App() {
         setStatus("playground ready");
         return;
       }
-      const method = playground.mode === "service" ? playground.serviceMethod : "POST";
+      const method = "POST";
       const result = await request<unknown>(gatewayOrigin, playgroundAccessEndpoint(playground, selectedServiceRoute), {
         method,
-        headers: method === "GET" ? undefined : { "content-type": "application/json" },
-        body: method === "GET" ? undefined : JSON.stringify(payload),
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(payload),
       });
       setPlaygroundResult(JSON.stringify(result, null, 2));
       setStatus("playground ready");
@@ -1276,10 +1277,14 @@ interface CatalogModel {
   capabilities: string[];
 }
 
-function playgroundPayload(form: PlaygroundForm) {
+function playgroundPayload(form: PlaygroundForm, route?: RouteCatalog["manifestProxy"][number]) {
   if (form.mode === "service") {
-    if (!form.servicePayload.trim()) return {};
-    return JSON.parse(form.servicePayload);
+    const body = form.servicePayload.trim() ? JSON.parse(form.servicePayload) : {};
+    return {
+      method: form.serviceMethod,
+      pathParams: pathParamsForRoute(route, form.servicePath),
+      body,
+    };
   }
   const maxTokens = optionalNumber(form.maxTokens);
   const temperature = optionalDecimal(form.temperature);
@@ -1290,25 +1295,22 @@ function playgroundPayload(form: PlaygroundForm) {
 }
 
 function playgroundCurl(form: PlaygroundForm, payload: unknown, route?: RouteCatalog["manifestProxy"][number]) {
-  const method = form.mode === "service" ? form.serviceMethod : "POST";
+  const method = "POST";
   const endpoint = playgroundAccessEndpoint(form, route);
-  const lines = [`curl -X ${method} '${window.location.origin}${endpoint}' \\`, `  -b '$CLOUDFLARE_ACCESS_COOKIE'`];
-  if (method !== "GET") {
-    lines.push(`  -H 'content-type: application/json' \\`, `  -d '${JSON.stringify(payload ?? {}, null, 2).replace(/'/g, `'\\''`)}'`);
-  }
+  const lines = [`curl -X ${method} '${window.location.origin}${endpoint}' \\`, `  -b '$CLOUDFLARE_ACCESS_COOKIE'`, `  -H 'content-type: application/json' \\`, `  -d '${JSON.stringify(payload ?? {}, null, 2).replace(/'/g, `'\\''`)}'`];
   return lines.join("\n");
 }
 
 function playgroundAccessEndpoint(form: PlaygroundForm, route?: RouteCatalog["manifestProxy"][number]) {
   if (form.mode === "service") {
-    return resolveProxyRoute(route, form.servicePath);
+    return resolveProxyRoute(route).replace(/^\/v1\/proxy/, "/v1/playground/proxy");
   }
   return `/v1/playground${form.endpoint}`;
 }
 
 function playgroundRequestPreview(form: PlaygroundForm, mode: "json" | "curl", route?: RouteCatalog["manifestProxy"][number]) {
   try {
-    const payload = playgroundPayload(form);
+    const payload = playgroundPayload(form, route);
     return mode === "json" ? JSON.stringify(payload, null, 2) : playgroundCurl(form, payload, route);
   } catch (error) {
     return errorMessage(error);
@@ -1339,14 +1341,17 @@ function routeKey(route: RouteCatalog["manifestProxy"][number] | undefined) {
   return route ? `${route.provider}:${route.endpoint}:${route.route}` : "";
 }
 
-function resolveProxyRoute(route: RouteCatalog["manifestProxy"][number] | undefined, value: string) {
+function resolveProxyRoute(route: RouteCatalog["manifestProxy"][number] | undefined) {
   if (!route) return "/v1/proxy";
-  const encoded = encodeRouteValue(value);
-  return route.route.replace(/\{[^}]+\}/g, encoded || "demo");
+  return route.route;
 }
 
-function encodeRouteValue(value: string) {
-  return value.trim().split("/").filter(Boolean).map(encodeURIComponent).join("/");
+function pathParamsForRoute(route: RouteCatalog["manifestProxy"][number] | undefined, value: string) {
+  const params: Record<string, string> = {};
+  for (const param of route?.pathParams ?? []) {
+    params[param] = value.trim() || "demo";
+  }
+  return params;
 }
 
 function demoData() {
@@ -1396,12 +1401,12 @@ function demoData() {
       modelRoute("xai", ["/v1/chat/completions"], [modelEntry("xai/default", ["llm.chat"], ["/v1/chat/completions"])]),
     ],
     manifestProxy: [
-      manifestRoute("github", "rest", "/v1/proxy/github/{path}", ["GET", "POST", "PATCH", "PUT", "DELETE"]),
+      manifestRoute("github", "rest", "/v1/proxy/github/rest", ["GET", "POST", "PATCH", "PUT", "DELETE"], ["path"]),
       manifestRoute("linear", "graphql", "/v1/proxy/linear/graphql", ["POST"]),
-      manifestRoute("notion", "rest", "/v1/proxy/notion/v1/{path}", ["GET", "POST", "PATCH"]),
+      manifestRoute("notion", "rest", "/v1/proxy/notion/rest", ["GET", "POST", "PATCH"], ["path"]),
       manifestRoute("replicate", "predictions", "/v1/proxy/replicate/predictions", ["POST"]),
-      manifestRoute("replicate", "prediction", "/v1/proxy/replicate/predictions/{prediction_id}", ["GET"]),
-      manifestRoute("slack", "method", "/v1/proxy/slack/{method}", ["GET", "POST"]),
+      manifestRoute("replicate", "prediction", "/v1/proxy/replicate/prediction", ["GET"], ["prediction_id"]),
+      manifestRoute("slack", "method", "/v1/proxy/slack/method", ["GET", "POST"], ["method"]),
       manifestRoute("tavily", "search", "/v1/proxy/tavily/search", ["POST"]),
       manifestRoute("tavily", "extract", "/v1/proxy/tavily/extract", ["POST"]),
       manifestRoute("tavily", "crawl", "/v1/proxy/tavily/crawl", ["POST"]),
@@ -1474,8 +1479,8 @@ function modelEntry(id: string, capabilities: string[], endpoints: string[]) {
   return { id, capabilities, endpoints };
 }
 
-function manifestRoute(provider: string, endpoint: string, route: string, methods: string[]): RouteCatalog["manifestProxy"][number] {
-  return { provider, endpoint, route, methods };
+function manifestRoute(provider: string, endpoint: string, route: string, methods: string[], pathParams: string[] = []): RouteCatalog["manifestProxy"][number] {
+  return { provider, endpoint, route, methods, pathParams };
 }
 
 function provider(id: string, display_name: string, providerClass: string, service_kind: string, capabilities: string[]): ProviderRow {

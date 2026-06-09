@@ -250,9 +250,9 @@ The record is stored in `POLICY_KV` at `access/users/<email>`:
 The console also exposes a Cloudflare Access-backed playground for
 OpenAI-compatible routes and manifest-proxy service routes. Model playground
 calls send requests through `/v1/playground/*`; service playground calls send to
-the selected `/v1/proxy/<provider>/<endpoint>` route. Upstream calls still obey
-stored policy provider allowlists, provider readiness, OAuth grants, and budget
-limits.
+the selected `/v1/playground/proxy/<provider>/<endpoint>` route using the same
+manifest request wrapper as `/v1/proxy/*`. Upstream calls still obey stored
+policy provider allowlists, provider readiness, OAuth grants, and budget limits.
 
 ## Admin API
 
