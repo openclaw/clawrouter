@@ -766,6 +766,14 @@ pre {
   object-fit: contain;
 }
 
+.brandSvg {
+  color: var(--foreground-strong);
+}
+
+.brandSvg path {
+  fill: currentColor;
+}
+
 .entityLogo path {
   transform-box: fill-box;
   transform-origin: center;
@@ -855,6 +863,17 @@ pre {
   height: 14px;
   flex: 0 0 auto;
   margin-top: 1px;
+}
+
+.inlineNote {
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--soft-background);
+  color: var(--muted);
+  padding: 7px 8px;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .issuedKey {
@@ -963,6 +982,30 @@ pre {
   align-items: start;
 }
 
+.modeTabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+  padding: 7px 10px 0;
+}
+
+.modeTabs button {
+  min-height: 27px;
+  border-color: transparent;
+  border-bottom-color: transparent;
+  border-radius: var(--radius) var(--radius) 0 0;
+  background: transparent;
+  color: var(--muted);
+}
+
+.modeTabs button.active,
+.modeTabs button:hover:not(:disabled) {
+  border-color: var(--border);
+  border-bottom-color: var(--background);
+  background: var(--background);
+  color: var(--foreground-strong);
+}
+
 .promptPane,
 .responsePane {
   display: grid;
@@ -984,6 +1027,28 @@ pre {
   align-items: end;
   border-bottom: 1px solid var(--border);
   padding: 8px 10px;
+}
+
+.playgroundToolbar .servicePathInput {
+  grid-column: span 2;
+}
+
+.runtimeStrip {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  border-bottom: 1px solid var(--border);
+  padding: 7px 10px;
+}
+
+.runtimeStrip > span:not(.status) {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .promptComposer {
@@ -1012,6 +1077,10 @@ pre {
 
 .mainPrompt {
   min-height: clamp(300px, 42vh, 520px);
+}
+
+.servicePayload {
+  min-height: clamp(380px, 56vh, 650px);
 }
 
 .requestDrawer {

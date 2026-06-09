@@ -17,27 +17,13 @@ import {
   ShieldCheck,
   Users,
 } from "lucide-react";
-import {
-  siAnthropic,
-  siCloudflare,
-  siDeepseek,
-  siGithub,
-  siGooglegemini,
-  siHuggingface,
-  siLinear,
-  siMinimax,
-  siMistralai,
-  siNotion,
-  siOpenrouter,
-  siPerplexity,
-  siReplicate,
-} from "simple-icons";
+import providerIconManifest from "../../crates/edge/src/provider-icons.json";
 import "./style.css";
 
 type View = "catalog" | "playground" | "policies" | "users" | "usage";
 type AccessRole = "admin" | "user";
 type IconComponent = React.ComponentType<React.SVGProps<SVGSVGElement>>;
-type BrandIcon = { title: string; hex: string; path: string };
+type BrandIcon = { label?: string; title?: string; viewBox?: string; body?: string };
 
 interface ProviderRow {
   id: string;
@@ -87,6 +73,39 @@ interface SessionResponse {
   tenantId?: string | null;
 }
 
+interface ProviderReadiness {
+  id: string;
+  displayName: string;
+  class: string;
+  serviceKind: string;
+  requiredConfig: string[];
+  optionalConfig: string[];
+  missingConfig: string[];
+  configPresent: boolean;
+  oauthGrantRequired: boolean;
+  oauthGrantCount: number;
+  openaiCompatible: boolean;
+  manifestRoutes: number;
+  modelCount: number;
+  executable: boolean;
+  status: string;
+  reasons: string[];
+}
+
+interface ProviderAccess {
+  provider: string;
+  displayName: string;
+  serviceKind: string;
+  allowed: boolean;
+  policies: string[];
+  readiness: ProviderReadiness;
+}
+
+interface EntitlementsResponse {
+  session: SessionResponse;
+  providers: ProviderAccess[];
+}
+
 interface AccessUser {
   email: string;
   role: AccessRole;
@@ -105,6 +124,8 @@ interface ServiceItem {
   route: string;
   models: number;
   modelIds: string[];
+  access?: ProviderAccess;
+  readiness?: ProviderReadiness;
   brandIcon?: BrandIcon;
 }
 
@@ -126,8 +147,13 @@ interface AccessForm {
 }
 
 interface PlaygroundForm {
+  mode: "model" | "service";
   model: string;
   endpoint: "/v1/chat/completions" | "/v1/responses";
+  serviceRoute: string;
+  serviceMethod: string;
+  servicePath: string;
+  servicePayload: string;
   system: string;
   prompt: string;
   maxTokens: string;
@@ -135,6 +161,8 @@ interface PlaygroundForm {
 }
 
 const demo = demoData();
+const emptyRoutes: RouteCatalog = { openaiCompatible: [], manifestProxy: [] };
+const emptySession: SessionResponse = { authenticated: false, auth: "access", role: "user", email: null, tenantId: "default" };
 
 const defaultPolicy: PolicyForm = {
   kid: "svc_docs",
@@ -171,27 +199,35 @@ const navItems: Array<{ id: View; label: string; icon: IconComponent }> = [
 function App() {
   const [view, setView] = useState<View>("catalog");
   const gatewayOrigin = window.location.origin;
-  const [session, setSession] = useState<SessionResponse>(demo.session);
-  const [providers, setProviders] = useState<ProviderRow[]>(demo.providers);
-  const [routes, setRoutes] = useState<RouteCatalog>(demo.routes);
-  const [keys, setKeys] = useState<KeyPolicy[]>(demo.keys);
-  const [users, setUsers] = useState<AccessUser[]>(demo.users);
+  const allowDemo = isLocalDemoAllowed();
+  const [session, setSession] = useState<SessionResponse>(allowDemo ? demo.session : emptySession);
+  const [providers, setProviders] = useState<ProviderRow[]>(allowDemo ? demo.providers : []);
+  const [routes, setRoutes] = useState<RouteCatalog>(allowDemo ? demo.routes : emptyRoutes);
+  const [keys, setKeys] = useState<KeyPolicy[]>(allowDemo ? demo.keys : []);
+  const [users, setUsers] = useState<AccessUser[]>(allowDemo ? demo.users : []);
+  const [entitlements, setEntitlements] = useState<EntitlementsResponse | null>(allowDemo ? demo.entitlements : null);
+  const [providerReadiness, setProviderReadiness] = useState<Record<string, ProviderReadiness>>(allowDemo ? readinessMap(demo.entitlements.providers.map((item) => item.readiness)) : {});
   const [policyForm, setPolicyForm] = useState<PolicyForm>(defaultPolicy);
   const [accessForm, setAccessForm] = useState<AccessForm>(defaultAccess);
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState("all");
-  const [selectedServiceId, setSelectedServiceId] = useState(demo.services[0].id);
-  const [selectedPolicyId, setSelectedPolicyId] = useState(demo.keys[0].kid);
-  const [selectedUserEmail, setSelectedUserEmail] = useState(demo.users[0].email);
-  const [status, setStatus] = useState("local demo data loaded");
-  const [demoMode, setDemoMode] = useState(true);
+  const [selectedServiceId, setSelectedServiceId] = useState(demo.services[0]?.id ?? "");
+  const [selectedPolicyId, setSelectedPolicyId] = useState(demo.keys[0]?.kid ?? "");
+  const [selectedUserEmail, setSelectedUserEmail] = useState(demo.users[0]?.email ?? "");
+  const [status, setStatus] = useState(allowDemo ? "local demo data loaded" : "loading");
+  const [demoMode, setDemoMode] = useState(allowDemo);
   const [issuedKey, setIssuedKey] = useState("");
   const [policyError, setPolicyError] = useState("");
   const [userError, setUserError] = useState("");
   const [playgroundError, setPlaygroundError] = useState("");
   const [playground, setPlayground] = useState<PlaygroundForm>({
+    mode: "model",
     model: catalogModels(demo.routes)[0]?.id ?? "",
     endpoint: "/v1/chat/completions",
+    serviceRoute: routeKey(demo.routes.manifestProxy[0]),
+    serviceMethod: demo.routes.manifestProxy[0]?.methods[0] ?? "POST",
+    servicePath: "repos/openclaw/openclaw",
+    servicePayload: '{\n  "query": "test"\n}',
     system: "You are concise and useful.",
     prompt: "Say hello from ClawRouter in one short sentence.",
     maxTokens: "128",
@@ -200,8 +236,10 @@ function App() {
   const [playgroundResult, setPlaygroundResult] = useState("Run a request to see the raw response.");
   const [requestMode, setRequestMode] = useState<"json" | "curl">("json");
 
-  const services = useMemo(() => serviceItems(providers, routes), [providers, routes]);
+  const accessByProvider = useMemo(() => accessMap(entitlements), [entitlements]);
+  const services = useMemo(() => serviceItems(providers, routes, providerReadiness, accessByProvider), [accessByProvider, providerReadiness, providers, routes]);
   const models = useMemo(() => catalogModels(routes), [routes]);
+  const serviceRoutes = useMemo(() => routes.manifestProxy, [routes]);
   const kinds = useMemo(() => ["all", ...Array.from(new Set(services.map((item) => item.kind))).sort()], [services]);
   const filteredServices = useMemo(() => {
     return services.filter((item) => (kind === "all" || item.kind === kind) && matchesServiceQuery(item, query));
@@ -210,6 +248,7 @@ function App() {
   const selectedPolicy = keys.find((key) => key.kid === selectedPolicyId) ?? keys[0];
   const selectedUser = users.find((user) => user.email === selectedUserEmail) ?? users[0];
   const selectedModel = models.find((model) => model.id === playground.model) ?? models[0];
+  const selectedServiceRoute = serviceRoutes.find((route) => routeKey(route) === playground.serviceRoute) ?? serviceRoutes[0];
   const busy = status === "loading" || status.startsWith("saving") || status.startsWith("running") || status.startsWith("revoking");
   const statusTone = statusKind(status);
 
@@ -223,6 +262,13 @@ function App() {
     }
   }, [models, playground.model]);
 
+  useEffect(() => {
+    if (serviceRoutes.length && !serviceRoutes.some((route) => routeKey(route) === playground.serviceRoute)) {
+      const route = serviceRoutes[0];
+      setPlayground((current) => ({ ...current, serviceRoute: routeKey(route), serviceMethod: route.methods[0] ?? "POST" }));
+    }
+  }, [playground.serviceRoute, serviceRoutes]);
+
   async function refresh() {
     try {
       setStatus("loading");
@@ -234,13 +280,24 @@ function App() {
       setSession(sessionData);
       setProviders(providerData.providers);
       setRoutes(routeData);
+      let refreshWarnings: string[] = [];
+      const entitlementResult = await settled(() => request<EntitlementsResponse>(gatewayOrigin, "/v1/entitlements"));
+      if (entitlementResult.ok) {
+        setEntitlements(entitlementResult.value);
+        setProviderReadiness(readinessMap(entitlementResult.value.providers.map((item) => item.readiness)));
+      } else {
+        setEntitlements(null);
+        refreshWarnings = [...refreshWarnings, `entitlements unavailable: ${entitlementResult.error}`];
+      }
       if (sessionData.role === "admin") {
-        const [keyData, userData] = await Promise.all([
+        const [keyData, userData, readinessData] = await Promise.all([
           request<{ keys: KeyPolicy[] }>(gatewayOrigin, "/v1/admin/keys"),
           request<{ users: AccessUser[] }>(gatewayOrigin, "/v1/admin/access-users"),
+          request<{ providers: ProviderReadiness[] }>(gatewayOrigin, "/v1/admin/provider-status"),
         ]);
         setKeys(keyData.keys);
         setUsers(userData.users);
+        setProviderReadiness((current) => ({ ...current, ...readinessMap(readinessData.providers) }));
       } else {
         const user = {
           email: sessionData.email ?? "access-user",
@@ -254,10 +311,23 @@ function App() {
         setAccessForm(user);
       }
       setDemoMode(false);
-      setStatus("connected");
+      setStatus(refreshWarnings.length ? refreshWarnings.join("; ") : "connected");
     } catch (error) {
-      setDemoMode(true);
-      setStatus(`demo mode: ${errorMessage(error)}`);
+      const message = errorMessage(error);
+      if (allowDemo) {
+        setSession(demo.session);
+        setProviders(demo.providers);
+        setRoutes(demo.routes);
+        setKeys(demo.keys);
+        setUsers(demo.users);
+        setEntitlements(demo.entitlements);
+        setProviderReadiness(readinessMap(demo.entitlements.providers.map((item) => item.readiness)));
+        setDemoMode(true);
+        setStatus(`demo mode: ${message}`);
+        return;
+      }
+      setDemoMode(false);
+      setStatus(`load error: ${message}`);
     }
   }
 
@@ -352,17 +422,21 @@ function App() {
     try {
       setPlaygroundError("");
       setStatus("running playground");
-      if (!selectedModel) throw new Error("select a model");
+      const guard = playgroundBlocker(playground, selectedModel, selectedServiceRoute, accessByProvider, providerReadiness, demoMode);
+      if (guard) throw new Error(guard);
       const payload = playgroundPayload(playground);
       if (demoMode) {
-        setPlaygroundResult(JSON.stringify({ provider: selectedModel.provider, model: selectedModel.id, output: "Hello from ClawRouter demo mode." }, null, 2));
+        setPlaygroundResult(JSON.stringify(playground.mode === "model"
+          ? { provider: selectedModel?.provider, model: selectedModel?.id, output: "Hello from ClawRouter demo mode." }
+          : { provider: selectedServiceRoute?.provider, route: selectedServiceRoute?.route, output: "Service proxy demo response." }, null, 2));
         setStatus("playground ready");
         return;
       }
-      const result = await request<unknown>(gatewayOrigin, playgroundAccessEndpoint(playground.endpoint), {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify(payload),
+      const method = playground.mode === "service" ? playground.serviceMethod : "POST";
+      const result = await request<unknown>(gatewayOrigin, playgroundAccessEndpoint(playground, selectedServiceRoute), {
+        method,
+        headers: method === "GET" ? undefined : { "content-type": "application/json" },
+        body: method === "GET" ? undefined : JSON.stringify(payload),
       });
       setPlaygroundResult(JSON.stringify(result, null, 2));
       setStatus("playground ready");
@@ -474,7 +548,10 @@ function App() {
             onSelect={(service) => setSelectedServiceId(service.id)}
             onPlay={(service) => {
               const model = models.find((item) => item.provider === service.provider);
-              if (model) setPlayground((current) => ({ ...current, model: model.id }));
+              const proxyRoute = serviceRoutes.find((route) => route.provider === service.provider);
+              setPlayground((current) => model
+                ? { ...current, mode: "model", model: model.id }
+                : proxyRoute ? { ...current, mode: "service", serviceRoute: routeKey(proxyRoute), serviceMethod: proxyRoute.methods[0] ?? "POST" } : current);
               setView("playground");
             }}
             onAdd={(service) => {
@@ -493,6 +570,11 @@ function App() {
             setForm={setPlayground}
             models={models}
             selected={selectedModel}
+            serviceRoutes={serviceRoutes}
+            selectedServiceRoute={selectedServiceRoute}
+            accessByProvider={accessByProvider}
+            readinessByProvider={providerReadiness}
+            demoMode={demoMode}
             requestMode={requestMode}
             setRequestMode={setRequestMode}
             result={playgroundResult}
@@ -573,15 +655,15 @@ function CatalogScreen({ services, allServices, selected, policies, query, setQu
     <div className="entityLayout">
       <section className="mainPane">
         <div className="catalogControls">
-          <div className="catalogMeta"><strong>{services.length} services</strong><span>{activePolicies.length} active policies</span></div>
+          <div className="catalogMeta"><strong>{services.length} services</strong><span>{readyCount(allServices)} ready · {allowedCount(allServices)} accessible</span></div>
           <label><span>search catalog</span><div className="inputWithIcon"><Search aria-hidden="true" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="provider, model, route, tool" /></div></label>
           <div className="kindTabs" role="tablist" aria-label="service kind">
             {kinds.map((item) => <button key={item} type="button" className={kind === item ? "active" : ""} onClick={() => setKind(item)}>{kindLabel(item)}<span>{kindCounts.get(item) ?? 0}</span></button>)}
           </div>
         </div>
         <EntityTable
-          columns={["service", "kind", "capabilities", "route", "policy"]}
-          columnTemplate="minmax(210px, 1.45fr) 72px minmax(150px, 1fr) minmax(130px, 0.88fr) minmax(150px, 0.82fr)"
+          columns={["service", "kind", "readiness", "access", "route"]}
+          columnTemplate="minmax(210px, 1.5fr) 72px 128px 120px minmax(150px, 0.9fr)"
           rows={services.map((service) => ({
             id: service.id,
             active: selected?.id === service.id,
@@ -589,9 +671,9 @@ function CatalogScreen({ services, allServices, selected, policies, query, setQu
             cells: [
               <EntityName brandIcon={service.brandIcon} icon={kindIcon(service.kind)} title={service.name} subtitle={service.provider} />,
               kindLabel(service.kind),
-              service.capabilities.slice(0, 3).join(", "),
+              <ReadinessStatus readiness={service.readiness} />,
+              <AccessStatus service={service} policies={servicePolicies(service)} />,
               service.surfaces.join(", "),
-              <PolicyChips policies={servicePolicies(service)} />,
             ],
           }))}
         />
@@ -605,7 +687,12 @@ function CatalogScreen({ services, allServices, selected, policies, query, setQu
               <dt>route</dt><dd>{selected.route}</dd>
               <dt>surfaces</dt><dd>{selected.surfaces.join(", ")}</dd>
               <dt>models</dt><dd>{selected.models || "n/a"}</dd>
+              <dt>access</dt><dd>{selected.access ? (selected.access.allowed ? `allowed by ${selected.access.policies.join(", ") || "session"}` : "not granted") : "unknown"}</dd>
+              <dt>readiness</dt><dd>{readinessLabel(selected.readiness)}</dd>
+              <dt>missing</dt><dd>{selected.readiness?.missingConfig.length ? selected.readiness.missingConfig.join(", ") : "none"}</dd>
+              <dt>oauth grants</dt><dd>{selected.readiness?.oauthGrantRequired ? selected.readiness.oauthGrantCount : "n/a"}</dd>
             </dl>
+            {selected.readiness?.reasons.length ? <InlineNote>{selected.readiness.reasons.join("; ")}</InlineNote> : null}
             {selected.modelIds.length ? (
               <>
                 <div className="sectionTitle">Models</div>
@@ -619,7 +706,7 @@ function CatalogScreen({ services, allServices, selected, policies, query, setQu
               {selectedPolicies.length ? selectedPolicies.map((policy) => <button key={policy.kid} type="button">{policy.kid}<span>{policy.tenantId ?? "default"}</span></button>) : <p>No policy grants this service yet.</p>}
             </div>
             <div className="inspectorActions">
-              <button type="button" onClick={() => onPlay(selected)}><Play className="buttonIcon" aria-hidden="true" /><span>Try in playground</span></button>
+              <button type="button" disabled={Boolean(playgroundBlockedForService(selected))} onClick={() => onPlay(selected)} title={playgroundBlockedForService(selected) ?? undefined}><Play className="buttonIcon" aria-hidden="true" /><span>Try in playground</span></button>
               <button type="button" className="buttonSecondary" onClick={() => onAdd(selected)}><Plus className="buttonIcon" aria-hidden="true" /><span>Add to policy</span></button>
             </div>
           </>
@@ -640,11 +727,16 @@ function PolicyChips({ policies }: { policies: KeyPolicy[] }) {
   );
 }
 
-function PlaygroundScreen({ form, setForm, models, selected, requestMode, setRequestMode, result, error, onRun, busy }: {
+function PlaygroundScreen({ form, setForm, models, selected, serviceRoutes, selectedServiceRoute, accessByProvider, readinessByProvider, demoMode, requestMode, setRequestMode, result, error, onRun, busy }: {
   form: PlaygroundForm;
   setForm: (form: PlaygroundForm) => void;
   models: CatalogModel[];
   selected?: CatalogModel;
+  serviceRoutes: RouteCatalog["manifestProxy"];
+  selectedServiceRoute?: RouteCatalog["manifestProxy"][number];
+  accessByProvider: Map<string, ProviderAccess>;
+  readinessByProvider: Record<string, ProviderReadiness>;
+  demoMode: boolean;
   requestMode: "json" | "curl";
   setRequestMode: (mode: "json" | "curl") => void;
   result: string;
@@ -652,22 +744,56 @@ function PlaygroundScreen({ form, setForm, models, selected, requestMode, setReq
   onRun: (event: FormEvent) => void;
   busy: boolean;
 }) {
-  const request = playgroundRequestPreview(form, requestMode);
+  const request = playgroundRequestPreview(form, requestMode, selectedServiceRoute);
+  const blocker = playgroundBlocker(form, selected, selectedServiceRoute, accessByProvider, readinessByProvider, demoMode);
+  const selectedProvider = form.mode === "model" ? selected?.provider : selectedServiceRoute?.provider;
+  const selectedAccess = selectedProvider ? accessByProvider.get(selectedProvider) : undefined;
+  const selectedReadiness = selectedProvider ? readinessByProvider[selectedProvider] : undefined;
+  const methods = selectedServiceRoute?.methods.length ? selectedServiceRoute.methods : ["POST"];
   return (
     <div className="playgroundLayout">
       <form className="promptPane" onSubmit={onRun}>
+        <div className="modeTabs" role="tablist" aria-label="playground mode">
+          <button type="button" className={form.mode === "model" ? "active" : ""} onClick={() => setForm({ ...form, mode: "model" })}>Model</button>
+          <button type="button" className={form.mode === "service" ? "active" : ""} onClick={() => setForm({ ...form, mode: "service" })}>Service</button>
+        </div>
         <div className="playgroundToolbar">
-          <label><span>model</span><select value={form.model} onChange={(event) => setForm({ ...form, model: event.target.value })}>{models.map((model) => <option key={model.id} value={model.id}>{model.id}</option>)}</select></label>
-          <label><span>endpoint</span><select value={form.endpoint} onChange={(event) => setForm({ ...form, endpoint: event.target.value as PlaygroundForm["endpoint"] })}><option value="/v1/chat/completions">chat completions</option><option value="/v1/responses">responses</option></select></label>
-          <label><span>tokens</span><input value={form.maxTokens} onChange={(event) => setForm({ ...form, maxTokens: event.target.value })} /></label>
-          <label><span>temp</span><input value={form.temperature} onChange={(event) => setForm({ ...form, temperature: event.target.value })} /></label>
-          <button type="submit" disabled={busy}><Play className="buttonIcon" aria-hidden="true" /><span>Run</span></button>
+          {form.mode === "model" ? (
+            <>
+              <label><span>model</span><select value={form.model} onChange={(event) => setForm({ ...form, model: event.target.value })}>{models.map((model) => <option key={`${model.provider}:${model.id}`} value={model.id}>{model.id}</option>)}</select></label>
+              <label><span>endpoint</span><select value={form.endpoint} onChange={(event) => setForm({ ...form, endpoint: event.target.value as PlaygroundForm["endpoint"] })}><option value="/v1/chat/completions">chat completions</option><option value="/v1/responses">responses</option></select></label>
+              <label><span>tokens</span><input value={form.maxTokens} onChange={(event) => setForm({ ...form, maxTokens: event.target.value })} /></label>
+              <label><span>temp</span><input value={form.temperature} onChange={(event) => setForm({ ...form, temperature: event.target.value })} /></label>
+            </>
+          ) : (
+            <>
+              <label><span>service route</span><select value={form.serviceRoute} onChange={(event) => {
+                const route = serviceRoutes.find((item) => routeKey(item) === event.target.value);
+                setForm({ ...form, serviceRoute: event.target.value, serviceMethod: route?.methods[0] ?? "POST" });
+              }}>{serviceRoutes.map((route) => <option key={routeKey(route)} value={routeKey(route)}>{route.provider} / {route.endpoint}</option>)}</select></label>
+              <label><span>method</span><select value={form.serviceMethod} onChange={(event) => setForm({ ...form, serviceMethod: event.target.value })}>{methods.map((method) => <option key={method} value={method}>{method}</option>)}</select></label>
+              <label className="servicePathInput"><span>path / id</span><input value={form.servicePath} onChange={(event) => setForm({ ...form, servicePath: event.target.value })} placeholder="replacement for route variables" /></label>
+            </>
+          )}
+          <button type="submit" disabled={busy || Boolean(blocker)} title={blocker ?? undefined}><Play className="buttonIcon" aria-hidden="true" /><span>Run</span></button>
         </div>
         {error ? <InlineError message={error} /> : null}
-        <div className="promptComposer">
-          <label><span>system</span><textarea className="systemPrompt" value={form.system} onChange={(event) => setForm({ ...form, system: event.target.value })} /></label>
-          <label><span>prompt</span><textarea className="mainPrompt" value={form.prompt} onChange={(event) => setForm({ ...form, prompt: event.target.value })} /></label>
+        {blocker ? <InlineNote>{blocker}</InlineNote> : null}
+        <div className="runtimeStrip">
+          <ReadinessStatus readiness={selectedReadiness} />
+          <span>{selectedAccess ? (selectedAccess.allowed ? `allowed: ${selectedAccess.policies.join(", ") || "session"}` : "not granted") : "access unknown"}</span>
+          <span>{selectedProvider ?? "no provider"}</span>
         </div>
+        {form.mode === "model" ? (
+          <div className="promptComposer">
+            <label><span>system</span><textarea className="systemPrompt" value={form.system} onChange={(event) => setForm({ ...form, system: event.target.value })} /></label>
+            <label><span>prompt</span><textarea className="mainPrompt" value={form.prompt} onChange={(event) => setForm({ ...form, prompt: event.target.value })} /></label>
+          </div>
+        ) : (
+          <div className="promptComposer">
+            <label><span>json body</span><textarea className="mainPrompt servicePayload" value={form.servicePayload} onChange={(event) => setForm({ ...form, servicePayload: event.target.value })} /></label>
+          </div>
+        )}
         <details className="requestDrawer">
           <summary><span><ServerCog className="buttonIcon" aria-hidden="true" />Request payload</span><strong>{requestMode}</strong></summary>
           <div className="requestDrawerToolbar">
@@ -783,6 +909,7 @@ function UsersScreen({ users, selected, policies, services, form, setForm, error
         <form onSubmit={onSave}>
           <InspectorHeader icon={Users} title="Access user" subtitle={selected?.email ?? "new user"} />
           {error ? <InlineError message={error} /> : null}
+          <InlineNote>Users are created from Cloudflare Access on first login. Admin status is controlled by the Worker admin allowlist; this record only controls tenant and enabled state.</InlineNote>
           <div className="formGrid compact">
             <label className="full"><span>email</span><input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} /></label>
             <label><span>tenant</span><input value={form.tenantId} onChange={(event) => setForm({ ...form, tenantId: event.target.value })} /></label>
@@ -801,14 +928,20 @@ function UsersScreen({ users, selected, policies, services, form, setForm, error
 }
 
 function UsageScreen({ keys, services }: { keys: KeyPolicy[]; services: ServiceItem[] }) {
+  const activeKeys = keys.filter((key) => key.enabled);
+  const readyServices = readyCount(services);
+  const missingServices = services.filter((service) => service.readiness?.status === "missing_config");
+  const blockedServices = services.filter((service) => service.readiness && !service.readiness.executable);
   return (
     <div className="entityLayout">
       <section className="mainPane">
         <EntityTable columns={["policy", "tenant", "budget", "request cost", "services"]} columnTemplate="minmax(240px, 1.5fr) 150px 140px 140px 120px" rows={keys.map((key) => ({ id: key.kid, cells: [<EntityName icon={KeyRound} title={key.kid} subtitle={key.tokenRole ?? "custom"} />, key.tenantId ?? "default", formatBudget(key.monthlyBudgetMicros), formatMicros(key.requestCostMicros), String(key.providers.length)] }))} />
       </section>
       <aside className="inspector">
-        <InspectorHeader icon={BarChart3} title="Coverage" subtitle={`${services.length} routable services`} />
-        <dl className="facts"><dt>active keys</dt><dd>{keys.filter((key) => key.enabled).length}</dd><dt>granted services</dt><dd>{new Set(keys.flatMap((key) => key.providers)).size}</dd><dt>monthly budget</dt><dd>{formatMicros(keys.reduce((total, key) => total + (key.monthlyBudgetMicros ?? 0), 0))}</dd></dl>
+        <InspectorHeader icon={BarChart3} title="Budget ledger" subtitle="policy coverage, not request analytics yet" />
+        <dl className="facts"><dt>active policies</dt><dd>{activeKeys.length}</dd><dt>granted services</dt><dd>{new Set(activeKeys.flatMap((key) => key.providers)).size}</dd><dt>ready services</dt><dd>{readyServices}/{services.length}</dd><dt>missing config</dt><dd>{missingServices.length}</dd><dt>monthly budget</dt><dd>{formatMicros(activeKeys.reduce((total, key) => total + (key.monthlyBudgetMicros ?? 0), 0))}</dd></dl>
+        <div className="sectionTitle">Needs configuration</div>
+        <div className="miniList">{blockedServices.length ? blockedServices.slice(0, 8).map((service) => <button type="button" key={service.id}>{service.name}<span>{readinessLabel(service.readiness)}</span></button>) : <p>All visible services are executable.</p>}</div>
       </aside>
     </div>
   );
@@ -848,8 +981,8 @@ function InspectorHeader({ brandIcon, icon: Icon, title, subtitle }: { brandIcon
 }
 
 function BrandMark({ brandIcon, fallback: Fallback, className = "" }: { brandIcon?: BrandIcon; fallback?: IconComponent; className?: string }) {
-  if (brandIcon) {
-    return <svg className={className || undefined} viewBox="0 0 24 24" aria-hidden="true"><path fill={`#${brandIcon.hex}`} d={brandIcon.path} /></svg>;
+  if (brandIcon?.body && !brandIcon.body.includes("undefined")) {
+    return <svg className={className ? `brandSvg ${className}` : "brandSvg"} viewBox={brandIcon.viewBox ?? "0 0 24 24"} aria-hidden="true" dangerouslySetInnerHTML={{ __html: brandIcon.body }} />;
   }
   return Fallback ? <Fallback className={className || undefined} aria-hidden="true" /> : null;
 }
@@ -862,9 +995,26 @@ function InlineError({ message }: { message: string }) {
   return <div className="inlineError" role="alert"><CircleSlash2 aria-hidden="true" /><span>{message}</span></div>;
 }
 
+function InlineNote({ children }: { children: React.ReactNode }) {
+  return <div className="inlineNote">{children}</div>;
+}
+
 function Status({ label, tone }: { label: string; tone: "active" | "revoked" | "neutral" }) {
   const Icon = tone === "active" ? CheckCircle2 : tone === "revoked" ? CircleSlash2 : null;
   return <span className={`status ${tone}`}>{Icon ? <Icon aria-hidden="true" /> : null}{label}</span>;
+}
+
+function ReadinessStatus({ readiness }: { readiness?: ProviderReadiness }) {
+  if (!readiness) return <span className="status neutral">unknown</span>;
+  const tone = readiness.status === "ready" ? "active" : readiness.status === "missing_config" || readiness.status === "grant_required" || readiness.status === "unsupported" ? "revoked" : "neutral";
+  return <Status label={readinessLabel(readiness)} tone={tone} />;
+}
+
+function AccessStatus({ service, policies }: { service: ServiceItem; policies: KeyPolicy[] }) {
+  if (service.access) {
+    return <Status label={service.access.allowed ? "allowed" : "denied"} tone={service.access.allowed ? "active" : "revoked"} />;
+  }
+  return <PolicyChips policies={policies} />;
 }
 
 function viewTitle(view: View) {
@@ -917,12 +1067,46 @@ function statusLabel(kind: ReturnType<typeof statusKind>) {
   return kind === "success" ? "ready" : kind === "pending" ? "working" : kind === "error" ? "needs attention" : "standby";
 }
 
+function isLocalDemoAllowed() {
+  const params = new URLSearchParams(window.location.search);
+  return params.has("demo") || ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+}
+
+async function settled<T>(loader: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
+  try {
+    return { ok: true, value: await loader() };
+  } catch (error) {
+    return { ok: false, error: errorMessage(error) };
+  }
+}
+
 async function request<T>(baseUrl: string, path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   const response = await fetch(`${baseUrl.replace(/\/$/, "")}${path}`, { ...init, credentials: "same-origin", headers });
   if (!response.ok) throw new Error((await response.text()) || `${path} failed with ${response.status}`);
   if (!(response.headers.get("content-type") ?? "").includes("application/json")) throw new Error(`${path} returned a non-JSON response from ${baseUrl}`);
   return response.json() as Promise<T>;
+}
+
+function readinessMap(readiness: ProviderReadiness[]) {
+  return Object.fromEntries(readiness.map((item) => [item.id, item]));
+}
+
+function accessMap(entitlements: EntitlementsResponse | null) {
+  return new Map((entitlements?.providers ?? []).map((item) => [item.provider, item]));
+}
+
+function readyCount(services: ServiceItem[]) {
+  return services.filter((service) => service.readiness?.status === "ready").length;
+}
+
+function allowedCount(services: ServiceItem[]) {
+  return services.filter((service) => service.access?.allowed).length;
+}
+
+function readinessLabel(readiness: ProviderReadiness | undefined) {
+  if (!readiness) return "unknown";
+  return readiness.status.replace(/_/g, " ");
 }
 
 function optionalNumber(value: string) {
@@ -1006,7 +1190,7 @@ function effectiveAccess(user: AccessUser | undefined, policies: KeyPolicy[], se
   return { policies: userPolicies, services: services.filter((service) => providerIds.has(service.provider)) };
 }
 
-function serviceItems(providers: ProviderRow[], routes: RouteCatalog): ServiceItem[] {
+function serviceItems(providers: ProviderRow[], routes: RouteCatalog, readinessByProvider: Record<string, ProviderReadiness> = {}, accessByProvider: Map<string, ProviderAccess> = new Map()): ServiceItem[] {
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
   const modelServices = routes.openaiCompatible.map((route) => {
     const provider = providerById.get(route.provider);
@@ -1023,6 +1207,8 @@ function serviceItems(providers: ProviderRow[], routes: RouteCatalog): ServiceIt
       route: route.endpoints.join(", ") || "/v1/chat/completions",
       models: route.models.length,
       modelIds: route.models.map((model) => model.id),
+      access: accessByProvider.get(route.provider),
+      readiness: readinessByProvider[route.provider],
       brandIcon: providerBrandIcon(route.provider),
     };
   });
@@ -1043,6 +1229,8 @@ function serviceItems(providers: ProviderRow[], routes: RouteCatalog): ServiceIt
       route: providerRoutes.map((route) => route.route).join(", "),
       models: 0,
       modelIds: [],
+      access: accessByProvider.get(providerId),
+      readiness: readinessByProvider[providerId],
       brandIcon: providerBrandIcon(providerId),
     };
   });
@@ -1059,6 +1247,8 @@ function serviceItems(providers: ProviderRow[], routes: RouteCatalog): ServiceIt
       route: "/v1/proxy",
       models: 0,
       modelIds: [],
+      access: accessByProvider.get(provider.id),
+      readiness: readinessByProvider[provider.id],
       brandIcon: providerBrandIcon(provider.id),
     }));
   return [...modelServices, ...toolServices, ...providerServices].sort((a, b) => a.provider.localeCompare(b.provider) || a.name.localeCompare(b.name));
@@ -1078,22 +1268,7 @@ function matchesServiceQuery(item: ServiceItem, query: string) {
 }
 
 function providerBrandIcon(providerId: string): BrandIcon | undefined {
-  const icons: Record<string, BrandIcon> = {
-    anthropic: siAnthropic,
-    "cloudflare-ai-gateway": siCloudflare,
-    deepseek: siDeepseek,
-    github: siGithub,
-    "google-gemini": siGooglegemini,
-    huggingface: siHuggingface,
-    linear: siLinear,
-    minimax: siMinimax,
-    mistral: siMistralai,
-    notion: siNotion,
-    openrouter: siOpenrouter,
-    perplexity: siPerplexity,
-    replicate: siReplicate,
-  };
-  return icons[providerId];
+  return (providerIconManifest.icons as Record<string, BrandIcon>)[providerId];
 }
 
 interface CatalogModel {
@@ -1103,6 +1278,10 @@ interface CatalogModel {
 }
 
 function playgroundPayload(form: PlaygroundForm) {
+  if (form.mode === "service") {
+    if (!form.servicePayload.trim()) return {};
+    return JSON.parse(form.servicePayload);
+  }
   const maxTokens = optionalNumber(form.maxTokens);
   const temperature = optionalDecimal(form.temperature);
   if (form.endpoint === "/v1/responses") {
@@ -1111,21 +1290,64 @@ function playgroundPayload(form: PlaygroundForm) {
   return { model: form.model, messages: [...(form.system ? [{ role: "system", content: form.system }] : []), { role: "user", content: form.prompt }], max_tokens: maxTokens, temperature };
 }
 
-function playgroundCurl(form: PlaygroundForm, payload: unknown) {
-  return [`curl '${window.location.origin}${playgroundAccessEndpoint(form.endpoint)}' \\`, `  -H 'content-type: application/json' \\`, `  -b '$CLOUDFLARE_ACCESS_COOKIE' \\`, `  -d '${JSON.stringify(payload ?? {}, null, 2).replace(/'/g, `'\\''`)}'`].join("\n");
+function playgroundCurl(form: PlaygroundForm, payload: unknown, route?: RouteCatalog["manifestProxy"][number]) {
+  const method = form.mode === "service" ? form.serviceMethod : "POST";
+  const endpoint = playgroundAccessEndpoint(form, route);
+  const lines = [`curl -X ${method} '${window.location.origin}${endpoint}' \\`, `  -b '$CLOUDFLARE_ACCESS_COOKIE'`];
+  if (method !== "GET") {
+    lines.push(`  -H 'content-type: application/json' \\`, `  -d '${JSON.stringify(payload ?? {}, null, 2).replace(/'/g, `'\\''`)}'`);
+  }
+  return lines.join("\n");
 }
 
-function playgroundAccessEndpoint(endpoint: PlaygroundForm["endpoint"]) {
-  return `/v1/playground${endpoint}`;
+function playgroundAccessEndpoint(form: PlaygroundForm, route?: RouteCatalog["manifestProxy"][number]) {
+  if (form.mode === "service") {
+    return resolveProxyRoute(route, form.servicePath);
+  }
+  return `/v1/playground${form.endpoint}`;
 }
 
-function playgroundRequestPreview(form: PlaygroundForm, mode: "json" | "curl") {
+function playgroundRequestPreview(form: PlaygroundForm, mode: "json" | "curl", route?: RouteCatalog["manifestProxy"][number]) {
   try {
     const payload = playgroundPayload(form);
-    return mode === "json" ? JSON.stringify(payload, null, 2) : playgroundCurl(form, payload);
+    return mode === "json" ? JSON.stringify(payload, null, 2) : playgroundCurl(form, payload, route);
   } catch (error) {
     return errorMessage(error);
   }
+}
+
+function playgroundBlocker(form: PlaygroundForm, model: CatalogModel | undefined, route: RouteCatalog["manifestProxy"][number] | undefined, accessByProvider: Map<string, ProviderAccess>, readinessByProvider: Record<string, ProviderReadiness>, demoMode: boolean) {
+  if (form.mode === "model" && !model) return "select a model";
+  if (form.mode === "service" && !route) return "select a service route";
+  const provider = form.mode === "model" ? model?.provider : route?.provider;
+  if (!provider || demoMode) return null;
+  const access = accessByProvider.get(provider);
+  if (!access?.allowed) return "Cloudflare Access identity is not granted this provider";
+  const readiness = readinessByProvider[provider];
+  if (!readiness) return "provider readiness is unknown";
+  if (!readiness.executable) return readiness.reasons[0] ?? `provider is ${readinessLabel(readiness)}`;
+  return null;
+}
+
+function playgroundBlockedForService(service: ServiceItem) {
+  if (service.access && !service.access.allowed) return "current Access identity is not granted this service";
+  if (service.readiness && !service.readiness.executable) return service.readiness.reasons[0] ?? `service is ${readinessLabel(service.readiness)}`;
+  if (!service.models && service.surfaces.includes("provider")) return "no executable model or proxy route declared";
+  return null;
+}
+
+function routeKey(route: RouteCatalog["manifestProxy"][number] | undefined) {
+  return route ? `${route.provider}:${route.endpoint}:${route.route}` : "";
+}
+
+function resolveProxyRoute(route: RouteCatalog["manifestProxy"][number] | undefined, value: string) {
+  if (!route) return "/v1/proxy";
+  const encoded = encodeRouteValue(value);
+  return route.route.replace(/\{[^}]+\}/g, encoded || "demo");
+}
+
+function encodeRouteValue(value: string) {
+  return value.trim().split("/").filter(Boolean).map(encodeURIComponent).join("/");
 }
 
 function demoData() {
@@ -1188,8 +1410,8 @@ function demoData() {
   };
   const keys: KeyPolicy[] = [
     { kid: "maintainer_models", enabled: true, providers: ["anthropic", "aws-bedrock", "azure-openai", "cloudflare-ai-gateway", "cohere", "deepseek", "fireworks", "google-gemini", "groq", "huggingface", "minimax", "mistral", "openai", "openrouter", "perplexity", "together", "xai"], tenantId: "openclaw", tokenRole: "maintainer", monthlyBudgetMicros: 250000000, requestCostMicros: 1000 },
-    { kid: "openclaw_tools", enabled: true, providers: ["github", "linear", "notion", "replicate", "slack", "tavily"], tenantId: "openclaw", tokenRole: "tooling", monthlyBudgetMicros: 75000000, requestCostMicros: 500 },
-    { kid: "user_research", enabled: true, providers: ["openai", "google-gemini", "github", "notion", "tavily"], tenantId: "research", tokenRole: "user", monthlyBudgetMicros: 50000000, requestCostMicros: 1000 },
+    { kid: "openclaw_tools", enabled: true, providers: ["github", "linear", "replicate", "tavily"], tenantId: "openclaw", tokenRole: "tooling", monthlyBudgetMicros: 75000000, requestCostMicros: 500 },
+    { kid: "user_research", enabled: true, providers: ["openai", "google-gemini", "github", "tavily"], tenantId: "research", tokenRole: "user", monthlyBudgetMicros: 50000000, requestCostMicros: 1000 },
     { kid: "sandbox_eval", enabled: false, providers: ["openai"], tenantId: "sandbox", tokenRole: "sandbox", monthlyBudgetMicros: 5000000, requestCostMicros: 500 },
   ];
   const users: AccessUser[] = [
@@ -1198,7 +1420,51 @@ function demoData() {
     { email: "research@example.com", role: "user", tenantId: "research", enabled: true },
   ];
   const models = routes.openaiCompatible.flatMap((route) => route.models.map((model) => ({ ...model, provider: route.provider })));
-  return { session: { authenticated: true, auth: "demo", role: "admin" as AccessRole, email: "admin@example.com", tenantId: "openclaw" }, providers, routes, keys, users, services: serviceItems(providers, routes), models };
+  const session = { authenticated: true, auth: "demo", role: "admin" as AccessRole, email: "admin@example.com", tenantId: "openclaw" };
+  const entitlements: EntitlementsResponse = {
+    session,
+    providers: providers.map((item) => {
+      const policies = keys.filter((key) => key.enabled && (key.tenantId ?? "default") === session.tenantId && key.providers.includes(item.id)).map((key) => key.kid);
+      return {
+        provider: item.id,
+        displayName: item.display_name,
+        serviceKind: item.service_kind,
+        allowed: policies.length > 0,
+        policies,
+        readiness: demoReadiness(item, routes),
+      };
+    }),
+  };
+  const accessByProvider = accessMap(entitlements);
+  const readinessByProvider = readinessMap(entitlements.providers.map((item) => item.readiness));
+  return { session, providers, routes, keys, users, entitlements, services: serviceItems(providers, routes, readinessByProvider, accessByProvider), models };
+}
+
+function demoReadiness(provider: ProviderRow, routes: RouteCatalog): ProviderReadiness {
+  const openaiRoute = routes.openaiCompatible.find((route) => route.provider === provider.id);
+  const manifestRoutes = routes.manifestProxy.filter((route) => route.provider === provider.id);
+  const grantRequired = provider.class.includes("oauth");
+  const declared = Boolean(openaiRoute || manifestRoutes.length);
+  const offline = ["azure-openai", "aws-bedrock", "cloudflare-ai-gateway", "notion", "slack"].includes(provider.id);
+  const status = offline ? "missing_config" : grantRequired ? "grant_required" : declared ? "ready" : "declared";
+  return {
+    id: provider.id,
+    displayName: provider.display_name,
+    class: provider.class,
+    serviceKind: provider.service_kind,
+    requiredConfig: offline ? [`${provider.id.toUpperCase().replace(/-/g, "_")}_CONFIG`] : [],
+    optionalConfig: [],
+    missingConfig: offline ? [`${provider.id.toUpperCase().replace(/-/g, "_")}_CONFIG`] : [],
+    configPresent: !offline,
+    oauthGrantRequired: grantRequired,
+    oauthGrantCount: 0,
+    openaiCompatible: Boolean(openaiRoute),
+    manifestRoutes: manifestRoutes.length,
+    modelCount: openaiRoute?.models.length ?? 0,
+    executable: status === "ready",
+    status,
+    reasons: status === "ready" ? [] : status === "grant_required" ? ["OAuth grant required before service calls can run."] : status === "missing_config" ? ["Provider config is not present in the runtime environment."] : ["Provider is declared but has no executable route."],
+  };
 }
 
 function modelRoute(provider: string, endpoints: string[], models: RouteCatalog["openaiCompatible"][number]["models"]): RouteCatalog["openaiCompatible"][number] {
