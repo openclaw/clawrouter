@@ -64,12 +64,12 @@ pnpm cf:access
 Then redeploy with the printed `CLAWROUTER_ACCESS_TEAM_DOMAIN` and
 `CLAWROUTER_ACCESS_AUD` values. `/` redirects to the Access-protected
 `/dashboard` path, while public `/v1` catalog and proxy routes stay normal.
-The Access app must also protect `/v1/entitlements` and `/v1/playground/*` so
-browser catalog and playground calls carry a verified Access session. A
-ClawRouter `access_session_required` JSON body on `/dashboard`,
-`/v1/entitlements`, or `/v1/playground/*` means the Access app is not in front of
-that console path yet, and `pnpm cf:smoke` treats that as a failed deployment
-smoke.
+The Access app must also protect `/v1/session` and `/v1/playground/*` so the
+browser console can bootstrap identity, entitlements, and playground calls from
+a verified Access session. A ClawRouter `access_session_required` JSON body on
+`/dashboard`, `/v1/session`, or `/v1/playground/*` means the Access app is not
+in front of that console path yet, and `pnpm cf:smoke` treats that as a failed
+deployment smoke.
 
 The `Deploy Cloudflare` workflow can do the Access step too: dispatch it with
 `provision_access=true` after adding a `CLOUDFLARE_API_TOKEN` that can manage
@@ -82,6 +82,7 @@ The Worker currently exposes:
 
 - `GET /v1/health`
 - `GET /v1/providers`
+- `GET /v1/session`
 - `GET /v1/entitlements`
 - `GET /v1/key/inspect`
 - `POST /v1/chat/completions`

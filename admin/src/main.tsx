@@ -86,6 +86,8 @@ interface SessionResponse {
   email?: string | null;
   subject?: string | null;
   tenantId?: string | null;
+  entitlements?: { providers: ProviderAccess[] } | null;
+  entitlementsError?: string | null;
 }
 
 interface ProviderReadiness {
@@ -296,14 +298,22 @@ function App() {
       setSession(sessionData);
       setProviders(providerData.providers);
       setRoutes(routeData);
-      let refreshWarnings: string[] = [];
-      const entitlementResult = await settled(() => request<EntitlementsResponse>(gatewayOrigin, "/v1/entitlements"));
-      if (entitlementResult.ok) {
-        setEntitlements(entitlementResult.value);
-        setProviderReadiness(readinessMap(entitlementResult.value.providers.map((item) => item.readiness)));
+      let refreshWarnings = sessionData.entitlementsError ? [`entitlements unavailable: ${sessionData.entitlementsError}`] : [];
+      const sessionEntitlements = sessionData.entitlements
+        ? { session: sessionData, providers: sessionData.entitlements.providers }
+        : null;
+      if (sessionEntitlements) {
+        setEntitlements(sessionEntitlements);
+        setProviderReadiness(readinessMap(sessionEntitlements.providers.map((item) => item.readiness)));
       } else {
-        setEntitlements(null);
-        refreshWarnings = [...refreshWarnings, `entitlements unavailable: ${entitlementResult.error}`];
+        const entitlementResult = await settled(() => request<EntitlementsResponse>(gatewayOrigin, "/v1/entitlements"));
+        if (entitlementResult.ok) {
+          setEntitlements(entitlementResult.value);
+          setProviderReadiness(readinessMap(entitlementResult.value.providers.map((item) => item.readiness)));
+        } else {
+          setEntitlements(null);
+          refreshWarnings = [...refreshWarnings, `entitlements unavailable: ${entitlementResult.error}`];
+        }
       }
       if (sessionData.role === "admin") {
         const [keyData, userData, readinessData] = await Promise.all([
