@@ -83,6 +83,11 @@ async function checkCloudflarePermissions() {
 
   await checkCloudflareWorkerRead({ token, accountId, workerName });
   if (process.env.CLAWROUTER_PREFLIGHT_SKIP_KV_WRITE === "1") {
+    if (process.env.CLAWROUTER_PREFLIGHT_DEPLOY === "1") {
+      errors.push(
+        "CLAWROUTER_PREFLIGHT_SKIP_KV_WRITE cannot be used for deploy: Wrangler requires KV write permission for Workers with KV bindings",
+      );
+    }
     console.log("cloudflare kv token: skipped write probe");
     return;
   }
