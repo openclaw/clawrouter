@@ -224,10 +224,12 @@ admin rights.
 }
 ```
 
-`GET /v1/session` reports the verified Access session. `GET /v1/entitlements`
-materializes the current user's provider access and readiness. The admin UI can
-call admin routes through the same-origin Access session; the admin bearer token
-is only a fallback for automation or emergency access.
+`GET /v1/session` reports the verified Access session and carries the console
+bootstrap entitlements/readiness payload when `POLICY_KV` is available.
+`GET /v1/entitlements` remains available for deployments that also protect that
+compatibility route. The admin UI can call admin routes through the same-origin
+Access session; the admin bearer token is only a fallback for automation or
+emergency access.
 
 Admins can inspect materialized Access users and update tenant/status in the
 console or API:

@@ -770,6 +770,23 @@ struct EntitlementsResponse {
 
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct SessionProfileResponse {
+    #[serde(flatten)]
+    session: AccessSession,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    entitlements: Option<SessionEntitlements>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    entitlements_error: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct SessionEntitlements {
+    providers: Vec<EntitlementProviderRow>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct EntitlementProviderRow {
     provider: String,
     display_name: String,
@@ -889,7 +906,16 @@ struct KeyPolicyEntry {
 
 async fn session_profile(headers: &Headers, env: &Env) -> Result<Response> {
     if let Some(session) = verified_access_session(headers, env).await? {
-        return Response::from_json(&session);
+        let (entitlements, entitlements_error) =
+            match access_entitlement_rows_for_session(&session, env).await {
+                Ok(providers) => (Some(SessionEntitlements { providers }), None),
+                Err(error) => (None, Some(provider_runtime_error_summary(&error))),
+            };
+        return Response::from_json(&SessionProfileResponse {
+            session,
+            entitlements,
+            entitlements_error,
+        });
     }
     Response::from_json(&serde_json::json!({
         "authenticated": false,
@@ -909,20 +935,26 @@ async fn access_entitlements(headers: &Headers, env: &Env) -> Result<Response> {
             401,
         );
     };
+    let providers = access_entitlement_rows_for_session(&session, env).await?;
+    Response::from_json(&EntitlementsResponse { session, providers })
+}
+
+async fn access_entitlement_rows_for_session(
+    session: &AccessSession,
+    env: &Env,
+) -> Result<Vec<EntitlementProviderRow>> {
     let kv = match env.kv("POLICY_KV") {
         Ok(kv) => kv,
         Err(_) => {
-            return json_error(
-                "policy_store_unavailable",
-                "POLICY_KV binding is required for Access entitlements",
-                503,
-            );
+            return Err(Error::RustError(
+                "POLICY_KV binding is required for Access entitlements".to_string(),
+            ));
         }
     };
     let snapshot = provider_snapshot()?;
     let entries = list_key_policy_records(&kv).await?;
     let grants = list_oauth_grants(&kv).await?;
-    let providers = snapshot
+    Ok(snapshot
         .providers
         .iter()
         .map(|provider| {
@@ -945,8 +977,14 @@ async fn access_entitlements(headers: &Headers, env: &Env) -> Result<Response> {
                 readiness,
             }
         })
-        .collect();
-    Response::from_json(&EntitlementsResponse { session, providers })
+        .collect())
+}
+
+fn provider_runtime_error_summary(error: &Error) -> String {
+    match error {
+        Error::RustError(message) => message.clone(),
+        _ => "entitlements unavailable".to_string(),
+    }
 }
 
 async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
