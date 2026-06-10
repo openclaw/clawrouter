@@ -52,6 +52,11 @@ on:
         required: false
         default: ""
         type: string
+      skip_kv_write_preflight:
+        description: "Skip the preflight POLICY_KV write probe for deploy-only tokens"
+        required: false
+        default: false
+        type: boolean
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -79,6 +84,7 @@ jobs:
       CLAWROUTER_SMOKE_KEY: ${{ secrets.CLAWROUTER_SMOKE_KEY }}
       CLAWROUTER_SMOKE_OPENAI: ${{ inputs.smoke_openai && '1' || '0' }}
       CLAWROUTER_SMOKE_LIVE_PROVIDERS: ${{ inputs.live_providers }}
+      CLAWROUTER_PREFLIGHT_SKIP_KV_WRITE: ${{ inputs.skip_kv_write_preflight && '1' || '0' }}
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
