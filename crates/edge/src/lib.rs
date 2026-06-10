@@ -24,6 +24,8 @@ const CORS_ALLOW_METHODS: &str = "GET,POST,PUT,OPTIONS";
 const CORS_ALLOW_HEADERS: &str = "authorization,content-type,x-request-id";
 const CORS_MAX_AGE: &str = "600";
 const ROOT_REDIRECT_PATH: &str = "/dashboard";
+const POLICY_KV_ENTITLEMENTS_REQUIRED: &str =
+    "POLICY_KV binding is required for Access entitlements";
 type HmacSha256 = Hmac<Sha256>;
 const MISSING_ADMIN_HTML: &str = r##"<!doctype html>
 <html lang="en">
@@ -935,7 +937,13 @@ async fn access_entitlements(headers: &Headers, env: &Env) -> Result<Response> {
             401,
         );
     };
-    let providers = access_entitlement_rows_for_session(&session, env).await?;
+    let providers = match access_entitlement_rows_for_session(&session, env).await {
+        Ok(providers) => providers,
+        Err(Error::RustError(message)) if message == POLICY_KV_ENTITLEMENTS_REQUIRED => {
+            return json_error("policy_store_unavailable", &message, 503);
+        }
+        Err(error) => return Err(error),
+    };
     Response::from_json(&EntitlementsResponse { session, providers })
 }
 
@@ -947,7 +955,7 @@ async fn access_entitlement_rows_for_session(
         Ok(kv) => kv,
         Err(_) => {
             return Err(Error::RustError(
-                "POLICY_KV binding is required for Access entitlements".to_string(),
+                POLICY_KV_ENTITLEMENTS_REQUIRED.to_string(),
             ));
         }
     };
