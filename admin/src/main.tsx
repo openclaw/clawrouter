@@ -25,14 +25,11 @@ type View = "catalog" | "playground" | "policies" | "users" | "usage";
 const pathViews: Record<string, View> = {
   "/": "catalog",
   "/admin": "policies",
-  "/catalog": "catalog",
   "/console": "catalog",
   "/dashboard": "catalog",
   "/playground": "playground",
-  "/policies": "policies",
   "/routes": "catalog",
-  "/usage": "usage",
-  "/users": "users",
+  "/account": "users",
 };
 
 function initialViewFromPath(): View {

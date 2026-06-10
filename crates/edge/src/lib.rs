@@ -180,13 +180,9 @@ fn service_index() -> Result<Response> {
         "interface": {
             "root": "/",
             "dashboard": "/dashboard",
-            "catalog": "/catalog",
             "playground": "/playground",
             "admin": "/admin",
-            "policies": "/policies",
-            "users": "/users",
-            "account": "/account",
-            "usage": "/usage"
+            "account": "/account"
         },
         "endpoints": {
             "health": "/v1/health",
@@ -222,16 +218,7 @@ fn service_index() -> Result<Response> {
 fn interface_path(path: &str) -> bool {
     matches!(
         path,
-        "/dashboard"
-            | "/catalog"
-            | "/playground"
-            | "/admin"
-            | "/policies"
-            | "/users"
-            | "/account"
-            | "/usage"
-            | "/console"
-            | "/routes"
+        "/dashboard" | "/playground" | "/admin" | "/account" | "/console" | "/routes"
     )
 }
 
@@ -4751,13 +4738,9 @@ mod tests {
     #[test]
     fn interface_routes_require_the_admin_shell() {
         assert!(interface_path("/dashboard"));
-        assert!(interface_path("/catalog"));
         assert!(interface_path("/playground"));
         assert!(interface_path("/admin"));
-        assert!(interface_path("/policies"));
-        assert!(interface_path("/users"));
         assert!(interface_path("/account"));
-        assert!(interface_path("/usage"));
         assert!(interface_path("/routes"));
         assert!(!interface_path("/v1/admin/keys"));
     }
