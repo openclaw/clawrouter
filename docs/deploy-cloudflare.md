@@ -155,6 +155,10 @@ pnpm cf:preflight
 pnpm cf:config
 ```
 
+`CLOUDFLARE_API_TOKEN` must be able to write `POLICY_KV`. This is not just a
+preflight nicety: Wrangler rejects deploys for Workers with KV bindings when
+the token cannot write the bound namespace.
+
 Deploy:
 
 ```sh

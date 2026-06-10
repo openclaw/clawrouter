@@ -53,7 +53,7 @@ on:
         default: ""
         type: string
       skip_kv_write_preflight:
-        description: "Skip the preflight POLICY_KV write probe for deploy-only tokens"
+        description: "Deprecated: ignored for real deploys because Wrangler requires KV write permission for KV bindings"
         required: false
         default: false
         type: boolean
@@ -84,6 +84,7 @@ jobs:
       CLAWROUTER_SMOKE_KEY: ${{ secrets.CLAWROUTER_SMOKE_KEY }}
       CLAWROUTER_SMOKE_OPENAI: ${{ inputs.smoke_openai && '1' || '0' }}
       CLAWROUTER_SMOKE_LIVE_PROVIDERS: ${{ inputs.live_providers }}
+      CLAWROUTER_PREFLIGHT_DEPLOY: "1"
       CLAWROUTER_PREFLIGHT_SKIP_KV_WRITE: ${{ inputs.skip_kv_write_preflight && '1' || '0' }}
     steps:
       - uses: actions/checkout@v4

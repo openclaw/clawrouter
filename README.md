@@ -73,8 +73,10 @@ deployment smoke.
 
 The `Deploy Cloudflare` workflow can do the Access step too: dispatch it with
 `provision_access=true` after adding a `CLOUDFLARE_API_TOKEN` that can manage
-Zero Trust Access apps and policies. Keep `access_domain` set to the console
-hostname; `worker_url` is only the post-deploy smoke-test target.
+Zero Trust Access apps and policies. Real deploys also require KV write
+permission because Wrangler validates the Worker `POLICY_KV` binding while
+publishing. Keep `access_domain` set to the console hostname; `worker_url` is
+only the post-deploy smoke-test target.
 
 ## Edge Proxy
 
