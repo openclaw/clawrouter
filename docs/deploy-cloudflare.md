@@ -159,6 +159,10 @@ pnpm cf:config
 preflight nicety: Wrangler rejects deploys for Workers with KV bindings when
 the token cannot write the bound namespace.
 
+GitHub deploys render Wrangler config with `CLAWROUTER_OMIT_ROUTES=1` so normal
+script updates do not require zone-level Worker route permissions after the
+custom domain route has already been provisioned.
+
 Deploy:
 
 ```sh

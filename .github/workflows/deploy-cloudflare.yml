@@ -86,6 +86,7 @@ jobs:
       CLAWROUTER_SMOKE_LIVE_PROVIDERS: ${{ inputs.live_providers }}
       CLAWROUTER_PREFLIGHT_DEPLOY: "1"
       CLAWROUTER_PREFLIGHT_SKIP_KV_WRITE: ${{ inputs.skip_kv_write_preflight && '1' || '0' }}
+      CLAWROUTER_OMIT_ROUTES: "1"
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
