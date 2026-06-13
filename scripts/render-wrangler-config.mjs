@@ -10,6 +10,7 @@ const kvId = process.env.CLAWROUTER_POLICY_KV_ID;
 const kvPreviewId = process.env.CLAWROUTER_POLICY_KV_PREVIEW_ID ?? kvId;
 const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
 const strict = process.env.CLAWROUTER_STRICT_CONFIG !== "0";
+const omitRoutes = process.env.CLAWROUTER_OMIT_ROUTES === "1";
 const workerVars = [
   "CLAWROUTER_ACCESS_TEAM_DOMAIN",
   "CLAWROUTER_ACCESS_AUD",
@@ -25,6 +26,11 @@ if (strict && !kvId) {
 let config = readFileSync(source, "utf8");
 config = config.replace(/^name = .+$/m, `name = "${workerName}"`);
 config = config.replace(/queue = ".+"/, `queue = "${queueName}"`);
+if (omitRoutes) {
+  config = removeTomlArrayBlocks(config, "routes");
+  config = ensureTopLevelSetting(config, "workers_dev", "false");
+  config = ensureTopLevelSetting(config, "preview_urls", "false");
+}
 
 if (kvId) {
   config = `${config.trimEnd()}
@@ -53,3 +59,29 @@ ${renderedVars.join("\n")}
 mkdirSync(dirname(target), { recursive: true });
 writeFileSync(target, config);
 console.log(`rendered ${target}`);
+
+function removeTomlArrayBlocks(input, name) {
+  const header = `[[${name}]]`;
+  const lines = input.split("\n");
+  const output = [];
+  for (let index = 0; index < lines.length; index += 1) {
+    if (lines[index].trim() !== header) {
+      output.push(lines[index]);
+      continue;
+    }
+    index += 1;
+    while (index < lines.length && !lines[index].trimStart().startsWith("[")) {
+      index += 1;
+    }
+    index -= 1;
+  }
+  return output.join("\n").replace(/\n{3,}/g, "\n\n");
+}
+
+function ensureTopLevelSetting(input, key, value) {
+  const pattern = new RegExp(`^${key}\\s*=`, "m");
+  if (pattern.test(input)) {
+    return input;
+  }
+  return input.replace(/^name = .+$/m, (line) => `${line}\n${key} = ${value}`);
+}
