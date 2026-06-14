@@ -413,7 +413,6 @@ function App() {
           request<{ providers: ProviderReadiness[] }>(gatewayOrigin, "/v1/admin/provider-status"),
         ]);
         setKeys(keyData.keys);
-        setPolicyDataLoaded(true);
         setUsers(userData.users);
         setProviderReadiness((current) => ({ ...current, ...readinessMap(readinessData.providers) }));
         const [overviewResult, tenantResult] = await Promise.all([
@@ -434,6 +433,7 @@ function App() {
         }
         setUsageRows([]);
         setUsageLoaded(false);
+        setPolicyDataLoaded(true);
         if (view === "usage") setUsageRefreshKey((current) => current + 1);
       } else {
         const user = {

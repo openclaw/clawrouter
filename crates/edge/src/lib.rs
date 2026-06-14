@@ -1125,7 +1125,13 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 );
             }
         };
-        let existing_policy = existing_key_policy(&kv, &kid).await?;
+        let needs_existing_policy = request.secret_sha256.is_none()
+            || request.providers.as_ref().is_some_and(Vec::is_empty);
+        let existing_policy = if needs_existing_policy {
+            existing_key_policy(&kv, &kid).await?
+        } else {
+            None
+        };
         let existing_secret_sha256 = if request.secret_sha256.is_none() {
             existing_policy
                 .as_ref()
