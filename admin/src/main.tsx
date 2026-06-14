@@ -295,6 +295,7 @@ function App() {
   const [adminOverview, setAdminOverview] = useState<AdminOverview | null>(allowDemo ? demo.overview : null);
   const [tenantSummaries, setTenantSummaries] = useState<AdminTenantSummary[]>(allowDemo ? demo.tenants : []);
   const [usageRows, setUsageRows] = useState<AdminUsageRow[]>(allowDemo ? demo.usageRows : []);
+  const [usageLoaded, setUsageLoaded] = useState(allowDemo);
   const [entitlements, setEntitlements] = useState<EntitlementsResponse | null>(allowDemo ? demo.entitlements : null);
   const [providerReadiness, setProviderReadiness] = useState<Record<string, ProviderReadiness>>(allowDemo ? readinessMap(demo.entitlements.providers.map((item) => item.readiness)) : {});
   const [policyForm, setPolicyForm] = useState<PolicyForm>(allowDemo && demo.keys[0] ? policyFormFromKey(demo.keys[0]) : defaultPolicy);
@@ -353,6 +354,12 @@ function App() {
   }, []);
 
   useEffect(() => {
+    if (view === "usage" && session.role === "admin" && !demoMode && !usageLoaded) {
+      void refreshUsageLedger();
+    }
+  }, [demoMode, session.role, usageLoaded, view]);
+
+  useEffect(() => {
     if (models.length && !models.some((model) => model.id === playground.model)) {
       setPlayground((current) => ({ ...current, model: models[0].id }));
     }
@@ -402,10 +409,9 @@ function App() {
         setKeys(keyData.keys);
         setUsers(userData.users);
         setProviderReadiness((current) => ({ ...current, ...readinessMap(readinessData.providers) }));
-        const [overviewResult, tenantResult, usageResult] = await Promise.all([
+        const [overviewResult, tenantResult] = await Promise.all([
           settled(() => request<AdminOverview>(gatewayOrigin, "/v1/admin/overview")),
           settled(() => request<{ tenants: AdminTenantSummary[] }>(gatewayOrigin, "/v1/admin/users")),
-          settled(() => request<{ keys: AdminUsageRow[] }>(gatewayOrigin, "/v1/admin/usage")),
         ]);
         if (overviewResult.ok) {
           setAdminOverview(overviewResult.value);
@@ -419,12 +425,8 @@ function App() {
           setTenantSummaries(tenantSummaryFallback(keyData.keys));
           refreshWarnings = [...refreshWarnings, `tenant summary unavailable: ${tenantResult.error}`];
         }
-        if (usageResult.ok) {
-          setUsageRows(usageResult.value.keys);
-        } else {
-          setUsageRows(keyData.keys.map(policyUsageFallback));
-          refreshWarnings = [...refreshWarnings, `usage ledger unavailable: ${usageResult.error}`];
-        }
+        setUsageRows([]);
+        setUsageLoaded(false);
       } else {
         const user = {
           email: sessionData.email ?? "access-user",
@@ -437,6 +439,7 @@ function App() {
         setAdminOverview(null);
         setTenantSummaries([]);
         setUsageRows([]);
+        setUsageLoaded(false);
         setSelectedUserEmail(user.email);
         setAccessForm(accessFormFromUser(user));
       }
@@ -453,6 +456,7 @@ function App() {
         setAdminOverview(demo.overview);
         setTenantSummaries(demo.tenants);
         setUsageRows(demo.usageRows);
+        setUsageLoaded(true);
         setEntitlements(demo.entitlements);
         setProviderReadiness(readinessMap(demo.entitlements.providers.map((item) => item.readiness)));
         setSelectedPolicyId(demo.keys[0]?.kid ?? "");
@@ -506,6 +510,19 @@ function App() {
       setPolicyError(message);
       setStatus(message);
     }
+  }
+
+  async function refreshUsageLedger() {
+    if (demoMode || session.role !== "admin") return;
+    const result = await settled(() => request<{ keys: AdminUsageRow[] }>(gatewayOrigin, "/v1/admin/usage"));
+    if (result.ok) {
+      setUsageRows(result.value.keys);
+      setUsageLoaded(true);
+      return;
+    }
+    setUsageRows([]);
+    setUsageLoaded(false);
+    if (view === "usage") setStatus(`usage ledger unavailable: ${result.error}`);
   }
 
   async function saveUser(event: FormEvent) {
@@ -627,6 +644,7 @@ function App() {
       setAdminOverview(adminOverviewFromKeys(next, providers, routes));
       setTenantSummaries(tenantSummaryFallback(next));
       setUsageRows(next.map(policyUsageFallback));
+      setUsageLoaded(true);
       return next;
     });
   }
@@ -771,7 +789,7 @@ function App() {
           />
         ) : null}
 
-        {view === "usage" ? <UsageScreen keys={keys} services={services} overview={adminOverview} tenants={tenantSummaries} usageRows={usageRows} /> : null}
+        {view === "usage" ? <UsageScreen keys={keys} services={services} overview={adminOverview} tenants={tenantSummaries} usageRows={usageRows} usageLoaded={usageLoaded} /> : null}
       </section>
     </main>
   );
@@ -1100,7 +1118,7 @@ function UsersScreen({ users, selected, policies, services, form, setForm, error
   );
 }
 
-function UsageScreen({ keys, services, overview, tenants, usageRows }: { keys: KeyPolicy[]; services: ServiceItem[]; overview: AdminOverview | null; tenants: AdminTenantSummary[]; usageRows: AdminUsageRow[] }) {
+function UsageScreen({ keys, services, overview, tenants, usageRows, usageLoaded }: { keys: KeyPolicy[]; services: ServiceItem[]; overview: AdminOverview | null; tenants: AdminTenantSummary[]; usageRows: AdminUsageRow[]; usageLoaded: boolean }) {
   const activeKeys = keys.filter((key) => key.enabled);
   const readyServices = readyCount(services);
   const blockedServices = services.filter((service) => service.readiness && !service.readiness.executable);
@@ -1110,9 +1128,14 @@ function UsageScreen({ keys, services, overview, tenants, usageRows }: { keys: K
   const grantedServiceCount = activeKeys.some((key) => key.providers.length === 0)
     ? serviceProviderCount
     : new Set(activeKeys.flatMap((key) => key.providers)).size;
-  const totalBudget = overview?.monthlyBudgetMicros ?? keys.reduce((total, key) => total + (key.monthlyBudgetMicros ?? 0), 0);
+  const hasUnlimitedBudget = activeKeys.some((key) => key.monthlyBudgetMicros === undefined || key.monthlyBudgetMicros === null);
+  const activeBudgetValues = activeKeys.map((key) => key.monthlyBudgetMicros);
+  const totalBudget = activeBudgetValues.some((value) => value === undefined || value === null)
+    ? null
+    : activeBudgetValues.reduce<number>((total, value) => total + (value ?? 0), 0);
+  const totalBudgetLabel = hasUnlimitedBudget ? "unlimited" : formatMicros(totalBudget);
   const trackedRows = rows.filter((row) => row.budget.configured);
-  const totalSpent = trackedRows.some((row) => row.budget.spentMicros === undefined || row.budget.spentMicros === null)
+  const totalSpent = !usageLoaded || trackedRows.some((row) => row.budget.spentMicros === undefined || row.budget.spentMicros === null)
     ? null
     : trackedRows.reduce((total, row) => total + (row.budget.spentMicros ?? 0), 0);
   const routeTotal = services.reduce((total, service) => total + service.routeCount, 0);
@@ -1124,13 +1147,13 @@ function UsageScreen({ keys, services, overview, tenants, usageRows }: { keys: K
           <Metric label="active grants" value={String(overview?.keysActive ?? activeKeys.length)} meta={`${overview?.keysTotal ?? keys.length} total`} />
           <Metric label="tenants" value={String(overview?.tenantsTotal ?? tenantRows.length)} meta={`${grantedServiceCount} granted services`} />
           <Metric label="routes" value={String(routeTotal)} meta={`${providerTotal} providers`} />
-          <Metric label="budget" value={formatMicros(totalBudget)} meta={`${formatMicros(totalSpent)} spent`} />
+          <Metric label="budget" value={totalBudgetLabel} meta={`${formatMicros(totalSpent)} spent`} />
         </div>
         <EntityTable columns={["grant", "tenant", "budget", "spent", "remaining", "services", "status"]} columnTemplate="minmax(220px, 1.4fr) 128px 120px 120px 120px 94px 108px" rows={rows.map((row) => ({ id: row.kid, cells: [<EntityName icon={KeyRound} title={row.kid} subtitle={row.tokenRole ?? "custom"} />, row.tenantId, formatBudget(row.monthlyBudgetMicros), formatMicros(row.budget.spentMicros), row.budget.configured ? formatMicros(row.budget.remainingMicros) : "not tracked", effectiveProviderCount(row.providers, services), <Status label={row.enabled ? "active" : "revoked"} tone={row.enabled ? "active" : "revoked"} />] }))} />
       </section>
       <aside className="inspector">
         <InspectorHeader icon={BarChart3} title="Usage ledger" subtitle="tenant budgets and grant health" />
-        <dl className="facts"><dt>active grants</dt><dd>{overview?.keysActive ?? activeKeys.length}</dd><dt>ready services</dt><dd>{readyServices}/{services.length}</dd><dt>blocked services</dt><dd>{blockedServices.length}</dd><dt>monthly budget</dt><dd>{formatMicros(totalBudget)}</dd><dt>tracked spend</dt><dd>{formatMicros(totalSpent)}</dd></dl>
+        <dl className="facts"><dt>active grants</dt><dd>{overview?.keysActive ?? activeKeys.length}</dd><dt>ready services</dt><dd>{readyServices}/{services.length}</dd><dt>blocked services</dt><dd>{blockedServices.length}</dd><dt>monthly budget</dt><dd>{totalBudgetLabel}</dd><dt>tracked spend</dt><dd>{formatMicros(totalSpent)}</dd></dl>
         <div className="sectionTitle">Tenants</div>
         <div className="miniList">{tenantRows.length ? tenantRows.slice(0, 8).map((tenant) => <button type="button" key={tenant.tenantId}>{tenant.tenantId}<span>{tenant.activeKeys}/{tenant.keys} grants · {effectiveProviderCount(tenant.providers, services)} services</span></button>) : <p>No tenant grants yet.</p>}</div>
         <div className="sectionTitle">Needs configuration</div>
