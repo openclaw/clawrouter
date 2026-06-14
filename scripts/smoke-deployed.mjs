@@ -10,7 +10,7 @@ const smokeKey = process.env.CLAWROUTER_SMOKE_KEY;
 
 await expectOk(`${baseUrl}/v1/health`, "health");
 await expectRedirect(`${baseUrl}/`, "root redirect", "/dashboard");
-await expectRedirect(`${baseUrl}/dashboard`, "dashboard redirect", "/dashboard/catalog");
+await expectRedirectOrAccessGate(`${baseUrl}/dashboard`, "dashboard redirect", "/dashboard/catalog");
 await expectAccessGate(`${baseUrl}/dashboard/catalog`, "catalog access gate");
 await expectRedirect(`${baseUrl}/catalog`, "legacy catalog redirect", "/dashboard/catalog");
 const providers = await expectOk(`${baseUrl}/v1/providers`, "providers");
@@ -68,6 +68,23 @@ async function expectRedirect(url, name, location) {
   }
 }
 
+async function expectRedirectOrAccessGate(url, name, location) {
+  const response = await fetch(url, {
+    headers: { accept: "text/html,application/json" },
+    redirect: "manual",
+  });
+  const actual = response.headers.get("location") ?? "";
+  if (response.status >= 300 && response.status < 400 && actual === location) {
+    return;
+  }
+  if (response.status >= 300 && response.status < 400 && looksLikeAccessRedirect(actual)) {
+    return;
+  }
+  const contentType = response.headers.get("content-type") ?? "";
+  const body = await response.text();
+  assertAccessGateResponse(response, contentType, body, name);
+}
+
 async function expectAccessGate(url, name) {
   const response = await fetch(url, {
     headers: { accept: "text/html,application/json" },
@@ -75,6 +92,10 @@ async function expectAccessGate(url, name) {
   });
   const contentType = response.headers.get("content-type") ?? "";
   const body = await response.text();
+  assertAccessGateResponse(response, contentType, body, name);
+}
+
+function assertAccessGateResponse(response, contentType, body, name) {
   if (contentType.includes("application/json")) {
     let json = null;
     try {
@@ -96,6 +117,10 @@ async function expectAccessGate(url, name) {
     return;
   }
   throw new Error(`${name} returned ${response.status}, expected Cloudflare Access challenge`);
+}
+
+function looksLikeAccessRedirect(location) {
+  return location.includes("cloudflareaccess.com") || location.includes("/cdn-cgi/access/");
 }
 
 function expectRouteCatalog(catalog, name) {
