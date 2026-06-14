@@ -359,10 +359,10 @@ function App() {
   }, []);
 
   useEffect(() => {
-    if (view === "usage" && session.role === "admin" && !demoMode && !usageLoaded) {
+    if (view === "usage" && session.role === "admin" && policyDataLoaded && !demoMode && !usageLoaded) {
       void refreshUsageLedger();
     }
-  }, [demoMode, session.role, usageLoaded, usageRefreshKey, view]);
+  }, [demoMode, policyDataLoaded, session.role, usageLoaded, usageRefreshKey, view]);
 
   useEffect(() => {
     if (models.length && !models.some((model) => model.id === playground.model)) {

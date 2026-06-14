@@ -77,8 +77,11 @@ async function expectRedirectOrAccessGate(url, name, location) {
   if (response.status >= 300 && response.status < 400 && actual === location) {
     return;
   }
-  if (response.status >= 300 && response.status < 400 && looksLikeAccessRedirect(actual)) {
+  if (response.status >= 300 && response.status < 400 && looksLikeAccessRedirect(actual, url)) {
     return;
+  }
+  if (response.status >= 300 && response.status < 400) {
+    throw new Error(`${name} redirected to ${actual || "<missing>"}, expected ${location} or Cloudflare Access`);
   }
   const contentType = response.headers.get("content-type") ?? "";
   const body = await response.text();
@@ -119,8 +122,15 @@ function assertAccessGateResponse(response, contentType, body, name) {
   throw new Error(`${name} returned ${response.status}, expected Cloudflare Access challenge`);
 }
 
-function looksLikeAccessRedirect(location) {
-  return location.includes("cloudflareaccess.com") || location.includes("/cdn-cgi/access/");
+function looksLikeAccessRedirect(location, requestUrl) {
+  if (location.includes("cloudflareaccess.com") || location.includes("/cdn-cgi/access/")) {
+    return true;
+  }
+  try {
+    return new URL(location, requestUrl).origin !== new URL(requestUrl).origin;
+  } catch {
+    return false;
+  }
 }
 
 function expectRouteCatalog(catalog, name) {
