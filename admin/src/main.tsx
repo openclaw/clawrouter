@@ -645,6 +645,7 @@ function App() {
   function setPolicyProviderGroup(providerIds: string[], checked: boolean) {
     const allProviderIds = providers.map((provider) => provider.id);
     setPolicyForm((current) => {
+      if (current.allProviders && checked) return current;
       const selected = current.allProviders ? allProviderIds : current.providers;
       return {
         ...current,
