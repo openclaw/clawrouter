@@ -24,12 +24,25 @@ type View = "catalog" | "playground" | "policies" | "users" | "usage";
 
 const pathViews: Record<string, View> = {
   "/": "catalog",
+  "/access": "policies",
   "/admin": "policies",
+  "/catalog": "catalog",
   "/console": "catalog",
   "/dashboard": "catalog",
+  "/policies": "policies",
   "/playground": "playground",
   "/routes": "catalog",
   "/account": "users",
+  "/usage": "usage",
+  "/users": "users",
+};
+
+const viewPaths: Record<View, string> = {
+  catalog: "/catalog",
+  playground: "/playground",
+  policies: "/access",
+  users: "/users",
+  usage: "/usage",
 };
 
 function initialViewFromPath(): View {
@@ -130,6 +143,46 @@ interface AccessUser {
   enabled: boolean;
 }
 
+interface AdminOverview {
+  keysTotal: number;
+  keysActive: number;
+  tenantsTotal: number;
+  providerCount: number;
+  openaiCompatibleProviders: number;
+  manifestRoutes: number;
+  monthlyBudgetMicros: number;
+  requestCostMicros: number;
+}
+
+interface AdminTenantSummary {
+  tenantId: string;
+  keys: number;
+  activeKeys: number;
+  providers: string[];
+  monthlyBudgetMicros: number;
+  requestCostMicros: number;
+}
+
+interface BudgetStatus {
+  configured: boolean;
+  ledger: string;
+  windowKey?: string | null;
+  limitMicros?: number | null;
+  spentMicros?: number | null;
+  remainingMicros?: number | null;
+}
+
+interface AdminUsageRow {
+  kid: string;
+  tenantId: string;
+  enabled: boolean;
+  providers: string[];
+  tokenRole?: string | null;
+  monthlyBudgetMicros?: number | null;
+  requestCostMicros?: number | null;
+  budget: BudgetStatus;
+}
+
 interface ServiceItem {
   id: string;
   name: string;
@@ -209,7 +262,7 @@ const rolePresets = {
 const navItems: Array<{ id: View; label: string; icon: IconComponent }> = [
   { id: "catalog", label: "Catalog", icon: Boxes },
   { id: "playground", label: "Playground", icon: FlaskConical },
-  { id: "policies", label: "Policies", icon: KeyRound },
+  { id: "policies", label: "Access", icon: KeyRound },
   { id: "users", label: "Users", icon: Users },
   { id: "usage", label: "Usage", icon: BarChart3 },
 ];
@@ -223,6 +276,9 @@ function App() {
   const [routes, setRoutes] = useState<RouteCatalog>(allowDemo ? demo.routes : emptyRoutes);
   const [keys, setKeys] = useState<KeyPolicy[]>(allowDemo ? demo.keys : []);
   const [users, setUsers] = useState<AccessUser[]>(allowDemo ? demo.users : []);
+  const [adminOverview, setAdminOverview] = useState<AdminOverview | null>(allowDemo ? demo.overview : null);
+  const [tenantSummaries, setTenantSummaries] = useState<AdminTenantSummary[]>(allowDemo ? demo.tenants : []);
+  const [usageRows, setUsageRows] = useState<AdminUsageRow[]>(allowDemo ? demo.usageRows : []);
   const [entitlements, setEntitlements] = useState<EntitlementsResponse | null>(allowDemo ? demo.entitlements : null);
   const [providerReadiness, setProviderReadiness] = useState<Record<string, ProviderReadiness>>(allowDemo ? readinessMap(demo.entitlements.providers.map((item) => item.readiness)) : {});
   const [policyForm, setPolicyForm] = useState<PolicyForm>(defaultPolicy);
@@ -275,6 +331,12 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const onPopState = () => setView(initialViewFromPath());
+    window.addEventListener("popstate", onPopState);
+    return () => window.removeEventListener("popstate", onPopState);
+  }, []);
+
+  useEffect(() => {
     if (models.length && !models.some((model) => model.id === playground.model)) {
       setPlayground((current) => ({ ...current, model: models[0].id }));
     }
@@ -316,13 +378,19 @@ function App() {
         }
       }
       if (sessionData.role === "admin") {
-        const [keyData, userData, readinessData] = await Promise.all([
+        const [keyData, userData, readinessData, overviewData, tenantData, usageData] = await Promise.all([
           request<{ keys: KeyPolicy[] }>(gatewayOrigin, "/v1/admin/keys"),
           request<{ users: AccessUser[] }>(gatewayOrigin, "/v1/admin/access-users"),
           request<{ providers: ProviderReadiness[] }>(gatewayOrigin, "/v1/admin/provider-status"),
+          request<AdminOverview>(gatewayOrigin, "/v1/admin/overview"),
+          request<{ tenants: AdminTenantSummary[] }>(gatewayOrigin, "/v1/admin/users"),
+          request<{ keys: AdminUsageRow[] }>(gatewayOrigin, "/v1/admin/usage"),
         ]);
         setKeys(keyData.keys);
         setUsers(userData.users);
+        setAdminOverview(overviewData);
+        setTenantSummaries(tenantData.tenants);
+        setUsageRows(usageData.keys);
         setProviderReadiness((current) => ({ ...current, ...readinessMap(readinessData.providers) }));
       } else {
         const user = {
@@ -333,6 +401,9 @@ function App() {
         };
         setKeys([]);
         setUsers([user]);
+        setAdminOverview(null);
+        setTenantSummaries([]);
+        setUsageRows([]);
         setSelectedUserEmail(user.email);
         setAccessForm(user);
       }
@@ -346,6 +417,9 @@ function App() {
         setRoutes(demo.routes);
         setKeys(demo.keys);
         setUsers(demo.users);
+        setAdminOverview(demo.overview);
+        setTenantSummaries(demo.tenants);
+        setUsageRows(demo.usageRows);
         setEntitlements(demo.entitlements);
         setProviderReadiness(readinessMap(demo.entitlements.providers.map((item) => item.readiness)));
         setDemoMode(true);
@@ -518,6 +592,14 @@ function App() {
     }));
   }
 
+  function navigateTo(nextView: View) {
+    setView(nextView);
+    const nextPath = viewPaths[nextView];
+    if (window.location.pathname !== nextPath) {
+      window.history.pushState(null, "", `${nextPath}${window.location.search}${window.location.hash}`);
+    }
+  }
+
   return (
     <main className="appShell">
       <aside className="sidebar">
@@ -532,7 +614,7 @@ function App() {
         </div>
         <nav className="navTabs" aria-label="console">
           {navItems.map(({ id, label, icon: Icon }) => (
-            <button key={id} className={view === id ? "active" : ""} type="button" onClick={() => setView(id)}>
+            <button key={id} className={view === id ? "active" : ""} type="button" onClick={() => navigateTo(id)}>
               <Icon className="navIcon" aria-hidden="true" />
               <span>{label}</span>
             </button>
@@ -578,14 +660,14 @@ function App() {
               setPlayground((current) => model
                 ? { ...current, mode: "model", model: model.id }
                 : proxyRoute ? { ...current, mode: "service", serviceRoute: routeKey(proxyRoute), serviceMethod: proxyRoute.methods[0] ?? "POST" } : current);
-              setView("playground");
+              navigateTo("playground");
             }}
             onAdd={(service) => {
               setPolicyForm((current) => ({
                 ...current,
                 providers: current.providers.includes(service.provider) ? current.providers : [...current.providers, service.provider].sort(),
               }));
-              setView("policies");
+              navigateTo("policies");
             }}
           />
         ) : null}
@@ -639,7 +721,7 @@ function App() {
             error={userError}
             onOpenPolicy={(policy) => {
               editPolicy(policy);
-              setView("policies");
+              navigateTo("policies");
             }}
             onSelect={(user) => {
               setSelectedUserEmail(user.email);
@@ -650,7 +732,7 @@ function App() {
           />
         ) : null}
 
-        {view === "usage" ? <UsageScreen keys={keys} services={services} /> : null}
+        {view === "usage" ? <UsageScreen keys={keys} services={services} overview={adminOverview} tenants={tenantSummaries} usageRows={usageRows} /> : null}
       </section>
     </main>
   );
@@ -951,24 +1033,39 @@ function UsersScreen({ users, selected, policies, services, form, setForm, error
   );
 }
 
-function UsageScreen({ keys, services }: { keys: KeyPolicy[]; services: ServiceItem[] }) {
+function UsageScreen({ keys, services, overview, tenants, usageRows }: { keys: KeyPolicy[]; services: ServiceItem[]; overview: AdminOverview | null; tenants: AdminTenantSummary[]; usageRows: AdminUsageRow[] }) {
   const activeKeys = keys.filter((key) => key.enabled);
   const readyServices = readyCount(services);
-  const missingServices = services.filter((service) => service.readiness?.status === "missing_config");
   const blockedServices = services.filter((service) => service.readiness && !service.readiness.executable);
+  const rows = usageRows.length ? usageRows : keys.map(policyUsageFallback);
+  const tenantRows = tenants.length ? tenants : tenantSummaryFallback(keys);
+  const totalBudget = overview?.monthlyBudgetMicros ?? activeKeys.reduce((total, key) => total + (key.monthlyBudgetMicros ?? 0), 0);
+  const totalSpent = rows.reduce((total, row) => total + (row.budget.spentMicros ?? 0), 0);
   return (
     <div className="entityLayout">
       <section className="mainPane">
-        <EntityTable columns={["policy", "tenant", "budget", "request cost", "services"]} columnTemplate="minmax(240px, 1.5fr) 150px 140px 140px 120px" rows={keys.map((key) => ({ id: key.kid, cells: [<EntityName icon={KeyRound} title={key.kid} subtitle={key.tokenRole ?? "custom"} />, key.tenantId ?? "default", formatBudget(key.monthlyBudgetMicros), formatMicros(key.requestCostMicros), String(key.providers.length)] }))} />
+        <div className="overviewStrip">
+          <Metric label="active policies" value={String(overview?.keysActive ?? activeKeys.length)} meta={`${overview?.keysTotal ?? keys.length} total`} />
+          <Metric label="tenants" value={String(overview?.tenantsTotal ?? tenantRows.length)} meta={`${new Set(activeKeys.flatMap((key) => key.providers)).size} granted services`} />
+          <Metric label="routes" value={String((overview?.openaiCompatibleProviders ?? 0) + (overview?.manifestRoutes ?? 0))} meta={`${overview?.providerCount ?? services.length} providers`} />
+          <Metric label="budget" value={formatMicros(totalBudget)} meta={`${formatMicros(totalSpent)} spent`} />
+        </div>
+        <EntityTable columns={["policy", "tenant", "budget", "spent", "remaining", "services", "status"]} columnTemplate="minmax(220px, 1.4fr) 128px 120px 120px 120px 94px 108px" rows={rows.map((row) => ({ id: row.kid, cells: [<EntityName icon={KeyRound} title={row.kid} subtitle={row.tokenRole ?? "custom"} />, row.tenantId, formatBudget(row.monthlyBudgetMicros), formatMicros(row.budget.spentMicros), row.budget.configured ? formatMicros(row.budget.remainingMicros) : "not tracked", String(row.providers.length), <Status label={row.enabled ? "active" : "revoked"} tone={row.enabled ? "active" : "revoked"} />] }))} />
       </section>
       <aside className="inspector">
-        <InspectorHeader icon={BarChart3} title="Budget ledger" subtitle="policy coverage, not request analytics yet" />
-        <dl className="facts"><dt>active policies</dt><dd>{activeKeys.length}</dd><dt>granted services</dt><dd>{new Set(activeKeys.flatMap((key) => key.providers)).size}</dd><dt>ready services</dt><dd>{readyServices}/{services.length}</dd><dt>missing config</dt><dd>{missingServices.length}</dd><dt>monthly budget</dt><dd>{formatMicros(activeKeys.reduce((total, key) => total + (key.monthlyBudgetMicros ?? 0), 0))}</dd></dl>
+        <InspectorHeader icon={BarChart3} title="Usage ledger" subtitle="tenant budgets and grant health" />
+        <dl className="facts"><dt>active policies</dt><dd>{overview?.keysActive ?? activeKeys.length}</dd><dt>ready services</dt><dd>{readyServices}/{services.length}</dd><dt>blocked services</dt><dd>{blockedServices.length}</dd><dt>monthly budget</dt><dd>{formatMicros(totalBudget)}</dd><dt>tracked spend</dt><dd>{formatMicros(totalSpent)}</dd></dl>
+        <div className="sectionTitle">Tenants</div>
+        <div className="miniList">{tenantRows.length ? tenantRows.slice(0, 8).map((tenant) => <button type="button" key={tenant.tenantId}>{tenant.tenantId}<span>{tenant.activeKeys}/{tenant.keys} policies · {tenant.providers.length} services</span></button>) : <p>No tenant policy coverage yet.</p>}</div>
         <div className="sectionTitle">Needs configuration</div>
         <div className="miniList">{blockedServices.length ? blockedServices.slice(0, 8).map((service) => <button type="button" key={service.id}>{service.name}<span>{readinessLabel(service.readiness)}</span></button>) : <p>All visible services are executable.</p>}</div>
       </aside>
     </div>
   );
+}
+
+function Metric({ label, value, meta }: { label: string; value: string; meta: string }) {
+  return <div className="metric"><span>{label}</span><strong>{value}</strong><small>{meta}</small></div>;
 }
 
 function EntityTable({ columns, columnTemplate, rows }: { columns: string[]; columnTemplate?: string; rows: Array<{ id: string; active?: boolean; onClick?: () => void; cells: React.ReactNode[] }> }) {
@@ -1237,6 +1334,40 @@ function effectiveAccess(user: AccessUser | undefined, policies: KeyPolicy[], se
   return { policies: userPolicies, services: services.filter((service) => providerIds.has(service.provider)) };
 }
 
+function policyUsageFallback(policy: KeyPolicy): AdminUsageRow {
+  return {
+    kid: policy.kid,
+    tenantId: policy.tenantId ?? "default",
+    enabled: policy.enabled,
+    providers: policy.providers,
+    tokenRole: policy.tokenRole,
+    monthlyBudgetMicros: policy.monthlyBudgetMicros,
+    requestCostMicros: policy.requestCostMicros,
+    budget: {
+      configured: false,
+      ledger: "untracked",
+      limitMicros: policy.monthlyBudgetMicros,
+      spentMicros: 0,
+      remainingMicros: policy.monthlyBudgetMicros,
+    },
+  };
+}
+
+function tenantSummaryFallback(keys: KeyPolicy[]): AdminTenantSummary[] {
+  const groups = keys.reduce((acc, key) => {
+    const tenantId = key.tenantId ?? "default";
+    const current = acc.get(tenantId) ?? { tenantId, keys: 0, activeKeys: 0, providers: new Set<string>(), monthlyBudgetMicros: 0, requestCostMicros: 0 };
+    current.keys += 1;
+    if (key.enabled) current.activeKeys += 1;
+    key.providers.forEach((provider) => current.providers.add(provider));
+    current.monthlyBudgetMicros += key.monthlyBudgetMicros ?? 0;
+    current.requestCostMicros += key.requestCostMicros ?? 0;
+    acc.set(tenantId, current);
+    return acc;
+  }, new Map<string, { tenantId: string; keys: number; activeKeys: number; providers: Set<string>; monthlyBudgetMicros: number; requestCostMicros: number }>());
+  return Array.from(groups.values()).map((tenant) => ({ ...tenant, providers: Array.from(tenant.providers).sort() }));
+}
+
 function serviceItems(providers: ProviderRow[], routes: RouteCatalog, readinessByProvider: Record<string, ProviderReadiness> = {}, accessByProvider: Map<string, ProviderAccess> = new Map()): ServiceItem[] {
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
   const modelServices = routes.openaiCompatible.map((route) => {
@@ -1488,7 +1619,19 @@ function demoData() {
   };
   const accessByProvider = accessMap(entitlements);
   const readinessByProvider = readinessMap(entitlements.providers.map((item) => item.readiness));
-  return { session, providers, routes, keys, users, entitlements, services: serviceItems(providers, routes, readinessByProvider, accessByProvider), models };
+  const usageRows = keys.map(policyUsageFallback);
+  const tenants = tenantSummaryFallback(keys);
+  const overview: AdminOverview = {
+    keysTotal: keys.length,
+    keysActive: keys.filter((key) => key.enabled).length,
+    tenantsTotal: tenants.length,
+    providerCount: providers.length,
+    openaiCompatibleProviders: routes.openaiCompatible.length,
+    manifestRoutes: routes.manifestProxy.length,
+    monthlyBudgetMicros: keys.reduce((total, key) => total + (key.monthlyBudgetMicros ?? 0), 0),
+    requestCostMicros: keys.reduce((total, key) => total + (key.requestCostMicros ?? 0), 0),
+  };
+  return { session, providers, routes, keys, users, overview, tenants, usageRows, entitlements, services: serviceItems(providers, routes, readinessByProvider, accessByProvider), models };
 }
 
 function demoReadiness(provider: ProviderRow, routes: RouteCatalog): ProviderReadiness {
