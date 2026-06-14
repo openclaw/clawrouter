@@ -291,8 +291,8 @@ function App() {
   const [usageRows, setUsageRows] = useState<AdminUsageRow[]>(allowDemo ? demo.usageRows : []);
   const [entitlements, setEntitlements] = useState<EntitlementsResponse | null>(allowDemo ? demo.entitlements : null);
   const [providerReadiness, setProviderReadiness] = useState<Record<string, ProviderReadiness>>(allowDemo ? readinessMap(demo.entitlements.providers.map((item) => item.readiness)) : {});
-  const [policyForm, setPolicyForm] = useState<PolicyForm>(defaultPolicy);
-  const [accessForm, setAccessForm] = useState<AccessForm>(defaultAccess);
+  const [policyForm, setPolicyForm] = useState<PolicyForm>(allowDemo && demo.keys[0] ? policyFormFromKey(demo.keys[0]) : defaultPolicy);
+  const [accessForm, setAccessForm] = useState<AccessForm>(allowDemo && demo.users[0] ? accessFormFromUser(demo.users[0]) : defaultAccess);
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState("all");
   const [selectedServiceId, setSelectedServiceId] = useState(demo.services[0]?.id ?? "");
@@ -415,7 +415,7 @@ function App() {
         setTenantSummaries([]);
         setUsageRows([]);
         setSelectedUserEmail(user.email);
-        setAccessForm(user);
+        setAccessForm(accessFormFromUser(user));
       }
       setDemoMode(false);
       setStatus(refreshWarnings.length ? refreshWarnings.join("; ") : "connected");
@@ -432,8 +432,12 @@ function App() {
         setUsageRows(demo.usageRows);
         setEntitlements(demo.entitlements);
         setProviderReadiness(readinessMap(demo.entitlements.providers.map((item) => item.readiness)));
+        setSelectedPolicyId(demo.keys[0]?.kid ?? "");
+        setPolicyForm(demo.keys[0] ? policyFormFromKey(demo.keys[0]) : defaultPolicy);
+        setSelectedUserEmail(demo.users[0]?.email ?? "");
+        setAccessForm(demo.users[0] ? accessFormFromUser(demo.users[0]) : defaultAccess);
         setDemoMode(true);
-        setStatus(`demo mode: ${message}`);
+        setStatus("local demo data loaded");
         return;
       }
       setDemoMode(false);
@@ -445,9 +449,9 @@ function App() {
     event.preventDefault();
     try {
       setPolicyError("");
-      setStatus("saving policy");
+      setStatus("saving grant");
       if (!policyForm.providers.length) throw new Error("select at least one service");
-      if (!/^[A-Za-z0-9_]{4,}$/.test(policyForm.kid)) throw new Error("policy id must use 4 or more letters, numbers, or underscores");
+      if (!/^[A-Za-z0-9_]{4,}$/.test(policyForm.kid)) throw new Error("grant id must use 4 or more letters, numbers, or underscores");
       const next: KeyPolicy = {
         kid: policyForm.kid,
         enabled: policyForm.enabled,
@@ -460,7 +464,7 @@ function App() {
       if (demoMode) {
         setKeys((current) => [next, ...current.filter((key) => key.kid !== next.kid)]);
         setSelectedPolicyId(next.kid);
-        setStatus("saved policy");
+        setStatus("saved grant");
         return;
       }
       const existingPolicy = keys.some((key) => key.kid === policyForm.kid);
@@ -473,7 +477,7 @@ function App() {
       });
       await refresh();
       setIssuedKey(generatedSecret ? `clawrouter-live-${policyForm.kid}-${generatedSecret}` : "");
-      setStatus("saved policy");
+      setStatus("saved grant");
     } catch (error) {
       const message = errorMessage(error);
       setPolicyError(message);
@@ -561,15 +565,7 @@ function App() {
   function editPolicy(key: KeyPolicy) {
     setIssuedKey("");
     setSelectedPolicyId(key.kid);
-    setPolicyForm({
-      kid: key.kid,
-      tokenRole: key.tokenRole ?? "",
-      tenantId: key.tenantId ?? "default",
-      enabled: key.enabled,
-      monthlyBudgetMicros: currencyInput(key.monthlyBudgetMicros),
-      requestCostMicros: key.requestCostMicros?.toString() ?? "",
-      providers: key.providers,
-    });
+    setPolicyForm(policyFormFromKey(key));
   }
 
   function applyPreset(role: keyof typeof rolePresets) {
@@ -735,7 +731,7 @@ function App() {
             }}
             onSelect={(user) => {
               setSelectedUserEmail(user.email);
-              setAccessForm(user);
+              setAccessForm(accessFormFromUser(user));
             }}
             onSave={saveUser}
             busy={busy}
@@ -835,9 +831,9 @@ function CatalogScreen({ services, allServices, selected, policies, query, setQu
                 </div>
               </>
             ) : null}
-            <div className="sectionTitle">Granting policies</div>
+            <div className="sectionTitle">Granting access</div>
             <div className="miniList">
-              {selectedPolicies.length ? selectedPolicies.map((policy) => <button key={policy.kid} type="button">{policy.kid}<span>{policy.tenantId ?? "default"}</span></button>) : <p>No policy grants this service yet.</p>}
+              {selectedPolicies.length ? selectedPolicies.map((policy) => <button key={policy.kid} type="button">{policy.kid}<span>{policy.tenantId ?? "default"}</span></button>) : <p>No active grant includes this service yet.</p>}
             </div>
             <div className="inspectorActions">
               <button type="button" disabled={Boolean(playBlocker)} onClick={() => onPlay(selected)} title={playBlocker ?? undefined}><Play className="buttonIcon" aria-hidden="true" /><span>Try in playground</span></button>
@@ -854,7 +850,7 @@ function CatalogScreen({ services, allServices, selected, policies, query, setQu
 }
 
 function PolicyChips({ policies }: { policies: KeyPolicy[] }) {
-  if (!policies.length) return <span className="emptyGrant">no policy</span>;
+  if (!policies.length) return <span className="emptyGrant">no grant</span>;
   const first = policies[0];
   return (
     <span className="grantChips">
@@ -1086,18 +1082,18 @@ function UsageScreen({ keys, services, overview, tenants, usageRows }: { keys: K
     <div className="entityLayout">
       <section className="mainPane">
         <div className="overviewStrip">
-          <Metric label="active policies" value={String(overview?.keysActive ?? activeKeys.length)} meta={`${overview?.keysTotal ?? keys.length} total`} />
+          <Metric label="active grants" value={String(overview?.keysActive ?? activeKeys.length)} meta={`${overview?.keysTotal ?? keys.length} total`} />
           <Metric label="tenants" value={String(overview?.tenantsTotal ?? tenantRows.length)} meta={`${new Set(activeKeys.flatMap((key) => key.providers)).size} granted services`} />
           <Metric label="routes" value={String((overview?.openaiCompatibleProviders ?? 0) + (overview?.manifestRoutes ?? 0))} meta={`${overview?.providerCount ?? services.length} providers`} />
           <Metric label="budget" value={formatMicros(totalBudget)} meta={`${formatMicros(totalSpent)} spent`} />
         </div>
-        <EntityTable columns={["policy", "tenant", "budget", "spent", "remaining", "services", "status"]} columnTemplate="minmax(220px, 1.4fr) 128px 120px 120px 120px 94px 108px" rows={rows.map((row) => ({ id: row.kid, cells: [<EntityName icon={KeyRound} title={row.kid} subtitle={row.tokenRole ?? "custom"} />, row.tenantId, formatBudget(row.monthlyBudgetMicros), formatMicros(row.budget.spentMicros), row.budget.configured ? formatMicros(row.budget.remainingMicros) : "not tracked", String(row.providers.length), <Status label={row.enabled ? "active" : "revoked"} tone={row.enabled ? "active" : "revoked"} />] }))} />
+        <EntityTable columns={["grant", "tenant", "budget", "spent", "remaining", "services", "status"]} columnTemplate="minmax(220px, 1.4fr) 128px 120px 120px 120px 94px 108px" rows={rows.map((row) => ({ id: row.kid, cells: [<EntityName icon={KeyRound} title={row.kid} subtitle={row.tokenRole ?? "custom"} />, row.tenantId, formatBudget(row.monthlyBudgetMicros), formatMicros(row.budget.spentMicros), row.budget.configured ? formatMicros(row.budget.remainingMicros) : "not tracked", String(row.providers.length), <Status label={row.enabled ? "active" : "revoked"} tone={row.enabled ? "active" : "revoked"} />] }))} />
       </section>
       <aside className="inspector">
         <InspectorHeader icon={BarChart3} title="Usage ledger" subtitle="tenant budgets and grant health" />
-        <dl className="facts"><dt>active policies</dt><dd>{overview?.keysActive ?? activeKeys.length}</dd><dt>ready services</dt><dd>{readyServices}/{services.length}</dd><dt>blocked services</dt><dd>{blockedServices.length}</dd><dt>monthly budget</dt><dd>{formatMicros(totalBudget)}</dd><dt>tracked spend</dt><dd>{formatMicros(totalSpent)}</dd></dl>
+        <dl className="facts"><dt>active grants</dt><dd>{overview?.keysActive ?? activeKeys.length}</dd><dt>ready services</dt><dd>{readyServices}/{services.length}</dd><dt>blocked services</dt><dd>{blockedServices.length}</dd><dt>monthly budget</dt><dd>{formatMicros(totalBudget)}</dd><dt>tracked spend</dt><dd>{formatMicros(totalSpent)}</dd></dl>
         <div className="sectionTitle">Tenants</div>
-        <div className="miniList">{tenantRows.length ? tenantRows.slice(0, 8).map((tenant) => <button type="button" key={tenant.tenantId}>{tenant.tenantId}<span>{tenant.activeKeys}/{tenant.keys} policies · {tenant.providers.length} services</span></button>) : <p>No tenant policy coverage yet.</p>}</div>
+        <div className="miniList">{tenantRows.length ? tenantRows.slice(0, 8).map((tenant) => <button type="button" key={tenant.tenantId}>{tenant.tenantId}<span>{tenant.activeKeys}/{tenant.keys} grants · {tenant.providers.length} services</span></button>) : <p>No tenant grants yet.</p>}</div>
         <div className="sectionTitle">Needs configuration</div>
         <div className="miniList">{blockedServices.length ? blockedServices.slice(0, 8).map((service) => <button type="button" key={service.id}>{service.name}<span>{readinessLabel(service.readiness)}</span></button>) : <p>All visible services are executable.</p>}</div>
       </aside>
@@ -1413,6 +1409,27 @@ function groupedProviders(providers: ProviderRow[], query: string) {
   return Array.from(groups.entries())
     .map(([kind, groupProviders]) => ({ kind, providers: groupProviders.sort((a, b) => a.display_name.localeCompare(b.display_name)) }))
     .sort((a, b) => kindLabel(a.kind).localeCompare(kindLabel(b.kind)));
+}
+
+function policyFormFromKey(key: KeyPolicy): PolicyForm {
+  return {
+    kid: key.kid,
+    tokenRole: key.tokenRole ?? "",
+    tenantId: key.tenantId ?? "default",
+    enabled: key.enabled,
+    monthlyBudgetMicros: currencyInput(key.monthlyBudgetMicros),
+    requestCostMicros: key.requestCostMicros?.toString() ?? "",
+    providers: key.providers,
+  };
+}
+
+function accessFormFromUser(user: AccessUser): AccessForm {
+  return {
+    email: user.email,
+    role: user.role,
+    tenantId: user.tenantId,
+    enabled: user.enabled,
+  };
 }
 
 function effectiveAccess(user: AccessUser | undefined, policies: KeyPolicy[], services: ServiceItem[]) {
