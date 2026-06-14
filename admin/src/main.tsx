@@ -1172,13 +1172,6 @@ function ReadinessStatus({ readiness }: { readiness?: ProviderReadiness }) {
   return <Status label={readinessLabel(readiness)} tone={tone} />;
 }
 
-function AccessStatus({ service, policies }: { service: ServiceItem; policies: KeyPolicy[] }) {
-  if (service.access) {
-    return <Status label={service.access.allowed ? "allowed" : "denied"} tone={service.access.allowed ? "active" : "revoked"} />;
-  }
-  return <PolicyChips policies={policies} />;
-}
-
 function viewTitle(view: View) {
   return ({ catalog: "Catalog", playground: "Playground", policies: "Access", users: "Users", usage: "Usage" } as const)[view];
 }
@@ -1283,10 +1276,6 @@ function accessMap(entitlements: EntitlementsResponse | null) {
 
 function readyCount(services: ServiceItem[]) {
   return services.filter((service) => service.readiness?.status === "ready").length;
-}
-
-function allowedCount(services: ServiceItem[]) {
-  return services.filter((service) => service.access?.allowed).length;
 }
 
 function serviceOutcome(service: ServiceItem, policies: KeyPolicy[] = []): ServiceOutcome {
