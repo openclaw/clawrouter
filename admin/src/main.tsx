@@ -1134,10 +1134,9 @@ function UsageScreen({ keys, services, overview, tenants, usageRows, usageLoaded
     ? null
     : activeBudgetValues.reduce<number>((total, value) => total + (value ?? 0), 0);
   const totalBudgetLabel = hasUnlimitedBudget ? "unlimited" : formatMicros(totalBudget);
-  const trackedRows = rows.filter((row) => row.budget.configured);
-  const totalSpent = !usageLoaded || trackedRows.some((row) => row.budget.spentMicros === undefined || row.budget.spentMicros === null)
+  const totalSpent = !usageLoaded || rows.some((row) => row.budget.spentMicros === undefined || row.budget.spentMicros === null)
     ? null
-    : trackedRows.reduce((total, row) => total + (row.budget.spentMicros ?? 0), 0);
+    : rows.reduce((total, row) => total + (row.budget.spentMicros ?? 0), 0);
   const routeTotal = services.reduce((total, service) => total + service.routeCount, 0);
   const providerTotal = overview?.providerCount ?? new Set(services.map((service) => service.provider)).size;
   return (
