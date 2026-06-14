@@ -125,7 +125,7 @@ export function summarizePlan(plan) {
 
 function smokeTarget(provider, env) {
   if (supportsOpenAiCompatibleProxy(provider)) {
-    const model = smokeModel(provider);
+    const model = smokeModel(provider, env);
     if (model) {
       return {
         kind: "openai_chat",
@@ -164,7 +164,11 @@ function smokeTarget(provider, env) {
   };
 }
 
-function smokeModel(provider) {
+function smokeModel(provider, env) {
+  const override = providerSmokeModelOverride(provider, env);
+  if (override) {
+    return override;
+  }
   const direct = provider.models.find((model) => {
     return model.capabilities.includes("llm.chat") && !model.upstream.includes("${");
   });
@@ -176,6 +180,33 @@ function smokeModel(provider) {
     return `${prefix}smoke-model`;
   }
   return provider.models.find((model) => !model.upstream.includes("${"))?.id ?? null;
+}
+
+function providerSmokeModelOverride(provider, env) {
+  const providerName = envName(provider.id);
+  const override =
+    env[`CLAWROUTER_SMOKE_MODEL_${providerName}`] ||
+    env[`${providerName}_SMOKE_MODEL`] ||
+    null;
+  if (!override) {
+    return null;
+  }
+  const catalogModel = provider.models.find((model) => model.id === override);
+  if (catalogModel) {
+    if (!catalogModel.capabilities.includes("llm.chat")) {
+      throw new Error(`smoke model override for ${provider.id} must support llm.chat`);
+    }
+    return override;
+  }
+  const matchesPrefix = (provider.routing.modelPrefixes ?? []).some((prefix) => {
+    return override.startsWith(prefix) && override.length > prefix.length;
+  });
+  if (!matchesPrefix) {
+    throw new Error(
+      `smoke model override for ${provider.id} must match a catalog id or provider model prefix`,
+    );
+  }
+  return override;
 }
 
 function smokeEndpoint(provider) {
