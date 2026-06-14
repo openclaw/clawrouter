@@ -1488,9 +1488,6 @@ impl AdminKeyPolicyRequest {
                 .filter(|value| is_sha256_hex(value))
                 .ok_or("secretSha256 is required for new proxy keys")?,
         };
-        if self.providers.is_empty() {
-            return Err("providers must contain at least one provider id");
-        }
         if let Some(value) = self.monthly_budget_micros {
             validate_admin_budget(value, "monthlyBudgetMicros")?;
         }
@@ -4774,7 +4771,7 @@ mod tests {
             "secretSha256 must be a 64-character hex string"
         );
 
-        let no_providers = AdminKeyPolicyRequest {
+        let wildcard_providers = AdminKeyPolicyRequest {
             enabled: true,
             secret_sha256: Some(sha256_hex("secret")),
             providers: Vec::new(),
@@ -4783,10 +4780,9 @@ mod tests {
             monthly_budget_micros: None,
             request_cost_micros: None,
         };
-        assert_eq!(
-            no_providers.try_into_policy(None).unwrap_err(),
-            "providers must contain at least one provider id"
-        );
+        let wildcard_policy = wildcard_providers.try_into_policy(None).unwrap();
+        assert!(wildcard_policy.providers.is_empty());
+        validate_policy_providers(&wildcard_policy).unwrap();
 
         let unknown_provider = KeyPolicy {
             enabled: true,
