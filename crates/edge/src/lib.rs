@@ -1125,12 +1125,18 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 );
             }
         };
+        let existing_policy = existing_key_policy(&kv, &kid).await?;
         let existing_secret_sha256 = if request.secret_sha256.is_none() {
-            existing_key_secret_sha256(&kv, &kid).await?
+            existing_policy
+                .as_ref()
+                .map(|policy| policy.secret_sha256.clone())
         } else {
             None
         };
-        let policy = match request.try_into_policy(existing_secret_sha256) {
+        let existing_all_providers = existing_policy
+            .as_ref()
+            .is_some_and(|policy| policy.providers.is_empty());
+        let policy = match request.try_into_policy(existing_secret_sha256, existing_all_providers) {
             Ok(policy) => policy,
             Err(message) => return json_error("invalid_admin_policy", message, 400),
         };
@@ -1480,6 +1486,7 @@ impl AdminKeyPolicyRequest {
     fn try_into_policy(
         self,
         existing_secret_sha256: Option<String>,
+        existing_all_providers: bool,
     ) -> std::result::Result<KeyPolicy, &'static str> {
         let secret_sha256 = match self.secret_sha256 {
             Some(secret_sha256) if is_sha256_hex(&secret_sha256) => secret_sha256,
@@ -1489,6 +1496,9 @@ impl AdminKeyPolicyRequest {
                 .ok_or("secretSha256 is required for new proxy keys")?,
         };
         let providers = self.providers.ok_or("providers is required")?;
+        if providers.is_empty() && !existing_all_providers {
+            return Err("providers must contain at least one provider id");
+        }
         if let Some(value) = self.monthly_budget_micros {
             validate_admin_budget(value, "monthlyBudgetMicros")?;
         }
@@ -1694,7 +1704,7 @@ fn sum_optional_micros(values: impl Iterator<Item = Option<u64>>) -> u64 {
     })
 }
 
-async fn existing_key_secret_sha256(kv: &KvStore, kid: &str) -> Result<Option<String>> {
+async fn existing_key_policy(kv: &KvStore, kid: &str) -> Result<Option<KeyPolicy>> {
     let Some(record) = kv
         .get(&format!("keys/{kid}"))
         .text()
@@ -1705,7 +1715,7 @@ async fn existing_key_secret_sha256(kv: &KvStore, kid: &str) -> Result<Option<St
     };
     let policy = serde_json::from_str::<KeyPolicy>(&record)
         .map_err(|error| Error::RustError(format!("key policy is invalid JSON: {error}")))?;
-    Ok(Some(policy.secret_sha256))
+    Ok(Some(policy))
 }
 
 async fn list_admin_key_policies(kv: &KvStore) -> Result<Vec<AdminKeyPolicyResponse>> {
@@ -4595,7 +4605,7 @@ mod tests {
             monthly_budget_micros: Some(100),
             request_cost_micros: Some(10),
         };
-        let policy = request.try_into_policy(None).unwrap();
+        let policy = request.try_into_policy(None, false).unwrap();
         validate_policy_providers(&policy).unwrap();
         let response = admin_policy_response("svc_docs", &policy);
         assert_eq!(response.kid, "svc_docs");
@@ -4618,7 +4628,7 @@ mod tests {
             request_cost_micros: Some(10),
         };
         assert_eq!(
-            request.try_into_policy(None).unwrap_err(),
+            request.try_into_policy(None, false).unwrap_err(),
             "tokenRole must be 32 or fewer ASCII letters, numbers, underscores, or hyphens"
         );
     }
@@ -4636,7 +4646,7 @@ mod tests {
             request_cost_micros: Some(20),
         };
         let policy = request
-            .try_into_policy(Some(existing_hash.clone()))
+            .try_into_policy(Some(existing_hash.clone()), false)
             .unwrap();
         assert_eq!(policy.secret_sha256, existing_hash);
 
@@ -4650,7 +4660,7 @@ mod tests {
             request_cost_micros: None,
         };
         assert_eq!(
-            new_key.try_into_policy(None).unwrap_err(),
+            new_key.try_into_policy(None, false).unwrap_err(),
             "secretSha256 is required for new proxy keys"
         );
     }
@@ -4768,7 +4778,7 @@ mod tests {
             request_cost_micros: None,
         };
         assert_eq!(
-            bad_hash.try_into_policy(None).unwrap_err(),
+            bad_hash.try_into_policy(None, false).unwrap_err(),
             "secretSha256 must be a 64-character hex string"
         );
 
@@ -4781,7 +4791,20 @@ mod tests {
             monthly_budget_micros: None,
             request_cost_micros: None,
         };
-        let wildcard_policy = wildcard_providers.try_into_policy(None).unwrap();
+        assert_eq!(
+            wildcard_providers.try_into_policy(None, false).unwrap_err(),
+            "providers must contain at least one provider id"
+        );
+        let wildcard_providers = AdminKeyPolicyRequest {
+            enabled: true,
+            secret_sha256: Some(sha256_hex("secret")),
+            providers: Some(Vec::new()),
+            tenant_id: None,
+            token_role: None,
+            monthly_budget_micros: None,
+            request_cost_micros: None,
+        };
+        let wildcard_policy = wildcard_providers.try_into_policy(None, true).unwrap();
         assert!(wildcard_policy.providers.is_empty());
         validate_policy_providers(&wildcard_policy).unwrap();
 
@@ -4795,7 +4818,7 @@ mod tests {
             request_cost_micros: None,
         };
         assert_eq!(
-            omitted_providers.try_into_policy(None).unwrap_err(),
+            omitted_providers.try_into_policy(None, false).unwrap_err(),
             "providers is required"
         );
 
