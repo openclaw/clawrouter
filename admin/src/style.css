@@ -645,6 +645,54 @@ pre {
   padding-left: 28px;
 }
 
+.overviewStrip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--background);
+}
+
+.metric {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+  border-right: 1px solid var(--border);
+  padding: 9px 10px;
+}
+
+.metric:last-child {
+  border-right: 0;
+}
+
+.metric span,
+.metric small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.metric strong {
+  overflow: hidden;
+  color: var(--foreground-strong);
+  font-size: 15px;
+  font-weight: 650;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metric small {
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: none;
+}
+
 .entityTable {
   min-width: 0;
   overflow: auto;
@@ -1354,10 +1402,20 @@ pre {
   }
 
   .catalogControls,
+  .overviewStrip,
   .playgroundToolbar,
   .formGrid,
   .presetRow {
     grid-template-columns: 1fr;
+  }
+
+  .metric {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .metric:last-child {
+    border-bottom: 0;
   }
 
   .statusBar em {
