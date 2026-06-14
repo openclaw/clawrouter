@@ -1645,10 +1645,12 @@ fn admin_tenant_summaries(entries: &[AdminKeyPolicyResponse]) -> Vec<AdminTenant
         summary.request_cost_micros = summary
             .request_cost_micros
             .saturating_add(entry.request_cost_micros.unwrap_or_default());
-        if entry.providers.is_empty() {
-            summary.all_providers = true;
-        } else {
-            summary.providers.extend(entry.providers.iter().cloned());
+        if entry.enabled {
+            if entry.providers.is_empty() {
+                summary.all_providers = true;
+            } else {
+                summary.providers.extend(entry.providers.iter().cloned());
+            }
         }
     }
     tenants
@@ -4704,7 +4706,7 @@ mod tests {
             },
             AdminKeyPolicyResponse {
                 kid: "svc_ops".to_string(),
-                enabled: false,
+                enabled: true,
                 providers: vec![],
                 tenant_id: Some("team_docs".to_string()),
                 token_role: Some("ops".to_string()),
@@ -4720,6 +4722,15 @@ mod tests {
                 monthly_budget_micros: None,
                 request_cost_micros: Some(5),
             },
+            AdminKeyPolicyResponse {
+                kid: "svc_retired".to_string(),
+                enabled: false,
+                providers: vec![],
+                tenant_id: Some("retired".to_string()),
+                token_role: Some("sandbox".to_string()),
+                monthly_budget_micros: Some(50),
+                request_cost_micros: None,
+            },
         ];
         let tenants = admin_tenant_summaries(&entries);
         let docs = tenants
@@ -4727,16 +4738,23 @@ mod tests {
             .find(|tenant| tenant.tenant_id == "team_docs")
             .unwrap();
         assert_eq!(docs.keys, 2);
-        assert_eq!(docs.active_keys, 1);
+        assert_eq!(docs.active_keys, 2);
         assert_eq!(docs.providers, vec!["openai", "tavily"]);
         assert!(docs.all_providers);
         assert_eq!(docs.monthly_budget_micros, 300);
+        let retired = tenants
+            .iter()
+            .find(|tenant| tenant.tenant_id == "retired")
+            .unwrap();
+        assert_eq!(retired.active_keys, 0);
+        assert!(!retired.all_providers);
+        assert!(retired.providers.is_empty());
 
         let overview = admin_overview(&entries, &provider_snapshot().unwrap());
-        assert_eq!(overview.keys_total, 3);
-        assert_eq!(overview.keys_active, 2);
-        assert_eq!(overview.tenants_total, 2);
-        assert_eq!(overview.monthly_budget_micros, 300);
+        assert_eq!(overview.keys_total, 4);
+        assert_eq!(overview.keys_active, 3);
+        assert_eq!(overview.tenants_total, 3);
+        assert_eq!(overview.monthly_budget_micros, 350);
         assert_eq!(overview.request_cost_micros, 15);
     }
 
