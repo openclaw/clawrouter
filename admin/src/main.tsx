@@ -192,6 +192,7 @@ interface ServiceItem {
   capabilities: string[];
   surfaces: string[];
   route: string;
+  routeCount: number;
   models: number;
   modelIds: string[];
   access?: ProviderAccess;
@@ -388,20 +389,37 @@ function App() {
         }
       }
       if (sessionData.role === "admin") {
-        const [keyData, userData, readinessData, overviewData, tenantData, usageData] = await Promise.all([
+        const [keyData, userData, readinessData] = await Promise.all([
           request<{ keys: KeyPolicy[] }>(gatewayOrigin, "/v1/admin/keys"),
           request<{ users: AccessUser[] }>(gatewayOrigin, "/v1/admin/access-users"),
           request<{ providers: ProviderReadiness[] }>(gatewayOrigin, "/v1/admin/provider-status"),
-          request<AdminOverview>(gatewayOrigin, "/v1/admin/overview"),
-          request<{ tenants: AdminTenantSummary[] }>(gatewayOrigin, "/v1/admin/users"),
-          request<{ keys: AdminUsageRow[] }>(gatewayOrigin, "/v1/admin/usage"),
         ]);
         setKeys(keyData.keys);
         setUsers(userData.users);
-        setAdminOverview(overviewData);
-        setTenantSummaries(tenantData.tenants);
-        setUsageRows(usageData.keys);
         setProviderReadiness((current) => ({ ...current, ...readinessMap(readinessData.providers) }));
+        const [overviewResult, tenantResult, usageResult] = await Promise.all([
+          settled(() => request<AdminOverview>(gatewayOrigin, "/v1/admin/overview")),
+          settled(() => request<{ tenants: AdminTenantSummary[] }>(gatewayOrigin, "/v1/admin/users")),
+          settled(() => request<{ keys: AdminUsageRow[] }>(gatewayOrigin, "/v1/admin/usage")),
+        ]);
+        if (overviewResult.ok) {
+          setAdminOverview(overviewResult.value);
+        } else {
+          setAdminOverview(null);
+          refreshWarnings = [...refreshWarnings, `overview unavailable: ${overviewResult.error}`];
+        }
+        if (tenantResult.ok) {
+          setTenantSummaries(tenantResult.value.tenants);
+        } else {
+          setTenantSummaries(tenantSummaryFallback(keyData.keys));
+          refreshWarnings = [...refreshWarnings, `tenant summary unavailable: ${tenantResult.error}`];
+        }
+        if (usageResult.ok) {
+          setUsageRows(usageResult.value.keys);
+        } else {
+          setUsageRows(keyData.keys.map(policyUsageFallback));
+          refreshWarnings = [...refreshWarnings, `usage ledger unavailable: ${usageResult.error}`];
+        }
       } else {
         const user = {
           email: sessionData.email ?? "access-user",
@@ -791,8 +809,8 @@ function CatalogScreen({ services, allServices, selected, policies, query, setQu
               cells: [
                 <EntityName brandIcon={service.brandIcon} icon={kindIcon(service.kind)} title={service.name} subtitle={`${service.provider} · ${kindLabel(service.kind)}`} />,
                 <OutcomeStatus outcome={outcome} />,
-                <PolicyChips policies={policiesForService} />,
-                service.models ? `${service.models} models` : `${service.surfaces.length} route${service.surfaces.length === 1 ? "" : "s"}`,
+                <GrantChips names={grantNamesForService(service, policiesForService)} />,
+                service.models ? `${service.models} models` : `${service.routeCount} route${service.routeCount === 1 ? "" : "s"}`,
                 service.surfaces.join(", "),
               ],
             };
@@ -817,7 +835,7 @@ function CatalogScreen({ services, allServices, selected, policies, query, setQu
               <dt>routes</dt><dd>{selected.route}</dd>
               <dt>surfaces</dt><dd>{selected.surfaces.join(", ")}</dd>
               <dt>models</dt><dd>{selected.models || "n/a"}</dd>
-              <dt>grant</dt><dd>{selectedPolicies.length ? selectedPolicies.map((policy) => policy.kid).join(", ") : selected.access?.allowed ? selected.access.policies.join(", ") || "session" : "none"}</dd>
+              <dt>grant</dt><dd>{grantNamesForService(selected, selectedPolicies).join(", ") || "none"}</dd>
               <dt>readiness</dt><dd>{readinessLabel(selected.readiness)}</dd>
               <dt>missing</dt><dd>{selected.readiness?.missingConfig.length ? selected.readiness.missingConfig.join(", ") : "none"}</dd>
               <dt>oauth grants</dt><dd>{selected.readiness?.oauthGrantRequired ? selected.readiness.oauthGrantCount : "n/a"}</dd>
@@ -833,7 +851,7 @@ function CatalogScreen({ services, allServices, selected, policies, query, setQu
             ) : null}
             <div className="sectionTitle">Granting access</div>
             <div className="miniList">
-              {selectedPolicies.length ? selectedPolicies.map((policy) => <button key={policy.kid} type="button">{policy.kid}<span>{policy.tenantId ?? "default"}</span></button>) : <p>No active grant includes this service yet.</p>}
+              {grantNamesForService(selected, selectedPolicies).length ? grantNamesForService(selected, selectedPolicies).map((grant) => <button key={grant} type="button">{grant}<span>{selectedPolicies.find((policy) => policy.kid === grant)?.tenantId ?? "entitlement"}</span></button>) : <p>No active grant includes this service yet.</p>}
             </div>
             <div className="inspectorActions">
               <button type="button" disabled={Boolean(playBlocker)} onClick={() => onPlay(selected)} title={playBlocker ?? undefined}><Play className="buttonIcon" aria-hidden="true" /><span>Try in playground</span></button>
@@ -849,13 +867,13 @@ function CatalogScreen({ services, allServices, selected, policies, query, setQu
   );
 }
 
-function PolicyChips({ policies }: { policies: KeyPolicy[] }) {
-  if (!policies.length) return <span className="emptyGrant">no grant</span>;
-  const first = policies[0];
+function GrantChips({ names }: { names: string[] }) {
+  if (!names.length) return <span className="emptyGrant">no grant</span>;
+  const first = names[0];
   return (
     <span className="grantChips">
-      <span className="grantChip" title={first.kid}>{first.kid}</span>
-      {policies.length > 1 ? <span className="grantMore" title={policies.slice(1).map((policy) => policy.kid).join(", ")}>+{policies.length - 1}</span> : null}
+      <span className="grantChip" title={first}>{first}</span>
+      {names.length > 1 ? <span className="grantMore" title={names.slice(1).join(", ")}>+{names.length - 1}</span> : null}
     </span>
   );
 }
@@ -1036,16 +1054,14 @@ function UsersScreen({ users, selected, policies, services, form, setForm, error
 }) {
   const accessForUser = (user: AccessUser | undefined) => effectiveAccess(user, policies, services);
   const selectedAccess = accessForUser(selected);
-  const selectedOutcomes = selectedAccess.services.map((service) => ({ service, outcome: serviceOutcome(service, selectedAccess.policies.filter((policy) => policy.providers.includes(service.provider))) }));
-  const selectedUsable = selectedOutcomes.filter((item) => item.outcome.playable).length;
-  const selectedBlocked = selectedOutcomes.filter((item) => item.outcome.blocked).length;
+  const selectedServices = selectedAccess.services.map((service) => ({ service, label: userServiceGrantLabel(service) }));
+  const selectedBlocked = selectedServices.filter(({ service }) => !service.readiness?.executable).length;
   return (
     <div className="entityLayout">
       <section className="mainPane">
-        <EntityTable columns={["identity", "role", "tenant", "grants", "usable", "status"]} columnTemplate="minmax(260px, 1.5fr) 90px 130px 96px 96px 116px" rows={users.map((user) => {
+        <EntityTable columns={["identity", "role", "tenant", "grants", "services", "status"]} columnTemplate="minmax(260px, 1.5fr) 90px 130px 96px 96px 116px" rows={users.map((user) => {
           const access = accessForUser(user);
-          const usable = access.services.filter((service) => serviceOutcome(service, access.policies.filter((policy) => policy.providers.includes(service.provider))).playable).length;
-          return { id: user.email, active: selected?.email === user.email, onClick: () => onSelect(user), cells: [<EntityName icon={Users} title={user.email} subtitle="Cloudflare Access" />, user.role, user.tenantId, String(access.policies.length), `${usable}/${access.services.length}`, <Status label={user.enabled ? "enabled" : "disabled"} tone={user.enabled ? "active" : "revoked"} />] };
+          return { id: user.email, active: selected?.email === user.email, onClick: () => onSelect(user), cells: [<EntityName icon={Users} title={user.email} subtitle="Cloudflare Access" />, user.role, user.tenantId, String(access.policies.length), String(access.services.length), <Status label={user.enabled ? "enabled" : "disabled"} tone={user.enabled ? "active" : "revoked"} />] };
         })} />
       </section>
       <aside className="inspector">
@@ -1058,11 +1074,11 @@ function UsersScreen({ users, selected, policies, services, form, setForm, error
             <label><span>tenant</span><input value={form.tenantId} onChange={(event) => setForm({ ...form, tenantId: event.target.value })} /></label>
             <label><span>status</span><select value={form.enabled ? "enabled" : "disabled"} onChange={(event) => setForm({ ...form, enabled: event.target.value === "enabled" })}><option value="enabled">enabled</option><option value="disabled">disabled</option></select></label>
           </div>
-          <dl className="facts"><dt>usable services</dt><dd>{selectedUsable}/{selectedAccess.services.length}</dd><dt>blocked services</dt><dd>{selectedBlocked}</dd><dt>active grants</dt><dd>{selectedAccess.policies.length}</dd><dt>role</dt><dd>{selected?.role ?? "user"}</dd><dt>tenant</dt><dd>{selected?.tenantId ?? form.tenantId}</dd></dl>
+          <dl className="facts"><dt>granted services</dt><dd>{selectedAccess.services.length}</dd><dt>blocked/unknown</dt><dd>{selectedBlocked}</dd><dt>active grants</dt><dd>{selectedAccess.policies.length}</dd><dt>role</dt><dd>{selected?.role ?? "user"}</dd><dt>tenant</dt><dd>{selected?.tenantId ?? form.tenantId}</dd></dl>
           <div className="sectionTitle">Tenant grants</div>
           <div className="miniList">{selectedAccess.policies.length ? selectedAccess.policies.map((policy) => <button type="button" key={policy.kid} onClick={() => onOpenPolicy(policy)}>{policy.kid}<span>{policy.providers.length} services · {formatBudget(policy.monthlyBudgetMicros)}</span></button>) : <p>No active grant gives this tenant service access.</p>}</div>
           <div className="sectionTitle">Effective access</div>
-          <div className="miniList">{selectedOutcomes.length ? selectedOutcomes.slice(0, 8).map(({ service, outcome }) => <button type="button" key={service.id}>{service.name}<span>{outcome.label} · {kindLabel(service.kind)}</span></button>) : <p>No services available for this user.</p>}</div>
+          <div className="miniList">{selectedServices.length ? selectedServices.slice(0, 8).map(({ service, label }) => <button type="button" key={service.id}>{service.name}<span>{label} · {kindLabel(service.kind)}</span></button>) : <p>No services available for this user.</p>}</div>
           <div className="inspectorActions"><button type="submit" disabled={busy}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save user</span></button></div>
         </form>
       </aside>
@@ -1278,6 +1294,10 @@ function readyCount(services: ServiceItem[]) {
   return services.filter((service) => service.readiness?.status === "ready").length;
 }
 
+function grantNamesForService(service: ServiceItem, policies: KeyPolicy[] = []) {
+  return unique([...policies.map((policy) => policy.kid), ...(service.access?.policies ?? [])]);
+}
+
 function serviceOutcome(service: ServiceItem, policies: KeyPolicy[] = []): ServiceOutcome {
   const grantedBySession = Boolean(service.access?.allowed);
   const explicitlyDenied = service.access ? !service.access.allowed : false;
@@ -1319,6 +1339,11 @@ function serviceOutcome(service: ServiceItem, policies: KeyPolicy[] = []): Servi
     playable: false,
     blocked: true,
   };
+}
+
+function userServiceGrantLabel(service: ServiceItem) {
+  if (!service.readiness) return "readiness unknown";
+  return service.readiness.executable ? "granted" : readinessLabel(service.readiness);
 }
 
 function readinessLabel(readiness: ProviderReadiness | undefined) {
@@ -1477,6 +1502,7 @@ function serviceItems(providers: ProviderRow[], routes: RouteCatalog, readinessB
       capabilities: unique([...(provider?.capabilities.map((capability) => capability.id) ?? []), ...modelCapabilities]),
       surfaces: unique([...route.endpoints, ...modelEndpoints]),
       route: route.endpoints.join(", ") || "/v1/chat/completions",
+      routeCount: unique([...route.endpoints, ...modelEndpoints]).length,
       models: route.models.length,
       modelIds: route.models.map((model) => model.id),
       access: accessByProvider.get(route.provider),
@@ -1499,6 +1525,7 @@ function serviceItems(providers: ProviderRow[], routes: RouteCatalog, readinessB
       capabilities: provider?.capabilities.map((capability) => capability.id) ?? [],
       surfaces: unique(providerRoutes.flatMap((route) => route.methods)),
       route: providerRoutes.map((route) => route.route).join(", "),
+      routeCount: providerRoutes.length,
       models: 0,
       modelIds: [],
       access: accessByProvider.get(providerId),
@@ -1517,6 +1544,7 @@ function serviceItems(providers: ProviderRow[], routes: RouteCatalog, readinessB
       capabilities: provider.capabilities.map((capability) => capability.id),
       surfaces: ["provider"],
       route: "/v1/proxy",
+      routeCount: 0,
       models: 0,
       modelIds: [],
       access: accessByProvider.get(provider.id),
