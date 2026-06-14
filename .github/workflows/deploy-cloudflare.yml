@@ -84,6 +84,7 @@ jobs:
       CLAWROUTER_SMOKE_KEY: ${{ secrets.CLAWROUTER_SMOKE_KEY }}
       CLAWROUTER_SMOKE_OPENAI: ${{ inputs.smoke_openai && '1' || '0' }}
       CLAWROUTER_SMOKE_LIVE_PROVIDERS: ${{ inputs.live_providers }}
+      CLAWROUTER_SMOKE_MODEL_AZURE_OPENAI: ${{ vars.CLAWROUTER_SMOKE_MODEL_AZURE_OPENAI }}
       CLAWROUTER_PREFLIGHT_DEPLOY: "1"
       CLAWROUTER_PREFLIGHT_SKIP_KV_WRITE: ${{ inputs.skip_kv_write_preflight && '1' || '0' }}
       CLAWROUTER_OMIT_ROUTES: "1"

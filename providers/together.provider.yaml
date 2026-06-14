@@ -38,7 +38,7 @@ endpoints:
 models:
   entries:
     - id: together/default
-      upstream: meta-llama/Llama-3.3-70B-Instruct-Turbo
+      upstream: Qwen/Qwen2.5-7B-Instruct-Turbo
       capabilities: [llm.chat]
       pricingRef: together-default
 billing:

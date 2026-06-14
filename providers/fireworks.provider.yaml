@@ -38,10 +38,9 @@ endpoints:
 models:
   entries:
     - id: fireworks/default
-      upstream: fireworks
+      upstream: accounts/fireworks/models/gpt-oss-120b
       capabilities: [llm.chat]
       pricingRef: fireworks-default
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
-
