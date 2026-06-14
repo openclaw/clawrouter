@@ -199,6 +199,16 @@ interface ServiceItem {
   brandIcon?: BrandIcon;
 }
 
+type OutcomeTone = "active" | "revoked" | "neutral";
+
+interface ServiceOutcome {
+  label: string;
+  detail: string;
+  tone: OutcomeTone;
+  playable: boolean;
+  blocked: boolean;
+}
+
 interface PolicyForm {
   kid: string;
   tokenRole: string;
@@ -757,44 +767,61 @@ function CatalogScreen({ services, allServices, selected, policies, query, setQu
   const selectedPolicies = selected ? activePolicies.filter((policy) => policy.providers.includes(selected.provider)) : [];
   const kindCounts = new Map(kinds.map((item) => [item, item === "all" ? queryMatchedServices.length : queryMatchedServices.filter((service) => service.kind === item).length]));
   const servicePolicies = (service: ServiceItem) => activePolicies.filter((policy) => policy.providers.includes(service.provider));
+  const outcomes = allServices.map((service) => serviceOutcome(service, servicePolicies(service)));
+  const usableCount = outcomes.filter((outcome) => outcome.playable).length;
+  const grantedCount = allServices.filter((service) => servicePolicies(service).length || service.access?.allowed).length;
+  const blockedCount = outcomes.filter((outcome) => outcome.blocked).length;
 
   return (
     <div className="entityLayout">
       <section className="mainPane">
         <div className="catalogControls">
-          <div className="catalogMeta"><strong>{services.length} services</strong><span>{readyCount(allServices)} ready · {allowedCount(allServices)} accessible</span></div>
-          <label><span>search catalog</span><div className="inputWithIcon"><Search aria-hidden="true" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="provider, model, route, tool" /></div></label>
+          <div className="catalogMeta"><strong>{services.length} services</strong><span>{usableCount} usable · {grantedCount} granted · {blockedCount} blocked</span></div>
+          <label><span>search catalog</span><div className="inputWithIcon"><Search aria-hidden="true" /><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="service, provider, model, route" /></div></label>
           <div className="kindTabs" role="tablist" aria-label="service kind">
             {kinds.map((item) => <button key={item} type="button" className={kind === item ? "active" : ""} onClick={() => setKind(item)}>{kindLabel(item)}<span>{kindCounts.get(item) ?? 0}</span></button>)}
           </div>
         </div>
         <EntityTable
-          columns={["service", "kind", "readiness", "access", "route"]}
-          columnTemplate="minmax(210px, 1.5fr) 72px 128px 120px minmax(150px, 0.9fr)"
-          rows={services.map((service) => ({
-            id: service.id,
-            active: selected?.id === service.id,
-            onClick: () => onSelect(service),
-            cells: [
-              <EntityName brandIcon={service.brandIcon} icon={kindIcon(service.kind)} title={service.name} subtitle={service.provider} />,
-              kindLabel(service.kind),
-              <ReadinessStatus readiness={service.readiness} />,
-              <AccessStatus service={service} policies={servicePolicies(service)} />,
-              service.surfaces.join(", "),
-            ],
-          }))}
+          columns={["service", "status", "granted by", "coverage", "routes"]}
+          columnTemplate="minmax(220px, 1.45fr) 138px minmax(130px, 0.8fr) 120px minmax(150px, 0.9fr)"
+          rows={services.map((service) => {
+            const policiesForService = servicePolicies(service);
+            const outcome = serviceOutcome(service, policiesForService);
+            return {
+              id: service.id,
+              active: selected?.id === service.id,
+              onClick: () => onSelect(service),
+              cells: [
+                <EntityName brandIcon={service.brandIcon} icon={kindIcon(service.kind)} title={service.name} subtitle={`${service.provider} · ${kindLabel(service.kind)}`} />,
+                <OutcomeStatus outcome={outcome} />,
+                <PolicyChips policies={policiesForService} />,
+                service.models ? `${service.models} models` : `${service.surfaces.length} route${service.surfaces.length === 1 ? "" : "s"}`,
+                service.surfaces.join(", "),
+              ],
+            };
+          })}
         />
       </section>
       <aside className="inspector">
         {selected ? (
           <>
+            {(() => {
+              const outcome = serviceOutcome(selected, selectedPolicies);
+              const playBlocker = playgroundBlockedForService(selected, selectedPolicies);
+              return (
+                <>
             <InspectorHeader brandIcon={selected.brandIcon} icon={kindIcon(selected.kind)} title={selected.name} subtitle={`${kindLabel(selected.kind)} · ${selected.category}`} />
+            <div className="outcomeCallout">
+              <OutcomeStatus outcome={outcome} />
+              <p>{outcome.detail}</p>
+            </div>
             <dl className="facts">
               <dt>provider</dt><dd>{selected.provider}</dd>
-              <dt>route</dt><dd>{selected.route}</dd>
+              <dt>routes</dt><dd>{selected.route}</dd>
               <dt>surfaces</dt><dd>{selected.surfaces.join(", ")}</dd>
               <dt>models</dt><dd>{selected.models || "n/a"}</dd>
-              <dt>access</dt><dd>{selected.access ? (selected.access.allowed ? `allowed by ${selected.access.policies.join(", ") || "session"}` : "not granted") : "unknown"}</dd>
+              <dt>grant</dt><dd>{selectedPolicies.length ? selectedPolicies.map((policy) => policy.kid).join(", ") : selected.access?.allowed ? selected.access.policies.join(", ") || "session" : "none"}</dd>
               <dt>readiness</dt><dd>{readinessLabel(selected.readiness)}</dd>
               <dt>missing</dt><dd>{selected.readiness?.missingConfig.length ? selected.readiness.missingConfig.join(", ") : "none"}</dd>
               <dt>oauth grants</dt><dd>{selected.readiness?.oauthGrantRequired ? selected.readiness.oauthGrantCount : "n/a"}</dd>
@@ -813,9 +840,12 @@ function CatalogScreen({ services, allServices, selected, policies, query, setQu
               {selectedPolicies.length ? selectedPolicies.map((policy) => <button key={policy.kid} type="button">{policy.kid}<span>{policy.tenantId ?? "default"}</span></button>) : <p>No policy grants this service yet.</p>}
             </div>
             <div className="inspectorActions">
-              <button type="button" disabled={Boolean(playgroundBlockedForService(selected))} onClick={() => onPlay(selected)} title={playgroundBlockedForService(selected) ?? undefined}><Play className="buttonIcon" aria-hidden="true" /><span>Try in playground</span></button>
-              <button type="button" className="buttonSecondary" onClick={() => onAdd(selected)}><Plus className="buttonIcon" aria-hidden="true" /><span>Add to policy</span></button>
+              <button type="button" disabled={Boolean(playBlocker)} onClick={() => onPlay(selected)} title={playBlocker ?? undefined}><Play className="buttonIcon" aria-hidden="true" /><span>Try in playground</span></button>
+              <button type="button" className="buttonSecondary" onClick={() => onAdd(selected)}><Plus className="buttonIcon" aria-hidden="true" /><span>Add to grant</span></button>
             </div>
+                </>
+              );
+            })()}
           </>
         ) : <p>Select a service.</p>}
       </aside>
@@ -942,14 +972,14 @@ function PoliciesScreen({ keys, selected, providers, form, setForm, issuedKey, e
     <div className="entityLayout">
       <section className="mainPane">
         <EntityTable
-          columns={["policy", "audience", "role", "services", "monthly cap", "status"]}
+          columns={["grant", "tenant", "role", "services", "budget", "state"]}
           columnTemplate="minmax(220px, 1.4fr) 130px 120px 110px 130px 120px"
-          rows={keys.map((key) => ({ id: key.kid, active: selected?.kid === key.kid, onClick: () => onEdit(key), cells: [<EntityName icon={KeyRound} title={key.kid} subtitle={key.enabled ? "active policy" : "revoked"} />, key.tenantId ?? "default", key.tokenRole ?? "custom", String(key.providers.length), formatBudget(key.monthlyBudgetMicros), <Status label={key.enabled ? "active" : "revoked"} tone={key.enabled ? "active" : "revoked"} />] }))}
+          rows={keys.map((key) => ({ id: key.kid, active: selected?.kid === key.kid, onClick: () => onEdit(key), cells: [<EntityName icon={KeyRound} title={key.kid} subtitle={key.enabled ? "active grant" : "revoked grant"} />, key.tenantId ?? "default", key.tokenRole ?? "custom", String(key.providers.length), formatBudget(key.monthlyBudgetMicros), <Status label={key.enabled ? "active" : "revoked"} tone={key.enabled ? "active" : "revoked"} />] }))}
         />
       </section>
       <aside className="inspector wideInspector">
         <form onSubmit={onSave}>
-          <InspectorHeader icon={KeyRound} title="Access policy" subtitle={`${form.providers.length} services · ${form.tenantId || "default"}`} />
+          <InspectorHeader icon={KeyRound} title="Access grant" subtitle={`${form.tenantId || "default"} gets ${form.providers.length} services`} />
           {error ? <InlineError message={error} /> : null}
           {issuedKey ? (
             <div className="issuedKey">
@@ -957,15 +987,19 @@ function PoliciesScreen({ keys, selected, providers, form, setForm, issuedKey, e
               <button type="button" className="buttonSecondary" onClick={copyIssuedKey}>Copy</button>
             </div>
           ) : null}
-          <div className="presetRow" aria-label="policy templates">{Object.keys(rolePresets).map((role) => <button key={role} type="button" className="buttonSecondary" onClick={() => onPreset(role as keyof typeof rolePresets)}>{role}</button>)}</div>
+          <div className="grantSummary">
+            <strong>{form.tenantId || "default"}</strong>
+            <span>{form.enabled ? "will have" : "would have"} access to {form.providers.length} selected services under the {form.tokenRole || "custom"} role.</span>
+          </div>
+          <div className="presetRow" aria-label="grant templates">{Object.keys(rolePresets).map((role) => <button key={role} type="button" className="buttonSecondary" onClick={() => onPreset(role as keyof typeof rolePresets)}>{role}</button>)}</div>
           <div className="formGrid compact">
-            <label><span>policy id</span><input value={form.kid} onChange={(event) => setForm({ ...form, kid: event.target.value })} /></label>
-            <label><span>audience tenant</span><input value={form.tenantId} onChange={(event) => setForm({ ...form, tenantId: event.target.value })} /></label>
+            <label><span>grant id</span><input value={form.kid} onChange={(event) => setForm({ ...form, kid: event.target.value })} /></label>
+            <label><span>tenant</span><input value={form.tenantId} onChange={(event) => setForm({ ...form, tenantId: event.target.value })} /></label>
             <label><span>role</span><input value={form.tokenRole} onChange={(event) => setForm({ ...form, tokenRole: event.target.value })} /></label>
             <label><span>status</span><select value={form.enabled ? "active" : "disabled"} onChange={(event) => setForm({ ...form, enabled: event.target.value === "active" })}><option value="active">active</option><option value="disabled">disabled</option></select></label>
             <label className="full"><span>monthly budget</span><input inputMode="decimal" value={form.monthlyBudgetMicros} onChange={(event) => setForm({ ...form, monthlyBudgetMicros: event.target.value })} placeholder="unlimited" /></label>
           </div>
-          <div className="matrixHeader"><strong>service access</strong><span>{form.providers.length} selected · {visibleProviderCount} shown</span></div>
+          <div className="matrixHeader"><strong>Services in this grant</strong><span>{form.providers.length} selected · {visibleProviderCount} shown</span></div>
           <div className="inputWithIcon providerFilter"><Search aria-hidden="true" /><input value={providerQuery} onChange={(event) => setProviderQuery(event.target.value)} placeholder="filter services" /></div>
           <div className="serviceGroups">
             {providerGroups.length ? providerGroups.map((group) => {
@@ -984,7 +1018,7 @@ function PoliciesScreen({ keys, selected, providers, form, setForm, issuedKey, e
               );
             }) : <p>No services match this filter.</p>}
           </div>
-          <div className="inspectorActions"><button type="submit" disabled={busy || !form.providers.length}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save policy</span></button>{selected ? <button type="button" className="buttonDanger" disabled={!selected.enabled || busy} onClick={() => onRevoke(selected.kid)}><CircleSlash2 className="buttonIcon" aria-hidden="true" /><span>Revoke selected</span></button> : null}</div>
+          <div className="inspectorActions"><button type="submit" disabled={busy || !form.providers.length}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save grant</span></button>{selected ? <button type="button" className="buttonDanger" disabled={!selected.enabled || busy} onClick={() => onRevoke(selected.kid)}><CircleSlash2 className="buttonIcon" aria-hidden="true" /><span>Revoke grant</span></button> : null}</div>
         </form>
       </aside>
     </div>
@@ -1006,10 +1040,17 @@ function UsersScreen({ users, selected, policies, services, form, setForm, error
 }) {
   const accessForUser = (user: AccessUser | undefined) => effectiveAccess(user, policies, services);
   const selectedAccess = accessForUser(selected);
+  const selectedOutcomes = selectedAccess.services.map((service) => ({ service, outcome: serviceOutcome(service, selectedAccess.policies.filter((policy) => policy.providers.includes(service.provider))) }));
+  const selectedUsable = selectedOutcomes.filter((item) => item.outcome.playable).length;
+  const selectedBlocked = selectedOutcomes.filter((item) => item.outcome.blocked).length;
   return (
     <div className="entityLayout">
       <section className="mainPane">
-        <EntityTable columns={["user", "role", "tenant", "access", "status"]} columnTemplate="minmax(260px, 1.5fr) 100px 140px 120px 120px" rows={users.map((user) => ({ id: user.email, active: selected?.email === user.email, onClick: () => onSelect(user), cells: [<EntityName icon={Users} title={user.email} subtitle="Cloudflare Access" />, user.role, user.tenantId, String(accessForUser(user).services.length), <Status label={user.enabled ? "enabled" : "disabled"} tone={user.enabled ? "active" : "revoked"} />] }))} />
+        <EntityTable columns={["identity", "role", "tenant", "grants", "usable", "status"]} columnTemplate="minmax(260px, 1.5fr) 90px 130px 96px 96px 116px" rows={users.map((user) => {
+          const access = accessForUser(user);
+          const usable = access.services.filter((service) => serviceOutcome(service, access.policies.filter((policy) => policy.providers.includes(service.provider))).playable).length;
+          return { id: user.email, active: selected?.email === user.email, onClick: () => onSelect(user), cells: [<EntityName icon={Users} title={user.email} subtitle="Cloudflare Access" />, user.role, user.tenantId, String(access.policies.length), `${usable}/${access.services.length}`, <Status label={user.enabled ? "enabled" : "disabled"} tone={user.enabled ? "active" : "revoked"} />] };
+        })} />
       </section>
       <aside className="inspector">
         <form onSubmit={onSave}>
@@ -1021,11 +1062,11 @@ function UsersScreen({ users, selected, policies, services, form, setForm, error
             <label><span>tenant</span><input value={form.tenantId} onChange={(event) => setForm({ ...form, tenantId: event.target.value })} /></label>
             <label><span>status</span><select value={form.enabled ? "enabled" : "disabled"} onChange={(event) => setForm({ ...form, enabled: event.target.value === "enabled" })}><option value="enabled">enabled</option><option value="disabled">disabled</option></select></label>
           </div>
-          <dl className="facts"><dt>effective services</dt><dd>{selectedAccess.services.length}</dd><dt>active policies</dt><dd>{selectedAccess.policies.length}</dd><dt>role</dt><dd>{selected?.role ?? "user"}</dd><dt>tenant</dt><dd>{selected?.tenantId ?? form.tenantId}</dd></dl>
-          <div className="sectionTitle">Tenant policies</div>
-          <div className="miniList">{selectedAccess.policies.length ? selectedAccess.policies.map((policy) => <button type="button" key={policy.kid} onClick={() => onOpenPolicy(policy)}>{policy.kid}<span>{policy.providers.length} services</span></button>) : <p>No active policy grants this tenant access.</p>}</div>
+          <dl className="facts"><dt>usable services</dt><dd>{selectedUsable}/{selectedAccess.services.length}</dd><dt>blocked services</dt><dd>{selectedBlocked}</dd><dt>active grants</dt><dd>{selectedAccess.policies.length}</dd><dt>role</dt><dd>{selected?.role ?? "user"}</dd><dt>tenant</dt><dd>{selected?.tenantId ?? form.tenantId}</dd></dl>
+          <div className="sectionTitle">Tenant grants</div>
+          <div className="miniList">{selectedAccess.policies.length ? selectedAccess.policies.map((policy) => <button type="button" key={policy.kid} onClick={() => onOpenPolicy(policy)}>{policy.kid}<span>{policy.providers.length} services · {formatBudget(policy.monthlyBudgetMicros)}</span></button>) : <p>No active grant gives this tenant service access.</p>}</div>
           <div className="sectionTitle">Effective access</div>
-          <div className="miniList">{selectedAccess.services.length ? selectedAccess.services.slice(0, 8).map((service) => <button type="button" key={service.id}>{service.name}<span>{kindLabel(service.kind)}</span></button>) : <p>No services available for this user.</p>}</div>
+          <div className="miniList">{selectedOutcomes.length ? selectedOutcomes.slice(0, 8).map(({ service, outcome }) => <button type="button" key={service.id}>{service.name}<span>{outcome.label} · {kindLabel(service.kind)}</span></button>) : <p>No services available for this user.</p>}</div>
           <div className="inspectorActions"><button type="submit" disabled={busy}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save user</span></button></div>
         </form>
       </aside>
@@ -1120,9 +1161,13 @@ function InlineNote({ children }: { children: React.ReactNode }) {
   return <div className="inlineNote">{children}</div>;
 }
 
-function Status({ label, tone }: { label: string; tone: "active" | "revoked" | "neutral" }) {
+function Status({ label, tone }: { label: string; tone: OutcomeTone }) {
   const Icon = tone === "active" ? CheckCircle2 : tone === "revoked" ? CircleSlash2 : null;
   return <span className={`status ${tone}`}>{Icon ? <Icon aria-hidden="true" /> : null}{label}</span>;
+}
+
+function OutcomeStatus({ outcome }: { outcome: ServiceOutcome }) {
+  return <Status label={outcome.label} tone={outcome.tone} />;
 }
 
 function ReadinessStatus({ readiness }: { readiness?: ProviderReadiness }) {
@@ -1139,16 +1184,16 @@ function AccessStatus({ service, policies }: { service: ServiceItem; policies: K
 }
 
 function viewTitle(view: View) {
-  return ({ catalog: "Catalog", playground: "Playground", policies: "Policies", users: "Users", usage: "Usage" } as const)[view];
+  return ({ catalog: "Catalog", playground: "Playground", policies: "Access", users: "Users", usage: "Usage" } as const)[view];
 }
 
 function viewSubtitle(view: View) {
   return {
-    catalog: "Access catalog",
-    playground: "Policy-path test",
-    policies: "Provider allowlists",
-    users: "Tenant grants",
-    usage: "Budget coverage",
+    catalog: "Service access catalog",
+    playground: "Run through the same access path",
+    policies: "Grant services to tenants",
+    users: "Cloudflare Access identities",
+    usage: "Tenant budget ledger",
   }[view];
 }
 
@@ -1246,6 +1291,49 @@ function readyCount(services: ServiceItem[]) {
 
 function allowedCount(services: ServiceItem[]) {
   return services.filter((service) => service.access?.allowed).length;
+}
+
+function serviceOutcome(service: ServiceItem, policies: KeyPolicy[] = []): ServiceOutcome {
+  const grantedBySession = Boolean(service.access?.allowed);
+  const explicitlyDenied = service.access ? !service.access.allowed : false;
+  const granted = grantedBySession || policies.length > 0;
+  const policyNames = service.access?.policies.length ? service.access.policies : policies.map((policy) => policy.kid);
+  if (!granted) {
+    return {
+      label: explicitlyDenied ? "denied" : "not granted",
+      detail: explicitlyDenied ? "Current Cloudflare Access identity is denied by policy." : "No active grant currently includes this service.",
+      tone: "revoked",
+      playable: false,
+      blocked: true,
+    };
+  }
+  if (!service.readiness) {
+    return {
+      label: "unknown",
+      detail: `Granted by ${policyNames.join(", ") || "session"}, but runtime readiness has not loaded yet.`,
+      tone: "neutral",
+      playable: false,
+      blocked: true,
+    };
+  }
+  if (service.readiness.executable) {
+    return {
+      label: "usable",
+      detail: `Granted by ${policyNames.join(", ") || "session"} and executable in the gateway.`,
+      tone: "active",
+      playable: true,
+      blocked: false,
+    };
+  }
+  const missing = service.readiness.missingConfig.length ? `Missing ${service.readiness.missingConfig.join(", ")}.` : "";
+  const oauth = service.readiness.oauthGrantRequired ? "OAuth grant required before calls can run." : "";
+  return {
+    label: service.readiness.status === "missing_config" ? "missing config" : service.readiness.status === "grant_required" ? "needs OAuth" : readinessLabel(service.readiness),
+    detail: [service.readiness.reasons[0], missing, oauth].filter(Boolean).join(" "),
+    tone: "revoked",
+    playable: false,
+    blocked: true,
+  };
 }
 
 function readinessLabel(readiness: ProviderReadiness | undefined) {
@@ -1508,8 +1596,9 @@ function playgroundBlocker(form: PlaygroundForm, model: CatalogModel | undefined
   return null;
 }
 
-function playgroundBlockedForService(service: ServiceItem) {
-  if (service.access && !service.access.allowed) return "current Access identity is not granted this service";
+function playgroundBlockedForService(service: ServiceItem, policies: KeyPolicy[] = []) {
+  const outcome = serviceOutcome(service, policies);
+  if (!outcome.playable) return outcome.detail;
   if (service.readiness && !service.readiness.executable) return service.readiness.reasons[0] ?? `service is ${readinessLabel(service.readiness)}`;
   if (!service.models && service.surfaces.includes("provider")) return "no executable model or proxy route declared";
   return null;
