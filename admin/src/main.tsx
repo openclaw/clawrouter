@@ -224,6 +224,7 @@ interface PolicyForm {
   monthlyBudgetMicros: string;
   requestCostMicros: string;
   providers: string[];
+  allProviders: boolean;
 }
 
 interface AccessForm {
@@ -260,6 +261,7 @@ const defaultPolicy: PolicyForm = {
   monthlyBudgetMicros: "100",
   requestCostMicros: "1000",
   providers: ["openai", "tavily"],
+  allProviders: false,
 };
 
 const defaultAccess: AccessForm = {
@@ -292,6 +294,7 @@ function App() {
   const [providers, setProviders] = useState<ProviderRow[]>(allowDemo ? demo.providers : []);
   const [routes, setRoutes] = useState<RouteCatalog>(allowDemo ? demo.routes : emptyRoutes);
   const [keys, setKeys] = useState<KeyPolicy[]>(allowDemo ? demo.keys : []);
+  const [policyDataLoaded, setPolicyDataLoaded] = useState(allowDemo);
   const [users, setUsers] = useState<AccessUser[]>(allowDemo ? demo.users : []);
   const [adminOverview, setAdminOverview] = useState<AdminOverview | null>(allowDemo ? demo.overview : null);
   const [tenantSummaries, setTenantSummaries] = useState<AdminTenantSummary[]>(allowDemo ? demo.tenants : []);
@@ -377,6 +380,7 @@ function App() {
   async function refresh() {
     try {
       setStatus("loading");
+      setPolicyDataLoaded(false);
       const [sessionData, providerData, routeData] = await Promise.all([
         request<SessionResponse>(gatewayOrigin, "/v1/session"),
         request<ProviderResponse>(gatewayOrigin, "/v1/providers"),
@@ -409,6 +413,7 @@ function App() {
           request<{ providers: ProviderReadiness[] }>(gatewayOrigin, "/v1/admin/provider-status"),
         ]);
         setKeys(keyData.keys);
+        setPolicyDataLoaded(true);
         setUsers(userData.users);
         setProviderReadiness((current) => ({ ...current, ...readinessMap(readinessData.providers) }));
         const [overviewResult, tenantResult] = await Promise.all([
@@ -438,6 +443,7 @@ function App() {
           enabled: sessionData.authenticated,
         };
         setKeys([]);
+        setPolicyDataLoaded(false);
         setUsers([user]);
         setAdminOverview(null);
         setTenantSummaries([]);
@@ -455,6 +461,7 @@ function App() {
         setProviders(demo.providers);
         setRoutes(demo.routes);
         setKeys(demo.keys);
+        setPolicyDataLoaded(true);
         setUsers(demo.users);
         setAdminOverview(demo.overview);
         setTenantSummaries(demo.tenants);
@@ -480,12 +487,12 @@ function App() {
     try {
       setPolicyError("");
       setStatus("saving grant");
-      if (!policyForm.providers.length) throw new Error("select at least one service");
+      if (!policyForm.allProviders && !policyForm.providers.length) throw new Error("select at least one service");
       if (!/^[A-Za-z0-9_]{4,}$/.test(policyForm.kid)) throw new Error("grant id must use 4 or more letters, numbers, or underscores");
       const next: KeyPolicy = {
         kid: policyForm.kid,
         enabled: policyForm.enabled,
-        providers: policyForm.providers,
+        providers: policyForm.allProviders ? [] : policyForm.providers,
         tenantId: policyForm.tenantId || "default",
         tokenRole: policyForm.tokenRole || null,
         monthlyBudgetMicros: optionalCurrencyMicros(policyForm.monthlyBudgetMicros) ?? null,
@@ -620,25 +627,33 @@ function App() {
       monthlyBudgetMicros: currencyInput(optionalNumber(preset.budget)),
       requestCostMicros: preset.request,
       providers: preset.providers.length ? preset.providers.filter((id) => available.has(id)) : providers.map((provider) => provider.id),
+      allProviders: false,
     }));
   }
 
   function togglePolicyProvider(providerId: string) {
+    const allProviderIds = providers.map((provider) => provider.id);
     setPolicyForm((current) => ({
       ...current,
-      providers: current.providers.includes(providerId)
-        ? current.providers.filter((id) => id !== providerId)
+      allProviders: false,
+      providers: (current.allProviders ? allProviderIds : current.providers).includes(providerId)
+        ? (current.allProviders ? allProviderIds : current.providers).filter((id) => id !== providerId)
         : [...current.providers, providerId].sort(),
     }));
   }
 
   function setPolicyProviderGroup(providerIds: string[], checked: boolean) {
-    setPolicyForm((current) => ({
-      ...current,
-      providers: checked
-        ? unique([...current.providers, ...providerIds]).sort()
-        : current.providers.filter((id) => !providerIds.includes(id)),
-    }));
+    const allProviderIds = providers.map((provider) => provider.id);
+    setPolicyForm((current) => {
+      const selected = current.allProviders ? allProviderIds : current.providers;
+      return {
+        ...current,
+        allProviders: false,
+        providers: checked
+          ? unique([...selected, ...providerIds]).sort()
+          : selected.filter((id) => !providerIds.includes(id)),
+      };
+    });
   }
 
   function applyDemoKeys(updater: (current: KeyPolicy[]) => KeyPolicy[]) {
@@ -708,7 +723,7 @@ function App() {
             allServices={services}
             selected={selectedService}
             policies={keys}
-            policyFallbackAuthoritative={session.role === "admin"}
+            policyFallbackAuthoritative={session.role === "admin" && policyDataLoaded}
             query={query}
             setQuery={setQuery}
             kind={kind}
@@ -726,7 +741,7 @@ function App() {
             onAdd={(service) => {
               setPolicyForm((current) => ({
                 ...current,
-                providers: current.providers.includes(service.provider) ? current.providers : [...current.providers, service.provider].sort(),
+                providers: current.allProviders || current.providers.includes(service.provider) ? current.providers : [...current.providers, service.provider].sort(),
               }));
               navigateTo("policies");
             }}
@@ -1017,6 +1032,8 @@ function PoliciesScreen({ keys, selected, providers, form, setForm, issuedKey, e
   const [providerQuery, setProviderQuery] = useState("");
   const providerGroups = groupedProviders(providers, providerQuery);
   const visibleProviderCount = providerGroups.reduce((total, group) => total + group.providers.length, 0);
+  const formServiceLabel = form.allProviders ? "all services" : `${form.providers.length} selected service${form.providers.length === 1 ? "" : "s"}`;
+  const formSelectionLabel = form.allProviders ? `all services · ${visibleProviderCount} shown` : `${form.providers.length} selected · ${visibleProviderCount} shown`;
   const copyIssuedKey = () => {
     void navigator.clipboard?.writeText(issuedKey);
   };
@@ -1026,12 +1043,12 @@ function PoliciesScreen({ keys, selected, providers, form, setForm, issuedKey, e
         <EntityTable
           columns={["grant", "tenant", "role", "services", "budget", "state"]}
           columnTemplate="minmax(220px, 1.4fr) 130px 120px 110px 130px 120px"
-          rows={keys.map((key) => ({ id: key.kid, active: selected?.kid === key.kid, onClick: () => onEdit(key), cells: [<EntityName icon={KeyRound} title={key.kid} subtitle={key.enabled ? "active grant" : "revoked grant"} />, key.tenantId ?? "default", key.tokenRole ?? "custom", String(key.providers.length), formatBudget(key.monthlyBudgetMicros), <Status label={key.enabled ? "active" : "revoked"} tone={key.enabled ? "active" : "revoked"} />] }))}
+          rows={keys.map((key) => ({ id: key.kid, active: selected?.kid === key.kid, onClick: () => onEdit(key), cells: [<EntityName icon={KeyRound} title={key.kid} subtitle={key.enabled ? "active grant" : "revoked grant"} />, key.tenantId ?? "default", key.tokenRole ?? "custom", key.providers.length ? String(key.providers.length) : "all", formatBudget(key.monthlyBudgetMicros), <Status label={key.enabled ? "active" : "revoked"} tone={key.enabled ? "active" : "revoked"} />] }))}
         />
       </section>
       <aside className="inspector wideInspector">
         <form onSubmit={onSave}>
-          <InspectorHeader icon={KeyRound} title="Access grant" subtitle={`${form.tenantId || "default"} gets ${form.providers.length} services`} />
+          <InspectorHeader icon={KeyRound} title="Access grant" subtitle={`${form.tenantId || "default"} gets ${formServiceLabel}`} />
           {error ? <InlineError message={error} /> : null}
           {issuedKey ? (
             <div className="issuedKey">
@@ -1041,7 +1058,7 @@ function PoliciesScreen({ keys, selected, providers, form, setForm, issuedKey, e
           ) : null}
           <div className="grantSummary">
             <strong>{form.tenantId || "default"}</strong>
-            <span>{form.enabled ? "will have" : "would have"} access to {form.providers.length} selected services under the {form.tokenRole || "custom"} role.</span>
+            <span>{form.enabled ? "will have" : "would have"} access to {formServiceLabel} under the {form.tokenRole || "custom"} role.</span>
           </div>
           <div className="presetRow" aria-label="grant templates">{Object.keys(rolePresets).map((role) => <button key={role} type="button" className="buttonSecondary" onClick={() => onPreset(role as keyof typeof rolePresets)}>{role}</button>)}</div>
           <div className="formGrid compact">
@@ -1051,12 +1068,12 @@ function PoliciesScreen({ keys, selected, providers, form, setForm, issuedKey, e
             <label><span>status</span><select value={form.enabled ? "active" : "disabled"} onChange={(event) => setForm({ ...form, enabled: event.target.value === "active" })}><option value="active">active</option><option value="disabled">disabled</option></select></label>
             <label className="full"><span>monthly budget</span><input inputMode="decimal" value={form.monthlyBudgetMicros} onChange={(event) => setForm({ ...form, monthlyBudgetMicros: event.target.value })} placeholder="unlimited" /></label>
           </div>
-          <div className="matrixHeader"><strong>Services in this grant</strong><span>{form.providers.length} selected · {visibleProviderCount} shown</span></div>
+          <div className="matrixHeader"><strong>Services in this grant</strong><span>{formSelectionLabel}</span></div>
           <div className="inputWithIcon providerFilter"><Search aria-hidden="true" /><input value={providerQuery} onChange={(event) => setProviderQuery(event.target.value)} placeholder="filter services" /></div>
           <div className="serviceGroups">
             {providerGroups.length ? providerGroups.map((group) => {
               const groupIds = group.providers.map((provider) => provider.id);
-              const selectedCount = groupIds.filter((id) => form.providers.includes(id)).length;
+              const selectedCount = form.allProviders ? group.providers.length : groupIds.filter((id) => form.providers.includes(id)).length;
               return (
                 <section className="serviceGroup" key={group.kind}>
                   <div className="serviceGroupHeader">
@@ -1065,12 +1082,12 @@ function PoliciesScreen({ keys, selected, providers, form, setForm, issuedKey, e
                     <button type="button" className="buttonSecondary" onClick={() => onSetProviderGroup(groupIds, true)}>All</button>
                     <button type="button" className="buttonSecondary" onClick={() => onSetProviderGroup(groupIds, false)}>None</button>
                   </div>
-                  <div className="serviceMatrix">{group.providers.map((provider) => <label key={provider.id} title={provider.id}><input type="checkbox" checked={form.providers.includes(provider.id)} onChange={() => onToggleProvider(provider.id)} /><span>{provider.display_name}</span><small>{provider.id}</small></label>)}</div>
+                  <div className="serviceMatrix">{group.providers.map((provider) => <label key={provider.id} title={provider.id}><input type="checkbox" checked={form.allProviders || form.providers.includes(provider.id)} onChange={() => onToggleProvider(provider.id)} /><span>{provider.display_name}</span><small>{provider.id}</small></label>)}</div>
                 </section>
               );
             }) : <p>No services match this filter.</p>}
           </div>
-          <div className="inspectorActions"><button type="submit" disabled={busy || !form.providers.length}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save grant</span></button>{selected ? <button type="button" className="buttonDanger" disabled={!selected.enabled || busy} onClick={() => onRevoke(selected.kid)}><CircleSlash2 className="buttonIcon" aria-hidden="true" /><span>Revoke grant</span></button> : null}</div>
+          <div className="inspectorActions"><button type="submit" disabled={busy || (!form.allProviders && !form.providers.length)}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save grant</span></button>{selected ? <button type="button" className="buttonDanger" disabled={!selected.enabled || busy} onClick={() => onRevoke(selected.kid)}><CircleSlash2 className="buttonIcon" aria-hidden="true" /><span>Revoke grant</span></button> : null}</div>
         </form>
       </aside>
     </div>
@@ -1350,8 +1367,16 @@ function grantNamesForService(service: ServiceItem, policies: KeyPolicy[] = []) 
 
 function serviceOutcome(service: ServiceItem, policies: KeyPolicy[] = [], policyFallbackAuthoritative = false): ServiceOutcome {
   const grantedBySession = Boolean(service.access?.allowed);
-  const explicitlyDenied = service.access ? !service.access.allowed : false;
-  const granted = grantedBySession || policies.length > 0;
+  if (service.access && !service.access.allowed) {
+    return {
+      label: "denied",
+      detail: "Current Cloudflare Access identity is denied by policy.",
+      tone: "revoked",
+      playable: false,
+      blocked: true,
+    };
+  }
+  const granted = grantedBySession || (!service.access && policies.length > 0);
   const policyNames = service.access?.policies.length ? service.access.policies : policies.map((policy) => policy.kid);
   if (!granted) {
     if (!service.access && !policyFallbackAuthoritative) {
@@ -1364,8 +1389,8 @@ function serviceOutcome(service: ServiceItem, policies: KeyPolicy[] = [], policy
       };
     }
     return {
-      label: explicitlyDenied ? "denied" : "not granted",
-      detail: explicitlyDenied ? "Current Cloudflare Access identity is denied by policy." : "No active grant currently includes this service.",
+      label: "not granted",
+      detail: "No active grant currently includes this service.",
       tone: "revoked",
       playable: false,
       blocked: true,
@@ -1492,6 +1517,7 @@ function policyFormFromKey(key: KeyPolicy): PolicyForm {
     monthlyBudgetMicros: currencyInput(key.monthlyBudgetMicros),
     requestCostMicros: key.requestCostMicros?.toString() ?? "",
     providers: key.providers,
+    allProviders: key.providers.length === 0,
   };
 }
 
