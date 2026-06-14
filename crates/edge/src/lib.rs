@@ -58,10 +58,10 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         return cors_preflight();
     }
     if req.method() == Method::Get && request_path == "/" {
-        return redirect_to(ROOT_REDIRECT_PATH);
+        return redirect_to(&redirect_location(ROOT_REDIRECT_PATH, url.query()));
     }
     if req.method() == Method::Get && request_path == ROOT_REDIRECT_PATH {
-        return redirect_to("/dashboard/catalog");
+        return redirect_to(&redirect_location("/dashboard/catalog", url.query()));
     }
     if req.method() == Method::Get {
         if let Some(target) = legacy_interface_redirect(url.path()) {
@@ -305,6 +305,12 @@ fn redirect_to(location: &str) -> Result<Response> {
         .headers_mut()
         .set("cache-control", "no-store, max-age=0")?;
     Ok(response)
+}
+
+fn redirect_location(location: &str, query: Option<&str>) -> String {
+    query
+        .map(|value| format!("{location}?{value}"))
+        .unwrap_or_else(|| location.to_string())
 }
 
 fn route_catalog(snapshot: &ProviderSnapshot) -> Value {
@@ -730,6 +736,7 @@ struct AdminTenantSummary {
     keys: usize,
     active_keys: usize,
     providers: Vec<String>,
+    all_providers: bool,
     monthly_budget_micros: u64,
     request_cost_micros: u64,
 }
@@ -739,6 +746,7 @@ struct TenantAccumulator {
     keys: usize,
     active_keys: usize,
     providers: BTreeSet<String>,
+    all_providers: bool,
     monthly_budget_micros: u64,
     request_cost_micros: u64,
 }
@@ -1637,7 +1645,11 @@ fn admin_tenant_summaries(entries: &[AdminKeyPolicyResponse]) -> Vec<AdminTenant
         summary.request_cost_micros = summary
             .request_cost_micros
             .saturating_add(entry.request_cost_micros.unwrap_or_default());
-        summary.providers.extend(entry.providers.iter().cloned());
+        if entry.providers.is_empty() {
+            summary.all_providers = true;
+        } else {
+            summary.providers.extend(entry.providers.iter().cloned());
+        }
     }
     tenants
         .into_iter()
@@ -1646,6 +1658,7 @@ fn admin_tenant_summaries(entries: &[AdminKeyPolicyResponse]) -> Vec<AdminTenant
             keys: summary.keys,
             active_keys: summary.active_keys,
             providers: summary.providers.into_iter().collect(),
+            all_providers: summary.all_providers,
             monthly_budget_micros: summary.monthly_budget_micros,
             request_cost_micros: summary.request_cost_micros,
         })
@@ -4692,7 +4705,7 @@ mod tests {
             AdminKeyPolicyResponse {
                 kid: "svc_ops".to_string(),
                 enabled: false,
-                providers: vec!["openai".to_string()],
+                providers: vec![],
                 tenant_id: Some("team_docs".to_string()),
                 token_role: Some("ops".to_string()),
                 monthly_budget_micros: Some(200),
@@ -4716,6 +4729,7 @@ mod tests {
         assert_eq!(docs.keys, 2);
         assert_eq!(docs.active_keys, 1);
         assert_eq!(docs.providers, vec!["openai", "tavily"]);
+        assert!(docs.all_providers);
         assert_eq!(docs.monthly_budget_micros, 300);
 
         let overview = admin_overview(&entries, &provider_snapshot().unwrap());
@@ -4815,13 +4829,22 @@ mod tests {
 
     #[test]
     fn legacy_interface_routes_redirect_under_dashboard() {
-        assert_eq!(legacy_interface_redirect("/access"), Some("/dashboard/access"));
-        assert_eq!(legacy_interface_redirect("/catalog"), Some("/dashboard/catalog"));
+        assert_eq!(
+            legacy_interface_redirect("/access"),
+            Some("/dashboard/access")
+        );
+        assert_eq!(
+            legacy_interface_redirect("/catalog"),
+            Some("/dashboard/catalog")
+        );
         assert_eq!(
             legacy_interface_redirect("/playground"),
             Some("/dashboard/playground")
         );
-        assert_eq!(legacy_interface_redirect("/usage"), Some("/dashboard/usage"));
+        assert_eq!(
+            legacy_interface_redirect("/usage"),
+            Some("/dashboard/usage")
+        );
         assert_eq!(legacy_interface_redirect("/v1/routes"), None);
     }
 
@@ -4853,6 +4876,14 @@ mod tests {
     #[test]
     fn root_redirect_points_to_dashboard() {
         assert_eq!(ROOT_REDIRECT_PATH, "/dashboard");
+        assert_eq!(
+            redirect_location(ROOT_REDIRECT_PATH, Some("demo")),
+            "/dashboard?demo"
+        );
+        assert_eq!(
+            redirect_location("/dashboard/catalog", Some("demo")),
+            "/dashboard/catalog?demo"
+        );
     }
 
     #[test]
