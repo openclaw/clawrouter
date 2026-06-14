@@ -668,7 +668,7 @@ struct AdminKeyPolicyRequest {
     #[serde(default)]
     secret_sha256: Option<String>,
     #[serde(default)]
-    providers: Vec<String>,
+    providers: Option<Vec<String>>,
     #[serde(default)]
     tenant_id: Option<String>,
     #[serde(default)]
@@ -1488,6 +1488,7 @@ impl AdminKeyPolicyRequest {
                 .filter(|value| is_sha256_hex(value))
                 .ok_or("secretSha256 is required for new proxy keys")?,
         };
+        let providers = self.providers.ok_or("providers is required")?;
         if let Some(value) = self.monthly_budget_micros {
             validate_admin_budget(value, "monthlyBudgetMicros")?;
         }
@@ -1498,7 +1499,7 @@ impl AdminKeyPolicyRequest {
         Ok(KeyPolicy {
             enabled: self.enabled,
             secret_sha256: secret_sha256.to_ascii_lowercase(),
-            providers: self.providers,
+            providers,
             tenant_id: self.tenant_id,
             token_role,
             monthly_budget_micros: self.monthly_budget_micros,
@@ -4588,7 +4589,7 @@ mod tests {
         let request = AdminKeyPolicyRequest {
             enabled: true,
             secret_sha256: Some(sha256_hex("secret")),
-            providers: vec!["openai".to_string(), "tavily".to_string()],
+            providers: Some(vec!["openai".to_string(), "tavily".to_string()]),
             tenant_id: Some("team_docs".to_string()),
             token_role: Some("User".to_string()),
             monthly_budget_micros: Some(100),
@@ -4610,7 +4611,7 @@ mod tests {
         let request = AdminKeyPolicyRequest {
             enabled: true,
             secret_sha256: Some(sha256_hex("secret")),
-            providers: vec!["openai".to_string()],
+            providers: Some(vec!["openai".to_string()]),
             tenant_id: Some("team_docs".to_string()),
             token_role: Some("bad role!".to_string()),
             monthly_budget_micros: Some(100),
@@ -4628,7 +4629,7 @@ mod tests {
         let request = AdminKeyPolicyRequest {
             enabled: true,
             secret_sha256: None,
-            providers: vec!["openai".to_string()],
+            providers: Some(vec!["openai".to_string()]),
             tenant_id: Some("team_docs".to_string()),
             token_role: Some("service".to_string()),
             monthly_budget_micros: Some(200),
@@ -4642,7 +4643,7 @@ mod tests {
         let new_key = AdminKeyPolicyRequest {
             enabled: true,
             secret_sha256: None,
-            providers: vec!["openai".to_string()],
+            providers: Some(vec!["openai".to_string()]),
             tenant_id: None,
             token_role: None,
             monthly_budget_micros: None,
@@ -4760,7 +4761,7 @@ mod tests {
         let bad_hash = AdminKeyPolicyRequest {
             enabled: true,
             secret_sha256: Some("not-a-hash".to_string()),
-            providers: vec!["openai".to_string()],
+            providers: Some(vec!["openai".to_string()]),
             tenant_id: None,
             token_role: None,
             monthly_budget_micros: None,
@@ -4774,7 +4775,7 @@ mod tests {
         let wildcard_providers = AdminKeyPolicyRequest {
             enabled: true,
             secret_sha256: Some(sha256_hex("secret")),
-            providers: Vec::new(),
+            providers: Some(Vec::new()),
             tenant_id: None,
             token_role: None,
             monthly_budget_micros: None,
@@ -4783,6 +4784,20 @@ mod tests {
         let wildcard_policy = wildcard_providers.try_into_policy(None).unwrap();
         assert!(wildcard_policy.providers.is_empty());
         validate_policy_providers(&wildcard_policy).unwrap();
+
+        let omitted_providers = AdminKeyPolicyRequest {
+            enabled: true,
+            secret_sha256: Some(sha256_hex("secret")),
+            providers: None,
+            tenant_id: None,
+            token_role: None,
+            monthly_budget_micros: None,
+            request_cost_micros: None,
+        };
+        assert_eq!(
+            omitted_providers.try_into_policy(None).unwrap_err(),
+            "providers is required"
+        );
 
         let unknown_provider = KeyPolicy {
             enabled: true,
