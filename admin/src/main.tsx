@@ -1471,9 +1471,10 @@ function accessFormFromUser(user: AccessUser): AccessForm {
 
 function effectiveAccess(user: AccessUser | undefined, policies: KeyPolicy[], services: ServiceItem[]) {
   if (!user || !user.enabled) return { policies: [] as KeyPolicy[], services: [] as ServiceItem[] };
-  const userPolicies = policies.filter((policy) => policy.enabled && (policy.tenantId ?? "default") === user.tenantId);
+  const userPolicies = policies.filter((policy) => policy.enabled && (user.role === "admin" || (policy.tenantId ?? "default") === user.tenantId));
+  const hasWildcardGrant = userPolicies.some((policy) => policy.providers.length === 0);
   const providerIds = new Set(userPolicies.flatMap((policy) => policy.providers));
-  return { policies: userPolicies, services: services.filter((service) => providerIds.has(service.provider)) };
+  return { policies: userPolicies, services: services.filter((service) => hasWildcardGrant || providerIds.has(service.provider)) };
 }
 
 function policyUsageFallback(policy: KeyPolicy): AdminUsageRow {
