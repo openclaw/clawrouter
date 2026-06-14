@@ -708,6 +708,7 @@ function App() {
             allServices={services}
             selected={selectedService}
             policies={keys}
+            policyFallbackAuthoritative={session.role === "admin"}
             query={query}
             setQuery={setQuery}
             kind={kind}
@@ -798,11 +799,12 @@ function App() {
   );
 }
 
-function CatalogScreen({ services, allServices, selected, policies, query, setQuery, kind, setKind, kinds, onSelect, onPlay, onAdd }: {
+function CatalogScreen({ services, allServices, selected, policies, policyFallbackAuthoritative, query, setQuery, kind, setKind, kinds, onSelect, onPlay, onAdd }: {
   services: ServiceItem[];
   allServices: ServiceItem[];
   selected?: ServiceItem;
   policies: KeyPolicy[];
+  policyFallbackAuthoritative: boolean;
   query: string;
   setQuery: (value: string) => void;
   kind: string;
@@ -814,10 +816,10 @@ function CatalogScreen({ services, allServices, selected, policies, query, setQu
 }) {
   const activePolicies = policies.filter((policy) => policy.enabled);
   const queryMatchedServices = allServices.filter((service) => matchesServiceQuery(service, query));
-  const selectedPolicies = selected ? activePolicies.filter((policy) => policy.providers.includes(selected.provider)) : [];
+  const selectedPolicies = selected ? activePolicies.filter((policy) => policyCoversProvider(policy, selected.provider)) : [];
   const kindCounts = new Map(kinds.map((item) => [item, item === "all" ? queryMatchedServices.length : queryMatchedServices.filter((service) => service.kind === item).length]));
-  const servicePolicies = (service: ServiceItem) => activePolicies.filter((policy) => policy.providers.includes(service.provider));
-  const outcomes = allServices.map((service) => serviceOutcome(service, servicePolicies(service)));
+  const servicePolicies = (service: ServiceItem) => activePolicies.filter((policy) => policyCoversProvider(policy, service.provider));
+  const outcomes = allServices.map((service) => serviceOutcome(service, servicePolicies(service), policyFallbackAuthoritative));
   const usableCount = outcomes.filter((outcome) => outcome.playable).length;
   const grantedCount = allServices.filter((service) => servicePolicies(service).length || service.access?.allowed).length;
   const blockedCount = outcomes.filter((outcome) => outcome.blocked).length;
@@ -837,7 +839,7 @@ function CatalogScreen({ services, allServices, selected, policies, query, setQu
           columnTemplate="minmax(220px, 1.45fr) 138px minmax(130px, 0.8fr) 120px minmax(150px, 0.9fr)"
           rows={services.map((service) => {
             const policiesForService = servicePolicies(service);
-            const outcome = serviceOutcome(service, policiesForService);
+            const outcome = serviceOutcome(service, policiesForService, policyFallbackAuthoritative);
             return {
               id: service.id,
               active: selected?.id === service.id,
@@ -857,8 +859,8 @@ function CatalogScreen({ services, allServices, selected, policies, query, setQu
         {selected ? (
           <>
             {(() => {
-              const outcome = serviceOutcome(selected, selectedPolicies);
-              const playBlocker = playgroundBlockedForService(selected, selectedPolicies);
+              const outcome = serviceOutcome(selected, selectedPolicies, policyFallbackAuthoritative);
+              const playBlocker = playgroundBlockedForService(selected, selectedPolicies, policyFallbackAuthoritative);
               return (
                 <>
             <InspectorHeader brandIcon={selected.brandIcon} icon={kindIcon(selected.kind)} title={selected.name} subtitle={`${kindLabel(selected.kind)} · ${selected.category}`} />
@@ -1346,12 +1348,21 @@ function grantNamesForService(service: ServiceItem, policies: KeyPolicy[] = []) 
   return unique([...policies.map((policy) => policy.kid), ...(service.access?.policies ?? [])]);
 }
 
-function serviceOutcome(service: ServiceItem, policies: KeyPolicy[] = []): ServiceOutcome {
+function serviceOutcome(service: ServiceItem, policies: KeyPolicy[] = [], policyFallbackAuthoritative = false): ServiceOutcome {
   const grantedBySession = Boolean(service.access?.allowed);
   const explicitlyDenied = service.access ? !service.access.allowed : false;
   const granted = grantedBySession || policies.length > 0;
   const policyNames = service.access?.policies.length ? service.access.policies : policies.map((policy) => policy.kid);
   if (!granted) {
+    if (!service.access && !policyFallbackAuthoritative) {
+      return {
+        label: "unknown",
+        detail: "Access entitlements are unavailable, so this identity's grant status cannot be determined.",
+        tone: "neutral",
+        playable: false,
+        blocked: false,
+      };
+    }
     return {
       label: explicitlyDenied ? "denied" : "not granted",
       detail: explicitlyDenied ? "Current Cloudflare Access identity is denied by policy." : "No active grant currently includes this service.",
@@ -1484,6 +1495,10 @@ function policyFormFromKey(key: KeyPolicy): PolicyForm {
   };
 }
 
+function policyCoversProvider(policy: KeyPolicy, providerId: string) {
+  return policy.providers.length === 0 || policy.providers.includes(providerId);
+}
+
 function accessFormFromUser(user: AccessUser): AccessForm {
   return {
     email: user.email,
@@ -1525,11 +1540,13 @@ function tenantSummaryFallback(keys: KeyPolicy[]): AdminTenantSummary[] {
     const tenantId = key.tenantId ?? "default";
     const current = acc.get(tenantId) ?? { tenantId, keys: 0, activeKeys: 0, providers: new Set<string>(), allProviders: false, monthlyBudgetMicros: 0, requestCostMicros: 0 };
     current.keys += 1;
-    if (key.enabled) current.activeKeys += 1;
-    if (key.providers.length) {
-      key.providers.forEach((provider) => current.providers.add(provider));
-    } else {
-      current.allProviders = true;
+    if (key.enabled) {
+      current.activeKeys += 1;
+      if (key.providers.length) {
+        key.providers.forEach((provider) => current.providers.add(provider));
+      } else {
+        current.allProviders = true;
+      }
     }
     current.monthlyBudgetMicros += key.monthlyBudgetMicros ?? 0;
     current.requestCostMicros += key.requestCostMicros ?? 0;
@@ -1696,8 +1713,8 @@ function playgroundBlocker(form: PlaygroundForm, model: CatalogModel | undefined
   return null;
 }
 
-function playgroundBlockedForService(service: ServiceItem, policies: KeyPolicy[] = []) {
-  const outcome = serviceOutcome(service, policies);
+function playgroundBlockedForService(service: ServiceItem, policies: KeyPolicy[] = [], policyFallbackAuthoritative = false) {
+  const outcome = serviceOutcome(service, policies, policyFallbackAuthoritative);
   if (!outcome.playable) return outcome.detail;
   if (service.readiness && !service.readiness.executable) return service.readiness.reasons[0] ?? `service is ${readinessLabel(service.readiness)}`;
   if (!service.models && service.surfaces.includes("provider")) return "no executable model or proxy route declared";
@@ -1795,7 +1812,7 @@ function demoData() {
   const entitlements: EntitlementsResponse = {
     session,
     providers: providers.map((item) => {
-      const policies = keys.filter((key) => key.enabled && (key.tenantId ?? "default") === session.tenantId && key.providers.includes(item.id)).map((key) => key.kid);
+      const policies = keys.filter((key) => key.enabled && (key.tenantId ?? "default") === session.tenantId && policyCoversProvider(key, item.id)).map((key) => key.kid);
       return {
         provider: item.id,
         displayName: item.display_name,
