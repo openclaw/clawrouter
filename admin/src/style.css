@@ -924,6 +924,40 @@ pre {
   line-height: 1.4;
 }
 
+.outcomeCallout,
+.grantSummary {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--soft-background);
+  padding: 8px;
+}
+
+.outcomeCallout {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+}
+
+.outcomeCallout p {
+  font-size: 12px;
+}
+
+.grantSummary strong {
+  overflow: hidden;
+  color: var(--foreground-strong);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.grantSummary span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.35;
+}
+
 .issuedKey {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
