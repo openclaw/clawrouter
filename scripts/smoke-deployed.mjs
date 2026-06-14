@@ -11,6 +11,8 @@ const smokeKey = process.env.CLAWROUTER_SMOKE_KEY;
 await expectOk(`${baseUrl}/v1/health`, "health");
 await expectRedirect(`${baseUrl}/`, "root redirect", "/dashboard");
 await expectAccessGate(`${baseUrl}/dashboard`, "dashboard access gate");
+await expectAccessGate(`${baseUrl}/dashboard/catalog`, "catalog access gate");
+await expectRedirect(`${baseUrl}/catalog`, "legacy catalog redirect", "/dashboard/catalog");
 const providers = await expectOk(`${baseUrl}/v1/providers`, "providers");
 if (!Array.isArray(providers.providers) || providers.providers.length < 20) {
   throw new Error("provider snapshot is unexpectedly small");

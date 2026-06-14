@@ -45,8 +45,8 @@ current deploy job renders and deploys a Worker that can verify Access JWTs.
 `CLAWROUTER_ACCESS_ADMIN_*` controls who is an admin inside ClawRouter.
 `CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS` creates a separate Service Auth
 (`non_identity`) policy for automation. The default path-scoped Access
-destinations are `/dashboard`, `/v1/session`, `/v1/entitlements`,
-`/v1/playground/*`, and `/v1/admin/*`. This stays within Cloudflare's
+destinations are `/dashboard`, `/dashboard/*`, `/v1/session`,
+`/v1/entitlements`, `/v1/playground/*`, and `/v1/admin/*`. This stays within Cloudflare's
 per-application destination limit while still protecting the console entrypoint
 and the Access-backed session, entitlement, playground, and admin APIs. Override
 them with `CLAWROUTER_ACCESS_PATHS` only if the API contract changes. Do not add
@@ -206,16 +206,16 @@ the `cf-access-jwt-assertion` signature against the team certs endpoint before
 it trusts the email or role.
 
 The browser console is fail-closed in the Worker. `/` redirects to
-`/dashboard`; the default Access app protects `/dashboard`, and the Worker
-still refuses `/playground`, `/admin`, `/account`, `/routes`, and `/console`
-without a verified Access JWT. Public and client-facing surfaces stay under
+`/dashboard`; the default Access app protects `/dashboard` and `/dashboard/*`.
+Old top-level console paths such as `/playground`, `/admin`, `/account`,
+`/routes`, and `/console` redirect under `/dashboard`. Public and client-facing surfaces stay under
 the API paths such as `/v1`, `/v1/health`, `/v1/providers`, `/v1/routes`, and
 proxy endpoints.
 
 After Access is configured, an unauthenticated request to `/` should be handled
 by the Worker with a redirect to `/dashboard`, and `/dashboard` should be
 handled by Cloudflare Access before it reaches the Worker. A raw `401` JSON
-response with `access_session_required` on `/dashboard` means the Access
+response with `access_session_required` on `/dashboard` or `/dashboard/*` means the Access
 application is not protecting the console path or the Worker was deployed
 without the Access team/AUD vars.
 
