@@ -1410,11 +1410,30 @@ pre {
   }
 
   .topbar,
-  .topActions,
   .statusBar,
   .splitHeader {
     align-items: stretch;
     flex-direction: column;
+  }
+
+  .sidebar {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto;
+    gap: 6px;
+    padding: 6px 10px 8px;
+  }
+
+  .brandBlock {
+    min-height: 28px;
+  }
+
+  .tenantSwitch {
+    justify-self: stretch;
+    width: 100%;
+  }
+
+  .navTabs {
+    grid-column: auto;
   }
 
   .topbar {
@@ -1425,14 +1444,32 @@ pre {
     white-space: normal;
   }
 
-  .topActions,
   .inspectorActions {
     width: 100%;
   }
 
-  .topActions button,
   .inspectorActions button {
     width: 100%;
+  }
+
+  .topActions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .topActions button {
+    flex: 0 0 auto;
+  }
+
+  .statusBar {
+    align-items: center;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .statusBar span {
+    white-space: normal;
   }
 
   .catalogControls,
