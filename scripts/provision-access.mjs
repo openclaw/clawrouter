@@ -339,7 +339,6 @@ function destinationUris(app) {
 
 function defaultAccessPaths() {
   return [
-    "/dashboard",
     "/dashboard/*",
     "/v1/session",
     "/v1/entitlements",
@@ -422,7 +421,7 @@ function printPlan({ app, policies, teamDomain, aud, created, updated }) {
   console.log("");
   console.log("Expected live root check after redeploy:");
   console.log(`curl -sS -D - -o /dev/null https://${host}/`);
-  console.log("Root should 302 to /dashboard; Cloudflare Access should challenge /dashboard and /dashboard/*.");
+  console.log("Root should 302 to /dashboard, /dashboard should 302 to /dashboard/catalog, and Cloudflare Access should challenge /dashboard/*.");
 }
 
 function syncGitHubVariable(repoName, name, value) {
