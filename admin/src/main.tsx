@@ -1102,9 +1102,12 @@ function UsageScreen({ keys, services, overview, tenants, usageRows }: { keys: K
   const rows = usageRows.length ? usageRows : keys.map(policyUsageFallback);
   const tenantRows = tenants.length ? tenants : tenantSummaryFallback(keys);
   const totalBudget = overview?.monthlyBudgetMicros ?? keys.reduce((total, key) => total + (key.monthlyBudgetMicros ?? 0), 0);
-  const totalSpent = rows.reduce((total, row) => total + (row.budget.spentMicros ?? 0), 0);
-  const routeTotal = overview ? overview.openaiCompatibleProviders + overview.manifestRoutes : services.reduce((total, service) => total + service.routeCount, 0);
-  const providerTotal = overview?.providerCount ?? services.length;
+  const trackedRows = rows.filter((row) => row.budget.configured);
+  const totalSpent = trackedRows.some((row) => row.budget.spentMicros === undefined || row.budget.spentMicros === null)
+    ? null
+    : trackedRows.reduce((total, row) => total + (row.budget.spentMicros ?? 0), 0);
+  const routeTotal = services.reduce((total, service) => total + service.routeCount, 0);
+  const providerTotal = overview?.providerCount ?? new Set(services.map((service) => service.provider)).size;
   return (
     <div className="entityLayout">
       <section className="mainPane">
