@@ -60,6 +60,9 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     if req.method() == Method::Get && request_path == "/" {
         return redirect_to(ROOT_REDIRECT_PATH);
     }
+    if req.method() == Method::Get && request_path == ROOT_REDIRECT_PATH {
+        return redirect_to("/dashboard/catalog");
+    }
     if req.method() == Method::Get {
         if let Some(target) = legacy_interface_redirect(url.path()) {
             let query = url
@@ -227,7 +230,7 @@ fn service_index() -> Result<Response> {
 }
 
 fn interface_path(path: &str) -> bool {
-    path == "/dashboard" || path.starts_with("/dashboard/")
+    path.starts_with("/dashboard/")
 }
 
 fn legacy_interface_redirect(path: &str) -> Option<&'static str> {
@@ -4800,7 +4803,7 @@ mod tests {
 
     #[test]
     fn interface_routes_require_the_admin_shell() {
-        assert!(interface_path("/dashboard"));
+        assert!(!interface_path("/dashboard"));
         assert!(interface_path("/dashboard/access"));
         assert!(interface_path("/dashboard/catalog"));
         assert!(interface_path("/dashboard/playground"));

@@ -1489,7 +1489,7 @@ function policyUsageFallback(policy: KeyPolicy): AdminUsageRow {
       configured: false,
       ledger: "untracked",
       limitMicros: policy.monthlyBudgetMicros,
-      spentMicros: 0,
+      spentMicros: null,
       remainingMicros: policy.monthlyBudgetMicros,
     },
   };

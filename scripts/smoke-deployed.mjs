@@ -10,7 +10,7 @@ const smokeKey = process.env.CLAWROUTER_SMOKE_KEY;
 
 await expectOk(`${baseUrl}/v1/health`, "health");
 await expectRedirect(`${baseUrl}/`, "root redirect", "/dashboard");
-await expectAccessGate(`${baseUrl}/dashboard`, "dashboard access gate");
+await expectRedirect(`${baseUrl}/dashboard`, "dashboard redirect", "/dashboard/catalog");
 await expectAccessGate(`${baseUrl}/dashboard/catalog`, "catalog access gate");
 await expectRedirect(`${baseUrl}/catalog`, "legacy catalog redirect", "/dashboard/catalog");
 const providers = await expectOk(`${baseUrl}/v1/providers`, "providers");
