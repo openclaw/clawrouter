@@ -480,7 +480,7 @@ function App() {
         requestCostMicros: optionalNumber(policyForm.requestCostMicros) ?? null,
       };
       if (demoMode) {
-        setKeys((current) => [next, ...current.filter((key) => key.kid !== next.kid)]);
+        applyDemoKeys((current) => [next, ...current.filter((key) => key.kid !== next.kid)]);
         setSelectedPolicyId(next.kid);
         setStatus("saved grant");
         return;
@@ -535,7 +535,7 @@ function App() {
     try {
       setStatus(`revoking ${kid}`);
       if (demoMode) {
-        setKeys((current) => current.map((key) => (key.kid === kid ? { ...key, enabled: false } : key)));
+        applyDemoKeys((current) => current.map((key) => (key.kid === kid ? { ...key, enabled: false } : key)));
         setStatus(`revoked ${kid}`);
         return;
       }
@@ -614,6 +614,16 @@ function App() {
         ? unique([...current.providers, ...providerIds]).sort()
         : current.providers.filter((id) => !providerIds.includes(id)),
     }));
+  }
+
+  function applyDemoKeys(updater: (current: KeyPolicy[]) => KeyPolicy[]) {
+    setKeys((current) => {
+      const next = updater(current);
+      setAdminOverview(adminOverviewFromKeys(next, providers, routes));
+      setTenantSummaries(tenantSummaryFallback(next));
+      setUsageRows(next.map(policyUsageFallback));
+      return next;
+    });
   }
 
   function navigateTo(nextView: View) {
@@ -1054,8 +1064,7 @@ function UsersScreen({ users, selected, policies, services, form, setForm, error
 }) {
   const accessForUser = (user: AccessUser | undefined) => effectiveAccess(user, policies, services);
   const selectedAccess = accessForUser(selected);
-  const selectedServices = selectedAccess.services.map((service) => ({ service, label: userServiceGrantLabel(service) }));
-  const selectedBlocked = selectedServices.filter(({ service }) => !service.readiness?.executable).length;
+  const selectedServices = selectedAccess.services.map((service) => ({ service, label: "granted" }));
   return (
     <div className="entityLayout">
       <section className="mainPane">
@@ -1074,7 +1083,7 @@ function UsersScreen({ users, selected, policies, services, form, setForm, error
             <label><span>tenant</span><input value={form.tenantId} onChange={(event) => setForm({ ...form, tenantId: event.target.value })} /></label>
             <label><span>status</span><select value={form.enabled ? "enabled" : "disabled"} onChange={(event) => setForm({ ...form, enabled: event.target.value === "enabled" })}><option value="enabled">enabled</option><option value="disabled">disabled</option></select></label>
           </div>
-          <dl className="facts"><dt>granted services</dt><dd>{selectedAccess.services.length}</dd><dt>blocked/unknown</dt><dd>{selectedBlocked}</dd><dt>active grants</dt><dd>{selectedAccess.policies.length}</dd><dt>role</dt><dd>{selected?.role ?? "user"}</dd><dt>tenant</dt><dd>{selected?.tenantId ?? form.tenantId}</dd></dl>
+          <dl className="facts"><dt>granted services</dt><dd>{selectedAccess.services.length}</dd><dt>active grants</dt><dd>{selectedAccess.policies.length}</dd><dt>role</dt><dd>{selected?.role ?? "user"}</dd><dt>tenant</dt><dd>{selected?.tenantId ?? form.tenantId}</dd></dl>
           <div className="sectionTitle">Tenant grants</div>
           <div className="miniList">{selectedAccess.policies.length ? selectedAccess.policies.map((policy) => <button type="button" key={policy.kid} onClick={() => onOpenPolicy(policy)}>{policy.kid}<span>{policy.providers.length} services · {formatBudget(policy.monthlyBudgetMicros)}</span></button>) : <p>No active grant gives this tenant service access.</p>}</div>
           <div className="sectionTitle">Effective access</div>
@@ -1092,15 +1101,17 @@ function UsageScreen({ keys, services, overview, tenants, usageRows }: { keys: K
   const blockedServices = services.filter((service) => service.readiness && !service.readiness.executable);
   const rows = usageRows.length ? usageRows : keys.map(policyUsageFallback);
   const tenantRows = tenants.length ? tenants : tenantSummaryFallback(keys);
-  const totalBudget = overview?.monthlyBudgetMicros ?? activeKeys.reduce((total, key) => total + (key.monthlyBudgetMicros ?? 0), 0);
+  const totalBudget = overview?.monthlyBudgetMicros ?? keys.reduce((total, key) => total + (key.monthlyBudgetMicros ?? 0), 0);
   const totalSpent = rows.reduce((total, row) => total + (row.budget.spentMicros ?? 0), 0);
+  const routeTotal = overview ? overview.openaiCompatibleProviders + overview.manifestRoutes : services.reduce((total, service) => total + service.routeCount, 0);
+  const providerTotal = overview?.providerCount ?? services.length;
   return (
     <div className="entityLayout">
       <section className="mainPane">
         <div className="overviewStrip">
           <Metric label="active grants" value={String(overview?.keysActive ?? activeKeys.length)} meta={`${overview?.keysTotal ?? keys.length} total`} />
           <Metric label="tenants" value={String(overview?.tenantsTotal ?? tenantRows.length)} meta={`${new Set(activeKeys.flatMap((key) => key.providers)).size} granted services`} />
-          <Metric label="routes" value={String((overview?.openaiCompatibleProviders ?? 0) + (overview?.manifestRoutes ?? 0))} meta={`${overview?.providerCount ?? services.length} providers`} />
+          <Metric label="routes" value={String(routeTotal)} meta={`${providerTotal} providers`} />
           <Metric label="budget" value={formatMicros(totalBudget)} meta={`${formatMicros(totalSpent)} spent`} />
         </div>
         <EntityTable columns={["grant", "tenant", "budget", "spent", "remaining", "services", "status"]} columnTemplate="minmax(220px, 1.4fr) 128px 120px 120px 120px 94px 108px" rows={rows.map((row) => ({ id: row.kid, cells: [<EntityName icon={KeyRound} title={row.kid} subtitle={row.tokenRole ?? "custom"} />, row.tenantId, formatBudget(row.monthlyBudgetMicros), formatMicros(row.budget.spentMicros), row.budget.configured ? formatMicros(row.budget.remainingMicros) : "not tracked", String(row.providers.length), <Status label={row.enabled ? "active" : "revoked"} tone={row.enabled ? "active" : "revoked"} />] }))} />
@@ -1341,11 +1352,6 @@ function serviceOutcome(service: ServiceItem, policies: KeyPolicy[] = []): Servi
   };
 }
 
-function userServiceGrantLabel(service: ServiceItem) {
-  if (!service.readiness) return "readiness unknown";
-  return service.readiness.executable ? "granted" : readinessLabel(service.readiness);
-}
-
 function readinessLabel(readiness: ProviderReadiness | undefined) {
   if (!readiness) return "unknown";
   return readiness.status.replace(/_/g, " ");
@@ -1485,6 +1491,20 @@ function tenantSummaryFallback(keys: KeyPolicy[]): AdminTenantSummary[] {
     return acc;
   }, new Map<string, { tenantId: string; keys: number; activeKeys: number; providers: Set<string>; monthlyBudgetMicros: number; requestCostMicros: number }>());
   return Array.from(groups.values()).map((tenant) => ({ ...tenant, providers: Array.from(tenant.providers).sort() }));
+}
+
+function adminOverviewFromKeys(keys: KeyPolicy[], providers: ProviderRow[], routes: RouteCatalog): AdminOverview {
+  const tenants = tenantSummaryFallback(keys);
+  return {
+    keysTotal: keys.length,
+    keysActive: keys.filter((key) => key.enabled).length,
+    tenantsTotal: tenants.length,
+    providerCount: providers.length,
+    openaiCompatibleProviders: routes.openaiCompatible.length,
+    manifestRoutes: routes.manifestProxy.length,
+    monthlyBudgetMicros: keys.reduce((total, key) => total + (key.monthlyBudgetMicros ?? 0), 0),
+    requestCostMicros: keys.reduce((total, key) => total + (key.requestCostMicros ?? 0), 0),
+  };
 }
 
 function serviceItems(providers: ProviderRow[], routes: RouteCatalog, readinessByProvider: Record<string, ProviderReadiness> = {}, accessByProvider: Map<string, ProviderAccess> = new Map()): ServiceItem[] {
@@ -1744,16 +1764,7 @@ function demoData() {
   const readinessByProvider = readinessMap(entitlements.providers.map((item) => item.readiness));
   const usageRows = keys.map(policyUsageFallback);
   const tenants = tenantSummaryFallback(keys);
-  const overview: AdminOverview = {
-    keysTotal: keys.length,
-    keysActive: keys.filter((key) => key.enabled).length,
-    tenantsTotal: tenants.length,
-    providerCount: providers.length,
-    openaiCompatibleProviders: routes.openaiCompatible.length,
-    manifestRoutes: routes.manifestProxy.length,
-    monthlyBudgetMicros: keys.reduce((total, key) => total + (key.monthlyBudgetMicros ?? 0), 0),
-    requestCostMicros: keys.reduce((total, key) => total + (key.requestCostMicros ?? 0), 0),
-  };
+  const overview = adminOverviewFromKeys(keys, providers, routes);
   return { session, providers, routes, keys, users, overview, tenants, usageRows, entitlements, services: serviceItems(providers, routes, readinessByProvider, accessByProvider), models };
 }
 
