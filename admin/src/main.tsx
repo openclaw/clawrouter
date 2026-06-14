@@ -29,6 +29,11 @@ const pathViews: Record<string, View> = {
   "/catalog": "catalog",
   "/console": "catalog",
   "/dashboard": "catalog",
+  "/dashboard/access": "policies",
+  "/dashboard/catalog": "catalog",
+  "/dashboard/playground": "playground",
+  "/dashboard/usage": "usage",
+  "/dashboard/users": "users",
   "/policies": "policies",
   "/playground": "playground",
   "/routes": "catalog",
@@ -38,11 +43,11 @@ const pathViews: Record<string, View> = {
 };
 
 const viewPaths: Record<View, string> = {
-  catalog: "/catalog",
-  playground: "/playground",
-  policies: "/access",
-  users: "/users",
-  usage: "/usage",
+  catalog: "/dashboard/catalog",
+  playground: "/dashboard/playground",
+  policies: "/dashboard/access",
+  users: "/dashboard/users",
+  usage: "/dashboard/usage",
 };
 
 function initialViewFromPath(): View {
@@ -1101,6 +1106,10 @@ function UsageScreen({ keys, services, overview, tenants, usageRows }: { keys: K
   const blockedServices = services.filter((service) => service.readiness && !service.readiness.executable);
   const rows = usageRows.length ? usageRows : keys.map(policyUsageFallback);
   const tenantRows = tenants.length ? tenants : tenantSummaryFallback(keys);
+  const serviceProviderCount = new Set(services.map((service) => service.provider)).size;
+  const grantedServiceCount = activeKeys.some((key) => key.providers.length === 0)
+    ? serviceProviderCount
+    : new Set(activeKeys.flatMap((key) => key.providers)).size;
   const totalBudget = overview?.monthlyBudgetMicros ?? keys.reduce((total, key) => total + (key.monthlyBudgetMicros ?? 0), 0);
   const trackedRows = rows.filter((row) => row.budget.configured);
   const totalSpent = trackedRows.some((row) => row.budget.spentMicros === undefined || row.budget.spentMicros === null)
@@ -1113,17 +1122,17 @@ function UsageScreen({ keys, services, overview, tenants, usageRows }: { keys: K
       <section className="mainPane">
         <div className="overviewStrip">
           <Metric label="active grants" value={String(overview?.keysActive ?? activeKeys.length)} meta={`${overview?.keysTotal ?? keys.length} total`} />
-          <Metric label="tenants" value={String(overview?.tenantsTotal ?? tenantRows.length)} meta={`${new Set(activeKeys.flatMap((key) => key.providers)).size} granted services`} />
+          <Metric label="tenants" value={String(overview?.tenantsTotal ?? tenantRows.length)} meta={`${grantedServiceCount} granted services`} />
           <Metric label="routes" value={String(routeTotal)} meta={`${providerTotal} providers`} />
           <Metric label="budget" value={formatMicros(totalBudget)} meta={`${formatMicros(totalSpent)} spent`} />
         </div>
-        <EntityTable columns={["grant", "tenant", "budget", "spent", "remaining", "services", "status"]} columnTemplate="minmax(220px, 1.4fr) 128px 120px 120px 120px 94px 108px" rows={rows.map((row) => ({ id: row.kid, cells: [<EntityName icon={KeyRound} title={row.kid} subtitle={row.tokenRole ?? "custom"} />, row.tenantId, formatBudget(row.monthlyBudgetMicros), formatMicros(row.budget.spentMicros), row.budget.configured ? formatMicros(row.budget.remainingMicros) : "not tracked", String(row.providers.length), <Status label={row.enabled ? "active" : "revoked"} tone={row.enabled ? "active" : "revoked"} />] }))} />
+        <EntityTable columns={["grant", "tenant", "budget", "spent", "remaining", "services", "status"]} columnTemplate="minmax(220px, 1.4fr) 128px 120px 120px 120px 94px 108px" rows={rows.map((row) => ({ id: row.kid, cells: [<EntityName icon={KeyRound} title={row.kid} subtitle={row.tokenRole ?? "custom"} />, row.tenantId, formatBudget(row.monthlyBudgetMicros), formatMicros(row.budget.spentMicros), row.budget.configured ? formatMicros(row.budget.remainingMicros) : "not tracked", effectiveProviderCount(row.providers, services), <Status label={row.enabled ? "active" : "revoked"} tone={row.enabled ? "active" : "revoked"} />] }))} />
       </section>
       <aside className="inspector">
         <InspectorHeader icon={BarChart3} title="Usage ledger" subtitle="tenant budgets and grant health" />
         <dl className="facts"><dt>active grants</dt><dd>{overview?.keysActive ?? activeKeys.length}</dd><dt>ready services</dt><dd>{readyServices}/{services.length}</dd><dt>blocked services</dt><dd>{blockedServices.length}</dd><dt>monthly budget</dt><dd>{formatMicros(totalBudget)}</dd><dt>tracked spend</dt><dd>{formatMicros(totalSpent)}</dd></dl>
         <div className="sectionTitle">Tenants</div>
-        <div className="miniList">{tenantRows.length ? tenantRows.slice(0, 8).map((tenant) => <button type="button" key={tenant.tenantId}>{tenant.tenantId}<span>{tenant.activeKeys}/{tenant.keys} grants · {tenant.providers.length} services</span></button>) : <p>No tenant grants yet.</p>}</div>
+        <div className="miniList">{tenantRows.length ? tenantRows.slice(0, 8).map((tenant) => <button type="button" key={tenant.tenantId}>{tenant.tenantId}<span>{tenant.activeKeys}/{tenant.keys} grants · {effectiveProviderCount(tenant.providers, services)} services</span></button>) : <p>No tenant grants yet.</p>}</div>
         <div className="sectionTitle">Needs configuration</div>
         <div className="miniList">{blockedServices.length ? blockedServices.slice(0, 8).map((service) => <button type="button" key={service.id}>{service.name}<span>{readinessLabel(service.readiness)}</span></button>) : <p>All visible services are executable.</p>}</div>
       </aside>
@@ -1412,6 +1421,11 @@ function formatMicros(value: number | null | undefined) {
   if (value === undefined || value === null) return "unknown";
   if (!value) return "none";
   return `$${(value / 1_000_000).toFixed(2)}`;
+}
+
+function effectiveProviderCount(providerIds: string[], services: ServiceItem[]) {
+  if (providerIds.length) return String(providerIds.length);
+  return `all ${new Set(services.map((service) => service.provider)).size}`;
 }
 
 function catalogModels(routes: RouteCatalog): CatalogModel[] {

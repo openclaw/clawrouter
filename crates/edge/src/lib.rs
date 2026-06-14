@@ -60,6 +60,15 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     if req.method() == Method::Get && request_path == "/" {
         return redirect_to(ROOT_REDIRECT_PATH);
     }
+    if req.method() == Method::Get {
+        if let Some(target) = legacy_interface_redirect(url.path()) {
+            let query = url
+                .query()
+                .map(|value| format!("?{value}"))
+                .unwrap_or_default();
+            return redirect_to(&format!("{target}{query}"));
+        }
+    }
     if req.method() == Method::Get && url.path() == "/v1" {
         return service_index().and_then(with_cors);
     }
@@ -218,20 +227,18 @@ fn service_index() -> Result<Response> {
 }
 
 fn interface_path(path: &str) -> bool {
-    matches!(
-        path,
-        "/access"
-            | "/account"
-            | "/admin"
-            | "/catalog"
-            | "/console"
-            | "/dashboard"
-            | "/playground"
-            | "/policies"
-            | "/routes"
-            | "/usage"
-            | "/users"
-    )
+    path == "/dashboard" || path.starts_with("/dashboard/")
+}
+
+fn legacy_interface_redirect(path: &str) -> Option<&'static str> {
+    match path {
+        "/access" | "/admin" | "/policies" => Some("/dashboard/access"),
+        "/account" | "/users" => Some("/dashboard/users"),
+        "/catalog" | "/console" | "/routes" => Some("/dashboard/catalog"),
+        "/playground" => Some("/dashboard/playground"),
+        "/usage" => Some("/dashboard/usage"),
+        _ => None,
+    }
 }
 
 fn canonical_api_path(path: &str) -> String {
@@ -4793,16 +4800,26 @@ mod tests {
 
     #[test]
     fn interface_routes_require_the_admin_shell() {
-        assert!(interface_path("/access"));
-        assert!(interface_path("/catalog"));
         assert!(interface_path("/dashboard"));
-        assert!(interface_path("/playground"));
-        assert!(interface_path("/admin"));
-        assert!(interface_path("/account"));
-        assert!(interface_path("/routes"));
-        assert!(interface_path("/usage"));
-        assert!(interface_path("/users"));
+        assert!(interface_path("/dashboard/access"));
+        assert!(interface_path("/dashboard/catalog"));
+        assert!(interface_path("/dashboard/playground"));
+        assert!(interface_path("/dashboard/usage"));
+        assert!(interface_path("/dashboard/users"));
+        assert!(!interface_path("/access"));
         assert!(!interface_path("/v1/admin/keys"));
+    }
+
+    #[test]
+    fn legacy_interface_routes_redirect_under_dashboard() {
+        assert_eq!(legacy_interface_redirect("/access"), Some("/dashboard/access"));
+        assert_eq!(legacy_interface_redirect("/catalog"), Some("/dashboard/catalog"));
+        assert_eq!(
+            legacy_interface_redirect("/playground"),
+            Some("/dashboard/playground")
+        );
+        assert_eq!(legacy_interface_redirect("/usage"), Some("/dashboard/usage"));
+        assert_eq!(legacy_interface_redirect("/v1/routes"), None);
     }
 
     #[test]
