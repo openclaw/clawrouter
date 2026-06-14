@@ -164,6 +164,7 @@ interface AdminTenantSummary {
   keys: number;
   activeKeys: number;
   providers: string[];
+  allProviders?: boolean;
   monthlyBudgetMicros: number;
   requestCostMicros: number;
 }
@@ -296,6 +297,7 @@ function App() {
   const [tenantSummaries, setTenantSummaries] = useState<AdminTenantSummary[]>(allowDemo ? demo.tenants : []);
   const [usageRows, setUsageRows] = useState<AdminUsageRow[]>(allowDemo ? demo.usageRows : []);
   const [usageLoaded, setUsageLoaded] = useState(allowDemo);
+  const [usageRefreshKey, setUsageRefreshKey] = useState(0);
   const [entitlements, setEntitlements] = useState<EntitlementsResponse | null>(allowDemo ? demo.entitlements : null);
   const [providerReadiness, setProviderReadiness] = useState<Record<string, ProviderReadiness>>(allowDemo ? readinessMap(demo.entitlements.providers.map((item) => item.readiness)) : {});
   const [policyForm, setPolicyForm] = useState<PolicyForm>(allowDemo && demo.keys[0] ? policyFormFromKey(demo.keys[0]) : defaultPolicy);
@@ -357,7 +359,7 @@ function App() {
     if (view === "usage" && session.role === "admin" && !demoMode && !usageLoaded) {
       void refreshUsageLedger();
     }
-  }, [demoMode, session.role, usageLoaded, view]);
+  }, [demoMode, session.role, usageLoaded, usageRefreshKey, view]);
 
   useEffect(() => {
     if (models.length && !models.some((model) => model.id === playground.model)) {
@@ -427,6 +429,7 @@ function App() {
         }
         setUsageRows([]);
         setUsageLoaded(false);
+        if (view === "usage") setUsageRefreshKey((current) => current + 1);
       } else {
         const user = {
           email: sessionData.email ?? "access-user",
@@ -1154,7 +1157,7 @@ function UsageScreen({ keys, services, overview, tenants, usageRows, usageLoaded
         <InspectorHeader icon={BarChart3} title="Usage ledger" subtitle="tenant budgets and grant health" />
         <dl className="facts"><dt>active grants</dt><dd>{overview?.keysActive ?? activeKeys.length}</dd><dt>ready services</dt><dd>{readyServices}/{services.length}</dd><dt>blocked services</dt><dd>{blockedServices.length}</dd><dt>monthly budget</dt><dd>{totalBudgetLabel}</dd><dt>tracked spend</dt><dd>{formatMicros(totalSpent)}</dd></dl>
         <div className="sectionTitle">Tenants</div>
-        <div className="miniList">{tenantRows.length ? tenantRows.slice(0, 8).map((tenant) => <button type="button" key={tenant.tenantId}>{tenant.tenantId}<span>{tenant.activeKeys}/{tenant.keys} grants · {effectiveProviderCount(tenant.providers, services)} services</span></button>) : <p>No tenant grants yet.</p>}</div>
+        <div className="miniList">{tenantRows.length ? tenantRows.slice(0, 8).map((tenant) => <button type="button" key={tenant.tenantId}>{tenant.tenantId}<span>{tenant.activeKeys}/{tenant.keys} grants · {effectiveProviderCount(tenant.providers, services, tenant.allProviders)} services</span></button>) : <p>No tenant grants yet.</p>}</div>
         <div className="sectionTitle">Needs configuration</div>
         <div className="miniList">{blockedServices.length ? blockedServices.slice(0, 8).map((service) => <button type="button" key={service.id}>{service.name}<span>{readinessLabel(service.readiness)}</span></button>) : <p>All visible services are executable.</p>}</div>
       </aside>
@@ -1445,9 +1448,8 @@ function formatMicros(value: number | null | undefined) {
   return `$${(value / 1_000_000).toFixed(2)}`;
 }
 
-function effectiveProviderCount(providerIds: string[], services: ServiceItem[]) {
-  if (providerIds.length) return String(providerIds.length);
-  return `all ${new Set(services.map((service) => service.provider)).size}`;
+function effectiveProviderCount(providerIds: string[], services: ServiceItem[], allProviders = providerIds.length === 0) {
+  return allProviders ? `all ${new Set(services.map((service) => service.provider)).size}` : String(providerIds.length);
 }
 
 function catalogModels(routes: RouteCatalog): CatalogModel[] {
@@ -1521,15 +1523,19 @@ function policyUsageFallback(policy: KeyPolicy): AdminUsageRow {
 function tenantSummaryFallback(keys: KeyPolicy[]): AdminTenantSummary[] {
   const groups = keys.reduce((acc, key) => {
     const tenantId = key.tenantId ?? "default";
-    const current = acc.get(tenantId) ?? { tenantId, keys: 0, activeKeys: 0, providers: new Set<string>(), monthlyBudgetMicros: 0, requestCostMicros: 0 };
+    const current = acc.get(tenantId) ?? { tenantId, keys: 0, activeKeys: 0, providers: new Set<string>(), allProviders: false, monthlyBudgetMicros: 0, requestCostMicros: 0 };
     current.keys += 1;
     if (key.enabled) current.activeKeys += 1;
-    key.providers.forEach((provider) => current.providers.add(provider));
+    if (key.providers.length) {
+      key.providers.forEach((provider) => current.providers.add(provider));
+    } else {
+      current.allProviders = true;
+    }
     current.monthlyBudgetMicros += key.monthlyBudgetMicros ?? 0;
     current.requestCostMicros += key.requestCostMicros ?? 0;
     acc.set(tenantId, current);
     return acc;
-  }, new Map<string, { tenantId: string; keys: number; activeKeys: number; providers: Set<string>; monthlyBudgetMicros: number; requestCostMicros: number }>());
+  }, new Map<string, { tenantId: string; keys: number; activeKeys: number; providers: Set<string>; allProviders: boolean; monthlyBudgetMicros: number; requestCostMicros: number }>());
   return Array.from(groups.values()).map((tenant) => ({ ...tenant, providers: Array.from(tenant.providers).sort() }));
 }
 
