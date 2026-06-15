@@ -388,7 +388,8 @@ passes `--all-providers`; omitting scope never creates an implicit wildcard.
 Policies and credentials carry the same generated policy generation.
 Authorization rejects mixed generations, so eventual KV propagation can cause
 a temporary denial during rotation but cannot combine an old secret with a
-newly expanded policy.
+newly expanded policy. Provisioning writes a disabled policy tombstone first
+and activates the policy only after its legacy and credential records succeed.
 
 Revoke access:
 

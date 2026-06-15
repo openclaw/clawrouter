@@ -5,7 +5,7 @@ import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 
-test("key provisioning activates the canonical credential last", () => {
+test("key provisioning activates the policy only after dependent records", () => {
   const dir = mkdtempSync(join(tmpdir(), "clawrouter-key-put-test-"));
   const logPath = join(dir, "commands.log");
   const payloadLogPath = join(dir, "payloads.log");
@@ -59,6 +59,7 @@ test("key provisioning activates the canonical credential last", () => {
       "policies/smoke",
       "keys/smoke",
       "credentials/smoke",
+      "policies/smoke",
     ]);
     const payloads = readFileSync(payloadLogPath, "utf8")
       .trim()
@@ -66,6 +67,8 @@ test("key provisioning activates the canonical credential last", () => {
       .map((line) => JSON.parse(line));
     const policy = payloads.findLast(({ key }) => key === "policies/smoke").value;
     const credential = payloads.findLast(({ key }) => key === "credentials/smoke").value;
+    const policyWrites = payloads.filter(({ key }) => key === "policies/smoke");
+    assert.deepEqual(policyWrites.map(({ value }) => value.enabled), [false, true]);
     assert.match(policy.generation, /^policy_/);
     assert.equal(credential.policyGeneration, policy.generation);
   } finally {

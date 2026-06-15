@@ -55,12 +55,14 @@ const credential = {
 const legacy = { ...policy, secretSha256: credential.secretSha256 };
 const tombstoneCredential = { ...credential, enabled: false };
 const tombstoneLegacy = { ...legacy, enabled: false };
+const tombstonePolicy = { ...policy, enabled: false };
 const records = [
   [`credentials/${kid}`, writeJson(tombstoneCredential, "credential-tombstone.json")],
   [`keys/${kid}`, writeJson(tombstoneLegacy, "legacy-key-tombstone.json")],
-  [`policies/${kid}`, writeJson(policy, "policy.json")],
+  [`policies/${kid}`, writeJson(tombstonePolicy, "policy-tombstone.json")],
   [`keys/${kid}`, writeJson(legacy, "legacy-key.json")],
   [`credentials/${kid}`, writeJson(credential, "credential.json")],
+  [`policies/${kid}`, writeJson(policy, "policy.json")],
 ];
 
 try {
