@@ -587,8 +587,9 @@ async fn proxy_openai_compatible(
         .with_body(Some(JsValue::from_str(&upstream_body)));
     let upstream_req = Request::new_with_init(&upstream_url, &init)?;
     let started_at_ms = Date::now().as_millis();
-    let response = send_upstream_request(upstream_req, &route.provider.id).await?;
+    let mut response = send_upstream_request(upstream_req, &route.provider.id).await?;
     let status_code = response.status_code();
+    let tokens = response_usage_tokens(&mut response, capability).await;
     let budget = settle_budget_after_response(&env, &auth, budget, status_code).await;
     enqueue_usage(
         &env,
@@ -599,6 +600,7 @@ async fn proxy_openai_compatible(
             model: Some(model.as_str()),
             request_id: &request_id,
             budget,
+            tokens,
             status: usage_status(status_code),
             status_code,
             duration_ms: Date::now().as_millis().saturating_sub(started_at_ms),
@@ -771,8 +773,9 @@ async fn proxy_manifest_endpoint(
     }
     let upstream_req = Request::new_with_init(&upstream_url, &init)?;
     let started_at_ms = Date::now().as_millis();
-    let response = send_upstream_request(upstream_req, &provider.id).await?;
+    let mut response = send_upstream_request(upstream_req, &provider.id).await?;
     let status_code = response.status_code();
+    let tokens = response_usage_tokens(&mut response, capability).await;
     let budget = settle_budget_after_response(&env, &auth, budget, status_code).await;
     enqueue_usage(
         &env,
@@ -783,6 +786,7 @@ async fn proxy_manifest_endpoint(
             model: None,
             request_id: &request_id,
             budget,
+            tokens,
             status: usage_status(status_code),
             status_code,
             duration_ms: Date::now().as_millis().saturating_sub(started_at_ms),
@@ -7452,9 +7456,90 @@ struct UsageRecord<'a> {
     model: Option<&'a str>,
     request_id: &'a str,
     budget: BudgetUsage,
+    tokens: UsageTokens,
     status: UsageStatus,
     status_code: u16,
     duration_ms: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+struct UsageTokens {
+    input: Option<u64>,
+    output: Option<u64>,
+    total: Option<u64>,
+}
+
+async fn response_usage_tokens(response: &mut Response, capability: &str) -> UsageTokens {
+    if !capability.starts_with("llm.") {
+        return UsageTokens::default();
+    }
+    let is_json = response
+        .headers()
+        .get("content-type")
+        .ok()
+        .flatten()
+        .is_some_and(|value| value.to_ascii_lowercase().contains("json"));
+    if !is_json {
+        return UsageTokens::default();
+    }
+    let Ok(mut cloned) = response.cloned() else {
+        return UsageTokens::default();
+    };
+    let Ok(value) = cloned.json::<Value>().await else {
+        return UsageTokens::default();
+    };
+    usage_tokens_from_response(&value)
+}
+
+fn usage_tokens_from_response(value: &Value) -> UsageTokens {
+    let input = first_json_u64(
+        value,
+        &[
+            &["usage", "input_tokens"],
+            &["usage", "inputTokens"],
+            &["usage", "prompt_tokens"],
+            &["usageMetadata", "promptTokenCount"],
+            &["meta", "billed_units", "input_tokens"],
+        ],
+    );
+    let output = first_json_u64(
+        value,
+        &[
+            &["usage", "output_tokens"],
+            &["usage", "outputTokens"],
+            &["usage", "completion_tokens"],
+            &["usageMetadata", "candidatesTokenCount"],
+            &["meta", "billed_units", "output_tokens"],
+        ],
+    );
+    let total = first_json_u64(
+        value,
+        &[
+            &["usage", "total_tokens"],
+            &["usage", "totalTokens"],
+            &["usageMetadata", "totalTokenCount"],
+        ],
+    )
+    .or_else(|| {
+        input
+            .zip(output)
+            .map(|(input, output)| input.saturating_add(output))
+    });
+    UsageTokens {
+        input,
+        output,
+        total,
+    }
+}
+
+fn first_json_u64(value: &Value, paths: &[&[&str]]) -> Option<u64> {
+    paths.iter().find_map(|path| {
+        let mut current = value;
+        for segment in *path {
+            current = current.get(*segment)?;
+        }
+        current.as_u64()
+    })
 }
 
 async fn enqueue_usage(env: &Env, record: UsageRecord<'_>) {
@@ -7484,6 +7569,9 @@ async fn enqueue_usage(env: &Env, record: UsageRecord<'_>) {
     event.principal_id.clone_from(&record.auth.principal_id);
     event.auth_type = record.auth.auth_type.to_string();
     event.model = record.model.map(str::to_string);
+    event.input_tokens = record.tokens.input;
+    event.output_tokens = record.tokens.output;
+    event.total_tokens = record.tokens.total;
     event.reserved_cost_micros = record.budget.reserved_cost_micros;
     event.actual_cost_micros = record.budget.actual_cost_micros;
     event.status_code = Some(record.status_code);
@@ -7517,6 +7605,7 @@ async fn enqueue_denied_usage(
             model,
             request_id,
             budget: BudgetUsage::default(),
+            tokens: UsageTokens::default(),
             status: UsageStatus::Denied,
             status_code,
             duration_ms: 0,
@@ -8871,6 +8960,51 @@ mod tests {
             QueueMessage::Job(QueueJob::BudgetSettlement { request, .. })
                 if request.reservation_id == "budget_1"
         ));
+    }
+
+    #[test]
+    fn usage_tokens_cover_common_provider_response_shapes() {
+        assert_eq!(
+            usage_tokens_from_response(&serde_json::json!({
+                "usage": {
+                    "prompt_tokens": 12,
+                    "completion_tokens": 4,
+                    "total_tokens": 16
+                }
+            })),
+            UsageTokens {
+                input: Some(12),
+                output: Some(4),
+                total: Some(16),
+            }
+        );
+        assert_eq!(
+            usage_tokens_from_response(&serde_json::json!({
+                "usage": {
+                    "input_tokens": 9,
+                    "output_tokens": 3
+                }
+            })),
+            UsageTokens {
+                input: Some(9),
+                output: Some(3),
+                total: Some(12),
+            }
+        );
+        assert_eq!(
+            usage_tokens_from_response(&serde_json::json!({
+                "usageMetadata": {
+                    "promptTokenCount": 8,
+                    "candidatesTokenCount": 5,
+                    "totalTokenCount": 13
+                }
+            })),
+            UsageTokens {
+                input: Some(8),
+                output: Some(5),
+                total: Some(13),
+            }
+        );
     }
 
     #[test]
