@@ -881,6 +881,7 @@ function App() {
         enabled: false,
         groups: next.groups.filter((group) => currentGroups.has(group)),
       };
+      const nextBindings = reconcileDirectUserBindings(bindings, email, keys, accessForm.policyIds);
       const bindingChanges = directUserBindingChanges(bindings, email, keys, accessForm.policyIds);
       const writeUser = (user: Pick<AccessUser, "tenantId" | "enabled" | "groups">) =>
         request<AccessUser>(gatewayOrigin, `/v1/admin/access-users/${encodeURIComponent(email)}`, {
@@ -899,6 +900,8 @@ function App() {
       await writeUser(next);
       for (const binding of bindingChanges.additions) await writeBinding(binding);
       await refresh();
+      setSelectedUserEmail(email);
+      setAccessForm(accessFormFromUser(next, nextBindings));
       setStatus("saved user");
     } catch (error) {
       const message = errorMessage(error);
