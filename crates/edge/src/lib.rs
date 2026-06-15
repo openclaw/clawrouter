@@ -3282,26 +3282,15 @@ async fn put_policy_binding_record(
         seed,
         binding: binding.clone(),
     };
-    if binding.enabled {
-        put_kv_record(
-            kv,
-            &binding_key,
-            binding,
-            "policy binding compatibility record",
-        )
-        .await?;
-        mutate_policy_binding_index(&namespace, mutation).await
+    // The Durable Object is authoritative; compatibility KV must never outlive a failed mutation.
+    mutate_policy_binding_index(&namespace, mutation).await?;
+    let compatibility_kind = if binding.enabled {
+        "policy binding compatibility record"
     } else {
-        mutate_policy_binding_index(&namespace, mutation).await?;
-        sync_kv_record_best_effort(
-            kv,
-            &binding_key,
-            binding,
-            "policy binding compatibility tombstone",
-        )
-        .await;
-        Ok(())
-    }
+        "policy binding compatibility tombstone"
+    };
+    sync_kv_record_best_effort(kv, &binding_key, binding, compatibility_kind).await;
+    Ok(())
 }
 
 async fn policy_binding_index_seed(
