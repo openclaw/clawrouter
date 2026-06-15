@@ -11,6 +11,8 @@ without a redeploy.
   health records.
 - `USAGE_QUEUE`: metered usage events and durable budget-settlement retries,
   with this Worker configured as producer and consumer.
+- usage DLQ, named by `CLAWROUTER_USAGE_DLQ`: separate queue for usage or
+  settlement messages that exhaust automatic retries.
 - `BUDGET_LEDGER`: SQLite-backed Durable Object budget ledger.
 - `ACCESS_CONTROL`: SQLite-backed Durable Object authority for user state,
   provider kill switches, serialized user/group policy-binding mutations, and
@@ -85,10 +87,12 @@ CLAWROUTER_SMOKE_KEY
 CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY # optional smoke-only upstream key
 ```
 
-Set these GitHub Actions variables when the console is protected by Cloudflare
-Access:
+Set the queue variables when overriding their defaults. Set the Access
+variables when the console is protected by Cloudflare Access:
 
 ```text
+CLAWROUTER_USAGE_QUEUE                 # optional, defaults to clawrouter-usage
+CLAWROUTER_USAGE_DLQ                   # optional, defaults to clawrouter-usage-dead-letter
 CLAWROUTER_ACCESS_TEAM_DOMAIN
 CLAWROUTER_ACCESS_AUD
 CLAWROUTER_ACCESS_ADMIN_EMAILS        # comma-separated admin emails
@@ -117,6 +121,12 @@ provider env names that are missing locally; those same provider bindings must b
 configured as Worker secrets or vars before enabling every provider live.
 Install the GitHub CLI as `gh`, or set `CLAWROUTER_GITHUB_CLI` when using a
 wrapper binary.
+
+Cloudflare moves a message to `CLAWROUTER_USAGE_DLQ` after the usage consumer
+exhausts `max_retries`. An unconsumed DLQ retains messages for four days. Treat
+any DLQ depth as an operator incident: inspect the failed message, repair the
+underlying Durable Object or Worker issue, and replay it to `USAGE_QUEUE`
+before that recovery window expires.
 
 Provider API keys are Cloudflare Worker secrets, not GitHub repository files:
 

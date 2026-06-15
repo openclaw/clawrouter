@@ -29,6 +29,7 @@ const optionalRepoSecrets = [
 
 const optionalRepoVars = [
   "CLAWROUTER_USAGE_QUEUE",
+  "CLAWROUTER_USAGE_DLQ",
   "CLAWROUTER_WORKER_NAME",
   "CLAWROUTER_ACCESS_TEAM_DOMAIN",
   "CLAWROUTER_ACCESS_AUD",

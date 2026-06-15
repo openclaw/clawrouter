@@ -180,7 +180,9 @@ Budgeted requests reserve the configured request cost before the upstream call.
 Successful upstream responses settle that charge; non-2xx and transport
 failures synchronously refund the reservation. Failed settlement calls are
 persisted to `USAGE_QUEUE` for durable retry while the reservation remains
-charged fail-closed. Internal reservation ids are generated independently from
-caller-supplied request ids.
+charged fail-closed. Messages that exhaust automatic retries move to the
+separate usage DLQ for operator inspection and replay before Cloudflare's
+four-day unconsumed-DLQ retention expires. Internal reservation ids are
+generated independently from caller-supplied request ids.
 OAuth, SigV4, and deployment-templated providers are still cataloged, but the
 edge path rejects them until the required token/signing/runtime mapping exists.
