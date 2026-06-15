@@ -36,6 +36,10 @@ if (smokeKey) {
   if (!inspect.ok) {
     throw new Error(`/v1/key/inspect failed with ${inspect.status}`);
   }
+  const inspection = await inspect.json();
+  if (inspection?.verified !== true) {
+    throw new Error(`/v1/key/inspect rejected the smoke key: ${inspection?.verification ?? "unknown"}`);
+  }
 }
 
 const liveProviders = liveProviderList();

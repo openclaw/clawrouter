@@ -29,6 +29,7 @@ const USAGE_CLEANUP_INTERVAL_MS: i64 = 86_400_000;
 const USAGE_AUDIT_FIELD_MAX_BYTES: usize = 256;
 const USAGE_AUDIT_PRINCIPAL_MAX_BYTES: usize = 320;
 const USAGE_AUDIT_MODEL_MAX_BYTES: usize = 512;
+const UPSTREAM_PROVIDER_HEADER: &str = "x-clawrouter-upstream-provider";
 const CORS_ALLOW_ORIGIN: &str = "*";
 const CORS_ALLOW_METHODS: &str = "GET,POST,PUT,OPTIONS";
 const CORS_ALLOW_HEADERS: &str = "authorization,content-type,x-request-id";
@@ -4535,7 +4536,12 @@ fn provider_runtime_error_response(error: Error) -> Result<Response> {
 
 async fn send_upstream_request(request: Request, provider_id: &str) -> Result<Response> {
     match Fetch::Request(request).send().await {
-        Ok(response) => Ok(response),
+        Ok(mut response) => {
+            response
+                .headers_mut()
+                .set(UPSTREAM_PROVIDER_HEADER, provider_id)?;
+            Ok(response)
+        }
         Err(_) => json_error(
             "provider_unavailable",
             &provider_transport_error_message(provider_id),

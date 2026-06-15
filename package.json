@@ -5,6 +5,7 @@
   "scripts": {
     "check": "pnpm --dir admin check && pnpm --dir admin test && cargo test --workspace",
     "build": "pnpm --dir admin build && cargo build --workspace",
+    "test:scripts": "node --test test/*.test.mjs",
     "provider:compile": "cargo run -p clawrouter -- provider compile providers/*.provider.yaml",
     "provider:icons": "node scripts/sync-provider-icons.mjs",
     "provider:smoke-plan": "node scripts/provider-smoke-plan.mjs --strict",
