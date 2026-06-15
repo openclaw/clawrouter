@@ -4243,6 +4243,48 @@ fn with_cors(mut response: Response) -> Result<Response> {
 mod tests {
     use super::*;
 
+    fn oauth_test_provider() -> CompiledProvider {
+        let snapshot = provider_snapshot().unwrap();
+        let mut provider = snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.id == "tavily")
+            .unwrap()
+            .clone();
+        provider.id = "oauth-test".to_string();
+        provider.auth.schemes = vec![AuthScheme::OAuth {
+            provider: Some("acme-oauth".to_string()),
+            scopes: vec![],
+            token_ref: Some("oauth.acme.access_token".to_string()),
+        }];
+        provider
+    }
+
+    fn relative_path_test_provider() -> CompiledProvider {
+        let snapshot = provider_snapshot().unwrap();
+        let mut provider = snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.id == "tavily")
+            .unwrap()
+            .clone();
+        provider.id = "relative-path-test".to_string();
+        provider
+            .base_urls
+            .insert("default".to_string(), "https://api.example.com".to_string());
+        let endpoint = provider
+            .endpoints
+            .iter_mut()
+            .find(|endpoint| endpoint.id == "search")
+            .unwrap();
+        endpoint.path = "/v1/${path}".to_string();
+        endpoint.path_params = vec!["path".to_string()];
+        endpoint
+            .path_param_styles
+            .insert("path".to_string(), PathParamStyle::RelativePath);
+        provider
+    }
+
     #[test]
     fn prefix_models_keep_requested_upstream_model() {
         let snapshot = provider_snapshot().unwrap();
@@ -4435,18 +4477,13 @@ mod tests {
 
     #[test]
     fn manifest_proxy_supports_oauth_with_token_refs() {
-        let snapshot = provider_snapshot().unwrap();
-        let provider = snapshot
-            .providers
-            .iter()
-            .find(|provider| provider.id == "github")
-            .unwrap();
+        let provider = oauth_test_provider();
         let endpoint = provider
             .endpoints
             .iter()
-            .find(|endpoint| endpoint.id == "rest")
+            .find(|endpoint| endpoint.id == "search")
             .unwrap();
-        assert!(supports_manifest_proxy(provider, endpoint));
+        assert!(supports_manifest_proxy(&provider, endpoint));
     }
 
     #[test]
@@ -4493,12 +4530,16 @@ mod tests {
                 && route.get("route").and_then(Value::as_str) == Some("/v1/proxy/tavily/search")
         }));
         assert!(manifest_routes.iter().any(|route| {
-            route.get("provider").and_then(Value::as_str) == Some("github")
-                && route.get("endpoint").and_then(Value::as_str) == Some("rest")
+            route.get("provider").and_then(Value::as_str) == Some("replicate")
+                && route.get("endpoint").and_then(Value::as_str) == Some("prediction")
                 && route
                     .get("pathParams")
                     .and_then(Value::as_array)
-                    .is_some_and(|params| params.iter().any(|param| param.as_str() == Some("path")))
+                    .is_some_and(|params| {
+                        params
+                            .iter()
+                            .any(|param| param.as_str() == Some("prediction_id"))
+                    })
         }));
 
         for route in openai_routes {
@@ -4730,7 +4771,7 @@ mod tests {
             AdminKeyPolicyResponse {
                 kid: "svc_default".to_string(),
                 enabled: true,
-                providers: vec!["github".to_string()],
+                providers: vec!["replicate".to_string()],
                 tenant_id: None,
                 token_role: Some("service".to_string()),
                 monthly_budget_micros: None,
@@ -5065,65 +5106,52 @@ mod tests {
 
     #[test]
     fn provider_oauth_refs_cover_token_ref_and_provider_fallbacks() {
-        let snapshot = provider_snapshot().unwrap();
-        let github = snapshot
-            .providers
-            .iter()
-            .find(|provider| provider.id == "github")
-            .unwrap();
+        let provider = oauth_test_provider();
+        let refs = provider_oauth_refs(&provider);
 
-        let refs = provider_oauth_refs(github);
-
-        assert!(refs
-            .iter()
-            .any(|value| value == "/oauth.github.access_token"));
-        assert!(refs.iter().any(|value| value == "/github"));
+        assert!(refs.iter().any(|value| value == "/oauth.acme.access_token"));
+        assert!(refs.iter().any(|value| value == "/acme-oauth"));
     }
 
     #[test]
     fn provider_oauth_grant_count_requires_enabled_token_records() {
-        let snapshot = provider_snapshot().unwrap();
-        let github = snapshot
-            .providers
-            .iter()
-            .find(|provider| provider.id == "github")
-            .unwrap();
+        let provider = oauth_test_provider();
         let grants = vec![
             OAuthGrantRecord {
-                key: "oauth/svc_docs/oauth.github.access_token".to_string(),
+                key: "oauth/svc_docs/oauth.acme.access_token".to_string(),
                 enabled: true,
                 has_access_token: true,
             },
             OAuthGrantRecord {
-                key: "oauth/tenants/default/github".to_string(),
+                key: "oauth/tenants/default/acme-oauth".to_string(),
                 enabled: false,
                 has_access_token: true,
             },
             OAuthGrantRecord {
-                key: "oauth/svc_docs/github".to_string(),
+                key: "oauth/svc_docs/acme-oauth".to_string(),
                 enabled: true,
                 has_access_token: false,
             },
         ];
 
-        assert_eq!(provider_oauth_grant_count(github, &grants), 1);
+        assert_eq!(provider_oauth_grant_count(&provider, &grants), 1);
     }
 
     #[test]
     fn entitlement_oauth_grants_are_scoped_to_matching_policies() {
         let grants = vec![
             OAuthGrantRecord {
-                key: "oauth/svc_docs/github".to_string(),
+                key: "oauth/svc_docs/acme-oauth".to_string(),
                 enabled: true,
                 has_access_token: true,
             },
             OAuthGrantRecord {
-                key: "oauth/tenants/research/github".to_string(),
+                key: "oauth/tenants/research/acme-oauth".to_string(),
                 enabled: true,
                 has_access_token: true,
             },
             OAuthGrantRecord {
-                key: "oauth/svc_other/github".to_string(),
+                key: "oauth/svc_other/acme-oauth".to_string(),
                 enabled: true,
                 has_access_token: true,
             },
@@ -5133,7 +5161,7 @@ mod tests {
             policy: KeyPolicy {
                 enabled: true,
                 secret_sha256: "hash".to_string(),
-                providers: vec!["github".to_string()],
+                providers: vec!["oauth-test".to_string()],
                 tenant_id: Some("team_docs".to_string()),
                 token_role: None,
                 monthly_budget_micros: None,
@@ -5152,29 +5180,24 @@ mod tests {
         assert_eq!(scoped.len(), 2);
         assert!(scoped
             .iter()
-            .any(|grant| grant.key == "oauth/svc_docs/github"));
+            .any(|grant| grant.key == "oauth/svc_docs/acme-oauth"));
         assert!(scoped
             .iter()
-            .any(|grant| grant.key == "oauth/tenants/research/github"));
+            .any(|grant| grant.key == "oauth/tenants/research/acme-oauth"));
         assert!(!scoped
             .iter()
-            .any(|grant| grant.key == "oauth/svc_other/github"));
+            .any(|grant| grant.key == "oauth/svc_other/acme-oauth"));
     }
 
     #[test]
     fn access_policy_selection_prefers_oauth_grant_backed_policy() {
-        let snapshot = provider_snapshot().unwrap();
-        let github = snapshot
-            .providers
-            .iter()
-            .find(|provider| provider.id == "github")
-            .unwrap();
+        let provider = oauth_test_provider();
         let docs = KeyPolicyEntry {
             kid: "svc_docs".to_string(),
             policy: KeyPolicy {
                 enabled: true,
                 secret_sha256: "hash".to_string(),
-                providers: vec!["github".to_string()],
+                providers: vec!["oauth-test".to_string()],
                 tenant_id: Some("team_docs".to_string()),
                 token_role: None,
                 monthly_budget_micros: None,
@@ -5189,13 +5212,14 @@ mod tests {
             },
         };
         let grants = vec![OAuthGrantRecord {
-            key: "oauth/svc_research/github".to_string(),
+            key: "oauth/svc_research/acme-oauth".to_string(),
             enabled: true,
             has_access_token: true,
         }];
 
         let entries = [&docs, &research];
-        let selected = select_access_policy_for_provider(Some(github), &entries, &grants).unwrap();
+        let selected =
+            select_access_policy_for_provider(Some(&provider), &entries, &grants).unwrap();
 
         assert_eq!(selected.kid, "svc_research");
     }
@@ -5249,16 +5273,11 @@ mod tests {
 
     #[test]
     fn manifest_proxy_encodes_declared_relative_path_params() {
-        let snapshot = provider_snapshot().unwrap();
-        let provider = snapshot
-            .providers
-            .iter()
-            .find(|provider| provider.id == "github")
-            .unwrap();
+        let provider = relative_path_test_provider();
         let endpoint = provider
             .endpoints
             .iter()
-            .find(|endpoint| endpoint.id == "rest")
+            .find(|endpoint| endpoint.id == "search")
             .unwrap();
         let proxy = ManifestProxyRequest {
             method: Some("GET".to_string()),
@@ -5268,22 +5287,17 @@ mod tests {
             )]),
             ..ManifestProxyRequest::default()
         };
-        let url = manifest_upstream_url(provider, endpoint, &proxy, None).unwrap();
-        assert_eq!(url, "https://api.github.com/repos/openclaw/clawrouter");
+        let url = manifest_upstream_url(&provider, endpoint, &proxy, None).unwrap();
+        assert_eq!(url, "https://api.example.com/v1/repos/openclaw/clawrouter");
     }
 
     #[test]
     fn manifest_proxy_rejects_relative_paths_that_escape() {
-        let snapshot = provider_snapshot().unwrap();
-        let provider = snapshot
-            .providers
-            .iter()
-            .find(|provider| provider.id == "github")
-            .unwrap();
+        let provider = relative_path_test_provider();
         let endpoint = provider
             .endpoints
             .iter()
-            .find(|endpoint| endpoint.id == "rest")
+            .find(|endpoint| endpoint.id == "search")
             .unwrap();
         let proxy = ManifestProxyRequest {
             method: Some("GET".to_string()),
@@ -5293,7 +5307,7 @@ mod tests {
             )]),
             ..ManifestProxyRequest::default()
         };
-        let error = manifest_upstream_url(provider, endpoint, &proxy, None).unwrap_err();
+        let error = manifest_upstream_url(&provider, endpoint, &proxy, None).unwrap_err();
         match error {
             ManifestProxyError::Client(message) => {
                 assert!(message.contains("safe relative path"));
@@ -5304,18 +5318,13 @@ mod tests {
 
     #[test]
     fn oauth_token_keys_prefer_key_token_ref_before_fallbacks() {
-        let snapshot = provider_snapshot().unwrap();
-        let provider = snapshot
-            .providers
-            .iter()
-            .find(|provider| provider.id == "github")
-            .unwrap();
+        let provider = oauth_test_provider();
         let auth = AuthorizedKey {
             kid: "svc_docs".to_string(),
             policy: KeyPolicy {
                 enabled: true,
                 secret_sha256: sha256_hex("secret"),
-                providers: vec!["github".to_string()],
+                providers: vec!["oauth-test".to_string()],
                 tenant_id: Some("team_docs".to_string()),
                 token_role: Some("service".to_string()),
                 monthly_budget_micros: None,
@@ -5325,16 +5334,18 @@ mod tests {
 
         assert_eq!(
             oauth_token_keys(
-                provider,
+                &provider,
                 &auth,
-                Some("github"),
-                Some("oauth.github.access_token")
+                Some("acme-oauth"),
+                Some("oauth.acme.access_token")
             ),
             vec![
-                "oauth/svc_docs/oauth.github.access_token",
-                "oauth/tenants/team_docs/oauth.github.access_token",
-                "oauth/svc_docs/github",
-                "oauth/tenants/team_docs/github",
+                "oauth/svc_docs/oauth.acme.access_token",
+                "oauth/tenants/team_docs/oauth.acme.access_token",
+                "oauth/svc_docs/acme-oauth",
+                "oauth/tenants/team_docs/acme-oauth",
+                "oauth/svc_docs/oauth-test",
+                "oauth/tenants/team_docs/oauth-test",
             ]
         );
     }
