@@ -309,7 +309,7 @@ function App() {
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState("all");
   const [selectedServiceId, setSelectedServiceId] = useState(demo.services[0]?.id ?? "");
-  const [selectedPolicyId, setSelectedPolicyId] = useState(demo.keys[0]?.kid ?? "");
+  const [selectedPolicyId, setSelectedPolicyId] = useState(allowDemo ? demo.keys[0]?.kid ?? "" : "");
   const [selectedUserEmail, setSelectedUserEmail] = useState(demo.users[0]?.email ?? "");
   const [status, setStatus] = useState(allowDemo ? "local demo data loaded" : "loading");
   const [demoMode, setDemoMode] = useState(allowDemo);
@@ -342,7 +342,7 @@ function App() {
     return services.filter((item) => (kind === "all" || item.kind === kind) && matchesServiceQuery(item, query));
   }, [kind, query, services]);
   const selectedService = services.find((item) => item.id === selectedServiceId) ?? services[0];
-  const selectedPolicy = keys.find((key) => key.kid === selectedPolicyId) ?? keys[0];
+  const selectedPolicy = keys.find((key) => key.kid === selectedPolicyId);
   const selectedUser = users.find((user) => user.email === selectedUserEmail) ?? users[0];
   const selectedModel = models.find((model) => model.id === playground.model) ?? models[0];
   const selectedServiceRoute = serviceRoutes.find((route) => routeKey(route) === playground.serviceRoute) ?? serviceRoutes[0];
@@ -418,6 +418,11 @@ function App() {
           request<{ providers: ProviderReadiness[] }>(gatewayOrigin, "/v1/admin/provider-status"),
         ]);
         setKeys(keyData.keys);
+        if (!policyDataLoaded || demoMode) {
+          const refreshedPolicy = keyData.keys.find((key) => key.kid === selectedPolicyId) ?? keyData.keys[0];
+          setSelectedPolicyId(refreshedPolicy?.kid ?? "");
+          setPolicyForm(refreshedPolicy ? policyFormFromKey(refreshedPolicy) : { ...defaultPolicy, kid: "", tenantId: sessionData.tenantId ?? "default", providers: [...defaultPolicy.providers] });
+        }
         setUsers(userData.users);
         setProviderReadiness((current) => ({ ...current, ...readinessMap(readinessData.providers) }));
         const [overviewResult, tenantResult] = await Promise.all([
@@ -494,6 +499,8 @@ function App() {
       setStatus("saving grant");
       if (!policyForm.allProviders && !policyForm.providers.length) throw new Error("select at least one service");
       if (!/^[A-Za-z0-9_]{4,}$/.test(policyForm.kid)) throw new Error("grant id must use 4 or more letters, numbers, or underscores");
+      const existingPolicy = keys.some((key) => key.kid === policyForm.kid);
+      if (existingPolicy && selectedPolicyId !== policyForm.kid) throw new Error("grant id already exists; select it from the grant list to edit it");
       const next: KeyPolicy = {
         kid: policyForm.kid,
         enabled: policyForm.enabled,
@@ -509,7 +516,6 @@ function App() {
         setStatus("saved grant");
         return;
       }
-      const existingPolicy = keys.some((key) => key.kid === policyForm.kid);
       const generatedSecret = existingPolicy ? "" : generateSecret();
       const body = generatedSecret ? { ...next, secretSha256: await sha256Hex(generatedSecret) } : next;
       await request<KeyPolicy>(gatewayOrigin, `/v1/admin/keys/${encodeURIComponent(policyForm.kid)}`, {
@@ -518,6 +524,8 @@ function App() {
         body: JSON.stringify(body),
       });
       await refresh();
+      setSelectedPolicyId(next.kid);
+      setPolicyForm(policyFormFromKey(next));
       setIssuedKey(generatedSecret ? `clawrouter-live-${policyForm.kid}-${generatedSecret}` : "");
       setStatus("saved grant");
     } catch (error) {
@@ -621,6 +629,13 @@ function App() {
     setIssuedKey("");
     setSelectedPolicyId(key.kid);
     setPolicyForm(policyFormFromKey(key));
+  }
+
+  function startNewPolicy() {
+    setIssuedKey("");
+    setPolicyError("");
+    setSelectedPolicyId("");
+    setPolicyForm({ ...defaultPolicy, kid: "", tenantId: session.tenantId ?? "default", providers: [...defaultPolicy.providers] });
   }
 
   function applyPreset(role: keyof typeof rolePresets) {
@@ -806,6 +821,7 @@ function App() {
             issuedKey={issuedKey}
             error={policyError}
             onSave={savePolicy}
+            onNew={startNewPolicy}
             onEdit={editPolicy}
             onRevoke={revoke}
             onPreset={applyPreset}
@@ -1050,7 +1066,7 @@ function PlaygroundScreen({ form, setForm, models, selected, serviceRoutes, sele
   );
 }
 
-function PoliciesScreen({ keys, selected, providers, form, setForm, issuedKey, error, onSave, onEdit, onRevoke, onPreset, onToggleProvider, onSetProviderGroup, busy }: {
+function PoliciesScreen({ keys, selected, providers, form, setForm, issuedKey, error, onSave, onNew, onEdit, onRevoke, onPreset, onToggleProvider, onSetProviderGroup, busy }: {
   keys: KeyPolicy[];
   selected?: KeyPolicy;
   providers: ProviderRow[];
@@ -1059,6 +1075,7 @@ function PoliciesScreen({ keys, selected, providers, form, setForm, issuedKey, e
   issuedKey: string;
   error: string;
   onSave: (event: FormEvent) => void;
+  onNew: () => void;
   onEdit: (key: KeyPolicy) => void;
   onRevoke: (kid: string) => void;
   onPreset: (role: keyof typeof rolePresets) => void;
@@ -1071,21 +1088,36 @@ function PoliciesScreen({ keys, selected, providers, form, setForm, issuedKey, e
   const visibleProviderCount = providerGroups.reduce((total, group) => total + group.providers.length, 0);
   const formServiceLabel = form.allProviders ? "all services" : `${form.providers.length} selected service${form.providers.length === 1 ? "" : "s"}`;
   const formSelectionLabel = form.allProviders ? `all services · ${visibleProviderCount} shown` : `${form.providers.length} selected · ${visibleProviderCount} shown`;
+  const activeGrantCount = keys.filter((key) => key.enabled).length;
+  const tenantCount = new Set(keys.map((key) => key.tenantId ?? "default")).size;
+  const coveredServiceCount = keys.some((key) => key.enabled && key.providers.length === 0)
+    ? providers.length
+    : new Set(keys.filter((key) => key.enabled).flatMap((key) => key.providers)).size;
   const copyIssuedKey = () => {
     void navigator.clipboard?.writeText(issuedKey);
   };
   return (
-    <div className="entityLayout">
-      <section className="mainPane">
+    <div className="entityLayout grantsLayout">
+      <section className="mainPane grantListPane">
+        <div className="overviewStrip grantOverview">
+          <Metric label="active grants" value={String(activeGrantCount)} meta={`${keys.length} total`} />
+          <Metric label="tenants" value={String(tenantCount)} meta="with configured grants" />
+          <Metric label="service coverage" value={String(coveredServiceCount)} meta={`${providers.length} available`} />
+        </div>
+        <div className="tableSectionHeader grantListHeader"><div><strong>Access grants</strong><span>{keys.length} configured grants</span></div><button type="button" disabled={busy} onClick={onNew}><Plus className="buttonIcon" aria-hidden="true" /><span>New grant</span></button></div>
         <EntityTable
-          columns={["grant", "tenant", "role", "services", "budget", "state"]}
-          columnTemplate="minmax(220px, 1.4fr) 130px 120px 110px 130px 120px"
-          rows={keys.map((key) => ({ id: key.kid, active: selected?.kid === key.kid, onClick: () => onEdit(key), cells: [<EntityName icon={KeyRound} title={key.kid} subtitle={key.enabled ? "active grant" : "revoked grant"} />, key.tenantId ?? "default", key.tokenRole ?? "custom", key.providers.length ? String(key.providers.length) : "all", formatBudget(key.monthlyBudgetMicros), <Status label={key.enabled ? "active" : "revoked"} tone={key.enabled ? "active" : "revoked"} />] }))}
+          columns={["grant", "tenant", "scope", "state"]}
+          columnTemplate="minmax(170px, 1.35fr) minmax(96px, 0.8fr) minmax(100px, 0.8fr) 88px"
+          rows={keys.map((key) => ({ id: key.kid, active: selected?.kid === key.kid, onClick: busy ? undefined : () => onEdit(key), cells: [<EntityName icon={KeyRound} title={key.kid} subtitle={key.tokenRole ?? "custom"} />, key.tenantId ?? "default", key.providers.length ? `${key.providers.length} services` : "all services", <Status label={key.enabled ? "active" : "revoked"} tone={key.enabled ? "active" : "revoked"} />] }))}
         />
       </section>
-      <aside className="inspector wideInspector">
+      <aside className="inspector wideInspector grantEditor">
         <form onSubmit={onSave}>
-          <InspectorHeader icon={KeyRound} title="Access grant" subtitle={`${form.tenantId || "default"} gets ${formServiceLabel}`} />
+          <fieldset className="grantEditorFields" disabled={busy}>
+          <div className="grantEditorHeader">
+            <InspectorHeader icon={KeyRound} title={form.kid || "New access grant"} subtitle={`${form.tenantId || "default"} · ${form.tokenRole || "custom"}`} />
+            <Status label={form.enabled ? "active" : "disabled"} tone={form.enabled ? "active" : "revoked"} />
+          </div>
           {error ? <InlineError message={error} /> : null}
           {issuedKey ? (
             <div className="issuedKey">
@@ -1097,15 +1129,18 @@ function PoliciesScreen({ keys, selected, providers, form, setForm, issuedKey, e
             <strong>{form.tenantId || "default"}</strong>
             <span>{form.enabled ? "will have" : "would have"} access to {formServiceLabel} under the {form.tokenRole || "custom"} role.</span>
           </div>
+          <div className="editorSectionHeader"><strong>Grant template</strong><span>Apply a starting policy</span></div>
           <div className="presetRow" aria-label="grant templates">{Object.keys(rolePresets).map((role) => <button key={role} type="button" className="buttonSecondary" onClick={() => onPreset(role as keyof typeof rolePresets)}>{role}</button>)}</div>
+          <div className="editorSectionHeader"><strong>Grant details</strong><span>Identity, role, and limits</span></div>
           <div className="formGrid compact">
-            <label><span>grant id</span><input value={form.kid} onChange={(event) => setForm({ ...form, kid: event.target.value })} /></label>
+            <label><span>grant id</span><input value={form.kid} readOnly={Boolean(selected)} onChange={(event) => setForm({ ...form, kid: event.target.value })} /></label>
             <label><span>tenant</span><input value={form.tenantId} onChange={(event) => setForm({ ...form, tenantId: event.target.value })} /></label>
             <label><span>role</span><input value={form.tokenRole} onChange={(event) => setForm({ ...form, tokenRole: event.target.value })} /></label>
             <label><span>status</span><select value={form.enabled ? "active" : "disabled"} onChange={(event) => setForm({ ...form, enabled: event.target.value === "active" })}><option value="active">active</option><option value="disabled">disabled</option></select></label>
-            <label className="full"><span>monthly budget</span><input inputMode="decimal" value={form.monthlyBudgetMicros} onChange={(event) => setForm({ ...form, monthlyBudgetMicros: event.target.value })} placeholder="unlimited" /></label>
+            <label><span>monthly budget ($)</span><input inputMode="decimal" value={form.monthlyBudgetMicros} onChange={(event) => setForm({ ...form, monthlyBudgetMicros: event.target.value })} placeholder="unlimited" /></label>
+            <label><span>request cost (micros)</span><input inputMode="decimal" value={form.requestCostMicros} onChange={(event) => setForm({ ...form, requestCostMicros: event.target.value })} placeholder="server default: 1" /></label>
           </div>
-          <div className="matrixHeader"><strong>Services in this grant</strong><span>{formSelectionLabel}</span></div>
+          <div className="editorSectionHeader serviceAccessHeader"><div><strong>Service access</strong><span>{formSelectionLabel}</span></div>{form.allProviders ? <span className="wildcardScope">Wildcard scope · all current and future services</span> : null}</div>
           <div className="inputWithIcon providerFilter"><Search aria-hidden="true" /><input value={providerQuery} onChange={(event) => setProviderQuery(event.target.value)} placeholder="filter services" /></div>
           <div className="serviceGroups">
             {providerGroups.length ? providerGroups.map((group) => {
@@ -1125,6 +1160,7 @@ function PoliciesScreen({ keys, selected, providers, form, setForm, issuedKey, e
             }) : <p>No services match this filter.</p>}
           </div>
           <div className="inspectorActions"><button type="submit" disabled={busy || (!form.allProviders && !form.providers.length)}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save grant</span></button>{selected ? <button type="button" className="buttonDanger" disabled={!selected.enabled || busy} onClick={() => onRevoke(selected.kid)}><CircleSlash2 className="buttonIcon" aria-hidden="true" /><span>Revoke grant</span></button> : null}</div>
+          </fieldset>
         </form>
       </aside>
     </div>
@@ -1198,21 +1234,34 @@ function UsageScreen({ keys, services, overview, tenants, usageRows, usageLoaded
     : rows.reduce((total, row) => total + (row.budget.spentMicros ?? 0), 0);
   const routeTotal = services.reduce((total, service) => total + service.routeCount, 0);
   const providerTotal = overview?.providerCount ?? new Set(services.map((service) => service.provider)).size;
+  const untrackedRows = rows.filter((row) => row.enabled && row.budget.ledger === "untracked");
+  const exhaustedRows = rows.filter((row) => row.enabled && row.budget.configured && row.budget.remainingMicros !== undefined && row.budget.remainingMicros !== null && row.budget.remainingMicros <= 0);
+  const ledgerFailureRows = rows.filter((row) => row.enabled && (row.budget.ledger === "unavailable" || row.budget.ledger === "invalid_policy"));
   return (
-    <div className="entityLayout">
-      <section className="mainPane">
+    <div className="entityLayout usageLayout">
+      <section className="mainPane usageMainPane">
         <div className="overviewStrip">
           <Metric label="active grants" value={String(overview?.keysActive ?? activeKeys.length)} meta={`${overview?.keysTotal ?? keys.length} total`} />
           <Metric label="tenants" value={String(overview?.tenantsTotal ?? tenantRows.length)} meta={`${grantedServiceCount} granted services`} />
-          <Metric label="routes" value={String(routeTotal)} meta={`${providerTotal} providers`} />
+          <Metric label="service routes" value={String(routeTotal)} meta={`${providerTotal} providers`} />
           <Metric label="budget" value={totalBudgetLabel} meta={`${formatMicros(totalSpent)} spent`} />
         </div>
-        <EntityTable columns={["grant", "tenant", "budget", "spent", "remaining", "services", "status"]} columnTemplate="minmax(220px, 1.4fr) 128px 120px 120px 120px 94px 108px" rows={rows.map((row) => ({ id: row.kid, cells: [<EntityName icon={KeyRound} title={row.kid} subtitle={row.tokenRole ?? "custom"} />, row.tenantId, formatBudget(row.monthlyBudgetMicros), formatMicros(row.budget.spentMicros), row.budget.configured ? formatMicros(row.budget.remainingMicros) : "not tracked", effectiveProviderCount(row.providers, services), <Status label={row.enabled ? "active" : "revoked"} tone={row.enabled ? "active" : "revoked"} />] }))} />
+        <div className="tableSectionHeader"><div><strong>Grant budget ledger</strong><span>{rows.length} configured grants</span></div><span>{usageLoaded ? "live ledger" : "policy fallback"}</span></div>
+        <EntityTable columns={["grant", "tenant", "budget usage", "services", "health"]} columnTemplate="minmax(210px, 1.15fr) minmax(120px, 0.7fr) minmax(250px, 1.45fr) 96px 120px" rows={rows.map((row) => ({ id: row.kid, cells: [<EntityName icon={KeyRound} title={row.kid} subtitle={row.tokenRole ?? "custom"} />, row.tenantId, <BudgetUsage row={row} />, effectiveProviderCount(row.providers, services), <UsageHealth row={row} />] }))} />
       </section>
-      <aside className="inspector">
-        <InspectorHeader icon={BarChart3} title="Usage ledger" subtitle="tenant budgets and grant health" />
-        <dl className="facts"><dt>active grants</dt><dd>{overview?.keysActive ?? activeKeys.length}</dd><dt>ready services</dt><dd>{readyServices}/{services.length}</dd><dt>blocked services</dt><dd>{blockedServices.length}</dd><dt>monthly budget</dt><dd>{totalBudgetLabel}</dd><dt>tracked spend</dt><dd>{formatMicros(totalSpent)}</dd></dl>
-        <div className="sectionTitle">Tenants</div>
+      <aside className="inspector usageInspector">
+        <InspectorHeader icon={BarChart3} title="Operational health" subtitle={`${readyServices}/${services.length} services executable`} />
+        <div className="attentionGrid">
+          <div className={blockedServices.length ? "attentionMetric warning" : "attentionMetric healthy"}><strong>{blockedServices.length}</strong><span>services need configuration</span></div>
+          {usageLoaded ? (
+            <>
+              <div className={untrackedRows.length ? "attentionMetric warning" : "attentionMetric healthy"}><strong>{untrackedRows.length}</strong><span>grants not reporting spend</span></div>
+              <div className={ledgerFailureRows.length ? "attentionMetric danger" : "attentionMetric healthy"}><strong>{ledgerFailureRows.length}</strong><span>budget ledger failures</span></div>
+            </>
+          ) : <div className="attentionMetric danger"><strong>!</strong><span>live usage ledger unavailable</span></div>}
+          <div className={exhaustedRows.length ? "attentionMetric danger" : "attentionMetric healthy"}><strong>{exhaustedRows.length}</strong><span>grants out of budget</span></div>
+        </div>
+        <div className="sectionTitle">Tenant coverage</div>
         <div className="miniList">{tenantRows.length ? tenantRows.slice(0, 8).map((tenant) => <button type="button" key={tenant.tenantId}>{tenant.tenantId}<span>{tenant.activeKeys}/{tenant.keys} grants · {effectiveProviderCount(tenant.providers, services, tenant.allProviders)} services</span></button>) : <p>No tenant grants yet.</p>}</div>
         <div className="sectionTitle">Needs configuration</div>
         <div className="miniList">{blockedServices.length ? blockedServices.slice(0, 8).map((service) => <button type="button" key={service.id}>{service.name}<span>{readinessLabel(service.readiness)}</span></button>) : <p>All visible services are executable.</p>}</div>
@@ -1223,6 +1272,39 @@ function UsageScreen({ keys, services, overview, tenants, usageRows, usageLoaded
 
 function Metric({ label, value, meta }: { label: string; value: string; meta: string }) {
   return <div className="metric"><span>{label}</span><strong>{value}</strong><small>{meta}</small></div>;
+}
+
+function BudgetUsage({ row }: { row: AdminUsageRow }) {
+  const limit = row.budget.limitMicros ?? row.monthlyBudgetMicros;
+  const spent = row.budget.spentMicros;
+  const blocked = row.budget.ledger === "blocked" || limit === 0;
+  const percent = blocked ? 100 : limit !== undefined && limit !== null && spent !== undefined && spent !== null ? Math.min(100, Math.max(0, (spent / limit) * 100)) : null;
+  const spendLabel = row.budget.ledger === "unavailable"
+    ? "Ledger unavailable"
+    : row.budget.ledger === "invalid_policy"
+      ? "Invalid budget policy"
+      : spent === undefined || spent === null
+        ? "Spend unavailable"
+        : `${formatMicros(spent)} spent`;
+  return (
+    <span className="budgetUsage">
+      <span><strong>{spendLabel}</strong><small>{formatBudget(limit)} budget</small></span>
+      <span className={`budgetTrack${blocked || (percent !== null && percent >= 100) ? " exhausted" : ""}`}><span style={{ width: `${percent ?? 0}%` }} /></span>
+    </span>
+  );
+}
+
+function UsageHealth({ row }: { row: AdminUsageRow }) {
+  if (!row.enabled) return <Status label="revoked" tone="revoked" />;
+  if (row.budget.ledger === "unavailable") return <Status label="ledger unavailable" tone="revoked" />;
+  if (row.budget.ledger === "invalid_policy") return <Status label="invalid policy" tone="revoked" />;
+  if (row.budget.ledger === "blocked") return <Status label="budget blocked" tone="revoked" />;
+  if (row.budget.ledger === "unmetered") return <Status label="unmetered" tone="neutral" />;
+  if (row.budget.ledger === "untracked") return <Status label="untracked" tone="neutral" />;
+  if (!row.budget.configured) return <Status label="untracked" tone="neutral" />;
+  if (row.budget.remainingMicros !== undefined && row.budget.remainingMicros !== null && row.budget.remainingMicros <= 0) return <Status label="budget blocked" tone="revoked" />;
+  if (row.budget.spentMicros === undefined || row.budget.spentMicros === null) return <Status label="awaiting usage" tone="neutral" />;
+  return <Status label="healthy" tone="active" />;
 }
 
 function EntityTable({ columns, columnTemplate, rows }: { columns: string[]; columnTemplate?: string; rows: Array<{ id: string; active?: boolean; onClick?: () => void; cells: React.ReactNode[] }> }) {
@@ -1580,6 +1662,9 @@ function effectiveAccess(user: AccessUser | undefined, policies: KeyPolicy[], se
 }
 
 function policyUsageFallback(policy: KeyPolicy): AdminUsageRow {
+  const limit = policy.monthlyBudgetMicros;
+  const blocked = limit === 0;
+  const unmetered = limit === undefined || limit === null;
   return {
     kid: policy.kid,
     tenantId: policy.tenantId ?? "default",
@@ -1589,11 +1674,11 @@ function policyUsageFallback(policy: KeyPolicy): AdminUsageRow {
     monthlyBudgetMicros: policy.monthlyBudgetMicros,
     requestCostMicros: policy.requestCostMicros,
     budget: {
-      configured: false,
-      ledger: "untracked",
-      limitMicros: policy.monthlyBudgetMicros,
-      spentMicros: null,
-      remainingMicros: policy.monthlyBudgetMicros,
+      configured: !unmetered,
+      ledger: blocked ? "blocked" : unmetered ? "unmetered" : "untracked",
+      limitMicros: limit,
+      spentMicros: blocked ? 0 : null,
+      remainingMicros: blocked ? 0 : limit,
     },
   };
 }
