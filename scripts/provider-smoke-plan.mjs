@@ -60,15 +60,23 @@ export async function runLiveProviderSmokes({
   }
   const selected = selectLiveProviderPlans(plan, liveProviders);
   const results = [];
+  const failures = [];
   for (const provider of selected) {
     const result = await runProviderTarget(baseUrl, smokeKey, provider);
+    results.push(result);
     if (result.providerAttempted) {
-      await onResult(result);
+      try {
+        await onResult(result);
+      } catch (error) {
+        failures.push(`${provider.id} health record failed: ${errorMessage(error)}`);
+      }
     }
     if (result.status !== "verified") {
-      throw new Error(`${provider.id} smoke failed: ${result.error}`);
+      failures.push(`${provider.id} smoke failed: ${result.error}`);
     }
-    results.push(result);
+  }
+  if (failures.length > 0) {
+    throw new Error(failures.join("; "));
   }
   return results;
 }
@@ -544,6 +552,10 @@ function splitCsv(value) {
 
 function envName(value) {
   return value.replace(/[^a-zA-Z0-9]/g, "_").toUpperCase();
+}
+
+function errorMessage(error) {
+  return error instanceof Error ? error.message : String(error);
 }
 
 function parseArgs(values) {
