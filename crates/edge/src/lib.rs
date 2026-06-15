@@ -1475,6 +1475,13 @@ struct ProxyCredentialEntry {
 
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
+struct AccessControlPolicyCredentialPutRequest {
+    policy: AccessPolicyEntry,
+    credential: ProxyCredentialEntry,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct AccessControlCredentialsResolveRequest {
     credential_ids: Vec<String>,
 }
@@ -2076,8 +2083,8 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
         }
         let mut tombstone_legacy = legacy.clone();
         tombstone_legacy.enabled = false;
-        put_authoritative_access_policy(&env, &kv, &kid, &policy).await?;
-        put_authoritative_proxy_credential(&env, &kv, &kid, &credential).await?;
+        put_authoritative_policy_and_credential(&env, &kv, &kid, &policy, &kid, &credential)
+            .await?;
         sync_kv_record_best_effort(
             &kv,
             &format!("keys/{kid}"),
@@ -3215,6 +3222,46 @@ async fn put_authoritative_access_policy(
     Ok(())
 }
 
+async fn put_authoritative_policy_and_credential(
+    env: &Env,
+    kv: &KvStore,
+    policy_id: &str,
+    policy: &AccessPolicy,
+    credential_id: &str,
+    credential: &ProxyCredential,
+) -> Result<()> {
+    let namespace = access_control_namespace(env)?;
+    put_access_control_policy_and_credential(
+        &namespace,
+        &AccessControlPolicyCredentialPutRequest {
+            policy: AccessPolicyEntry {
+                policy_id: policy_id.to_string(),
+                policy: policy.clone(),
+            },
+            credential: ProxyCredentialEntry {
+                credential_id: credential_id.to_string(),
+                credential: credential.clone(),
+            },
+        },
+    )
+    .await?;
+    sync_kv_record_best_effort(
+        kv,
+        &format!("policies/{policy_id}"),
+        policy,
+        "access policy compatibility record",
+    )
+    .await;
+    sync_kv_record_best_effort(
+        kv,
+        &format!("credentials/{credential_id}"),
+        credential,
+        "proxy credential compatibility record",
+    )
+    .await;
+    Ok(())
+}
+
 async fn authoritative_proxy_credential(
     env: &Env,
     kv: &KvStore,
@@ -3756,6 +3803,15 @@ async fn put_access_control_policy(
     policy: &AccessPolicyEntry,
 ) -> Result<()> {
     access_control_request(namespace, "/policies/put", policy)
+        .await
+        .map(|_| ())
+}
+
+async fn put_access_control_policy_and_credential(
+    namespace: &ObjectNamespace,
+    request: &AccessControlPolicyCredentialPutRequest,
+) -> Result<()> {
+    access_control_request(namespace, "/policy-credentials/put", request)
         .await
         .map(|_| ())
 }
@@ -6555,6 +6611,17 @@ impl DurableObject for PolicyBindingIndexObject {
             put_access_control_policy_in_object(&self.state, policy)?;
             return Response::ok("updated");
         }
+        if req.method() == Method::Post && url.path() == "/policy-credentials/put" {
+            let request =
+                serde_json::from_str::<AccessControlPolicyCredentialPutRequest>(&req.text().await?)
+                    .map_err(|error| {
+                        Error::RustError(format!(
+                            "policy and credential put request is invalid JSON: {error}"
+                        ))
+                    })?;
+            put_access_control_policy_and_credential_in_object(&self.state, request).await?;
+            return Response::ok("updated");
+        }
         if req.method() == Method::Post && url.path() == "/policies/list" {
             return Response::from_json(&list_access_control_policies_in_object(&self.state)?);
         }
@@ -7116,6 +7183,24 @@ fn put_access_control_policy_in_object(state: &State, mut policy: AccessPolicyEn
     ensure_access_control_schema(&sql)?;
     normalize_access_control_policy(&mut policy)?;
     put_access_control_policy_in_sql(&sql, &policy)
+}
+
+async fn put_access_control_policy_and_credential_in_object(
+    state: &State,
+    mut request: AccessControlPolicyCredentialPutRequest,
+) -> Result<()> {
+    let storage = state.storage();
+    let sql = storage.sql();
+    ensure_access_control_schema(&sql)?;
+    normalize_access_control_policy(&mut request.policy)?;
+    normalize_access_control_credential(&mut request.credential)?;
+    storage
+        .transaction(move |_| async move {
+            put_access_control_policy_in_sql(&sql, &request.policy)?;
+            put_access_control_credential_in_sql(&sql, &request.credential)?;
+            Ok(())
+        })
+        .await
 }
 
 fn normalize_access_control_policy(policy: &mut AccessPolicyEntry) -> Result<()> {
