@@ -120,6 +120,8 @@ The Worker currently exposes:
 Legacy `GET|PUT /v1/admin/keys...`, `POST /v1/admin/keys/<kid>/revoke`, and
 `GET /v1/admin/users` remain compatibility aliases during migration. New
 control-plane clients should use policies, credentials, and tenants directly.
+The legacy revoke alias treats `<kid>` as a credential id and never disables a
+shared policy.
 
 OpenAI-compatible proxy requests route by the request body `model` field, for
 example `openai/gpt-5.5-mini`. Before an upstream provider secret is used, the
