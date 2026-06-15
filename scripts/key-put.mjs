@@ -3,6 +3,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { adminRequest } from "./admin-api.mjs";
 
 const args = parseArgs(process.argv.slice(2));
 const kid = required(args.kid, "--kid");
@@ -31,79 +32,97 @@ const monthlyBudgetMicros = args["monthly-budget-micros"]
 const requestCostMicros = args["request-cost-micros"]
   ? parseNonNegativeInteger(args["request-cost-micros"], "--request-cost-micros")
   : undefined;
-const existingPolicy = readRecord(`policies/${kid}`, { allowMissing: true });
-const existingLegacy = readRecord(`keys/${kid}`, { allowMissing: true });
-const existingCredential =
-  readRecord(`credentials/${kid}`, { allowMissing: true }) ?? legacyCredential(existingLegacy);
-const generation = existingPolicy?.generation ?? `policy_${randomUUID()}`;
-
-const policy = {
+const request = {
   enabled,
-  generation,
   providers,
+  allProviders,
   tenantId,
+  secretSha256: createHash("sha256").update(secret).digest("hex"),
 };
 if (monthlyBudgetMicros !== undefined) {
-  policy.monthlyBudgetMicros = monthlyBudgetMicros;
+  request.monthlyBudgetMicros = monthlyBudgetMicros;
 }
 if (requestCostMicros !== undefined) {
-  policy.requestCostMicros = requestCostMicros;
+  request.requestCostMicros = requestCostMicros;
 }
 
-const credential = {
-  enabled,
-  secretSha256: createHash("sha256").update(secret).digest("hex"),
-  policyId: kid,
-  policyGeneration: generation,
-};
-if (
-  existingPolicy &&
-  existingCredential &&
-  policyChanged(existingPolicy, policy) &&
-  existingCredential.secretSha256 !== credential.secretSha256
-) {
-  throw new Error(
-    "cannot change policy scope and secret together; update the canonical policy and credential separately",
+if (!args.local) {
+  await adminRequest(`/v1/admin/keys/${encodeURIComponent(kid)}`, {
+    method: "PUT",
+    body: request,
+  });
+  console.log(
+    `stored authoritative access policy and proxy credential for ${kid}; secret was not printed`,
+  );
+} else {
+  putLocalBootstrapRecords(request);
+  console.log(
+    `bootstrapped local KV access policy and proxy credential for ${kid}; secret was not printed`,
   );
 }
-const legacy = { ...policy, secretSha256: credential.secretSha256 };
-const tombstoneCredential = { ...credential, enabled: false };
-const tombstoneLegacy = { ...legacy, enabled: false };
-const tombstonePolicy = { ...policy, enabled: false };
-const records = [
-  [`credentials/${kid}`, writeJson(tombstoneCredential, "credential-tombstone.json")],
-  [`keys/${kid}`, writeJson(tombstoneLegacy, "legacy-key-tombstone.json")],
-  [`policies/${kid}`, writeJson(tombstonePolicy, "policy-tombstone.json")],
-  [`credentials/${kid}`, writeJson(credential, "credential.json")],
-  [`policies/${kid}`, writeJson(policy, "policy.json")],
-];
 
-try {
-  for (const [key, path] of records) {
-    run("pnpm", [
-      "exec",
-      "wrangler",
-      "kv",
-      "key",
-      "put",
-      key,
-      "--path",
-      path,
-      "--binding",
-      binding,
-      "--config",
-      config,
-      ...kvTargetArgs(args),
-    ]);
+function putLocalBootstrapRecords(request) {
+  const existingPolicy = readRecord(`policies/${kid}`, { allowMissing: true });
+  const existingLegacy = readRecord(`keys/${kid}`, { allowMissing: true });
+  const existingCredential =
+    readRecord(`credentials/${kid}`, { allowMissing: true }) ?? legacyCredential(existingLegacy);
+  const generation = existingPolicy?.generation ?? `policy_${randomUUID()}`;
+  const policy = { ...request, generation };
+  delete policy.allProviders;
+  delete policy.secretSha256;
+  const credential = {
+    enabled,
+    secretSha256: request.secretSha256,
+    policyId: kid,
+    policyGeneration: generation,
+  };
+  if (
+    existingPolicy &&
+    existingCredential &&
+    policyChanged(existingPolicy, policy) &&
+    existingCredential.secretSha256 !== credential.secretSha256
+  ) {
+    throw new Error(
+      "cannot change policy scope and secret together; update the canonical policy and credential separately",
+    );
   }
-} finally {
-  for (const [, path] of records) {
-    rmSync(path, { force: true });
-    rmSync(join(path, ".."), { force: true, recursive: true });
+  const legacy = { ...policy, secretSha256: credential.secretSha256 };
+  const tombstoneCredential = { ...credential, enabled: false };
+  const tombstoneLegacy = { ...legacy, enabled: false };
+  const tombstonePolicy = { ...policy, enabled: false };
+  const records = [
+    [`credentials/${kid}`, writeJson(tombstoneCredential, "credential-tombstone.json")],
+    [`keys/${kid}`, writeJson(tombstoneLegacy, "legacy-key-tombstone.json")],
+    [`policies/${kid}`, writeJson(tombstonePolicy, "policy-tombstone.json")],
+    [`credentials/${kid}`, writeJson(credential, "credential.json")],
+    [`policies/${kid}`, writeJson(policy, "policy.json")],
+  ];
+
+  try {
+    for (const [key, path] of records) {
+      run("pnpm", [
+        "exec",
+        "wrangler",
+        "kv",
+        "key",
+        "put",
+        key,
+        "--path",
+        path,
+        "--binding",
+        binding,
+        "--config",
+        config,
+        ...kvTargetArgs(args),
+      ]);
+    }
+  } finally {
+    for (const [, path] of records) {
+      rmSync(path, { force: true });
+      rmSync(join(path, ".."), { force: true, recursive: true });
+    }
   }
 }
-
-console.log(`stored access policy and proxy credential for ${kid}; secret was not printed`);
 
 function parseArgs(values) {
   const out = {};

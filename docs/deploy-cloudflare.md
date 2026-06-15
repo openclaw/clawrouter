@@ -1,22 +1,23 @@
 # Deploy ClawRouter on Cloudflare
 
-ClawRouter’s edge runtime is a Rust/Wasm Worker. Runtime policy lives in
-Cloudflare KV and serialized Durable Object state so access can be revoked
-without a redeploy.
+ClawRouter’s edge runtime is a Rust/Wasm Worker. Revocation-critical runtime
+policy lives in serialized Durable Object authority so access can be revoked
+without a redeploy. Cloudflare KV stores migration seeds, compatibility copies,
+OAuth grants, and operational health.
 
 ## Required Bindings
 
-- `POLICY_KV`: access policies, issued credential hashes, compatibility
-  principal-binding records, provider connections, OAuth grants, and provider
-  health records.
+- `POLICY_KV`: migration seeds and compatibility copies for access policies,
+  issued credential hashes, principal bindings, users, and provider
+  connections, plus OAuth grants and provider health records.
 - `USAGE_QUEUE`: metered usage events and durable budget-settlement retries,
   with this Worker configured as producer and consumer.
 - usage DLQ, named by `CLAWROUTER_USAGE_DLQ`: separate queue for usage or
   settlement messages that exhaust automatic retries.
 - `BUDGET_LEDGER`: SQLite-backed Durable Object budget ledger.
-- `ACCESS_CONTROL`: SQLite-backed Durable Object authority for user state,
-  per-provider kill-switch shards, serialized user/group policy-binding
-  mutations, and session entitlement lookup.
+- `ACCESS_CONTROL`: SQLite-backed Durable Object authority for policies,
+  credential hashes, user state, per-provider kill-switch shards, serialized
+  user/group policy-binding mutations, and session entitlement lookup.
 - `USAGE_LEDGER`: SQLite-backed Durable Object request audit and reporting
   ledger. It retains bounded metadata for 30 days and never stores prompt or
   completion bodies.
@@ -276,7 +277,8 @@ GET /v1/admin/policy-bindings
 PUT /v1/admin/policy-bindings
 ```
 
-The record is stored in `POLICY_KV` at `access/users/<email>`:
+The authoritative record is stored in `ACCESS_CONTROL` and mirrored to
+`POLICY_KV` at `access/users/<email>` for compatibility:
 
 ```json
 {
@@ -287,8 +289,9 @@ The record is stored in `POLICY_KV` at `access/users/<email>`:
 }
 ```
 
-Bindings are indexed in `POLICY_KV` by principal so the request path reads only
-the signed-in user and their groups:
+Bindings are indexed in `ACCESS_CONTROL` by principal so the request path reads
+only the signed-in user and their groups. `POLICY_KV` keeps compatibility
+copies:
 
 ```json
 {
@@ -358,11 +361,10 @@ API materializes a same-id policy and credential and accepts the same shape as
 Access user records are not role-grant records. Cloudflare Access creates the
 identity, `access/users/<email>` stores tenant/status/groups, policy bindings
 grant service access, and ClawRouter admin rights come from the Access admin
-email/domain allowlist configured on the Worker. `ACCESS_CONTROL` makes user
-status, binding mutations, and session grant resolution strongly consistent
-without scanning global KV state. Provider kill switches use one authority
-object per provider so proxy traffic does not serialize through a global
-object.
+email/domain allowlist configured on the Worker. `ACCESS_CONTROL` makes
+policies, credentials, user status, binding mutations, and session grant
+resolution strongly consistent. Provider kill switches use one authority object
+per provider so proxy traffic does not serialize through a global object.
 
 ## Keys and Revocation
 
@@ -375,6 +377,12 @@ clawrouter-live-<kid>-<secret>
 Register a same-id policy and proxy credential:
 
 ```sh
+export CLAWROUTER_BASE_URL=https://clawrouter.openclaw.ai
+export CLAWROUTER_ADMIN_TOKEN=...
+# Required when Cloudflare Access protects /v1/admin/* for automation:
+export CF_ACCESS_CLIENT_ID=...
+export CF_ACCESS_CLIENT_SECRET=...
+
 printf '%s' "$CLAWROUTER_PROXY_SECRET" | pnpm cf:key:put -- \
   --kid svc_docs \
   --secret-stdin \
@@ -383,18 +391,14 @@ printf '%s' "$CLAWROUTER_PROXY_SECRET" | pnpm cf:key:put -- \
   --request-cost-micros 1000
 ```
 
-This stores the provider allowlist and budget at `policies/<kid>`, the proxy
-secret hash at `credentials/<kid>`, and a disabled `keys/<kid>` compatibility
-tombstone. `--providers` is required unless the operator deliberately passes
-`--all-providers`; omitting scope never creates an implicit wildcard. Policies
-and credentials carry the same generated policy generation. Authorization
-rejects mixed generations, so eventual KV propagation can cause a temporary
-denial during rotation but cannot combine an old secret with a newly expanded
-policy. Provisioning activates the policy only after its canonical credential
-succeeds. Only genuine pre-migration `keys/<kid>` records can authorize through
-the legacy fallback; generation-bearing compatibility records never can. When
-replacing an existing id, the helper preserves its policy generation and rejects
-changing policy scope and secret in the same operation.
+Remote key commands call the admin API so serialized authority is updated
+before compatibility KV. `--providers` is required unless the operator
+deliberately passes `--all-providers`; omitting scope never creates an implicit
+wildcard. Policies and credentials carry the same policy generation.
+Authorization rejects mixed generations, and replacing an existing id rejects
+changing policy scope and secret in the same operation. `--local` writes local
+KV only for bootstrap and tests; it is not an authoritative way to mutate a
+running Worker.
 
 Revoke access:
 
@@ -402,10 +406,11 @@ Revoke access:
 pnpm cf:key:revoke -- --kid svc_docs
 ```
 
-The edge runtime checks `POLICY_KV` on proxy requests. Disabling a credential
-revokes one issued key. Disabling a policy revokes every credential, Access
-user, and Access group bound to it. Neither operation rotates upstream provider
-credentials.
+The edge runtime checks serialized `ACCESS_CONTROL` authority on proxy
+requests. Disabling a credential revokes one issued key. Disabling a policy
+revokes every credential, Access user, and Access group bound to it. Neither
+operation rotates upstream provider credentials. Never use `--local` to revoke
+a deployed credential.
 
 Inspect a key without making an upstream provider call:
 
@@ -414,9 +419,9 @@ curl "$CLAWROUTER_BASE_URL/v1/key/inspect" \
   -H "authorization: Bearer $CLAWROUTER_KEY"
 ```
 
-When `POLICY_KV` is bound, the response verifies syntax, registration, secret
-hash, enabled state, tenant, budget, and provider allowlist. The endpoint never
-returns the key secret or stored secret hash.
+When `ACCESS_CONTROL` and `POLICY_KV` are bound, the response verifies syntax,
+registration, secret hash, enabled state, tenant, budget, and provider
+allowlist. The endpoint never returns the key secret or stored secret hash.
 
 The stored policy and credential shapes are separate:
 

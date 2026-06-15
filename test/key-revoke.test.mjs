@@ -1,9 +1,54 @@
 import assert from "node:assert/strict";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
+
+test("remote key revocation requires the authoritative admin API", () => {
+  const dir = mkdtempSync(join(tmpdir(), "clawrouter-key-revoke-remote-test-"));
+  const logPath = join(dir, "commands.log");
+  const fakePnpm = join(dir, "pnpm");
+  writeFileSync(
+    fakePnpm,
+    [
+      "#!/usr/bin/env node",
+      'require("node:fs").appendFileSync(process.env.CLAWROUTER_TEST_LOG, "called\\n");',
+    ].join("\n"),
+  );
+  chmodSync(fakePnpm, 0o755);
+  const env = {
+    ...process.env,
+    CLAWROUTER_TEST_LOG: logPath,
+    PATH: `${dir}:${process.env.PATH}`,
+  };
+  delete env.CLAWROUTER_BASE_URL;
+  delete env.CLAWROUTER_ADMIN_TOKEN;
+
+  try {
+    const result = spawnSync(
+      process.execPath,
+      [resolve("scripts/key-revoke.mjs"), "--kid", "issued"],
+      {
+        cwd: resolve("."),
+        encoding: "utf8",
+        env,
+      },
+    );
+    assert.notEqual(result.status, 0);
+    assert.match(result.stderr, /CLAWROUTER_BASE_URL is required for remote key mutations/);
+    assert.equal(existsSync(logPath), false);
+  } finally {
+    rmSync(dir, { force: true, recursive: true });
+  }
+});
 
 test("key revocation leaves the referenced policy enabled", () => {
   const dir = mkdtempSync(join(tmpdir(), "clawrouter-key-revoke-test-"));

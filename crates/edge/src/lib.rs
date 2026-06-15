@@ -979,6 +979,8 @@ struct AdminKeyPolicyRequest {
     #[serde(default)]
     providers: Option<Vec<String>>,
     #[serde(default)]
+    all_providers: bool,
+    #[serde(default)]
     tenant_id: Option<String>,
     #[serde(default)]
     token_role: Option<String>,
@@ -2468,8 +2470,11 @@ impl AdminKeyPolicyRequest {
                 .ok_or("secretSha256 is required for new proxy keys")?,
         };
         let providers = self.providers.ok_or("providers is required")?;
-        if providers.is_empty() && !existing_all_providers {
+        if providers.is_empty() && !self.all_providers && !existing_all_providers {
             return Err("providers must contain at least one provider id");
+        }
+        if !providers.is_empty() && self.all_providers {
+            return Err("allProviders cannot be combined with provider ids");
         }
         if let Some(value) = self.monthly_budget_micros {
             validate_admin_budget(value, "monthlyBudgetMicros")?;
@@ -9258,6 +9263,7 @@ mod tests {
             enabled: true,
             secret_sha256: Some(sha256_hex("secret")),
             providers: Some(vec!["openai".to_string(), "tavily".to_string()]),
+            all_providers: false,
             tenant_id: Some("team_docs".to_string()),
             token_role: Some("User".to_string()),
             monthly_budget_micros: Some(100),
@@ -9284,6 +9290,7 @@ mod tests {
             enabled: true,
             secret_sha256: Some(sha256_hex("secret")),
             providers: Some(vec!["openai".to_string()]),
+            all_providers: false,
             tenant_id: Some("team_docs".to_string()),
             token_role: Some("bad role!".to_string()),
             monthly_budget_micros: Some(100),
@@ -9302,6 +9309,7 @@ mod tests {
             enabled: true,
             secret_sha256: None,
             providers: Some(vec!["openai".to_string()]),
+            all_providers: false,
             tenant_id: Some("team_docs".to_string()),
             token_role: Some("service".to_string()),
             monthly_budget_micros: Some(200),
@@ -9316,6 +9324,7 @@ mod tests {
             enabled: true,
             secret_sha256: None,
             providers: Some(vec!["openai".to_string()]),
+            all_providers: false,
             tenant_id: None,
             token_role: None,
             monthly_budget_micros: None,
@@ -9636,6 +9645,7 @@ mod tests {
             enabled: true,
             secret_sha256: Some("not-a-hash".to_string()),
             providers: Some(vec!["openai".to_string()]),
+            all_providers: false,
             tenant_id: None,
             token_role: None,
             monthly_budget_micros: None,
@@ -9650,6 +9660,7 @@ mod tests {
             enabled: true,
             secret_sha256: Some(sha256_hex("secret")),
             providers: Some(Vec::new()),
+            all_providers: false,
             tenant_id: None,
             token_role: None,
             monthly_budget_micros: None,
@@ -9663,6 +9674,7 @@ mod tests {
             enabled: true,
             secret_sha256: Some(sha256_hex("secret")),
             providers: Some(Vec::new()),
+            all_providers: false,
             tenant_id: None,
             token_role: None,
             monthly_budget_micros: None,
@@ -9672,10 +9684,27 @@ mod tests {
         assert!(wildcard_policy.providers.is_empty());
         validate_policy_providers(&wildcard_policy.access_policy()).unwrap();
 
+        let explicit_wildcard = AdminKeyPolicyRequest {
+            enabled: true,
+            secret_sha256: Some(sha256_hex("secret")),
+            providers: Some(Vec::new()),
+            all_providers: true,
+            tenant_id: None,
+            token_role: None,
+            monthly_budget_micros: None,
+            request_cost_micros: None,
+        };
+        assert!(explicit_wildcard
+            .try_into_policy(None, false)
+            .unwrap()
+            .providers
+            .is_empty());
+
         let omitted_providers = AdminKeyPolicyRequest {
             enabled: true,
             secret_sha256: Some(sha256_hex("secret")),
             providers: None,
+            all_providers: false,
             tenant_id: None,
             token_role: None,
             monthly_budget_micros: None,
