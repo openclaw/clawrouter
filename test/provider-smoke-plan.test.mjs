@@ -66,6 +66,56 @@ test("provider transport failures are recorded as provider health", async () => 
   );
 });
 
+test("all selected providers run before smoke failures are reported", async () => {
+  const multiProviderPlan = {
+    providers: [
+      ...plan.providers,
+      {
+        id: "anthropic",
+        target: {
+          kind: "openai_chat",
+          route: "/v1/chat/completions",
+          body: { model: "anthropic/test" },
+        },
+      },
+    ],
+  };
+  let calls = 0;
+  await withFetch(
+    () => {
+      calls += 1;
+      if (calls === 1) {
+        return new Response(JSON.stringify({ error: { code: "provider_unavailable" } }), {
+          status: 502,
+          headers: { "x-clawrouter-upstream-provider": "openai" },
+        });
+      }
+      return new Response("ok", {
+        status: 200,
+        headers: { "x-clawrouter-upstream-provider": "anthropic" },
+      });
+    },
+    async () => {
+      const recorded = [];
+      await assert.rejects(
+        runLiveProviderSmokes({
+          baseUrl: "https://clawrouter.example",
+          smokeKey: "smoke-key",
+          plan: multiProviderPlan,
+          liveProviders: ["openai", "anthropic"],
+          onResult: async (result) => recorded.push(result),
+        }),
+        /openai smoke failed: HTTP 502/,
+      );
+      assert.equal(calls, 2);
+      assert.deepEqual(recorded.map((result) => [result.provider, result.status]), [
+        ["openai", "failed"],
+        ["anthropic", "verified"],
+      ]);
+    },
+  );
+});
+
 test("provider response stream failures are recorded as provider health", async () => {
   await withFetch(
     () =>
