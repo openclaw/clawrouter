@@ -19,6 +19,7 @@ const PROVIDER_ICONS: &str = include_str!("provider-icons.json");
 include!(concat!(env!("OUT_DIR"), "/admin-assets.rs"));
 static USAGE_EVENT_COUNTER: AtomicU64 = AtomicU64::new(0);
 const MAX_SQL_BUDGET_MICROS: u64 = 9_007_199_254_740_991;
+const BUDGET_RESERVATION_LEASE_MS: u64 = 15 * 60 * 1_000;
 const PROVIDER_HEALTH_MAX_AGE_MS: f64 = 86_400_000.0;
 const USAGE_EVENT_LIMIT: usize = 100;
 const USAGE_EVENT_RETENTION_MS: u64 = 30 * 86_400_000;
@@ -4854,23 +4855,38 @@ impl DurableObject for BudgetLedgerObject {
                     );
                 }
             };
-            return budget_status_in_object(&self.state, policy_id, window_key, limit_micros);
+            let response =
+                budget_status_in_object(&self.state, policy_id, window_key, limit_micros)?;
+            ensure_budget_cleanup_alarm(&self.state).await?;
+            return Ok(response);
         }
         if req.method() == Method::Post && url.path() == "/reserve" {
             let body = req.text().await?;
             let request = serde_json::from_str::<BudgetReserveRequest>(&body).map_err(|error| {
                 Error::RustError(format!("budget reserve request is invalid JSON: {error}"))
             })?;
-            return reserve_budget_in_object(&self.state, request);
+            let response = reserve_budget_in_object(&self.state, request)?;
+            ensure_budget_cleanup_alarm(&self.state).await?;
+            return Ok(response);
         }
         if req.method() == Method::Post && url.path() == "/settle" {
             let body = req.text().await?;
             let request = serde_json::from_str::<BudgetSettleRequest>(&body).map_err(|error| {
                 Error::RustError(format!("budget settle request is invalid JSON: {error}"))
             })?;
-            return settle_budget_in_object(&self.state, request);
+            let response = settle_budget_in_object(&self.state, request)?;
+            ensure_budget_cleanup_alarm(&self.state).await?;
+            return Ok(response);
         }
         json_error("route_not_found", "route not found", 404)
+    }
+
+    async fn alarm(&self) -> Result<Response> {
+        let sql = self.state.storage().sql();
+        ensure_budget_schema(&sql)?;
+        reclaim_stale_budget_reservations(&sql, Date::now().as_millis())?;
+        ensure_budget_cleanup_alarm(&self.state).await?;
+        Response::ok("stale budget reservations reclaimed")
     }
 }
 
@@ -5478,8 +5494,9 @@ async fn fetch_budget_status(
 fn reserve_budget_in_object(state: &State, request: BudgetReserveRequest) -> Result<Response> {
     let sql = state.storage().sql();
     ensure_budget_schema(&sql)?;
+    reclaim_stale_budget_reservations(&sql, Date::now().as_millis())?;
     if let Some(existing) = budget_reservation(&sql, &request.reservation_id)? {
-        let spent_micros = budget_spent(&sql, &existing.window_key)?;
+        let spent_micros = budget_effective_spent(&sql, &existing.window_key)?;
         return Response::from_json(&BudgetReserveResponse {
             allowed: true,
             policy_id: existing.policy_id,
@@ -5489,7 +5506,7 @@ fn reserve_budget_in_object(state: &State, request: BudgetReserveRequest) -> Res
             remaining_micros: request.limit_micros.saturating_sub(spent_micros),
         });
     }
-    let spent_micros = budget_spent(&sql, &request.window_key)?;
+    let spent_micros = budget_effective_spent(&sql, &request.window_key)?;
     let remaining_micros = request.limit_micros.saturating_sub(spent_micros);
     if request.cost_micros > remaining_micros {
         return Response::from_json(&BudgetReserveResponse {
@@ -5504,16 +5521,16 @@ fn reserve_budget_in_object(state: &State, request: BudgetReserveRequest) -> Res
 
     let next_spent = spent_micros.saturating_add(request.cost_micros);
     let remaining_after = request.limit_micros.saturating_sub(next_spent);
-    write_budget_spent(&sql, &request.window_key, &request.policy_id, next_spent)?;
     sql.exec_raw(
         "INSERT INTO budget_reservations (
-            reservation_id, window_key, policy_id, reserved_micros
-        ) VALUES (?, ?, ?, ?)",
+            reservation_id, window_key, policy_id, reserved_micros, created_at_ms
+        ) VALUES (?, ?, ?, ?, ?)",
         raw_bindings(vec![
             JsValue::from_str(&request.reservation_id),
             JsValue::from_str(&request.window_key),
             JsValue::from_str(&request.policy_id),
             sql_budget_number(request.cost_micros, "reserved_micros")?,
+            sql_budget_number(Date::now().as_millis(), "created_at_ms")?,
         ]),
     )?;
 
@@ -5530,6 +5547,7 @@ fn reserve_budget_in_object(state: &State, request: BudgetReserveRequest) -> Res
 fn settle_budget_in_object(state: &State, request: BudgetSettleRequest) -> Result<Response> {
     let sql = state.storage().sql();
     ensure_budget_schema(&sql)?;
+    reclaim_stale_budget_reservations(&sql, Date::now().as_millis())?;
     let Some(reservation) = budget_reservation(&sql, &request.reservation_id)? else {
         return Response::from_json(&BudgetSettleResponse {
             settled: false,
@@ -5537,20 +5555,17 @@ fn settle_budget_in_object(state: &State, request: BudgetSettleRequest) -> Resul
             spent_micros: 0,
         });
     };
-    let reserved_micros = sql_count(reservation.reserved_micros);
     let current_spent = budget_spent(&sql, &reservation.window_key)?;
-    let next_spent = current_spent
-        .saturating_sub(reserved_micros)
-        .saturating_add(request.actual_cost_micros);
-    sql.exec_raw(
-        "DELETE FROM budget_reservations WHERE reservation_id = ?",
-        raw_bindings(vec![JsValue::from_str(&request.reservation_id)]),
-    )?;
+    let next_spent = current_spent.saturating_add(request.actual_cost_micros);
     write_budget_spent(
         &sql,
         &reservation.window_key,
         &reservation.policy_id,
         next_spent,
+    )?;
+    sql.exec_raw(
+        "DELETE FROM budget_reservations WHERE reservation_id = ?",
+        raw_bindings(vec![JsValue::from_str(&request.reservation_id)]),
     )?;
     Response::from_json(&BudgetSettleResponse {
         settled: true,
@@ -5567,7 +5582,8 @@ fn budget_status_in_object(
 ) -> Result<Response> {
     let sql = state.storage().sql();
     ensure_budget_schema(&sql)?;
-    let spent_micros = budget_spent(&sql, &window_key)?;
+    reclaim_stale_budget_reservations(&sql, Date::now().as_millis())?;
+    let spent_micros = budget_effective_spent(&sql, &window_key)?;
     Response::from_json(&BudgetStatusResponse {
         policy_id,
         window_key,
@@ -5591,8 +5607,51 @@ fn ensure_budget_schema(sql: &SqlStorage) -> Result<()> {
             reservation_id TEXT PRIMARY KEY,
             window_key TEXT NOT NULL,
             policy_id TEXT NOT NULL,
-            reserved_micros INTEGER NOT NULL
+            reserved_micros INTEGER NOT NULL,
+            created_at_ms INTEGER NOT NULL
         )",
+        None,
+    )?;
+    if sql
+        .exec(
+            "SELECT created_at_ms FROM budget_reservations LIMIT 0",
+            None,
+        )
+        .is_err()
+    {
+        let legacy_reservations = sql
+            .exec(
+                "SELECT window_key, policy_id, reserved_micros
+                    FROM budget_reservations",
+                None,
+            )?
+            .to_array::<BudgetReservationRow>()?;
+        for reservation in legacy_reservations {
+            let settled_micros = budget_spent(sql, &reservation.window_key)?
+                .saturating_sub(sql_count(reservation.reserved_micros));
+            write_budget_spent(
+                sql,
+                &reservation.window_key,
+                &reservation.policy_id,
+                settled_micros,
+            )?;
+        }
+        sql.exec(
+            "ALTER TABLE budget_reservations
+                ADD COLUMN created_at_ms INTEGER NOT NULL DEFAULT 0",
+            None,
+        )?;
+        sql.exec_raw(
+            "UPDATE budget_reservations SET created_at_ms = ? WHERE created_at_ms = 0",
+            raw_bindings(vec![sql_budget_number(
+                Date::now().as_millis(),
+                "created_at_ms",
+            )?]),
+        )?;
+    }
+    sql.exec(
+        "CREATE INDEX IF NOT EXISTS budget_reservations_created_at
+            ON budget_reservations (created_at_ms)",
         None,
     )?;
     Ok(())
@@ -5613,6 +5672,44 @@ fn budget_reservation(
         .next())
 }
 
+async fn ensure_budget_cleanup_alarm(state: &State) -> Result<()> {
+    let sql = state.storage().sql();
+    ensure_budget_schema(&sql)?;
+    if budget_has_reservations(&sql)? && state.storage().get_alarm().await?.is_none() {
+        state
+            .storage()
+            .set_alarm(BUDGET_RESERVATION_LEASE_MS as i64)
+            .await?;
+    }
+    Ok(())
+}
+
+fn reclaim_stale_budget_reservations(sql: &SqlStorage, now_ms: u64) -> Result<()> {
+    sql.exec_raw(
+        "DELETE FROM budget_reservations WHERE created_at_ms < ?",
+        raw_bindings(vec![sql_budget_number(
+            budget_reservation_cutoff_ms(now_ms),
+            "reservation_cutoff",
+        )?]),
+    )?;
+    Ok(())
+}
+
+fn budget_reservation_cutoff_ms(now_ms: u64) -> u64 {
+    now_ms.saturating_sub(BUDGET_RESERVATION_LEASE_MS)
+}
+
+fn budget_has_reservations(sql: &SqlStorage) -> Result<bool> {
+    Ok(!sql
+        .exec(
+            "SELECT reserved_micros AS spent_micros
+                FROM budget_reservations LIMIT 1",
+            None,
+        )?
+        .to_array::<BudgetSpendRow>()?
+        .is_empty())
+}
+
 fn budget_spent(sql: &SqlStorage, window_key: &str) -> Result<u64> {
     Ok(sql
         .exec_raw(
@@ -5623,6 +5720,23 @@ fn budget_spent(sql: &SqlStorage, window_key: &str) -> Result<u64> {
         .first()
         .map(|row| row.spent_micros.max(0) as u64)
         .unwrap_or_default())
+}
+
+fn budget_reserved(sql: &SqlStorage, window_key: &str) -> Result<u64> {
+    Ok(sql
+        .exec_raw(
+            "SELECT COALESCE(SUM(reserved_micros), 0) AS spent_micros
+                FROM budget_reservations WHERE window_key = ?",
+            raw_bindings(vec![JsValue::from_str(window_key)]),
+        )?
+        .to_array::<BudgetSpendRow>()?
+        .first()
+        .map(|row| row.spent_micros.max(0) as u64)
+        .unwrap_or_default())
+}
+
+fn budget_effective_spent(sql: &SqlStorage, window_key: &str) -> Result<u64> {
+    Ok(budget_spent(sql, window_key)?.saturating_add(budget_reserved(sql, window_key)?))
 }
 
 fn write_budget_spent(
@@ -6823,6 +6937,18 @@ mod tests {
         assert_eq!(actual_request_cost(299, 42), 42);
         assert_eq!(actual_request_cost(400, 42), 0);
         assert_eq!(actual_request_cost(502, 42), 0);
+    }
+
+    #[test]
+    fn budget_reservation_cutoff_saturates_before_the_lease_window() {
+        assert_eq!(
+            budget_reservation_cutoff_ms(BUDGET_RESERVATION_LEASE_MS - 1),
+            0
+        );
+        assert_eq!(
+            budget_reservation_cutoff_ms(BUDGET_RESERVATION_LEASE_MS + 42),
+            42
+        );
     }
 
     #[test]
