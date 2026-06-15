@@ -30,7 +30,6 @@ const USAGE_AUDIT_FIELD_MAX_BYTES: usize = 256;
 const USAGE_AUDIT_PRINCIPAL_MAX_BYTES: usize = 320;
 const USAGE_AUDIT_MODEL_MAX_BYTES: usize = 512;
 const KV_BULK_GET_MAX_KEYS: usize = 100;
-const SESSION_BINDING_SCAN_MAX_KEYS: usize = 10_000;
 const UPSTREAM_PROVIDER_HEADER: &str = "x-clawrouter-upstream-provider";
 const CORS_ALLOW_ORIGIN: &str = "*";
 const CORS_ALLOW_METHODS: &str = "GET,POST,PUT,OPTIONS";
@@ -1185,6 +1184,13 @@ struct PolicyBindingRecord {
     priority: u16,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PolicyBindingIndexRecord {
+    #[serde(default)]
+    binding_keys: Vec<String>,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum AccessAud {
@@ -1422,16 +1428,7 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             {
                 return json_error("unknown_policy", "bound policy does not exist", 404);
             }
-            let value = serde_json::to_string(&binding)?;
-            kv.put(&policy_binding_key(&binding), value)
-                .map_err(|error| {
-                    Error::RustError(format!("failed to prepare policy binding: {error}"))
-                })?
-                .execute()
-                .await
-                .map_err(|error| {
-                    Error::RustError(format!("failed to write policy binding: {error}"))
-                })?;
+            put_policy_binding_record(&kv, &binding).await?;
             return Response::from_json(&binding);
         }
         return json_error("method_not_allowed", "admin method is not allowed", 405);
@@ -1488,7 +1485,17 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             if let Err(message) = validate_policy_budget(&policy) {
                 return json_error("invalid_policy", message, 400);
             }
+            let mut tombstone = policy.clone();
+            tombstone.enabled = false;
+            put_kv_record(
+                &kv,
+                &format!("policies/{policy_id}"),
+                &tombstone,
+                "access policy tombstone",
+            )
+            .await?;
             let rollback_credentials = disable_legacy_records_for_policy(&kv, &policy_id).await?;
+            sync_legacy_records_for_policy(&kv, &policy, &rollback_credentials).await?;
             put_kv_record(
                 &kv,
                 &format!("policies/{policy_id}"),
@@ -1496,7 +1503,6 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 "access policy",
             )
             .await?;
-            sync_legacy_records_for_policy(&kv, &policy, &rollback_credentials).await?;
             return Response::from_json(&admin_access_policy_response(&policy_id, &policy));
         }
         if req.method() == Method::Post {
@@ -1576,6 +1582,7 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             )
             .await?;
             disable_legacy_key_record(&kv, &credential_id).await?;
+            sync_legacy_rollback_record(&kv, &credential_id, &policy, &credential).await?;
             put_kv_record(
                 &kv,
                 &format!("credentials/{credential_id}"),
@@ -1583,7 +1590,6 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 "proxy credential",
             )
             .await?;
-            sync_legacy_rollback_record(&kv, &credential_id, &policy, &credential).await?;
             return Response::from_json(&admin_credential_response(&credential_id, &credential));
         }
         if req.method() == Method::Post {
@@ -2857,15 +2863,11 @@ async fn list_policy_bindings_for_prefix(
     kv: &KvStore,
     prefix: &str,
 ) -> Result<Vec<PolicyBindingRecord>> {
-    let key_names = list_policy_binding_keys(kv, prefix, None).await?;
+    let key_names = list_policy_binding_keys(kv, prefix).await?;
     read_policy_bindings(kv, &key_names).await
 }
 
-async fn list_policy_binding_keys(
-    kv: &KvStore,
-    prefix: &str,
-    max_keys: Option<usize>,
-) -> Result<Vec<String>> {
+async fn list_policy_binding_keys(kv: &KvStore, prefix: &str) -> Result<Vec<String>> {
     let mut key_names = Vec::new();
     let mut cursor = None;
     loop {
@@ -2879,13 +2881,6 @@ async fn list_policy_binding_keys(
         for key in list.keys {
             key_names.push(key.name);
         }
-        if let Some(limit) = max_keys {
-            if key_names.len() > limit {
-                return Err(Error::RustError(format!(
-                    "policy binding scan exceeds the {limit} key authorization limit"
-                )));
-            }
-        }
         if list.list_complete {
             break;
         }
@@ -2895,6 +2890,62 @@ async fn list_policy_binding_keys(
         cursor = Some(next_cursor);
     }
     Ok(key_names)
+}
+
+async fn put_policy_binding_record(kv: &KvStore, binding: &PolicyBindingRecord) -> Result<()> {
+    let binding_key = policy_binding_key(binding);
+    let mut index =
+        existing_policy_binding_index(kv, binding.principal_type, &binding.principal_id).await?;
+    if binding.enabled {
+        index.binding_keys.push(binding_key.clone());
+        normalize_policy_binding_index(&mut index, binding.principal_type, &binding.principal_id);
+        put_policy_binding_index(kv, binding.principal_type, &binding.principal_id, &index).await?;
+        put_kv_record(kv, &binding_key, binding, "policy binding").await
+    } else {
+        put_kv_record(kv, &binding_key, binding, "policy binding tombstone").await?;
+        index.binding_keys.retain(|key| key != &binding_key);
+        put_policy_binding_index(kv, binding.principal_type, &binding.principal_id, &index).await
+    }
+}
+
+async fn existing_policy_binding_index(
+    kv: &KvStore,
+    principal_type: PrincipalType,
+    principal_id: &str,
+) -> Result<PolicyBindingIndexRecord> {
+    let key = policy_binding_index_key(principal_type, principal_id);
+    let mut index = if let Some(record) = kv.get(&key).text().await.map_err(|error| {
+        Error::RustError(format!("failed to read policy binding index: {error}"))
+    })? {
+        serde_json::from_str::<PolicyBindingIndexRecord>(&record).map_err(|error| {
+            Error::RustError(format!("policy binding index is invalid JSON: {error}"))
+        })?
+    } else {
+        PolicyBindingIndexRecord {
+            binding_keys: list_policy_binding_keys(
+                kv,
+                &policy_binding_prefix(principal_type, principal_id),
+            )
+            .await?,
+        }
+    };
+    normalize_policy_binding_index(&mut index, principal_type, principal_id);
+    Ok(index)
+}
+
+async fn put_policy_binding_index(
+    kv: &KvStore,
+    principal_type: PrincipalType,
+    principal_id: &str,
+    index: &PolicyBindingIndexRecord,
+) -> Result<()> {
+    put_kv_record(
+        kv,
+        &policy_binding_index_key(principal_type, principal_id),
+        index,
+        "policy binding index",
+    )
+    .await
 }
 
 async fn read_policy_bindings(
@@ -2946,19 +2997,7 @@ async fn list_session_policy_entries(
     kv: &KvStore,
     session: &AccessSession,
 ) -> Result<Vec<AccessPolicyEntry>> {
-    let binding_prefixes = session_binding_prefixes(session)
-        .into_iter()
-        .collect::<BTreeSet<_>>();
-    let binding_keys =
-        list_policy_binding_keys(kv, "access/bindings/", Some(SESSION_BINDING_SCAN_MAX_KEYS))
-            .await?
-            .into_iter()
-            .filter(|key| {
-                binding_prefixes
-                    .iter()
-                    .any(|prefix| key.starts_with(prefix))
-            })
-            .collect::<Vec<_>>();
+    let binding_keys = session_binding_keys(kv, session).await?;
     let bindings = read_policy_bindings(kv, &binding_keys).await?;
     let priorities = session_binding_priorities(session, &bindings);
     let policy_ids = priorities.keys().cloned().collect::<Vec<_>>();
@@ -2981,6 +3020,47 @@ async fn list_session_policy_entries(
             .then_with(|| entry_a.policy_id.cmp(&entry_b.policy_id))
     });
     Ok(entries.into_iter().map(|(_, entry)| entry).collect())
+}
+
+async fn session_binding_keys(kv: &KvStore, session: &AccessSession) -> Result<Vec<String>> {
+    let principals = session_binding_principals(session);
+    let index_keys = principals
+        .iter()
+        .map(|(principal_type, principal_id)| {
+            policy_binding_index_key(*principal_type, principal_id)
+        })
+        .collect::<Vec<_>>();
+    let records = bulk_read_kv_text(kv, &index_keys, "policy binding index").await?;
+    let mut binding_keys = BTreeSet::new();
+    for ((principal_type, principal_id), index_key) in principals.into_iter().zip(index_keys) {
+        let mut index = if let Some(record) = records.get(&index_key) {
+            serde_json::from_str::<PolicyBindingIndexRecord>(record).map_err(|error| {
+                Error::RustError(format!("policy binding index is invalid JSON: {error}"))
+            })?
+        } else {
+            let mut index = PolicyBindingIndexRecord {
+                binding_keys: list_policy_binding_keys(
+                    kv,
+                    &policy_binding_prefix(principal_type, principal_id),
+                )
+                .await?,
+            };
+            normalize_policy_binding_index(&mut index, principal_type, principal_id);
+            if let Err(error) =
+                put_policy_binding_index(kv, principal_type, principal_id, &index).await
+            {
+                console_error!(
+                    "failed to backfill policy binding index {}: {}",
+                    index_key,
+                    error
+                );
+            }
+            index
+        };
+        normalize_policy_binding_index(&mut index, principal_type, principal_id);
+        binding_keys.extend(index.binding_keys);
+    }
+    Ok(binding_keys.into_iter().collect())
 }
 
 fn session_binding_priorities(
@@ -3043,15 +3123,15 @@ async fn read_access_policies(
     Ok(policies)
 }
 
-fn session_binding_prefixes(session: &AccessSession) -> Vec<String> {
-    let mut prefixes = vec![policy_binding_prefix(PrincipalType::User, &session.email)];
-    prefixes.extend(
+fn session_binding_principals(session: &AccessSession) -> Vec<(PrincipalType, &str)> {
+    let mut principals = vec![(PrincipalType::User, session.email.as_str())];
+    principals.extend(
         session
             .groups
             .iter()
-            .map(|group| policy_binding_prefix(PrincipalType::Group, group)),
+            .map(|group| (PrincipalType::Group, group.as_str())),
     );
-    prefixes
+    principals
 }
 
 async fn list_oauth_grants(kv: &KvStore) -> Result<Vec<OAuthGrantRecord>> {
@@ -3501,6 +3581,25 @@ fn policy_binding_key(binding: &PolicyBindingRecord) -> String {
         policy_binding_prefix(binding.principal_type, &binding.principal_id),
         binding.policy_id
     )
+}
+
+fn policy_binding_index_key(principal_type: PrincipalType, principal_id: &str) -> String {
+    format!(
+        "access/binding-index/{}/{}",
+        principal_type_label(principal_type),
+        encode_component(principal_id)
+    )
+}
+
+fn normalize_policy_binding_index(
+    index: &mut PolicyBindingIndexRecord,
+    principal_type: PrincipalType,
+    principal_id: &str,
+) {
+    let prefix = policy_binding_prefix(principal_type, principal_id);
+    index.binding_keys.retain(|key| key.starts_with(&prefix));
+    index.binding_keys.sort();
+    index.binding_keys.dedup();
 }
 
 fn percent_decode_path_segment(value: &str) -> Option<String> {
@@ -7119,6 +7218,10 @@ mod tests {
             policy_binding_key(&binding),
             "access/bindings/user/writer%40example.com/svc_docs"
         );
+        assert_eq!(
+            policy_binding_index_key(binding.principal_type, &binding.principal_id),
+            "access/binding-index/user/writer%40example.com"
+        );
 
         let groups = normalize_access_groups(vec![
             "Maintainers".to_string(),
@@ -7130,7 +7233,29 @@ mod tests {
     }
 
     #[test]
-    fn admin_sessions_have_no_implicit_policy_binding_prefix() {
+    fn policy_binding_indexes_only_keep_their_principal_keys() {
+        let mut index = PolicyBindingIndexRecord {
+            binding_keys: vec![
+                "access/bindings/group/docs/read".to_string(),
+                "access/bindings/group/ops/admin".to_string(),
+                "access/bindings/group/docs/read".to_string(),
+                "access/bindings/group/docs/write".to_string(),
+            ],
+        };
+
+        normalize_policy_binding_index(&mut index, PrincipalType::Group, "docs");
+
+        assert_eq!(
+            index.binding_keys,
+            vec![
+                "access/bindings/group/docs/read",
+                "access/bindings/group/docs/write"
+            ]
+        );
+    }
+
+    #[test]
+    fn admin_sessions_have_no_implicit_policy_binding_index() {
         let session = AccessSession {
             authenticated: true,
             auth: "cloudflare_access",
@@ -7142,8 +7267,13 @@ mod tests {
         };
 
         assert_eq!(
-            session_binding_prefixes(&session),
-            vec!["access/bindings/user/admin%40example.com/"]
+            session_binding_principals(&session)
+                .into_iter()
+                .map(|(principal_type, principal_id)| {
+                    policy_binding_index_key(principal_type, principal_id)
+                })
+                .collect::<Vec<_>>(),
+            vec!["access/binding-index/user/admin%40example.com"]
         );
     }
 

@@ -43,8 +43,8 @@ const records = [
   [`credentials/${kid}`, writeJson(tombstoneCredential, "credential-tombstone.json")],
   [`keys/${kid}`, writeJson(tombstoneLegacy, "legacy-key-tombstone.json")],
   [`policies/${kid}`, writeJson(policy, "policy.json")],
-  [`credentials/${kid}`, writeJson(credential, "credential.json")],
   [`keys/${kid}`, writeJson(legacy, "legacy-key.json")],
+  [`credentials/${kid}`, writeJson(credential, "credential.json")],
 ];
 
 try {
