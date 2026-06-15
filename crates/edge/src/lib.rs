@@ -2028,13 +2028,13 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             Ok(kid) => kid,
             Err(message) => return json_error("invalid_admin_key", message, 400),
         };
-        let Some(mut policy) = existing_access_policy(&kv, &kid).await? else {
+        let Some(policy) = existing_access_policy(&kv, &kid).await? else {
             return json_error("unknown_proxy_key", "proxy key is not registered", 404);
         };
         let Some(mut credential) = existing_proxy_credential(&kv, &kid).await? else {
             return json_error("unknown_proxy_key", "proxy key is not registered", 404);
         };
-        policy.enabled = false;
+        // Legacy key ids can reference shared policies, so revocation is credential-scoped.
         credential.enabled = false;
         put_kv_record(
             &kv,
@@ -2043,7 +2043,6 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             "proxy credential",
         )
         .await?;
-        put_kv_record(&kv, &format!("policies/{kid}"), &policy, "access policy").await?;
         if let Some(mut legacy) = existing_legacy_key_policy(&kv, &kid).await? {
             legacy.enabled = false;
             put_kv_record(&kv, &format!("keys/{kid}"), &legacy, "legacy key policy").await?;
