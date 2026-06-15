@@ -1297,6 +1297,17 @@ struct AccessUserRecord {
 
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
+struct AdminAccessUserPatchRequest {
+    #[serde(default)]
+    tenant_id: Option<String>,
+    #[serde(default)]
+    enabled: Option<bool>,
+    #[serde(default)]
+    groups: Option<Vec<String>>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
 struct AdminAccessUserGrantsRequest {
     #[serde(flatten)]
     record: AccessUserRecord,
@@ -1402,6 +1413,7 @@ struct AccessControlUser {
 struct AccessControlUserBindingsPutRequest {
     user: AccessControlUser,
     policy_ids: Vec<String>,
+    seed: PolicyBindingIndexSeed,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -2076,19 +2088,20 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             Ok(email) => email,
             Err(message) => return json_error("invalid_access_user", message, 400),
         };
-        let mut request = match serde_json::from_str::<AccessUserRecord>(&req.text().await?) {
+        let patch = match serde_json::from_str::<AdminAccessUserPatchRequest>(&req.text().await?) {
             Ok(request) => request,
             Err(error) => {
                 return json_error(
                     "invalid_access_user_request",
-                    &format!("request body must be a JSON access user record: {error}"),
+                    &format!("request body must be a JSON access user patch record: {error}"),
                     400,
                 );
             }
         };
-        request.role = AccessRole::User;
-        request.groups = match normalize_access_groups(request.groups) {
-            Ok(groups) => groups,
+        let existing =
+            access_control_user_record(&env, &email, &default_access_tenant(&env)).await?;
+        let request = match apply_access_user_patch(existing, patch) {
+            Ok(request) => request,
             Err(message) => return json_error("invalid_access_user", &message, 400),
         };
         let namespace = access_control_namespace(&env)?;
@@ -2446,6 +2459,23 @@ fn default_access_user_record(default_tenant: &str) -> AccessUserRecord {
         enabled: Some(true),
         groups: Vec::new(),
     }
+}
+
+fn apply_access_user_patch(
+    mut record: AccessUserRecord,
+    patch: AdminAccessUserPatchRequest,
+) -> std::result::Result<AccessUserRecord, String> {
+    record.role = AccessRole::User;
+    if let Some(tenant_id) = patch.tenant_id {
+        record.tenant_id = Some(tenant_id);
+    }
+    if let Some(enabled) = patch.enabled {
+        record.enabled = Some(enabled);
+    }
+    if let Some(groups) = patch.groups {
+        record.groups = normalize_access_groups(groups)?;
+    }
+    Ok(record)
 }
 
 async fn existing_access_user_record(
@@ -3768,11 +3798,20 @@ async fn put_authoritative_access_user_bindings(
     policy_ids: &[String],
 ) -> Result<Vec<PolicyBindingRecord>> {
     let namespace = access_control_namespace(env)?;
+    let seed = policy_binding_index_seed(
+        kv,
+        PolicyBindingPrincipal {
+            principal_type: PrincipalType::User,
+            principal_id: user.email.clone(),
+        },
+    )
+    .await?;
     let bindings = put_access_control_user_bindings(
         &namespace,
         &AccessControlUserBindingsPutRequest {
             user: user.clone(),
             policy_ids: policy_ids.to_vec(),
+            seed,
         },
     )
     .await?;
@@ -7055,20 +7094,28 @@ fn initialize_policy_binding_index_in_object(
 ) -> Result<()> {
     let sql = state.storage().sql();
     ensure_access_control_schema(&sql)?;
-    for mut seed in seeds {
-        let principal_key = policy_binding_principal_key(&seed.principal);
-        if policy_binding_index_initialized(&sql, &principal_key)? {
-            continue;
-        }
-        normalize_policy_binding_records(&mut seed.bindings, &seed.principal);
-        for binding in seed.bindings {
-            upsert_policy_binding_in_sql(&sql, &principal_key, &binding)?;
-        }
-        sql.exec_raw(
-            "INSERT OR IGNORE INTO policy_binding_principals (principal_key) VALUES (?)",
-            raw_bindings(vec![JsValue::from_str(&principal_key)]),
-        )?;
+    for seed in seeds {
+        initialize_policy_binding_seed_in_sql(&sql, seed)?;
     }
+    Ok(())
+}
+
+fn initialize_policy_binding_seed_in_sql(
+    sql: &SqlStorage,
+    mut seed: PolicyBindingIndexSeed,
+) -> Result<()> {
+    let principal_key = policy_binding_principal_key(&seed.principal);
+    if policy_binding_index_initialized(sql, &principal_key)? {
+        return Ok(());
+    }
+    normalize_policy_binding_records(&mut seed.bindings, &seed.principal);
+    for binding in seed.bindings {
+        upsert_policy_binding_in_sql(sql, &principal_key, &binding)?;
+    }
+    sql.exec_raw(
+        "INSERT OR IGNORE INTO policy_binding_principals (principal_key) VALUES (?)",
+        raw_bindings(vec![JsValue::from_str(&principal_key)]),
+    )?;
     Ok(())
 }
 
@@ -7272,6 +7319,15 @@ async fn put_access_control_user_bindings_in_object(
         principal_type: PrincipalType::User,
         principal_id: request.user.email.clone(),
     };
+    if request.seed.principal.principal_type != PrincipalType::User
+        || normalize_access_email(&request.seed.principal.principal_id).map_err(str::to_string)?
+            != principal.principal_id
+    {
+        return Err(Error::RustError(
+            "access user binding seed does not match the requested user".to_string(),
+        ));
+    }
+    request.seed.principal = principal.clone();
     let mut desired_policy_ids = BTreeSet::new();
     for policy_id in request.policy_ids {
         desired_policy_ids.insert(validate_admin_kid(policy_id.trim()).map_err(str::to_string)?);
@@ -7283,6 +7339,7 @@ async fn put_access_control_user_bindings_in_object(
     let transaction_principal = principal.clone();
     storage
         .transaction(move |_| async move {
+            initialize_policy_binding_seed_in_sql(&transaction_sql, request.seed)?;
             let current =
                 policy_bindings_for_principal_in_sql(&transaction_sql, &transaction_principal)?;
             let bindings = reconcile_user_policy_bindings(
@@ -10470,6 +10527,31 @@ mod tests {
         assert_eq!(user.record.role, AccessRole::User);
         assert_eq!(user.record.enabled, Some(false));
         assert_eq!(user.record.groups, vec!["docs"]);
+    }
+
+    #[test]
+    fn legacy_access_user_patches_preserve_omitted_groups() {
+        let existing = AccessUserRecord {
+            role: AccessRole::User,
+            tenant_id: Some("old".to_string()),
+            enabled: Some(false),
+            groups: vec!["maintainers".to_string()],
+        };
+        let patch = serde_json::from_str::<AdminAccessUserPatchRequest>(
+            r#"{"tenantId":"new","enabled":true}"#,
+        )
+        .unwrap();
+        let updated = apply_access_user_patch(existing.clone(), patch).unwrap();
+        assert_eq!(updated.tenant_id.as_deref(), Some("new"));
+        assert_eq!(updated.enabled, Some(true));
+        assert_eq!(updated.groups, vec!["maintainers"]);
+
+        let clear =
+            serde_json::from_str::<AdminAccessUserPatchRequest>(r#"{"groups":[]}"#).unwrap();
+        assert!(apply_access_user_patch(existing, clear)
+            .unwrap()
+            .groups
+            .is_empty());
     }
 
     #[test]
