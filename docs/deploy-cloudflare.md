@@ -350,8 +350,9 @@ console also stores `tokenRole` metadata from policy templates such as
 provider allowlist and budget fields.
 
 Legacy `GET|PUT /v1/admin/keys...`, `POST /v1/admin/keys/<kid>/revoke`, and
-`GET /v1/admin/users` remain compatibility aliases. The key mutation API
-materializes a same-id policy and credential and accepts the same shape as
+`GET /v1/admin/users` remain compatibility aliases. The revoke alias treats
+`<kid>` as a credential id and never disables a shared policy. The key mutation
+API materializes a same-id policy and credential and accepts the same shape as
 `pnpm cf:key:put`, but with `secretSha256` instead of a raw key secret.
 
 Access user records are not role-grant records. Cloudflare Access creates the
