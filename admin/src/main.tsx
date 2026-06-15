@@ -725,6 +725,7 @@ function App() {
       if (credentials.some((credential) => credential.credentialId === credentialId)) throw new Error("credential id already exists");
       setStatus("issuing credential");
       const secret = generateSecret();
+      const revealedKey = `clawrouter-live-${credentialId}-${secret}`;
       const next: ProxyCredential = { credentialId, policyId, enabled: true };
       if (demoMode) {
         applyDemoCredentials((current) => [next, ...current]);
@@ -734,11 +735,21 @@ function App() {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ enabled: true, policyId, secretSha256: await sha256Hex(secret) }),
         });
-        await refresh();
+        setIssuedKey(revealedKey);
+        try {
+          await refresh();
+        } catch (error) {
+          const message = errorMessage(error);
+          setSelectedCredentialId(credentialId);
+          setCredentialForm({ credentialId: "", policyId });
+          setPolicyError(`credential issued, but refresh failed: ${message}`);
+          setStatus("issued credential; refresh failed");
+          return;
+        }
       }
       setSelectedCredentialId(credentialId);
       setCredentialForm({ credentialId: "", policyId });
-      setIssuedKey(`clawrouter-live-${credentialId}-${secret}`);
+      setIssuedKey(revealedKey);
       setStatus("issued credential");
     } catch (error) {
       const message = errorMessage(error);
