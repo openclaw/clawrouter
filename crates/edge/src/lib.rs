@@ -1429,6 +1429,73 @@ struct AccessControlConnectionRow {
     connection_json: String,
 }
 
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccessControlPoliciesResolveRequest {
+    policy_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccessControlPoliciesResolveResponse {
+    policies: Vec<AccessPolicyEntry>,
+    missing_policy_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccessControlPoliciesListResponse {
+    policies: Vec<AccessPolicyEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AccessControlPolicyRow {
+    policy_json: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AccessControlPolicyListRow {
+    policy_id: String,
+    policy_json: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProxyCredentialEntry {
+    credential_id: String,
+    credential: ProxyCredential,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccessControlCredentialsResolveRequest {
+    credential_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccessControlCredentialsResolveResponse {
+    credentials: Vec<ProxyCredentialEntry>,
+    missing_credential_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccessControlCredentialsListResponse {
+    credentials: Vec<ProxyCredentialEntry>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AccessControlCredentialRow {
+    credential_json: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AccessControlCredentialListRow {
+    credential_id: String,
+    credential_json: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum AccessAud {
@@ -1489,7 +1556,8 @@ enum AuthOutcome {
     Denied(Response),
 }
 
-#[derive(Debug)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
 struct AccessPolicyEntry {
     policy_id: String,
     policy: AccessPolicy,
@@ -1609,20 +1677,20 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
     };
 
     if req.method() == Method::Get && path == "/v1/admin/overview" {
-        let entries = list_admin_key_policies(&kv).await?;
+        let entries = list_admin_key_policies(&env, &kv).await?;
         let snapshot = provider_snapshot()?;
         return Response::from_json(&admin_overview(&entries, &snapshot));
     }
 
     if req.method() == Method::Get && (path == "/v1/admin/tenants" || path == "/v1/admin/users") {
-        let entries = list_admin_key_policies(&kv).await?;
+        let entries = list_admin_key_policies(&env, &kv).await?;
         return Response::from_json(&serde_json::json!({
             "tenants": admin_tenant_summaries(&entries)
         }));
     }
 
     if req.method() == Method::Get && path == "/v1/admin/usage" {
-        let entries = list_admin_key_policies(&kv).await?;
+        let entries = list_admin_key_policies(&env, &kv).await?;
         let usage = usage_snapshot(&env, None, USAGE_EVENT_LIMIT).await?;
         let mut rows = Vec::new();
         for entry in entries {
@@ -1660,7 +1728,7 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 Ok(binding) => binding,
                 Err(message) => return json_error("invalid_policy_binding", message, 400),
             };
-            if existing_access_policy(&kv, &binding.policy_id)
+            if authoritative_access_policy(&env, &kv, &binding.policy_id)
                 .await?
                 .is_none()
             {
@@ -1690,7 +1758,7 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
     }
 
     if req.method() == Method::Get && path == "/v1/admin/policies" {
-        let policies = list_access_policy_records(&kv)
+        let policies = list_access_policy_records(&env, &kv)
             .await?
             .into_iter()
             .map(|entry| admin_access_policy_response(&entry.policy_id, &entry.policy))
@@ -1704,7 +1772,7 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 Ok(policy_id) => policy_id,
                 Err(message) => return json_error("invalid_policy", message, 400),
             };
-            let existing_policy = existing_access_policy(&kv, &policy_id).await?;
+            let existing_policy = authoritative_access_policy(&env, &kv, &policy_id).await?;
             let mut policy =
                 match serde_json::from_str::<AdminAccessPolicyRequest>(&req.text().await?)
                     .map_err(|error| error.to_string())
@@ -1726,22 +1794,7 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             if let Err(message) = validate_policy_budget(&policy) {
                 return json_error("invalid_policy", message, 400);
             }
-            let mut tombstone = policy.clone();
-            tombstone.enabled = false;
-            put_kv_record(
-                &kv,
-                &format!("policies/{policy_id}"),
-                &tombstone,
-                "access policy tombstone",
-            )
-            .await?;
-            put_kv_record(
-                &kv,
-                &format!("policies/{policy_id}"),
-                &policy,
-                "access policy",
-            )
-            .await?;
+            put_authoritative_access_policy(&env, &kv, &policy_id, &policy).await?;
             return Response::from_json(&admin_access_policy_response(&policy_id, &policy));
         }
         if req.method() == Method::Post {
@@ -1752,24 +1805,18 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 Ok(policy_id) => policy_id,
                 Err(message) => return json_error("invalid_policy", message, 400),
             };
-            let Some(mut policy) = existing_access_policy(&kv, &policy_id).await? else {
+            let Some(mut policy) = authoritative_access_policy(&env, &kv, &policy_id).await? else {
                 return json_error("unknown_policy", "access policy is not registered", 404);
             };
             policy.enabled = false;
-            put_kv_record(
-                &kv,
-                &format!("policies/{policy_id}"),
-                &policy,
-                "access policy",
-            )
-            .await?;
+            put_authoritative_access_policy(&env, &kv, &policy_id, &policy).await?;
             return Response::from_json(&admin_access_policy_response(&policy_id, &policy));
         }
         return json_error("method_not_allowed", "admin method is not allowed", 405);
     }
 
     if req.method() == Method::Get && path == "/v1/admin/credentials" {
-        let credentials = list_proxy_credentials(&kv)
+        let credentials = list_proxy_credentials(&env, &kv)
             .await?
             .into_iter()
             .map(|(credential_id, credential)| {
@@ -1806,28 +1853,20 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             if validate_admin_kid(&credential.policy_id).is_err() {
                 return json_error("unknown_policy", "credential policy is not registered", 404);
             };
-            let Some(policy) = existing_access_policy(&kv, &credential.policy_id).await? else {
+            let Some(policy) =
+                authoritative_access_policy(&env, &kv, &credential.policy_id).await?
+            else {
                 return json_error("unknown_policy", "credential policy is not registered", 404);
             };
             credential.policy_generation.clone_from(&policy.generation);
-            let mut tombstone = credential.clone();
-            tombstone.enabled = false;
-            put_kv_record(
+            put_authoritative_proxy_credential(&env, &kv, &credential_id, &credential).await?;
+            sync_legacy_compatibility_tombstone_best_effort(
                 &kv,
-                &format!("credentials/{credential_id}"),
-                &tombstone,
-                "proxy credential tombstone",
-            )
-            .await?;
-            disable_legacy_key_record(&kv, &credential_id).await?;
-            sync_legacy_compatibility_tombstone(&kv, &credential_id, &policy, &credential).await?;
-            put_kv_record(
-                &kv,
-                &format!("credentials/{credential_id}"),
+                &credential_id,
+                &policy,
                 &credential,
-                "proxy credential",
             )
-            .await?;
+            .await;
             return Response::from_json(&admin_credential_response(&credential_id, &credential));
         }
         if req.method() == Method::Post {
@@ -1838,7 +1877,9 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 Ok(credential_id) => credential_id,
                 Err(message) => return json_error("invalid_credential", message, 400),
             };
-            let Some(mut credential) = existing_proxy_credential(&kv, &credential_id).await? else {
+            let Some(mut credential) =
+                authoritative_proxy_credential(&env, &kv, &credential_id).await?
+            else {
                 return json_error(
                     "unknown_proxy_key",
                     "proxy credential is not registered",
@@ -1846,18 +1887,19 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 );
             };
             credential.enabled = false;
-            put_kv_record(
-                &kv,
-                &format!("credentials/{credential_id}"),
-                &credential,
-                "proxy credential",
-            )
-            .await?;
-            if let Some(policy) = existing_access_policy(&kv, &credential.policy_id).await? {
-                sync_legacy_compatibility_tombstone(&kv, &credential_id, &policy, &credential)
-                    .await?;
+            put_authoritative_proxy_credential(&env, &kv, &credential_id, &credential).await?;
+            if let Some(policy) =
+                authoritative_access_policy(&env, &kv, &credential.policy_id).await?
+            {
+                sync_legacy_compatibility_tombstone_best_effort(
+                    &kv,
+                    &credential_id,
+                    &policy,
+                    &credential,
+                )
+                .await;
             } else {
-                disable_legacy_key_record(&kv, &credential_id).await?;
+                disable_legacy_key_record_best_effort(&kv, &credential_id).await;
             }
             return Response::from_json(&admin_credential_response(&credential_id, &credential));
         }
@@ -1955,7 +1997,7 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
     }
 
     if req.method() == Method::Get && path == "/v1/admin/keys" {
-        let entries = list_admin_key_policies(&kv).await?;
+        let entries = list_admin_key_policies(&env, &kv).await?;
         return Response::from_json(&serde_json::json!({ "keys": entries }));
     }
 
@@ -1977,8 +2019,8 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 );
             }
         };
-        let existing_policy = existing_access_policy(&kv, &kid).await?;
-        let existing_credential = existing_proxy_credential(&kv, &kid).await?;
+        let existing_policy = authoritative_access_policy(&env, &kv, &kid).await?;
+        let existing_credential = authoritative_proxy_credential(&env, &kv, &kid).await?;
         let existing_secret_sha256 = if request.secret_sha256.is_none() {
             existing_credential
                 .as_ref()
@@ -2014,39 +2056,15 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
         }
         let mut tombstone_legacy = legacy.clone();
         tombstone_legacy.enabled = false;
-        let mut tombstone_credential = credential.clone();
-        tombstone_credential.enabled = false;
-        let mut tombstone_policy = policy.clone();
-        tombstone_policy.enabled = false;
-        put_kv_record(
-            &kv,
-            &format!("credentials/{kid}"),
-            &tombstone_credential,
-            "proxy credential tombstone",
-        )
-        .await?;
-        put_kv_record(
+        put_authoritative_access_policy(&env, &kv, &kid, &policy).await?;
+        put_authoritative_proxy_credential(&env, &kv, &kid, &credential).await?;
+        sync_kv_record_best_effort(
             &kv,
             &format!("keys/{kid}"),
             &tombstone_legacy,
-            "legacy key tombstone",
+            "legacy key compatibility tombstone",
         )
-        .await?;
-        put_kv_record(
-            &kv,
-            &format!("policies/{kid}"),
-            &tombstone_policy,
-            "access policy tombstone",
-        )
-        .await?;
-        put_kv_record(
-            &kv,
-            &format!("credentials/{kid}"),
-            &credential,
-            "proxy credential",
-        )
-        .await?;
-        put_kv_record(&kv, &format!("policies/{kid}"), &policy, "access policy").await?;
+        .await;
         return Response::from_json(&admin_policy_response(&kid, &kid, &policy));
     }
 
@@ -2058,24 +2076,15 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             Ok(kid) => kid,
             Err(message) => return json_error("invalid_admin_key", message, 400),
         };
-        let Some(mut credential) = existing_proxy_credential(&kv, &kid).await? else {
+        let Some(mut credential) = authoritative_proxy_credential(&env, &kv, &kid).await? else {
             return json_error("unknown_proxy_key", "proxy key is not registered", 404);
         };
         let policy_id = credential.policy_id.clone();
         // Legacy key ids can reference shared policies, so revocation is credential-scoped.
         credential.enabled = false;
-        put_kv_record(
-            &kv,
-            &format!("credentials/{kid}"),
-            &credential,
-            "proxy credential",
-        )
-        .await?;
-        if let Some(mut legacy) = existing_legacy_key_policy(&kv, &kid).await? {
-            legacy.enabled = false;
-            put_kv_record(&kv, &format!("keys/{kid}"), &legacy, "legacy key policy").await?;
-        }
-        if let Some(policy) = existing_access_policy(&kv, &policy_id).await? {
+        put_authoritative_proxy_credential(&env, &kv, &kid, &credential).await?;
+        disable_legacy_key_record_best_effort(&kv, &kid).await;
+        if let Some(policy) = authoritative_access_policy(&env, &kv, &policy_id).await? {
             let mut response = admin_policy_response(&kid, &policy_id, &policy);
             response.enabled = credential.enabled && policy.enabled;
             return Response::from_json(&response);
@@ -2393,7 +2402,7 @@ async fn inspect_proxy_key(headers: &Headers, env: &Env) -> Result<Response> {
     let Ok(kv) = env.kv("POLICY_KV") else {
         return key_inspection_response(&key.kid, &format!("{:?}", key.mode), None, None);
     };
-    let Some(credential) = existing_proxy_credential(&kv, &key.kid).await? else {
+    let Some(credential) = authoritative_proxy_credential(env, &kv, &key.kid).await? else {
         return key_inspection_response(
             &key.kid,
             &format!("{:?}", key.mode),
@@ -2401,7 +2410,7 @@ async fn inspect_proxy_key(headers: &Headers, env: &Env) -> Result<Response> {
             Some("unknown_proxy_key"),
         );
     };
-    let Some(policy) = existing_access_policy(&kv, &credential.policy_id).await? else {
+    let Some(policy) = authoritative_access_policy(env, &kv, &credential.policy_id).await? else {
         return key_inspection_response(
             &key.kid,
             &format!("{:?}", key.mode),
@@ -2820,23 +2829,6 @@ fn sum_optional_micros(values: impl Iterator<Item = Option<u64>>) -> u64 {
     })
 }
 
-async fn existing_access_policy(kv: &KvStore, policy_id: &str) -> Result<Option<AccessPolicy>> {
-    if let Some(record) = kv
-        .get(&format!("policies/{policy_id}"))
-        .text()
-        .await
-        .map_err(|error| Error::RustError(format!("failed to read access policy: {error}")))?
-    {
-        let policy = serde_json::from_str::<AccessPolicy>(&record)
-            .map_err(|error| Error::RustError(format!("access policy is invalid JSON: {error}")))?;
-        return Ok(Some(policy));
-    }
-    Ok(existing_legacy_key_policy(kv, policy_id)
-        .await?
-        .filter(is_pre_migration_legacy_key_policy)
-        .map(|legacy| legacy.access_policy()))
-}
-
 async fn existing_proxy_credential(
     kv: &KvStore,
     credential_id: &str,
@@ -2872,17 +2864,36 @@ async fn existing_legacy_key_policy(kv: &KvStore, kid: &str) -> Result<Option<Le
     Ok(Some(policy))
 }
 
-async fn list_admin_key_policies(kv: &KvStore) -> Result<Vec<AdminKeyPolicyResponse>> {
-    let mut entries = list_access_policy_records(kv)
-        .await?
+async fn list_admin_key_policies(env: &Env, kv: &KvStore) -> Result<Vec<AdminKeyPolicyResponse>> {
+    let credentials = list_proxy_credentials(env, kv).await?;
+    let policy_ids = credentials
+        .iter()
+        .map(|(_, credential)| credential.policy_id.clone())
+        .collect::<BTreeSet<_>>()
         .into_iter()
-        .map(|entry| admin_policy_response(&entry.policy_id, &entry.policy_id, &entry.policy))
         .collect::<Vec<_>>();
-    entries.sort_by(|a, b| a.kid.cmp(&b.kid));
-    Ok(entries)
+    let policies = authoritative_access_policies(env, kv, &policy_ids).await?;
+    Ok(admin_key_policy_responses(credentials, &policies))
 }
 
-async fn list_access_policy_records(kv: &KvStore) -> Result<Vec<AccessPolicyEntry>> {
+fn admin_key_policy_responses(
+    credentials: Vec<(String, ProxyCredential)>,
+    policies: &BTreeMap<String, AccessPolicy>,
+) -> Vec<AdminKeyPolicyResponse> {
+    let mut entries = credentials
+        .into_iter()
+        .filter_map(|(credential_id, credential)| {
+            let policy = policies.get(&credential.policy_id)?;
+            let mut response = admin_policy_response(&credential_id, &credential.policy_id, policy);
+            response.enabled = credential.enabled && policy.enabled;
+            Some(response)
+        })
+        .collect::<Vec<_>>();
+    entries.sort_by(|a, b| a.kid.cmp(&b.kid));
+    entries
+}
+
+async fn list_access_policy_records_from_kv(kv: &KvStore) -> Result<Vec<AccessPolicyEntry>> {
     let mut entries = Vec::new();
     let mut policy_ids = BTreeSet::new();
     let mut cursor = None;
@@ -2974,7 +2985,7 @@ async fn list_legacy_key_policies(kv: &KvStore) -> Result<Vec<(String, LegacyKey
     Ok(entries)
 }
 
-async fn list_proxy_credentials(kv: &KvStore) -> Result<Vec<(String, ProxyCredential)>> {
+async fn list_proxy_credentials_from_kv(kv: &KvStore) -> Result<Vec<(String, ProxyCredential)>> {
     let mut entries = Vec::new();
     let mut credential_ids = BTreeSet::new();
     let mut cursor = None;
@@ -3021,6 +3032,163 @@ async fn list_proxy_credentials(kv: &KvStore) -> Result<Vec<(String, ProxyCreden
     }
     entries.sort_by(|(id_a, _), (id_b, _)| id_a.cmp(id_b));
     Ok(entries)
+}
+
+async fn authoritative_access_policy(
+    env: &Env,
+    kv: &KvStore,
+    policy_id: &str,
+) -> Result<Option<AccessPolicy>> {
+    let mut policies = authoritative_access_policies(env, kv, &[policy_id.to_string()]).await?;
+    Ok(policies.remove(policy_id))
+}
+
+async fn authoritative_access_policies(
+    env: &Env,
+    kv: &KvStore,
+    policy_ids: &[String],
+) -> Result<BTreeMap<String, AccessPolicy>> {
+    if policy_ids.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    let namespace = access_control_namespace(env)?;
+    let mut response = resolve_access_control_policies(&namespace, policy_ids.to_vec()).await?;
+    if !response.missing_policy_ids.is_empty() {
+        let fallback = read_access_policies_from_kv(kv, &response.missing_policy_ids).await?;
+        let policies = response
+            .missing_policy_ids
+            .iter()
+            .filter_map(|policy_id| {
+                fallback
+                    .get(policy_id)
+                    .cloned()
+                    .map(|policy| AccessPolicyEntry {
+                        policy_id: policy_id.clone(),
+                        policy,
+                    })
+            })
+            .collect::<Vec<_>>();
+        if !policies.is_empty() {
+            initialize_access_control_policies(&namespace, &policies).await?;
+        }
+        response = resolve_access_control_policies(&namespace, policy_ids.to_vec()).await?;
+    }
+    Ok(response
+        .policies
+        .into_iter()
+        .map(|entry| (entry.policy_id, entry.policy))
+        .collect())
+}
+
+async fn list_access_policy_records(env: &Env, kv: &KvStore) -> Result<Vec<AccessPolicyEntry>> {
+    let namespace = access_control_namespace(env)?;
+    let fallback = list_access_policy_records_from_kv(kv).await?;
+    if !fallback.is_empty() {
+        initialize_access_control_policies(&namespace, &fallback).await?;
+    }
+    let mut response = list_access_control_policies(&namespace).await?;
+    response
+        .policies
+        .sort_by(|a, b| a.policy_id.cmp(&b.policy_id));
+    Ok(response.policies)
+}
+
+async fn put_authoritative_access_policy(
+    env: &Env,
+    kv: &KvStore,
+    policy_id: &str,
+    policy: &AccessPolicy,
+) -> Result<()> {
+    let namespace = access_control_namespace(env)?;
+    put_access_control_policy(
+        &namespace,
+        &AccessPolicyEntry {
+            policy_id: policy_id.to_string(),
+            policy: policy.clone(),
+        },
+    )
+    .await?;
+    sync_kv_record_best_effort(
+        kv,
+        &format!("policies/{policy_id}"),
+        policy,
+        "access policy compatibility record",
+    )
+    .await;
+    Ok(())
+}
+
+async fn authoritative_proxy_credential(
+    env: &Env,
+    kv: &KvStore,
+    credential_id: &str,
+) -> Result<Option<ProxyCredential>> {
+    let namespace = access_control_namespace(env)?;
+    let mut response =
+        resolve_access_control_credentials(&namespace, vec![credential_id.to_string()]).await?;
+    if !response.missing_credential_ids.is_empty() {
+        if let Some(credential) = existing_proxy_credential(kv, credential_id).await? {
+            initialize_access_control_credentials(
+                &namespace,
+                &[ProxyCredentialEntry {
+                    credential_id: credential_id.to_string(),
+                    credential,
+                }],
+            )
+            .await?;
+        }
+        response =
+            resolve_access_control_credentials(&namespace, vec![credential_id.to_string()]).await?;
+    }
+    Ok(response.credentials.pop().map(|entry| entry.credential))
+}
+
+async fn list_proxy_credentials(env: &Env, kv: &KvStore) -> Result<Vec<(String, ProxyCredential)>> {
+    let namespace = access_control_namespace(env)?;
+    let fallback = list_proxy_credentials_from_kv(kv)
+        .await?
+        .into_iter()
+        .map(|(credential_id, credential)| ProxyCredentialEntry {
+            credential_id,
+            credential,
+        })
+        .collect::<Vec<_>>();
+    if !fallback.is_empty() {
+        initialize_access_control_credentials(&namespace, &fallback).await?;
+    }
+    let mut credentials = list_access_control_credentials(&namespace)
+        .await?
+        .credentials
+        .into_iter()
+        .map(|entry| (entry.credential_id, entry.credential))
+        .collect::<Vec<_>>();
+    credentials.sort_by(|(id_a, _), (id_b, _)| id_a.cmp(id_b));
+    Ok(credentials)
+}
+
+async fn put_authoritative_proxy_credential(
+    env: &Env,
+    kv: &KvStore,
+    credential_id: &str,
+    credential: &ProxyCredential,
+) -> Result<()> {
+    let namespace = access_control_namespace(env)?;
+    put_access_control_credential(
+        &namespace,
+        &ProxyCredentialEntry {
+            credential_id: credential_id.to_string(),
+            credential: credential.clone(),
+        },
+    )
+    .await?;
+    sync_kv_record_best_effort(
+        kv,
+        &format!("credentials/{credential_id}"),
+        credential,
+        "proxy credential compatibility record",
+    )
+    .await;
+    Ok(())
 }
 
 async fn existing_provider_connection(
@@ -3209,6 +3377,33 @@ async fn disable_legacy_key_record(kv: &KvStore, credential_id: &str) -> Result<
         "legacy compatibility tombstone",
     )
     .await
+}
+
+async fn sync_legacy_compatibility_tombstone_best_effort(
+    kv: &KvStore,
+    credential_id: &str,
+    policy: &AccessPolicy,
+    credential: &ProxyCredential,
+) {
+    if let Err(error) =
+        sync_legacy_compatibility_tombstone(kv, credential_id, policy, credential).await
+    {
+        console_error!(
+            "failed to sync legacy compatibility tombstone keys/{}: {}",
+            credential_id,
+            error
+        );
+    }
+}
+
+async fn disable_legacy_key_record_best_effort(kv: &KvStore, credential_id: &str) {
+    if let Err(error) = disable_legacy_key_record(kv, credential_id).await {
+        console_error!(
+            "failed to disable legacy compatibility record keys/{}: {}",
+            credential_id,
+            error
+        );
+    }
 }
 
 fn legacy_compatibility_tombstone(
@@ -3433,6 +3628,98 @@ async fn list_access_control_users(
     })
 }
 
+async fn resolve_access_control_policies(
+    namespace: &ObjectNamespace,
+    policy_ids: Vec<String>,
+) -> Result<AccessControlPoliciesResolveResponse> {
+    let body = access_control_request(
+        namespace,
+        "/policies/resolve",
+        &AccessControlPoliciesResolveRequest { policy_ids },
+    )
+    .await?;
+    serde_json::from_str::<AccessControlPoliciesResolveResponse>(&body).map_err(|error| {
+        Error::RustError(format!(
+            "access policy authority response is invalid JSON: {error}"
+        ))
+    })
+}
+
+async fn initialize_access_control_policies(
+    namespace: &ObjectNamespace,
+    policies: &[AccessPolicyEntry],
+) -> Result<()> {
+    access_control_request(namespace, "/policies/initialize", policies)
+        .await
+        .map(|_| ())
+}
+
+async fn put_access_control_policy(
+    namespace: &ObjectNamespace,
+    policy: &AccessPolicyEntry,
+) -> Result<()> {
+    access_control_request(namespace, "/policies/put", policy)
+        .await
+        .map(|_| ())
+}
+
+async fn list_access_control_policies(
+    namespace: &ObjectNamespace,
+) -> Result<AccessControlPoliciesListResponse> {
+    let body = access_control_request(namespace, "/policies/list", &()).await?;
+    serde_json::from_str::<AccessControlPoliciesListResponse>(&body).map_err(|error| {
+        Error::RustError(format!(
+            "access policy authority list response is invalid JSON: {error}"
+        ))
+    })
+}
+
+async fn resolve_access_control_credentials(
+    namespace: &ObjectNamespace,
+    credential_ids: Vec<String>,
+) -> Result<AccessControlCredentialsResolveResponse> {
+    let body = access_control_request(
+        namespace,
+        "/credentials/resolve",
+        &AccessControlCredentialsResolveRequest { credential_ids },
+    )
+    .await?;
+    serde_json::from_str::<AccessControlCredentialsResolveResponse>(&body).map_err(|error| {
+        Error::RustError(format!(
+            "proxy credential authority response is invalid JSON: {error}"
+        ))
+    })
+}
+
+async fn initialize_access_control_credentials(
+    namespace: &ObjectNamespace,
+    credentials: &[ProxyCredentialEntry],
+) -> Result<()> {
+    access_control_request(namespace, "/credentials/initialize", credentials)
+        .await
+        .map(|_| ())
+}
+
+async fn put_access_control_credential(
+    namespace: &ObjectNamespace,
+    credential: &ProxyCredentialEntry,
+) -> Result<()> {
+    access_control_request(namespace, "/credentials/put", credential)
+        .await
+        .map(|_| ())
+}
+
+async fn list_access_control_credentials(
+    namespace: &ObjectNamespace,
+) -> Result<AccessControlCredentialsListResponse> {
+    let body = access_control_request(namespace, "/credentials/list", &()).await?;
+    serde_json::from_str::<AccessControlCredentialsListResponse>(&body).map_err(|error| {
+        Error::RustError(format!(
+            "proxy credential authority list response is invalid JSON: {error}"
+        ))
+    })
+}
+
 async fn resolve_access_control_connections(
     namespace: &ObjectNamespace,
     object_name: &str,
@@ -3565,7 +3852,7 @@ async fn list_session_policy_entries(
     let bindings = session_policy_bindings(kv, env, session).await?;
     let priorities = session_binding_priorities(session, &bindings);
     let policy_ids = priorities.keys().cloned().collect::<Vec<_>>();
-    let policies = read_access_policies(kv, &policy_ids).await?;
+    let policies = authoritative_access_policies(env, kv, &policy_ids).await?;
     let mut entries = Vec::new();
     for (policy_id, priority) in priorities {
         if let Some(policy) = policies.get(&policy_id) {
@@ -3632,7 +3919,7 @@ fn session_binding_priorities(
     priorities
 }
 
-async fn read_access_policies(
+async fn read_access_policies_from_kv(
     kv: &KvStore,
     policy_ids: &[String],
 ) -> Result<BTreeMap<String, AccessPolicy>> {
@@ -4621,7 +4908,7 @@ async fn authorize_proxy_key_for_provider(
             .map(AuthOutcome::Denied);
         }
     };
-    let Some(credential) = existing_proxy_credential(&kv, &key.kid).await? else {
+    let Some(credential) = authoritative_proxy_credential(env, &kv, &key.kid).await? else {
         return json_error("unknown_proxy_key", "proxy key is not registered", 401)
             .map(AuthOutcome::Denied);
     };
@@ -4629,7 +4916,7 @@ async fn authorize_proxy_key_for_provider(
         return json_error("invalid_proxy_key", "proxy key secret is invalid", 401)
             .map(AuthOutcome::Denied);
     }
-    let Some(policy) = existing_access_policy(&kv, &credential.policy_id).await? else {
+    let Some(policy) = authoritative_access_policy(env, &kv, &credential.policy_id).await? else {
         let response = json_error(
             "credential_policy_missing",
             "proxy credential references an unknown access policy",
@@ -6139,6 +6426,76 @@ impl DurableObject for PolicyBindingIndexObject {
             put_access_control_user_in_object(&self.state, user)?;
             return Response::ok("updated");
         }
+        if req.method() == Method::Post && url.path() == "/policies/resolve" {
+            let request =
+                serde_json::from_str::<AccessControlPoliciesResolveRequest>(&req.text().await?)
+                    .map_err(|error| {
+                        Error::RustError(format!(
+                            "access policy resolve request is invalid JSON: {error}"
+                        ))
+                    })?;
+            let response =
+                resolve_access_control_policies_in_object(&self.state, request.policy_ids)?;
+            return Response::from_json(&response);
+        }
+        if req.method() == Method::Post && url.path() == "/policies/initialize" {
+            let policies = serde_json::from_str::<Vec<AccessPolicyEntry>>(&req.text().await?)
+                .map_err(|error| {
+                    Error::RustError(format!(
+                        "access policy initialize request is invalid JSON: {error}"
+                    ))
+                })?;
+            initialize_access_control_policies_in_object(&self.state, policies)?;
+            return Response::ok("initialized");
+        }
+        if req.method() == Method::Post && url.path() == "/policies/put" {
+            let policy =
+                serde_json::from_str::<AccessPolicyEntry>(&req.text().await?).map_err(|error| {
+                    Error::RustError(format!(
+                        "access policy put request is invalid JSON: {error}"
+                    ))
+                })?;
+            put_access_control_policy_in_object(&self.state, policy)?;
+            return Response::ok("updated");
+        }
+        if req.method() == Method::Post && url.path() == "/policies/list" {
+            return Response::from_json(&list_access_control_policies_in_object(&self.state)?);
+        }
+        if req.method() == Method::Post && url.path() == "/credentials/resolve" {
+            let request =
+                serde_json::from_str::<AccessControlCredentialsResolveRequest>(&req.text().await?)
+                    .map_err(|error| {
+                        Error::RustError(format!(
+                            "proxy credential resolve request is invalid JSON: {error}"
+                        ))
+                    })?;
+            let response =
+                resolve_access_control_credentials_in_object(&self.state, request.credential_ids)?;
+            return Response::from_json(&response);
+        }
+        if req.method() == Method::Post && url.path() == "/credentials/initialize" {
+            let credentials = serde_json::from_str::<Vec<ProxyCredentialEntry>>(&req.text().await?)
+                .map_err(|error| {
+                    Error::RustError(format!(
+                        "proxy credential initialize request is invalid JSON: {error}"
+                    ))
+                })?;
+            initialize_access_control_credentials_in_object(&self.state, credentials)?;
+            return Response::ok("initialized");
+        }
+        if req.method() == Method::Post && url.path() == "/credentials/put" {
+            let credential = serde_json::from_str::<ProxyCredentialEntry>(&req.text().await?)
+                .map_err(|error| {
+                    Error::RustError(format!(
+                        "proxy credential put request is invalid JSON: {error}"
+                    ))
+                })?;
+            put_access_control_credential_in_object(&self.state, credential)?;
+            return Response::ok("updated");
+        }
+        if req.method() == Method::Post && url.path() == "/credentials/list" {
+            return Response::from_json(&list_access_control_credentials_in_object(&self.state)?);
+        }
         if req.method() == Method::Post && url.path() == "/connections/resolve" {
             let request =
                 serde_json::from_str::<AccessControlConnectionsResolveRequest>(&req.text().await?)
@@ -6313,6 +6670,20 @@ fn ensure_access_control_schema(sql: &SqlStorage) -> Result<()> {
         "CREATE TABLE IF NOT EXISTS access_users (
             email TEXT PRIMARY KEY,
             user_json TEXT NOT NULL
+        )",
+        None,
+    )?;
+    sql.exec(
+        "CREATE TABLE IF NOT EXISTS access_policies (
+            policy_id TEXT PRIMARY KEY,
+            policy_json TEXT NOT NULL
+        )",
+        None,
+    )?;
+    sql.exec(
+        "CREATE TABLE IF NOT EXISTS proxy_credentials (
+            credential_id TEXT PRIMARY KEY,
+            credential_json TEXT NOT NULL
         )",
         None,
     )?;
@@ -6626,6 +6997,242 @@ fn list_access_control_users_in_object(state: &State) -> Result<AccessControlUse
         initialized: access_control_meta_initialized(&sql, "users_global_initialized")?,
         users,
     })
+}
+
+fn initialize_access_control_policies_in_object(
+    state: &State,
+    policies: Vec<AccessPolicyEntry>,
+) -> Result<()> {
+    let sql = state.storage().sql();
+    ensure_access_control_schema(&sql)?;
+    for mut policy in policies {
+        normalize_access_control_policy(&mut policy)?;
+        if access_control_policy_in_sql(&sql, &policy.policy_id)?.is_none() {
+            put_access_control_policy_in_sql(&sql, &policy)?;
+        }
+    }
+    Ok(())
+}
+
+fn put_access_control_policy_in_object(state: &State, mut policy: AccessPolicyEntry) -> Result<()> {
+    let sql = state.storage().sql();
+    ensure_access_control_schema(&sql)?;
+    normalize_access_control_policy(&mut policy)?;
+    put_access_control_policy_in_sql(&sql, &policy)
+}
+
+fn normalize_access_control_policy(policy: &mut AccessPolicyEntry) -> Result<()> {
+    policy.policy_id = validate_admin_kid(policy.policy_id.trim()).map_err(str::to_string)?;
+    Ok(())
+}
+
+fn put_access_control_policy_in_sql(sql: &SqlStorage, policy: &AccessPolicyEntry) -> Result<()> {
+    sql.exec_raw(
+        "INSERT OR REPLACE INTO access_policies (policy_id, policy_json) VALUES (?, ?)",
+        raw_bindings(vec![
+            JsValue::from_str(&policy.policy_id),
+            JsValue::from_str(&serde_json::to_string(&policy.policy)?),
+        ]),
+    )?;
+    Ok(())
+}
+
+fn access_control_policy_in_sql(
+    sql: &SqlStorage,
+    policy_id: &str,
+) -> Result<Option<AccessPolicyEntry>> {
+    let Some(row) = sql
+        .exec_raw(
+            "SELECT policy_json FROM access_policies WHERE policy_id = ? LIMIT 1",
+            raw_bindings(vec![JsValue::from_str(policy_id)]),
+        )?
+        .to_array::<AccessControlPolicyRow>()?
+        .into_iter()
+        .next()
+    else {
+        return Ok(None);
+    };
+    let policy = serde_json::from_str::<AccessPolicy>(&row.policy_json).map_err(|error| {
+        Error::RustError(format!("stored access policy is invalid JSON: {error}"))
+    })?;
+    Ok(Some(AccessPolicyEntry {
+        policy_id: policy_id.to_string(),
+        policy,
+    }))
+}
+
+fn resolve_access_control_policies_in_object(
+    state: &State,
+    policy_ids: Vec<String>,
+) -> Result<AccessControlPoliciesResolveResponse> {
+    let sql = state.storage().sql();
+    ensure_access_control_schema(&sql)?;
+    let mut policies = Vec::new();
+    let mut missing_policy_ids = Vec::new();
+    for policy_id in policy_ids {
+        let policy_id = validate_admin_kid(policy_id.trim()).map_err(str::to_string)?;
+        if let Some(policy) = access_control_policy_in_sql(&sql, &policy_id)? {
+            policies.push(policy);
+        } else {
+            missing_policy_ids.push(policy_id);
+        }
+    }
+    Ok(AccessControlPoliciesResolveResponse {
+        policies,
+        missing_policy_ids,
+    })
+}
+
+fn list_access_control_policies_in_object(
+    state: &State,
+) -> Result<AccessControlPoliciesListResponse> {
+    let sql = state.storage().sql();
+    ensure_access_control_schema(&sql)?;
+    let policies = sql
+        .exec(
+            "SELECT policy_id, policy_json FROM access_policies ORDER BY policy_id",
+            None,
+        )?
+        .to_array::<AccessControlPolicyListRow>()?
+        .into_iter()
+        .map(|row| {
+            let policy =
+                serde_json::from_str::<AccessPolicy>(&row.policy_json).map_err(|error| {
+                    Error::RustError(format!("stored access policy is invalid JSON: {error}"))
+                })?;
+            Ok(AccessPolicyEntry {
+                policy_id: row.policy_id,
+                policy,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(AccessControlPoliciesListResponse { policies })
+}
+
+fn initialize_access_control_credentials_in_object(
+    state: &State,
+    credentials: Vec<ProxyCredentialEntry>,
+) -> Result<()> {
+    let sql = state.storage().sql();
+    ensure_access_control_schema(&sql)?;
+    for mut credential in credentials {
+        normalize_access_control_credential(&mut credential)?;
+        if access_control_credential_in_sql(&sql, &credential.credential_id)?.is_none() {
+            put_access_control_credential_in_sql(&sql, &credential)?;
+        }
+    }
+    Ok(())
+}
+
+fn put_access_control_credential_in_object(
+    state: &State,
+    mut credential: ProxyCredentialEntry,
+) -> Result<()> {
+    let sql = state.storage().sql();
+    ensure_access_control_schema(&sql)?;
+    normalize_access_control_credential(&mut credential)?;
+    put_access_control_credential_in_sql(&sql, &credential)
+}
+
+fn normalize_access_control_credential(credential: &mut ProxyCredentialEntry) -> Result<()> {
+    credential.credential_id =
+        validate_admin_kid(credential.credential_id.trim()).map_err(str::to_string)?;
+    credential.credential.policy_id =
+        validate_admin_kid(credential.credential.policy_id.trim()).map_err(str::to_string)?;
+    if !is_sha256_hex(&credential.credential.secret_sha256) {
+        return Err(Error::RustError(
+            "proxy credential secret hash is invalid".to_string(),
+        ));
+    }
+    credential.credential.secret_sha256 = credential.credential.secret_sha256.to_ascii_lowercase();
+    Ok(())
+}
+
+fn put_access_control_credential_in_sql(
+    sql: &SqlStorage,
+    credential: &ProxyCredentialEntry,
+) -> Result<()> {
+    sql.exec_raw(
+        "INSERT OR REPLACE INTO proxy_credentials (credential_id, credential_json) VALUES (?, ?)",
+        raw_bindings(vec![
+            JsValue::from_str(&credential.credential_id),
+            JsValue::from_str(&serde_json::to_string(&credential.credential)?),
+        ]),
+    )?;
+    Ok(())
+}
+
+fn access_control_credential_in_sql(
+    sql: &SqlStorage,
+    credential_id: &str,
+) -> Result<Option<ProxyCredentialEntry>> {
+    let Some(row) = sql
+        .exec_raw(
+            "SELECT credential_json FROM proxy_credentials WHERE credential_id = ? LIMIT 1",
+            raw_bindings(vec![JsValue::from_str(credential_id)]),
+        )?
+        .to_array::<AccessControlCredentialRow>()?
+        .into_iter()
+        .next()
+    else {
+        return Ok(None);
+    };
+    let credential =
+        serde_json::from_str::<ProxyCredential>(&row.credential_json).map_err(|error| {
+            Error::RustError(format!("stored proxy credential is invalid JSON: {error}"))
+        })?;
+    Ok(Some(ProxyCredentialEntry {
+        credential_id: credential_id.to_string(),
+        credential,
+    }))
+}
+
+fn resolve_access_control_credentials_in_object(
+    state: &State,
+    credential_ids: Vec<String>,
+) -> Result<AccessControlCredentialsResolveResponse> {
+    let sql = state.storage().sql();
+    ensure_access_control_schema(&sql)?;
+    let mut credentials = Vec::new();
+    let mut missing_credential_ids = Vec::new();
+    for credential_id in credential_ids {
+        let credential_id = validate_admin_kid(credential_id.trim()).map_err(str::to_string)?;
+        if let Some(credential) = access_control_credential_in_sql(&sql, &credential_id)? {
+            credentials.push(credential);
+        } else {
+            missing_credential_ids.push(credential_id);
+        }
+    }
+    Ok(AccessControlCredentialsResolveResponse {
+        credentials,
+        missing_credential_ids,
+    })
+}
+
+fn list_access_control_credentials_in_object(
+    state: &State,
+) -> Result<AccessControlCredentialsListResponse> {
+    let sql = state.storage().sql();
+    ensure_access_control_schema(&sql)?;
+    let credentials = sql
+        .exec(
+            "SELECT credential_id, credential_json FROM proxy_credentials ORDER BY credential_id",
+            None,
+        )?
+        .to_array::<AccessControlCredentialListRow>()?
+        .into_iter()
+        .map(|row| {
+            let credential = serde_json::from_str::<ProxyCredential>(&row.credential_json)
+                .map_err(|error| {
+                    Error::RustError(format!("stored proxy credential is invalid JSON: {error}"))
+                })?;
+            Ok(ProxyCredentialEntry {
+                credential_id: row.credential_id,
+                credential,
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(AccessControlCredentialsListResponse { credentials })
 }
 
 fn initialize_access_control_connections_in_object(
@@ -8878,6 +9485,72 @@ mod tests {
             session_binding_priorities(&session, &bindings),
             BTreeMap::from([("direct".to_string(), 20), ("shared".to_string(), 10)])
         );
+    }
+
+    #[test]
+    fn admin_key_listing_joins_each_credential_to_its_authoritative_policy() {
+        let active_policy = AccessPolicy {
+            enabled: true,
+            generation: "gen_active".to_string(),
+            providers: vec!["openai".to_string()],
+            tenant_id: Some("team_docs".to_string()),
+            token_role: Some("service".to_string()),
+            monthly_budget_micros: Some(100),
+            request_cost_micros: Some(10),
+        };
+        let revoked_policy = AccessPolicy {
+            enabled: false,
+            generation: "gen_revoked".to_string(),
+            ..active_policy.clone()
+        };
+        let credentials = vec![
+            (
+                "key_a".to_string(),
+                ProxyCredential {
+                    enabled: true,
+                    secret_sha256: sha256_hex("a"),
+                    policy_id: "shared".to_string(),
+                    policy_generation: active_policy.generation.clone(),
+                },
+            ),
+            (
+                "key_b".to_string(),
+                ProxyCredential {
+                    enabled: false,
+                    secret_sha256: sha256_hex("b"),
+                    policy_id: "shared".to_string(),
+                    policy_generation: active_policy.generation.clone(),
+                },
+            ),
+            (
+                "key_c".to_string(),
+                ProxyCredential {
+                    enabled: true,
+                    secret_sha256: sha256_hex("c"),
+                    policy_id: "revoked".to_string(),
+                    policy_generation: revoked_policy.generation.clone(),
+                },
+            ),
+        ];
+        let policies = BTreeMap::from([
+            ("revoked".to_string(), revoked_policy),
+            ("shared".to_string(), active_policy),
+        ]);
+
+        let entries = admin_key_policy_responses(credentials, &policies);
+
+        assert_eq!(
+            entries
+                .iter()
+                .map(|entry| entry.kid.as_str())
+                .collect::<Vec<_>>(),
+            vec!["key_a", "key_b", "key_c"]
+        );
+        assert!(entries[0].enabled);
+        assert!(!entries[1].enabled);
+        assert!(!entries[2].enabled);
+        assert_eq!(entries[0].policy_id, "shared");
+        assert_eq!(entries[1].policy_id, "shared");
     }
 
     #[test]
