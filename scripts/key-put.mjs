@@ -21,7 +21,6 @@ const requestCostMicros = args["request-cost-micros"]
 
 const policy = {
   enabled,
-  secretSha256: createHash("sha256").update(secret).digest("hex"),
   providers,
   tenantId,
 };
@@ -32,30 +31,44 @@ if (requestCostMicros !== undefined) {
   policy.requestCostMicros = requestCostMicros;
 }
 
-const policyPath = writeSecretJson(policy);
+const credential = {
+  enabled,
+  secretSha256: createHash("sha256").update(secret).digest("hex"),
+  policyId: kid,
+};
+const legacy = { ...policy, secretSha256: credential.secretSha256 };
+const records = [
+  [`policies/${kid}`, writeJson(policy, "policy.json")],
+  [`credentials/${kid}`, writeJson(credential, "credential.json")],
+  [`keys/${kid}`, writeJson(legacy, "legacy-key.json")],
+];
 
 try {
-  run("pnpm", [
-    "exec",
-    "wrangler",
-    "kv",
-    "key",
-    "put",
-    `keys/${kid}`,
-    "--path",
-    policyPath,
-    "--binding",
-    binding,
-    "--config",
-    config,
-    ...kvTargetArgs(args),
-  ]);
+  for (const [key, path] of records) {
+    run("pnpm", [
+      "exec",
+      "wrangler",
+      "kv",
+      "key",
+      "put",
+      key,
+      "--path",
+      path,
+      "--binding",
+      binding,
+      "--config",
+      config,
+      ...kvTargetArgs(args),
+    ]);
+  }
 } finally {
-  rmSync(policyPath, { force: true });
-  rmSync(join(policyPath, ".."), { force: true, recursive: true });
+  for (const [, path] of records) {
+    rmSync(path, { force: true });
+    rmSync(join(path, ".."), { force: true, recursive: true });
+  }
 }
 
-console.log(`stored key policy for ${kid}; secret was not printed`);
+console.log(`stored access policy and proxy credential for ${kid}; secret was not printed`);
 
 function parseArgs(values) {
   const out = {};
@@ -118,9 +131,9 @@ function run(command, args) {
   }
 }
 
-function writeSecretJson(value) {
+function writeJson(value, name) {
   const dir = mkdtempSync(join(tmpdir(), "clawrouter-key-"));
-  const path = join(dir, "policy.json");
+  const path = join(dir, name);
   writeFileSync(path, JSON.stringify(value), { encoding: "utf8", mode: 0o600 });
   return path;
 }

@@ -93,22 +93,34 @@ The Worker currently exposes:
 - `POST /v1/embeddings`
 - `POST /v1/proxy/<provider>/<endpoint>`
 - `GET /v1/admin/keys`
+- `GET /v1/admin/policies`
+- `GET /v1/admin/credentials`
+- `GET /v1/admin/connections`
 - `GET /v1/admin/access-users`
 - `GET /v1/admin/policy-bindings`
 - `GET /v1/admin/provider-status`
 - `PUT /v1/admin/access-users/<email>`
 - `PUT /v1/admin/policy-bindings`
+- `PUT /v1/admin/policies/<policy-id>`
+- `PUT /v1/admin/credentials/<credential-id>`
+- `PUT /v1/admin/connections/<provider-id>`
 - `PUT /v1/admin/keys/<kid>`
+- `POST /v1/admin/policies/<policy-id>/revoke`
+- `POST /v1/admin/credentials/<credential-id>/revoke`
 - `POST /v1/admin/keys/<kid>/revoke`
 
 OpenAI-compatible proxy requests route by the request body `model` field, for
 example `openai/gpt-5.5-mini`. Before an upstream provider secret is used, the
-Worker checks `POLICY_KV` at `keys/<kid>` for:
+Worker verifies the issued credential at `credentials/<credential-id>` and then
+loads its access policy from `policies/<policy-id>`:
+
+```json
+{"enabled":true,"secretSha256":"<sha256 of key secret>","policyId":"team_docs"}
+```
 
 ```json
 {
   "enabled": true,
-  "secretSha256": "<sha256 of key secret>",
   "providers": ["openai"],
   "tenantId": "team_docs",
   "tokenRole": "service",
@@ -116,8 +128,10 @@ Worker checks `POLICY_KV` at `keys/<kid>` for:
 }
 ```
 
-Flip `enabled` to `false` to revoke a key without rotating upstream provider
-credentials. See `docs/deploy-cloudflare.md` for Cloudflare provisioning,
+Disable a credential to revoke one issued key, disable a policy to revoke every
+user and credential bound to it, or disable a provider connection to stop that
+provider globally. Legacy `keys/<kid>` records remain readable during
+migration. See `docs/deploy-cloudflare.md` for Cloudflare provisioning,
 deployment, key registration, and smoke commands.
 
 Admin endpoints accept a verified Cloudflare Access admin session or

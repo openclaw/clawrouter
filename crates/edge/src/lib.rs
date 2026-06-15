@@ -212,6 +212,9 @@ fn service_index() -> Result<Response> {
             "adminUsage": "/v1/admin/usage",
             "adminAccessUsers": "/v1/admin/access-users",
             "adminKeys": "/v1/admin/keys",
+            "adminPolicies": "/v1/admin/policies",
+            "adminCredentials": "/v1/admin/credentials",
+            "adminConnections": "/v1/admin/connections",
             "apiAliases": {
                 "routes": ["/api/route", "/api/routes"],
                 "session": "/api/session",
@@ -647,7 +650,31 @@ async fn proxy_manifest_endpoint(
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct KeyPolicy {
+struct AccessPolicy {
+    enabled: bool,
+    #[serde(default)]
+    providers: Vec<String>,
+    #[serde(default)]
+    tenant_id: Option<String>,
+    #[serde(default)]
+    token_role: Option<String>,
+    #[serde(default)]
+    monthly_budget_micros: Option<u64>,
+    #[serde(default)]
+    request_cost_micros: Option<u64>,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProxyCredential {
+    enabled: bool,
+    secret_sha256: String,
+    policy_id: String,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct LegacyKeyPolicy {
     enabled: bool,
     secret_sha256: String,
     #[serde(default)]
@@ -660,6 +687,17 @@ struct KeyPolicy {
     monthly_budget_micros: Option<u64>,
     #[serde(default)]
     request_cost_micros: Option<u64>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderConnectionRecord {
+    #[serde(default)]
+    provider_id: String,
+    #[serde(default = "default_true")]
+    enabled: bool,
+    #[serde(default)]
+    label: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -685,6 +723,7 @@ struct AdminKeyPolicyRequest {
 #[serde(rename_all = "camelCase")]
 struct AdminKeyPolicyResponse {
     kid: String,
+    policy_id: String,
     enabled: bool,
     providers: Vec<String>,
     tenant_id: Option<String>,
@@ -693,10 +732,31 @@ struct AdminKeyPolicyResponse {
     request_cost_micros: Option<u64>,
 }
 
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AdminAccessPolicyResponse {
+    policy_id: String,
+    enabled: bool,
+    providers: Vec<String>,
+    tenant_id: Option<String>,
+    token_role: Option<String>,
+    monthly_budget_micros: Option<u64>,
+    request_cost_micros: Option<u64>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AdminCredentialResponse {
+    credential_id: String,
+    policy_id: String,
+    enabled: bool,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct KeyProfileResponse {
     kid: String,
+    policy_id: String,
     enabled: bool,
     providers: Vec<String>,
     tenant_id: String,
@@ -948,8 +1008,9 @@ struct OAuthTokenRecord {
 }
 
 struct AuthorizedKey {
-    kid: String,
-    policy: KeyPolicy,
+    credential_id: Option<String>,
+    policy_id: String,
+    policy: AccessPolicy,
 }
 
 enum AuthOutcome {
@@ -958,9 +1019,9 @@ enum AuthOutcome {
 }
 
 #[derive(Debug)]
-struct KeyPolicyEntry {
-    kid: String,
-    policy: KeyPolicy,
+struct AccessPolicyEntry {
+    policy_id: String,
+    policy: AccessPolicy,
 }
 
 async fn session_profile(headers: &Headers, env: &Env) -> Result<Response> {
@@ -1029,7 +1090,7 @@ async fn access_entitlement_rows_for_session(
                 .collect::<Vec<_>>();
             let matching_policies = matching_entries
                 .iter()
-                .map(|entry| entry.kid.clone())
+                .map(|entry| entry.policy_id.clone())
                 .collect::<Vec<_>>();
             let scoped_grants = entitlement_oauth_grants(&grants, &matching_entries);
             let readiness = provider_readiness_row(provider, env, &scoped_grants);
@@ -1115,7 +1176,7 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 Ok(binding) => binding,
                 Err(message) => return json_error("invalid_policy_binding", message, 400),
             };
-            if existing_key_policy(&kv, &binding.policy_id)
+            if existing_access_policy(&kv, &binding.policy_id)
                 .await?
                 .is_none()
             {
@@ -1142,6 +1203,190 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
         return Response::from_json(&ProviderReadinessResponse {
             providers: provider_readiness_rows(&snapshot, &env, &grants),
         });
+    }
+
+    if req.method() == Method::Get && path == "/v1/admin/policies" {
+        let policies = list_access_policy_records(&kv)
+            .await?
+            .into_iter()
+            .map(|entry| admin_access_policy_response(&entry.policy_id, &entry.policy))
+            .collect::<Vec<_>>();
+        return Response::from_json(&serde_json::json!({ "policies": policies }));
+    }
+
+    if let Some(rest) = path.strip_prefix("/v1/admin/policies/") {
+        if req.method() == Method::Put {
+            let policy_id = match validate_admin_kid(rest) {
+                Ok(policy_id) => policy_id,
+                Err(message) => return json_error("invalid_policy", message, 400),
+            };
+            let policy = match serde_json::from_str::<AccessPolicy>(&req.text().await?) {
+                Ok(policy) => policy,
+                Err(error) => {
+                    return json_error(
+                        "invalid_policy_request",
+                        &format!("request body must be a JSON access policy: {error}"),
+                        400,
+                    );
+                }
+            };
+            if let Err(message) = validate_policy_providers(&policy) {
+                return json_error("invalid_policy", &message, 400);
+            }
+            put_kv_record(
+                &kv,
+                &format!("policies/{policy_id}"),
+                &policy,
+                "access policy",
+            )
+            .await?;
+            return Response::from_json(&admin_access_policy_response(&policy_id, &policy));
+        }
+        if req.method() == Method::Post {
+            let Some(policy_id) = rest.strip_suffix("/revoke") else {
+                return json_error("route_not_found", "route not found", 404);
+            };
+            let policy_id = match validate_admin_kid(policy_id.trim_end_matches('/')) {
+                Ok(policy_id) => policy_id,
+                Err(message) => return json_error("invalid_policy", message, 400),
+            };
+            let Some(mut policy) = existing_access_policy(&kv, &policy_id).await? else {
+                return json_error("unknown_policy", "access policy is not registered", 404);
+            };
+            policy.enabled = false;
+            put_kv_record(
+                &kv,
+                &format!("policies/{policy_id}"),
+                &policy,
+                "access policy",
+            )
+            .await?;
+            return Response::from_json(&admin_access_policy_response(&policy_id, &policy));
+        }
+        return json_error("method_not_allowed", "admin method is not allowed", 405);
+    }
+
+    if req.method() == Method::Get && path == "/v1/admin/credentials" {
+        let credentials = list_proxy_credentials(&kv)
+            .await?
+            .into_iter()
+            .map(|(credential_id, credential)| {
+                admin_credential_response(&credential_id, &credential)
+            })
+            .collect::<Vec<_>>();
+        return Response::from_json(&serde_json::json!({ "credentials": credentials }));
+    }
+
+    if let Some(rest) = path.strip_prefix("/v1/admin/credentials/") {
+        if req.method() == Method::Put {
+            let credential_id = match validate_admin_kid(rest) {
+                Ok(credential_id) => credential_id,
+                Err(message) => return json_error("invalid_credential", message, 400),
+            };
+            let mut credential = match serde_json::from_str::<ProxyCredential>(&req.text().await?) {
+                Ok(credential) => credential,
+                Err(error) => {
+                    return json_error(
+                        "invalid_credential_request",
+                        &format!("request body must be a JSON proxy credential: {error}"),
+                        400,
+                    );
+                }
+            };
+            if !is_sha256_hex(&credential.secret_sha256) {
+                return json_error(
+                    "invalid_credential",
+                    "secretSha256 must be a 64-character hex string",
+                    400,
+                );
+            }
+            credential.secret_sha256 = credential.secret_sha256.to_ascii_lowercase();
+            if validate_admin_kid(&credential.policy_id).is_err()
+                || existing_access_policy(&kv, &credential.policy_id)
+                    .await?
+                    .is_none()
+            {
+                return json_error("unknown_policy", "credential policy is not registered", 404);
+            }
+            put_kv_record(
+                &kv,
+                &format!("credentials/{credential_id}"),
+                &credential,
+                "proxy credential",
+            )
+            .await?;
+            return Response::from_json(&admin_credential_response(&credential_id, &credential));
+        }
+        if req.method() == Method::Post {
+            let Some(credential_id) = rest.strip_suffix("/revoke") else {
+                return json_error("route_not_found", "route not found", 404);
+            };
+            let credential_id = match validate_admin_kid(credential_id.trim_end_matches('/')) {
+                Ok(credential_id) => credential_id,
+                Err(message) => return json_error("invalid_credential", message, 400),
+            };
+            let Some(mut credential) = existing_proxy_credential(&kv, &credential_id).await? else {
+                return json_error(
+                    "unknown_proxy_key",
+                    "proxy credential is not registered",
+                    404,
+                );
+            };
+            credential.enabled = false;
+            put_kv_record(
+                &kv,
+                &format!("credentials/{credential_id}"),
+                &credential,
+                "proxy credential",
+            )
+            .await?;
+            return Response::from_json(&admin_credential_response(&credential_id, &credential));
+        }
+        return json_error("method_not_allowed", "admin method is not allowed", 405);
+    }
+
+    if req.method() == Method::Get && path == "/v1/admin/connections" {
+        let snapshot = provider_snapshot()?;
+        let connections = list_provider_connections(&kv, &snapshot).await?;
+        return Response::from_json(&serde_json::json!({ "connections": connections }));
+    }
+
+    if let Some(provider_id) = path.strip_prefix("/v1/admin/connections/") {
+        if req.method() != Method::Put {
+            return json_error("method_not_allowed", "admin method is not allowed", 405);
+        }
+        let snapshot = provider_snapshot()?;
+        if !snapshot
+            .providers
+            .iter()
+            .any(|provider| provider.id == provider_id)
+        {
+            return json_error("unknown_provider", "provider is not declared", 404);
+        }
+        let mut connection =
+            match serde_json::from_str::<ProviderConnectionRecord>(&req.text().await?) {
+                Ok(connection) => connection,
+                Err(error) => {
+                    return json_error(
+                        "invalid_connection_request",
+                        &format!("request body must be a JSON provider connection: {error}"),
+                        400,
+                    );
+                }
+            };
+        connection.provider_id = provider_id.to_string();
+        connection.label = match normalize_optional_label(connection.label) {
+            Ok(label) => label,
+            Err(message) => return json_error("invalid_connection", message, 400),
+        };
+        put_kv_record(
+            &kv,
+            &format!("connections/{provider_id}"),
+            &connection,
+            "provider connection",
+        )
+        .await?;
+        return Response::from_json(&connection);
     }
 
     if let Some(email) = path.strip_prefix("/v1/admin/access-users/") {
@@ -1202,33 +1447,39 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
         let needs_existing_policy = request.secret_sha256.is_none()
             || request.providers.as_ref().is_some_and(Vec::is_empty);
         let existing_policy = if needs_existing_policy {
-            existing_key_policy(&kv, &kid).await?
+            existing_access_policy(&kv, &kid).await?
         } else {
             None
         };
         let existing_secret_sha256 = if request.secret_sha256.is_none() {
-            existing_policy
+            existing_proxy_credential(&kv, &kid)
+                .await?
                 .as_ref()
-                .map(|policy| policy.secret_sha256.clone())
+                .map(|credential| credential.secret_sha256.clone())
         } else {
             None
         };
         let existing_all_providers = existing_policy
             .as_ref()
             .is_some_and(|policy| policy.providers.is_empty());
-        let policy = match request.try_into_policy(existing_secret_sha256, existing_all_providers) {
-            Ok(policy) => policy,
+        let legacy = match request.try_into_policy(existing_secret_sha256, existing_all_providers) {
+            Ok(legacy) => legacy,
             Err(message) => return json_error("invalid_admin_policy", message, 400),
         };
+        let policy = legacy.access_policy();
+        let credential = legacy.credential(&kid);
         if let Err(message) = validate_policy_providers(&policy) {
             return json_error("invalid_admin_policy", &message, 400);
         }
-        let value = serde_json::to_string(&policy)?;
-        kv.put(&format!("keys/{kid}"), value)
-            .map_err(|error| Error::RustError(format!("failed to prepare key policy: {error}")))?
-            .execute()
-            .await
-            .map_err(|error| Error::RustError(format!("failed to write key policy: {error}")))?;
+        put_kv_record(&kv, &format!("keys/{kid}"), &legacy, "legacy key policy").await?;
+        put_kv_record(&kv, &format!("policies/{kid}"), &policy, "access policy").await?;
+        put_kv_record(
+            &kv,
+            &format!("credentials/{kid}"),
+            &credential,
+            "proxy credential",
+        )
+        .await?;
         return Response::from_json(&admin_policy_response(&kid, &policy));
     }
 
@@ -1240,23 +1491,26 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             Ok(kid) => kid,
             Err(message) => return json_error("invalid_admin_key", message, 400),
         };
-        let Some(record) = kv
-            .get(&format!("keys/{kid}"))
-            .text()
-            .await
-            .map_err(|error| Error::RustError(format!("failed to read key policy: {error}")))?
-        else {
+        let Some(mut policy) = existing_access_policy(&kv, &kid).await? else {
             return json_error("unknown_proxy_key", "proxy key is not registered", 404);
         };
-        let mut policy = serde_json::from_str::<KeyPolicy>(&record)
-            .map_err(|error| Error::RustError(format!("key policy is invalid JSON: {error}")))?;
+        let Some(mut credential) = existing_proxy_credential(&kv, &kid).await? else {
+            return json_error("unknown_proxy_key", "proxy key is not registered", 404);
+        };
         policy.enabled = false;
-        let value = serde_json::to_string(&policy)?;
-        kv.put(&format!("keys/{kid}"), value)
-            .map_err(|error| Error::RustError(format!("failed to prepare key policy: {error}")))?
-            .execute()
-            .await
-            .map_err(|error| Error::RustError(format!("failed to write key policy: {error}")))?;
+        credential.enabled = false;
+        put_kv_record(&kv, &format!("policies/{kid}"), &policy, "access policy").await?;
+        put_kv_record(
+            &kv,
+            &format!("credentials/{kid}"),
+            &credential,
+            "proxy credential",
+        )
+        .await?;
+        if let Some(mut legacy) = existing_legacy_key_policy(&kv, &kid).await? {
+            legacy.enabled = false;
+            put_kv_record(&kv, &format!("keys/{kid}"), &legacy, "legacy key policy").await?;
+        }
         return Response::from_json(&admin_policy_response(&kid, &policy));
     }
 
@@ -1511,7 +1765,7 @@ async fn user_usage(headers: &Headers, env: &Env) -> Result<Response> {
     let budget = budget_status_for_key(
         env,
         &tenant_id(&auth),
-        &auth.kid,
+        &auth.policy_id,
         auth.policy.monthly_budget_micros,
     )
     .await?;
@@ -1539,12 +1793,7 @@ async fn inspect_proxy_key(headers: &Headers, env: &Env) -> Result<Response> {
     let Ok(kv) = env.kv("POLICY_KV") else {
         return key_inspection_response(&key.kid, &format!("{:?}", key.mode), None, None);
     };
-    let record = kv
-        .get(&format!("keys/{}", key.kid))
-        .text()
-        .await
-        .map_err(|error| Error::RustError(format!("failed to read key policy: {error}")))?;
-    let Some(record) = record else {
+    let Some(credential) = existing_proxy_credential(&kv, &key.kid).await? else {
         return key_inspection_response(
             &key.kid,
             &format!("{:?}", key.mode),
@@ -1552,9 +1801,19 @@ async fn inspect_proxy_key(headers: &Headers, env: &Env) -> Result<Response> {
             Some("unknown_proxy_key"),
         );
     };
-    let policy = serde_json::from_str::<KeyPolicy>(&record)
-        .map_err(|error| Error::RustError(format!("key policy is invalid JSON: {error}")))?;
-    let verification = key_verification(&key.secret, &policy);
+    let Some(policy) = existing_access_policy(&kv, &credential.policy_id).await? else {
+        return key_inspection_response(
+            &key.kid,
+            &format!("{:?}", key.mode),
+            None,
+            Some("unknown_policy"),
+        );
+    };
+    let verification = if credential.enabled {
+        key_verification(&key.secret, &credential)
+    } else {
+        "revoked"
+    };
     let verified_policy = inspect_policy_for_response(verification, &policy);
     key_inspection_response(
         &key.kid,
@@ -1564,8 +1823,8 @@ async fn inspect_proxy_key(headers: &Headers, env: &Env) -> Result<Response> {
     )
 }
 
-fn key_verification(secret: &str, policy: &KeyPolicy) -> &'static str {
-    (sha256_hex(secret) == policy.secret_sha256)
+fn key_verification(secret: &str, credential: &ProxyCredential) -> &'static str {
+    (sha256_hex(secret) == credential.secret_sha256)
         .then_some("verified")
         .unwrap_or("invalid_secret")
 }
@@ -1575,7 +1834,7 @@ impl AdminKeyPolicyRequest {
         self,
         existing_secret_sha256: Option<String>,
         existing_all_providers: bool,
-    ) -> std::result::Result<KeyPolicy, &'static str> {
+    ) -> std::result::Result<LegacyKeyPolicy, &'static str> {
         let secret_sha256 = match self.secret_sha256 {
             Some(secret_sha256) if is_sha256_hex(&secret_sha256) => secret_sha256,
             Some(_) => return Err("secretSha256 must be a 64-character hex string"),
@@ -1594,7 +1853,7 @@ impl AdminKeyPolicyRequest {
             validate_admin_budget(value, "requestCostMicros")?;
         }
         let token_role = normalize_token_role(self.token_role)?;
-        Ok(KeyPolicy {
+        Ok(LegacyKeyPolicy {
             enabled: self.enabled,
             secret_sha256: secret_sha256.to_ascii_lowercase(),
             providers,
@@ -1603,6 +1862,27 @@ impl AdminKeyPolicyRequest {
             monthly_budget_micros: self.monthly_budget_micros,
             request_cost_micros: self.request_cost_micros,
         })
+    }
+}
+
+impl LegacyKeyPolicy {
+    fn access_policy(&self) -> AccessPolicy {
+        AccessPolicy {
+            enabled: self.enabled,
+            providers: self.providers.clone(),
+            tenant_id: self.tenant_id.clone(),
+            token_role: self.token_role.clone(),
+            monthly_budget_micros: self.monthly_budget_micros,
+            request_cost_micros: self.request_cost_micros,
+        }
+    }
+
+    fn credential(&self, policy_id: &str) -> ProxyCredential {
+        ProxyCredential {
+            enabled: self.enabled,
+            secret_sha256: self.secret_sha256.clone(),
+            policy_id: policy_id.to_string(),
+        }
     }
 }
 
@@ -1638,7 +1918,23 @@ fn normalize_token_role(
     Ok(Some(value.to_ascii_lowercase()))
 }
 
-fn validate_policy_providers(policy: &KeyPolicy) -> std::result::Result<(), String> {
+fn normalize_optional_label(
+    value: Option<String>,
+) -> std::result::Result<Option<String>, &'static str> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value.len() > 80 || value.bytes().any(|byte| byte.is_ascii_control()) {
+        return Err("label must be 80 or fewer characters without control characters");
+    }
+    Ok(Some(value.to_string()))
+}
+
+fn validate_policy_providers(policy: &AccessPolicy) -> std::result::Result<(), String> {
     if policy.providers.is_empty() {
         return Ok(());
     }
@@ -1673,9 +1969,10 @@ fn is_sha256_hex(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-fn admin_policy_response(kid: &str, policy: &KeyPolicy) -> AdminKeyPolicyResponse {
+fn admin_policy_response(kid: &str, policy: &AccessPolicy) -> AdminKeyPolicyResponse {
     AdminKeyPolicyResponse {
         kid: kid.to_string(),
+        policy_id: kid.to_string(),
         enabled: policy.enabled,
         providers: policy.providers.clone(),
         tenant_id: policy.tenant_id.clone(),
@@ -1685,9 +1982,39 @@ fn admin_policy_response(kid: &str, policy: &KeyPolicy) -> AdminKeyPolicyRespons
     }
 }
 
+fn admin_access_policy_response(
+    policy_id: &str,
+    policy: &AccessPolicy,
+) -> AdminAccessPolicyResponse {
+    AdminAccessPolicyResponse {
+        policy_id: policy_id.to_string(),
+        enabled: policy.enabled,
+        providers: policy.providers.clone(),
+        tenant_id: policy.tenant_id.clone(),
+        token_role: policy.token_role.clone(),
+        monthly_budget_micros: policy.monthly_budget_micros,
+        request_cost_micros: policy.request_cost_micros,
+    }
+}
+
+fn admin_credential_response(
+    credential_id: &str,
+    credential: &ProxyCredential,
+) -> AdminCredentialResponse {
+    AdminCredentialResponse {
+        credential_id: credential_id.to_string(),
+        policy_id: credential.policy_id.clone(),
+        enabled: credential.enabled,
+    }
+}
+
 fn key_profile_response(auth: &AuthorizedKey) -> KeyProfileResponse {
     KeyProfileResponse {
-        kid: auth.kid.clone(),
+        kid: auth
+            .credential_id
+            .clone()
+            .unwrap_or_else(|| auth.policy_id.clone()),
+        policy_id: auth.policy_id.clone(),
         enabled: auth.policy.enabled,
         providers: auth.policy.providers.clone(),
         tenant_id: tenant_id(auth),
@@ -1765,8 +2092,13 @@ fn admin_tenant_summaries(entries: &[AdminKeyPolicyResponse]) -> Vec<AdminTenant
 
 async fn admin_usage_row(env: &Env, entry: AdminKeyPolicyResponse) -> Result<AdminUsageRow> {
     let tenant_id = response_tenant_id(&entry);
-    let budget =
-        budget_status_for_key(env, &tenant_id, &entry.kid, entry.monthly_budget_micros).await?;
+    let budget = budget_status_for_key(
+        env,
+        &tenant_id,
+        &entry.policy_id,
+        entry.monthly_budget_micros,
+    )
+    .await?;
     Ok(AdminUsageRow {
         kid: entry.kid,
         tenant_id,
@@ -1792,58 +2124,94 @@ fn sum_optional_micros(values: impl Iterator<Item = Option<u64>>) -> u64 {
     })
 }
 
-async fn existing_key_policy(kv: &KvStore, kid: &str) -> Result<Option<KeyPolicy>> {
+async fn existing_access_policy(kv: &KvStore, policy_id: &str) -> Result<Option<AccessPolicy>> {
+    if let Some(record) = kv
+        .get(&format!("policies/{policy_id}"))
+        .text()
+        .await
+        .map_err(|error| Error::RustError(format!("failed to read access policy: {error}")))?
+    {
+        let policy = serde_json::from_str::<AccessPolicy>(&record)
+            .map_err(|error| Error::RustError(format!("access policy is invalid JSON: {error}")))?;
+        return Ok(Some(policy));
+    }
+    Ok(existing_legacy_key_policy(kv, policy_id)
+        .await?
+        .map(|legacy| legacy.access_policy()))
+}
+
+async fn existing_proxy_credential(
+    kv: &KvStore,
+    credential_id: &str,
+) -> Result<Option<ProxyCredential>> {
+    if let Some(record) = kv
+        .get(&format!("credentials/{credential_id}"))
+        .text()
+        .await
+        .map_err(|error| Error::RustError(format!("failed to read proxy credential: {error}")))?
+    {
+        let credential = serde_json::from_str::<ProxyCredential>(&record).map_err(|error| {
+            Error::RustError(format!("proxy credential is invalid JSON: {error}"))
+        })?;
+        return Ok(Some(credential));
+    }
+    Ok(existing_legacy_key_policy(kv, credential_id)
+        .await?
+        .map(|legacy| legacy.credential(credential_id)))
+}
+
+async fn existing_legacy_key_policy(kv: &KvStore, kid: &str) -> Result<Option<LegacyKeyPolicy>> {
     let Some(record) = kv
         .get(&format!("keys/{kid}"))
         .text()
         .await
-        .map_err(|error| Error::RustError(format!("failed to read key policy: {error}")))?
+        .map_err(|error| Error::RustError(format!("failed to read legacy key policy: {error}")))?
     else {
         return Ok(None);
     };
-    let policy = serde_json::from_str::<KeyPolicy>(&record)
-        .map_err(|error| Error::RustError(format!("key policy is invalid JSON: {error}")))?;
+    let policy = serde_json::from_str::<LegacyKeyPolicy>(&record)
+        .map_err(|error| Error::RustError(format!("legacy key policy is invalid JSON: {error}")))?;
     Ok(Some(policy))
 }
 
 async fn list_admin_key_policies(kv: &KvStore) -> Result<Vec<AdminKeyPolicyResponse>> {
-    let mut entries = list_key_policy_records(kv)
+    let mut entries = list_access_policy_records(kv)
         .await?
         .into_iter()
-        .map(|entry| admin_policy_response(&entry.kid, &entry.policy))
+        .map(|entry| admin_policy_response(&entry.policy_id, &entry.policy))
         .collect::<Vec<_>>();
     entries.sort_by(|a, b| a.kid.cmp(&b.kid));
     Ok(entries)
 }
 
-async fn list_key_policy_records(kv: &KvStore) -> Result<Vec<KeyPolicyEntry>> {
+async fn list_access_policy_records(kv: &KvStore) -> Result<Vec<AccessPolicyEntry>> {
     let mut entries = Vec::new();
+    let mut policy_ids = BTreeSet::new();
     let mut cursor = None;
     loop {
-        let mut request = kv.list().prefix("keys/".to_string()).limit(1000);
+        let mut request = kv.list().prefix("policies/".to_string()).limit(1000);
         if let Some(next_cursor) = cursor.take() {
             request = request.cursor(next_cursor);
         }
-        let list = request
-            .execute()
-            .await
-            .map_err(|error| Error::RustError(format!("failed to list key policies: {error}")))?;
+        let list = request.execute().await.map_err(|error| {
+            Error::RustError(format!("failed to list access policies: {error}"))
+        })?;
         for key in list.keys {
-            let Some(kid) = key.name.strip_prefix("keys/") else {
+            let Some(policy_id) = key.name.strip_prefix("policies/") else {
                 continue;
             };
-            let Some(record) =
-                kv.get(&key.name).text().await.map_err(|error| {
-                    Error::RustError(format!("failed to read key policy: {error}"))
-                })?
+            let Some(record) = kv.get(&key.name).text().await.map_err(|error| {
+                Error::RustError(format!("failed to read access policy: {error}"))
+            })?
             else {
                 continue;
             };
-            let policy = serde_json::from_str::<KeyPolicy>(&record).map_err(|error| {
-                Error::RustError(format!("key policy is invalid JSON: {error}"))
+            let policy = serde_json::from_str::<AccessPolicy>(&record).map_err(|error| {
+                Error::RustError(format!("access policy is invalid JSON: {error}"))
             })?;
-            entries.push(KeyPolicyEntry {
-                kid: kid.to_string(),
+            policy_ids.insert(policy_id.to_string());
+            entries.push(AccessPolicyEntry {
+                policy_id: policy_id.to_string(),
                 policy,
             });
         }
@@ -1855,8 +2223,140 @@ async fn list_key_policy_records(kv: &KvStore) -> Result<Vec<KeyPolicyEntry>> {
         };
         cursor = Some(next_cursor);
     }
-    entries.sort_by(|a, b| a.kid.cmp(&b.kid));
+    for (kid, legacy) in list_legacy_key_policies(kv).await? {
+        if policy_ids.insert(kid.clone()) {
+            entries.push(AccessPolicyEntry {
+                policy_id: kid,
+                policy: legacy.access_policy(),
+            });
+        }
+    }
+    entries.sort_by(|a, b| a.policy_id.cmp(&b.policy_id));
     Ok(entries)
+}
+
+async fn list_legacy_key_policies(kv: &KvStore) -> Result<Vec<(String, LegacyKeyPolicy)>> {
+    let mut entries = Vec::new();
+    let mut cursor = None;
+    loop {
+        let mut request = kv.list().prefix("keys/".to_string()).limit(1000);
+        if let Some(next_cursor) = cursor.take() {
+            request = request.cursor(next_cursor);
+        }
+        let list = request.execute().await.map_err(|error| {
+            Error::RustError(format!("failed to list legacy key policies: {error}"))
+        })?;
+        for key in list.keys {
+            let Some(kid) = key.name.strip_prefix("keys/") else {
+                continue;
+            };
+            let Some(record) = kv.get(&key.name).text().await.map_err(|error| {
+                Error::RustError(format!("failed to read legacy key policy: {error}"))
+            })?
+            else {
+                continue;
+            };
+            let policy = serde_json::from_str::<LegacyKeyPolicy>(&record).map_err(|error| {
+                Error::RustError(format!("legacy key policy is invalid JSON: {error}"))
+            })?;
+            entries.push((kid.to_string(), policy));
+        }
+        if list.list_complete {
+            break;
+        }
+        let Some(next_cursor) = list.cursor else {
+            break;
+        };
+        cursor = Some(next_cursor);
+    }
+    Ok(entries)
+}
+
+async fn list_proxy_credentials(kv: &KvStore) -> Result<Vec<(String, ProxyCredential)>> {
+    let mut entries = Vec::new();
+    let mut credential_ids = BTreeSet::new();
+    let mut cursor = None;
+    loop {
+        let mut request = kv.list().prefix("credentials/".to_string()).limit(1000);
+        if let Some(next_cursor) = cursor.take() {
+            request = request.cursor(next_cursor);
+        }
+        let list = request.execute().await.map_err(|error| {
+            Error::RustError(format!("failed to list proxy credentials: {error}"))
+        })?;
+        for key in list.keys {
+            let Some(credential_id) = key.name.strip_prefix("credentials/") else {
+                continue;
+            };
+            let Some(record) = kv.get(&key.name).text().await.map_err(|error| {
+                Error::RustError(format!("failed to read proxy credential: {error}"))
+            })?
+            else {
+                continue;
+            };
+            let credential = serde_json::from_str::<ProxyCredential>(&record).map_err(|error| {
+                Error::RustError(format!("proxy credential is invalid JSON: {error}"))
+            })?;
+            credential_ids.insert(credential_id.to_string());
+            entries.push((credential_id.to_string(), credential));
+        }
+        if list.list_complete {
+            break;
+        }
+        let Some(next_cursor) = list.cursor else {
+            break;
+        };
+        cursor = Some(next_cursor);
+    }
+    for (kid, legacy) in list_legacy_key_policies(kv).await? {
+        if credential_ids.insert(kid.clone()) {
+            entries.push((kid.clone(), legacy.credential(&kid)));
+        }
+    }
+    entries.sort_by(|(id_a, _), (id_b, _)| id_a.cmp(id_b));
+    Ok(entries)
+}
+
+async fn existing_provider_connection(
+    kv: &KvStore,
+    provider_id: &str,
+) -> Result<ProviderConnectionRecord> {
+    let Some(record) = kv
+        .get(&format!("connections/{provider_id}"))
+        .text()
+        .await
+        .map_err(|error| {
+            Error::RustError(format!("failed to read provider connection: {error}"))
+        })?
+    else {
+        return Ok(ProviderConnectionRecord {
+            provider_id: provider_id.to_string(),
+            enabled: true,
+            label: None,
+        });
+    };
+    serde_json::from_str::<ProviderConnectionRecord>(&record)
+        .map_err(|error| Error::RustError(format!("provider connection is invalid JSON: {error}")))
+}
+
+async fn list_provider_connections(
+    kv: &KvStore,
+    snapshot: &ProviderSnapshot,
+) -> Result<Vec<ProviderConnectionRecord>> {
+    let mut connections = Vec::new();
+    for provider in &snapshot.providers {
+        connections.push(existing_provider_connection(kv, &provider.id).await?);
+    }
+    Ok(connections)
+}
+
+async fn put_kv_record<T: Serialize>(kv: &KvStore, key: &str, value: &T, kind: &str) -> Result<()> {
+    let value = serde_json::to_string(value)?;
+    kv.put(key, value)
+        .map_err(|error| Error::RustError(format!("failed to prepare {kind}: {error}")))?
+        .execute()
+        .await
+        .map_err(|error| Error::RustError(format!("failed to write {kind}: {error}")))
 }
 
 async fn list_policy_bindings(kv: &KvStore) -> Result<Vec<PolicyBindingRecord>> {
@@ -1913,7 +2413,7 @@ async fn list_policy_bindings_for_prefix(
 async fn list_session_policy_entries(
     kv: &KvStore,
     session: &AccessSession,
-) -> Result<Vec<KeyPolicyEntry>> {
+) -> Result<Vec<AccessPolicyEntry>> {
     let mut priorities = BTreeMap::<String, u16>::new();
     for prefix in session_binding_prefixes(session) {
         for binding in list_policy_bindings_for_prefix(kv, &prefix).await? {
@@ -1928,20 +2428,14 @@ async fn list_session_policy_entries(
     }
     let mut entries = Vec::new();
     for (policy_id, priority) in priorities {
-        if let Some(policy) = existing_key_policy(kv, &policy_id).await? {
-            entries.push((
-                priority,
-                KeyPolicyEntry {
-                    kid: policy_id,
-                    policy,
-                },
-            ));
+        if let Some(policy) = existing_access_policy(kv, &policy_id).await? {
+            entries.push((priority, AccessPolicyEntry { policy_id, policy }));
         }
     }
     entries.sort_by(|(priority_a, entry_a), (priority_b, entry_b)| {
         priority_a
             .cmp(priority_b)
-            .then_with(|| entry_a.kid.cmp(&entry_b.kid))
+            .then_with(|| entry_a.policy_id.cmp(&entry_b.policy_id))
     });
     Ok(entries.into_iter().map(|(_, entry)| entry).collect())
 }
@@ -2100,7 +2594,7 @@ fn provider_optional_config_keys(provider: &CompiledProvider) -> Vec<String> {
 
 fn entitlement_oauth_grants(
     grants: &[OAuthGrantRecord],
-    entries: &[&KeyPolicyEntry],
+    entries: &[&AccessPolicyEntry],
 ) -> Vec<OAuthGrantRecord> {
     grants
         .iter()
@@ -2113,8 +2607,14 @@ fn entitlement_oauth_grants(
         .collect()
 }
 
-fn oauth_grant_applies_to_policy_entry(grant: &OAuthGrantRecord, entry: &KeyPolicyEntry) -> bool {
-    if grant.key.starts_with(&format!("oauth/{}/", entry.kid)) {
+fn oauth_grant_applies_to_policy_entry(
+    grant: &OAuthGrantRecord,
+    entry: &AccessPolicyEntry,
+) -> bool {
+    if grant
+        .key
+        .starts_with(&format!("oauth/{}/", entry.policy_id))
+    {
         return true;
     }
     let tenant = entry.policy.tenant_id.as_deref().unwrap_or("default");
@@ -2131,9 +2631,9 @@ fn provider_requires_oauth(provider: &CompiledProvider) -> bool {
 
 fn select_access_policy_for_provider<'a>(
     provider: Option<&CompiledProvider>,
-    entries: &'a [&'a KeyPolicyEntry],
+    entries: &'a [&'a AccessPolicyEntry],
     grants: &[OAuthGrantRecord],
-) -> Option<&'a KeyPolicyEntry> {
+) -> Option<&'a AccessPolicyEntry> {
     let first_entry = entries.first().copied()?;
     if provider.is_some_and(provider_requires_oauth) {
         if let Some(grant_entry) = provider.and_then(|provider| {
@@ -2629,15 +3129,15 @@ fn default_oauth_token_type() -> String {
 
 fn inspect_policy_for_response<'a>(
     verification: &str,
-    policy: &'a KeyPolicy,
-) -> Option<&'a KeyPolicy> {
+    policy: &'a AccessPolicy,
+) -> Option<&'a AccessPolicy> {
     (verification == "verified").then_some(policy)
 }
 
 fn key_inspection_response(
     kid: &str,
     mode: &str,
-    policy: Option<&KeyPolicy>,
+    policy: Option<&AccessPolicy>,
     verification: Option<&str>,
 ) -> Result<Response> {
     Response::from_json(&serde_json::json!({
@@ -2669,10 +3169,37 @@ async fn authorize_request(
     provider_id: &str,
     mode: ProxyAuthMode,
 ) -> Result<AuthOutcome> {
-    match mode {
+    let outcome = match mode {
         ProxyAuthMode::ProxyKey => authorize_proxy_key(headers, env, provider_id).await,
         ProxyAuthMode::AccessSession => authorize_access_session(headers, env, provider_id).await,
+    }?;
+    if matches!(outcome, AuthOutcome::Allowed(_)) {
+        if let Some(response) = disabled_provider_connection_response(env, provider_id).await? {
+            return Ok(AuthOutcome::Denied(response));
+        }
     }
+    Ok(outcome)
+}
+
+async fn disabled_provider_connection_response(
+    env: &Env,
+    provider_id: &str,
+) -> Result<Option<Response>> {
+    let Ok(kv) = env.kv("POLICY_KV") else {
+        return Ok(None);
+    };
+    if existing_provider_connection(&kv, provider_id)
+        .await?
+        .enabled
+    {
+        return Ok(None);
+    }
+    json_error(
+        "provider_connection_disabled",
+        "provider connection is disabled",
+        403,
+    )
+    .map(Some)
 }
 
 async fn authorize_proxy_key_identity(headers: &Headers, env: &Env) -> Result<AuthOutcome> {
@@ -2708,23 +3235,28 @@ async fn authorize_proxy_key_for_provider(
             .map(AuthOutcome::Denied);
         }
     };
-    let record = kv
-        .get(&format!("keys/{}", key.kid))
-        .text()
-        .await
-        .map_err(|error| Error::RustError(format!("failed to read key policy: {error}")))?;
-    let Some(record) = record else {
+    let Some(credential) = existing_proxy_credential(&kv, &key.kid).await? else {
         return json_error("unknown_proxy_key", "proxy key is not registered", 401)
             .map(AuthOutcome::Denied);
     };
-    let policy = serde_json::from_str::<KeyPolicy>(&record)
-        .map_err(|error| Error::RustError(format!("key policy is invalid JSON: {error}")))?;
-    if !policy.enabled {
+    if !credential.enabled {
         return json_error("proxy_key_revoked", "proxy key is revoked", 403)
             .map(AuthOutcome::Denied);
     }
-    if sha256_hex(&key.secret) != policy.secret_sha256 {
+    if sha256_hex(&key.secret) != credential.secret_sha256 {
         return json_error("invalid_proxy_key", "proxy key secret is invalid", 401)
+            .map(AuthOutcome::Denied);
+    }
+    let Some(policy) = existing_access_policy(&kv, &credential.policy_id).await? else {
+        return json_error(
+            "credential_policy_missing",
+            "proxy credential references an unknown access policy",
+            403,
+        )
+        .map(AuthOutcome::Denied);
+    };
+    if !policy.enabled {
+        return json_error("policy_revoked", "access policy is revoked", 403)
             .map(AuthOutcome::Denied);
     }
     if let Some(provider_id) = provider_id {
@@ -2738,7 +3270,8 @@ async fn authorize_proxy_key_for_provider(
         }
     }
     Ok(AuthOutcome::Allowed(AuthorizedKey {
-        kid: key.kid,
+        credential_id: Some(key.kid),
+        policy_id: credential.policy_id,
         policy,
     }))
 }
@@ -2794,12 +3327,13 @@ async fn authorize_access_session(
     let selected_entry = select_access_policy_for_provider(provider, &matching_entries, &grants)
         .unwrap_or(first_entry);
     return Ok(AuthOutcome::Allowed(AuthorizedKey {
-        kid: selected_entry.kid.clone(),
+        credential_id: None,
+        policy_id: selected_entry.policy_id.clone(),
         policy: selected_entry.policy.clone(),
     }));
 }
 
-fn policy_allows_provider(policy: &KeyPolicy, provider_id: &str) -> bool {
+fn policy_allows_provider(policy: &AccessPolicy, provider_id: &str) -> bool {
     if !policy.enabled {
         return false;
     }
@@ -3663,7 +4197,7 @@ fn oauth_token_keys(
 ) -> Vec<String> {
     let mut keys = Vec::new();
     if let Some(token_ref) = token_ref.filter(|value| !value.is_empty()) {
-        keys.push(format!("oauth/{}/{}", auth.kid, token_ref));
+        keys.push(format!("oauth/{}/{}", auth.policy_id, token_ref));
         if let Some(tenant) = auth
             .policy
             .tenant_id
@@ -3674,7 +4208,7 @@ fn oauth_token_keys(
         }
     }
     if let Some(oauth_provider) = oauth_provider.filter(|value| !value.is_empty()) {
-        keys.push(format!("oauth/{}/{}", auth.kid, oauth_provider));
+        keys.push(format!("oauth/{}/{}", auth.policy_id, oauth_provider));
         if let Some(tenant) = auth
             .policy
             .tenant_id
@@ -3684,7 +4218,7 @@ fn oauth_token_keys(
             keys.push(format!("oauth/tenants/{tenant}/{oauth_provider}"));
         }
     }
-    keys.push(format!("oauth/{}/{}", auth.kid, provider.id));
+    keys.push(format!("oauth/{}/{}", auth.policy_id, provider.id));
     if let Some(tenant) = auth
         .policy
         .tenant_id
@@ -3989,7 +4523,7 @@ impl DurableObject for BudgetLedgerObject {
     }
 }
 
-fn preflight_static_budget(policy: &KeyPolicy) -> Result<Option<Response>> {
+fn preflight_static_budget(policy: &AccessPolicy) -> Result<Option<Response>> {
     if policy.monthly_budget_micros == Some(0) {
         return json_error("budget_exhausted", "proxy key budget is exhausted", 402).map(Some);
     }
@@ -4033,7 +4567,7 @@ async fn preflight_budget(
     };
 
     let tenant_id = tenant_id(auth);
-    let policy_id = budget_policy_id(&tenant_id, &auth.kid);
+    let policy_id = budget_policy_id(&tenant_id, &auth.policy_id);
     let request = BudgetReserveRequest {
         window_key: current_month_window_key(&policy_id)?,
         policy_id,
@@ -4042,7 +4576,7 @@ async fn preflight_budget(
         request_id: request_id.to_string(),
         capability: capability.to_string(),
     };
-    let response = reserve_budget(namespace, &tenant_id, &auth.kid, &request).await?;
+    let response = reserve_budget(namespace, &tenant_id, &auth.policy_id, &request).await?;
     if response.allowed {
         return Ok(BudgetPreflight::Allowed(BudgetUsage {
             reserved_cost_micros: response.charged_micros,
@@ -4331,7 +4865,7 @@ async fn enqueue_usage(env: &Env, record: UsageRecord<'_>) {
             .tenant_id
             .clone()
             .unwrap_or_else(|| "default".to_string()),
-        record.auth.kid.clone(),
+        record.auth.policy_id.clone(),
         record.request_id.to_string(),
         record.provider.id.clone(),
         record.capability.to_string(),
@@ -4868,7 +5402,30 @@ mod tests {
 
     #[test]
     fn key_verification_matches_registered_secret_hash() {
-        let policy = KeyPolicy {
+        let credential = ProxyCredential {
+            enabled: true,
+            secret_sha256: sha256_hex("secret"),
+            policy_id: "svc_docs".to_string(),
+        };
+        let policy = AccessPolicy {
+            enabled: true,
+            providers: vec!["openai".to_string()],
+            tenant_id: Some("team_docs".to_string()),
+            token_role: Some("service".to_string()),
+            monthly_budget_micros: Some(100),
+            request_cost_micros: Some(10),
+        };
+
+        assert_eq!(key_verification("secret", &credential), "verified");
+        assert_eq!(key_verification("wrong", &credential), "invalid_secret");
+        assert!(inspect_policy_for_response("verified", &policy).is_some());
+        assert!(inspect_policy_for_response("invalid_secret", &policy).is_none());
+        assert_eq!(policy.request_cost_micros, Some(10));
+    }
+
+    #[test]
+    fn legacy_key_records_split_policy_from_proxy_credential() {
+        let legacy = LegacyKeyPolicy {
             enabled: true,
             secret_sha256: sha256_hex("secret"),
             providers: vec!["openai".to_string()],
@@ -4877,12 +5434,14 @@ mod tests {
             monthly_budget_micros: Some(100),
             request_cost_micros: Some(10),
         };
+        let policy = legacy.access_policy();
+        let credential = legacy.credential("svc_docs");
+        let policy_json = serde_json::to_value(&policy).unwrap();
+        let credential_json = serde_json::to_value(&credential).unwrap();
 
-        assert_eq!(key_verification("secret", &policy), "verified");
-        assert_eq!(key_verification("wrong", &policy), "invalid_secret");
-        assert!(inspect_policy_for_response("verified", &policy).is_some());
-        assert!(inspect_policy_for_response("invalid_secret", &policy).is_none());
-        assert_eq!(policy.request_cost_micros, Some(10));
+        assert!(policy_json.get("secretSha256").is_none());
+        assert_eq!(credential_json["policyId"], "svc_docs");
+        assert_eq!(credential_json["secretSha256"], sha256_hex("secret"));
     }
 
     #[test]
@@ -4896,7 +5455,8 @@ mod tests {
             monthly_budget_micros: Some(100),
             request_cost_micros: Some(10),
         };
-        let policy = request.try_into_policy(None, false).unwrap();
+        let legacy = request.try_into_policy(None, false).unwrap();
+        let policy = legacy.access_policy();
         validate_policy_providers(&policy).unwrap();
         let response = admin_policy_response("svc_docs", &policy);
         assert_eq!(response.kid, "svc_docs");
@@ -4958,9 +5518,8 @@ mod tests {
 
     #[test]
     fn access_playground_policy_scope_is_provider_only() {
-        let policy = KeyPolicy {
+        let policy = AccessPolicy {
             enabled: true,
-            secret_sha256: sha256_hex("secret"),
             providers: vec!["openai".to_string()],
             tenant_id: Some("team_docs".to_string()),
             token_role: Some("user".to_string()),
@@ -5020,6 +5579,7 @@ mod tests {
         let entries = vec![
             AdminKeyPolicyResponse {
                 kid: "svc_docs".to_string(),
+                policy_id: "svc_docs".to_string(),
                 enabled: true,
                 providers: vec!["openai".to_string(), "tavily".to_string()],
                 tenant_id: Some("team_docs".to_string()),
@@ -5029,6 +5589,7 @@ mod tests {
             },
             AdminKeyPolicyResponse {
                 kid: "svc_ops".to_string(),
+                policy_id: "svc_ops".to_string(),
                 enabled: true,
                 providers: vec![],
                 tenant_id: Some("team_docs".to_string()),
@@ -5038,6 +5599,7 @@ mod tests {
             },
             AdminKeyPolicyResponse {
                 kid: "svc_default".to_string(),
+                policy_id: "svc_default".to_string(),
                 enabled: true,
                 providers: vec!["replicate".to_string()],
                 tenant_id: None,
@@ -5047,6 +5609,7 @@ mod tests {
             },
             AdminKeyPolicyResponse {
                 kid: "svc_retired".to_string(),
+                policy_id: "svc_retired".to_string(),
                 enabled: false,
                 providers: vec![],
                 tenant_id: Some("retired".to_string()),
@@ -5121,7 +5684,7 @@ mod tests {
         };
         let wildcard_policy = wildcard_providers.try_into_policy(None, true).unwrap();
         assert!(wildcard_policy.providers.is_empty());
-        validate_policy_providers(&wildcard_policy).unwrap();
+        validate_policy_providers(&wildcard_policy.access_policy()).unwrap();
 
         let omitted_providers = AdminKeyPolicyRequest {
             enabled: true,
@@ -5137,9 +5700,8 @@ mod tests {
             "providers is required"
         );
 
-        let unknown_provider = KeyPolicy {
+        let unknown_provider = AccessPolicy {
             enabled: true,
-            secret_sha256: sha256_hex("secret"),
             providers: vec!["not-real".to_string()],
             tenant_id: None,
             token_role: None,
@@ -5425,11 +5987,10 @@ mod tests {
                 has_access_token: true,
             },
         ];
-        let docs = KeyPolicyEntry {
-            kid: "svc_docs".to_string(),
-            policy: KeyPolicy {
+        let docs = AccessPolicyEntry {
+            policy_id: "svc_docs".to_string(),
+            policy: AccessPolicy {
                 enabled: true,
-                secret_sha256: "hash".to_string(),
                 providers: vec!["oauth-test".to_string()],
                 tenant_id: Some("team_docs".to_string()),
                 token_role: None,
@@ -5437,9 +5998,9 @@ mod tests {
                 request_cost_micros: None,
             },
         };
-        let research = KeyPolicyEntry {
-            kid: "svc_research".to_string(),
-            policy: KeyPolicy {
+        let research = AccessPolicyEntry {
+            policy_id: "svc_research".to_string(),
+            policy: AccessPolicy {
                 tenant_id: Some("research".to_string()),
                 ..docs.policy.clone()
             },
@@ -5461,11 +6022,10 @@ mod tests {
     #[test]
     fn access_policy_selection_prefers_oauth_grant_backed_policy() {
         let provider = oauth_test_provider();
-        let docs = KeyPolicyEntry {
-            kid: "svc_docs".to_string(),
-            policy: KeyPolicy {
+        let docs = AccessPolicyEntry {
+            policy_id: "svc_docs".to_string(),
+            policy: AccessPolicy {
                 enabled: true,
-                secret_sha256: "hash".to_string(),
                 providers: vec!["oauth-test".to_string()],
                 tenant_id: Some("team_docs".to_string()),
                 token_role: None,
@@ -5473,9 +6033,9 @@ mod tests {
                 request_cost_micros: None,
             },
         };
-        let research = KeyPolicyEntry {
-            kid: "svc_research".to_string(),
-            policy: KeyPolicy {
+        let research = AccessPolicyEntry {
+            policy_id: "svc_research".to_string(),
+            policy: AccessPolicy {
                 tenant_id: Some("research".to_string()),
                 ..docs.policy.clone()
             },
@@ -5490,7 +6050,7 @@ mod tests {
         let selected =
             select_access_policy_for_provider(Some(&provider), &entries, &grants).unwrap();
 
-        assert_eq!(selected.kid, "svc_research");
+        assert_eq!(selected.policy_id, "svc_research");
     }
 
     #[test]
@@ -5589,10 +6149,10 @@ mod tests {
     fn oauth_token_keys_prefer_key_token_ref_before_fallbacks() {
         let provider = oauth_test_provider();
         let auth = AuthorizedKey {
-            kid: "svc_docs".to_string(),
-            policy: KeyPolicy {
+            credential_id: Some("cred_docs".to_string()),
+            policy_id: "svc_docs".to_string(),
+            policy: AccessPolicy {
                 enabled: true,
-                secret_sha256: sha256_hex("secret"),
                 providers: vec!["oauth-test".to_string()],
                 tenant_id: Some("team_docs".to_string()),
                 token_role: Some("service".to_string()),
