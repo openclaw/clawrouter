@@ -8,13 +8,18 @@ import test from "node:test";
 test("key provisioning activates the canonical credential last", () => {
   const dir = mkdtempSync(join(tmpdir(), "clawrouter-key-put-test-"));
   const logPath = join(dir, "commands.log");
+  const payloadLogPath = join(dir, "payloads.log");
   const fakePnpm = join(dir, "pnpm");
   writeFileSync(
     fakePnpm,
     [
       "#!/usr/bin/env node",
-      'const { appendFileSync } = require("node:fs");',
-      'appendFileSync(process.env.CLAWROUTER_TEST_LOG, `${process.argv.slice(2).join(" ")}\\n`);',
+      'const { appendFileSync, readFileSync } = require("node:fs");',
+      'const args = process.argv.slice(2);',
+      'appendFileSync(process.env.CLAWROUTER_TEST_LOG, `${args.join(" ")}\\n`);',
+      'const pathIndex = args.indexOf("--path");',
+      'const putIndex = args.indexOf("put");',
+      'if (pathIndex !== -1 && putIndex !== -1) appendFileSync(process.env.CLAWROUTER_TEST_PAYLOAD_LOG, `${JSON.stringify({ key: args[putIndex + 1], value: JSON.parse(readFileSync(args[pathIndex + 1], "utf8")) })}\\n`);',
     ].join("\n"),
   );
   chmodSync(fakePnpm, 0o755);
@@ -38,6 +43,7 @@ test("key provisioning activates the canonical credential last", () => {
         env: {
           ...process.env,
           CLAWROUTER_TEST_LOG: logPath,
+          CLAWROUTER_TEST_PAYLOAD_LOG: payloadLogPath,
           PATH: `${dir}:${process.env.PATH}`,
         },
       },
@@ -54,6 +60,14 @@ test("key provisioning activates the canonical credential last", () => {
       "keys/smoke",
       "credentials/smoke",
     ]);
+    const payloads = readFileSync(payloadLogPath, "utf8")
+      .trim()
+      .split("\n")
+      .map((line) => JSON.parse(line));
+    const policy = payloads.findLast(({ key }) => key === "policies/smoke").value;
+    const credential = payloads.findLast(({ key }) => key === "credentials/smoke").value;
+    assert.match(policy.generation, /^policy_/);
+    assert.equal(credential.policyGeneration, policy.generation);
   } finally {
     rmSync(dir, { force: true, recursive: true });
   }

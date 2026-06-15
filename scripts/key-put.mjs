@@ -1,4 +1,4 @@
-import { createHash } from "node:crypto";
+import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -31,9 +31,11 @@ const monthlyBudgetMicros = args["monthly-budget-micros"]
 const requestCostMicros = args["request-cost-micros"]
   ? parseNonNegativeInteger(args["request-cost-micros"], "--request-cost-micros")
   : undefined;
+const generation = `policy_${randomUUID()}`;
 
 const policy = {
   enabled,
+  generation,
   providers,
   tenantId,
 };
@@ -48,6 +50,7 @@ const credential = {
   enabled,
   secretSha256: createHash("sha256").update(secret).digest("hex"),
   policyId: kid,
+  policyGeneration: generation,
 };
 const legacy = { ...policy, secretSha256: credential.secretSha256 };
 const tombstoneCredential = { ...credential, enabled: false };
