@@ -850,6 +850,25 @@ struct AdminKeyPolicyRequest {
     enabled: bool,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AdminAccessPolicyRequest {
+    #[serde(default)]
+    providers: Option<Vec<String>>,
+    #[serde(default)]
+    all_providers: bool,
+    #[serde(default)]
+    tenant_id: Option<String>,
+    #[serde(default)]
+    token_role: Option<String>,
+    #[serde(default)]
+    monthly_budget_micros: Option<u64>,
+    #[serde(default)]
+    request_cost_micros: Option<u64>,
+    #[serde(default = "default_true")]
+    enabled: bool,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AdminKeyPolicyResponse {
@@ -1447,7 +1466,10 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 Ok(policy_id) => policy_id,
                 Err(message) => return json_error("invalid_policy", message, 400),
             };
-            let policy = match serde_json::from_str::<AccessPolicy>(&req.text().await?) {
+            let policy = match serde_json::from_str::<AdminAccessPolicyRequest>(&req.text().await?)
+                .map_err(|error| error.to_string())
+                .and_then(|request| request.try_into_policy().map_err(str::to_string))
+            {
                 Ok(policy) => policy,
                 Err(error) => {
                     return json_error(
@@ -2122,6 +2144,26 @@ impl AdminKeyPolicyRequest {
             providers,
             tenant_id: self.tenant_id,
             token_role,
+            monthly_budget_micros: self.monthly_budget_micros,
+            request_cost_micros: self.request_cost_micros,
+        })
+    }
+}
+
+impl AdminAccessPolicyRequest {
+    fn try_into_policy(self) -> std::result::Result<AccessPolicy, &'static str> {
+        let providers = self.providers.ok_or("providers is required")?;
+        if providers.is_empty() && !self.all_providers {
+            return Err("allProviders must be true for wildcard provider access");
+        }
+        if !providers.is_empty() && self.all_providers {
+            return Err("allProviders cannot be combined with provider ids");
+        }
+        Ok(AccessPolicy {
+            enabled: self.enabled,
+            providers,
+            tenant_id: self.tenant_id,
+            token_role: normalize_token_role(self.token_role)?,
             monthly_budget_micros: self.monthly_budget_micros,
             request_cost_micros: self.request_cost_micros,
         })
@@ -7122,6 +7164,42 @@ mod tests {
         assert_eq!(
             validate_policy_budget(&invalid_budget).unwrap_err(),
             "monthlyBudgetMicros exceeds the durable ledger limit"
+        );
+
+        let omitted_providers =
+            serde_json::from_str::<AdminAccessPolicyRequest>(r#"{"enabled":true}"#)
+                .unwrap()
+                .try_into_policy()
+                .unwrap_err();
+        assert_eq!(omitted_providers, "providers is required");
+
+        let implicit_wildcard =
+            serde_json::from_str::<AdminAccessPolicyRequest>(r#"{"enabled":true,"providers":[]}"#)
+                .unwrap()
+                .try_into_policy()
+                .unwrap_err();
+        assert_eq!(
+            implicit_wildcard,
+            "allProviders must be true for wildcard provider access"
+        );
+
+        let explicit_wildcard = serde_json::from_str::<AdminAccessPolicyRequest>(
+            r#"{"enabled":true,"providers":[],"allProviders":true}"#,
+        )
+        .unwrap()
+        .try_into_policy()
+        .unwrap();
+        assert!(explicit_wildcard.providers.is_empty());
+
+        let ambiguous_scope = serde_json::from_str::<AdminAccessPolicyRequest>(
+            r#"{"enabled":true,"providers":["openai"],"allProviders":true}"#,
+        )
+        .unwrap()
+        .try_into_policy()
+        .unwrap_err();
+        assert_eq!(
+            ambiguous_scope,
+            "allProviders cannot be combined with provider ids"
         );
     }
 

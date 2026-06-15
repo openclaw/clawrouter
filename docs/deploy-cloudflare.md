@@ -326,8 +326,9 @@ the proxy secret hash plus its `policyId`, and a provider connection can stop a
 provider globally. The TypeScript admin UI hashes generated key secrets in the
 browser before issuing a credential. Credential ids must use alphanumeric or
 underscore characters because the issued live key format is
-`clawrouter-live-<credential-id>-<secret>`. Admin policies must select at least
-one provider; use the CLI path for deliberate all-provider policies. The
+`clawrouter-live-<credential-id>-<secret>`. Admin policy writes must include
+`providers`. Deliberate wildcard policies must send an empty list with
+`"allProviders": true`; omitted or implicitly empty scope is rejected. The
 console also stores `tokenRole` metadata from policy templates such as
 `sandbox`, `user`, `service`, and `ops`; enforcement still comes from the saved
 provider allowlist and budget fields.
