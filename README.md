@@ -168,7 +168,8 @@ curl "$CLAWROUTER_BASE_URL/v1/proxy/tavily/search" \
 The Worker resolves `provider` and `endpoint` from the compiled provider
 snapshot, applies manifest path/query/header/auth mapping, forwards the request,
 and emits a usage event to `USAGE_QUEUE`. The same Worker consumes that queue
-into the bounded `USAGE_LEDGER` reporting Durable Object. Audit events retain
+into the bounded `USAGE_LEDGER` reporting Durable Object and replays unsettled
+budget updates. Audit events retain
 identity, policy, credential, provider, route capability, model, timing,
 outcome, tokens when safely available, and cost for 30 days. Prompt and
 completion bodies are never stored. `/v1/usage` returns the caller policy's
@@ -177,7 +178,9 @@ all-tenant usage summary and recent request audit.
 
 Budgeted requests reserve the configured request cost before the upstream call.
 Successful upstream responses settle that charge; non-2xx and transport
-failures synchronously refund the reservation. Internal reservation ids are
-generated independently from caller-supplied request ids.
+failures synchronously refund the reservation. Failed settlement calls are
+persisted to `USAGE_QUEUE` for durable retry while the reservation remains
+charged fail-closed. Internal reservation ids are generated independently from
+caller-supplied request ids.
 OAuth, SigV4, and deployment-templated providers are still cataloged, but the
 edge path rejects them until the required token/signing/runtime mapping exists.
