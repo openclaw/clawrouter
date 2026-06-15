@@ -10,6 +10,7 @@ import {
   playgroundPayload,
   policyUsageFallback,
   reconcileDirectUserBindings,
+  readinessTone,
   serviceOutcome,
   tenantSummaryFallback,
 } from "../src/domain.ts";
@@ -93,6 +94,12 @@ test("service outcome and playground blocker require both access and readiness",
   const disabled = services[2];
   assert.equal(serviceOutcome(disabled).label, "disabled");
   assert.match(playgroundBlocker(modelForm(), { id: "disabled/default", provider: "disabled-provider", capabilities: [] }, undefined, new Map([["disabled-provider", disabled.access]]), { "disabled-provider": disabled.readiness }), /disabled/);
+});
+
+test("readiness tone prioritizes current executability over historical verification", () => {
+  assert.equal(readinessTone({ ...services[0].readiness, executable: false, verified: true, status: "disabled" }), "revoked");
+  assert.equal(readinessTone({ ...services[0].readiness, executable: true, verified: true }), "active");
+  assert.equal(readinessTone({ ...services[0].readiness, executable: true, verified: false }), "neutral");
 });
 
 test("playground payloads preserve model and service semantics", () => {

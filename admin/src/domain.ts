@@ -232,6 +232,12 @@ export function readinessLabel(readiness: ProviderReadiness | undefined) {
   return readiness.status.replace(/_/g, " ");
 }
 
+export function readinessTone(readiness: ProviderReadiness | undefined): ServiceOutcome["tone"] {
+  if (!readiness) return "neutral";
+  if (!readiness.executable) return "revoked";
+  return readiness.verified ? "active" : "neutral";
+}
+
 export function optionalNumber(value: string) {
   if (!value.trim()) return undefined;
   const parsed = Number(value);
