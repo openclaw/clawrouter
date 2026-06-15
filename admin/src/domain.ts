@@ -99,6 +99,7 @@ export interface BudgetStatus {
 }
 
 export interface AdminUsageRow {
+  policyId?: string;
   kid: string;
   tenantId: string;
   enabled: boolean;
@@ -111,6 +112,8 @@ export interface AdminUsageRow {
 
 export interface AdminTenantSummary {
   tenantId: string;
+  policies?: number;
+  activePolicies?: number;
   keys: number;
   activeKeys: number;
   providers: string[];
@@ -333,6 +336,7 @@ export function policyUsageFallback(policy: AccessPolicy): AdminUsageRow {
   const blocked = limit === 0;
   const unmetered = limit === undefined || limit === null;
   return {
+    policyId: policy.policyId,
     kid: policy.policyId,
     tenantId: policy.tenantId ?? "default",
     enabled: policy.enabled,
@@ -368,7 +372,12 @@ export function tenantSummaryFallback(keys: AccessPolicy[]): AdminTenantSummary[
     acc.set(tenantId, current);
     return acc;
   }, new Map<string, { tenantId: string; keys: number; activeKeys: number; providers: Set<string>; allProviders: boolean; monthlyBudgetMicros: number; requestCostMicros: number }>());
-  return Array.from(groups.values()).map((tenant) => ({ ...tenant, providers: Array.from(tenant.providers).sort() }));
+  return Array.from(groups.values()).map((tenant) => ({
+    ...tenant,
+    policies: tenant.keys,
+    activePolicies: tenant.activeKeys,
+    providers: Array.from(tenant.providers).sort(),
+  }));
 }
 
 export function unique(values: string[]) {

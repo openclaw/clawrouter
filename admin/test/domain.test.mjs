@@ -113,7 +113,10 @@ test("budget parsing and fallback summaries keep blocked and wildcard states exp
   assert.equal(blocked.budget.remainingMicros, 0);
 
   const summaries = tenantSummaryFallback(policies);
-  assert.equal(summaries.find((tenant) => tenant.tenantId === "ops")?.allProviders, true);
+  const ops = summaries.find((tenant) => tenant.tenantId === "ops");
+  assert.equal(ops?.allProviders, true);
+  assert.equal(ops?.policies, ops?.keys);
+  assert.equal(ops?.activePolicies, ops?.activeKeys);
 });
 
 function modelForm() {

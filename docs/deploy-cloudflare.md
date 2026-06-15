@@ -5,7 +5,8 @@ Cloudflare KV so access can be revoked without a redeploy.
 
 ## Required Bindings
 
-- `POLICY_KV`: key and policy records.
+- `POLICY_KV`: access policies, issued credential hashes, principal bindings,
+  provider connections, OAuth grants, and provider health records.
 - `USAGE_QUEUE`: metered usage events, with this Worker configured as producer
   and consumer.
 - `BUDGET_LEDGER`: SQLite-backed Durable Object budget ledger.
@@ -228,9 +229,10 @@ application is not protecting the console path or the Worker was deployed
 without the Access team/AUD vars.
 
 Access users are materialized automatically on sign-in as enabled `user`
-records with no service grants. Admins are resolved only from `CLAWROUTER_ACCESS_ADMIN_EMAILS` or
-`CLAWROUTER_ACCESS_ADMIN_DOMAINS`; `access/users/<email>` records do not grant
-admin rights, and admin rights do not bypass service grants.
+records with no policy bindings. Admins are resolved only from
+`CLAWROUTER_ACCESS_ADMIN_EMAILS` or `CLAWROUTER_ACCESS_ADMIN_DOMAINS`;
+`access/users/<email>` records do not grant admin rights, and admin rights do
+not bypass policy bindings.
 
 ```json
 {
@@ -249,7 +251,7 @@ Access session; the admin bearer token is only a fallback for automation or
 emergency access.
 
 Admins can inspect materialized Access users, update tenant/status/groups, and
-assign explicit user or group grants in the console or API:
+assign explicit user or group policy bindings in the console or API:
 
 ```text
 GET /v1/admin/access-users
@@ -282,7 +284,7 @@ the signed-in user and their groups:
 }
 ```
 
-Lower priority numbers win when multiple grants allow the same provider.
+Lower priority numbers win when multiple bindings allow the same provider.
 
 The console also exposes a Cloudflare Access-backed playground for
 OpenAI-compatible routes and manifest-proxy service routes. Model playground
@@ -299,7 +301,9 @@ SHA-256 hash of that token with `CLAWROUTER_ADMIN_TOKEN_SHA256`; the raw admin
 token is never configured in the Worker.
 
 ```text
-GET /v1/admin/keys
+GET /v1/admin/overview
+GET /v1/admin/tenants
+GET /v1/admin/usage
 GET /v1/admin/policies
 GET /v1/admin/credentials
 GET /v1/admin/connections
@@ -312,26 +316,26 @@ PUT /v1/admin/policy-bindings
 PUT /v1/admin/policies/<policy-id>
 PUT /v1/admin/credentials/<credential-id>
 PUT /v1/admin/connections/<provider-id>
-PUT /v1/admin/keys/<kid>
 POST /v1/admin/policies/<policy-id>/revoke
 POST /v1/admin/credentials/<credential-id>/revoke
-POST /v1/admin/keys/<kid>/revoke
 ```
 
 Policies, credentials, and provider connections are separate control-plane
 records. A policy defines service scope and budgets, a credential contains only
 the proxy secret hash plus its `policyId`, and a provider connection can stop a
-provider globally. `PUT /v1/admin/keys/<kid>` remains a compatibility API that
-materializes a same-id policy and credential. It accepts the same shape as
-`pnpm cf:key:put`, but with `secretSha256` instead of a raw key secret. The
-TypeScript admin UI hashes generated key secrets in the browser before calling
-the API.
-Admin-created key ids must use alphanumeric or underscore characters because the
-issued live key format is `clawrouter-live-<kid>-<secret>`. Admin policies must
-select at least one provider; use the CLI path for deliberate all-provider keys.
-The console also stores `tokenRole` metadata from role presets such as
+provider globally. The TypeScript admin UI hashes generated key secrets in the
+browser before issuing a credential. Credential ids must use alphanumeric or
+underscore characters because the issued live key format is
+`clawrouter-live-<credential-id>-<secret>`. Admin policies must select at least
+one provider; use the CLI path for deliberate all-provider policies. The
+console also stores `tokenRole` metadata from policy templates such as
 `sandbox`, `user`, `service`, and `ops`; enforcement still comes from the saved
 provider allowlist and budget fields.
+
+Legacy `GET|PUT /v1/admin/keys...`, `POST /v1/admin/keys/<kid>/revoke`, and
+`GET /v1/admin/users` remain compatibility aliases. The key mutation API
+materializes a same-id policy and credential and accepts the same shape as
+`pnpm cf:key:put`, but with `secretSha256` instead of a raw key secret.
 
 Access user records are not role-grant records. Cloudflare Access creates the
 identity, `access/users/<email>` stores tenant/status/groups, policy bindings
@@ -383,17 +387,24 @@ When `POLICY_KV` is bound, the response verifies syntax, registration, secret
 hash, enabled state, tenant, budget, and provider allowlist. The endpoint never
 returns the key secret or stored secret hash.
 
-The stored policy shape is:
+The stored policy and credential shapes are separate:
 
 ```json
 {
   "enabled": true,
-  "secretSha256": "<sha256 of key secret>",
   "providers": ["openai", "tavily"],
   "tenantId": "default",
   "tokenRole": "service",
   "monthlyBudgetMicros": 100000000,
   "requestCostMicros": 1000
+}
+```
+
+```json
+{
+  "enabled": true,
+  "secretSha256": "<sha256 of key secret>",
+  "policyId": "svc_docs"
 }
 ```
 

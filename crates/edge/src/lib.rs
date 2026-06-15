@@ -833,6 +833,8 @@ struct BudgetStatusView {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AdminOverviewResponse {
+    policies_total: usize,
+    policies_active: usize,
     keys_total: usize,
     keys_active: usize,
     tenants_total: usize,
@@ -847,6 +849,8 @@ struct AdminOverviewResponse {
 #[serde(rename_all = "camelCase")]
 struct AdminTenantSummary {
     tenant_id: String,
+    policies: usize,
+    active_policies: usize,
     keys: usize,
     active_keys: usize,
     providers: Vec<String>,
@@ -868,6 +872,7 @@ struct TenantAccumulator {
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AdminUsageRow {
+    policy_id: String,
     kid: String,
     tenant_id: String,
     enabled: bool,
@@ -1261,7 +1266,7 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
         return Response::from_json(&admin_overview(&entries, &snapshot));
     }
 
-    if req.method() == Method::Get && path == "/v1/admin/users" {
+    if req.method() == Method::Get && (path == "/v1/admin/tenants" || path == "/v1/admin/users") {
         let entries = list_admin_key_policies(&kv).await?;
         return Response::from_json(&serde_json::json!({
             "tenants": admin_tenant_summaries(&entries)
@@ -1276,7 +1281,8 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             rows.push(admin_usage_row(&env, entry).await?);
         }
         return Response::from_json(&serde_json::json!({
-            "keys": rows,
+            "policies": &rows,
+            "keys": &rows,
             "usage": usage
         }));
     }
@@ -2173,6 +2179,8 @@ fn admin_overview(
 ) -> AdminOverviewResponse {
     let route_catalog = route_catalog(snapshot);
     AdminOverviewResponse {
+        policies_total: entries.len(),
+        policies_active: entries.iter().filter(|entry| entry.enabled).count(),
         keys_total: entries.len(),
         keys_active: entries.iter().filter(|entry| entry.enabled).count(),
         tenants_total: admin_tenant_summaries(entries).len(),
@@ -2223,6 +2231,8 @@ fn admin_tenant_summaries(entries: &[AdminKeyPolicyResponse]) -> Vec<AdminTenant
         .into_iter()
         .map(|(tenant_id, summary)| AdminTenantSummary {
             tenant_id,
+            policies: summary.keys,
+            active_policies: summary.active_keys,
             keys: summary.keys,
             active_keys: summary.active_keys,
             providers: summary.providers.into_iter().collect(),
@@ -2243,6 +2253,7 @@ async fn admin_usage_row(env: &Env, entry: AdminKeyPolicyResponse) -> Result<Adm
     )
     .await?;
     Ok(AdminUsageRow {
+        policy_id: entry.policy_id,
         kid: entry.kid,
         tenant_id,
         enabled: entry.enabled,
@@ -6399,6 +6410,8 @@ mod tests {
             .iter()
             .find(|tenant| tenant.tenant_id == "team_docs")
             .unwrap();
+        assert_eq!(docs.policies, 2);
+        assert_eq!(docs.active_policies, 2);
         assert_eq!(docs.keys, 2);
         assert_eq!(docs.active_keys, 2);
         assert_eq!(docs.providers, vec!["openai", "tavily"]);
@@ -6410,6 +6423,11 @@ mod tests {
             .unwrap();
         assert_eq!(retired.active_keys, 0);
         assert!(!retired.all_providers);
+        let overview = admin_overview(&entries, &provider_snapshot().unwrap());
+        assert_eq!(overview.policies_total, 4);
+        assert_eq!(overview.policies_active, 3);
+        assert_eq!(overview.keys_total, overview.policies_total);
+        assert_eq!(overview.keys_active, overview.policies_active);
         assert!(retired.providers.is_empty());
 
         let overview = admin_overview(&entries, &provider_snapshot().unwrap());
