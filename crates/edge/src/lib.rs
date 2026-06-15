@@ -19,6 +19,7 @@ const PROVIDER_ICONS: &str = include_str!("provider-icons.json");
 include!(concat!(env!("OUT_DIR"), "/admin-assets.rs"));
 static USAGE_EVENT_COUNTER: AtomicU64 = AtomicU64::new(0);
 const MAX_SQL_BUDGET_MICROS: u64 = 9_007_199_254_740_991;
+const BUDGET_SETTLEMENT_ATTEMPTS: usize = 3;
 const BUDGET_RESERVATION_LEASE_MS: u64 = 15 * 60 * 1_000;
 const BUDGET_CHARGE_RETENTION_MS: u64 = 45 * 86_400_000;
 const BUDGET_CLEANUP_INTERVAL_MS: i64 = 86_400_000;
@@ -564,7 +565,7 @@ async fn proxy_openai_compatible(
     let started_at_ms = Date::now().as_millis();
     let response = send_upstream_request(upstream_req, &route.provider.id).await?;
     let status_code = response.status_code();
-    let budget = settle_budget_after_response(&env, &auth, budget, status_code).await?;
+    let budget = settle_budget_after_response(&env, &auth, budget, status_code).await;
     enqueue_usage(
         &env,
         UsageRecord {
@@ -748,7 +749,7 @@ async fn proxy_manifest_endpoint(
     let started_at_ms = Date::now().as_millis();
     let response = send_upstream_request(upstream_req, &provider.id).await?;
     let status_code = response.status_code();
-    let budget = settle_budget_after_response(&env, &auth, budget, status_code).await?;
+    let budget = settle_budget_after_response(&env, &auth, budget, status_code).await;
     enqueue_usage(
         &env,
         UsageRecord {
@@ -1235,6 +1236,62 @@ struct PolicyBindingIndexEntryRow {
     binding_json: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccessControlUser {
+    email: String,
+    record: AccessUserRecord,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccessControlUsersResolveRequest {
+    emails: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccessControlUsersResolveResponse {
+    users: Vec<AccessControlUser>,
+    missing_emails: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccessControlUsersListResponse {
+    initialized: bool,
+    users: Vec<AccessControlUser>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AccessControlUserRow {
+    user_json: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct AccessControlUserListRow {
+    email: String,
+    user_json: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccessControlConnectionsResolveRequest {
+    provider_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccessControlConnectionsResolveResponse {
+    connections: Vec<ProviderConnectionRecord>,
+    missing_provider_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct AccessControlConnectionRow {
+    connection_json: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum AccessAud {
@@ -1357,7 +1414,7 @@ async fn access_entitlement_rows_for_session(
     let snapshot = provider_snapshot()?;
     let entries = list_session_policy_entries(&kv, env, session).await?;
     let grants = list_oauth_grants(&kv).await?;
-    let connections = list_provider_connections(&kv, &snapshot).await?;
+    let connections = list_provider_connections(env, &kv, &snapshot).await?;
     let health = list_provider_health(&kv).await?;
     Ok(snapshot
         .providers
@@ -1442,7 +1499,7 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
     }
 
     if req.method() == Method::Get && path == "/v1/admin/access-users" {
-        let users = list_admin_access_users(&kv, &env).await?;
+        let users = list_admin_access_users(&env, &kv).await?;
         return Response::from_json(&serde_json::json!({ "users": users }));
     }
 
@@ -1481,7 +1538,7 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
     if req.method() == Method::Get && path == "/v1/admin/provider-status" {
         let snapshot = provider_snapshot()?;
         let grants = list_oauth_grants(&kv).await?;
-        let connections = list_provider_connections(&kv, &snapshot).await?;
+        let connections = list_provider_connections(&env, &kv, &snapshot).await?;
         let health = list_provider_health(&kv).await?;
         return Response::from_json(&ProviderReadinessResponse {
             providers: provider_readiness_rows(&snapshot, &env, &grants, &connections, &health),
@@ -1671,7 +1728,7 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
 
     if req.method() == Method::Get && path == "/v1/admin/connections" {
         let snapshot = provider_snapshot()?;
-        let connections = list_provider_connections(&kv, &snapshot).await?;
+        let connections = list_provider_connections(&env, &kv, &snapshot).await?;
         return Response::from_json(&serde_json::json!({ "connections": connections }));
     }
 
@@ -1703,13 +1760,15 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             Ok(label) => label,
             Err(message) => return json_error("invalid_connection", message, 400),
         };
-        put_kv_record(
+        let namespace = access_control_namespace(&env)?;
+        put_access_control_connection(&namespace, &connection).await?;
+        sync_kv_record_best_effort(
             &kv,
             &format!("connections/{provider_id}"),
             &connection,
-            "provider connection",
+            "provider connection compatibility record",
         )
-        .await?;
+        .await;
         return Response::from_json(&connection);
     }
 
@@ -1736,12 +1795,19 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             Ok(groups) => groups,
             Err(message) => return json_error("invalid_access_user", &message, 400),
         };
-        let value = serde_json::to_string(&request)?;
-        kv.put(&format!("access/users/{email}"), value)
-            .map_err(|error| Error::RustError(format!("failed to prepare access user: {error}")))?
-            .execute()
-            .await
-            .map_err(|error| Error::RustError(format!("failed to write access user: {error}")))?;
+        let namespace = access_control_namespace(&env)?;
+        let user = AccessControlUser {
+            email: email.clone(),
+            record: request.clone(),
+        };
+        put_access_control_user(&namespace, &user).await?;
+        sync_kv_record_best_effort(
+            &kv,
+            &format!("access/users/{email}"),
+            &request,
+            "access user compatibility record",
+        )
+        .await;
         return Response::from_json(&access_user_response(&email, request, &env)?);
     }
 
@@ -2032,49 +2098,15 @@ fn access_audiences(payload: &AccessJwtPayload) -> Vec<&str> {
 
 async fn access_role_for_email(env: &Env, email: &str) -> Result<Option<AccessUserIdentity>> {
     let default_tenant = default_access_tenant(env);
-    let mut tenant_id = default_tenant.clone();
-    let mut groups = Vec::new();
-    if let Ok(kv) = env.kv("POLICY_KV") {
-        if let Some(record) = kv
-            .get(&format!("access/users/{email}"))
-            .text()
-            .await
-            .map_err(|error| Error::RustError(format!("failed to read access user: {error}")))?
-        {
-            let user = serde_json::from_str::<AccessUserRecord>(&record).map_err(|error| {
-                Error::RustError(format!("access user is invalid JSON: {error}"))
-            })?;
-            if !user.enabled.unwrap_or(true) {
-                return Ok(None);
-            }
-            tenant_id = user
-                .tenant_id
-                .filter(|tenant| !tenant.trim().is_empty())
-                .unwrap_or_else(|| default_tenant.clone());
-            groups = normalize_access_groups(user.groups).map_err(Error::RustError)?;
-        } else {
-            let user = AccessUserRecord {
-                role: AccessRole::User,
-                tenant_id: Some(default_tenant.clone()),
-                enabled: Some(true),
-                groups: Vec::new(),
-            };
-            let value = serde_json::to_string(&user)?;
-            kv.put(&format!("access/users/{email}"), value)
-                .map_err(|error| {
-                    Error::RustError(format!(
-                        "failed to prepare autogenerated access user: {error}"
-                    ))
-                })?
-                .execute()
-                .await
-                .map_err(|error| {
-                    Error::RustError(format!(
-                        "failed to write autogenerated access user: {error}"
-                    ))
-                })?;
-        }
+    let user = access_control_user_record(env, email, &default_tenant).await?;
+    if !user.enabled.unwrap_or(true) {
+        return Ok(None);
     }
+    let tenant_id = user
+        .tenant_id
+        .filter(|tenant| !tenant.trim().is_empty())
+        .unwrap_or_else(|| default_tenant.clone());
+    let groups = normalize_access_groups(user.groups).map_err(Error::RustError)?;
     let role = if access_admin_for_email(env, email)? {
         AccessRole::Admin
     } else {
@@ -2085,6 +2117,69 @@ async fn access_role_for_email(env: &Env, email: &str) -> Result<Option<AccessUs
         tenant_id,
         groups,
     }))
+}
+
+async fn access_control_user_record(
+    env: &Env,
+    email: &str,
+    default_tenant: &str,
+) -> Result<AccessUserRecord> {
+    let namespace = access_control_namespace(env)?;
+    let mut response = resolve_access_control_users(&namespace, vec![email.to_string()]).await?;
+    if let Some(user) = response.users.pop() {
+        return Ok(user.record);
+    }
+    let record = match env.kv("POLICY_KV") {
+        Ok(kv) => existing_access_user_record(&kv, email)
+            .await?
+            .unwrap_or_else(|| default_access_user_record(default_tenant)),
+        Err(_) => default_access_user_record(default_tenant),
+    };
+    let user = AccessControlUser {
+        email: email.to_string(),
+        record,
+    };
+    initialize_access_control_users(&namespace, std::slice::from_ref(&user)).await?;
+    let mut response = resolve_access_control_users(&namespace, vec![email.to_string()]).await?;
+    let user = response.users.pop().ok_or_else(|| {
+        Error::RustError("access user authority did not initialize the requested user".to_string())
+    })?;
+    if let Ok(kv) = env.kv("POLICY_KV") {
+        sync_kv_record_best_effort(
+            &kv,
+            &format!("access/users/{email}"),
+            &user.record,
+            "access user compatibility record",
+        )
+        .await;
+    }
+    Ok(user.record)
+}
+
+fn default_access_user_record(default_tenant: &str) -> AccessUserRecord {
+    AccessUserRecord {
+        role: AccessRole::User,
+        tenant_id: Some(default_tenant.to_string()),
+        enabled: Some(true),
+        groups: Vec::new(),
+    }
+}
+
+async fn existing_access_user_record(
+    kv: &KvStore,
+    email: &str,
+) -> Result<Option<AccessUserRecord>> {
+    let Some(record) = kv
+        .get(&format!("access/users/{email}"))
+        .text()
+        .await
+        .map_err(|error| Error::RustError(format!("failed to read access user: {error}")))?
+    else {
+        return Ok(None);
+    };
+    serde_json::from_str::<AccessUserRecord>(&record)
+        .map(Some)
+        .map_err(|error| Error::RustError(format!("access user is invalid JSON: {error}")))
 }
 
 async fn user_profile(headers: &Headers, env: &Env) -> Result<Response> {
@@ -2753,19 +2848,46 @@ async fn existing_provider_connection(
             label: None,
         });
     };
-    serde_json::from_str::<ProviderConnectionRecord>(&record)
-        .map_err(|error| Error::RustError(format!("provider connection is invalid JSON: {error}")))
+    let mut connection =
+        serde_json::from_str::<ProviderConnectionRecord>(&record).map_err(|error| {
+            Error::RustError(format!("provider connection is invalid JSON: {error}"))
+        })?;
+    connection.provider_id = provider_id.to_string();
+    Ok(connection)
 }
 
 async fn list_provider_connections(
+    env: &Env,
     kv: &KvStore,
     snapshot: &ProviderSnapshot,
 ) -> Result<Vec<ProviderConnectionRecord>> {
-    let mut connections = Vec::new();
-    for provider in &snapshot.providers {
-        connections.push(existing_provider_connection(kv, &provider.id).await?);
+    let provider_ids = snapshot
+        .providers
+        .iter()
+        .map(|provider| provider.id.clone())
+        .collect::<Vec<_>>();
+    authoritative_provider_connections(env, kv, provider_ids).await
+}
+
+async fn authoritative_provider_connections(
+    env: &Env,
+    kv: &KvStore,
+    provider_ids: Vec<String>,
+) -> Result<Vec<ProviderConnectionRecord>> {
+    let namespace = access_control_namespace(env)?;
+    let mut response = resolve_access_control_connections(&namespace, provider_ids.clone()).await?;
+    if !response.missing_provider_ids.is_empty() {
+        let mut connections = Vec::with_capacity(response.missing_provider_ids.len());
+        for provider_id in response.missing_provider_ids {
+            connections.push(existing_provider_connection(kv, &provider_id).await?);
+        }
+        initialize_access_control_connections(&namespace, &connections).await?;
+        response = resolve_access_control_connections(&namespace, provider_ids).await?;
     }
-    Ok(connections)
+    response
+        .connections
+        .sort_by(|a, b| a.provider_id.cmp(&b.provider_id));
+    Ok(response.connections)
 }
 
 async fn list_provider_health(kv: &KvStore) -> Result<BTreeMap<String, ProviderHealthRecord>> {
@@ -2816,6 +2938,12 @@ async fn put_kv_record<T: Serialize>(kv: &KvStore, key: &str, value: &T, kind: &
         .execute()
         .await
         .map_err(|error| Error::RustError(format!("failed to write {kind}: {error}")))
+}
+
+async fn sync_kv_record_best_effort<T: Serialize>(kv: &KvStore, key: &str, value: &T, kind: &str) {
+    if let Err(error) = put_kv_record(kv, key, value, kind).await {
+        console_error!("failed to sync {} {}: {}", kind, key, error);
+    }
 }
 
 async fn sync_legacy_records_for_policy(
@@ -2900,7 +3028,7 @@ fn legacy_rollback_record(policy: &AccessPolicy, credential: &ProxyCredential) -
 }
 
 async fn list_policy_bindings(env: &Env, kv: &KvStore) -> Result<Vec<PolicyBindingRecord>> {
-    let namespace = policy_binding_index_namespace(env)?;
+    let namespace = access_control_namespace(env)?;
     let mut response = list_policy_binding_index(&namespace).await?;
     if !response.initialized {
         let legacy_bindings = list_policy_bindings_for_prefix(kv, "access/bindings/").await?;
@@ -2954,7 +3082,7 @@ async fn put_policy_binding_record(
         principal_type: binding.principal_type,
         principal_id: binding.principal_id.clone(),
     };
-    let namespace = policy_binding_index_namespace(env)?;
+    let namespace = access_control_namespace(env)?;
     let seed = policy_binding_index_seed(kv, principal).await?;
     initialize_policy_binding_index(&namespace, std::slice::from_ref(&seed)).await?;
     let mutation = PolicyBindingIndexMutationRequest {
@@ -2972,20 +3100,13 @@ async fn put_policy_binding_record(
         mutate_policy_binding_index(&namespace, mutation).await
     } else {
         mutate_policy_binding_index(&namespace, mutation).await?;
-        if let Err(error) = put_kv_record(
+        sync_kv_record_best_effort(
             kv,
             &binding_key,
             binding,
             "policy binding compatibility tombstone",
         )
-        .await
-        {
-            console_error!(
-                "failed to sync revoked policy binding compatibility record {}: {}",
-                binding_key,
-                error
-            );
-        }
+        .await;
         Ok(())
     }
 }
@@ -3005,10 +3126,10 @@ async fn policy_binding_index_seed(
     })
 }
 
-fn policy_binding_index_namespace(env: &Env) -> Result<ObjectNamespace> {
-    env.durable_object("BINDING_INDEX").map_err(|error| {
+fn access_control_namespace(env: &Env) -> Result<ObjectNamespace> {
+    env.durable_object("ACCESS_CONTROL").map_err(|error| {
         Error::RustError(format!(
-            "BINDING_INDEX Durable Object binding is required for Access policy bindings: {error}"
+            "ACCESS_CONTROL Durable Object binding is required for access authorization: {error}"
         ))
     })
 }
@@ -3017,7 +3138,7 @@ async fn resolve_policy_binding_index(
     namespace: &ObjectNamespace,
     principals: Vec<PolicyBindingPrincipal>,
 ) -> Result<PolicyBindingIndexResolveResponse> {
-    let body = policy_binding_index_request(
+    let body = access_control_request(
         namespace,
         "/resolve",
         &PolicyBindingIndexResolveRequest { principals },
@@ -3034,7 +3155,7 @@ async fn initialize_policy_binding_index(
     namespace: &ObjectNamespace,
     seeds: &[PolicyBindingIndexSeed],
 ) -> Result<()> {
-    policy_binding_index_request(namespace, "/initialize", seeds)
+    access_control_request(namespace, "/initialize", seeds)
         .await
         .map(|_| ())
 }
@@ -3043,7 +3164,7 @@ async fn initialize_all_policy_bindings(
     namespace: &ObjectNamespace,
     bindings: &[PolicyBindingRecord],
 ) -> Result<()> {
-    policy_binding_index_request(namespace, "/initialize-all", bindings)
+    access_control_request(namespace, "/initialize-all", bindings)
         .await
         .map(|_| ())
 }
@@ -3052,7 +3173,7 @@ async fn mutate_policy_binding_index(
     namespace: &ObjectNamespace,
     request: PolicyBindingIndexMutationRequest,
 ) -> Result<()> {
-    policy_binding_index_request(namespace, "/mutate", &request)
+    access_control_request(namespace, "/mutate", &request)
         .await
         .map(|_| ())
 }
@@ -3060,7 +3181,7 @@ async fn mutate_policy_binding_index(
 async fn list_policy_binding_index(
     namespace: &ObjectNamespace,
 ) -> Result<PolicyBindingIndexListResponse> {
-    let body = policy_binding_index_request(namespace, "/list", &()).await?;
+    let body = access_control_request(namespace, "/list", &()).await?;
     serde_json::from_str::<PolicyBindingIndexListResponse>(&body).map_err(|error| {
         Error::RustError(format!(
             "policy binding index list response is invalid JSON: {error}"
@@ -3068,12 +3189,102 @@ async fn list_policy_binding_index(
     })
 }
 
-async fn policy_binding_index_request<T: Serialize + ?Sized>(
+async fn resolve_access_control_users(
+    namespace: &ObjectNamespace,
+    emails: Vec<String>,
+) -> Result<AccessControlUsersResolveResponse> {
+    let body = access_control_request(
+        namespace,
+        "/users/resolve",
+        &AccessControlUsersResolveRequest { emails },
+    )
+    .await?;
+    serde_json::from_str::<AccessControlUsersResolveResponse>(&body).map_err(|error| {
+        Error::RustError(format!(
+            "access user authority response is invalid JSON: {error}"
+        ))
+    })
+}
+
+async fn initialize_access_control_users(
+    namespace: &ObjectNamespace,
+    users: &[AccessControlUser],
+) -> Result<()> {
+    access_control_request(namespace, "/users/initialize", users)
+        .await
+        .map(|_| ())
+}
+
+async fn initialize_all_access_control_users(
+    namespace: &ObjectNamespace,
+    users: &[AccessControlUser],
+) -> Result<()> {
+    access_control_request(namespace, "/users/initialize-all", users)
+        .await
+        .map(|_| ())
+}
+
+async fn put_access_control_user(
+    namespace: &ObjectNamespace,
+    user: &AccessControlUser,
+) -> Result<()> {
+    access_control_request(namespace, "/users/put", user)
+        .await
+        .map(|_| ())
+}
+
+async fn list_access_control_users(
+    namespace: &ObjectNamespace,
+) -> Result<AccessControlUsersListResponse> {
+    let body = access_control_request(namespace, "/users/list", &()).await?;
+    serde_json::from_str::<AccessControlUsersListResponse>(&body).map_err(|error| {
+        Error::RustError(format!(
+            "access user authority list response is invalid JSON: {error}"
+        ))
+    })
+}
+
+async fn resolve_access_control_connections(
+    namespace: &ObjectNamespace,
+    provider_ids: Vec<String>,
+) -> Result<AccessControlConnectionsResolveResponse> {
+    let body = access_control_request(
+        namespace,
+        "/connections/resolve",
+        &AccessControlConnectionsResolveRequest { provider_ids },
+    )
+    .await?;
+    serde_json::from_str::<AccessControlConnectionsResolveResponse>(&body).map_err(|error| {
+        Error::RustError(format!(
+            "provider connection authority response is invalid JSON: {error}"
+        ))
+    })
+}
+
+async fn initialize_access_control_connections(
+    namespace: &ObjectNamespace,
+    connections: &[ProviderConnectionRecord],
+) -> Result<()> {
+    access_control_request(namespace, "/connections/initialize", connections)
+        .await
+        .map(|_| ())
+}
+
+async fn put_access_control_connection(
+    namespace: &ObjectNamespace,
+    connection: &ProviderConnectionRecord,
+) -> Result<()> {
+    access_control_request(namespace, "/connections/put", connection)
+        .await
+        .map(|_| ())
+}
+
+async fn access_control_request<T: Serialize + ?Sized>(
     namespace: &ObjectNamespace,
     path: &str,
     body: &T,
 ) -> Result<String> {
-    let stub = namespace.get_by_name(policy_binding_index_object_name())?;
+    let stub = namespace.get_by_name(access_control_object_name())?;
     let body = serde_json::to_string(body)?;
     let mut init = RequestInit::new();
     init.with_method(Method::Post)
@@ -3173,7 +3384,7 @@ async fn session_policy_bindings(
     env: &Env,
     session: &AccessSession,
 ) -> Result<Vec<PolicyBindingRecord>> {
-    let namespace = policy_binding_index_namespace(env)?;
+    let namespace = access_control_namespace(env)?;
     let principals = session_binding_principals(session);
     let mut response = resolve_policy_binding_index(&namespace, principals.clone()).await?;
     if !response.missing_principals.is_empty() {
@@ -3566,7 +3777,24 @@ fn enum_label<T: Serialize>(value: &T) -> String {
         .unwrap_or_else(|| "unknown".to_string())
 }
 
-async fn list_admin_access_users(kv: &KvStore, env: &Env) -> Result<Vec<AdminAccessUserResponse>> {
+async fn list_admin_access_users(env: &Env, kv: &KvStore) -> Result<Vec<AdminAccessUserResponse>> {
+    let namespace = access_control_namespace(env)?;
+    let mut response = list_access_control_users(&namespace).await?;
+    if !response.initialized {
+        let legacy_users = list_access_users_from_kv(kv).await?;
+        initialize_all_access_control_users(&namespace, &legacy_users).await?;
+        response = list_access_control_users(&namespace).await?;
+    }
+    let mut users = response
+        .users
+        .into_iter()
+        .map(|user| access_user_response(&user.email, user.record, env))
+        .collect::<Result<Vec<_>>>()?;
+    users.sort_by(|a, b| a.email.cmp(&b.email));
+    Ok(users)
+}
+
+async fn list_access_users_from_kv(kv: &KvStore) -> Result<Vec<AccessControlUser>> {
     let mut users = Vec::new();
     let mut cursor = None;
     loop {
@@ -3591,7 +3819,10 @@ async fn list_admin_access_users(kv: &KvStore, env: &Env) -> Result<Vec<AdminAcc
             let user = serde_json::from_str::<AccessUserRecord>(&record).map_err(|error| {
                 Error::RustError(format!("access user is invalid JSON: {error}"))
             })?;
-            users.push(access_user_response(email, user, env)?);
+            users.push(AccessControlUser {
+                email: email.to_string(),
+                record: user,
+            });
         }
         if list.list_complete {
             break;
@@ -3601,7 +3832,6 @@ async fn list_admin_access_users(kv: &KvStore, env: &Env) -> Result<Vec<AdminAcc
         };
         cursor = Some(next_cursor);
     }
-    users.sort_by(|a, b| a.email.cmp(&b.email));
     Ok(users)
 }
 
@@ -3732,7 +3962,8 @@ fn normalize_policy_binding_records(
     *bindings = normalized.into_values().collect();
 }
 
-fn policy_binding_index_object_name() -> &'static str {
+fn access_control_object_name() -> &'static str {
+    // Keep the original object name so the expanded authority reuses existing binding state.
     "policy-bindings"
 }
 
@@ -4070,13 +4301,14 @@ async fn disabled_provider_connection_response(
     env: &Env,
     provider_id: &str,
 ) -> Result<Option<Response>> {
-    let Ok(kv) = env.kv("POLICY_KV") else {
-        return Ok(None);
-    };
-    if existing_provider_connection(&kv, provider_id)
-        .await?
-        .enabled
-    {
+    let kv = env.kv("POLICY_KV").map_err(|error| {
+        Error::RustError(format!(
+            "POLICY_KV binding is required for provider connection authorization: {error}"
+        ))
+    })?;
+    let connections =
+        authoritative_provider_connections(env, &kv, vec![provider_id.to_string()]).await?;
+    if provider_connection_enabled(&connections, provider_id) {
         return Ok(None);
     }
     json_error(
@@ -5557,6 +5789,82 @@ impl DurableObject for PolicyBindingIndexObject {
             mutate_policy_binding_index_in_object(&self.state, request)?;
             return Response::ok("updated");
         }
+        if req.method() == Method::Post && url.path() == "/users/resolve" {
+            let request =
+                serde_json::from_str::<AccessControlUsersResolveRequest>(&req.text().await?)
+                    .map_err(|error| {
+                        Error::RustError(format!(
+                            "access user resolve request is invalid JSON: {error}"
+                        ))
+                    })?;
+            let response = resolve_access_control_users_in_object(&self.state, request.emails)?;
+            return Response::from_json(&response);
+        }
+        if req.method() == Method::Post && url.path() == "/users/initialize" {
+            let users = serde_json::from_str::<Vec<AccessControlUser>>(&req.text().await?)
+                .map_err(|error| {
+                    Error::RustError(format!(
+                        "access user initialize request is invalid JSON: {error}"
+                    ))
+                })?;
+            initialize_access_control_users_in_object(&self.state, users)?;
+            return Response::ok("initialized");
+        }
+        if req.method() == Method::Post && url.path() == "/users/initialize-all" {
+            let users = serde_json::from_str::<Vec<AccessControlUser>>(&req.text().await?)
+                .map_err(|error| {
+                    Error::RustError(format!(
+                        "access user initialize-all request is invalid JSON: {error}"
+                    ))
+                })?;
+            initialize_all_access_control_users_in_object(&self.state, users)?;
+            return Response::ok("initialized");
+        }
+        if req.method() == Method::Post && url.path() == "/users/list" {
+            return Response::from_json(&list_access_control_users_in_object(&self.state)?);
+        }
+        if req.method() == Method::Post && url.path() == "/users/put" {
+            let user =
+                serde_json::from_str::<AccessControlUser>(&req.text().await?).map_err(|error| {
+                    Error::RustError(format!("access user put request is invalid JSON: {error}"))
+                })?;
+            put_access_control_user_in_object(&self.state, user)?;
+            return Response::ok("updated");
+        }
+        if req.method() == Method::Post && url.path() == "/connections/resolve" {
+            let request =
+                serde_json::from_str::<AccessControlConnectionsResolveRequest>(&req.text().await?)
+                    .map_err(|error| {
+                        Error::RustError(format!(
+                            "provider connection resolve request is invalid JSON: {error}"
+                        ))
+                    })?;
+            let response =
+                resolve_access_control_connections_in_object(&self.state, request.provider_ids)?;
+            return Response::from_json(&response);
+        }
+        if req.method() == Method::Post && url.path() == "/connections/initialize" {
+            let connections = serde_json::from_str::<Vec<ProviderConnectionRecord>>(
+                &req.text().await?,
+            )
+            .map_err(|error| {
+                Error::RustError(format!(
+                    "provider connection initialize request is invalid JSON: {error}"
+                ))
+            })?;
+            initialize_access_control_connections_in_object(&self.state, connections)?;
+            return Response::ok("initialized");
+        }
+        if req.method() == Method::Post && url.path() == "/connections/put" {
+            let connection = serde_json::from_str::<ProviderConnectionRecord>(&req.text().await?)
+                .map_err(|error| {
+                Error::RustError(format!(
+                    "provider connection put request is invalid JSON: {error}"
+                ))
+            })?;
+            put_access_control_connection_in_object(&self.state, connection)?;
+            return Response::ok("updated");
+        }
         json_error("route_not_found", "route not found", 404)
     }
 }
@@ -5671,7 +5979,7 @@ impl DurableObject for UsageLedgerObject {
     }
 }
 
-fn ensure_policy_binding_index_schema(sql: &SqlStorage) -> Result<()> {
+fn ensure_access_control_schema(sql: &SqlStorage) -> Result<()> {
     sql.exec(
         "CREATE TABLE IF NOT EXISTS policy_binding_principals (
             principal_key TEXT PRIMARY KEY
@@ -5690,6 +5998,20 @@ fn ensure_policy_binding_index_schema(sql: &SqlStorage) -> Result<()> {
     sql.exec(
         "CREATE TABLE IF NOT EXISTS policy_binding_meta (
             meta_key TEXT PRIMARY KEY
+        )",
+        None,
+    )?;
+    sql.exec(
+        "CREATE TABLE IF NOT EXISTS access_users (
+            email TEXT PRIMARY KEY,
+            user_json TEXT NOT NULL
+        )",
+        None,
+    )?;
+    sql.exec(
+        "CREATE TABLE IF NOT EXISTS provider_connections (
+            provider_id TEXT PRIMARY KEY,
+            connection_json TEXT NOT NULL
         )",
         None,
     )?;
@@ -5714,7 +6036,7 @@ fn initialize_policy_binding_index_in_object(
     seeds: Vec<PolicyBindingIndexSeed>,
 ) -> Result<()> {
     let sql = state.storage().sql();
-    ensure_policy_binding_index_schema(&sql)?;
+    ensure_access_control_schema(&sql)?;
     for mut seed in seeds {
         let principal_key = policy_binding_principal_key(&seed.principal);
         if policy_binding_index_initialized(&sql, &principal_key)? {
@@ -5773,7 +6095,7 @@ fn initialize_all_policy_bindings_in_object(
     initialize_policy_binding_index_in_object(state, seeds.into_values().collect())?;
     let sql = state.storage().sql();
     sql.exec(
-        "INSERT OR IGNORE INTO policy_binding_meta (meta_key) VALUES ('global_initialized')",
+        "INSERT OR IGNORE INTO policy_binding_meta (meta_key) VALUES ('bindings_global_initialized')",
         None,
     )?;
     Ok(())
@@ -5798,12 +6120,16 @@ fn upsert_policy_binding_in_sql(
 }
 
 fn policy_binding_index_global_initialized(sql: &SqlStorage) -> Result<bool> {
+    access_control_meta_initialized(sql, "bindings_global_initialized")
+}
+
+fn access_control_meta_initialized(sql: &SqlStorage, meta_key: &str) -> Result<bool> {
     Ok(sql
-        .exec(
+        .exec_raw(
             "SELECT COUNT(*) AS principal_count
                 FROM policy_binding_meta
-                WHERE meta_key = 'global_initialized'",
-            None,
+                WHERE meta_key = ?",
+            raw_bindings(vec![JsValue::from_str(meta_key)]),
         )?
         .to_array::<PolicyBindingIndexCountRow>()?
         .first()
@@ -5812,7 +6138,7 @@ fn policy_binding_index_global_initialized(sql: &SqlStorage) -> Result<bool> {
 
 fn list_policy_bindings_in_object(state: &State) -> Result<PolicyBindingIndexListResponse> {
     let sql = state.storage().sql();
-    ensure_policy_binding_index_schema(&sql)?;
+    ensure_access_control_schema(&sql)?;
     let mut bindings = sql
         .exec(
             "SELECT binding_json FROM policy_binding_entries
@@ -5839,7 +6165,7 @@ fn resolve_policy_binding_index_in_object(
     principals: Vec<PolicyBindingPrincipal>,
 ) -> Result<PolicyBindingIndexResolveResponse> {
     let sql = state.storage().sql();
-    ensure_policy_binding_index_schema(&sql)?;
+    ensure_access_control_schema(&sql)?;
     let mut bindings = Vec::new();
     let mut missing_principals = Vec::new();
     for principal in principals {
@@ -5869,6 +6195,230 @@ fn resolve_policy_binding_index_in_object(
     Ok(PolicyBindingIndexResolveResponse {
         bindings,
         missing_principals,
+    })
+}
+
+fn initialize_access_control_users_in_object(
+    state: &State,
+    users: Vec<AccessControlUser>,
+) -> Result<()> {
+    let sql = state.storage().sql();
+    ensure_access_control_schema(&sql)?;
+    for mut user in users {
+        normalize_access_control_user(&mut user)?;
+        if access_control_user_in_sql(&sql, &user.email)?.is_none() {
+            put_access_control_user_in_sql(&sql, &user)?;
+        }
+    }
+    Ok(())
+}
+
+fn initialize_all_access_control_users_in_object(
+    state: &State,
+    users: Vec<AccessControlUser>,
+) -> Result<()> {
+    initialize_access_control_users_in_object(state, users)?;
+    state.storage().sql().exec(
+        "INSERT OR IGNORE INTO policy_binding_meta (meta_key)
+            VALUES ('users_global_initialized')",
+        None,
+    )?;
+    Ok(())
+}
+
+fn put_access_control_user_in_object(state: &State, mut user: AccessControlUser) -> Result<()> {
+    let sql = state.storage().sql();
+    ensure_access_control_schema(&sql)?;
+    normalize_access_control_user(&mut user)?;
+    put_access_control_user_in_sql(&sql, &user)
+}
+
+fn put_access_control_user_in_sql(sql: &SqlStorage, user: &AccessControlUser) -> Result<()> {
+    sql.exec_raw(
+        "INSERT OR REPLACE INTO access_users (email, user_json) VALUES (?, ?)",
+        raw_bindings(vec![
+            JsValue::from_str(&user.email),
+            JsValue::from_str(&serde_json::to_string(&user.record)?),
+        ]),
+    )?;
+    Ok(())
+}
+
+fn normalize_access_control_user(user: &mut AccessControlUser) -> Result<()> {
+    user.email = normalize_access_email(&user.email).map_err(str::to_string)?;
+    user.record.role = AccessRole::User;
+    user.record.groups = normalize_access_groups(std::mem::take(&mut user.record.groups))
+        .map_err(Error::RustError)?;
+    Ok(())
+}
+
+fn access_control_user_in_sql(sql: &SqlStorage, email: &str) -> Result<Option<AccessControlUser>> {
+    let Some(row) = sql
+        .exec_raw(
+            "SELECT user_json FROM access_users WHERE email = ? LIMIT 1",
+            raw_bindings(vec![JsValue::from_str(email)]),
+        )?
+        .to_array::<AccessControlUserRow>()?
+        .into_iter()
+        .next()
+    else {
+        return Ok(None);
+    };
+    let record = serde_json::from_str::<AccessUserRecord>(&row.user_json).map_err(|error| {
+        Error::RustError(format!("stored access user is invalid JSON: {error}"))
+    })?;
+    Ok(Some(AccessControlUser {
+        email: email.to_string(),
+        record,
+    }))
+}
+
+fn resolve_access_control_users_in_object(
+    state: &State,
+    emails: Vec<String>,
+) -> Result<AccessControlUsersResolveResponse> {
+    let sql = state.storage().sql();
+    ensure_access_control_schema(&sql)?;
+    let mut users = Vec::new();
+    let mut missing_emails = Vec::new();
+    for email in emails {
+        let email = normalize_access_email(&email).map_err(str::to_string)?;
+        if let Some(user) = access_control_user_in_sql(&sql, &email)? {
+            users.push(user);
+        } else {
+            missing_emails.push(email);
+        }
+    }
+    Ok(AccessControlUsersResolveResponse {
+        users,
+        missing_emails,
+    })
+}
+
+fn list_access_control_users_in_object(state: &State) -> Result<AccessControlUsersListResponse> {
+    let sql = state.storage().sql();
+    ensure_access_control_schema(&sql)?;
+    let mut users = Vec::new();
+    for row in sql
+        .exec(
+            "SELECT email, user_json FROM access_users ORDER BY email",
+            None,
+        )?
+        .to_array::<AccessControlUserListRow>()?
+    {
+        let record = serde_json::from_str::<AccessUserRecord>(&row.user_json).map_err(|error| {
+            Error::RustError(format!("stored access user is invalid JSON: {error}"))
+        })?;
+        users.push(AccessControlUser {
+            email: row.email,
+            record,
+        });
+    }
+    Ok(AccessControlUsersListResponse {
+        initialized: access_control_meta_initialized(&sql, "users_global_initialized")?,
+        users,
+    })
+}
+
+fn initialize_access_control_connections_in_object(
+    state: &State,
+    connections: Vec<ProviderConnectionRecord>,
+) -> Result<()> {
+    let sql = state.storage().sql();
+    ensure_access_control_schema(&sql)?;
+    for mut connection in connections {
+        normalize_access_control_connection(&mut connection)?;
+        if access_control_connection_in_sql(&sql, &connection.provider_id)?.is_none() {
+            put_access_control_connection_in_sql(&sql, &connection)?;
+        }
+    }
+    Ok(())
+}
+
+fn put_access_control_connection_in_object(
+    state: &State,
+    mut connection: ProviderConnectionRecord,
+) -> Result<()> {
+    let sql = state.storage().sql();
+    ensure_access_control_schema(&sql)?;
+    normalize_access_control_connection(&mut connection)?;
+    put_access_control_connection_in_sql(&sql, &connection)
+}
+
+fn normalize_access_control_connection(connection: &mut ProviderConnectionRecord) -> Result<()> {
+    connection.provider_id = connection.provider_id.trim().to_string();
+    if connection.provider_id.is_empty() {
+        return Err(Error::RustError(
+            "provider connection id is required".to_string(),
+        ));
+    }
+    Ok(())
+}
+
+fn put_access_control_connection_in_sql(
+    sql: &SqlStorage,
+    connection: &ProviderConnectionRecord,
+) -> Result<()> {
+    sql.exec_raw(
+        "INSERT OR REPLACE INTO provider_connections (provider_id, connection_json)
+            VALUES (?, ?)",
+        raw_bindings(vec![
+            JsValue::from_str(&connection.provider_id),
+            JsValue::from_str(&serde_json::to_string(connection)?),
+        ]),
+    )?;
+    Ok(())
+}
+
+fn access_control_connection_in_sql(
+    sql: &SqlStorage,
+    provider_id: &str,
+) -> Result<Option<ProviderConnectionRecord>> {
+    let Some(row) = sql
+        .exec_raw(
+            "SELECT connection_json FROM provider_connections WHERE provider_id = ? LIMIT 1",
+            raw_bindings(vec![JsValue::from_str(provider_id)]),
+        )?
+        .to_array::<AccessControlConnectionRow>()?
+        .into_iter()
+        .next()
+    else {
+        return Ok(None);
+    };
+    let mut connection = serde_json::from_str::<ProviderConnectionRecord>(&row.connection_json)
+        .map_err(|error| {
+            Error::RustError(format!(
+                "stored provider connection is invalid JSON: {error}"
+            ))
+        })?;
+    connection.provider_id = provider_id.to_string();
+    Ok(Some(connection))
+}
+
+fn resolve_access_control_connections_in_object(
+    state: &State,
+    provider_ids: Vec<String>,
+) -> Result<AccessControlConnectionsResolveResponse> {
+    let sql = state.storage().sql();
+    ensure_access_control_schema(&sql)?;
+    let mut connections = Vec::new();
+    let mut missing_provider_ids = Vec::new();
+    for provider_id in provider_ids {
+        let provider_id = provider_id.trim().to_string();
+        if provider_id.is_empty() {
+            return Err(Error::RustError(
+                "provider connection id is required".to_string(),
+            ));
+        }
+        if let Some(connection) = access_control_connection_in_sql(&sql, &provider_id)? {
+            connections.push(connection);
+        } else {
+            missing_provider_ids.push(provider_id);
+        }
+    }
+    Ok(AccessControlConnectionsResolveResponse {
+        connections,
+        missing_provider_ids,
     })
 }
 
@@ -6264,34 +6814,55 @@ async fn settle_budget_after_response(
     auth: &AuthorizedKey,
     mut usage: BudgetUsage,
     status_code: u16,
-) -> Result<BudgetUsage> {
+) -> BudgetUsage {
     if usage.reserved_cost_micros == 0 {
-        return Ok(usage);
+        return usage;
     }
     let Some(reservation_id) = usage.reservation_id.as_deref() else {
-        return Ok(usage);
+        return usage;
     };
-    let namespace = env.durable_object("BUDGET_LEDGER").map_err(|error| {
-        Error::RustError(format!(
-            "failed to settle budget reservation {reservation_id}: BUDGET_LEDGER binding is unavailable: {error}"
-        ))
-    })?;
+    let namespace = match env.durable_object("BUDGET_LEDGER") {
+        Ok(namespace) => namespace,
+        Err(error) => {
+            console_error!(
+                "failed to settle budget reservation {}: BUDGET_LEDGER binding is unavailable: {}",
+                reservation_id,
+                error
+            );
+            return usage;
+        }
+    };
     let request = BudgetSettleRequest {
         reservation_id: reservation_id.to_string(),
         actual_cost_micros: actual_request_cost(status_code, usage.reserved_cost_micros),
     };
-    let response = settle_budget(namespace, &tenant_id(auth), &auth.policy_id, &request).await?;
-    if !response.settled {
-        return Err(Error::RustError(format!(
-            "budget reservation {reservation_id} was not available for settlement"
-        )));
+    let mut last_error = String::new();
+    for _ in 0..BUDGET_SETTLEMENT_ATTEMPTS {
+        match settle_budget(&namespace, &tenant_id(auth), &auth.policy_id, &request).await {
+            Ok(response) if response.settled => {
+                usage.actual_cost_micros = response.charged_micros;
+                return usage;
+            }
+            Ok(_) => {
+                last_error =
+                    format!("budget reservation {reservation_id} was not available for settlement");
+            }
+            Err(error) => {
+                last_error = error.to_string();
+            }
+        }
     }
-    usage.actual_cost_micros = response.charged_micros;
-    Ok(usage)
+    console_error!(
+        "failed to settle budget reservation {} after {} attempts; reservation remains charged: {}",
+        reservation_id,
+        BUDGET_SETTLEMENT_ATTEMPTS,
+        last_error
+    );
+    usage
 }
 
 async fn settle_budget(
-    namespace: ObjectNamespace,
+    namespace: &ObjectNamespace,
     tenant_id: &str,
     policy_id: &str,
     request: &BudgetSettleRequest,
@@ -8086,6 +8657,48 @@ mod tests {
         assert_eq!(record.tenant_id.as_deref(), Some("default"));
         assert_eq!(record.enabled, None);
         assert!(record.groups.is_empty());
+    }
+
+    #[test]
+    fn access_control_users_are_normalized_without_role_grants() {
+        let mut user = AccessControlUser {
+            email: " Ops@Example.COM ".to_string(),
+            record: AccessUserRecord {
+                role: AccessRole::Admin,
+                tenant_id: Some("default".to_string()),
+                enabled: Some(false),
+                groups: vec![" Docs ".to_string(), "docs".to_string()],
+            },
+        };
+
+        normalize_access_control_user(&mut user).unwrap();
+
+        assert_eq!(user.email, "ops@example.com");
+        assert_eq!(user.record.role, AccessRole::User);
+        assert_eq!(user.record.enabled, Some(false));
+        assert_eq!(user.record.groups, vec!["docs"]);
+    }
+
+    #[test]
+    fn provider_connection_ids_are_normalized_for_authority_writes() {
+        let mut connection = ProviderConnectionRecord {
+            provider_id: " openai ".to_string(),
+            enabled: false,
+            label: Some("Primary".to_string()),
+        };
+
+        normalize_access_control_connection(&mut connection).unwrap();
+
+        assert_eq!(connection.provider_id, "openai");
+        assert!(!connection.enabled);
+        assert!(
+            normalize_access_control_connection(&mut ProviderConnectionRecord {
+                provider_id: " ".to_string(),
+                enabled: true,
+                label: None,
+            })
+            .is_err()
+        );
     }
 
     #[test]
