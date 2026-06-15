@@ -1628,7 +1628,7 @@ label > span,
 .panelTitle span,
 .tenantSwitch span,
 .tenantSwitch small {
-  font-size: 9px;
+  font-size: 10px;
   font-weight: 500;
 }
 
@@ -1705,7 +1705,7 @@ h2 {
 
 .brandBlock > div > span {
   font-family: "DM Mono", ui-monospace, monospace;
-  font-size: 8px;
+  font-size: 10px;
   text-transform: uppercase;
 }
 
@@ -1725,7 +1725,7 @@ h2 {
 .navGroupLabel {
   color: var(--muted);
   padding: 0 7px 5px;
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 500;
   text-transform: uppercase;
 }
@@ -1803,7 +1803,7 @@ h2 {
 .tenantSwitch span,
 .tenantSwitch small {
   color: var(--muted);
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .workspace {
@@ -1836,7 +1836,7 @@ h2 {
 
 .pageTitle p {
   font-family: "DM Mono", ui-monospace, monospace;
-  font-size: 8px;
+  font-size: 10px;
   text-transform: uppercase;
 }
 
@@ -1892,13 +1892,13 @@ h2 {
   min-height: 18px;
   border-radius: 2px;
   padding: 2px 6px;
-  font-size: 8px;
+  font-size: 10px;
   letter-spacing: 0;
 }
 
 .statusBar em {
   border-radius: 2px;
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .entityLayout,
@@ -1972,7 +1972,7 @@ h2 {
   border-radius: 2px;
   background: transparent;
   font-family: "DM Mono", ui-monospace, monospace;
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .tableHead {
@@ -2025,7 +2025,7 @@ h2 {
   height: 19px;
   border-radius: 2px;
   font-family: "DM Mono", ui-monospace, monospace;
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 500;
 }
 
@@ -2074,7 +2074,7 @@ h2 {
 
 .facts dt {
   font-family: "DM Mono", ui-monospace, monospace;
-  font-size: 8px;
+  font-size: 10px;
   font-weight: 500;
 }
 
@@ -2162,7 +2162,7 @@ h2 {
 
 .runtimeStrip > span:not(.status) {
   font-family: "DM Mono", ui-monospace, monospace;
-  font-size: 8px;
+  font-size: 10px;
 }
 
 .promptComposer {
@@ -2245,7 +2245,7 @@ h2 {
 .requestDrawer summary span,
 .requestDrawer summary strong {
   font-family: "DM Mono", ui-monospace, monospace;
-  font-size: 8px;
+  font-size: 10px;
   text-transform: uppercase;
 }
 
@@ -2510,7 +2510,7 @@ label > span,
 .brandBlock > div > span,
 .navGroupLabel,
 .pageTitle p {
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .navTabs button {
@@ -2532,7 +2532,7 @@ label > span,
 .statusBar strong,
 .statusBar em,
 .status {
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .tableHead {
@@ -2555,7 +2555,7 @@ label > span,
 .grantChip,
 .grantMore,
 .emptyGrant {
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .inspectorHeader h2,
@@ -2568,7 +2568,7 @@ label > span,
 }
 
 .facts dt {
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .facts dd {
@@ -2713,7 +2713,7 @@ label > span,
 
 .grantEditor .serviceMatrix small {
   grid-column: 2;
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .grantEditor .serviceMatrix span {
@@ -2942,7 +2942,7 @@ label > span,
 
 .auditTime {
   font-family: "DM Mono", ui-monospace, monospace;
-  font-size: 9px;
+  font-size: 10px;
   color: var(--muted);
   white-space: nowrap;
 }
@@ -2969,7 +2969,7 @@ label > span,
   overflow: hidden;
   color: var(--muted);
   font-family: "DM Mono", ui-monospace, monospace;
-  font-size: 8px;
+  font-size: 10px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -3012,7 +3012,7 @@ label > span,
 .providerUsageList > div > span small,
 .providerUsageList > p {
   color: var(--muted);
-  font-size: 9px;
+  font-size: 10px;
 }
 
 @media (max-width: 980px) {
@@ -3073,7 +3073,7 @@ label > span,
   background: #f1f3ed;
   padding: 1px 4px;
   font-family: "DM Mono", ui-monospace, monospace;
-  font-size: 8px;
+  font-size: 10px;
   text-align: center;
 }
 
