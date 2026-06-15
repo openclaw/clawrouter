@@ -200,26 +200,50 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
 }
 
 #[event(queue)]
-async fn queue(batch: MessageBatch<UsageEvent>, env: Env, _ctx: Context) -> Result<()> {
-    let namespace = match env.durable_object("USAGE_LEDGER") {
-        Ok(namespace) => namespace,
-        Err(error) => {
-            batch.retry_all();
-            return Err(Error::RustError(format!(
-                "USAGE_LEDGER Durable Object binding is required for usage events: {error}"
-            )));
-        }
-    };
+async fn queue(batch: MessageBatch<QueueMessage>, env: Env, _ctx: Context) -> Result<()> {
+    let usage_namespace = env.durable_object("USAGE_LEDGER");
+    let budget_namespace = env.durable_object("BUDGET_LEDGER");
     for message in batch.messages()? {
-        match persist_usage_event(&namespace, message.body()).await {
-            Ok(()) => message.ack(),
-            Err(error) => {
-                console_error!(
-                    "failed to persist usage event {}: {}",
-                    message.body().id,
-                    error
-                );
-                message.retry();
+        match message.body() {
+            QueueMessage::Usage(event) => {
+                let result = match usage_namespace.as_ref() {
+                    Ok(namespace) => persist_usage_event(namespace, event).await,
+                    Err(error) => Err(Error::RustError(format!(
+                        "USAGE_LEDGER Durable Object binding is required for usage events: {error}"
+                    ))),
+                };
+                match result {
+                    Ok(()) => message.ack(),
+                    Err(error) => {
+                        console_error!("failed to persist usage event {}: {}", event.id, error);
+                        message.retry();
+                    }
+                }
+            }
+            QueueMessage::Job(QueueJob::BudgetSettlement {
+                tenant_id,
+                policy_id,
+                request,
+            }) => {
+                let result = match budget_namespace.as_ref() {
+                    Ok(namespace) => {
+                        persist_budget_settlement(namespace, tenant_id, policy_id, request).await
+                    }
+                    Err(error) => Err(Error::RustError(format!(
+                        "BUDGET_LEDGER Durable Object binding is required for budget settlement retries: {error}"
+                    ))),
+                };
+                match result {
+                    Ok(()) => message.ack(),
+                    Err(error) => {
+                        console_error!(
+                            "failed to replay budget settlement {}: {}",
+                            request.reservation_id,
+                            error
+                        );
+                        message.retry();
+                    }
+                }
             }
         }
     }
@@ -5730,6 +5754,23 @@ struct BudgetSettleResponse {
     spent_micros: u64,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(untagged)]
+enum QueueMessage {
+    Usage(Box<UsageEvent>),
+    Job(QueueJob),
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+enum QueueJob {
+    BudgetSettlement {
+        tenant_id: String,
+        policy_id: String,
+        request: BudgetSettleRequest,
+    },
+}
+
 #[durable_object]
 pub struct PolicyBindingIndexObject {
     state: State,
@@ -6836,6 +6877,7 @@ async fn settle_budget_after_response(
         reservation_id: reservation_id.to_string(),
         actual_cost_micros: actual_request_cost(status_code, usage.reserved_cost_micros),
     };
+    usage.actual_cost_micros = request.actual_cost_micros;
     let mut last_error = String::new();
     for _ in 0..BUDGET_SETTLEMENT_ATTEMPTS {
         match settle_budget(&namespace, &tenant_id(auth), &auth.policy_id, &request).await {
@@ -6858,7 +6900,52 @@ async fn settle_budget_after_response(
         BUDGET_SETTLEMENT_ATTEMPTS,
         last_error
     );
+    if let Err(error) = enqueue_budget_settlement_retry(
+        env,
+        QueueJob::BudgetSettlement {
+            tenant_id: tenant_id(auth),
+            policy_id: auth.policy_id.clone(),
+            request,
+        },
+    )
+    .await
+    {
+        console_error!(
+            "failed to enqueue budget settlement retry for {}: {}",
+            reservation_id,
+            error
+        );
+    }
     usage
+}
+
+async fn enqueue_budget_settlement_retry(env: &Env, job: QueueJob) -> Result<()> {
+    let queue = env.queue("USAGE_QUEUE").map_err(|error| {
+        Error::RustError(format!(
+            "USAGE_QUEUE binding is required for budget settlement retries: {error}"
+        ))
+    })?;
+    queue.send(job).await.map_err(|error| {
+        Error::RustError(format!(
+            "failed to persist budget settlement retry: {error}"
+        ))
+    })
+}
+
+async fn persist_budget_settlement(
+    namespace: &ObjectNamespace,
+    tenant_id: &str,
+    policy_id: &str,
+    request: &BudgetSettleRequest,
+) -> Result<()> {
+    let response = settle_budget(namespace, tenant_id, policy_id, request).await?;
+    if response.settled {
+        return Ok(());
+    }
+    Err(Error::RustError(format!(
+        "budget reservation {} was not available for settlement",
+        request.reservation_id
+    )))
 }
 
 async fn settle_budget(
@@ -8751,6 +8838,39 @@ mod tests {
         assert_eq!(actual_request_cost(299, 42), 42);
         assert_eq!(actual_request_cost(400, 42), 0);
         assert_eq!(actual_request_cost(502, 42), 0);
+    }
+
+    #[test]
+    fn queue_messages_accept_legacy_usage_and_tagged_settlement_jobs() {
+        let usage = UsageEvent::new_success(
+            "usage_1",
+            "default",
+            "credential_1",
+            "request_1",
+            "openai",
+            "llm.chat",
+        );
+        let legacy = serde_json::to_value(&usage).unwrap();
+        assert!(matches!(
+            serde_json::from_value::<QueueMessage>(legacy).unwrap(),
+            QueueMessage::Usage(event) if event.id == "usage_1"
+        ));
+
+        let job = QueueJob::BudgetSettlement {
+            tenant_id: "default".to_string(),
+            policy_id: "policy_1".to_string(),
+            request: BudgetSettleRequest {
+                reservation_id: "budget_1".to_string(),
+                actual_cost_micros: 0,
+            },
+        };
+        let encoded = serde_json::to_value(&job).unwrap();
+        assert_eq!(encoded["kind"], "budget_settlement");
+        assert!(matches!(
+            serde_json::from_value::<QueueMessage>(encoded).unwrap(),
+            QueueMessage::Job(QueueJob::BudgetSettlement { request, .. })
+                if request.reservation_id == "budget_1"
+        ));
     }
 
     #[test]
