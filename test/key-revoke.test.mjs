@@ -23,8 +23,8 @@ test("key revocation leaves the referenced policy enabled", () => {
       '    process.stdout.write(JSON.stringify({ enabled: true, secretSha256: "a".repeat(64), policyId: "shared_policy" }));',
       '    process.exit(0);',
       '  }',
-      '  process.stderr.write("not found");',
-      '  process.exit(1);',
+      '  process.stdout.write("Value not found");',
+      '  process.exit(0);',
       '}',
     ].join("\n"),
   );

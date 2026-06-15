@@ -102,11 +102,19 @@ function readRecord(key, { allowMissing = false } = {}) {
     }
     throw new Error(message || `failed to read ${key}`);
   }
-  if (!result.stdout.trim()) {
+  const output = result.stdout.trim();
+  if (allowMissing && isMissingRecordOutput(output)) {
+    return null;
+  }
+  if (!output) {
     if (allowMissing) return null;
     throw new Error(`empty response while reading ${key}`);
   }
-  return JSON.parse(result.stdout);
+  return JSON.parse(output);
+}
+
+function isMissingRecordOutput(value) {
+  return /^(?:value\s+)?not found$/i.test(value.trim());
 }
 
 function legacyCredential(legacy) {
