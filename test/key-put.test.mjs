@@ -22,7 +22,15 @@ test("key provisioning activates the canonical credential last", () => {
   try {
     const result = spawnSync(
       process.execPath,
-      [resolve("scripts/key-put.mjs"), "--kid", "smoke", "--secret-stdin", "--local"],
+      [
+        resolve("scripts/key-put.mjs"),
+        "--kid",
+        "smoke",
+        "--secret-stdin",
+        "--providers",
+        "openai",
+        "--local",
+      ],
       {
         cwd: resolve("."),
         encoding: "utf8",
@@ -49,4 +57,19 @@ test("key provisioning activates the canonical credential last", () => {
   } finally {
     rmSync(dir, { force: true, recursive: true });
   }
+});
+
+test("key provisioning requires explicit wildcard intent", () => {
+  const result = spawnSync(
+    process.execPath,
+    [resolve("scripts/key-put.mjs"), "--kid", "smoke", "--secret-stdin", "--local"],
+    {
+      cwd: resolve("."),
+      encoding: "utf8",
+      input: "test-secret\n",
+    },
+  );
+
+  assert.notEqual(result.status, 0);
+  assert.match(result.stderr, /--providers or --all-providers is required/);
 });
