@@ -1709,7 +1709,24 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
         if let Err(message) = validate_policy_providers(&policy) {
             return json_error("invalid_admin_policy", &message, 400);
         }
-        put_kv_record(&kv, &format!("keys/{kid}"), &legacy, "legacy key policy").await?;
+        let mut tombstone_legacy = legacy.clone();
+        tombstone_legacy.enabled = false;
+        let mut tombstone_credential = credential.clone();
+        tombstone_credential.enabled = false;
+        put_kv_record(
+            &kv,
+            &format!("keys/{kid}"),
+            &tombstone_legacy,
+            "legacy key tombstone",
+        )
+        .await?;
+        put_kv_record(
+            &kv,
+            &format!("credentials/{kid}"),
+            &tombstone_credential,
+            "proxy credential tombstone",
+        )
+        .await?;
         put_kv_record(&kv, &format!("policies/{kid}"), &policy, "access policy").await?;
         put_kv_record(
             &kv,
@@ -1718,6 +1735,7 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             "proxy credential",
         )
         .await?;
+        put_kv_record(&kv, &format!("keys/{kid}"), &legacy, "legacy key policy").await?;
         return Response::from_json(&admin_policy_response(&kid, &policy));
     }
 
@@ -1737,7 +1755,10 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
         };
         policy.enabled = false;
         credential.enabled = false;
-        put_kv_record(&kv, &format!("policies/{kid}"), &policy, "access policy").await?;
+        if let Some(mut legacy) = existing_legacy_key_policy(&kv, &kid).await? {
+            legacy.enabled = false;
+            put_kv_record(&kv, &format!("keys/{kid}"), &legacy, "legacy key policy").await?;
+        }
         put_kv_record(
             &kv,
             &format!("credentials/{kid}"),
@@ -1745,10 +1766,7 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             "proxy credential",
         )
         .await?;
-        if let Some(mut legacy) = existing_legacy_key_policy(&kv, &kid).await? {
-            legacy.enabled = false;
-            put_kv_record(&kv, &format!("keys/{kid}"), &legacy, "legacy key policy").await?;
-        }
+        put_kv_record(&kv, &format!("policies/{kid}"), &policy, "access policy").await?;
         return Response::from_json(&admin_policy_response(&kid, &policy));
     }
 
