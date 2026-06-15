@@ -8,11 +8,12 @@ Current implementation target:
 
 - Rust/Wasm data plane on Cloudflare Workers
 - Durable Object budget ledgers
+- serialized Durable Object policy-binding authority
 - TypeScript admin/control UI
 - declarative service provider manifests
 - OpenClaw-native `clawrouter-` key routing
-- Cloudflare KV-backed access policies, issued credentials, principal bindings,
-  provider connections, and revocation
+- Cloudflare KV-backed access policies, issued credentials, binding migration
+  records, provider connections, and revocation
 
 ## Provider Registry
 

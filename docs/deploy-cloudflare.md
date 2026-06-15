@@ -1,15 +1,19 @@
 # Deploy ClawRouter on Cloudflare
 
 ClawRouter’s edge runtime is a Rust/Wasm Worker. Runtime policy lives in
-Cloudflare KV so access can be revoked without a redeploy.
+Cloudflare KV and serialized Durable Object state so access can be revoked
+without a redeploy.
 
 ## Required Bindings
 
-- `POLICY_KV`: access policies, issued credential hashes, principal bindings,
-  provider connections, OAuth grants, and provider health records.
+- `POLICY_KV`: access policies, issued credential hashes, compatibility
+  principal-binding records, provider connections, OAuth grants, and provider
+  health records.
 - `USAGE_QUEUE`: metered usage events, with this Worker configured as producer
   and consumer.
 - `BUDGET_LEDGER`: SQLite-backed Durable Object budget ledger.
+- `BINDING_INDEX`: SQLite-backed Durable Object authority for serialized user
+  and group policy-binding mutations and session entitlement lookup.
 - `USAGE_LEDGER`: SQLite-backed Durable Object request audit and reporting
   ledger. It retains bounded metadata for 30 days and never stores prompt or
   completion bodies.
@@ -341,7 +345,8 @@ materializes a same-id policy and credential and accepts the same shape as
 Access user records are not role-grant records. Cloudflare Access creates the
 identity, `access/users/<email>` stores tenant/status/groups, policy bindings
 grant service access, and ClawRouter admin rights come from the Access admin
-email/domain allowlist configured on the Worker.
+email/domain allowlist configured on the Worker. `BINDING_INDEX` serializes
+binding mutations and resolves session grants without scanning global KV state.
 
 ## Keys and Revocation
 

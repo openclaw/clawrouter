@@ -24,6 +24,10 @@ class_name = "BudgetLedgerObject"
 name = "USAGE_LEDGER"
 class_name = "UsageLedgerObject"
 
+[[durable_objects.bindings]]
+name = "BINDING_INDEX"
+class_name = "PolicyBindingIndexObject"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["BudgetLedgerObject"]
@@ -31,6 +35,10 @@ new_sqlite_classes = ["BudgetLedgerObject"]
 [[migrations]]
 tag = "v2"
 new_sqlite_classes = ["UsageLedgerObject"]
+
+[[migrations]]
+tag = "v3"
+new_sqlite_classes = ["PolicyBindingIndexObject"]
 
 [[routes]]
 pattern = "clawrouter.openclaw.ai"
