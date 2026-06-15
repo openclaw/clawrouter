@@ -19,9 +19,9 @@ credential.enabled = false;
 policy.enabled = false;
 if (legacy) legacy.enabled = false;
 const records = [
-  ...(legacy ? [[`keys/${kid}`, writeJson(legacy, "legacy-key.json")]] : []),
   [`credentials/${kid}`, writeJson(credential, "credential.json")],
   [`policies/${kid}`, writeJson(policy, "policy.json")],
+  ...(legacy ? [[`keys/${kid}`, writeJson(legacy, "legacy-key.json")]] : []),
 ];
 
 try {

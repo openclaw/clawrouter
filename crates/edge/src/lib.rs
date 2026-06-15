@@ -1509,7 +1509,7 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 return json_error("unknown_policy", "access policy is not registered", 404);
             };
             policy.enabled = false;
-            let rollback_credentials = disable_legacy_records_for_policy(&kv, &policy_id).await?;
+            let rollback_credentials = proxy_credentials_for_policy(&kv, &policy_id).await?;
             put_kv_record(
                 &kv,
                 &format!("policies/{policy_id}"),
@@ -1564,6 +1564,15 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             let Some(policy) = existing_access_policy(&kv, &credential.policy_id).await? else {
                 return json_error("unknown_policy", "credential policy is not registered", 404);
             };
+            let mut tombstone = credential.clone();
+            tombstone.enabled = false;
+            put_kv_record(
+                &kv,
+                &format!("credentials/{credential_id}"),
+                &tombstone,
+                "proxy credential tombstone",
+            )
+            .await?;
             disable_legacy_key_record(&kv, &credential_id).await?;
             put_kv_record(
                 &kv,
@@ -1591,7 +1600,6 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 );
             };
             credential.enabled = false;
-            disable_legacy_key_record(&kv, &credential_id).await?;
             put_kv_record(
                 &kv,
                 &format!("credentials/{credential_id}"),
@@ -1741,16 +1749,16 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
         tombstone_credential.enabled = false;
         put_kv_record(
             &kv,
-            &format!("keys/{kid}"),
-            &tombstone_legacy,
-            "legacy key tombstone",
+            &format!("credentials/{kid}"),
+            &tombstone_credential,
+            "proxy credential tombstone",
         )
         .await?;
         put_kv_record(
             &kv,
-            &format!("credentials/{kid}"),
-            &tombstone_credential,
-            "proxy credential tombstone",
+            &format!("keys/{kid}"),
+            &tombstone_legacy,
+            "legacy key tombstone",
         )
         .await?;
         put_kv_record(&kv, &format!("policies/{kid}"), &policy, "access policy").await?;
@@ -1781,10 +1789,6 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
         };
         policy.enabled = false;
         credential.enabled = false;
-        if let Some(mut legacy) = existing_legacy_key_policy(&kv, &kid).await? {
-            legacy.enabled = false;
-            put_kv_record(&kv, &format!("keys/{kid}"), &legacy, "legacy key policy").await?;
-        }
         put_kv_record(
             &kv,
             &format!("credentials/{kid}"),
@@ -1793,6 +1797,10 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
         )
         .await?;
         put_kv_record(&kv, &format!("policies/{kid}"), &policy, "access policy").await?;
+        if let Some(mut legacy) = existing_legacy_key_policy(&kv, &kid).await? {
+            legacy.enabled = false;
+            put_kv_record(&kv, &format!("keys/{kid}"), &legacy, "legacy key policy").await?;
+        }
         return Response::from_json(&admin_policy_response(&kid, &policy));
     }
 
@@ -2773,15 +2781,22 @@ async fn disable_legacy_records_for_policy(
     kv: &KvStore,
     policy_id: &str,
 ) -> Result<Vec<(String, ProxyCredential)>> {
-    let credentials = list_proxy_credentials(kv)
-        .await?
-        .into_iter()
-        .filter(|(_, credential)| credential.policy_id == policy_id)
-        .collect::<Vec<_>>();
+    let credentials = proxy_credentials_for_policy(kv, policy_id).await?;
     for (credential_id, _) in &credentials {
         disable_legacy_key_record(kv, credential_id).await?;
     }
     Ok(credentials)
+}
+
+async fn proxy_credentials_for_policy(
+    kv: &KvStore,
+    policy_id: &str,
+) -> Result<Vec<(String, ProxyCredential)>> {
+    Ok(list_proxy_credentials(kv)
+        .await?
+        .into_iter()
+        .filter(|(_, credential)| credential.policy_id == policy_id)
+        .collect())
 }
 
 async fn sync_legacy_rollback_record(
