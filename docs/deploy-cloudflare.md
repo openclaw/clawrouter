@@ -273,9 +273,14 @@ assign explicit user or group policy bindings in the console or API:
 ```text
 GET /v1/admin/access-users
 PUT /v1/admin/access-users/<email>
+PUT /v1/admin/access-user-grants/<email>
 GET /v1/admin/policy-bindings
 PUT /v1/admin/policy-bindings
 ```
+
+`PUT /v1/admin/access-users/<email>` patches identity fields and preserves
+omitted fields. `PUT /v1/admin/access-user-grants/<email>` atomically updates
+the identity and replaces its complete direct-policy set.
 
 The authoritative record is stored in `ACCESS_CONTROL` and mirrored to
 `POLICY_KV` at `access/users/<email>` for compatibility:
@@ -331,6 +336,7 @@ GET /v1/admin/policy-bindings
 GET /v1/admin/provider-status
 GET /v1/admin/provider-health
 PUT /v1/admin/access-users/<email>
+PUT /v1/admin/access-user-grants/<email>
 PUT /v1/admin/policy-bindings
 PUT /v1/admin/policies/<policy-id>
 PUT /v1/admin/credentials/<credential-id>

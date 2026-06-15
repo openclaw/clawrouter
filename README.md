@@ -110,6 +110,7 @@ The Worker currently exposes:
 - `GET /v1/admin/provider-status`
 - `GET /v1/admin/provider-health`
 - `PUT /v1/admin/access-users/<email>`
+- `PUT /v1/admin/access-user-grants/<email>`
 - `PUT /v1/admin/policy-bindings`
 - `PUT /v1/admin/policies/<policy-id>`
 - `PUT /v1/admin/credentials/<credential-id>`
