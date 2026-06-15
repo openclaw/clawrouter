@@ -5943,16 +5943,14 @@ fn ensure_budget_schema(sql: &SqlStorage) -> Result<()> {
         )",
         None,
     )?;
-    let mut converted_reservation_accounting = false;
-    if sql
+    let has_created_at_ms = sql
         .exec(
             "SELECT created_at_ms FROM budget_reservations LIMIT 0",
             None,
         )
-        .is_err()
-    {
+        .is_ok();
+    if legacy_budget_schema_requires_accounting_conversion(has_created_at_ms) {
         convert_legacy_reservation_accounting(sql)?;
-        converted_reservation_accounting = true;
         sql.exec(
             "ALTER TABLE budget_reservations
                 ADD COLUMN created_at_ms INTEGER NOT NULL DEFAULT 0",
@@ -5970,9 +5968,6 @@ fn ensure_budget_schema(sql: &SqlStorage) -> Result<()> {
         .exec("SELECT settled FROM budget_reservations LIMIT 0", None)
         .is_err()
     {
-        if !converted_reservation_accounting {
-            convert_legacy_reservation_accounting(sql)?;
-        }
         sql.exec(
             "ALTER TABLE budget_reservations
                 ADD COLUMN settled INTEGER NOT NULL DEFAULT 0",
@@ -5990,6 +5985,10 @@ fn ensure_budget_schema(sql: &SqlStorage) -> Result<()> {
         None,
     )?;
     Ok(())
+}
+
+fn legacy_budget_schema_requires_accounting_conversion(has_created_at_ms: bool) -> bool {
+    !has_created_at_ms
 }
 
 fn convert_legacy_reservation_accounting(sql: &SqlStorage) -> Result<()> {
@@ -7460,6 +7459,12 @@ mod tests {
             budget_charge_retention_cutoff_ms(BUDGET_CHARGE_RETENTION_MS + 42),
             42
         );
+    }
+
+    #[test]
+    fn budget_accounting_conversion_only_applies_before_created_at() {
+        assert!(legacy_budget_schema_requires_accounting_conversion(false));
+        assert!(!legacy_budget_schema_requires_accounting_conversion(true));
     }
 
     #[test]
