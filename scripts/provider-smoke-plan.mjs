@@ -234,10 +234,6 @@ function smokeMethod(endpoint) {
 function preferredEndpointId(providerId) {
   return {
     cohere: "chat",
-    github: "rest",
-    linear: "graphql",
-    notion: "rest",
-    slack: "method",
     tavily: "search",
   }[providerId];
 }
@@ -398,16 +394,10 @@ function pushUnique(values, value) {
 
 function samplePathParam(provider, endpoint, param, env) {
   if (param === "path") {
-    if (provider.id === "github") {
-      return "rate_limit";
-    }
-    if (provider.id === "notion") {
-      return "users";
-    }
     return "status";
   }
   if (param === "method") {
-    return provider.id === "slack" ? "auth.test" : "status";
+    return "status";
   }
   if (param === "model") {
     return (

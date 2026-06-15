@@ -364,13 +364,13 @@ monthly budget.
 
 ## OAuth Grants
 
-OAuth-backed providers such as GitHub, Linear, Notion, and Slack read access
-tokens from `POLICY_KV`. Register a grant for one proxy key:
+OAuth-backed providers read access tokens from `POLICY_KV`. Register a grant
+for one proxy key:
 
 ```sh
-printf '%s' "$GITHUB_TOKEN" | pnpm cf:oauth:put -- \
+printf '%s' "$PROVIDER_ACCESS_TOKEN" | pnpm cf:oauth:put -- \
   --kid svc_docs \
-  --token-ref oauth.github.access_token \
+  --token-ref oauth.provider.access_token \
   --access-token-stdin
 ```
 
@@ -379,8 +379,8 @@ Tenant-wide grants are also supported:
 ```sh
 pnpm cf:oauth:put -- \
   --tenant default \
-  --token-ref oauth.slack.bot_token \
-  --access-token-env SLACK_BOT_TOKEN
+  --token-ref oauth.provider.access_token \
+  --access-token-env PROVIDER_ACCESS_TOKEN
 ```
 
 This stores a grant at `oauth/<kid>/<tokenRef>` or
@@ -390,7 +390,7 @@ This stores a grant at `oauth/<kid>/<tokenRef>` or
 Revoke a grant without deleting audit history:
 
 ```sh
-pnpm cf:oauth:revoke -- --kid svc_docs --token-ref oauth.github.access_token
+pnpm cf:oauth:revoke -- --kid svc_docs --token-ref oauth.provider.access_token
 ```
 
 Revocation overwrites the grant with a disabled tombstone and removes the stored

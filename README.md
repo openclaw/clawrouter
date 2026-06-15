@@ -32,7 +32,7 @@ Built-in starter coverage:
   MiniMax, Mistral, Cohere, xAI, Groq, Perplexity, DeepSeek, Together, Fireworks,
   Hugging Face, Replicate
 - gateway APIs: OpenRouter, Cloudflare AI Gateway
-- tool/API platforms: Tavily, GitHub, Slack, Linear, Notion
+- tool/API platforms: Tavily
 
 Validate the catalog with:
 

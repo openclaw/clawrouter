@@ -1895,19 +1895,15 @@ function demoData() {
     provider("cohere", "Cohere", "rest_json", "model_provider", ["llm.chat", "llm.embeddings"]),
     provider("deepseek", "DeepSeek", "openai_compatible", "model_provider", ["llm.chat"]),
     provider("fireworks", "Fireworks AI", "openai_compatible", "model_provider", ["llm.chat"]),
-    provider("github", "GitHub", "oauth_rest_json", "oauth_platform", ["tool.invoke"]),
     provider("google-gemini", "Google Gemini", "rest_json", "model_provider", ["llm.generate", "llm.stream"]),
     provider("groq", "Groq", "openai_compatible", "model_provider", ["llm.chat"]),
     provider("huggingface", "Hugging Face", "rest_json", "model_provider", ["llm.invoke"]),
-    provider("linear", "Linear", "oauth_rest_json", "oauth_platform", ["tool.invoke"]),
     provider("minimax", "MiniMax", "openai_compatible", "model_provider", ["llm.chat"]),
     provider("mistral", "Mistral AI", "openai_compatible", "model_provider", ["llm.chat", "llm.embeddings"]),
-    provider("notion", "Notion", "oauth_rest_json", "oauth_platform", ["tool.invoke"]),
     provider("openai", "OpenAI", "openai_compatible", "model_provider", ["llm.responses", "llm.chat", "llm.embeddings"]),
     provider("openrouter", "OpenRouter", "openai_compatible", "gateway_platform", ["llm.chat"]),
     provider("perplexity", "Perplexity", "openai_compatible", "model_provider", ["llm.chat"]),
     provider("replicate", "Replicate", "rest_json", "tool_provider", ["media.predict", "media.prediction.read"]),
-    provider("slack", "Slack", "oauth_rest_json", "oauth_platform", ["tool.invoke"]),
     provider("tavily", "Tavily", "rest_json", "tool_provider", ["web.search", "web.extract", "web.crawl"]),
     provider("together", "Together AI", "openai_compatible", "model_provider", ["llm.chat"]),
     provider("xai", "xAI", "openai_compatible", "model_provider", ["llm.chat"]),
@@ -1933,12 +1929,8 @@ function demoData() {
       modelRoute("xai", ["/v1/chat/completions"], [modelEntry("xai/default", ["llm.chat"], ["/v1/chat/completions"])]),
     ],
     manifestProxy: [
-      manifestRoute("github", "rest", "/v1/proxy/github/rest", ["GET", "POST", "PATCH", "PUT", "DELETE"], ["path"]),
-      manifestRoute("linear", "graphql", "/v1/proxy/linear/graphql", ["POST"]),
-      manifestRoute("notion", "rest", "/v1/proxy/notion/rest", ["GET", "POST", "PATCH"], ["path"]),
       manifestRoute("replicate", "predictions", "/v1/proxy/replicate/predictions", ["POST"]),
       manifestRoute("replicate", "prediction", "/v1/proxy/replicate/prediction", ["GET"], ["prediction_id"]),
-      manifestRoute("slack", "method", "/v1/proxy/slack/method", ["GET", "POST"], ["method"]),
       manifestRoute("tavily", "search", "/v1/proxy/tavily/search", ["POST"]),
       manifestRoute("tavily", "extract", "/v1/proxy/tavily/extract", ["POST"]),
       manifestRoute("tavily", "crawl", "/v1/proxy/tavily/crawl", ["POST"]),
@@ -1946,8 +1938,8 @@ function demoData() {
   };
   const keys: KeyPolicy[] = [
     { kid: "maintainer_models", enabled: true, providers: ["anthropic", "aws-bedrock", "azure-openai", "cloudflare-ai-gateway", "cohere", "deepseek", "fireworks", "google-gemini", "groq", "huggingface", "minimax", "mistral", "openai", "openrouter", "perplexity", "together", "xai"], tenantId: "openclaw", tokenRole: "maintainer", monthlyBudgetMicros: 250000000, requestCostMicros: 1000 },
-    { kid: "openclaw_tools", enabled: true, providers: ["github", "linear", "replicate", "tavily"], tenantId: "openclaw", tokenRole: "tooling", monthlyBudgetMicros: 75000000, requestCostMicros: 500 },
-    { kid: "user_research", enabled: true, providers: ["openai", "google-gemini", "github", "tavily"], tenantId: "research", tokenRole: "user", monthlyBudgetMicros: 50000000, requestCostMicros: 1000 },
+    { kid: "openclaw_tools", enabled: true, providers: ["replicate", "tavily"], tenantId: "openclaw", tokenRole: "tooling", monthlyBudgetMicros: 75000000, requestCostMicros: 500 },
+    { kid: "user_research", enabled: true, providers: ["openai", "google-gemini", "tavily"], tenantId: "research", tokenRole: "user", monthlyBudgetMicros: 50000000, requestCostMicros: 1000 },
     { kid: "sandbox_eval", enabled: false, providers: ["openai"], tenantId: "sandbox", tokenRole: "sandbox", monthlyBudgetMicros: 5000000, requestCostMicros: 500 },
   ];
   const users: AccessUser[] = [
@@ -1984,7 +1976,7 @@ function demoReadiness(provider: ProviderRow, routes: RouteCatalog): ProviderRea
   const manifestRoutes = routes.manifestProxy.filter((route) => route.provider === provider.id);
   const grantRequired = provider.class.includes("oauth");
   const declared = Boolean(openaiRoute || manifestRoutes.length);
-  const offline = ["azure-openai", "aws-bedrock", "cloudflare-ai-gateway", "notion", "slack"].includes(provider.id);
+  const offline = ["azure-openai", "aws-bedrock", "cloudflare-ai-gateway"].includes(provider.id);
   const status = offline ? "missing_config" : grantRequired ? "grant_required" : declared ? "ready" : "declared";
   return {
     id: provider.id,

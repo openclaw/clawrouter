@@ -6,8 +6,6 @@ import { join } from "node:path";
 const output = new URL("../crates/edge/src/provider-icons.json", import.meta.url);
 
 const lobePackage = "@lobehub/icons-static-svg@latest";
-const simplePackage = "simple-icons@latest";
-const fontAwesomePackage = "@fortawesome/free-brands-svg-icons@latest";
 
 const providers = {
   anthropic: { package: "lobe", file: "icons/anthropic.svg", label: "Anthropic" },
@@ -21,19 +19,15 @@ const providers = {
   cohere: { package: "lobe", file: "icons/cohere.svg", label: "Cohere" },
   deepseek: { package: "lobe", file: "icons/deepseek.svg", label: "DeepSeek" },
   fireworks: { package: "lobe", file: "icons/fireworks.svg", label: "Fireworks AI" },
-  github: { package: "lobe", file: "icons/github.svg", label: "GitHub" },
   "google-gemini": { package: "lobe", file: "icons/gemini.svg", label: "Google Gemini" },
   groq: { package: "lobe", file: "icons/groq.svg", label: "Groq" },
   huggingface: { package: "lobe", file: "icons/huggingface.svg", label: "Hugging Face" },
-  linear: { package: "simple", slug: "linear", label: "Linear" },
   minimax: { package: "lobe", file: "icons/minimax.svg", label: "MiniMax" },
   mistral: { package: "lobe", file: "icons/mistral.svg", label: "Mistral AI" },
-  notion: { package: "lobe", file: "icons/notion.svg", label: "Notion" },
   openai: { package: "lobe", file: "icons/openai.svg", label: "OpenAI" },
   openrouter: { package: "lobe", file: "icons/openrouter.svg", label: "OpenRouter" },
   perplexity: { package: "lobe", file: "icons/perplexity.svg", label: "Perplexity" },
   replicate: { package: "lobe", file: "icons/replicate.svg", label: "Replicate" },
-  slack: { package: "fontawesome", icon: "faSlack", label: "Slack" },
   tavily: { package: "lobe", file: "icons/tavily.svg", label: "Tavily" },
   together: { package: "lobe", file: "icons/together.svg", label: "Together AI" },
   xai: { package: "lobe", file: "icons/xai.svg", label: "xAI" },
@@ -44,12 +38,7 @@ const tmp = mkdtempSync(join(tmpdir(), "clawrouter-icons-"));
 try {
   const packages = {
     lobe: unpackPackage(lobePackage, tmp),
-    simple: unpackPackage(simplePackage, tmp),
-    fontawesome: unpackPackage(fontAwesomePackage, tmp),
   };
-  const simpleIcons = JSON.parse(
-    readFileSync(join(packages.simple.root, "data/simple-icons.json"), "utf8"),
-  );
 
   const icons = {};
   for (const [id, config] of Object.entries(providers)) {
@@ -58,34 +47,6 @@ try {
         label: config.label,
         source: `${packages.lobe.name}@${packages.lobe.version}/${config.file}`,
       });
-      continue;
-    }
-
-    if (config.package === "simple") {
-      const icon = simpleIcons.find((candidate) => candidate.slug === config.slug);
-      if (!icon) {
-        throw new Error(`missing Simple Icons slug ${config.slug}`);
-      }
-      icons[id] = {
-        label: config.label,
-        viewBox: "0 0 24 24",
-        body: `<path d="${icon.path}"></path>`,
-        source: `${packages.simple.name}@${packages.simple.version}/${config.slug}`,
-      };
-      continue;
-    }
-
-    if (config.package === "fontawesome") {
-      const moduleText = readFileSync(join(packages.fontawesome.root, `${config.icon}.js`), "utf8");
-      const width = Number(match(moduleText, /var width = (\d+);/));
-      const height = Number(match(moduleText, /var height = (\d+);/));
-      const path = match(moduleText, /var svgPathData = '([^']+)';/);
-      icons[id] = {
-        label: config.label,
-        viewBox: `0 0 ${width} ${height}`,
-        body: `<path d="${path}"></path>`,
-        source: `${packages.fontawesome.name}@${packages.fontawesome.version}/${config.icon}`,
-      };
       continue;
     }
 
