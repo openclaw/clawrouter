@@ -5830,7 +5830,7 @@ async fn enqueue_usage(env: &Env, record: UsageRecord<'_>) {
         .as_deref()
         .unwrap_or(&record.auth.policy_id);
     let mut event = UsageEvent::new_success(
-        usage_event_id(record.request_id),
+        usage_event_id(),
         tenant_id(record.auth),
         key_id,
         record.request_id,
@@ -5857,9 +5857,15 @@ async fn enqueue_usage(env: &Env, record: UsageRecord<'_>) {
     }
 }
 
-fn usage_event_id(request_id: &str) -> String {
+fn usage_event_id() -> String {
     let seq = next_usage_event_sequence();
-    format!("usage_{}_{}_{}", Date::now().as_millis(), seq, request_id)
+    let nonce_a = (js_sys::Math::random() * MAX_SQL_BUDGET_MICROS as f64) as u64;
+    let nonce_b = (js_sys::Math::random() * MAX_SQL_BUDGET_MICROS as f64) as u64;
+    usage_event_id_from_parts(Date::now().as_millis(), seq, nonce_a, nonce_b)
+}
+
+fn usage_event_id_from_parts(now_ms: u64, seq: u64, nonce_a: u64, nonce_b: u64) -> String {
+    format!("usage_{now_ms}_{seq}_{nonce_a:x}{nonce_b:x}")
 }
 
 fn next_usage_event_sequence() -> u64 {
@@ -7275,10 +7281,11 @@ mod tests {
     }
 
     #[test]
-    fn usage_event_ids_include_a_sequence_component() {
-        let first = next_usage_event_sequence();
-        let second = next_usage_event_sequence();
+    fn usage_event_ids_are_internal_and_unique() {
+        let first = usage_event_id_from_parts(42, 1, 2, 3);
+        let second = usage_event_id_from_parts(42, 2, 2, 3);
         assert_ne!(first, second);
+        assert_eq!(first, "usage_42_1_23");
     }
 
     #[test]
