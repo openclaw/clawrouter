@@ -39,6 +39,7 @@ import {
   policyUsageFallback,
   readinessLabel,
   readinessMap,
+  readinessTone,
   reconcileDirectUserBindings,
   routeKey,
   serviceOutcome,
@@ -887,7 +888,9 @@ function App() {
       setStatus("saved user");
     } catch (error) {
       const message = errorMessage(error);
-      await refresh();
+      setUserError(message);
+      setStatus(message);
+      await refresh().catch(() => undefined);
       setUserError(message);
       setStatus(message);
     }
@@ -1883,8 +1886,7 @@ function OutcomeStatus({ outcome }: { outcome: ServiceOutcome }) {
 
 function ReadinessStatus({ readiness }: { readiness?: ProviderReadiness }) {
   if (!readiness) return <span className="status neutral">unknown</span>;
-  const tone = readiness.verified ? "active" : !readiness.executable ? "revoked" : "neutral";
-  return <Status label={readinessLabel(readiness)} tone={tone} />;
+  return <Status label={readinessLabel(readiness)} tone={readinessTone(readiness)} />;
 }
 
 function viewTitle(view: View) {
