@@ -26,6 +26,9 @@ const PROVIDER_HEALTH_MAX_AGE_MS: f64 = 86_400_000.0;
 const USAGE_EVENT_LIMIT: usize = 100;
 const USAGE_EVENT_RETENTION_MS: u64 = 30 * 86_400_000;
 const USAGE_CLEANUP_INTERVAL_MS: i64 = 86_400_000;
+const USAGE_AUDIT_FIELD_MAX_BYTES: usize = 256;
+const USAGE_AUDIT_PRINCIPAL_MAX_BYTES: usize = 320;
+const USAGE_AUDIT_MODEL_MAX_BYTES: usize = 512;
 const CORS_ALLOW_ORIGIN: &str = "*";
 const CORS_ALLOW_METHODS: &str = "GET,POST,PUT,OPTIONS";
 const CORS_ALLOW_HEADERS: &str = "authorization,content-type,x-request-id";
@@ -5215,6 +5218,7 @@ fn ingest_usage_event(state: &State, mut event: UsageEvent) -> Result<()> {
     if event.policy_id.is_empty() {
         event.policy_id.clone_from(&event.key_id);
     }
+    normalize_usage_event_metadata(&mut event);
     let event_json = serde_json::to_string(&event)?;
     state.storage().sql().exec_raw(
         "INSERT OR IGNORE INTO usage_events (
@@ -6161,6 +6165,7 @@ async fn enqueue_usage(env: &Env, record: UsageRecord<'_>) {
     event.status_code = Some(record.status_code);
     event.duration_ms = Some(record.duration_ms);
     event.status = record.status;
+    normalize_usage_event_metadata(&mut event);
     if let Err(error) = queue.send(event).await {
         console_error!(
             "failed to enqueue usage event for request {}: {}",
@@ -6207,6 +6212,41 @@ fn usage_event_id_from_parts(now_ms: u64, seq: u64, nonce_a: u64, nonce_b: u64) 
     format!("usage_{now_ms}_{seq}_{nonce_a:x}{nonce_b:x}")
 }
 
+fn normalize_usage_event_metadata(event: &mut UsageEvent) {
+    event.id = truncate_audit_metadata(&event.id, USAGE_AUDIT_FIELD_MAX_BYTES);
+    event.event_type = truncate_audit_metadata(&event.event_type, USAGE_AUDIT_FIELD_MAX_BYTES);
+    event.tenant_id = truncate_audit_metadata(&event.tenant_id, USAGE_AUDIT_FIELD_MAX_BYTES);
+    event.policy_id = truncate_audit_metadata(&event.policy_id, USAGE_AUDIT_FIELD_MAX_BYTES);
+    event.credential_id = event
+        .credential_id
+        .as_deref()
+        .map(|value| truncate_audit_metadata(value, USAGE_AUDIT_FIELD_MAX_BYTES));
+    event.principal_id = event
+        .principal_id
+        .as_deref()
+        .map(|value| truncate_audit_metadata(value, USAGE_AUDIT_PRINCIPAL_MAX_BYTES));
+    event.auth_type = truncate_audit_metadata(&event.auth_type, USAGE_AUDIT_FIELD_MAX_BYTES);
+    event.key_id = truncate_audit_metadata(&event.key_id, USAGE_AUDIT_FIELD_MAX_BYTES);
+    event.request_id = truncate_audit_metadata(&event.request_id, USAGE_AUDIT_FIELD_MAX_BYTES);
+    event.provider = truncate_audit_metadata(&event.provider, USAGE_AUDIT_FIELD_MAX_BYTES);
+    event.capability = truncate_audit_metadata(&event.capability, USAGE_AUDIT_FIELD_MAX_BYTES);
+    event.model = event
+        .model
+        .as_deref()
+        .map(|value| truncate_audit_metadata(value, USAGE_AUDIT_MODEL_MAX_BYTES));
+}
+
+fn truncate_audit_metadata(value: &str, max_bytes: usize) -> String {
+    if value.len() <= max_bytes {
+        return value.to_string();
+    }
+    let mut end = max_bytes;
+    while !value.is_char_boundary(end) {
+        end -= 1;
+    }
+    value[..end].to_string()
+}
+
 fn next_usage_event_sequence() -> u64 {
     USAGE_EVENT_COUNTER.fetch_add(1, Ordering::Relaxed)
 }
@@ -6233,6 +6273,7 @@ fn request_id(headers: &Headers, fallback: &str) -> String {
         .ok()
         .flatten()
         .filter(|value| !value.trim().is_empty())
+        .map(|value| truncate_audit_metadata(&value, USAGE_AUDIT_FIELD_MAX_BYTES))
         .unwrap_or_else(|| format!("req_{}_{}", fallback, Date::now().as_millis()))
 }
 
@@ -7646,6 +7687,57 @@ mod tests {
         let second = usage_event_id_from_parts(42, 2, 2, 3);
         assert_ne!(first, second);
         assert_eq!(first, "usage_42_1_23");
+    }
+
+    #[test]
+    fn usage_audit_metadata_is_bounded_at_utf8_boundaries() {
+        let multibyte = "é".repeat(USAGE_AUDIT_MODEL_MAX_BYTES);
+        let mut event = UsageEvent::new_success(
+            "x".repeat(USAGE_AUDIT_FIELD_MAX_BYTES + 1),
+            "x".repeat(USAGE_AUDIT_FIELD_MAX_BYTES + 1),
+            "x".repeat(USAGE_AUDIT_FIELD_MAX_BYTES + 1),
+            multibyte.clone(),
+            "x".repeat(USAGE_AUDIT_FIELD_MAX_BYTES + 1),
+            "x".repeat(USAGE_AUDIT_FIELD_MAX_BYTES + 1),
+        );
+        event.policy_id = "x".repeat(USAGE_AUDIT_FIELD_MAX_BYTES + 1);
+        event.credential_id = Some("x".repeat(USAGE_AUDIT_FIELD_MAX_BYTES + 1));
+        event.principal_id = Some("x".repeat(USAGE_AUDIT_PRINCIPAL_MAX_BYTES + 1));
+        event.event_type = "x".repeat(USAGE_AUDIT_FIELD_MAX_BYTES + 1);
+        event.auth_type = "x".repeat(USAGE_AUDIT_FIELD_MAX_BYTES + 1);
+        event.model = Some(multibyte);
+
+        normalize_usage_event_metadata(&mut event);
+
+        assert_eq!(event.id.len(), USAGE_AUDIT_FIELD_MAX_BYTES);
+        assert_eq!(event.event_type.len(), USAGE_AUDIT_FIELD_MAX_BYTES);
+        assert_eq!(event.tenant_id.len(), USAGE_AUDIT_FIELD_MAX_BYTES);
+        assert_eq!(event.policy_id.len(), USAGE_AUDIT_FIELD_MAX_BYTES);
+        assert_eq!(
+            event.credential_id.as_deref().unwrap().len(),
+            USAGE_AUDIT_FIELD_MAX_BYTES
+        );
+        assert_eq!(
+            event.principal_id.as_deref().unwrap().len(),
+            USAGE_AUDIT_PRINCIPAL_MAX_BYTES
+        );
+        assert_eq!(event.auth_type.len(), USAGE_AUDIT_FIELD_MAX_BYTES);
+        assert_eq!(event.key_id.len(), USAGE_AUDIT_FIELD_MAX_BYTES);
+        assert_eq!(event.request_id.len(), USAGE_AUDIT_FIELD_MAX_BYTES);
+        assert_eq!(
+            event.request_id.chars().count(),
+            USAGE_AUDIT_FIELD_MAX_BYTES / 2
+        );
+        assert_eq!(event.provider.len(), USAGE_AUDIT_FIELD_MAX_BYTES);
+        assert_eq!(event.capability.len(), USAGE_AUDIT_FIELD_MAX_BYTES);
+        assert_eq!(
+            event.model.as_deref().unwrap().len(),
+            USAGE_AUDIT_MODEL_MAX_BYTES
+        );
+        assert_eq!(
+            event.model.as_deref().unwrap().chars().count(),
+            USAGE_AUDIT_MODEL_MAX_BYTES / 2
+        );
     }
 
     #[test]
