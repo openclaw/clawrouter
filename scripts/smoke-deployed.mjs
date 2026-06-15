@@ -1,5 +1,6 @@
 import {
   buildProviderSmokePlan,
+  inspectSmokeKeyProviderAccess,
   liveProviderList,
   runLiveProviderSmokes,
   summarizePlan,
@@ -29,19 +30,6 @@ if (plan.targetCount !== plan.providerCount) {
 }
 console.log(summarizePlan(plan));
 
-if (smokeKey) {
-  const inspect = await fetch(`${baseUrl}/v1/key/inspect`, {
-    headers: { authorization: `Bearer ${smokeKey}` },
-  });
-  if (!inspect.ok) {
-    throw new Error(`/v1/key/inspect failed with ${inspect.status}`);
-  }
-  const inspection = await inspect.json();
-  if (inspection?.verified !== true) {
-    throw new Error(`/v1/key/inspect rejected the smoke key: ${inspection?.verification ?? "unknown"}`);
-  }
-}
-
 const liveProviders = liveProviderList();
 if (liveProviders.length === 0) {
   throw new Error("CLAWROUTER_SMOKE_LIVE_PROVIDERS must name at least one golden provider");
@@ -49,6 +37,7 @@ if (liveProviders.length === 0) {
 if (!smokeKey) {
   throw new Error("CLAWROUTER_SMOKE_KEY is required for live provider smoke");
 }
+await inspectSmokeKeyProviderAccess({ baseUrl, smokeKey, liveProviders });
 const results = await runLiveProviderSmokes({
   baseUrl,
   smokeKey,

@@ -1,8 +1,10 @@
 import {
   buildProviderSmokePlan,
   compileProviderSnapshot,
+  inspectSmokeKeyProviderAccess,
   liveProviderList,
   selectLiveProviderPlans,
+  SmokeKeyInspectionUnavailableError,
 } from "./provider-smoke-plan.mjs";
 
 const requiredDeployEnv = [
@@ -55,6 +57,23 @@ if (liveProviders.length > 0) {
     selectedProviders = selectLiveProviderPlans(plan, liveProviders);
   } catch (error) {
     errors.push(error.message);
+  }
+}
+
+if (selectedProviders.length > 0 && baseUrl && process.env.CLAWROUTER_SMOKE_KEY) {
+  try {
+    await inspectSmokeKeyProviderAccess({
+      baseUrl,
+      smokeKey: process.env.CLAWROUTER_SMOKE_KEY,
+      liveProviders: selectedProviders.map((provider) => provider.id),
+    });
+    console.log("smoke key policy: permits selected live providers");
+  } catch (error) {
+    if (error instanceof SmokeKeyInspectionUnavailableError) {
+      console.warn(`smoke key policy preflight unavailable: ${error.message}`);
+    } else {
+      errors.push(`smoke key policy preflight failed: ${error.message}`);
+    }
   }
 }
 

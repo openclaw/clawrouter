@@ -1,7 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { runLiveProviderSmokes } from "../scripts/provider-smoke-plan.mjs";
+import {
+  inspectSmokeKeyProviderAccess,
+  runLiveProviderSmokes,
+  SmokeKeyInspectionUnavailableError,
+} from "../scripts/provider-smoke-plan.mjs";
 
 const plan = {
   providers: [
@@ -37,6 +41,75 @@ test("gateway failures do not overwrite provider health", async () => {
       );
       assert.deepEqual(recorded, []);
     },
+  );
+});
+
+test("smoke key inspection rejects selected providers outside policy scope", async () => {
+  await assert.rejects(
+    inspectSmokeKeyProviderAccess({
+      baseUrl: "https://clawrouter.example/",
+      smokeKey: "smoke-key",
+      liveProviders: ["openai"],
+      fetchImpl: async (url, init) => {
+        assert.equal(url, "https://clawrouter.example/v1/key/inspect");
+        assert.equal(init.headers.authorization, "Bearer smoke-key");
+        assert.equal(init.redirect, "manual");
+        return Response.json({
+          verified: true,
+          verification: "verified",
+          providers: ["openrouter"],
+        });
+      },
+    }),
+    /smoke key policy does not allow live providers: openai/,
+  );
+});
+
+test("smoke key inspection accepts explicit and wildcard provider scope", async () => {
+  for (const providers of [["openai"], []]) {
+    const inspection = await inspectSmokeKeyProviderAccess({
+      baseUrl: "https://clawrouter.example",
+      smokeKey: "smoke-key",
+      liveProviders: ["openai"],
+      fetchImpl: async () =>
+        Response.json({
+          verified: true,
+          verification: "verified",
+          providers,
+        }),
+    });
+    assert.deepEqual(inspection.providers, providers);
+  }
+});
+
+test("smoke key inspection reports revoked or stale credentials before provider smoke", async () => {
+  await assert.rejects(
+    inspectSmokeKeyProviderAccess({
+      baseUrl: "https://clawrouter.example",
+      smokeKey: "smoke-key",
+      liveProviders: ["openai"],
+      fetchImpl: async () =>
+        Response.json({
+          verified: false,
+          verification: "policy_generation_mismatch",
+          providers: null,
+        }),
+    }),
+    /rejected the smoke key: policy_generation_mismatch/,
+  );
+});
+
+test("smoke key inspection distinguishes unavailable current deployments", async () => {
+  await assert.rejects(
+    inspectSmokeKeyProviderAccess({
+      baseUrl: "https://clawrouter.example",
+      smokeKey: "smoke-key",
+      liveProviders: ["openai"],
+      fetchImpl: async () => {
+        throw new Error("offline");
+      },
+    }),
+    SmokeKeyInspectionUnavailableError,
   );
 });
 

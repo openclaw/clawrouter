@@ -7,6 +7,8 @@ const DEFAULT_OPTIONAL_CONFIG_KEYS = new Set([
   "AZURE_OPENAI_COMPLETION_TOKEN_DEPLOYMENTS",
 ]);
 
+export class SmokeKeyInspectionUnavailableError extends Error {}
+
 export function buildProviderSmokePlan(snapshot, env = process.env) {
   const providers = Array.isArray(snapshot?.providers) ? snapshot.providers : [];
   const optionalConfigKeys = new Set([
@@ -101,6 +103,53 @@ export function liveProviderList(env = process.env) {
     providers.push("openai");
   }
   return providers;
+}
+
+export async function inspectSmokeKeyProviderAccess({
+  baseUrl,
+  smokeKey,
+  liveProviders,
+  fetchImpl = fetch,
+}) {
+  let response;
+  try {
+    response = await fetchImpl(`${baseUrl.replace(/\/$/, "")}/v1/key/inspect`, {
+      headers: { authorization: `Bearer ${smokeKey}` },
+      redirect: "manual",
+    });
+  } catch (error) {
+    throw new SmokeKeyInspectionUnavailableError(
+      `could not reach /v1/key/inspect: ${error.message}`,
+    );
+  }
+  if (!response.ok) {
+    throw new SmokeKeyInspectionUnavailableError(`/v1/key/inspect failed with ${response.status}`);
+  }
+  let inspection;
+  try {
+    inspection = await response.json();
+  } catch (error) {
+    throw new SmokeKeyInspectionUnavailableError(
+      `/v1/key/inspect returned invalid JSON: ${error.message}`,
+    );
+  }
+  if (inspection?.verified !== true) {
+    throw new Error(
+      `/v1/key/inspect rejected the smoke key: ${inspection?.verification ?? "unknown"}`,
+    );
+  }
+  if (!Array.isArray(inspection.providers)) {
+    throw new SmokeKeyInspectionUnavailableError(
+      "/v1/key/inspect did not expose the smoke key provider scope",
+    );
+  }
+  const denied = liveProviders.filter(
+    (provider) => inspection.providers.length > 0 && !inspection.providers.includes(provider),
+  );
+  if (denied.length > 0) {
+    throw new Error(`smoke key policy does not allow live providers: ${denied.join(",")}`);
+  }
+  return inspection;
 }
 
 export function compileProviderSnapshot() {
