@@ -135,6 +135,7 @@ test("budget parsing and fallback summaries keep blocked and wildcard states exp
   const summaries = tenantSummaryFallback(policies, [
     { credentialId: "models_a", policyId: "models", enabled: true },
     { credentialId: "models_b", policyId: "models", enabled: false },
+    { credentialId: "models_stale", policyId: "models", enabled: true, active: false },
     { credentialId: "wildcard_a", policyId: "wildcard", enabled: true },
   ]);
   const ops = summaries.find((tenant) => tenant.tenantId === "ops");
@@ -146,7 +147,7 @@ test("budget parsing and fallback summaries keep blocked and wildcard states exp
   const openclaw = summaries.find((tenant) => tenant.tenantId === "openclaw");
   assert.equal(openclaw?.policies, 3);
   assert.equal(openclaw?.activePolicies, 2);
-  assert.equal(openclaw?.keys, 2);
+  assert.equal(openclaw?.keys, 3);
   assert.equal(openclaw?.activeKeys, 1);
 });
 

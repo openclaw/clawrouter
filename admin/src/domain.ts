@@ -29,6 +29,7 @@ export interface CredentialSummary {
   credentialId: string;
   policyId: string;
   enabled: boolean;
+  active?: boolean;
 }
 
 export interface ProviderReadiness {
@@ -404,7 +405,7 @@ export function tenantSummaryFallback(policies: AccessPolicy[], credentials: Cre
     const tenant = groups.get(policy.tenantId ?? "default");
     if (!tenant) continue;
     tenant.keys += 1;
-    if (credential.enabled && policy.enabled) tenant.activeKeys += 1;
+    if (credential.active ?? (credential.enabled && policy.enabled)) tenant.activeKeys += 1;
   }
   return Array.from(groups.values()).map((tenant) => ({
     ...tenant,

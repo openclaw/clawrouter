@@ -134,6 +134,9 @@ interface ProxyCredential {
   credentialId: string;
   policyId: string;
   enabled: boolean;
+  policyEnabled?: boolean;
+  generationMatches?: boolean;
+  active?: boolean;
 }
 
 interface ProviderConnection {
@@ -597,7 +600,7 @@ function App() {
         if (overviewResult.ok) {
           setAdminOverview(overviewResult.value);
         } else {
-          setAdminOverview(adminOverviewFromPolicies(policyData.policies, credentialData.credentials, providers, routes));
+          setAdminOverview(adminOverviewFromPolicies(policyData.policies, credentialData.credentials, providerData.providers, routeData));
           refreshWarnings = [...refreshWarnings, `overview unavailable: ${overviewResult.error}`];
         }
         if (tenantResult.ok) {
@@ -731,12 +734,12 @@ function App() {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ enabled: true, policyId, secretSha256: await sha256Hex(secret) }),
         });
+        await refresh();
       }
       setSelectedCredentialId(credentialId);
       setCredentialForm({ credentialId: "", policyId });
       setIssuedKey(`clawrouter-live-${credentialId}-${secret}`);
       setStatus("issued credential");
-      if (!demoMode) await refresh();
     } catch (error) {
       const message = errorMessage(error);
       setPolicyError(message);
@@ -1504,16 +1507,18 @@ function CredentialPanel({ policies, credentials, selected, form, setForm, issue
   busy: boolean;
 }) {
   const copyIssuedKey = () => void navigator.clipboard?.writeText(issuedKey);
+  const outcomes = new Map(credentials.map((credential) => [credential.credentialId, credentialOutcome(credential, policies)]));
+  const selectedOutcome = selected ? outcomes.get(selected.credentialId) : undefined;
   return (
     <div className="entityLayout">
       <section className="mainPane">
         <div className="overviewStrip">
-          <Metric label="active credentials" value={String(credentials.filter((credential) => credential.enabled).length)} meta={`${credentials.length} total`} />
+          <Metric label="active credentials" value={String(Array.from(outcomes.values()).filter((outcome) => outcome.active).length)} meta={`${credentials.length} total`} />
           <Metric label="bound policies" value={String(new Set(credentials.map((credential) => credential.policyId)).size)} meta={`${policies.length} available`} />
-          <Metric label="revoked" value={String(credentials.filter((credential) => !credential.enabled).length)} meta="individually disabled" />
+          <Metric label="inactive" value={String(Array.from(outcomes.values()).filter((outcome) => !outcome.active).length)} meta="revoked, stale, or policy-disabled" />
         </div>
         <div className="tableSectionHeader"><div><strong>Issued credentials</strong><span>Machine access bound to policies</span></div><span>secrets reveal once</span></div>
-        <EntityTable columns={["credential", "policy", "state"]} columnTemplate="minmax(220px, 1.3fr) minmax(180px, 1fr) 110px" rows={credentials.map((credential) => ({ id: credential.credentialId, active: selected?.credentialId === credential.credentialId, onClick: () => onEdit(credential), cells: [<EntityName icon={KeyRound} title={credential.credentialId} subtitle="proxy credential" />, credential.policyId, <Status label={credential.enabled ? "active" : "revoked"} tone={credential.enabled ? "active" : "revoked"} />] }))} />
+        <EntityTable columns={["credential", "policy", "state"]} columnTemplate="minmax(220px, 1.3fr) minmax(180px, 1fr) 110px" rows={credentials.map((credential) => { const outcome = outcomes.get(credential.credentialId)!; return { id: credential.credentialId, active: selected?.credentialId === credential.credentialId, onClick: () => onEdit(credential), cells: [<EntityName icon={KeyRound} title={credential.credentialId} subtitle="proxy credential" />, credential.policyId, <Status label={outcome.label} tone={outcome.tone} />] }; })} />
       </section>
       <aside className="inspector">
         <form onSubmit={onIssue}>
@@ -1526,7 +1531,7 @@ function CredentialPanel({ policies, credentials, selected, form, setForm, issue
           </div>
           <InlineNote>Credentials are optional. Maintainers using Cloudflare Access do not need a proxy key.</InlineNote>
           <div className="inspectorActions"><button type="submit" disabled={busy || !form.policyId}><Plus className="buttonIcon" aria-hidden="true" /><span>Issue credential</span></button></div>
-          {selected ? <><div className="sectionTitle">Selected credential</div><dl className="facts"><dt>id</dt><dd>{selected.credentialId}</dd><dt>policy</dt><dd>{selected.policyId}</dd><dt>state</dt><dd>{selected.enabled ? "active" : "revoked"}</dd></dl><div className="inspectorActions"><button type="button" className="buttonDanger" disabled={busy || !selected.enabled} onClick={() => onRevoke(selected.credentialId)}><CircleSlash2 className="buttonIcon" aria-hidden="true" /><span>Revoke credential</span></button></div></> : null}
+          {selected ? <><div className="sectionTitle">Selected credential</div><dl className="facts"><dt>id</dt><dd>{selected.credentialId}</dd><dt>policy</dt><dd>{selected.policyId}</dd><dt>state</dt><dd>{selectedOutcome?.label ?? "inactive"}</dd></dl><div className="inspectorActions"><button type="button" className="buttonDanger" disabled={busy || !selected.enabled} onClick={() => onRevoke(selected.credentialId)}><CircleSlash2 className="buttonIcon" aria-hidden="true" /><span>Revoke credential</span></button></div></> : null}
         </form>
       </aside>
     </div>
@@ -2052,6 +2057,16 @@ function usageEventTone(event: UsageAuditEvent): OutcomeTone {
   return "neutral";
 }
 
+function credentialOutcome(credential: ProxyCredential, policies: AccessPolicy[]): { label: string; tone: OutcomeTone; active: boolean } {
+  const policy = policies.find((item) => item.policyId === credential.policyId);
+  if (!credential.enabled) return { label: "revoked", tone: "revoked", active: false };
+  if (!policy) return { label: "policy missing", tone: "revoked", active: false };
+  if (credential.policyEnabled === false || !policy.enabled) return { label: "policy disabled", tone: "revoked", active: false };
+  if (credential.generationMatches === false) return { label: "stale", tone: "neutral", active: false };
+  if (credential.active === false) return { label: "inactive", tone: "neutral", active: false };
+  return { label: "active", tone: "active", active: true };
+}
+
 function usagePolicyId(row: AdminUsageRow) {
   return row.policyId ?? row.kid;
 }
@@ -2094,13 +2109,12 @@ function policyFormFromPolicy(key: AccessPolicy): PolicyForm {
 }
 
 function adminOverviewFromPolicies(keys: AccessPolicy[], credentials: ProxyCredential[], providers: ProviderRow[], routes: RouteCatalog): AdminOverview {
-  const policyById = new Map(keys.map((key) => [key.policyId, key]));
   const tenants = tenantSummaryFallback(keys, credentials);
   return {
     policiesTotal: keys.length,
     policiesActive: keys.filter((key) => key.enabled).length,
     keysTotal: credentials.length,
-    keysActive: credentials.filter((credential) => credential.enabled && policyById.get(credential.policyId)?.enabled).length,
+    keysActive: credentials.filter((credential) => credentialOutcome(credential, keys).active).length,
     tenantsTotal: tenants.length,
     providerCount: providers.length,
     openaiCompatibleProviders: routes.openaiCompatible.length,
