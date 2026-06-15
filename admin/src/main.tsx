@@ -1305,6 +1305,7 @@ function CatalogScreen({ services, allServices, selected, policies, connections,
               const outcome = serviceOutcome(selected);
               const playBlocker = playgroundBlockedForService(selected);
               const connection = connectionByProvider.get(selected.provider);
+              const connectionEnabled = connection?.enabled ?? selected.readiness?.connectionEnabled;
               return (
                 <>
             <InspectorHeader brandIcon={selected.brandIcon} icon={kindIcon(selected.kind)} title={selected.name} subtitle={`${kindLabel(selected.kind)} · ${selected.category}`} />
@@ -1318,7 +1319,7 @@ function CatalogScreen({ services, allServices, selected, policies, connections,
               <dt>routes</dt><dd>{selected.route}</dd>
               <dt>surfaces</dt><dd>{selected.surfaces.join(", ")}</dd>
               <dt>policies</dt><dd>{grantNamesForService(selected, selectedPolicies).join(", ") || "none"}</dd>
-              <dt>connection</dt><dd>{connection?.enabled === false ? "disabled" : "enabled"}</dd>
+              <dt>connection</dt><dd>{connectionEnabled === false ? "disabled" : connectionEnabled === true ? "enabled" : "unknown"}</dd>
               <dt>readiness</dt><dd>{readinessLabel(selected.readiness)}</dd>
               <dt>verified</dt><dd>{selected.readiness?.lastCheckedAt ? `${formatRelativeTime(selected.readiness.lastCheckedAt)} · ${formatDuration(selected.readiness.latencyMs)}` : "not checked"}</dd>
               <dt>missing</dt><dd>{selected.readiness?.missingConfig.length ? selected.readiness.missingConfig.join(", ") : "none"}</dd>
@@ -1331,7 +1332,7 @@ function CatalogScreen({ services, allServices, selected, policies, connections,
             </div>
             <div className="inspectorActions">
               <button type="button" disabled={Boolean(playBlocker)} onClick={() => onPlay(selected)} title={playBlocker ?? undefined}><Play className="buttonIcon" aria-hidden="true" /><span>Try in playground</span></button>
-              {canAdminister ? <button type="button" className={connection?.enabled === false ? "buttonSecondary" : "buttonDanger"} onClick={() => onSetConnection(selected.provider, connection?.enabled === false)}><ServerCog className="buttonIcon" aria-hidden="true" /><span>{connection?.enabled === false ? "Enable connection" : "Disable connection"}</span></button> : null}
+              {canAdminister ? <button type="button" className={connectionEnabled === false ? "buttonSecondary" : "buttonDanger"} onClick={() => onSetConnection(selected.provider, connectionEnabled === false)}><ServerCog className="buttonIcon" aria-hidden="true" /><span>{connectionEnabled === false ? "Enable connection" : "Disable connection"}</span></button> : null}
               {canAdminister ? <button type="button" className="buttonSecondary" onClick={() => onAdd(selected)}><Plus className="buttonIcon" aria-hidden="true" /><span>Add to selected policy</span></button> : null}
             </div>
                 </>
