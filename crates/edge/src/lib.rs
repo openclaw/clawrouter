@@ -2,6 +2,7 @@ use clawrouter_core::{
     parse_proxy_key, AuthScheme, CompiledEndpoint, CompiledProvider, PathParamStyle, ProviderClass,
     ProviderSnapshot, UsageEvent, UsageStatus,
 };
+use futures_util::future::try_join_all;
 use hmac::{Hmac, Mac};
 use js_sys::{Array, Function, Object, Promise, Reflect, Uint8Array};
 use serde::{Deserialize, Serialize};
@@ -1891,7 +1892,12 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             Err(message) => return json_error("invalid_connection", message, 400),
         };
         let namespace = access_control_namespace(&env)?;
-        put_access_control_connection(&namespace, &connection).await?;
+        put_access_control_connection(
+            &namespace,
+            &provider_connection_object_name(provider_id),
+            &connection,
+        )
+        .await?;
         sync_kv_record_best_effort(
             &kv,
             &format!("connections/{provider_id}"),
@@ -3015,20 +3021,56 @@ async fn authoritative_provider_connections(
     kv: &KvStore,
     provider_ids: Vec<String>,
 ) -> Result<Vec<ProviderConnectionRecord>> {
+    let futures = provider_ids
+        .into_iter()
+        .map(|provider_id| authoritative_provider_connection(env, kv, provider_id));
+    let mut connections = try_join_all(futures).await?;
+    connections.sort_by(|a, b| a.provider_id.cmp(&b.provider_id));
+    Ok(connections)
+}
+
+async fn authoritative_provider_connection(
+    env: &Env,
+    kv: &KvStore,
+    provider_id: String,
+) -> Result<ProviderConnectionRecord> {
     let namespace = access_control_namespace(env)?;
-    let mut response = resolve_access_control_connections(&namespace, provider_ids.clone()).await?;
-    if !response.missing_provider_ids.is_empty() {
-        let mut connections = Vec::with_capacity(response.missing_provider_ids.len());
-        for provider_id in response.missing_provider_ids {
-            connections.push(existing_provider_connection(kv, &provider_id).await?);
-        }
-        initialize_access_control_connections(&namespace, &connections).await?;
-        response = resolve_access_control_connections(&namespace, provider_ids).await?;
+    let object_name = provider_connection_object_name(&provider_id);
+    let mut response =
+        resolve_access_control_connections(&namespace, &object_name, vec![provider_id.clone()])
+            .await?;
+    if response.missing_provider_ids.is_empty() {
+        return response.connections.pop().ok_or_else(|| {
+            Error::RustError(format!(
+                "provider connection authority omitted `{provider_id}`"
+            ))
+        });
     }
-    response
-        .connections
-        .sort_by(|a, b| a.provider_id.cmp(&b.provider_id));
-    Ok(response.connections)
+
+    let mut legacy = resolve_access_control_connections(
+        &namespace,
+        access_control_object_name(),
+        vec![provider_id.clone()],
+    )
+    .await?;
+    let connection = match legacy.connections.pop() {
+        Some(connection) => connection,
+        None => existing_provider_connection(kv, &provider_id).await?,
+    };
+    initialize_access_control_connections(
+        &namespace,
+        &object_name,
+        std::slice::from_ref(&connection),
+    )
+    .await?;
+    let mut response =
+        resolve_access_control_connections(&namespace, &object_name, vec![provider_id.clone()])
+            .await?;
+    response.connections.pop().ok_or_else(|| {
+        Error::RustError(format!(
+            "provider connection authority did not initialize `{provider_id}`"
+        ))
+    })
 }
 
 async fn list_provider_health(kv: &KvStore) -> Result<BTreeMap<String, ProviderHealthRecord>> {
@@ -3387,10 +3429,12 @@ async fn list_access_control_users(
 
 async fn resolve_access_control_connections(
     namespace: &ObjectNamespace,
+    object_name: &str,
     provider_ids: Vec<String>,
 ) -> Result<AccessControlConnectionsResolveResponse> {
-    let body = access_control_request(
+    let body = access_control_request_for_object(
         namespace,
+        object_name,
         "/connections/resolve",
         &AccessControlConnectionsResolveRequest { provider_ids },
     )
@@ -3404,18 +3448,25 @@ async fn resolve_access_control_connections(
 
 async fn initialize_access_control_connections(
     namespace: &ObjectNamespace,
+    object_name: &str,
     connections: &[ProviderConnectionRecord],
 ) -> Result<()> {
-    access_control_request(namespace, "/connections/initialize", connections)
-        .await
-        .map(|_| ())
+    access_control_request_for_object(
+        namespace,
+        object_name,
+        "/connections/initialize",
+        connections,
+    )
+    .await
+    .map(|_| ())
 }
 
 async fn put_access_control_connection(
     namespace: &ObjectNamespace,
+    object_name: &str,
     connection: &ProviderConnectionRecord,
 ) -> Result<()> {
-    access_control_request(namespace, "/connections/put", connection)
+    access_control_request_for_object(namespace, object_name, "/connections/put", connection)
         .await
         .map(|_| ())
 }
@@ -3425,7 +3476,16 @@ async fn access_control_request<T: Serialize + ?Sized>(
     path: &str,
     body: &T,
 ) -> Result<String> {
-    let stub = namespace.get_by_name(access_control_object_name())?;
+    access_control_request_for_object(namespace, access_control_object_name(), path, body).await
+}
+
+async fn access_control_request_for_object<T: Serialize + ?Sized>(
+    namespace: &ObjectNamespace,
+    object_name: &str,
+    path: &str,
+    body: &T,
+) -> Result<String> {
+    let stub = namespace.get_by_name(object_name)?;
     let body = serde_json::to_string(body)?;
     let mut init = RequestInit::new();
     init.with_method(Method::Post)
@@ -3436,7 +3496,7 @@ async fn access_control_request<T: Serialize + ?Sized>(
     let text = response.text().await?;
     if !(200..=299).contains(&status) {
         return Err(Error::RustError(format!(
-            "policy binding index rejected {path} with HTTP {status}: {text}"
+            "access control authority rejected {path} with HTTP {status}: {text}"
         )));
     }
     Ok(text)
@@ -4108,6 +4168,10 @@ fn access_control_object_name() -> &'static str {
     "policy-bindings"
 }
 
+fn provider_connection_object_name(provider_id: &str) -> String {
+    format!("provider-connection:{}", encode_component(provider_id))
+}
+
 fn percent_decode_path_segment(value: &str) -> Option<String> {
     let bytes = value.as_bytes();
     let mut decoded = Vec::with_capacity(bytes.len());
@@ -4447,9 +4511,8 @@ async fn disabled_provider_connection_response(
             "POLICY_KV binding is required for provider connection authorization: {error}"
         ))
     })?;
-    let connections =
-        authoritative_provider_connections(env, &kv, vec![provider_id.to_string()]).await?;
-    if provider_connection_enabled(&connections, provider_id) {
+    let connection = authoritative_provider_connection(env, &kv, provider_id.to_string()).await?;
+    if connection.enabled {
         return Ok(None);
     }
     json_error(
@@ -9046,6 +9109,23 @@ mod tests {
                 label: None,
             })
             .is_err()
+        );
+    }
+
+    #[test]
+    fn provider_connection_authority_is_sharded_by_provider() {
+        assert_eq!(access_control_object_name(), "policy-bindings");
+        assert_eq!(
+            provider_connection_object_name("openai"),
+            "provider-connection:openai"
+        );
+        assert_eq!(
+            provider_connection_object_name("provider/path"),
+            "provider-connection:provider%2Fpath"
+        );
+        assert_ne!(
+            provider_connection_object_name("openai"),
+            provider_connection_object_name("anthropic")
         );
     }
 
