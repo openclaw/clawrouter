@@ -2,51 +2,62 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { adminRequest } from "./admin-api.mjs";
 
 const args = parseArgs(process.argv.slice(2));
 const kid = required(args.kid, "--kid");
 const binding = args.binding ?? "POLICY_KV";
 const config = args.config ?? ".wrangler.generated.toml";
 
-const legacy = readRecord(`keys/${kid}`, { allowMissing: true });
-const credential =
-  readRecord(`credentials/${kid}`, { allowMissing: true }) ?? legacyCredential(legacy);
-if (!credential) {
-  throw new Error(`proxy credential ${kid} was not found`);
-}
-credential.enabled = false;
-if (legacy) legacy.enabled = false;
-const records = [
-  [`credentials/${kid}`, writeJson(credential, "credential.json")],
-  ...(legacy ? [[`keys/${kid}`, writeJson(legacy, "legacy-key.json")]] : []),
-];
-
-try {
-  for (const [key, path] of records) {
-    run("pnpm", [
-      "exec",
-      "wrangler",
-      "kv",
-      "key",
-      "put",
-      key,
-      "--path",
-      path,
-      "--binding",
-      binding,
-      "--config",
-      config,
-      ...kvTargetArgs(args),
-    ]);
-  }
-} finally {
-  for (const [, path] of records) {
-    rmSync(path, { force: true });
-    rmSync(join(path, ".."), { force: true, recursive: true });
-  }
+if (!args.local) {
+  await adminRequest(`/v1/admin/keys/${encodeURIComponent(kid)}/revoke`, {
+    method: "POST",
+  });
+  console.log(`revoked authoritative proxy credential ${kid}`);
+} else {
+  revokeLocalBootstrapRecord();
+  console.log(`revoked local KV proxy credential ${kid}`);
 }
 
-console.log(`revoked proxy credential ${kid}`);
+function revokeLocalBootstrapRecord() {
+  const legacy = readRecord(`keys/${kid}`, { allowMissing: true });
+  const credential =
+    readRecord(`credentials/${kid}`, { allowMissing: true }) ?? legacyCredential(legacy);
+  if (!credential) {
+    throw new Error(`proxy credential ${kid} was not found`);
+  }
+  credential.enabled = false;
+  if (legacy) legacy.enabled = false;
+  const records = [
+    [`credentials/${kid}`, writeJson(credential, "credential.json")],
+    ...(legacy ? [[`keys/${kid}`, writeJson(legacy, "legacy-key.json")]] : []),
+  ];
+
+  try {
+    for (const [key, path] of records) {
+      run("pnpm", [
+        "exec",
+        "wrangler",
+        "kv",
+        "key",
+        "put",
+        key,
+        "--path",
+        path,
+        "--binding",
+        binding,
+        "--config",
+        config,
+        ...kvTargetArgs(args),
+      ]);
+    }
+  } finally {
+    for (const [, path] of records) {
+      rmSync(path, { force: true });
+      rmSync(join(path, ".."), { force: true, recursive: true });
+    }
+  }
+}
 
 function parseArgs(values) {
   const out = {};

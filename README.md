@@ -12,8 +12,8 @@ Current implementation target:
 - TypeScript admin/control UI
 - declarative service provider manifests
 - OpenClaw-native `clawrouter-` key routing
-- Cloudflare KV-backed access policies, issued credentials, binding migration
-  records, provider connections, and revocation
+- Cloudflare KV-backed migration and compatibility records, OAuth grants, and
+  provider health
 
 ## Provider Registry
 
@@ -125,8 +125,10 @@ shared policy.
 
 OpenAI-compatible proxy requests route by the request body `model` field, for
 example `openai/gpt-5.5-mini`. Before an upstream provider secret is used, the
-Worker verifies the issued credential at `credentials/<credential-id>` and then
-loads its access policy from `policies/<policy-id>`:
+Worker verifies the issued credential and its policy from serialized
+`ACCESS_CONTROL` Durable Object authority. `credentials/<credential-id>` and
+`policies/<policy-id>` in `POLICY_KV` seed migration and remain compatibility
+copies:
 
 ```json
 {"enabled":true,"secretSha256":"<sha256 of key secret>","policyId":"team_docs","policyGeneration":"policy_..."}
@@ -144,11 +146,11 @@ loads its access policy from `policies/<policy-id>`:
 }
 ```
 
-Policy and credential generations must match. During rotations, mixed KV
-generations fail closed instead of letting an old secret inherit a newly
-expanded policy. Canonical policy edits preserve their generation, so they do
-not depend on eventually-consistent credential listings. The legacy key
-mutation alias rejects changing policy scope and secret together.
+Policy and credential generations must match. Strongly consistent authority
+writes make revocation and scope reductions immediate; generation mismatches
+still fail closed during migration or incomplete rotations. Canonical policy
+edits preserve their generation. The legacy key mutation alias rejects changing
+policy scope and secret together.
 
 Disable a credential to revoke one issued key, disable a policy to revoke every
 user and credential bound to it, or disable a provider connection to stop that
