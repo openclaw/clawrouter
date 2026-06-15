@@ -30,6 +30,7 @@ const USAGE_CLEANUP_INTERVAL_MS: i64 = 86_400_000;
 const USAGE_AUDIT_FIELD_MAX_BYTES: usize = 256;
 const USAGE_AUDIT_PRINCIPAL_MAX_BYTES: usize = 320;
 const USAGE_AUDIT_MODEL_MAX_BYTES: usize = 512;
+const USAGE_TOKEN_RESPONSE_MAX_BYTES: u64 = 128 * 1024;
 const KV_BULK_GET_MAX_KEYS: usize = 100;
 const UPSTREAM_PROVIDER_HEADER: &str = "x-clawrouter-upstream-provider";
 const CORS_ALLOW_ORIGIN: &str = "*";
@@ -7603,6 +7604,10 @@ async fn response_usage_tokens(response: &mut Response, capability: &str) -> Usa
     if !is_json {
         return UsageTokens::default();
     }
+    let content_length = response.headers().get("content-length").ok().flatten();
+    if !usage_token_response_size_allowed(content_length.as_deref()) {
+        return UsageTokens::default();
+    }
     let Ok(mut cloned) = response.cloned() else {
         return UsageTokens::default();
     };
@@ -7610,6 +7615,12 @@ async fn response_usage_tokens(response: &mut Response, capability: &str) -> Usa
         return UsageTokens::default();
     };
     usage_tokens_from_response(&value)
+}
+
+fn usage_token_response_size_allowed(content_length: Option<&str>) -> bool {
+    content_length
+        .and_then(|value| value.trim().parse::<u64>().ok())
+        .is_some_and(|bytes| bytes <= USAGE_TOKEN_RESPONSE_MAX_BYTES)
 }
 
 fn usage_tokens_from_response(value: &Value) -> UsageTokens {
@@ -9174,6 +9185,18 @@ mod tests {
                 total: Some(13),
             }
         );
+    }
+
+    #[test]
+    fn usage_token_extraction_requires_an_explicit_bounded_response_size() {
+        assert!(!usage_token_response_size_allowed(None));
+        assert!(!usage_token_response_size_allowed(Some("invalid")));
+        assert!(usage_token_response_size_allowed(Some(
+            &USAGE_TOKEN_RESPONSE_MAX_BYTES.to_string()
+        )));
+        assert!(!usage_token_response_size_allowed(Some(
+            &(USAGE_TOKEN_RESPONSE_MAX_BYTES + 1).to_string()
+        )));
     }
 
     #[test]
