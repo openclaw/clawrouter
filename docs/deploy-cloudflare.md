@@ -294,18 +294,31 @@ token is never configured in the Worker.
 
 ```text
 GET /v1/admin/keys
+GET /v1/admin/policies
+GET /v1/admin/credentials
+GET /v1/admin/connections
 GET /v1/admin/access-users
 GET /v1/admin/policy-bindings
 GET /v1/admin/provider-status
 PUT /v1/admin/access-users/<email>
 PUT /v1/admin/policy-bindings
+PUT /v1/admin/policies/<policy-id>
+PUT /v1/admin/credentials/<credential-id>
+PUT /v1/admin/connections/<provider-id>
 PUT /v1/admin/keys/<kid>
+POST /v1/admin/policies/<policy-id>/revoke
+POST /v1/admin/credentials/<credential-id>/revoke
 POST /v1/admin/keys/<kid>/revoke
 ```
 
-`PUT /v1/admin/keys/<kid>` accepts the same policy shape as `pnpm cf:key:put`,
-but with `secretSha256` instead of a raw key secret. The TypeScript admin UI
-hashes generated key secrets in the browser before calling the API.
+Policies, credentials, and provider connections are separate control-plane
+records. A policy defines service scope and budgets, a credential contains only
+the proxy secret hash plus its `policyId`, and a provider connection can stop a
+provider globally. `PUT /v1/admin/keys/<kid>` remains a compatibility API that
+materializes a same-id policy and credential. It accepts the same shape as
+`pnpm cf:key:put`, but with `secretSha256` instead of a raw key secret. The
+TypeScript admin UI hashes generated key secrets in the browser before calling
+the API.
 Admin-created key ids must use alphanumeric or underscore characters because the
 issued live key format is `clawrouter-live-<kid>-<secret>`. Admin policies must
 select at least one provider; use the CLI path for deliberate all-provider keys.
@@ -326,7 +339,7 @@ Proxy keys use this shape:
 clawrouter-live-<kid>-<secret>
 ```
 
-Register a key policy:
+Register a same-id policy and proxy credential:
 
 ```sh
 printf '%s' "$CLAWROUTER_PROXY_SECRET" | pnpm cf:key:put -- \
@@ -337,8 +350,9 @@ printf '%s' "$CLAWROUTER_PROXY_SECRET" | pnpm cf:key:put -- \
   --request-cost-micros 1000
 ```
 
-This stores only `secretSha256`, enabled state, and provider allowlist in
-`POLICY_KV` at `keys/<kid>`.
+This stores the provider allowlist and budget at `policies/<kid>`, the proxy
+secret hash at `credentials/<kid>`, and a `keys/<kid>` compatibility record for
+rollback safety.
 
 Revoke access:
 
@@ -346,8 +360,10 @@ Revoke access:
 pnpm cf:key:revoke -- --kid svc_docs
 ```
 
-The edge runtime checks `POLICY_KV` on proxy requests. Setting `enabled: false`
-revokes access without rotating upstream provider credentials.
+The edge runtime checks `POLICY_KV` on proxy requests. Disabling a credential
+revokes one issued key. Disabling a policy revokes every credential, Access
+user, and Access group bound to it. Neither operation rotates upstream provider
+credentials.
 
 Inspect a key without making an upstream provider call:
 
@@ -386,7 +402,7 @@ monthly budget.
 ## OAuth Grants
 
 OAuth-backed providers read access tokens from `POLICY_KV`. Register a grant
-for one proxy key:
+for one access policy:
 
 ```sh
 printf '%s' "$PROVIDER_ACCESS_TOKEN" | pnpm cf:oauth:put -- \
@@ -404,7 +420,7 @@ pnpm cf:oauth:put -- \
   --access-token-env PROVIDER_ACCESS_TOKEN
 ```
 
-This stores a grant at `oauth/<kid>/<tokenRef>` or
+This stores a grant at `oauth/<policy-id>/<tokenRef>` or
 `oauth/tenants/<tenant>/<tokenRef>`. Active grant records contain `enabled`,
 `accessToken`, and `tokenType`; the token is never printed by the helper.
 

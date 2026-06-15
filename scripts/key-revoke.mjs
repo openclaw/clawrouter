@@ -8,46 +8,47 @@ const kid = required(args.kid, "--kid");
 const binding = args.binding ?? "POLICY_KV";
 const config = args.config ?? ".wrangler.generated.toml";
 
-const existing = run("pnpm", [
-  "exec",
-  "wrangler",
-  "kv",
-  "key",
-  "get",
-  `keys/${kid}`,
-  "--binding",
-  binding,
-  "--config",
-  config,
-  ...kvTargetArgs(args),
-]);
-const policy = JSON.parse(existing.stdout);
+const credential = readRecord(`credentials/${kid}`) ?? legacyCredential(readRecord(`keys/${kid}`));
+const policy = readRecord(`policies/${kid}`) ?? legacyPolicy(readRecord(`keys/${kid}`));
+const legacy = readRecord(`keys/${kid}`);
+if (!credential || !policy) {
+  throw new Error(`proxy credential or access policy ${kid} was not found`);
+}
+credential.enabled = false;
 policy.enabled = false;
-
-const policyPath = writeSecretJson(policy);
+if (legacy) legacy.enabled = false;
+const records = [
+  [`credentials/${kid}`, writeJson(credential, "credential.json")],
+  [`policies/${kid}`, writeJson(policy, "policy.json")],
+  ...(legacy ? [[`keys/${kid}`, writeJson(legacy, "legacy-key.json")]] : []),
+];
 
 try {
-  run("pnpm", [
-    "exec",
-    "wrangler",
-    "kv",
-    "key",
-    "put",
-    `keys/${kid}`,
-    "--path",
-    policyPath,
-    "--binding",
-    binding,
-    "--config",
-    config,
-    ...kvTargetArgs(args),
-  ]);
+  for (const [key, path] of records) {
+    run("pnpm", [
+      "exec",
+      "wrangler",
+      "kv",
+      "key",
+      "put",
+      key,
+      "--path",
+      path,
+      "--binding",
+      binding,
+      "--config",
+      config,
+      ...kvTargetArgs(args),
+    ]);
+  }
 } finally {
-  rmSync(policyPath, { force: true });
-  rmSync(join(policyPath, ".."), { force: true, recursive: true });
+  for (const [, path] of records) {
+    rmSync(path, { force: true });
+    rmSync(join(path, ".."), { force: true, recursive: true });
+  }
 }
 
-console.log(`revoked key policy for ${kid}`);
+console.log(`revoked proxy credential and access policy for ${kid}`);
 
 function parseArgs(values) {
   const out = {};
@@ -82,9 +83,38 @@ function run(command, args) {
   return result;
 }
 
-function writeSecretJson(value) {
+function readRecord(key) {
+  const result = spawnSync("pnpm", [
+    "exec",
+    "wrangler",
+    "kv",
+    "key",
+    "get",
+    key,
+    "--binding",
+    binding,
+    "--config",
+    config,
+    ...kvTargetArgs(args),
+  ], { encoding: "utf8" });
+  if (result.status !== 0) return null;
+  return JSON.parse(result.stdout);
+}
+
+function legacyCredential(legacy) {
+  if (!legacy?.secretSha256) return null;
+  return { enabled: legacy.enabled !== false, secretSha256: legacy.secretSha256, policyId: kid };
+}
+
+function legacyPolicy(legacy) {
+  if (!legacy) return null;
+  const { secretSha256: _, ...policy } = legacy;
+  return policy;
+}
+
+function writeJson(value, name) {
   const dir = mkdtempSync(join(tmpdir(), "clawrouter-key-"));
-  const path = join(dir, "policy.json");
+  const path = join(dir, name);
   writeFileSync(path, JSON.stringify(value), { encoding: "utf8", mode: 0o600 });
   return path;
 }
