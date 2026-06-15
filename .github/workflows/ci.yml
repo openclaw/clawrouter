@@ -17,7 +17,10 @@ jobs:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
         with:
+          components: clippy, rustfmt
           targets: wasm32-unknown-unknown
+      - run: cargo fmt --check
+      - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo test --workspace
       - run: cargo build -p clawrouter-edge --target wasm32-unknown-unknown
       - run: cargo run -p clawrouter -- provider compile providers/*.provider.yaml > /tmp/provider-snapshot.json
@@ -32,7 +35,7 @@ jobs:
       - uses: pnpm/action-setup@v4
         with:
           version: 11.5.1
-      - run: pnpm install --frozen-lockfile=false
+      - run: pnpm install --frozen-lockfile
       - run: pnpm --dir admin check
       - run: pnpm --dir admin test
       - run: pnpm --dir admin build
@@ -50,7 +53,7 @@ jobs:
       - uses: pnpm/action-setup@v4
         with:
           version: 11.5.1
-      - run: pnpm install --frozen-lockfile=false
+      - run: pnpm install --frozen-lockfile
       - run: pnpm provider:smoke-plan
       - run: CLAWROUTER_STRICT_CONFIG=0 pnpm cf:config
       - run: timeout 900s pnpm exec wrangler deploy --dry-run --outdir /tmp/clawrouter-worker-dry-run --config .wrangler.generated.toml

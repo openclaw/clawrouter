@@ -1813,9 +1813,7 @@ async fn verify_access_signature(
 
 fn valid_access_payload(payload: &AccessJwtPayload, team_domain: &str, expected_aud: &str) -> bool {
     let now = js_sys::Date::now() as u64 / 1000;
-    access_audiences(payload)
-        .iter()
-        .any(|audience| *audience == expected_aud)
+    access_audiences(payload).contains(&expected_aud)
         && payload.iss.as_deref() == Some(&format!("https://{team_domain}"))
         && payload.exp.is_some_and(|exp| exp > now)
         && payload.nbf.is_none_or(|nbf| nbf <= now)
@@ -1967,9 +1965,11 @@ async fn inspect_proxy_key(headers: &Headers, env: &Env) -> Result<Response> {
 }
 
 fn key_verification(secret: &str, credential: &ProxyCredential) -> &'static str {
-    (sha256_hex(secret) == credential.secret_sha256)
-        .then_some("verified")
-        .unwrap_or("invalid_secret")
+    if sha256_hex(secret) == credential.secret_sha256 {
+        "verified"
+    } else {
+        "invalid_secret"
+    }
 }
 
 impl AdminKeyPolicyRequest {
@@ -3604,13 +3604,13 @@ async fn authorize_access_session(
     };
     let selected_entry = select_access_policy_for_provider(provider, &matching_entries, &grants)
         .unwrap_or(first_entry);
-    return Ok(AuthOutcome::Allowed(AuthorizedKey {
+    Ok(AuthOutcome::Allowed(AuthorizedKey {
         credential_id: None,
         principal_id: Some(session.email),
         auth_type: "access",
         policy_id: selected_entry.policy_id.clone(),
         policy: selected_entry.policy.clone(),
-    }));
+    }))
 }
 
 fn policy_allows_provider(policy: &AccessPolicy, provider_id: &str) -> bool {
@@ -4346,77 +4346,73 @@ async fn apply_auth_headers(
     auth: &AuthorizedKey,
     context: HeaderRequestContext<'_>,
 ) -> std::result::Result<(), HeaderBuildError> {
-    for scheme in &provider.auth.schemes {
-        match scheme {
-            AuthScheme::Bearer {
-                header,
-                format,
-                secret_kind,
-            } => {
-                let secret = provider_secret(env, provider, secret_kind)
-                    .map_err(HeaderBuildError::Runtime)?;
-                headers
-                    .set(header, &format.replace("${secret}", &secret))
-                    .map_err(HeaderBuildError::Runtime)?;
-                return Ok(());
-            }
-            AuthScheme::ApiKey {
-                header,
-                secret_kind,
-            } => {
-                let secret = provider_secret(env, provider, secret_kind)
-                    .map_err(HeaderBuildError::Runtime)?;
-                headers
-                    .set(header, &secret)
-                    .map_err(HeaderBuildError::Runtime)?;
-                return Ok(());
-            }
-            AuthScheme::QueryApiKey { .. } => {
-                return Ok(());
-            }
-            AuthScheme::OAuth {
-                provider: oauth_provider,
-                token_ref,
-                ..
-            } => {
-                let token = oauth_token(
-                    env,
-                    provider,
-                    auth,
-                    oauth_provider.as_deref(),
-                    token_ref.as_deref(),
+    let Some(scheme) = provider.auth.schemes.first() else {
+        return Ok(());
+    };
+    match scheme {
+        AuthScheme::Bearer {
+            header,
+            format,
+            secret_kind,
+        } => {
+            let secret =
+                provider_secret(env, provider, secret_kind).map_err(HeaderBuildError::Runtime)?;
+            headers
+                .set(header, &format.replace("${secret}", &secret))
+                .map_err(HeaderBuildError::Runtime)?;
+            Ok(())
+        }
+        AuthScheme::ApiKey {
+            header,
+            secret_kind,
+        } => {
+            let secret =
+                provider_secret(env, provider, secret_kind).map_err(HeaderBuildError::Runtime)?;
+            headers
+                .set(header, &secret)
+                .map_err(HeaderBuildError::Runtime)?;
+            Ok(())
+        }
+        AuthScheme::QueryApiKey { .. } | AuthScheme::CloudflareBinding => Ok(()),
+        AuthScheme::OAuth {
+            provider: oauth_provider,
+            token_ref,
+            ..
+        } => {
+            let token = oauth_token(
+                env,
+                provider,
+                auth,
+                oauth_provider.as_deref(),
+                token_ref.as_deref(),
+            )
+            .await?;
+            headers
+                .set(
+                    "authorization",
+                    &format!(
+                        "{} {}",
+                        token.token_type,
+                        token.access_token.as_deref().unwrap_or_default()
+                    ),
                 )
-                .await?;
+                .map_err(HeaderBuildError::Runtime)?;
+            Ok(())
+        }
+        AuthScheme::SigV4 {
+            service,
+            region_param,
+        } => {
+            let signed = sigv4_headers(env, provider, service, region_param.as_deref(), context)
+                .map_err(HeaderBuildError::Runtime)?;
+            for (name, value) in signed {
                 headers
-                    .set(
-                        "authorization",
-                        &format!(
-                            "{} {}",
-                            token.token_type,
-                            token.access_token.as_deref().unwrap_or_default()
-                        ),
-                    )
+                    .set(&name, &value)
                     .map_err(HeaderBuildError::Runtime)?;
-                return Ok(());
             }
-            AuthScheme::SigV4 {
-                service,
-                region_param,
-            } => {
-                let signed =
-                    sigv4_headers(env, provider, service, region_param.as_deref(), context)
-                        .map_err(HeaderBuildError::Runtime)?;
-                for (name, value) in signed {
-                    headers
-                        .set(&name, &value)
-                        .map_err(HeaderBuildError::Runtime)?;
-                }
-                return Ok(());
-            }
-            AuthScheme::CloudflareBinding => return Ok(()),
+            Ok(())
         }
     }
-    Ok(())
 }
 
 async fn oauth_token(
@@ -4448,10 +4444,10 @@ async fn oauth_token(
                 status: 403,
             });
         }
-        if !token
+        if token
             .access_token
             .as_deref()
-            .is_some_and(|value| !value.trim().is_empty())
+            .is_none_or(|value| value.trim().is_empty())
         {
             return Err(HeaderBuildError::Client {
                 code: "oauth_grant_invalid",
