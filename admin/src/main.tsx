@@ -53,6 +53,11 @@ const viewPaths: Record<View, string> = {
 function initialViewFromPath(): View {
   return pathViews[window.location.pathname] ?? "catalog";
 }
+
+function initialAccessTab(): AccessTab {
+  const resource = new URLSearchParams(window.location.search).get("resource");
+  return resource === "credentials" || resource === "bindings" ? resource : "policies";
+}
 type AccessRole = "admin" | "user";
 type IconComponent = React.ComponentType<React.SVGProps<SVGSVGElement>>;
 type BrandIcon = { label?: string; title?: string; viewBox?: string; body?: string };
@@ -87,14 +92,26 @@ interface RouteCatalog {
   }>;
 }
 
-interface KeyPolicy {
-  kid: string;
+interface AccessPolicy {
+  policyId: string;
   enabled: boolean;
   providers: string[];
   tenantId?: string | null;
   tokenRole?: string | null;
   monthlyBudgetMicros?: number | null;
   requestCostMicros?: number | null;
+}
+
+interface ProxyCredential {
+  credentialId: string;
+  policyId: string;
+  enabled: boolean;
+}
+
+interface ProviderConnection {
+  providerId: string;
+  enabled: boolean;
+  label?: string | null;
 }
 
 interface SessionResponse {
@@ -281,7 +298,7 @@ interface ServiceOutcome {
 }
 
 interface PolicyForm {
-  kid: string;
+  policyId: string;
   tokenRole: string;
   tenantId: string;
   enabled: boolean;
@@ -293,12 +310,26 @@ interface PolicyForm {
 
 interface AccessForm {
   email: string;
-  role: AccessRole;
   tenantId: string;
   enabled: boolean;
   groups: string;
   policyIds: string[];
 }
+
+interface CredentialForm {
+  credentialId: string;
+  policyId: string;
+}
+
+interface BindingForm {
+  policyId: string;
+  principalType: "user" | "group";
+  principalId: string;
+  enabled: boolean;
+  priority: string;
+}
+
+type AccessTab = "policies" | "credentials" | "bindings";
 
 interface PlaygroundForm {
   mode: "model" | "service";
@@ -314,6 +345,8 @@ interface PlaygroundForm {
   temperature: string;
 }
 
+const demoDisabledProviderIds = new Set(["aws-bedrock", "cloudflare-ai-gateway"]);
+const demoMissingConfigProviderIds = new Set(["azure-openai"]);
 const demo = demoData();
 const demoServiceRoute = demo.routes.manifestProxy.find((route) => route.provider === "tavily") ?? demo.routes.manifestProxy[0];
 const emptyRoutes: RouteCatalog = { openaiCompatible: [], manifestProxy: [] };
@@ -326,7 +359,7 @@ const emptyUsageSnapshot: UsageSnapshot = {
 };
 
 const defaultPolicy: PolicyForm = {
-  kid: "svc_docs",
+  policyId: "svc_docs",
   tokenRole: "service",
   tenantId: "default",
   enabled: true,
@@ -338,12 +371,13 @@ const defaultPolicy: PolicyForm = {
 
 const defaultAccess: AccessForm = {
   email: "admin@example.com",
-  role: "user",
   tenantId: "default",
   enabled: true,
   groups: "",
   policyIds: [],
 };
+const defaultCredential: CredentialForm = { credentialId: "", policyId: "" };
+const defaultBinding: BindingForm = { policyId: "", principalType: "group", principalId: "", enabled: true, priority: "100" };
 
 const rolePresets = {
   sandbox: { budget: "5000000", request: "500", providers: ["openai", "openrouter"] },
@@ -368,7 +402,9 @@ function App() {
   const [session, setSession] = useState<SessionResponse>(allowDemo ? demo.session : emptySession);
   const [providers, setProviders] = useState<ProviderRow[]>(allowDemo ? demo.providers : []);
   const [routes, setRoutes] = useState<RouteCatalog>(allowDemo ? demo.routes : emptyRoutes);
-  const [keys, setKeys] = useState<KeyPolicy[]>(allowDemo ? demo.keys : []);
+  const [keys, setKeys] = useState<AccessPolicy[]>(allowDemo ? demo.keys : []);
+  const [credentials, setCredentials] = useState<ProxyCredential[]>(allowDemo ? demo.credentials : []);
+  const [connections, setConnections] = useState<ProviderConnection[]>(allowDemo ? demo.connections : []);
   const [policyDataLoaded, setPolicyDataLoaded] = useState(allowDemo);
   const [users, setUsers] = useState<AccessUser[]>(allowDemo ? demo.users : []);
   const [bindings, setBindings] = useState<PolicyBinding[]>(allowDemo ? demo.bindings : []);
@@ -380,12 +416,17 @@ function App() {
   const [usageRefreshKey, setUsageRefreshKey] = useState(0);
   const [entitlements, setEntitlements] = useState<EntitlementsResponse | null>(allowDemo ? demo.entitlements : null);
   const [providerReadiness, setProviderReadiness] = useState<Record<string, ProviderReadiness>>(allowDemo ? readinessMap(demo.entitlements.providers.map((item) => item.readiness)) : {});
-  const [policyForm, setPolicyForm] = useState<PolicyForm>(allowDemo && demo.keys[0] ? policyFormFromKey(demo.keys[0]) : defaultPolicy);
+  const [policyForm, setPolicyForm] = useState<PolicyForm>(allowDemo && demo.keys[0] ? policyFormFromPolicy(demo.keys[0]) : defaultPolicy);
+  const [credentialForm, setCredentialForm] = useState<CredentialForm>(allowDemo && demo.keys[0] ? { credentialId: "", policyId: demo.keys[0].policyId } : defaultCredential);
+  const [bindingForm, setBindingForm] = useState<BindingForm>(allowDemo && demo.keys[0] ? { ...defaultBinding, policyId: demo.keys[0].policyId } : defaultBinding);
+  const [accessTab, setAccessTab] = useState<AccessTab>(initialAccessTab);
   const [accessForm, setAccessForm] = useState<AccessForm>(allowDemo && demo.users[0] ? accessFormFromUser(demo.users[0], demo.bindings) : defaultAccess);
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState("all");
   const [selectedServiceId, setSelectedServiceId] = useState(demo.services[0]?.id ?? "");
-  const [selectedPolicyId, setSelectedPolicyId] = useState(allowDemo ? demo.keys[0]?.kid ?? "" : "");
+  const [selectedPolicyId, setSelectedPolicyId] = useState(allowDemo ? demo.keys[0]?.policyId ?? "" : "");
+  const [selectedCredentialId, setSelectedCredentialId] = useState(allowDemo ? demo.credentials[0]?.credentialId ?? "" : "");
+  const [selectedBindingKey, setSelectedBindingKey] = useState(allowDemo ? bindingKey(demo.bindings[0]) : "");
   const [selectedUserEmail, setSelectedUserEmail] = useState(demo.users[0]?.email ?? "");
   const [status, setStatus] = useState(allowDemo ? "local demo data loaded" : "loading");
   const [demoMode, setDemoMode] = useState(allowDemo);
@@ -418,11 +459,13 @@ function App() {
     return services.filter((item) => (kind === "all" || item.kind === kind) && matchesServiceQuery(item, query));
   }, [kind, query, services]);
   const selectedService = services.find((item) => item.id === selectedServiceId) ?? services[0];
-  const selectedPolicy = keys.find((key) => key.kid === selectedPolicyId);
-  const selectedUser = users.find((user) => user.email === selectedUserEmail) ?? users[0];
+  const selectedPolicy = keys.find((key) => key.policyId === selectedPolicyId);
+  const selectedCredential = credentials.find((credential) => credential.credentialId === selectedCredentialId);
+  const selectedBinding = bindings.find((binding) => bindingKey(binding) === selectedBindingKey);
+  const selectedUser = selectedUserEmail ? users.find((user) => user.email === selectedUserEmail) : undefined;
   const selectedModel = models.find((model) => model.id === playground.model) ?? models[0];
   const selectedServiceRoute = serviceRoutes.find((route) => routeKey(route) === playground.serviceRoute) ?? serviceRoutes[0];
-  const busy = status === "loading" || status.startsWith("saving") || status.startsWith("running") || status.startsWith("revoking");
+  const busy = status === "loading" || ["saving", "running", "revoking", "issuing", "enabling", "disabling"].some((prefix) => status.startsWith(prefix));
   const statusTone = statusKind(status);
 
   useEffect(() => {
@@ -488,16 +531,26 @@ function App() {
         }
       }
       if (sessionData.role === "admin") {
-        const [keyData, userData, bindingData, readinessData] = await Promise.all([
-          request<{ keys: KeyPolicy[] }>(gatewayOrigin, "/v1/admin/keys"),
+        const [policyData, credentialData, connectionData, userData, bindingData, readinessData] = await Promise.all([
+          request<{ policies: AccessPolicy[] }>(gatewayOrigin, "/v1/admin/policies"),
+          request<{ credentials: ProxyCredential[] }>(gatewayOrigin, "/v1/admin/credentials"),
+          request<{ connections: ProviderConnection[] }>(gatewayOrigin, "/v1/admin/connections"),
           request<{ users: AccessUser[] }>(gatewayOrigin, "/v1/admin/access-users"),
           request<{ bindings: PolicyBinding[] }>(gatewayOrigin, "/v1/admin/policy-bindings"),
           request<{ providers: ProviderReadiness[] }>(gatewayOrigin, "/v1/admin/provider-status"),
         ]);
-        setKeys(keyData.keys);
-        const refreshedPolicy = keyData.keys.find((key) => key.kid === selectedPolicyId) ?? keyData.keys[0];
-        setSelectedPolicyId(refreshedPolicy?.kid ?? "");
-        setPolicyForm(refreshedPolicy ? policyFormFromKey(refreshedPolicy) : { ...defaultPolicy, kid: "", tenantId: sessionData.tenantId ?? "default", providers: [...defaultPolicy.providers] });
+        setKeys(policyData.policies);
+        setCredentials(credentialData.credentials);
+        setConnections(connectionData.connections);
+        const refreshedPolicy = policyData.policies.find((policy) => policy.policyId === selectedPolicyId) ?? policyData.policies[0];
+        setSelectedPolicyId(refreshedPolicy?.policyId ?? "");
+        setPolicyForm(refreshedPolicy ? policyFormFromPolicy(refreshedPolicy) : { ...defaultPolicy, policyId: "", tenantId: sessionData.tenantId ?? "default", providers: [...defaultPolicy.providers] });
+        const refreshedCredential = credentialData.credentials.find((credential) => credential.credentialId === selectedCredentialId) ?? credentialData.credentials[0];
+        setSelectedCredentialId(refreshedCredential?.credentialId ?? "");
+        setCredentialForm({ credentialId: "", policyId: refreshedPolicy?.policyId ?? policyData.policies[0]?.policyId ?? "" });
+        const refreshedBinding = bindingData.bindings.find((binding) => bindingKey(binding) === selectedBindingKey) ?? bindingData.bindings[0];
+        setSelectedBindingKey(refreshedBinding ? bindingKey(refreshedBinding) : "");
+        setBindingForm(refreshedBinding ? bindingFormFromBinding(refreshedBinding) : { ...defaultBinding, policyId: refreshedPolicy?.policyId ?? "" });
         setUsers(userData.users);
         setBindings(bindingData.bindings);
         const refreshedUser = userData.users.find((user) => user.email === selectedUserEmail) ?? userData.users[0];
@@ -517,7 +570,7 @@ function App() {
         if (tenantResult.ok) {
           setTenantSummaries(tenantResult.value.tenants);
         } else {
-          setTenantSummaries(tenantSummaryFallback(keyData.keys));
+          setTenantSummaries(tenantSummaryFallback(policyData.policies));
           refreshWarnings = [...refreshWarnings, `tenant summary unavailable: ${tenantResult.error}`];
         }
         setUsageRows([]);
@@ -534,6 +587,8 @@ function App() {
           groups: sessionData.groups ?? [],
         };
         setKeys([]);
+        setCredentials([]);
+        setConnections([]);
         setPolicyDataLoaded(false);
         setUsers([user]);
         setBindings([]);
@@ -554,6 +609,8 @@ function App() {
         setProviders(demo.providers);
         setRoutes(demo.routes);
         setKeys(demo.keys);
+        setCredentials(demo.credentials);
+        setConnections(demo.connections);
         setPolicyDataLoaded(true);
         setUsers(demo.users);
         setBindings(demo.bindings);
@@ -564,8 +621,12 @@ function App() {
         setUsageLoaded(true);
         setEntitlements(demo.entitlements);
         setProviderReadiness(readinessMap(demo.entitlements.providers.map((item) => item.readiness)));
-        setSelectedPolicyId(demo.keys[0]?.kid ?? "");
-        setPolicyForm(demo.keys[0] ? policyFormFromKey(demo.keys[0]) : defaultPolicy);
+        setSelectedPolicyId(demo.keys[0]?.policyId ?? "");
+        setPolicyForm(demo.keys[0] ? policyFormFromPolicy(demo.keys[0]) : defaultPolicy);
+        setSelectedCredentialId(demo.credentials[0]?.credentialId ?? "");
+        setCredentialForm({ credentialId: "", policyId: demo.keys[0]?.policyId ?? "" });
+        setSelectedBindingKey(demo.bindings[0] ? bindingKey(demo.bindings[0]) : "");
+        setBindingForm(demo.bindings[0] ? bindingFormFromBinding(demo.bindings[0]) : defaultBinding);
         setSelectedUserEmail(demo.users[0]?.email ?? "");
         setAccessForm(demo.users[0] ? accessFormFromUser(demo.users[0], demo.bindings) : defaultAccess);
         setDemoMode(true);
@@ -581,13 +642,13 @@ function App() {
     event.preventDefault();
     try {
       setPolicyError("");
-      setStatus("saving grant");
+      setStatus("saving policy");
       if (!policyForm.allProviders && !policyForm.providers.length) throw new Error("select at least one service");
-      if (!/^[A-Za-z0-9_]{4,}$/.test(policyForm.kid)) throw new Error("grant id must use 4 or more letters, numbers, or underscores");
-      const existingPolicy = keys.some((key) => key.kid === policyForm.kid);
-      if (existingPolicy && selectedPolicyId !== policyForm.kid) throw new Error("grant id already exists; select it from the grant list to edit it");
-      const next: KeyPolicy = {
-        kid: policyForm.kid,
+      if (!/^[A-Za-z0-9_]{4,}$/.test(policyForm.policyId)) throw new Error("policy id must use 4 or more letters, numbers, or underscores");
+      const existingPolicy = keys.some((key) => key.policyId === policyForm.policyId);
+      if (existingPolicy && selectedPolicyId !== policyForm.policyId) throw new Error("policy id already exists; select it from the policy list to edit it");
+      const next: AccessPolicy = {
+        policyId: policyForm.policyId,
         enabled: policyForm.enabled,
         providers: policyForm.allProviders ? [] : policyForm.providers,
         tenantId: policyForm.tenantId || "default",
@@ -596,26 +657,135 @@ function App() {
         requestCostMicros: optionalNumber(policyForm.requestCostMicros) ?? null,
       };
       if (demoMode) {
-        applyDemoKeys((current) => [next, ...current.filter((key) => key.kid !== next.kid)]);
-        setSelectedPolicyId(next.kid);
-        setStatus("saved grant");
+        applyDemoKeys((current) => [next, ...current.filter((key) => key.policyId !== next.policyId)]);
+        setSelectedPolicyId(next.policyId);
+        setStatus("saved policy");
         return;
       }
-      const generatedSecret = existingPolicy ? "" : generateSecret();
-      const body = generatedSecret ? { ...next, secretSha256: await sha256Hex(generatedSecret) } : next;
-      await request<KeyPolicy>(gatewayOrigin, `/v1/admin/keys/${encodeURIComponent(policyForm.kid)}`, {
+      await request<AccessPolicy>(gatewayOrigin, `/v1/admin/policies/${encodeURIComponent(policyForm.policyId)}`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(body),
+        body: JSON.stringify(next),
       });
       await refresh();
-      setSelectedPolicyId(next.kid);
-      setPolicyForm(policyFormFromKey(next));
-      setIssuedKey(generatedSecret ? `clawrouter-live-${policyForm.kid}-${generatedSecret}` : "");
-      setStatus("saved grant");
+      setSelectedPolicyId(next.policyId);
+      setPolicyForm(policyFormFromPolicy(next));
+      setStatus("saved policy");
     } catch (error) {
       const message = errorMessage(error);
       setPolicyError(message);
+      setStatus(message);
+    }
+  }
+
+  async function issueCredential(event: FormEvent) {
+    event.preventDefault();
+    try {
+      setPolicyError("");
+      const policyId = credentialForm.policyId || selectedPolicyId;
+      if (!keys.some((policy) => policy.policyId === policyId)) throw new Error("select a policy for this credential");
+      const credentialId = credentialForm.credentialId.trim() || `${policyId}_${Date.now().toString(36)}`;
+      if (!/^[A-Za-z0-9_]{4,}$/.test(credentialId)) throw new Error("credential id must use 4 or more letters, numbers, or underscores");
+      if (credentials.some((credential) => credential.credentialId === credentialId)) throw new Error("credential id already exists");
+      setStatus("issuing credential");
+      const secret = generateSecret();
+      const next: ProxyCredential = { credentialId, policyId, enabled: true };
+      if (demoMode) {
+        setCredentials((current) => [next, ...current]);
+      } else {
+        await request<ProxyCredential>(gatewayOrigin, `/v1/admin/credentials/${encodeURIComponent(credentialId)}`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ enabled: true, policyId, secretSha256: await sha256Hex(secret) }),
+        });
+        await refresh();
+      }
+      setSelectedCredentialId(credentialId);
+      setCredentialForm({ credentialId: "", policyId });
+      setIssuedKey(`clawrouter-live-${credentialId}-${secret}`);
+      setStatus("issued credential");
+    } catch (error) {
+      const message = errorMessage(error);
+      setPolicyError(message);
+      setStatus(message);
+    }
+  }
+
+  async function revokeCredential(credentialId: string) {
+    try {
+      setStatus(`revoking ${credentialId}`);
+      if (demoMode) {
+        setCredentials((current) => current.map((credential) => credential.credentialId === credentialId ? { ...credential, enabled: false } : credential));
+      } else {
+        await request<ProxyCredential>(gatewayOrigin, `/v1/admin/credentials/${encodeURIComponent(credentialId)}/revoke`, { method: "POST" });
+        await refresh();
+      }
+      setIssuedKey("");
+      setStatus(`revoked ${credentialId}`);
+    } catch (error) {
+      const message = errorMessage(error);
+      setPolicyError(message);
+      setStatus(message);
+    }
+  }
+
+  async function saveBinding(event: FormEvent) {
+    event.preventDefault();
+    try {
+      setPolicyError("");
+      const principalId = bindingForm.principalId.trim().toLowerCase();
+      if (!principalId) throw new Error("principal is required");
+      if (!bindingForm.policyId) throw new Error("select a policy");
+      const next: PolicyBinding = {
+        policyId: bindingForm.policyId,
+        principalType: bindingForm.principalType,
+        principalId,
+        enabled: bindingForm.enabled,
+        priority: optionalNumber(bindingForm.priority) ?? 100,
+      };
+      setStatus("saving binding");
+      if (demoMode) {
+        setBindings((current) => [next, ...current.filter((binding) => bindingKey(binding) !== bindingKey(next))]);
+      } else {
+        await request<PolicyBinding>(gatewayOrigin, "/v1/admin/policy-bindings", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(next),
+        });
+        await refresh();
+      }
+      setSelectedBindingKey(bindingKey(next));
+      setBindingForm(bindingFormFromBinding(next));
+      setStatus("saved binding");
+    } catch (error) {
+      const message = errorMessage(error);
+      setPolicyError(message);
+      setStatus(message);
+    }
+  }
+
+  async function setProviderConnection(providerId: string, enabled: boolean) {
+    try {
+      setStatus(`${enabled ? "enabling" : "disabling"} ${providerId}`);
+      const current = connections.find((connection) => connection.providerId === providerId);
+      const next: ProviderConnection = { providerId, enabled, label: current?.label ?? null };
+      if (demoMode) {
+        setConnections((items) => [next, ...items.filter((item) => item.providerId !== providerId)]);
+        setProviderReadiness((items) => {
+          const readiness = items[providerId];
+          return readiness ? { ...items, [providerId]: { ...readiness, connectionEnabled: enabled, executable: enabled && readiness.configPresent && (!readiness.oauthGrantRequired || readiness.oauthGrantCount > 0), status: enabled ? (readiness.verified ? "verified" : "unverified") : "disabled" } } : items;
+        });
+      } else {
+        await request<ProviderConnection>(gatewayOrigin, `/v1/admin/connections/${encodeURIComponent(providerId)}`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(next),
+        });
+        await refresh();
+      }
+      setStatus(`${enabled ? "enabled" : "disabled"} ${providerId}`);
+    } catch (error) {
+      const message = errorMessage(error);
       setStatus(message);
     }
   }
@@ -644,7 +814,7 @@ function App() {
       if (!email.includes("@")) throw new Error("enter a valid email");
       const next: AccessUser = {
         email,
-        role: accessForm.role,
+        role: selectedUser?.role ?? "user",
         tenantId: accessForm.tenantId || "default",
         enabled: accessForm.enabled,
         groups: parseGroups(accessForm.groups),
@@ -663,14 +833,14 @@ function App() {
         body: JSON.stringify({ tenantId: next.tenantId, enabled: next.enabled, groups: next.groups }),
       });
       const bindingWrites = keys.flatMap((policy) => {
-        const existing = bindings.find((binding) => binding.principalType === "user" && binding.principalId === email && binding.policyId === policy.kid);
-        const enabled = accessForm.policyIds.includes(policy.kid);
+        const existing = bindings.find((binding) => binding.principalType === "user" && binding.principalId === email && binding.policyId === policy.policyId);
+        const enabled = accessForm.policyIds.includes(policy.policyId);
         if (existing?.enabled === enabled || (!existing && !enabled)) return [];
         return [request<PolicyBinding>(gatewayOrigin, "/v1/admin/policy-bindings", {
           method: "PUT",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({
-            policyId: policy.kid,
+            policyId: policy.policyId,
             principalType: "user",
             principalId: email,
             enabled,
@@ -688,17 +858,17 @@ function App() {
     }
   }
 
-  async function revoke(kid: string) {
+  async function revoke(policyId: string) {
     try {
-      setStatus(`revoking ${kid}`);
+      setStatus(`revoking ${policyId}`);
       if (demoMode) {
-        applyDemoKeys((current) => current.map((key) => (key.kid === kid ? { ...key, enabled: false } : key)));
-        setStatus(`revoked ${kid}`);
+        applyDemoKeys((current) => current.map((key) => (key.policyId === policyId ? { ...key, enabled: false } : key)));
+        setStatus(`revoked ${policyId}`);
         return;
       }
-      await request<KeyPolicy>(gatewayOrigin, `/v1/admin/keys/${encodeURIComponent(kid)}/revoke`, { method: "POST" });
+      await request<AccessPolicy>(gatewayOrigin, `/v1/admin/policies/${encodeURIComponent(policyId)}/revoke`, { method: "POST" });
       await refresh();
-      setStatus(`revoked ${kid}`);
+      setStatus(`revoked ${policyId}`);
     } catch (error) {
       const message = errorMessage(error);
       setPolicyError(message);
@@ -737,17 +907,30 @@ function App() {
     }
   }
 
-  function editPolicy(key: KeyPolicy) {
+  function editPolicy(key: AccessPolicy) {
     setIssuedKey("");
-    setSelectedPolicyId(key.kid);
-    setPolicyForm(policyFormFromKey(key));
+    setSelectedPolicyId(key.policyId);
+    setPolicyForm(policyFormFromPolicy(key));
+    setCredentialForm((current) => ({ ...current, policyId: key.policyId }));
+    setBindingForm((current) => ({ ...current, policyId: key.policyId }));
   }
 
   function startNewPolicy() {
     setIssuedKey("");
     setPolicyError("");
     setSelectedPolicyId("");
-    setPolicyForm({ ...defaultPolicy, kid: "", tenantId: session.tenantId ?? "default", providers: [...defaultPolicy.providers] });
+    setPolicyForm({ ...defaultPolicy, policyId: "", tenantId: session.tenantId ?? "default", providers: [...defaultPolicy.providers] });
+  }
+
+  function startNewUser() {
+    setSelectedUserEmail("");
+    setUserError("");
+    setAccessForm({ ...defaultAccess, email: "", tenantId: session.tenantId ?? "default" });
+  }
+
+  function editBinding(binding: PolicyBinding) {
+    setSelectedBindingKey(bindingKey(binding));
+    setBindingForm(bindingFormFromBinding(binding));
   }
 
   function applyPreset(role: keyof typeof rolePresets) {
@@ -789,7 +972,7 @@ function App() {
     });
   }
 
-  function applyDemoKeys(updater: (current: KeyPolicy[]) => KeyPolicy[]) {
+  function applyDemoKeys(updater: (current: AccessPolicy[]) => AccessPolicy[]) {
     setKeys((current) => {
       const next = updater(current);
       setAdminOverview(adminOverviewFromKeys(next, providers, routes));
@@ -878,7 +1061,7 @@ function App() {
             allServices={services}
             selected={selectedService}
             policies={keys}
-            policyFallbackAuthoritative={session.role === "admin" && policyDataLoaded}
+            connections={connections}
             query={query}
             setQuery={setQuery}
             kind={kind}
@@ -886,6 +1069,7 @@ function App() {
             kinds={kinds}
             canAdminister={session.role === "admin"}
             onSelect={(service) => setSelectedServiceId(service.id)}
+            onSetConnection={setProviderConnection}
             onPlay={(service) => {
               const model = models.find((item) => item.provider === service.provider);
               const proxyRoute = serviceRoutes.find((route) => route.provider === service.provider);
@@ -925,16 +1109,39 @@ function App() {
 
         {view === "policies" && session.role === "admin" ? (
           <PoliciesScreen
+            tab={accessTab}
+            setTab={setAccessTab}
             keys={keys}
             selected={selectedPolicy}
+            credentials={credentials}
+            selectedCredential={selectedCredential}
+            bindings={bindings}
+            selectedBinding={selectedBinding}
             providers={providers}
             form={policyForm}
             setForm={setPolicyForm}
+            credentialForm={credentialForm}
+            setCredentialForm={setCredentialForm}
+            bindingForm={bindingForm}
+            setBindingForm={setBindingForm}
             issuedKey={issuedKey}
             error={policyError}
             onSave={savePolicy}
+            onIssueCredential={issueCredential}
+            onRevokeCredential={revokeCredential}
+            onSaveBinding={saveBinding}
             onNew={startNewPolicy}
             onEdit={editPolicy}
+            onEditCredential={(credential) => {
+              setSelectedCredentialId(credential.credentialId);
+              setCredentialForm({ credentialId: "", policyId: credential.policyId });
+              setIssuedKey("");
+            }}
+            onEditBinding={editBinding}
+            onNewBinding={() => {
+              setSelectedBindingKey("");
+              setBindingForm({ ...defaultBinding, policyId: selectedPolicyId || keys[0]?.policyId || "" });
+            }}
             onRevoke={revoke}
             onPreset={applyPreset}
             onToggleProvider={togglePolicyProvider}
@@ -955,12 +1162,14 @@ function App() {
             error={userError}
             onOpenPolicy={(policy) => {
               editPolicy(policy);
+              setAccessTab("policies");
               navigateTo("policies");
             }}
             onSelect={(user) => {
               setSelectedUserEmail(user.email);
               setAccessForm(accessFormFromUser(user, bindings));
             }}
+            onNew={startNewUser}
             onSave={saveUser}
             busy={busy}
           />
@@ -972,12 +1181,12 @@ function App() {
   );
 }
 
-function CatalogScreen({ services, allServices, selected, policies, policyFallbackAuthoritative, query, setQuery, kind, setKind, kinds, canAdminister, onSelect, onPlay, onAdd }: {
+function CatalogScreen({ services, allServices, selected, policies, connections, query, setQuery, kind, setKind, kinds, canAdminister, onSelect, onSetConnection, onPlay, onAdd }: {
   services: ServiceItem[];
   allServices: ServiceItem[];
   selected?: ServiceItem;
-  policies: KeyPolicy[];
-  policyFallbackAuthoritative: boolean;
+  policies: AccessPolicy[];
+  connections: ProviderConnection[];
   query: string;
   setQuery: (value: string) => void;
   kind: string;
@@ -985,17 +1194,19 @@ function CatalogScreen({ services, allServices, selected, policies, policyFallba
   kinds: string[];
   canAdminister: boolean;
   onSelect: (service: ServiceItem) => void;
+  onSetConnection: (providerId: string, enabled: boolean) => void;
   onPlay: (service: ServiceItem) => void;
   onAdd: (service: ServiceItem) => void;
 }) {
   const activePolicies = policies.filter((policy) => policy.enabled);
   const queryMatchedServices = allServices.filter((service) => matchesServiceQuery(service, query));
   const selectedPolicies = selected ? activePolicies.filter((policy) => policyCoversProvider(policy, selected.provider)) : [];
+  const connectionByProvider = new Map(connections.map((connection) => [connection.providerId, connection]));
   const kindCounts = new Map(kinds.map((item) => [item, item === "all" ? queryMatchedServices.length : queryMatchedServices.filter((service) => service.kind === item).length]));
   const servicePolicies = (service: ServiceItem) => activePolicies.filter((policy) => policyCoversProvider(policy, service.provider));
-  const outcomes = allServices.map((service) => serviceOutcome(service, servicePolicies(service), policyFallbackAuthoritative));
+  const outcomes = allServices.map((service) => serviceOutcome(service));
   const usableCount = outcomes.filter((outcome) => outcome.playable).length;
-  const grantedCount = allServices.filter((service) => servicePolicies(service).length || service.access?.allowed).length;
+  const grantedCount = allServices.filter((service) => service.access?.allowed).length;
   const blockedCount = outcomes.filter((outcome) => outcome.blocked).length;
 
   return (
@@ -1009,21 +1220,21 @@ function CatalogScreen({ services, allServices, selected, policies, policyFallba
           </div>
         </div>
         <EntityTable
-          columns={["service", "status", "granted by", "kind", "interface"]}
-          columnTemplate="minmax(220px, 1.45fr) 138px minmax(130px, 0.8fr) 120px minmax(150px, 0.9fr)"
+          columns={["service", "your access", "connection", "policies", "kind"]}
+          columnTemplate="minmax(220px, 1.45fr) 124px 126px minmax(130px, 0.8fr) 116px"
           rows={services.map((service) => {
             const policiesForService = servicePolicies(service);
-            const outcome = serviceOutcome(service, policiesForService, policyFallbackAuthoritative);
+            const outcome = serviceOutcome(service);
             return {
               id: service.id,
               active: selected?.id === service.id,
               onClick: () => onSelect(service),
               cells: [
                 <EntityName brandIcon={service.brandIcon} icon={kindIcon(service.kind)} title={service.name} subtitle={`${service.provider} · ${kindLabel(service.kind)}`} />,
-                <OutcomeStatus outcome={outcome} />,
+                <Status label={service.access?.allowed ? "granted" : service.access ? "not granted" : "unknown"} tone={service.access?.allowed ? "active" : service.access ? "revoked" : "neutral"} />,
+                <ReadinessStatus readiness={service.readiness} />,
                 <GrantChips names={grantNamesForService(service, policiesForService)} />,
                 kindLabel(service.kind),
-                service.surfaces.join(", "),
               ],
             };
           })}
@@ -1033,8 +1244,9 @@ function CatalogScreen({ services, allServices, selected, policies, policyFallba
         {selected ? (
           <>
             {(() => {
-              const outcome = serviceOutcome(selected, selectedPolicies, policyFallbackAuthoritative);
-              const playBlocker = playgroundBlockedForService(selected, selectedPolicies, policyFallbackAuthoritative);
+              const outcome = serviceOutcome(selected);
+              const playBlocker = playgroundBlockedForService(selected);
+              const connection = connectionByProvider.get(selected.provider);
               return (
                 <>
             <InspectorHeader brandIcon={selected.brandIcon} icon={kindIcon(selected.kind)} title={selected.name} subtitle={`${kindLabel(selected.kind)} · ${selected.category}`} />
@@ -1047,19 +1259,22 @@ function CatalogScreen({ services, allServices, selected, policies, policyFallba
               <dt>kind</dt><dd>{kindLabel(selected.kind)}</dd>
               <dt>routes</dt><dd>{selected.route}</dd>
               <dt>surfaces</dt><dd>{selected.surfaces.join(", ")}</dd>
-              <dt>grant</dt><dd>{grantNamesForService(selected, selectedPolicies).join(", ") || "none"}</dd>
+              <dt>policies</dt><dd>{grantNamesForService(selected, selectedPolicies).join(", ") || "none"}</dd>
+              <dt>connection</dt><dd>{connection?.enabled === false ? "disabled" : "enabled"}</dd>
               <dt>readiness</dt><dd>{readinessLabel(selected.readiness)}</dd>
+              <dt>verified</dt><dd>{selected.readiness?.lastCheckedAt ? `${formatRelativeTime(selected.readiness.lastCheckedAt)} · ${formatDuration(selected.readiness.latencyMs)}` : "not checked"}</dd>
               <dt>missing</dt><dd>{selected.readiness?.missingConfig.length ? selected.readiness.missingConfig.join(", ") : "none"}</dd>
               <dt>oauth grants</dt><dd>{selected.readiness?.oauthGrantRequired ? selected.readiness.oauthGrantCount : "n/a"}</dd>
             </dl>
             {selected.readiness?.reasons.length ? <InlineNote>{selected.readiness.reasons.join("; ")}</InlineNote> : null}
-            <div className="sectionTitle">Granting access</div>
+            <div className="sectionTitle">Policies including this service</div>
             <div className="miniList">
-              {grantNamesForService(selected, selectedPolicies).length ? grantNamesForService(selected, selectedPolicies).map((grant) => <button key={grant} type="button">{grant}<span>{selectedPolicies.find((policy) => policy.kid === grant)?.tenantId ?? "entitlement"}</span></button>) : <p>No active grant includes this service yet.</p>}
+              {grantNamesForService(selected, selectedPolicies).length ? grantNamesForService(selected, selectedPolicies).map((policyId) => <button key={policyId} type="button">{policyId}<span>{selectedPolicies.find((policy) => policy.policyId === policyId)?.tenantId ?? "identity policy"}</span></button>) : <p>No active policy includes this service yet.</p>}
             </div>
             <div className="inspectorActions">
               <button type="button" disabled={Boolean(playBlocker)} onClick={() => onPlay(selected)} title={playBlocker ?? undefined}><Play className="buttonIcon" aria-hidden="true" /><span>Try in playground</span></button>
-              {canAdminister ? <button type="button" className="buttonSecondary" onClick={() => onAdd(selected)}><Plus className="buttonIcon" aria-hidden="true" /><span>Add to grant</span></button> : null}
+              {canAdminister ? <button type="button" className={connection?.enabled === false ? "buttonSecondary" : "buttonDanger"} onClick={() => onSetConnection(selected.provider, connection?.enabled === false)}><ServerCog className="buttonIcon" aria-hidden="true" /><span>{connection?.enabled === false ? "Enable connection" : "Disable connection"}</span></button> : null}
+              {canAdminister ? <button type="button" className="buttonSecondary" onClick={() => onAdd(selected)}><Plus className="buttonIcon" aria-hidden="true" /><span>Add to selected policy</span></button> : null}
             </div>
                 </>
               );
@@ -1072,7 +1287,7 @@ function CatalogScreen({ services, allServices, selected, policies, policyFallba
 }
 
 function GrantChips({ names }: { names: string[] }) {
-  if (!names.length) return <span className="emptyGrant">no grant</span>;
+  if (!names.length) return <span className="emptyGrant">no policy</span>;
   const first = names[0];
   return (
     <span className="grantChips">
@@ -1181,18 +1396,148 @@ function PlaygroundScreen({ form, setForm, models, selected, serviceRoutes, sele
   );
 }
 
-function PoliciesScreen({ keys, selected, providers, form, setForm, issuedKey, error, onSave, onNew, onEdit, onRevoke, onPreset, onToggleProvider, onSetProviderGroup, busy }: {
-  keys: KeyPolicy[];
-  selected?: KeyPolicy;
+function PoliciesScreen({ tab, setTab, keys, selected, credentials, selectedCredential, bindings, selectedBinding, providers, form, setForm, credentialForm, setCredentialForm, bindingForm, setBindingForm, issuedKey, error, onSave, onIssueCredential, onRevokeCredential, onSaveBinding, onNew, onEdit, onEditCredential, onEditBinding, onNewBinding, onRevoke, onPreset, onToggleProvider, onSetProviderGroup, busy }: {
+  tab: AccessTab;
+  setTab: (tab: AccessTab) => void;
+  keys: AccessPolicy[];
+  selected?: AccessPolicy;
+  credentials: ProxyCredential[];
+  selectedCredential?: ProxyCredential;
+  bindings: PolicyBinding[];
+  selectedBinding?: PolicyBinding;
   providers: ProviderRow[];
   form: PolicyForm;
   setForm: (form: PolicyForm) => void;
+  credentialForm: CredentialForm;
+  setCredentialForm: (form: CredentialForm) => void;
+  bindingForm: BindingForm;
+  setBindingForm: (form: BindingForm) => void;
   issuedKey: string;
   error: string;
   onSave: (event: FormEvent) => void;
+  onIssueCredential: (event: FormEvent) => void;
+  onRevokeCredential: (credentialId: string) => void;
+  onSaveBinding: (event: FormEvent) => void;
   onNew: () => void;
-  onEdit: (key: KeyPolicy) => void;
-  onRevoke: (kid: string) => void;
+  onEdit: (policy: AccessPolicy) => void;
+  onEditCredential: (credential: ProxyCredential) => void;
+  onEditBinding: (binding: PolicyBinding) => void;
+  onNewBinding: () => void;
+  onRevoke: (policyId: string) => void;
+  onPreset: (role: keyof typeof rolePresets) => void;
+  onToggleProvider: (id: string) => void;
+  onSetProviderGroup: (ids: string[], checked: boolean) => void;
+  busy: boolean;
+}) {
+  return (
+    <div className="accessWorkspace">
+      <div className="resourceTabs" role="tablist" aria-label="access resources">
+        <button type="button" role="tab" aria-selected={tab === "policies"} className={tab === "policies" ? "active" : ""} onClick={() => setTab("policies")}>Policies <span>{keys.length}</span></button>
+        <button type="button" role="tab" aria-selected={tab === "credentials"} className={tab === "credentials" ? "active" : ""} onClick={() => setTab("credentials")}>Credentials <span>{credentials.length}</span></button>
+        <button type="button" role="tab" aria-selected={tab === "bindings"} className={tab === "bindings" ? "active" : ""} onClick={() => setTab("bindings")}>Bindings <span>{bindings.filter((binding) => binding.enabled).length}</span></button>
+      </div>
+      {tab === "policies" ? <PolicyPanel keys={keys} selected={selected} providers={providers} form={form} setForm={setForm} error={error} onSave={onSave} onNew={onNew} onEdit={onEdit} onRevoke={onRevoke} onPreset={onPreset} onToggleProvider={onToggleProvider} onSetProviderGroup={onSetProviderGroup} busy={busy} /> : null}
+      {tab === "credentials" ? <CredentialPanel policies={keys} credentials={credentials} selected={selectedCredential} form={credentialForm} setForm={setCredentialForm} issuedKey={issuedKey} error={error} onIssue={onIssueCredential} onEdit={onEditCredential} onRevoke={onRevokeCredential} busy={busy} /> : null}
+      {tab === "bindings" ? <BindingPanel policies={keys} bindings={bindings} selected={selectedBinding} form={bindingForm} setForm={setBindingForm} error={error} onSave={onSaveBinding} onEdit={onEditBinding} onNew={onNewBinding} busy={busy} /> : null}
+    </div>
+  );
+}
+
+function CredentialPanel({ policies, credentials, selected, form, setForm, issuedKey, error, onIssue, onEdit, onRevoke, busy }: {
+  policies: AccessPolicy[];
+  credentials: ProxyCredential[];
+  selected?: ProxyCredential;
+  form: CredentialForm;
+  setForm: (form: CredentialForm) => void;
+  issuedKey: string;
+  error: string;
+  onIssue: (event: FormEvent) => void;
+  onEdit: (credential: ProxyCredential) => void;
+  onRevoke: (credentialId: string) => void;
+  busy: boolean;
+}) {
+  const copyIssuedKey = () => void navigator.clipboard?.writeText(issuedKey);
+  return (
+    <div className="entityLayout">
+      <section className="mainPane">
+        <div className="overviewStrip">
+          <Metric label="active credentials" value={String(credentials.filter((credential) => credential.enabled).length)} meta={`${credentials.length} total`} />
+          <Metric label="bound policies" value={String(new Set(credentials.map((credential) => credential.policyId)).size)} meta={`${policies.length} available`} />
+          <Metric label="revoked" value={String(credentials.filter((credential) => !credential.enabled).length)} meta="individually disabled" />
+        </div>
+        <div className="tableSectionHeader"><div><strong>Issued credentials</strong><span>Machine access bound to policies</span></div><span>secrets reveal once</span></div>
+        <EntityTable columns={["credential", "policy", "state"]} columnTemplate="minmax(220px, 1.3fr) minmax(180px, 1fr) 110px" rows={credentials.map((credential) => ({ id: credential.credentialId, active: selected?.credentialId === credential.credentialId, onClick: () => onEdit(credential), cells: [<EntityName icon={KeyRound} title={credential.credentialId} subtitle="proxy credential" />, credential.policyId, <Status label={credential.enabled ? "active" : "revoked"} tone={credential.enabled ? "active" : "revoked"} />] }))} />
+      </section>
+      <aside className="inspector">
+        <form onSubmit={onIssue}>
+          <InspectorHeader icon={KeyRound} title="Issue credential" subtitle="creates a new secret for one policy" />
+          {error ? <InlineError message={error} /> : null}
+          {issuedKey ? <div className="issuedKey"><div><span>copy now · shown once</span><code>{issuedKey}</code></div><button type="button" className="buttonSecondary" onClick={copyIssuedKey}>Copy</button></div> : null}
+          <div className="formGrid compact">
+            <label className="full"><span>credential id</span><input value={form.credentialId} onChange={(event) => setForm({ ...form, credentialId: event.target.value })} placeholder="auto-generated when blank" /></label>
+            <label className="full"><span>policy</span><select value={form.policyId} onChange={(event) => setForm({ ...form, policyId: event.target.value })}>{policies.map((policy) => <option key={policy.policyId} value={policy.policyId}>{policy.policyId}</option>)}</select></label>
+          </div>
+          <InlineNote>Credentials are optional. Maintainers using Cloudflare Access do not need a proxy key.</InlineNote>
+          <div className="inspectorActions"><button type="submit" disabled={busy || !form.policyId}><Plus className="buttonIcon" aria-hidden="true" /><span>Issue credential</span></button></div>
+          {selected ? <><div className="sectionTitle">Selected credential</div><dl className="facts"><dt>id</dt><dd>{selected.credentialId}</dd><dt>policy</dt><dd>{selected.policyId}</dd><dt>state</dt><dd>{selected.enabled ? "active" : "revoked"}</dd></dl><div className="inspectorActions"><button type="button" className="buttonDanger" disabled={busy || !selected.enabled} onClick={() => onRevoke(selected.credentialId)}><CircleSlash2 className="buttonIcon" aria-hidden="true" /><span>Revoke credential</span></button></div></> : null}
+        </form>
+      </aside>
+    </div>
+  );
+}
+
+function BindingPanel({ policies, bindings, selected, form, setForm, error, onSave, onEdit, onNew, busy }: {
+  policies: AccessPolicy[];
+  bindings: PolicyBinding[];
+  selected?: PolicyBinding;
+  form: BindingForm;
+  setForm: (form: BindingForm) => void;
+  error: string;
+  onSave: (event: FormEvent) => void;
+  onEdit: (binding: PolicyBinding) => void;
+  onNew: () => void;
+  busy: boolean;
+}) {
+  return (
+    <div className="entityLayout">
+      <section className="mainPane">
+        <div className="overviewStrip">
+          <Metric label="active bindings" value={String(bindings.filter((binding) => binding.enabled).length)} meta={`${bindings.length} total`} />
+          <Metric label="users" value={String(new Set(bindings.filter((binding) => binding.principalType === "user").map((binding) => binding.principalId)).size)} meta="direct principals" />
+          <Metric label="groups" value={String(new Set(bindings.filter((binding) => binding.principalType === "group").map((binding) => binding.principalId)).size)} meta="inherited principals" />
+        </div>
+        <div className="tableSectionHeader"><div><strong>Principal bindings</strong><span>Explicit policy assignment and priority</span></div><button type="button" onClick={onNew} disabled={busy}><Plus className="buttonIcon" aria-hidden="true" /><span>New binding</span></button></div>
+        <EntityTable columns={["principal", "type", "policy", "priority", "state"]} columnTemplate="minmax(220px, 1.4fr) 90px minmax(170px, 1fr) 80px 100px" rows={bindings.map((binding) => ({ id: bindingKey(binding), active: selected ? bindingKey(selected) === bindingKey(binding) : false, onClick: () => onEdit(binding), cells: [<EntityName icon={Users} title={binding.principalId} subtitle={binding.principalType === "group" ? "inherited by group members" : "direct identity binding"} />, binding.principalType, binding.policyId, binding.priority, <Status label={binding.enabled ? "active" : "disabled"} tone={binding.enabled ? "active" : "revoked"} />] }))} />
+      </section>
+      <aside className="inspector">
+        <form onSubmit={onSave}>
+          <InspectorHeader icon={Users} title={selected ? "Edit binding" : "New binding"} subtitle="assign one policy to one principal" />
+          {error ? <InlineError message={error} /> : null}
+          <div className="formGrid compact">
+            <label><span>principal type</span><select value={form.principalType} disabled={Boolean(selected)} onChange={(event) => setForm({ ...form, principalType: event.target.value as BindingForm["principalType"] })}><option value="group">group</option><option value="user">user</option></select></label>
+            <label><span>priority</span><input inputMode="numeric" value={form.priority} onChange={(event) => setForm({ ...form, priority: event.target.value })} /></label>
+            <label className="full"><span>principal</span><input value={form.principalId} readOnly={Boolean(selected)} onChange={(event) => setForm({ ...form, principalId: event.target.value })} placeholder={form.principalType === "group" ? "maintainers" : "user@example.com"} /></label>
+            <label className="full"><span>policy</span><select value={form.policyId} disabled={Boolean(selected)} onChange={(event) => setForm({ ...form, policyId: event.target.value })}>{policies.map((policy) => <option key={policy.policyId} value={policy.policyId}>{policy.policyId}</option>)}</select></label>
+            <label className="full"><span>state</span><select value={form.enabled ? "enabled" : "disabled"} onChange={(event) => setForm({ ...form, enabled: event.target.value === "enabled" })}><option value="enabled">enabled</option><option value="disabled">disabled</option></select></label>
+          </div>
+          <div className="inspectorActions"><button type="submit" disabled={busy || !form.policyId || !form.principalId.trim()}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save binding</span></button></div>
+        </form>
+      </aside>
+    </div>
+  );
+}
+
+function PolicyPanel({ keys, selected, providers, form, setForm, error, onSave, onNew, onEdit, onRevoke, onPreset, onToggleProvider, onSetProviderGroup, busy }: {
+  keys: AccessPolicy[];
+  selected?: AccessPolicy;
+  providers: ProviderRow[];
+  form: PolicyForm;
+  setForm: (form: PolicyForm) => void;
+  error: string;
+  onSave: (event: FormEvent) => void;
+  onNew: () => void;
+  onEdit: (key: AccessPolicy) => void;
+  onRevoke: (policyId: string) => void;
   onPreset: (role: keyof typeof rolePresets) => void;
   onToggleProvider: (id: string) => void;
   onSetProviderGroup: (ids: string[], checked: boolean) => void;
@@ -1208,47 +1553,38 @@ function PoliciesScreen({ keys, selected, providers, form, setForm, issuedKey, e
   const coveredServiceCount = keys.some((key) => key.enabled && key.providers.length === 0)
     ? providers.length
     : new Set(keys.filter((key) => key.enabled).flatMap((key) => key.providers)).size;
-  const copyIssuedKey = () => {
-    void navigator.clipboard?.writeText(issuedKey);
-  };
   return (
     <div className="entityLayout grantsLayout">
       <section className="mainPane grantListPane">
         <div className="overviewStrip grantOverview">
-          <Metric label="active grants" value={String(activeGrantCount)} meta={`${keys.length} total`} />
-          <Metric label="tenants" value={String(tenantCount)} meta="with configured grants" />
+          <Metric label="active policies" value={String(activeGrantCount)} meta={`${keys.length} total`} />
+          <Metric label="tenants" value={String(tenantCount)} meta="with configured policies" />
           <Metric label="service coverage" value={String(coveredServiceCount)} meta={`${providers.length} available`} />
         </div>
-        <div className="tableSectionHeader grantListHeader"><div><strong>Access grants</strong><span>{keys.length} configured grants</span></div><button type="button" disabled={busy} onClick={onNew}><Plus className="buttonIcon" aria-hidden="true" /><span>New grant</span></button></div>
+        <div className="tableSectionHeader grantListHeader"><div><strong>Access policies</strong><span>{keys.length} configured policies</span></div><button type="button" disabled={busy} onClick={onNew}><Plus className="buttonIcon" aria-hidden="true" /><span>New policy</span></button></div>
         <EntityTable
-          columns={["grant", "tenant", "scope", "state"]}
+          columns={["policy", "tenant", "scope", "state"]}
           columnTemplate="minmax(170px, 1.35fr) minmax(96px, 0.8fr) minmax(100px, 0.8fr) 88px"
-          rows={keys.map((key) => ({ id: key.kid, active: selected?.kid === key.kid, onClick: busy ? undefined : () => onEdit(key), cells: [<EntityName icon={KeyRound} title={key.kid} subtitle={key.tokenRole ?? "custom"} />, key.tenantId ?? "default", key.providers.length ? `${key.providers.length} services` : "all services", <Status label={key.enabled ? "active" : "revoked"} tone={key.enabled ? "active" : "revoked"} />] }))}
+          rows={keys.map((key) => ({ id: key.policyId, active: selected?.policyId === key.policyId, onClick: busy ? undefined : () => onEdit(key), cells: [<EntityName icon={KeyRound} title={key.policyId} subtitle={key.tokenRole ?? "custom"} />, key.tenantId ?? "default", key.providers.length ? `${key.providers.length} services` : "all services", <Status label={key.enabled ? "active" : "revoked"} tone={key.enabled ? "active" : "revoked"} />] }))}
         />
       </section>
       <aside className="inspector wideInspector grantEditor">
         <form onSubmit={onSave}>
           <fieldset className="grantEditorFields" disabled={busy}>
           <div className="grantEditorHeader">
-            <InspectorHeader icon={KeyRound} title={form.kid || "New access grant"} subtitle={`${form.tenantId || "default"} · ${form.tokenRole || "custom"}`} />
+            <InspectorHeader icon={KeyRound} title={form.policyId || "New access policy"} subtitle={`${form.tenantId || "default"} · ${form.tokenRole || "custom"}`} />
             <Status label={form.enabled ? "active" : "disabled"} tone={form.enabled ? "active" : "revoked"} />
           </div>
           {error ? <InlineError message={error} /> : null}
-          {issuedKey ? (
-            <div className="issuedKey">
-              <div><span>issued key</span><code>{issuedKey}</code></div>
-              <button type="button" className="buttonSecondary" onClick={copyIssuedKey}>Copy</button>
-            </div>
-          ) : null}
           <div className="grantSummary">
             <strong>{form.tenantId || "default"}</strong>
             <span>{form.enabled ? "will have" : "would have"} access to {formServiceLabel} under the {form.tokenRole || "custom"} role.</span>
           </div>
-          <div className="editorSectionHeader"><strong>Grant template</strong><span>Apply a starting policy</span></div>
-          <div className="presetRow" aria-label="grant templates">{Object.keys(rolePresets).map((role) => <button key={role} type="button" className="buttonSecondary" onClick={() => onPreset(role as keyof typeof rolePresets)}>{role}</button>)}</div>
-          <div className="editorSectionHeader"><strong>Grant details</strong><span>Identity, role, and limits</span></div>
+          <div className="editorSectionHeader"><strong>Policy template</strong><span>Apply a starting scope</span></div>
+          <div className="presetRow" aria-label="policy templates">{Object.keys(rolePresets).map((role) => <button key={role} type="button" className="buttonSecondary" onClick={() => onPreset(role as keyof typeof rolePresets)}>{role}</button>)}</div>
+          <div className="editorSectionHeader"><strong>Policy details</strong><span>Tenant, role, and limits</span></div>
           <div className="formGrid compact">
-            <label><span>grant id</span><input value={form.kid} readOnly={Boolean(selected)} onChange={(event) => setForm({ ...form, kid: event.target.value })} /></label>
+            <label><span>policy id</span><input value={form.policyId} readOnly={Boolean(selected)} onChange={(event) => setForm({ ...form, policyId: event.target.value })} /></label>
             <label><span>tenant</span><input value={form.tenantId} onChange={(event) => setForm({ ...form, tenantId: event.target.value })} /></label>
             <label><span>role</span><input value={form.tokenRole} onChange={(event) => setForm({ ...form, tokenRole: event.target.value })} /></label>
             <label><span>status</span><select value={form.enabled ? "active" : "disabled"} onChange={(event) => setForm({ ...form, enabled: event.target.value === "active" })}><option value="active">active</option><option value="disabled">disabled</option></select></label>
@@ -1274,7 +1610,7 @@ function PoliciesScreen({ keys, selected, providers, form, setForm, issuedKey, e
               );
             }) : <p>No services match this filter.</p>}
           </div>
-          <div className="inspectorActions"><button type="submit" disabled={busy || (!form.allProviders && !form.providers.length)}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save grant</span></button>{selected ? <button type="button" className="buttonDanger" disabled={!selected.enabled || busy} onClick={() => onRevoke(selected.kid)}><CircleSlash2 className="buttonIcon" aria-hidden="true" /><span>Revoke grant</span></button> : null}</div>
+          <div className="inspectorActions"><button type="submit" disabled={busy || (!form.allProviders && !form.providers.length)}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save policy</span></button>{selected ? <button type="button" className="buttonDanger" disabled={!selected.enabled || busy} onClick={() => onRevoke(selected.policyId)}><CircleSlash2 className="buttonIcon" aria-hidden="true" /><span>Disable policy</span></button> : null}</div>
           </fieldset>
         </form>
       </aside>
@@ -1282,27 +1618,35 @@ function PoliciesScreen({ keys, selected, providers, form, setForm, issuedKey, e
   );
 }
 
-function UsersScreen({ users, selected, policies, bindings, services, form, setForm, error, onOpenPolicy, onSelect, onSave, busy }: {
+function UsersScreen({ users, selected, policies, bindings, services, form, setForm, error, onOpenPolicy, onSelect, onNew, onSave, busy }: {
   users: AccessUser[];
   selected?: AccessUser;
-  policies: KeyPolicy[];
+  policies: AccessPolicy[];
   bindings: PolicyBinding[];
   services: ServiceItem[];
   form: AccessForm;
   setForm: (form: AccessForm) => void;
   error: string;
-  onOpenPolicy: (policy: KeyPolicy) => void;
+  onOpenPolicy: (policy: AccessPolicy) => void;
   onSelect: (user: AccessUser) => void;
+  onNew: () => void;
   onSave: (event: FormEvent) => void;
   busy: boolean;
 }) {
+  const [userQuery, setUserQuery] = useState("");
   const accessForUser = (user: AccessUser | undefined) => effectiveAccess(user, policies, bindings, services);
   const selectedAccess = accessForUser(selected);
   const selectedServices = selectedAccess.services.map((service) => ({ service, label: "granted" }));
+  const selectedGroups = new Set(selected?.groups ?? []);
+  const selectedBindings = bindings
+    .filter((binding) => binding.enabled && selected && (binding.principalType === "user" ? binding.principalId === selected.email : selectedGroups.has(binding.principalId)))
+    .sort((a, b) => a.priority - b.priority || a.policyId.localeCompare(b.policyId));
+  const visibleUsers = users.filter((user) => !userQuery.trim() || [user.email, user.tenantId, user.groups.join(" ")].join(" ").toLowerCase().includes(userQuery.trim().toLowerCase()));
   return (
     <div className="entityLayout">
       <section className="mainPane">
-        <EntityTable columns={["identity", "role", "tenant", "grants", "services", "status"]} columnTemplate="minmax(260px, 1.5fr) 90px 130px 96px 96px 116px" rows={users.map((user) => {
+        <div className="tableSectionHeader userListHeader"><label className="inputWithIcon"><Search aria-hidden="true" /><input value={userQuery} onChange={(event) => setUserQuery(event.target.value)} placeholder="search identities or groups" /></label><button type="button" onClick={onNew} disabled={busy}><Plus className="buttonIcon" aria-hidden="true" /><span>New identity</span></button></div>
+        <EntityTable columns={["identity", "role", "tenant", "policies", "services", "status"]} columnTemplate="minmax(260px, 1.5fr) 90px 130px 96px 96px 116px" rows={visibleUsers.map((user) => {
           const access = accessForUser(user);
           return { id: user.email, active: selected?.email === user.email, onClick: () => onSelect(user), cells: [<EntityName icon={Users} title={user.email} subtitle="Cloudflare Access" />, user.role, user.tenantId, String(access.policies.length), String(access.services.length), <Status label={user.enabled ? "enabled" : "disabled"} tone={user.enabled ? "active" : "revoked"} />] };
         })} />
@@ -1311,18 +1655,21 @@ function UsersScreen({ users, selected, policies, bindings, services, form, setF
         <form onSubmit={onSave}>
           <InspectorHeader icon={Users} title="Access user" subtitle={selected?.email ?? "new user"} />
           {error ? <InlineError message={error} /> : null}
-          <InlineNote>Users are created from Cloudflare Access on first login with no grants. Admin status controls the console only; service access always requires an explicit user or group grant.</InlineNote>
+          <InlineNote>Users are created from Cloudflare Access on first login with no policies. Admin status controls the console only; service access always requires an explicit user or group binding.</InlineNote>
           <div className="formGrid compact">
-            <label className="full"><span>email</span><input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} /></label>
+            <label className="full"><span>email</span><input type="email" value={form.email} readOnly={Boolean(selected)} onChange={(event) => setForm({ ...form, email: event.target.value })} /></label>
             <label><span>tenant</span><input value={form.tenantId} onChange={(event) => setForm({ ...form, tenantId: event.target.value })} /></label>
             <label><span>status</span><select value={form.enabled ? "enabled" : "disabled"} onChange={(event) => setForm({ ...form, enabled: event.target.value === "enabled" })}><option value="enabled">enabled</option><option value="disabled">disabled</option></select></label>
             <label className="full"><span>groups</span><input value={form.groups} onChange={(event) => setForm({ ...form, groups: event.target.value })} placeholder="maintainers, docs" /></label>
           </div>
-          <dl className="facts"><dt>granted services</dt><dd>{selectedAccess.services.length}</dd><dt>active grants</dt><dd>{selectedAccess.policies.length}</dd><dt>role</dt><dd>{selected?.role ?? "user"}</dd><dt>tenant</dt><dd>{selected?.tenantId ?? form.tenantId}</dd></dl>
-          <div className="sectionTitle">Direct grants</div>
-          <div className="serviceMatrix">{policies.map((policy) => <label key={policy.kid}><input type="checkbox" checked={form.policyIds.includes(policy.kid)} onChange={() => setForm({ ...form, policyIds: form.policyIds.includes(policy.kid) ? form.policyIds.filter((id) => id !== policy.kid) : [...form.policyIds, policy.kid].sort() })} /><span>{policy.kid}</span><small>{effectiveProviderCount(policy.providers, services)} services</small></label>)}</div>
-          <div className="sectionTitle">Effective grants</div>
-          <div className="miniList">{selectedAccess.policies.length ? selectedAccess.policies.map((policy) => <button type="button" key={policy.kid} onClick={() => onOpenPolicy(policy)}>{policy.kid}<span>{effectiveProviderCount(policy.providers, services)} services · {formatBudget(policy.monthlyBudgetMicros)}</span></button>) : <p>No user or group grants assigned.</p>}</div>
+          <dl className="facts"><dt>granted services</dt><dd>{selectedAccess.services.length}</dd><dt>active policies</dt><dd>{selectedAccess.policies.length}</dd><dt>console role</dt><dd>{selected?.role ?? "user"}</dd><dt>tenant</dt><dd>{selected?.tenantId ?? form.tenantId}</dd></dl>
+          <div className="sectionTitle">Direct policies</div>
+          <div className="serviceMatrix">{policies.map((policy) => <label key={policy.policyId}><input type="checkbox" checked={form.policyIds.includes(policy.policyId)} onChange={() => setForm({ ...form, policyIds: form.policyIds.includes(policy.policyId) ? form.policyIds.filter((id) => id !== policy.policyId) : [...form.policyIds, policy.policyId].sort() })} /><span>{policy.policyId}</span><small>{effectiveProviderCount(policy.providers, services)} services</small></label>)}</div>
+          <div className="sectionTitle">Effective policies</div>
+          <div className="miniList">{selectedBindings.length ? selectedBindings.map((binding) => {
+            const policy = policies.find((item) => item.policyId === binding.policyId);
+            return <button type="button" key={bindingKey(binding)} onClick={() => policy && onOpenPolicy(policy)}>{binding.policyId}<span>{binding.principalType === "user" ? "direct" : `via ${binding.principalId}`} · priority {binding.priority}</span></button>;
+          }) : <p>No user or group policies assigned.</p>}</div>
           <div className="sectionTitle">Effective access</div>
           <div className="miniList">{selectedServices.length ? selectedServices.slice(0, 8).map(({ service, label }) => <button type="button" key={service.id}>{service.name}<span>{label} · {kindLabel(service.kind)}</span></button>) : <p>No services available for this user.</p>}</div>
           <div className="inspectorActions"><button type="submit" disabled={busy}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save user</span></button></div>
@@ -1332,7 +1679,7 @@ function UsersScreen({ users, selected, policies, bindings, services, form, setF
   );
 }
 
-function UsageScreen({ keys, services, overview, tenants, usageRows, usage, usageLoaded }: { keys: KeyPolicy[]; services: ServiceItem[]; overview: AdminOverview | null; tenants: AdminTenantSummary[]; usageRows: AdminUsageRow[]; usage: UsageSnapshot; usageLoaded: boolean }) {
+function UsageScreen({ keys, services, overview, tenants, usageRows, usage, usageLoaded }: { keys: AccessPolicy[]; services: ServiceItem[]; overview: AdminOverview | null; tenants: AdminTenantSummary[]; usageRows: AdminUsageRow[]; usage: UsageSnapshot; usageLoaded: boolean }) {
   const activeKeys = keys.filter((key) => key.enabled);
   const readyServices = readyCount(services);
   const blockedServices = services.filter((service) => service.readiness && !service.readiness.executable);
@@ -1374,7 +1721,7 @@ function UsageScreen({ keys, services, overview, tenants, usageRows, usage, usag
         />
         {!usage.events.length ? <div className="emptyTable">No request audit events recorded yet.</div> : null}
         <div className="tableSectionHeader secondaryTableHeader"><div><strong>Policy budgets</strong><span>{rows.length} configured policies</span></div><span>{usageLoaded ? "live ledger" : "policy fallback"}</span></div>
-        <EntityTable columns={["grant", "tenant", "budget usage", "services", "health"]} columnTemplate="minmax(210px, 1.15fr) minmax(120px, 0.7fr) minmax(250px, 1.45fr) 96px 120px" rows={rows.map((row) => ({ id: row.kid, cells: [<EntityName icon={KeyRound} title={row.kid} subtitle={row.tokenRole ?? "custom"} />, row.tenantId, <BudgetUsage row={row} />, effectiveProviderCount(row.providers, services), <UsageHealth row={row} />] }))} />
+        <EntityTable columns={["policy", "tenant", "budget usage", "services", "health"]} columnTemplate="minmax(210px, 1.15fr) minmax(120px, 0.7fr) minmax(250px, 1.45fr) 96px 120px" rows={rows.map((row) => ({ id: row.kid, cells: [<EntityName icon={KeyRound} title={row.kid} subtitle={row.tokenRole ?? "custom"} />, row.tenantId, <BudgetUsage row={row} />, effectiveProviderCount(row.providers, services), <UsageHealth row={row} />] }))} />
       </section>
       <aside className="inspector usageInspector">
         <InspectorHeader icon={BarChart3} title="Request activity" subtitle={`${readyServices}/${services.length} services executable`} />
@@ -1382,11 +1729,11 @@ function UsageScreen({ keys, services, overview, tenants, usageRows, usage, usag
           <div className={blockedServices.length ? "attentionMetric warning" : "attentionMetric healthy"}><strong>{blockedServices.length}</strong><span>services need configuration</span></div>
           {usageLoaded ? (
             <>
-              <div className={untrackedRows.length ? "attentionMetric warning" : "attentionMetric healthy"}><strong>{untrackedRows.length}</strong><span>grants not reporting spend</span></div>
+              <div className={untrackedRows.length ? "attentionMetric warning" : "attentionMetric healthy"}><strong>{untrackedRows.length}</strong><span>policies not reporting spend</span></div>
               <div className={ledgerFailureRows.length ? "attentionMetric danger" : "attentionMetric healthy"}><strong>{ledgerFailureRows.length}</strong><span>budget ledger failures</span></div>
             </>
           ) : <div className="attentionMetric danger"><strong>!</strong><span>live usage ledger unavailable</span></div>}
-          <div className={exhaustedRows.length ? "attentionMetric danger" : "attentionMetric healthy"}><strong>{exhaustedRows.length}</strong><span>grants out of budget</span></div>
+          <div className={exhaustedRows.length ? "attentionMetric danger" : "attentionMetric healthy"}><strong>{exhaustedRows.length}</strong><span>policies out of budget</span></div>
         </div>
         <div className="sectionTitle">Provider usage</div>
         <div className="providerUsageList">{usage.providers.length ? usage.providers.map((provider) => {
@@ -1394,7 +1741,7 @@ function UsageScreen({ keys, services, overview, tenants, usageRows, usage, usag
           return <div key={provider.provider}><EntityName brandIcon={service?.brandIcon} icon={ServerCog} title={service?.name ?? provider.provider} subtitle={`${formatCount(provider.totalTokens)} tokens · ${formatMicros(provider.actualCostMicros)}`} /><span><strong>{formatCount(provider.requestCount)}</strong><small>{provider.errorCount ? `${provider.errorCount} errors` : "healthy"}</small></span></div>;
         }) : <p>No provider activity yet.</p>}</div>
         <div className="sectionTitle">Tenant coverage</div>
-        <div className="miniList">{tenantRows.length ? tenantRows.slice(0, 8).map((tenant) => <button type="button" key={tenant.tenantId}>{tenant.tenantId}<span>{tenant.activeKeys}/{tenant.keys} grants · {effectiveProviderCount(tenant.providers, services, tenant.allProviders)} services</span></button>) : <p>No tenant grants yet.</p>}</div>
+        <div className="miniList">{tenantRows.length ? tenantRows.slice(0, 8).map((tenant) => <button type="button" key={tenant.tenantId}>{tenant.tenantId}<span>{tenant.activeKeys}/{tenant.keys} policies · {effectiveProviderCount(tenant.providers, services, tenant.allProviders)} services</span></button>) : <p>No tenant policies yet.</p>}</div>
         <dl className="facts"><dt>ledger</dt><dd>{usage.ledger}</dd><dt>retention</dt><dd>30 days of request metadata</dd><dt>policies</dt><dd>{overview?.keysActive ?? activeKeys.length} active</dd><dt>tenants</dt><dd>{overview?.tenantsTotal ?? tenantRows.length}</dd></dl>
       </aside>
     </div>
@@ -1513,9 +1860,9 @@ function viewSubtitle(view: View) {
   return {
     catalog: "Service access catalog",
     playground: "Run through the same access path",
-    policies: "Grant services to tenants",
+    policies: "Policies, credentials, and principal bindings",
     users: "Cloudflare Access identities",
-    usage: "Tenant budget ledger",
+    usage: "Request audit and policy budgets",
   }[view];
 }
 
@@ -1611,12 +1958,11 @@ function readyCount(services: ServiceItem[]) {
   return services.filter((service) => service.readiness?.executable).length;
 }
 
-function grantNamesForService(service: ServiceItem, policies: KeyPolicy[] = []) {
-  return unique([...policies.map((policy) => policy.kid), ...(service.access?.policies ?? [])]);
+function grantNamesForService(service: ServiceItem, policies: AccessPolicy[] = []) {
+  return unique([...policies.map((policy) => policy.policyId), ...(service.access?.policies ?? [])]);
 }
 
-function serviceOutcome(service: ServiceItem, policies: KeyPolicy[] = [], policyFallbackAuthoritative = false): ServiceOutcome {
-  const grantedBySession = Boolean(service.access?.allowed);
+function serviceOutcome(service: ServiceItem): ServiceOutcome {
   if (service.access && !service.access.allowed) {
     return {
       label: "denied",
@@ -1626,26 +1972,16 @@ function serviceOutcome(service: ServiceItem, policies: KeyPolicy[] = [], policy
       blocked: true,
     };
   }
-  const granted = grantedBySession || (!service.access && policies.length > 0);
-  const policyNames = service.access?.policies.length ? service.access.policies : policies.map((policy) => policy.kid);
-  if (!granted) {
-    if (!service.access && !policyFallbackAuthoritative) {
-      return {
-        label: "unknown",
-        detail: "Access entitlements are unavailable, so this identity's grant status cannot be determined.",
-        tone: "neutral",
-        playable: false,
-        blocked: false,
-      };
-    }
+  if (!service.access) {
     return {
-      label: "not granted",
-      detail: "No active grant currently includes this service.",
-      tone: "revoked",
+      label: "unknown",
+      detail: "Access entitlements are unavailable, so this identity's policy status cannot be determined.",
+      tone: "neutral",
       playable: false,
-      blocked: true,
+      blocked: false,
     };
   }
+  const policyNames = service.access.policies;
   if (!service.readiness) {
     return {
       label: "unknown",
@@ -1752,6 +2088,15 @@ function formatTimestamp(value: number, full = false) {
     : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
 }
 
+function formatRelativeTime(value: string | null | undefined) {
+  if (!value) return "never";
+  const elapsed = Date.now() - new Date(value).getTime();
+  if (!Number.isFinite(elapsed)) return "unknown";
+  if (elapsed < 60_000) return "checked just now";
+  if (elapsed < 3_600_000) return `checked ${Math.floor(elapsed / 60_000)}m ago`;
+  return `checked ${Math.floor(elapsed / 3_600_000)}h ago`;
+}
+
 function usageEventTone(event: UsageAuditEvent): OutcomeTone {
   if (event.status === "success" || (event.status_code !== undefined && event.status_code !== null && event.status_code < 400)) return "active";
   if (event.status === "denied" || event.status === "provider_error" || event.status === "client_error" || event.status === "timeout" || (event.status_code !== undefined && event.status_code !== null && event.status_code >= 400)) return "revoked";
@@ -1782,9 +2127,9 @@ function groupedProviders(providers: ProviderRow[], query: string) {
     .sort((a, b) => kindLabel(a.kind).localeCompare(kindLabel(b.kind)));
 }
 
-function policyFormFromKey(key: KeyPolicy): PolicyForm {
+function policyFormFromPolicy(key: AccessPolicy): PolicyForm {
   return {
-    kid: key.kid,
+    policyId: key.policyId,
     tokenRole: key.tokenRole ?? "",
     tenantId: key.tenantId ?? "default",
     enabled: key.enabled,
@@ -1795,14 +2140,13 @@ function policyFormFromKey(key: KeyPolicy): PolicyForm {
   };
 }
 
-function policyCoversProvider(policy: KeyPolicy, providerId: string) {
+function policyCoversProvider(policy: AccessPolicy, providerId: string) {
   return policy.providers.length === 0 || policy.providers.includes(providerId);
 }
 
 function accessFormFromUser(user: AccessUser, bindings: PolicyBinding[]): AccessForm {
   return {
     email: user.email,
-    role: user.role,
     tenantId: user.tenantId,
     enabled: user.enabled,
     groups: user.groups.join(", "),
@@ -1813,14 +2157,28 @@ function accessFormFromUser(user: AccessUser, bindings: PolicyBinding[]): Access
   };
 }
 
-function effectiveAccess(user: AccessUser | undefined, policies: KeyPolicy[], bindings: PolicyBinding[], services: ServiceItem[]) {
-  if (!user || !user.enabled) return { policies: [] as KeyPolicy[], services: [] as ServiceItem[] };
+function bindingKey(binding: PolicyBinding | undefined) {
+  return binding ? `${binding.principalType}:${binding.principalId}:${binding.policyId}` : "";
+}
+
+function bindingFormFromBinding(binding: PolicyBinding): BindingForm {
+  return {
+    policyId: binding.policyId,
+    principalType: binding.principalType,
+    principalId: binding.principalId,
+    enabled: binding.enabled,
+    priority: String(binding.priority),
+  };
+}
+
+function effectiveAccess(user: AccessUser | undefined, policies: AccessPolicy[], bindings: PolicyBinding[], services: ServiceItem[]) {
+  if (!user || !user.enabled) return { policies: [] as AccessPolicy[], services: [] as ServiceItem[] };
   const groupIds = new Set(user.groups);
   const policyIds = new Set(bindings
     .filter((binding) => binding.enabled && (binding.principalType === "user" ? binding.principalId === user.email : groupIds.has(binding.principalId)))
     .sort((a, b) => a.priority - b.priority || a.policyId.localeCompare(b.policyId))
     .map((binding) => binding.policyId));
-  const userPolicies = policies.filter((policy) => policy.enabled && policyIds.has(policy.kid));
+  const userPolicies = policies.filter((policy) => policy.enabled && policyIds.has(policy.policyId));
   const hasWildcardGrant = userPolicies.some((policy) => policy.providers.length === 0);
   const providerIds = new Set(userPolicies.flatMap((policy) => policy.providers));
   return { policies: userPolicies, services: services.filter((service) => hasWildcardGrant || providerIds.has(service.provider)) };
@@ -1830,32 +2188,32 @@ function parseGroups(value: string) {
   return unique(value.split(/[,\n]+/).map((group) => group.trim().toLowerCase()).filter(Boolean)).sort();
 }
 
-function reconcileDirectUserBindings(current: PolicyBinding[], email: string, policies: KeyPolicy[], policyIds: string[]) {
+function reconcileDirectUserBindings(current: PolicyBinding[], email: string, policies: AccessPolicy[], policyIds: string[]) {
   const desired = new Set(policyIds);
   const existing = new Map(current
     .filter((binding) => binding.principalType === "user" && binding.principalId === email)
     .map((binding) => [binding.policyId, binding]));
   const other = current.filter((binding) => binding.principalType !== "user" || binding.principalId !== email);
   const direct = policies.flatMap((policy) => {
-    const binding = existing.get(policy.kid);
-    if (!binding && !desired.has(policy.kid)) return [];
+    const binding = existing.get(policy.policyId);
+    if (!binding && !desired.has(policy.policyId)) return [];
     return [{
-      policyId: policy.kid,
+      policyId: policy.policyId,
       principalType: "user" as const,
       principalId: email,
-      enabled: desired.has(policy.kid),
+      enabled: desired.has(policy.policyId),
       priority: binding?.priority ?? 100,
     }];
   });
   return [...other, ...direct];
 }
 
-function policyUsageFallback(policy: KeyPolicy): AdminUsageRow {
+function policyUsageFallback(policy: AccessPolicy): AdminUsageRow {
   const limit = policy.monthlyBudgetMicros;
   const blocked = limit === 0;
   const unmetered = limit === undefined || limit === null;
   return {
-    kid: policy.kid,
+    kid: policy.policyId,
     tenantId: policy.tenantId ?? "default",
     enabled: policy.enabled,
     providers: policy.providers,
@@ -1872,7 +2230,7 @@ function policyUsageFallback(policy: KeyPolicy): AdminUsageRow {
   };
 }
 
-function tenantSummaryFallback(keys: KeyPolicy[]): AdminTenantSummary[] {
+function tenantSummaryFallback(keys: AccessPolicy[]): AdminTenantSummary[] {
   const groups = keys.reduce((acc, key) => {
     const tenantId = key.tenantId ?? "default";
     const current = acc.get(tenantId) ?? { tenantId, keys: 0, activeKeys: 0, providers: new Set<string>(), allProviders: false, monthlyBudgetMicros: 0, requestCostMicros: 0 };
@@ -1893,7 +2251,7 @@ function tenantSummaryFallback(keys: KeyPolicy[]): AdminTenantSummary[] {
   return Array.from(groups.values()).map((tenant) => ({ ...tenant, providers: Array.from(tenant.providers).sort() }));
 }
 
-function adminOverviewFromKeys(keys: KeyPolicy[], providers: ProviderRow[], routes: RouteCatalog): AdminOverview {
+function adminOverviewFromKeys(keys: AccessPolicy[], providers: ProviderRow[], routes: RouteCatalog): AdminOverview {
   const tenants = tenantSummaryFallback(keys);
   return {
     keysTotal: keys.length,
@@ -2050,8 +2408,8 @@ function playgroundBlocker(form: PlaygroundForm, model: CatalogModel | undefined
   return null;
 }
 
-function playgroundBlockedForService(service: ServiceItem, policies: KeyPolicy[] = [], policyFallbackAuthoritative = false) {
-  const outcome = serviceOutcome(service, policies, policyFallbackAuthoritative);
+function playgroundBlockedForService(service: ServiceItem) {
+  const outcome = serviceOutcome(service);
   if (!outcome.playable) return outcome.detail;
   if (service.readiness && !service.readiness.executable) return service.readiness.reasons[0] ?? `service is ${readinessLabel(service.readiness)}`;
   if (!service.models && service.surfaces.includes("provider")) return "no executable model or proxy route declared";
@@ -2175,12 +2533,18 @@ function demoData() {
       manifestRoute("tavily", "crawl", "/v1/proxy/tavily/crawl", ["POST"]),
     ],
   };
-  const keys: KeyPolicy[] = [
-    { kid: "maintainer_models", enabled: true, providers: ["anthropic", "aws-bedrock", "azure-openai", "cloudflare-ai-gateway", "cohere", "deepseek", "fireworks", "google-gemini", "groq", "huggingface", "minimax", "mistral", "openai", "openrouter", "perplexity", "together", "xai"], tenantId: "openclaw", tokenRole: "maintainer", monthlyBudgetMicros: 250000000, requestCostMicros: 1000 },
-    { kid: "openclaw_tools", enabled: true, providers: ["replicate", "tavily"], tenantId: "openclaw", tokenRole: "tooling", monthlyBudgetMicros: 75000000, requestCostMicros: 500 },
-    { kid: "user_research", enabled: true, providers: ["openai", "google-gemini", "tavily"], tenantId: "research", tokenRole: "user", monthlyBudgetMicros: 50000000, requestCostMicros: 1000 },
-    { kid: "sandbox_eval", enabled: false, providers: ["openai"], tenantId: "sandbox", tokenRole: "sandbox", monthlyBudgetMicros: 5000000, requestCostMicros: 500 },
+  const keys: AccessPolicy[] = [
+    { policyId: "maintainer_models", enabled: true, providers: ["anthropic", "aws-bedrock", "azure-openai", "cloudflare-ai-gateway", "cohere", "deepseek", "fireworks", "google-gemini", "groq", "huggingface", "minimax", "mistral", "openai", "openrouter", "perplexity", "together", "xai"], tenantId: "openclaw", tokenRole: "maintainer", monthlyBudgetMicros: 250000000, requestCostMicros: 1000 },
+    { policyId: "openclaw_tools", enabled: true, providers: ["replicate", "tavily"], tenantId: "openclaw", tokenRole: "tooling", monthlyBudgetMicros: 75000000, requestCostMicros: 500 },
+    { policyId: "user_research", enabled: true, providers: ["openai", "google-gemini", "tavily"], tenantId: "research", tokenRole: "user", monthlyBudgetMicros: 50000000, requestCostMicros: 1000 },
+    { policyId: "sandbox_eval", enabled: false, providers: ["openai"], tenantId: "sandbox", tokenRole: "sandbox", monthlyBudgetMicros: 5000000, requestCostMicros: 500 },
   ];
+  const credentials: ProxyCredential[] = [
+    { credentialId: "maintainer_cli", policyId: "maintainer_models", enabled: true },
+    { credentialId: "openclaw_tools_ci", policyId: "openclaw_tools", enabled: true },
+    { credentialId: "research_notebook", policyId: "user_research", enabled: false },
+  ];
+  const connections: ProviderConnection[] = providers.map((item) => ({ providerId: item.id, enabled: !demoDisabledProviderIds.has(item.id) }));
   const users: AccessUser[] = [
     { email: "admin@example.com", role: "admin", tenantId: "openclaw", enabled: true, groups: ["maintainers"] },
     { email: "maintainer@example.com", role: "user", tenantId: "docs", enabled: true, groups: ["maintainers"] },
@@ -2197,7 +2561,7 @@ function demoData() {
   const entitlements: EntitlementsResponse = {
     session,
     providers: providers.map((item) => {
-      const policies = sessionPolicies.filter((key) => policyCoversProvider(key, item.id)).map((key) => key.kid);
+      const policies = sessionPolicies.filter((key) => policyCoversProvider(key, item.id)).map((key) => key.policyId);
       return {
         provider: item.id,
         displayName: item.display_name,
@@ -2214,7 +2578,7 @@ function demoData() {
   const usage = demoUsageSnapshot();
   const tenants = tenantSummaryFallback(keys);
   const overview = adminOverviewFromKeys(keys, providers, routes);
-  return { session, providers, routes, keys, users, bindings, overview, tenants, usageRows, usage, entitlements, services: serviceItems(providers, routes, readinessByProvider, accessByProvider), models };
+  return { session, providers, routes, keys, credentials, connections, users, bindings, overview, tenants, usageRows, usage, entitlements, services: serviceItems(providers, routes, readinessByProvider, accessByProvider), models };
 }
 
 function demoReadiness(provider: ProviderRow, routes: RouteCatalog): ProviderReadiness {
@@ -2222,18 +2586,19 @@ function demoReadiness(provider: ProviderRow, routes: RouteCatalog): ProviderRea
   const manifestRoutes = routes.manifestProxy.filter((route) => route.provider === provider.id);
   const grantRequired = provider.class.includes("oauth");
   const declared = Boolean(openaiRoute || manifestRoutes.length);
-  const offline = ["azure-openai", "aws-bedrock", "cloudflare-ai-gateway"].includes(provider.id);
-  const status = offline ? "missing_config" : grantRequired ? "grant_required" : declared ? "verified" : "declared";
+  const connectionEnabled = !demoDisabledProviderIds.has(provider.id);
+  const missingConfig = demoMissingConfigProviderIds.has(provider.id);
+  const status = !connectionEnabled ? "disabled" : missingConfig ? "missing_config" : grantRequired ? "grant_required" : declared ? "verified" : "declared";
   return {
     id: provider.id,
     displayName: provider.display_name,
     class: provider.class,
     serviceKind: provider.service_kind,
-    requiredConfig: offline ? [`${provider.id.toUpperCase().replace(/-/g, "_")}_CONFIG`] : [],
+    requiredConfig: missingConfig ? [`${provider.id.toUpperCase().replace(/-/g, "_")}_CONFIG`] : [],
     optionalConfig: [],
-    missingConfig: offline ? [`${provider.id.toUpperCase().replace(/-/g, "_")}_CONFIG`] : [],
-    configPresent: !offline,
-    connectionEnabled: true,
+    missingConfig: missingConfig ? [`${provider.id.toUpperCase().replace(/-/g, "_")}_CONFIG`] : [],
+    configPresent: !missingConfig,
+    connectionEnabled,
     oauthGrantRequired: grantRequired,
     oauthGrantCount: 0,
     openaiCompatible: Boolean(openaiRoute),
@@ -2244,7 +2609,7 @@ function demoReadiness(provider: ProviderRow, routes: RouteCatalog): ProviderRea
     lastCheckedAt: status === "verified" ? new Date(Date.now() - 45_000).toISOString() : null,
     latencyMs: status === "verified" ? 184 : null,
     status,
-    reasons: status === "verified" ? [] : status === "grant_required" ? ["OAuth grant required before service calls can run."] : status === "missing_config" ? ["Provider config is not present in the runtime environment."] : ["Provider is declared but has no executable route."],
+    reasons: status === "verified" ? [] : status === "disabled" ? ["Provider connection is disabled by an administrator."] : status === "grant_required" ? ["OAuth grant required before service calls can run."] : status === "missing_config" ? ["Provider config is not present in the runtime environment."] : ["Provider is declared but has no executable route."],
   };
 }
 
