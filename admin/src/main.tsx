@@ -278,13 +278,14 @@ const rolePresets = {
   ops: { budget: "", request: "0", providers: [] },
 };
 
-const navItems: Array<{ id: View; label: string; icon: IconComponent }> = [
-  { id: "catalog", label: "Catalog", icon: Boxes },
-  { id: "playground", label: "Playground", icon: FlaskConical },
-  { id: "policies", label: "Access", icon: KeyRound },
-  { id: "users", label: "Users", icon: Users },
-  { id: "usage", label: "Usage", icon: BarChart3 },
+const navItems: Array<{ id: View; label: string; icon: IconComponent; section: "workspace" | "admin" }> = [
+  { id: "catalog", label: "Catalog", icon: Boxes, section: "workspace" },
+  { id: "playground", label: "Playground", icon: FlaskConical, section: "workspace" },
+  { id: "policies", label: "Access", icon: KeyRound, section: "admin" },
+  { id: "users", label: "Users", icon: Users, section: "admin" },
+  { id: "usage", label: "Usage", icon: BarChart3, section: "admin" },
 ];
+const adminViews = new Set<View>(["policies", "users", "usage"]);
 
 function App() {
   const [view, setView] = useState<View>(initialViewFromPath);
@@ -357,6 +358,10 @@ function App() {
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
+
+  useEffect(() => {
+    if (status !== "loading" && session.role !== "admin" && adminViews.has(view)) navigateTo("catalog", true);
+  }, [session.role, status, view]);
 
   useEffect(() => {
     if (view === "usage" && session.role === "admin" && policyDataLoaded && !demoMode && !usageLoaded) {
@@ -668,11 +673,13 @@ function App() {
     });
   }
 
-  function navigateTo(nextView: View) {
+  function navigateTo(nextView: View, replace = false) {
     setView(nextView);
     const nextPath = viewPaths[nextView];
     if (window.location.pathname !== nextPath) {
-      window.history.pushState(null, "", `${nextPath}${window.location.search}${window.location.hash}`);
+      const nextUrl = `${nextPath}${window.location.search}${window.location.hash}`;
+      if (replace) window.history.replaceState(null, "", nextUrl);
+      else window.history.pushState(null, "", nextUrl);
     }
   }
 
@@ -680,22 +687,42 @@ function App() {
     <main className="appShell">
       <aside className="sidebar">
         <div className="brandBlock">
-          <strong>ClawRouter</strong>
-          <span>provider access control</span>
-        </div>
-        <div className="tenantSwitch">
-          <span>active context</span>
-          <strong>{session.tenantId ?? "default"}</strong>
-          <small>{session.email ?? "not signed in"}</small>
+          <span className="brandMark"><Route aria-hidden="true" /></span>
+          <div>
+            <strong>ClawRouter</strong>
+            <span>access gateway</span>
+          </div>
         </div>
         <nav className="navTabs" aria-label="console">
-          {navItems.map(({ id, label, icon: Icon }) => (
-            <button key={id} className={view === id ? "active" : ""} type="button" onClick={() => navigateTo(id)}>
-              <Icon className="navIcon" aria-hidden="true" />
-              <span>{label}</span>
-            </button>
-          ))}
+          <div className="navGroup">
+            <span className="navGroupLabel">Workspace</span>
+            {navItems.filter((item) => item.section === "workspace").map(({ id, label, icon: Icon }) => (
+              <button key={id} className={view === id ? "active" : ""} type="button" onClick={() => navigateTo(id)}>
+                <Icon className="navIcon" aria-hidden="true" />
+                <span>{label}</span>
+              </button>
+            ))}
+          </div>
+          {session.role === "admin" ? (
+            <div className="navGroup">
+              <span className="navGroupLabel">Administration</span>
+              {navItems.filter((item) => item.section === "admin").map(({ id, label, icon: Icon }) => (
+                <button key={id} className={view === id ? "active" : ""} type="button" onClick={() => navigateTo(id)}>
+                  <Icon className="navIcon" aria-hidden="true" />
+                  <span>{label}</span>
+                </button>
+              ))}
+            </div>
+          ) : null}
         </nav>
+        <div className="tenantSwitch">
+          <span className="contextIcon"><ShieldCheck aria-hidden="true" /></span>
+          <div>
+            <span>Active context</span>
+            <strong>{session.email ?? "not signed in"}</strong>
+            <small>{session.tenantId ?? "default"} · {session.role}</small>
+          </div>
+        </div>
       </aside>
 
       <section className="workspace">
@@ -730,6 +757,7 @@ function App() {
             kind={kind}
             setKind={setKind}
             kinds={kinds}
+            canAdminister={session.role === "admin"}
             onSelect={(service) => setSelectedServiceId(service.id)}
             onPlay={(service) => {
               const model = models.find((item) => item.provider === service.provider);
@@ -768,7 +796,7 @@ function App() {
           />
         ) : null}
 
-        {view === "policies" ? (
+        {view === "policies" && session.role === "admin" ? (
           <PoliciesScreen
             keys={keys}
             selected={selectedPolicy}
@@ -787,7 +815,7 @@ function App() {
           />
         ) : null}
 
-        {view === "users" ? (
+        {view === "users" && session.role === "admin" ? (
           <UsersScreen
             users={users}
             selected={selectedUser}
@@ -809,13 +837,13 @@ function App() {
           />
         ) : null}
 
-        {view === "usage" ? <UsageScreen keys={keys} services={services} overview={adminOverview} tenants={tenantSummaries} usageRows={usageRows} usageLoaded={usageLoaded} /> : null}
+        {view === "usage" && session.role === "admin" ? <UsageScreen keys={keys} services={services} overview={adminOverview} tenants={tenantSummaries} usageRows={usageRows} usageLoaded={usageLoaded} /> : null}
       </section>
     </main>
   );
 }
 
-function CatalogScreen({ services, allServices, selected, policies, policyFallbackAuthoritative, query, setQuery, kind, setKind, kinds, onSelect, onPlay, onAdd }: {
+function CatalogScreen({ services, allServices, selected, policies, policyFallbackAuthoritative, query, setQuery, kind, setKind, kinds, canAdminister, onSelect, onPlay, onAdd }: {
   services: ServiceItem[];
   allServices: ServiceItem[];
   selected?: ServiceItem;
@@ -826,6 +854,7 @@ function CatalogScreen({ services, allServices, selected, policies, policyFallba
   kind: string;
   setKind: (value: string) => void;
   kinds: string[];
+  canAdminister: boolean;
   onSelect: (service: ServiceItem) => void;
   onPlay: (service: ServiceItem) => void;
   onAdd: (service: ServiceItem) => void;
@@ -851,7 +880,7 @@ function CatalogScreen({ services, allServices, selected, policies, policyFallba
           </div>
         </div>
         <EntityTable
-          columns={["service", "status", "granted by", "coverage", "routes"]}
+          columns={["service", "status", "granted by", "kind", "interface"]}
           columnTemplate="minmax(220px, 1.45fr) 138px minmax(130px, 0.8fr) 120px minmax(150px, 0.9fr)"
           rows={services.map((service) => {
             const policiesForService = servicePolicies(service);
@@ -864,7 +893,7 @@ function CatalogScreen({ services, allServices, selected, policies, policyFallba
                 <EntityName brandIcon={service.brandIcon} icon={kindIcon(service.kind)} title={service.name} subtitle={`${service.provider} · ${kindLabel(service.kind)}`} />,
                 <OutcomeStatus outcome={outcome} />,
                 <GrantChips names={grantNamesForService(service, policiesForService)} />,
-                service.models ? `${service.models} models` : `${service.routeCount} route${service.routeCount === 1 ? "" : "s"}`,
+                kindLabel(service.kind),
                 service.surfaces.join(", "),
               ],
             };
@@ -880,36 +909,28 @@ function CatalogScreen({ services, allServices, selected, policies, policyFallba
               return (
                 <>
             <InspectorHeader brandIcon={selected.brandIcon} icon={kindIcon(selected.kind)} title={selected.name} subtitle={`${kindLabel(selected.kind)} · ${selected.category}`} />
-            <div className="outcomeCallout">
+            <div className={`outcomeCallout ${outcome.tone}`}>
               <OutcomeStatus outcome={outcome} />
               <p>{outcome.detail}</p>
             </div>
             <dl className="facts">
               <dt>provider</dt><dd>{selected.provider}</dd>
+              <dt>kind</dt><dd>{kindLabel(selected.kind)}</dd>
               <dt>routes</dt><dd>{selected.route}</dd>
               <dt>surfaces</dt><dd>{selected.surfaces.join(", ")}</dd>
-              <dt>models</dt><dd>{selected.models || "n/a"}</dd>
               <dt>grant</dt><dd>{grantNamesForService(selected, selectedPolicies).join(", ") || "none"}</dd>
               <dt>readiness</dt><dd>{readinessLabel(selected.readiness)}</dd>
               <dt>missing</dt><dd>{selected.readiness?.missingConfig.length ? selected.readiness.missingConfig.join(", ") : "none"}</dd>
               <dt>oauth grants</dt><dd>{selected.readiness?.oauthGrantRequired ? selected.readiness.oauthGrantCount : "n/a"}</dd>
             </dl>
             {selected.readiness?.reasons.length ? <InlineNote>{selected.readiness.reasons.join("; ")}</InlineNote> : null}
-            {selected.modelIds.length ? (
-              <>
-                <div className="sectionTitle">Models</div>
-                <div className="miniList">
-                  {selected.modelIds.slice(0, 5).map((model) => <button key={model} type="button">{model}<span>model</span></button>)}
-                </div>
-              </>
-            ) : null}
             <div className="sectionTitle">Granting access</div>
             <div className="miniList">
               {grantNamesForService(selected, selectedPolicies).length ? grantNamesForService(selected, selectedPolicies).map((grant) => <button key={grant} type="button">{grant}<span>{selectedPolicies.find((policy) => policy.kid === grant)?.tenantId ?? "entitlement"}</span></button>) : <p>No active grant includes this service yet.</p>}
             </div>
             <div className="inspectorActions">
               <button type="button" disabled={Boolean(playBlocker)} onClick={() => onPlay(selected)} title={playBlocker ?? undefined}><Play className="buttonIcon" aria-hidden="true" /><span>Try in playground</span></button>
-              <button type="button" className="buttonSecondary" onClick={() => onAdd(selected)}><Plus className="buttonIcon" aria-hidden="true" /><span>Add to grant</span></button>
+              {canAdminister ? <button type="button" className="buttonSecondary" onClick={() => onAdd(selected)}><Plus className="buttonIcon" aria-hidden="true" /><span>Add to grant</span></button> : null}
             </div>
                 </>
               );
@@ -955,62 +976,77 @@ function PlaygroundScreen({ form, setForm, models, selected, serviceRoutes, sele
   const selectedReadiness = selectedProvider ? readinessByProvider[selectedProvider] : undefined;
   const methods = selectedServiceRoute?.methods.length ? selectedServiceRoute.methods : ["POST"];
   return (
-    <div className="playgroundLayout">
-      <form className="promptPane" onSubmit={onRun}>
-        <div className="modeTabs" role="tablist" aria-label="playground mode">
-          <button type="button" className={form.mode === "model" ? "active" : ""} onClick={() => setForm({ ...form, mode: "model" })}>Model</button>
-          <button type="button" className={form.mode === "service" ? "active" : ""} onClick={() => setForm({ ...form, mode: "service" })}>Service</button>
-        </div>
+    <form className="playgroundLayout" onSubmit={onRun}>
+      <aside className="playgroundSettings">
+        <PanelTitle icon={ServerCog} title="Request setup" meta={form.mode === "model" ? "model invocation" : "service proxy"} />
         <div className="playgroundToolbar">
           {form.mode === "model" ? (
             <>
-              <label><span>model</span><select value={form.model} onChange={(event) => setForm({ ...form, model: event.target.value })}>{models.map((model) => <option key={`${model.provider}:${model.id}`} value={model.id}>{model.id}</option>)}</select></label>
-              <label><span>endpoint</span><select value={form.endpoint} onChange={(event) => setForm({ ...form, endpoint: event.target.value as PlaygroundForm["endpoint"] })}><option value="/v1/chat/completions">chat completions</option><option value="/v1/responses">responses</option></select></label>
-              <label><span>tokens</span><input value={form.maxTokens} onChange={(event) => setForm({ ...form, maxTokens: event.target.value })} /></label>
-              <label><span>temp</span><input value={form.temperature} onChange={(event) => setForm({ ...form, temperature: event.target.value })} /></label>
+              <label><span>Model</span><select value={form.model} onChange={(event) => setForm({ ...form, model: event.target.value })}>{models.map((model) => <option key={`${model.provider}:${model.id}`} value={model.id}>{model.id}</option>)}</select></label>
+              <label><span>Endpoint</span><select value={form.endpoint} onChange={(event) => setForm({ ...form, endpoint: event.target.value as PlaygroundForm["endpoint"] })}><option value="/v1/chat/completions">chat completions</option><option value="/v1/responses">responses</option></select></label>
+              <div className="playgroundSettingPair">
+                <label><span>Max tokens</span><input value={form.maxTokens} onChange={(event) => setForm({ ...form, maxTokens: event.target.value })} /></label>
+                <label><span>Temperature</span><input value={form.temperature} onChange={(event) => setForm({ ...form, temperature: event.target.value })} /></label>
+              </div>
             </>
           ) : (
             <>
-              <label><span>service route</span><select value={form.serviceRoute} onChange={(event) => {
+              <label><span>Service route</span><select value={form.serviceRoute} onChange={(event) => {
                 const route = serviceRoutes.find((item) => routeKey(item) === event.target.value);
                 setForm({ ...form, serviceRoute: event.target.value, serviceMethod: route?.methods[0] ?? "POST" });
               }}>{serviceRoutes.map((route) => <option key={routeKey(route)} value={routeKey(route)}>{route.provider} / {route.endpoint}</option>)}</select></label>
-              <label><span>method</span><select value={form.serviceMethod} onChange={(event) => setForm({ ...form, serviceMethod: event.target.value })}>{methods.map((method) => <option key={method} value={method}>{method}</option>)}</select></label>
-              <label className="servicePathInput"><span>path / id</span><input value={form.servicePath} onChange={(event) => setForm({ ...form, servicePath: event.target.value })} placeholder="replacement for route variables" /></label>
+              <label><span>Method</span><select value={form.serviceMethod} onChange={(event) => setForm({ ...form, serviceMethod: event.target.value })}>{methods.map((method) => <option key={method} value={method}>{method}</option>)}</select></label>
+              <label><span>Path / id</span><input value={form.servicePath} onChange={(event) => setForm({ ...form, servicePath: event.target.value })} placeholder="replacement for route variables" /></label>
             </>
           )}
-          <button type="submit" disabled={busy || Boolean(blocker)} title={blocker ?? undefined}><Play className="buttonIcon" aria-hidden="true" /><span>Run</span></button>
+        </div>
+        {blocker ? <InlineNote>{blocker}</InlineNote> : null}
+        <dl className="facts">
+          <dt>provider</dt><dd>{selectedProvider ?? "none"}</dd>
+          <dt>readiness</dt><dd>{readinessLabel(selectedReadiness)}</dd>
+          <dt>access</dt><dd>{selectedAccess ? (selectedAccess.allowed ? selectedAccess.policies.join(", ") || "session" : "not granted") : "unknown"}</dd>
+          <dt>endpoint</dt><dd>{playgroundAccessEndpoint(form, selectedServiceRoute)}</dd>
+        </dl>
+      </aside>
+      <section className="promptPane">
+        <div className="playgroundHeader">
+          <div className="modeTabs" role="tablist" aria-label="playground mode">
+            <button type="button" className={form.mode === "model" ? "active" : ""} onClick={() => setForm({ ...form, mode: "model" })}>Model</button>
+            <button type="button" className={form.mode === "service" ? "active" : ""} onClick={() => setForm({ ...form, mode: "service" })}>Service</button>
+          </div>
+          <button type="submit" disabled={busy || Boolean(blocker)} title={blocker ?? undefined}><Play className="buttonIcon" aria-hidden="true" /><span>Run request</span></button>
         </div>
         {error ? <InlineError message={error} /> : null}
-        {blocker ? <InlineNote>{blocker}</InlineNote> : null}
         <div className="runtimeStrip">
           <ReadinessStatus readiness={selectedReadiness} />
-          <span>{selectedAccess ? (selectedAccess.allowed ? `allowed: ${selectedAccess.policies.join(", ") || "session"}` : "not granted") : "access unknown"}</span>
+          <span>{selectedAccess ? (selectedAccess.allowed ? `allowed by ${selectedAccess.policies.join(", ") || "session"}` : "not granted") : "access unknown"}</span>
           <span>{selectedProvider ?? "no provider"}</span>
         </div>
         {form.mode === "model" ? (
           <div className="promptComposer">
-            <label><span>system</span><textarea className="systemPrompt" value={form.system} onChange={(event) => setForm({ ...form, system: event.target.value })} /></label>
-            <label><span>prompt</span><textarea className="mainPrompt" value={form.prompt} onChange={(event) => setForm({ ...form, prompt: event.target.value })} /></label>
+            <label><span>System instructions</span><textarea className="systemPrompt" value={form.system} onChange={(event) => setForm({ ...form, system: event.target.value })} /></label>
+            <label><span>User prompt</span><textarea className="mainPrompt" value={form.prompt} onChange={(event) => setForm({ ...form, prompt: event.target.value })} /></label>
           </div>
         ) : (
           <div className="promptComposer">
-            <label><span>json body</span><textarea className="mainPrompt servicePayload" value={form.servicePayload} onChange={(event) => setForm({ ...form, servicePayload: event.target.value })} /></label>
+            <label><span>JSON body</span><textarea className="mainPrompt servicePayload" value={form.servicePayload} onChange={(event) => setForm({ ...form, servicePayload: event.target.value })} /></label>
           </div>
         )}
+        <section className="responsePane">
+          <div className="splitHeader">
+            <PanelTitle icon={ChevronRight} title="Response" meta="raw response" />
+          </div>
+          <pre>{result}</pre>
+        </section>
         <details className="requestDrawer">
-          <summary><span><ServerCog className="buttonIcon" aria-hidden="true" />Request payload</span><strong>{requestMode}</strong></summary>
+          <summary><span><ServerCog className="buttonIcon" aria-hidden="true" />Inspect request</span><strong>{requestMode}</strong></summary>
           <div className="requestDrawerToolbar">
             <div className="segmented"><button type="button" className={requestMode === "json" ? "active" : ""} onClick={() => setRequestMode("json")}>JSON</button><button type="button" className={requestMode === "curl" ? "active" : ""} onClick={() => setRequestMode("curl")}>curl</button></div>
           </div>
           <pre>{request}</pre>
         </details>
-      </form>
-      <section className="responsePane">
-        <PanelTitle icon={ChevronRight} title="Response" meta="raw" />
-        <pre>{result}</pre>
       </section>
-    </div>
+    </form>
   );
 }
 
