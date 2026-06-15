@@ -1099,6 +1099,8 @@ struct AdminTenantSummary {
 
 #[derive(Debug, Default)]
 struct TenantAccumulator {
+    policies: usize,
+    active_policies: usize,
     keys: usize,
     active_keys: usize,
     providers: BTreeSet<String>,
@@ -1679,20 +1681,24 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
     };
 
     if req.method() == Method::Get && path == "/v1/admin/overview" {
-        let entries = list_admin_key_policies(&env, &kv).await?;
+        let reporting = admin_reporting_snapshot(&env, &kv).await?;
         let snapshot = provider_snapshot()?;
-        return Response::from_json(&admin_overview(&entries, &snapshot));
+        return Response::from_json(&admin_overview(
+            &reporting.policies,
+            &reporting.keys,
+            &snapshot,
+        ));
     }
 
     if req.method() == Method::Get && (path == "/v1/admin/tenants" || path == "/v1/admin/users") {
-        let entries = list_admin_key_policies(&env, &kv).await?;
+        let reporting = admin_reporting_snapshot(&env, &kv).await?;
         return Response::from_json(&serde_json::json!({
-            "tenants": admin_tenant_summaries(&entries)
+            "tenants": admin_tenant_summaries(&reporting.policies, &reporting.keys)
         }));
     }
 
     if req.method() == Method::Get && path == "/v1/admin/usage" {
-        let entries = list_admin_key_policies(&env, &kv).await?;
+        let entries = list_admin_policy_reports(&env, &kv).await?;
         let usage = usage_snapshot(&env, None, USAGE_EVENT_LIMIT).await?;
         let mut rows = Vec::new();
         for entry in entries {
@@ -2693,16 +2699,17 @@ fn key_profile_response(auth: &AuthorizedKey) -> KeyProfileResponse {
 }
 
 fn admin_overview(
-    entries: &[AdminKeyPolicyResponse],
+    policies: &[AdminKeyPolicyResponse],
+    keys: &[AdminKeyPolicyResponse],
     snapshot: &ProviderSnapshot,
 ) -> AdminOverviewResponse {
     let route_catalog = route_catalog(snapshot);
     AdminOverviewResponse {
-        policies_total: entries.len(),
-        policies_active: entries.iter().filter(|entry| entry.enabled).count(),
-        keys_total: entries.len(),
-        keys_active: entries.iter().filter(|entry| entry.enabled).count(),
-        tenants_total: admin_tenant_summaries(entries).len(),
+        policies_total: policies.len(),
+        policies_active: policies.iter().filter(|entry| entry.enabled).count(),
+        keys_total: keys.len(),
+        keys_active: keys.iter().filter(|entry| entry.enabled).count(),
+        tenants_total: admin_tenant_summaries(policies, keys).len(),
         provider_count: snapshot.providers.len(),
         openai_compatible_providers: route_catalog
             .get("openaiCompatible")
@@ -2715,22 +2722,25 @@ fn admin_overview(
             .map(Vec::len)
             .unwrap_or_default(),
         monthly_budget_micros: sum_optional_micros(
-            entries.iter().map(|entry| entry.monthly_budget_micros),
+            policies.iter().map(|entry| entry.monthly_budget_micros),
         ),
         request_cost_micros: sum_optional_micros(
-            entries.iter().map(|entry| entry.request_cost_micros),
+            policies.iter().map(|entry| entry.request_cost_micros),
         ),
     }
 }
 
-fn admin_tenant_summaries(entries: &[AdminKeyPolicyResponse]) -> Vec<AdminTenantSummary> {
+fn admin_tenant_summaries(
+    policies: &[AdminKeyPolicyResponse],
+    keys: &[AdminKeyPolicyResponse],
+) -> Vec<AdminTenantSummary> {
     let mut tenants = BTreeMap::<String, TenantAccumulator>::new();
-    for entry in entries {
+    for entry in policies {
         let tenant_id = response_tenant_id(entry);
         let summary = tenants.entry(tenant_id).or_default();
-        summary.keys += 1;
+        summary.policies += 1;
         if entry.enabled {
-            summary.active_keys += 1;
+            summary.active_policies += 1;
         }
         summary.monthly_budget_micros = summary
             .monthly_budget_micros
@@ -2746,12 +2756,19 @@ fn admin_tenant_summaries(entries: &[AdminKeyPolicyResponse]) -> Vec<AdminTenant
             }
         }
     }
+    for entry in keys {
+        let summary = tenants.entry(response_tenant_id(entry)).or_default();
+        summary.keys += 1;
+        if entry.enabled {
+            summary.active_keys += 1;
+        }
+    }
     tenants
         .into_iter()
         .map(|(tenant_id, summary)| AdminTenantSummary {
             tenant_id,
-            policies: summary.keys,
-            active_policies: summary.active_keys,
+            policies: summary.policies,
+            active_policies: summary.active_policies,
             keys: summary.keys,
             active_keys: summary.active_keys,
             providers: summary.providers.into_iter().collect(),
@@ -2867,6 +2884,40 @@ async fn existing_legacy_key_policy(kv: &KvStore, kid: &str) -> Result<Option<Le
     let policy = serde_json::from_str::<LegacyKeyPolicy>(&record)
         .map_err(|error| Error::RustError(format!("legacy key policy is invalid JSON: {error}")))?;
     Ok(Some(policy))
+}
+
+struct AdminReportingSnapshot {
+    policies: Vec<AdminKeyPolicyResponse>,
+    keys: Vec<AdminKeyPolicyResponse>,
+}
+
+async fn admin_reporting_snapshot(env: &Env, kv: &KvStore) -> Result<AdminReportingSnapshot> {
+    let policy_entries = list_access_policy_records(env, kv).await?;
+    let policies = policy_entries
+        .iter()
+        .map(|entry| (entry.policy_id.clone(), entry.policy.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let policy_reports = admin_policy_reports(policy_entries);
+    let key_reports = admin_key_policy_responses(list_proxy_credentials(env, kv).await?, &policies);
+    Ok(AdminReportingSnapshot {
+        policies: policy_reports,
+        keys: key_reports,
+    })
+}
+
+async fn list_admin_policy_reports(env: &Env, kv: &KvStore) -> Result<Vec<AdminKeyPolicyResponse>> {
+    Ok(admin_policy_reports(
+        list_access_policy_records(env, kv).await?,
+    ))
+}
+
+fn admin_policy_reports(entries: Vec<AccessPolicyEntry>) -> Vec<AdminKeyPolicyResponse> {
+    let mut reports = entries
+        .into_iter()
+        .map(|entry| admin_policy_response(&entry.policy_id, &entry.policy_id, &entry.policy))
+        .collect::<Vec<_>>();
+    reports.sort_by(|a, b| a.policy_id.cmp(&b.policy_id));
+    reports
 }
 
 async fn list_admin_key_policies(env: &Env, kv: &KvStore) -> Result<Vec<AdminKeyPolicyResponse>> {
@@ -9563,8 +9614,8 @@ mod tests {
     }
 
     #[test]
-    fn admin_overview_and_tenants_are_derived_from_key_policies() {
-        let entries = vec![
+    fn admin_overview_and_tenants_keep_policy_and_credential_counts_separate() {
+        let policies = vec![
             AdminKeyPolicyResponse {
                 kid: "svc_docs".to_string(),
                 policy_id: "svc_docs".to_string(),
@@ -9606,14 +9657,38 @@ mod tests {
                 request_cost_micros: None,
             },
         ];
-        let tenants = admin_tenant_summaries(&entries);
+        let keys = vec![
+            AdminKeyPolicyResponse {
+                kid: "key_docs_a".to_string(),
+                policy_id: "svc_docs".to_string(),
+                enabled: true,
+                ..policies[0].clone()
+            },
+            AdminKeyPolicyResponse {
+                kid: "key_docs_b".to_string(),
+                policy_id: "svc_docs".to_string(),
+                enabled: false,
+                ..policies[0].clone()
+            },
+            AdminKeyPolicyResponse {
+                kid: "key_ops".to_string(),
+                policy_id: "svc_ops".to_string(),
+                ..policies[1].clone()
+            },
+            AdminKeyPolicyResponse {
+                kid: "key_default".to_string(),
+                policy_id: "svc_default".to_string(),
+                ..policies[2].clone()
+            },
+        ];
+        let tenants = admin_tenant_summaries(&policies, &keys);
         let docs = tenants
             .iter()
             .find(|tenant| tenant.tenant_id == "team_docs")
             .unwrap();
         assert_eq!(docs.policies, 2);
         assert_eq!(docs.active_policies, 2);
-        assert_eq!(docs.keys, 2);
+        assert_eq!(docs.keys, 3);
         assert_eq!(docs.active_keys, 2);
         assert_eq!(docs.providers, vec!["openai", "tavily"]);
         assert!(docs.all_providers);
@@ -9622,16 +9697,18 @@ mod tests {
             .iter()
             .find(|tenant| tenant.tenant_id == "retired")
             .unwrap();
+        assert_eq!(retired.policies, 1);
+        assert_eq!(retired.keys, 0);
         assert_eq!(retired.active_keys, 0);
         assert!(!retired.all_providers);
-        let overview = admin_overview(&entries, &provider_snapshot().unwrap());
+        let overview = admin_overview(&policies, &keys, &provider_snapshot().unwrap());
         assert_eq!(overview.policies_total, 4);
         assert_eq!(overview.policies_active, 3);
-        assert_eq!(overview.keys_total, overview.policies_total);
-        assert_eq!(overview.keys_active, overview.policies_active);
+        assert_eq!(overview.keys_total, 4);
+        assert_eq!(overview.keys_active, 3);
         assert!(retired.providers.is_empty());
 
-        let overview = admin_overview(&entries, &provider_snapshot().unwrap());
+        let overview = admin_overview(&policies, &keys, &provider_snapshot().unwrap());
         assert_eq!(overview.keys_total, 4);
         assert_eq!(overview.keys_active, 3);
         assert_eq!(overview.tenants_total, 3);

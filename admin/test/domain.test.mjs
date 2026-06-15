@@ -132,11 +132,22 @@ test("budget parsing and fallback summaries keep blocked and wildcard states exp
   assert.equal(blocked.budget.ledger, "blocked");
   assert.equal(blocked.budget.remainingMicros, 0);
 
-  const summaries = tenantSummaryFallback(policies);
+  const summaries = tenantSummaryFallback(policies, [
+    { credentialId: "models_a", policyId: "models", enabled: true },
+    { credentialId: "models_b", policyId: "models", enabled: false },
+    { credentialId: "wildcard_a", policyId: "wildcard", enabled: true },
+  ]);
   const ops = summaries.find((tenant) => tenant.tenantId === "ops");
   assert.equal(ops?.allProviders, true);
-  assert.equal(ops?.policies, ops?.keys);
-  assert.equal(ops?.activePolicies, ops?.activeKeys);
+  assert.equal(ops?.policies, 1);
+  assert.equal(ops?.activePolicies, 1);
+  assert.equal(ops?.keys, 1);
+  assert.equal(ops?.activeKeys, 1);
+  const openclaw = summaries.find((tenant) => tenant.tenantId === "openclaw");
+  assert.equal(openclaw?.policies, 3);
+  assert.equal(openclaw?.activePolicies, 2);
+  assert.equal(openclaw?.keys, 2);
+  assert.equal(openclaw?.activeKeys, 1);
 });
 
 function modelForm() {

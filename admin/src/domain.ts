@@ -25,6 +25,12 @@ export interface AccessPolicy {
   requestCostMicros?: number | null;
 }
 
+export interface CredentialSummary {
+  credentialId: string;
+  policyId: string;
+  enabled: boolean;
+}
+
 export interface ProviderReadiness {
   id: string;
   displayName: string;
@@ -373,28 +379,35 @@ export function policyUsageFallback(policy: AccessPolicy): AdminUsageRow {
   };
 }
 
-export function tenantSummaryFallback(keys: AccessPolicy[]): AdminTenantSummary[] {
-  const groups = keys.reduce((acc, key) => {
-    const tenantId = key.tenantId ?? "default";
-    const current = acc.get(tenantId) ?? { tenantId, keys: 0, activeKeys: 0, providers: new Set<string>(), allProviders: false, monthlyBudgetMicros: 0, requestCostMicros: 0 };
-    current.keys += 1;
-    if (key.enabled) {
-      current.activeKeys += 1;
-      if (key.providers.length) {
-        key.providers.forEach((provider) => current.providers.add(provider));
+export function tenantSummaryFallback(policies: AccessPolicy[], credentials: CredentialSummary[] = []): AdminTenantSummary[] {
+  const groups = policies.reduce((acc, policy) => {
+    const tenantId = policy.tenantId ?? "default";
+    const current = acc.get(tenantId) ?? { tenantId, policies: 0, activePolicies: 0, keys: 0, activeKeys: 0, providers: new Set<string>(), allProviders: false, monthlyBudgetMicros: 0, requestCostMicros: 0 };
+    current.policies += 1;
+    if (policy.enabled) {
+      current.activePolicies += 1;
+      if (policy.providers.length) {
+        policy.providers.forEach((provider) => current.providers.add(provider));
       } else {
         current.allProviders = true;
       }
     }
-    current.monthlyBudgetMicros += key.monthlyBudgetMicros ?? 0;
-    current.requestCostMicros += key.requestCostMicros ?? 0;
+    current.monthlyBudgetMicros += policy.monthlyBudgetMicros ?? 0;
+    current.requestCostMicros += policy.requestCostMicros ?? 0;
     acc.set(tenantId, current);
     return acc;
-  }, new Map<string, { tenantId: string; keys: number; activeKeys: number; providers: Set<string>; allProviders: boolean; monthlyBudgetMicros: number; requestCostMicros: number }>());
+  }, new Map<string, { tenantId: string; policies: number; activePolicies: number; keys: number; activeKeys: number; providers: Set<string>; allProviders: boolean; monthlyBudgetMicros: number; requestCostMicros: number }>());
+  const policyById = new Map(policies.map((policy) => [policy.policyId, policy]));
+  for (const credential of credentials) {
+    const policy = policyById.get(credential.policyId);
+    if (!policy) continue;
+    const tenant = groups.get(policy.tenantId ?? "default");
+    if (!tenant) continue;
+    tenant.keys += 1;
+    if (credential.enabled && policy.enabled) tenant.activeKeys += 1;
+  }
   return Array.from(groups.values()).map((tenant) => ({
     ...tenant,
-    policies: tenant.keys,
-    activePolicies: tenant.activeKeys,
     providers: Array.from(tenant.providers).sort(),
   }));
 }
