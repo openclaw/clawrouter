@@ -1401,6 +1401,12 @@ struct AccessControlUser {
 #[serde(rename_all = "camelCase")]
 struct AccessControlUserBindingsPutRequest {
     user: AccessControlUser,
+    policy_ids: Vec<String>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccessControlUserBindingsPutResponse {
     bindings: Vec<PolicyBindingRecord>,
 }
 
@@ -2050,19 +2056,12 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 404,
             );
         }
-        let principal = PolicyBindingPrincipal {
-            principal_type: PrincipalType::User,
-            principal_id: email.clone(),
-        };
-        let current_bindings =
-            authoritative_policy_bindings_for_principal(&env, &kv, principal).await?;
-        let bindings =
-            reconcile_user_policy_bindings(&email, current_bindings, &desired_policy_ids);
         let user = AccessControlUser {
             email: email.clone(),
             record: request.record.clone(),
         };
-        put_authoritative_access_user_bindings(&env, &kv, &user, &bindings).await?;
+        let bindings =
+            put_authoritative_access_user_bindings(&env, &kv, &user, &policy_ids).await?;
         return Response::from_json(&serde_json::json!({
             "user": access_user_response(&email, request.record, &env)?,
             "bindings": bindings
@@ -3731,22 +3730,6 @@ async fn sync_policy_binding_compatibility_best_effort(
     sync_kv_record_best_effort(kv, &binding_key, binding, compatibility_kind).await;
 }
 
-async fn authoritative_policy_bindings_for_principal(
-    env: &Env,
-    kv: &KvStore,
-    principal: PolicyBindingPrincipal,
-) -> Result<Vec<PolicyBindingRecord>> {
-    let namespace = access_control_namespace(env)?;
-    let mut response = resolve_policy_binding_index(&namespace, vec![principal.clone()]).await?;
-    if !response.missing_principals.is_empty() {
-        let seed = policy_binding_index_seed(kv, principal.clone()).await?;
-        initialize_policy_binding_index(&namespace, &[seed]).await?;
-        response = resolve_policy_binding_index(&namespace, vec![principal]).await?;
-    }
-    sort_policy_bindings(&mut response.bindings);
-    Ok(response.bindings)
-}
-
 fn reconcile_user_policy_bindings(
     email: &str,
     current: Vec<PolicyBindingRecord>,
@@ -3782,14 +3765,14 @@ async fn put_authoritative_access_user_bindings(
     env: &Env,
     kv: &KvStore,
     user: &AccessControlUser,
-    bindings: &[PolicyBindingRecord],
-) -> Result<()> {
+    policy_ids: &[String],
+) -> Result<Vec<PolicyBindingRecord>> {
     let namespace = access_control_namespace(env)?;
-    put_access_control_user_bindings(
+    let bindings = put_access_control_user_bindings(
         &namespace,
         &AccessControlUserBindingsPutRequest {
             user: user.clone(),
-            bindings: bindings.to_vec(),
+            policy_ids: policy_ids.to_vec(),
         },
     )
     .await?;
@@ -3800,10 +3783,10 @@ async fn put_authoritative_access_user_bindings(
         "access user compatibility record",
     )
     .await;
-    for binding in bindings {
+    for binding in &bindings {
         sync_policy_binding_compatibility_best_effort(kv, binding).await;
     }
-    Ok(())
+    Ok(bindings)
 }
 
 async fn policy_binding_index_seed(
@@ -3931,10 +3914,15 @@ async fn put_access_control_user(
 async fn put_access_control_user_bindings(
     namespace: &ObjectNamespace,
     request: &AccessControlUserBindingsPutRequest,
-) -> Result<()> {
-    access_control_request(namespace, "/users/put-bindings", request)
-        .await
-        .map(|_| ())
+) -> Result<Vec<PolicyBindingRecord>> {
+    let body = access_control_request(namespace, "/users/put-bindings", request).await?;
+    serde_json::from_str::<AccessControlUserBindingsPutResponse>(&body)
+        .map(|response| response.bindings)
+        .map_err(|error| {
+            Error::RustError(format!(
+                "access user and bindings put response is invalid JSON: {error}"
+            ))
+        })
 }
 
 async fn list_access_control_users(
@@ -6763,8 +6751,8 @@ impl DurableObject for PolicyBindingIndexObject {
                             "access user and bindings put request is invalid JSON: {error}"
                         ))
                     })?;
-            put_access_control_user_bindings_in_object(&self.state, request).await?;
-            return Response::ok("updated");
+            let bindings = put_access_control_user_bindings_in_object(&self.state, request).await?;
+            return Response::from_json(&AccessControlUserBindingsPutResponse { bindings });
         }
         if req.method() == Method::Post && url.path() == "/policies/resolve" {
             let request =
@@ -7190,6 +7178,33 @@ fn list_policy_bindings_in_object(state: &State) -> Result<PolicyBindingIndexLis
     })
 }
 
+fn policy_bindings_for_principal_in_sql(
+    sql: &SqlStorage,
+    principal: &PolicyBindingPrincipal,
+) -> Result<Vec<PolicyBindingRecord>> {
+    let principal_key = policy_binding_principal_key(principal);
+    if !policy_binding_index_initialized(sql, &principal_key)? {
+        return Ok(Vec::new());
+    }
+    let mut bindings = sql
+        .exec_raw(
+            "SELECT binding_json FROM policy_binding_entries
+                WHERE principal_key = ?
+                ORDER BY binding_key",
+            raw_bindings(vec![JsValue::from_str(&principal_key)]),
+        )?
+        .to_array::<PolicyBindingIndexEntryRow>()?
+        .into_iter()
+        .map(|row| {
+            serde_json::from_str::<PolicyBindingRecord>(&row.binding_json).map_err(|error| {
+                Error::RustError(format!("stored policy binding is invalid JSON: {error}"))
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    sort_policy_bindings(&mut bindings);
+    Ok(bindings)
+}
+
 fn resolve_policy_binding_index_in_object(
     state: &State,
     principals: Vec<PolicyBindingPrincipal>,
@@ -7204,22 +7219,7 @@ fn resolve_policy_binding_index_in_object(
             missing_principals.push(principal);
             continue;
         }
-        bindings.extend(
-            sql.exec_raw(
-                "SELECT binding_json FROM policy_binding_entries
-                    WHERE principal_key = ?
-                    ORDER BY binding_key",
-                raw_bindings(vec![JsValue::from_str(&principal_key)]),
-            )?
-            .to_array::<PolicyBindingIndexEntryRow>()?
-            .into_iter()
-            .map(|row| {
-                serde_json::from_str::<PolicyBindingRecord>(&row.binding_json).map_err(|error| {
-                    Error::RustError(format!("stored policy binding is invalid JSON: {error}"))
-                })
-            })
-            .collect::<Result<Vec<_>>>()?,
-        );
+        bindings.extend(policy_bindings_for_principal_in_sql(&sql, &principal)?);
     }
     sort_policy_bindings(&mut bindings);
     Ok(PolicyBindingIndexResolveResponse {
@@ -7266,42 +7266,43 @@ fn put_access_control_user_in_object(state: &State, mut user: AccessControlUser)
 async fn put_access_control_user_bindings_in_object(
     state: &State,
     mut request: AccessControlUserBindingsPutRequest,
-) -> Result<()> {
+) -> Result<Vec<PolicyBindingRecord>> {
     normalize_access_control_user(&mut request.user)?;
     let principal = PolicyBindingPrincipal {
         principal_type: PrincipalType::User,
         principal_id: request.user.email.clone(),
     };
-    let mut bindings = BTreeMap::new();
-    for binding in request.bindings {
-        let binding = normalize_policy_binding(binding).map_err(str::to_string)?;
-        if binding.principal_type != principal.principal_type
-            || binding.principal_id != principal.principal_id
-        {
-            return Err(Error::RustError(
-                "access user binding does not match the requested user".to_string(),
-            ));
-        }
-        bindings.insert(binding.policy_id.clone(), binding);
+    let mut desired_policy_ids = BTreeSet::new();
+    for policy_id in request.policy_ids {
+        desired_policy_ids.insert(validate_admin_kid(policy_id.trim()).map_err(str::to_string)?);
     }
-    let bindings = bindings.into_values().collect::<Vec<_>>();
     let storage = state.storage();
     let sql = storage.sql();
     ensure_access_control_schema(&sql)?;
+    let transaction_sql = sql.clone();
+    let transaction_principal = principal.clone();
     storage
         .transaction(move |_| async move {
-            put_access_control_user_in_sql(&sql, &request.user)?;
-            let principal_key = policy_binding_principal_key(&principal);
-            sql.exec_raw(
+            let current =
+                policy_bindings_for_principal_in_sql(&transaction_sql, &transaction_principal)?;
+            let bindings = reconcile_user_policy_bindings(
+                &transaction_principal.principal_id,
+                current,
+                &desired_policy_ids,
+            );
+            put_access_control_user_in_sql(&transaction_sql, &request.user)?;
+            let principal_key = policy_binding_principal_key(&transaction_principal);
+            transaction_sql.exec_raw(
                 "INSERT OR IGNORE INTO policy_binding_principals (principal_key) VALUES (?)",
                 raw_bindings(vec![JsValue::from_str(&principal_key)]),
             )?;
             for binding in bindings {
-                upsert_policy_binding_in_sql(&sql, &principal_key, &binding)?;
+                upsert_policy_binding_in_sql(&transaction_sql, &principal_key, &binding)?;
             }
             Ok(())
         })
-        .await
+        .await?;
+    policy_bindings_for_principal_in_sql(&sql, &principal)
 }
 
 fn put_access_control_user_in_sql(sql: &SqlStorage, user: &AccessControlUser) -> Result<()> {
