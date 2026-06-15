@@ -4556,11 +4556,17 @@ async fn send_upstream_request(request: Request, provider_id: &str) -> Result<Re
             headers.set(UPSTREAM_PROVIDER_HEADER, provider_id)?;
             Ok(response.with_headers(headers))
         }
-        Err(_) => json_error(
-            "provider_unavailable",
-            &provider_transport_error_message(provider_id),
-            502,
-        ),
+        Err(_) => {
+            let mut response = json_error(
+                "provider_unavailable",
+                &provider_transport_error_message(provider_id),
+                502,
+            )?;
+            response
+                .headers_mut()
+                .set(UPSTREAM_PROVIDER_HEADER, provider_id)?;
+            Ok(response)
+        }
     }
 }
 
