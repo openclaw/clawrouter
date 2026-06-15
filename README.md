@@ -94,8 +94,10 @@ The Worker currently exposes:
 - `POST /v1/proxy/<provider>/<endpoint>`
 - `GET /v1/admin/keys`
 - `GET /v1/admin/access-users`
+- `GET /v1/admin/policy-bindings`
 - `GET /v1/admin/provider-status`
 - `PUT /v1/admin/access-users/<email>`
+- `PUT /v1/admin/policy-bindings`
 - `PUT /v1/admin/keys/<kid>`
 - `POST /v1/admin/keys/<kid>/revoke`
 

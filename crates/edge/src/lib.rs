@@ -849,6 +849,7 @@ struct AccessSession {
     email: String,
     subject: Option<String>,
     tenant_id: String,
+    groups: Vec<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -860,6 +861,8 @@ struct AccessUserRecord {
     tenant_id: Option<String>,
     #[serde(default)]
     enabled: Option<bool>,
+    #[serde(default)]
+    groups: Vec<String>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -869,6 +872,32 @@ struct AdminAccessUserResponse {
     role: AccessRole,
     tenant_id: String,
     enabled: bool,
+    groups: Vec<String>,
+}
+
+struct AccessUserIdentity {
+    role: AccessRole,
+    tenant_id: String,
+    groups: Vec<String>,
+}
+
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "lowercase")]
+enum PrincipalType {
+    User,
+    Group,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PolicyBindingRecord {
+    policy_id: String,
+    principal_type: PrincipalType,
+    principal_id: String,
+    #[serde(default = "default_true")]
+    enabled: bool,
+    #[serde(default = "default_binding_priority")]
+    priority: u16,
 }
 
 #[derive(Debug, Deserialize)]
@@ -988,7 +1017,7 @@ async fn access_entitlement_rows_for_session(
         }
     };
     let snapshot = provider_snapshot()?;
-    let entries = list_key_policy_records(&kv).await?;
+    let entries = list_session_policy_entries(&kv, session).await?;
     let grants = list_oauth_grants(&kv).await?;
     Ok(snapshot
         .providers
@@ -996,7 +1025,7 @@ async fn access_entitlement_rows_for_session(
         .map(|provider| {
             let matching_entries = entries
                 .iter()
-                .filter(|entry| access_policy_allows(&entry.policy, &session, &provider.id))
+                .filter(|entry| policy_allows_provider(&entry.policy, &provider.id))
                 .collect::<Vec<_>>();
             let matching_policies = matching_entries
                 .iter()
@@ -1066,6 +1095,47 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
         return Response::from_json(&serde_json::json!({ "users": users }));
     }
 
+    if path == "/v1/admin/policy-bindings" {
+        if req.method() == Method::Get {
+            let bindings = list_policy_bindings(&kv).await?;
+            return Response::from_json(&serde_json::json!({ "bindings": bindings }));
+        }
+        if req.method() == Method::Put {
+            let request = match serde_json::from_str::<PolicyBindingRecord>(&req.text().await?) {
+                Ok(request) => request,
+                Err(error) => {
+                    return json_error(
+                        "invalid_policy_binding_request",
+                        &format!("request body must be a JSON policy binding: {error}"),
+                        400,
+                    );
+                }
+            };
+            let binding = match normalize_policy_binding(request) {
+                Ok(binding) => binding,
+                Err(message) => return json_error("invalid_policy_binding", message, 400),
+            };
+            if existing_key_policy(&kv, &binding.policy_id)
+                .await?
+                .is_none()
+            {
+                return json_error("unknown_policy", "bound policy does not exist", 404);
+            }
+            let value = serde_json::to_string(&binding)?;
+            kv.put(&policy_binding_key(&binding), value)
+                .map_err(|error| {
+                    Error::RustError(format!("failed to prepare policy binding: {error}"))
+                })?
+                .execute()
+                .await
+                .map_err(|error| {
+                    Error::RustError(format!("failed to write policy binding: {error}"))
+                })?;
+            return Response::from_json(&binding);
+        }
+        return json_error("method_not_allowed", "admin method is not allowed", 405);
+    }
+
     if req.method() == Method::Get && path == "/v1/admin/provider-status" {
         let snapshot = provider_snapshot()?;
         let grants = list_oauth_grants(&kv).await?;
@@ -1093,6 +1163,10 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             }
         };
         request.role = AccessRole::User;
+        request.groups = match normalize_access_groups(request.groups) {
+            Ok(groups) => groups,
+            Err(message) => return json_error("invalid_access_user", &message, 400),
+        };
         let value = serde_json::to_string(&request)?;
         kv.put(&format!("access/users/{email}"), value)
             .map_err(|error| Error::RustError(format!("failed to prepare access user: {error}")))?
@@ -1202,16 +1276,17 @@ async fn verified_access_session(headers: &Headers, env: &Env) -> Result<Option<
         return Ok(None);
     };
     let normalized_email = email.to_ascii_lowercase();
-    let Some((role, tenant_id)) = access_role_for_email(env, &normalized_email).await? else {
+    let Some(identity) = access_role_for_email(env, &normalized_email).await? else {
         return Ok(None);
     };
     Ok(Some(AccessSession {
         authenticated: true,
         auth: "cloudflare_access",
-        role,
+        role: identity.role,
         email: normalized_email,
         subject: payload.sub,
-        tenant_id,
+        tenant_id: identity.tenant_id,
+        groups: identity.groups,
     }))
 }
 
@@ -1361,9 +1436,10 @@ fn access_audiences(payload: &AccessJwtPayload) -> Vec<&str> {
     }
 }
 
-async fn access_role_for_email(env: &Env, email: &str) -> Result<Option<(AccessRole, String)>> {
+async fn access_role_for_email(env: &Env, email: &str) -> Result<Option<AccessUserIdentity>> {
     let default_tenant = default_access_tenant(env);
     let mut tenant_id = default_tenant.clone();
+    let mut groups = Vec::new();
     if let Ok(kv) = env.kv("POLICY_KV") {
         if let Some(record) = kv
             .get(&format!("access/users/{email}"))
@@ -1381,11 +1457,13 @@ async fn access_role_for_email(env: &Env, email: &str) -> Result<Option<(AccessR
                 .tenant_id
                 .filter(|tenant| !tenant.trim().is_empty())
                 .unwrap_or_else(|| default_tenant.clone());
+            groups = normalize_access_groups(user.groups).map_err(Error::RustError)?;
         } else {
             let user = AccessUserRecord {
                 role: AccessRole::User,
                 tenant_id: Some(default_tenant.clone()),
                 enabled: Some(true),
+                groups: Vec::new(),
             };
             let value = serde_json::to_string(&user)?;
             kv.put(&format!("access/users/{email}"), value)
@@ -1408,7 +1486,11 @@ async fn access_role_for_email(env: &Env, email: &str) -> Result<Option<(AccessR
     } else {
         AccessRole::User
     };
-    Ok(Some((role, tenant_id)))
+    Ok(Some(AccessUserIdentity {
+        role,
+        tenant_id,
+        groups,
+    }))
 }
 
 async fn user_profile(headers: &Headers, env: &Env) -> Result<Response> {
@@ -1777,6 +1859,104 @@ async fn list_key_policy_records(kv: &KvStore) -> Result<Vec<KeyPolicyEntry>> {
     Ok(entries)
 }
 
+async fn list_policy_bindings(kv: &KvStore) -> Result<Vec<PolicyBindingRecord>> {
+    list_policy_bindings_for_prefix(kv, "access/bindings/").await
+}
+
+async fn list_policy_bindings_for_prefix(
+    kv: &KvStore,
+    prefix: &str,
+) -> Result<Vec<PolicyBindingRecord>> {
+    let mut bindings = Vec::new();
+    let mut cursor = None;
+    loop {
+        let mut request = kv.list().prefix(prefix.to_string()).limit(1000);
+        if let Some(next_cursor) = cursor.take() {
+            request = request.cursor(next_cursor);
+        }
+        let list = request.execute().await.map_err(|error| {
+            Error::RustError(format!("failed to list policy bindings: {error}"))
+        })?;
+        for key in list.keys {
+            let Some(record) = kv.get(&key.name).text().await.map_err(|error| {
+                Error::RustError(format!("failed to read policy binding: {error}"))
+            })?
+            else {
+                continue;
+            };
+            let binding =
+                serde_json::from_str::<PolicyBindingRecord>(&record).map_err(|error| {
+                    Error::RustError(format!("policy binding is invalid JSON: {error}"))
+                })?;
+            bindings.push(binding);
+        }
+        if list.list_complete {
+            break;
+        }
+        let Some(next_cursor) = list.cursor else {
+            break;
+        };
+        cursor = Some(next_cursor);
+    }
+    bindings.sort_by(|a, b| {
+        a.priority
+            .cmp(&b.priority)
+            .then_with(|| {
+                principal_type_label(a.principal_type).cmp(principal_type_label(b.principal_type))
+            })
+            .then_with(|| a.principal_id.cmp(&b.principal_id))
+            .then_with(|| a.policy_id.cmp(&b.policy_id))
+    });
+    Ok(bindings)
+}
+
+async fn list_session_policy_entries(
+    kv: &KvStore,
+    session: &AccessSession,
+) -> Result<Vec<KeyPolicyEntry>> {
+    let mut priorities = BTreeMap::<String, u16>::new();
+    for prefix in session_binding_prefixes(session) {
+        for binding in list_policy_bindings_for_prefix(kv, &prefix).await? {
+            if !binding.enabled {
+                continue;
+            }
+            priorities
+                .entry(binding.policy_id)
+                .and_modify(|priority| *priority = (*priority).min(binding.priority))
+                .or_insert(binding.priority);
+        }
+    }
+    let mut entries = Vec::new();
+    for (policy_id, priority) in priorities {
+        if let Some(policy) = existing_key_policy(kv, &policy_id).await? {
+            entries.push((
+                priority,
+                KeyPolicyEntry {
+                    kid: policy_id,
+                    policy,
+                },
+            ));
+        }
+    }
+    entries.sort_by(|(priority_a, entry_a), (priority_b, entry_b)| {
+        priority_a
+            .cmp(priority_b)
+            .then_with(|| entry_a.kid.cmp(&entry_b.kid))
+    });
+    Ok(entries.into_iter().map(|(_, entry)| entry).collect())
+}
+
+fn session_binding_prefixes(session: &AccessSession) -> Vec<String> {
+    let mut prefixes = vec![policy_binding_prefix(PrincipalType::User, &session.email)];
+    prefixes.extend(
+        session
+            .groups
+            .iter()
+            .map(|group| policy_binding_prefix(PrincipalType::Group, group)),
+    );
+    prefixes
+}
+
 async fn list_oauth_grants(kv: &KvStore) -> Result<Vec<OAuthGrantRecord>> {
     let mut grants = Vec::new();
     let mut cursor = None;
@@ -2078,12 +2258,17 @@ fn access_user_response(
             .filter(|tenant| !tenant.trim().is_empty())
             .unwrap_or_else(|| default_access_tenant(env)),
         enabled: record.enabled.unwrap_or(true),
+        groups: normalize_access_groups(record.groups).map_err(Error::RustError)?,
     })
 }
 
 fn decode_access_user_email(value: &str) -> std::result::Result<String, &'static str> {
     let decoded = percent_decode_path_segment(value).ok_or("email path segment is malformed")?;
-    let email = decoded.trim().to_ascii_lowercase();
+    normalize_access_email(&decoded)
+}
+
+fn normalize_access_email(value: &str) -> std::result::Result<String, &'static str> {
+    let email = value.trim().to_ascii_lowercase();
     if email.len() > 254
         || email.contains('/')
         || email.bytes().any(|byte| byte.is_ascii_whitespace())
@@ -2098,6 +2283,66 @@ fn decode_access_user_email(value: &str) -> std::result::Result<String, &'static
         return Err("email must include a local part and domain");
     }
     Ok(email)
+}
+
+fn normalize_access_group(value: &str) -> std::result::Result<String, &'static str> {
+    let group = value.trim().to_ascii_lowercase();
+    if group.is_empty()
+        || group.len() > 64
+        || !group
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+    {
+        return Err(
+            "groups must use 1-64 lowercase letters, numbers, dots, underscores, or hyphens",
+        );
+    }
+    Ok(group)
+}
+
+fn normalize_access_groups(groups: Vec<String>) -> std::result::Result<Vec<String>, String> {
+    if groups.len() > 64 {
+        return Err("an access user can belong to at most 64 groups".to_string());
+    }
+    groups
+        .into_iter()
+        .map(|group| normalize_access_group(&group).map_err(str::to_string))
+        .collect::<std::result::Result<BTreeSet<_>, _>>()
+        .map(|groups| groups.into_iter().collect())
+}
+
+fn normalize_policy_binding(
+    mut binding: PolicyBindingRecord,
+) -> std::result::Result<PolicyBindingRecord, &'static str> {
+    binding.policy_id = validate_admin_kid(binding.policy_id.trim())?;
+    binding.principal_id = match binding.principal_type {
+        PrincipalType::User => normalize_access_email(&binding.principal_id)?,
+        PrincipalType::Group => normalize_access_group(&binding.principal_id)?,
+    };
+    Ok(binding)
+}
+
+fn principal_type_label(principal_type: PrincipalType) -> &'static str {
+    match principal_type {
+        PrincipalType::User => "user",
+        PrincipalType::Group => "group",
+    }
+}
+
+fn policy_binding_prefix(principal_type: PrincipalType, principal_id: &str) -> String {
+    format!(
+        "access/bindings/{}/{}/",
+        principal_type_label(principal_type),
+        encode_component(principal_id)
+    )
+}
+
+fn policy_binding_key(binding: &PolicyBindingRecord) -> String {
+    format!(
+        "{}{}",
+        policy_binding_prefix(binding.principal_type, &binding.principal_id),
+        binding.policy_id
+    )
 }
 
 fn percent_decode_path_segment(value: &str) -> Option<String> {
@@ -2374,6 +2619,10 @@ fn default_true() -> bool {
     true
 }
 
+fn default_binding_priority() -> u16 {
+    100
+}
+
 fn default_oauth_token_type() -> String {
     "Bearer".to_string()
 }
@@ -2518,10 +2767,10 @@ async fn authorize_access_session(
             .map(AuthOutcome::Denied);
         }
     };
-    let entries = list_key_policy_records(&kv).await?;
+    let entries = list_session_policy_entries(&kv, &session).await?;
     let matching_entries = entries
         .iter()
-        .filter(|entry| access_policy_allows(&entry.policy, &session, provider_id))
+        .filter(|entry| policy_allows_provider(&entry.policy, provider_id))
         .collect::<Vec<_>>();
     let Some(first_entry) = matching_entries.first().copied() else {
         return json_error(
@@ -2550,13 +2799,8 @@ async fn authorize_access_session(
     }));
 }
 
-fn access_policy_allows(policy: &KeyPolicy, session: &AccessSession, provider_id: &str) -> bool {
+fn policy_allows_provider(policy: &KeyPolicy, provider_id: &str) -> bool {
     if !policy.enabled {
-        return false;
-    }
-    if session.role != AccessRole::Admin
-        && policy.tenant_id.as_deref().unwrap_or("default") != session.tenant_id
-    {
         return false;
     }
     policy.providers.is_empty() || policy.providers.iter().any(|id| id == provider_id)
@@ -4713,7 +4957,7 @@ mod tests {
     }
 
     #[test]
-    fn access_playground_matches_session_tenant_policies() {
+    fn access_playground_policy_scope_is_provider_only() {
         let policy = KeyPolicy {
             enabled: true,
             secret_sha256: sha256_hex("secret"),
@@ -4723,28 +4967,52 @@ mod tests {
             monthly_budget_micros: Some(100),
             request_cost_micros: Some(10),
         };
-        let user = AccessSession {
+
+        assert!(policy_allows_provider(&policy, "openai"));
+        assert!(!policy_allows_provider(&policy, "anthropic"));
+    }
+
+    #[test]
+    fn policy_bindings_are_principal_indexed_and_normalized() {
+        let binding = normalize_policy_binding(PolicyBindingRecord {
+            policy_id: "svc_docs".to_string(),
+            principal_type: PrincipalType::User,
+            principal_id: " Writer@Example.com ".to_string(),
+            enabled: true,
+            priority: 10,
+        })
+        .unwrap();
+        assert_eq!(binding.principal_id, "writer@example.com");
+        assert_eq!(
+            policy_binding_key(&binding),
+            "access/bindings/user/writer%40example.com/svc_docs"
+        );
+
+        let groups = normalize_access_groups(vec![
+            "Maintainers".to_string(),
+            "docs".to_string(),
+            "maintainers".to_string(),
+        ])
+        .unwrap();
+        assert_eq!(groups, vec!["docs", "maintainers"]);
+    }
+
+    #[test]
+    fn admin_sessions_have_no_implicit_policy_binding_prefix() {
+        let session = AccessSession {
             authenticated: true,
             auth: "cloudflare_access",
-            role: AccessRole::User,
-            email: "writer@example.com".to_string(),
-            subject: None,
-            tenant_id: "team_docs".to_string(),
-        };
-        let other_tenant = AccessSession {
-            tenant_id: "research".to_string(),
-            ..user.clone()
-        };
-        let admin = AccessSession {
             role: AccessRole::Admin,
+            email: "admin@example.com".to_string(),
+            subject: None,
             tenant_id: "ops".to_string(),
-            ..user.clone()
+            groups: Vec::new(),
         };
 
-        assert!(access_policy_allows(&policy, &user, "openai"));
-        assert!(!access_policy_allows(&policy, &user, "anthropic"));
-        assert!(!access_policy_allows(&policy, &other_tenant, "openai"));
-        assert!(access_policy_allows(&policy, &admin, "openai"));
+        assert_eq!(
+            session_binding_prefixes(&session),
+            vec!["access/bindings/user/admin%40example.com/"]
+        );
     }
 
     #[test]
@@ -5046,6 +5314,7 @@ mod tests {
         assert_eq!(record.role, AccessRole::User);
         assert_eq!(record.tenant_id.as_deref(), Some("default"));
         assert_eq!(record.enabled, None);
+        assert!(record.groups.is_empty());
     }
 
     #[test]
