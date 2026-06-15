@@ -1,0 +1,438 @@
+export interface RouteCatalog {
+  openaiCompatible: Array<{
+    provider: string;
+    models: Array<{ id: string; capabilities: string[]; endpoints: string[] }>;
+    modelPrefixes?: string[];
+    endpoints: string[];
+  }>;
+  manifestProxy: Array<{
+    provider: string;
+    endpoint: string;
+    route: string;
+    methods: string[];
+    pathParams?: string[];
+    streaming?: boolean | null;
+  }>;
+}
+
+export interface AccessPolicy {
+  policyId: string;
+  enabled: boolean;
+  providers: string[];
+  tenantId?: string | null;
+  tokenRole?: string | null;
+  monthlyBudgetMicros?: number | null;
+  requestCostMicros?: number | null;
+}
+
+export interface ProviderReadiness {
+  id: string;
+  displayName: string;
+  class: string;
+  serviceKind: string;
+  requiredConfig: string[];
+  optionalConfig: string[];
+  missingConfig: string[];
+  configPresent: boolean;
+  oauthGrantRequired: boolean;
+  oauthGrantCount: number;
+  openaiCompatible: boolean;
+  manifestRoutes: number;
+  modelCount: number;
+  connectionEnabled?: boolean;
+  verified?: boolean;
+  lastCheckedAt?: string | null;
+  latencyMs?: number | null;
+  executable: boolean;
+  status: string;
+  reasons: string[];
+}
+
+export interface ProviderAccess {
+  provider: string;
+  displayName: string;
+  serviceKind: string;
+  allowed: boolean;
+  policies: string[];
+  readiness: ProviderReadiness;
+}
+
+export interface AccessUser {
+  email: string;
+  role: "admin" | "user";
+  tenantId: string;
+  enabled: boolean;
+  groups: string[];
+}
+
+export interface PolicyBinding {
+  policyId: string;
+  principalType: "user" | "group";
+  principalId: string;
+  enabled: boolean;
+  priority: number;
+}
+
+export interface AccessForm {
+  email: string;
+  tenantId: string;
+  enabled: boolean;
+  groups: string;
+  policyIds: string[];
+}
+
+export interface BindingForm {
+  policyId: string;
+  principalType: "user" | "group";
+  principalId: string;
+  enabled: boolean;
+  priority: string;
+}
+
+export interface BudgetStatus {
+  configured: boolean;
+  ledger: string;
+  windowKey?: string | null;
+  limitMicros?: number | null;
+  spentMicros?: number | null;
+  remainingMicros?: number | null;
+}
+
+export interface AdminUsageRow {
+  kid: string;
+  tenantId: string;
+  enabled: boolean;
+  providers: string[];
+  tokenRole?: string | null;
+  monthlyBudgetMicros?: number | null;
+  requestCostMicros?: number | null;
+  budget: BudgetStatus;
+}
+
+export interface AdminTenantSummary {
+  tenantId: string;
+  keys: number;
+  activeKeys: number;
+  providers: string[];
+  allProviders?: boolean;
+  monthlyBudgetMicros: number;
+  requestCostMicros: number;
+}
+
+export interface ServiceItem {
+  id: string;
+  name: string;
+  provider: string;
+  kind: string;
+  category: string;
+  capabilities: string[];
+  surfaces: string[];
+  route: string;
+  routeCount: number;
+  models: number;
+  modelIds: string[];
+  access?: ProviderAccess;
+  readiness?: ProviderReadiness;
+}
+
+export interface ServiceOutcome {
+  label: string;
+  detail: string;
+  tone: "active" | "revoked" | "neutral";
+  playable: boolean;
+  blocked: boolean;
+}
+
+export interface PlaygroundForm {
+  mode: "model" | "service";
+  model: string;
+  endpoint: "/v1/chat/completions" | "/v1/responses";
+  serviceRoute: string;
+  serviceMethod: string;
+  servicePath: string;
+  servicePayload: string;
+  system: string;
+  prompt: string;
+  maxTokens: string;
+  temperature: string;
+}
+
+export interface CatalogModel {
+  id: string;
+  provider: string;
+  capabilities: string[];
+}
+
+export function readinessMap(readiness: ProviderReadiness[]) {
+  return Object.fromEntries(readiness.map((item) => [item.id, item]));
+}
+
+export function accessMap(entitlements: { providers: ProviderAccess[] } | null) {
+  return new Map((entitlements?.providers ?? []).map((item) => [item.provider, item]));
+}
+
+export function grantNamesForService(service: ServiceItem, policies: AccessPolicy[] = []) {
+  return unique([...policies.map((policy) => policy.policyId), ...(service.access?.policies ?? [])]);
+}
+
+export function serviceOutcome(service: ServiceItem): ServiceOutcome {
+  if (service.access && !service.access.allowed) {
+    return {
+      label: "denied",
+      detail: "Current Cloudflare Access identity is denied by policy.",
+      tone: "revoked",
+      playable: false,
+      blocked: true,
+    };
+  }
+  if (!service.access) {
+    return {
+      label: "unknown",
+      detail: "Access entitlements are unavailable, so this identity's policy status cannot be determined.",
+      tone: "neutral",
+      playable: false,
+      blocked: false,
+    };
+  }
+  const policyNames = service.access.policies;
+  if (!service.readiness) {
+    return {
+      label: "unknown",
+      detail: `Granted by ${policyNames.join(", ") || "session"}, but runtime readiness has not loaded yet.`,
+      tone: "neutral",
+      playable: false,
+      blocked: true,
+    };
+  }
+  if (service.readiness.executable) {
+    return {
+      label: "usable",
+      detail: `Granted by ${policyNames.join(", ") || "session"} and executable in the gateway.`,
+      tone: "active",
+      playable: true,
+      blocked: false,
+    };
+  }
+  const missing = service.readiness.missingConfig.length ? `Missing ${service.readiness.missingConfig.join(", ")}.` : "";
+  const oauth = service.readiness.oauthGrantRequired ? "OAuth grant required before calls can run." : "";
+  return {
+    label: service.readiness.status === "missing_config" ? "missing config" : service.readiness.status === "grant_required" ? "needs OAuth" : readinessLabel(service.readiness),
+    detail: [service.readiness.reasons[0], missing, oauth].filter(Boolean).join(" "),
+    tone: "revoked",
+    playable: false,
+    blocked: true,
+  };
+}
+
+export function readinessLabel(readiness: ProviderReadiness | undefined) {
+  if (!readiness) return "unknown";
+  return readiness.status.replace(/_/g, " ");
+}
+
+export function optionalNumber(value: string) {
+  if (!value.trim()) return undefined;
+  const parsed = Number(value);
+  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error(`${value} is not a non-negative safe integer`);
+  return parsed;
+}
+
+export function optionalCurrencyMicros(value: string) {
+  if (!value.trim()) return undefined;
+  const normalized = value.replace(/[$,\s]/g, "");
+  const parsed = Number(normalized);
+  if (!Number.isFinite(parsed) || parsed < 0) throw new Error(`${value} is not a valid budget`);
+  return Math.round(parsed * 1_000_000);
+}
+
+export function currencyInput(value: number | null | undefined) {
+  if (value === undefined || value === null) return "";
+  return String(value / 1_000_000);
+}
+
+export function optionalDecimal(value: string) {
+  if (!value.trim()) return undefined;
+  const parsed = Number(value);
+  if (!Number.isFinite(parsed)) throw new Error(`${value} is not a number`);
+  return parsed;
+}
+
+export function errorMessage(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
+export function policyCoversProvider(policy: AccessPolicy, providerId: string) {
+  return policy.providers.length === 0 || policy.providers.includes(providerId);
+}
+
+export function accessFormFromUser(user: AccessUser, bindings: PolicyBinding[]): AccessForm {
+  return {
+    email: user.email,
+    tenantId: user.tenantId,
+    enabled: user.enabled,
+    groups: user.groups.join(", "),
+    policyIds: bindings
+      .filter((binding) => binding.enabled && binding.principalType === "user" && binding.principalId === user.email)
+      .sort((a, b) => a.priority - b.priority || a.policyId.localeCompare(b.policyId))
+      .map((binding) => binding.policyId),
+  };
+}
+
+export function bindingKey(binding: PolicyBinding | undefined) {
+  return binding ? `${binding.principalType}:${binding.principalId}:${binding.policyId}` : "";
+}
+
+export function bindingFormFromBinding(binding: PolicyBinding): BindingForm {
+  return {
+    policyId: binding.policyId,
+    principalType: binding.principalType,
+    principalId: binding.principalId,
+    enabled: binding.enabled,
+    priority: String(binding.priority),
+  };
+}
+
+export function effectiveAccess(user: AccessUser | undefined, policies: AccessPolicy[], bindings: PolicyBinding[], services: ServiceItem[]) {
+  if (!user || !user.enabled) return { policies: [] as AccessPolicy[], services: [] as ServiceItem[] };
+  const groupIds = new Set(user.groups);
+  const policyIds = new Set(bindings
+    .filter((binding) => binding.enabled && (binding.principalType === "user" ? binding.principalId === user.email : groupIds.has(binding.principalId)))
+    .sort((a, b) => a.priority - b.priority || a.policyId.localeCompare(b.policyId))
+    .map((binding) => binding.policyId));
+  const userPolicies = policies.filter((policy) => policy.enabled && policyIds.has(policy.policyId));
+  const hasWildcardPolicy = userPolicies.some((policy) => policy.providers.length === 0);
+  const providerIds = new Set(userPolicies.flatMap((policy) => policy.providers));
+  return { policies: userPolicies, services: services.filter((service) => hasWildcardPolicy || providerIds.has(service.provider)) };
+}
+
+export function parseGroups(value: string) {
+  return unique(value.split(/[,\n]+/).map((group) => group.trim().toLowerCase()).filter(Boolean)).sort();
+}
+
+export function reconcileDirectUserBindings(current: PolicyBinding[], email: string, policies: AccessPolicy[], policyIds: string[]) {
+  const desired = new Set(policyIds);
+  const existing = new Map(current
+    .filter((binding) => binding.principalType === "user" && binding.principalId === email)
+    .map((binding) => [binding.policyId, binding]));
+  const other = current.filter((binding) => binding.principalType !== "user" || binding.principalId !== email);
+  const direct = policies.flatMap((policy) => {
+    const binding = existing.get(policy.policyId);
+    if (!binding && !desired.has(policy.policyId)) return [];
+    return [{
+      policyId: policy.policyId,
+      principalType: "user" as const,
+      principalId: email,
+      enabled: desired.has(policy.policyId),
+      priority: binding?.priority ?? 100,
+    }];
+  });
+  return [...other, ...direct];
+}
+
+export function policyUsageFallback(policy: AccessPolicy): AdminUsageRow {
+  const limit = policy.monthlyBudgetMicros;
+  const blocked = limit === 0;
+  const unmetered = limit === undefined || limit === null;
+  return {
+    kid: policy.policyId,
+    tenantId: policy.tenantId ?? "default",
+    enabled: policy.enabled,
+    providers: policy.providers,
+    tokenRole: policy.tokenRole,
+    monthlyBudgetMicros: policy.monthlyBudgetMicros,
+    requestCostMicros: policy.requestCostMicros,
+    budget: {
+      configured: !unmetered,
+      ledger: blocked ? "blocked" : unmetered ? "unmetered" : "untracked",
+      limitMicros: limit,
+      spentMicros: blocked ? 0 : null,
+      remainingMicros: blocked ? 0 : limit,
+    },
+  };
+}
+
+export function tenantSummaryFallback(keys: AccessPolicy[]): AdminTenantSummary[] {
+  const groups = keys.reduce((acc, key) => {
+    const tenantId = key.tenantId ?? "default";
+    const current = acc.get(tenantId) ?? { tenantId, keys: 0, activeKeys: 0, providers: new Set<string>(), allProviders: false, monthlyBudgetMicros: 0, requestCostMicros: 0 };
+    current.keys += 1;
+    if (key.enabled) {
+      current.activeKeys += 1;
+      if (key.providers.length) {
+        key.providers.forEach((provider) => current.providers.add(provider));
+      } else {
+        current.allProviders = true;
+      }
+    }
+    current.monthlyBudgetMicros += key.monthlyBudgetMicros ?? 0;
+    current.requestCostMicros += key.requestCostMicros ?? 0;
+    acc.set(tenantId, current);
+    return acc;
+  }, new Map<string, { tenantId: string; keys: number; activeKeys: number; providers: Set<string>; allProviders: boolean; monthlyBudgetMicros: number; requestCostMicros: number }>());
+  return Array.from(groups.values()).map((tenant) => ({ ...tenant, providers: Array.from(tenant.providers).sort() }));
+}
+
+export function unique(values: string[]) {
+  return Array.from(new Set(values.filter(Boolean)));
+}
+
+export function playgroundPayload(form: PlaygroundForm, route?: RouteCatalog["manifestProxy"][number]) {
+  if (form.mode === "service") {
+    const body = form.servicePayload.trim() ? JSON.parse(form.servicePayload) : {};
+    return {
+      method: form.serviceMethod,
+      pathParams: pathParamsForRoute(route, form.servicePath),
+      body,
+    };
+  }
+  const maxTokens = optionalNumber(form.maxTokens);
+  const temperature = optionalDecimal(form.temperature);
+  if (form.endpoint === "/v1/responses") {
+    return { model: form.model, input: form.prompt, instructions: form.system || undefined, max_output_tokens: maxTokens, temperature };
+  }
+  return { model: form.model, messages: [...(form.system ? [{ role: "system", content: form.system }] : []), { role: "user", content: form.prompt }], max_tokens: maxTokens, temperature };
+}
+
+export function playgroundAccessEndpoint(form: PlaygroundForm, route?: RouteCatalog["manifestProxy"][number]) {
+  if (form.mode === "service") {
+    return resolveProxyRoute(route).replace(/^\/v1\/proxy/, "/v1/playground/proxy");
+  }
+  return `/v1/playground${form.endpoint}`;
+}
+
+export function playgroundBlocker(form: PlaygroundForm, model: CatalogModel | undefined, route: RouteCatalog["manifestProxy"][number] | undefined, accessByProvider: Map<string, ProviderAccess>, readinessByProvider: Record<string, ProviderReadiness>) {
+  if (form.mode === "model" && !model) return "select a model";
+  if (form.mode === "service" && !route) return "select a service route";
+  const provider = form.mode === "model" ? model?.provider : route?.provider;
+  if (!provider) return null;
+  const access = accessByProvider.get(provider);
+  if (!access?.allowed) return "Cloudflare Access identity is not granted this provider";
+  const readiness = readinessByProvider[provider];
+  if (!readiness) return "provider readiness is unknown";
+  if (!readiness.executable) return readiness.reasons[0] ?? `provider is ${readinessLabel(readiness)}`;
+  return null;
+}
+
+export function playgroundBlockedForService(service: ServiceItem) {
+  const outcome = serviceOutcome(service);
+  if (!outcome.playable) return outcome.detail;
+  if (service.readiness && !service.readiness.executable) return service.readiness.reasons[0] ?? `service is ${readinessLabel(service.readiness)}`;
+  if (!service.models && service.surfaces.includes("provider")) return "no executable model or proxy route declared";
+  return null;
+}
+
+export function routeKey(route: RouteCatalog["manifestProxy"][number] | undefined) {
+  return route ? `${route.provider}:${route.endpoint}:${route.route}` : "";
+}
+
+export function resolveProxyRoute(route: RouteCatalog["manifestProxy"][number] | undefined) {
+  if (!route) return "/v1/proxy";
+  return route.route;
+}
+
+export function pathParamsForRoute(route: RouteCatalog["manifestProxy"][number] | undefined, value: string) {
+  const params: Record<string, string> = {};
+  for (const param of route?.pathParams ?? []) {
+    params[param] = value.trim() || "demo";
+  }
+  return params;
+}

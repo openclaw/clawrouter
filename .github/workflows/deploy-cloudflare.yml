@@ -98,6 +98,7 @@ jobs:
       - run: pnpm cf:preflight
       - run: cargo test --workspace
       - run: pnpm --dir admin check
+      - run: pnpm --dir admin test
       - run: pnpm --dir admin build
       - if: ${{ inputs.provision_access }}
         env:
