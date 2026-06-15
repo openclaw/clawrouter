@@ -899,7 +899,7 @@ async fn proxy_manifest_endpoint(
     Ok(response)
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AccessPolicy {
     enabled: bool,
@@ -917,7 +917,7 @@ struct AccessPolicy {
     request_cost_micros: Option<u64>,
 }
 
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, PartialEq, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProxyCredential {
     enabled: bool,
@@ -1704,19 +1704,22 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 Ok(policy_id) => policy_id,
                 Err(message) => return json_error("invalid_policy", message, 400),
             };
-            let policy = match serde_json::from_str::<AdminAccessPolicyRequest>(&req.text().await?)
-                .map_err(|error| error.to_string())
-                .and_then(|request| request.try_into_policy().map_err(str::to_string))
-            {
-                Ok(policy) => policy,
-                Err(error) => {
-                    return json_error(
-                        "invalid_policy_request",
-                        &format!("request body must be a JSON access policy: {error}"),
-                        400,
-                    );
-                }
-            };
+            let existing_policy = existing_access_policy(&kv, &policy_id).await?;
+            let mut policy =
+                match serde_json::from_str::<AdminAccessPolicyRequest>(&req.text().await?)
+                    .map_err(|error| error.to_string())
+                    .and_then(|request| request.try_into_policy().map_err(str::to_string))
+                {
+                    Ok(policy) => policy,
+                    Err(error) => {
+                        return json_error(
+                            "invalid_policy_request",
+                            &format!("request body must be a JSON access policy: {error}"),
+                            400,
+                        );
+                    }
+                };
+            preserve_existing_policy_generation(&mut policy, existing_policy.as_ref());
             if let Err(message) = validate_policy_providers(&policy) {
                 return json_error("invalid_policy", &message, 400);
             }
@@ -1732,14 +1735,6 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 "access policy tombstone",
             )
             .await?;
-            let rollback_credentials = disable_legacy_records_for_policy(&kv, &policy_id).await?;
-            let rebound_credentials = bind_credentials_to_policy_generation(
-                &kv,
-                &policy.generation,
-                rollback_credentials,
-            )
-            .await?;
-            sync_legacy_records_for_policy(&kv, &policy, &rebound_credentials).await?;
             put_kv_record(
                 &kv,
                 &format!("policies/{policy_id}"),
@@ -1761,7 +1756,6 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 return json_error("unknown_policy", "access policy is not registered", 404);
             };
             policy.enabled = false;
-            let rollback_credentials = proxy_credentials_for_policy(&kv, &policy_id).await?;
             put_kv_record(
                 &kv,
                 &format!("policies/{policy_id}"),
@@ -1769,7 +1763,6 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 "access policy",
             )
             .await?;
-            sync_legacy_records_for_policy(&kv, &policy, &rollback_credentials).await?;
             return Response::from_json(&admin_access_policy_response(&policy_id, &policy));
         }
         return json_error("method_not_allowed", "admin method is not allowed", 405);
@@ -1827,7 +1820,7 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             )
             .await?;
             disable_legacy_key_record(&kv, &credential_id).await?;
-            sync_legacy_rollback_record(&kv, &credential_id, &policy, &credential).await?;
+            sync_legacy_compatibility_tombstone(&kv, &credential_id, &policy, &credential).await?;
             put_kv_record(
                 &kv,
                 &format!("credentials/{credential_id}"),
@@ -1861,7 +1854,8 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             )
             .await?;
             if let Some(policy) = existing_access_policy(&kv, &credential.policy_id).await? {
-                sync_legacy_rollback_record(&kv, &credential_id, &policy, &credential).await?;
+                sync_legacy_compatibility_tombstone(&kv, &credential_id, &policy, &credential)
+                    .await?;
             } else {
                 disable_legacy_key_record(&kv, &credential_id).await?;
             }
@@ -1983,16 +1977,10 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 );
             }
         };
-        let needs_existing_policy = request.secret_sha256.is_none()
-            || request.providers.as_ref().is_some_and(Vec::is_empty);
-        let existing_policy = if needs_existing_policy {
-            existing_access_policy(&kv, &kid).await?
-        } else {
-            None
-        };
+        let existing_policy = existing_access_policy(&kv, &kid).await?;
+        let existing_credential = existing_proxy_credential(&kv, &kid).await?;
         let existing_secret_sha256 = if request.secret_sha256.is_none() {
-            existing_proxy_credential(&kv, &kid)
-                .await?
+            existing_credential
                 .as_ref()
                 .map(|credential| credential.secret_sha256.clone())
         } else {
@@ -2001,12 +1989,26 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
         let existing_all_providers = existing_policy
             .as_ref()
             .is_some_and(|policy| policy.providers.is_empty());
-        let legacy = match request.try_into_policy(existing_secret_sha256, existing_all_providers) {
-            Ok(legacy) => legacy,
-            Err(message) => return json_error("invalid_admin_policy", message, 400),
-        };
+        let mut legacy =
+            match request.try_into_policy(existing_secret_sha256, existing_all_providers) {
+                Ok(legacy) => legacy,
+                Err(message) => return json_error("invalid_admin_policy", message, 400),
+            };
+        preserve_existing_legacy_generation(&mut legacy, existing_policy.as_ref());
         let policy = legacy.access_policy();
         let credential = legacy.credential(&kid);
+        if legacy_key_update_changes_policy_and_secret(
+            existing_policy.as_ref(),
+            existing_credential.as_ref(),
+            &policy,
+            &credential,
+        ) {
+            return json_error(
+                "unsafe_legacy_key_update",
+                "legacy key updates cannot change policy scope and secret together; use canonical policy and credential endpoints",
+                409,
+            );
+        }
         if let Err(message) = validate_policy_providers(&policy) {
             return json_error("invalid_admin_policy", &message, 400);
         }
@@ -2037,15 +2039,13 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             "access policy tombstone",
         )
         .await?;
-        let mut credentials = disable_legacy_records_for_policy(&kv, &kid).await?;
-        if let Some((_, existing)) = credentials.iter_mut().find(|(id, _)| id == &kid) {
-            existing.clone_from(&credential);
-        } else {
-            credentials.push((kid.clone(), credential));
-        }
-        let rebound_credentials =
-            bind_credentials_to_policy_generation(&kv, &policy.generation, credentials).await?;
-        sync_legacy_records_for_policy(&kv, &policy, &rebound_credentials).await?;
+        put_kv_record(
+            &kv,
+            &format!("credentials/{kid}"),
+            &credential,
+            "proxy credential",
+        )
+        .await?;
         put_kv_record(&kv, &format!("policies/{kid}"), &policy, "access policy").await?;
         return Response::from_json(&admin_policy_response(&kid, &policy));
     }
@@ -2826,6 +2826,7 @@ async fn existing_access_policy(kv: &KvStore, policy_id: &str) -> Result<Option<
     }
     Ok(existing_legacy_key_policy(kv, policy_id)
         .await?
+        .filter(is_pre_migration_legacy_key_policy)
         .map(|legacy| legacy.access_policy()))
 }
 
@@ -2846,6 +2847,7 @@ async fn existing_proxy_credential(
     }
     Ok(existing_legacy_key_policy(kv, credential_id)
         .await?
+        .filter(is_pre_migration_legacy_key_policy)
         .map(|legacy| legacy.credential(credential_id)))
 }
 
@@ -2912,7 +2914,11 @@ async fn list_access_policy_records(kv: &KvStore) -> Result<Vec<AccessPolicyEntr
         };
         cursor = Some(next_cursor);
     }
-    for (kid, legacy) in list_legacy_key_policies(kv).await? {
+    for (kid, legacy) in list_legacy_key_policies(kv)
+        .await?
+        .into_iter()
+        .filter(|(_, legacy)| is_pre_migration_legacy_key_policy(legacy))
+    {
         if policy_ids.insert(kid.clone()) {
             entries.push(AccessPolicyEntry {
                 policy_id: kid,
@@ -2997,7 +3003,11 @@ async fn list_proxy_credentials(kv: &KvStore) -> Result<Vec<(String, ProxyCreden
         };
         cursor = Some(next_cursor);
     }
-    for (kid, legacy) in list_legacy_key_policies(kv).await? {
+    for (kid, legacy) in list_legacy_key_policies(kv)
+        .await?
+        .into_iter()
+        .filter(|(_, legacy)| is_pre_migration_legacy_key_policy(legacy))
+    {
         if credential_ids.insert(kid.clone()) {
             entries.push((kid.clone(), legacy.credential(&kid)));
         }
@@ -3158,58 +3168,7 @@ async fn sync_kv_record_best_effort<T: Serialize>(kv: &KvStore, key: &str, value
     }
 }
 
-async fn sync_legacy_records_for_policy(
-    kv: &KvStore,
-    policy: &AccessPolicy,
-    credentials: &[(String, ProxyCredential)],
-) -> Result<()> {
-    for (credential_id, credential) in credentials {
-        sync_legacy_rollback_record(kv, credential_id, policy, credential).await?;
-    }
-    Ok(())
-}
-
-async fn disable_legacy_records_for_policy(
-    kv: &KvStore,
-    policy_id: &str,
-) -> Result<Vec<(String, ProxyCredential)>> {
-    let credentials = proxy_credentials_for_policy(kv, policy_id).await?;
-    for (credential_id, _) in &credentials {
-        disable_legacy_key_record(kv, credential_id).await?;
-    }
-    Ok(credentials)
-}
-
-async fn bind_credentials_to_policy_generation(
-    kv: &KvStore,
-    policy_generation: &str,
-    mut credentials: Vec<(String, ProxyCredential)>,
-) -> Result<Vec<(String, ProxyCredential)>> {
-    for (credential_id, credential) in &mut credentials {
-        credential.policy_generation = policy_generation.to_string();
-        put_kv_record(
-            kv,
-            &format!("credentials/{credential_id}"),
-            credential,
-            "proxy credential policy generation",
-        )
-        .await?;
-    }
-    Ok(credentials)
-}
-
-async fn proxy_credentials_for_policy(
-    kv: &KvStore,
-    policy_id: &str,
-) -> Result<Vec<(String, ProxyCredential)>> {
-    Ok(list_proxy_credentials(kv)
-        .await?
-        .into_iter()
-        .filter(|(_, credential)| credential.policy_id == policy_id)
-        .collect())
-}
-
-async fn sync_legacy_rollback_record(
+async fn sync_legacy_compatibility_tombstone(
     kv: &KvStore,
     credential_id: &str,
     policy: &AccessPolicy,
@@ -3221,12 +3180,12 @@ async fn sync_legacy_rollback_record(
     {
         return Ok(());
     }
-    let legacy = legacy_rollback_record(policy, credential);
+    let legacy = legacy_compatibility_tombstone(policy, credential);
     put_kv_record(
         kv,
         &format!("keys/{credential_id}"),
         &legacy,
-        "legacy rollback key policy",
+        "legacy compatibility tombstone",
     )
     .await
 }
@@ -3240,14 +3199,17 @@ async fn disable_legacy_key_record(kv: &KvStore, credential_id: &str) -> Result<
         kv,
         &format!("keys/{credential_id}"),
         &legacy,
-        "legacy rollback key policy",
+        "legacy compatibility tombstone",
     )
     .await
 }
 
-fn legacy_rollback_record(policy: &AccessPolicy, credential: &ProxyCredential) -> LegacyKeyPolicy {
+fn legacy_compatibility_tombstone(
+    policy: &AccessPolicy,
+    credential: &ProxyCredential,
+) -> LegacyKeyPolicy {
     LegacyKeyPolicy {
-        enabled: policy.enabled && credential.enabled,
+        enabled: false,
         secret_sha256: credential.secret_sha256.clone(),
         generation: policy.generation.clone(),
         providers: policy.providers.clone(),
@@ -3703,7 +3665,9 @@ async fn read_access_policies(
         let legacy = serde_json::from_str::<LegacyKeyPolicy>(&record).map_err(|error| {
             Error::RustError(format!("legacy key policy is invalid JSON: {error}"))
         })?;
-        policies.insert(policy_id.to_string(), legacy.access_policy());
+        if is_pre_migration_legacy_key_policy(&legacy) {
+            policies.insert(policy_id.to_string(), legacy.access_policy());
+        }
     }
     Ok(policies)
 }
@@ -4516,6 +4480,39 @@ fn credential_policy_generation_matches(
     policy: &AccessPolicy,
 ) -> bool {
     credential.policy_generation == policy.generation
+}
+
+fn preserve_existing_policy_generation(
+    policy: &mut AccessPolicy,
+    existing_policy: Option<&AccessPolicy>,
+) {
+    if let Some(existing_policy) = existing_policy {
+        policy.generation.clone_from(&existing_policy.generation);
+    }
+}
+
+fn preserve_existing_legacy_generation(
+    policy: &mut LegacyKeyPolicy,
+    existing_policy: Option<&AccessPolicy>,
+) {
+    if let Some(existing_policy) = existing_policy {
+        policy.generation.clone_from(&existing_policy.generation);
+    }
+}
+
+fn legacy_key_update_changes_policy_and_secret(
+    existing_policy: Option<&AccessPolicy>,
+    existing_credential: Option<&ProxyCredential>,
+    policy: &AccessPolicy,
+    credential: &ProxyCredential,
+) -> bool {
+    existing_policy.is_some_and(|existing| existing != policy)
+        && existing_credential
+            .is_some_and(|existing| existing.secret_sha256 != credential.secret_sha256)
+}
+
+fn is_pre_migration_legacy_key_policy(policy: &LegacyKeyPolicy) -> bool {
+    policy.generation == legacy_policy_generation()
 }
 
 fn default_binding_priority() -> u16 {
@@ -8589,11 +8586,11 @@ mod tests {
         assert_eq!(credential_json["policyGeneration"], "gen_1");
         assert_eq!(credential_json["secretSha256"], sha256_hex("secret"));
 
-        let rollback = legacy_rollback_record(&policy, &credential);
-        assert!(rollback.enabled);
+        let rollback = legacy_compatibility_tombstone(&policy, &credential);
+        assert!(!rollback.enabled);
         assert_eq!(rollback.generation, "gen_1");
         assert_eq!(rollback.providers, vec!["openai"]);
-        let rollback = legacy_rollback_record(
+        let rollback = legacy_compatibility_tombstone(
             &policy,
             &ProxyCredential {
                 enabled: false,
@@ -8601,6 +8598,55 @@ mod tests {
             },
         );
         assert!(!rollback.enabled);
+        assert!(!is_pre_migration_legacy_key_policy(&legacy));
+        let pre_migration = LegacyKeyPolicy {
+            generation: legacy_policy_generation(),
+            ..legacy
+        };
+        assert!(is_pre_migration_legacy_key_policy(&pre_migration));
+    }
+
+    #[test]
+    fn canonical_policy_edits_preserve_generation_and_legacy_combined_updates_fail() {
+        let existing_policy = AccessPolicy {
+            enabled: true,
+            generation: "gen_existing".to_string(),
+            providers: vec!["openai".to_string()],
+            tenant_id: Some("team_docs".to_string()),
+            token_role: Some("service".to_string()),
+            monthly_budget_micros: Some(100),
+            request_cost_micros: Some(10),
+        };
+        let existing_credential = ProxyCredential {
+            enabled: true,
+            secret_sha256: sha256_hex("old-secret"),
+            policy_id: "svc_docs".to_string(),
+            policy_generation: existing_policy.generation.clone(),
+        };
+        let mut updated_policy = AccessPolicy {
+            generation: new_policy_generation(),
+            providers: vec!["openai".to_string(), "tavily".to_string()],
+            ..existing_policy.clone()
+        };
+        preserve_existing_policy_generation(&mut updated_policy, Some(&existing_policy));
+        assert_eq!(updated_policy.generation, "gen_existing");
+
+        let changed_credential = ProxyCredential {
+            secret_sha256: sha256_hex("new-secret"),
+            ..existing_credential.clone()
+        };
+        assert!(legacy_key_update_changes_policy_and_secret(
+            Some(&existing_policy),
+            Some(&existing_credential),
+            &updated_policy,
+            &changed_credential,
+        ));
+        assert!(!legacy_key_update_changes_policy_and_secret(
+            Some(&existing_policy),
+            Some(&existing_credential),
+            &updated_policy,
+            &existing_credential,
+        ));
     }
 
     #[test]

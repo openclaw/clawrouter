@@ -31,7 +31,9 @@ const monthlyBudgetMicros = args["monthly-budget-micros"]
 const requestCostMicros = args["request-cost-micros"]
   ? parseNonNegativeInteger(args["request-cost-micros"], "--request-cost-micros")
   : undefined;
-const generation = `policy_${randomUUID()}`;
+const existingPolicy = readRecord(`policies/${kid}`, { allowMissing: true });
+const existingCredential = readRecord(`credentials/${kid}`, { allowMissing: true });
+const generation = existingPolicy?.generation ?? `policy_${randomUUID()}`;
 
 const policy = {
   enabled,
@@ -52,6 +54,16 @@ const credential = {
   policyId: kid,
   policyGeneration: generation,
 };
+if (
+  existingPolicy &&
+  existingCredential &&
+  policyChanged(existingPolicy, policy) &&
+  existingCredential.secretSha256 !== credential.secretSha256
+) {
+  throw new Error(
+    "cannot change policy scope and secret together; update the canonical policy and credential separately",
+  );
+}
 const legacy = { ...policy, secretSha256: credential.secretSha256 };
 const tombstoneCredential = { ...credential, enabled: false };
 const tombstoneLegacy = { ...legacy, enabled: false };
@@ -60,7 +72,6 @@ const records = [
   [`credentials/${kid}`, writeJson(tombstoneCredential, "credential-tombstone.json")],
   [`keys/${kid}`, writeJson(tombstoneLegacy, "legacy-key-tombstone.json")],
   [`policies/${kid}`, writeJson(tombstonePolicy, "policy-tombstone.json")],
-  [`keys/${kid}`, writeJson(legacy, "legacy-key.json")],
   [`credentials/${kid}`, writeJson(credential, "credential.json")],
   [`policies/${kid}`, writeJson(policy, "policy.json")],
 ];
@@ -151,6 +162,53 @@ function run(command, args) {
   if (result.status !== 0) {
     throw new Error(`${command} failed`);
   }
+}
+
+function readRecord(key, { allowMissing = false } = {}) {
+  const result = spawnSync(
+    "pnpm",
+    [
+      "exec",
+      "wrangler",
+      "kv",
+      "key",
+      "get",
+      key,
+      "--binding",
+      binding,
+      "--config",
+      config,
+      ...kvTargetArgs(args),
+    ],
+    { encoding: "utf8" },
+  );
+  if (result.status !== 0) {
+    const message = `${result.stderr ?? ""}\n${result.stdout ?? ""}`.trim();
+    if (allowMissing && /\b(not found|does not exist|missing)\b/i.test(message)) {
+      return null;
+    }
+    throw new Error(message || `failed to read ${key}`);
+  }
+  if (!result.stdout.trim()) {
+    if (allowMissing) return null;
+    throw new Error(`empty response while reading ${key}`);
+  }
+  return JSON.parse(result.stdout);
+}
+
+function policyChanged(existing, next) {
+  return JSON.stringify(policyFields(existing)) !== JSON.stringify(policyFields(next));
+}
+
+function policyFields(policy) {
+  return {
+    enabled: policy.enabled !== false,
+    providers: policy.providers ?? [],
+    tenantId: policy.tenantId ?? null,
+    tokenRole: policy.tokenRole ?? null,
+    monthlyBudgetMicros: policy.monthlyBudgetMicros ?? null,
+    requestCostMicros: policy.requestCostMicros ?? null,
+  };
 }
 
 function writeJson(value, name) {
