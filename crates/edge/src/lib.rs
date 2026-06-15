@@ -1378,6 +1378,9 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             if let Err(message) = validate_policy_providers(&policy) {
                 return json_error("invalid_policy", &message, 400);
             }
+            if let Err(message) = validate_policy_budget(&policy) {
+                return json_error("invalid_policy", message, 400);
+            }
             put_kv_record(
                 &kv,
                 &format!("policies/{policy_id}"),
@@ -2096,6 +2099,16 @@ fn validate_policy_providers(policy: &AccessPolicy) -> std::result::Result<(), S
         {
             return Err(format!("unknown provider `{provider_id}`"));
         }
+    }
+    Ok(())
+}
+
+fn validate_policy_budget(policy: &AccessPolicy) -> std::result::Result<(), &'static str> {
+    if let Some(value) = policy.monthly_budget_micros {
+        validate_admin_budget(value, "monthlyBudgetMicros")?;
+    }
+    if let Some(value) = policy.request_cost_micros {
+        validate_admin_budget(value, "requestCostMicros")?;
     }
     Ok(())
 }
@@ -6505,6 +6518,19 @@ mod tests {
         assert_eq!(
             validate_policy_providers(&unknown_provider).unwrap_err(),
             "unknown provider `not-real`"
+        );
+
+        let invalid_budget = AccessPolicy {
+            enabled: true,
+            providers: vec!["openai".to_string()],
+            tenant_id: None,
+            token_role: None,
+            monthly_budget_micros: Some(MAX_SQL_BUDGET_MICROS + 1),
+            request_cost_micros: None,
+        };
+        assert_eq!(
+            validate_policy_budget(&invalid_budget).unwrap_err(),
+            "monthlyBudgetMicros exceeds the durable ledger limit"
         );
     }
 
