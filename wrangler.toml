@@ -12,6 +12,7 @@ queue = "clawrouter-usage"
 
 [[queues.consumers]]
 queue = "clawrouter-usage"
+dead_letter_queue = "clawrouter-usage-dead-letter"
 max_batch_size = 50
 max_batch_timeout = 5
 max_retries = 5

@@ -6,6 +6,8 @@ const target = process.argv[3] ?? ".wrangler.generated.toml";
 
 const workerName = process.env.CLAWROUTER_WORKER_NAME ?? "clawrouter-edge";
 const queueName = process.env.CLAWROUTER_USAGE_QUEUE ?? "clawrouter-usage";
+const queueDlqName =
+  process.env.CLAWROUTER_USAGE_DLQ ?? "clawrouter-usage-dead-letter";
 const kvId = process.env.CLAWROUTER_POLICY_KV_ID;
 const kvPreviewId = process.env.CLAWROUTER_POLICY_KV_PREVIEW_ID ?? kvId;
 const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
@@ -26,6 +28,10 @@ if (strict && !kvId) {
 let config = readFileSync(source, "utf8");
 config = config.replace(/^name = .+$/m, `name = "${workerName}"`);
 config = config.replace(/^queue = ".+"$/gm, `queue = "${queueName}"`);
+config = config.replace(
+  /^dead_letter_queue = ".+"$/gm,
+  `dead_letter_queue = "${queueDlqName}"`,
+);
 if (omitRoutes) {
   config = removeTomlArrayBlocks(config, "routes");
   config = ensureTopLevelSetting(config, "workers_dev", "false");
