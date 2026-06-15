@@ -2157,12 +2157,14 @@ async fn access_control_user_record(
     if let Some(user) = response.users.pop() {
         return Ok(user.record);
     }
-    let record = match env.kv("POLICY_KV") {
-        Ok(kv) => existing_access_user_record(&kv, email)
-            .await?
-            .unwrap_or_else(|| default_access_user_record(default_tenant)),
-        Err(_) => default_access_user_record(default_tenant),
-    };
+    let kv = env.kv("POLICY_KV").map_err(|error| {
+        Error::RustError(format!(
+            "POLICY_KV binding is required before initializing an access user: {error}"
+        ))
+    })?;
+    let record = existing_access_user_record(&kv, email)
+        .await?
+        .unwrap_or_else(|| default_access_user_record(default_tenant));
     let user = AccessControlUser {
         email: email.to_string(),
         record,
@@ -2172,15 +2174,13 @@ async fn access_control_user_record(
     let user = response.users.pop().ok_or_else(|| {
         Error::RustError("access user authority did not initialize the requested user".to_string())
     })?;
-    if let Ok(kv) = env.kv("POLICY_KV") {
-        sync_kv_record_best_effort(
-            &kv,
-            &format!("access/users/{email}"),
-            &user.record,
-            "access user compatibility record",
-        )
-        .await;
-    }
+    sync_kv_record_best_effort(
+        &kv,
+        &format!("access/users/{email}"),
+        &user.record,
+        "access user compatibility record",
+    )
+    .await;
     Ok(user.record)
 }
 
@@ -2276,11 +2276,7 @@ async fn inspect_proxy_key(headers: &Headers, env: &Env) -> Result<Response> {
             Some("unknown_policy"),
         );
     };
-    let verification = if credential.enabled {
-        key_verification(&key.secret, &credential)
-    } else {
-        "revoked"
-    };
+    let verification = key_inspection_verification(&key.secret, &credential, &policy);
     let verified_policy = inspect_policy_for_response(verification, &policy);
     key_inspection_response(
         &key.kid,
@@ -2295,6 +2291,22 @@ fn key_verification(secret: &str, credential: &ProxyCredential) -> &'static str 
         "verified"
     } else {
         "invalid_secret"
+    }
+}
+
+fn key_inspection_verification(
+    secret: &str,
+    credential: &ProxyCredential,
+    policy: &AccessPolicy,
+) -> &'static str {
+    if !credential.enabled {
+        return "revoked";
+    }
+    let verification = key_verification(secret, credential);
+    if verification == "verified" && !policy.enabled {
+        "policy_revoked"
+    } else {
+        verification
     }
 }
 
@@ -4281,7 +4293,7 @@ fn inspect_policy_for_response<'a>(
     verification: &str,
     policy: &'a AccessPolicy,
 ) -> Option<&'a AccessPolicy> {
-    (verification == "verified").then_some(policy)
+    matches!(verification, "verified" | "policy_revoked").then_some(policy)
 }
 
 fn key_inspection_response(
@@ -8205,8 +8217,25 @@ mod tests {
 
         assert_eq!(key_verification("secret", &credential), "verified");
         assert_eq!(key_verification("wrong", &credential), "invalid_secret");
+        assert_eq!(
+            key_inspection_verification("secret", &credential, &policy),
+            "verified"
+        );
         assert!(inspect_policy_for_response("verified", &policy).is_some());
         assert!(inspect_policy_for_response("invalid_secret", &policy).is_none());
+        let revoked_policy = AccessPolicy {
+            enabled: false,
+            ..policy.clone()
+        };
+        assert_eq!(
+            key_inspection_verification("secret", &credential, &revoked_policy),
+            "policy_revoked"
+        );
+        assert_eq!(
+            key_inspection_verification("wrong", &credential, &revoked_policy),
+            "invalid_secret"
+        );
+        assert!(inspect_policy_for_response("policy_revoked", &revoked_policy).is_some());
         assert_eq!(policy.request_cost_micros, Some(10));
     }
 
