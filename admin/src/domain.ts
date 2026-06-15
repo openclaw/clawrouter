@@ -331,6 +331,19 @@ export function reconcileDirectUserBindings(current: PolicyBinding[], email: str
   return [...other, ...direct];
 }
 
+export function directUserBindingChanges(current: PolicyBinding[], email: string, policies: AccessPolicy[], policyIds: string[]) {
+  const existing = new Map(current
+    .filter((binding) => binding.principalType === "user" && binding.principalId === email)
+    .map((binding) => [binding.policyId, binding]));
+  const changes = reconcileDirectUserBindings(current, email, policies, policyIds)
+    .filter((binding) => binding.principalType === "user" && binding.principalId === email)
+    .filter((binding) => existing.get(binding.policyId)?.enabled !== binding.enabled);
+  return {
+    removals: changes.filter((binding) => !binding.enabled),
+    additions: changes.filter((binding) => binding.enabled),
+  };
+}
+
 export function policyUsageFallback(policy: AccessPolicy): AdminUsageRow {
   const limit = policy.monthlyBudgetMicros;
   const blocked = limit === 0;

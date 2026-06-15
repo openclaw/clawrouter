@@ -24,6 +24,7 @@ import {
   bindingFormFromBinding,
   bindingKey,
   currencyInput,
+  directUserBindingChanges,
   effectiveAccess,
   errorMessage,
   grantNamesForService,
@@ -729,12 +730,12 @@ function App() {
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ enabled: true, policyId, secretSha256: await sha256Hex(secret) }),
         });
-        await refresh();
       }
       setSelectedCredentialId(credentialId);
       setCredentialForm({ credentialId: "", policyId });
       setIssuedKey(`clawrouter-live-${credentialId}-${secret}`);
       setStatus("issued credential");
+      if (!demoMode) await refresh();
     } catch (error) {
       const message = errorMessage(error);
       setPolicyError(message);
@@ -858,32 +859,35 @@ function App() {
         setStatus("saved user");
         return;
       }
-      await request<AccessUser>(gatewayOrigin, `/v1/admin/access-users/${encodeURIComponent(email)}`, {
-        method: "PUT",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({ tenantId: next.tenantId, enabled: next.enabled, groups: next.groups }),
-      });
-      const bindingWrites = keys.flatMap((policy) => {
-        const existing = bindings.find((binding) => binding.principalType === "user" && binding.principalId === email && binding.policyId === policy.policyId);
-        const enabled = accessForm.policyIds.includes(policy.policyId);
-        if (existing?.enabled === enabled || (!existing && !enabled)) return [];
-        return [request<PolicyBinding>(gatewayOrigin, "/v1/admin/policy-bindings", {
+      const currentUser = users.find((user) => user.email === email);
+      const currentGroups = new Set(currentUser?.groups ?? []);
+      const stagedUser = {
+        tenantId: currentUser?.tenantId ?? next.tenantId,
+        enabled: false,
+        groups: next.groups.filter((group) => currentGroups.has(group)),
+      };
+      const bindingChanges = directUserBindingChanges(bindings, email, keys, accessForm.policyIds);
+      const writeUser = (user: Pick<AccessUser, "tenantId" | "enabled" | "groups">) =>
+        request<AccessUser>(gatewayOrigin, `/v1/admin/access-users/${encodeURIComponent(email)}`, {
           method: "PUT",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({
-            policyId: policy.policyId,
-            principalType: "user",
-            principalId: email,
-            enabled,
-            priority: existing?.priority ?? 100,
-          }),
-        })];
-      });
-      await Promise.all(bindingWrites);
+          body: JSON.stringify(user),
+        });
+      const writeBinding = (binding: PolicyBinding) =>
+        request<PolicyBinding>(gatewayOrigin, "/v1/admin/policy-bindings", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(binding),
+        });
+      await writeUser(stagedUser);
+      for (const binding of bindingChanges.removals) await writeBinding(binding);
+      await writeUser(next);
+      for (const binding of bindingChanges.additions) await writeBinding(binding);
       await refresh();
       setStatus("saved user");
     } catch (error) {
       const message = errorMessage(error);
+      await refresh();
       setUserError(message);
       setStatus(message);
     }
