@@ -7,7 +7,20 @@ import { join } from "node:path";
 const args = parseArgs(process.argv.slice(2));
 const kid = required(args.kid, "--kid");
 const secret = readSecret(args);
-const providers = args.providers ? args.providers.split(",").filter(Boolean) : [];
+const allProviders = args["all-providers"] === true;
+if (args["all-providers"] !== undefined && !allProviders) {
+  throw new Error("--all-providers is a flag and does not accept a value");
+}
+if (args.providers && allProviders) {
+  throw new Error("--providers and --all-providers are mutually exclusive");
+}
+const providers =
+  typeof args.providers === "string"
+    ? [...new Set(args.providers.split(",").map((provider) => provider.trim()).filter(Boolean))]
+    : [];
+if (!allProviders && providers.length === 0) {
+  throw new Error("--providers or --all-providers is required");
+}
 const binding = args.binding ?? "POLICY_KV";
 const config = args.config ?? ".wrangler.generated.toml";
 const enabled = args.disabled ? false : true;
