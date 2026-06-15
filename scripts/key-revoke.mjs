@@ -8,9 +8,10 @@ const kid = required(args.kid, "--kid");
 const binding = args.binding ?? "POLICY_KV";
 const config = args.config ?? ".wrangler.generated.toml";
 
-const credential = readRecord(`credentials/${kid}`) ?? legacyCredential(readRecord(`keys/${kid}`));
-const policy = readRecord(`policies/${kid}`) ?? legacyPolicy(readRecord(`keys/${kid}`));
-const legacy = readRecord(`keys/${kid}`);
+const legacy = readRecord(`keys/${kid}`, { allowMissing: true });
+const credential =
+  readRecord(`credentials/${kid}`, { allowMissing: true }) ?? legacyCredential(legacy);
+const policy = readRecord(`policies/${kid}`, { allowMissing: true }) ?? legacyPolicy(legacy);
 if (!credential || !policy) {
   throw new Error(`proxy credential or access policy ${kid} was not found`);
 }
@@ -18,9 +19,9 @@ credential.enabled = false;
 policy.enabled = false;
 if (legacy) legacy.enabled = false;
 const records = [
+  ...(legacy ? [[`keys/${kid}`, writeJson(legacy, "legacy-key.json")]] : []),
   [`credentials/${kid}`, writeJson(credential, "credential.json")],
   [`policies/${kid}`, writeJson(policy, "policy.json")],
-  ...(legacy ? [[`keys/${kid}`, writeJson(legacy, "legacy-key.json")]] : []),
 ];
 
 try {
@@ -83,7 +84,7 @@ function run(command, args) {
   return result;
 }
 
-function readRecord(key) {
+function readRecord(key, { allowMissing = false } = {}) {
   const result = spawnSync("pnpm", [
     "exec",
     "wrangler",
@@ -97,7 +98,17 @@ function readRecord(key) {
     config,
     ...kvTargetArgs(args),
   ], { encoding: "utf8" });
-  if (result.status !== 0) return null;
+  if (result.status !== 0) {
+    const message = `${result.stderr ?? ""}\n${result.stdout ?? ""}`.trim();
+    if (allowMissing && /\b(not found|does not exist|missing)\b/i.test(message)) {
+      return null;
+    }
+    throw new Error(message || `failed to read ${key}`);
+  }
+  if (!result.stdout.trim()) {
+    if (allowMissing) return null;
+    throw new Error(`empty response while reading ${key}`);
+  }
   return JSON.parse(result.stdout);
 }
 

@@ -37,7 +37,11 @@ const credential = {
   policyId: kid,
 };
 const legacy = { ...policy, secretSha256: credential.secretSha256 };
+const tombstoneCredential = { ...credential, enabled: false };
+const tombstoneLegacy = { ...legacy, enabled: false };
 const records = [
+  [`keys/${kid}`, writeJson(tombstoneLegacy, "legacy-key-tombstone.json")],
+  [`credentials/${kid}`, writeJson(tombstoneCredential, "credential-tombstone.json")],
   [`policies/${kid}`, writeJson(policy, "policy.json")],
   [`credentials/${kid}`, writeJson(credential, "credential.json")],
   [`keys/${kid}`, writeJson(legacy, "legacy-key.json")],
