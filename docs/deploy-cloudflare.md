@@ -117,8 +117,9 @@ pnpm cf:doctor
 
 The doctor verifies local deploy env, Wrangler auth, required GitHub Actions
 secret names, the provider smoke plan, and provider binding coverage. It reports
-provider env names that are missing locally; those same provider bindings must be
-configured as Worker secrets or vars before enabling every provider live.
+provider env names that are missing locally as warnings because provider secrets
+normally exist only on the deployed Worker. The mandatory deployed smoke is the
+authoritative check that selected live-provider bindings work.
 Install the GitHub CLI as `gh`, or set `CLAWROUTER_GITHUB_CLI` when using a
 wrapper binary.
 
@@ -382,14 +383,17 @@ printf '%s' "$CLAWROUTER_PROXY_SECRET" | pnpm cf:key:put -- \
 ```
 
 This stores the provider allowlist and budget at `policies/<kid>`, the proxy
-secret hash at `credentials/<kid>`, and a `keys/<kid>` compatibility record for
-rollback safety. `--providers` is required unless the operator deliberately
-passes `--all-providers`; omitting scope never creates an implicit wildcard.
-Policies and credentials carry the same generated policy generation.
-Authorization rejects mixed generations, so eventual KV propagation can cause
-a temporary denial during rotation but cannot combine an old secret with a
-newly expanded policy. Provisioning writes a disabled policy tombstone first
-and activates the policy only after its legacy and credential records succeed.
+secret hash at `credentials/<kid>`, and a disabled `keys/<kid>` compatibility
+tombstone. `--providers` is required unless the operator deliberately passes
+`--all-providers`; omitting scope never creates an implicit wildcard. Policies
+and credentials carry the same generated policy generation. Authorization
+rejects mixed generations, so eventual KV propagation can cause a temporary
+denial during rotation but cannot combine an old secret with a newly expanded
+policy. Provisioning activates the policy only after its canonical credential
+succeeds. Only genuine pre-migration `keys/<kid>` records can authorize through
+the legacy fallback; generation-bearing compatibility records never can. When
+replacing an existing id, the helper preserves its policy generation and rejects
+changing policy scope and secret in the same operation.
 
 Revoke access:
 

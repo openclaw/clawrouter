@@ -144,13 +144,17 @@ loads its access policy from `policies/<policy-id>`:
 
 Policy and credential generations must match. During rotations, mixed KV
 generations fail closed instead of letting an old secret inherit a newly
-expanded policy.
+expanded policy. Canonical policy edits preserve their generation, so they do
+not depend on eventually-consistent credential listings. The legacy key
+mutation alias rejects changing policy scope and secret together.
 
 Disable a credential to revoke one issued key, disable a policy to revoke every
 user and credential bound to it, or disable a provider connection to stop that
 provider globally. Legacy `keys/<kid>` records remain readable during
-migration. See `docs/deploy-cloudflare.md` for Cloudflare provisioning,
-deployment, key registration, and smoke commands.
+migration only when they are genuine pre-migration records. Generation-bearing
+compatibility records stay disabled and are never authorization fallback. See
+`docs/deploy-cloudflare.md` for Cloudflare provisioning, deployment, key
+registration, and smoke commands.
 
 Admin endpoints accept a verified Cloudflare Access admin session or
 `Authorization: Bearer <admin-token>` against `CLAWROUTER_ADMIN_TOKEN_SHA256`.
