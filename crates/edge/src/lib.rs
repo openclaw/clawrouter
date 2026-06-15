@@ -457,7 +457,30 @@ async fn proxy_openai_compatible(
     };
     let request_id = request_id(req.headers(), "openai");
     let capability = capability_for_path(&route.capabilities, path).unwrap_or("llm.unknown");
+    if let Some(response) = disabled_provider_connection_response(&env, &route.provider.id).await? {
+        enqueue_denied_usage(
+            &env,
+            &auth,
+            &route.provider.id,
+            capability,
+            Some(model.as_str()),
+            &request_id,
+            response.status_code(),
+        )
+        .await;
+        return Ok(response);
+    }
     if let Some(response) = preflight_static_budget(&auth.policy)? {
+        enqueue_denied_usage(
+            &env,
+            &auth,
+            &route.provider.id,
+            capability,
+            Some(model.as_str()),
+            &request_id,
+            response.status_code(),
+        )
+        .await;
         return Ok(response);
     }
     if let Err(error) = openai_endpoint_path(endpoint, &route.upstream_model) {
@@ -513,7 +536,19 @@ async fn proxy_openai_compatible(
     };
     let budget = match preflight_budget(&env, &auth, capability).await? {
         BudgetPreflight::Allowed(budget) => budget,
-        BudgetPreflight::Denied(response) => return Ok(response),
+        BudgetPreflight::Denied(response) => {
+            enqueue_denied_usage(
+                &env,
+                &auth,
+                &route.provider.id,
+                capability,
+                Some(model.as_str()),
+                &request_id,
+                response.status_code(),
+            )
+            .await;
+            return Ok(response);
+        }
     };
 
     let mut init = RequestInit::new();
@@ -529,7 +564,7 @@ async fn proxy_openai_compatible(
         &env,
         UsageRecord {
             auth: &auth,
-            provider: route.provider,
+            provider: &route.provider.id,
             capability,
             model: Some(model.as_str()),
             request_id: &request_id,
@@ -589,7 +624,30 @@ async fn proxy_manifest_endpoint(
         AuthOutcome::Denied(response) => return Ok(response),
     };
     let request_id = request_id(req.headers(), endpoint_id);
+    if let Some(response) = disabled_provider_connection_response(&env, &provider.id).await? {
+        enqueue_denied_usage(
+            &env,
+            &auth,
+            &provider.id,
+            capability,
+            None,
+            &request_id,
+            response.status_code(),
+        )
+        .await;
+        return Ok(response);
+    }
     if let Some(response) = preflight_static_budget(&auth.policy)? {
+        enqueue_denied_usage(
+            &env,
+            &auth,
+            &provider.id,
+            capability,
+            None,
+            &request_id,
+            response.status_code(),
+        )
+        .await;
         return Ok(response);
     }
     let raw_body = req.text().await?;
@@ -660,7 +718,19 @@ async fn proxy_manifest_endpoint(
     };
     let budget = match preflight_budget(&env, &auth, capability).await? {
         BudgetPreflight::Allowed(budget) => budget,
-        BudgetPreflight::Denied(response) => return Ok(response),
+        BudgetPreflight::Denied(response) => {
+            enqueue_denied_usage(
+                &env,
+                &auth,
+                &provider.id,
+                capability,
+                None,
+                &request_id,
+                response.status_code(),
+            )
+            .await;
+            return Ok(response);
+        }
     };
 
     let mut init = RequestInit::new();
@@ -678,7 +748,7 @@ async fn proxy_manifest_endpoint(
         &env,
         UsageRecord {
             auth: &auth,
-            provider,
+            provider: &provider.id,
             capability,
             model: None,
             request_id: &request_id,
@@ -3546,16 +3616,10 @@ async fn authorize_request(
     provider_id: &str,
     mode: ProxyAuthMode,
 ) -> Result<AuthOutcome> {
-    let outcome = match mode {
+    match mode {
         ProxyAuthMode::ProxyKey => authorize_proxy_key(headers, env, provider_id).await,
         ProxyAuthMode::AccessSession => authorize_access_session(headers, env, provider_id).await,
-    }?;
-    if matches!(outcome, AuthOutcome::Allowed(_)) {
-        if let Some(response) = disabled_provider_connection_response(env, provider_id).await? {
-            return Ok(AuthOutcome::Denied(response));
-        }
     }
-    Ok(outcome)
 }
 
 async fn disabled_provider_connection_response(
@@ -3616,43 +3680,103 @@ async fn authorize_proxy_key_for_provider(
         return json_error("unknown_proxy_key", "proxy key is not registered", 401)
             .map(AuthOutcome::Denied);
     };
-    if !credential.enabled {
-        return json_error("proxy_key_revoked", "proxy key is revoked", 403)
-            .map(AuthOutcome::Denied);
-    }
     if sha256_hex(&key.secret) != credential.secret_sha256 {
         return json_error("invalid_proxy_key", "proxy key secret is invalid", 401)
             .map(AuthOutcome::Denied);
     }
     let Some(policy) = existing_access_policy(&kv, &credential.policy_id).await? else {
-        return json_error(
+        let response = json_error(
             "credential_policy_missing",
             "proxy credential references an unknown access policy",
             403,
-        )
-        .map(AuthOutcome::Denied);
-    };
-    if !policy.enabled {
-        return json_error("policy_revoked", "access policy is revoked", 403)
-            .map(AuthOutcome::Denied);
-    }
-    if let Some(provider_id) = provider_id {
-        if !policy.providers.is_empty() && !policy.providers.iter().any(|id| id == provider_id) {
-            return json_error(
-                "provider_not_allowed",
-                "proxy key is not allowed to use this provider",
-                403,
+        )?;
+        if let Some(provider_id) = provider_id {
+            let auth = AuthorizedKey {
+                credential_id: Some(key.kid),
+                principal_id: None,
+                auth_type: "proxy_key",
+                policy_id: credential.policy_id,
+                policy: denied_access_policy(None),
+            };
+            enqueue_denied_usage(
+                env,
+                &auth,
+                provider_id,
+                "access.denied",
+                None,
+                &request_id(headers, "auth"),
+                response.status_code(),
             )
-            .map(AuthOutcome::Denied);
+            .await;
         }
-    }
-    Ok(AuthOutcome::Allowed(AuthorizedKey {
+        return Ok(AuthOutcome::Denied(response));
+    };
+    let authorized = AuthorizedKey {
         credential_id: Some(key.kid),
         principal_id: None,
         auth_type: "proxy_key",
         policy_id: credential.policy_id,
         policy,
-    }))
+    };
+    if !credential.enabled {
+        let response = json_error("proxy_key_revoked", "proxy key is revoked", 403)?;
+        if let Some(provider_id) = provider_id {
+            enqueue_denied_usage(
+                env,
+                &authorized,
+                provider_id,
+                "access.denied",
+                None,
+                &request_id(headers, "auth"),
+                response.status_code(),
+            )
+            .await;
+        }
+        return Ok(AuthOutcome::Denied(response));
+    }
+    if !authorized.policy.enabled {
+        let response = json_error("policy_revoked", "access policy is revoked", 403)?;
+        if let Some(provider_id) = provider_id {
+            enqueue_denied_usage(
+                env,
+                &authorized,
+                provider_id,
+                "access.denied",
+                None,
+                &request_id(headers, "auth"),
+                response.status_code(),
+            )
+            .await;
+        }
+        return Ok(AuthOutcome::Denied(response));
+    }
+    if let Some(provider_id) = provider_id {
+        if !authorized.policy.providers.is_empty()
+            && !authorized
+                .policy
+                .providers
+                .iter()
+                .any(|id| id == provider_id)
+        {
+            let response = json_error(
+                "provider_not_allowed",
+                "proxy key is not allowed to use this provider",
+                403,
+            )?;
+            enqueue_denied_usage(
+                env,
+                &authorized,
+                provider_id,
+                "access.denied",
+                None,
+                &request_id(headers, "auth"),
+                response.status_code(),
+            )
+            .await;
+            return Ok(AuthOutcome::Denied(response));
+        }
+    }
+    Ok(AuthOutcome::Allowed(authorized))
 }
 
 async fn authorize_access_session(
@@ -3685,12 +3809,29 @@ async fn authorize_access_session(
         .filter(|entry| policy_allows_provider(&entry.policy, provider_id))
         .collect::<Vec<_>>();
     let Some(first_entry) = matching_entries.first().copied() else {
-        return json_error(
+        let response = json_error(
             "provider_not_allowed",
             "Cloudflare Access user is not allowed to use this provider",
             403,
+        )?;
+        let auth = AuthorizedKey {
+            credential_id: None,
+            principal_id: Some(session.email),
+            auth_type: "access",
+            policy_id: "access_unbound".to_string(),
+            policy: denied_access_policy(Some(session.tenant_id)),
+        };
+        enqueue_denied_usage(
+            env,
+            &auth,
+            provider_id,
+            "access.denied",
+            None,
+            &request_id(headers, "auth"),
+            response.status_code(),
         )
-        .map(AuthOutcome::Denied);
+        .await;
+        return Ok(AuthOutcome::Denied(response));
     };
     let snapshot = provider_snapshot()?;
     let provider = snapshot
@@ -3719,6 +3860,17 @@ fn policy_allows_provider(policy: &AccessPolicy, provider_id: &str) -> bool {
         return false;
     }
     policy.providers.is_empty() || policy.providers.iter().any(|id| id == provider_id)
+}
+
+fn denied_access_policy(tenant_id: Option<String>) -> AccessPolicy {
+    AccessPolicy {
+        enabled: false,
+        providers: Vec::new(),
+        tenant_id,
+        token_role: None,
+        monthly_budget_micros: None,
+        request_cost_micros: None,
+    }
 }
 
 fn provider_snapshot() -> Result<ProviderSnapshot> {
@@ -5932,7 +6084,7 @@ fn current_month_window_key(policy_id: &str) -> Result<String> {
 
 struct UsageRecord<'a> {
     auth: &'a AuthorizedKey,
-    provider: &'a CompiledProvider,
+    provider: &'a str,
     capability: &'a str,
     model: Option<&'a str>,
     request_id: &'a str,
@@ -5960,7 +6112,7 @@ async fn enqueue_usage(env: &Env, record: UsageRecord<'_>) {
         tenant_id(record.auth),
         key_id,
         record.request_id,
-        &record.provider.id,
+        record.provider,
         record.capability,
     );
     event.occurred_at_ms = Date::now().as_millis();
@@ -5981,6 +6133,32 @@ async fn enqueue_usage(env: &Env, record: UsageRecord<'_>) {
             error
         );
     }
+}
+
+async fn enqueue_denied_usage(
+    env: &Env,
+    auth: &AuthorizedKey,
+    provider: &str,
+    capability: &str,
+    model: Option<&str>,
+    request_id: &str,
+    status_code: u16,
+) {
+    enqueue_usage(
+        env,
+        UsageRecord {
+            auth,
+            provider,
+            capability,
+            model,
+            request_id,
+            budget: BudgetUsage::default(),
+            status: UsageStatus::Denied,
+            status_code,
+            duration_ms: 0,
+        },
+    )
+    .await;
 }
 
 fn usage_event_id() -> String {
@@ -6661,6 +6839,11 @@ mod tests {
 
         assert!(policy_allows_provider(&policy, "openai"));
         assert!(!policy_allows_provider(&policy, "anthropic"));
+
+        let denied = denied_access_policy(Some("team_docs".to_string()));
+        assert!(!denied.enabled);
+        assert_eq!(denied.tenant_id.as_deref(), Some("team_docs"));
+        assert!(!policy_allows_provider(&denied, "openai"));
     }
 
     #[test]
