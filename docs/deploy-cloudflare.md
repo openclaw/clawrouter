@@ -6,8 +6,12 @@ Cloudflare KV so access can be revoked without a redeploy.
 ## Required Bindings
 
 - `POLICY_KV`: key and policy records.
-- `USAGE_QUEUE`: metered usage events.
+- `USAGE_QUEUE`: metered usage events, with this Worker configured as producer
+  and consumer.
 - `BUDGET_LEDGER`: SQLite-backed Durable Object budget ledger.
+- `USAGE_LEDGER`: SQLite-backed Durable Object request audit and reporting
+  ledger. It retains bounded metadata for 30 days and never stores prompt or
+  completion bodies.
 - provider secrets such as `OPENAI_API_KEY`, `OPENROUTER_API_KEY`,
   `MINIMAX_API_KEY`, and `TAVILY_API_KEY`.
 - provider config vars declared by manifests, such as `OPENROUTER_SITE_URL`,

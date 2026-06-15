@@ -20,6 +20,8 @@ include!(concat!(env!("OUT_DIR"), "/admin-assets.rs"));
 static USAGE_EVENT_COUNTER: AtomicU64 = AtomicU64::new(0);
 const MAX_SQL_BUDGET_MICROS: u64 = 9_007_199_254_740_991;
 const PROVIDER_HEALTH_MAX_AGE_MS: f64 = 86_400_000.0;
+const USAGE_EVENT_LIMIT: usize = 100;
+const USAGE_EVENT_RETENTION_MS: u64 = 30 * 86_400_000;
 const CORS_ALLOW_ORIGIN: &str = "*";
 const CORS_ALLOW_METHODS: &str = "GET,POST,PUT,OPTIONS";
 const CORS_ALLOW_HEADERS: &str = "authorization,content-type,x-request-id";
@@ -185,6 +187,33 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         }
     }))
     .map(|resp| resp.with_status(404))
+}
+
+#[event(queue)]
+async fn queue(batch: MessageBatch<UsageEvent>, env: Env, _ctx: Context) -> Result<()> {
+    let namespace = match env.durable_object("USAGE_LEDGER") {
+        Ok(namespace) => namespace,
+        Err(error) => {
+            batch.retry_all();
+            return Err(Error::RustError(format!(
+                "USAGE_LEDGER Durable Object binding is required for usage events: {error}"
+            )));
+        }
+    };
+    for message in batch.messages()? {
+        match persist_usage_event(&namespace, message.body()).await {
+            Ok(()) => message.ack(),
+            Err(error) => {
+                console_error!(
+                    "failed to persist usage event {}: {}",
+                    message.body().id,
+                    error
+                );
+                message.retry();
+            }
+        }
+    }
+    Ok(())
 }
 
 fn service_index() -> Result<Response> {
@@ -488,7 +517,9 @@ async fn proxy_openai_compatible(
         .with_headers(headers)
         .with_body(Some(JsValue::from_str(&upstream_body)));
     let upstream_req = Request::new_with_init(&upstream_url, &init)?;
+    let started_at_ms = Date::now().as_millis();
     let response = send_upstream_request(upstream_req, &route.provider.id).await?;
+    let status_code = response.status_code();
     enqueue_usage(
         &env,
         UsageRecord {
@@ -498,7 +529,9 @@ async fn proxy_openai_compatible(
             model: Some(model.as_str()),
             request_id: &request_id,
             budget,
-            status: usage_status(response.status_code()),
+            status: usage_status(status_code),
+            status_code,
+            duration_ms: Date::now().as_millis().saturating_sub(started_at_ms),
         },
     )
     .await;
@@ -632,7 +665,9 @@ async fn proxy_manifest_endpoint(
         init.with_body(Some(JsValue::from_str(&upstream_body)));
     }
     let upstream_req = Request::new_with_init(&upstream_url, &init)?;
+    let started_at_ms = Date::now().as_millis();
     let response = send_upstream_request(upstream_req, &provider.id).await?;
+    let status_code = response.status_code();
     enqueue_usage(
         &env,
         UsageRecord {
@@ -642,7 +677,9 @@ async fn proxy_manifest_endpoint(
             model: None,
             request_id: &request_id,
             budget,
-            status: usage_status(response.status_code()),
+            status: usage_status(status_code),
+            status_code,
+            duration_ms: Date::now().as_millis().saturating_sub(started_at_ms),
         },
     )
     .await;
@@ -839,6 +876,64 @@ struct AdminUsageRow {
     budget: BudgetStatusView,
 }
 
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UsageSummary {
+    request_count: u64,
+    success_count: u64,
+    error_count: u64,
+    input_tokens: u64,
+    output_tokens: u64,
+    total_tokens: u64,
+    actual_cost_micros: u64,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderUsageSummary {
+    provider: String,
+    request_count: u64,
+    success_count: u64,
+    error_count: u64,
+    total_tokens: u64,
+    actual_cost_micros: u64,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UsageSnapshot {
+    ledger: String,
+    summary: UsageSummary,
+    providers: Vec<ProviderUsageSummary>,
+    events: Vec<UsageEvent>,
+}
+
+#[derive(Debug, Deserialize)]
+struct UsageEventJsonRow {
+    event_json: String,
+}
+
+#[derive(Debug, Default, Deserialize)]
+struct UsageSummarySqlRow {
+    request_count: i64,
+    success_count: i64,
+    error_count: i64,
+    input_tokens: i64,
+    output_tokens: i64,
+    total_tokens: i64,
+    actual_cost_micros: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct ProviderUsageSummarySqlRow {
+    provider: String,
+    request_count: i64,
+    success_count: i64,
+    error_count: i64,
+    total_tokens: i64,
+    actual_cost_micros: i64,
+}
+
 #[derive(Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct ProviderReadinessResponse {
@@ -1028,6 +1123,8 @@ struct OAuthTokenRecord {
 
 struct AuthorizedKey {
     credential_id: Option<String>,
+    principal_id: Option<String>,
+    auth_type: &'static str,
     policy_id: String,
     policy: AccessPolicy,
 }
@@ -1171,11 +1268,15 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
 
     if req.method() == Method::Get && path == "/v1/admin/usage" {
         let entries = list_admin_key_policies(&kv).await?;
+        let usage = usage_snapshot(&env, None, USAGE_EVENT_LIMIT).await?;
         let mut rows = Vec::new();
         for entry in entries {
             rows.push(admin_usage_row(&env, entry).await?);
         }
-        return Response::from_json(&serde_json::json!({ "keys": rows }));
+        return Response::from_json(&serde_json::json!({
+            "keys": rows,
+            "usage": usage
+        }));
     }
 
     if req.method() == Method::Get && path == "/v1/admin/access-users" {
@@ -1798,16 +1899,20 @@ async fn user_usage(headers: &Headers, env: &Env) -> Result<Response> {
         AuthOutcome::Allowed(auth) => auth,
         AuthOutcome::Denied(response) => return Ok(response),
     };
+    let tenant_id = tenant_id(&auth);
     let budget = budget_status_for_key(
         env,
-        &tenant_id(&auth),
+        &tenant_id,
         &auth.policy_id,
         auth.policy.monthly_budget_micros,
     )
     .await?;
+    let mut usage = usage_snapshot(env, Some(&auth.policy_id), 50).await?;
+    usage.events.clear();
     Response::from_json(&serde_json::json!({
         "key": key_profile_response(&auth),
-        "budget": budget
+        "budget": budget,
+        "usage": usage
     }))
 }
 
@@ -2145,6 +2250,43 @@ async fn admin_usage_row(env: &Env, entry: AdminKeyPolicyResponse) -> Result<Adm
         request_cost_micros: entry.request_cost_micros,
         budget,
     })
+}
+
+async fn usage_snapshot(env: &Env, policy_id: Option<&str>, limit: usize) -> Result<UsageSnapshot> {
+    let Ok(namespace) = env.durable_object("USAGE_LEDGER") else {
+        return Ok(empty_usage_snapshot("unavailable"));
+    };
+    let stub = namespace.get_by_name(usage_object_name())?;
+    let mut url = format!(
+        "https://clawrouter.internal/snapshot?limit={}",
+        limit.min(USAGE_EVENT_LIMIT)
+    );
+    if let Some(policy_id) = policy_id {
+        url.push_str("&policy_id=");
+        url.push_str(&encode_component(policy_id));
+    }
+    let mut init = RequestInit::new();
+    init.with_method(Method::Get);
+    let req = Request::new_with_init(&url, &init)?;
+    let mut response = stub.fetch_with_request(req).await?;
+    let status = response.status_code();
+    let text = response.text().await?;
+    if !(200..=299).contains(&status) {
+        return Err(Error::RustError(format!(
+            "usage ledger rejected snapshot request with HTTP {status}: {text}"
+        )));
+    }
+    serde_json::from_str::<UsageSnapshot>(&text)
+        .map_err(|error| Error::RustError(format!("usage snapshot is invalid JSON: {error}")))
+}
+
+fn empty_usage_snapshot(ledger: &str) -> UsageSnapshot {
+    UsageSnapshot {
+        ledger: ledger.to_string(),
+        summary: UsageSummary::default(),
+        providers: Vec::new(),
+        events: Vec::new(),
+    }
 }
 
 fn response_tenant_id(entry: &AdminKeyPolicyResponse) -> String {
@@ -3403,6 +3545,8 @@ async fn authorize_proxy_key_for_provider(
     }
     Ok(AuthOutcome::Allowed(AuthorizedKey {
         credential_id: Some(key.kid),
+        principal_id: None,
+        auth_type: "proxy_key",
         policy_id: credential.policy_id,
         policy,
     }))
@@ -3460,6 +3604,8 @@ async fn authorize_access_session(
         .unwrap_or(first_entry);
     return Ok(AuthOutcome::Allowed(AuthorizedKey {
         credential_id: None,
+        principal_id: Some(session.email),
+        auth_type: "access",
         policy_id: selected_entry.policy_id.clone(),
         policy: selected_entry.policy.clone(),
     }));
@@ -4670,6 +4816,275 @@ impl DurableObject for BudgetLedgerObject {
     }
 }
 
+#[durable_object]
+pub struct UsageLedgerObject {
+    state: State,
+    _env: Env,
+}
+
+impl DurableObject for UsageLedgerObject {
+    fn new(state: State, env: Env) -> Self {
+        Self { state, _env: env }
+    }
+
+    async fn fetch(&self, mut req: Request) -> Result<Response> {
+        let url = req.url()?;
+        if req.method() == Method::Post && url.path() == "/ingest" {
+            let event =
+                serde_json::from_str::<UsageEvent>(&req.text().await?).map_err(|error| {
+                    Error::RustError(format!("usage event is invalid JSON: {error}"))
+                })?;
+            ingest_usage_event(&self.state, event)?;
+            return Response::ok("accepted");
+        }
+        if req.method() == Method::Get && url.path() == "/snapshot" {
+            let policy_id = query_param(&url, "policy_id");
+            let limit = query_param(&url, "limit")
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(USAGE_EVENT_LIMIT)
+                .min(USAGE_EVENT_LIMIT);
+            return Response::from_json(&usage_snapshot_in_object(
+                &self.state,
+                policy_id.as_deref(),
+                limit,
+            )?);
+        }
+        json_error("route_not_found", "route not found", 404)
+    }
+}
+
+async fn persist_usage_event(namespace: &ObjectNamespace, event: &UsageEvent) -> Result<()> {
+    let stub = namespace.get_by_name(usage_object_name())?;
+    let body = serde_json::to_string(event)?;
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post)
+        .with_body(Some(JsValue::from_str(&body)));
+    let req = Request::new_with_init("https://clawrouter.internal/ingest", &init)?;
+    let mut response = stub.fetch_with_request(req).await?;
+    let status = response.status_code();
+    if !(200..=299).contains(&status) {
+        let text = response.text().await?;
+        return Err(Error::RustError(format!(
+            "usage ledger rejected event with HTTP {status}: {text}"
+        )));
+    }
+    Ok(())
+}
+
+fn ingest_usage_event(state: &State, mut event: UsageEvent) -> Result<()> {
+    ensure_usage_schema(state)?;
+    if event.occurred_at_ms == 0 {
+        event.occurred_at_ms = Date::now().as_millis();
+    }
+    if event.policy_id.is_empty() {
+        event.policy_id.clone_from(&event.key_id);
+    }
+    let event_json = serde_json::to_string(&event)?;
+    state.storage().sql().exec_raw(
+        "INSERT OR IGNORE INTO usage_events (
+            id, occurred_at_ms, tenant_id, policy_id, provider, status, status_code,
+            input_tokens, output_tokens, total_tokens, actual_cost_micros, event_json
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        raw_bindings(vec![
+            JsValue::from_str(&event.id),
+            sql_usage_number(event.occurred_at_ms, "occurred_at_ms")?,
+            JsValue::from_str(&event.tenant_id),
+            JsValue::from_str(&event.policy_id),
+            JsValue::from_str(&event.provider),
+            JsValue::from_str(usage_status_label(&event.status)),
+            optional_sql_usage_number(event.status_code.map(u64::from), "status_code")?,
+            optional_sql_usage_number(event.input_tokens, "input_tokens")?,
+            optional_sql_usage_number(event.output_tokens, "output_tokens")?,
+            optional_sql_usage_number(event.total_tokens, "total_tokens")?,
+            sql_usage_number(event.actual_cost_micros, "actual_cost_micros")?,
+            JsValue::from_str(&event_json),
+        ]),
+    )?;
+    let retention_cutoff = Date::now()
+        .as_millis()
+        .saturating_sub(USAGE_EVENT_RETENTION_MS);
+    state.storage().sql().exec_raw(
+        "DELETE FROM usage_events WHERE occurred_at_ms < ?",
+        raw_bindings(vec![sql_usage_number(
+            retention_cutoff,
+            "retention_cutoff",
+        )?]),
+    )?;
+    Ok(())
+}
+
+fn ensure_usage_schema(state: &State) -> Result<()> {
+    let sql = state.storage().sql();
+    sql.exec(
+        "CREATE TABLE IF NOT EXISTS usage_events (
+            id TEXT PRIMARY KEY,
+            occurred_at_ms INTEGER NOT NULL,
+            tenant_id TEXT NOT NULL,
+            policy_id TEXT NOT NULL,
+            provider TEXT NOT NULL,
+            status TEXT NOT NULL,
+            status_code INTEGER,
+            input_tokens INTEGER,
+            output_tokens INTEGER,
+            total_tokens INTEGER,
+            actual_cost_micros INTEGER NOT NULL,
+            event_json TEXT NOT NULL
+        )",
+        None,
+    )?;
+    sql.exec(
+        "CREATE INDEX IF NOT EXISTS usage_events_occurred_at
+            ON usage_events (occurred_at_ms DESC)",
+        None,
+    )?;
+    sql.exec(
+        "CREATE INDEX IF NOT EXISTS usage_events_policy
+            ON usage_events (policy_id, occurred_at_ms DESC)",
+        None,
+    )?;
+    Ok(())
+}
+
+fn usage_snapshot_in_object(
+    state: &State,
+    policy_id: Option<&str>,
+    limit: usize,
+) -> Result<UsageSnapshot> {
+    ensure_usage_schema(state)?;
+    let sql = state.storage().sql();
+    let event_rows = match policy_id {
+        Some(policy_id) => sql.exec_raw(
+            "SELECT event_json FROM usage_events
+                WHERE policy_id = ?
+                ORDER BY occurred_at_ms DESC LIMIT ?",
+            raw_bindings(vec![
+                JsValue::from_str(policy_id),
+                sql_usage_number(limit as u64, "limit")?,
+            ]),
+        )?,
+        None => sql.exec_raw(
+            "SELECT event_json FROM usage_events
+                ORDER BY occurred_at_ms DESC LIMIT ?",
+            raw_bindings(vec![sql_usage_number(limit as u64, "limit")?]),
+        )?,
+    }
+    .to_array::<UsageEventJsonRow>()?;
+    let events = event_rows
+        .into_iter()
+        .map(|row| {
+            serde_json::from_str::<UsageEvent>(&row.event_json).map_err(|error| {
+                Error::RustError(format!("stored usage event is invalid JSON: {error}"))
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+
+    let summary_row = usage_summary_cursor(&sql, policy_id)?
+        .to_array::<UsageSummarySqlRow>()?
+        .into_iter()
+        .next()
+        .unwrap_or_default();
+    let providers = provider_usage_summary_cursor(&sql, policy_id)?
+        .to_array::<ProviderUsageSummarySqlRow>()?
+        .into_iter()
+        .map(provider_usage_summary_from_sql)
+        .collect();
+    Ok(UsageSnapshot {
+        ledger: "durable_object".to_string(),
+        summary: usage_summary_from_sql(summary_row),
+        providers,
+        events,
+    })
+}
+
+fn usage_summary_cursor(sql: &SqlStorage, policy_id: Option<&str>) -> Result<SqlCursor> {
+    let select = "SELECT
+        COUNT(*) AS request_count,
+        COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count,
+        COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) AS error_count,
+        COALESCE(SUM(input_tokens), 0) AS input_tokens,
+        COALESCE(SUM(output_tokens), 0) AS output_tokens,
+        COALESCE(SUM(total_tokens), 0) AS total_tokens,
+        COALESCE(SUM(actual_cost_micros), 0) AS actual_cost_micros
+        FROM usage_events";
+    match policy_id {
+        Some(policy_id) => sql.exec_raw(
+            &format!("{select} WHERE policy_id = ?"),
+            raw_bindings(vec![JsValue::from_str(policy_id)]),
+        ),
+        None => sql.exec(select, None),
+    }
+}
+
+fn provider_usage_summary_cursor(sql: &SqlStorage, policy_id: Option<&str>) -> Result<SqlCursor> {
+    let select = "SELECT
+        provider,
+        COUNT(*) AS request_count,
+        COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count,
+        COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) AS error_count,
+        COALESCE(SUM(total_tokens), 0) AS total_tokens,
+        COALESCE(SUM(actual_cost_micros), 0) AS actual_cost_micros
+        FROM usage_events";
+    match policy_id {
+        Some(policy_id) => sql.exec_raw(
+            &format!("{select} WHERE policy_id = ? GROUP BY provider ORDER BY request_count DESC"),
+            raw_bindings(vec![JsValue::from_str(policy_id)]),
+        ),
+        None => sql.exec(
+            &format!("{select} GROUP BY provider ORDER BY request_count DESC"),
+            None,
+        ),
+    }
+}
+
+fn usage_summary_from_sql(row: UsageSummarySqlRow) -> UsageSummary {
+    UsageSummary {
+        request_count: sql_count(row.request_count),
+        success_count: sql_count(row.success_count),
+        error_count: sql_count(row.error_count),
+        input_tokens: sql_count(row.input_tokens),
+        output_tokens: sql_count(row.output_tokens),
+        total_tokens: sql_count(row.total_tokens),
+        actual_cost_micros: sql_count(row.actual_cost_micros),
+    }
+}
+
+fn provider_usage_summary_from_sql(row: ProviderUsageSummarySqlRow) -> ProviderUsageSummary {
+    ProviderUsageSummary {
+        provider: row.provider,
+        request_count: sql_count(row.request_count),
+        success_count: sql_count(row.success_count),
+        error_count: sql_count(row.error_count),
+        total_tokens: sql_count(row.total_tokens),
+        actual_cost_micros: sql_count(row.actual_cost_micros),
+    }
+}
+
+fn sql_count(value: i64) -> u64 {
+    value.max(0) as u64
+}
+
+fn sql_usage_number(value: u64, field: &str) -> Result<JsValue> {
+    validate_budget_number(value, field).map(JsValue::from_f64)
+}
+
+fn optional_sql_usage_number(value: Option<u64>, field: &str) -> Result<JsValue> {
+    value.map_or(Ok(JsValue::NULL), |value| sql_usage_number(value, field))
+}
+
+fn usage_status_label(status: &UsageStatus) -> &'static str {
+    match status {
+        UsageStatus::Success => "success",
+        UsageStatus::ProviderError => "provider_error",
+        UsageStatus::ClientError => "client_error",
+        UsageStatus::Denied => "denied",
+        UsageStatus::Timeout => "timeout",
+    }
+}
+
+fn usage_object_name() -> &'static str {
+    "global"
+}
+
 fn preflight_static_budget(policy: &AccessPolicy) -> Result<Option<Response>> {
     if policy.monthly_budget_micros == Some(0) {
         return json_error("budget_exhausted", "proxy key budget is exhausted", 402).map(Some);
@@ -4998,30 +5413,50 @@ struct UsageRecord<'a> {
     request_id: &'a str,
     budget: BudgetUsage,
     status: UsageStatus,
+    status_code: u16,
+    duration_ms: u64,
 }
 
 async fn enqueue_usage(env: &Env, record: UsageRecord<'_>) {
-    let Ok(queue) = env.queue("USAGE_QUEUE") else {
-        return;
+    let queue = match env.queue("USAGE_QUEUE") {
+        Ok(queue) => queue,
+        Err(error) => {
+            console_error!("USAGE_QUEUE binding is unavailable: {}", error);
+            return;
+        }
     };
+    let key_id = record
+        .auth
+        .credential_id
+        .as_deref()
+        .unwrap_or(&record.auth.policy_id);
     let mut event = UsageEvent::new_success(
         usage_event_id(record.request_id),
-        record
-            .auth
-            .policy
-            .tenant_id
-            .clone()
-            .unwrap_or_else(|| "default".to_string()),
-        record.auth.policy_id.clone(),
-        record.request_id.to_string(),
-        record.provider.id.clone(),
-        record.capability.to_string(),
+        tenant_id(record.auth),
+        key_id,
+        record.request_id,
+        &record.provider.id,
+        record.capability,
     );
+    event.occurred_at_ms = Date::now().as_millis();
+    event.policy_id.clone_from(&record.auth.policy_id);
+    event.credential_id.clone_from(&record.auth.credential_id);
+    event.principal_id.clone_from(&record.auth.principal_id);
+    event.auth_type = record.auth.auth_type.to_string();
     event.model = record.model.map(str::to_string);
     event.reserved_cost_micros = record.budget.reserved_cost_micros;
     event.actual_cost_micros = record.budget.actual_cost_micros;
+    event.status_code = Some(record.status_code);
+    event.duration_ms = Some(record.duration_ms);
     event.status = record.status;
-    let _ = queue.send(event).await;
+    if let Err(error) = queue.send(event).await {
+        console_error!(
+            "failed to enqueue usage event for request {}: {}",
+            record.request_id,
+            error
+        );
+        return;
+    }
 }
 
 fn usage_event_id(request_id: &str) -> String {
@@ -6301,6 +6736,8 @@ mod tests {
         let provider = oauth_test_provider();
         let auth = AuthorizedKey {
             credential_id: Some("cred_docs".to_string()),
+            principal_id: None,
+            auth_type: "proxy_key",
             policy_id: "svc_docs".to_string(),
             policy: AccessPolicy {
                 enabled: true,

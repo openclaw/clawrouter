@@ -10,13 +10,27 @@ command = "pnpm --dir admin build && cargo install -q worker-build --version 0.8
 binding = "USAGE_QUEUE"
 queue = "clawrouter-usage"
 
+[[queues.consumers]]
+queue = "clawrouter-usage"
+max_batch_size = 50
+max_batch_timeout = 5
+max_retries = 5
+
 [[durable_objects.bindings]]
 name = "BUDGET_LEDGER"
 class_name = "BudgetLedgerObject"
 
+[[durable_objects.bindings]]
+name = "USAGE_LEDGER"
+class_name = "UsageLedgerObject"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["BudgetLedgerObject"]
+
+[[migrations]]
+tag = "v2"
+new_sqlite_classes = ["UsageLedgerObject"]
 
 [[routes]]
 pattern = "clawrouter.openclaw.ai"
