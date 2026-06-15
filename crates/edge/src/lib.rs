@@ -20,6 +20,8 @@ include!(concat!(env!("OUT_DIR"), "/admin-assets.rs"));
 static USAGE_EVENT_COUNTER: AtomicU64 = AtomicU64::new(0);
 const MAX_SQL_BUDGET_MICROS: u64 = 9_007_199_254_740_991;
 const BUDGET_RESERVATION_LEASE_MS: u64 = 15 * 60 * 1_000;
+const BUDGET_CHARGE_RETENTION_MS: u64 = 45 * 86_400_000;
+const BUDGET_CLEANUP_INTERVAL_MS: i64 = 86_400_000;
 const PROVIDER_HEALTH_MAX_AGE_MS: f64 = 86_400_000.0;
 const USAGE_EVENT_LIMIT: usize = 100;
 const USAGE_EVENT_RETENTION_MS: u64 = 30 * 86_400_000;
@@ -4952,9 +4954,9 @@ impl DurableObject for BudgetLedgerObject {
     async fn alarm(&self) -> Result<Response> {
         let sql = self.state.storage().sql();
         ensure_budget_schema(&sql)?;
-        reclaim_stale_budget_reservations(&sql, Date::now().as_millis())?;
+        maintain_budget_reservations(&sql, Date::now().as_millis())?;
         ensure_budget_cleanup_alarm(&self.state).await?;
-        Response::ok("stale budget reservations reclaimed")
+        Response::ok("stale budget reservations finalized")
     }
 }
 
@@ -5562,7 +5564,7 @@ async fn fetch_budget_status(
 fn reserve_budget_in_object(state: &State, request: BudgetReserveRequest) -> Result<Response> {
     let sql = state.storage().sql();
     ensure_budget_schema(&sql)?;
-    reclaim_stale_budget_reservations(&sql, Date::now().as_millis())?;
+    maintain_budget_reservations(&sql, Date::now().as_millis())?;
     if let Some(existing) = budget_reservation(&sql, &request.reservation_id)? {
         let spent_micros = budget_effective_spent(&sql, &existing.window_key)?;
         return Response::from_json(&BudgetReserveResponse {
@@ -5591,8 +5593,8 @@ fn reserve_budget_in_object(state: &State, request: BudgetReserveRequest) -> Res
     let remaining_after = request.limit_micros.saturating_sub(next_spent);
     sql.exec_raw(
         "INSERT INTO budget_reservations (
-            reservation_id, window_key, policy_id, reserved_micros, created_at_ms
-        ) VALUES (?, ?, ?, ?, ?)",
+            reservation_id, window_key, policy_id, reserved_micros, created_at_ms, settled
+        ) VALUES (?, ?, ?, ?, ?, 0)",
         raw_bindings(vec![
             JsValue::from_str(&request.reservation_id),
             JsValue::from_str(&request.window_key),
@@ -5615,7 +5617,7 @@ fn reserve_budget_in_object(state: &State, request: BudgetReserveRequest) -> Res
 fn settle_budget_in_object(state: &State, request: BudgetSettleRequest) -> Result<Response> {
     let sql = state.storage().sql();
     ensure_budget_schema(&sql)?;
-    reclaim_stale_budget_reservations(&sql, Date::now().as_millis())?;
+    maintain_budget_reservations(&sql, Date::now().as_millis())?;
     let Some(reservation) = budget_reservation(&sql, &request.reservation_id)? else {
         return Response::from_json(&BudgetSettleResponse {
             settled: false,
@@ -5623,17 +5625,18 @@ fn settle_budget_in_object(state: &State, request: BudgetSettleRequest) -> Resul
             spent_micros: 0,
         });
     };
-    let current_spent = budget_spent(&sql, &reservation.window_key)?;
-    let next_spent = current_spent.saturating_add(request.actual_cost_micros);
-    write_budget_spent(
-        &sql,
-        &reservation.window_key,
-        &reservation.policy_id,
-        next_spent,
-    )?;
+    let current_spent = budget_effective_spent(&sql, &reservation.window_key)?;
+    let next_spent = current_spent
+        .saturating_sub(sql_count(reservation.reserved_micros))
+        .saturating_add(request.actual_cost_micros);
     sql.exec_raw(
-        "DELETE FROM budget_reservations WHERE reservation_id = ?",
-        raw_bindings(vec![JsValue::from_str(&request.reservation_id)]),
+        "UPDATE budget_reservations
+            SET reserved_micros = ?, settled = 1
+            WHERE reservation_id = ?",
+        raw_bindings(vec![
+            sql_budget_number(request.actual_cost_micros, "actual_cost_micros")?,
+            JsValue::from_str(&request.reservation_id),
+        ]),
     )?;
     Response::from_json(&BudgetSettleResponse {
         settled: true,
@@ -5650,7 +5653,7 @@ fn budget_status_in_object(
 ) -> Result<Response> {
     let sql = state.storage().sql();
     ensure_budget_schema(&sql)?;
-    reclaim_stale_budget_reservations(&sql, Date::now().as_millis())?;
+    maintain_budget_reservations(&sql, Date::now().as_millis())?;
     let spent_micros = budget_effective_spent(&sql, &window_key)?;
     Response::from_json(&BudgetStatusResponse {
         policy_id,
@@ -5676,10 +5679,12 @@ fn ensure_budget_schema(sql: &SqlStorage) -> Result<()> {
             window_key TEXT NOT NULL,
             policy_id TEXT NOT NULL,
             reserved_micros INTEGER NOT NULL,
-            created_at_ms INTEGER NOT NULL
+            created_at_ms INTEGER NOT NULL,
+            settled INTEGER NOT NULL
         )",
         None,
     )?;
+    let mut converted_reservation_accounting = false;
     if sql
         .exec(
             "SELECT created_at_ms FROM budget_reservations LIMIT 0",
@@ -5687,23 +5692,8 @@ fn ensure_budget_schema(sql: &SqlStorage) -> Result<()> {
         )
         .is_err()
     {
-        let legacy_reservations = sql
-            .exec(
-                "SELECT window_key, policy_id, reserved_micros
-                    FROM budget_reservations",
-                None,
-            )?
-            .to_array::<BudgetReservationRow>()?;
-        for reservation in legacy_reservations {
-            let settled_micros = budget_spent(sql, &reservation.window_key)?
-                .saturating_sub(sql_count(reservation.reserved_micros));
-            write_budget_spent(
-                sql,
-                &reservation.window_key,
-                &reservation.policy_id,
-                settled_micros,
-            )?;
-        }
+        convert_legacy_reservation_accounting(sql)?;
+        converted_reservation_accounting = true;
         sql.exec(
             "ALTER TABLE budget_reservations
                 ADD COLUMN created_at_ms INTEGER NOT NULL DEFAULT 0",
@@ -5717,11 +5707,50 @@ fn ensure_budget_schema(sql: &SqlStorage) -> Result<()> {
             )?]),
         )?;
     }
+    if sql
+        .exec("SELECT settled FROM budget_reservations LIMIT 0", None)
+        .is_err()
+    {
+        if !converted_reservation_accounting {
+            convert_legacy_reservation_accounting(sql)?;
+        }
+        sql.exec(
+            "ALTER TABLE budget_reservations
+                ADD COLUMN settled INTEGER NOT NULL DEFAULT 0",
+            None,
+        )?;
+    }
     sql.exec(
         "CREATE INDEX IF NOT EXISTS budget_reservations_created_at
             ON budget_reservations (created_at_ms)",
         None,
     )?;
+    sql.exec(
+        "CREATE INDEX IF NOT EXISTS budget_reservations_pending
+            ON budget_reservations (settled, created_at_ms)",
+        None,
+    )?;
+    Ok(())
+}
+
+fn convert_legacy_reservation_accounting(sql: &SqlStorage) -> Result<()> {
+    let legacy_reservations = sql
+        .exec(
+            "SELECT window_key, policy_id, reserved_micros
+                FROM budget_reservations",
+            None,
+        )?
+        .to_array::<BudgetReservationRow>()?;
+    for reservation in legacy_reservations {
+        let settled_micros = budget_spent(sql, &reservation.window_key)?
+            .saturating_sub(sql_count(reservation.reserved_micros));
+        write_budget_spent(
+            sql,
+            &reservation.window_key,
+            &reservation.policy_id,
+            settled_micros,
+        )?;
+    }
     Ok(())
 }
 
@@ -5743,21 +5772,35 @@ fn budget_reservation(
 async fn ensure_budget_cleanup_alarm(state: &State) -> Result<()> {
     let sql = state.storage().sql();
     ensure_budget_schema(&sql)?;
-    if budget_has_reservations(&sql)? && state.storage().get_alarm().await?.is_none() {
-        state
-            .storage()
-            .set_alarm(BUDGET_RESERVATION_LEASE_MS as i64)
-            .await?;
+    if state.storage().get_alarm().await?.is_some() {
+        return Ok(());
     }
+    let delay_ms = if budget_has_pending_reservations(&sql)? {
+        BUDGET_RESERVATION_LEASE_MS as i64
+    } else if budget_has_any_reservations(&sql)? {
+        BUDGET_CLEANUP_INTERVAL_MS
+    } else {
+        return Ok(());
+    };
+    state.storage().set_alarm(delay_ms).await?;
     Ok(())
 }
 
-fn reclaim_stale_budget_reservations(sql: &SqlStorage, now_ms: u64) -> Result<()> {
+fn maintain_budget_reservations(sql: &SqlStorage, now_ms: u64) -> Result<()> {
     sql.exec_raw(
-        "DELETE FROM budget_reservations WHERE created_at_ms < ?",
+        "UPDATE budget_reservations SET settled = 1
+            WHERE settled = 0 AND created_at_ms < ?",
         raw_bindings(vec![sql_budget_number(
             budget_reservation_cutoff_ms(now_ms),
             "reservation_cutoff",
+        )?]),
+    )?;
+    sql.exec_raw(
+        "DELETE FROM budget_reservations
+            WHERE settled = 1 AND created_at_ms < ?",
+        raw_bindings(vec![sql_budget_number(
+            budget_charge_retention_cutoff_ms(now_ms),
+            "charge_retention_cutoff",
         )?]),
     )?;
     Ok(())
@@ -5767,7 +5810,22 @@ fn budget_reservation_cutoff_ms(now_ms: u64) -> u64 {
     now_ms.saturating_sub(BUDGET_RESERVATION_LEASE_MS)
 }
 
-fn budget_has_reservations(sql: &SqlStorage) -> Result<bool> {
+fn budget_charge_retention_cutoff_ms(now_ms: u64) -> u64 {
+    now_ms.saturating_sub(BUDGET_CHARGE_RETENTION_MS)
+}
+
+fn budget_has_pending_reservations(sql: &SqlStorage) -> Result<bool> {
+    Ok(!sql
+        .exec(
+            "SELECT reserved_micros AS spent_micros
+                FROM budget_reservations WHERE settled = 0 LIMIT 1",
+            None,
+        )?
+        .to_array::<BudgetSpendRow>()?
+        .is_empty())
+}
+
+fn budget_has_any_reservations(sql: &SqlStorage) -> Result<bool> {
     Ok(!sql
         .exec(
             "SELECT reserved_micros AS spent_micros
@@ -7033,6 +7091,10 @@ mod tests {
         );
         assert_eq!(
             budget_reservation_cutoff_ms(BUDGET_RESERVATION_LEASE_MS + 42),
+            42
+        );
+        assert_eq!(
+            budget_charge_retention_cutoff_ms(BUDGET_CHARGE_RETENTION_MS + 42),
             42
         );
     }
