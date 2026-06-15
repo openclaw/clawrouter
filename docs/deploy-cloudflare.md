@@ -12,8 +12,9 @@ without a redeploy.
 - `USAGE_QUEUE`: metered usage events, with this Worker configured as producer
   and consumer.
 - `BUDGET_LEDGER`: SQLite-backed Durable Object budget ledger.
-- `BINDING_INDEX`: SQLite-backed Durable Object authority for serialized user
-  and group policy-binding mutations and session entitlement lookup.
+- `ACCESS_CONTROL`: SQLite-backed Durable Object authority for user state,
+  provider kill switches, serialized user/group policy-binding mutations, and
+  session entitlement lookup.
 - `USAGE_LEDGER`: SQLite-backed Durable Object request audit and reporting
   ledger. It retains bounded metadata for 30 days and never stores prompt or
   completion bodies.
@@ -345,8 +346,9 @@ materializes a same-id policy and credential and accepts the same shape as
 Access user records are not role-grant records. Cloudflare Access creates the
 identity, `access/users/<email>` stores tenant/status/groups, policy bindings
 grant service access, and ClawRouter admin rights come from the Access admin
-email/domain allowlist configured on the Worker. `BINDING_INDEX` serializes
-binding mutations and resolves session grants without scanning global KV state.
+email/domain allowlist configured on the Worker. `ACCESS_CONTROL` makes user
+status, provider kill switches, binding mutations, and session grant resolution
+strongly consistent without scanning global KV state.
 
 ## Keys and Revocation
 

@@ -25,7 +25,7 @@ name = "USAGE_LEDGER"
 class_name = "UsageLedgerObject"
 
 [[durable_objects.bindings]]
-name = "BINDING_INDEX"
+name = "ACCESS_CONTROL"
 class_name = "PolicyBindingIndexObject"
 
 [[migrations]]
