@@ -22,6 +22,7 @@ const MAX_SQL_BUDGET_MICROS: u64 = 9_007_199_254_740_991;
 const PROVIDER_HEALTH_MAX_AGE_MS: f64 = 86_400_000.0;
 const USAGE_EVENT_LIMIT: usize = 100;
 const USAGE_EVENT_RETENTION_MS: u64 = 30 * 86_400_000;
+const USAGE_CLEANUP_INTERVAL_MS: i64 = 86_400_000;
 const CORS_ALLOW_ORIGIN: &str = "*";
 const CORS_ALLOW_METHODS: &str = "GET,POST,PUT,OPTIONS";
 const CORS_ALLOW_HEADERS: &str = "authorization,content-type,x-request-id";
@@ -918,6 +919,11 @@ struct UsageSnapshot {
 #[derive(Debug, Deserialize)]
 struct UsageEventJsonRow {
     event_json: String,
+}
+
+#[derive(Debug, Deserialize)]
+struct UsageEventCountRow {
+    event_count: i64,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -4887,6 +4893,7 @@ impl DurableObject for UsageLedgerObject {
                     Error::RustError(format!("usage event is invalid JSON: {error}"))
                 })?;
             ingest_usage_event(&self.state, event)?;
+            ensure_usage_cleanup_alarm(&self.state).await?;
             return Response::ok("accepted");
         }
         if req.method() == Method::Get && url.path() == "/snapshot" {
@@ -4895,13 +4902,17 @@ impl DurableObject for UsageLedgerObject {
                 .and_then(|value| value.parse::<usize>().ok())
                 .unwrap_or(USAGE_EVENT_LIMIT)
                 .min(USAGE_EVENT_LIMIT);
-            return Response::from_json(&usage_snapshot_in_object(
-                &self.state,
-                policy_id.as_deref(),
-                limit,
-            )?);
+            let snapshot = usage_snapshot_in_object(&self.state, policy_id.as_deref(), limit)?;
+            ensure_usage_cleanup_alarm(&self.state).await?;
+            return Response::from_json(&snapshot);
         }
         json_error("route_not_found", "route not found", 404)
+    }
+
+    async fn alarm(&self) -> Result<Response> {
+        cleanup_usage_events(&self.state, Date::now().as_millis())?;
+        ensure_usage_cleanup_alarm(&self.state).await?;
+        Response::ok("usage retention applied")
     }
 }
 
@@ -4952,9 +4963,13 @@ fn ingest_usage_event(state: &State, mut event: UsageEvent) -> Result<()> {
             JsValue::from_str(&event_json),
         ]),
     )?;
-    let retention_cutoff = Date::now()
-        .as_millis()
-        .saturating_sub(USAGE_EVENT_RETENTION_MS);
+    cleanup_usage_events(state, Date::now().as_millis())?;
+    Ok(())
+}
+
+fn cleanup_usage_events(state: &State, now_ms: u64) -> Result<()> {
+    ensure_usage_schema(state)?;
+    let retention_cutoff = usage_retention_cutoff_ms(now_ms);
     state.storage().sql().exec_raw(
         "DELETE FROM usage_events WHERE occurred_at_ms < ?",
         raw_bindings(vec![sql_usage_number(
@@ -4963,6 +4978,28 @@ fn ingest_usage_event(state: &State, mut event: UsageEvent) -> Result<()> {
         )?]),
     )?;
     Ok(())
+}
+
+async fn ensure_usage_cleanup_alarm(state: &State) -> Result<()> {
+    if usage_has_events(state)? && state.storage().get_alarm().await?.is_none() {
+        state.storage().set_alarm(USAGE_CLEANUP_INTERVAL_MS).await?;
+    }
+    Ok(())
+}
+
+fn usage_has_events(state: &State) -> Result<bool> {
+    ensure_usage_schema(state)?;
+    Ok(state
+        .storage()
+        .sql()
+        .exec("SELECT COUNT(*) AS event_count FROM usage_events", None)?
+        .to_array::<UsageEventCountRow>()?
+        .first()
+        .is_some_and(|row| row.event_count > 0))
+}
+
+fn usage_retention_cutoff_ms(now_ms: u64) -> u64 {
+    now_ms.saturating_sub(USAGE_EVENT_RETENTION_MS)
 }
 
 fn ensure_usage_schema(state: &State) -> Result<()> {
@@ -5003,21 +5040,29 @@ fn usage_snapshot_in_object(
     limit: usize,
 ) -> Result<UsageSnapshot> {
     ensure_usage_schema(state)?;
+    let now_ms = Date::now().as_millis();
+    cleanup_usage_events(state, now_ms)?;
+    let retention_cutoff = usage_retention_cutoff_ms(now_ms);
     let sql = state.storage().sql();
     let event_rows = match policy_id {
         Some(policy_id) => sql.exec_raw(
             "SELECT event_json FROM usage_events
-                WHERE policy_id = ?
+                WHERE policy_id = ? AND occurred_at_ms >= ?
                 ORDER BY occurred_at_ms DESC LIMIT ?",
             raw_bindings(vec![
                 JsValue::from_str(policy_id),
+                sql_usage_number(retention_cutoff, "retention_cutoff")?,
                 sql_usage_number(limit as u64, "limit")?,
             ]),
         )?,
         None => sql.exec_raw(
             "SELECT event_json FROM usage_events
+                WHERE occurred_at_ms >= ?
                 ORDER BY occurred_at_ms DESC LIMIT ?",
-            raw_bindings(vec![sql_usage_number(limit as u64, "limit")?]),
+            raw_bindings(vec![
+                sql_usage_number(retention_cutoff, "retention_cutoff")?,
+                sql_usage_number(limit as u64, "limit")?,
+            ]),
         )?,
     }
     .to_array::<UsageEventJsonRow>()?;
@@ -5030,12 +5075,12 @@ fn usage_snapshot_in_object(
         })
         .collect::<Result<Vec<_>>>()?;
 
-    let summary_row = usage_summary_cursor(&sql, policy_id)?
+    let summary_row = usage_summary_cursor(&sql, policy_id, retention_cutoff)?
         .to_array::<UsageSummarySqlRow>()?
         .into_iter()
         .next()
         .unwrap_or_default();
-    let providers = provider_usage_summary_cursor(&sql, policy_id)?
+    let providers = provider_usage_summary_cursor(&sql, policy_id, retention_cutoff)?
         .to_array::<ProviderUsageSummarySqlRow>()?
         .into_iter()
         .map(provider_usage_summary_from_sql)
@@ -5048,7 +5093,11 @@ fn usage_snapshot_in_object(
     })
 }
 
-fn usage_summary_cursor(sql: &SqlStorage, policy_id: Option<&str>) -> Result<SqlCursor> {
+fn usage_summary_cursor(
+    sql: &SqlStorage,
+    policy_id: Option<&str>,
+    retention_cutoff: u64,
+) -> Result<SqlCursor> {
     let select = "SELECT
         COUNT(*) AS request_count,
         COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count,
@@ -5060,14 +5109,27 @@ fn usage_summary_cursor(sql: &SqlStorage, policy_id: Option<&str>) -> Result<Sql
         FROM usage_events";
     match policy_id {
         Some(policy_id) => sql.exec_raw(
-            &format!("{select} WHERE policy_id = ?"),
-            raw_bindings(vec![JsValue::from_str(policy_id)]),
+            &format!("{select} WHERE policy_id = ? AND occurred_at_ms >= ?"),
+            raw_bindings(vec![
+                JsValue::from_str(policy_id),
+                sql_usage_number(retention_cutoff, "retention_cutoff")?,
+            ]),
         ),
-        None => sql.exec(select, None),
+        None => sql.exec_raw(
+            &format!("{select} WHERE occurred_at_ms >= ?"),
+            raw_bindings(vec![sql_usage_number(
+                retention_cutoff,
+                "retention_cutoff",
+            )?]),
+        ),
     }
 }
 
-fn provider_usage_summary_cursor(sql: &SqlStorage, policy_id: Option<&str>) -> Result<SqlCursor> {
+fn provider_usage_summary_cursor(
+    sql: &SqlStorage,
+    policy_id: Option<&str>,
+    retention_cutoff: u64,
+) -> Result<SqlCursor> {
     let select = "SELECT
         provider,
         COUNT(*) AS request_count,
@@ -5078,12 +5140,24 @@ fn provider_usage_summary_cursor(sql: &SqlStorage, policy_id: Option<&str>) -> R
         FROM usage_events";
     match policy_id {
         Some(policy_id) => sql.exec_raw(
-            &format!("{select} WHERE policy_id = ? GROUP BY provider ORDER BY request_count DESC"),
-            raw_bindings(vec![JsValue::from_str(policy_id)]),
+            &format!(
+                "{select} WHERE policy_id = ? AND occurred_at_ms >= ?
+                    GROUP BY provider ORDER BY request_count DESC"
+            ),
+            raw_bindings(vec![
+                JsValue::from_str(policy_id),
+                sql_usage_number(retention_cutoff, "retention_cutoff")?,
+            ]),
         ),
-        None => sql.exec(
-            &format!("{select} GROUP BY provider ORDER BY request_count DESC"),
-            None,
+        None => sql.exec_raw(
+            &format!(
+                "{select} WHERE occurred_at_ms >= ?
+                    GROUP BY provider ORDER BY request_count DESC"
+            ),
+            raw_bindings(vec![sql_usage_number(
+                retention_cutoff,
+                "retention_cutoff",
+            )?]),
         ),
     }
 }
@@ -7079,5 +7153,11 @@ mod tests {
         let first = next_usage_event_sequence();
         let second = next_usage_event_sequence();
         assert_ne!(first, second);
+    }
+
+    #[test]
+    fn usage_retention_cutoff_saturates_before_the_retention_window() {
+        assert_eq!(usage_retention_cutoff_ms(USAGE_EVENT_RETENTION_MS - 1), 0);
+        assert_eq!(usage_retention_cutoff_ms(USAGE_EVENT_RETENTION_MS + 42), 42);
     }
 }
