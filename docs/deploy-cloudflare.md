@@ -222,15 +222,16 @@ application is not protecting the console path or the Worker was deployed
 without the Access team/AUD vars.
 
 Access users are materialized automatically on sign-in as enabled `user`
-records. Admins are resolved only from `CLAWROUTER_ACCESS_ADMIN_EMAILS` or
+records with no service grants. Admins are resolved only from `CLAWROUTER_ACCESS_ADMIN_EMAILS` or
 `CLAWROUTER_ACCESS_ADMIN_DOMAINS`; `access/users/<email>` records do not grant
-admin rights.
+admin rights, and admin rights do not bypass service grants.
 
 ```json
 {
   "role": "user",
   "tenantId": "default",
-  "enabled": true
+  "enabled": true,
+  "groups": []
 }
 ```
 
@@ -241,12 +242,14 @@ compatibility route. The admin UI can call admin routes through the same-origin
 Access session; the admin bearer token is only a fallback for automation or
 emergency access.
 
-Admins can inspect materialized Access users and update tenant/status in the
-console or API:
+Admins can inspect materialized Access users, update tenant/status/groups, and
+assign explicit user or group grants in the console or API:
 
 ```text
 GET /v1/admin/access-users
 PUT /v1/admin/access-users/<email>
+GET /v1/admin/policy-bindings
+PUT /v1/admin/policy-bindings
 ```
 
 The record is stored in `POLICY_KV` at `access/users/<email>`:
@@ -255,9 +258,25 @@ The record is stored in `POLICY_KV` at `access/users/<email>`:
 {
   "role": "user",
   "tenantId": "default",
-  "enabled": true
+  "enabled": true,
+  "groups": ["maintainers"]
 }
 ```
+
+Bindings are indexed in `POLICY_KV` by principal so the request path reads only
+the signed-in user and their groups:
+
+```json
+{
+  "policyId": "maintainer_models",
+  "principalType": "group",
+  "principalId": "maintainers",
+  "enabled": true,
+  "priority": 10
+}
+```
+
+Lower priority numbers win when multiple grants allow the same provider.
 
 The console also exposes a Cloudflare Access-backed playground for
 OpenAI-compatible routes and manifest-proxy service routes. Model playground
@@ -276,8 +295,10 @@ token is never configured in the Worker.
 ```text
 GET /v1/admin/keys
 GET /v1/admin/access-users
+GET /v1/admin/policy-bindings
 GET /v1/admin/provider-status
 PUT /v1/admin/access-users/<email>
+PUT /v1/admin/policy-bindings
 PUT /v1/admin/keys/<kid>
 POST /v1/admin/keys/<kid>/revoke
 ```
@@ -293,9 +314,9 @@ The console also stores `tokenRole` metadata from role presets such as
 provider allowlist and budget fields.
 
 Access user records are not role-grant records. Cloudflare Access creates the
-identity, `access/users/<email>` stores tenant/status, and ClawRouter admin
-rights come from the Access admin email/domain allowlist configured on the
-Worker.
+identity, `access/users/<email>` stores tenant/status/groups, policy bindings
+grant service access, and ClawRouter admin rights come from the Access admin
+email/domain allowlist configured on the Worker.
 
 ## Keys and Revocation
 

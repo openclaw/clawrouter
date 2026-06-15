@@ -104,6 +104,7 @@ interface SessionResponse {
   email?: string | null;
   subject?: string | null;
   tenantId?: string | null;
+  groups?: string[];
   entitlements?: { providers: ProviderAccess[] } | null;
   entitlementsError?: string | null;
 }
@@ -146,6 +147,15 @@ interface AccessUser {
   role: AccessRole;
   tenantId: string;
   enabled: boolean;
+  groups: string[];
+}
+
+interface PolicyBinding {
+  policyId: string;
+  principalType: "user" | "group";
+  principalId: string;
+  enabled: boolean;
+  priority: number;
 }
 
 interface AdminOverview {
@@ -232,6 +242,8 @@ interface AccessForm {
   role: AccessRole;
   tenantId: string;
   enabled: boolean;
+  groups: string;
+  policyIds: string[];
 }
 
 interface PlaygroundForm {
@@ -269,6 +281,8 @@ const defaultAccess: AccessForm = {
   role: "user",
   tenantId: "default",
   enabled: true,
+  groups: "",
+  policyIds: [],
 };
 
 const rolePresets = {
@@ -297,6 +311,7 @@ function App() {
   const [keys, setKeys] = useState<KeyPolicy[]>(allowDemo ? demo.keys : []);
   const [policyDataLoaded, setPolicyDataLoaded] = useState(allowDemo);
   const [users, setUsers] = useState<AccessUser[]>(allowDemo ? demo.users : []);
+  const [bindings, setBindings] = useState<PolicyBinding[]>(allowDemo ? demo.bindings : []);
   const [adminOverview, setAdminOverview] = useState<AdminOverview | null>(allowDemo ? demo.overview : null);
   const [tenantSummaries, setTenantSummaries] = useState<AdminTenantSummary[]>(allowDemo ? demo.tenants : []);
   const [usageRows, setUsageRows] = useState<AdminUsageRow[]>(allowDemo ? demo.usageRows : []);
@@ -305,7 +320,7 @@ function App() {
   const [entitlements, setEntitlements] = useState<EntitlementsResponse | null>(allowDemo ? demo.entitlements : null);
   const [providerReadiness, setProviderReadiness] = useState<Record<string, ProviderReadiness>>(allowDemo ? readinessMap(demo.entitlements.providers.map((item) => item.readiness)) : {});
   const [policyForm, setPolicyForm] = useState<PolicyForm>(allowDemo && demo.keys[0] ? policyFormFromKey(demo.keys[0]) : defaultPolicy);
-  const [accessForm, setAccessForm] = useState<AccessForm>(allowDemo && demo.users[0] ? accessFormFromUser(demo.users[0]) : defaultAccess);
+  const [accessForm, setAccessForm] = useState<AccessForm>(allowDemo && demo.users[0] ? accessFormFromUser(demo.users[0], demo.bindings) : defaultAccess);
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState("all");
   const [selectedServiceId, setSelectedServiceId] = useState(demo.services[0]?.id ?? "");
@@ -412,18 +427,21 @@ function App() {
         }
       }
       if (sessionData.role === "admin") {
-        const [keyData, userData, readinessData] = await Promise.all([
+        const [keyData, userData, bindingData, readinessData] = await Promise.all([
           request<{ keys: KeyPolicy[] }>(gatewayOrigin, "/v1/admin/keys"),
           request<{ users: AccessUser[] }>(gatewayOrigin, "/v1/admin/access-users"),
+          request<{ bindings: PolicyBinding[] }>(gatewayOrigin, "/v1/admin/policy-bindings"),
           request<{ providers: ProviderReadiness[] }>(gatewayOrigin, "/v1/admin/provider-status"),
         ]);
         setKeys(keyData.keys);
-        if (!policyDataLoaded || demoMode) {
-          const refreshedPolicy = keyData.keys.find((key) => key.kid === selectedPolicyId) ?? keyData.keys[0];
-          setSelectedPolicyId(refreshedPolicy?.kid ?? "");
-          setPolicyForm(refreshedPolicy ? policyFormFromKey(refreshedPolicy) : { ...defaultPolicy, kid: "", tenantId: sessionData.tenantId ?? "default", providers: [...defaultPolicy.providers] });
-        }
+        const refreshedPolicy = keyData.keys.find((key) => key.kid === selectedPolicyId) ?? keyData.keys[0];
+        setSelectedPolicyId(refreshedPolicy?.kid ?? "");
+        setPolicyForm(refreshedPolicy ? policyFormFromKey(refreshedPolicy) : { ...defaultPolicy, kid: "", tenantId: sessionData.tenantId ?? "default", providers: [...defaultPolicy.providers] });
         setUsers(userData.users);
+        setBindings(bindingData.bindings);
+        const refreshedUser = userData.users.find((user) => user.email === selectedUserEmail) ?? userData.users[0];
+        setSelectedUserEmail(refreshedUser?.email ?? "");
+        setAccessForm(refreshedUser ? accessFormFromUser(refreshedUser, bindingData.bindings) : defaultAccess);
         setProviderReadiness((current) => ({ ...current, ...readinessMap(readinessData.providers) }));
         const [overviewResult, tenantResult] = await Promise.all([
           settled(() => request<AdminOverview>(gatewayOrigin, "/v1/admin/overview")),
@@ -451,16 +469,18 @@ function App() {
           role: sessionData.role,
           tenantId: sessionData.tenantId ?? "default",
           enabled: sessionData.authenticated,
+          groups: sessionData.groups ?? [],
         };
         setKeys([]);
         setPolicyDataLoaded(false);
         setUsers([user]);
+        setBindings([]);
         setAdminOverview(null);
         setTenantSummaries([]);
         setUsageRows([]);
         setUsageLoaded(false);
         setSelectedUserEmail(user.email);
-        setAccessForm(accessFormFromUser(user));
+        setAccessForm(accessFormFromUser(user, []));
       }
       setDemoMode(false);
       setStatus(refreshWarnings.length ? refreshWarnings.join("; ") : "connected");
@@ -473,6 +493,7 @@ function App() {
         setKeys(demo.keys);
         setPolicyDataLoaded(true);
         setUsers(demo.users);
+        setBindings(demo.bindings);
         setAdminOverview(demo.overview);
         setTenantSummaries(demo.tenants);
         setUsageRows(demo.usageRows);
@@ -482,7 +503,7 @@ function App() {
         setSelectedPolicyId(demo.keys[0]?.kid ?? "");
         setPolicyForm(demo.keys[0] ? policyFormFromKey(demo.keys[0]) : defaultPolicy);
         setSelectedUserEmail(demo.users[0]?.email ?? "");
-        setAccessForm(demo.users[0] ? accessFormFromUser(demo.users[0]) : defaultAccess);
+        setAccessForm(demo.users[0] ? accessFormFromUser(demo.users[0], demo.bindings) : defaultAccess);
         setDemoMode(true);
         setStatus("local demo data loaded");
         return;
@@ -555,18 +576,43 @@ function App() {
       setStatus("saving user");
       const email = accessForm.email.trim().toLowerCase();
       if (!email.includes("@")) throw new Error("enter a valid email");
-      const next = { ...accessForm, email };
+      const next: AccessUser = {
+        email,
+        role: accessForm.role,
+        tenantId: accessForm.tenantId || "default",
+        enabled: accessForm.enabled,
+        groups: parseGroups(accessForm.groups),
+      };
       if (demoMode) {
         setUsers((current) => [next, ...current.filter((user) => user.email !== email)]);
+        setBindings((current) => reconcileDirectUserBindings(current, email, keys, accessForm.policyIds));
         setSelectedUserEmail(email);
+        setAccessForm(accessFormFromUser(next, reconcileDirectUserBindings(bindings, email, keys, accessForm.policyIds)));
         setStatus("saved user");
         return;
       }
       await request<AccessUser>(gatewayOrigin, `/v1/admin/access-users/${encodeURIComponent(email)}`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify({ tenantId: next.tenantId, enabled: next.enabled }),
+        body: JSON.stringify({ tenantId: next.tenantId, enabled: next.enabled, groups: next.groups }),
       });
+      const bindingWrites = keys.flatMap((policy) => {
+        const existing = bindings.find((binding) => binding.principalType === "user" && binding.principalId === email && binding.policyId === policy.kid);
+        const enabled = accessForm.policyIds.includes(policy.kid);
+        if (existing?.enabled === enabled || (!existing && !enabled)) return [];
+        return [request<PolicyBinding>(gatewayOrigin, "/v1/admin/policy-bindings", {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({
+            policyId: policy.kid,
+            principalType: "user",
+            principalId: email,
+            enabled,
+            priority: existing?.priority ?? 100,
+          }),
+        })];
+      });
+      await Promise.all(bindingWrites);
       await refresh();
       setStatus("saved user");
     } catch (error) {
@@ -836,6 +882,7 @@ function App() {
             users={users}
             selected={selectedUser}
             policies={keys}
+            bindings={bindings}
             services={services}
             form={accessForm}
             setForm={setAccessForm}
@@ -846,7 +893,7 @@ function App() {
             }}
             onSelect={(user) => {
               setSelectedUserEmail(user.email);
-              setAccessForm(accessFormFromUser(user));
+              setAccessForm(accessFormFromUser(user, bindings));
             }}
             onSave={saveUser}
             busy={busy}
@@ -1167,10 +1214,11 @@ function PoliciesScreen({ keys, selected, providers, form, setForm, issuedKey, e
   );
 }
 
-function UsersScreen({ users, selected, policies, services, form, setForm, error, onOpenPolicy, onSelect, onSave, busy }: {
+function UsersScreen({ users, selected, policies, bindings, services, form, setForm, error, onOpenPolicy, onSelect, onSave, busy }: {
   users: AccessUser[];
   selected?: AccessUser;
   policies: KeyPolicy[];
+  bindings: PolicyBinding[];
   services: ServiceItem[];
   form: AccessForm;
   setForm: (form: AccessForm) => void;
@@ -1180,7 +1228,7 @@ function UsersScreen({ users, selected, policies, services, form, setForm, error
   onSave: (event: FormEvent) => void;
   busy: boolean;
 }) {
-  const accessForUser = (user: AccessUser | undefined) => effectiveAccess(user, policies, services);
+  const accessForUser = (user: AccessUser | undefined) => effectiveAccess(user, policies, bindings, services);
   const selectedAccess = accessForUser(selected);
   const selectedServices = selectedAccess.services.map((service) => ({ service, label: "granted" }));
   return (
@@ -1195,15 +1243,18 @@ function UsersScreen({ users, selected, policies, services, form, setForm, error
         <form onSubmit={onSave}>
           <InspectorHeader icon={Users} title="Access user" subtitle={selected?.email ?? "new user"} />
           {error ? <InlineError message={error} /> : null}
-          <InlineNote>Users are created from Cloudflare Access on first login. Admin status is controlled by the Worker admin allowlist; this record only controls tenant and enabled state.</InlineNote>
+          <InlineNote>Users are created from Cloudflare Access on first login with no grants. Admin status controls the console only; service access always requires an explicit user or group grant.</InlineNote>
           <div className="formGrid compact">
             <label className="full"><span>email</span><input type="email" value={form.email} onChange={(event) => setForm({ ...form, email: event.target.value })} /></label>
             <label><span>tenant</span><input value={form.tenantId} onChange={(event) => setForm({ ...form, tenantId: event.target.value })} /></label>
             <label><span>status</span><select value={form.enabled ? "enabled" : "disabled"} onChange={(event) => setForm({ ...form, enabled: event.target.value === "enabled" })}><option value="enabled">enabled</option><option value="disabled">disabled</option></select></label>
+            <label className="full"><span>groups</span><input value={form.groups} onChange={(event) => setForm({ ...form, groups: event.target.value })} placeholder="maintainers, docs" /></label>
           </div>
           <dl className="facts"><dt>granted services</dt><dd>{selectedAccess.services.length}</dd><dt>active grants</dt><dd>{selectedAccess.policies.length}</dd><dt>role</dt><dd>{selected?.role ?? "user"}</dd><dt>tenant</dt><dd>{selected?.tenantId ?? form.tenantId}</dd></dl>
-          <div className="sectionTitle">Tenant grants</div>
-          <div className="miniList">{selectedAccess.policies.length ? selectedAccess.policies.map((policy) => <button type="button" key={policy.kid} onClick={() => onOpenPolicy(policy)}>{policy.kid}<span>{effectiveProviderCount(policy.providers, services)} services · {formatBudget(policy.monthlyBudgetMicros)}</span></button>) : <p>No active grant gives this tenant service access.</p>}</div>
+          <div className="sectionTitle">Direct grants</div>
+          <div className="serviceMatrix">{policies.map((policy) => <label key={policy.kid}><input type="checkbox" checked={form.policyIds.includes(policy.kid)} onChange={() => setForm({ ...form, policyIds: form.policyIds.includes(policy.kid) ? form.policyIds.filter((id) => id !== policy.kid) : [...form.policyIds, policy.kid].sort() })} /><span>{policy.kid}</span><small>{effectiveProviderCount(policy.providers, services)} services</small></label>)}</div>
+          <div className="sectionTitle">Effective grants</div>
+          <div className="miniList">{selectedAccess.policies.length ? selectedAccess.policies.map((policy) => <button type="button" key={policy.kid} onClick={() => onOpenPolicy(policy)}>{policy.kid}<span>{effectiveProviderCount(policy.providers, services)} services · {formatBudget(policy.monthlyBudgetMicros)}</span></button>) : <p>No user or group grants assigned.</p>}</div>
           <div className="sectionTitle">Effective access</div>
           <div className="miniList">{selectedServices.length ? selectedServices.slice(0, 8).map(({ service, label }) => <button type="button" key={service.id}>{service.name}<span>{label} · {kindLabel(service.kind)}</span></button>) : <p>No services available for this user.</p>}</div>
           <div className="inspectorActions"><button type="submit" disabled={busy}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save user</span></button></div>
@@ -1644,21 +1695,55 @@ function policyCoversProvider(policy: KeyPolicy, providerId: string) {
   return policy.providers.length === 0 || policy.providers.includes(providerId);
 }
 
-function accessFormFromUser(user: AccessUser): AccessForm {
+function accessFormFromUser(user: AccessUser, bindings: PolicyBinding[]): AccessForm {
   return {
     email: user.email,
     role: user.role,
     tenantId: user.tenantId,
     enabled: user.enabled,
+    groups: user.groups.join(", "),
+    policyIds: bindings
+      .filter((binding) => binding.enabled && binding.principalType === "user" && binding.principalId === user.email)
+      .sort((a, b) => a.priority - b.priority || a.policyId.localeCompare(b.policyId))
+      .map((binding) => binding.policyId),
   };
 }
 
-function effectiveAccess(user: AccessUser | undefined, policies: KeyPolicy[], services: ServiceItem[]) {
+function effectiveAccess(user: AccessUser | undefined, policies: KeyPolicy[], bindings: PolicyBinding[], services: ServiceItem[]) {
   if (!user || !user.enabled) return { policies: [] as KeyPolicy[], services: [] as ServiceItem[] };
-  const userPolicies = policies.filter((policy) => policy.enabled && (user.role === "admin" || (policy.tenantId ?? "default") === user.tenantId));
+  const groupIds = new Set(user.groups);
+  const policyIds = new Set(bindings
+    .filter((binding) => binding.enabled && (binding.principalType === "user" ? binding.principalId === user.email : groupIds.has(binding.principalId)))
+    .sort((a, b) => a.priority - b.priority || a.policyId.localeCompare(b.policyId))
+    .map((binding) => binding.policyId));
+  const userPolicies = policies.filter((policy) => policy.enabled && policyIds.has(policy.kid));
   const hasWildcardGrant = userPolicies.some((policy) => policy.providers.length === 0);
   const providerIds = new Set(userPolicies.flatMap((policy) => policy.providers));
   return { policies: userPolicies, services: services.filter((service) => hasWildcardGrant || providerIds.has(service.provider)) };
+}
+
+function parseGroups(value: string) {
+  return unique(value.split(/[,\n]+/).map((group) => group.trim().toLowerCase()).filter(Boolean)).sort();
+}
+
+function reconcileDirectUserBindings(current: PolicyBinding[], email: string, policies: KeyPolicy[], policyIds: string[]) {
+  const desired = new Set(policyIds);
+  const existing = new Map(current
+    .filter((binding) => binding.principalType === "user" && binding.principalId === email)
+    .map((binding) => [binding.policyId, binding]));
+  const other = current.filter((binding) => binding.principalType !== "user" || binding.principalId !== email);
+  const direct = policies.flatMap((policy) => {
+    const binding = existing.get(policy.kid);
+    if (!binding && !desired.has(policy.kid)) return [];
+    return [{
+      policyId: policy.kid,
+      principalType: "user" as const,
+      principalId: email,
+      enabled: desired.has(policy.kid),
+      priority: binding?.priority ?? 100,
+    }];
+  });
+  return [...other, ...direct];
 }
 
 function policyUsageFallback(policy: KeyPolicy): AdminUsageRow {
@@ -1943,16 +2028,22 @@ function demoData() {
     { kid: "sandbox_eval", enabled: false, providers: ["openai"], tenantId: "sandbox", tokenRole: "sandbox", monthlyBudgetMicros: 5000000, requestCostMicros: 500 },
   ];
   const users: AccessUser[] = [
-    { email: "admin@example.com", role: "admin", tenantId: "openclaw", enabled: true },
-    { email: "maintainer@example.com", role: "user", tenantId: "docs", enabled: true },
-    { email: "research@example.com", role: "user", tenantId: "research", enabled: true },
+    { email: "admin@example.com", role: "admin", tenantId: "openclaw", enabled: true, groups: ["maintainers"] },
+    { email: "maintainer@example.com", role: "user", tenantId: "docs", enabled: true, groups: ["maintainers"] },
+    { email: "research@example.com", role: "user", tenantId: "research", enabled: true, groups: [] },
+  ];
+  const bindings: PolicyBinding[] = [
+    { policyId: "maintainer_models", principalType: "group", principalId: "maintainers", enabled: true, priority: 10 },
+    { policyId: "openclaw_tools", principalType: "group", principalId: "maintainers", enabled: true, priority: 20 },
+    { policyId: "user_research", principalType: "user", principalId: "research@example.com", enabled: true, priority: 100 },
   ];
   const models = routes.openaiCompatible.flatMap((route) => route.models.map((model) => ({ ...model, provider: route.provider })));
-  const session = { authenticated: true, auth: "demo", role: "admin" as AccessRole, email: "admin@example.com", tenantId: "openclaw" };
+  const session = { authenticated: true, auth: "demo", role: "admin" as AccessRole, email: "admin@example.com", tenantId: "openclaw", groups: ["maintainers"] };
+  const sessionPolicies = effectiveAccess(users[0], keys, bindings, []).policies;
   const entitlements: EntitlementsResponse = {
     session,
     providers: providers.map((item) => {
-      const policies = keys.filter((key) => key.enabled && (key.tenantId ?? "default") === session.tenantId && policyCoversProvider(key, item.id)).map((key) => key.kid);
+      const policies = sessionPolicies.filter((key) => policyCoversProvider(key, item.id)).map((key) => key.kid);
       return {
         provider: item.id,
         displayName: item.display_name,
@@ -1968,7 +2059,7 @@ function demoData() {
   const usageRows = keys.map(policyUsageFallback);
   const tenants = tenantSummaryFallback(keys);
   const overview = adminOverviewFromKeys(keys, providers, routes);
-  return { session, providers, routes, keys, users, overview, tenants, usageRows, entitlements, services: serviceItems(providers, routes, readinessByProvider, accessByProvider), models };
+  return { session, providers, routes, keys, users, bindings, overview, tenants, usageRows, entitlements, services: serviceItems(providers, routes, readinessByProvider, accessByProvider), models };
 }
 
 function demoReadiness(provider: ProviderRow, routes: RouteCatalog): ProviderReadiness {
