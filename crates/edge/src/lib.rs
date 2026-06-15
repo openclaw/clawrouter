@@ -1460,6 +1460,7 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             if let Err(message) = validate_policy_budget(&policy) {
                 return json_error("invalid_policy", message, 400);
             }
+            let rollback_credentials = disable_legacy_records_for_policy(&kv, &policy_id).await?;
             put_kv_record(
                 &kv,
                 &format!("policies/{policy_id}"),
@@ -1467,7 +1468,7 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 "access policy",
             )
             .await?;
-            sync_legacy_records_for_policy(&kv, &policy_id, &policy).await?;
+            sync_legacy_records_for_policy(&kv, &policy, &rollback_credentials).await?;
             return Response::from_json(&admin_access_policy_response(&policy_id, &policy));
         }
         if req.method() == Method::Post {
@@ -1482,6 +1483,7 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 return json_error("unknown_policy", "access policy is not registered", 404);
             };
             policy.enabled = false;
+            let rollback_credentials = disable_legacy_records_for_policy(&kv, &policy_id).await?;
             put_kv_record(
                 &kv,
                 &format!("policies/{policy_id}"),
@@ -1489,7 +1491,7 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 "access policy",
             )
             .await?;
-            sync_legacy_records_for_policy(&kv, &policy_id, &policy).await?;
+            sync_legacy_records_for_policy(&kv, &policy, &rollback_credentials).await?;
             return Response::from_json(&admin_access_policy_response(&policy_id, &policy));
         }
         return json_error("method_not_allowed", "admin method is not allowed", 405);
@@ -1536,6 +1538,7 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             let Some(policy) = existing_access_policy(&kv, &credential.policy_id).await? else {
                 return json_error("unknown_policy", "credential policy is not registered", 404);
             };
+            disable_legacy_key_record(&kv, &credential_id).await?;
             put_kv_record(
                 &kv,
                 &format!("credentials/{credential_id}"),
@@ -1562,6 +1565,7 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 );
             };
             credential.enabled = false;
+            disable_legacy_key_record(&kv, &credential_id).await?;
             put_kv_record(
                 &kv,
                 &format!("credentials/{credential_id}"),
@@ -2692,15 +2696,28 @@ async fn put_kv_record<T: Serialize>(kv: &KvStore, key: &str, value: &T, kind: &
 
 async fn sync_legacy_records_for_policy(
     kv: &KvStore,
-    policy_id: &str,
     policy: &AccessPolicy,
+    credentials: &[(String, ProxyCredential)],
 ) -> Result<()> {
-    for (credential_id, credential) in list_proxy_credentials(kv).await? {
-        if credential.policy_id == policy_id {
-            sync_legacy_rollback_record(kv, &credential_id, policy, &credential).await?;
-        }
+    for (credential_id, credential) in credentials {
+        sync_legacy_rollback_record(kv, credential_id, policy, credential).await?;
     }
     Ok(())
+}
+
+async fn disable_legacy_records_for_policy(
+    kv: &KvStore,
+    policy_id: &str,
+) -> Result<Vec<(String, ProxyCredential)>> {
+    let credentials = list_proxy_credentials(kv)
+        .await?
+        .into_iter()
+        .filter(|(_, credential)| credential.policy_id == policy_id)
+        .collect::<Vec<_>>();
+    for (credential_id, _) in &credentials {
+        disable_legacy_key_record(kv, credential_id).await?;
+    }
+    Ok(credentials)
 }
 
 async fn sync_legacy_rollback_record(
