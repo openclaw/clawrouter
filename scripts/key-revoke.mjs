@@ -111,7 +111,12 @@ function readRecord(key, { allowMissing = false } = {}) {
 
 function legacyCredential(legacy) {
   if (!legacy?.secretSha256) return null;
-  return { enabled: legacy.enabled !== false, secretSha256: legacy.secretSha256, policyId: kid };
+  return {
+    enabled: legacy.enabled !== false,
+    secretSha256: legacy.secretSha256,
+    policyId: kid,
+    policyGeneration: legacy.generation ?? "legacy",
+  };
 }
 
 function writeJson(value, name) {

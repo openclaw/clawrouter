@@ -127,12 +127,13 @@ Worker verifies the issued credential at `credentials/<credential-id>` and then
 loads its access policy from `policies/<policy-id>`:
 
 ```json
-{"enabled":true,"secretSha256":"<sha256 of key secret>","policyId":"team_docs"}
+{"enabled":true,"secretSha256":"<sha256 of key secret>","policyId":"team_docs","policyGeneration":"policy_..."}
 ```
 
 ```json
 {
   "enabled": true,
+  "generation": "policy_...",
   "providers": ["openai"],
   "allProviders": false,
   "tenantId": "team_docs",
@@ -140,6 +141,10 @@ loads its access policy from `policies/<policy-id>`:
   "monthlyBudgetMicros": 100000000
 }
 ```
+
+Policy and credential generations must match. During rotations, mixed KV
+generations fail closed instead of letting an old secret inherit a newly
+expanded policy.
 
 Disable a credential to revoke one issued key, disable a policy to revoke every
 user and credential bound to it, or disable a provider connection to stop that

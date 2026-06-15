@@ -385,6 +385,10 @@ This stores the provider allowlist and budget at `policies/<kid>`, the proxy
 secret hash at `credentials/<kid>`, and a `keys/<kid>` compatibility record for
 rollback safety. `--providers` is required unless the operator deliberately
 passes `--all-providers`; omitting scope never creates an implicit wildcard.
+Policies and credentials carry the same generated policy generation.
+Authorization rejects mixed generations, so eventual KV propagation can cause
+a temporary denial during rotation but cannot combine an old secret with a
+newly expanded policy.
 
 Revoke access:
 
@@ -413,6 +417,7 @@ The stored policy and credential shapes are separate:
 ```json
 {
   "enabled": true,
+  "generation": "policy_...",
   "providers": ["openai", "tavily"],
   "tenantId": "default",
   "tokenRole": "service",
@@ -425,7 +430,8 @@ The stored policy and credential shapes are separate:
 {
   "enabled": true,
   "secretSha256": "<sha256 of key secret>",
-  "policyId": "svc_docs"
+  "policyId": "svc_docs",
+  "policyGeneration": "policy_..."
 }
 ```
 

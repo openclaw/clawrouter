@@ -903,6 +903,8 @@ async fn proxy_manifest_endpoint(
 #[serde(rename_all = "camelCase")]
 struct AccessPolicy {
     enabled: bool,
+    #[serde(default = "legacy_policy_generation")]
+    generation: String,
     #[serde(default)]
     providers: Vec<String>,
     #[serde(default)]
@@ -921,6 +923,8 @@ struct ProxyCredential {
     enabled: bool,
     secret_sha256: String,
     policy_id: String,
+    #[serde(default = "legacy_policy_generation")]
+    policy_generation: String,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -928,6 +932,8 @@ struct ProxyCredential {
 struct LegacyKeyPolicy {
     enabled: bool,
     secret_sha256: String,
+    #[serde(default = "legacy_policy_generation")]
+    generation: String,
     #[serde(default)]
     providers: Vec<String>,
     #[serde(default)]
@@ -1727,7 +1733,13 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             )
             .await?;
             let rollback_credentials = disable_legacy_records_for_policy(&kv, &policy_id).await?;
-            sync_legacy_records_for_policy(&kv, &policy, &rollback_credentials).await?;
+            let rebound_credentials = bind_credentials_to_policy_generation(
+                &kv,
+                &policy.generation,
+                rollback_credentials,
+            )
+            .await?;
+            sync_legacy_records_for_policy(&kv, &policy, &rebound_credentials).await?;
             put_kv_record(
                 &kv,
                 &format!("policies/{policy_id}"),
@@ -1804,6 +1816,7 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             let Some(policy) = existing_access_policy(&kv, &credential.policy_id).await? else {
                 return json_error("unknown_policy", "credential policy is not registered", 404);
             };
+            credential.policy_generation.clone_from(&policy.generation);
             let mut tombstone = credential.clone();
             tombstone.enabled = false;
             put_kv_record(
@@ -2001,6 +2014,8 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
         tombstone_legacy.enabled = false;
         let mut tombstone_credential = credential.clone();
         tombstone_credential.enabled = false;
+        let mut tombstone_policy = policy.clone();
+        tombstone_policy.enabled = false;
         put_kv_record(
             &kv,
             &format!("credentials/{kid}"),
@@ -2015,15 +2030,23 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             "legacy key tombstone",
         )
         .await?;
-        put_kv_record(&kv, &format!("policies/{kid}"), &policy, "access policy").await?;
         put_kv_record(
             &kv,
-            &format!("credentials/{kid}"),
-            &credential,
-            "proxy credential",
+            &format!("policies/{kid}"),
+            &tombstone_policy,
+            "access policy tombstone",
         )
         .await?;
-        put_kv_record(&kv, &format!("keys/{kid}"), &legacy, "legacy key policy").await?;
+        let mut credentials = disable_legacy_records_for_policy(&kv, &kid).await?;
+        if let Some((_, existing)) = credentials.iter_mut().find(|(id, _)| id == &kid) {
+            existing.clone_from(&credential);
+        } else {
+            credentials.push((kid.clone(), credential));
+        }
+        let rebound_credentials =
+            bind_credentials_to_policy_generation(&kv, &policy.generation, credentials).await?;
+        sync_legacy_records_for_policy(&kv, &policy, &rebound_credentials).await?;
+        put_kv_record(&kv, &format!("policies/{kid}"), &policy, "access policy").await?;
         return Response::from_json(&admin_policy_response(&kid, &policy));
     }
 
@@ -2410,7 +2433,9 @@ fn key_inspection_verification(
         return "revoked";
     }
     let verification = key_verification(secret, credential);
-    if verification == "verified" && !policy.enabled {
+    if verification == "verified" && !credential_policy_generation_matches(credential, policy) {
+        "policy_generation_mismatch"
+    } else if verification == "verified" && !policy.enabled {
         "policy_revoked"
     } else {
         verification
@@ -2444,6 +2469,7 @@ impl AdminKeyPolicyRequest {
         Ok(LegacyKeyPolicy {
             enabled: self.enabled,
             secret_sha256: secret_sha256.to_ascii_lowercase(),
+            generation: new_policy_generation(),
             providers,
             tenant_id: self.tenant_id,
             token_role,
@@ -2464,6 +2490,7 @@ impl AdminAccessPolicyRequest {
         }
         Ok(AccessPolicy {
             enabled: self.enabled,
+            generation: new_policy_generation(),
             providers,
             tenant_id: self.tenant_id,
             token_role: normalize_token_role(self.token_role)?,
@@ -2477,6 +2504,7 @@ impl LegacyKeyPolicy {
     fn access_policy(&self) -> AccessPolicy {
         AccessPolicy {
             enabled: self.enabled,
+            generation: self.generation.clone(),
             providers: self.providers.clone(),
             tenant_id: self.tenant_id.clone(),
             token_role: self.token_role.clone(),
@@ -2490,6 +2518,7 @@ impl LegacyKeyPolicy {
             enabled: self.enabled,
             secret_sha256: self.secret_sha256.clone(),
             policy_id: policy_id.to_string(),
+            policy_generation: self.generation.clone(),
         }
     }
 }
@@ -3151,6 +3180,24 @@ async fn disable_legacy_records_for_policy(
     Ok(credentials)
 }
 
+async fn bind_credentials_to_policy_generation(
+    kv: &KvStore,
+    policy_generation: &str,
+    mut credentials: Vec<(String, ProxyCredential)>,
+) -> Result<Vec<(String, ProxyCredential)>> {
+    for (credential_id, credential) in &mut credentials {
+        credential.policy_generation = policy_generation.to_string();
+        put_kv_record(
+            kv,
+            &format!("credentials/{credential_id}"),
+            credential,
+            "proxy credential policy generation",
+        )
+        .await?;
+    }
+    Ok(credentials)
+}
+
 async fn proxy_credentials_for_policy(
     kv: &KvStore,
     policy_id: &str,
@@ -3202,6 +3249,7 @@ fn legacy_rollback_record(policy: &AccessPolicy, credential: &ProxyCredential) -
     LegacyKeyPolicy {
         enabled: policy.enabled && credential.enabled,
         secret_sha256: credential.secret_sha256.clone(),
+        generation: policy.generation.clone(),
         providers: policy.providers.clone(),
         tenant_id: policy.tenant_id.clone(),
         token_role: policy.token_role.clone(),
@@ -4446,6 +4494,30 @@ fn default_true() -> bool {
     true
 }
 
+fn legacy_policy_generation() -> String {
+    "legacy".to_string()
+}
+
+fn new_policy_generation() -> String {
+    #[cfg(test)]
+    {
+        format!("policy_test_{}", next_usage_event_sequence())
+    }
+    #[cfg(not(test))]
+    {
+        let seq = next_usage_event_sequence();
+        let nonce = (js_sys::Math::random() * MAX_SQL_BUDGET_MICROS as f64) as u64;
+        format!("policy_{}_{}_{nonce:x}", Date::now().as_millis(), seq)
+    }
+}
+
+fn credential_policy_generation_matches(
+    credential: &ProxyCredential,
+    policy: &AccessPolicy,
+) -> bool {
+    credential.policy_generation == policy.generation
+}
+
 fn default_binding_priority() -> u16 {
     100
 }
@@ -4591,6 +4663,7 @@ async fn authorize_proxy_key_for_provider(
         }
         return Ok(AuthOutcome::Denied(response));
     };
+    let generation_matches = credential_policy_generation_matches(&credential, &policy);
     let authorized = AuthorizedKey {
         credential_id: Some(key.kid),
         principal_id: None,
@@ -4616,6 +4689,26 @@ async fn authorize_proxy_key_for_provider(
     }
     if !authorized.policy.enabled {
         let response = json_error("policy_revoked", "access policy is revoked", 403)?;
+        if let Some(provider_id) = provider_id {
+            enqueue_denied_usage(
+                env,
+                &authorized,
+                provider_id,
+                "access.denied",
+                None,
+                &request_id(headers, "auth"),
+                response.status_code(),
+            )
+            .await;
+        }
+        return Ok(AuthOutcome::Denied(response));
+    }
+    if !generation_matches {
+        let response = json_error(
+            "credential_policy_stale",
+            "proxy credential is not bound to the current access policy generation",
+            403,
+        )?;
         if let Some(provider_id) = provider_id {
             enqueue_denied_usage(
                 env,
@@ -4745,6 +4838,7 @@ fn policy_allows_provider(policy: &AccessPolicy, provider_id: &str) -> bool {
 fn denied_access_policy(tenant_id: Option<String>) -> AccessPolicy {
     AccessPolicy {
         enabled: false,
+        generation: legacy_policy_generation(),
         providers: Vec::new(),
         tenant_id,
         token_role: None,
@@ -8411,9 +8505,11 @@ mod tests {
             enabled: true,
             secret_sha256: sha256_hex("secret"),
             policy_id: "svc_docs".to_string(),
+            policy_generation: "gen_1".to_string(),
         };
         let policy = AccessPolicy {
             enabled: true,
+            generation: "gen_1".to_string(),
             providers: vec!["openai".to_string()],
             tenant_id: Some("team_docs".to_string()),
             token_role: Some("service".to_string()),
@@ -8442,14 +8538,40 @@ mod tests {
             "invalid_secret"
         );
         assert!(inspect_policy_for_response("policy_revoked", &revoked_policy).is_some());
+        let stale_credential = ProxyCredential {
+            policy_generation: "gen_0".to_string(),
+            ..credential.clone()
+        };
+        assert!(!credential_policy_generation_matches(
+            &stale_credential,
+            &policy
+        ));
+        assert_eq!(
+            key_inspection_verification("secret", &stale_credential, &policy),
+            "policy_generation_mismatch"
+        );
         assert_eq!(policy.request_cost_micros, Some(10));
     }
 
     #[test]
     fn legacy_key_records_split_policy_from_proxy_credential() {
+        let legacy_policy =
+            serde_json::from_str::<AccessPolicy>(r#"{"enabled":true,"providers":["openai"]}"#)
+                .unwrap();
+        let legacy_credential = serde_json::from_str::<ProxyCredential>(
+            r#"{"enabled":true,"secretSha256":"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa","policyId":"svc_docs"}"#,
+        )
+        .unwrap();
+        assert_eq!(legacy_policy.generation, "legacy");
+        assert!(credential_policy_generation_matches(
+            &legacy_credential,
+            &legacy_policy
+        ));
+
         let legacy = LegacyKeyPolicy {
             enabled: true,
             secret_sha256: sha256_hex("secret"),
+            generation: "gen_1".to_string(),
             providers: vec!["openai".to_string()],
             tenant_id: Some("team_docs".to_string()),
             token_role: Some("service".to_string()),
@@ -8462,11 +8584,14 @@ mod tests {
         let credential_json = serde_json::to_value(&credential).unwrap();
 
         assert!(policy_json.get("secretSha256").is_none());
+        assert_eq!(policy_json["generation"], "gen_1");
         assert_eq!(credential_json["policyId"], "svc_docs");
+        assert_eq!(credential_json["policyGeneration"], "gen_1");
         assert_eq!(credential_json["secretSha256"], sha256_hex("secret"));
 
         let rollback = legacy_rollback_record(&policy, &credential);
         assert!(rollback.enabled);
+        assert_eq!(rollback.generation, "gen_1");
         assert_eq!(rollback.providers, vec!["openai"]);
         let rollback = legacy_rollback_record(
             &policy,
@@ -8491,6 +8616,8 @@ mod tests {
         };
         let legacy = request.try_into_policy(None, false).unwrap();
         let policy = legacy.access_policy();
+        assert!(legacy.generation.starts_with("policy_test_"));
+        assert_eq!(policy.generation, legacy.generation);
         validate_policy_providers(&policy).unwrap();
         let response = admin_policy_response("svc_docs", &policy);
         assert_eq!(response.kid, "svc_docs");
@@ -8554,6 +8681,7 @@ mod tests {
     fn access_playground_policy_scope_is_provider_only() {
         let policy = AccessPolicy {
             enabled: true,
+            generation: "gen_1".to_string(),
             providers: vec!["openai".to_string()],
             tenant_id: Some("team_docs".to_string()),
             token_role: Some("user".to_string()),
@@ -8844,6 +8972,7 @@ mod tests {
 
         let unknown_provider = AccessPolicy {
             enabled: true,
+            generation: "gen_1".to_string(),
             providers: vec!["not-real".to_string()],
             tenant_id: None,
             token_role: None,
@@ -8857,6 +8986,7 @@ mod tests {
 
         let invalid_budget = AccessPolicy {
             enabled: true,
+            generation: "gen_1".to_string(),
             providers: vec!["openai".to_string()],
             tenant_id: None,
             token_role: None,
@@ -8892,6 +9022,7 @@ mod tests {
         .try_into_policy()
         .unwrap();
         assert!(explicit_wildcard.providers.is_empty());
+        assert!(explicit_wildcard.generation.starts_with("policy_test_"));
 
         let ambiguous_scope = serde_json::from_str::<AdminAccessPolicyRequest>(
             r#"{"enabled":true,"providers":["openai"],"allProviders":true}"#,
@@ -9373,6 +9504,7 @@ mod tests {
             policy_id: "svc_docs".to_string(),
             policy: AccessPolicy {
                 enabled: true,
+                generation: "gen_1".to_string(),
                 providers: vec!["oauth-test".to_string()],
                 tenant_id: Some("team_docs".to_string()),
                 token_role: None,
@@ -9408,6 +9540,7 @@ mod tests {
             policy_id: "svc_docs".to_string(),
             policy: AccessPolicy {
                 enabled: true,
+                generation: "gen_1".to_string(),
                 providers: vec!["oauth-test".to_string()],
                 tenant_id: Some("team_docs".to_string()),
                 token_role: None,
@@ -9537,6 +9670,7 @@ mod tests {
             policy_id: "svc_docs".to_string(),
             policy: AccessPolicy {
                 enabled: true,
+                generation: "gen_1".to_string(),
                 providers: vec!["oauth-test".to_string()],
                 tenant_id: Some("team_docs".to_string()),
                 token_role: Some("service".to_string()),
