@@ -15,8 +15,8 @@ without a redeploy.
   settlement messages that exhaust automatic retries.
 - `BUDGET_LEDGER`: SQLite-backed Durable Object budget ledger.
 - `ACCESS_CONTROL`: SQLite-backed Durable Object authority for user state,
-  provider kill switches, serialized user/group policy-binding mutations, and
-  session entitlement lookup.
+  per-provider kill-switch shards, serialized user/group policy-binding
+  mutations, and session entitlement lookup.
 - `USAGE_LEDGER`: SQLite-backed Durable Object request audit and reporting
   ledger. It retains bounded metadata for 30 days and never stores prompt or
   completion bodies.
@@ -357,8 +357,10 @@ Access user records are not role-grant records. Cloudflare Access creates the
 identity, `access/users/<email>` stores tenant/status/groups, policy bindings
 grant service access, and ClawRouter admin rights come from the Access admin
 email/domain allowlist configured on the Worker. `ACCESS_CONTROL` makes user
-status, provider kill switches, binding mutations, and session grant resolution
-strongly consistent without scanning global KV state.
+status, binding mutations, and session grant resolution strongly consistent
+without scanning global KV state. Provider kill switches use one authority
+object per provider so proxy traffic does not serialize through a global
+object.
 
 ## Keys and Revocation
 
