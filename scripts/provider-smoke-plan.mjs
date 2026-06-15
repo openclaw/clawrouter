@@ -505,9 +505,21 @@ export async function runProviderTarget(baseUrl, smokeKey, provider) {
       providerAttempted: false,
     };
   }
-  await response.arrayBuffer();
   const providerAttempted =
     response.headers.get("x-clawrouter-upstream-provider") === provider.id;
+  try {
+    await response.arrayBuffer();
+  } catch {
+    return {
+      provider: provider.id,
+      status: "failed",
+      checkedAt,
+      latencyMs: Date.now() - startedAt,
+      statusCode: response.status,
+      error: "response body read failure",
+      providerAttempted,
+    };
+  }
   return {
     provider: provider.id,
     status: response.ok && providerAttempted ? "verified" : "failed",

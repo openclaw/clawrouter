@@ -66,6 +66,39 @@ test("provider transport failures are recorded as provider health", async () => 
   );
 });
 
+test("provider response stream failures are recorded as provider health", async () => {
+  await withFetch(
+    () =>
+      new Response(
+        new ReadableStream({
+          start(controller) {
+            controller.error(new Error("aborted"));
+          },
+        }),
+        {
+          status: 200,
+          headers: { "x-clawrouter-upstream-provider": "openai" },
+        },
+      ),
+    async () => {
+      const recorded = [];
+      await assert.rejects(
+        runLiveProviderSmokes({
+          baseUrl: "https://clawrouter.example",
+          smokeKey: "smoke-key",
+          plan,
+          liveProviders: ["openai"],
+          onResult: async (result) => recorded.push(result),
+        }),
+        /response body read failure/,
+      );
+      assert.equal(recorded.length, 1);
+      assert.equal(recorded[0].providerAttempted, true);
+      assert.equal(recorded[0].status, "failed");
+    },
+  );
+});
+
 test("successful upstream responses verify and record provider health", async () => {
   await withFetch(
     () =>
