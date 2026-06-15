@@ -4536,11 +4536,10 @@ fn provider_runtime_error_response(error: Error) -> Result<Response> {
 
 async fn send_upstream_request(request: Request, provider_id: &str) -> Result<Response> {
     match Fetch::Request(request).send().await {
-        Ok(mut response) => {
-            response
-                .headers_mut()
-                .set(UPSTREAM_PROVIDER_HEADER, provider_id)?;
-            Ok(response)
+        Ok(response) => {
+            let headers = response.headers().clone();
+            headers.set(UPSTREAM_PROVIDER_HEADER, provider_id)?;
+            Ok(response.with_headers(headers))
         }
         Err(_) => json_error(
             "provider_unavailable",
