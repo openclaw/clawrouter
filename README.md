@@ -157,6 +157,12 @@ curl "$CLAWROUTER_BASE_URL/v1/proxy/tavily/search" \
 
 The Worker resolves `provider` and `endpoint` from the compiled provider
 snapshot, applies manifest path/query/header/auth mapping, forwards the request,
-and emits a usage event to `USAGE_QUEUE` when the binding is available.
+and emits a usage event to `USAGE_QUEUE`. The same Worker consumes that queue
+into the bounded `USAGE_LEDGER` reporting Durable Object. Audit events retain
+identity, policy, credential, provider, route capability, model, timing,
+outcome, tokens when safely available, and cost for 30 days. Prompt and
+completion bodies are never stored. `/v1/usage` returns the caller policy's
+budget plus usage summary; `/v1/admin/usage` returns budget rows plus the
+all-tenant usage summary and recent request audit.
 OAuth, SigV4, and deployment-templated providers are still cataloged, but the
 edge path rejects them until the required token/signing/runtime mapping exists.

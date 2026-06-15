@@ -25,7 +25,7 @@ if (strict && !kvId) {
 
 let config = readFileSync(source, "utf8");
 config = config.replace(/^name = .+$/m, `name = "${workerName}"`);
-config = config.replace(/queue = ".+"/, `queue = "${queueName}"`);
+config = config.replace(/^queue = ".+"$/gm, `queue = "${queueName}"`);
 if (omitRoutes) {
   config = removeTomlArrayBlocks(config, "routes");
   config = ensureTopLevelSetting(config, "workers_dev", "false");
