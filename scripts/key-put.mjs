@@ -32,7 +32,9 @@ const requestCostMicros = args["request-cost-micros"]
   ? parseNonNegativeInteger(args["request-cost-micros"], "--request-cost-micros")
   : undefined;
 const existingPolicy = readRecord(`policies/${kid}`, { allowMissing: true });
-const existingCredential = readRecord(`credentials/${kid}`, { allowMissing: true });
+const existingLegacy = readRecord(`keys/${kid}`, { allowMissing: true });
+const existingCredential =
+  readRecord(`credentials/${kid}`, { allowMissing: true }) ?? legacyCredential(existingLegacy);
 const generation = existingPolicy?.generation ?? `policy_${randomUUID()}`;
 
 const policy = {
@@ -189,11 +191,29 @@ function readRecord(key, { allowMissing = false } = {}) {
     }
     throw new Error(message || `failed to read ${key}`);
   }
-  if (!result.stdout.trim()) {
+  const output = result.stdout.trim();
+  if (allowMissing && isMissingRecordOutput(output)) {
+    return null;
+  }
+  if (!output) {
     if (allowMissing) return null;
     throw new Error(`empty response while reading ${key}`);
   }
-  return JSON.parse(result.stdout);
+  return JSON.parse(output);
+}
+
+function isMissingRecordOutput(value) {
+  return /^(?:value\s+)?not found$/i.test(value.trim());
+}
+
+function legacyCredential(legacy) {
+  if (!legacy?.secretSha256) return null;
+  return {
+    enabled: legacy.enabled !== false,
+    secretSha256: legacy.secretSha256,
+    policyId: kid,
+    policyGeneration: legacy.generation ?? "legacy",
+  };
 }
 
 function policyChanged(existing, next) {
