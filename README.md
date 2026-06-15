@@ -133,6 +133,7 @@ loads its access policy from `policies/<policy-id>`:
 {
   "enabled": true,
   "providers": ["openai"],
+  "allProviders": false,
   "tenantId": "team_docs",
   "tokenRole": "service",
   "monthlyBudgetMicros": 100000000

@@ -696,7 +696,7 @@ function App() {
       await request<AccessPolicy>(gatewayOrigin, `/v1/admin/policies/${encodeURIComponent(policyForm.policyId)}`, {
         method: "PUT",
         headers: { "content-type": "application/json" },
-        body: JSON.stringify(next),
+        body: JSON.stringify({ ...next, allProviders: policyForm.allProviders }),
       });
       await refresh();
       setSelectedPolicyId(next.policyId);
