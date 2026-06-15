@@ -24,7 +24,6 @@ import {
   bindingFormFromBinding,
   bindingKey,
   currencyInput,
-  directUserBindingChanges,
   effectiveAccess,
   errorMessage,
   grantNamesForService,
@@ -866,40 +865,35 @@ function App() {
         enabled: accessForm.enabled,
         groups: parseGroups(accessForm.groups),
       };
+      const nextBindings = reconcileDirectUserBindings(bindings, email, keys, accessForm.policyIds);
       if (demoMode) {
         setUsers((current) => [next, ...current.filter((user) => user.email !== email)]);
-        setBindings((current) => reconcileDirectUserBindings(current, email, keys, accessForm.policyIds));
+        setBindings(nextBindings);
         setSelectedUserEmail(email);
-        setAccessForm(accessFormFromUser(next, reconcileDirectUserBindings(bindings, email, keys, accessForm.policyIds)));
+        setAccessForm(accessFormFromUser(next, nextBindings));
         setStatus("saved user");
         return;
       }
-      const currentUser = users.find((user) => user.email === email);
-      const currentGroups = new Set(currentUser?.groups ?? []);
-      const stagedUser = {
-        tenantId: currentUser?.tenantId ?? next.tenantId,
-        enabled: false,
-        groups: next.groups.filter((group) => currentGroups.has(group)),
-      };
-      const nextBindings = reconcileDirectUserBindings(bindings, email, keys, accessForm.policyIds);
-      const bindingChanges = directUserBindingChanges(bindings, email, keys, accessForm.policyIds);
-      const writeUser = (user: Pick<AccessUser, "tenantId" | "enabled" | "groups">) =>
-        request<AccessUser>(gatewayOrigin, `/v1/admin/access-users/${encodeURIComponent(email)}`, {
-          method: "PUT",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(user),
-        });
-      const writeBinding = (binding: PolicyBinding) =>
-        request<PolicyBinding>(gatewayOrigin, "/v1/admin/policy-bindings", {
-          method: "PUT",
-          headers: { "content-type": "application/json" },
-          body: JSON.stringify(binding),
-        });
-      await writeUser(stagedUser);
-      for (const binding of bindingChanges.removals) await writeBinding(binding);
-      await writeUser(next);
-      for (const binding of bindingChanges.additions) await writeBinding(binding);
-      await refresh();
+      await request<{ user: AccessUser; bindings: PolicyBinding[] }>(gatewayOrigin, `/v1/admin/access-user-grants/${encodeURIComponent(email)}`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          tenantId: next.tenantId,
+          enabled: next.enabled,
+          groups: next.groups,
+          policyIds: accessForm.policyIds,
+        }),
+      });
+      try {
+        await refresh();
+      } catch (error) {
+        const message = errorMessage(error);
+        setSelectedUserEmail(email);
+        setAccessForm(accessFormFromUser(next, nextBindings));
+        setUserError(`saved user, but refresh failed: ${message}`);
+        setStatus("saved user; refresh failed");
+        return;
+      }
       setSelectedUserEmail(email);
       setAccessForm(accessFormFromUser(next, nextBindings));
       setStatus("saved user");

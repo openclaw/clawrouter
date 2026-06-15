@@ -277,6 +277,7 @@ fn service_index() -> Result<Response> {
             "adminUsers": "/v1/admin/users",
             "adminUsage": "/v1/admin/usage",
             "adminAccessUsers": "/v1/admin/access-users",
+            "adminAccessUserGrants": "/v1/admin/access-user-grants/{email}",
             "adminKeys": "/v1/admin/keys",
             "adminPolicies": "/v1/admin/policies",
             "adminCredentials": "/v1/admin/credentials",
@@ -1294,6 +1295,15 @@ struct AccessUserRecord {
     groups: Vec<String>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AdminAccessUserGrantsRequest {
+    #[serde(flatten)]
+    record: AccessUserRecord,
+    #[serde(default)]
+    policy_ids: Vec<String>,
+}
+
 #[derive(Clone, Debug, Serialize)]
 #[serde(rename_all = "camelCase")]
 struct AdminAccessUserResponse {
@@ -1385,6 +1395,13 @@ struct PolicyBindingIndexEntryRow {
 struct AccessControlUser {
     email: String,
     record: AccessUserRecord,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AccessControlUserBindingsPutRequest {
+    user: AccessControlUser,
+    bindings: Vec<PolicyBindingRecord>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -1982,6 +1999,74 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
         )
         .await;
         return Response::from_json(&connection);
+    }
+
+    if let Some(email) = path.strip_prefix("/v1/admin/access-user-grants/") {
+        if req.method() != Method::Put {
+            return json_error("method_not_allowed", "admin method is not allowed", 405);
+        }
+        let email = match decode_access_user_email(email) {
+            Ok(email) => email,
+            Err(message) => return json_error("invalid_access_user", message, 400),
+        };
+        let mut request =
+            match serde_json::from_str::<AdminAccessUserGrantsRequest>(&req.text().await?) {
+                Ok(request) => request,
+                Err(error) => {
+                    return json_error(
+                        "invalid_access_user_grants_request",
+                        &format!("request body must be a JSON access user grant record: {error}"),
+                        400,
+                    );
+                }
+            };
+        request.record.role = AccessRole::User;
+        request.record.groups = match normalize_access_groups(request.record.groups) {
+            Ok(groups) => groups,
+            Err(message) => return json_error("invalid_access_user", &message, 400),
+        };
+        let mut desired_policy_ids = BTreeSet::new();
+        for policy_id in request.policy_ids {
+            let policy_id = match validate_admin_kid(policy_id.trim()) {
+                Ok(policy_id) => policy_id,
+                Err(message) => return json_error("invalid_policy", message, 400),
+            };
+            desired_policy_ids.insert(policy_id);
+        }
+        let policy_ids = desired_policy_ids.iter().cloned().collect::<Vec<_>>();
+        let policies = authoritative_access_policies(&env, &kv, &policy_ids).await?;
+        let missing_policy_ids = policy_ids
+            .iter()
+            .filter(|policy_id| !policies.contains_key(*policy_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !missing_policy_ids.is_empty() {
+            return json_error(
+                "unknown_policy",
+                &format!(
+                    "bound policies do not exist: {}",
+                    missing_policy_ids.join(",")
+                ),
+                404,
+            );
+        }
+        let principal = PolicyBindingPrincipal {
+            principal_type: PrincipalType::User,
+            principal_id: email.clone(),
+        };
+        let current_bindings =
+            authoritative_policy_bindings_for_principal(&env, &kv, principal).await?;
+        let bindings =
+            reconcile_user_policy_bindings(&email, current_bindings, &desired_policy_ids);
+        let user = AccessControlUser {
+            email: email.clone(),
+            record: request.record.clone(),
+        };
+        put_authoritative_access_user_bindings(&env, &kv, &user, &bindings).await?;
+        return Response::from_json(&serde_json::json!({
+            "user": access_user_response(&email, request.record, &env)?,
+            "bindings": bindings
+        }));
     }
 
     if let Some(email) = path.strip_prefix("/v1/admin/access-users/") {
@@ -3616,7 +3701,6 @@ async fn put_policy_binding_record(
     kv: &KvStore,
     binding: &PolicyBindingRecord,
 ) -> Result<()> {
-    let binding_key = policy_binding_key(binding);
     let principal = PolicyBindingPrincipal {
         principal_type: binding.principal_type,
         principal_id: binding.principal_id.clone(),
@@ -3630,12 +3714,95 @@ async fn put_policy_binding_record(
     };
     // The Durable Object is authoritative; compatibility KV must never outlive a failed mutation.
     mutate_policy_binding_index(&namespace, mutation).await?;
+    sync_policy_binding_compatibility_best_effort(kv, binding).await;
+    Ok(())
+}
+
+async fn sync_policy_binding_compatibility_best_effort(
+    kv: &KvStore,
+    binding: &PolicyBindingRecord,
+) {
+    let binding_key = policy_binding_key(binding);
     let compatibility_kind = if binding.enabled {
         "policy binding compatibility record"
     } else {
         "policy binding compatibility tombstone"
     };
     sync_kv_record_best_effort(kv, &binding_key, binding, compatibility_kind).await;
+}
+
+async fn authoritative_policy_bindings_for_principal(
+    env: &Env,
+    kv: &KvStore,
+    principal: PolicyBindingPrincipal,
+) -> Result<Vec<PolicyBindingRecord>> {
+    let namespace = access_control_namespace(env)?;
+    let mut response = resolve_policy_binding_index(&namespace, vec![principal.clone()]).await?;
+    if !response.missing_principals.is_empty() {
+        let seed = policy_binding_index_seed(kv, principal.clone()).await?;
+        initialize_policy_binding_index(&namespace, &[seed]).await?;
+        response = resolve_policy_binding_index(&namespace, vec![principal]).await?;
+    }
+    sort_policy_bindings(&mut response.bindings);
+    Ok(response.bindings)
+}
+
+fn reconcile_user_policy_bindings(
+    email: &str,
+    current: Vec<PolicyBindingRecord>,
+    desired_policy_ids: &BTreeSet<String>,
+) -> Vec<PolicyBindingRecord> {
+    let mut bindings = current
+        .into_iter()
+        .filter(|binding| {
+            binding.principal_type == PrincipalType::User && binding.principal_id == email
+        })
+        .map(|binding| (binding.policy_id.clone(), binding))
+        .collect::<BTreeMap<_, _>>();
+    for policy_id in desired_policy_ids {
+        bindings
+            .entry(policy_id.clone())
+            .or_insert_with(|| PolicyBindingRecord {
+                policy_id: policy_id.clone(),
+                principal_type: PrincipalType::User,
+                principal_id: email.to_string(),
+                enabled: true,
+                priority: default_binding_priority(),
+            });
+    }
+    for binding in bindings.values_mut() {
+        binding.enabled = desired_policy_ids.contains(&binding.policy_id);
+    }
+    let mut bindings = bindings.into_values().collect::<Vec<_>>();
+    sort_policy_bindings(&mut bindings);
+    bindings
+}
+
+async fn put_authoritative_access_user_bindings(
+    env: &Env,
+    kv: &KvStore,
+    user: &AccessControlUser,
+    bindings: &[PolicyBindingRecord],
+) -> Result<()> {
+    let namespace = access_control_namespace(env)?;
+    put_access_control_user_bindings(
+        &namespace,
+        &AccessControlUserBindingsPutRequest {
+            user: user.clone(),
+            bindings: bindings.to_vec(),
+        },
+    )
+    .await?;
+    sync_kv_record_best_effort(
+        kv,
+        &format!("access/users/{}", user.email),
+        &user.record,
+        "access user compatibility record",
+    )
+    .await;
+    for binding in bindings {
+        sync_policy_binding_compatibility_best_effort(kv, binding).await;
+    }
     Ok(())
 }
 
@@ -3757,6 +3924,15 @@ async fn put_access_control_user(
     user: &AccessControlUser,
 ) -> Result<()> {
     access_control_request(namespace, "/users/put", user)
+        .await
+        .map(|_| ())
+}
+
+async fn put_access_control_user_bindings(
+    namespace: &ObjectNamespace,
+    request: &AccessControlUserBindingsPutRequest,
+) -> Result<()> {
+    access_control_request(namespace, "/users/put-bindings", request)
         .await
         .map(|_| ())
 }
@@ -6579,6 +6755,17 @@ impl DurableObject for PolicyBindingIndexObject {
             put_access_control_user_in_object(&self.state, user)?;
             return Response::ok("updated");
         }
+        if req.method() == Method::Post && url.path() == "/users/put-bindings" {
+            let request =
+                serde_json::from_str::<AccessControlUserBindingsPutRequest>(&req.text().await?)
+                    .map_err(|error| {
+                        Error::RustError(format!(
+                            "access user and bindings put request is invalid JSON: {error}"
+                        ))
+                    })?;
+            put_access_control_user_bindings_in_object(&self.state, request).await?;
+            return Response::ok("updated");
+        }
         if req.method() == Method::Post && url.path() == "/policies/resolve" {
             let request =
                 serde_json::from_str::<AccessControlPoliciesResolveRequest>(&req.text().await?)
@@ -7074,6 +7261,47 @@ fn put_access_control_user_in_object(state: &State, mut user: AccessControlUser)
     ensure_access_control_schema(&sql)?;
     normalize_access_control_user(&mut user)?;
     put_access_control_user_in_sql(&sql, &user)
+}
+
+async fn put_access_control_user_bindings_in_object(
+    state: &State,
+    mut request: AccessControlUserBindingsPutRequest,
+) -> Result<()> {
+    normalize_access_control_user(&mut request.user)?;
+    let principal = PolicyBindingPrincipal {
+        principal_type: PrincipalType::User,
+        principal_id: request.user.email.clone(),
+    };
+    let mut bindings = BTreeMap::new();
+    for binding in request.bindings {
+        let binding = normalize_policy_binding(binding).map_err(str::to_string)?;
+        if binding.principal_type != principal.principal_type
+            || binding.principal_id != principal.principal_id
+        {
+            return Err(Error::RustError(
+                "access user binding does not match the requested user".to_string(),
+            ));
+        }
+        bindings.insert(binding.policy_id.clone(), binding);
+    }
+    let bindings = bindings.into_values().collect::<Vec<_>>();
+    let storage = state.storage();
+    let sql = storage.sql();
+    ensure_access_control_schema(&sql)?;
+    storage
+        .transaction(move |_| async move {
+            put_access_control_user_in_sql(&sql, &request.user)?;
+            let principal_key = policy_binding_principal_key(&principal);
+            sql.exec_raw(
+                "INSERT OR IGNORE INTO policy_binding_principals (principal_key) VALUES (?)",
+                raw_bindings(vec![JsValue::from_str(&principal_key)]),
+            )?;
+            for binding in bindings {
+                upsert_policy_binding_in_sql(&sql, &principal_key, &binding)?;
+            }
+            Ok(())
+        })
+        .await
 }
 
 fn put_access_control_user_in_sql(sql: &SqlStorage, user: &AccessControlUser) -> Result<()> {
@@ -9564,6 +9792,44 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(groups, vec!["docs", "maintainers"]);
+    }
+
+    #[test]
+    fn user_grant_mutations_reconcile_direct_bindings_as_one_authority_request() {
+        let request = serde_json::from_str::<AdminAccessUserGrantsRequest>(
+            r#"{"tenantId":"openclaw","enabled":true,"groups":["maintainers"],"policyIds":["svc_tools","svc_tools"]}"#,
+        )
+        .unwrap();
+        assert_eq!(request.record.tenant_id.as_deref(), Some("openclaw"));
+        assert_eq!(request.policy_ids, vec!["svc_tools", "svc_tools"]);
+
+        let bindings = reconcile_user_policy_bindings(
+            "user@example.com",
+            vec![
+                PolicyBindingRecord {
+                    policy_id: "svc_models".to_string(),
+                    principal_type: PrincipalType::User,
+                    principal_id: "user@example.com".to_string(),
+                    enabled: true,
+                    priority: 8,
+                },
+                PolicyBindingRecord {
+                    policy_id: "svc_other".to_string(),
+                    principal_type: PrincipalType::User,
+                    principal_id: "other@example.com".to_string(),
+                    enabled: true,
+                    priority: 10,
+                },
+            ],
+            &BTreeSet::from(["svc_tools".to_string()]),
+        );
+        assert_eq!(bindings.len(), 2);
+        assert_eq!(bindings[0].policy_id, "svc_models");
+        assert!(!bindings[0].enabled);
+        assert_eq!(bindings[0].priority, 8);
+        assert_eq!(bindings[1].policy_id, "svc_tools");
+        assert!(bindings[1].enabled);
+        assert_eq!(bindings[1].priority, default_binding_priority());
     }
 
     #[test]
