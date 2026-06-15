@@ -2878,3 +2878,159 @@ label > span,
     align-items: stretch;
   }
 }
+
+/* Request workbench and audit ledger */
+.playgroundCanvas {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(360px, 0.92fr);
+  min-height: calc(100vh - var(--header-height) - 176px);
+  border-bottom: 1px solid var(--border);
+}
+
+.playgroundCanvas .promptComposer {
+  align-content: start;
+  min-width: 0;
+  border-right: 1px solid var(--border);
+  border-bottom: 0;
+}
+
+.playgroundCanvas .responsePane {
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 100%;
+  border-bottom: 0;
+}
+
+.playgroundCanvas .responsePane pre {
+  min-height: 100%;
+  max-height: calc(100vh - var(--header-height) - 224px);
+  overflow: auto;
+}
+
+.playgroundCanvas .mainPrompt {
+  min-height: clamp(360px, 49vh, 680px);
+}
+
+.playgroundCanvas .servicePayload {
+  min-height: clamp(480px, 62vh, 760px);
+}
+
+.usageLayout {
+  grid-template-columns: minmax(0, 1fr) minmax(286px, 318px);
+}
+
+.usageMainPane .overviewStrip {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.usageMainPane .tableRow {
+  min-height: 52px;
+}
+
+.usageMainPane .entityTable {
+  overflow-x: auto;
+}
+
+.usageMainPane .tableHead,
+.usageMainPane .tableRow {
+  min-width: 940px;
+}
+
+.secondaryTableHeader {
+  margin-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.auditTime {
+  font-family: "DM Mono", ui-monospace, monospace;
+  font-size: 9px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.auditIdentity,
+.auditOperation {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.auditIdentity strong,
+.auditOperation strong {
+  overflow: hidden;
+  color: var(--foreground-strong);
+  font-size: 10px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auditIdentity small,
+.auditOperation small {
+  overflow: hidden;
+  color: var(--muted);
+  font-family: "DM Mono", ui-monospace, monospace;
+  font-size: 8px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.emptyTable {
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  padding: 18px 12px;
+  font-size: 11px;
+}
+
+.providerUsageList {
+  display: grid;
+  border-top: 1px solid var(--border);
+}
+
+.providerUsageList > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  border-bottom: 1px solid var(--border);
+  padding: 6px 0;
+}
+
+.providerUsageList > div > span {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+}
+
+.providerUsageList > div > span strong {
+  color: var(--foreground-strong);
+  font-family: "DM Mono", ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.providerUsageList > div > span small,
+.providerUsageList > p {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+@media (max-width: 980px) {
+  .playgroundCanvas {
+    grid-template-columns: 1fr;
+  }
+
+  .playgroundCanvas .promptComposer {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .playgroundCanvas .responsePane pre {
+    min-height: 320px;
+    max-height: 520px;
+  }
+
+  .usageMainPane .overviewStrip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}

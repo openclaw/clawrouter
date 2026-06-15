@@ -123,6 +123,10 @@ interface ProviderReadiness {
   openaiCompatible: boolean;
   manifestRoutes: number;
   modelCount: number;
+  connectionEnabled?: boolean;
+  verified?: boolean;
+  lastCheckedAt?: string | null;
+  latencyMs?: number | null;
   executable: boolean;
   status: string;
   reasons: string[];
@@ -199,6 +203,56 @@ interface AdminUsageRow {
   budget: BudgetStatus;
 }
 
+interface UsageSummary {
+  requestCount: number;
+  successCount: number;
+  errorCount: number;
+  inputTokens: number;
+  outputTokens: number;
+  totalTokens: number;
+  actualCostMicros: number;
+}
+
+interface ProviderUsageSummary {
+  provider: string;
+  requestCount: number;
+  successCount: number;
+  errorCount: number;
+  totalTokens: number;
+  actualCostMicros: number;
+}
+
+interface UsageAuditEvent {
+  id: string;
+  type: string;
+  occurred_at_ms: number;
+  tenant_id: string;
+  policy_id?: string | null;
+  credential_id?: string | null;
+  principal_id?: string | null;
+  auth_type?: string | null;
+  key_id?: string | null;
+  request_id?: string | null;
+  provider: string;
+  capability?: string | null;
+  model?: string | null;
+  input_tokens?: number | null;
+  output_tokens?: number | null;
+  total_tokens?: number | null;
+  reserved_cost_micros: number;
+  actual_cost_micros: number;
+  status_code?: number | null;
+  duration_ms?: number | null;
+  status: string;
+}
+
+interface UsageSnapshot {
+  ledger: string;
+  summary: UsageSummary;
+  providers: ProviderUsageSummary[];
+  events: UsageAuditEvent[];
+}
+
 interface ServiceItem {
   id: string;
   name: string;
@@ -264,6 +318,12 @@ const demo = demoData();
 const demoServiceRoute = demo.routes.manifestProxy.find((route) => route.provider === "tavily") ?? demo.routes.manifestProxy[0];
 const emptyRoutes: RouteCatalog = { openaiCompatible: [], manifestProxy: [] };
 const emptySession: SessionResponse = { authenticated: false, auth: "access", role: "user", email: null, tenantId: "default" };
+const emptyUsageSnapshot: UsageSnapshot = {
+  ledger: "unavailable",
+  summary: { requestCount: 0, successCount: 0, errorCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, actualCostMicros: 0 },
+  providers: [],
+  events: [],
+};
 
 const defaultPolicy: PolicyForm = {
   kid: "svc_docs",
@@ -315,6 +375,7 @@ function App() {
   const [adminOverview, setAdminOverview] = useState<AdminOverview | null>(allowDemo ? demo.overview : null);
   const [tenantSummaries, setTenantSummaries] = useState<AdminTenantSummary[]>(allowDemo ? demo.tenants : []);
   const [usageRows, setUsageRows] = useState<AdminUsageRow[]>(allowDemo ? demo.usageRows : []);
+  const [usageSnapshot, setUsageSnapshot] = useState<UsageSnapshot>(allowDemo ? demo.usage : emptyUsageSnapshot);
   const [usageLoaded, setUsageLoaded] = useState(allowDemo);
   const [usageRefreshKey, setUsageRefreshKey] = useState(0);
   const [entitlements, setEntitlements] = useState<EntitlementsResponse | null>(allowDemo ? demo.entitlements : null);
@@ -460,6 +521,7 @@ function App() {
           refreshWarnings = [...refreshWarnings, `tenant summary unavailable: ${tenantResult.error}`];
         }
         setUsageRows([]);
+        setUsageSnapshot(emptyUsageSnapshot);
         setUsageLoaded(false);
         setPolicyDataLoaded(true);
         if (view === "usage") setUsageRefreshKey((current) => current + 1);
@@ -478,6 +540,7 @@ function App() {
         setAdminOverview(null);
         setTenantSummaries([]);
         setUsageRows([]);
+        setUsageSnapshot(emptyUsageSnapshot);
         setUsageLoaded(false);
         setSelectedUserEmail(user.email);
         setAccessForm(accessFormFromUser(user, []));
@@ -497,6 +560,7 @@ function App() {
         setAdminOverview(demo.overview);
         setTenantSummaries(demo.tenants);
         setUsageRows(demo.usageRows);
+        setUsageSnapshot(demo.usage);
         setUsageLoaded(true);
         setEntitlements(demo.entitlements);
         setProviderReadiness(readinessMap(demo.entitlements.providers.map((item) => item.readiness)));
@@ -558,13 +622,15 @@ function App() {
 
   async function refreshUsageLedger() {
     if (demoMode || session.role !== "admin") return;
-    const result = await settled(() => request<{ keys: AdminUsageRow[] }>(gatewayOrigin, "/v1/admin/usage"));
+    const result = await settled(() => request<{ keys: AdminUsageRow[]; usage: UsageSnapshot }>(gatewayOrigin, "/v1/admin/usage"));
     if (result.ok) {
       setUsageRows(result.value.keys);
+      setUsageSnapshot(result.value.usage);
       setUsageLoaded(true);
       return;
     }
     setUsageRows([]);
+    setUsageSnapshot(emptyUsageSnapshot);
     setUsageLoaded(false);
     if (view === "usage") setStatus(`usage ledger unavailable: ${result.error}`);
   }
@@ -900,7 +966,7 @@ function App() {
           />
         ) : null}
 
-        {view === "usage" && session.role === "admin" ? <UsageScreen keys={keys} services={services} overview={adminOverview} tenants={tenantSummaries} usageRows={usageRows} usageLoaded={usageLoaded} /> : null}
+        {view === "usage" && session.role === "admin" ? <UsageScreen keys={keys} services={services} overview={adminOverview} tenants={tenantSummaries} usageRows={usageRows} usage={usageSnapshot} usageLoaded={usageLoaded} /> : null}
       </section>
     </main>
   );
@@ -1085,22 +1151,24 @@ function PlaygroundScreen({ form, setForm, models, selected, serviceRoutes, sele
           <span>{selectedAccess ? (selectedAccess.allowed ? `allowed by ${selectedAccess.policies.join(", ") || "session"}` : "not granted") : "access unknown"}</span>
           <span>{selectedProvider ?? "no provider"}</span>
         </div>
-        {form.mode === "model" ? (
-          <div className="promptComposer">
-            <label><span>System instructions</span><textarea className="systemPrompt" value={form.system} onChange={(event) => setForm({ ...form, system: event.target.value })} /></label>
-            <label><span>User prompt</span><textarea className="mainPrompt" value={form.prompt} onChange={(event) => setForm({ ...form, prompt: event.target.value })} /></label>
-          </div>
-        ) : (
-          <div className="promptComposer">
-            <label><span>JSON body</span><textarea className="mainPrompt servicePayload" value={form.servicePayload} onChange={(event) => setForm({ ...form, servicePayload: event.target.value })} /></label>
-          </div>
-        )}
-        <section className="responsePane">
-          <div className="splitHeader">
-            <PanelTitle icon={ChevronRight} title="Response" meta="raw response" />
-          </div>
-          <pre>{result}</pre>
-        </section>
+        <div className="playgroundCanvas">
+          {form.mode === "model" ? (
+            <div className="promptComposer">
+              <label><span>System instructions</span><textarea className="systemPrompt" value={form.system} onChange={(event) => setForm({ ...form, system: event.target.value })} /></label>
+              <label><span>User prompt</span><textarea className="mainPrompt" value={form.prompt} onChange={(event) => setForm({ ...form, prompt: event.target.value })} /></label>
+            </div>
+          ) : (
+            <div className="promptComposer">
+              <label><span>JSON body</span><textarea className="mainPrompt servicePayload" value={form.servicePayload} onChange={(event) => setForm({ ...form, servicePayload: event.target.value })} /></label>
+            </div>
+          )}
+          <section className="responsePane">
+            <div className="splitHeader">
+              <PanelTitle icon={ChevronRight} title="Response" meta="raw response" />
+            </div>
+            <pre>{result}</pre>
+          </section>
+        </div>
         <details className="requestDrawer">
           <summary><span><ServerCog className="buttonIcon" aria-hidden="true" />Inspect request</span><strong>{requestMode}</strong></summary>
           <div className="requestDrawerToolbar">
@@ -1264,27 +1332,14 @@ function UsersScreen({ users, selected, policies, bindings, services, form, setF
   );
 }
 
-function UsageScreen({ keys, services, overview, tenants, usageRows, usageLoaded }: { keys: KeyPolicy[]; services: ServiceItem[]; overview: AdminOverview | null; tenants: AdminTenantSummary[]; usageRows: AdminUsageRow[]; usageLoaded: boolean }) {
+function UsageScreen({ keys, services, overview, tenants, usageRows, usage, usageLoaded }: { keys: KeyPolicy[]; services: ServiceItem[]; overview: AdminOverview | null; tenants: AdminTenantSummary[]; usageRows: AdminUsageRow[]; usage: UsageSnapshot; usageLoaded: boolean }) {
   const activeKeys = keys.filter((key) => key.enabled);
   const readyServices = readyCount(services);
   const blockedServices = services.filter((service) => service.readiness && !service.readiness.executable);
   const rows = usageRows.length ? usageRows : keys.map(policyUsageFallback);
   const tenantRows = tenants.length ? tenants : tenantSummaryFallback(keys);
-  const serviceProviderCount = new Set(services.map((service) => service.provider)).size;
-  const grantedServiceCount = activeKeys.some((key) => key.providers.length === 0)
-    ? serviceProviderCount
-    : new Set(activeKeys.flatMap((key) => key.providers)).size;
-  const hasUnlimitedBudget = activeKeys.some((key) => key.monthlyBudgetMicros === undefined || key.monthlyBudgetMicros === null);
-  const activeBudgetValues = activeKeys.map((key) => key.monthlyBudgetMicros);
-  const totalBudget = activeBudgetValues.some((value) => value === undefined || value === null)
-    ? null
-    : activeBudgetValues.reduce<number>((total, value) => total + (value ?? 0), 0);
-  const totalBudgetLabel = hasUnlimitedBudget ? "unlimited" : formatMicros(totalBudget);
-  const totalSpent = !usageLoaded || rows.some((row) => row.budget.spentMicros === undefined || row.budget.spentMicros === null)
-    ? null
-    : rows.reduce((total, row) => total + (row.budget.spentMicros ?? 0), 0);
-  const routeTotal = services.reduce((total, service) => total + service.routeCount, 0);
-  const providerTotal = overview?.providerCount ?? new Set(services.map((service) => service.provider)).size;
+  const serviceByProvider = new Map(services.map((service) => [service.provider, service]));
+  const successRate = usage.summary.requestCount ? Math.round((usage.summary.successCount / usage.summary.requestCount) * 100) : 0;
   const untrackedRows = rows.filter((row) => row.enabled && row.budget.ledger === "untracked");
   const exhaustedRows = rows.filter((row) => row.enabled && row.budget.configured && row.budget.remainingMicros !== undefined && row.budget.remainingMicros !== null && row.budget.remainingMicros <= 0);
   const ledgerFailureRows = rows.filter((row) => row.enabled && (row.budget.ledger === "unavailable" || row.budget.ledger === "invalid_policy"));
@@ -1292,16 +1347,37 @@ function UsageScreen({ keys, services, overview, tenants, usageRows, usageLoaded
     <div className="entityLayout usageLayout">
       <section className="mainPane usageMainPane">
         <div className="overviewStrip">
-          <Metric label="active grants" value={String(overview?.keysActive ?? activeKeys.length)} meta={`${overview?.keysTotal ?? keys.length} total`} />
-          <Metric label="tenants" value={String(overview?.tenantsTotal ?? tenantRows.length)} meta={`${grantedServiceCount} granted services`} />
-          <Metric label="service routes" value={String(routeTotal)} meta={`${providerTotal} providers`} />
-          <Metric label="budget" value={totalBudgetLabel} meta={`${formatMicros(totalSpent)} spent`} />
+          <Metric label="requests" value={formatCount(usage.summary.requestCount)} meta={`${formatCount(usage.summary.totalTokens)} tokens`} />
+          <Metric label="success rate" value={`${successRate}%`} meta={`${formatCount(usage.summary.successCount)} successful`} />
+          <Metric label="errors" value={formatCount(usage.summary.errorCount)} meta="upstream and policy outcomes" />
+          <Metric label="actual spend" value={formatMicros(usage.summary.actualCostMicros)} meta={`${usage.providers.length} active services`} />
         </div>
-        <div className="tableSectionHeader"><div><strong>Grant budget ledger</strong><span>{rows.length} configured grants</span></div><span>{usageLoaded ? "live ledger" : "policy fallback"}</span></div>
+        <div className="tableSectionHeader"><div><strong>Recent requests</strong><span>{usage.events.length} most recent audit events</span></div><span>{usageLoaded ? usage.ledger : "unavailable"}</span></div>
+        <EntityTable
+          columns={["time", "identity", "service", "operation", "outcome", "latency", "cost"]}
+          columnTemplate="92px minmax(170px, 1.2fr) minmax(145px, 1fr) minmax(150px, 1fr) 104px 74px 74px"
+          rows={usage.events.map((event) => {
+            const service = serviceByProvider.get(event.provider);
+            return {
+              id: event.id,
+              cells: [
+                <span className="auditTime" title={formatTimestamp(event.occurred_at_ms, true)}>{formatTimestamp(event.occurred_at_ms)}</span>,
+                <span className="auditIdentity"><strong>{event.principal_id ?? event.credential_id ?? event.policy_id ?? "unknown"}</strong><small>{event.auth_type ?? event.tenant_id}</small></span>,
+                <EntityName brandIcon={service?.brandIcon} icon={ServerCog} title={service?.name ?? event.provider} subtitle={event.provider} />,
+                <span className="auditOperation"><strong>{event.capability ?? event.type}</strong><small>{event.model ?? event.request_id ?? "request"}</small></span>,
+                <Status label={event.status_code ? `${event.status_code} ${event.status}` : event.status} tone={usageEventTone(event)} />,
+                formatDuration(event.duration_ms),
+                formatMicros(event.actual_cost_micros),
+              ],
+            };
+          })}
+        />
+        {!usage.events.length ? <div className="emptyTable">No request audit events recorded yet.</div> : null}
+        <div className="tableSectionHeader secondaryTableHeader"><div><strong>Policy budgets</strong><span>{rows.length} configured policies</span></div><span>{usageLoaded ? "live ledger" : "policy fallback"}</span></div>
         <EntityTable columns={["grant", "tenant", "budget usage", "services", "health"]} columnTemplate="minmax(210px, 1.15fr) minmax(120px, 0.7fr) minmax(250px, 1.45fr) 96px 120px" rows={rows.map((row) => ({ id: row.kid, cells: [<EntityName icon={KeyRound} title={row.kid} subtitle={row.tokenRole ?? "custom"} />, row.tenantId, <BudgetUsage row={row} />, effectiveProviderCount(row.providers, services), <UsageHealth row={row} />] }))} />
       </section>
       <aside className="inspector usageInspector">
-        <InspectorHeader icon={BarChart3} title="Operational health" subtitle={`${readyServices}/${services.length} services executable`} />
+        <InspectorHeader icon={BarChart3} title="Request activity" subtitle={`${readyServices}/${services.length} services executable`} />
         <div className="attentionGrid">
           <div className={blockedServices.length ? "attentionMetric warning" : "attentionMetric healthy"}><strong>{blockedServices.length}</strong><span>services need configuration</span></div>
           {usageLoaded ? (
@@ -1312,10 +1388,14 @@ function UsageScreen({ keys, services, overview, tenants, usageRows, usageLoaded
           ) : <div className="attentionMetric danger"><strong>!</strong><span>live usage ledger unavailable</span></div>}
           <div className={exhaustedRows.length ? "attentionMetric danger" : "attentionMetric healthy"}><strong>{exhaustedRows.length}</strong><span>grants out of budget</span></div>
         </div>
+        <div className="sectionTitle">Provider usage</div>
+        <div className="providerUsageList">{usage.providers.length ? usage.providers.map((provider) => {
+          const service = serviceByProvider.get(provider.provider);
+          return <div key={provider.provider}><EntityName brandIcon={service?.brandIcon} icon={ServerCog} title={service?.name ?? provider.provider} subtitle={`${formatCount(provider.totalTokens)} tokens · ${formatMicros(provider.actualCostMicros)}`} /><span><strong>{formatCount(provider.requestCount)}</strong><small>{provider.errorCount ? `${provider.errorCount} errors` : "healthy"}</small></span></div>;
+        }) : <p>No provider activity yet.</p>}</div>
         <div className="sectionTitle">Tenant coverage</div>
         <div className="miniList">{tenantRows.length ? tenantRows.slice(0, 8).map((tenant) => <button type="button" key={tenant.tenantId}>{tenant.tenantId}<span>{tenant.activeKeys}/{tenant.keys} grants · {effectiveProviderCount(tenant.providers, services, tenant.allProviders)} services</span></button>) : <p>No tenant grants yet.</p>}</div>
-        <div className="sectionTitle">Needs configuration</div>
-        <div className="miniList">{blockedServices.length ? blockedServices.slice(0, 8).map((service) => <button type="button" key={service.id}>{service.name}<span>{readinessLabel(service.readiness)}</span></button>) : <p>All visible services are executable.</p>}</div>
+        <dl className="facts"><dt>ledger</dt><dd>{usage.ledger}</dd><dt>retention</dt><dd>30 days of request metadata</dd><dt>policies</dt><dd>{overview?.keysActive ?? activeKeys.length} active</dd><dt>tenants</dt><dd>{overview?.tenantsTotal ?? tenantRows.length}</dd></dl>
       </aside>
     </div>
   );
@@ -1421,7 +1501,7 @@ function OutcomeStatus({ outcome }: { outcome: ServiceOutcome }) {
 
 function ReadinessStatus({ readiness }: { readiness?: ProviderReadiness }) {
   if (!readiness) return <span className="status neutral">unknown</span>;
-  const tone = readiness.status === "ready" ? "active" : readiness.status === "missing_config" || readiness.status === "grant_required" || readiness.status === "unsupported" ? "revoked" : "neutral";
+  const tone = readiness.verified ? "active" : !readiness.executable ? "revoked" : "neutral";
   return <Status label={readinessLabel(readiness)} tone={tone} />;
 }
 
@@ -1528,7 +1608,7 @@ function accessMap(entitlements: EntitlementsResponse | null) {
 }
 
 function readyCount(services: ServiceItem[]) {
-  return services.filter((service) => service.readiness?.status === "ready").length;
+  return services.filter((service) => service.readiness?.executable).length;
 }
 
 function grantNamesForService(service: ServiceItem, policies: KeyPolicy[] = []) {
@@ -1651,7 +1731,31 @@ function formatBudget(value: number | null | undefined) {
 function formatMicros(value: number | null | undefined) {
   if (value === undefined || value === null) return "unknown";
   if (!value) return "none";
+  if (value < 10_000) return "<$0.01";
   return `$${(value / 1_000_000).toFixed(2)}`;
+}
+
+function formatCount(value: number | null | undefined) {
+  return new Intl.NumberFormat("en-US", { notation: value !== undefined && value !== null && Math.abs(value) >= 10_000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value ?? 0);
+}
+
+function formatDuration(value: number | null | undefined) {
+  if (value === undefined || value === null) return "unknown";
+  return value < 1000 ? `${value}ms` : `${(value / 1000).toFixed(1)}s`;
+}
+
+function formatTimestamp(value: number, full = false) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "unknown";
+  return full
+    ? date.toLocaleString([], { dateStyle: "medium", timeStyle: "medium" })
+    : date.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+function usageEventTone(event: UsageAuditEvent): OutcomeTone {
+  if (event.status === "success" || (event.status_code !== undefined && event.status_code !== null && event.status_code < 400)) return "active";
+  if (event.status === "denied" || event.status === "provider_error" || event.status === "client_error" || event.status === "timeout" || (event.status_code !== undefined && event.status_code !== null && event.status_code >= 400)) return "revoked";
+  return "neutral";
 }
 
 function effectiveProviderCount(providerIds: string[], services: ServiceItem[], allProviders = providerIds.length === 0) {
@@ -1971,6 +2075,56 @@ function pathParamsForRoute(route: RouteCatalog["manifestProxy"][number] | undef
   return params;
 }
 
+function demoUsageSnapshot(): UsageSnapshot {
+  const now = Date.now();
+  const events: UsageAuditEvent[] = [
+    demoUsageEvent("usage_6", now - 26_000, "admin@example.com", "maintainer_models", "openai", "llm.responses", "gpt-4.1", 200, 842, 1000, "success", 1814),
+    demoUsageEvent("usage_5", now - 74_000, "maintainer@example.com", "maintainer_models", "anthropic", "llm.messages", "claude-sonnet", 200, 1180, 1000, "success", 2631),
+    demoUsageEvent("usage_4", now - 146_000, "admin@example.com", "openclaw_tools", "tavily", "web.search", null, 200, 436, 500, "success", 0),
+    demoUsageEvent("usage_3", now - 318_000, "research@example.com", "user_research", "google-gemini", "llm.generate", "gemini-default", 429, 218, 0, "provider_error", 0),
+    demoUsageEvent("usage_2", now - 522_000, "admin@example.com", "maintainer_models", "openrouter", "llm.chat", "openrouter/auto", 200, 1640, 1000, "success", 3250),
+    demoUsageEvent("usage_1", now - 816_000, "maintainer@example.com", "openclaw_tools", "replicate", "media.predict", null, 502, 904, 0, "provider_error", 0),
+  ];
+  return {
+    ledger: "ready",
+    summary: { requestCount: 1284, successCount: 1247, errorCount: 37, inputTokens: 1_482_402, outputTokens: 382_151, totalTokens: 1_864_553, actualCostMicros: 8_432_100 },
+    providers: [
+      { provider: "openai", requestCount: 604, successCount: 596, errorCount: 8, totalTokens: 904_814, actualCostMicros: 3_904_000 },
+      { provider: "anthropic", requestCount: 382, successCount: 374, errorCount: 8, totalTokens: 612_201, actualCostMicros: 3_120_000 },
+      { provider: "tavily", requestCount: 174, successCount: 170, errorCount: 4, totalTokens: 0, actualCostMicros: 870_000 },
+      { provider: "openrouter", requestCount: 88, successCount: 82, errorCount: 6, totalTokens: 347_538, actualCostMicros: 538_100 },
+      { provider: "replicate", requestCount: 36, successCount: 25, errorCount: 11, totalTokens: 0, actualCostMicros: 0 },
+    ],
+    events,
+  };
+}
+
+function demoUsageEvent(id: string, occurredAt: number, principal: string, policy: string, providerId: string, capability: string, model: string | null, statusCode: number, durationMs: number, cost: number, status: string, tokens: number): UsageAuditEvent {
+  return {
+    id,
+    type: "clawrouter.usage.v1",
+    occurred_at_ms: occurredAt,
+    tenant_id: principal === "research@example.com" ? "research" : "openclaw",
+    policy_id: policy,
+    credential_id: null,
+    principal_id: principal,
+    auth_type: "access",
+    key_id: "",
+    request_id: `req_${id.slice(-1)}`,
+    provider: providerId,
+    capability,
+    model,
+    input_tokens: tokens ? Math.round(tokens * 0.7) : null,
+    output_tokens: tokens ? Math.round(tokens * 0.3) : null,
+    total_tokens: tokens,
+    reserved_cost_micros: cost,
+    actual_cost_micros: cost,
+    status_code: statusCode,
+    duration_ms: durationMs,
+    status,
+  };
+}
+
 function demoData() {
   const providers = [
     provider("anthropic", "Anthropic", "anthropic_compatible", "model_provider", ["llm.messages"]),
@@ -2057,9 +2211,10 @@ function demoData() {
   const accessByProvider = accessMap(entitlements);
   const readinessByProvider = readinessMap(entitlements.providers.map((item) => item.readiness));
   const usageRows = keys.map(policyUsageFallback);
+  const usage = demoUsageSnapshot();
   const tenants = tenantSummaryFallback(keys);
   const overview = adminOverviewFromKeys(keys, providers, routes);
-  return { session, providers, routes, keys, users, bindings, overview, tenants, usageRows, entitlements, services: serviceItems(providers, routes, readinessByProvider, accessByProvider), models };
+  return { session, providers, routes, keys, users, bindings, overview, tenants, usageRows, usage, entitlements, services: serviceItems(providers, routes, readinessByProvider, accessByProvider), models };
 }
 
 function demoReadiness(provider: ProviderRow, routes: RouteCatalog): ProviderReadiness {
@@ -2068,7 +2223,7 @@ function demoReadiness(provider: ProviderRow, routes: RouteCatalog): ProviderRea
   const grantRequired = provider.class.includes("oauth");
   const declared = Boolean(openaiRoute || manifestRoutes.length);
   const offline = ["azure-openai", "aws-bedrock", "cloudflare-ai-gateway"].includes(provider.id);
-  const status = offline ? "missing_config" : grantRequired ? "grant_required" : declared ? "ready" : "declared";
+  const status = offline ? "missing_config" : grantRequired ? "grant_required" : declared ? "verified" : "declared";
   return {
     id: provider.id,
     displayName: provider.display_name,
@@ -2078,14 +2233,18 @@ function demoReadiness(provider: ProviderRow, routes: RouteCatalog): ProviderRea
     optionalConfig: [],
     missingConfig: offline ? [`${provider.id.toUpperCase().replace(/-/g, "_")}_CONFIG`] : [],
     configPresent: !offline,
+    connectionEnabled: true,
     oauthGrantRequired: grantRequired,
     oauthGrantCount: 0,
     openaiCompatible: Boolean(openaiRoute),
     manifestRoutes: manifestRoutes.length,
     modelCount: openaiRoute?.models.length ?? 0,
-    executable: status === "ready",
+    executable: status === "verified",
+    verified: status === "verified",
+    lastCheckedAt: status === "verified" ? new Date(Date.now() - 45_000).toISOString() : null,
+    latencyMs: status === "verified" ? 184 : null,
     status,
-    reasons: status === "ready" ? [] : status === "grant_required" ? ["OAuth grant required before service calls can run."] : status === "missing_config" ? ["Provider config is not present in the runtime environment."] : ["Provider is declared but has no executable route."],
+    reasons: status === "verified" ? [] : status === "grant_required" ? ["OAuth grant required before service calls can run."] : status === "missing_config" ? ["Provider config is not present in the runtime environment."] : ["Provider is declared but has no executable route."],
   };
 }
 
