@@ -11,16 +11,13 @@ const config = args.config ?? ".wrangler.generated.toml";
 const legacy = readRecord(`keys/${kid}`, { allowMissing: true });
 const credential =
   readRecord(`credentials/${kid}`, { allowMissing: true }) ?? legacyCredential(legacy);
-const policy = readRecord(`policies/${kid}`, { allowMissing: true }) ?? legacyPolicy(legacy);
-if (!credential || !policy) {
-  throw new Error(`proxy credential or access policy ${kid} was not found`);
+if (!credential) {
+  throw new Error(`proxy credential ${kid} was not found`);
 }
 credential.enabled = false;
-policy.enabled = false;
 if (legacy) legacy.enabled = false;
 const records = [
   [`credentials/${kid}`, writeJson(credential, "credential.json")],
-  [`policies/${kid}`, writeJson(policy, "policy.json")],
   ...(legacy ? [[`keys/${kid}`, writeJson(legacy, "legacy-key.json")]] : []),
 ];
 
@@ -49,7 +46,7 @@ try {
   }
 }
 
-console.log(`revoked proxy credential and access policy for ${kid}`);
+console.log(`revoked proxy credential ${kid}`);
 
 function parseArgs(values) {
   const out = {};
@@ -115,12 +112,6 @@ function readRecord(key, { allowMissing = false } = {}) {
 function legacyCredential(legacy) {
   if (!legacy?.secretSha256) return null;
   return { enabled: legacy.enabled !== false, secretSha256: legacy.secretSha256, policyId: kid };
-}
-
-function legacyPolicy(legacy) {
-  if (!legacy) return null;
-  const { secretSha256: _, ...policy } = legacy;
-  return policy;
 }
 
 function writeJson(value, name) {

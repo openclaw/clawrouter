@@ -564,7 +564,7 @@ async fn proxy_openai_compatible(
     let started_at_ms = Date::now().as_millis();
     let response = send_upstream_request(upstream_req, &route.provider.id).await?;
     let status_code = response.status_code();
-    let budget = settle_budget_after_response(&env, &auth, budget, status_code).await;
+    let budget = settle_budget_after_response(&env, &auth, budget, status_code).await?;
     enqueue_usage(
         &env,
         UsageRecord {
@@ -748,7 +748,7 @@ async fn proxy_manifest_endpoint(
     let started_at_ms = Date::now().as_millis();
     let response = send_upstream_request(upstream_req, &provider.id).await?;
     let status_code = response.status_code();
-    let budget = settle_budget_after_response(&env, &auth, budget, status_code).await;
+    let budget = settle_budget_after_response(&env, &auth, budget, status_code).await?;
     enqueue_usage(
         &env,
         UsageRecord {
@@ -2957,21 +2957,37 @@ async fn put_policy_binding_record(
     let namespace = policy_binding_index_namespace(env)?;
     let seed = policy_binding_index_seed(kv, principal).await?;
     initialize_policy_binding_index(&namespace, std::slice::from_ref(&seed)).await?;
-    put_kv_record(
-        kv,
-        &binding_key,
-        binding,
-        "policy binding compatibility record",
-    )
-    .await?;
-    mutate_policy_binding_index(
-        &namespace,
-        PolicyBindingIndexMutationRequest {
-            seed,
-            binding: binding.clone(),
-        },
-    )
-    .await
+    let mutation = PolicyBindingIndexMutationRequest {
+        seed,
+        binding: binding.clone(),
+    };
+    if binding.enabled {
+        put_kv_record(
+            kv,
+            &binding_key,
+            binding,
+            "policy binding compatibility record",
+        )
+        .await?;
+        mutate_policy_binding_index(&namespace, mutation).await
+    } else {
+        mutate_policy_binding_index(&namespace, mutation).await?;
+        if let Err(error) = put_kv_record(
+            kv,
+            &binding_key,
+            binding,
+            "policy binding compatibility tombstone",
+        )
+        .await
+        {
+            console_error!(
+                "failed to sync revoked policy binding compatibility record {}: {}",
+                binding_key,
+                error
+            );
+        }
+        Ok(())
+    }
 }
 
 async fn policy_binding_index_seed(
@@ -6248,43 +6264,30 @@ async fn settle_budget_after_response(
     auth: &AuthorizedKey,
     mut usage: BudgetUsage,
     status_code: u16,
-) -> BudgetUsage {
+) -> Result<BudgetUsage> {
     if usage.reserved_cost_micros == 0 {
-        return usage;
+        return Ok(usage);
     }
     let Some(reservation_id) = usage.reservation_id.as_deref() else {
-        return usage;
+        return Ok(usage);
     };
-    let Ok(namespace) = env.durable_object("BUDGET_LEDGER") else {
-        console_error!(
-            "failed to settle budget reservation {}: BUDGET_LEDGER binding is unavailable",
-            reservation_id
-        );
-        return usage;
-    };
+    let namespace = env.durable_object("BUDGET_LEDGER").map_err(|error| {
+        Error::RustError(format!(
+            "failed to settle budget reservation {reservation_id}: BUDGET_LEDGER binding is unavailable: {error}"
+        ))
+    })?;
     let request = BudgetSettleRequest {
         reservation_id: reservation_id.to_string(),
         actual_cost_micros: actual_request_cost(status_code, usage.reserved_cost_micros),
     };
-    match settle_budget(namespace, &tenant_id(auth), &auth.policy_id, &request).await {
-        Ok(response) if response.settled => {
-            usage.actual_cost_micros = response.charged_micros;
-        }
-        Ok(_) => {
-            console_error!(
-                "budget reservation {} was not available for settlement",
-                reservation_id
-            );
-        }
-        Err(error) => {
-            console_error!(
-                "failed to settle budget reservation {}: {}",
-                reservation_id,
-                error
-            );
-        }
+    let response = settle_budget(namespace, &tenant_id(auth), &auth.policy_id, &request).await?;
+    if !response.settled {
+        return Err(Error::RustError(format!(
+            "budget reservation {reservation_id} was not available for settlement"
+        )));
     }
-    usage
+    usage.actual_cost_micros = response.charged_micros;
+    Ok(usage)
 }
 
 async fn settle_budget(
