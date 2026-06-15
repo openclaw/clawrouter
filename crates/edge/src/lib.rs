@@ -29,6 +29,8 @@ const USAGE_CLEANUP_INTERVAL_MS: i64 = 86_400_000;
 const USAGE_AUDIT_FIELD_MAX_BYTES: usize = 256;
 const USAGE_AUDIT_PRINCIPAL_MAX_BYTES: usize = 320;
 const USAGE_AUDIT_MODEL_MAX_BYTES: usize = 512;
+const KV_BULK_GET_MAX_KEYS: usize = 100;
+const SESSION_BINDING_SCAN_MAX_KEYS: usize = 10_000;
 const UPSTREAM_PROVIDER_HEADER: &str = "x-clawrouter-upstream-provider";
 const CORS_ALLOW_ORIGIN: &str = "*";
 const CORS_ALLOW_METHODS: &str = "GET,POST,PUT,OPTIONS";
@@ -2855,7 +2857,16 @@ async fn list_policy_bindings_for_prefix(
     kv: &KvStore,
     prefix: &str,
 ) -> Result<Vec<PolicyBindingRecord>> {
-    let mut bindings = Vec::new();
+    let key_names = list_policy_binding_keys(kv, prefix, None).await?;
+    read_policy_bindings(kv, &key_names).await
+}
+
+async fn list_policy_binding_keys(
+    kv: &KvStore,
+    prefix: &str,
+    max_keys: Option<usize>,
+) -> Result<Vec<String>> {
+    let mut key_names = Vec::new();
     let mut cursor = None;
     loop {
         let mut request = kv.list().prefix(prefix.to_string()).limit(1000);
@@ -2866,17 +2877,14 @@ async fn list_policy_bindings_for_prefix(
             Error::RustError(format!("failed to list policy bindings: {error}"))
         })?;
         for key in list.keys {
-            let Some(record) = kv.get(&key.name).text().await.map_err(|error| {
-                Error::RustError(format!("failed to read policy binding: {error}"))
-            })?
-            else {
-                continue;
-            };
-            let binding =
-                serde_json::from_str::<PolicyBindingRecord>(&record).map_err(|error| {
-                    Error::RustError(format!("policy binding is invalid JSON: {error}"))
-                })?;
-            bindings.push(binding);
+            key_names.push(key.name);
+        }
+        if let Some(limit) = max_keys {
+            if key_names.len() > limit {
+                return Err(Error::RustError(format!(
+                    "policy binding scan exceeds the {limit} key authorization limit"
+                )));
+            }
         }
         if list.list_complete {
             break;
@@ -2886,6 +2894,22 @@ async fn list_policy_bindings_for_prefix(
         };
         cursor = Some(next_cursor);
     }
+    Ok(key_names)
+}
+
+async fn read_policy_bindings(
+    kv: &KvStore,
+    key_names: &[String],
+) -> Result<Vec<PolicyBindingRecord>> {
+    let records = bulk_read_kv_text(kv, key_names, "policy binding").await?;
+    let mut bindings = records
+        .into_values()
+        .map(|record| {
+            serde_json::from_str::<PolicyBindingRecord>(&record).map_err(|error| {
+                Error::RustError(format!("policy binding is invalid JSON: {error}"))
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
     bindings.sort_by(|a, b| {
         a.priority
             .cmp(&b.priority)
@@ -2898,26 +2922,57 @@ async fn list_policy_bindings_for_prefix(
     Ok(bindings)
 }
 
+async fn bulk_read_kv_text(
+    kv: &KvStore,
+    key_names: &[String],
+    kind: &str,
+) -> Result<BTreeMap<String, String>> {
+    let mut records = BTreeMap::new();
+    for keys in key_names.chunks(KV_BULK_GET_MAX_KEYS) {
+        let values =
+            kv.get_bulk(keys).text().await.map_err(|error| {
+                Error::RustError(format!("failed to read {kind} records: {error}"))
+            })?;
+        records.extend(
+            values
+                .into_iter()
+                .filter_map(|(key, value)| value.map(|record| (key, record))),
+        );
+    }
+    Ok(records)
+}
+
 async fn list_session_policy_entries(
     kv: &KvStore,
     session: &AccessSession,
 ) -> Result<Vec<AccessPolicyEntry>> {
-    let mut priorities = BTreeMap::<String, u16>::new();
-    for prefix in session_binding_prefixes(session) {
-        for binding in list_policy_bindings_for_prefix(kv, &prefix).await? {
-            if !binding.enabled {
-                continue;
-            }
-            priorities
-                .entry(binding.policy_id)
-                .and_modify(|priority| *priority = (*priority).min(binding.priority))
-                .or_insert(binding.priority);
-        }
-    }
+    let binding_prefixes = session_binding_prefixes(session)
+        .into_iter()
+        .collect::<BTreeSet<_>>();
+    let binding_keys =
+        list_policy_binding_keys(kv, "access/bindings/", Some(SESSION_BINDING_SCAN_MAX_KEYS))
+            .await?
+            .into_iter()
+            .filter(|key| {
+                binding_prefixes
+                    .iter()
+                    .any(|prefix| key.starts_with(prefix))
+            })
+            .collect::<Vec<_>>();
+    let bindings = read_policy_bindings(kv, &binding_keys).await?;
+    let priorities = session_binding_priorities(session, &bindings);
+    let policy_ids = priorities.keys().cloned().collect::<Vec<_>>();
+    let policies = read_access_policies(kv, &policy_ids).await?;
     let mut entries = Vec::new();
     for (policy_id, priority) in priorities {
-        if let Some(policy) = existing_access_policy(kv, &policy_id).await? {
-            entries.push((priority, AccessPolicyEntry { policy_id, policy }));
+        if let Some(policy) = policies.get(&policy_id) {
+            entries.push((
+                priority,
+                AccessPolicyEntry {
+                    policy_id,
+                    policy: policy.clone(),
+                },
+            ));
         }
     }
     entries.sort_by(|(priority_a, entry_a), (priority_b, entry_b)| {
@@ -2926,6 +2981,66 @@ async fn list_session_policy_entries(
             .then_with(|| entry_a.policy_id.cmp(&entry_b.policy_id))
     });
     Ok(entries.into_iter().map(|(_, entry)| entry).collect())
+}
+
+fn session_binding_priorities(
+    session: &AccessSession,
+    bindings: &[PolicyBindingRecord],
+) -> BTreeMap<String, u16> {
+    let groups = session
+        .groups
+        .iter()
+        .map(String::as_str)
+        .collect::<BTreeSet<_>>();
+    let mut priorities = BTreeMap::<String, u16>::new();
+    for binding in bindings {
+        let matches_principal = match binding.principal_type {
+            PrincipalType::User => binding.principal_id == session.email,
+            PrincipalType::Group => groups.contains(binding.principal_id.as_str()),
+        };
+        if !binding.enabled || !matches_principal {
+            continue;
+        }
+        priorities
+            .entry(binding.policy_id.clone())
+            .and_modify(|priority| *priority = (*priority).min(binding.priority))
+            .or_insert(binding.priority);
+    }
+    priorities
+}
+
+async fn read_access_policies(
+    kv: &KvStore,
+    policy_ids: &[String],
+) -> Result<BTreeMap<String, AccessPolicy>> {
+    let canonical_keys = policy_ids
+        .iter()
+        .map(|policy_id| format!("policies/{policy_id}"))
+        .collect::<Vec<_>>();
+    let canonical_records = bulk_read_kv_text(kv, &canonical_keys, "access policy").await?;
+    let mut policies = BTreeMap::new();
+    for policy_id in policy_ids {
+        let Some(record) = canonical_records.get(&format!("policies/{policy_id}")) else {
+            continue;
+        };
+        let policy = serde_json::from_str::<AccessPolicy>(record)
+            .map_err(|error| Error::RustError(format!("access policy is invalid JSON: {error}")))?;
+        policies.insert(policy_id.clone(), policy);
+    }
+
+    let legacy_keys = policy_ids
+        .iter()
+        .filter(|policy_id| !policies.contains_key(*policy_id))
+        .map(|policy_id| format!("keys/{policy_id}"))
+        .collect::<Vec<_>>();
+    for (key, record) in bulk_read_kv_text(kv, &legacy_keys, "legacy key policy").await? {
+        let policy_id = key.strip_prefix("keys/").unwrap_or(&key);
+        let legacy = serde_json::from_str::<LegacyKeyPolicy>(&record).map_err(|error| {
+            Error::RustError(format!("legacy key policy is invalid JSON: {error}"))
+        })?;
+        policies.insert(policy_id.to_string(), legacy.access_policy());
+    }
+    Ok(policies)
 }
 
 fn session_binding_prefixes(session: &AccessSession) -> Vec<String> {
@@ -7029,6 +7144,61 @@ mod tests {
         assert_eq!(
             session_binding_prefixes(&session),
             vec!["access/bindings/user/admin%40example.com/"]
+        );
+    }
+
+    #[test]
+    fn session_bindings_collapse_large_group_sets_without_implicit_access() {
+        let session = AccessSession {
+            authenticated: true,
+            auth: "cloudflare_access",
+            role: AccessRole::User,
+            email: "writer@example.com".to_string(),
+            subject: None,
+            tenant_id: "docs".to_string(),
+            groups: (0..64).map(|index| format!("group-{index}")).collect(),
+        };
+        let bindings = vec![
+            PolicyBindingRecord {
+                policy_id: "direct".to_string(),
+                principal_type: PrincipalType::User,
+                principal_id: session.email.clone(),
+                enabled: true,
+                priority: 20,
+            },
+            PolicyBindingRecord {
+                policy_id: "shared".to_string(),
+                principal_type: PrincipalType::Group,
+                principal_id: "group-63".to_string(),
+                enabled: true,
+                priority: 50,
+            },
+            PolicyBindingRecord {
+                policy_id: "shared".to_string(),
+                principal_type: PrincipalType::Group,
+                principal_id: "group-0".to_string(),
+                enabled: true,
+                priority: 10,
+            },
+            PolicyBindingRecord {
+                policy_id: "disabled".to_string(),
+                principal_type: PrincipalType::User,
+                principal_id: session.email.clone(),
+                enabled: false,
+                priority: 1,
+            },
+            PolicyBindingRecord {
+                policy_id: "unrelated".to_string(),
+                principal_type: PrincipalType::Group,
+                principal_id: "other".to_string(),
+                enabled: true,
+                priority: 1,
+            },
+        ];
+
+        assert_eq!(
+            session_binding_priorities(&session, &bindings),
+            BTreeMap::from([("direct".to_string(), 20), ("shared".to_string(), 10)])
         );
     }
 
