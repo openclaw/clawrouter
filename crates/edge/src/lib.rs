@@ -2047,7 +2047,7 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
         )
         .await?;
         put_kv_record(&kv, &format!("policies/{kid}"), &policy, "access policy").await?;
-        return Response::from_json(&admin_policy_response(&kid, &policy));
+        return Response::from_json(&admin_policy_response(&kid, &kid, &policy));
     }
 
     if req.method() == Method::Post {
@@ -2058,12 +2058,10 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             Ok(kid) => kid,
             Err(message) => return json_error("invalid_admin_key", message, 400),
         };
-        let Some(policy) = existing_access_policy(&kv, &kid).await? else {
-            return json_error("unknown_proxy_key", "proxy key is not registered", 404);
-        };
         let Some(mut credential) = existing_proxy_credential(&kv, &kid).await? else {
             return json_error("unknown_proxy_key", "proxy key is not registered", 404);
         };
+        let policy_id = credential.policy_id.clone();
         // Legacy key ids can reference shared policies, so revocation is credential-scoped.
         credential.enabled = false;
         put_kv_record(
@@ -2077,7 +2075,12 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             legacy.enabled = false;
             put_kv_record(&kv, &format!("keys/{kid}"), &legacy, "legacy key policy").await?;
         }
-        return Response::from_json(&admin_policy_response(&kid, &policy));
+        if let Some(policy) = existing_access_policy(&kv, &policy_id).await? {
+            let mut response = admin_policy_response(&kid, &policy_id, &policy);
+            response.enabled = credential.enabled && policy.enabled;
+            return Response::from_json(&response);
+        }
+        return Response::from_json(&admin_credential_response(&kid, &credential));
     }
 
     json_error("method_not_allowed", "admin method is not allowed", 405)
@@ -2616,10 +2619,14 @@ fn is_sha256_hex(value: &str) -> bool {
     value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
 }
 
-fn admin_policy_response(kid: &str, policy: &AccessPolicy) -> AdminKeyPolicyResponse {
+fn admin_policy_response(
+    kid: &str,
+    policy_id: &str,
+    policy: &AccessPolicy,
+) -> AdminKeyPolicyResponse {
     AdminKeyPolicyResponse {
         kid: kid.to_string(),
-        policy_id: kid.to_string(),
+        policy_id: policy_id.to_string(),
         enabled: policy.enabled,
         providers: policy.providers.clone(),
         tenant_id: policy.tenant_id.clone(),
@@ -2869,7 +2876,7 @@ async fn list_admin_key_policies(kv: &KvStore) -> Result<Vec<AdminKeyPolicyRespo
     let mut entries = list_access_policy_records(kv)
         .await?
         .into_iter()
-        .map(|entry| admin_policy_response(&entry.policy_id, &entry.policy))
+        .map(|entry| admin_policy_response(&entry.policy_id, &entry.policy_id, &entry.policy))
         .collect::<Vec<_>>();
     entries.sort_by(|a, b| a.kid.cmp(&b.kid));
     Ok(entries)
@@ -8654,8 +8661,9 @@ mod tests {
         assert!(legacy.generation.starts_with("policy_test_"));
         assert_eq!(policy.generation, legacy.generation);
         validate_policy_providers(&policy).unwrap();
-        let response = admin_policy_response("svc_docs", &policy);
+        let response = admin_policy_response("svc_docs", "team_docs", &policy);
         assert_eq!(response.kid, "svc_docs");
+        assert_eq!(response.policy_id, "team_docs");
         assert!(response.enabled);
         assert_eq!(response.providers, vec!["openai", "tavily"]);
         assert_eq!(response.token_role.as_deref(), Some("user"));
