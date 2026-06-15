@@ -62,7 +62,9 @@ export async function runLiveProviderSmokes({
   const results = [];
   for (const provider of selected) {
     const result = await runProviderTarget(baseUrl, smokeKey, provider);
-    await onResult(result);
+    if (result.providerAttempted) {
+      await onResult(result);
+    }
     if (result.status !== "verified") {
       throw new Error(`${provider.id} smoke failed: ${result.error}`);
     }
@@ -477,7 +479,7 @@ function methodAllowsBody(method) {
   return !["GET", "HEAD"].includes((method ?? "POST").toUpperCase());
 }
 
-async function runProviderTarget(baseUrl, smokeKey, provider) {
+export async function runProviderTarget(baseUrl, smokeKey, provider) {
   const target = provider.target;
   const startedAt = Date.now();
   const checkedAt = new Date(startedAt).toISOString();
@@ -500,16 +502,24 @@ async function runProviderTarget(baseUrl, smokeKey, provider) {
       latencyMs: Date.now() - startedAt,
       statusCode: null,
       error: "transport failure",
+      providerAttempted: false,
     };
   }
   await response.arrayBuffer();
+  const providerAttempted =
+    response.headers.get("x-clawrouter-upstream-provider") === provider.id;
   return {
     provider: provider.id,
-    status: response.ok ? "verified" : "failed",
+    status: response.ok && providerAttempted ? "verified" : "failed",
     checkedAt,
     latencyMs: Date.now() - startedAt,
     statusCode: response.status,
-    error: response.ok ? null : `HTTP ${response.status}`,
+    error: response.ok && providerAttempted
+      ? null
+      : providerAttempted
+        ? `HTTP ${response.status}`
+        : `gateway HTTP ${response.status} before upstream response`,
+    providerAttempted,
   };
 }
 
