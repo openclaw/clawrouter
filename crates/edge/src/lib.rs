@@ -487,6 +487,14 @@ async fn proxy_openai_compatible(
     };
     let request_id = request_id(req.headers(), "openai");
     let capability = capability_for_path(&route.capabilities, path).unwrap_or("llm.unknown");
+    let audit = ProxyAuditContext {
+        env: &env,
+        auth: &auth,
+        provider: &route.provider.id,
+        capability,
+        model: Some(model.as_str()),
+        request_id: &request_id,
+    };
     if let Some(response) = disabled_provider_connection_response(&env, &route.provider.id).await? {
         enqueue_denied_usage(
             &env,
@@ -514,21 +522,22 @@ async fn proxy_openai_compatible(
         return Ok(response);
     }
     if let Err(error) = openai_endpoint_path(endpoint, &route.upstream_model) {
-        match error {
-            OpenAiProxyUrlError::Client(message) => {
-                return json_error("invalid_model", &message, 400);
-            }
-            OpenAiProxyUrlError::Runtime(error) => return provider_runtime_error_response(error),
-        }
+        let response = match error {
+            OpenAiProxyUrlError::Client(message) => json_error("invalid_model", &message, 400)?,
+            OpenAiProxyUrlError::Runtime(error) => provider_runtime_error_response(error)?,
+        };
+        return audit.failure_response(response).await;
     }
     let upstream_url =
         match openai_upstream_url(route.provider, endpoint, &env, &route.upstream_model) {
             Ok(url) => url,
             Err(OpenAiProxyUrlError::Client(message)) => {
-                return json_error("invalid_model", &message, 400);
+                let response = json_error("invalid_model", &message, 400)?;
+                return audit.failure_response(response).await;
             }
             Err(OpenAiProxyUrlError::Runtime(error)) => {
-                return provider_runtime_error_response(error);
+                let response = provider_runtime_error_response(error)?;
+                return audit.failure_response(response).await;
             }
         };
     body["model"] = Value::String(route.upstream_model.clone());
@@ -561,8 +570,35 @@ async fn proxy_openai_compatible(
             code,
             message,
             status,
-        }) => return json_error(code, message, status),
-        Err(HeaderBuildError::Runtime(error)) => return provider_runtime_error_response(error),
+        }) => {
+            let response = json_error(code, message, status)?;
+            return audit.failure_response(response).await;
+        }
+        Err(HeaderBuildError::Runtime(error)) => {
+            let response = provider_runtime_error_response(error)?;
+            return audit.failure_response(response).await;
+        }
+    };
+
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post)
+        .with_headers(headers)
+        .with_body(Some(JsValue::from_str(&upstream_body)));
+    let upstream_req = match Request::new_with_init(&upstream_url, &init) {
+        Ok(request) => request,
+        Err(error) => {
+            console_error!(
+                "failed to build upstream request for provider {}: {}",
+                route.provider.id,
+                error
+            );
+            let response = json_error(
+                "proxy_request_build_failed",
+                "failed to build upstream provider request",
+                500,
+            )?;
+            return audit.failure_response(response).await;
+        }
     };
     let budget = match preflight_budget(&env, &auth, capability).await? {
         BudgetPreflight::Allowed(budget) => budget,
@@ -580,12 +616,6 @@ async fn proxy_openai_compatible(
             return Ok(response);
         }
     };
-
-    let mut init = RequestInit::new();
-    init.with_method(Method::Post)
-        .with_headers(headers)
-        .with_body(Some(JsValue::from_str(&upstream_body)));
-    let upstream_req = Request::new_with_init(&upstream_url, &init)?;
     let started_at_ms = Date::now().as_millis();
     let mut response = send_upstream_request(upstream_req, &route.provider.id).await?;
     let status_code = response.status_code();
@@ -656,6 +686,14 @@ async fn proxy_manifest_endpoint(
         AuthOutcome::Denied(response) => return Ok(response),
     };
     let request_id = request_id(req.headers(), endpoint_id);
+    let audit = ProxyAuditContext {
+        env: &env,
+        auth: &auth,
+        provider: &provider.id,
+        capability,
+        model: None,
+        request_id: &request_id,
+    };
     if let Some(response) = disabled_provider_connection_response(&env, &provider.id).await? {
         enqueue_denied_usage(
             &env,
@@ -682,10 +720,28 @@ async fn proxy_manifest_endpoint(
         .await;
         return Ok(response);
     }
-    let raw_body = req.text().await?;
+    let raw_body = match req.text().await {
+        Ok(body) => body,
+        Err(error) => {
+            console_error!(
+                "failed to read proxy request body for provider {}: {}",
+                provider.id,
+                error
+            );
+            let response = json_error(
+                "invalid_proxy_request",
+                "failed to read proxy request body",
+                400,
+            )?;
+            return audit.failure_response(response).await;
+        }
+    };
     let proxy = match parse_proxy_request(&raw_body) {
         Ok(proxy) => proxy,
-        Err(message) => return json_error("invalid_proxy_request", &message, 400),
+        Err(message) => {
+            let response = json_error("invalid_proxy_request", &message, 400)?;
+            return audit.failure_response(response).await;
+        }
     };
     let upstream_method = proxy
         .method
@@ -697,30 +753,54 @@ async fn proxy_manifest_endpoint(
         .iter()
         .any(|method| method == &upstream_method)
     {
-        return json_error(
+        let response = json_error(
             "method_not_allowed",
             "requested upstream method is not allowed by provider manifest",
             405,
-        );
+        )?;
+        return audit.failure_response(response).await;
     }
     if !supports_manifest_proxy(provider, endpoint) {
-        return json_error(
+        let response = json_error(
             "provider_endpoint_not_supported",
             "provider endpoint requires edge support that is not configured yet",
             501,
-        );
+        )?;
+        return audit.failure_response(response).await;
     }
+    let upstream_worker_method = match method_from_str(&upstream_method) {
+        Ok(method) => method,
+        Err(error) => {
+            console_error!(
+                "provider {} endpoint {} declares unsupported method: {}",
+                provider.id,
+                endpoint.id,
+                error
+            );
+            let response = json_error(
+                "provider_endpoint_not_supported",
+                "provider endpoint method is not supported by the edge runtime",
+                501,
+            )?;
+            return audit.failure_response(response).await;
+        }
+    };
     if let Err(ManifestProxyError::Client(message)) =
         validate_manifest_path_params(endpoint, &proxy)
     {
-        return json_error("invalid_proxy_request", &message, 400);
+        let response = json_error("invalid_proxy_request", &message, 400)?;
+        return audit.failure_response(response).await;
     }
     let upstream_url = match manifest_upstream_url(provider, endpoint, &proxy, Some(&env)) {
         Ok(url) => url,
         Err(ManifestProxyError::Client(message)) => {
-            return json_error("invalid_proxy_request", &message, 400);
+            let response = json_error("invalid_proxy_request", &message, 400)?;
+            return audit.failure_response(response).await;
         }
-        Err(ManifestProxyError::Runtime(error)) => return provider_runtime_error_response(error),
+        Err(ManifestProxyError::Runtime(error)) => {
+            let response = provider_runtime_error_response(error)?;
+            return audit.failure_response(response).await;
+        }
     };
     let upstream_body = method_allows_body(&upstream_method)
         .then(|| serde_json::to_string(&proxy.body.unwrap_or(Value::Object(Map::new()))))
@@ -745,8 +825,37 @@ async fn proxy_manifest_endpoint(
             code,
             message,
             status,
-        }) => return json_error(code, message, status),
-        Err(HeaderBuildError::Runtime(error)) => return provider_runtime_error_response(error),
+        }) => {
+            let response = json_error(code, message, status)?;
+            return audit.failure_response(response).await;
+        }
+        Err(HeaderBuildError::Runtime(error)) => {
+            let response = provider_runtime_error_response(error)?;
+            return audit.failure_response(response).await;
+        }
+    };
+
+    let mut init = RequestInit::new();
+    init.with_method(upstream_worker_method)
+        .with_headers(headers);
+    if let Some(upstream_body) = upstream_body {
+        init.with_body(Some(JsValue::from_str(&upstream_body)));
+    }
+    let upstream_req = match Request::new_with_init(&upstream_url, &init) {
+        Ok(request) => request,
+        Err(error) => {
+            console_error!(
+                "failed to build upstream request for provider {}: {}",
+                provider.id,
+                error
+            );
+            let response = json_error(
+                "proxy_request_build_failed",
+                "failed to build upstream provider request",
+                500,
+            )?;
+            return audit.failure_response(response).await;
+        }
     };
     let budget = match preflight_budget(&env, &auth, capability).await? {
         BudgetPreflight::Allowed(budget) => budget,
@@ -764,14 +873,6 @@ async fn proxy_manifest_endpoint(
             return Ok(response);
         }
     };
-
-    let mut init = RequestInit::new();
-    init.with_method(method_from_str(&upstream_method)?)
-        .with_headers(headers);
-    if let Some(upstream_body) = upstream_body {
-        init.with_body(Some(JsValue::from_str(&upstream_body)));
-    }
-    let upstream_req = Request::new_with_init(&upstream_url, &init)?;
     let started_at_ms = Date::now().as_millis();
     let mut response = send_upstream_request(upstream_req, &provider.id).await?;
     let status_code = response.status_code();
@@ -7474,6 +7575,15 @@ struct UsageRecord<'a> {
     duration_ms: u64,
 }
 
+struct ProxyAuditContext<'a> {
+    env: &'a Env,
+    auth: &'a AuthorizedKey,
+    provider: &'a str,
+    capability: &'a str,
+    model: Option<&'a str>,
+    request_id: &'a str,
+}
+
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 struct UsageTokens {
     input: Option<u64>,
@@ -7624,6 +7734,29 @@ async fn enqueue_denied_usage(
         },
     )
     .await;
+}
+
+impl ProxyAuditContext<'_> {
+    async fn failure_response(&self, response: Response) -> Result<Response> {
+        let status_code = response.status_code();
+        enqueue_usage(
+            self.env,
+            UsageRecord {
+                auth: self.auth,
+                provider: self.provider,
+                capability: self.capability,
+                model: self.model,
+                request_id: self.request_id,
+                budget: BudgetUsage::default(),
+                tokens: UsageTokens::default(),
+                status: usage_status(status_code),
+                status_code,
+                duration_ms: 0,
+            },
+        )
+        .await;
+        Ok(response)
+    }
 }
 
 fn usage_event_id() -> String {
@@ -8956,6 +9089,14 @@ mod tests {
         assert_eq!(actual_request_cost(299, 42), 42);
         assert_eq!(actual_request_cost(400, 42), 0);
         assert_eq!(actual_request_cost(502, 42), 0);
+    }
+
+    #[test]
+    fn authenticated_proxy_failures_keep_client_and_provider_outcomes_distinct() {
+        assert_eq!(usage_status(400), UsageStatus::ClientError);
+        assert_eq!(usage_status(405), UsageStatus::ClientError);
+        assert_eq!(usage_status(500), UsageStatus::ProviderError);
+        assert_eq!(usage_status(503), UsageStatus::ProviderError);
     }
 
     #[test]
