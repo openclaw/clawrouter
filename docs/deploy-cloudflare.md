@@ -215,10 +215,13 @@ pnpm cf:smoke
 ```
 
 For GitHub Actions deploys, `worker_url`, `live_providers`, and the smoke key
-are mandatory. `all` runs every provider smoke target and requires a proxy smoke
-key with access to every selected provider. Readiness reports live checks as
-`verified`, `failed`, or `stale`; a configured provider without a live check is
-`unverified`.
+are mandatory. When the current Worker exposes key inspection, preflight blocks
+deployment if the smoke credential is invalid or its policy denies a selected
+live provider. An unavailable current Worker only warns so first and recovery
+deploys remain possible. `all` runs every provider smoke target and requires a
+proxy smoke key with access to every selected provider. Readiness reports live
+checks as `verified`, `failed`, or `stale`; a configured provider without a live
+check is `unverified`.
 
 ## Cloudflare Access Console
 
@@ -322,7 +325,8 @@ policy provider allowlists, provider readiness, OAuth grants, and budget limits.
 Admin requests use either a verified Cloudflare Access admin session or
 `Authorization: Bearer <admin-token>`. For bearer auth, the Worker compares the
 SHA-256 hash of that token with `CLAWROUTER_ADMIN_TOKEN_SHA256`; the raw admin
-token is never configured in the Worker.
+token is never configured in the Worker. Retain the raw token in the operator
+secret manager; only its SHA-256 hash belongs in the Worker and GitHub Actions.
 
 ```text
 GET /v1/admin/overview
