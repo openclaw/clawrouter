@@ -40,11 +40,11 @@ test("gateway failures do not overwrite provider health", async () => {
   );
 });
 
-test("upstream failures are recorded as provider health", async () => {
+test("provider transport failures are recorded as provider health", async () => {
   await withFetch(
     () =>
-      new Response("rate limited", {
-        status: 429,
+      new Response(JSON.stringify({ error: { code: "provider_unavailable" } }), {
+        status: 502,
         headers: { "x-clawrouter-upstream-provider": "openai" },
       }),
     async () => {
@@ -57,7 +57,7 @@ test("upstream failures are recorded as provider health", async () => {
           liveProviders: ["openai"],
           onResult: async (result) => recorded.push(result),
         }),
-        /HTTP 429/,
+        /HTTP 502/,
       );
       assert.equal(recorded.length, 1);
       assert.equal(recorded[0].providerAttempted, true);
