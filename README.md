@@ -11,7 +11,8 @@ Current implementation target:
 - TypeScript admin/control UI
 - declarative service provider manifests
 - OpenClaw-native `clawrouter-` key routing
-- Cloudflare KV-backed key policy and revocation
+- Cloudflare KV-backed access policies, issued credentials, principal bindings,
+  provider connections, and revocation
 
 ## Provider Registry
 
@@ -87,14 +88,19 @@ The Worker currently exposes:
 
 - `GET /v1/health`
 - `GET /v1/providers`
+- `GET /v1/routes`
 - `GET /v1/session`
 - `GET /v1/entitlements`
+- `GET /v1/me`
+- `GET /v1/usage`
 - `GET /v1/key/inspect`
 - `POST /v1/chat/completions`
 - `POST /v1/responses`
 - `POST /v1/embeddings`
 - `POST /v1/proxy/<provider>/<endpoint>`
-- `GET /v1/admin/keys`
+- `GET /v1/admin/overview`
+- `GET /v1/admin/tenants`
+- `GET /v1/admin/usage`
 - `GET /v1/admin/policies`
 - `GET /v1/admin/credentials`
 - `GET /v1/admin/connections`
@@ -107,10 +113,12 @@ The Worker currently exposes:
 - `PUT /v1/admin/policies/<policy-id>`
 - `PUT /v1/admin/credentials/<credential-id>`
 - `PUT /v1/admin/connections/<provider-id>`
-- `PUT /v1/admin/keys/<kid>`
 - `POST /v1/admin/policies/<policy-id>/revoke`
 - `POST /v1/admin/credentials/<credential-id>/revoke`
-- `POST /v1/admin/keys/<kid>/revoke`
+
+Legacy `GET|PUT /v1/admin/keys...`, `POST /v1/admin/keys/<kid>/revoke`, and
+`GET /v1/admin/users` remain compatibility aliases during migration. New
+control-plane clients should use policies, credentials, and tenants directly.
 
 OpenAI-compatible proxy requests route by the request body `model` field, for
 example `openai/gpt-5.5-mini`. Before an upstream provider secret is used, the
@@ -140,11 +148,11 @@ deployment, key registration, and smoke commands.
 Admin endpoints accept a verified Cloudflare Access admin session or
 `Authorization: Bearer <admin-token>` against `CLAWROUTER_ADMIN_TOKEN_SHA256`.
 The browser console hashes generated proxy key secrets in-browser before
-storing policy in `POLICY_KV`, can assign Access users to tenants and enabled
-states, offers proxy-key role presets with provider and budget limits, shows
-provider readiness, and includes a Cloudflare Access-backed playground for model
-and manifest-proxy service routes. Admin rights come from the Access admin
-allowlist, not editable user rows.
+issuing a credential, manages policies separately from credentials and provider
+connections, assigns explicit user/group policy bindings, shows provider
+readiness and request audit, and includes a Cloudflare Access-backed playground
+for model and manifest-proxy service routes. Admin rights come from the Access
+admin allowlist, not editable user rows, and do not imply provider access.
 
 Generic REST/tool proxy requests are manifest-driven:
 

@@ -91,7 +91,7 @@ components:
 
 ClawRouter is a restrained product interface for maintainers and admins managing provider access. It should feel like a precise control plane: compact, legible, aligned, and fast to scan. The surface follows an Opik-like application grammar: soft page background, white panels, compact controls, local brand marks for services, lucide icons for controls, dense tables, and clear list/detail workflows.
 
-The current UI is an access console with persistent navigation, session posture, provider catalog coverage, policy grants, user access, and playground traffic. Future work should preserve that workflow shape: identity first, catalog next, policy builder and playground always close at hand.
+The current UI is an access console with persistent navigation, session posture, provider catalog coverage, policy bindings, user access, and playground traffic. Future work should preserve that workflow shape: identity first, catalog next, policy builder and playground always close at hand.
 
 It explicitly rejects generic dark terminal aesthetics, neon cyberpunk styling, rounded toy-like SaaS dashboards, cheap gradient-heavy AI-tool visuals, busy provider marketplace pages, demo-console looseness, landing-page composition, and decorative metrics walls.
 

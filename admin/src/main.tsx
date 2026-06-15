@@ -206,6 +206,8 @@ interface PolicyBinding {
 }
 
 interface AdminOverview {
+  policiesTotal?: number;
+  policiesActive?: number;
   keysTotal: number;
   keysActive: number;
   tenantsTotal: number;
@@ -218,6 +220,8 @@ interface AdminOverview {
 
 interface AdminTenantSummary {
   tenantId: string;
+  policies?: number;
+  activePolicies?: number;
   keys: number;
   activeKeys: number;
   providers: string[];
@@ -236,6 +240,7 @@ interface BudgetStatus {
 }
 
 interface AdminUsageRow {
+  policyId?: string;
   kid: string;
   tenantId: string;
   enabled: boolean;
@@ -585,7 +590,7 @@ function App() {
         setProviderReadiness((current) => ({ ...current, ...readinessMap(readinessData.providers) }));
         const [overviewResult, tenantResult] = await Promise.all([
           settled(() => request<AdminOverview>(gatewayOrigin, "/v1/admin/overview")),
-          settled(() => request<{ tenants: AdminTenantSummary[] }>(gatewayOrigin, "/v1/admin/users")),
+          settled(() => request<{ tenants: AdminTenantSummary[] }>(gatewayOrigin, "/v1/admin/tenants")),
         ]);
         if (overviewResult.ok) {
           setAdminOverview(overviewResult.value);
@@ -818,9 +823,9 @@ function App() {
 
   async function refreshUsageLedger() {
     if (demoMode || session.role !== "admin") return;
-    const result = await settled(() => request<{ keys: AdminUsageRow[]; usage: UsageSnapshot }>(gatewayOrigin, "/v1/admin/usage"));
+    const result = await settled(() => request<{ policies?: AdminUsageRow[]; keys?: AdminUsageRow[]; usage: UsageSnapshot }>(gatewayOrigin, "/v1/admin/usage"));
     if (result.ok) {
-      setUsageRows(result.value.keys);
+      setUsageRows(result.value.policies ?? result.value.keys ?? []);
       setUsageSnapshot(result.value.usage);
       setUsageLoaded(true);
       return;
@@ -1747,7 +1752,7 @@ function UsageScreen({ keys, services, overview, tenants, usageRows, usage, usag
         />
         {!usage.events.length ? <div className="emptyTable">No request audit events recorded yet.</div> : null}
         <div className="tableSectionHeader secondaryTableHeader"><div><strong>Policy budgets</strong><span>{rows.length} configured policies</span></div><span>{usageLoaded ? "live ledger" : "policy fallback"}</span></div>
-        <EntityTable columns={["policy", "tenant", "budget usage", "services", "health"]} columnTemplate="minmax(210px, 1.15fr) minmax(120px, 0.7fr) minmax(250px, 1.45fr) 96px 120px" rows={rows.map((row) => ({ id: row.kid, cells: [<EntityName icon={KeyRound} title={row.kid} subtitle={row.tokenRole ?? "custom"} />, row.tenantId, <BudgetUsage row={row} />, effectiveProviderCount(row.providers, services), <UsageHealth row={row} />] }))} />
+        <EntityTable columns={["policy", "tenant", "budget usage", "services", "health"]} columnTemplate="minmax(210px, 1.15fr) minmax(120px, 0.7fr) minmax(250px, 1.45fr) 96px 120px" rows={rows.map((row) => ({ id: usagePolicyId(row), cells: [<EntityName icon={KeyRound} title={usagePolicyId(row)} subtitle={row.tokenRole ?? "custom"} />, row.tenantId, <BudgetUsage row={row} />, effectiveProviderCount(row.providers, services), <UsageHealth row={row} />] }))} />
       </section>
       <aside className="inspector usageInspector">
         <InspectorHeader icon={BarChart3} title="Request activity" subtitle={`${readyServices}/${services.length} services executable`} />
@@ -1767,8 +1772,8 @@ function UsageScreen({ keys, services, overview, tenants, usageRows, usage, usag
           return <div key={provider.provider}><EntityName brandIcon={service?.brandIcon} icon={ServerCog} title={service?.name ?? provider.provider} subtitle={`${formatCount(provider.totalTokens)} tokens · ${formatMicros(provider.actualCostMicros)}`} /><span><strong>{formatCount(provider.requestCount)}</strong><small>{provider.errorCount ? `${provider.errorCount} errors` : "healthy"}</small></span></div>;
         }) : <p>No provider activity yet.</p>}</div>
         <div className="sectionTitle">Tenant coverage</div>
-        <div className="miniList">{tenantRows.length ? tenantRows.slice(0, 8).map((tenant) => <button type="button" key={tenant.tenantId}>{tenant.tenantId}<span>{tenant.activeKeys}/{tenant.keys} policies · {effectiveProviderCount(tenant.providers, services, tenant.allProviders)} services</span></button>) : <p>No tenant policies yet.</p>}</div>
-        <dl className="facts"><dt>ledger</dt><dd>{usage.ledger}</dd><dt>retention</dt><dd>30 days of request metadata</dd><dt>policies</dt><dd>{overview?.keysActive ?? activeKeys.length} active</dd><dt>tenants</dt><dd>{overview?.tenantsTotal ?? tenantRows.length}</dd></dl>
+        <div className="miniList">{tenantRows.length ? tenantRows.slice(0, 8).map((tenant) => <button type="button" key={tenant.tenantId}>{tenant.tenantId}<span>{tenant.activePolicies ?? tenant.activeKeys}/{tenant.policies ?? tenant.keys} policies · {effectiveProviderCount(tenant.providers, services, tenant.allProviders)} services</span></button>) : <p>No tenant policies yet.</p>}</div>
+        <dl className="facts"><dt>ledger</dt><dd>{usage.ledger}</dd><dt>retention</dt><dd>30 days of request metadata</dd><dt>policies</dt><dd>{overview?.policiesActive ?? overview?.keysActive ?? activeKeys.length} active</dd><dt>tenants</dt><dd>{overview?.tenantsTotal ?? tenantRows.length}</dd></dl>
       </aside>
     </div>
   );
@@ -2032,6 +2037,10 @@ function usageEventTone(event: UsageAuditEvent): OutcomeTone {
   return "neutral";
 }
 
+function usagePolicyId(row: AdminUsageRow) {
+  return row.policyId ?? row.kid;
+}
+
 function effectiveProviderCount(providerIds: string[], services: ServiceItem[], allProviders = providerIds.length === 0) {
   return allProviders ? `all ${new Set(services.map((service) => service.provider)).size}` : String(providerIds.length);
 }
@@ -2072,6 +2081,8 @@ function policyFormFromPolicy(key: AccessPolicy): PolicyForm {
 function adminOverviewFromKeys(keys: AccessPolicy[], providers: ProviderRow[], routes: RouteCatalog): AdminOverview {
   const tenants = tenantSummaryFallback(keys);
   return {
+    policiesTotal: keys.length,
+    policiesActive: keys.filter((key) => key.enabled).length,
     keysTotal: keys.length,
     keysActive: keys.filter((key) => key.enabled).length,
     tenantsTotal: tenants.length,
