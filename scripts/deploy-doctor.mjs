@@ -123,7 +123,9 @@ function checkLiveProviderReadiness(plan) {
           : "oauth grant";
         return `${provider.id}(${config})`;
       });
-      errors.push(`live provider smoke is not configured: ${details.join(", ")}`);
+      warnings.push(
+        `live provider config is not present locally; deployed smoke will verify Worker bindings: ${details.join(", ")}`,
+      );
     }
   } catch (error) {
     errors.push(error.message);
