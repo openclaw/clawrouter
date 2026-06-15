@@ -1184,11 +1184,55 @@ struct PolicyBindingRecord {
     priority: u16,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct PolicyBindingIndexRecord {
-    #[serde(default)]
-    binding_keys: Vec<String>,
+struct PolicyBindingPrincipal {
+    principal_type: PrincipalType,
+    principal_id: String,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PolicyBindingIndexSeed {
+    principal: PolicyBindingPrincipal,
+    bindings: Vec<PolicyBindingRecord>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PolicyBindingIndexResolveRequest {
+    principals: Vec<PolicyBindingPrincipal>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PolicyBindingIndexResolveResponse {
+    bindings: Vec<PolicyBindingRecord>,
+    missing_principals: Vec<PolicyBindingPrincipal>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PolicyBindingIndexListResponse {
+    initialized: bool,
+    bindings: Vec<PolicyBindingRecord>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PolicyBindingIndexMutationRequest {
+    seed: PolicyBindingIndexSeed,
+    binding: PolicyBindingRecord,
+}
+
+#[derive(Debug, Deserialize)]
+struct PolicyBindingIndexCountRow {
+    principal_count: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct PolicyBindingIndexEntryRow {
+    binding_json: String,
 }
 
 #[derive(Debug, Deserialize)]
@@ -1311,7 +1355,7 @@ async fn access_entitlement_rows_for_session(
         }
     };
     let snapshot = provider_snapshot()?;
-    let entries = list_session_policy_entries(&kv, session).await?;
+    let entries = list_session_policy_entries(&kv, env, session).await?;
     let grants = list_oauth_grants(&kv).await?;
     let connections = list_provider_connections(&kv, &snapshot).await?;
     let health = list_provider_health(&kv).await?;
@@ -1404,7 +1448,7 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
 
     if path == "/v1/admin/policy-bindings" {
         if req.method() == Method::Get {
-            let bindings = list_policy_bindings(&kv).await?;
+            let bindings = list_policy_bindings(&env, &kv).await?;
             return Response::from_json(&serde_json::json!({ "bindings": bindings }));
         }
         if req.method() == Method::Put {
@@ -1428,7 +1472,7 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             {
                 return json_error("unknown_policy", "bound policy does not exist", 404);
             }
-            put_policy_binding_record(&kv, &binding).await?;
+            put_policy_binding_record(&env, &kv, &binding).await?;
             return Response::from_json(&binding);
         }
         return json_error("method_not_allowed", "admin method is not allowed", 405);
@@ -2855,8 +2899,16 @@ fn legacy_rollback_record(policy: &AccessPolicy, credential: &ProxyCredential) -
     }
 }
 
-async fn list_policy_bindings(kv: &KvStore) -> Result<Vec<PolicyBindingRecord>> {
-    list_policy_bindings_for_prefix(kv, "access/bindings/").await
+async fn list_policy_bindings(env: &Env, kv: &KvStore) -> Result<Vec<PolicyBindingRecord>> {
+    let namespace = policy_binding_index_namespace(env)?;
+    let mut response = list_policy_binding_index(&namespace).await?;
+    if !response.initialized {
+        let legacy_bindings = list_policy_bindings_for_prefix(kv, "access/bindings/").await?;
+        initialize_all_policy_bindings(&namespace, &legacy_bindings).await?;
+        response = list_policy_binding_index(&namespace).await?;
+    }
+    sort_policy_bindings(&mut response.bindings);
+    Ok(response.bindings)
 }
 
 async fn list_policy_bindings_for_prefix(
@@ -2892,60 +2944,134 @@ async fn list_policy_binding_keys(kv: &KvStore, prefix: &str) -> Result<Vec<Stri
     Ok(key_names)
 }
 
-async fn put_policy_binding_record(kv: &KvStore, binding: &PolicyBindingRecord) -> Result<()> {
-    let binding_key = policy_binding_key(binding);
-    let mut index =
-        existing_policy_binding_index(kv, binding.principal_type, &binding.principal_id).await?;
-    if binding.enabled {
-        index.binding_keys.push(binding_key.clone());
-        normalize_policy_binding_index(&mut index, binding.principal_type, &binding.principal_id);
-        put_policy_binding_index(kv, binding.principal_type, &binding.principal_id, &index).await?;
-        put_kv_record(kv, &binding_key, binding, "policy binding").await
-    } else {
-        put_kv_record(kv, &binding_key, binding, "policy binding tombstone").await?;
-        index.binding_keys.retain(|key| key != &binding_key);
-        put_policy_binding_index(kv, binding.principal_type, &binding.principal_id, &index).await
-    }
-}
-
-async fn existing_policy_binding_index(
+async fn put_policy_binding_record(
+    env: &Env,
     kv: &KvStore,
-    principal_type: PrincipalType,
-    principal_id: &str,
-) -> Result<PolicyBindingIndexRecord> {
-    let key = policy_binding_index_key(principal_type, principal_id);
-    let mut index = if let Some(record) = kv.get(&key).text().await.map_err(|error| {
-        Error::RustError(format!("failed to read policy binding index: {error}"))
-    })? {
-        serde_json::from_str::<PolicyBindingIndexRecord>(&record).map_err(|error| {
-            Error::RustError(format!("policy binding index is invalid JSON: {error}"))
-        })?
-    } else {
-        PolicyBindingIndexRecord {
-            binding_keys: list_policy_binding_keys(
-                kv,
-                &policy_binding_prefix(principal_type, principal_id),
-            )
-            .await?,
-        }
-    };
-    normalize_policy_binding_index(&mut index, principal_type, principal_id);
-    Ok(index)
-}
-
-async fn put_policy_binding_index(
-    kv: &KvStore,
-    principal_type: PrincipalType,
-    principal_id: &str,
-    index: &PolicyBindingIndexRecord,
+    binding: &PolicyBindingRecord,
 ) -> Result<()> {
+    let binding_key = policy_binding_key(binding);
+    let principal = PolicyBindingPrincipal {
+        principal_type: binding.principal_type,
+        principal_id: binding.principal_id.clone(),
+    };
+    let namespace = policy_binding_index_namespace(env)?;
+    let seed = policy_binding_index_seed(kv, principal).await?;
+    initialize_policy_binding_index(&namespace, std::slice::from_ref(&seed)).await?;
     put_kv_record(
         kv,
-        &policy_binding_index_key(principal_type, principal_id),
-        index,
-        "policy binding index",
+        &binding_key,
+        binding,
+        "policy binding compatibility record",
+    )
+    .await?;
+    mutate_policy_binding_index(
+        &namespace,
+        PolicyBindingIndexMutationRequest {
+            seed,
+            binding: binding.clone(),
+        },
     )
     .await
+}
+
+async fn policy_binding_index_seed(
+    kv: &KvStore,
+    principal: PolicyBindingPrincipal,
+) -> Result<PolicyBindingIndexSeed> {
+    let bindings = list_policy_bindings_for_prefix(
+        kv,
+        &policy_binding_prefix(principal.principal_type, &principal.principal_id),
+    )
+    .await?;
+    Ok(PolicyBindingIndexSeed {
+        principal,
+        bindings,
+    })
+}
+
+fn policy_binding_index_namespace(env: &Env) -> Result<ObjectNamespace> {
+    env.durable_object("BINDING_INDEX").map_err(|error| {
+        Error::RustError(format!(
+            "BINDING_INDEX Durable Object binding is required for Access policy bindings: {error}"
+        ))
+    })
+}
+
+async fn resolve_policy_binding_index(
+    namespace: &ObjectNamespace,
+    principals: Vec<PolicyBindingPrincipal>,
+) -> Result<PolicyBindingIndexResolveResponse> {
+    let body = policy_binding_index_request(
+        namespace,
+        "/resolve",
+        &PolicyBindingIndexResolveRequest { principals },
+    )
+    .await?;
+    serde_json::from_str::<PolicyBindingIndexResolveResponse>(&body).map_err(|error| {
+        Error::RustError(format!(
+            "policy binding index response is invalid JSON: {error}"
+        ))
+    })
+}
+
+async fn initialize_policy_binding_index(
+    namespace: &ObjectNamespace,
+    seeds: &[PolicyBindingIndexSeed],
+) -> Result<()> {
+    policy_binding_index_request(namespace, "/initialize", seeds)
+        .await
+        .map(|_| ())
+}
+
+async fn initialize_all_policy_bindings(
+    namespace: &ObjectNamespace,
+    bindings: &[PolicyBindingRecord],
+) -> Result<()> {
+    policy_binding_index_request(namespace, "/initialize-all", bindings)
+        .await
+        .map(|_| ())
+}
+
+async fn mutate_policy_binding_index(
+    namespace: &ObjectNamespace,
+    request: PolicyBindingIndexMutationRequest,
+) -> Result<()> {
+    policy_binding_index_request(namespace, "/mutate", &request)
+        .await
+        .map(|_| ())
+}
+
+async fn list_policy_binding_index(
+    namespace: &ObjectNamespace,
+) -> Result<PolicyBindingIndexListResponse> {
+    let body = policy_binding_index_request(namespace, "/list", &()).await?;
+    serde_json::from_str::<PolicyBindingIndexListResponse>(&body).map_err(|error| {
+        Error::RustError(format!(
+            "policy binding index list response is invalid JSON: {error}"
+        ))
+    })
+}
+
+async fn policy_binding_index_request<T: Serialize + ?Sized>(
+    namespace: &ObjectNamespace,
+    path: &str,
+    body: &T,
+) -> Result<String> {
+    let stub = namespace.get_by_name(policy_binding_index_object_name())?;
+    let body = serde_json::to_string(body)?;
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post)
+        .with_body(Some(JsValue::from_str(&body)));
+    let req = Request::new_with_init(&format!("https://clawrouter.internal{path}"), &init)?;
+    let mut response = stub.fetch_with_request(req).await?;
+    let status = response.status_code();
+    let text = response.text().await?;
+    if !(200..=299).contains(&status) {
+        return Err(Error::RustError(format!(
+            "policy binding index rejected {path} with HTTP {status}: {text}"
+        )));
+    }
+    Ok(text)
 }
 
 async fn read_policy_bindings(
@@ -2961,6 +3087,11 @@ async fn read_policy_bindings(
             })
         })
         .collect::<Result<Vec<_>>>()?;
+    sort_policy_bindings(&mut bindings);
+    Ok(bindings)
+}
+
+fn sort_policy_bindings(bindings: &mut [PolicyBindingRecord]) {
     bindings.sort_by(|a, b| {
         a.priority
             .cmp(&b.priority)
@@ -2970,7 +3101,6 @@ async fn read_policy_bindings(
             .then_with(|| a.principal_id.cmp(&b.principal_id))
             .then_with(|| a.policy_id.cmp(&b.policy_id))
     });
-    Ok(bindings)
 }
 
 async fn bulk_read_kv_text(
@@ -2995,10 +3125,10 @@ async fn bulk_read_kv_text(
 
 async fn list_session_policy_entries(
     kv: &KvStore,
+    env: &Env,
     session: &AccessSession,
 ) -> Result<Vec<AccessPolicyEntry>> {
-    let binding_keys = session_binding_keys(kv, session).await?;
-    let bindings = read_policy_bindings(kv, &binding_keys).await?;
+    let bindings = session_policy_bindings(kv, env, session).await?;
     let priorities = session_binding_priorities(session, &bindings);
     let policy_ids = priorities.keys().cloned().collect::<Vec<_>>();
     let policies = read_access_policies(kv, &policy_ids).await?;
@@ -3022,45 +3152,24 @@ async fn list_session_policy_entries(
     Ok(entries.into_iter().map(|(_, entry)| entry).collect())
 }
 
-async fn session_binding_keys(kv: &KvStore, session: &AccessSession) -> Result<Vec<String>> {
+async fn session_policy_bindings(
+    kv: &KvStore,
+    env: &Env,
+    session: &AccessSession,
+) -> Result<Vec<PolicyBindingRecord>> {
+    let namespace = policy_binding_index_namespace(env)?;
     let principals = session_binding_principals(session);
-    let index_keys = principals
-        .iter()
-        .map(|(principal_type, principal_id)| {
-            policy_binding_index_key(*principal_type, principal_id)
-        })
-        .collect::<Vec<_>>();
-    let records = bulk_read_kv_text(kv, &index_keys, "policy binding index").await?;
-    let mut binding_keys = BTreeSet::new();
-    for ((principal_type, principal_id), index_key) in principals.into_iter().zip(index_keys) {
-        let mut index = if let Some(record) = records.get(&index_key) {
-            serde_json::from_str::<PolicyBindingIndexRecord>(record).map_err(|error| {
-                Error::RustError(format!("policy binding index is invalid JSON: {error}"))
-            })?
-        } else {
-            let mut index = PolicyBindingIndexRecord {
-                binding_keys: list_policy_binding_keys(
-                    kv,
-                    &policy_binding_prefix(principal_type, principal_id),
-                )
-                .await?,
-            };
-            normalize_policy_binding_index(&mut index, principal_type, principal_id);
-            if let Err(error) =
-                put_policy_binding_index(kv, principal_type, principal_id, &index).await
-            {
-                console_error!(
-                    "failed to backfill policy binding index {}: {}",
-                    index_key,
-                    error
-                );
-            }
-            index
-        };
-        normalize_policy_binding_index(&mut index, principal_type, principal_id);
-        binding_keys.extend(index.binding_keys);
+    let mut response = resolve_policy_binding_index(&namespace, principals.clone()).await?;
+    if !response.missing_principals.is_empty() {
+        let mut seeds = Vec::with_capacity(response.missing_principals.len());
+        for principal in response.missing_principals {
+            seeds.push(policy_binding_index_seed(kv, principal).await?);
+        }
+        initialize_policy_binding_index(&namespace, &seeds).await?;
+        response = resolve_policy_binding_index(&namespace, principals).await?;
     }
-    Ok(binding_keys.into_iter().collect())
+    sort_policy_bindings(&mut response.bindings);
+    Ok(response.bindings)
 }
 
 fn session_binding_priorities(
@@ -3123,14 +3232,15 @@ async fn read_access_policies(
     Ok(policies)
 }
 
-fn session_binding_principals(session: &AccessSession) -> Vec<(PrincipalType, &str)> {
-    let mut principals = vec![(PrincipalType::User, session.email.as_str())];
-    principals.extend(
-        session
-            .groups
-            .iter()
-            .map(|group| (PrincipalType::Group, group.as_str())),
-    );
+fn session_binding_principals(session: &AccessSession) -> Vec<PolicyBindingPrincipal> {
+    let mut principals = vec![PolicyBindingPrincipal {
+        principal_type: PrincipalType::User,
+        principal_id: session.email.clone(),
+    }];
+    principals.extend(session.groups.iter().map(|group| PolicyBindingPrincipal {
+        principal_type: PrincipalType::Group,
+        principal_id: group.clone(),
+    }));
     principals
 }
 
@@ -3583,23 +3693,31 @@ fn policy_binding_key(binding: &PolicyBindingRecord) -> String {
     )
 }
 
-fn policy_binding_index_key(principal_type: PrincipalType, principal_id: &str) -> String {
+fn policy_binding_principal_key(principal: &PolicyBindingPrincipal) -> String {
     format!(
-        "access/binding-index/{}/{}",
-        principal_type_label(principal_type),
-        encode_component(principal_id)
+        "{}:{}",
+        principal_type_label(principal.principal_type),
+        encode_component(&principal.principal_id)
     )
 }
 
-fn normalize_policy_binding_index(
-    index: &mut PolicyBindingIndexRecord,
-    principal_type: PrincipalType,
-    principal_id: &str,
+fn normalize_policy_binding_records(
+    bindings: &mut Vec<PolicyBindingRecord>,
+    principal: &PolicyBindingPrincipal,
 ) {
-    let prefix = policy_binding_prefix(principal_type, principal_id);
-    index.binding_keys.retain(|key| key.starts_with(&prefix));
-    index.binding_keys.sort();
-    index.binding_keys.dedup();
+    let mut normalized = BTreeMap::new();
+    for binding in bindings.drain(..) {
+        if binding.principal_type == principal.principal_type
+            && binding.principal_id == principal.principal_id
+        {
+            normalized.insert(policy_binding_key(&binding), binding);
+        }
+    }
+    *bindings = normalized.into_values().collect();
+}
+
+fn policy_binding_index_object_name() -> &'static str {
+    "policy-bindings"
 }
 
 fn percent_decode_path_segment(value: &str) -> Option<String> {
@@ -4113,7 +4231,7 @@ async fn authorize_access_session(
             .map(AuthOutcome::Denied);
         }
     };
-    let entries = list_session_policy_entries(&kv, &session).await?;
+    let entries = list_session_policy_entries(&kv, env, &session).await?;
     let matching_entries = entries
         .iter()
         .filter(|entry| policy_allows_provider(&entry.policy, provider_id))
@@ -5365,6 +5483,69 @@ struct BudgetSettleResponse {
 }
 
 #[durable_object]
+pub struct PolicyBindingIndexObject {
+    state: State,
+    _env: Env,
+}
+
+impl DurableObject for PolicyBindingIndexObject {
+    fn new(state: State, env: Env) -> Self {
+        Self { state, _env: env }
+    }
+
+    async fn fetch(&self, mut req: Request) -> Result<Response> {
+        let url = req.url()?;
+        if req.method() == Method::Post && url.path() == "/resolve" {
+            let request =
+                serde_json::from_str::<PolicyBindingIndexResolveRequest>(&req.text().await?)
+                    .map_err(|error| {
+                        Error::RustError(format!(
+                            "policy binding resolve request is invalid JSON: {error}"
+                        ))
+                    })?;
+            let response = resolve_policy_binding_index_in_object(&self.state, request.principals)?;
+            return Response::from_json(&response);
+        }
+        if req.method() == Method::Post && url.path() == "/initialize" {
+            let seeds = serde_json::from_str::<Vec<PolicyBindingIndexSeed>>(&req.text().await?)
+                .map_err(|error| {
+                    Error::RustError(format!(
+                        "policy binding initialize request is invalid JSON: {error}"
+                    ))
+                })?;
+            initialize_policy_binding_index_in_object(&self.state, seeds)?;
+            return Response::ok("initialized");
+        }
+        if req.method() == Method::Post && url.path() == "/initialize-all" {
+            let bindings = serde_json::from_str::<Vec<PolicyBindingRecord>>(&req.text().await?)
+                .map_err(|error| {
+                    Error::RustError(format!(
+                        "policy binding initialize-all request is invalid JSON: {error}"
+                    ))
+                })?;
+            initialize_all_policy_bindings_in_object(&self.state, bindings)?;
+            return Response::ok("initialized");
+        }
+        if req.method() == Method::Post && url.path() == "/list" {
+            let response = list_policy_bindings_in_object(&self.state)?;
+            return Response::from_json(&response);
+        }
+        if req.method() == Method::Post && url.path() == "/mutate" {
+            let request =
+                serde_json::from_str::<PolicyBindingIndexMutationRequest>(&req.text().await?)
+                    .map_err(|error| {
+                        Error::RustError(format!(
+                            "policy binding mutation request is invalid JSON: {error}"
+                        ))
+                    })?;
+            mutate_policy_binding_index_in_object(&self.state, request)?;
+            return Response::ok("updated");
+        }
+        json_error("route_not_found", "route not found", 404)
+    }
+}
+
+#[durable_object]
 pub struct BudgetLedgerObject {
     state: State,
     _env: Env,
@@ -5472,6 +5653,207 @@ impl DurableObject for UsageLedgerObject {
         ensure_usage_cleanup_alarm(&self.state).await?;
         Response::ok("usage retention applied")
     }
+}
+
+fn ensure_policy_binding_index_schema(sql: &SqlStorage) -> Result<()> {
+    sql.exec(
+        "CREATE TABLE IF NOT EXISTS policy_binding_principals (
+            principal_key TEXT PRIMARY KEY
+        )",
+        None,
+    )?;
+    sql.exec(
+        "CREATE TABLE IF NOT EXISTS policy_binding_entries (
+            principal_key TEXT NOT NULL,
+            binding_key TEXT NOT NULL,
+            binding_json TEXT NOT NULL,
+            PRIMARY KEY (principal_key, binding_key)
+        )",
+        None,
+    )?;
+    sql.exec(
+        "CREATE TABLE IF NOT EXISTS policy_binding_meta (
+            meta_key TEXT PRIMARY KEY
+        )",
+        None,
+    )?;
+    Ok(())
+}
+
+fn policy_binding_index_initialized(sql: &SqlStorage, principal_key: &str) -> Result<bool> {
+    Ok(sql
+        .exec_raw(
+            "SELECT COUNT(*) AS principal_count
+                FROM policy_binding_principals
+                WHERE principal_key = ?",
+            raw_bindings(vec![JsValue::from_str(principal_key)]),
+        )?
+        .to_array::<PolicyBindingIndexCountRow>()?
+        .first()
+        .is_some_and(|row| row.principal_count > 0))
+}
+
+fn initialize_policy_binding_index_in_object(
+    state: &State,
+    seeds: Vec<PolicyBindingIndexSeed>,
+) -> Result<()> {
+    let sql = state.storage().sql();
+    ensure_policy_binding_index_schema(&sql)?;
+    for mut seed in seeds {
+        let principal_key = policy_binding_principal_key(&seed.principal);
+        if policy_binding_index_initialized(&sql, &principal_key)? {
+            continue;
+        }
+        normalize_policy_binding_records(&mut seed.bindings, &seed.principal);
+        for binding in seed.bindings {
+            upsert_policy_binding_in_sql(&sql, &principal_key, &binding)?;
+        }
+        sql.exec_raw(
+            "INSERT OR IGNORE INTO policy_binding_principals (principal_key) VALUES (?)",
+            raw_bindings(vec![JsValue::from_str(&principal_key)]),
+        )?;
+    }
+    Ok(())
+}
+
+fn mutate_policy_binding_index_in_object(
+    state: &State,
+    request: PolicyBindingIndexMutationRequest,
+) -> Result<()> {
+    let principal = request.seed.principal.clone();
+    let mut bindings = vec![request.binding.clone()];
+    normalize_policy_binding_records(&mut bindings, &principal);
+    if bindings.len() != 1 {
+        return Err(Error::RustError(
+            "policy binding mutation does not match its principal".to_string(),
+        ));
+    }
+    initialize_policy_binding_index_in_object(state, vec![request.seed])?;
+    let sql = state.storage().sql();
+    let principal_key = policy_binding_principal_key(&principal);
+    upsert_policy_binding_in_sql(&sql, &principal_key, &request.binding)
+}
+
+fn initialize_all_policy_bindings_in_object(
+    state: &State,
+    bindings: Vec<PolicyBindingRecord>,
+) -> Result<()> {
+    let mut seeds = BTreeMap::<String, PolicyBindingIndexSeed>::new();
+    for binding in bindings {
+        let principal = PolicyBindingPrincipal {
+            principal_type: binding.principal_type,
+            principal_id: binding.principal_id.clone(),
+        };
+        let principal_key = policy_binding_principal_key(&principal);
+        seeds
+            .entry(principal_key)
+            .or_insert_with(|| PolicyBindingIndexSeed {
+                principal,
+                bindings: Vec::new(),
+            })
+            .bindings
+            .push(binding);
+    }
+    initialize_policy_binding_index_in_object(state, seeds.into_values().collect())?;
+    let sql = state.storage().sql();
+    sql.exec(
+        "INSERT OR IGNORE INTO policy_binding_meta (meta_key) VALUES ('global_initialized')",
+        None,
+    )?;
+    Ok(())
+}
+
+fn upsert_policy_binding_in_sql(
+    sql: &SqlStorage,
+    principal_key: &str,
+    binding: &PolicyBindingRecord,
+) -> Result<()> {
+    sql.exec_raw(
+        "INSERT OR REPLACE INTO policy_binding_entries
+            (principal_key, binding_key, binding_json)
+            VALUES (?, ?, ?)",
+        raw_bindings(vec![
+            JsValue::from_str(principal_key),
+            JsValue::from_str(&policy_binding_key(binding)),
+            JsValue::from_str(&serde_json::to_string(binding)?),
+        ]),
+    )?;
+    Ok(())
+}
+
+fn policy_binding_index_global_initialized(sql: &SqlStorage) -> Result<bool> {
+    Ok(sql
+        .exec(
+            "SELECT COUNT(*) AS principal_count
+                FROM policy_binding_meta
+                WHERE meta_key = 'global_initialized'",
+            None,
+        )?
+        .to_array::<PolicyBindingIndexCountRow>()?
+        .first()
+        .is_some_and(|row| row.principal_count > 0))
+}
+
+fn list_policy_bindings_in_object(state: &State) -> Result<PolicyBindingIndexListResponse> {
+    let sql = state.storage().sql();
+    ensure_policy_binding_index_schema(&sql)?;
+    let mut bindings = sql
+        .exec(
+            "SELECT binding_json FROM policy_binding_entries
+                ORDER BY principal_key, binding_key",
+            None,
+        )?
+        .to_array::<PolicyBindingIndexEntryRow>()?
+        .into_iter()
+        .map(|row| {
+            serde_json::from_str::<PolicyBindingRecord>(&row.binding_json).map_err(|error| {
+                Error::RustError(format!("stored policy binding is invalid JSON: {error}"))
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    sort_policy_bindings(&mut bindings);
+    Ok(PolicyBindingIndexListResponse {
+        initialized: policy_binding_index_global_initialized(&sql)?,
+        bindings,
+    })
+}
+
+fn resolve_policy_binding_index_in_object(
+    state: &State,
+    principals: Vec<PolicyBindingPrincipal>,
+) -> Result<PolicyBindingIndexResolveResponse> {
+    let sql = state.storage().sql();
+    ensure_policy_binding_index_schema(&sql)?;
+    let mut bindings = Vec::new();
+    let mut missing_principals = Vec::new();
+    for principal in principals {
+        let principal_key = policy_binding_principal_key(&principal);
+        if !policy_binding_index_initialized(&sql, &principal_key)? {
+            missing_principals.push(principal);
+            continue;
+        }
+        bindings.extend(
+            sql.exec_raw(
+                "SELECT binding_json FROM policy_binding_entries
+                    WHERE principal_key = ?
+                    ORDER BY binding_key",
+                raw_bindings(vec![JsValue::from_str(&principal_key)]),
+            )?
+            .to_array::<PolicyBindingIndexEntryRow>()?
+            .into_iter()
+            .map(|row| {
+                serde_json::from_str::<PolicyBindingRecord>(&row.binding_json).map_err(|error| {
+                    Error::RustError(format!("stored policy binding is invalid JSON: {error}"))
+                })
+            })
+            .collect::<Result<Vec<_>>>()?,
+        );
+    }
+    sort_policy_bindings(&mut bindings);
+    Ok(PolicyBindingIndexResolveResponse {
+        bindings,
+        missing_principals,
+    })
 }
 
 async fn persist_usage_event(namespace: &ObjectNamespace, event: &UsageEvent) -> Result<()> {
@@ -7219,8 +7601,11 @@ mod tests {
             "access/bindings/user/writer%40example.com/svc_docs"
         );
         assert_eq!(
-            policy_binding_index_key(binding.principal_type, &binding.principal_id),
-            "access/binding-index/user/writer%40example.com"
+            policy_binding_principal_key(&PolicyBindingPrincipal {
+                principal_type: binding.principal_type,
+                principal_id: binding.principal_id.clone(),
+            }),
+            "user:writer%40example.com"
         );
 
         let groups = normalize_access_groups(vec![
@@ -7234,23 +7619,32 @@ mod tests {
 
     #[test]
     fn policy_binding_indexes_only_keep_their_principal_keys() {
-        let mut index = PolicyBindingIndexRecord {
-            binding_keys: vec![
-                "access/bindings/group/docs/read".to_string(),
-                "access/bindings/group/ops/admin".to_string(),
-                "access/bindings/group/docs/read".to_string(),
-                "access/bindings/group/docs/write".to_string(),
-            ],
+        let principal = PolicyBindingPrincipal {
+            principal_type: PrincipalType::Group,
+            principal_id: "docs".to_string(),
         };
+        let binding = |policy_id: &str, principal_id: &str| PolicyBindingRecord {
+            policy_id: policy_id.to_string(),
+            principal_type: PrincipalType::Group,
+            principal_id: principal_id.to_string(),
+            enabled: true,
+            priority: 100,
+        };
+        let mut bindings = vec![
+            binding("read", "docs"),
+            binding("admin", "ops"),
+            binding("read", "docs"),
+            binding("write", "docs"),
+        ];
 
-        normalize_policy_binding_index(&mut index, PrincipalType::Group, "docs");
+        normalize_policy_binding_records(&mut bindings, &principal);
 
         assert_eq!(
-            index.binding_keys,
-            vec![
-                "access/bindings/group/docs/read",
-                "access/bindings/group/docs/write"
-            ]
+            bindings
+                .into_iter()
+                .map(|binding| binding.policy_id)
+                .collect::<Vec<_>>(),
+            vec!["read", "write"]
         );
     }
 
@@ -7269,11 +7663,9 @@ mod tests {
         assert_eq!(
             session_binding_principals(&session)
                 .into_iter()
-                .map(|(principal_type, principal_id)| {
-                    policy_binding_index_key(principal_type, principal_id)
-                })
+                .map(|principal| policy_binding_principal_key(&principal))
                 .collect::<Vec<_>>(),
-            vec!["access/binding-index/user/admin%40example.com"]
+            vec!["user:admin%40example.com"]
         );
     }
 

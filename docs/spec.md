@@ -11,6 +11,7 @@ The implementation in this repository follows that RFC:
 - Rust/Wasm edge data plane
 - TypeScript admin frontend
 - Durable Object budget ledgers
+- Durable Object policy-binding authority
 - declarative `providers/*.provider.yaml` service provider manifests
 - OpenMeter-compatible usage events
 - OpenClaw-native `clawrouter-` key detection
