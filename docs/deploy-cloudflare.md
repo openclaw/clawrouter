@@ -174,27 +174,29 @@ pnpm cf:deploy
 The deployed smoke checks health, root-to-dashboard redirect behavior, that the
 dashboard and session paths are gated before the Worker can return console HTML
 or fallback JSON, provider snapshot size, key inspection when a smoke key is
-present, and that every provider has an executable smoke target:
+present, and that every provider has an executable smoke target. It must also
+run at least one live golden-provider request and writes the timestamped result
+to `health/providers/<provider-id>` in `POLICY_KV`:
 
 ```sh
 export CLAWROUTER_BASE_URL=https://...
 export CLAWROUTER_SMOKE_KEY=clawrouter-live-svc_docs-...
+export CLAWROUTER_SMOKE_LIVE_PROVIDERS=openai
 pnpm cf:smoke
 ```
 
-Live upstream provider calls are opt-in:
+Select more golden providers with a comma-separated list:
 
 ```sh
 export CLAWROUTER_SMOKE_LIVE_PROVIDERS=openai,tavily
 pnpm cf:smoke
 ```
 
-For GitHub Actions deploys, set the same value in the `live_providers`
-workflow-dispatch input. `all` runs every provider smoke target and requires a
-proxy smoke key with access to every selected provider.
-
-`CLAWROUTER_SMOKE_OPENAI=1` remains supported as a shortcut for
-`CLAWROUTER_SMOKE_LIVE_PROVIDERS=openai`.
+For GitHub Actions deploys, `worker_url`, `live_providers`, and the smoke key
+are mandatory. `all` runs every provider smoke target and requires a proxy smoke
+key with access to every selected provider. Readiness reports live checks as
+`verified`, `failed`, or `stale`; a configured provider without a live check is
+`unverified`.
 
 ## Cloudflare Access Console
 
@@ -300,6 +302,7 @@ GET /v1/admin/connections
 GET /v1/admin/access-users
 GET /v1/admin/policy-bindings
 GET /v1/admin/provider-status
+GET /v1/admin/provider-health
 PUT /v1/admin/access-users/<email>
 PUT /v1/admin/policy-bindings
 PUT /v1/admin/policies/<policy-id>
@@ -477,13 +480,7 @@ Validate a deployed Worker:
 
 ```sh
 export CLAWROUTER_BASE_URL=https://<worker>.<subdomain>.workers.dev
-pnpm cf:smoke
-```
-
-Optional provider-path smoke:
-
-```sh
 export CLAWROUTER_SMOKE_KEY=clawrouter-live-svc_docs-...
-export CLAWROUTER_SMOKE_OPENAI=1
+export CLAWROUTER_SMOKE_LIVE_PROVIDERS=openai
 pnpm cf:smoke
 ```

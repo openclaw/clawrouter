@@ -48,7 +48,9 @@ pnpm cf:doctor
 
 It checks Wrangler auth, required GitHub Actions secret names, local deploy env,
 provider binding coverage, and the all-provider smoke plan without printing
-secret values.
+secret values. Real deploys require at least one live golden-provider smoke;
+the result is persisted in `POLICY_KV` so readiness distinguishes verified,
+failed, stale, unverified, and disabled providers.
 
 The browser console is meant to sit behind Cloudflare Access. Provision that
 edge gate with:
@@ -99,6 +101,7 @@ The Worker currently exposes:
 - `GET /v1/admin/access-users`
 - `GET /v1/admin/policy-bindings`
 - `GET /v1/admin/provider-status`
+- `GET /v1/admin/provider-health`
 - `PUT /v1/admin/access-users/<email>`
 - `PUT /v1/admin/policy-bindings`
 - `PUT /v1/admin/policies/<policy-id>`

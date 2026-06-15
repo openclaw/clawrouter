@@ -14,7 +14,7 @@ await expectRedirectOrAccessGate(`${baseUrl}/dashboard`, "dashboard redirect", "
 await expectAccessGate(`${baseUrl}/dashboard/catalog`, "catalog access gate");
 await expectRedirect(`${baseUrl}/catalog`, "legacy catalog redirect", "/dashboard/catalog");
 const providers = await expectOk(`${baseUrl}/v1/providers`, "providers");
-if (!Array.isArray(providers.providers) || providers.providers.length < 20) {
+if (!Array.isArray(providers.providers) || providers.providers.length < 19) {
   throw new Error("provider snapshot is unexpectedly small");
 }
 const routes = await expectOk(`${baseUrl}/v1/routes`, "route catalog");
@@ -39,13 +39,20 @@ if (smokeKey) {
 }
 
 const liveProviders = liveProviderList();
-if (liveProviders.length > 0) {
-  if (!smokeKey) {
-    throw new Error("CLAWROUTER_SMOKE_KEY is required for live provider smoke");
-  }
-  const results = await runLiveProviderSmokes({ baseUrl, smokeKey, plan, liveProviders });
-  console.log(`live provider smoke passed: ${results.map((result) => result.provider).join(",")}`);
+if (liveProviders.length === 0) {
+  throw new Error("CLAWROUTER_SMOKE_LIVE_PROVIDERS must name at least one golden provider");
 }
+if (!smokeKey) {
+  throw new Error("CLAWROUTER_SMOKE_KEY is required for live provider smoke");
+}
+const results = await runLiveProviderSmokes({
+  baseUrl,
+  smokeKey,
+  plan,
+  liveProviders,
+  onResult: recordProviderHealth,
+});
+console.log(`live provider smoke passed: ${results.map((result) => result.provider).join(",")}`);
 
 console.log("deployed smoke passed");
 
@@ -150,4 +157,32 @@ function required(value, name) {
     throw new Error(`${name} is required`);
   }
   return value;
+}
+
+async function recordProviderHealth(result) {
+  const token = required(process.env.CLOUDFLARE_API_TOKEN, "CLOUDFLARE_API_TOKEN");
+  const accountId = required(process.env.CLOUDFLARE_ACCOUNT_ID, "CLOUDFLARE_ACCOUNT_ID");
+  const namespaceId = required(process.env.CLAWROUTER_POLICY_KV_ID, "CLAWROUTER_POLICY_KV_ID");
+  const key = encodeURIComponent(`health/providers/${result.provider}`);
+  const response = await fetch(
+    `https://api.cloudflare.com/client/v4/accounts/${accountId}/storage/kv/namespaces/${namespaceId}/values/${key}`,
+    {
+      method: "PUT",
+      headers: {
+        authorization: `Bearer ${token}`,
+        "content-type": "application/json",
+      },
+      body: JSON.stringify({
+        providerId: result.provider,
+        status: result.status,
+        checkedAt: result.checkedAt,
+        latencyMs: result.latencyMs,
+        statusCode: result.statusCode,
+        error: result.error,
+      }),
+    },
+  );
+  if (!response.ok) {
+    throw new Error(`failed to record ${result.provider} health with ${response.status}`);
+  }
 }

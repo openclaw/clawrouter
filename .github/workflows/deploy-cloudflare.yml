@@ -4,18 +4,14 @@ on:
   workflow_dispatch:
     inputs:
       worker_url:
-        description: "Optional deployed Worker URL to smoke-test after deploy"
-        required: false
+        description: "Deployed Worker URL used for mandatory post-deploy smoke"
+        required: true
+        default: "https://clawrouter.openclaw.ai"
         type: string
-      smoke_openai:
-        description: "Run OpenAI-compatible proxy smoke; requires CLAWROUTER_SMOKE_KEY and OPENAI_API_KEY secrets"
-        required: false
-        default: false
-        type: boolean
       live_providers:
-        description: "Comma-separated provider ids for live upstream smoke, or all"
-        required: false
-        default: ""
+        description: "Comma-separated golden provider ids for mandatory live upstream smoke"
+        required: true
+        default: "openai"
         type: string
       provision_access:
         description: "Provision/update the Cloudflare Access console app before deploy"
@@ -82,7 +78,6 @@ jobs:
       CLAWROUTER_ACCESS_IDP_IDS: ${{ inputs.access_idp_ids }}
       CLAWROUTER_BASE_URL: ${{ inputs.worker_url }}
       CLAWROUTER_SMOKE_KEY: ${{ secrets.CLAWROUTER_SMOKE_KEY }}
-      CLAWROUTER_SMOKE_OPENAI: ${{ inputs.smoke_openai && '1' || '0' }}
       CLAWROUTER_SMOKE_LIVE_PROVIDERS: ${{ inputs.live_providers }}
       CLAWROUTER_SMOKE_MODEL_AZURE_OPENAI: ${{ vars.CLAWROUTER_SMOKE_MODEL_AZURE_OPENAI }}
       CLAWROUTER_PREFLIGHT_DEPLOY: "1"
@@ -99,7 +94,7 @@ jobs:
       - uses: pnpm/action-setup@v4
         with:
           version: 11.5.1
-      - run: pnpm install --frozen-lockfile=false
+      - run: pnpm install --frozen-lockfile
       - run: pnpm cf:preflight
       - run: cargo test --workspace
       - run: pnpm --dir admin check
@@ -113,7 +108,6 @@ jobs:
         run: pnpm cf:access -- --write-github-env
       - run: pnpm cf:config
       - run: pnpm exec wrangler deploy --config .wrangler.generated.toml
-      - if: ${{ inputs.worker_url != '' }}
-        env:
+      - env:
           CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY: ${{ secrets.CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY }}
         run: pnpm cf:smoke

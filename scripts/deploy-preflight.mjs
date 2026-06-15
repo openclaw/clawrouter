@@ -41,6 +41,9 @@ if (baseUrl) {
 
 const liveProviders = liveProviderList();
 let selectedProviders = [];
+if (process.env.CLAWROUTER_PREFLIGHT_DEPLOY === "1" && liveProviders.length === 0) {
+  errors.push("CLAWROUTER_SMOKE_LIVE_PROVIDERS must name at least one golden provider for deploy");
+}
 if (liveProviders.length > 0) {
   if (!baseUrl) {
     errors.push("CLAWROUTER_BASE_URL is required when live provider smoke is enabled");
