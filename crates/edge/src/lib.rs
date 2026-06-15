@@ -1395,6 +1395,7 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 "access policy",
             )
             .await?;
+            sync_legacy_records_for_policy(&kv, &policy_id, &policy).await?;
             return Response::from_json(&admin_access_policy_response(&policy_id, &policy));
         }
         if req.method() == Method::Post {
@@ -1416,6 +1417,7 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 "access policy",
             )
             .await?;
+            sync_legacy_records_for_policy(&kv, &policy_id, &policy).await?;
             return Response::from_json(&admin_access_policy_response(&policy_id, &policy));
         }
         return json_error("method_not_allowed", "admin method is not allowed", 405);
@@ -1456,13 +1458,12 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 );
             }
             credential.secret_sha256 = credential.secret_sha256.to_ascii_lowercase();
-            if validate_admin_kid(&credential.policy_id).is_err()
-                || existing_access_policy(&kv, &credential.policy_id)
-                    .await?
-                    .is_none()
-            {
+            if validate_admin_kid(&credential.policy_id).is_err() {
                 return json_error("unknown_policy", "credential policy is not registered", 404);
-            }
+            };
+            let Some(policy) = existing_access_policy(&kv, &credential.policy_id).await? else {
+                return json_error("unknown_policy", "credential policy is not registered", 404);
+            };
             put_kv_record(
                 &kv,
                 &format!("credentials/{credential_id}"),
@@ -1470,6 +1471,7 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 "proxy credential",
             )
             .await?;
+            sync_legacy_rollback_record(&kv, &credential_id, &policy, &credential).await?;
             return Response::from_json(&admin_credential_response(&credential_id, &credential));
         }
         if req.method() == Method::Post {
@@ -1495,6 +1497,11 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 "proxy credential",
             )
             .await?;
+            if let Some(policy) = existing_access_policy(&kv, &credential.policy_id).await? {
+                sync_legacy_rollback_record(&kv, &credential_id, &policy, &credential).await?;
+            } else {
+                disable_legacy_key_record(&kv, &credential_id).await?;
+            }
             return Response::from_json(&admin_credential_response(&credential_id, &credential));
         }
         return json_error("method_not_allowed", "admin method is not allowed", 405);
@@ -2609,6 +2616,67 @@ async fn put_kv_record<T: Serialize>(kv: &KvStore, key: &str, value: &T, kind: &
         .execute()
         .await
         .map_err(|error| Error::RustError(format!("failed to write {kind}: {error}")))
+}
+
+async fn sync_legacy_records_for_policy(
+    kv: &KvStore,
+    policy_id: &str,
+    policy: &AccessPolicy,
+) -> Result<()> {
+    for (credential_id, credential) in list_proxy_credentials(kv).await? {
+        if credential.policy_id == policy_id {
+            sync_legacy_rollback_record(kv, &credential_id, policy, &credential).await?;
+        }
+    }
+    Ok(())
+}
+
+async fn sync_legacy_rollback_record(
+    kv: &KvStore,
+    credential_id: &str,
+    policy: &AccessPolicy,
+    credential: &ProxyCredential,
+) -> Result<()> {
+    if existing_legacy_key_policy(kv, credential_id)
+        .await?
+        .is_none()
+    {
+        return Ok(());
+    }
+    let legacy = legacy_rollback_record(policy, credential);
+    put_kv_record(
+        kv,
+        &format!("keys/{credential_id}"),
+        &legacy,
+        "legacy rollback key policy",
+    )
+    .await
+}
+
+async fn disable_legacy_key_record(kv: &KvStore, credential_id: &str) -> Result<()> {
+    let Some(mut legacy) = existing_legacy_key_policy(kv, credential_id).await? else {
+        return Ok(());
+    };
+    legacy.enabled = false;
+    put_kv_record(
+        kv,
+        &format!("keys/{credential_id}"),
+        &legacy,
+        "legacy rollback key policy",
+    )
+    .await
+}
+
+fn legacy_rollback_record(policy: &AccessPolicy, credential: &ProxyCredential) -> LegacyKeyPolicy {
+    LegacyKeyPolicy {
+        enabled: policy.enabled && credential.enabled,
+        secret_sha256: credential.secret_sha256.clone(),
+        providers: policy.providers.clone(),
+        tenant_id: policy.tenant_id.clone(),
+        token_role: policy.token_role.clone(),
+        monthly_budget_micros: policy.monthly_budget_micros,
+        request_cost_micros: policy.request_cost_micros,
+    }
 }
 
 async fn list_policy_bindings(kv: &KvStore) -> Result<Vec<PolicyBindingRecord>> {
@@ -6436,6 +6504,18 @@ mod tests {
         assert!(policy_json.get("secretSha256").is_none());
         assert_eq!(credential_json["policyId"], "svc_docs");
         assert_eq!(credential_json["secretSha256"], sha256_hex("secret"));
+
+        let rollback = legacy_rollback_record(&policy, &credential);
+        assert!(rollback.enabled);
+        assert_eq!(rollback.providers, vec!["openai"]);
+        let rollback = legacy_rollback_record(
+            &policy,
+            &ProxyCredential {
+                enabled: false,
+                ..credential
+            },
+        );
+        assert!(!rollback.enabled);
     }
 
     #[test]
