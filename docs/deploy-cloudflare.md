@@ -9,8 +9,8 @@ without a redeploy.
 - `POLICY_KV`: access policies, issued credential hashes, compatibility
   principal-binding records, provider connections, OAuth grants, and provider
   health records.
-- `USAGE_QUEUE`: metered usage events, with this Worker configured as producer
-  and consumer.
+- `USAGE_QUEUE`: metered usage events and durable budget-settlement retries,
+  with this Worker configured as producer and consumer.
 - `BUDGET_LEDGER`: SQLite-backed Durable Object budget ledger.
 - `ACCESS_CONTROL`: SQLite-backed Durable Object authority for user state,
   provider kill switches, serialized user/group policy-binding mutations, and
@@ -371,7 +371,8 @@ printf '%s' "$CLAWROUTER_PROXY_SECRET" | pnpm cf:key:put -- \
 
 This stores the provider allowlist and budget at `policies/<kid>`, the proxy
 secret hash at `credentials/<kid>`, and a `keys/<kid>` compatibility record for
-rollback safety.
+rollback safety. `--providers` is required unless the operator deliberately
+passes `--all-providers`; omitting scope never creates an implicit wildcard.
 
 Revoke access:
 
@@ -416,9 +417,10 @@ The stored policy and credential shapes are separate:
 }
 ```
 
-`providers` is an allowlist. The admin API requires at least one provider; a raw
-stored policy with an empty list allows every configured provider and should be
-reserved for deliberate CLI/operator use. `monthlyBudgetMicros: 0` denies
+`providers` is an allowlist. The admin API requires at least one provider;
+`pnpm cf:key:put` requires `--providers` or the explicit `--all-providers` flag.
+A raw stored policy with an empty list allows every configured provider and
+should be reserved for deliberate operator use. `monthlyBudgetMicros: 0` denies
 requests immediately. A non-zero `monthlyBudgetMicros` uses the `BUDGET_LEDGER`
 Durable Object before upstream calls and charges `requestCostMicros` per
 accepted request. If `requestCostMicros` is omitted, ClawRouter charges one
