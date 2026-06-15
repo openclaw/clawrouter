@@ -507,7 +507,7 @@ async fn proxy_openai_compatible(
         }) => return json_error(code, message, status),
         Err(HeaderBuildError::Runtime(error)) => return provider_runtime_error_response(error),
     };
-    let budget = match preflight_budget(&env, &auth, capability, &request_id).await? {
+    let budget = match preflight_budget(&env, &auth, capability).await? {
         BudgetPreflight::Allowed(budget) => budget,
         BudgetPreflight::Denied(response) => return Ok(response),
     };
@@ -520,6 +520,7 @@ async fn proxy_openai_compatible(
     let started_at_ms = Date::now().as_millis();
     let response = send_upstream_request(upstream_req, &route.provider.id).await?;
     let status_code = response.status_code();
+    let budget = settle_budget_after_response(&env, &auth, budget, status_code).await;
     enqueue_usage(
         &env,
         UsageRecord {
@@ -653,7 +654,7 @@ async fn proxy_manifest_endpoint(
         }) => return json_error(code, message, status),
         Err(HeaderBuildError::Runtime(error)) => return provider_runtime_error_response(error),
     };
-    let budget = match preflight_budget(&env, &auth, capability, &request_id).await? {
+    let budget = match preflight_budget(&env, &auth, capability).await? {
         BudgetPreflight::Allowed(budget) => budget,
         BudgetPreflight::Denied(response) => return Ok(response),
     };
@@ -668,6 +669,7 @@ async fn proxy_manifest_endpoint(
     let started_at_ms = Date::now().as_millis();
     let response = send_upstream_request(upstream_req, &provider.id).await?;
     let status_code = response.status_code();
+    let budget = settle_budget_after_response(&env, &auth, budget, status_code).await;
     enqueue_usage(
         &env,
         UsageRecord {
@@ -4722,8 +4724,9 @@ fn secret_binding_name(provider_id: &str, secret_kind: &str) -> String {
     }
 }
 
-#[derive(Clone, Copy, Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct BudgetUsage {
+    reservation_id: Option<String>,
     reserved_cost_micros: u64,
     actual_cost_micros: u64,
 }
@@ -4740,7 +4743,7 @@ struct BudgetReserveRequest {
     window_key: String,
     limit_micros: u64,
     cost_micros: u64,
-    request_id: String,
+    reservation_id: String,
     capability: String,
 }
 
@@ -4768,6 +4771,28 @@ struct BudgetStatusResponse {
 #[derive(Debug, Deserialize)]
 struct BudgetSpendRow {
     spent_micros: i64,
+}
+
+#[derive(Debug, Deserialize)]
+struct BudgetReservationRow {
+    window_key: String,
+    policy_id: String,
+    reserved_micros: i64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BudgetSettleRequest {
+    reservation_id: String,
+    actual_cost_micros: u64,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct BudgetSettleResponse {
+    settled: bool,
+    charged_micros: u64,
+    spent_micros: u64,
 }
 
 #[durable_object]
@@ -4805,14 +4830,21 @@ impl DurableObject for BudgetLedgerObject {
             };
             return budget_status_in_object(&self.state, policy_id, window_key, limit_micros);
         }
-        if req.method() != Method::Post || url.path() != "/reserve" {
-            return json_error("route_not_found", "route not found", 404);
+        if req.method() == Method::Post && url.path() == "/reserve" {
+            let body = req.text().await?;
+            let request = serde_json::from_str::<BudgetReserveRequest>(&body).map_err(|error| {
+                Error::RustError(format!("budget reserve request is invalid JSON: {error}"))
+            })?;
+            return reserve_budget_in_object(&self.state, request);
         }
-        let body = req.text().await?;
-        let request = serde_json::from_str::<BudgetReserveRequest>(&body).map_err(|error| {
-            Error::RustError(format!("budget request is invalid JSON: {error}"))
-        })?;
-        reserve_budget_in_object(&self.state, request)
+        if req.method() == Method::Post && url.path() == "/settle" {
+            let body = req.text().await?;
+            let request = serde_json::from_str::<BudgetSettleRequest>(&body).map_err(|error| {
+                Error::RustError(format!("budget settle request is invalid JSON: {error}"))
+            })?;
+            return settle_budget_in_object(&self.state, request);
+        }
+        json_error("route_not_found", "route not found", 404)
     }
 }
 
@@ -5096,7 +5128,6 @@ async fn preflight_budget(
     env: &Env,
     auth: &AuthorizedKey,
     capability: &str,
-    request_id: &str,
 ) -> Result<BudgetPreflight> {
     let Some(limit_micros) = auth.policy.monthly_budget_micros else {
         return Ok(BudgetPreflight::Allowed(BudgetUsage::default()));
@@ -5130,17 +5161,19 @@ async fn preflight_budget(
 
     let tenant_id = tenant_id(auth);
     let policy_id = budget_policy_id(&tenant_id, &auth.policy_id);
+    let reservation_id = budget_reservation_id();
     let request = BudgetReserveRequest {
         window_key: current_month_window_key(&policy_id)?,
         policy_id,
         limit_micros,
         cost_micros,
-        request_id: request_id.to_string(),
+        reservation_id: reservation_id.clone(),
         capability: capability.to_string(),
     };
     let response = reserve_budget(namespace, &tenant_id, &auth.policy_id, &request).await?;
     if response.allowed {
         return Ok(BudgetPreflight::Allowed(BudgetUsage {
+            reservation_id: Some(reservation_id),
             reserved_cost_micros: response.charged_micros,
             actual_cost_micros: response.charged_micros,
         }));
@@ -5172,6 +5205,77 @@ async fn reserve_budget(
     }
     serde_json::from_str::<BudgetReserveResponse>(&text).map_err(|error| {
         Error::RustError(format!("budget ledger response is invalid JSON: {error}"))
+    })
+}
+
+async fn settle_budget_after_response(
+    env: &Env,
+    auth: &AuthorizedKey,
+    mut usage: BudgetUsage,
+    status_code: u16,
+) -> BudgetUsage {
+    if usage.reserved_cost_micros == 0 {
+        return usage;
+    }
+    let Some(reservation_id) = usage.reservation_id.as_deref() else {
+        return usage;
+    };
+    let Ok(namespace) = env.durable_object("BUDGET_LEDGER") else {
+        console_error!(
+            "failed to settle budget reservation {}: BUDGET_LEDGER binding is unavailable",
+            reservation_id
+        );
+        return usage;
+    };
+    let request = BudgetSettleRequest {
+        reservation_id: reservation_id.to_string(),
+        actual_cost_micros: actual_request_cost(status_code, usage.reserved_cost_micros),
+    };
+    match settle_budget(namespace, &tenant_id(auth), &auth.policy_id, &request).await {
+        Ok(response) if response.settled => {
+            usage.actual_cost_micros = response.charged_micros;
+        }
+        Ok(_) => {
+            console_error!(
+                "budget reservation {} was not available for settlement",
+                reservation_id
+            );
+        }
+        Err(error) => {
+            console_error!(
+                "failed to settle budget reservation {}: {}",
+                reservation_id,
+                error
+            );
+        }
+    }
+    usage
+}
+
+async fn settle_budget(
+    namespace: ObjectNamespace,
+    tenant_id: &str,
+    policy_id: &str,
+    request: &BudgetSettleRequest,
+) -> Result<BudgetSettleResponse> {
+    let stub = namespace.get_by_name(&budget_object_name(tenant_id, policy_id))?;
+    let body = serde_json::to_string(request)?;
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post)
+        .with_body(Some(JsValue::from_str(&body)));
+    let req = Request::new_with_init("https://clawrouter.internal/settle", &init)?;
+    let mut response = stub.fetch_with_request(req).await?;
+    let status = response.status_code();
+    let text = response.text().await?;
+    if !(200..=299).contains(&status) {
+        return Err(Error::RustError(format!(
+            "budget ledger rejected settlement with HTTP {status}: {text}"
+        )));
+    }
+    serde_json::from_str::<BudgetSettleResponse>(&text).map_err(|error| {
+        Error::RustError(format!(
+            "budget ledger settlement response is invalid JSON: {error}"
+        ))
     })
 }
 
@@ -5279,23 +5383,19 @@ async fn fetch_budget_status(
 
 fn reserve_budget_in_object(state: &State, request: BudgetReserveRequest) -> Result<Response> {
     let sql = state.storage().sql();
-    sql.exec(
-        "CREATE TABLE IF NOT EXISTS budget_windows (
-            window_key TEXT PRIMARY KEY,
-            policy_id TEXT NOT NULL,
-            spent_micros INTEGER NOT NULL
-        )",
-        None,
-    )?;
-    let spent_micros = sql
-        .exec_raw(
-            "SELECT spent_micros FROM budget_windows WHERE window_key = ? LIMIT 1",
-            raw_bindings(vec![JsValue::from_str(&request.window_key)]),
-        )?
-        .to_array::<BudgetSpendRow>()?
-        .first()
-        .map(|row| row.spent_micros.max(0) as u64)
-        .unwrap_or_default();
+    ensure_budget_schema(&sql)?;
+    if let Some(existing) = budget_reservation(&sql, &request.reservation_id)? {
+        let spent_micros = budget_spent(&sql, &existing.window_key)?;
+        return Response::from_json(&BudgetReserveResponse {
+            allowed: true,
+            policy_id: existing.policy_id,
+            window_key: existing.window_key,
+            charged_micros: sql_count(existing.reserved_micros),
+            spent_micros,
+            remaining_micros: request.limit_micros.saturating_sub(spent_micros),
+        });
+    }
+    let spent_micros = budget_spent(&sql, &request.window_key)?;
     let remaining_micros = request.limit_micros.saturating_sub(spent_micros);
     if request.cost_micros > remaining_micros {
         return Response::from_json(&BudgetReserveResponse {
@@ -5309,16 +5409,17 @@ fn reserve_budget_in_object(state: &State, request: BudgetReserveRequest) -> Res
     }
 
     let next_spent = spent_micros.saturating_add(request.cost_micros);
-    let next_spent_sql = sql_budget_number(next_spent, "spent_micros")?;
     let remaining_after = request.limit_micros.saturating_sub(next_spent);
+    write_budget_spent(&sql, &request.window_key, &request.policy_id, next_spent)?;
     sql.exec_raw(
-        "INSERT INTO budget_windows (window_key, policy_id, spent_micros)
-            VALUES (?, ?, ?)
-            ON CONFLICT(window_key) DO UPDATE SET spent_micros = excluded.spent_micros",
+        "INSERT INTO budget_reservations (
+            reservation_id, window_key, policy_id, reserved_micros
+        ) VALUES (?, ?, ?, ?)",
         raw_bindings(vec![
+            JsValue::from_str(&request.reservation_id),
             JsValue::from_str(&request.window_key),
             JsValue::from_str(&request.policy_id),
-            next_spent_sql.clone(),
+            sql_budget_number(request.cost_micros, "reserved_micros")?,
         ]),
     )?;
 
@@ -5332,6 +5433,38 @@ fn reserve_budget_in_object(state: &State, request: BudgetReserveRequest) -> Res
     })
 }
 
+fn settle_budget_in_object(state: &State, request: BudgetSettleRequest) -> Result<Response> {
+    let sql = state.storage().sql();
+    ensure_budget_schema(&sql)?;
+    let Some(reservation) = budget_reservation(&sql, &request.reservation_id)? else {
+        return Response::from_json(&BudgetSettleResponse {
+            settled: false,
+            charged_micros: 0,
+            spent_micros: 0,
+        });
+    };
+    let reserved_micros = sql_count(reservation.reserved_micros);
+    let current_spent = budget_spent(&sql, &reservation.window_key)?;
+    let next_spent = current_spent
+        .saturating_sub(reserved_micros)
+        .saturating_add(request.actual_cost_micros);
+    sql.exec_raw(
+        "DELETE FROM budget_reservations WHERE reservation_id = ?",
+        raw_bindings(vec![JsValue::from_str(&request.reservation_id)]),
+    )?;
+    write_budget_spent(
+        &sql,
+        &reservation.window_key,
+        &reservation.policy_id,
+        next_spent,
+    )?;
+    Response::from_json(&BudgetSettleResponse {
+        settled: true,
+        charged_micros: request.actual_cost_micros,
+        spent_micros: next_spent,
+    })
+}
+
 fn budget_status_in_object(
     state: &State,
     policy_id: String,
@@ -5339,6 +5472,18 @@ fn budget_status_in_object(
     limit_micros: u64,
 ) -> Result<Response> {
     let sql = state.storage().sql();
+    ensure_budget_schema(&sql)?;
+    let spent_micros = budget_spent(&sql, &window_key)?;
+    Response::from_json(&BudgetStatusResponse {
+        policy_id,
+        window_key,
+        limit_micros,
+        spent_micros,
+        remaining_micros: limit_micros.saturating_sub(spent_micros),
+    })
+}
+
+fn ensure_budget_schema(sql: &SqlStorage) -> Result<()> {
     sql.exec(
         "CREATE TABLE IF NOT EXISTS budget_windows (
             window_key TEXT PRIMARY KEY,
@@ -5347,22 +5492,62 @@ fn budget_status_in_object(
         )",
         None,
     )?;
-    let spent_micros = sql
+    sql.exec(
+        "CREATE TABLE IF NOT EXISTS budget_reservations (
+            reservation_id TEXT PRIMARY KEY,
+            window_key TEXT NOT NULL,
+            policy_id TEXT NOT NULL,
+            reserved_micros INTEGER NOT NULL
+        )",
+        None,
+    )?;
+    Ok(())
+}
+
+fn budget_reservation(
+    sql: &SqlStorage,
+    reservation_id: &str,
+) -> Result<Option<BudgetReservationRow>> {
+    Ok(sql
+        .exec_raw(
+            "SELECT window_key, policy_id, reserved_micros
+                FROM budget_reservations WHERE reservation_id = ? LIMIT 1",
+            raw_bindings(vec![JsValue::from_str(reservation_id)]),
+        )?
+        .to_array::<BudgetReservationRow>()?
+        .into_iter()
+        .next())
+}
+
+fn budget_spent(sql: &SqlStorage, window_key: &str) -> Result<u64> {
+    Ok(sql
         .exec_raw(
             "SELECT spent_micros FROM budget_windows WHERE window_key = ? LIMIT 1",
-            raw_bindings(vec![JsValue::from_str(&window_key)]),
+            raw_bindings(vec![JsValue::from_str(window_key)]),
         )?
         .to_array::<BudgetSpendRow>()?
         .first()
         .map(|row| row.spent_micros.max(0) as u64)
-        .unwrap_or_default();
-    Response::from_json(&BudgetStatusResponse {
-        policy_id,
-        window_key,
-        limit_micros,
-        spent_micros,
-        remaining_micros: limit_micros.saturating_sub(spent_micros),
-    })
+        .unwrap_or_default())
+}
+
+fn write_budget_spent(
+    sql: &SqlStorage,
+    window_key: &str,
+    policy_id: &str,
+    spent_micros: u64,
+) -> Result<()> {
+    sql.exec_raw(
+        "INSERT INTO budget_windows (window_key, policy_id, spent_micros)
+            VALUES (?, ?, ?)
+            ON CONFLICT(window_key) DO UPDATE SET spent_micros = excluded.spent_micros",
+        raw_bindings(vec![
+            JsValue::from_str(window_key),
+            JsValue::from_str(policy_id),
+            sql_budget_number(spent_micros, "spent_micros")?,
+        ]),
+    )?;
+    Ok(())
 }
 
 fn raw_bindings(values: Vec<JsValue>) -> Option<Vec<JsValue>> {
@@ -5395,6 +5580,12 @@ fn budget_policy_id(tenant_id: &str, kid: &str) -> String {
 
 fn budget_object_name(tenant_id: &str, kid: &str) -> String {
     format!("{tenant_id}:{kid}")
+}
+
+fn budget_reservation_id() -> String {
+    let seq = next_usage_event_sequence();
+    let nonce = (js_sys::Math::random() * MAX_SQL_BUDGET_MICROS as f64) as u64;
+    format!("budget_{}_{}_{nonce:x}", Date::now().as_millis(), seq)
 }
 
 fn current_month_window_key(policy_id: &str) -> Result<String> {
@@ -5455,7 +5646,6 @@ async fn enqueue_usage(env: &Env, record: UsageRecord<'_>) {
             record.request_id,
             error
         );
-        return;
     }
 }
 
@@ -5473,6 +5663,14 @@ fn usage_status(status: u16) -> UsageStatus {
         200..=299 => UsageStatus::Success,
         400..=499 => UsageStatus::ClientError,
         _ => UsageStatus::ProviderError,
+    }
+}
+
+fn actual_request_cost(status: u16, reserved_cost_micros: u64) -> u64 {
+    if (200..=299).contains(&status) {
+        reserved_cost_micros
+    } else {
+        0
     }
 }
 
@@ -6503,6 +6701,14 @@ mod tests {
     fn budget_sql_integer_conversion_is_checked() {
         assert_eq!(validate_budget_number(42, "spent_micros").unwrap(), 42.0);
         assert!(validate_budget_number(MAX_SQL_BUDGET_MICROS + 1, "spent_micros").is_err());
+    }
+
+    #[test]
+    fn budget_settlement_only_charges_successful_upstream_requests() {
+        assert_eq!(actual_request_cost(200, 42), 42);
+        assert_eq!(actual_request_cost(299, 42), 42);
+        assert_eq!(actual_request_cost(400, 42), 0);
+        assert_eq!(actual_request_cost(502, 42), 0);
     }
 
     #[test]

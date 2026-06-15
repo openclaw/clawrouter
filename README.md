@@ -164,5 +164,10 @@ outcome, tokens when safely available, and cost for 30 days. Prompt and
 completion bodies are never stored. `/v1/usage` returns the caller policy's
 budget plus usage summary; `/v1/admin/usage` returns budget rows plus the
 all-tenant usage summary and recent request audit.
+
+Budgeted requests reserve the configured request cost before the upstream call.
+Successful upstream responses settle that charge; non-2xx and transport
+failures synchronously refund the reservation. Internal reservation ids are
+generated independently from caller-supplied request ids.
 OAuth, SigV4, and deployment-templated providers are still cataloged, but the
 edge path rejects them until the required token/signing/runtime mapping exists.
