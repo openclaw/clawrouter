@@ -103,6 +103,7 @@ function checkLocalEnv() {
 function checkLiveProviderReadiness(plan) {
   const liveProviders = liveProviderList();
   if (liveProviders.length === 0) {
+    errors.push("CLAWROUTER_SMOKE_LIVE_PROVIDERS must name at least one golden provider");
     return;
   }
   if (!process.env.CLAWROUTER_BASE_URL) {

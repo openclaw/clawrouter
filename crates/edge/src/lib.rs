@@ -19,6 +19,7 @@ const PROVIDER_ICONS: &str = include_str!("provider-icons.json");
 include!(concat!(env!("OUT_DIR"), "/admin-assets.rs"));
 static USAGE_EVENT_COUNTER: AtomicU64 = AtomicU64::new(0);
 const MAX_SQL_BUDGET_MICROS: u64 = 9_007_199_254_740_991;
+const PROVIDER_HEALTH_MAX_AGE_MS: f64 = 86_400_000.0;
 const CORS_ALLOW_ORIGIN: &str = "*";
 const CORS_ALLOW_METHODS: &str = "GET,POST,PUT,OPTIONS";
 const CORS_ALLOW_HEADERS: &str = "authorization,content-type,x-request-id";
@@ -487,7 +488,7 @@ async fn proxy_openai_compatible(
         .with_headers(headers)
         .with_body(Some(JsValue::from_str(&upstream_body)));
     let upstream_req = Request::new_with_init(&upstream_url, &init)?;
-    let response = Fetch::Request(upstream_req).send().await?;
+    let response = send_upstream_request(upstream_req, &route.provider.id).await?;
     enqueue_usage(
         &env,
         UsageRecord {
@@ -631,7 +632,7 @@ async fn proxy_manifest_endpoint(
         init.with_body(Some(JsValue::from_str(&upstream_body)));
     }
     let upstream_req = Request::new_with_init(&upstream_url, &init)?;
-    let response = Fetch::Request(upstream_req).send().await?;
+    let response = send_upstream_request(upstream_req, &provider.id).await?;
     enqueue_usage(
         &env,
         UsageRecord {
@@ -698,6 +699,20 @@ struct ProviderConnectionRecord {
     enabled: bool,
     #[serde(default)]
     label: Option<String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ProviderHealthRecord {
+    provider_id: String,
+    status: String,
+    checked_at: String,
+    #[serde(default)]
+    latency_ms: Option<u64>,
+    #[serde(default)]
+    status_code: Option<u16>,
+    #[serde(default)]
+    error: Option<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -841,12 +856,16 @@ struct ProviderReadinessRow {
     optional_config: Vec<String>,
     missing_config: Vec<String>,
     config_present: bool,
+    connection_enabled: bool,
     oauth_grant_required: bool,
     oauth_grant_count: usize,
     openai_compatible: bool,
     manifest_routes: usize,
     model_count: usize,
     executable: bool,
+    verified: bool,
+    last_checked_at: Option<String>,
+    latency_ms: Option<u64>,
     status: String,
     reasons: Vec<String>,
 }
@@ -1080,6 +1099,8 @@ async fn access_entitlement_rows_for_session(
     let snapshot = provider_snapshot()?;
     let entries = list_session_policy_entries(&kv, session).await?;
     let grants = list_oauth_grants(&kv).await?;
+    let connections = list_provider_connections(&kv, &snapshot).await?;
+    let health = list_provider_health(&kv).await?;
     Ok(snapshot
         .providers
         .iter()
@@ -1093,7 +1114,13 @@ async fn access_entitlement_rows_for_session(
                 .map(|entry| entry.policy_id.clone())
                 .collect::<Vec<_>>();
             let scoped_grants = entitlement_oauth_grants(&grants, &matching_entries);
-            let readiness = provider_readiness_row(provider, env, &scoped_grants);
+            let readiness = provider_readiness_row(
+                provider,
+                env,
+                &scoped_grants,
+                provider_connection_enabled(&connections, &provider.id),
+                health.get(&provider.id),
+            );
             EntitlementProviderRow {
                 provider: provider.id.clone(),
                 display_name: provider.display_name.clone(),
@@ -1200,9 +1227,18 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
     if req.method() == Method::Get && path == "/v1/admin/provider-status" {
         let snapshot = provider_snapshot()?;
         let grants = list_oauth_grants(&kv).await?;
+        let connections = list_provider_connections(&kv, &snapshot).await?;
+        let health = list_provider_health(&kv).await?;
         return Response::from_json(&ProviderReadinessResponse {
-            providers: provider_readiness_rows(&snapshot, &env, &grants),
+            providers: provider_readiness_rows(&snapshot, &env, &grants, &connections, &health),
         });
+    }
+
+    if req.method() == Method::Get && path == "/v1/admin/provider-health" {
+        let health = list_provider_health(&kv).await?;
+        return Response::from_json(&serde_json::json!({
+            "providers": health.into_values().collect::<Vec<_>>()
+        }));
     }
 
     if req.method() == Method::Get && path == "/v1/admin/policies" {
@@ -2350,6 +2386,47 @@ async fn list_provider_connections(
     Ok(connections)
 }
 
+async fn list_provider_health(kv: &KvStore) -> Result<BTreeMap<String, ProviderHealthRecord>> {
+    let mut health = BTreeMap::new();
+    let mut cursor = None;
+    loop {
+        let mut request = kv
+            .list()
+            .prefix("health/providers/".to_string())
+            .limit(1000);
+        if let Some(next_cursor) = cursor.take() {
+            request = request.cursor(next_cursor);
+        }
+        let list = request.execute().await.map_err(|error| {
+            Error::RustError(format!("failed to list provider health: {error}"))
+        })?;
+        for key in list.keys {
+            let Some(provider_id) = key.name.strip_prefix("health/providers/") else {
+                continue;
+            };
+            let Some(record) = kv.get(&key.name).text().await.map_err(|error| {
+                Error::RustError(format!("failed to read provider health: {error}"))
+            })?
+            else {
+                continue;
+            };
+            let record =
+                serde_json::from_str::<ProviderHealthRecord>(&record).map_err(|error| {
+                    Error::RustError(format!("provider health is invalid JSON: {error}"))
+                })?;
+            health.insert(provider_id.to_string(), record);
+        }
+        if list.list_complete {
+            break;
+        }
+        let Some(next_cursor) = list.cursor else {
+            break;
+        };
+        cursor = Some(next_cursor);
+    }
+    Ok(health)
+}
+
 async fn put_kv_record<T: Serialize>(kv: &KvStore, key: &str, value: &T, kind: &str) -> Result<()> {
     let value = serde_json::to_string(value)?;
     kv.put(key, value)
@@ -2495,11 +2572,21 @@ fn provider_readiness_rows(
     snapshot: &ProviderSnapshot,
     env: &Env,
     grants: &[OAuthGrantRecord],
+    connections: &[ProviderConnectionRecord],
+    health: &BTreeMap<String, ProviderHealthRecord>,
 ) -> Vec<ProviderReadinessRow> {
     snapshot
         .providers
         .iter()
-        .map(|provider| provider_readiness_row(provider, env, grants))
+        .map(|provider| {
+            provider_readiness_row(
+                provider,
+                env,
+                grants,
+                provider_connection_enabled(connections, &provider.id),
+                health.get(&provider.id),
+            )
+        })
         .collect()
 }
 
@@ -2507,6 +2594,8 @@ fn provider_readiness_row(
     provider: &CompiledProvider,
     env: &Env,
     grants: &[OAuthGrantRecord],
+    connection_enabled: bool,
+    health: Option<&ProviderHealthRecord>,
 ) -> ProviderReadinessRow {
     let optional_config = provider_optional_config_keys(provider);
     let required_config = provider
@@ -2534,9 +2623,18 @@ fn provider_readiness_row(
         .filter(|endpoint| supports_manifest_proxy(provider, endpoint))
         .count();
     let has_route = openai_compatible || manifest_routes > 0;
-    let executable =
-        has_route && config_present && (!oauth_grant_required || oauth_grant_count > 0);
+    let executable = connection_enabled
+        && has_route
+        && config_present
+        && (!oauth_grant_required || oauth_grant_count > 0);
+    let health_fresh = health.is_some_and(provider_health_is_fresh);
+    let verified = health_fresh && health.is_some_and(|health| health.status == "verified");
+    let health_failed = health.is_some_and(|health| health.status == "failed");
+    let health_stale = health.is_some() && !health_fresh;
     let mut reasons = Vec::new();
+    if !connection_enabled {
+        reasons.push("provider connection disabled".to_string());
+    }
     if !has_route {
         reasons.push("no executable edge route".to_string());
     }
@@ -2546,8 +2644,22 @@ fn provider_readiness_row(
     if oauth_grant_required && oauth_grant_count == 0 {
         reasons.push("OAuth grant required".to_string());
     }
-    let status = if executable {
-        "ready"
+    if health_failed {
+        reasons.push("last live check failed".to_string());
+    }
+    if health_stale {
+        reasons.push("live check is stale".to_string());
+    }
+    let status = if !connection_enabled {
+        "disabled"
+    } else if executable && verified {
+        "verified"
+    } else if executable && health_stale {
+        "stale"
+    } else if executable && health_failed {
+        "failed"
+    } else if executable {
+        "unverified"
     } else if !missing_config.is_empty() {
         "missing_config"
     } else if oauth_grant_required && oauth_grant_count == 0 {
@@ -2567,15 +2679,35 @@ fn provider_readiness_row(
         optional_config,
         missing_config,
         config_present,
+        connection_enabled,
         oauth_grant_required,
         oauth_grant_count,
         openai_compatible,
         manifest_routes,
         model_count: provider.models.len(),
         executable,
+        verified,
+        last_checked_at: health.map(|health| health.checked_at.clone()),
+        latency_ms: health.and_then(|health| health.latency_ms),
         status: status.to_string(),
         reasons,
     }
+}
+
+fn provider_health_is_fresh(health: &ProviderHealthRecord) -> bool {
+    let checked_at = js_sys::Date::parse(&health.checked_at);
+    let now = js_sys::Date::now();
+    checked_at.is_finite() && checked_at <= now && now - checked_at <= PROVIDER_HEALTH_MAX_AGE_MS
+}
+
+fn provider_connection_enabled(
+    connections: &[ProviderConnectionRecord],
+    provider_id: &str,
+) -> bool {
+    connections
+        .iter()
+        .find(|connection| connection.provider_id == provider_id)
+        .is_none_or(|connection| connection.enabled)
 }
 
 fn provider_optional_config_keys(provider: &CompiledProvider) -> Vec<String> {
@@ -3918,6 +4050,21 @@ fn provider_runtime_error_response(error: Error) -> Result<Response> {
         return json_error("provider_not_configured", &message, 503);
     }
     Err(error)
+}
+
+async fn send_upstream_request(request: Request, provider_id: &str) -> Result<Response> {
+    match Fetch::Request(request).send().await {
+        Ok(response) => Ok(response),
+        Err(_) => json_error(
+            "provider_unavailable",
+            &provider_transport_error_message(provider_id),
+            502,
+        ),
+    }
+}
+
+fn provider_transport_error_message(provider_id: &str) -> String {
+    format!("upstream request to provider `{provider_id}` failed")
 }
 
 fn provider_runtime_config_error_message(error: &Error) -> Option<String> {
@@ -5890,6 +6037,10 @@ mod tests {
 
         let unrelated = Error::RustError("upstream response was malformed".to_string());
         assert!(provider_runtime_config_error_message(&unrelated).is_none());
+        assert_eq!(
+            provider_transport_error_message("openai"),
+            "upstream request to provider `openai` failed"
+        );
     }
 
     #[test]

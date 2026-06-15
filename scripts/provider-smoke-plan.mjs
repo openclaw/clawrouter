@@ -48,7 +48,13 @@ export function buildProviderSmokePlan(snapshot, env = process.env) {
   };
 }
 
-export async function runLiveProviderSmokes({ baseUrl, smokeKey, plan, liveProviders }) {
+export async function runLiveProviderSmokes({
+  baseUrl,
+  smokeKey,
+  plan,
+  liveProviders,
+  onResult = async () => {},
+}) {
   if (!baseUrl || !smokeKey || liveProviders.length === 0) {
     return [];
   }
@@ -56,6 +62,10 @@ export async function runLiveProviderSmokes({ baseUrl, smokeKey, plan, liveProvi
   const results = [];
   for (const provider of selected) {
     const result = await runProviderTarget(baseUrl, smokeKey, provider);
+    await onResult(result);
+    if (result.status !== "verified") {
+      throw new Error(`${provider.id} smoke failed: ${result.error}`);
+    }
     results.push(result);
   }
   return results;
@@ -469,20 +479,38 @@ function methodAllowsBody(method) {
 
 async function runProviderTarget(baseUrl, smokeKey, provider) {
   const target = provider.target;
-  const response = await fetch(`${baseUrl.replace(/\/$/, "")}${target.route}`, {
-    method: "POST",
-    headers: {
-      authorization: `Bearer ${smokeKey}`,
-      "content-type": "application/json",
-      "x-request-id": `smoke_${provider.id}_${Date.now()}`,
-    },
-    body: JSON.stringify(target.kind === "openai_chat" ? target.body : target.envelope),
-  });
-  const text = await response.text();
-  if (!response.ok) {
-    throw new Error(`${provider.id} smoke failed with ${response.status}: ${text}`);
+  const startedAt = Date.now();
+  const checkedAt = new Date(startedAt).toISOString();
+  let response;
+  try {
+    response = await fetch(`${baseUrl.replace(/\/$/, "")}${target.route}`, {
+      method: "POST",
+      headers: {
+        authorization: `Bearer ${smokeKey}`,
+        "content-type": "application/json",
+        "x-request-id": `smoke_${provider.id}_${startedAt}`,
+      },
+      body: JSON.stringify(target.kind === "openai_chat" ? target.body : target.envelope),
+    });
+  } catch {
+    return {
+      provider: provider.id,
+      status: "failed",
+      checkedAt,
+      latencyMs: Date.now() - startedAt,
+      statusCode: null,
+      error: "transport failure",
+    };
   }
-  return { provider: provider.id, status: response.status };
+  await response.arrayBuffer();
+  return {
+    provider: provider.id,
+    status: response.ok ? "verified" : "failed",
+    checkedAt,
+    latencyMs: Date.now() - startedAt,
+    statusCode: response.status,
+    error: response.ok ? null : `HTTP ${response.status}`,
+  };
 }
 
 function splitCsv(value) {
