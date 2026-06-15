@@ -1042,6 +1042,9 @@ struct AdminCredentialResponse {
     credential_id: String,
     policy_id: String,
     enabled: bool,
+    policy_enabled: bool,
+    generation_matches: bool,
+    active: bool,
 }
 
 #[derive(Debug, Serialize)]
@@ -1824,13 +1827,15 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
     }
 
     if req.method() == Method::Get && path == "/v1/admin/credentials" {
-        let credentials = list_proxy_credentials(&env, &kv)
-            .await?
+        let credentials = list_proxy_credentials(&env, &kv).await?;
+        let policy_ids = credentials
+            .iter()
+            .map(|(_, credential)| credential.policy_id.clone())
+            .collect::<BTreeSet<_>>()
             .into_iter()
-            .map(|(credential_id, credential)| {
-                admin_credential_response(&credential_id, &credential)
-            })
             .collect::<Vec<_>>();
+        let policies = authoritative_access_policies(&env, &kv, &policy_ids).await?;
+        let credentials = admin_credential_responses(credentials, &policies);
         return Response::from_json(&serde_json::json!({ "credentials": credentials }));
     }
 
@@ -1875,7 +1880,11 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 &credential,
             )
             .await;
-            return Response::from_json(&admin_credential_response(&credential_id, &credential));
+            return Response::from_json(&admin_credential_response(
+                &credential_id,
+                &credential,
+                Some(&policy),
+            ));
         }
         if req.method() == Method::Post {
             let Some(credential_id) = rest.strip_suffix("/revoke") else {
@@ -1896,20 +1905,23 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             };
             credential.enabled = false;
             put_authoritative_proxy_credential(&env, &kv, &credential_id, &credential).await?;
-            if let Some(policy) =
-                authoritative_access_policy(&env, &kv, &credential.policy_id).await?
-            {
+            let policy = authoritative_access_policy(&env, &kv, &credential.policy_id).await?;
+            if let Some(policy) = policy.as_ref() {
                 sync_legacy_compatibility_tombstone_best_effort(
                     &kv,
                     &credential_id,
-                    &policy,
+                    policy,
                     &credential,
                 )
                 .await;
             } else {
                 disable_legacy_key_record_best_effort(&kv, &credential_id).await;
             }
-            return Response::from_json(&admin_credential_response(&credential_id, &credential));
+            return Response::from_json(&admin_credential_response(
+                &credential_id,
+                &credential,
+                policy.as_ref(),
+            ));
         }
         return json_error("method_not_allowed", "admin method is not allowed", 405);
     }
@@ -2094,10 +2106,12 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
         disable_legacy_key_record_best_effort(&kv, &kid).await;
         if let Some(policy) = authoritative_access_policy(&env, &kv, &policy_id).await? {
             let mut response = admin_policy_response(&kid, &policy_id, &policy);
-            response.enabled = credential.enabled && policy.enabled;
+            response.enabled = credential.enabled
+                && policy.enabled
+                && credential_policy_generation_matches(&credential, &policy);
             return Response::from_json(&response);
         }
-        return Response::from_json(&admin_credential_response(&kid, &credential));
+        return Response::from_json(&admin_credential_response(&kid, &credential, None));
     }
 
     json_error("method_not_allowed", "admin method is not allowed", 405)
@@ -2674,11 +2688,18 @@ fn admin_access_policy_response(
 fn admin_credential_response(
     credential_id: &str,
     credential: &ProxyCredential,
+    policy: Option<&AccessPolicy>,
 ) -> AdminCredentialResponse {
+    let policy_enabled = policy.is_some_and(|policy| policy.enabled);
+    let generation_matches =
+        policy.is_some_and(|policy| credential_policy_generation_matches(credential, policy));
     AdminCredentialResponse {
         credential_id: credential_id.to_string(),
         policy_id: credential.policy_id.clone(),
         enabled: credential.enabled,
+        policy_enabled,
+        generation_matches,
+        active: credential.enabled && policy_enabled && generation_matches,
     }
 }
 
@@ -2941,12 +2962,32 @@ fn admin_key_policy_responses(
         .filter_map(|(credential_id, credential)| {
             let policy = policies.get(&credential.policy_id)?;
             let mut response = admin_policy_response(&credential_id, &credential.policy_id, policy);
-            response.enabled = credential.enabled && policy.enabled;
+            response.enabled = credential.enabled
+                && policy.enabled
+                && credential_policy_generation_matches(&credential, policy);
             Some(response)
         })
         .collect::<Vec<_>>();
     entries.sort_by(|a, b| a.kid.cmp(&b.kid));
     entries
+}
+
+fn admin_credential_responses(
+    credentials: Vec<(String, ProxyCredential)>,
+    policies: &BTreeMap<String, AccessPolicy>,
+) -> Vec<AdminCredentialResponse> {
+    let mut responses = credentials
+        .into_iter()
+        .map(|(credential_id, credential)| {
+            admin_credential_response(
+                &credential_id,
+                &credential,
+                policies.get(&credential.policy_id),
+            )
+        })
+        .collect::<Vec<_>>();
+    responses.sort_by(|a, b| a.credential_id.cmp(&b.credential_id));
+    responses
 }
 
 async fn list_access_policy_records_from_kv(kv: &KvStore) -> Result<Vec<AccessPolicyEntry>> {
@@ -9591,26 +9632,62 @@ mod tests {
                     policy_generation: revoked_policy.generation.clone(),
                 },
             ),
+            (
+                "key_d".to_string(),
+                ProxyCredential {
+                    enabled: true,
+                    secret_sha256: sha256_hex("d"),
+                    policy_id: "shared".to_string(),
+                    policy_generation: "stale_generation".to_string(),
+                },
+            ),
         ];
         let policies = BTreeMap::from([
             ("revoked".to_string(), revoked_policy),
             ("shared".to_string(), active_policy),
         ]);
 
-        let entries = admin_key_policy_responses(credentials, &policies);
+        let entries = admin_key_policy_responses(credentials.clone(), &policies);
 
         assert_eq!(
             entries
                 .iter()
                 .map(|entry| entry.kid.as_str())
                 .collect::<Vec<_>>(),
-            vec!["key_a", "key_b", "key_c"]
+            vec!["key_a", "key_b", "key_c", "key_d"]
         );
         assert!(entries[0].enabled);
         assert!(!entries[1].enabled);
         assert!(!entries[2].enabled);
+        assert!(!entries[3].enabled);
         assert_eq!(entries[0].policy_id, "shared");
         assert_eq!(entries[1].policy_id, "shared");
+
+        let credentials = admin_credential_responses(
+            [
+                credentials,
+                vec![(
+                    "key_missing".to_string(),
+                    ProxyCredential {
+                        enabled: true,
+                        secret_sha256: sha256_hex("missing"),
+                        policy_id: "missing".to_string(),
+                        policy_generation: "gen_missing".to_string(),
+                    },
+                )],
+            ]
+            .concat(),
+            &policies,
+        );
+        assert!(credentials[0].active);
+        assert!(credentials[0].policy_enabled);
+        assert!(credentials[0].generation_matches);
+        assert!(!credentials[1].active);
+        assert!(!credentials[2].active);
+        assert!(!credentials[3].active);
+        assert!(!credentials[3].generation_matches);
+        assert!(!credentials[4].active);
+        assert!(!credentials[4].policy_enabled);
     }
 
     #[test]
