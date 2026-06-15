@@ -597,13 +597,13 @@ function App() {
         if (overviewResult.ok) {
           setAdminOverview(overviewResult.value);
         } else {
-          setAdminOverview(null);
+          setAdminOverview(adminOverviewFromPolicies(policyData.policies, credentialData.credentials, providers, routes));
           refreshWarnings = [...refreshWarnings, `overview unavailable: ${overviewResult.error}`];
         }
         if (tenantResult.ok) {
           setTenantSummaries(tenantResult.value.tenants);
         } else {
-          setTenantSummaries(tenantSummaryFallback(policyData.policies));
+          setTenantSummaries(tenantSummaryFallback(policyData.policies, credentialData.credentials));
           refreshWarnings = [...refreshWarnings, `tenant summary unavailable: ${tenantResult.error}`];
         }
         setUsageRows([]);
@@ -724,7 +724,7 @@ function App() {
       const secret = generateSecret();
       const next: ProxyCredential = { credentialId, policyId, enabled: true };
       if (demoMode) {
-        setCredentials((current) => [next, ...current]);
+        applyDemoCredentials((current) => [next, ...current]);
       } else {
         await request<ProxyCredential>(gatewayOrigin, `/v1/admin/credentials/${encodeURIComponent(credentialId)}`, {
           method: "PUT",
@@ -748,7 +748,7 @@ function App() {
     try {
       setStatus(`revoking ${credentialId}`);
       if (demoMode) {
-        setCredentials((current) => current.map((credential) => credential.credentialId === credentialId ? { ...credential, enabled: false } : credential));
+        applyDemoCredentials((current) => current.map((credential) => credential.credentialId === credentialId ? { ...credential, enabled: false } : credential));
       } else {
         await request<ProxyCredential>(gatewayOrigin, `/v1/admin/credentials/${encodeURIComponent(credentialId)}/revoke`, { method: "POST" });
         await refresh();
@@ -1013,10 +1013,19 @@ function App() {
   function applyDemoKeys(updater: (current: AccessPolicy[]) => AccessPolicy[]) {
     setKeys((current) => {
       const next = updater(current);
-      setAdminOverview(adminOverviewFromKeys(next, providers, routes));
-      setTenantSummaries(tenantSummaryFallback(next));
+      setAdminOverview(adminOverviewFromPolicies(next, credentials, providers, routes));
+      setTenantSummaries(tenantSummaryFallback(next, credentials));
       setUsageRows(next.map(policyUsageFallback));
       setUsageLoaded(true);
+      return next;
+    });
+  }
+
+  function applyDemoCredentials(updater: (current: ProxyCredential[]) => ProxyCredential[]) {
+    setCredentials((current) => {
+      const next = updater(current);
+      setAdminOverview(adminOverviewFromPolicies(keys, next, providers, routes));
+      setTenantSummaries(tenantSummaryFallback(keys, next));
       return next;
     });
   }
@@ -1213,7 +1222,7 @@ function App() {
           />
         ) : null}
 
-        {view === "usage" && session.role === "admin" ? <UsageScreen keys={keys} services={services} overview={adminOverview} tenants={tenantSummaries} usageRows={usageRows} usage={usageSnapshot} usageLoaded={usageLoaded} /> : null}
+        {view === "usage" && session.role === "admin" ? <UsageScreen keys={keys} credentials={credentials} services={services} overview={adminOverview} tenants={tenantSummaries} usageRows={usageRows} usage={usageSnapshot} usageLoaded={usageLoaded} /> : null}
       </section>
     </main>
   );
@@ -1717,12 +1726,12 @@ function UsersScreen({ users, selected, policies, bindings, services, form, setF
   );
 }
 
-function UsageScreen({ keys, services, overview, tenants, usageRows, usage, usageLoaded }: { keys: AccessPolicy[]; services: ServiceItem[]; overview: AdminOverview | null; tenants: AdminTenantSummary[]; usageRows: AdminUsageRow[]; usage: UsageSnapshot; usageLoaded: boolean }) {
-  const activeKeys = keys.filter((key) => key.enabled);
+function UsageScreen({ keys, credentials, services, overview, tenants, usageRows, usage, usageLoaded }: { keys: AccessPolicy[]; credentials: ProxyCredential[]; services: ServiceItem[]; overview: AdminOverview | null; tenants: AdminTenantSummary[]; usageRows: AdminUsageRow[]; usage: UsageSnapshot; usageLoaded: boolean }) {
+  const activePolicies = keys.filter((key) => key.enabled);
   const readyServices = readyCount(services);
   const blockedServices = services.filter((service) => service.readiness && !service.readiness.executable);
   const rows = usageRows.length ? usageRows : keys.map(policyUsageFallback);
-  const tenantRows = tenants.length ? tenants : tenantSummaryFallback(keys);
+  const tenantRows = tenants.length ? tenants : tenantSummaryFallback(keys, credentials);
   const serviceByProvider = new Map(services.map((service) => [service.provider, service]));
   const successRate = usage.summary.requestCount ? Math.round((usage.summary.successCount / usage.summary.requestCount) * 100) : 0;
   const untrackedRows = rows.filter((row) => row.enabled && row.budget.ledger === "untracked");
@@ -1780,7 +1789,7 @@ function UsageScreen({ keys, services, overview, tenants, usageRows, usage, usag
         }) : <p>No provider activity yet.</p>}</div>
         <div className="sectionTitle">Tenant coverage</div>
         <div className="miniList">{tenantRows.length ? tenantRows.slice(0, 8).map((tenant) => <button type="button" key={tenant.tenantId}>{tenant.tenantId}<span>{tenant.activePolicies ?? tenant.activeKeys}/{tenant.policies ?? tenant.keys} policies · {effectiveProviderCount(tenant.providers, services, tenant.allProviders)} services</span></button>) : <p>No tenant policies yet.</p>}</div>
-        <dl className="facts"><dt>ledger</dt><dd>{usage.ledger}</dd><dt>retention</dt><dd>30 days of request metadata</dd><dt>policies</dt><dd>{overview?.policiesActive ?? overview?.keysActive ?? activeKeys.length} active</dd><dt>tenants</dt><dd>{overview?.tenantsTotal ?? tenantRows.length}</dd></dl>
+        <dl className="facts"><dt>ledger</dt><dd>{usage.ledger}</dd><dt>retention</dt><dd>30 days of request metadata</dd><dt>policies</dt><dd>{overview?.policiesActive ?? activePolicies.length} active</dd><dt>tenants</dt><dd>{overview?.tenantsTotal ?? tenantRows.length}</dd></dl>
       </aside>
     </div>
   );
@@ -2084,13 +2093,14 @@ function policyFormFromPolicy(key: AccessPolicy): PolicyForm {
   };
 }
 
-function adminOverviewFromKeys(keys: AccessPolicy[], providers: ProviderRow[], routes: RouteCatalog): AdminOverview {
-  const tenants = tenantSummaryFallback(keys);
+function adminOverviewFromPolicies(keys: AccessPolicy[], credentials: ProxyCredential[], providers: ProviderRow[], routes: RouteCatalog): AdminOverview {
+  const policyById = new Map(keys.map((key) => [key.policyId, key]));
+  const tenants = tenantSummaryFallback(keys, credentials);
   return {
     policiesTotal: keys.length,
     policiesActive: keys.filter((key) => key.enabled).length,
-    keysTotal: keys.length,
-    keysActive: keys.filter((key) => key.enabled).length,
+    keysTotal: credentials.length,
+    keysActive: credentials.filter((credential) => credential.enabled && policyById.get(credential.policyId)?.enabled).length,
     tenantsTotal: tenants.length,
     providerCount: providers.length,
     openaiCompatibleProviders: routes.openaiCompatible.length,
@@ -2345,8 +2355,8 @@ function demoData() {
   const readinessByProvider = readinessMap(entitlements.providers.map((item) => item.readiness));
   const usageRows = keys.map(policyUsageFallback);
   const usage = demoUsageSnapshot();
-  const tenants = tenantSummaryFallback(keys);
-  const overview = adminOverviewFromKeys(keys, providers, routes);
+  const tenants = tenantSummaryFallback(keys, credentials);
+  const overview = adminOverviewFromPolicies(keys, credentials, providers, routes);
   return { session, providers, routes, keys, credentials, connections, users, bindings, overview, tenants, usageRows, usage, entitlements, services: serviceItems(providers, routes, readinessByProvider, accessByProvider), models };
 }
 
