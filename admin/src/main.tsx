@@ -18,6 +18,32 @@ import {
   Users,
 } from "lucide-react";
 import providerIconManifest from "../../crates/edge/src/provider-icons.json";
+import {
+  accessFormFromUser,
+  accessMap,
+  bindingFormFromBinding,
+  bindingKey,
+  currencyInput,
+  effectiveAccess,
+  errorMessage,
+  grantNamesForService,
+  optionalCurrencyMicros,
+  optionalNumber,
+  parseGroups,
+  playgroundAccessEndpoint,
+  playgroundBlockedForService,
+  playgroundBlocker,
+  playgroundPayload,
+  policyCoversProvider,
+  policyUsageFallback,
+  readinessLabel,
+  readinessMap,
+  reconcileDirectUserBindings,
+  routeKey,
+  serviceOutcome,
+  tenantSummaryFallback,
+  unique,
+} from "./domain";
 import "./style.css";
 
 type View = "catalog" | "playground" | "policies" | "users" | "usage";
@@ -1946,101 +1972,8 @@ function isTextualResponse(contentType: string) {
   return /(^text\/|json|xml|html|csv|yaml|graphql|javascript)/i.test(contentType);
 }
 
-function readinessMap(readiness: ProviderReadiness[]) {
-  return Object.fromEntries(readiness.map((item) => [item.id, item]));
-}
-
-function accessMap(entitlements: EntitlementsResponse | null) {
-  return new Map((entitlements?.providers ?? []).map((item) => [item.provider, item]));
-}
-
 function readyCount(services: ServiceItem[]) {
   return services.filter((service) => service.readiness?.executable).length;
-}
-
-function grantNamesForService(service: ServiceItem, policies: AccessPolicy[] = []) {
-  return unique([...policies.map((policy) => policy.policyId), ...(service.access?.policies ?? [])]);
-}
-
-function serviceOutcome(service: ServiceItem): ServiceOutcome {
-  if (service.access && !service.access.allowed) {
-    return {
-      label: "denied",
-      detail: "Current Cloudflare Access identity is denied by policy.",
-      tone: "revoked",
-      playable: false,
-      blocked: true,
-    };
-  }
-  if (!service.access) {
-    return {
-      label: "unknown",
-      detail: "Access entitlements are unavailable, so this identity's policy status cannot be determined.",
-      tone: "neutral",
-      playable: false,
-      blocked: false,
-    };
-  }
-  const policyNames = service.access.policies;
-  if (!service.readiness) {
-    return {
-      label: "unknown",
-      detail: `Granted by ${policyNames.join(", ") || "session"}, but runtime readiness has not loaded yet.`,
-      tone: "neutral",
-      playable: false,
-      blocked: true,
-    };
-  }
-  if (service.readiness.executable) {
-    return {
-      label: "usable",
-      detail: `Granted by ${policyNames.join(", ") || "session"} and executable in the gateway.`,
-      tone: "active",
-      playable: true,
-      blocked: false,
-    };
-  }
-  const missing = service.readiness.missingConfig.length ? `Missing ${service.readiness.missingConfig.join(", ")}.` : "";
-  const oauth = service.readiness.oauthGrantRequired ? "OAuth grant required before calls can run." : "";
-  return {
-    label: service.readiness.status === "missing_config" ? "missing config" : service.readiness.status === "grant_required" ? "needs OAuth" : readinessLabel(service.readiness),
-    detail: [service.readiness.reasons[0], missing, oauth].filter(Boolean).join(" "),
-    tone: "revoked",
-    playable: false,
-    blocked: true,
-  };
-}
-
-function readinessLabel(readiness: ProviderReadiness | undefined) {
-  if (!readiness) return "unknown";
-  return readiness.status.replace(/_/g, " ");
-}
-
-function optionalNumber(value: string) {
-  if (!value.trim()) return undefined;
-  const parsed = Number(value);
-  if (!Number.isSafeInteger(parsed) || parsed < 0) throw new Error(`${value} is not a non-negative safe integer`);
-  return parsed;
-}
-
-function optionalCurrencyMicros(value: string) {
-  if (!value.trim()) return undefined;
-  const normalized = value.replace(/[$,\s]/g, "");
-  const parsed = Number(normalized);
-  if (!Number.isFinite(parsed) || parsed < 0) throw new Error(`${value} is not a valid budget`);
-  return Math.round(parsed * 1_000_000);
-}
-
-function currencyInput(value: number | null | undefined) {
-  if (value === undefined || value === null) return "";
-  return String(value / 1_000_000);
-}
-
-function optionalDecimal(value: string) {
-  if (!value.trim()) return undefined;
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) throw new Error(`${value} is not a number`);
-  return parsed;
 }
 
 function generateSecret() {
@@ -2052,10 +1985,6 @@ function generateSecret() {
 async function sha256Hex(value: string) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
-}
-
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : String(error);
 }
 
 function formatBudget(value: number | null | undefined) {
@@ -2140,117 +2069,6 @@ function policyFormFromPolicy(key: AccessPolicy): PolicyForm {
   };
 }
 
-function policyCoversProvider(policy: AccessPolicy, providerId: string) {
-  return policy.providers.length === 0 || policy.providers.includes(providerId);
-}
-
-function accessFormFromUser(user: AccessUser, bindings: PolicyBinding[]): AccessForm {
-  return {
-    email: user.email,
-    tenantId: user.tenantId,
-    enabled: user.enabled,
-    groups: user.groups.join(", "),
-    policyIds: bindings
-      .filter((binding) => binding.enabled && binding.principalType === "user" && binding.principalId === user.email)
-      .sort((a, b) => a.priority - b.priority || a.policyId.localeCompare(b.policyId))
-      .map((binding) => binding.policyId),
-  };
-}
-
-function bindingKey(binding: PolicyBinding | undefined) {
-  return binding ? `${binding.principalType}:${binding.principalId}:${binding.policyId}` : "";
-}
-
-function bindingFormFromBinding(binding: PolicyBinding): BindingForm {
-  return {
-    policyId: binding.policyId,
-    principalType: binding.principalType,
-    principalId: binding.principalId,
-    enabled: binding.enabled,
-    priority: String(binding.priority),
-  };
-}
-
-function effectiveAccess(user: AccessUser | undefined, policies: AccessPolicy[], bindings: PolicyBinding[], services: ServiceItem[]) {
-  if (!user || !user.enabled) return { policies: [] as AccessPolicy[], services: [] as ServiceItem[] };
-  const groupIds = new Set(user.groups);
-  const policyIds = new Set(bindings
-    .filter((binding) => binding.enabled && (binding.principalType === "user" ? binding.principalId === user.email : groupIds.has(binding.principalId)))
-    .sort((a, b) => a.priority - b.priority || a.policyId.localeCompare(b.policyId))
-    .map((binding) => binding.policyId));
-  const userPolicies = policies.filter((policy) => policy.enabled && policyIds.has(policy.policyId));
-  const hasWildcardGrant = userPolicies.some((policy) => policy.providers.length === 0);
-  const providerIds = new Set(userPolicies.flatMap((policy) => policy.providers));
-  return { policies: userPolicies, services: services.filter((service) => hasWildcardGrant || providerIds.has(service.provider)) };
-}
-
-function parseGroups(value: string) {
-  return unique(value.split(/[,\n]+/).map((group) => group.trim().toLowerCase()).filter(Boolean)).sort();
-}
-
-function reconcileDirectUserBindings(current: PolicyBinding[], email: string, policies: AccessPolicy[], policyIds: string[]) {
-  const desired = new Set(policyIds);
-  const existing = new Map(current
-    .filter((binding) => binding.principalType === "user" && binding.principalId === email)
-    .map((binding) => [binding.policyId, binding]));
-  const other = current.filter((binding) => binding.principalType !== "user" || binding.principalId !== email);
-  const direct = policies.flatMap((policy) => {
-    const binding = existing.get(policy.policyId);
-    if (!binding && !desired.has(policy.policyId)) return [];
-    return [{
-      policyId: policy.policyId,
-      principalType: "user" as const,
-      principalId: email,
-      enabled: desired.has(policy.policyId),
-      priority: binding?.priority ?? 100,
-    }];
-  });
-  return [...other, ...direct];
-}
-
-function policyUsageFallback(policy: AccessPolicy): AdminUsageRow {
-  const limit = policy.monthlyBudgetMicros;
-  const blocked = limit === 0;
-  const unmetered = limit === undefined || limit === null;
-  return {
-    kid: policy.policyId,
-    tenantId: policy.tenantId ?? "default",
-    enabled: policy.enabled,
-    providers: policy.providers,
-    tokenRole: policy.tokenRole,
-    monthlyBudgetMicros: policy.monthlyBudgetMicros,
-    requestCostMicros: policy.requestCostMicros,
-    budget: {
-      configured: !unmetered,
-      ledger: blocked ? "blocked" : unmetered ? "unmetered" : "untracked",
-      limitMicros: limit,
-      spentMicros: blocked ? 0 : null,
-      remainingMicros: blocked ? 0 : limit,
-    },
-  };
-}
-
-function tenantSummaryFallback(keys: AccessPolicy[]): AdminTenantSummary[] {
-  const groups = keys.reduce((acc, key) => {
-    const tenantId = key.tenantId ?? "default";
-    const current = acc.get(tenantId) ?? { tenantId, keys: 0, activeKeys: 0, providers: new Set<string>(), allProviders: false, monthlyBudgetMicros: 0, requestCostMicros: 0 };
-    current.keys += 1;
-    if (key.enabled) {
-      current.activeKeys += 1;
-      if (key.providers.length) {
-        key.providers.forEach((provider) => current.providers.add(provider));
-      } else {
-        current.allProviders = true;
-      }
-    }
-    current.monthlyBudgetMicros += key.monthlyBudgetMicros ?? 0;
-    current.requestCostMicros += key.requestCostMicros ?? 0;
-    acc.set(tenantId, current);
-    return acc;
-  }, new Map<string, { tenantId: string; keys: number; activeKeys: number; providers: Set<string>; allProviders: boolean; monthlyBudgetMicros: number; requestCostMicros: number }>());
-  return Array.from(groups.values()).map((tenant) => ({ ...tenant, providers: Array.from(tenant.providers).sort() }));
-}
-
 function adminOverviewFromKeys(keys: AccessPolicy[], providers: ProviderRow[], routes: RouteCatalog): AdminOverview {
   const tenants = tenantSummaryFallback(keys);
   return {
@@ -2332,10 +2150,6 @@ function serviceItems(providers: ProviderRow[], routes: RouteCatalog, readinessB
   return [...modelServices, ...toolServices, ...providerServices].sort((a, b) => a.provider.localeCompare(b.provider) || a.name.localeCompare(b.name));
 }
 
-function unique(values: string[]) {
-  return Array.from(new Set(values.filter(Boolean)));
-}
-
 function matchesServiceQuery(item: ServiceItem, query: string) {
   const needle = query.trim().toLowerCase();
   if (!needle) return true;
@@ -2355,35 +2169,11 @@ interface CatalogModel {
   capabilities: string[];
 }
 
-function playgroundPayload(form: PlaygroundForm, route?: RouteCatalog["manifestProxy"][number]) {
-  if (form.mode === "service") {
-    const body = form.servicePayload.trim() ? JSON.parse(form.servicePayload) : {};
-    return {
-      method: form.serviceMethod,
-      pathParams: pathParamsForRoute(route, form.servicePath),
-      body,
-    };
-  }
-  const maxTokens = optionalNumber(form.maxTokens);
-  const temperature = optionalDecimal(form.temperature);
-  if (form.endpoint === "/v1/responses") {
-    return { model: form.model, input: form.prompt, instructions: form.system || undefined, max_output_tokens: maxTokens, temperature };
-  }
-  return { model: form.model, messages: [...(form.system ? [{ role: "system", content: form.system }] : []), { role: "user", content: form.prompt }], max_tokens: maxTokens, temperature };
-}
-
 function playgroundCurl(form: PlaygroundForm, payload: unknown, route?: RouteCatalog["manifestProxy"][number]) {
   const method = "POST";
   const endpoint = playgroundAccessEndpoint(form, route);
   const lines = [`curl -X ${method} '${window.location.origin}${endpoint}' \\`, `  -b '$CLOUDFLARE_ACCESS_COOKIE' \\`, `  -H 'content-type: application/json' \\`, `  -d '${JSON.stringify(payload ?? {}, null, 2).replace(/'/g, `'\\''`)}'`];
   return lines.join("\n");
-}
-
-function playgroundAccessEndpoint(form: PlaygroundForm, route?: RouteCatalog["manifestProxy"][number]) {
-  if (form.mode === "service") {
-    return resolveProxyRoute(route).replace(/^\/v1\/proxy/, "/v1/playground/proxy");
-  }
-  return `/v1/playground${form.endpoint}`;
 }
 
 function playgroundRequestPreview(form: PlaygroundForm, mode: "json" | "curl", route?: RouteCatalog["manifestProxy"][number]) {
@@ -2393,44 +2183,6 @@ function playgroundRequestPreview(form: PlaygroundForm, mode: "json" | "curl", r
   } catch (error) {
     return errorMessage(error);
   }
-}
-
-function playgroundBlocker(form: PlaygroundForm, model: CatalogModel | undefined, route: RouteCatalog["manifestProxy"][number] | undefined, accessByProvider: Map<string, ProviderAccess>, readinessByProvider: Record<string, ProviderReadiness>) {
-  if (form.mode === "model" && !model) return "select a model";
-  if (form.mode === "service" && !route) return "select a service route";
-  const provider = form.mode === "model" ? model?.provider : route?.provider;
-  if (!provider) return null;
-  const access = accessByProvider.get(provider);
-  if (!access?.allowed) return "Cloudflare Access identity is not granted this provider";
-  const readiness = readinessByProvider[provider];
-  if (!readiness) return "provider readiness is unknown";
-  if (!readiness.executable) return readiness.reasons[0] ?? `provider is ${readinessLabel(readiness)}`;
-  return null;
-}
-
-function playgroundBlockedForService(service: ServiceItem) {
-  const outcome = serviceOutcome(service);
-  if (!outcome.playable) return outcome.detail;
-  if (service.readiness && !service.readiness.executable) return service.readiness.reasons[0] ?? `service is ${readinessLabel(service.readiness)}`;
-  if (!service.models && service.surfaces.includes("provider")) return "no executable model or proxy route declared";
-  return null;
-}
-
-function routeKey(route: RouteCatalog["manifestProxy"][number] | undefined) {
-  return route ? `${route.provider}:${route.endpoint}:${route.route}` : "";
-}
-
-function resolveProxyRoute(route: RouteCatalog["manifestProxy"][number] | undefined) {
-  if (!route) return "/v1/proxy";
-  return route.route;
-}
-
-function pathParamsForRoute(route: RouteCatalog["manifestProxy"][number] | undefined, value: string) {
-  const params: Record<string, string> = {};
-  for (const param of route?.pathParams ?? []) {
-    params[param] = value.trim() || "demo";
-  }
-  return params;
 }
 
 function demoUsageSnapshot(): UsageSnapshot {

@@ -3,7 +3,7 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "pnpm --dir admin check && cargo test --workspace",
+    "check": "pnpm --dir admin check && pnpm --dir admin test && cargo test --workspace",
     "build": "pnpm --dir admin build && cargo build --workspace",
     "provider:compile": "cargo run -p clawrouter -- provider compile providers/*.provider.yaml",
     "provider:icons": "node scripts/sync-provider-icons.mjs",
