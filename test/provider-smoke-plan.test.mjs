@@ -147,6 +147,24 @@ test("smoke key inspection keeps malformed credentials fatal", async () => {
   );
 });
 
+test("smoke key inspection treats redirects and access challenges as unavailable", async () => {
+  for (const response of [
+    new Response(null, { status: 302, headers: { location: "https://access.example" } }),
+    Response.json({ error: { code: "access_required" } }, { status: 403 }),
+    Response.json({ error: { code: "rate_limited" } }, { status: 429 }),
+  ]) {
+    await assert.rejects(
+      inspectSmokeKeyProviderAccess({
+        baseUrl: "https://clawrouter.example",
+        smokeKey: "smoke-key",
+        liveProviders: ["openai"],
+        fetchImpl: async () => response,
+      }),
+      SmokeKeyInspectionUnavailableError,
+    );
+  }
+});
+
 test("all live provider selection expands to concrete provider ids", () => {
   const selected = selectLiveProviderPlans(
     {

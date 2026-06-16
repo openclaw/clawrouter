@@ -123,17 +123,17 @@ export async function inspectSmokeKeyProviderAccess({
     );
   }
   if (!response.ok) {
-    if (response.status === 404 || response.status >= 500) {
-      throw new SmokeKeyInspectionUnavailableError(
-        `/v1/key/inspect failed with ${response.status}`,
-      );
-    }
-    let detail = "";
+    let errorCode = "";
     try {
       const body = await response.json();
-      detail = body?.error?.code ? `: ${body.error.code}` : "";
+      errorCode = body?.error?.code ?? "";
     } catch {}
-    throw new Error(`/v1/key/inspect failed with ${response.status}${detail}`);
+    if (response.status === 400 && errorCode === "invalid_key_syntax") {
+      throw new Error(`/v1/key/inspect failed with 400: invalid_key_syntax`);
+    }
+    throw new SmokeKeyInspectionUnavailableError(
+      `/v1/key/inspect failed with ${response.status}${errorCode ? `: ${errorCode}` : ""}`,
+    );
   }
   let inspection;
   try {
