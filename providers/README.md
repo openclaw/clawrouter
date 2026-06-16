@@ -60,7 +60,7 @@ billing:
   policy grants.
 - `routing.nativePrefixes` lets OpenClaw route native keys such as
   `clawrouter-openai-*` to a provider without users setting `base_url`.
-- `routing.modelPrefixes` maps model names like `openai/gpt-5.5-mini` to the
+- `routing.modelPrefixes` maps model names like `openai/gpt-4.1-mini` to the
   provider snapshot.
 - `auth.schemes` declares how ClawRouter injects the upstream credential.
 - `adapter` declares the request/response family. Use `custom_adapter` only after

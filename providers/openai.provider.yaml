@@ -56,10 +56,10 @@ endpoints:
     timeoutMs: 120000
 models:
   entries:
-    - id: openai/gpt-5.5-mini
-      upstream: gpt-5.5-mini
+    - id: openai/gpt-4.1-mini
+      upstream: gpt-4.1-mini
       capabilities: [llm.responses, llm.chat]
-      pricingRef: openai-gpt-5.5-mini
+      pricingRef: openai-gpt-4.1-mini
     - id: openai/text-embedding-3-large
       upstream: text-embedding-3-large
       capabilities: [llm.embeddings]

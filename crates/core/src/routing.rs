@@ -39,9 +39,9 @@ mod tests {
 
     #[test]
     fn matches_provider_prefixes() {
-        assert!(match_model("openai/", "openai/gpt-5.5-mini"));
+        assert!(match_model("openai/", "openai/gpt-4.1-mini"));
         assert!(match_model("tavily/", "tavily/search"));
-        assert!(match_model("openai/gpt-*", "openai/gpt-5.5-mini"));
+        assert!(match_model("openai/gpt-*", "openai/gpt-4.1-mini"));
         assert!(match_model("minimax/*", "minimax/MiniMax-M3"));
         assert!(!match_model("openai/", "openrouter/auto"));
         assert!(!match_model("openai/*", "tavily/search"));

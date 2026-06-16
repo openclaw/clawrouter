@@ -533,7 +533,7 @@ function sampleBody(provider, endpoint, method, env) {
       provider: "openai",
       endpoint: "chat/completions",
       query: {
-        model: env.CLOUDFLARE_AI_GATEWAY_SMOKE_MODEL ?? "openai/gpt-5.5-mini",
+        model: env.CLOUDFLARE_AI_GATEWAY_SMOKE_MODEL ?? "openai/gpt-4.1-mini",
         messages: [{ role: "user", content: "reply with ok" }],
         max_tokens: 8,
       },
