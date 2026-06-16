@@ -1200,11 +1200,13 @@ async fn proxy_native_provider(
         provider,
         endpoint,
         &env,
-        &native_path,
-        incoming_url.query(),
-        query_auth,
-        grant.as_ref(),
-        transport_path.as_deref(),
+        NativeUpstreamContext {
+            native_path: &native_path,
+            incoming_query: incoming_url.query(),
+            query_auth,
+            grant: grant.as_ref(),
+            transport_path: transport_path.as_deref(),
+        },
     ) {
         Ok(url) => url,
         Err(error) => {
@@ -1332,14 +1334,10 @@ fn native_endpoint_path(endpoint: &CompiledEndpoint, path: &str) -> Option<Strin
     let mut normalized = String::with_capacity(path.len());
     while let Some(start) = template_rest.find("${") {
         let literal = &template_rest[..start];
-        let Some(after_literal) = path_rest.strip_prefix(literal) else {
-            return None;
-        };
+        let after_literal = path_rest.strip_prefix(literal)?;
         normalized.push_str(literal);
         let after_start = &template_rest[start + 2..];
-        let Some(end) = after_start.find('}') else {
-            return None;
-        };
+        let end = after_start.find('}')?;
         let param = &after_start[..end];
         let next_template = &after_start[end + 1..];
         let next_literal_end = next_template.find("${").unwrap_or(next_template.len());
@@ -1347,10 +1345,7 @@ fn native_endpoint_path(endpoint: &CompiledEndpoint, path: &str) -> Option<Strin
         let capture_end = if next_literal.is_empty() {
             after_literal.len()
         } else {
-            let Some(index) = after_literal.find(next_literal) else {
-                return None;
-            };
-            index
+            after_literal.find(next_literal)?
         };
         let capture = &after_literal[..capture_end];
         let decoded = percent_decode_path_segment(capture)?;
@@ -1370,38 +1365,42 @@ fn supports_native_proxy(provider: &CompiledProvider, endpoint: &CompiledEndpoin
     endpoint.native_proxy && supports_manifest_proxy(provider, endpoint)
 }
 
+struct NativeUpstreamContext<'a> {
+    native_path: &'a str,
+    incoming_query: Option<&'a str>,
+    query_auth: Option<(String, String)>,
+    grant: Option<&'a UpstreamGrantRecord>,
+    transport_path: Option<&'a str>,
+}
+
 fn native_upstream_url(
     provider: &CompiledProvider,
     endpoint: &CompiledEndpoint,
     env: &Env,
-    native_path: &str,
-    incoming_query: Option<&str>,
-    query_auth: Option<(String, String)>,
-    grant: Option<&UpstreamGrantRecord>,
-    transport_path: Option<&str>,
+    context: NativeUpstreamContext<'_>,
 ) -> Result<String> {
-    let native_path = native_endpoint_path(endpoint, native_path).ok_or_else(|| {
+    let native_path = native_endpoint_path(endpoint, context.native_path).ok_or_else(|| {
         Error::RustError(format!(
             "provider-native path is not allowed for endpoint `{}`",
             endpoint.id
         ))
     })?;
-    let base = provider_upstream_base_url(provider, grant)?;
+    let base = provider_upstream_base_url(provider, context.grant)?;
     let base = resolve_template_value(provider, base, Some(env))?;
     let mut url = format!(
         "{}{}",
         base.trim_end_matches('/'),
-        transport_path.unwrap_or(&native_path)
+        context.transport_path.unwrap_or(&native_path)
     );
     let mut injected = resolved_template_map(provider, &endpoint.query, Some(env))?;
     for (name, value) in resolved_template_map(provider, &provider.adapter.inject_query, Some(env))?
     {
         injected.insert(name, value);
     }
-    if let Some((param, secret)) = query_auth {
+    if let Some((param, secret)) = context.query_auth {
         injected.insert(param, secret);
     }
-    append_native_query(&mut url, incoming_query, injected)?;
+    append_native_query(&mut url, context.incoming_query, injected)?;
     Ok(url)
 }
 
@@ -2443,9 +2442,9 @@ async fn entitlement_rows_for_entries(
     kv: &KvStore,
 ) -> Result<Vec<EntitlementProviderRow>> {
     let snapshot = provider_snapshot()?;
-    let grants = list_oauth_grants(&kv).await?;
-    let connections = list_provider_connections(env, &kv, &snapshot).await?;
-    let health = list_provider_health(&kv).await?;
+    let grants = list_oauth_grants(kv).await?;
+    let connections = list_provider_connections(env, kv, &snapshot).await?;
+    let health = list_provider_health(kv).await?;
     Ok(snapshot
         .providers
         .iter()
@@ -6008,7 +6007,7 @@ fn normalize_upstream_grant(
     if grant.refresh.is_none() && grant.refresh_token.is_some() {
         grant.refresh = provider
             .as_ref()
-            .and_then(|provider| upstream_grant_refresh_from_manifest(provider));
+            .and_then(upstream_grant_refresh_from_manifest);
     }
     if let Some(refresh) = grant.refresh.as_ref() {
         validate_upstream_grant_refresh(refresh)?;
@@ -6442,12 +6441,12 @@ fn provider_readiness_row(
     let missing_config = required_config
         .iter()
         .filter(|key| {
-            !runtime_binding_present(env, key)
-                && !(auth_secret_config.contains(*key)
-                    && !routable_endpoints.is_empty()
-                    && routable_endpoints.iter().all(|endpoint| {
-                        provider_endpoint_has_upstream_grant(provider, endpoint, grants)
-                    }))
+            let covered_by_grants = auth_secret_config.contains(*key)
+                && !routable_endpoints.is_empty()
+                && routable_endpoints.iter().all(|endpoint| {
+                    provider_endpoint_has_upstream_grant(provider, endpoint, grants)
+                });
+            !runtime_binding_present(env, key) && !covered_by_grants
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -9100,7 +9099,7 @@ fn apply_auth_headers(
                     &format!(
                         "{} {}",
                         token.token_type,
-                        upstream_grant_secret(&token).unwrap_or_default()
+                        upstream_grant_secret(token).unwrap_or_default()
                     ),
                 )
                 .map_err(HeaderBuildError::Runtime)?;
@@ -12596,9 +12595,11 @@ mod tests {
             display_name: provider.to_string(),
             service_kind: "model_provider".to_string(),
             allowed,
-            policies: allowed
-                .then(|| vec!["maintainers".to_string()])
-                .unwrap_or_default(),
+            policies: if allowed {
+                vec!["maintainers".to_string()]
+            } else {
+                Vec::new()
+            },
             readiness: ProviderReadinessRow {
                 id: provider.to_string(),
                 display_name: provider.to_string(),
