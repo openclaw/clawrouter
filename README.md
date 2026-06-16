@@ -166,6 +166,13 @@ still fail closed during migration or incomplete rotations. Canonical policy
 edits preserve their generation. The legacy key mutation alias rejects changing
 policy scope and secret together.
 
+`GET /v1/catalog` is the credential-scoped client integration contract. It
+returns only allowed providers and executable models. Each provider row reports
+whether the unified OpenAI-compatible `/v1` route is available, its native proxy
+base URL, and the request/response formats for its executable native routes.
+Clients can use those fields to choose the real provider transport without
+guessing from provider ids.
+
 Disable a credential to revoke one issued key, disable a policy to revoke every
 user and credential bound to it, or disable a provider connection to stop that
 provider globally. Legacy `keys/<kid>` records remain readable during
