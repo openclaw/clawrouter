@@ -344,6 +344,7 @@ function defaultAccessPaths() {
     "/v1/entitlements",
     "/v1/playground/*",
     "/v1/admin/*",
+    "/v1/oauth/callback",
   ];
 }
 
@@ -421,7 +422,7 @@ function printPlan({ app, policies, teamDomain, aud, created, updated }) {
   console.log("");
   console.log("Expected live root check after redeploy:");
   console.log(`curl -sS -D - -o /dev/null https://${host}/`);
-  console.log("Root should 302 to /dashboard, /dashboard should 302 to /dashboard/catalog, and Cloudflare Access should challenge /dashboard/*.");
+  console.log("Root should 302 to /dashboard, /dashboard should 302 to /dashboard/catalog, and Cloudflare Access should challenge console, admin, playground, and OAuth callback paths.");
 }
 
 function syncGitHubVariable(repoName, name, value) {
