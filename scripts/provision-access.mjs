@@ -341,7 +341,6 @@ function defaultAccessPaths() {
   return [
     "/dashboard/*",
     "/v1/session",
-    "/v1/entitlements",
     "/v1/playground/*",
     "/v1/admin/*",
     "/v1/oauth/callback",
