@@ -14,6 +14,18 @@ auth:
       header: Authorization
       format: "Bearer ${secret}"
       secretKind: api_key
+  refresh:
+    tokenUrl: https://auth.openai.com/oauth/token
+    clientId: app_EMoamEEZ73f0CkXaXp7hrann
+  grantTransports:
+    subscription:
+      baseUrl: https://chatgpt.com/backend-api/codex
+      endpointPaths:
+        responses: /responses
+      headers:
+        ChatGPT-Account-ID: "${grant.accountId}"
+        OpenAI-Beta: responses=experimental
+        originator: clawrouter
 baseUrls:
   default: https://api.openai.com
 routing:
@@ -39,6 +51,7 @@ capabilities:
 endpoints:
   responses:
     path: /v1/responses
+    requestHeaders: [session_id, x-client-request-id]
     requestFormat: openai.responses
     responseFormat: openai.responses
     streaming: sse

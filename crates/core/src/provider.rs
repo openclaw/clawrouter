@@ -93,6 +93,36 @@ pub struct ServiceBinding {
 pub struct AuthConfig {
     #[serde(default)]
     pub schemes: Vec<AuthScheme>,
+    #[serde(default)]
+    pub refresh: Option<AuthRefreshConfig>,
+    #[serde(rename = "grantTransports", default)]
+    pub grant_transports: BTreeMap<String, GrantTransportConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthRefreshConfig {
+    #[serde(rename = "tokenUrl")]
+    pub token_url: String,
+    #[serde(rename = "clientId", default)]
+    pub client_id: Option<String>,
+    #[serde(rename = "clientIdConfig", default)]
+    pub client_id_config: Option<String>,
+    #[serde(rename = "clientSecretConfig", default)]
+    pub client_secret_config: Option<String>,
+    #[serde(rename = "extraParams", default)]
+    pub extra_params: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct GrantTransportConfig {
+    #[serde(rename = "baseUrl", default)]
+    pub base_url: Option<String>,
+    #[serde(rename = "endpointPaths", default)]
+    pub endpoint_paths: BTreeMap<String, String>,
+    #[serde(default)]
+    pub headers: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -388,6 +418,10 @@ pub enum ProviderError {
         endpoint: String,
         param: String,
     },
+    #[error("provider {provider} has invalid OAuth refresh configuration")]
+    InvalidAuthRefresh { provider: String },
+    #[error("provider {provider} has invalid grant transport {transport}")]
+    InvalidGrantTransport { provider: String, transport: String },
     #[error("provider {provider} capability {capability} references missing endpoint {endpoint}")]
     MissingEndpoint {
         provider: String,
@@ -427,6 +461,49 @@ pub fn validate_provider_manifest(manifest: &ProviderManifest) -> Result<(), Pro
     }
     if manifest.capabilities.is_empty() {
         return Err(ProviderError::MissingCapabilities(manifest.id.clone()));
+    }
+    if manifest.auth.refresh.as_ref().is_some_and(|refresh| {
+        !refresh.token_url.starts_with("https://")
+            || (refresh.client_id.is_none() && refresh.client_id_config.is_none())
+            || refresh
+                .client_id
+                .as_deref()
+                .is_some_and(|value| value.trim().is_empty())
+            || refresh
+                .client_id_config
+                .as_deref()
+                .is_some_and(|value| value.trim().is_empty())
+    }) {
+        return Err(ProviderError::InvalidAuthRefresh {
+            provider: manifest.id.clone(),
+        });
+    }
+    for (kind, transport) in &manifest.auth.grant_transports {
+        if !matches!(kind.as_str(), "api_key" | "oauth" | "subscription")
+            || transport
+                .base_url
+                .as_deref()
+                .is_some_and(|value| !value.starts_with("https://"))
+            || transport.endpoint_paths.iter().any(|(endpoint, path)| {
+                !manifest.endpoints.contains_key(endpoint) || !path.starts_with('/')
+            })
+            || transport.headers.values().any(|value| {
+                template_placeholders(value).iter().any(|placeholder| {
+                    !matches!(
+                        placeholder.as_str(),
+                        "grant.accountId"
+                            | "grant.provider"
+                            | "grant.subscription.plan"
+                            | "grant.subscription.subject"
+                    )
+                })
+            })
+        {
+            return Err(ProviderError::InvalidGrantTransport {
+                provider: manifest.id.clone(),
+                transport: kind.clone(),
+            });
+        }
     }
     for (endpoint_id, endpoint) in &manifest.endpoints {
         if !endpoint.path.starts_with('/') {
@@ -946,6 +1023,77 @@ endpoints:
         .unwrap();
         let error = validate_provider_manifest(&manifest).unwrap_err();
         assert!(matches!(error, ProviderError::MissingPathParam { .. }));
+    }
+
+    #[test]
+    fn rejects_unapproved_refresh_and_grant_transport_contracts() {
+        let invalid_refresh: ProviderManifest = serde_yaml::from_str(
+            r#"
+schema: clawrouter.service-provider.v1
+id: bad-refresh
+displayName: Bad Refresh
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+  refresh:
+    tokenUrl: http://example.com/oauth/token
+    clientId: public-client
+baseUrls:
+  default: https://example.com
+capabilities:
+  - id: llm.responses
+    endpoint: responses
+endpoints:
+  responses:
+    path: /v1/responses
+    requestFormat: openai.responses
+    responseFormat: openai.responses
+"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            validate_provider_manifest(&invalid_refresh),
+            Err(ProviderError::InvalidAuthRefresh { .. })
+        ));
+
+        let invalid_transport: ProviderManifest = serde_yaml::from_str(
+            r#"
+schema: clawrouter.service-provider.v1
+id: bad-transport
+displayName: Bad Transport
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+  grantTransports:
+    subscription:
+      baseUrl: https://example.com/subscription
+      endpointPaths:
+        unknown: /responses
+      headers:
+        Account-ID: "${grant.unknown}"
+baseUrls:
+  default: https://example.com
+capabilities:
+  - id: llm.responses
+    endpoint: responses
+endpoints:
+  responses:
+    path: /v1/responses
+    requestFormat: openai.responses
+    responseFormat: openai.responses
+"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            validate_provider_manifest(&invalid_transport),
+            Err(ProviderError::InvalidGrantTransport { .. })
+        ));
     }
 
     #[test]
