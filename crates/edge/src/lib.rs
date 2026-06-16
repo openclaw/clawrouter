@@ -1,6 +1,7 @@
 use clawrouter_core::{
-    parse_proxy_key, AuthAuthorizationConfig, AuthScheme, CompiledEndpoint, CompiledProvider,
-    GrantTransportConfig, PathParamStyle, ProviderClass, ProviderSnapshot, UsageEvent, UsageStatus,
+    parse_proxy_key, AuthAuthorizationConfig, AuthScheme, CompiledEndpoint, CompiledModel,
+    CompiledProvider, GrantTransportConfig, PathParamStyle, ProviderClass, ProviderSnapshot,
+    UsageEvent, UsageStatus,
 };
 use futures_util::future::try_join_all;
 use hmac::{Hmac, Mac};
@@ -1717,6 +1718,7 @@ struct ProviderReadinessRow {
     upstream_grant_count: usize,
     openai_compatible: bool,
     manifest_routes: usize,
+    executable_endpoints: Vec<String>,
     model_count: usize,
     executable: bool,
     verified: bool,
@@ -1764,6 +1766,7 @@ struct EntitlementProviderRow {
 #[derive(Clone, Debug)]
 struct OAuthGrantRecord {
     key: String,
+    kind: UpstreamGrantKind,
     enabled: bool,
     usable: bool,
 }
@@ -2520,19 +2523,27 @@ fn client_models_value(snapshot: &ProviderSnapshot, rows: &[EntitlementProviderR
     let allowed = rows
         .iter()
         .filter(|row| row.allowed && row.readiness.executable)
-        .map(|row| row.provider.as_str())
-        .collect::<BTreeSet<_>>();
+        .map(|row| (row.provider.as_str(), &row.readiness.executable_endpoints))
+        .collect::<BTreeMap<_, _>>();
     let data = snapshot
         .providers
         .iter()
-        .filter(|provider| allowed.contains(provider.id.as_str()))
+        .filter_map(|provider| {
+            allowed
+                .get(provider.id.as_str())
+                .map(|endpoints| (provider, *endpoints))
+        })
         .flat_map(|provider| {
-            provider.models.iter().map(|model| {
-                serde_json::json!({
-                    "id": model.id,
-                    "object": "model",
-                    "owned_by": provider.id,
-                    "capabilities": model.capabilities
+            let (provider, endpoints) = provider;
+            provider.models.iter().filter_map(|model| {
+                let capabilities = executable_model_capabilities(provider, model, endpoints);
+                (!capabilities.is_empty()).then(|| {
+                    serde_json::json!({
+                        "id": model.id,
+                        "object": "model",
+                        "owned_by": provider.id,
+                        "capabilities": capabilities
+                    })
                 })
             })
         })
@@ -2561,6 +2572,7 @@ fn client_catalog_value(snapshot: &ProviderSnapshot, rows: Vec<EntitlementProvid
                 .providers
                 .iter()
                 .find(|provider| provider.id == row.provider)?;
+            let executable_endpoints = &row.readiness.executable_endpoints;
             Some(serde_json::json!({
                 "id": provider.id,
                 "displayName": provider.display_name,
@@ -2570,7 +2582,9 @@ fn client_catalog_value(snapshot: &ProviderSnapshot, rows: Vec<EntitlementProvid
                 "policies": row.policies,
                 "readiness": row.readiness,
                 "connectionTypes": provider_connection_types(provider),
-                "routes": provider.endpoints.iter().filter(|endpoint| endpoint.native_proxy).map(|endpoint| {
+                "routes": provider.endpoints.iter().filter(|endpoint| {
+                    endpoint.native_proxy && executable_endpoints.contains(&endpoint.id)
+                }).map(|endpoint| {
                     serde_json::json!({
                         "endpoint": endpoint.id,
                         "methods": endpoint.methods,
@@ -2578,7 +2592,18 @@ fn client_catalog_value(snapshot: &ProviderSnapshot, rows: Vec<EntitlementProvid
                         "streaming": endpoint.streaming
                     })
                 }).collect::<Vec<_>>(),
-                "models": provider.models
+                "models": provider.models.iter().filter_map(|model| {
+                    let capabilities =
+                        executable_model_capabilities(provider, model, executable_endpoints);
+                    (!capabilities.is_empty()).then(|| {
+                        serde_json::json!({
+                            "id": model.id,
+                            "upstream": model.upstream,
+                            "capabilities": capabilities,
+                            "pricing_ref": model.pricing_ref
+                        })
+                    })
+                }).collect::<Vec<_>>()
             }))
         })
         .collect::<Vec<_>>();
@@ -2586,6 +2611,25 @@ fn client_catalog_value(snapshot: &ProviderSnapshot, rows: Vec<EntitlementProvid
         "version": "clawrouter.client-catalog.v1",
         "providers": providers
     })
+}
+
+fn executable_model_capabilities(
+    provider: &CompiledProvider,
+    model: &CompiledModel,
+    executable_endpoints: &[String],
+) -> Vec<String> {
+    model
+        .capabilities
+        .iter()
+        .filter(|capability| {
+            provider
+                .capabilities
+                .iter()
+                .find(|candidate| candidate.id == **capability)
+                .is_some_and(|candidate| executable_endpoints.contains(&candidate.endpoint))
+        })
+        .cloned()
+        .collect()
 }
 
 fn provider_connection_types(provider: &CompiledProvider) -> Vec<&'static str> {
@@ -5502,6 +5546,7 @@ async fn list_oauth_grants(kv: &KvStore) -> Result<Vec<OAuthGrantRecord>> {
             let token = parse_upstream_grant_record(&record)?;
             grants.push(OAuthGrantRecord {
                 key: key.name,
+                kind: token.kind,
                 enabled: token.enabled,
                 usable: upstream_grant_usable_by_declared_provider(&token),
             });
@@ -6389,11 +6434,20 @@ fn provider_readiness_row(
         .collect::<Vec<_>>();
     let upstream_grant_count = provider_upstream_grant_count(provider, grants);
     let auth_secret_config = provider_auth_secret_config_keys(provider);
+    let routable_endpoints = provider
+        .endpoints
+        .iter()
+        .filter(|endpoint| supports_manifest_proxy(provider, endpoint))
+        .collect::<Vec<_>>();
     let missing_config = required_config
         .iter()
         .filter(|key| {
             !runtime_binding_present(env, key)
-                && !(upstream_grant_count > 0 && auth_secret_config.contains(*key))
+                && !(auth_secret_config.contains(*key)
+                    && !routable_endpoints.is_empty()
+                    && routable_endpoints.iter().all(|endpoint| {
+                        provider_endpoint_has_upstream_grant(provider, endpoint, grants)
+                    }))
         })
         .cloned()
         .collect::<Vec<_>>();
@@ -6405,16 +6459,24 @@ fn provider_readiness_row(
         0
     };
     let openai_compatible = supports_openai_compatible_proxy(provider);
-    let manifest_routes = provider
-        .endpoints
-        .iter()
-        .filter(|endpoint| supports_manifest_proxy(provider, endpoint))
-        .count();
+    let manifest_routes = routable_endpoints.len();
     let has_route = openai_compatible || manifest_routes > 0;
-    let executable = connection_enabled
-        && has_route
-        && config_present
-        && (!oauth_grant_required || oauth_grant_count > 0);
+    let executable_endpoints = routable_endpoints
+        .iter()
+        .filter(|endpoint| {
+            provider_endpoint_executable(
+                provider,
+                endpoint,
+                env,
+                grants,
+                &required_config,
+                &auth_secret_config,
+                connection_enabled,
+            )
+        })
+        .map(|endpoint| endpoint.id.clone())
+        .collect::<Vec<_>>();
+    let executable = !executable_endpoints.is_empty();
     let health_fresh = health.is_some_and(provider_health_is_fresh);
     let verified = health_fresh && health.is_some_and(|health| health.status == "verified");
     let health_failed = health.is_some_and(|health| health.status == "failed");
@@ -6473,6 +6535,7 @@ fn provider_readiness_row(
         upstream_grant_count,
         openai_compatible,
         manifest_routes,
+        executable_endpoints,
         model_count: provider.models.len(),
         executable,
         verified,
@@ -6481,6 +6544,24 @@ fn provider_readiness_row(
         status: status.to_string(),
         reasons,
     }
+}
+
+fn provider_endpoint_executable(
+    provider: &CompiledProvider,
+    endpoint: &CompiledEndpoint,
+    env: &Env,
+    grants: &[OAuthGrantRecord],
+    required_config: &[String],
+    auth_secret_config: &BTreeSet<String>,
+    connection_enabled: bool,
+) -> bool {
+    if !connection_enabled || !supports_manifest_proxy(provider, endpoint) {
+        return false;
+    }
+    let has_grant = provider_endpoint_has_upstream_grant(provider, endpoint, grants);
+    required_config.iter().all(|key| {
+        runtime_binding_present(env, key) || (auth_secret_config.contains(key) && has_grant)
+    }) && (!provider_requires_oauth(provider) || has_grant)
 }
 
 fn provider_health_is_fresh(health: &ProviderHealthRecord) -> bool {
@@ -6585,12 +6666,33 @@ fn provider_upstream_grant_count(
     provider: &CompiledProvider,
     grants: &[OAuthGrantRecord],
 ) -> usize {
-    let refs = provider_upstream_grant_refs(provider);
     grants
         .iter()
-        .filter(|grant| grant.enabled && grant.usable)
-        .filter(|grant| refs.iter().any(|token_ref| grant.key.ends_with(token_ref)))
+        .filter(|grant| provider_upstream_grant_matches(provider, grant))
         .count()
+}
+
+fn provider_endpoint_has_upstream_grant(
+    provider: &CompiledProvider,
+    endpoint: &CompiledEndpoint,
+    grants: &[OAuthGrantRecord],
+) -> bool {
+    grants.iter().any(|grant| {
+        provider_upstream_grant_matches(provider, grant)
+            && provider
+                .auth
+                .grant_transports
+                .get(&enum_label(&grant.kind))
+                .is_none_or(|transport| transport.endpoint_paths.contains_key(&endpoint.id))
+    })
+}
+
+fn provider_upstream_grant_matches(provider: &CompiledProvider, grant: &OAuthGrantRecord) -> bool {
+    grant.enabled
+        && grant.usable
+        && provider_upstream_grant_refs(provider)
+            .iter()
+            .any(|token_ref| grant.key.ends_with(token_ref))
 }
 
 fn provider_upstream_grant_refs(provider: &CompiledProvider) -> Vec<String> {
@@ -12511,6 +12613,7 @@ mod tests {
                 upstream_grant_count: 0,
                 openai_compatible: true,
                 manifest_routes: 1,
+                executable_endpoints: Vec::new(),
                 model_count: 1,
                 executable,
                 verified: false,
@@ -12550,8 +12653,10 @@ mod tests {
     #[test]
     fn client_catalog_and_models_filter_by_effective_entitlement() {
         let snapshot = provider_snapshot().unwrap();
+        let mut openai = entitlement_test_row("openai", true, true);
+        openai.readiness.executable_endpoints = vec!["responses".to_string()];
         let rows = vec![
-            entitlement_test_row("openai", true, true),
+            openai,
             entitlement_test_row("anthropic", false, true),
             entitlement_test_row("xai", true, false),
         ];
@@ -12563,8 +12668,13 @@ mod tests {
             .filter_map(|model| model["id"].as_str())
             .collect::<Vec<_>>();
         assert!(ids.contains(&"openai/gpt-4.1-mini"));
+        assert!(!ids.contains(&"openai/text-embedding-3-large"));
         assert!(!ids.contains(&"anthropic/default"));
         assert!(!ids.contains(&"xai/default"));
+        assert_eq!(
+            models["data"][0]["capabilities"],
+            serde_json::json!(["llm.responses"])
+        );
 
         let catalog = client_catalog_value(&snapshot, rows);
         let providers = catalog["providers"]
@@ -12577,6 +12687,14 @@ mod tests {
         assert_eq!(
             catalog["providers"][0]["nativeBaseUrl"],
             "/v1/native/openai"
+        );
+        assert_eq!(
+            catalog["providers"][0]["routes"][0]["endpoint"],
+            "responses"
+        );
+        assert_eq!(
+            catalog["providers"][0]["models"][0]["capabilities"],
+            serde_json::json!(["llm.responses"])
         );
     }
 
@@ -14217,16 +14335,19 @@ mod tests {
         let grants = vec![
             OAuthGrantRecord {
                 key: "oauth/svc_docs/oauth.acme.access_token".to_string(),
+                kind: UpstreamGrantKind::OAuth,
                 enabled: true,
                 usable: true,
             },
             OAuthGrantRecord {
                 key: "oauth/tenants/default/acme-oauth".to_string(),
+                kind: UpstreamGrantKind::OAuth,
                 enabled: false,
                 usable: true,
             },
             OAuthGrantRecord {
                 key: "oauth/svc_docs/acme-oauth".to_string(),
+                kind: UpstreamGrantKind::OAuth,
                 enabled: true,
                 usable: false,
             },
@@ -14240,16 +14361,19 @@ mod tests {
         let grants = vec![
             OAuthGrantRecord {
                 key: "oauth/svc_docs/acme-oauth".to_string(),
+                kind: UpstreamGrantKind::OAuth,
                 enabled: true,
                 usable: true,
             },
             OAuthGrantRecord {
                 key: "oauth/tenants/research/acme-oauth".to_string(),
+                kind: UpstreamGrantKind::OAuth,
                 enabled: true,
                 usable: true,
             },
             OAuthGrantRecord {
                 key: "oauth/svc_other/acme-oauth".to_string(),
+                kind: UpstreamGrantKind::OAuth,
                 enabled: true,
                 usable: true,
             },
@@ -14311,6 +14435,7 @@ mod tests {
         };
         let grants = vec![OAuthGrantRecord {
             key: "oauth/svc_research/acme-oauth".to_string(),
+            kind: UpstreamGrantKind::OAuth,
             enabled: true,
             usable: true,
         }];
@@ -14410,11 +14535,27 @@ mod tests {
             .iter()
             .find(|endpoint| endpoint.id == "chat_completions")
             .unwrap();
+        let discovery_grants = vec![OAuthGrantRecord {
+            key: "oauth/svc_models/openai".to_string(),
+            kind: UpstreamGrantKind::Subscription,
+            enabled: true,
+            usable: true,
+        }];
 
         assert_eq!(
             provider_upstream_base_url(provider, Some(&grant)).unwrap(),
             "https://chatgpt.com/backend-api/codex"
         );
+        assert!(provider_endpoint_has_upstream_grant(
+            provider,
+            responses,
+            &discovery_grants
+        ));
+        assert!(!provider_endpoint_has_upstream_grant(
+            provider,
+            chat,
+            &discovery_grants
+        ));
         let (responses_grant, responses_path) =
             endpoint_upstream_grant(provider, responses, Some(grant.clone())).unwrap();
         assert!(responses_grant.is_some());
