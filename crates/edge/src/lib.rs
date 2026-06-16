@@ -5819,7 +5819,7 @@ fn oauth_authorization_client_id(
 
 fn oauth_authorization_result_redirect(status: &str, provider: &str) -> Result<Response> {
     redirect_to(&format!(
-        "/dashboard/access?tab=upstream&oauth={}&provider={}",
+        "/dashboard/access?resource=upstream&oauth={}&provider={}",
         encode_component(status),
         encode_component(provider)
     ))
@@ -5937,6 +5937,15 @@ fn normalize_upstream_grant(
     merge_upstream_grant_secrets(&mut grant, existing);
     grant.credentials = normalize_grant_credentials(grant.credentials)?;
     validate_upstream_grant_secret_shape(&grant)?;
+    if grant.enabled
+        && provider
+            .as_ref()
+            .is_some_and(|provider| !upstream_grant_supports_provider(provider, &grant))
+    {
+        return Err(
+            "upstream grant credentials do not satisfy the provider auth contract".to_string(),
+        );
+    }
     if grant.refresh.is_none() && grant.refresh_token.is_some() {
         grant.refresh = provider
             .as_ref()
@@ -6580,13 +6589,26 @@ fn provider_auth_secret_config_keys(provider: &CompiledProvider) -> BTreeSet<Str
         .auth
         .schemes
         .iter()
-        .filter_map(|scheme| match scheme {
+        .flat_map(|scheme| match scheme {
             AuthScheme::Bearer { secret_kind, .. }
             | AuthScheme::ApiKey { secret_kind, .. }
             | AuthScheme::QueryApiKey { secret_kind, .. } => Some(secret_kind),
+            AuthScheme::SigV4 { .. } => None,
             _ => None,
         })
         .flat_map(|secret_kind| secret_binding_candidates(provider, secret_kind))
+        .chain(
+            provider
+                .auth
+                .schemes
+                .iter()
+                .filter(|scheme| matches!(scheme, AuthScheme::SigV4 { .. }))
+                .flat_map(|_| {
+                    ["access_key_id", "secret_access_key"]
+                        .into_iter()
+                        .flat_map(|name| template_binding_candidates(provider, name))
+                }),
+        )
         .collect()
 }
 
@@ -12695,6 +12717,13 @@ mod tests {
         assert!(template_binding_candidates(provider, "secret_access_key")
             .iter()
             .any(|binding| binding == "AWS_SECRET_ACCESS_KEY"));
+        assert_eq!(
+            provider_auth_secret_config_keys(provider),
+            BTreeSet::from([
+                "AWS_ACCESS_KEY_ID".to_string(),
+                "AWS_SECRET_ACCESS_KEY".to_string(),
+            ])
+        );
     }
 
     #[test]
@@ -14421,6 +14450,23 @@ mod tests {
         );
         assert!(!raw.contains("AKID_PLACEHOLDER"));
         assert!(!raw.contains("secret-placeholder"));
+    }
+
+    #[test]
+    fn sigv4_grants_reject_incomplete_provider_credentials() {
+        let mut grant = subscription_test_grant("aws-bedrock");
+        grant.kind = UpstreamGrantKind::ApiKey;
+        grant.credential = None;
+        grant.access_token = None;
+        grant.refresh_token = None;
+        grant.subscription = None;
+        grant.credentials =
+            BTreeMap::from([("accessKeyId".to_string(), "AKID_PLACEHOLDER".to_string())]);
+
+        assert_eq!(
+            normalize_upstream_grant(grant, None).unwrap_err(),
+            "upstream grant credentials do not satisfy the provider auth contract"
+        );
     }
 
     #[test]
