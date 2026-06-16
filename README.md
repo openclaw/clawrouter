@@ -125,7 +125,7 @@ The legacy revoke alias treats `<kid>` as a credential id and never disables a
 shared policy.
 
 OpenAI-compatible proxy requests route by the request body `model` field, for
-example `openai/gpt-5.5-mini`. Before an upstream provider secret is used, the
+example `openai/gpt-4.1-mini`. Before an upstream provider secret is used, the
 Worker verifies the issued credential and its policy from serialized
 `ACCESS_CONTROL` Durable Object authority. `credentials/<credential-id>` and
 `policies/<policy-id>` in `POLICY_KV` seed migration and remain compatibility

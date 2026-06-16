@@ -508,7 +508,7 @@ OpenAI-compatible calls use normal OpenAI paths and route by `model`:
 curl "$CLAWROUTER_BASE_URL/v1/chat/completions" \
   -H "authorization: Bearer $CLAWROUTER_KEY" \
   -H "content-type: application/json" \
-  --data '{"model":"openai/gpt-5.5-mini","messages":[{"role":"user","content":"ok"}]}'
+  --data '{"model":"openai/gpt-4.1-mini","messages":[{"role":"user","content":"ok"}]}'
 ```
 
 Manifest REST/tool calls use:

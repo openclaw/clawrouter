@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  buildProviderSmokePlan,
+  compileProviderSnapshot,
   inspectSmokeKeyProviderAccess,
   runLiveProviderSmokes,
   selectLiveProviderPlans,
@@ -20,6 +22,13 @@ const plan = {
     },
   ],
 };
+
+test("bundled OpenAI smoke target uses the catalog default model", () => {
+  const provider = buildProviderSmokePlan(compileProviderSnapshot(), {}).providers.find(
+    (entry) => entry.id === "openai",
+  );
+  assert.equal(provider.target.body.model, "openai/gpt-4.1-mini");
+});
 
 test("gateway failures do not overwrite provider health", async () => {
   await withFetch(

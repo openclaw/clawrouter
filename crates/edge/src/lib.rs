@@ -9245,9 +9245,9 @@ mod tests {
     #[test]
     fn catalog_models_use_mapped_upstream_model() {
         let snapshot = provider_snapshot().unwrap();
-        let route = select_model_route(&snapshot, "openai/gpt-5.5-mini").unwrap();
+        let route = select_model_route(&snapshot, "openai/gpt-4.1-mini").unwrap();
         assert_eq!(route.provider.id, "openai");
-        assert_eq!(route.upstream_model, "gpt-5.5-mini");
+        assert_eq!(route.upstream_model, "gpt-4.1-mini");
     }
 
     #[test]
