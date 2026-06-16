@@ -1324,16 +1324,22 @@ fn select_native_endpoint<'a>(
 }
 
 fn native_endpoint_path_matches(endpoint: &CompiledEndpoint, path: &str) -> bool {
+    native_endpoint_path(endpoint, path).is_some()
+}
+
+fn native_endpoint_path(endpoint: &CompiledEndpoint, path: &str) -> Option<String> {
     let mut template_rest = endpoint.path.as_str();
     let mut path_rest = path;
+    let mut normalized = String::with_capacity(path.len());
     while let Some(start) = template_rest.find("${") {
         let literal = &template_rest[..start];
         let Some(after_literal) = path_rest.strip_prefix(literal) else {
-            return false;
+            return None;
         };
+        normalized.push_str(literal);
         let after_start = &template_rest[start + 2..];
         let Some(end) = after_start.find('}') else {
-            return false;
+            return None;
         };
         let param = &after_start[..end];
         let next_template = &after_start[end + 1..];
@@ -1343,18 +1349,22 @@ fn native_endpoint_path_matches(endpoint: &CompiledEndpoint, path: &str) -> bool
             after_literal.len()
         } else {
             let Some(index) = after_literal.find(next_literal) else {
-                return false;
+                return None;
             };
             index
         };
         let capture = &after_literal[..capture_end];
-        if path_param_value(endpoint, param, capture).is_err() {
-            return false;
-        }
+        let decoded = percent_decode_path_segment(capture)?;
+        let encoded = path_param_value(endpoint, param, &decoded).ok()?;
+        normalized.push_str(&encoded);
         path_rest = &after_literal[capture_end..];
         template_rest = next_template;
     }
-    path_rest == template_rest
+    if path_rest != template_rest {
+        return None;
+    }
+    normalized.push_str(template_rest);
+    Some(normalized)
 }
 
 fn supports_native_proxy(provider: &CompiledProvider, endpoint: &CompiledEndpoint) -> bool {
@@ -1371,18 +1381,18 @@ fn native_upstream_url(
     grant: Option<&UpstreamGrantRecord>,
     transport_path: Option<&str>,
 ) -> Result<String> {
-    if !native_endpoint_path_matches(endpoint, native_path) {
-        return Err(Error::RustError(format!(
+    let native_path = native_endpoint_path(endpoint, native_path).ok_or_else(|| {
+        Error::RustError(format!(
             "provider-native path is not allowed for endpoint `{}`",
             endpoint.id
-        )));
-    }
+        ))
+    })?;
     let base = provider_upstream_base_url(provider, grant)?;
     let base = resolve_template_value(provider, base, Some(env))?;
     let mut url = format!(
         "{}{}",
         base.trim_end_matches('/'),
-        transport_path.unwrap_or(native_path)
+        transport_path.unwrap_or(&native_path)
     );
     if let Some(query) = incoming_query.filter(|query| !query.is_empty()) {
         url.push('?');
@@ -14302,6 +14312,14 @@ mod tests {
             generate,
             "/v1beta/models/gemini-2.5-pro:streamGenerateContent"
         ));
+        assert!(!native_endpoint_path_matches(
+            generate,
+            "/v1beta/models/gemini%2F2.5-pro:generateContent"
+        ));
+        assert!(!native_endpoint_path_matches(
+            generate,
+            "/v1beta/models/%2e%2e:generateContent"
+        ));
         assert_eq!(
             select_native_endpoint(
                 google,
@@ -14541,6 +14559,11 @@ mod tests {
             endpoint,
             "/v1/repos/../secrets"
         ));
+        assert_eq!(
+            native_endpoint_path(endpoint, "/v1/repos/openclaw%2Fclawrouter").as_deref(),
+            Some("/v1/repos/openclaw/clawrouter")
+        );
+        assert!(native_endpoint_path(endpoint, "/v1/repos/openclaw%2F..%2Fsecrets").is_none());
     }
 
     #[test]
