@@ -2574,12 +2574,14 @@ fn client_catalog_value(snapshot: &ProviderSnapshot, rows: Vec<EntitlementProvid
                 .iter()
                 .find(|provider| provider.id == row.provider)?;
             let executable_endpoints = &row.readiness.executable_endpoints;
+            let openai_compatible =
+                row.readiness.executable && supports_openai_compatible_proxy(provider);
             Some(serde_json::json!({
                 "id": provider.id,
                 "displayName": provider.display_name,
                 "allowed": true,
                 "executable": row.readiness.executable,
-                "openAiCompatible": supports_openai_compatible_proxy(provider),
+                "openAiCompatible": openai_compatible,
                 "nativeBaseUrl": format!("/v1/native/{}", provider.id),
                 "policies": row.policies,
                 "readiness": row.readiness,
@@ -12810,7 +12812,7 @@ mod tests {
             catalog["providers"][0]["models"][0]["capabilities"],
             serde_json::json!(["llm.responses"])
         );
-        assert_eq!(catalog["providers"][1]["openAiCompatible"], true);
+        assert_eq!(catalog["providers"][1]["openAiCompatible"], false);
     }
 
     #[test]
