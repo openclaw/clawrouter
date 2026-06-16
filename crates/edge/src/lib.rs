@@ -1766,6 +1766,7 @@ struct EntitlementProviderRow {
 struct OAuthGrantRecord {
     key: String,
     kind: UpstreamGrantKind,
+    provider: Option<String>,
     enabled: bool,
     usable: bool,
 }
@@ -5613,6 +5614,7 @@ async fn list_oauth_grants(kv: &KvStore) -> Result<Vec<OAuthGrantRecord>> {
             grants.push(OAuthGrantRecord {
                 key: key.name,
                 kind: token.kind,
+                provider: token.provider.clone(),
                 enabled: token.enabled,
                 usable: upstream_grant_usable_by_declared_provider(&token),
             });
@@ -6756,6 +6758,10 @@ fn provider_endpoint_has_upstream_grant(
 fn provider_upstream_grant_matches(provider: &CompiledProvider, grant: &OAuthGrantRecord) -> bool {
     grant.enabled
         && grant.usable
+        && grant
+            .provider
+            .as_deref()
+            .is_none_or(|grant_provider| grant_provider == provider.id)
         && provider_upstream_grant_refs(provider)
             .iter()
             .any(|token_ref| grant.key.ends_with(token_ref))
@@ -14453,20 +14459,30 @@ mod tests {
             OAuthGrantRecord {
                 key: "oauth/svc_docs/oauth.acme.access_token".to_string(),
                 kind: UpstreamGrantKind::OAuth,
+                provider: None,
                 enabled: true,
                 usable: true,
             },
             OAuthGrantRecord {
                 key: "oauth/tenants/default/acme-oauth".to_string(),
                 kind: UpstreamGrantKind::OAuth,
+                provider: None,
                 enabled: false,
                 usable: true,
             },
             OAuthGrantRecord {
                 key: "oauth/svc_docs/acme-oauth".to_string(),
                 kind: UpstreamGrantKind::OAuth,
+                provider: None,
                 enabled: true,
                 usable: false,
+            },
+            OAuthGrantRecord {
+                key: "oauth/svc_docs/acme-oauth".to_string(),
+                kind: UpstreamGrantKind::OAuth,
+                provider: Some("other-provider".to_string()),
+                enabled: true,
+                usable: true,
             },
         ];
 
@@ -14479,18 +14495,21 @@ mod tests {
             OAuthGrantRecord {
                 key: "oauth/svc_docs/acme-oauth".to_string(),
                 kind: UpstreamGrantKind::OAuth,
+                provider: None,
                 enabled: true,
                 usable: true,
             },
             OAuthGrantRecord {
                 key: "oauth/tenants/research/acme-oauth".to_string(),
                 kind: UpstreamGrantKind::OAuth,
+                provider: None,
                 enabled: true,
                 usable: true,
             },
             OAuthGrantRecord {
                 key: "oauth/svc_other/acme-oauth".to_string(),
                 kind: UpstreamGrantKind::OAuth,
+                provider: None,
                 enabled: true,
                 usable: true,
             },
@@ -14553,6 +14572,7 @@ mod tests {
         let grants = vec![OAuthGrantRecord {
             key: "oauth/svc_research/acme-oauth".to_string(),
             kind: UpstreamGrantKind::OAuth,
+            provider: None,
             enabled: true,
             usable: true,
         }];
@@ -14655,6 +14675,7 @@ mod tests {
         let discovery_grants = vec![OAuthGrantRecord {
             key: "oauth/svc_models/openai".to_string(),
             kind: UpstreamGrantKind::Subscription,
+            provider: Some("openai".to_string()),
             enabled: true,
             usable: true,
         }];
