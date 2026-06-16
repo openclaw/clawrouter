@@ -6,6 +6,7 @@ import {
   selectLiveProviderPlans,
   summarizePlan,
 } from "./provider-smoke-plan.mjs";
+import { assertAccessGateResponse } from "./smoke-access-gate.mjs";
 
 const baseUrl = required(process.env.CLAWROUTER_BASE_URL, "CLAWROUTER_BASE_URL").replace(/\/$/, "");
 const smokeKey = process.env.CLAWROUTER_SMOKE_KEY;
@@ -142,30 +143,6 @@ async function expectClientAuthGate(url, name, init = {}) {
     }
   }
   throw new Error(`${name} returned ${response.status}, expected a ClawRouter or Cloudflare Access auth challenge`);
-}
-
-function assertAccessGateResponse(response, contentType, body, name) {
-  if (contentType.includes("application/json")) {
-    let json = null;
-    try {
-      json = JSON.parse(body);
-    } catch {}
-    if (json?.error?.code === "access_session_required") {
-      throw new Error(
-        `${name} reached ClawRouter's fallback 401; Cloudflare Access is not protecting the console path`,
-      );
-    }
-  }
-  if (response.ok && contentType.includes("text/html") && body.includes("ClawRouter")) {
-    throw new Error(`${name} returned the ClawRouter console without Cloudflare Access`);
-  }
-  if (response.status >= 300 && response.status < 400) {
-    return;
-  }
-  if ((response.status === 401 || response.status === 403) && !body.includes("ClawRouter")) {
-    return;
-  }
-  throw new Error(`${name} returned ${response.status}, expected Cloudflare Access challenge`);
 }
 
 function looksLikeAccessRedirect(location, requestUrl) {
