@@ -279,6 +279,9 @@ PUT /v1/admin/access-users/<email>
 PUT /v1/admin/access-user-grants/<email>
 GET /v1/admin/policy-bindings
 PUT /v1/admin/policy-bindings
+GET /v1/admin/assignment-rules
+PUT /v1/admin/assignment-rules/<rule-id>
+POST /v1/admin/assignment-rules/reconcile
 ```
 
 `PUT /v1/admin/access-users/<email>` patches identity fields and preserves
@@ -313,6 +316,33 @@ copies:
 
 Lower priority numbers win when multiple bindings allow the same provider.
 
+Automatic assignment rules are stored separately from users and manual
+bindings. Exact-email and verified email-domain rules reconcile on first
+Cloudflare Access login and through the admin reconcile endpoint. Policy grants
+use a rule-owned `assignment.<rule-id>` group, so reconciliation never replaces
+manual direct user bindings. GitHub organization/team rules require explicit
+verified GitHub evidence for one user; a reconcile without GitHub evidence
+retains existing GitHub-derived assignments instead of treating unknown
+membership as loss.
+
+```json
+{
+  "enabled": true,
+  "kind": "email_domain",
+  "subject": "example.com",
+  "groups": ["maintainers"],
+  "policyIds": ["maintainer_models"],
+  "priority": 10,
+  "revokeOnLoss": true,
+  "provenance": "cloudflare_access"
+}
+```
+
+Use `POST /v1/admin/assignment-rules/reconcile` with `{"all":true}` to
+reconcile all known users against email rules. For a verified GitHub
+reconciliation, send one `email` plus an evidence object with `source:
+"github"`, `verified: true`, and normalized `githubOrgs`/`githubTeams`.
+
 The console also exposes a Cloudflare Access-backed playground for
 OpenAI-compatible routes and manifest-proxy service routes. Model playground
 calls send requests through `/v1/playground/*`; service playground calls send to
@@ -340,6 +370,7 @@ GET /v1/admin/policy-bindings
 GET /v1/admin/provider-status
 GET /v1/admin/provider-health
 GET /v1/admin/upstream-grants
+GET /v1/admin/assignment-rules
 PUT /v1/admin/access-users/<email>
 PUT /v1/admin/access-user-grants/<email>
 PUT /v1/admin/policy-bindings
@@ -347,10 +378,12 @@ PUT /v1/admin/policies/<policy-id>
 PUT /v1/admin/credentials/<credential-id>
 PUT /v1/admin/connections/<provider-id>
 PUT /v1/admin/upstream-grants/<policies|tenants>/<scope-id>/<token-ref>
+PUT /v1/admin/assignment-rules/<rule-id>
 POST /v1/admin/policies/<policy-id>/revoke
 POST /v1/admin/credentials/<credential-id>/revoke
 POST /v1/admin/upstream-grants/<policies|tenants>/<scope-id>/<token-ref>/revoke
 POST /v1/admin/upstream-grants/<policies|tenants>/<scope-id>/<token-ref>/refresh
+POST /v1/admin/assignment-rules/reconcile
 ```
 
 Policies, credentials, and provider connections are separate control-plane

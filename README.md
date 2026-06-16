@@ -113,6 +113,7 @@ The Worker currently exposes:
 - `GET /v1/admin/provider-status`
 - `GET /v1/admin/provider-health`
 - `GET /v1/admin/upstream-grants`
+- `GET /v1/admin/assignment-rules`
 - `PUT /v1/admin/access-users/<email>`
 - `PUT /v1/admin/access-user-grants/<email>`
 - `PUT /v1/admin/policy-bindings`
@@ -120,10 +121,12 @@ The Worker currently exposes:
 - `PUT /v1/admin/credentials/<credential-id>`
 - `PUT /v1/admin/connections/<provider-id>`
 - `PUT /v1/admin/upstream-grants/<policies|tenants>/<scope-id>/<token-ref>`
+- `PUT /v1/admin/assignment-rules/<rule-id>`
 - `POST /v1/admin/policies/<policy-id>/revoke`
 - `POST /v1/admin/credentials/<credential-id>/revoke`
 - `POST /v1/admin/upstream-grants/<policies|tenants>/<scope-id>/<token-ref>/revoke`
 - `POST /v1/admin/upstream-grants/<policies|tenants>/<scope-id>/<token-ref>/refresh`
+- `POST /v1/admin/assignment-rules/reconcile`
 
 Legacy `GET|PUT /v1/admin/keys...`, `POST /v1/admin/keys/<kid>/revoke`, and
 `GET /v1/admin/users` remain compatibility aliases during migration. New
