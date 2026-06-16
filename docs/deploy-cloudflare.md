@@ -59,9 +59,10 @@ current deploy job renders and deploys a Worker that can verify Access JWTs.
 `CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS` creates a separate Service Auth
 (`non_identity`) policy for automation. The default path-scoped Access
 destinations are `/dashboard/*`, `/v1/session`, `/v1/entitlements`,
-`/v1/playground/*`, and `/v1/admin/*`. This stays within Cloudflare's
+`/v1/playground/*`, `/v1/admin/*`, and `/v1/oauth/callback`. This stays within Cloudflare's
 per-application destination limit while still protecting the console entrypoint
-and the Access-backed session, entitlement, playground, and admin APIs. Override
+and the Access-backed session, entitlement, playground, admin, and OAuth
+callback APIs. Override
 them with `CLAWROUTER_ACCESS_PATHS` only if the API contract changes. Do not add
 `/` on the shared API hostname: Cloudflare Access
 path inheritance would protect the public `/v1/*` API too. Root reaches Access
@@ -268,7 +269,8 @@ bootstrap entitlements/readiness payload when `POLICY_KV` is available.
 `GET /v1/entitlements` remains available for deployments that also protect that
 compatibility route. The admin UI can call admin routes through the same-origin
 Access session; the admin bearer token is only a fallback for automation or
-emergency access.
+emergency access. Browser OAuth providers return to `/v1/oauth/callback`, which
+must also require the same verified Access admin session that started the flow.
 
 Admins can inspect materialized Access users, update tenant/status/groups, and
 assign explicit user or group policy bindings in the console or API:
@@ -383,6 +385,7 @@ POST /v1/admin/policies/<policy-id>/revoke
 POST /v1/admin/credentials/<credential-id>/revoke
 POST /v1/admin/upstream-grants/<policies|tenants>/<scope-id>/<token-ref>/revoke
 POST /v1/admin/upstream-grants/<policies|tenants>/<scope-id>/<token-ref>/refresh
+POST /v1/admin/upstream-grants/<policies|tenants>/<scope-id>/<token-ref>/authorize
 POST /v1/admin/assignment-rules/reconcile
 ```
 
@@ -534,16 +537,17 @@ pnpm cf:oauth:put -- \
 This stores a grant at `oauth/<policy-id>/<tokenRef>` or
 `oauth/tenants/<tenant>/<tokenRef>`. Canonical records contain `version: 1`,
 `enabled`, `kind`, `provider`, `label`, `tokenType`, `scopes`, timestamps, and
-the selected primary secret field. `api_key` grants require `credential`,
-`oauth` grants require `accessToken`, and `subscription` grants accept either.
+the selected primary secret field. `api_key` grants require `credential` or a
+non-empty `credentials` string map, `oauth` grants require `accessToken`, and
+`subscription` grants accept either a credential or access token.
 Use the provider id as `tokenRef` for the provider's default connection.
 Provider manifests may declare a different explicit token reference when a
 provider needs multiple named connection contracts.
 
-Secrets are never accepted in argv. Supply `accessToken`, `credential`, and an
-optional `refreshToken` only through the matching `--*-stdin`, `--*-env`, or
-`--*-file` option. Only one secret can use stdin in a single invocation. Other
-optional metadata flags are:
+Secrets are never accepted in argv. Supply `accessToken`, `credential`,
+`credentials-json`, and an optional `refreshToken` only through the matching
+`--*-stdin`, `--*-env`, or `--*-file` option. Only one secret can use stdin in
+a single invocation. Other optional metadata flags are:
 
 - `--token-type`, `--expires-at`, `--scopes`, and `--account-id`
 - `--subscription-plan` and `--subscription-subject`
@@ -556,6 +560,20 @@ are only for matching custom provider manifests. Refresh extra parameters must
 be non-secret string metadata. Store client secrets in Worker configuration and
 pass only the configuration binding name with
 `--refresh-client-secret-config`.
+
+For SigV4 providers, store the canonical signing fields as a write-only
+credential bundle. Region remains a non-secret runtime binding:
+
+```sh
+export AWS_BEDROCK_CREDENTIALS='{"accessKeyId":"...","secretAccessKey":"...","sessionToken":"..."}'
+pnpm cf:oauth:put -- \
+  --kid svc_models \
+  --token-ref aws-bedrock \
+  --kind api_key \
+  --provider aws-bedrock \
+  --label "maintainer Bedrock" \
+  --credentials-json-env AWS_BEDROCK_CREDENTIALS
+```
 
 For example, add refresh and subscription metadata without exposing either
 token in argv:
@@ -581,6 +599,27 @@ transport, injects the required account metadata, and refreshes through the
 manifest-declared OpenAI OAuth endpoint. OpenAI API-key grants continue to use
 the normal OpenAI Platform transport.
 
+### Browser OAuth
+
+When a provider manifest declares `auth.authorization`, a verified Cloudflare
+Access admin can start its browser flow from the upstream-grants console or:
+
+```text
+POST /v1/admin/upstream-grants/<policies|tenants>/<scope-id>/<token-ref>/authorize
+{"provider":"openai"}
+```
+
+ClawRouter creates a one-time, ten-minute PKCE state bound to the Access admin,
+grant key, provider, and callback URI. The provider returns to
+`https://<clawrouter-host>/v1/oauth/callback`; ClawRouter consumes the state
+before exchanging the code and persists the canonical grant without exposing
+tokens to the browser. Admin bearer tokens cannot start or finish this browser
+flow.
+
+The provider OAuth client must allow that exact callback URI. Treat a provider
+as browser-OAuth-ready only after its redirect allowlist has been verified in
+the deployed environment.
+
 Revoke a grant without deleting audit history:
 
 ```sh
@@ -589,9 +628,10 @@ pnpm cf:oauth:revoke -- --kid svc_docs --token-ref openai
 
 Revocation overwrites the grant with a canonical disabled tombstone. It retains
 the grant's metadata and timestamps, adds `revokedAt`, and recursively removes
-stored access tokens, refresh tokens, credentials, and other recognized secret
-fields. When revoking a raw legacy token, pass `--kind`, `--provider`, and
-`--label` to attach identifying metadata to its tombstone.
+stored access tokens, refresh tokens, single credentials, credential bundles,
+and other recognized secret fields. When revoking a raw legacy token, pass
+`--kind`, `--provider`, and `--label` to attach identifying metadata to its
+tombstone.
 
 ## Proxy Routes
 

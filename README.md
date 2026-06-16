@@ -69,10 +69,11 @@ Then redeploy with the printed `CLAWROUTER_ACCESS_TEAM_DOMAIN` and
 `CLAWROUTER_ACCESS_AUD` values. `/` redirects to the Access-protected
 `/dashboard` path, `/dashboard` redirects to `/dashboard/catalog`, and canonical console views live under `/dashboard/*`, while
 public `/v1` catalog and proxy routes stay normal. The Access app must also
-protect `/v1/session` and `/v1/playground/*` so the browser console can
-bootstrap identity, entitlements, and playground calls from a verified Access
-session. A ClawRouter `access_session_required` JSON body on `/dashboard/*`,
-`/v1/session`, or `/v1/playground/*` means the Access app is not
+protect `/v1/session`, `/v1/playground/*`, `/v1/admin/*`, and
+`/v1/oauth/callback` so the browser console can bootstrap identity,
+entitlements, playground calls, admin mutations, and OAuth callbacks from a
+verified Access session. A ClawRouter `access_session_required` JSON body on
+`/dashboard/*`, `/v1/session`, `/v1/playground/*`, or `/v1/oauth/callback` means the Access app is not
 in front of that console path yet, and `pnpm cf:smoke` treats that as a failed
 deployment smoke.
 
@@ -96,6 +97,7 @@ The Worker currently exposes:
 - `GET /v1/usage`
 - `GET /v1/models`
 - `GET /v1/catalog`
+- `GET /v1/oauth/callback`
 - `GET /v1/key/inspect`
 - `POST /v1/chat/completions`
 - `POST /v1/responses`
@@ -126,6 +128,7 @@ The Worker currently exposes:
 - `POST /v1/admin/credentials/<credential-id>/revoke`
 - `POST /v1/admin/upstream-grants/<policies|tenants>/<scope-id>/<token-ref>/revoke`
 - `POST /v1/admin/upstream-grants/<policies|tenants>/<scope-id>/<token-ref>/refresh`
+- `POST /v1/admin/upstream-grants/<policies|tenants>/<scope-id>/<token-ref>/authorize`
 - `POST /v1/admin/assignment-rules/reconcile`
 
 Legacy `GET|PUT /v1/admin/keys...`, `POST /v1/admin/keys/<kid>/revoke`, and
@@ -174,12 +177,16 @@ registration, and smoke commands.
 The legacy-named `pnpm cf:oauth:put` and `pnpm cf:oauth:revoke` helpers write
 canonical version 1 upstream-grant records for `api_key`, `oauth`, and
 `subscription` connections. They accept access tokens, refresh tokens, and
-credentials only through stdin, environment variables, or files, never argv.
+single- or multi-field credentials only through stdin, environment variables,
+or files, never argv.
 Revocation retains grant metadata in a disabled tombstone while removing
 secrets. See `docs/deploy-cloudflare.md` for the complete operator flow.
 
 Admin endpoints accept a verified Cloudflare Access admin session or
 `Authorization: Bearer <admin-token>` against `CLAWROUTER_ADMIN_TOKEN_SHA256`.
+Provider-approved browser OAuth starts only from a verified Access admin
+session, uses a one-time PKCE state, and stores the resulting grant without
+returning provider tokens to the browser.
 The browser console hashes generated proxy key secrets in-browser before
 issuing a credential, manages policies separately from credentials and provider
 connections, assigns explicit user/group policy bindings, shows provider
@@ -215,5 +222,7 @@ charged fail-closed. Messages that exhaust automatic retries move to the
 separate usage DLQ for operator inspection and replay before Cloudflare's
 four-day unconsumed-DLQ retention expires. Internal reservation ids are
 generated independently from caller-supplied request ids.
-OAuth, SigV4, and deployment-templated providers are still cataloged, but the
-edge path rejects them until the required token/signing/runtime mapping exists.
+OAuth, SigV4, and deployment-templated providers execute through the same
+policy-enforced proxy when their manifest-declared grant and remaining runtime
+configuration are present. Provider secrets can come from scoped upstream
+grants instead of Worker-global bindings.
