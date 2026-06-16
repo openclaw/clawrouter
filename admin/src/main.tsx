@@ -8,6 +8,7 @@ import {
   CircleSlash2,
   FlaskConical,
   KeyRound,
+  LogIn,
   Play,
   Plus,
   RefreshCw,
@@ -96,6 +97,11 @@ interface ProviderRow {
   service_kind: string;
   meter?: string | null;
   capabilities: Array<{ id: string }>;
+  auth?: {
+    authorization?: {
+      grantKind?: "oauth" | "subscription";
+    } | null;
+  };
 }
 
 interface ProviderResponse {
@@ -163,6 +169,7 @@ interface UpstreamGrant {
   updatedAt?: string | null;
   revokedAt?: string | null;
   hasCredential: boolean;
+  credentialFields: string[];
   hasAccessToken: boolean;
   hasRefreshToken: boolean;
   refreshConfigured: boolean;
@@ -415,6 +422,7 @@ interface UpstreamGrantForm {
   label: string;
   enabled: boolean;
   credential: string;
+  credentialBundle: string;
   accessToken: string;
   refreshToken: string;
   accountId: string;
@@ -482,7 +490,7 @@ const defaultAccess: AccessForm = {
 };
 const defaultCredential: CredentialForm = { credentialId: "", policyId: "" };
 const defaultBinding: BindingForm = { policyId: "", principalType: "group", principalId: "", enabled: true, priority: "100" };
-const defaultUpstreamGrant: UpstreamGrantForm = { scope: "policies", scopeId: "", tokenRef: "", kind: "api_key", provider: "", label: "", enabled: true, credential: "", accessToken: "", refreshToken: "", accountId: "", expiresAt: "" };
+const defaultUpstreamGrant: UpstreamGrantForm = { scope: "policies", scopeId: "", tokenRef: "", kind: "api_key", provider: "", label: "", enabled: true, credential: "", credentialBundle: "", accessToken: "", refreshToken: "", accountId: "", expiresAt: "" };
 const defaultAssignmentRule: AssignmentRuleForm = { ruleId: "", enabled: true, kind: "email_domain", subject: "", groups: "", policyIds: [], priority: "100", revokeOnLoss: true, provenance: "cloudflare_access" };
 
 const rolePresets = {
@@ -579,7 +587,7 @@ function App() {
   const selectedUser = selectedUserEmail ? users.find((user) => user.email === selectedUserEmail) : undefined;
   const selectedModel = models.find((model) => model.id === playground.model) ?? models[0];
   const selectedServiceRoute = serviceRoutes.find((route) => routeKey(route) === playground.serviceRoute) ?? serviceRoutes[0];
-  const busy = status === "loading" || ["saving", "running", "revoking", "issuing", "enabling", "disabling"].some((prefix) => status.startsWith(prefix));
+  const busy = status === "loading" || ["saving", "running", "revoking", "issuing", "enabling", "disabling", "connecting"].some((prefix) => status.startsWith(prefix));
   const statusTone = statusKind(status);
 
   useEffect(() => {
@@ -727,7 +735,7 @@ function App() {
         setAccessForm(accessFormFromUser(user, []));
       }
       setDemoMode(false);
-      setStatus(refreshWarnings.length ? refreshWarnings.join("; ") : "connected");
+      setStatus(refreshWarnings.length ? refreshWarnings.join("; ") : oauthCallbackStatus() ?? "connected");
     } catch (error) {
       const message = errorMessage(error);
       if (allowDemo) {
@@ -915,7 +923,8 @@ function App() {
       const tokenRef = upstreamGrantForm.tokenRef.trim();
       const provider = upstreamGrantForm.provider.trim();
       if (!scopeId || !tokenRef || !provider) throw new Error("scope, token reference, and provider are required");
-      const primarySecret = upstreamGrantForm.kind === "api_key" ? upstreamGrantForm.credential.trim() : upstreamGrantForm.accessToken.trim();
+      const credentialBundle = parseCredentialBundle(upstreamGrantForm.credentialBundle);
+      const primarySecret = upstreamGrantForm.kind === "api_key" ? upstreamGrantForm.credential.trim() || Object.keys(credentialBundle).length : upstreamGrantForm.accessToken.trim();
       if (!selectedUpstreamGrant && !primarySecret) throw new Error("a new upstream grant requires its primary secret");
       const body = {
         version: 1,
@@ -929,6 +938,7 @@ function App() {
         accountId: upstreamGrantForm.accountId.trim() || undefined,
         subscription: selectedUpstreamGrant?.subscription ?? undefined,
         ...(upstreamGrantForm.credential.trim() ? { credential: upstreamGrantForm.credential.trim() } : {}),
+        ...(Object.keys(credentialBundle).length ? { credentials: credentialBundle } : {}),
         ...(upstreamGrantForm.accessToken.trim() ? { accessToken: upstreamGrantForm.accessToken.trim() } : {}),
         ...(upstreamGrantForm.refreshToken.trim() ? { refreshToken: upstreamGrantForm.refreshToken.trim() } : {}),
       };
@@ -962,7 +972,7 @@ function App() {
       setStatus("revoking upstream grant");
       let revoked: UpstreamGrant;
       if (demoMode) {
-        revoked = { ...grant, enabled: false, usable: false, hasCredential: false, hasAccessToken: false, hasRefreshToken: false, revokedAt: new Date().toISOString() };
+        revoked = { ...grant, enabled: false, usable: false, hasCredential: false, credentialFields: [], hasAccessToken: false, hasRefreshToken: false, revokedAt: new Date().toISOString() };
         setUpstreamGrants((current) => current.map((item) => item.key === grant.key ? revoked : item));
       } else {
         revoked = await request<UpstreamGrant>(gatewayOrigin, `/v1/admin/upstream-grants/${grant.scope}/${encodeURIComponent(grant.scopeId)}/${encodeURIComponent(grant.tokenRef)}/revoke`, { method: "POST" });
@@ -989,6 +999,32 @@ function App() {
         setUpstreamGrantForm(upstreamGrantFormFromGrant(refreshed));
       }
       setStatus("refreshed upstream grant");
+    } catch (error) {
+      const message = errorMessage(error);
+      setPolicyError(message);
+      setStatus(message);
+    }
+  }
+
+  async function authorizeUpstreamGrant() {
+    try {
+      setPolicyError("");
+      const scopeId = upstreamGrantForm.scopeId.trim();
+      const tokenRef = upstreamGrantForm.tokenRef.trim();
+      const provider = upstreamGrantForm.provider.trim();
+      if (!scopeId || !tokenRef || !provider) throw new Error("scope, token reference, and provider are required");
+      if (!providers.find((item) => item.id === provider)?.auth?.authorization) throw new Error("selected provider does not support browser OAuth");
+      setStatus("connecting upstream grant");
+      if (demoMode) {
+        setStatus("browser OAuth unavailable in local demo");
+        return;
+      }
+      const result = await request<{ authorizationUrl: string }>(gatewayOrigin, `/v1/admin/upstream-grants/${upstreamGrantForm.scope}/${encodeURIComponent(scopeId)}/${encodeURIComponent(tokenRef)}/authorize`, {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({ provider }),
+      });
+      window.location.assign(result.authorizationUrl);
     } catch (error) {
       const message = errorMessage(error);
       setPolicyError(message);
@@ -1467,6 +1503,7 @@ function App() {
             onSaveUpstreamGrant={saveUpstreamGrant}
             onRevokeUpstreamGrant={revokeUpstreamGrant}
             onRefreshUpstreamGrant={refreshUpstreamGrant}
+            onAuthorizeUpstreamGrant={authorizeUpstreamGrant}
             onSaveAssignmentRule={saveAssignmentRule}
             onReconcileAssignments={reconcileAssignments}
             onNew={startNewPolicy}
@@ -1740,7 +1777,7 @@ function PlaygroundScreen({ form, setForm, models, selected, serviceRoutes, sele
   );
 }
 
-function PoliciesScreen({ tab, setTab, keys, selected, credentials, selectedCredential, bindings, selectedBinding, upstreamGrants, selectedUpstreamGrant, assignmentRules, selectedAssignmentRule, providers, form, setForm, credentialForm, setCredentialForm, bindingForm, setBindingForm, upstreamGrantForm, setUpstreamGrantForm, assignmentRuleForm, setAssignmentRuleForm, issuedKey, error, onSave, onIssueCredential, onRevokeCredential, onSaveBinding, onSaveUpstreamGrant, onRevokeUpstreamGrant, onRefreshUpstreamGrant, onSaveAssignmentRule, onReconcileAssignments, onNew, onEdit, onEditCredential, onEditBinding, onNewBinding, onEditUpstreamGrant, onNewUpstreamGrant, onEditAssignmentRule, onNewAssignmentRule, onRevoke, onPreset, onToggleProvider, onSetProviderGroup, busy }: {
+function PoliciesScreen({ tab, setTab, keys, selected, credentials, selectedCredential, bindings, selectedBinding, upstreamGrants, selectedUpstreamGrant, assignmentRules, selectedAssignmentRule, providers, form, setForm, credentialForm, setCredentialForm, bindingForm, setBindingForm, upstreamGrantForm, setUpstreamGrantForm, assignmentRuleForm, setAssignmentRuleForm, issuedKey, error, onSave, onIssueCredential, onRevokeCredential, onSaveBinding, onSaveUpstreamGrant, onRevokeUpstreamGrant, onRefreshUpstreamGrant, onAuthorizeUpstreamGrant, onSaveAssignmentRule, onReconcileAssignments, onNew, onEdit, onEditCredential, onEditBinding, onNewBinding, onEditUpstreamGrant, onNewUpstreamGrant, onEditAssignmentRule, onNewAssignmentRule, onRevoke, onPreset, onToggleProvider, onSetProviderGroup, busy }: {
   tab: AccessTab;
   setTab: (tab: AccessTab) => void;
   keys: AccessPolicy[];
@@ -1773,6 +1810,7 @@ function PoliciesScreen({ tab, setTab, keys, selected, credentials, selectedCred
   onSaveUpstreamGrant: (event: FormEvent) => void;
   onRevokeUpstreamGrant: (grant: UpstreamGrant) => void;
   onRefreshUpstreamGrant: (grant: UpstreamGrant) => void;
+  onAuthorizeUpstreamGrant: () => void;
   onSaveAssignmentRule: (event: FormEvent) => void;
   onReconcileAssignments: () => void;
   onNew: () => void;
@@ -1802,13 +1840,13 @@ function PoliciesScreen({ tab, setTab, keys, selected, credentials, selectedCred
       {tab === "policies" ? <PolicyPanel keys={keys} selected={selected} providers={providers} form={form} setForm={setForm} error={error} onSave={onSave} onNew={onNew} onEdit={onEdit} onRevoke={onRevoke} onPreset={onPreset} onToggleProvider={onToggleProvider} onSetProviderGroup={onSetProviderGroup} busy={busy} /> : null}
       {tab === "credentials" ? <CredentialPanel policies={keys} credentials={credentials} selected={selectedCredential} form={credentialForm} setForm={setCredentialForm} issuedKey={issuedKey} error={error} onIssue={onIssueCredential} onEdit={onEditCredential} onRevoke={onRevokeCredential} busy={busy} /> : null}
       {tab === "bindings" ? <BindingPanel policies={keys} bindings={bindings} selected={selectedBinding} form={bindingForm} setForm={setBindingForm} error={error} onSave={onSaveBinding} onEdit={onEditBinding} onNew={onNewBinding} busy={busy} /> : null}
-      {tab === "upstream" ? <UpstreamGrantPanel policies={keys} providers={providers} grants={upstreamGrants} selected={selectedUpstreamGrant} form={upstreamGrantForm} setForm={setUpstreamGrantForm} error={error} onSave={onSaveUpstreamGrant} onEdit={onEditUpstreamGrant} onNew={onNewUpstreamGrant} onRefresh={onRefreshUpstreamGrant} onRevoke={onRevokeUpstreamGrant} busy={busy} /> : null}
+      {tab === "upstream" ? <UpstreamGrantPanel policies={keys} providers={providers} grants={upstreamGrants} selected={selectedUpstreamGrant} form={upstreamGrantForm} setForm={setUpstreamGrantForm} error={error} onSave={onSaveUpstreamGrant} onEdit={onEditUpstreamGrant} onNew={onNewUpstreamGrant} onRefresh={onRefreshUpstreamGrant} onAuthorize={onAuthorizeUpstreamGrant} onRevoke={onRevokeUpstreamGrant} busy={busy} /> : null}
       {tab === "assignments" ? <AssignmentRulePanel policies={keys} rules={assignmentRules} selected={selectedAssignmentRule} form={assignmentRuleForm} setForm={setAssignmentRuleForm} error={error} onSave={onSaveAssignmentRule} onEdit={onEditAssignmentRule} onNew={onNewAssignmentRule} onReconcile={onReconcileAssignments} busy={busy} /> : null}
     </div>
   );
 }
 
-function UpstreamGrantPanel({ policies, providers, grants, selected, form, setForm, error, onSave, onEdit, onNew, onRefresh, onRevoke, busy }: {
+function UpstreamGrantPanel({ policies, providers, grants, selected, form, setForm, error, onSave, onEdit, onNew, onRefresh, onAuthorize, onRevoke, busy }: {
   policies: AccessPolicy[];
   providers: ProviderRow[];
   grants: UpstreamGrant[];
@@ -1820,12 +1858,15 @@ function UpstreamGrantPanel({ policies, providers, grants, selected, form, setFo
   onEdit: (grant: UpstreamGrant) => void;
   onNew: () => void;
   onRefresh: (grant: UpstreamGrant) => void;
+  onAuthorize: () => void;
   onRevoke: (grant: UpstreamGrant) => void;
   busy: boolean;
 }) {
   const active = grants.filter((grant) => grant.enabled).length;
   const usable = grants.filter((grant) => grant.usable).length;
   const refreshable = grants.filter((grant) => grant.refreshConfigured && grant.hasRefreshToken).length;
+  const selectedProvider = providers.find((provider) => provider.id === form.provider);
+  const authorizationKind = selectedProvider?.auth?.authorization?.grantKind;
   return (
     <div className="entityLayout">
       <section className="mainPane">
@@ -1848,19 +1889,20 @@ function UpstreamGrantPanel({ policies, providers, grants, selected, form, setFo
           <div className="formGrid compact">
             <label><span>scope</span><select value={form.scope} disabled={Boolean(selected)} onChange={(event) => setForm({ ...form, scope: event.target.value as UpstreamGrantForm["scope"], scopeId: event.target.value === "policies" ? policies[0]?.policyId ?? "" : "default" })}><option value="policies">policy</option><option value="tenants">tenant</option></select></label>
             <label><span>scope id</span>{form.scope === "policies" ? <select value={form.scopeId} disabled={Boolean(selected)} onChange={(event) => setForm({ ...form, scopeId: event.target.value })}>{policies.map((policy) => <option key={policy.policyId} value={policy.policyId}>{policy.policyId}</option>)}</select> : <input value={form.scopeId} readOnly={Boolean(selected)} onChange={(event) => setForm({ ...form, scopeId: event.target.value })} />}</label>
-            <label><span>provider</span><select value={form.provider} disabled={Boolean(selected)} onChange={(event) => setForm({ ...form, provider: event.target.value, tokenRef: !form.tokenRef || form.tokenRef === form.provider ? event.target.value : form.tokenRef })}>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.display_name}</option>)}</select></label>
-            <label><span>kind</span><select value={form.kind} disabled={Boolean(selected)} onChange={(event) => setForm({ ...form, kind: event.target.value as UpstreamGrant["kind"], credential: "", accessToken: "", refreshToken: "" })}><option value="api_key">API key</option><option value="oauth">OAuth</option><option value="subscription">subscription</option></select></label>
+            <label><span>provider</span><select value={form.provider} disabled={Boolean(selected)} onChange={(event) => { const provider = providers.find((item) => item.id === event.target.value); setForm({ ...form, provider: event.target.value, kind: provider?.auth?.authorization?.grantKind ?? form.kind, tokenRef: !form.tokenRef || form.tokenRef === form.provider ? event.target.value : form.tokenRef }); }}>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.display_name}</option>)}</select></label>
+            <label><span>kind</span><select value={form.kind} disabled={Boolean(selected)} onChange={(event) => setForm({ ...form, kind: event.target.value as UpstreamGrant["kind"], credential: "", credentialBundle: "", accessToken: "", refreshToken: "" })}><option value="api_key">API key</option><option value="oauth">OAuth</option><option value="subscription">subscription</option></select></label>
             <label className="full"><span>token reference</span><input value={form.tokenRef} readOnly={Boolean(selected)} onChange={(event) => setForm({ ...form, tokenRef: event.target.value })} /></label>
             <label className="full"><span>label</span><input value={form.label} onChange={(event) => setForm({ ...form, label: event.target.value })} /></label>
             {form.kind === "api_key" ? <label className="full"><span>{selected?.hasCredential ? "replace API key" : "API key"}</span><input type="password" autoComplete="off" value={form.credential} onChange={(event) => setForm({ ...form, credential: event.target.value })} /></label> : <label className="full"><span>{selected?.hasAccessToken ? "replace access token" : "access token"}</span><input type="password" autoComplete="off" value={form.accessToken} onChange={(event) => setForm({ ...form, accessToken: event.target.value })} /></label>}
+            {form.kind === "api_key" ? <label className="full"><span>{selected?.credentialFields.length ? "replace credential bundle JSON" : "credential bundle JSON"}</span><textarea value={form.credentialBundle} onChange={(event) => setForm({ ...form, credentialBundle: event.target.value })} placeholder={'{"accessKeyId":"...","secretAccessKey":"...","sessionToken":"..."}'} /></label> : null}
             {form.kind !== "api_key" ? <label className="full"><span>{selected?.hasRefreshToken ? "replace refresh token" : "refresh token"}</span><input type="password" autoComplete="off" value={form.refreshToken} onChange={(event) => setForm({ ...form, refreshToken: event.target.value })} /></label> : null}
             {form.kind === "subscription" ? <label className="full"><span>account id</span><input value={form.accountId} onChange={(event) => setForm({ ...form, accountId: event.target.value })} /></label> : null}
             <label><span>expires at</span><input value={form.expiresAt} onChange={(event) => setForm({ ...form, expiresAt: event.target.value })} placeholder="ISO-8601 or blank" /></label>
             <label><span>state</span><select value={form.enabled ? "enabled" : "disabled"} onChange={(event) => setForm({ ...form, enabled: event.target.value === "enabled" })}><option value="enabled">enabled</option><option value="disabled">disabled</option></select></label>
           </div>
           <InlineNote>Secret values are write-only and never returned by ClawRouter.</InlineNote>
-          {selected ? <dl className="facts"><dt>primary secret</dt><dd>{selected.hasCredential || selected.hasAccessToken ? "stored" : "missing"}</dd><dt>refresh token</dt><dd>{selected.hasRefreshToken ? "stored" : "none"}</dd><dt>refresh config</dt><dd>{selected.refreshConfigured ? "manifest approved" : "none"}</dd><dt>state</dt><dd>{selected.usable ? "usable" : "blocked"}</dd></dl> : null}
-          <div className="inspectorActions"><button type="submit" disabled={busy || !form.scopeId || !form.tokenRef || !form.provider}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save grant</span></button>{selected?.refreshConfigured && selected.hasRefreshToken ? <button type="button" className="buttonSecondary" disabled={busy || !selected.enabled} onClick={() => onRefresh(selected)}><RefreshCw className="buttonIcon" aria-hidden="true" /><span>Refresh</span></button> : null}{selected ? <button type="button" className="buttonDanger" disabled={busy || !selected.enabled} onClick={() => onRevoke(selected)}><CircleSlash2 className="buttonIcon" aria-hidden="true" /><span>Revoke</span></button> : null}</div>
+          {selected ? <dl className="facts"><dt>primary secret</dt><dd>{selected.hasCredential || selected.hasAccessToken || selected.credentialFields.length ? "stored" : "missing"}</dd><dt>credential fields</dt><dd>{selected.credentialFields.length ? selected.credentialFields.join(", ") : "none"}</dd><dt>refresh token</dt><dd>{selected.hasRefreshToken ? "stored" : "none"}</dd><dt>refresh config</dt><dd>{selected.refreshConfigured ? "manifest approved" : "none"}</dd><dt>state</dt><dd>{selected.usable ? "usable" : "blocked"}</dd></dl> : null}
+          <div className="inspectorActions">{authorizationKind ? <button type="button" disabled={busy || !form.scopeId || !form.tokenRef || !form.provider} onClick={onAuthorize}><LogIn className="buttonIcon" aria-hidden="true" /><span>{selected ? "Reconnect" : "Connect"} with provider</span></button> : null}<button type="submit" className={authorizationKind ? "buttonSecondary" : undefined} disabled={busy || !form.scopeId || !form.tokenRef || !form.provider}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save grant</span></button>{selected?.refreshConfigured && selected.hasRefreshToken ? <button type="button" className="buttonSecondary" disabled={busy || !selected.enabled} onClick={() => onRefresh(selected)}><RefreshCw className="buttonIcon" aria-hidden="true" /><span>Refresh</span></button> : null}{selected ? <button type="button" className="buttonDanger" disabled={busy || !selected.enabled} onClick={() => onRevoke(selected)}><CircleSlash2 className="buttonIcon" aria-hidden="true" /><span>Revoke</span></button> : null}</div>
         </form>
       </aside>
     </div>
@@ -2364,10 +2406,19 @@ function kindIcon(kind: string): IconComponent {
 }
 
 function statusKind(status: string) {
-  if (status.includes("error") || status.includes("select") || status.includes("invalid") || status.includes("must") || status.includes("returned") || status.includes("paste")) return "error";
-  if (status === "loading" || status.startsWith("saving") || status.startsWith("running") || status.startsWith("revoking")) return "pending";
+  if (status.includes("error") || status.includes("failed") || status.includes("select") || status.includes("invalid") || status.includes("must") || status.includes("returned") || status.includes("paste")) return "error";
+  if (status === "loading" || status.startsWith("saving") || status.startsWith("running") || status.startsWith("revoking") || status.startsWith("connecting")) return "pending";
   if (status.includes("loaded") || status.includes("saved") || status.includes("connected") || status.includes("ready") || status.includes("revoked")) return "success";
   return "neutral";
+}
+
+function oauthCallbackStatus() {
+  const params = new URLSearchParams(window.location.search);
+  const outcome = params.get("oauth");
+  const provider = params.get("provider") ?? "provider";
+  if (outcome === "connected") return `${provider} connected`;
+  if (outcome === "failed") return `${provider} OAuth failed`;
+  return null;
 }
 
 function statusLabel(kind: ReturnType<typeof statusKind>) {
@@ -2443,6 +2494,7 @@ function upstreamGrantFormFromGrant(grant: UpstreamGrant): UpstreamGrantForm {
     label: grant.label ?? "",
     enabled: grant.enabled,
     credential: "",
+    credentialBundle: "",
     accessToken: "",
     refreshToken: "",
     accountId: grant.accountId ?? "",
@@ -2470,6 +2522,8 @@ function demoGrantFromForm(form: UpstreamGrantForm, existing?: UpstreamGrant): U
     : `oauth/${form.scopeId.trim()}/${form.tokenRef.trim()}`;
   const now = new Date().toISOString();
   const hasCredential = Boolean(form.credential.trim()) || Boolean(existing?.hasCredential);
+  const credentialFields = Object.keys(parseCredentialBundle(form.credentialBundle)).sort();
+  const effectiveCredentialFields = credentialFields.length ? credentialFields : existing?.credentialFields ?? [];
   const hasAccessToken = Boolean(form.accessToken.trim()) || Boolean(existing?.hasAccessToken);
   const hasRefreshToken = Boolean(form.refreshToken.trim()) || Boolean(existing?.hasRefreshToken);
   return {
@@ -2491,11 +2545,24 @@ function demoGrantFromForm(form: UpstreamGrantForm, existing?: UpstreamGrant): U
     updatedAt: now,
     revokedAt: form.enabled ? null : now,
     hasCredential,
+    credentialFields: effectiveCredentialFields,
     hasAccessToken,
     hasRefreshToken,
     refreshConfigured: existing?.refreshConfigured ?? hasRefreshToken,
-    usable: form.enabled && (form.kind === "api_key" ? hasCredential : hasAccessToken || form.kind === "subscription" && hasCredential),
+    usable: form.enabled && (form.kind === "api_key" ? hasCredential || effectiveCredentialFields.length > 0 : hasAccessToken || form.kind === "subscription" && hasCredential),
   };
+}
+
+function parseCredentialBundle(raw: string): Record<string, string> {
+  if (!raw.trim()) return {};
+  const value = JSON.parse(raw) as unknown;
+  if (!value || Array.isArray(value) || typeof value !== "object") throw new Error("credential bundle must be a JSON object");
+  const credentials: Record<string, string> = {};
+  for (const [name, secret] of Object.entries(value)) {
+    if (!/^[A-Za-z0-9_.-]{1,128}$/.test(name) || typeof secret !== "string" || !secret) throw new Error("credential bundle fields must use non-empty string secrets");
+    credentials[name] = secret;
+  }
+  return credentials;
 }
 
 function demoRuleFromForm(form: AssignmentRuleForm): AssignmentRule {
@@ -2795,7 +2862,7 @@ function demoData() {
     provider("huggingface", "Hugging Face", "rest_json", "model_provider", ["llm.invoke"]),
     provider("minimax", "MiniMax", "openai_compatible", "model_provider", ["llm.chat"]),
     provider("mistral", "Mistral AI", "openai_compatible", "model_provider", ["llm.chat", "llm.embeddings"]),
-    provider("openai", "OpenAI", "openai_compatible", "model_provider", ["llm.responses", "llm.chat", "llm.embeddings"]),
+    provider("openai", "OpenAI", "openai_compatible", "model_provider", ["llm.responses", "llm.chat", "llm.embeddings"], "subscription"),
     provider("openrouter", "OpenRouter", "openai_compatible", "gateway_platform", ["llm.chat"]),
     provider("perplexity", "Perplexity", "openai_compatible", "model_provider", ["llm.chat"]),
     provider("replicate", "Replicate", "rest_json", "tool_provider", ["media.predict", "media.prediction.read"]),
@@ -2844,8 +2911,8 @@ function demoData() {
   ];
   const connections: ProviderConnection[] = providers.map((item) => ({ providerId: item.id, enabled: !demoDisabledProviderIds.has(item.id) }));
   const upstreamGrants: UpstreamGrant[] = [
-    { key: "oauth/maintainer_models/openai", scope: "policies", scopeId: "maintainer_models", tokenRef: "openai", version: 1, enabled: true, kind: "subscription", provider: "openai", label: "maintainer subscription", tokenType: "Bearer", scopes: ["openid", "profile"], accountId: "acct_demo", subscription: { plan: "plus" }, createdAt: "2026-06-16T00:00:00.000Z", updatedAt: "2026-06-16T00:00:00.000Z", hasCredential: false, hasAccessToken: true, hasRefreshToken: true, refreshConfigured: true, usable: true },
-    { key: "oauth/tenants/openclaw/anthropic", scope: "tenants", scopeId: "openclaw", tokenRef: "anthropic", version: 1, enabled: true, kind: "api_key", provider: "anthropic", label: "shared Anthropic key", tokenType: "Bearer", scopes: [], createdAt: "2026-06-16T00:00:00.000Z", updatedAt: "2026-06-16T00:00:00.000Z", hasCredential: true, hasAccessToken: false, hasRefreshToken: false, refreshConfigured: false, usable: true },
+    { key: "oauth/maintainer_models/openai", scope: "policies", scopeId: "maintainer_models", tokenRef: "openai", version: 1, enabled: true, kind: "subscription", provider: "openai", label: "maintainer subscription", tokenType: "Bearer", scopes: ["openid", "profile"], accountId: "acct_demo", subscription: { plan: "plus" }, createdAt: "2026-06-16T00:00:00.000Z", updatedAt: "2026-06-16T00:00:00.000Z", hasCredential: false, credentialFields: [], hasAccessToken: true, hasRefreshToken: true, refreshConfigured: true, usable: true },
+    { key: "oauth/tenants/openclaw/anthropic", scope: "tenants", scopeId: "openclaw", tokenRef: "anthropic", version: 1, enabled: true, kind: "api_key", provider: "anthropic", label: "shared Anthropic key", tokenType: "Bearer", scopes: [], createdAt: "2026-06-16T00:00:00.000Z", updatedAt: "2026-06-16T00:00:00.000Z", hasCredential: true, credentialFields: [], hasAccessToken: false, hasRefreshToken: false, refreshConfigured: false, usable: true },
   ];
   const assignmentRules: AssignmentRule[] = [
     { ruleId: "maintainers", version: 1, enabled: true, kind: "email_domain", subject: "example.com", groups: ["maintainers"], policyIds: ["maintainer_models", "openclaw_tools"], priority: 10, revokeOnLoss: true, provenance: "cloudflare_access", generatedGroup: "assignment.maintainers", createdAt: "2026-06-16T00:00:00.000Z", updatedAt: "2026-06-16T00:00:00.000Z" },
@@ -2931,8 +2998,8 @@ function manifestRoute(provider: string, endpoint: string, route: string, method
   return { provider, endpoint, route, methods, pathParams };
 }
 
-function provider(id: string, display_name: string, providerClass: string, service_kind: string, capabilities: string[]): ProviderRow {
-  return { id, display_name, class: providerClass, service_kind, meter: "request", capabilities: capabilities.map((capability) => ({ id: capability })) };
+function provider(id: string, display_name: string, providerClass: string, service_kind: string, capabilities: string[], authorizationKind?: "oauth" | "subscription"): ProviderRow {
+  return { id, display_name, class: providerClass, service_kind, meter: "request", capabilities: capabilities.map((capability) => ({ id: capability })), auth: authorizationKind ? { authorization: { grantKind: authorizationKind } } : undefined };
 }
 
 createRoot(document.getElementById("root")!).render(<App />);
