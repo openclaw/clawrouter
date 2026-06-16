@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   inspectSmokeKeyProviderAccess,
   runLiveProviderSmokes,
+  selectLiveProviderPlans,
   SmokeKeyInspectionUnavailableError,
 } from "../scripts/provider-smoke-plan.mjs";
 
@@ -110,6 +111,62 @@ test("smoke key inspection distinguishes unavailable current deployments", async
       },
     }),
     SmokeKeyInspectionUnavailableError,
+  );
+});
+
+test("smoke key inspection treats missing policy authority as unavailable", async () => {
+  await assert.rejects(
+    inspectSmokeKeyProviderAccess({
+      baseUrl: "https://clawrouter.example",
+      smokeKey: "smoke-key",
+      liveProviders: ["openai"],
+      fetchImpl: async () =>
+        Response.json({
+          verified: false,
+          verification: "policy_store_unavailable",
+          providers: null,
+        }),
+    }),
+    SmokeKeyInspectionUnavailableError,
+  );
+});
+
+test("smoke key inspection keeps malformed credentials fatal", async () => {
+  await assert.rejects(
+    inspectSmokeKeyProviderAccess({
+      baseUrl: "https://clawrouter.example",
+      smokeKey: "malformed",
+      liveProviders: ["openai"],
+      fetchImpl: async () =>
+        Response.json(
+          { error: { code: "invalid_key_syntax", message: "invalid" } },
+          { status: 400 },
+        ),
+    }),
+    /failed with 400: invalid_key_syntax/,
+  );
+});
+
+test("all live provider selection expands to concrete provider ids", () => {
+  const selected = selectLiveProviderPlans(
+    {
+      providers: [
+        ...plan.providers,
+        {
+          id: "anthropic",
+          target: {
+            kind: "openai_chat",
+            route: "/v1/chat/completions",
+            body: { model: "anthropic/test" },
+          },
+        },
+      ],
+    },
+    ["all"],
+  );
+  assert.deepEqual(
+    selected.map((provider) => provider.id),
+    ["openai", "anthropic"],
   );
 });
 

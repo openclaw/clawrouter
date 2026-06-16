@@ -123,7 +123,17 @@ export async function inspectSmokeKeyProviderAccess({
     );
   }
   if (!response.ok) {
-    throw new SmokeKeyInspectionUnavailableError(`/v1/key/inspect failed with ${response.status}`);
+    if (response.status === 404 || response.status >= 500) {
+      throw new SmokeKeyInspectionUnavailableError(
+        `/v1/key/inspect failed with ${response.status}`,
+      );
+    }
+    let detail = "";
+    try {
+      const body = await response.json();
+      detail = body?.error?.code ? `: ${body.error.code}` : "";
+    } catch {}
+    throw new Error(`/v1/key/inspect failed with ${response.status}${detail}`);
   }
   let inspection;
   try {
@@ -131,6 +141,11 @@ export async function inspectSmokeKeyProviderAccess({
   } catch (error) {
     throw new SmokeKeyInspectionUnavailableError(
       `/v1/key/inspect returned invalid JSON: ${error.message}`,
+    );
+  }
+  if (inspection?.verification === "policy_store_unavailable") {
+    throw new SmokeKeyInspectionUnavailableError(
+      "/v1/key/inspect reported policy_store_unavailable",
     );
   }
   if (inspection?.verified !== true) {
