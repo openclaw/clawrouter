@@ -2579,6 +2579,7 @@ fn client_catalog_value(snapshot: &ProviderSnapshot, rows: Vec<EntitlementProvid
                 "displayName": provider.display_name,
                 "allowed": true,
                 "executable": row.readiness.executable,
+                "openAiCompatible": supports_openai_compatible_proxy(provider),
                 "nativeBaseUrl": format!("/v1/native/{}", provider.id),
                 "policies": row.policies,
                 "readiness": row.readiness,
@@ -2590,6 +2591,8 @@ fn client_catalog_value(snapshot: &ProviderSnapshot, rows: Vec<EntitlementProvid
                         "endpoint": endpoint.id,
                         "methods": endpoint.methods,
                         "path": endpoint.path,
+                        "requestFormat": endpoint.request_format,
+                        "responseFormat": endpoint.response_format,
                         "streaming": endpoint.streaming
                     })
                 }).collect::<Vec<_>>(),
@@ -12790,13 +12793,40 @@ mod tests {
             catalog["providers"][0]["nativeBaseUrl"],
             "/v1/native/openai"
         );
+        assert_eq!(catalog["providers"][0]["openAiCompatible"], true);
         assert_eq!(
             catalog["providers"][0]["routes"][0]["endpoint"],
             "responses"
         );
         assert_eq!(
+            catalog["providers"][0]["routes"][0]["requestFormat"],
+            "openai.responses"
+        );
+        assert_eq!(
+            catalog["providers"][0]["routes"][0]["responseFormat"],
+            "openai.responses"
+        );
+        assert_eq!(
             catalog["providers"][0]["models"][0]["capabilities"],
             serde_json::json!(["llm.responses"])
+        );
+        assert_eq!(catalog["providers"][1]["openAiCompatible"], true);
+    }
+
+    #[test]
+    fn client_catalog_describes_native_transport_formats() {
+        let snapshot = provider_snapshot().unwrap();
+        let mut anthropic = entitlement_test_row("anthropic", true, true);
+        anthropic.readiness.executable_endpoints = vec!["messages".to_string()];
+        let catalog = client_catalog_value(&snapshot, vec![anthropic]);
+        let provider = &catalog["providers"][0];
+        assert_eq!(provider["openAiCompatible"], false);
+        assert_eq!(provider["nativeBaseUrl"], "/v1/native/anthropic");
+        assert_eq!(provider["routes"][0]["path"], "/v1/messages");
+        assert_eq!(provider["routes"][0]["requestFormat"], "anthropic.messages");
+        assert_eq!(
+            provider["routes"][0]["responseFormat"],
+            "anthropic.messages"
         );
     }
 
