@@ -1,6 +1,6 @@
 use clawrouter_core::{
-    parse_proxy_key, AuthScheme, CompiledEndpoint, CompiledProvider, PathParamStyle, ProviderClass,
-    ProviderSnapshot, UsageEvent, UsageStatus,
+    parse_proxy_key, AuthScheme, CompiledEndpoint, CompiledProvider, GrantTransportConfig,
+    PathParamStyle, ProviderClass, ProviderSnapshot, UsageEvent, UsageStatus,
 };
 use futures_util::future::try_join_all;
 use hmac::{Hmac, Mac};
@@ -25,6 +25,7 @@ const BUDGET_RESERVATION_LEASE_MS: u64 = 15 * 60 * 1_000;
 const BUDGET_CHARGE_RETENTION_MS: u64 = 45 * 86_400_000;
 const BUDGET_CLEANUP_INTERVAL_MS: i64 = 86_400_000;
 const PROVIDER_HEALTH_MAX_AGE_MS: f64 = 86_400_000.0;
+const UPSTREAM_GRANT_REFRESH_WINDOW_MS: f64 = 5.0 * 60.0 * 1_000.0;
 const USAGE_EVENT_LIMIT: usize = 100;
 const USAGE_EVENT_RETENTION_MS: u64 = 30 * 86_400_000;
 const USAGE_CLEANUP_INTERVAL_MS: i64 = 86_400_000;
@@ -298,6 +299,7 @@ fn service_index() -> Result<Response> {
             "adminPolicies": "/v1/admin/policies",
             "adminCredentials": "/v1/admin/credentials",
             "adminConnections": "/v1/admin/connections",
+            "adminUpstreamGrants": "/v1/admin/upstream-grants",
             "apiAliases": {
                 "routes": ["/api/route", "/api/routes"],
                 "session": "/api/session",
@@ -570,18 +572,71 @@ async fn proxy_openai_compatible(
         };
         return audit.failure_response(response).await;
     }
-    let upstream_url =
-        match openai_upstream_url(route.provider, endpoint, &env, &route.upstream_model) {
-            Ok(url) => url,
-            Err(OpenAiProxyUrlError::Client(message)) => {
-                let response = json_error("invalid_model", &message, 400)?;
+    let grant = match upstream_grant_for_request(&env, route.provider, &auth).await {
+        Ok(value) => value,
+        Err(HeaderBuildError::Client {
+            code,
+            message,
+            status,
+        }) => {
+            let response = json_error(code, message, status)?;
+            return audit.failure_response(response).await;
+        }
+        Err(HeaderBuildError::Runtime(error)) => {
+            let response = provider_runtime_error_response(error)?;
+            return audit.failure_response(response).await;
+        }
+    };
+    let transport_path =
+        match grant_transport_endpoint_path(route.provider, endpoint, grant.as_ref()) {
+            Ok(value) => value,
+            Err(HeaderBuildError::Client {
+                code,
+                message,
+                status,
+            }) => {
+                let response = json_error(code, message, status)?;
                 return audit.failure_response(response).await;
             }
-            Err(OpenAiProxyUrlError::Runtime(error)) => {
+            Err(HeaderBuildError::Runtime(error)) => {
                 let response = provider_runtime_error_response(error)?;
                 return audit.failure_response(response).await;
             }
         };
+    let query_auth = match query_api_key_for_grant(route.provider, &env, grant.as_ref()) {
+        Ok(value) => value,
+        Err(HeaderBuildError::Client {
+            code,
+            message,
+            status,
+        }) => {
+            let response = json_error(code, message, status)?;
+            return audit.failure_response(response).await;
+        }
+        Err(HeaderBuildError::Runtime(error)) => {
+            let response = provider_runtime_error_response(error)?;
+            return audit.failure_response(response).await;
+        }
+    };
+    let upstream_url = match openai_upstream_url(
+        route.provider,
+        endpoint,
+        &env,
+        &route.upstream_model,
+        query_auth,
+        grant.as_ref(),
+        transport_path.as_deref(),
+    ) {
+        Ok(url) => url,
+        Err(OpenAiProxyUrlError::Client(message)) => {
+            let response = json_error("invalid_model", &message, 400)?;
+            return audit.failure_response(response).await;
+        }
+        Err(OpenAiProxyUrlError::Runtime(error)) => {
+            let response = provider_runtime_error_response(error)?;
+            return audit.failure_response(response).await;
+        }
+    };
     body["model"] = Value::String(route.upstream_model.clone());
     normalize_openai_proxy_body(
         route.provider,
@@ -602,7 +657,7 @@ async fn proxy_openai_compatible(
         &env,
         route.provider,
         endpoint,
-        &auth,
+        grant.as_ref(),
         header_context,
     )
     .await
@@ -833,7 +888,60 @@ async fn proxy_manifest_endpoint(
         let response = json_error("invalid_proxy_request", &message, 400)?;
         return audit.failure_response(response).await;
     }
-    let upstream_url = match manifest_upstream_url(provider, endpoint, &proxy, Some(&env)) {
+    let grant = match upstream_grant_for_request(&env, provider, &auth).await {
+        Ok(value) => value,
+        Err(HeaderBuildError::Client {
+            code,
+            message,
+            status,
+        }) => {
+            let response = json_error(code, message, status)?;
+            return audit.failure_response(response).await;
+        }
+        Err(HeaderBuildError::Runtime(error)) => {
+            let response = provider_runtime_error_response(error)?;
+            return audit.failure_response(response).await;
+        }
+    };
+    let transport_path = match grant_transport_endpoint_path(provider, endpoint, grant.as_ref()) {
+        Ok(value) => value,
+        Err(HeaderBuildError::Client {
+            code,
+            message,
+            status,
+        }) => {
+            let response = json_error(code, message, status)?;
+            return audit.failure_response(response).await;
+        }
+        Err(HeaderBuildError::Runtime(error)) => {
+            let response = provider_runtime_error_response(error)?;
+            return audit.failure_response(response).await;
+        }
+    };
+    let query_auth = match query_api_key_for_grant(provider, &env, grant.as_ref()) {
+        Ok(value) => value,
+        Err(HeaderBuildError::Client {
+            code,
+            message,
+            status,
+        }) => {
+            let response = json_error(code, message, status)?;
+            return audit.failure_response(response).await;
+        }
+        Err(HeaderBuildError::Runtime(error)) => {
+            let response = provider_runtime_error_response(error)?;
+            return audit.failure_response(response).await;
+        }
+    };
+    let upstream_url = match manifest_upstream_url(
+        provider,
+        endpoint,
+        &proxy,
+        Some(&env),
+        query_auth,
+        grant.as_ref(),
+        transport_path.as_deref(),
+    ) {
         Ok(url) => url,
         Err(ManifestProxyError::Client(message)) => {
             let response = json_error("invalid_proxy_request", &message, 400)?;
@@ -857,7 +965,7 @@ async fn proxy_manifest_endpoint(
         &env,
         provider,
         endpoint,
-        &auth,
+        grant.as_ref(),
         header_context,
     )
     .await
@@ -1037,15 +1145,68 @@ async fn proxy_native_provider(
         return Ok(response);
     }
     let incoming_url = req.url()?;
-    let upstream_url =
-        match native_upstream_url(provider, endpoint, &env, &native_path, incoming_url.query()) {
-            Ok(url) => url,
-            Err(error) => {
-                return audit
-                    .failure_response(provider_runtime_error_response(error)?)
-                    .await
-            }
-        };
+    let grant = match upstream_grant_for_request(&env, provider, &auth).await {
+        Ok(value) => value,
+        Err(HeaderBuildError::Client {
+            code,
+            message,
+            status,
+        }) => {
+            let response = json_error(code, message, status)?;
+            return audit.failure_response(response).await;
+        }
+        Err(HeaderBuildError::Runtime(error)) => {
+            let response = provider_runtime_error_response(error)?;
+            return audit.failure_response(response).await;
+        }
+    };
+    let transport_path = match grant_transport_endpoint_path(provider, endpoint, grant.as_ref()) {
+        Ok(value) => value,
+        Err(HeaderBuildError::Client {
+            code,
+            message,
+            status,
+        }) => {
+            let response = json_error(code, message, status)?;
+            return audit.failure_response(response).await;
+        }
+        Err(HeaderBuildError::Runtime(error)) => {
+            let response = provider_runtime_error_response(error)?;
+            return audit.failure_response(response).await;
+        }
+    };
+    let query_auth = match query_api_key_for_grant(provider, &env, grant.as_ref()) {
+        Ok(value) => value,
+        Err(HeaderBuildError::Client {
+            code,
+            message,
+            status,
+        }) => {
+            let response = json_error(code, message, status)?;
+            return audit.failure_response(response).await;
+        }
+        Err(HeaderBuildError::Runtime(error)) => {
+            let response = provider_runtime_error_response(error)?;
+            return audit.failure_response(response).await;
+        }
+    };
+    let upstream_url = match native_upstream_url(
+        provider,
+        endpoint,
+        &env,
+        &native_path,
+        incoming_url.query(),
+        query_auth,
+        grant.as_ref(),
+        transport_path.as_deref(),
+    ) {
+        Ok(url) => url,
+        Err(error) => {
+            return audit
+                .failure_response(provider_runtime_error_response(error)?)
+                .await
+        }
+    };
     let body = if method_allows_body(&method) {
         Some(req.bytes().await?)
     } else {
@@ -1061,7 +1222,7 @@ async fn proxy_native_provider(
         &env,
         provider,
         endpoint,
-        &auth,
+        grant.as_ref(),
         header_context,
     )
     .await
@@ -1199,6 +1360,9 @@ fn native_upstream_url(
     env: &Env,
     native_path: &str,
     incoming_query: Option<&str>,
+    query_auth: Option<(String, String)>,
+    grant: Option<&UpstreamGrantRecord>,
+    transport_path: Option<&str>,
 ) -> Result<String> {
     if !native_endpoint_path_matches(endpoint, native_path) {
         return Err(Error::RustError(format!(
@@ -1206,14 +1370,13 @@ fn native_upstream_url(
             endpoint.id
         )));
     }
-    let base = provider.base_urls.get("default").ok_or_else(|| {
-        Error::RustError(format!(
-            "provider `{}` has no default base URL",
-            provider.id
-        ))
-    })?;
+    let base = provider_upstream_base_url(provider, grant)?;
     let base = resolve_template_value(provider, base, Some(env))?;
-    let mut url = format!("{}{}", base.trim_end_matches('/'), native_path);
+    let mut url = format!(
+        "{}{}",
+        base.trim_end_matches('/'),
+        transport_path.unwrap_or(native_path)
+    );
     if let Some(query) = incoming_query.filter(|query| !query.is_empty()) {
         url.push('?');
         url.push_str(query);
@@ -1223,7 +1386,7 @@ fn native_upstream_url(
     {
         injected.insert(name, value);
     }
-    if let Some((param, secret)) = query_api_key(provider, Some(env))? {
+    if let Some((param, secret)) = query_auth {
         injected.insert(param, secret);
     }
     append_query(&mut url, injected);
@@ -1540,6 +1703,7 @@ struct ProviderReadinessRow {
     connection_enabled: bool,
     oauth_grant_required: bool,
     oauth_grant_count: usize,
+    upstream_grant_count: usize,
     openai_compatible: bool,
     manifest_routes: usize,
     model_count: usize,
@@ -1590,7 +1754,37 @@ struct EntitlementProviderRow {
 struct OAuthGrantRecord {
     key: String,
     enabled: bool,
+    usable: bool,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AdminUpstreamGrantResponse {
+    key: String,
+    scope: String,
+    scope_id: String,
+    token_ref: String,
+    version: u8,
+    enabled: bool,
+    kind: UpstreamGrantKind,
+    provider: Option<String>,
+    label: Option<String>,
+    token_type: String,
+    expires_at: Option<String>,
+    scopes: Vec<String>,
+    account_id: Option<String>,
+    subscription: Option<UpstreamGrantSubscription>,
+    created_at: Option<String>,
+    updated_at: Option<String>,
+    revoked_at: Option<String>,
+    has_credential: bool,
     has_access_token: bool,
+    has_refresh_token: bool,
+    refresh_configured: bool,
+    refresh_token_url: Option<String>,
+    client_id_config: Option<String>,
+    client_secret_config: Option<String>,
+    usable: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -1911,15 +2105,88 @@ struct AccessPublicJwk {
     e: Option<String>,
 }
 
-#[derive(Debug, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum UpstreamGrantKind {
+    ApiKey,
+    #[default]
+    OAuth,
+    Subscription,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
 #[serde(rename_all = "camelCase")]
-struct OAuthTokenRecord {
+struct UpstreamGrantSubscription {
+    #[serde(default)]
+    plan: Option<String>,
+    #[serde(default)]
+    subject: Option<String>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpstreamGrantRefresh {
+    token_url: String,
+    #[serde(default)]
+    client_id: Option<String>,
+    #[serde(default)]
+    client_id_config: Option<String>,
+    #[serde(default)]
+    client_secret_config: Option<String>,
+    #[serde(default)]
+    extra_params: BTreeMap<String, String>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct UpstreamGrantRecord {
+    #[serde(default = "default_upstream_grant_version")]
+    version: u8,
     #[serde(default = "default_true")]
     enabled: bool,
+    #[serde(default)]
+    kind: UpstreamGrantKind,
+    #[serde(default)]
+    provider: Option<String>,
+    #[serde(default)]
+    label: Option<String>,
+    #[serde(default)]
+    credential: Option<String>,
     #[serde(default, alias = "access_token")]
     access_token: Option<String>,
+    #[serde(default, alias = "refresh_token")]
+    refresh_token: Option<String>,
     #[serde(default = "default_oauth_token_type", alias = "token_type")]
     token_type: String,
+    #[serde(default, alias = "expires_at")]
+    expires_at: Option<String>,
+    #[serde(default)]
+    scopes: Vec<String>,
+    #[serde(default, alias = "account_id")]
+    account_id: Option<String>,
+    #[serde(default)]
+    subscription: Option<UpstreamGrantSubscription>,
+    #[serde(default)]
+    refresh: Option<UpstreamGrantRefresh>,
+    #[serde(default, alias = "created_at")]
+    created_at: Option<String>,
+    #[serde(default, alias = "updated_at")]
+    updated_at: Option<String>,
+    #[serde(default, alias = "revoked_at")]
+    revoked_at: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OAuthRefreshResponse {
+    access_token: String,
+    #[serde(default)]
+    refresh_token: Option<String>,
+    #[serde(default)]
+    token_type: Option<String>,
+    #[serde(default)]
+    expires_in: Option<u64>,
+    #[serde(default)]
+    scope: Option<String>,
 }
 
 struct AuthorizedKey {
@@ -2184,6 +2451,8 @@ fn provider_connection_types(provider: &CompiledProvider) -> Vec<&'static str> {
             | AuthScheme::ApiKey { .. }
             | AuthScheme::QueryApiKey { .. } => {
                 types.insert("api_key");
+                types.insert("oauth");
+                types.insert("subscription");
             }
             AuthScheme::SigV4 { .. } => {
                 types.insert("sigv4");
@@ -2329,6 +2598,69 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
         return Response::from_json(&serde_json::json!({
             "providers": health.into_values().collect::<Vec<_>>()
         }));
+    }
+
+    if req.method() == Method::Get && path == "/v1/admin/upstream-grants" {
+        let grants = list_admin_upstream_grants(&kv).await?;
+        return Response::from_json(&serde_json::json!({ "grants": grants }));
+    }
+
+    if let Some(rest) = path.strip_prefix("/v1/admin/upstream-grants/") {
+        let route = match parse_admin_upstream_grant_route(rest) {
+            Ok(route) => route,
+            Err(message) => return json_error("invalid_upstream_grant_route", message, 400),
+        };
+        if req.method() == Method::Put && route.action.is_none() {
+            let request = match serde_json::from_str::<UpstreamGrantRecord>(&req.text().await?) {
+                Ok(request) => request,
+                Err(_) => {
+                    return json_error(
+                        "invalid_upstream_grant_request",
+                        "request body must be a JSON upstream grant record",
+                        400,
+                    );
+                }
+            };
+            let existing = get_upstream_grant(&kv, &route.key).await?;
+            let grant = match normalize_upstream_grant(request, existing.as_ref()) {
+                Ok(grant) => grant,
+                Err(message) => return json_error("invalid_upstream_grant", &message, 400),
+            };
+            put_kv_record(&kv, &route.key, &grant, "upstream grant").await?;
+            return Response::from_json(&admin_upstream_grant_response(&route.key, &grant)?);
+        }
+        if req.method() == Method::Post && route.action.as_deref() == Some("revoke") {
+            let Some(mut grant) = get_upstream_grant(&kv, &route.key).await? else {
+                return json_error(
+                    "unknown_upstream_grant",
+                    "upstream grant is not registered",
+                    404,
+                );
+            };
+            revoke_upstream_grant(&mut grant);
+            put_kv_record(&kv, &route.key, &grant, "upstream grant tombstone").await?;
+            return Response::from_json(&admin_upstream_grant_response(&route.key, &grant)?);
+        }
+        if req.method() == Method::Post && route.action.as_deref() == Some("refresh") {
+            let Some(grant) = get_upstream_grant(&kv, &route.key).await? else {
+                return json_error(
+                    "unknown_upstream_grant",
+                    "upstream grant is not registered",
+                    404,
+                );
+            };
+            let grant = match refresh_upstream_grant(&env, &kv, &route.key, grant, true).await {
+                Ok(grant) => grant,
+                Err(HeaderBuildError::Client {
+                    code,
+                    message,
+                    status,
+                }) => return json_error(code, message, status),
+                Err(HeaderBuildError::Runtime(error)) => return Err(error),
+            };
+            return Response::from_json(&admin_upstream_grant_response(&route.key, &grant)?);
+        }
+        return json_error("method_not_allowed", "admin method is not allowed", 405);
     }
 
     if req.method() == Method::Get && path == "/v1/admin/policies" {
@@ -4863,14 +5195,11 @@ async fn list_oauth_grants(kv: &KvStore) -> Result<Vec<OAuthGrantRecord>> {
             else {
                 continue;
             };
-            let token = parse_oauth_token_record(&record)?;
+            let token = parse_upstream_grant_record(&record)?;
             grants.push(OAuthGrantRecord {
                 key: key.name,
                 enabled: token.enabled,
-                has_access_token: token
-                    .access_token
-                    .as_deref()
-                    .is_some_and(|value| !value.trim().is_empty()),
+                usable: upstream_grant_usable(&token),
             });
         }
         if list.list_complete {
@@ -4882,6 +5211,468 @@ async fn list_oauth_grants(kv: &KvStore) -> Result<Vec<OAuthGrantRecord>> {
         cursor = Some(next_cursor);
     }
     Ok(grants)
+}
+
+#[derive(Debug)]
+struct AdminUpstreamGrantRoute {
+    key: String,
+    action: Option<String>,
+}
+
+fn parse_admin_upstream_grant_route(
+    rest: &str,
+) -> std::result::Result<AdminUpstreamGrantRoute, &'static str> {
+    let mut parts = rest.split('/').collect::<Vec<_>>();
+    let action = if parts
+        .last()
+        .is_some_and(|value| matches!(*value, "revoke" | "refresh"))
+    {
+        parts.pop().map(str::to_string)
+    } else {
+        None
+    };
+    if parts.len() != 3 {
+        return Err("expected /v1/admin/upstream-grants/<policies|tenants>/<scope-id>/<token-ref>");
+    }
+    let scope = parts[0];
+    if !matches!(scope, "policies" | "tenants") {
+        return Err("upstream grant scope must be `policies` or `tenants`");
+    }
+    let scope_id = validate_upstream_grant_component(parts[1])?;
+    let token_ref = validate_upstream_grant_component(parts[2])?;
+    let key = if scope == "tenants" {
+        format!("oauth/tenants/{scope_id}/{token_ref}")
+    } else {
+        format!("oauth/{scope_id}/{token_ref}")
+    };
+    Ok(AdminUpstreamGrantRoute { key, action })
+}
+
+fn validate_upstream_grant_component(value: &str) -> std::result::Result<String, &'static str> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+    {
+        return Err(
+            "upstream grant identifiers must be 1-128 ASCII letters, numbers, underscores, hyphens, or dots",
+        );
+    }
+    Ok(value.to_string())
+}
+
+async fn list_admin_upstream_grants(kv: &KvStore) -> Result<Vec<AdminUpstreamGrantResponse>> {
+    let mut grants = Vec::new();
+    let mut cursor = None;
+    loop {
+        let mut request = kv.list().prefix("oauth/".to_string()).limit(1000);
+        if let Some(next_cursor) = cursor.take() {
+            request = request.cursor(next_cursor);
+        }
+        let list = request.execute().await.map_err(|error| {
+            Error::RustError(format!("failed to list upstream grants: {error}"))
+        })?;
+        for key in list.keys {
+            let Some(record) = kv.get(&key.name).text().await.map_err(|error| {
+                Error::RustError(format!("failed to read upstream grant: {error}"))
+            })?
+            else {
+                continue;
+            };
+            let grant = parse_upstream_grant_record(&record)?;
+            grants.push(admin_upstream_grant_response(&key.name, &grant)?);
+        }
+        if list.list_complete {
+            break;
+        }
+        let Some(next_cursor) = list.cursor else {
+            break;
+        };
+        cursor = Some(next_cursor);
+    }
+    grants.sort_by(|a, b| a.key.cmp(&b.key));
+    Ok(grants)
+}
+
+async fn get_upstream_grant(kv: &KvStore, key: &str) -> Result<Option<UpstreamGrantRecord>> {
+    let Some(record) = kv
+        .get(key)
+        .text()
+        .await
+        .map_err(|error| Error::RustError(format!("failed to read upstream grant: {error}")))?
+    else {
+        return Ok(None);
+    };
+    parse_upstream_grant_record(&record).map(Some)
+}
+
+fn normalize_upstream_grant(
+    mut grant: UpstreamGrantRecord,
+    existing: Option<&UpstreamGrantRecord>,
+) -> std::result::Result<UpstreamGrantRecord, String> {
+    if let Some(existing) = existing.filter(|record| record.enabled) {
+        if existing.kind != grant.kind {
+            return Err("revoke an enabled grant before changing its kind".to_string());
+        }
+        if existing
+            .provider
+            .as_deref()
+            .zip(grant.provider.as_deref())
+            .is_some_and(|(current, requested)| current != requested)
+        {
+            return Err("revoke an enabled grant before changing its provider".to_string());
+        }
+    }
+    grant.version = default_upstream_grant_version();
+    grant.provider = normalize_grant_optional_text(grant.provider, "provider", 128)?;
+    grant.label = normalize_optional_label(grant.label).map_err(str::to_string)?;
+    grant.account_id = normalize_grant_optional_text(grant.account_id, "accountId", 256)?;
+    if let Some(subscription) = grant.subscription.as_mut() {
+        subscription.plan =
+            normalize_grant_optional_text(subscription.plan.take(), "subscription.plan", 128)?;
+        subscription.subject = normalize_grant_optional_text(
+            subscription.subject.take(),
+            "subscription.subject",
+            256,
+        )?;
+    }
+    grant.scopes = normalize_grant_scopes(grant.scopes)?;
+    grant.token_type = grant.token_type.trim().to_string();
+    if grant.token_type.is_empty() || grant.token_type.len() > 32 {
+        return Err("tokenType must be 1-32 characters".to_string());
+    }
+    let provider = if let Some(provider_id) = grant.provider.as_deref() {
+        let snapshot = provider_snapshot().map_err(|error| error.to_string())?;
+        let provider = snapshot
+            .providers
+            .iter()
+            .find(|candidate| candidate.id == provider_id)
+            .cloned()
+            .ok_or_else(|| format!("provider `{provider_id}` is not registered"))?;
+        Some(provider)
+    } else {
+        None
+    };
+    if let Some(expires_at) = grant.expires_at.as_deref() {
+        if !js_sys::Date::parse(expires_at).is_finite() {
+            return Err("expiresAt must be an ISO-8601 timestamp".to_string());
+        }
+    }
+    merge_upstream_grant_secrets(&mut grant, existing);
+    validate_upstream_grant_secret_shape(&grant)?;
+    if grant.refresh.is_none() && grant.refresh_token.is_some() {
+        grant.refresh = provider
+            .as_ref()
+            .and_then(|provider| upstream_grant_refresh_from_manifest(provider));
+    }
+    if let Some(refresh) = grant.refresh.as_ref() {
+        validate_upstream_grant_refresh(refresh)?;
+        if provider
+            .as_ref()
+            .is_none_or(|provider| !provider_approves_refresh(provider, refresh))
+        {
+            return Err("provider manifest does not approve refresh configuration".to_string());
+        }
+    }
+    if grant.enabled && upstream_grant_secret(&grant).is_none() {
+        return Err(match grant.kind {
+            UpstreamGrantKind::ApiKey => "enabled API-key grant requires credential".to_string(),
+            UpstreamGrantKind::OAuth | UpstreamGrantKind::Subscription => {
+                "enabled OAuth or subscription grant requires accessToken".to_string()
+            }
+        });
+    }
+    let now = current_iso_timestamp();
+    grant.created_at = existing
+        .and_then(|record| record.created_at.clone())
+        .or(grant.created_at)
+        .or_else(|| Some(now.clone()));
+    grant.updated_at = Some(now);
+    if grant.enabled {
+        grant.revoked_at = None;
+    } else {
+        revoke_upstream_grant(&mut grant);
+    }
+    Ok(grant)
+}
+
+fn validate_upstream_grant_secret_shape(
+    grant: &UpstreamGrantRecord,
+) -> std::result::Result<(), String> {
+    match grant.kind {
+        UpstreamGrantKind::ApiKey => {
+            if grant.access_token.is_some() || grant.refresh_token.is_some() {
+                return Err(
+                    "API-key grants accept credential only; revoke before changing grant kind"
+                        .to_string(),
+                );
+            }
+        }
+        UpstreamGrantKind::OAuth => {
+            if grant.credential.is_some() {
+                return Err(
+                    "OAuth grants accept accessToken only; revoke before changing grant kind"
+                        .to_string(),
+                );
+            }
+        }
+        UpstreamGrantKind::Subscription => {
+            if grant.credential.is_some() && grant.access_token.is_some() {
+                return Err("subscription grants accept exactly one primary credential".to_string());
+            }
+        }
+    }
+    Ok(())
+}
+
+fn normalize_grant_optional_text(
+    value: Option<String>,
+    field: &str,
+    max_len: usize,
+) -> std::result::Result<Option<String>, String> {
+    let Some(value) = value else {
+        return Ok(None);
+    };
+    let value = value.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    if value.len() > max_len || value.bytes().any(|byte| byte.is_ascii_control()) {
+        return Err(format!(
+            "{field} must be {max_len} or fewer characters without control characters"
+        ));
+    }
+    Ok(Some(value.to_string()))
+}
+
+fn normalize_grant_scopes(scopes: Vec<String>) -> std::result::Result<Vec<String>, String> {
+    let mut normalized = Vec::new();
+    for scope in scopes {
+        let Some(scope) = normalize_grant_optional_text(Some(scope), "scope", 256)? else {
+            continue;
+        };
+        if !normalized.iter().any(|value| value == &scope) {
+            normalized.push(scope);
+        }
+    }
+    normalized.sort();
+    Ok(normalized)
+}
+
+fn validate_upstream_grant_refresh(
+    refresh: &UpstreamGrantRefresh,
+) -> std::result::Result<(), String> {
+    if !refresh.token_url.starts_with("https://")
+        || refresh.token_url.contains('@')
+        || refresh.token_url.contains('#')
+    {
+        return Err("refresh.tokenUrl must be a trusted HTTPS URL".to_string());
+    }
+    if refresh
+        .client_id
+        .as_deref()
+        .is_none_or(|value| value.trim().is_empty())
+        && refresh.client_id_config.is_none()
+    {
+        return Err("refresh requires clientId or clientIdConfig".to_string());
+    }
+    if let Some(value) = refresh.client_id.as_deref() {
+        if value.len() > 256 || value.bytes().any(|byte| byte.is_ascii_control()) {
+            return Err("refresh.clientId is invalid".to_string());
+        }
+    }
+    if let Some(value) = refresh.client_id_config.as_deref() {
+        validate_runtime_config_name(value, "refresh.clientIdConfig")?;
+    }
+    if let Some(value) = refresh.client_secret_config.as_deref() {
+        validate_runtime_config_name(value, "refresh.clientSecretConfig")?;
+    }
+    for (name, value) in &refresh.extra_params {
+        if name.is_empty()
+            || name.len() > 128
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+            || value.len() > 1024
+            || value.bytes().any(|byte| byte.is_ascii_control())
+        {
+            return Err("refresh.extraParams contains an invalid entry".to_string());
+        }
+    }
+    Ok(())
+}
+
+fn validate_runtime_config_name(value: &str, field: &str) -> std::result::Result<(), String> {
+    if value.is_empty()
+        || value.len() > 128
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_')
+    {
+        return Err(format!("{field} must be an uppercase runtime binding name"));
+    }
+    Ok(())
+}
+
+fn merge_upstream_grant_secrets(
+    grant: &mut UpstreamGrantRecord,
+    existing: Option<&UpstreamGrantRecord>,
+) {
+    let Some(existing) = existing else {
+        return;
+    };
+    if grant.credential.is_none() {
+        grant.credential.clone_from(&existing.credential);
+    }
+    if grant.access_token.is_none() {
+        grant.access_token.clone_from(&existing.access_token);
+    }
+    if grant.refresh_token.is_none() {
+        grant.refresh_token.clone_from(&existing.refresh_token);
+    }
+}
+
+fn revoke_upstream_grant(grant: &mut UpstreamGrantRecord) {
+    let now = current_iso_timestamp();
+    grant.enabled = false;
+    grant.credential = None;
+    grant.access_token = None;
+    grant.refresh_token = None;
+    grant.updated_at = Some(now.clone());
+    grant.revoked_at = Some(now);
+}
+
+fn current_iso_timestamp() -> String {
+    js_sys::Date::new_0().to_iso_string().into()
+}
+
+fn admin_upstream_grant_response(
+    key: &str,
+    grant: &UpstreamGrantRecord,
+) -> Result<AdminUpstreamGrantResponse> {
+    let (scope, scope_id, token_ref) = parse_upstream_grant_key(key)?;
+    Ok(AdminUpstreamGrantResponse {
+        key: key.to_string(),
+        scope,
+        scope_id,
+        token_ref,
+        version: grant.version,
+        enabled: grant.enabled,
+        kind: grant.kind,
+        provider: grant.provider.clone(),
+        label: grant.label.clone(),
+        token_type: grant.token_type.clone(),
+        expires_at: grant.expires_at.clone(),
+        scopes: grant.scopes.clone(),
+        account_id: grant.account_id.clone(),
+        subscription: grant.subscription.clone(),
+        created_at: grant.created_at.clone(),
+        updated_at: grant.updated_at.clone(),
+        revoked_at: grant.revoked_at.clone(),
+        has_credential: grant
+            .credential
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty()),
+        has_access_token: grant
+            .access_token
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty()),
+        has_refresh_token: grant
+            .refresh_token
+            .as_deref()
+            .is_some_and(|value| !value.trim().is_empty()),
+        refresh_configured: grant.refresh.is_some(),
+        refresh_token_url: grant
+            .refresh
+            .as_ref()
+            .map(|refresh| refresh.token_url.clone()),
+        client_id_config: grant
+            .refresh
+            .as_ref()
+            .and_then(|refresh| refresh.client_id_config.clone()),
+        client_secret_config: grant
+            .refresh
+            .as_ref()
+            .and_then(|refresh| refresh.client_secret_config.clone()),
+        usable: upstream_grant_usable(grant),
+    })
+}
+
+fn parse_upstream_grant_key(key: &str) -> Result<(String, String, String)> {
+    let Some(rest) = key.strip_prefix("oauth/") else {
+        return Err(Error::RustError(
+            "upstream grant key has invalid prefix".to_string(),
+        ));
+    };
+    let (scope, scope_id, token_ref) = if let Some(rest) = rest.strip_prefix("tenants/") {
+        let Some((scope_id, token_ref)) = rest.split_once('/') else {
+            return Err(Error::RustError(
+                "tenant upstream grant key is invalid".to_string(),
+            ));
+        };
+        ("tenants", scope_id, token_ref)
+    } else {
+        let Some((scope_id, token_ref)) = rest.split_once('/') else {
+            return Err(Error::RustError(
+                "policy upstream grant key is invalid".to_string(),
+            ));
+        };
+        ("policies", scope_id, token_ref)
+    };
+    Ok((
+        scope.to_string(),
+        scope_id.to_string(),
+        token_ref.to_string(),
+    ))
+}
+
+fn upstream_grant_secret(grant: &UpstreamGrantRecord) -> Option<&str> {
+    let preferred = match grant.kind {
+        UpstreamGrantKind::ApiKey => grant.credential.as_deref(),
+        UpstreamGrantKind::OAuth => grant.access_token.as_deref(),
+        UpstreamGrantKind::Subscription => grant
+            .access_token
+            .as_deref()
+            .or(grant.credential.as_deref()),
+    };
+    preferred.filter(|value| !value.trim().is_empty())
+}
+
+fn upstream_grant_expired(grant: &UpstreamGrantRecord) -> bool {
+    grant
+        .expires_at
+        .as_deref()
+        .map(js_sys::Date::parse)
+        .is_some_and(|expires_at| expires_at.is_finite() && expires_at <= js_sys::Date::now())
+}
+
+fn upstream_grant_needs_refresh(grant: &UpstreamGrantRecord) -> bool {
+    grant
+        .expires_at
+        .as_deref()
+        .map(js_sys::Date::parse)
+        .is_some_and(|expires_at| {
+            expires_at.is_finite()
+                && expires_at <= js_sys::Date::now() + UPSTREAM_GRANT_REFRESH_WINDOW_MS
+        })
+}
+
+fn upstream_grant_refreshable(grant: &UpstreamGrantRecord) -> bool {
+    matches!(
+        grant.kind,
+        UpstreamGrantKind::OAuth | UpstreamGrantKind::Subscription
+    ) && grant
+        .refresh_token
+        .as_deref()
+        .is_some_and(|value| !value.trim().is_empty())
+        && grant.refresh.is_some()
+}
+
+fn upstream_grant_usable(grant: &UpstreamGrantRecord) -> bool {
+    grant.enabled
+        && upstream_grant_secret(grant).is_some()
+        && (!upstream_grant_expired(grant) || upstream_grant_refreshable(grant))
 }
 
 fn provider_readiness_rows(
@@ -4920,15 +5711,20 @@ fn provider_readiness_row(
         .filter(|key| !optional_config.iter().any(|optional| optional == *key))
         .cloned()
         .collect::<Vec<_>>();
+    let upstream_grant_count = provider_upstream_grant_count(provider, grants);
+    let auth_secret_config = provider_auth_secret_config_keys(provider);
     let missing_config = required_config
         .iter()
-        .filter(|key| !runtime_binding_present(env, key))
+        .filter(|key| {
+            !runtime_binding_present(env, key)
+                && !(upstream_grant_count > 0 && auth_secret_config.contains(*key))
+        })
         .cloned()
         .collect::<Vec<_>>();
     let config_present = missing_config.is_empty();
     let oauth_grant_required = provider_requires_oauth(provider);
     let oauth_grant_count = if oauth_grant_required {
-        provider_oauth_grant_count(provider, grants)
+        upstream_grant_count
     } else {
         0
     };
@@ -4998,6 +5794,7 @@ fn provider_readiness_row(
         connection_enabled,
         oauth_grant_required,
         oauth_grant_count,
+        upstream_grant_count,
         openai_compatible,
         manifest_routes,
         model_count: provider.models.len(),
@@ -5083,15 +5880,13 @@ fn select_access_policy_for_provider<'a>(
     grants: &[OAuthGrantRecord],
 ) -> Option<&'a AccessPolicyEntry> {
     let first_entry = entries.first().copied()?;
-    if provider.is_some_and(provider_requires_oauth) {
-        if let Some(grant_entry) = provider.and_then(|provider| {
-            entries.iter().copied().find(|entry| {
-                let scoped_grants = entitlement_oauth_grants(grants, &[*entry]);
-                provider_oauth_grant_count(provider, &scoped_grants) > 0
-            })
-        }) {
-            return Some(grant_entry);
-        }
+    if let Some(grant_entry) = provider.and_then(|provider| {
+        entries.iter().copied().find(|entry| {
+            let scoped_grants = entitlement_oauth_grants(grants, &[*entry]);
+            provider_upstream_grant_count(provider, &scoped_grants) > 0
+        })
+    }) {
+        return Some(grant_entry);
     }
     Some(first_entry)
 }
@@ -5110,16 +5905,19 @@ fn runtime_binding_present(env: &Env, name: &str) -> bool {
     false
 }
 
-fn provider_oauth_grant_count(provider: &CompiledProvider, grants: &[OAuthGrantRecord]) -> usize {
-    let refs = provider_oauth_refs(provider);
+fn provider_upstream_grant_count(
+    provider: &CompiledProvider,
+    grants: &[OAuthGrantRecord],
+) -> usize {
+    let refs = provider_upstream_grant_refs(provider);
     grants
         .iter()
-        .filter(|grant| grant.enabled && grant.has_access_token)
+        .filter(|grant| grant.enabled && grant.usable)
         .filter(|grant| refs.iter().any(|token_ref| grant.key.ends_with(token_ref)))
         .count()
 }
 
-fn provider_oauth_refs(provider: &CompiledProvider) -> Vec<String> {
+fn provider_upstream_grant_refs(provider: &CompiledProvider) -> Vec<String> {
     let mut refs = Vec::new();
     for scheme in &provider.auth.schemes {
         if let AuthScheme::OAuth {
@@ -5141,6 +5939,21 @@ fn provider_oauth_refs(provider: &CompiledProvider) -> Vec<String> {
     refs.push(format!("/{}", provider.id));
     dedupe_preserving_order(&mut refs);
     refs
+}
+
+fn provider_auth_secret_config_keys(provider: &CompiledProvider) -> BTreeSet<String> {
+    provider
+        .auth
+        .schemes
+        .iter()
+        .filter_map(|scheme| match scheme {
+            AuthScheme::Bearer { secret_kind, .. }
+            | AuthScheme::ApiKey { secret_kind, .. }
+            | AuthScheme::QueryApiKey { secret_kind, .. } => Some(secret_kind),
+            _ => None,
+        })
+        .flat_map(|secret_kind| secret_binding_candidates(provider, secret_kind))
+        .collect()
 }
 
 fn enum_label<T: Serialize>(value: &T) -> String {
@@ -5683,6 +6496,10 @@ fn default_oauth_token_type() -> String {
     "Bearer".to_string()
 }
 
+fn default_upstream_grant_version() -> u8 {
+    1
+}
+
 fn inspect_policy_for_response<'a>(
     verification: &str,
     policy: &'a AccessPolicy,
@@ -5981,12 +6798,7 @@ async fn authorize_access_session(
         .providers
         .iter()
         .find(|provider| provider.id == provider_id);
-    let grants = if provider.is_some_and(provider_requires_oauth) {
-        let grants = list_oauth_grants(&kv).await?;
-        grants
-    } else {
-        Vec::new()
-    };
+    let grants = list_oauth_grants(&kv).await?;
     let selected_entry = select_access_policy_for_provider(provider, &matching_entries, &grants)
         .unwrap_or(first_entry);
     Ok(AuthOutcome::Allowed(AuthorizedKey {
@@ -6200,19 +7012,23 @@ fn openai_upstream_url(
     endpoint: &CompiledEndpoint,
     env: &Env,
     upstream_model: &str,
+    query_auth: Option<(String, String)>,
+    grant: Option<&UpstreamGrantRecord>,
+    transport_path: Option<&str>,
 ) -> std::result::Result<String, OpenAiProxyUrlError> {
-    let base = provider.base_urls.get("default").ok_or_else(|| {
-        OpenAiProxyUrlError::Runtime(Error::RustError(format!(
-            "provider `{}` has no default base URL",
-            provider.id
-        )))
-    })?;
+    let base = provider_upstream_base_url(provider, grant).map_err(OpenAiProxyUrlError::Runtime)?;
     let base =
         resolve_template_value(provider, base, Some(env)).map_err(OpenAiProxyUrlError::Runtime)?;
-    let path = openai_endpoint_path(endpoint, upstream_model)?;
+    let path = match transport_path {
+        Some(path) => path.to_string(),
+        None => openai_endpoint_path(endpoint, upstream_model)?,
+    };
     let mut url = format!("{}{}", base.trim_end_matches('/'), path);
-    let query = resolved_template_map(provider, &provider.adapter.inject_query, Some(env))
+    let mut query = resolved_template_map(provider, &provider.adapter.inject_query, Some(env))
         .map_err(OpenAiProxyUrlError::Runtime)?;
+    if let Some((param, secret)) = query_auth {
+        query.insert(param, secret);
+    }
     append_query(&mut url, query);
     Ok(url)
 }
@@ -6344,14 +7160,12 @@ fn manifest_upstream_url(
     endpoint: &CompiledEndpoint,
     proxy: &ManifestProxyRequest,
     env: Option<&Env>,
+    query_auth: Option<(String, String)>,
+    grant: Option<&UpstreamGrantRecord>,
+    transport_path: Option<&str>,
 ) -> std::result::Result<String, ManifestProxyError> {
-    let base = provider.base_urls.get("default").ok_or_else(|| {
-        ManifestProxyError::Runtime(Error::RustError(format!(
-            "provider `{}` has no default base URL",
-            provider.id
-        )))
-    })?;
-    let mut path = endpoint.path.clone();
+    let base = provider_upstream_base_url(provider, grant).map_err(ManifestProxyError::Runtime)?;
+    let mut path = transport_path.unwrap_or(&endpoint.path).to_string();
     for param in &endpoint.path_params {
         let Some(value) = proxy.path_params.get(param).and_then(Value::as_str) else {
             return Err(ManifestProxyError::Client(format!(
@@ -6376,9 +7190,7 @@ fn manifest_upstream_url(
     {
         query.insert(name, value);
     }
-    if let Some((param, secret)) =
-        query_api_key(provider, env).map_err(ManifestProxyError::Runtime)?
-    {
+    if let Some((param, secret)) = query_auth {
         query.insert(param, secret);
     }
     append_query(&mut url, query);
@@ -6418,12 +7230,102 @@ struct HeaderRequestContext<'a> {
     body: Option<&'a [u8]>,
 }
 
+fn grant_transport<'a>(
+    provider: &'a CompiledProvider,
+    grant: Option<&UpstreamGrantRecord>,
+) -> Option<&'a GrantTransportConfig> {
+    let grant = grant?;
+    provider.auth.grant_transports.get(&enum_label(&grant.kind))
+}
+
+fn provider_upstream_base_url<'a>(
+    provider: &'a CompiledProvider,
+    grant: Option<&UpstreamGrantRecord>,
+) -> Result<&'a str> {
+    grant_transport(provider, grant)
+        .and_then(|transport| transport.base_url.as_deref())
+        .or_else(|| provider.base_urls.get("default").map(String::as_str))
+        .ok_or_else(|| {
+            Error::RustError(format!(
+                "provider `{}` has no default base URL",
+                provider.id
+            ))
+        })
+}
+
+fn grant_transport_endpoint_path(
+    provider: &CompiledProvider,
+    endpoint: &CompiledEndpoint,
+    grant: Option<&UpstreamGrantRecord>,
+) -> std::result::Result<Option<String>, HeaderBuildError> {
+    let Some(transport) = grant_transport(provider, grant) else {
+        return Ok(None);
+    };
+    transport
+        .endpoint_paths
+        .get(&endpoint.id)
+        .cloned()
+        .map(Some)
+        .ok_or(HeaderBuildError::Client {
+            code: "upstream_grant_transport_unsupported",
+            message: "upstream grant transport does not support this provider endpoint",
+            status: 409,
+        })
+}
+
+fn apply_grant_transport_headers(
+    headers: &Headers,
+    provider: &CompiledProvider,
+    grant: Option<&UpstreamGrantRecord>,
+) -> std::result::Result<(), HeaderBuildError> {
+    let Some(transport) = grant_transport(provider, grant) else {
+        return Ok(());
+    };
+    let grant = grant.expect("grant transport requires a grant");
+    for (name, value) in &transport.headers {
+        headers
+            .set(name, &resolve_grant_template(value, grant)?)
+            .map_err(HeaderBuildError::Runtime)?;
+    }
+    Ok(())
+}
+
+fn resolve_grant_template(
+    value: &str,
+    grant: &UpstreamGrantRecord,
+) -> std::result::Result<String, HeaderBuildError> {
+    let mut resolved = value.to_string();
+    for placeholder in template_placeholders(value) {
+        let replacement = match placeholder.as_str() {
+            "grant.accountId" => grant.account_id.as_deref(),
+            "grant.provider" => grant.provider.as_deref(),
+            "grant.subscription.plan" => grant
+                .subscription
+                .as_ref()
+                .and_then(|subscription| subscription.plan.as_deref()),
+            "grant.subscription.subject" => grant
+                .subscription
+                .as_ref()
+                .and_then(|subscription| subscription.subject.as_deref()),
+            _ => None,
+        }
+        .filter(|replacement| !replacement.trim().is_empty())
+        .ok_or(HeaderBuildError::Client {
+            code: "upstream_grant_invalid",
+            message: "upstream grant is missing transport metadata",
+            status: 409,
+        })?;
+        resolved = resolved.replace(&format!("${{{placeholder}}}"), replacement);
+    }
+    Ok(resolved)
+}
+
 async fn provider_headers(
     incoming: &Headers,
     env: &Env,
     provider: &CompiledProvider,
     endpoint: &CompiledEndpoint,
-    auth: &AuthorizedKey,
+    grant: Option<&UpstreamGrantRecord>,
     context: HeaderRequestContext<'_>,
 ) -> std::result::Result<Headers, HeaderBuildError> {
     let headers = Headers::new();
@@ -6452,7 +7354,8 @@ async fn provider_headers(
                 .map_err(HeaderBuildError::Runtime)?;
         }
     }
-    apply_auth_headers(&headers, env, provider, auth, context).await?;
+    apply_grant_transport_headers(&headers, provider, grant)?;
+    apply_auth_headers(&headers, env, provider, grant, context)?;
     Ok(headers)
 }
 
@@ -6461,7 +7364,7 @@ async fn native_provider_headers(
     env: &Env,
     provider: &CompiledProvider,
     endpoint: &CompiledEndpoint,
-    auth: &AuthorizedKey,
+    grant: Option<&UpstreamGrantRecord>,
     context: HeaderRequestContext<'_>,
 ) -> std::result::Result<Headers, HeaderBuildError> {
     let headers = Headers::new();
@@ -6487,7 +7390,8 @@ async fn native_provider_headers(
             .set(&name, &value)
             .map_err(HeaderBuildError::Runtime)?;
     }
-    apply_auth_headers(&headers, env, provider, auth, context).await?;
+    apply_grant_transport_headers(&headers, provider, grant)?;
+    apply_auth_headers(&headers, env, provider, grant, context)?;
     Ok(headers)
 }
 
@@ -6863,11 +7767,11 @@ fn provider_has_secret_candidate(provider: &CompiledProvider, secret_kind: &str)
         .any(|candidate| provider.config_keys.iter().any(|key| key == candidate))
 }
 
-async fn apply_auth_headers(
+fn apply_auth_headers(
     headers: &Headers,
     env: &Env,
     provider: &CompiledProvider,
-    auth: &AuthorizedKey,
+    grant: Option<&UpstreamGrantRecord>,
     context: HeaderRequestContext<'_>,
 ) -> std::result::Result<(), HeaderBuildError> {
     let Some(scheme) = provider.auth.schemes.first() else {
@@ -6879,8 +7783,13 @@ async fn apply_auth_headers(
             format,
             secret_kind,
         } => {
-            let secret =
-                provider_secret(env, provider, secret_kind).map_err(HeaderBuildError::Runtime)?;
+            let secret = grant
+                .and_then(upstream_grant_secret)
+                .map(str::to_string)
+                .map(Ok)
+                .unwrap_or_else(|| {
+                    provider_secret(env, provider, secret_kind).map_err(HeaderBuildError::Runtime)
+                })?;
             headers
                 .set(header, &format.replace("${secret}", &secret))
                 .map_err(HeaderBuildError::Runtime)?;
@@ -6890,34 +7799,28 @@ async fn apply_auth_headers(
             header,
             secret_kind,
         } => {
-            let secret =
-                provider_secret(env, provider, secret_kind).map_err(HeaderBuildError::Runtime)?;
+            let secret = grant
+                .and_then(upstream_grant_secret)
+                .map(str::to_string)
+                .map(Ok)
+                .unwrap_or_else(|| {
+                    provider_secret(env, provider, secret_kind).map_err(HeaderBuildError::Runtime)
+                })?;
             headers
                 .set(header, &secret)
                 .map_err(HeaderBuildError::Runtime)?;
             Ok(())
         }
         AuthScheme::QueryApiKey { .. } | AuthScheme::CloudflareBinding => Ok(()),
-        AuthScheme::OAuth {
-            provider: oauth_provider,
-            token_ref,
-            ..
-        } => {
-            let token = oauth_token(
-                env,
-                provider,
-                auth,
-                oauth_provider.as_deref(),
-                token_ref.as_deref(),
-            )
-            .await?;
+        AuthScheme::OAuth { .. } => {
+            let token = grant.expect("required upstream grant resolver returned no grant");
             headers
                 .set(
                     "authorization",
                     &format!(
                         "{} {}",
                         token.token_type,
-                        token.access_token.as_deref().unwrap_or_default()
+                        upstream_grant_secret(&token).unwrap_or_default()
                     ),
                 )
                 .map_err(HeaderBuildError::Runtime)?;
@@ -6939,110 +7842,417 @@ async fn apply_auth_headers(
     }
 }
 
-async fn oauth_token(
+async fn upstream_grant_for_request(
+    env: &Env,
+    provider: &CompiledProvider,
+    auth: &AuthorizedKey,
+) -> std::result::Result<Option<UpstreamGrantRecord>, HeaderBuildError> {
+    match provider.auth.schemes.first() {
+        Some(AuthScheme::OAuth {
+            provider: oauth_provider,
+            token_ref,
+            ..
+        }) => {
+            selected_upstream_grant(
+                env,
+                provider,
+                auth,
+                oauth_provider.as_deref(),
+                token_ref.as_deref(),
+                true,
+            )
+            .await
+        }
+        Some(
+            AuthScheme::Bearer { .. } | AuthScheme::ApiKey { .. } | AuthScheme::QueryApiKey { .. },
+        ) => selected_upstream_grant(env, provider, auth, None, None, false).await,
+        _ => Ok(None),
+    }
+}
+
+async fn selected_upstream_grant(
     env: &Env,
     provider: &CompiledProvider,
     auth: &AuthorizedKey,
     oauth_provider: Option<&str>,
     token_ref: Option<&str>,
-) -> std::result::Result<OAuthTokenRecord, HeaderBuildError> {
-    let kv = env.kv("POLICY_KV").map_err(|_| HeaderBuildError::Client {
-        code: "policy_store_unavailable",
-        message: "POLICY_KV binding is required for OAuth-backed proxy requests",
-        status: 503,
-    })?;
-    for key in oauth_token_keys(provider, auth, oauth_provider, token_ref) {
-        let record = kv.get(&key).text().await.map_err(|error| {
-            HeaderBuildError::Runtime(Error::RustError(format!(
-                "failed to read OAuth token grant: {error}"
-            )))
-        })?;
-        let Some(record) = record else {
+    required: bool,
+) -> std::result::Result<Option<UpstreamGrantRecord>, HeaderBuildError> {
+    let kv = match env.kv("POLICY_KV") {
+        Ok(kv) => kv,
+        Err(_) if !required => return Ok(None),
+        Err(_) => {
+            return Err(HeaderBuildError::Client {
+                code: "policy_store_unavailable",
+                message: "POLICY_KV binding is required for upstream grant requests",
+                status: 503,
+            });
+        }
+    };
+    for key in upstream_grant_keys(provider, auth, oauth_provider, token_ref) {
+        let Some(mut grant) = get_upstream_grant(&kv, &key)
+            .await
+            .map_err(HeaderBuildError::Runtime)?
+        else {
             continue;
         };
-        let token = parse_oauth_token_record(&record).map_err(HeaderBuildError::Runtime)?;
-        if !token.enabled {
-            return Err(HeaderBuildError::Client {
-                code: "oauth_grant_revoked",
-                message: "OAuth grant is revoked for this proxy key",
-                status: 403,
-            });
+        if grant.refresh.is_none() && grant.refresh_token.is_some() {
+            grant.refresh = upstream_grant_refresh_from_manifest(provider);
         }
-        if token
-            .access_token
+        if grant
+            .provider
             .as_deref()
-            .is_none_or(|value| value.trim().is_empty())
+            .is_some_and(|grant_provider| grant_provider != provider.id)
         {
             return Err(HeaderBuildError::Client {
-                code: "oauth_grant_invalid",
-                message: "OAuth grant is missing an access token",
+                code: "upstream_grant_invalid",
+                message: "upstream grant does not match the requested provider",
                 status: 403,
             });
         }
-        return Ok(token);
+        if !grant.enabled {
+            return Err(HeaderBuildError::Client {
+                code: "upstream_grant_revoked",
+                message: "upstream grant is revoked for this policy",
+                status: 403,
+            });
+        }
+        if upstream_grant_needs_refresh(&grant) {
+            grant = refresh_upstream_grant(env, &kv, &key, grant, false).await?;
+        }
+        if !upstream_grant_usable(&grant) {
+            return Err(HeaderBuildError::Client {
+                code: "upstream_grant_invalid",
+                message: "upstream grant is missing a usable credential",
+                status: 403,
+            });
+        }
+        return Ok(Some(grant));
     }
-    Err(HeaderBuildError::Client {
-        code: "oauth_grant_missing",
-        message: "OAuth grant is not registered for this proxy key",
-        status: 403,
+    if required {
+        return Err(HeaderBuildError::Client {
+            code: "upstream_grant_missing",
+            message: "upstream grant is not registered for this policy",
+            status: 403,
+        });
+    }
+    Ok(None)
+}
+
+async fn refresh_upstream_grant(
+    env: &Env,
+    kv: &KvStore,
+    key: &str,
+    mut grant: UpstreamGrantRecord,
+    force: bool,
+) -> std::result::Result<UpstreamGrantRecord, HeaderBuildError> {
+    if !force && !upstream_grant_needs_refresh(&grant) {
+        return Ok(grant);
+    }
+    if !grant.enabled {
+        return Err(HeaderBuildError::Client {
+            code: "upstream_grant_revoked",
+            message: "upstream grant is revoked for this policy",
+            status: 403,
+        });
+    }
+    if !matches!(
+        grant.kind,
+        UpstreamGrantKind::OAuth | UpstreamGrantKind::Subscription
+    ) {
+        return Err(HeaderBuildError::Client {
+            code: "upstream_grant_not_refreshable",
+            message: "upstream grant kind cannot be refreshed",
+            status: 409,
+        });
+    }
+    let Some(refresh_token) = grant
+        .refresh_token
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    else {
+        return Err(HeaderBuildError::Client {
+            code: "upstream_grant_not_refreshable",
+            message: "upstream grant has no refresh token",
+            status: 409,
+        });
+    };
+    let Some(refresh) = grant.refresh.as_ref() else {
+        return Err(HeaderBuildError::Client {
+            code: "upstream_grant_not_refreshable",
+            message: "upstream grant has no refresh configuration",
+            status: 409,
+        });
+    };
+    let Some(provider_id) = grant.provider.as_deref() else {
+        return Err(HeaderBuildError::Client {
+            code: "upstream_grant_not_refreshable",
+            message: "upstream grant must identify its provider before refresh",
+            status: 409,
+        });
+    };
+    let snapshot = provider_snapshot().map_err(HeaderBuildError::Runtime)?;
+    let Some(provider) = snapshot
+        .providers
+        .iter()
+        .find(|provider| provider.id == provider_id)
+    else {
+        return Err(HeaderBuildError::Client {
+            code: "upstream_grant_not_refreshable",
+            message: "upstream grant provider is not registered",
+            status: 409,
+        });
+    };
+    if !provider_approves_refresh(provider, refresh) {
+        return Err(HeaderBuildError::Client {
+            code: "upstream_grant_refresh_not_approved",
+            message: "provider manifest does not approve this refresh configuration",
+            status: 409,
+        });
+    }
+    let client_id = match (
+        refresh
+            .client_id
+            .as_deref()
+            .filter(|value| !value.trim().is_empty()),
+        refresh.client_id_config.as_deref(),
+    ) {
+        (Some(client_id), _) => client_id.to_string(),
+        (None, Some(config)) => {
+            exact_runtime_config_value(env, config).map_err(|_| HeaderBuildError::Client {
+                code: "upstream_grant_refresh_not_configured",
+                message: "OAuth refresh client configuration is missing",
+                status: 503,
+            })?
+        }
+        (None, None) => {
+            return Err(HeaderBuildError::Client {
+                code: "upstream_grant_refresh_not_configured",
+                message: "OAuth refresh client configuration is missing",
+                status: 503,
+            });
+        }
+    };
+    let client_secret = refresh
+        .client_secret_config
+        .as_deref()
+        .map(|name| exact_runtime_config_value(env, name))
+        .transpose()
+        .map_err(|_| HeaderBuildError::Client {
+            code: "upstream_grant_refresh_not_configured",
+            message: "OAuth refresh client configuration is missing",
+            status: 503,
+        })?;
+    let mut form = BTreeMap::from([
+        ("client_id".to_string(), client_id),
+        ("grant_type".to_string(), "refresh_token".to_string()),
+        ("refresh_token".to_string(), refresh_token.to_string()),
+    ]);
+    if let Some(client_secret) = client_secret {
+        form.insert("client_secret".to_string(), client_secret);
+    }
+    for (name, value) in &refresh.extra_params {
+        form.insert(name.clone(), value.clone());
+    }
+    let body = form_urlencoded(&form);
+    let headers = Headers::new();
+    headers
+        .set("accept", "application/json")
+        .map_err(HeaderBuildError::Runtime)?;
+    headers
+        .set("content-type", "application/x-www-form-urlencoded")
+        .map_err(HeaderBuildError::Runtime)?;
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post)
+        .with_headers(headers)
+        .with_body(Some(JsValue::from_str(&body)));
+    let request =
+        Request::new_with_init(&refresh.token_url, &init).map_err(HeaderBuildError::Runtime)?;
+    let mut response =
+        Fetch::Request(request)
+            .send()
+            .await
+            .map_err(|_| HeaderBuildError::Client {
+                code: "upstream_grant_refresh_failed",
+                message: "upstream OAuth refresh request failed",
+                status: 502,
+            })?;
+    if !(200..=299).contains(&response.status_code()) {
+        return Err(HeaderBuildError::Client {
+            code: "upstream_grant_refresh_failed",
+            message: "upstream OAuth refresh request was rejected",
+            status: 502,
+        });
+    }
+    let refreshed =
+        response
+            .json::<OAuthRefreshResponse>()
+            .await
+            .map_err(|_| HeaderBuildError::Client {
+                code: "upstream_grant_refresh_failed",
+                message: "upstream OAuth refresh response was invalid",
+                status: 502,
+            })?;
+    if refreshed.access_token.trim().is_empty() {
+        return Err(HeaderBuildError::Client {
+            code: "upstream_grant_refresh_failed",
+            message: "upstream OAuth refresh response was invalid",
+            status: 502,
+        });
+    }
+    grant.access_token = Some(refreshed.access_token);
+    if let Some(refresh_token) = refreshed
+        .refresh_token
+        .filter(|value| !value.trim().is_empty())
+    {
+        grant.refresh_token = Some(refresh_token);
+    }
+    if let Some(token_type) = refreshed
+        .token_type
+        .filter(|value| !value.trim().is_empty())
+    {
+        grant.token_type = token_type;
+    }
+    if let Some(expires_in) = refreshed.expires_in {
+        grant.expires_at = Some(timestamp_after_seconds(expires_in));
+    }
+    if let Some(scope) = refreshed.scope {
+        grant.scopes = normalize_grant_scopes(
+            scope
+                .split_ascii_whitespace()
+                .map(str::to_string)
+                .collect::<Vec<_>>(),
+        )
+        .map_err(|_| HeaderBuildError::Client {
+            code: "upstream_grant_refresh_failed",
+            message: "upstream OAuth refresh response was invalid",
+            status: 502,
+        })?;
+    }
+    grant.updated_at = Some(current_iso_timestamp());
+    put_kv_record(kv, key, &grant, "refreshed upstream grant")
+        .await
+        .map_err(HeaderBuildError::Runtime)?;
+    Ok(grant)
+}
+
+fn provider_approves_refresh(provider: &CompiledProvider, refresh: &UpstreamGrantRefresh) -> bool {
+    provider.auth.refresh.as_ref().is_some_and(|approved| {
+        approved.token_url == refresh.token_url
+            && approved.client_id == refresh.client_id
+            && approved.client_id_config == refresh.client_id_config
+            && approved.client_secret_config == refresh.client_secret_config
+            && approved.extra_params == refresh.extra_params
     })
 }
 
-fn parse_oauth_token_record(raw: &str) -> Result<OAuthTokenRecord> {
+fn upstream_grant_refresh_from_manifest(
+    provider: &CompiledProvider,
+) -> Option<UpstreamGrantRefresh> {
+    let refresh = provider.auth.refresh.as_ref()?;
+    Some(UpstreamGrantRefresh {
+        token_url: refresh.token_url.clone(),
+        client_id: refresh.client_id.clone(),
+        client_id_config: refresh.client_id_config.clone(),
+        client_secret_config: refresh.client_secret_config.clone(),
+        extra_params: refresh.extra_params.clone(),
+    })
+}
+
+fn exact_runtime_config_value(env: &Env, name: &str) -> Result<String> {
+    if let Ok(secret) = env.secret(name) {
+        let value = secret.to_string();
+        if !value.trim().is_empty() {
+            return Ok(value);
+        }
+    }
+    if let Ok(var) = env.var(name) {
+        let value = var.to_string();
+        if !value.trim().is_empty() {
+            return Ok(value);
+        }
+    }
+    Err(Error::RustError(format!(
+        "missing Cloudflare config value `{name}`"
+    )))
+}
+
+fn form_urlencoded(values: &BTreeMap<String, String>) -> String {
+    values
+        .iter()
+        .map(|(name, value)| format!("{}={}", encode_component(name), encode_component(value)))
+        .collect::<Vec<_>>()
+        .join("&")
+}
+
+fn timestamp_after_seconds(seconds: u64) -> String {
+    let date = js_sys::Date::new(&JsValue::from_f64(
+        js_sys::Date::now() + seconds as f64 * 1_000.0,
+    ));
+    date.to_iso_string().into()
+}
+
+fn parse_upstream_grant_record(raw: &str) -> Result<UpstreamGrantRecord> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
-        return Err(Error::RustError("OAuth token grant is empty".to_string()));
+        return Err(Error::RustError("upstream grant is empty".to_string()));
     }
     if !trimmed.starts_with('{') {
-        return Ok(OAuthTokenRecord {
+        return Ok(UpstreamGrantRecord {
+            version: default_upstream_grant_version(),
             enabled: true,
+            kind: UpstreamGrantKind::OAuth,
+            provider: None,
+            label: None,
+            credential: None,
             access_token: Some(trimmed.to_string()),
+            refresh_token: None,
             token_type: default_oauth_token_type(),
+            expires_at: None,
+            scopes: Vec::new(),
+            account_id: None,
+            subscription: None,
+            refresh: None,
+            created_at: None,
+            updated_at: None,
+            revoked_at: None,
         });
     }
     serde_json::from_str(trimmed)
-        .map_err(|error| Error::RustError(format!("OAuth token grant is invalid JSON: {error}")))
+        .map_err(|error| Error::RustError(format!("upstream grant is invalid JSON: {error}")))
 }
 
-fn oauth_token_keys(
+fn upstream_grant_keys(
     provider: &CompiledProvider,
     auth: &AuthorizedKey,
     oauth_provider: Option<&str>,
     token_ref: Option<&str>,
 ) -> Vec<String> {
-    let mut keys = Vec::new();
+    let mut refs = Vec::new();
     if let Some(token_ref) = token_ref.filter(|value| !value.is_empty()) {
-        keys.push(format!("oauth/{}/{}", auth.policy_id, token_ref));
-        if let Some(tenant) = auth
-            .policy
-            .tenant_id
-            .as_deref()
-            .filter(|value| !value.is_empty())
-        {
-            keys.push(format!("oauth/tenants/{tenant}/{token_ref}"));
-        }
+        refs.push(token_ref.to_string());
     }
     if let Some(oauth_provider) = oauth_provider.filter(|value| !value.is_empty()) {
-        keys.push(format!("oauth/{}/{}", auth.policy_id, oauth_provider));
-        if let Some(tenant) = auth
-            .policy
-            .tenant_id
-            .as_deref()
-            .filter(|value| !value.is_empty())
-        {
-            keys.push(format!("oauth/tenants/{tenant}/{oauth_provider}"));
-        }
+        refs.push(oauth_provider.to_string());
     }
-    keys.push(format!("oauth/{}/{}", auth.policy_id, provider.id));
+    refs.push(provider.id.clone());
+    dedupe_preserving_order(&mut refs);
+
+    let mut keys = refs
+        .iter()
+        .map(|token_ref| format!("oauth/{}/{token_ref}", auth.policy_id))
+        .collect::<Vec<_>>();
     if let Some(tenant) = auth
         .policy
         .tenant_id
         .as_deref()
         .filter(|value| !value.is_empty())
     {
-        keys.push(format!("oauth/tenants/{tenant}/{}", provider.id));
+        keys.extend(
+            refs.iter()
+                .map(|token_ref| format!("oauth/tenants/{tenant}/{token_ref}")),
+        );
     }
-    dedupe_preserving_order(&mut keys);
     keys
 }
 
@@ -7196,19 +8406,21 @@ fn aws_amz_date_now() -> Result<String> {
     Ok(format!("{date}T{time}Z"))
 }
 
-fn query_api_key(
+fn query_api_key_for_grant(
     provider: &CompiledProvider,
-    env: Option<&Env>,
-) -> Result<Option<(String, String)>> {
-    let Some(env) = env else {
-        return Ok(None);
-    };
+    env: &Env,
+    grant: Option<&UpstreamGrantRecord>,
+) -> std::result::Result<Option<(String, String)>, HeaderBuildError> {
     for scheme in &provider.auth.schemes {
         if let AuthScheme::QueryApiKey { param, secret_kind } = scheme {
-            return Ok(Some((
-                param.clone(),
-                provider_secret(env, provider, secret_kind)?,
-            )));
+            let secret = grant
+                .and_then(upstream_grant_secret)
+                .map(str::to_string)
+                .map(Ok)
+                .unwrap_or_else(|| {
+                    provider_secret(env, provider, secret_kind).map_err(HeaderBuildError::Runtime)
+                })?;
+            return Ok(Some((param.clone(), secret)));
         }
     }
     Ok(None)
@@ -9887,6 +11099,31 @@ mod tests {
         provider
     }
 
+    fn subscription_test_grant(provider: &str) -> UpstreamGrantRecord {
+        UpstreamGrantRecord {
+            version: 1,
+            enabled: true,
+            kind: UpstreamGrantKind::Subscription,
+            provider: Some(provider.to_string()),
+            label: Some("maintainer subscription".to_string()),
+            credential: None,
+            access_token: Some("test-access-token".to_string()),
+            refresh_token: Some("test-refresh-token".to_string()),
+            token_type: "Bearer".to_string(),
+            expires_at: None,
+            scopes: vec!["openid".to_string()],
+            account_id: Some("acct_test".to_string()),
+            subscription: Some(UpstreamGrantSubscription {
+                plan: Some("plus".to_string()),
+                subject: Some("subject_test".to_string()),
+            }),
+            refresh: None,
+            created_at: Some("2026-06-16T00:00:00.000Z".to_string()),
+            updated_at: Some("2026-06-16T00:00:00.000Z".to_string()),
+            revoked_at: None,
+        }
+    }
+
     fn entitlement_test_row(
         provider: &str,
         allowed: bool,
@@ -9912,6 +11149,7 @@ mod tests {
                 connection_enabled: true,
                 oauth_grant_required: false,
                 oauth_grant_count: 0,
+                upstream_grant_count: 0,
                 openai_compatible: true,
                 manifest_routes: 1,
                 model_count: 1,
@@ -11525,36 +12763,36 @@ mod tests {
     }
 
     #[test]
-    fn provider_oauth_refs_cover_token_ref_and_provider_fallbacks() {
+    fn provider_upstream_grant_refs_cover_token_ref_and_provider_fallbacks() {
         let provider = oauth_test_provider();
-        let refs = provider_oauth_refs(&provider);
+        let refs = provider_upstream_grant_refs(&provider);
 
         assert!(refs.iter().any(|value| value == "/oauth.acme.access_token"));
         assert!(refs.iter().any(|value| value == "/acme-oauth"));
     }
 
     #[test]
-    fn provider_oauth_grant_count_requires_enabled_token_records() {
+    fn provider_upstream_grant_count_requires_enabled_usable_records() {
         let provider = oauth_test_provider();
         let grants = vec![
             OAuthGrantRecord {
                 key: "oauth/svc_docs/oauth.acme.access_token".to_string(),
                 enabled: true,
-                has_access_token: true,
+                usable: true,
             },
             OAuthGrantRecord {
                 key: "oauth/tenants/default/acme-oauth".to_string(),
                 enabled: false,
-                has_access_token: true,
+                usable: true,
             },
             OAuthGrantRecord {
                 key: "oauth/svc_docs/acme-oauth".to_string(),
                 enabled: true,
-                has_access_token: false,
+                usable: false,
             },
         ];
 
-        assert_eq!(provider_oauth_grant_count(&provider, &grants), 1);
+        assert_eq!(provider_upstream_grant_count(&provider, &grants), 1);
     }
 
     #[test]
@@ -11563,17 +12801,17 @@ mod tests {
             OAuthGrantRecord {
                 key: "oauth/svc_docs/acme-oauth".to_string(),
                 enabled: true,
-                has_access_token: true,
+                usable: true,
             },
             OAuthGrantRecord {
                 key: "oauth/tenants/research/acme-oauth".to_string(),
                 enabled: true,
-                has_access_token: true,
+                usable: true,
             },
             OAuthGrantRecord {
                 key: "oauth/svc_other/acme-oauth".to_string(),
                 enabled: true,
-                has_access_token: true,
+                usable: true,
             },
         ];
         let docs = AccessPolicyEntry {
@@ -11634,7 +12872,7 @@ mod tests {
         let grants = vec![OAuthGrantRecord {
             key: "oauth/svc_research/acme-oauth".to_string(),
             enabled: true,
-            has_access_token: true,
+            usable: true,
         }];
 
         let entries = [&docs, &research];
@@ -11662,7 +12900,8 @@ mod tests {
             query: Map::from_iter([("topic".to_string(), Value::String("news".to_string()))]),
             ..ManifestProxyRequest::default()
         };
-        let url = manifest_upstream_url(provider, endpoint, &proxy, None).unwrap();
+        let url =
+            manifest_upstream_url(provider, endpoint, &proxy, None, None, None, None).unwrap();
         assert_eq!(url, "https://api.tavily.com/search?topic=news");
     }
 
@@ -11702,6 +12941,103 @@ mod tests {
             "/v1beta/models/gemini-2.5-pro:generateContent"
         )
         .is_none());
+    }
+
+    #[test]
+    fn openai_subscription_grants_use_the_manifest_codex_transport() {
+        let snapshot = provider_snapshot().unwrap();
+        let provider = snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.id == "openai")
+            .unwrap();
+        let grant = subscription_test_grant("openai");
+        let responses = provider
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.id == "responses")
+            .unwrap();
+        let chat = provider
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.id == "chat_completions")
+            .unwrap();
+
+        assert_eq!(
+            provider_upstream_base_url(provider, Some(&grant)).unwrap(),
+            "https://chatgpt.com/backend-api/codex"
+        );
+        assert_eq!(
+            grant_transport_endpoint_path(provider, responses, Some(&grant)).unwrap(),
+            Some("/responses".to_string())
+        );
+        assert!(matches!(
+            grant_transport_endpoint_path(provider, chat, Some(&grant)),
+            Err(HeaderBuildError::Client {
+                code: "upstream_grant_transport_unsupported",
+                ..
+            })
+        ));
+        assert_eq!(
+            resolve_grant_template("${grant.accountId}", &grant).unwrap(),
+            "acct_test"
+        );
+    }
+
+    #[test]
+    fn upstream_grant_admin_metadata_never_serializes_secrets() {
+        let grant = subscription_test_grant("openai");
+        let value = serde_json::to_value(
+            admin_upstream_grant_response("oauth/svc_docs/openai", &grant).unwrap(),
+        )
+        .unwrap();
+        let raw = serde_json::to_string(&value).unwrap();
+
+        assert_eq!(value["scope"], "policies");
+        assert_eq!(value["scopeId"], "svc_docs");
+        assert_eq!(value["tokenRef"], "openai");
+        assert_eq!(value["hasAccessToken"], true);
+        assert_eq!(value["hasRefreshToken"], true);
+        assert!(!raw.contains("test-access-token"));
+        assert!(!raw.contains("test-refresh-token"));
+    }
+
+    #[test]
+    fn upstream_grant_secret_shapes_do_not_cross_kind_boundaries() {
+        let mut grant = subscription_test_grant("openai");
+        grant.kind = UpstreamGrantKind::ApiKey;
+        grant.credential = None;
+        assert!(upstream_grant_secret(&grant).is_none());
+        assert!(validate_upstream_grant_secret_shape(&grant).is_err());
+
+        grant.kind = UpstreamGrantKind::OAuth;
+        grant.access_token = None;
+        grant.refresh_token = None;
+        grant.credential = Some("api-key-placeholder".to_string());
+        assert!(upstream_grant_secret(&grant).is_none());
+        assert!(validate_upstream_grant_secret_shape(&grant).is_err());
+
+        grant.kind = UpstreamGrantKind::Subscription;
+        grant.access_token = Some("subscription-token-placeholder".to_string());
+        assert!(validate_upstream_grant_secret_shape(&grant).is_err());
+    }
+
+    #[test]
+    fn enabled_upstream_grants_require_revoke_before_identity_changes() {
+        let existing = subscription_test_grant("openai");
+        let mut changed_kind = existing.clone();
+        changed_kind.kind = UpstreamGrantKind::OAuth;
+        assert_eq!(
+            normalize_upstream_grant(changed_kind, Some(&existing)).unwrap_err(),
+            "revoke an enabled grant before changing its kind"
+        );
+
+        let mut changed_provider = existing.clone();
+        changed_provider.provider = Some("anthropic".to_string());
+        assert_eq!(
+            normalize_upstream_grant(changed_provider, Some(&existing)).unwrap_err(),
+            "revoke an enabled grant before changing its provider"
+        );
     }
 
     #[test]
@@ -11789,7 +13125,8 @@ mod tests {
             )]),
             ..ManifestProxyRequest::default()
         };
-        let url = manifest_upstream_url(provider, endpoint, &proxy, None).unwrap();
+        let url =
+            manifest_upstream_url(provider, endpoint, &proxy, None, None, None, None).unwrap();
         assert_eq!(url, "https://api.replicate.com/v1/predictions/abc%20123");
     }
 
@@ -11809,7 +13146,8 @@ mod tests {
             )]),
             ..ManifestProxyRequest::default()
         };
-        let url = manifest_upstream_url(&provider, endpoint, &proxy, None).unwrap();
+        let url =
+            manifest_upstream_url(&provider, endpoint, &proxy, None, None, None, None).unwrap();
         assert_eq!(url, "https://api.example.com/v1/repos/openclaw/clawrouter");
     }
 
@@ -11829,7 +13167,8 @@ mod tests {
             )]),
             ..ManifestProxyRequest::default()
         };
-        let error = manifest_upstream_url(&provider, endpoint, &proxy, None).unwrap_err();
+        let error =
+            manifest_upstream_url(&provider, endpoint, &proxy, None, None, None, None).unwrap_err();
         match error {
             ManifestProxyError::Client(message) => {
                 assert!(message.contains("safe relative path"));
@@ -11839,7 +13178,7 @@ mod tests {
     }
 
     #[test]
-    fn oauth_token_keys_prefer_key_token_ref_before_fallbacks() {
+    fn upstream_grant_keys_prefer_policy_scope_before_tenant_fallbacks() {
         let provider = oauth_test_provider();
         let auth = AuthorizedKey {
             credential_id: Some("cred_docs".to_string()),
@@ -11858,7 +13197,7 @@ mod tests {
         };
 
         assert_eq!(
-            oauth_token_keys(
+            upstream_grant_keys(
                 &provider,
                 &auth,
                 Some("acme-oauth"),
@@ -11866,32 +13205,32 @@ mod tests {
             ),
             vec![
                 "oauth/svc_docs/oauth.acme.access_token",
-                "oauth/tenants/team_docs/oauth.acme.access_token",
                 "oauth/svc_docs/acme-oauth",
-                "oauth/tenants/team_docs/acme-oauth",
                 "oauth/svc_docs/oauth-test",
+                "oauth/tenants/team_docs/oauth.acme.access_token",
+                "oauth/tenants/team_docs/acme-oauth",
                 "oauth/tenants/team_docs/oauth-test",
             ]
         );
     }
 
     #[test]
-    fn oauth_token_records_accept_json_or_raw_tokens() {
-        let json = parse_oauth_token_record(
+    fn upstream_grant_records_accept_json_or_raw_tokens() {
+        let json = parse_upstream_grant_record(
             r#"{"enabled":true,"accessToken":"gho_test","tokenType":"Bearer"}"#,
         )
         .unwrap();
         assert_eq!(json.access_token.as_deref(), Some("gho_test"));
         assert_eq!(json.token_type, "Bearer");
 
-        let raw = parse_oauth_token_record("xoxb-test").unwrap();
+        let raw = parse_upstream_grant_record("xoxb-test").unwrap();
         assert_eq!(raw.access_token.as_deref(), Some("xoxb-test"));
         assert_eq!(raw.token_type, "Bearer");
         let tombstone =
-            parse_oauth_token_record(r#"{"enabled":false,"tokenType":"Bearer"}"#).unwrap();
+            parse_upstream_grant_record(r#"{"enabled":false,"tokenType":"Bearer"}"#).unwrap();
         assert!(!tombstone.enabled);
         assert_eq!(tombstone.access_token, None);
-        assert!(parse_oauth_token_record("   ").is_err());
+        assert!(parse_upstream_grant_record("   ").is_err());
     }
 
     #[test]

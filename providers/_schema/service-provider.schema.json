@@ -52,6 +52,13 @@
           "type": "array",
           "items": { "$ref": "#/$defs/authScheme" },
           "minItems": 1
+        },
+        "refresh": {
+          "$ref": "#/$defs/authRefresh"
+        },
+        "grantTransports": {
+          "type": "object",
+          "additionalProperties": { "$ref": "#/$defs/grantTransport" }
         }
       }
     },
@@ -137,6 +144,40 @@
     }
   },
   "$defs": {
+    "authRefresh": {
+      "type": "object",
+      "required": ["tokenUrl"],
+      "additionalProperties": false,
+      "anyOf": [
+        { "required": ["clientId"] },
+        { "required": ["clientIdConfig"] }
+      ],
+      "properties": {
+        "tokenUrl": { "type": "string", "pattern": "^https://" },
+        "clientId": { "type": "string" },
+        "clientIdConfig": { "type": "string" },
+        "clientSecretConfig": { "type": "string" },
+        "extraParams": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
+    "grantTransport": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "baseUrl": { "type": "string", "pattern": "^https://" },
+        "endpointPaths": {
+          "type": "object",
+          "additionalProperties": { "type": "string", "pattern": "^/" }
+        },
+        "headers": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        }
+      }
+    },
     "authScheme": {
       "oneOf": [
         {

@@ -43,6 +43,7 @@ export interface ProviderReadiness {
   configPresent: boolean;
   oauthGrantRequired: boolean;
   oauthGrantCount: number;
+  upstreamGrantCount: number;
   openaiCompatible: boolean;
   manifestRoutes: number;
   modelCount: number;
