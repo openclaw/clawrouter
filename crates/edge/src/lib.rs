@@ -3583,42 +3583,47 @@ async fn access_control_user_record(
 ) -> Result<AccessUserRecord> {
     let namespace = access_control_namespace(env)?;
     let mut response = resolve_access_control_users(&namespace, vec![email.to_string()]).await?;
-    if let Some(user) = response.users.pop() {
-        return Ok(user.record);
-    }
     let kv = env.kv("POLICY_KV").map_err(|error| {
         Error::RustError(format!(
             "POLICY_KV binding is required before initializing an access user: {error}"
         ))
     })?;
-    let record = existing_access_user_record(&kv, email)
-        .await?
-        .unwrap_or_else(|| default_access_user_record(default_tenant));
-    let user = AccessControlUser {
-        email: email.to_string(),
-        record,
+    let record = if let Some(user) = response.users.pop() {
+        user.record
+    } else {
+        let record = existing_access_user_record(&kv, email)
+            .await?
+            .unwrap_or_else(|| default_access_user_record(default_tenant));
+        let user = AccessControlUser {
+            email: email.to_string(),
+            record,
+        };
+        initialize_access_control_users(&namespace, std::slice::from_ref(&user)).await?;
+        let mut response =
+            resolve_access_control_users(&namespace, vec![email.to_string()]).await?;
+        let user = response.users.pop().ok_or_else(|| {
+            Error::RustError(
+                "access user authority did not initialize the requested user".to_string(),
+            )
+        })?;
+        sync_kv_record_best_effort(
+            &kv,
+            &format!("access/users/{email}"),
+            &user.record,
+            "access user compatibility record",
+        )
+        .await;
+        user.record
     };
-    initialize_access_control_users(&namespace, std::slice::from_ref(&user)).await?;
-    let mut response = resolve_access_control_users(&namespace, vec![email.to_string()]).await?;
-    let user = response.users.pop().ok_or_else(|| {
-        Error::RustError("access user authority did not initialize the requested user".to_string())
-    })?;
-    sync_kv_record_best_effort(
-        &kv,
-        &format!("access/users/{email}"),
-        &user.record,
-        "access user compatibility record",
-    )
-    .await;
-    match reconcile_access_user_assignments(env, &kv, email, user.record.clone(), None).await {
+    match reconcile_access_user_assignments(env, &kv, email, record.clone(), None).await {
         Ok((record, _)) => Ok(record),
         Err(error) => {
             console_error!(
-                "first-login assignment reconciliation failed closed for {}: {}",
+                "login assignment reconciliation failed for {}: {}",
                 email,
                 error
             );
-            Ok(user.record)
+            Ok(record)
         }
     }
 }
@@ -8731,6 +8736,23 @@ fn sanitize_native_response(response: Response, endpoint: &CompiledEndpoint) -> 
 
 fn native_response_header_allowed(endpoint: &CompiledEndpoint, name: &str) -> bool {
     let name = name.to_ascii_lowercase();
+    if matches!(
+        name.as_str(),
+        "connection"
+            | "keep-alive"
+            | "proxy-authenticate"
+            | "proxy-authorization"
+            | "proxy-connection"
+            | "set-cookie"
+            | "set-cookie2"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
+    ) || name.starts_with("cf-")
+    {
+        return false;
+    }
     matches!(
         name.as_str(),
         "accept-ranges"
@@ -14839,6 +14861,26 @@ mod tests {
             "x-ratelimit-limit"
         ));
         assert!(!native_response_header_allowed(endpoint, "set-cookie"));
+        let mut manifest_allowed = endpoint.clone();
+        manifest_allowed.response_headers.extend([
+            "connection".to_string(),
+            "cf-ray".to_string(),
+            "set-cookie".to_string(),
+            "x-provider-trace".to_string(),
+        ]);
+        assert!(!native_response_header_allowed(
+            &manifest_allowed,
+            "connection"
+        ));
+        assert!(!native_response_header_allowed(&manifest_allowed, "cf-ray"));
+        assert!(!native_response_header_allowed(
+            &manifest_allowed,
+            "set-cookie"
+        ));
+        assert!(native_response_header_allowed(
+            &manifest_allowed,
+            "x-provider-trace"
+        ));
     }
 
     #[test]
