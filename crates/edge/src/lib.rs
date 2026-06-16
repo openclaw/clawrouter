@@ -9627,17 +9627,11 @@ fn upstream_grant_keys(
         .iter()
         .map(|token_ref| format!("oauth/{}/{token_ref}", auth.policy_id))
         .collect::<Vec<_>>();
-    if let Some(tenant) = auth
-        .policy
-        .tenant_id
-        .as_deref()
-        .filter(|value| !value.is_empty())
-    {
-        keys.extend(
-            refs.iter()
-                .map(|token_ref| format!("oauth/tenants/{tenant}/{token_ref}")),
-        );
-    }
+    let tenant = tenant_id(auth);
+    keys.extend(
+        refs.iter()
+            .map(|token_ref| format!("oauth/tenants/{tenant}/{token_ref}")),
+    );
     keys
 }
 
@@ -15103,7 +15097,7 @@ mod tests {
     #[test]
     fn upstream_grant_keys_prefer_policy_scope_before_tenant_fallbacks() {
         let provider = oauth_test_provider();
-        let auth = AuthorizedKey {
+        let mut auth = AuthorizedKey {
             credential_id: Some("cred_docs".to_string()),
             principal_id: None,
             auth_type: "proxy_key",
@@ -15133,6 +15127,14 @@ mod tests {
                 "oauth/tenants/team_docs/oauth.acme.access_token",
                 "oauth/tenants/team_docs/acme-oauth",
                 "oauth/tenants/team_docs/oauth-test",
+            ]
+        );
+        auth.policy.tenant_id = None;
+        assert_eq!(
+            upstream_grant_keys(&provider, &auth, None, None),
+            vec![
+                "oauth/svc_docs/oauth-test",
+                "oauth/tenants/default/oauth-test",
             ]
         );
     }
