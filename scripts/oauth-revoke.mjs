@@ -115,6 +115,7 @@ function stripSecrets(value) {
     "refreshToken",
     "refresh_token",
     "credential",
+    "credentials",
     "apiKey",
     "api_key",
     "token",

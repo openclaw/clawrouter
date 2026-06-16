@@ -158,6 +158,49 @@ test("oauth put supports api_key credentials from stdin and rejects argv secrets
   }
 });
 
+test("oauth put supports multi-field credential bundles without argv exposure", () => {
+  const fixture = scriptFixture();
+
+  try {
+    const result = runScript(
+      "oauth-put.mjs",
+      [
+        "--kid",
+        "svc_models",
+        "--token-ref",
+        "aws-bedrock",
+        "--kind",
+        "api_key",
+        "--provider",
+        "aws-bedrock",
+        "--credentials-json-env",
+        "TEST_AWS_CREDENTIALS",
+        "--local",
+      ],
+      fixture,
+      {
+        TEST_AWS_CREDENTIALS: JSON.stringify({
+          accessKeyId: "AKID_PLACEHOLDER",
+          secretAccessKey: "secret-placeholder",
+          sessionToken: "session-placeholder",
+        }),
+      },
+    );
+
+    assert.equal(result.status, 0, result.stderr);
+    const [{ value }] = payloads(fixture.payloadLogPath);
+    assert.deepEqual(value.credentials, {
+      accessKeyId: "AKID_PLACEHOLDER",
+      secretAccessKey: "secret-placeholder",
+      sessionToken: "session-placeholder",
+    });
+    assert.doesNotMatch(readFileSync(fixture.commandLogPath, "utf8"), /AKID_PLACEHOLDER/);
+    assert.doesNotMatch(readFileSync(fixture.commandLogPath, "utf8"), /secret-placeholder/);
+  } finally {
+    fixture.cleanup();
+  }
+});
+
 test("oauth put accepts a public literal refresh client id", () => {
   const fixture = scriptFixture();
 
@@ -206,6 +249,10 @@ test("oauth revoke preserves canonical metadata and removes secrets recursively"
       accessToken: "access-token-placeholder",
       refreshToken: "refresh-token-placeholder",
       credential: "credential-placeholder",
+      credentials: {
+        accessKeyId: "AKID_PLACEHOLDER",
+        secretAccessKey: "secret-placeholder",
+      },
       expiresAt: "2026-06-16T12:00:00Z",
       scopes: ["openid"],
       accountId: "stable-account-id",
@@ -242,6 +289,7 @@ test("oauth revoke preserves canonical metadata and removes secrets recursively"
     assert.equal(value.accessToken, undefined);
     assert.equal(value.refreshToken, undefined);
     assert.equal(value.credential, undefined);
+    assert.equal(value.credentials, undefined);
     assert.deepEqual(value.refresh.extraParams, { audience: "provider-api" });
     assert.doesNotMatch(JSON.stringify(value), /placeholder/);
   } finally {

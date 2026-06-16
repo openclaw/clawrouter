@@ -13,8 +13,9 @@ const label = optionalValue(args, "label");
 assertSingleStdinSecret(args);
 const accessToken = readSecret(args, "access-token");
 const credential = readSecret(args, "credential");
+const credentials = parseSecretStringMap(readSecret(args, "credentials-json"), "--credentials-json");
 const refreshToken = readSecret(args, "refresh-token");
-validatePrimarySecret(kind, { accessToken, credential });
+validatePrimarySecret(kind, { accessToken, credential, credentials });
 if (kind === "api_key" && refreshToken) {
   throw new Error("--refresh-token-* is only supported for oauth and subscription grants");
 }
@@ -41,6 +42,7 @@ setOptional(grant, "provider", provider);
 setOptional(grant, "label", label);
 setOptional(grant, "accessToken", accessToken);
 setOptional(grant, "credential", credential);
+setOptional(grant, "credentials", credentials);
 setOptional(grant, "refreshToken", refreshToken);
 setOptional(grant, "expiresAt", parseTimestamp(optionalValue(args, "expires-at"), "--expires-at"));
 setOptional(grant, "accountId", optionalValue(args, "account-id"));
@@ -140,7 +142,7 @@ function readSecret(args, name) {
 }
 
 function assertSingleStdinSecret(args) {
-  const stdinSecrets = ["access-token", "credential", "refresh-token"].filter(
+  const stdinSecrets = ["access-token", "credential", "credentials-json", "refresh-token"].filter(
     (name) => args[`${name}-stdin`] !== undefined,
   );
   if (stdinSecrets.length > 1) {
@@ -148,12 +150,12 @@ function assertSingleStdinSecret(args) {
   }
 }
 
-function validatePrimarySecret(kind, { accessToken, credential }) {
-  if (accessToken && credential) {
-    throw new Error("use exactly one primary secret: accessToken or credential");
+function validatePrimarySecret(kind, { accessToken, credential, credentials }) {
+  if ([accessToken, credential, credentials].filter(Boolean).length > 1) {
+    throw new Error("use exactly one primary secret: accessToken, credential, or credentials");
   }
-  if (kind === "api_key" && !credential) {
-    throw new Error("api_key grants require --credential-stdin, --credential-env, or --credential-file");
+  if (kind === "api_key" && !credential && !credentials) {
+    throw new Error("api_key grants require credential or credentials-json from stdin, env, or file");
   }
   if (kind === "oauth" && !accessToken) {
     throw new Error("oauth grants require --access-token-stdin, --access-token-env, or --access-token-file");
@@ -163,6 +165,28 @@ function validatePrimarySecret(kind, { accessToken, credential }) {
       "subscription grants require an accessToken or credential supplied through stdin, env, or file",
     );
   }
+}
+
+function parseSecretStringMap(value, name) {
+  if (!value) {
+    return undefined;
+  }
+  let parsed;
+  try {
+    parsed = JSON.parse(value);
+  } catch {
+    throw new Error(`${name} must be valid JSON`);
+  }
+  if (
+    !parsed ||
+    Array.isArray(parsed) ||
+    typeof parsed !== "object" ||
+    Object.keys(parsed).length === 0 ||
+    Object.values(parsed).some((item) => typeof item !== "string" || !item)
+  ) {
+    throw new Error(`${name} must be a non-empty JSON object with non-empty string values`);
+  }
+  return parsed;
 }
 
 function parseKind(value) {
