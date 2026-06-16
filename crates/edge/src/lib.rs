@@ -209,7 +209,7 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     }
 
     if url.path().starts_with("/v1/native/") {
-        return proxy_native_provider(req, env, url.path(), ProxyAuthMode::Client).await;
+        return proxy_native_provider(req, env, url.path(), ProxyAuthMode::ProxyKey).await;
     }
 
     Response::from_json(&serde_json::json!({
@@ -493,7 +493,6 @@ fn openai_compatible_endpoint_paths(
 enum ProxyAuthMode {
     ProxyKey,
     AccessSession,
-    Client,
 }
 
 async fn proxy_openai_compatible(
@@ -7715,13 +7714,6 @@ async fn authorize_request(
     match mode {
         ProxyAuthMode::ProxyKey => authorize_proxy_key(headers, env, provider_id).await,
         ProxyAuthMode::AccessSession => authorize_access_session(headers, env, provider_id).await,
-        ProxyAuthMode::Client => {
-            if proxy_key_header_present(headers)? {
-                authorize_proxy_key(headers, env, provider_id).await
-            } else {
-                authorize_access_session(headers, env, provider_id).await
-            }
-        }
     }
 }
 

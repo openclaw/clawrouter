@@ -94,14 +94,10 @@ The native route:
 9. Copies only safe response headers.
 10. Emits the existing audit, usage, and budget events.
 
-The route accepts both:
-
-- ClawRouter proxy credentials in `Authorization: Bearer clawrouter-*`.
-- Verified Cloudflare Access sessions when the request is not browser-only and
-  the application token is valid.
-
-Access-session support must not reuse the playground CSRF exception. The
-playground remains a browser surface; `/v1/native/*` is a client API surface.
+The route accepts ClawRouter proxy credentials in
+`Authorization: Bearer clawrouter-*`. Cloudflare Access sessions are limited to
+the explicitly same-origin playground surface; `/v1/native/*` is a machine
+client API and never falls back to browser Access identity.
 
 ### Discovery
 
