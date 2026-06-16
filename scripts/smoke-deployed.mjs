@@ -53,6 +53,12 @@ if (liveProviders.length === 0) {
 if (!smokeKey) {
   throw new Error("CLAWROUTER_SMOKE_KEY is required for live provider smoke");
 }
+const clientCatalog = await expectAuthenticatedOk(
+  `${baseUrl}/v1/catalog`,
+  "credential-scoped client catalog",
+  smokeKey,
+);
+expectClientCatalog(clientCatalog);
 const selectedLiveProviders = selectLiveProviderPlans(plan, liveProviders).map(
   (provider) => provider.id,
 );
@@ -74,6 +80,16 @@ console.log("deployed smoke passed");
 
 async function expectOk(url, name) {
   const response = await fetch(url);
+  if (!response.ok) {
+    throw new Error(`${name} failed with ${response.status}`);
+  }
+  return response.json();
+}
+
+async function expectAuthenticatedOk(url, name, token) {
+  const response = await fetch(url, {
+    headers: { authorization: `Bearer ${token}` },
+  });
   if (!response.ok) {
     throw new Error(`${name} failed with ${response.status}`);
   }
@@ -166,6 +182,25 @@ function expectRouteCatalog(catalog, name) {
   }
   if (!catalog.manifestProxy.some((route) => route.route === "/v1/proxy/tavily/search")) {
     throw new Error(`${name} is missing the Tavily manifest route`);
+  }
+}
+
+function expectClientCatalog(catalog) {
+  if (!Array.isArray(catalog.providers) || catalog.providers.length === 0) {
+    throw new Error("credential-scoped client catalog is empty");
+  }
+  for (const provider of catalog.providers) {
+    if (typeof provider.openAiCompatible !== "boolean") {
+      throw new Error(`client catalog provider ${provider.id} is missing openAiCompatible`);
+    }
+    if (!Array.isArray(provider.routes)) {
+      throw new Error(`client catalog provider ${provider.id} is missing routes`);
+    }
+    for (const route of provider.routes) {
+      if (typeof route.requestFormat !== "string" || typeof route.responseFormat !== "string") {
+        throw new Error(`client catalog provider ${provider.id} has an incomplete route contract`);
+      }
+    }
   }
 }
 
