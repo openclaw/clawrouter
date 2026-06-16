@@ -3089,6 +3089,36 @@ label > span,
   color: var(--success);
 }
 
+.inlineActions {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.checkLabel {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  min-height: 30px;
+  align-self: end;
+  border: 1px solid var(--border);
+  padding: 5px 8px;
+}
+
+.checkLabel input {
+  width: 14px;
+  min-height: 14px;
+  margin: 0;
+}
+
+.checkLabel span {
+  color: var(--foreground-strong);
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: none;
+}
+
 .userListHeader {
   display: grid;
   grid-template-columns: minmax(220px, 360px) auto;

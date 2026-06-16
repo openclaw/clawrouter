@@ -83,7 +83,7 @@ function initialViewFromPath(): View {
 
 function initialAccessTab(): AccessTab {
   const resource = new URLSearchParams(window.location.search).get("resource");
-  return resource === "credentials" || resource === "bindings" ? resource : "policies";
+  return resource === "credentials" || resource === "bindings" || resource === "upstream" || resource === "assignments" ? resource : "policies";
 }
 type AccessRole = "admin" | "user";
 type IconComponent = React.ComponentType<React.SVGProps<SVGSVGElement>>;
@@ -144,6 +144,47 @@ interface ProviderConnection {
   label?: string | null;
 }
 
+interface UpstreamGrant {
+  key: string;
+  scope: "policies" | "tenants";
+  scopeId: string;
+  tokenRef: string;
+  version: number;
+  enabled: boolean;
+  kind: "api_key" | "oauth" | "subscription";
+  provider?: string | null;
+  label?: string | null;
+  tokenType: string;
+  expiresAt?: string | null;
+  scopes: string[];
+  accountId?: string | null;
+  subscription?: { plan?: string | null; subject?: string | null } | null;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+  revokedAt?: string | null;
+  hasCredential: boolean;
+  hasAccessToken: boolean;
+  hasRefreshToken: boolean;
+  refreshConfigured: boolean;
+  usable: boolean;
+}
+
+interface AssignmentRule {
+  ruleId: string;
+  version: number;
+  enabled: boolean;
+  kind: "exact_email" | "email_domain" | "github_org" | "github_team";
+  subject: string;
+  groups: string[];
+  policyIds: string[];
+  priority: number;
+  revokeOnLoss: boolean;
+  provenance: string;
+  generatedGroup: string;
+  createdAt?: string | null;
+  updatedAt?: string | null;
+}
+
 interface SessionResponse {
   authenticated: boolean;
   auth: string;
@@ -167,6 +208,7 @@ interface ProviderReadiness {
   configPresent: boolean;
   oauthGrantRequired: boolean;
   oauthGrantCount: number;
+  upstreamGrantCount: number;
   openaiCompatible: boolean;
   manifestRoutes: number;
   modelCount: number;
@@ -364,7 +406,34 @@ interface BindingForm {
   priority: string;
 }
 
-type AccessTab = "policies" | "credentials" | "bindings";
+interface UpstreamGrantForm {
+  scope: "policies" | "tenants";
+  scopeId: string;
+  tokenRef: string;
+  kind: UpstreamGrant["kind"];
+  provider: string;
+  label: string;
+  enabled: boolean;
+  credential: string;
+  accessToken: string;
+  refreshToken: string;
+  accountId: string;
+  expiresAt: string;
+}
+
+interface AssignmentRuleForm {
+  ruleId: string;
+  enabled: boolean;
+  kind: AssignmentRule["kind"];
+  subject: string;
+  groups: string;
+  policyIds: string[];
+  priority: string;
+  revokeOnLoss: boolean;
+  provenance: string;
+}
+
+type AccessTab = "policies" | "credentials" | "bindings" | "upstream" | "assignments";
 
 interface PlaygroundForm {
   mode: "model" | "service";
@@ -413,6 +482,8 @@ const defaultAccess: AccessForm = {
 };
 const defaultCredential: CredentialForm = { credentialId: "", policyId: "" };
 const defaultBinding: BindingForm = { policyId: "", principalType: "group", principalId: "", enabled: true, priority: "100" };
+const defaultUpstreamGrant: UpstreamGrantForm = { scope: "policies", scopeId: "", tokenRef: "", kind: "api_key", provider: "", label: "", enabled: true, credential: "", accessToken: "", refreshToken: "", accountId: "", expiresAt: "" };
+const defaultAssignmentRule: AssignmentRuleForm = { ruleId: "", enabled: true, kind: "email_domain", subject: "", groups: "", policyIds: [], priority: "100", revokeOnLoss: true, provenance: "cloudflare_access" };
 
 const rolePresets = {
   sandbox: { budget: "5000000", request: "500", providers: ["openai", "openrouter"] },
@@ -440,6 +511,8 @@ function App() {
   const [keys, setKeys] = useState<AccessPolicy[]>(allowDemo ? demo.keys : []);
   const [credentials, setCredentials] = useState<ProxyCredential[]>(allowDemo ? demo.credentials : []);
   const [connections, setConnections] = useState<ProviderConnection[]>(allowDemo ? demo.connections : []);
+  const [upstreamGrants, setUpstreamGrants] = useState<UpstreamGrant[]>(allowDemo ? demo.upstreamGrants : []);
+  const [assignmentRules, setAssignmentRules] = useState<AssignmentRule[]>(allowDemo ? demo.assignmentRules : []);
   const [policyDataLoaded, setPolicyDataLoaded] = useState(allowDemo);
   const [users, setUsers] = useState<AccessUser[]>(allowDemo ? demo.users : []);
   const [bindings, setBindings] = useState<PolicyBinding[]>(allowDemo ? demo.bindings : []);
@@ -454,6 +527,8 @@ function App() {
   const [policyForm, setPolicyForm] = useState<PolicyForm>(allowDemo && demo.keys[0] ? policyFormFromPolicy(demo.keys[0]) : defaultPolicy);
   const [credentialForm, setCredentialForm] = useState<CredentialForm>(allowDemo && demo.keys[0] ? { credentialId: "", policyId: demo.keys[0].policyId } : defaultCredential);
   const [bindingForm, setBindingForm] = useState<BindingForm>(allowDemo && demo.keys[0] ? { ...defaultBinding, policyId: demo.keys[0].policyId } : defaultBinding);
+  const [upstreamGrantForm, setUpstreamGrantForm] = useState<UpstreamGrantForm>(allowDemo && demo.upstreamGrants[0] ? upstreamGrantFormFromGrant(demo.upstreamGrants[0]) : defaultUpstreamGrant);
+  const [assignmentRuleForm, setAssignmentRuleForm] = useState<AssignmentRuleForm>(allowDemo && demo.assignmentRules[0] ? assignmentRuleFormFromRule(demo.assignmentRules[0]) : defaultAssignmentRule);
   const [accessTab, setAccessTab] = useState<AccessTab>(initialAccessTab);
   const [accessForm, setAccessForm] = useState<AccessForm>(allowDemo && demo.users[0] ? accessFormFromUser(demo.users[0], demo.bindings) : defaultAccess);
   const [query, setQuery] = useState("");
@@ -462,6 +537,8 @@ function App() {
   const [selectedPolicyId, setSelectedPolicyId] = useState(allowDemo ? demo.keys[0]?.policyId ?? "" : "");
   const [selectedCredentialId, setSelectedCredentialId] = useState(allowDemo ? demo.credentials[0]?.credentialId ?? "" : "");
   const [selectedBindingKey, setSelectedBindingKey] = useState(allowDemo ? bindingKey(demo.bindings[0]) : "");
+  const [selectedUpstreamGrantKey, setSelectedUpstreamGrantKey] = useState(allowDemo ? demo.upstreamGrants[0]?.key ?? "" : "");
+  const [selectedAssignmentRuleId, setSelectedAssignmentRuleId] = useState(allowDemo ? demo.assignmentRules[0]?.ruleId ?? "" : "");
   const [selectedUserEmail, setSelectedUserEmail] = useState(demo.users[0]?.email ?? "");
   const [status, setStatus] = useState(allowDemo ? "local demo data loaded" : "loading");
   const [demoMode, setDemoMode] = useState(allowDemo);
@@ -497,6 +574,8 @@ function App() {
   const selectedPolicy = keys.find((key) => key.policyId === selectedPolicyId);
   const selectedCredential = credentials.find((credential) => credential.credentialId === selectedCredentialId);
   const selectedBinding = bindings.find((binding) => bindingKey(binding) === selectedBindingKey);
+  const selectedUpstreamGrant = upstreamGrants.find((grant) => grant.key === selectedUpstreamGrantKey);
+  const selectedAssignmentRule = assignmentRules.find((rule) => rule.ruleId === selectedAssignmentRuleId);
   const selectedUser = selectedUserEmail ? users.find((user) => user.email === selectedUserEmail) : undefined;
   const selectedModel = models.find((model) => model.id === playground.model) ?? models[0];
   const selectedServiceRoute = serviceRoutes.find((route) => routeKey(route) === playground.serviceRoute) ?? serviceRoutes[0];
@@ -566,17 +645,21 @@ function App() {
         }
       }
       if (sessionData.role === "admin") {
-        const [policyData, credentialData, connectionData, userData, bindingData, readinessData] = await Promise.all([
+        const [policyData, credentialData, connectionData, userData, bindingData, readinessData, upstreamGrantData, assignmentRuleData] = await Promise.all([
           request<{ policies: AccessPolicy[] }>(gatewayOrigin, "/v1/admin/policies"),
           request<{ credentials: ProxyCredential[] }>(gatewayOrigin, "/v1/admin/credentials"),
           request<{ connections: ProviderConnection[] }>(gatewayOrigin, "/v1/admin/connections"),
           request<{ users: AccessUser[] }>(gatewayOrigin, "/v1/admin/access-users"),
           request<{ bindings: PolicyBinding[] }>(gatewayOrigin, "/v1/admin/policy-bindings"),
           request<{ providers: ProviderReadiness[] }>(gatewayOrigin, "/v1/admin/provider-status"),
+          request<{ grants: UpstreamGrant[] }>(gatewayOrigin, "/v1/admin/upstream-grants"),
+          request<{ rules: AssignmentRule[] }>(gatewayOrigin, "/v1/admin/assignment-rules"),
         ]);
         setKeys(policyData.policies);
         setCredentials(credentialData.credentials);
         setConnections(connectionData.connections);
+        setUpstreamGrants(upstreamGrantData.grants);
+        setAssignmentRules(assignmentRuleData.rules);
         const refreshedPolicy = policyData.policies.find((policy) => policy.policyId === selectedPolicyId) ?? policyData.policies[0];
         setSelectedPolicyId(refreshedPolicy?.policyId ?? "");
         setPolicyForm(refreshedPolicy ? policyFormFromPolicy(refreshedPolicy) : { ...defaultPolicy, policyId: "", tenantId: sessionData.tenantId ?? "default", providers: [...defaultPolicy.providers] });
@@ -586,6 +669,12 @@ function App() {
         const refreshedBinding = bindingData.bindings.find((binding) => bindingKey(binding) === selectedBindingKey) ?? bindingData.bindings[0];
         setSelectedBindingKey(refreshedBinding ? bindingKey(refreshedBinding) : "");
         setBindingForm(refreshedBinding ? bindingFormFromBinding(refreshedBinding) : { ...defaultBinding, policyId: refreshedPolicy?.policyId ?? "" });
+        const refreshedGrant = upstreamGrantData.grants.find((grant) => grant.key === selectedUpstreamGrantKey) ?? upstreamGrantData.grants[0];
+        setSelectedUpstreamGrantKey(refreshedGrant?.key ?? "");
+        setUpstreamGrantForm(refreshedGrant ? upstreamGrantFormFromGrant(refreshedGrant) : { ...defaultUpstreamGrant, scopeId: refreshedPolicy?.policyId ?? "", provider: providerData.providers[0]?.id ?? "", tokenRef: providerData.providers[0]?.id ?? "" });
+        const refreshedRule = assignmentRuleData.rules.find((rule) => rule.ruleId === selectedAssignmentRuleId) ?? assignmentRuleData.rules[0];
+        setSelectedAssignmentRuleId(refreshedRule?.ruleId ?? "");
+        setAssignmentRuleForm(refreshedRule ? assignmentRuleFormFromRule(refreshedRule) : defaultAssignmentRule);
         setUsers(userData.users);
         setBindings(bindingData.bindings);
         const refreshedUser = userData.users.find((user) => user.email === selectedUserEmail) ?? userData.users[0];
@@ -624,6 +713,8 @@ function App() {
         setKeys([]);
         setCredentials([]);
         setConnections([]);
+        setUpstreamGrants([]);
+        setAssignmentRules([]);
         setPolicyDataLoaded(false);
         setUsers([user]);
         setBindings([]);
@@ -646,6 +737,8 @@ function App() {
         setKeys(demo.keys);
         setCredentials(demo.credentials);
         setConnections(demo.connections);
+        setUpstreamGrants(demo.upstreamGrants);
+        setAssignmentRules(demo.assignmentRules);
         setPolicyDataLoaded(true);
         setUsers(demo.users);
         setBindings(demo.bindings);
@@ -662,6 +755,10 @@ function App() {
         setCredentialForm({ credentialId: "", policyId: demo.keys[0]?.policyId ?? "" });
         setSelectedBindingKey(demo.bindings[0] ? bindingKey(demo.bindings[0]) : "");
         setBindingForm(demo.bindings[0] ? bindingFormFromBinding(demo.bindings[0]) : defaultBinding);
+        setSelectedUpstreamGrantKey(demo.upstreamGrants[0]?.key ?? "");
+        setUpstreamGrantForm(demo.upstreamGrants[0] ? upstreamGrantFormFromGrant(demo.upstreamGrants[0]) : defaultUpstreamGrant);
+        setSelectedAssignmentRuleId(demo.assignmentRules[0]?.ruleId ?? "");
+        setAssignmentRuleForm(demo.assignmentRules[0] ? assignmentRuleFormFromRule(demo.assignmentRules[0]) : defaultAssignmentRule);
         setSelectedUserEmail(demo.users[0]?.email ?? "");
         setAccessForm(demo.users[0] ? accessFormFromUser(demo.users[0], demo.bindings) : defaultAccess);
         setDemoMode(true);
@@ -803,6 +900,156 @@ function App() {
       setSelectedBindingKey(bindingKey(next));
       setBindingForm(bindingFormFromBinding(next));
       setStatus("saved binding");
+    } catch (error) {
+      const message = errorMessage(error);
+      setPolicyError(message);
+      setStatus(message);
+    }
+  }
+
+  async function saveUpstreamGrant(event: FormEvent) {
+    event.preventDefault();
+    try {
+      setPolicyError("");
+      const scopeId = upstreamGrantForm.scopeId.trim();
+      const tokenRef = upstreamGrantForm.tokenRef.trim();
+      const provider = upstreamGrantForm.provider.trim();
+      if (!scopeId || !tokenRef || !provider) throw new Error("scope, token reference, and provider are required");
+      const primarySecret = upstreamGrantForm.kind === "api_key" ? upstreamGrantForm.credential.trim() : upstreamGrantForm.accessToken.trim();
+      if (!selectedUpstreamGrant && !primarySecret) throw new Error("a new upstream grant requires its primary secret");
+      const body = {
+        version: 1,
+        enabled: upstreamGrantForm.enabled,
+        kind: upstreamGrantForm.kind,
+        provider,
+        label: upstreamGrantForm.label.trim() || undefined,
+        tokenType: selectedUpstreamGrant?.tokenType ?? "Bearer",
+        expiresAt: upstreamGrantForm.expiresAt.trim() || undefined,
+        scopes: selectedUpstreamGrant?.scopes ?? [],
+        accountId: upstreamGrantForm.accountId.trim() || undefined,
+        subscription: selectedUpstreamGrant?.subscription ?? undefined,
+        ...(upstreamGrantForm.credential.trim() ? { credential: upstreamGrantForm.credential.trim() } : {}),
+        ...(upstreamGrantForm.accessToken.trim() ? { accessToken: upstreamGrantForm.accessToken.trim() } : {}),
+        ...(upstreamGrantForm.refreshToken.trim() ? { refreshToken: upstreamGrantForm.refreshToken.trim() } : {}),
+      };
+      const path = `/v1/admin/upstream-grants/${upstreamGrantForm.scope}/${encodeURIComponent(scopeId)}/${encodeURIComponent(tokenRef)}`;
+      setStatus("saving upstream grant");
+      let saved: UpstreamGrant;
+      if (demoMode) {
+        saved = demoGrantFromForm(upstreamGrantForm, selectedUpstreamGrant);
+        setUpstreamGrants((current) => [saved, ...current.filter((grant) => grant.key !== saved.key)]);
+      } else {
+        saved = await request<UpstreamGrant>(gatewayOrigin, path, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        await refresh();
+      }
+      setSelectedUpstreamGrantKey(saved.key);
+      setUpstreamGrantForm(upstreamGrantFormFromGrant(saved));
+      setStatus("saved upstream grant");
+    } catch (error) {
+      const message = errorMessage(error);
+      setPolicyError(message);
+      setStatus(message);
+    }
+  }
+
+  async function revokeUpstreamGrant(grant: UpstreamGrant) {
+    try {
+      setPolicyError("");
+      setStatus("revoking upstream grant");
+      let revoked: UpstreamGrant;
+      if (demoMode) {
+        revoked = { ...grant, enabled: false, usable: false, hasCredential: false, hasAccessToken: false, hasRefreshToken: false, revokedAt: new Date().toISOString() };
+        setUpstreamGrants((current) => current.map((item) => item.key === grant.key ? revoked : item));
+      } else {
+        revoked = await request<UpstreamGrant>(gatewayOrigin, `/v1/admin/upstream-grants/${grant.scope}/${encodeURIComponent(grant.scopeId)}/${encodeURIComponent(grant.tokenRef)}/revoke`, { method: "POST" });
+        await refresh();
+      }
+      setSelectedUpstreamGrantKey(revoked.key);
+      setUpstreamGrantForm(upstreamGrantFormFromGrant(revoked));
+      setStatus("revoked upstream grant");
+    } catch (error) {
+      const message = errorMessage(error);
+      setPolicyError(message);
+      setStatus(message);
+    }
+  }
+
+  async function refreshUpstreamGrant(grant: UpstreamGrant) {
+    try {
+      setPolicyError("");
+      setStatus("refreshing upstream grant");
+      if (!demoMode) {
+        const refreshed = await request<UpstreamGrant>(gatewayOrigin, `/v1/admin/upstream-grants/${grant.scope}/${encodeURIComponent(grant.scopeId)}/${encodeURIComponent(grant.tokenRef)}/refresh`, { method: "POST" });
+        await refresh();
+        setSelectedUpstreamGrantKey(refreshed.key);
+        setUpstreamGrantForm(upstreamGrantFormFromGrant(refreshed));
+      }
+      setStatus("refreshed upstream grant");
+    } catch (error) {
+      const message = errorMessage(error);
+      setPolicyError(message);
+      setStatus(message);
+    }
+  }
+
+  async function saveAssignmentRule(event: FormEvent) {
+    event.preventDefault();
+    try {
+      setPolicyError("");
+      const ruleId = assignmentRuleForm.ruleId.trim();
+      if (!/^[a-z0-9_]{4,48}$/.test(ruleId)) throw new Error("rule id must use 4-48 lowercase letters, numbers, or underscores");
+      if (!assignmentRuleForm.subject.trim()) throw new Error("rule subject is required");
+      const body = {
+        version: 1,
+        enabled: assignmentRuleForm.enabled,
+        kind: assignmentRuleForm.kind,
+        subject: assignmentRuleForm.subject.trim(),
+        groups: parseGroups(assignmentRuleForm.groups),
+        policyIds: assignmentRuleForm.policyIds,
+        priority: optionalNumber(assignmentRuleForm.priority) ?? 100,
+        revokeOnLoss: assignmentRuleForm.revokeOnLoss,
+        provenance: assignmentRuleForm.provenance.trim(),
+      };
+      setStatus("saving assignment rule");
+      let saved: AssignmentRule;
+      if (demoMode) {
+        saved = demoRuleFromForm(assignmentRuleForm);
+        setAssignmentRules((current) => [saved, ...current.filter((rule) => rule.ruleId !== saved.ruleId)]);
+      } else {
+        saved = await request<AssignmentRule>(gatewayOrigin, `/v1/admin/assignment-rules/${encodeURIComponent(ruleId)}`, {
+          method: "PUT",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        });
+        await refresh();
+      }
+      setSelectedAssignmentRuleId(saved.ruleId);
+      setAssignmentRuleForm(assignmentRuleFormFromRule(saved));
+      setStatus("saved assignment rule");
+    } catch (error) {
+      const message = errorMessage(error);
+      setPolicyError(message);
+      setStatus(message);
+    }
+  }
+
+  async function reconcileAssignments() {
+    try {
+      setPolicyError("");
+      setStatus("reconciling assignments");
+      if (!demoMode) {
+        await request<{ results: unknown[] }>(gatewayOrigin, "/v1/admin/assignment-rules/reconcile", {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ all: true }),
+        });
+        await refresh();
+      }
+      setStatus("reconciled assignments");
     } catch (error) {
       const message = errorMessage(error);
       setPolicyError(message);
@@ -980,6 +1227,27 @@ function App() {
   function editBinding(binding: PolicyBinding) {
     setSelectedBindingKey(bindingKey(binding));
     setBindingForm(bindingFormFromBinding(binding));
+  }
+
+  function editUpstreamGrant(grant: UpstreamGrant) {
+    setSelectedUpstreamGrantKey(grant.key);
+    setUpstreamGrantForm(upstreamGrantFormFromGrant(grant));
+  }
+
+  function startNewUpstreamGrant() {
+    const provider = providers[0]?.id ?? "";
+    setSelectedUpstreamGrantKey("");
+    setUpstreamGrantForm({ ...defaultUpstreamGrant, scopeId: selectedPolicyId || keys[0]?.policyId || "default", provider, tokenRef: provider });
+  }
+
+  function editAssignmentRule(rule: AssignmentRule) {
+    setSelectedAssignmentRuleId(rule.ruleId);
+    setAssignmentRuleForm(assignmentRuleFormFromRule(rule));
+  }
+
+  function startNewAssignmentRule() {
+    setSelectedAssignmentRuleId("");
+    setAssignmentRuleForm({ ...defaultAssignmentRule, policyIds: [] });
   }
 
   function applyPreset(role: keyof typeof rolePresets) {
@@ -1175,6 +1443,10 @@ function App() {
             selectedCredential={selectedCredential}
             bindings={bindings}
             selectedBinding={selectedBinding}
+            upstreamGrants={upstreamGrants}
+            selectedUpstreamGrant={selectedUpstreamGrant}
+            assignmentRules={assignmentRules}
+            selectedAssignmentRule={selectedAssignmentRule}
             providers={providers}
             form={policyForm}
             setForm={setPolicyForm}
@@ -1182,12 +1454,21 @@ function App() {
             setCredentialForm={setCredentialForm}
             bindingForm={bindingForm}
             setBindingForm={setBindingForm}
+            upstreamGrantForm={upstreamGrantForm}
+            setUpstreamGrantForm={setUpstreamGrantForm}
+            assignmentRuleForm={assignmentRuleForm}
+            setAssignmentRuleForm={setAssignmentRuleForm}
             issuedKey={issuedKey}
             error={policyError}
             onSave={savePolicy}
             onIssueCredential={issueCredential}
             onRevokeCredential={revokeCredential}
             onSaveBinding={saveBinding}
+            onSaveUpstreamGrant={saveUpstreamGrant}
+            onRevokeUpstreamGrant={revokeUpstreamGrant}
+            onRefreshUpstreamGrant={refreshUpstreamGrant}
+            onSaveAssignmentRule={saveAssignmentRule}
+            onReconcileAssignments={reconcileAssignments}
             onNew={startNewPolicy}
             onEdit={editPolicy}
             onEditCredential={(credential) => {
@@ -1200,6 +1481,10 @@ function App() {
               setSelectedBindingKey("");
               setBindingForm({ ...defaultBinding, policyId: selectedPolicyId || keys[0]?.policyId || "" });
             }}
+            onEditUpstreamGrant={editUpstreamGrant}
+            onNewUpstreamGrant={startNewUpstreamGrant}
+            onEditAssignmentRule={editAssignmentRule}
+            onNewAssignmentRule={startNewAssignmentRule}
             onRevoke={revoke}
             onPreset={applyPreset}
             onToggleProvider={togglePolicyProvider}
@@ -1455,7 +1740,7 @@ function PlaygroundScreen({ form, setForm, models, selected, serviceRoutes, sele
   );
 }
 
-function PoliciesScreen({ tab, setTab, keys, selected, credentials, selectedCredential, bindings, selectedBinding, providers, form, setForm, credentialForm, setCredentialForm, bindingForm, setBindingForm, issuedKey, error, onSave, onIssueCredential, onRevokeCredential, onSaveBinding, onNew, onEdit, onEditCredential, onEditBinding, onNewBinding, onRevoke, onPreset, onToggleProvider, onSetProviderGroup, busy }: {
+function PoliciesScreen({ tab, setTab, keys, selected, credentials, selectedCredential, bindings, selectedBinding, upstreamGrants, selectedUpstreamGrant, assignmentRules, selectedAssignmentRule, providers, form, setForm, credentialForm, setCredentialForm, bindingForm, setBindingForm, upstreamGrantForm, setUpstreamGrantForm, assignmentRuleForm, setAssignmentRuleForm, issuedKey, error, onSave, onIssueCredential, onRevokeCredential, onSaveBinding, onSaveUpstreamGrant, onRevokeUpstreamGrant, onRefreshUpstreamGrant, onSaveAssignmentRule, onReconcileAssignments, onNew, onEdit, onEditCredential, onEditBinding, onNewBinding, onEditUpstreamGrant, onNewUpstreamGrant, onEditAssignmentRule, onNewAssignmentRule, onRevoke, onPreset, onToggleProvider, onSetProviderGroup, busy }: {
   tab: AccessTab;
   setTab: (tab: AccessTab) => void;
   keys: AccessPolicy[];
@@ -1464,6 +1749,10 @@ function PoliciesScreen({ tab, setTab, keys, selected, credentials, selectedCred
   selectedCredential?: ProxyCredential;
   bindings: PolicyBinding[];
   selectedBinding?: PolicyBinding;
+  upstreamGrants: UpstreamGrant[];
+  selectedUpstreamGrant?: UpstreamGrant;
+  assignmentRules: AssignmentRule[];
+  selectedAssignmentRule?: AssignmentRule;
   providers: ProviderRow[];
   form: PolicyForm;
   setForm: (form: PolicyForm) => void;
@@ -1471,17 +1760,30 @@ function PoliciesScreen({ tab, setTab, keys, selected, credentials, selectedCred
   setCredentialForm: (form: CredentialForm) => void;
   bindingForm: BindingForm;
   setBindingForm: (form: BindingForm) => void;
+  upstreamGrantForm: UpstreamGrantForm;
+  setUpstreamGrantForm: (form: UpstreamGrantForm) => void;
+  assignmentRuleForm: AssignmentRuleForm;
+  setAssignmentRuleForm: (form: AssignmentRuleForm) => void;
   issuedKey: string;
   error: string;
   onSave: (event: FormEvent) => void;
   onIssueCredential: (event: FormEvent) => void;
   onRevokeCredential: (credentialId: string) => void;
   onSaveBinding: (event: FormEvent) => void;
+  onSaveUpstreamGrant: (event: FormEvent) => void;
+  onRevokeUpstreamGrant: (grant: UpstreamGrant) => void;
+  onRefreshUpstreamGrant: (grant: UpstreamGrant) => void;
+  onSaveAssignmentRule: (event: FormEvent) => void;
+  onReconcileAssignments: () => void;
   onNew: () => void;
   onEdit: (policy: AccessPolicy) => void;
   onEditCredential: (credential: ProxyCredential) => void;
   onEditBinding: (binding: PolicyBinding) => void;
   onNewBinding: () => void;
+  onEditUpstreamGrant: (grant: UpstreamGrant) => void;
+  onNewUpstreamGrant: () => void;
+  onEditAssignmentRule: (rule: AssignmentRule) => void;
+  onNewAssignmentRule: () => void;
   onRevoke: (policyId: string) => void;
   onPreset: (role: keyof typeof rolePresets) => void;
   onToggleProvider: (id: string) => void;
@@ -1494,10 +1796,120 @@ function PoliciesScreen({ tab, setTab, keys, selected, credentials, selectedCred
         <button type="button" role="tab" aria-selected={tab === "policies"} className={tab === "policies" ? "active" : ""} onClick={() => setTab("policies")}>Policies <span>{keys.length}</span></button>
         <button type="button" role="tab" aria-selected={tab === "credentials"} className={tab === "credentials" ? "active" : ""} onClick={() => setTab("credentials")}>Credentials <span>{credentials.length}</span></button>
         <button type="button" role="tab" aria-selected={tab === "bindings"} className={tab === "bindings" ? "active" : ""} onClick={() => setTab("bindings")}>Bindings <span>{bindings.filter((binding) => binding.enabled).length}</span></button>
+        <button type="button" role="tab" aria-selected={tab === "upstream"} className={tab === "upstream" ? "active" : ""} onClick={() => setTab("upstream")}>Upstream <span>{upstreamGrants.filter((grant) => grant.enabled).length}</span></button>
+        <button type="button" role="tab" aria-selected={tab === "assignments"} className={tab === "assignments" ? "active" : ""} onClick={() => setTab("assignments")}>Assignments <span>{assignmentRules.filter((rule) => rule.enabled).length}</span></button>
       </div>
       {tab === "policies" ? <PolicyPanel keys={keys} selected={selected} providers={providers} form={form} setForm={setForm} error={error} onSave={onSave} onNew={onNew} onEdit={onEdit} onRevoke={onRevoke} onPreset={onPreset} onToggleProvider={onToggleProvider} onSetProviderGroup={onSetProviderGroup} busy={busy} /> : null}
       {tab === "credentials" ? <CredentialPanel policies={keys} credentials={credentials} selected={selectedCredential} form={credentialForm} setForm={setCredentialForm} issuedKey={issuedKey} error={error} onIssue={onIssueCredential} onEdit={onEditCredential} onRevoke={onRevokeCredential} busy={busy} /> : null}
       {tab === "bindings" ? <BindingPanel policies={keys} bindings={bindings} selected={selectedBinding} form={bindingForm} setForm={setBindingForm} error={error} onSave={onSaveBinding} onEdit={onEditBinding} onNew={onNewBinding} busy={busy} /> : null}
+      {tab === "upstream" ? <UpstreamGrantPanel policies={keys} providers={providers} grants={upstreamGrants} selected={selectedUpstreamGrant} form={upstreamGrantForm} setForm={setUpstreamGrantForm} error={error} onSave={onSaveUpstreamGrant} onEdit={onEditUpstreamGrant} onNew={onNewUpstreamGrant} onRefresh={onRefreshUpstreamGrant} onRevoke={onRevokeUpstreamGrant} busy={busy} /> : null}
+      {tab === "assignments" ? <AssignmentRulePanel policies={keys} rules={assignmentRules} selected={selectedAssignmentRule} form={assignmentRuleForm} setForm={setAssignmentRuleForm} error={error} onSave={onSaveAssignmentRule} onEdit={onEditAssignmentRule} onNew={onNewAssignmentRule} onReconcile={onReconcileAssignments} busy={busy} /> : null}
+    </div>
+  );
+}
+
+function UpstreamGrantPanel({ policies, providers, grants, selected, form, setForm, error, onSave, onEdit, onNew, onRefresh, onRevoke, busy }: {
+  policies: AccessPolicy[];
+  providers: ProviderRow[];
+  grants: UpstreamGrant[];
+  selected?: UpstreamGrant;
+  form: UpstreamGrantForm;
+  setForm: (form: UpstreamGrantForm) => void;
+  error: string;
+  onSave: (event: FormEvent) => void;
+  onEdit: (grant: UpstreamGrant) => void;
+  onNew: () => void;
+  onRefresh: (grant: UpstreamGrant) => void;
+  onRevoke: (grant: UpstreamGrant) => void;
+  busy: boolean;
+}) {
+  const active = grants.filter((grant) => grant.enabled).length;
+  const usable = grants.filter((grant) => grant.usable).length;
+  const refreshable = grants.filter((grant) => grant.refreshConfigured && grant.hasRefreshToken).length;
+  return (
+    <div className="entityLayout">
+      <section className="mainPane">
+        <div className="overviewStrip">
+          <Metric label="active grants" value={String(active)} meta={`${grants.length} total`} />
+          <Metric label="usable" value={String(usable)} meta="ready for routing" />
+          <Metric label="refreshable" value={String(refreshable)} meta="rotatable OAuth grants" />
+        </div>
+        <div className="tableSectionHeader"><div><strong>Upstream credentials</strong><span>Policy and tenant scoped provider access</span></div><button type="button" onClick={onNew} disabled={busy}><Plus className="buttonIcon" aria-hidden="true" /><span>New grant</span></button></div>
+        <EntityTable
+          columns={["connection", "scope", "provider", "kind", "state"]}
+          columnTemplate="minmax(220px, 1.4fr) minmax(150px, 1fr) minmax(130px, .8fr) 100px 100px"
+          rows={grants.map((grant) => ({ id: grant.key, active: selected?.key === grant.key, onClick: () => onEdit(grant), cells: [<EntityName icon={ServerCog} title={grant.label || grant.tokenRef} subtitle={grant.tokenRef} />, `${grant.scope === "policies" ? "policy" : "tenant"} · ${grant.scopeId}`, grant.provider ?? "legacy", grant.kind.replace("_", " "), <Status label={grant.usable ? "usable" : grant.enabled ? "blocked" : "revoked"} tone={grant.usable ? "active" : "revoked"} />] }))}
+        />
+      </section>
+      <aside className="inspector">
+        <form onSubmit={onSave}>
+          <InspectorHeader icon={ServerCog} title={selected ? "Edit upstream grant" : "New upstream grant"} subtitle={selected?.key ?? "provider credential"} />
+          {error ? <InlineError message={error} /> : null}
+          <div className="formGrid compact">
+            <label><span>scope</span><select value={form.scope} disabled={Boolean(selected)} onChange={(event) => setForm({ ...form, scope: event.target.value as UpstreamGrantForm["scope"], scopeId: event.target.value === "policies" ? policies[0]?.policyId ?? "" : "default" })}><option value="policies">policy</option><option value="tenants">tenant</option></select></label>
+            <label><span>scope id</span>{form.scope === "policies" ? <select value={form.scopeId} disabled={Boolean(selected)} onChange={(event) => setForm({ ...form, scopeId: event.target.value })}>{policies.map((policy) => <option key={policy.policyId} value={policy.policyId}>{policy.policyId}</option>)}</select> : <input value={form.scopeId} readOnly={Boolean(selected)} onChange={(event) => setForm({ ...form, scopeId: event.target.value })} />}</label>
+            <label><span>provider</span><select value={form.provider} disabled={Boolean(selected)} onChange={(event) => setForm({ ...form, provider: event.target.value, tokenRef: !form.tokenRef || form.tokenRef === form.provider ? event.target.value : form.tokenRef })}>{providers.map((provider) => <option key={provider.id} value={provider.id}>{provider.display_name}</option>)}</select></label>
+            <label><span>kind</span><select value={form.kind} disabled={Boolean(selected)} onChange={(event) => setForm({ ...form, kind: event.target.value as UpstreamGrant["kind"], credential: "", accessToken: "", refreshToken: "" })}><option value="api_key">API key</option><option value="oauth">OAuth</option><option value="subscription">subscription</option></select></label>
+            <label className="full"><span>token reference</span><input value={form.tokenRef} readOnly={Boolean(selected)} onChange={(event) => setForm({ ...form, tokenRef: event.target.value })} /></label>
+            <label className="full"><span>label</span><input value={form.label} onChange={(event) => setForm({ ...form, label: event.target.value })} /></label>
+            {form.kind === "api_key" ? <label className="full"><span>{selected?.hasCredential ? "replace API key" : "API key"}</span><input type="password" autoComplete="off" value={form.credential} onChange={(event) => setForm({ ...form, credential: event.target.value })} /></label> : <label className="full"><span>{selected?.hasAccessToken ? "replace access token" : "access token"}</span><input type="password" autoComplete="off" value={form.accessToken} onChange={(event) => setForm({ ...form, accessToken: event.target.value })} /></label>}
+            {form.kind !== "api_key" ? <label className="full"><span>{selected?.hasRefreshToken ? "replace refresh token" : "refresh token"}</span><input type="password" autoComplete="off" value={form.refreshToken} onChange={(event) => setForm({ ...form, refreshToken: event.target.value })} /></label> : null}
+            {form.kind === "subscription" ? <label className="full"><span>account id</span><input value={form.accountId} onChange={(event) => setForm({ ...form, accountId: event.target.value })} /></label> : null}
+            <label><span>expires at</span><input value={form.expiresAt} onChange={(event) => setForm({ ...form, expiresAt: event.target.value })} placeholder="ISO-8601 or blank" /></label>
+            <label><span>state</span><select value={form.enabled ? "enabled" : "disabled"} onChange={(event) => setForm({ ...form, enabled: event.target.value === "enabled" })}><option value="enabled">enabled</option><option value="disabled">disabled</option></select></label>
+          </div>
+          <InlineNote>Secret values are write-only and never returned by ClawRouter.</InlineNote>
+          {selected ? <dl className="facts"><dt>primary secret</dt><dd>{selected.hasCredential || selected.hasAccessToken ? "stored" : "missing"}</dd><dt>refresh token</dt><dd>{selected.hasRefreshToken ? "stored" : "none"}</dd><dt>refresh config</dt><dd>{selected.refreshConfigured ? "manifest approved" : "none"}</dd><dt>state</dt><dd>{selected.usable ? "usable" : "blocked"}</dd></dl> : null}
+          <div className="inspectorActions"><button type="submit" disabled={busy || !form.scopeId || !form.tokenRef || !form.provider}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save grant</span></button>{selected?.refreshConfigured && selected.hasRefreshToken ? <button type="button" className="buttonSecondary" disabled={busy || !selected.enabled} onClick={() => onRefresh(selected)}><RefreshCw className="buttonIcon" aria-hidden="true" /><span>Refresh</span></button> : null}{selected ? <button type="button" className="buttonDanger" disabled={busy || !selected.enabled} onClick={() => onRevoke(selected)}><CircleSlash2 className="buttonIcon" aria-hidden="true" /><span>Revoke</span></button> : null}</div>
+        </form>
+      </aside>
+    </div>
+  );
+}
+
+function AssignmentRulePanel({ policies, rules, selected, form, setForm, error, onSave, onEdit, onNew, onReconcile, busy }: {
+  policies: AccessPolicy[];
+  rules: AssignmentRule[];
+  selected?: AssignmentRule;
+  form: AssignmentRuleForm;
+  setForm: (form: AssignmentRuleForm) => void;
+  error: string;
+  onSave: (event: FormEvent) => void;
+  onEdit: (rule: AssignmentRule) => void;
+  onNew: () => void;
+  onReconcile: () => void;
+  busy: boolean;
+}) {
+  return (
+    <div className="entityLayout">
+      <section className="mainPane">
+        <div className="overviewStrip">
+          <Metric label="active rules" value={String(rules.filter((rule) => rule.enabled).length)} meta={`${rules.length} total`} />
+          <Metric label="email rules" value={String(rules.filter((rule) => rule.kind.startsWith("email") || rule.kind === "exact_email").length)} meta="reconcile on first login" />
+          <Metric label="GitHub rules" value={String(rules.filter((rule) => rule.kind.startsWith("github")).length)} meta="verified evidence only" />
+        </div>
+        <div className="tableSectionHeader"><div><strong>Automatic assignments</strong><span>Identity evidence to managed group access</span></div><div className="inlineActions"><button type="button" className="buttonSecondary" onClick={onReconcile} disabled={busy}><RefreshCw className="buttonIcon" aria-hidden="true" /><span>Reconcile all</span></button><button type="button" onClick={onNew} disabled={busy}><Plus className="buttonIcon" aria-hidden="true" /><span>New rule</span></button></div></div>
+        <EntityTable columns={["rule", "match", "groups", "policies", "state"]} columnTemplate="minmax(180px, 1fr) minmax(220px, 1.4fr) 90px 90px 100px" rows={rules.map((rule) => ({ id: rule.ruleId, active: selected?.ruleId === rule.ruleId, onClick: () => onEdit(rule), cells: [<EntityName icon={Users} title={rule.ruleId} subtitle={rule.provenance} />, `${rule.kind.replaceAll("_", " ")} · ${rule.subject}`, String(rule.groups.length), String(rule.policyIds.length), <Status label={rule.enabled ? "active" : "disabled"} tone={rule.enabled ? "active" : "revoked"} />] }))} />
+      </section>
+      <aside className="inspector">
+        <form onSubmit={onSave}>
+          <InspectorHeader icon={Users} title={selected ? "Edit assignment rule" : "New assignment rule"} subtitle={selected?.generatedGroup ?? "managed identity access"} />
+          {error ? <InlineError message={error} /> : null}
+          <div className="formGrid compact">
+            <label className="full"><span>rule id</span><input value={form.ruleId} readOnly={Boolean(selected)} onChange={(event) => setForm({ ...form, ruleId: event.target.value })} /></label>
+            <label><span>match kind</span><select value={form.kind} onChange={(event) => setForm({ ...form, kind: event.target.value as AssignmentRule["kind"] })}><option value="exact_email">exact email</option><option value="email_domain">email domain</option><option value="github_org">GitHub organization</option><option value="github_team">GitHub team</option></select></label>
+            <label><span>priority</span><input inputMode="numeric" value={form.priority} onChange={(event) => setForm({ ...form, priority: event.target.value })} /></label>
+            <label className="full"><span>subject</span><input value={form.subject} onChange={(event) => setForm({ ...form, subject: event.target.value })} placeholder={form.kind === "exact_email" ? "user@example.com" : form.kind === "email_domain" ? "example.com" : form.kind === "github_team" ? "org/team" : "organization"} /></label>
+            <label className="full"><span>groups</span><input value={form.groups} onChange={(event) => setForm({ ...form, groups: event.target.value })} placeholder="maintainers, docs" /></label>
+            <label className="full"><span>provenance</span><input value={form.provenance} onChange={(event) => setForm({ ...form, provenance: event.target.value })} /></label>
+            <label><span>state</span><select value={form.enabled ? "enabled" : "disabled"} onChange={(event) => setForm({ ...form, enabled: event.target.value === "enabled" })}><option value="enabled">enabled</option><option value="disabled">disabled</option></select></label>
+            <label className="checkLabel"><input type="checkbox" checked={form.revokeOnLoss} onChange={(event) => setForm({ ...form, revokeOnLoss: event.target.checked })} /><span>revoke on loss</span></label>
+          </div>
+          <div className="sectionTitle">Managed policies</div>
+          <div className="serviceMatrix">{policies.map((policy) => <label key={policy.policyId}><input type="checkbox" checked={form.policyIds.includes(policy.policyId)} onChange={() => setForm({ ...form, policyIds: form.policyIds.includes(policy.policyId) ? form.policyIds.filter((id) => id !== policy.policyId) : [...form.policyIds, policy.policyId].sort() })} /><span>{policy.policyId}</span><small>{policy.providers.length ? `${policy.providers.length} services` : "all services"}</small></label>)}</div>
+          <div className="inspectorActions"><button type="submit" disabled={busy || !form.ruleId || !form.subject.trim() || !form.provenance.trim()}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save rule</span></button></div>
+        </form>
+      </aside>
     </div>
   );
 }
@@ -2021,6 +2433,90 @@ async function sha256Hex(value: string) {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
+function upstreamGrantFormFromGrant(grant: UpstreamGrant): UpstreamGrantForm {
+  return {
+    scope: grant.scope,
+    scopeId: grant.scopeId,
+    tokenRef: grant.tokenRef,
+    kind: grant.kind,
+    provider: grant.provider ?? "",
+    label: grant.label ?? "",
+    enabled: grant.enabled,
+    credential: "",
+    accessToken: "",
+    refreshToken: "",
+    accountId: grant.accountId ?? "",
+    expiresAt: grant.expiresAt ?? "",
+  };
+}
+
+function assignmentRuleFormFromRule(rule: AssignmentRule): AssignmentRuleForm {
+  return {
+    ruleId: rule.ruleId,
+    enabled: rule.enabled,
+    kind: rule.kind,
+    subject: rule.subject,
+    groups: rule.groups.join(", "),
+    policyIds: rule.policyIds,
+    priority: String(rule.priority),
+    revokeOnLoss: rule.revokeOnLoss,
+    provenance: rule.provenance,
+  };
+}
+
+function demoGrantFromForm(form: UpstreamGrantForm, existing?: UpstreamGrant): UpstreamGrant {
+  const key = form.scope === "tenants"
+    ? `oauth/tenants/${form.scopeId.trim()}/${form.tokenRef.trim()}`
+    : `oauth/${form.scopeId.trim()}/${form.tokenRef.trim()}`;
+  const now = new Date().toISOString();
+  const hasCredential = Boolean(form.credential.trim()) || Boolean(existing?.hasCredential);
+  const hasAccessToken = Boolean(form.accessToken.trim()) || Boolean(existing?.hasAccessToken);
+  const hasRefreshToken = Boolean(form.refreshToken.trim()) || Boolean(existing?.hasRefreshToken);
+  return {
+    key,
+    scope: form.scope,
+    scopeId: form.scopeId.trim(),
+    tokenRef: form.tokenRef.trim(),
+    version: 1,
+    enabled: form.enabled,
+    kind: form.kind,
+    provider: form.provider.trim(),
+    label: form.label.trim() || null,
+    tokenType: existing?.tokenType ?? "Bearer",
+    expiresAt: form.expiresAt.trim() || null,
+    scopes: existing?.scopes ?? [],
+    accountId: form.accountId.trim() || null,
+    subscription: existing?.subscription ?? null,
+    createdAt: existing?.createdAt ?? now,
+    updatedAt: now,
+    revokedAt: form.enabled ? null : now,
+    hasCredential,
+    hasAccessToken,
+    hasRefreshToken,
+    refreshConfigured: existing?.refreshConfigured ?? hasRefreshToken,
+    usable: form.enabled && (form.kind === "api_key" ? hasCredential : hasAccessToken || form.kind === "subscription" && hasCredential),
+  };
+}
+
+function demoRuleFromForm(form: AssignmentRuleForm): AssignmentRule {
+  const now = new Date().toISOString();
+  return {
+    ruleId: form.ruleId.trim(),
+    version: 1,
+    enabled: form.enabled,
+    kind: form.kind,
+    subject: form.subject.trim().toLowerCase(),
+    groups: parseGroups(form.groups),
+    policyIds: [...form.policyIds].sort(),
+    priority: optionalNumber(form.priority) ?? 100,
+    revokeOnLoss: form.revokeOnLoss,
+    provenance: form.provenance.trim(),
+    generatedGroup: `assignment.${form.ruleId.trim()}`,
+    createdAt: now,
+    updatedAt: now,
+  };
+}
+
 function formatBudget(value: number | null | undefined) {
   if (value === undefined || value === null) return "unlimited";
   if (value === 0) return "blocked";
@@ -2347,6 +2843,13 @@ function demoData() {
     { credentialId: "research_notebook", policyId: "user_research", enabled: false },
   ];
   const connections: ProviderConnection[] = providers.map((item) => ({ providerId: item.id, enabled: !demoDisabledProviderIds.has(item.id) }));
+  const upstreamGrants: UpstreamGrant[] = [
+    { key: "oauth/maintainer_models/openai", scope: "policies", scopeId: "maintainer_models", tokenRef: "openai", version: 1, enabled: true, kind: "subscription", provider: "openai", label: "maintainer subscription", tokenType: "Bearer", scopes: ["openid", "profile"], accountId: "acct_demo", subscription: { plan: "plus" }, createdAt: "2026-06-16T00:00:00.000Z", updatedAt: "2026-06-16T00:00:00.000Z", hasCredential: false, hasAccessToken: true, hasRefreshToken: true, refreshConfigured: true, usable: true },
+    { key: "oauth/tenants/openclaw/anthropic", scope: "tenants", scopeId: "openclaw", tokenRef: "anthropic", version: 1, enabled: true, kind: "api_key", provider: "anthropic", label: "shared Anthropic key", tokenType: "Bearer", scopes: [], createdAt: "2026-06-16T00:00:00.000Z", updatedAt: "2026-06-16T00:00:00.000Z", hasCredential: true, hasAccessToken: false, hasRefreshToken: false, refreshConfigured: false, usable: true },
+  ];
+  const assignmentRules: AssignmentRule[] = [
+    { ruleId: "maintainers", version: 1, enabled: true, kind: "email_domain", subject: "example.com", groups: ["maintainers"], policyIds: ["maintainer_models", "openclaw_tools"], priority: 10, revokeOnLoss: true, provenance: "cloudflare_access", generatedGroup: "assignment.maintainers", createdAt: "2026-06-16T00:00:00.000Z", updatedAt: "2026-06-16T00:00:00.000Z" },
+  ];
   const users: AccessUser[] = [
     { email: "admin@example.com", role: "admin", tenantId: "openclaw", enabled: true, groups: ["maintainers"] },
     { email: "maintainer@example.com", role: "user", tenantId: "docs", enabled: true, groups: ["maintainers"] },
@@ -2380,7 +2883,7 @@ function demoData() {
   const usage = demoUsageSnapshot();
   const tenants = tenantSummaryFallback(keys, credentials);
   const overview = adminOverviewFromPolicies(keys, credentials, providers, routes);
-  return { session, providers, routes, keys, credentials, connections, users, bindings, overview, tenants, usageRows, usage, entitlements, services: serviceItems(providers, routes, readinessByProvider, accessByProvider), models };
+  return { session, providers, routes, keys, credentials, connections, upstreamGrants, assignmentRules, users, bindings, overview, tenants, usageRows, usage, entitlements, services: serviceItems(providers, routes, readinessByProvider, accessByProvider), models };
 }
 
 function demoReadiness(provider: ProviderRow, routes: RouteCatalog): ProviderReadiness {
@@ -2403,6 +2906,7 @@ function demoReadiness(provider: ProviderRow, routes: RouteCatalog): ProviderRea
     connectionEnabled,
     oauthGrantRequired: grantRequired,
     oauthGrantCount: 0,
+    upstreamGrantCount: 0,
     openaiCompatible: Boolean(openaiRoute),
     manifestRoutes: manifestRoutes.length,
     modelCount: openaiRoute?.models.length ?? 0,
