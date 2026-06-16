@@ -2,7 +2,7 @@
 
 ClawRouter is a high-throughput API gateway and provider router for OpenClaw services.
 
-It brokers proxy keys, service identities, provider credentials, OAuth grants, budgets, and metered usage across model providers, search APIs, tool APIs, and future service providers.
+It brokers proxy keys, service identities, versioned upstream grants, budgets, and metered usage across model providers, search APIs, tool APIs, and future service providers.
 
 Current implementation target:
 
@@ -12,8 +12,8 @@ Current implementation target:
 - TypeScript admin/control UI
 - declarative service provider manifests
 - OpenClaw-native `clawrouter-` key routing
-- Cloudflare KV-backed migration and compatibility records, OAuth grants, and
-  provider health
+- Cloudflare KV-backed migration and compatibility records, version 1
+  API-key/OAuth/subscription grants, and provider health
 
 ## Provider Registry
 
@@ -94,11 +94,14 @@ The Worker currently exposes:
 - `GET /v1/entitlements`
 - `GET /v1/me`
 - `GET /v1/usage`
+- `GET /v1/models`
+- `GET /v1/catalog`
 - `GET /v1/key/inspect`
 - `POST /v1/chat/completions`
 - `POST /v1/responses`
 - `POST /v1/embeddings`
 - `POST /v1/proxy/<provider>/<endpoint>`
+- `<METHOD> /v1/native/<provider>/<provider-native-path>`
 - `GET /v1/admin/overview`
 - `GET /v1/admin/tenants`
 - `GET /v1/admin/usage`
@@ -109,14 +112,18 @@ The Worker currently exposes:
 - `GET /v1/admin/policy-bindings`
 - `GET /v1/admin/provider-status`
 - `GET /v1/admin/provider-health`
+- `GET /v1/admin/upstream-grants`
 - `PUT /v1/admin/access-users/<email>`
 - `PUT /v1/admin/access-user-grants/<email>`
 - `PUT /v1/admin/policy-bindings`
 - `PUT /v1/admin/policies/<policy-id>`
 - `PUT /v1/admin/credentials/<credential-id>`
 - `PUT /v1/admin/connections/<provider-id>`
+- `PUT /v1/admin/upstream-grants/<policies|tenants>/<scope-id>/<token-ref>`
 - `POST /v1/admin/policies/<policy-id>/revoke`
 - `POST /v1/admin/credentials/<credential-id>/revoke`
+- `POST /v1/admin/upstream-grants/<policies|tenants>/<scope-id>/<token-ref>/revoke`
+- `POST /v1/admin/upstream-grants/<policies|tenants>/<scope-id>/<token-ref>/refresh`
 
 Legacy `GET|PUT /v1/admin/keys...`, `POST /v1/admin/keys/<kid>/revoke`, and
 `GET /v1/admin/users` remain compatibility aliases during migration. New
@@ -160,6 +167,13 @@ migration only when they are genuine pre-migration records. Generation-bearing
 compatibility records stay disabled and are never authorization fallback. See
 `docs/deploy-cloudflare.md` for Cloudflare provisioning, deployment, key
 registration, and smoke commands.
+
+The legacy-named `pnpm cf:oauth:put` and `pnpm cf:oauth:revoke` helpers write
+canonical version 1 upstream-grant records for `api_key`, `oauth`, and
+`subscription` connections. They accept access tokens, refresh tokens, and
+credentials only through stdin, environment variables, or files, never argv.
+Revocation retains grant metadata in a disabled tombstone while removing
+secrets. See `docs/deploy-cloudflare.md` for the complete operator flow.
 
 Admin endpoints accept a verified Cloudflare Access admin session or
 `Authorization: Bearer <admin-token>` against `CLAWROUTER_ADMIN_TOKEN_SHA256`.

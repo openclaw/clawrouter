@@ -339,14 +339,18 @@ GET /v1/admin/access-users
 GET /v1/admin/policy-bindings
 GET /v1/admin/provider-status
 GET /v1/admin/provider-health
+GET /v1/admin/upstream-grants
 PUT /v1/admin/access-users/<email>
 PUT /v1/admin/access-user-grants/<email>
 PUT /v1/admin/policy-bindings
 PUT /v1/admin/policies/<policy-id>
 PUT /v1/admin/credentials/<credential-id>
 PUT /v1/admin/connections/<provider-id>
+PUT /v1/admin/upstream-grants/<policies|tenants>/<scope-id>/<token-ref>
 POST /v1/admin/policies/<policy-id>/revoke
 POST /v1/admin/credentials/<credential-id>/revoke
+POST /v1/admin/upstream-grants/<policies|tenants>/<scope-id>/<token-ref>/revoke
+POST /v1/admin/upstream-grants/<policies|tenants>/<scope-id>/<token-ref>/refresh
 ```
 
 Policies, credentials, and provider connections are separate control-plane
@@ -466,39 +470,95 @@ accepted request. If `requestCostMicros` is omitted, ClawRouter charges one
 micro unit per request so budget enforcement still works for keys with a
 monthly budget.
 
-## OAuth Grants
+## Upstream Grants
 
-OAuth-backed providers read access tokens from `POLICY_KV`. Register a grant
-for one access policy:
+The compatibility `cf:oauth:*` helpers manage version 1 upstream grants in
+`POLICY_KV`. Despite their legacy names, the helpers support `api_key`, `oauth`,
+and `subscription` grants. Register an OAuth grant for one access policy:
 
 ```sh
 printf '%s' "$PROVIDER_ACCESS_TOKEN" | pnpm cf:oauth:put -- \
   --kid svc_docs \
-  --token-ref oauth.provider.access_token \
+  --token-ref openai \
+  --kind oauth \
+  --provider openai \
+  --label "maintainer OAuth" \
   --access-token-stdin
 ```
 
-Tenant-wide grants are also supported:
+Register a tenant-wide API-key grant:
 
 ```sh
 pnpm cf:oauth:put -- \
   --tenant default \
-  --token-ref oauth.provider.access_token \
-  --access-token-env PROVIDER_ACCESS_TOKEN
+  --token-ref anthropic \
+  --kind api_key \
+  --provider anthropic \
+  --label "primary API key" \
+  --credential-env ANTHROPIC_API_KEY
 ```
 
 This stores a grant at `oauth/<policy-id>/<tokenRef>` or
-`oauth/tenants/<tenant>/<tokenRef>`. Active grant records contain `enabled`,
-`accessToken`, and `tokenType`; the token is never printed by the helper.
+`oauth/tenants/<tenant>/<tokenRef>`. Canonical records contain `version: 1`,
+`enabled`, `kind`, `provider`, `label`, `tokenType`, `scopes`, timestamps, and
+the selected primary secret field. `api_key` grants require `credential`,
+`oauth` grants require `accessToken`, and `subscription` grants accept either.
+Use the provider id as `tokenRef` for the provider's default connection.
+Provider manifests may declare a different explicit token reference when a
+provider needs multiple named connection contracts.
+
+Secrets are never accepted in argv. Supply `accessToken`, `credential`, and an
+optional `refreshToken` only through the matching `--*-stdin`, `--*-env`, or
+`--*-file` option. Only one secret can use stdin in a single invocation. Other
+optional metadata flags are:
+
+- `--token-type`, `--expires-at`, `--scopes`, and `--account-id`
+- `--subscription-plan` and `--subscription-subject`
+- `--refresh-token-url`, `--refresh-client-id` or `--refresh-client-id-config`,
+  `--refresh-client-secret-config`, and `--refresh-extra-params-json`
+
+When a provider manifest declares standard refresh configuration, ClawRouter
+uses that manifest-approved configuration automatically. Explicit refresh flags
+are only for matching custom provider manifests. Refresh extra parameters must
+be non-secret string metadata. Store client secrets in Worker configuration and
+pass only the configuration binding name with
+`--refresh-client-secret-config`.
+
+For example, add refresh and subscription metadata without exposing either
+token in argv:
+
+```sh
+pnpm cf:oauth:put -- \
+  --kid svc_docs \
+  --token-ref openai \
+  --kind subscription \
+  --provider openai \
+  --label "maintainer subscription" \
+  --access-token-env PROVIDER_ACCESS_TOKEN \
+  --refresh-token-file .secrets/provider-refresh-token \
+  --expires-at 2026-06-16T12:00:00Z \
+  --scopes openid,profile \
+  --subscription-plan plus \
+  --subscription-subject "$PROVIDER_ACCOUNT_ID" \
+  --account-id "$PROVIDER_ACCOUNT_ID"
+```
+
+The bundled OpenAI manifest maps `subscription` grants to the ChatGPT Codex
+transport, injects the required account metadata, and refreshes through the
+manifest-declared OpenAI OAuth endpoint. OpenAI API-key grants continue to use
+the normal OpenAI Platform transport.
 
 Revoke a grant without deleting audit history:
 
 ```sh
-pnpm cf:oauth:revoke -- --kid svc_docs --token-ref oauth.provider.access_token
+pnpm cf:oauth:revoke -- --kid svc_docs --token-ref openai
 ```
 
-Revocation overwrites the grant with a disabled tombstone and removes the stored
-access token.
+Revocation overwrites the grant with a canonical disabled tombstone. It retains
+the grant's metadata and timestamps, adds `revokedAt`, and recursively removes
+stored access tokens, refresh tokens, credentials, and other recognized secret
+fields. When revoking a raw legacy token, pass `--kind`, `--provider`, and
+`--label` to attach identifying metadata to its tombstone.
 
 ## Proxy Routes
 
