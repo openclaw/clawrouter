@@ -114,6 +114,23 @@ test("smoke key inspection distinguishes unavailable current deployments", async
   );
 });
 
+test("smoke key inspection bounds requests and treats timeouts as unavailable", async () => {
+  await assert.rejects(
+    inspectSmokeKeyProviderAccess({
+      baseUrl: "https://clawrouter.example",
+      smokeKey: "smoke-key",
+      liveProviders: ["openai"],
+      timeoutMs: 1,
+      fetchImpl: async (_url, init) =>
+        new Promise((_resolve, reject) => {
+          assert.equal(init.signal instanceof AbortSignal, true);
+          init.signal.addEventListener("abort", () => reject(init.signal.reason), { once: true });
+        }),
+    }),
+    SmokeKeyInspectionUnavailableError,
+  );
+});
+
 test("smoke key inspection treats missing policy authority as unavailable", async () => {
   await assert.rejects(
     inspectSmokeKeyProviderAccess({

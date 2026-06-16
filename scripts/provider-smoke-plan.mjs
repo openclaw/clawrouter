@@ -110,12 +110,14 @@ export async function inspectSmokeKeyProviderAccess({
   smokeKey,
   liveProviders,
   fetchImpl = fetch,
+  timeoutMs = 10_000,
 }) {
   let response;
   try {
     response = await fetchImpl(`${baseUrl.replace(/\/$/, "")}/v1/key/inspect`, {
       headers: { authorization: `Bearer ${smokeKey}` },
       redirect: "manual",
+      signal: AbortSignal.timeout(timeoutMs),
     });
   } catch (error) {
     throw new SmokeKeyInspectionUnavailableError(
