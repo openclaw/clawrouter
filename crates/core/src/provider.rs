@@ -199,10 +199,16 @@ pub struct Endpoint {
     pub path: String,
     #[serde(default = "default_post")]
     pub method: String,
+    #[serde(rename = "nativeProxy", default = "default_true")]
+    pub native_proxy: bool,
     #[serde(default)]
     pub auth: Option<String>,
     #[serde(default)]
     pub headers: BTreeMap<String, String>,
+    #[serde(rename = "requestHeaders", default)]
+    pub request_headers: Vec<String>,
+    #[serde(rename = "responseHeaders", default)]
+    pub response_headers: Vec<String>,
     #[serde(default)]
     pub query: BTreeMap<String, String>,
     #[serde(rename = "pathParams", default)]
@@ -323,8 +329,11 @@ pub struct CompiledEndpoint {
     pub method: String,
     pub methods: Vec<String>,
     pub path: String,
+    pub native_proxy: bool,
     pub auth: Option<String>,
     pub headers: BTreeMap<String, String>,
+    pub request_headers: Vec<String>,
+    pub response_headers: Vec<String>,
     pub query: BTreeMap<String, String>,
     pub path_params: Vec<String>,
     pub path_param_styles: BTreeMap<String, PathParamStyle>,
@@ -541,8 +550,11 @@ pub fn compile_provider_snapshot(
                     .filter(|methods: &Vec<String>| !methods.is_empty())
                     .unwrap_or_else(|| vec![endpoint.method.clone()]),
                 path: endpoint.path.clone(),
+                native_proxy: endpoint.native_proxy,
                 auth: endpoint.auth.clone(),
                 headers: endpoint.headers.clone(),
+                request_headers: endpoint.request_headers.clone(),
+                response_headers: endpoint.response_headers.clone(),
                 query: endpoint.query.clone(),
                 path_params: endpoint.path_params.clone(),
                 path_param_styles: endpoint.path_param_styles.clone(),
@@ -606,6 +618,10 @@ pub fn compile_provider_snapshot(
 
 fn default_post() -> String {
     "POST".to_string()
+}
+
+fn default_true() -> bool {
+    true
 }
 
 fn auth_scheme_id(scheme: &AuthScheme) -> String {
@@ -722,6 +738,7 @@ billing:
             vec!["GET", "POST"]
         );
         assert_eq!(snapshot.providers[0].endpoints[0].timeout_ms, Some(120000));
+        assert!(snapshot.providers[0].endpoints[0].native_proxy);
         assert_eq!(
             snapshot.providers[0].routing.model_prefixes,
             vec!["tavily/"]
@@ -929,5 +946,41 @@ endpoints:
         .unwrap();
         let error = validate_provider_manifest(&manifest).unwrap_err();
         assert!(matches!(error, ProviderError::MissingPathParam { .. }));
+    }
+
+    #[test]
+    fn compiles_native_proxy_header_contract() {
+        let manifest: ProviderManifest = serde_yaml::from_str(
+            r#"
+schema: clawrouter.service-provider.v1
+id: native-contract
+displayName: Native Contract
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://example.com
+capabilities:
+  - id: llm.responses
+    endpoint: responses
+endpoints:
+  responses:
+    path: /v1/responses
+    nativeProxy: false
+    requestHeaders: [OpenAI-Organization]
+    responseHeaders: [request-id]
+    requestFormat: openai.responses
+    responseFormat: openai.responses
+"#,
+        )
+        .unwrap();
+        let snapshot = compile_provider_snapshot(&[manifest]).unwrap();
+        let endpoint = &snapshot.providers[0].endpoints[0];
+        assert!(!endpoint.native_proxy);
+        assert_eq!(endpoint.request_headers, vec!["OpenAI-Organization"]);
+        assert_eq!(endpoint.response_headers, vec!["request-id"]);
     }
 }

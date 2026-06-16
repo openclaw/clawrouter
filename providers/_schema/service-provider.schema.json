@@ -218,8 +218,11 @@
       "properties": {
         "path": { "type": "string", "pattern": "^/" },
         "method": { "type": "string" },
+        "nativeProxy": { "type": "boolean" },
         "auth": { "type": "string" },
         "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+        "requestHeaders": { "type": "array", "items": { "type": "string" } },
+        "responseHeaders": { "type": "array", "items": { "type": "string" } },
         "query": { "type": "object", "additionalProperties": { "type": "string" } },
         "pathParams": { "type": "array", "items": { "type": "string" } },
         "pathParamStyles": {
