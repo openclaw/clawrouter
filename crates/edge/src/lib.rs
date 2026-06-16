@@ -594,22 +594,21 @@ async fn proxy_openai_compatible(
             return audit.failure_response(response).await;
         }
     };
-    let transport_path =
-        match grant_transport_endpoint_path(route.provider, endpoint, grant.as_ref()) {
-            Ok(value) => value,
-            Err(HeaderBuildError::Client {
-                code,
-                message,
-                status,
-            }) => {
-                let response = json_error(code, message, status)?;
-                return audit.failure_response(response).await;
-            }
-            Err(HeaderBuildError::Runtime(error)) => {
-                let response = provider_runtime_error_response(error)?;
-                return audit.failure_response(response).await;
-            }
-        };
+    let (grant, transport_path) = match endpoint_upstream_grant(route.provider, endpoint, grant) {
+        Ok(value) => value,
+        Err(HeaderBuildError::Client {
+            code,
+            message,
+            status,
+        }) => {
+            let response = json_error(code, message, status)?;
+            return audit.failure_response(response).await;
+        }
+        Err(HeaderBuildError::Runtime(error)) => {
+            let response = provider_runtime_error_response(error)?;
+            return audit.failure_response(response).await;
+        }
+    };
     let query_auth = match query_api_key_for_grant(route.provider, &env, grant.as_ref()) {
         Ok(value) => value,
         Err(HeaderBuildError::Client {
@@ -910,7 +909,7 @@ async fn proxy_manifest_endpoint(
             return audit.failure_response(response).await;
         }
     };
-    let transport_path = match grant_transport_endpoint_path(provider, endpoint, grant.as_ref()) {
+    let (grant, transport_path) = match endpoint_upstream_grant(provider, endpoint, grant) {
         Ok(value) => value,
         Err(HeaderBuildError::Client {
             code,
@@ -1167,7 +1166,7 @@ async fn proxy_native_provider(
             return audit.failure_response(response).await;
         }
     };
-    let transport_path = match grant_transport_endpoint_path(provider, endpoint, grant.as_ref()) {
+    let (grant, transport_path) = match endpoint_upstream_grant(provider, endpoint, grant) {
         Ok(value) => value,
         Err(HeaderBuildError::Client {
             code,
@@ -1394,10 +1393,6 @@ fn native_upstream_url(
         base.trim_end_matches('/'),
         transport_path.unwrap_or(&native_path)
     );
-    if let Some(query) = incoming_query.filter(|query| !query.is_empty()) {
-        url.push('?');
-        url.push_str(query);
-    }
     let mut injected = resolved_template_map(provider, &endpoint.query, Some(env))?;
     for (name, value) in resolved_template_map(provider, &provider.adapter.inject_query, Some(env))?
     {
@@ -1406,7 +1401,7 @@ fn native_upstream_url(
     if let Some((param, secret)) = query_auth {
         injected.insert(param, secret);
     }
-    append_query(&mut url, injected);
+    append_native_query(&mut url, incoming_query, injected)?;
     Ok(url)
 }
 
@@ -8409,24 +8404,28 @@ fn provider_upstream_base_url<'a>(
         })
 }
 
-fn grant_transport_endpoint_path(
+fn endpoint_upstream_grant(
     provider: &CompiledProvider,
     endpoint: &CompiledEndpoint,
-    grant: Option<&UpstreamGrantRecord>,
-) -> std::result::Result<Option<String>, HeaderBuildError> {
-    let Some(transport) = grant_transport(provider, grant) else {
-        return Ok(None);
+    grant: Option<UpstreamGrantRecord>,
+) -> std::result::Result<(Option<UpstreamGrantRecord>, Option<String>), HeaderBuildError> {
+    let Some(grant) = grant else {
+        return Ok((None, None));
     };
-    transport
-        .endpoint_paths
-        .get(&endpoint.id)
-        .cloned()
-        .map(Some)
-        .ok_or(HeaderBuildError::Client {
+    let Some(transport) = grant_transport(provider, Some(&grant)) else {
+        return Ok((Some(grant), None));
+    };
+    let Some(path) = transport.endpoint_paths.get(&endpoint.id).cloned() else {
+        if !provider_requires_oauth(provider) {
+            return Ok((None, None));
+        }
+        return Err(HeaderBuildError::Client {
             code: "upstream_grant_transport_unsupported",
             message: "upstream grant transport does not support this provider endpoint",
             status: 409,
-        })
+        });
+    };
+    Ok((Some(grant), Some(path)))
 }
 
 fn apply_grant_transport_headers(
@@ -12245,6 +12244,36 @@ fn append_query(url: &mut String, query: BTreeMap<String, String>) {
     url.push_str(&pairs);
 }
 
+fn append_native_query(
+    url: &mut String,
+    incoming_query: Option<&str>,
+    injected: BTreeMap<String, String>,
+) -> Result<()> {
+    if let Some(incoming_query) = incoming_query.filter(|query| !query.is_empty()) {
+        let mut parsed = Url::parse("https://clawrouter.invalid/")
+            .map_err(|error| Error::RustError(format!("failed to parse native query: {error}")))?;
+        parsed.set_query(Some(incoming_query));
+        let forwarded = parsed
+            .query_pairs()
+            .filter(|(name, _)| !injected.contains_key(name.as_ref()))
+            .map(|(name, value)| {
+                format!(
+                    "{}={}",
+                    encode_component(name.as_ref()),
+                    encode_component(value.as_ref())
+                )
+            })
+            .collect::<Vec<_>>()
+            .join("&");
+        if !forwarded.is_empty() {
+            url.push(if url.contains('?') { '&' } else { '?' });
+            url.push_str(&forwarded);
+        }
+    }
+    append_query(url, injected);
+    Ok(())
+}
+
 fn template_placeholders(template: &str) -> Vec<String> {
     let mut params = Vec::new();
     let mut rest = template;
@@ -14361,17 +14390,14 @@ mod tests {
             provider_upstream_base_url(provider, Some(&grant)).unwrap(),
             "https://chatgpt.com/backend-api/codex"
         );
-        assert_eq!(
-            grant_transport_endpoint_path(provider, responses, Some(&grant)).unwrap(),
-            Some("/responses".to_string())
-        );
-        assert!(matches!(
-            grant_transport_endpoint_path(provider, chat, Some(&grant)),
-            Err(HeaderBuildError::Client {
-                code: "upstream_grant_transport_unsupported",
-                ..
-            })
-        ));
+        let (responses_grant, responses_path) =
+            endpoint_upstream_grant(provider, responses, Some(grant.clone())).unwrap();
+        assert!(responses_grant.is_some());
+        assert_eq!(responses_path, Some("/responses".to_string()));
+        let (chat_grant, chat_path) =
+            endpoint_upstream_grant(provider, chat, Some(grant.clone())).unwrap();
+        assert!(chat_grant.is_none());
+        assert!(chat_path.is_none());
         assert_eq!(
             resolve_grant_template("${grant.accountId}", &grant).unwrap(),
             "acct_test"
@@ -14603,13 +14629,21 @@ mod tests {
     }
 
     #[test]
-    fn native_query_injection_preserves_the_client_query() {
-        let mut url = "https://example.com/v1/models?alt=sse".to_string();
-        append_query(
+    fn native_query_injection_preserves_unowned_duplicates_and_overrides_controlled_values() {
+        let mut url = "https://example.com/v1/models".to_string();
+        append_native_query(
             &mut url,
-            BTreeMap::from([("key".to_string(), "secret".to_string())]),
+            Some("tag=one&api-version=caller&tag=two"),
+            BTreeMap::from([
+                ("api-version".to_string(), "configured".to_string()),
+                ("key".to_string(), "secret".to_string()),
+            ]),
+        )
+        .unwrap();
+        assert_eq!(
+            url,
+            "https://example.com/v1/models?tag=one&tag=two&api-version=configured&key=secret"
         );
-        assert_eq!(url, "https://example.com/v1/models?alt=sse&key=secret");
     }
 
     #[test]
