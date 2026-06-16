@@ -531,6 +531,14 @@ pub fn validate_provider_manifest(manifest: &ProviderManifest) -> Result<(), Pro
                     .iter()
                     .any(|scope| scope.trim().is_empty())
                 || authorization
+                    .extra_authorize_params
+                    .keys()
+                    .any(|name| oauth_authorize_reserved_param(name))
+                || authorization
+                    .extra_token_params
+                    .keys()
+                    .any(|name| oauth_token_reserved_param(name))
+                || authorization
                     .account_id_json_pointer
                     .as_deref()
                     .is_some_and(|pointer| !pointer.starts_with('/'))
@@ -769,6 +777,26 @@ fn default_true() -> bool {
 
 fn default_oauth_grant_kind() -> String {
     "oauth".to_string()
+}
+
+fn oauth_authorize_reserved_param(name: &str) -> bool {
+    matches!(
+        name,
+        "response_type"
+            | "client_id"
+            | "redirect_uri"
+            | "scope"
+            | "code_challenge"
+            | "code_challenge_method"
+            | "state"
+    )
+}
+
+fn oauth_token_reserved_param(name: &str) -> bool {
+    matches!(
+        name,
+        "grant_type" | "client_id" | "client_secret" | "code" | "code_verifier" | "redirect_uri"
+    )
 }
 
 fn auth_scheme_id(scheme: &AuthScheme) -> String {
@@ -1127,6 +1155,42 @@ endpoints:
         assert!(matches!(
             validate_provider_manifest(&invalid_refresh),
             Err(ProviderError::InvalidAuthRefresh { .. })
+        ));
+
+        let invalid_authorization: ProviderManifest = serde_yaml::from_str(
+            r#"
+schema: clawrouter.service-provider.v1
+id: bad-authorization
+displayName: Bad Authorization
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+  authorization:
+    authorizeUrl: https://example.com/oauth/authorize
+    tokenUrl: https://example.com/oauth/token
+    clientId: public-client
+    scopes: [openid]
+    extraAuthorizeParams:
+      state: attacker-controlled
+baseUrls:
+  default: https://example.com
+capabilities:
+  - id: llm.responses
+    endpoint: responses
+endpoints:
+  responses:
+    path: /v1/responses
+    requestFormat: openai.responses
+    responseFormat: openai.responses
+"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            validate_provider_manifest(&invalid_authorization),
+            Err(ProviderError::InvalidAuthAuthorization { .. })
         ));
 
         let invalid_transport: ProviderManifest = serde_yaml::from_str(

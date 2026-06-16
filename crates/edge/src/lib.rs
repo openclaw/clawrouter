@@ -1,6 +1,6 @@
 use clawrouter_core::{
-    parse_proxy_key, AuthScheme, CompiledEndpoint, CompiledProvider, GrantTransportConfig,
-    PathParamStyle, ProviderClass, ProviderSnapshot, UsageEvent, UsageStatus,
+    parse_proxy_key, AuthAuthorizationConfig, AuthScheme, CompiledEndpoint, CompiledProvider,
+    GrantTransportConfig, PathParamStyle, ProviderClass, ProviderSnapshot, UsageEvent, UsageStatus,
 };
 use futures_util::future::try_join_all;
 use hmac::{Hmac, Mac};
@@ -25,6 +25,7 @@ const BUDGET_RESERVATION_LEASE_MS: u64 = 15 * 60 * 1_000;
 const BUDGET_CHARGE_RETENTION_MS: u64 = 45 * 86_400_000;
 const BUDGET_CLEANUP_INTERVAL_MS: i64 = 86_400_000;
 const PROVIDER_HEALTH_MAX_AGE_MS: f64 = 86_400_000.0;
+const OAUTH_AUTHORIZATION_TTL_MS: u64 = 10 * 60 * 1_000;
 const UPSTREAM_GRANT_REFRESH_WINDOW_MS: f64 = 5.0 * 60.0 * 1_000.0;
 const USAGE_EVENT_LIMIT: usize = 100;
 const USAGE_EVENT_RETENTION_MS: u64 = 30 * 86_400_000;
@@ -146,6 +147,10 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         return client_catalog(req.headers(), &env)
             .await
             .and_then(with_cors);
+    }
+
+    if req.method() == Method::Get && api_path == "/v1/oauth/callback" {
+        return oauth_authorization_callback(req, env).await;
     }
 
     if api_path.starts_with("/v1/admin/") {
@@ -300,6 +305,7 @@ fn service_index() -> Result<Response> {
             "adminCredentials": "/v1/admin/credentials",
             "adminConnections": "/v1/admin/connections",
             "adminUpstreamGrants": "/v1/admin/upstream-grants",
+            "oauthCallback": "/v1/oauth/callback",
             "adminAssignmentRules": "/v1/admin/assignment-rules",
             "apiAliases": {
                 "routes": ["/api/route", "/api/routes"],
@@ -1779,6 +1785,7 @@ struct AdminUpstreamGrantResponse {
     updated_at: Option<String>,
     revoked_at: Option<String>,
     has_credential: bool,
+    credential_fields: Vec<String>,
     has_access_token: bool,
     has_refresh_token: bool,
     refresh_configured: bool,
@@ -2167,6 +2174,36 @@ struct AccessControlCredentialListRow {
     credential_json: String,
 }
 
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OAuthAuthorizationState {
+    state: String,
+    verifier: String,
+    actor_email: String,
+    grant_key: String,
+    provider: String,
+    redirect_uri: String,
+    expires_at_ms: u64,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OAuthAuthorizationStateConsumeRequest {
+    state: String,
+    actor_email: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct OAuthAuthorizationStateConsumeResponse {
+    state: Option<OAuthAuthorizationState>,
+}
+
+#[derive(Debug, Deserialize)]
+struct OAuthAuthorizationStateRow {
+    state_json: String,
+}
+
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum AccessAud {
@@ -2250,6 +2287,8 @@ struct UpstreamGrantRecord {
     label: Option<String>,
     #[serde(default)]
     credential: Option<String>,
+    #[serde(default)]
+    credentials: BTreeMap<String, String>,
     #[serde(default, alias = "access_token")]
     access_token: Option<String>,
     #[serde(default, alias = "refresh_token")]
@@ -2285,6 +2324,12 @@ struct OAuthRefreshResponse {
     expires_in: Option<u64>,
     #[serde(default)]
     scope: Option<String>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct OAuthAuthorizationStartRequest {
+    provider: String,
 }
 
 struct AuthorizedKey {
@@ -2838,6 +2883,41 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 Err(HeaderBuildError::Runtime(error)) => return Err(error),
             };
             return Response::from_json(&admin_upstream_grant_response(&route.key, &grant)?);
+        }
+        if req.method() == Method::Post && route.action.as_deref() == Some("authorize") {
+            let Some(session) = verified_access_session(req.headers(), &env).await? else {
+                return json_error(
+                    "access_admin_required",
+                    "browser OAuth authorization requires a verified Cloudflare Access admin session",
+                    403,
+                );
+            };
+            if session.role != AccessRole::Admin {
+                return json_error(
+                    "access_admin_required",
+                    "browser OAuth authorization requires a verified Cloudflare Access admin session",
+                    403,
+                );
+            }
+            let request =
+                match serde_json::from_str::<OAuthAuthorizationStartRequest>(&req.text().await?) {
+                    Ok(request) => request,
+                    Err(_) => {
+                        return json_error(
+                            "invalid_oauth_authorization_request",
+                            "request body must identify a provider",
+                            400,
+                        );
+                    }
+                };
+            return start_oauth_authorization(
+                &env,
+                &url,
+                &route.key,
+                &session.email,
+                request.provider.trim(),
+            )
+            .await;
         }
         return json_error("method_not_allowed", "admin method is not allowed", 405);
     }
@@ -5118,6 +5198,35 @@ async fn list_access_control_credentials(
     })
 }
 
+async fn put_oauth_authorization_state(
+    namespace: &ObjectNamespace,
+    state: &OAuthAuthorizationState,
+) -> Result<()> {
+    access_control_request(namespace, "/oauth-states/put", state)
+        .await
+        .map(|_| ())
+}
+
+async fn consume_oauth_authorization_state(
+    namespace: &ObjectNamespace,
+    state: String,
+    actor_email: String,
+) -> Result<Option<OAuthAuthorizationState>> {
+    let body = access_control_request(
+        namespace,
+        "/oauth-states/consume",
+        &OAuthAuthorizationStateConsumeRequest { state, actor_email },
+    )
+    .await?;
+    serde_json::from_str::<OAuthAuthorizationStateConsumeResponse>(&body)
+        .map(|response| response.state)
+        .map_err(|error| {
+            Error::RustError(format!(
+                "OAuth authorization state response is invalid JSON: {error}"
+            ))
+        })
+}
+
 async fn resolve_access_control_connections(
     namespace: &ObjectNamespace,
     object_name: &str,
@@ -5414,7 +5523,7 @@ fn parse_admin_upstream_grant_route(
     let mut parts = rest.split('/').collect::<Vec<_>>();
     let action = if parts
         .last()
-        .is_some_and(|value| matches!(*value, "revoke" | "refresh"))
+        .is_some_and(|value| matches!(*value, "authorize" | "revoke" | "refresh"))
     {
         parts.pop().map(str::to_string)
     } else {
@@ -5449,6 +5558,283 @@ fn validate_upstream_grant_component(value: &str) -> std::result::Result<String,
         );
     }
     Ok(value.to_string())
+}
+
+async fn start_oauth_authorization(
+    env: &Env,
+    request_url: &Url,
+    grant_key: &str,
+    actor_email: &str,
+    provider_id: &str,
+) -> Result<Response> {
+    let snapshot = provider_snapshot()?;
+    let Some(provider) = snapshot
+        .providers
+        .iter()
+        .find(|provider| provider.id == provider_id)
+    else {
+        return json_error(
+            "unknown_provider",
+            "OAuth authorization provider is not registered",
+            404,
+        );
+    };
+    let Some(authorization) = provider.auth.authorization.as_ref() else {
+        return json_error(
+            "oauth_authorization_unsupported",
+            "provider does not declare a browser OAuth authorization flow",
+            409,
+        );
+    };
+    let client_id = oauth_authorization_client_id(env, authorization).map_err(|_| {
+        Error::RustError("OAuth authorization client configuration is missing".to_string())
+    })?;
+    let state_value = random_hex(32)?;
+    let verifier = random_hex(32)?;
+    let challenge = base64_url_encode(&Sha256::digest(verifier.as_bytes()));
+    let redirect_uri = format!("{}/v1/oauth/callback", request_origin(request_url));
+    let expires_at_ms = Date::now().as_millis() + OAUTH_AUTHORIZATION_TTL_MS;
+    let state = OAuthAuthorizationState {
+        state: state_value.clone(),
+        verifier,
+        actor_email: actor_email.to_string(),
+        grant_key: grant_key.to_string(),
+        provider: provider.id.clone(),
+        redirect_uri: redirect_uri.clone(),
+        expires_at_ms,
+    };
+    put_oauth_authorization_state(&access_control_namespace(env)?, &state).await?;
+
+    let mut authorization_url = Url::parse(&authorization.authorize_url).map_err(|error| {
+        Error::RustError(format!("OAuth authorization URL is invalid: {error}"))
+    })?;
+    {
+        let mut query = authorization_url.query_pairs_mut();
+        for (name, value) in &authorization.extra_authorize_params {
+            query.append_pair(name, value);
+        }
+        query.append_pair("response_type", "code");
+        query.append_pair("client_id", &client_id);
+        query.append_pair("redirect_uri", &redirect_uri);
+        query.append_pair("scope", &authorization.scopes.join(" "));
+        query.append_pair("code_challenge", &challenge);
+        query.append_pair("code_challenge_method", "S256");
+        query.append_pair("state", &state_value);
+    }
+    Response::from_json(&serde_json::json!({
+        "authorizationUrl": authorization_url.as_str(),
+        "expiresAt": timestamp_from_epoch_ms(expires_at_ms),
+        "provider": provider.id,
+    }))
+}
+
+async fn oauth_authorization_callback(req: Request, env: Env) -> Result<Response> {
+    let url = req.url()?;
+    let Some(session) = verified_access_session(req.headers(), &env).await? else {
+        return json_error(
+            "access_admin_required",
+            "OAuth callback requires the initiating Cloudflare Access admin session",
+            403,
+        );
+    };
+    if session.role != AccessRole::Admin {
+        return json_error(
+            "access_admin_required",
+            "OAuth callback requires the initiating Cloudflare Access admin session",
+            403,
+        );
+    }
+    let Some(state_value) = query_param(&url, "state").filter(|value| !value.is_empty()) else {
+        return json_error(
+            "invalid_oauth_callback",
+            "OAuth callback state is missing",
+            400,
+        );
+    };
+    let Some(state) = consume_oauth_authorization_state(
+        &access_control_namespace(&env)?,
+        state_value,
+        session.email,
+    )
+    .await?
+    else {
+        return json_error(
+            "invalid_oauth_callback",
+            "OAuth callback state is invalid, expired, or already used",
+            400,
+        );
+    };
+    if query_param(&url, "error").is_some() {
+        return oauth_authorization_result_redirect("failed", &state.provider);
+    }
+    let Some(code) = query_param(&url, "code").filter(|value| !value.is_empty()) else {
+        return json_error(
+            "invalid_oauth_callback",
+            "OAuth callback authorization code is missing",
+            400,
+        );
+    };
+    complete_oauth_authorization(&env, state.clone(), &code).await?;
+    oauth_authorization_result_redirect("connected", &state.provider)
+}
+
+async fn complete_oauth_authorization(
+    env: &Env,
+    state: OAuthAuthorizationState,
+    code: &str,
+) -> Result<()> {
+    let snapshot = provider_snapshot()?;
+    let provider = snapshot
+        .providers
+        .iter()
+        .find(|provider| provider.id == state.provider)
+        .ok_or_else(|| Error::RustError("OAuth authorization provider is not registered".into()))?;
+    let authorization = provider.auth.authorization.as_ref().ok_or_else(|| {
+        Error::RustError("provider does not declare a browser OAuth authorization flow".into())
+    })?;
+    let client_id = oauth_authorization_client_id(env, authorization)?;
+    let client_secret = authorization
+        .client_secret_config
+        .as_deref()
+        .map(|name| exact_runtime_config_value(env, name))
+        .transpose()?;
+    let mut form = authorization.extra_token_params.clone();
+    form.insert("grant_type".to_string(), "authorization_code".to_string());
+    form.insert("client_id".to_string(), client_id);
+    form.insert("code".to_string(), code.to_string());
+    form.insert("code_verifier".to_string(), state.verifier);
+    form.insert("redirect_uri".to_string(), state.redirect_uri);
+    if let Some(client_secret) = client_secret {
+        form.insert("client_secret".to_string(), client_secret);
+    }
+
+    let headers = Headers::new();
+    headers.set("accept", "application/json")?;
+    headers.set("content-type", "application/x-www-form-urlencoded")?;
+    let mut init = RequestInit::new();
+    init.with_method(Method::Post)
+        .with_headers(headers)
+        .with_body(Some(JsValue::from_str(&form_urlencoded(&form))));
+    let request = Request::new_with_init(&authorization.token_url, &init)?;
+    let mut response = Fetch::Request(request).send().await.map_err(|_| {
+        Error::RustError("upstream OAuth authorization exchange request failed".to_string())
+    })?;
+    if !(200..=299).contains(&response.status_code()) {
+        return Err(Error::RustError(
+            "upstream OAuth authorization exchange was rejected".to_string(),
+        ));
+    }
+    let token = response.json::<OAuthRefreshResponse>().await.map_err(|_| {
+        Error::RustError("upstream OAuth authorization response was invalid".to_string())
+    })?;
+    if token.access_token.trim().is_empty() {
+        return Err(Error::RustError(
+            "upstream OAuth authorization response was invalid".to_string(),
+        ));
+    }
+    let kind = match authorization.grant_kind.as_str() {
+        "oauth" => UpstreamGrantKind::OAuth,
+        "subscription" => UpstreamGrantKind::Subscription,
+        _ => {
+            return Err(Error::RustError(
+                "provider OAuth authorization grant kind is invalid".to_string(),
+            ));
+        }
+    };
+    let account_id = authorization
+        .account_id_json_pointer
+        .as_deref()
+        .and_then(|pointer| jwt_json_pointer_string(&token.access_token, pointer));
+    let plan = authorization
+        .subscription_plan_json_pointer
+        .as_deref()
+        .and_then(|pointer| jwt_json_pointer_string(&token.access_token, pointer));
+    let scopes = token
+        .scope
+        .as_deref()
+        .map(|scope| {
+            scope
+                .split_ascii_whitespace()
+                .map(str::to_string)
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_else(|| authorization.scopes.clone());
+    let kv = env.kv("POLICY_KV").map_err(|error| {
+        Error::RustError(format!(
+            "POLICY_KV binding is required for OAuth authorization: {error}"
+        ))
+    })?;
+    let existing = get_upstream_grant(&kv, &state.grant_key).await?;
+    let grant = UpstreamGrantRecord {
+        version: default_upstream_grant_version(),
+        enabled: true,
+        kind,
+        provider: Some(provider.id.clone()),
+        label: existing.as_ref().and_then(|grant| grant.label.clone()),
+        credential: None,
+        credentials: BTreeMap::new(),
+        access_token: Some(token.access_token),
+        refresh_token: token.refresh_token,
+        token_type: token
+            .token_type
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(default_oauth_token_type),
+        expires_at: token.expires_in.map(timestamp_after_seconds),
+        scopes,
+        account_id,
+        subscription: (kind == UpstreamGrantKind::Subscription).then_some(
+            UpstreamGrantSubscription {
+                plan,
+                subject: None,
+            },
+        ),
+        refresh: upstream_grant_refresh_from_manifest(provider),
+        created_at: None,
+        updated_at: None,
+        revoked_at: None,
+    };
+    let grant = normalize_upstream_grant(grant, existing.as_ref()).map_err(Error::RustError)?;
+    put_kv_record(&kv, &state.grant_key, &grant, "authorized upstream grant").await
+}
+
+fn oauth_authorization_client_id(
+    env: &Env,
+    authorization: &AuthAuthorizationConfig,
+) -> Result<String> {
+    if let Some(client_id) = authorization
+        .client_id
+        .as_deref()
+        .filter(|value| !value.trim().is_empty())
+    {
+        return Ok(client_id.to_string());
+    }
+    exact_runtime_config_value(
+        env,
+        authorization
+            .client_id_config
+            .as_deref()
+            .ok_or_else(|| Error::RustError("OAuth authorization client ID is missing".into()))?,
+    )
+}
+
+fn oauth_authorization_result_redirect(status: &str, provider: &str) -> Result<Response> {
+    redirect_to(&format!(
+        "/dashboard/access?tab=upstream&oauth={}&provider={}",
+        encode_component(status),
+        encode_component(provider)
+    ))
+}
+
+fn jwt_json_pointer_string(token: &str, pointer: &str) -> Option<String> {
+    let (_, payload, _) = split_jwt(token)?;
+    let payload = base64_url_decode(payload).ok()?;
+    let value = serde_json::from_slice::<Value>(&payload).ok()?;
+    value
+        .pointer(pointer)?
+        .as_str()
+        .map(str::trim)
+        .filter(|value| !value.is_empty())
+        .map(str::to_string)
 }
 
 async fn list_admin_upstream_grants(kv: &KvStore) -> Result<Vec<AdminUpstreamGrantResponse>> {
@@ -5549,6 +5935,7 @@ fn normalize_upstream_grant(
         }
     }
     merge_upstream_grant_secrets(&mut grant, existing);
+    grant.credentials = normalize_grant_credentials(grant.credentials)?;
     validate_upstream_grant_secret_shape(&grant)?;
     if grant.refresh.is_none() && grant.refresh_token.is_some() {
         grant.refresh = provider
@@ -5564,9 +5951,11 @@ fn normalize_upstream_grant(
             return Err("provider manifest does not approve refresh configuration".to_string());
         }
     }
-    if grant.enabled && upstream_grant_secret(&grant).is_none() {
+    if grant.enabled && !upstream_grant_has_primary_secret(&grant) {
         return Err(match grant.kind {
-            UpstreamGrantKind::ApiKey => "enabled API-key grant requires credential".to_string(),
+            UpstreamGrantKind::ApiKey => {
+                "enabled API-key grant requires credential or credentials".to_string()
+            }
             UpstreamGrantKind::OAuth | UpstreamGrantKind::Subscription => {
                 "enabled OAuth or subscription grant requires accessToken".to_string()
             }
@@ -5593,13 +5982,12 @@ fn validate_upstream_grant_secret_shape(
         UpstreamGrantKind::ApiKey => {
             if grant.access_token.is_some() || grant.refresh_token.is_some() {
                 return Err(
-                    "API-key grants accept credential only; revoke before changing grant kind"
-                        .to_string(),
+                    "API-key grants accept credential or credentials only; revoke before changing grant kind".to_string(),
                 );
             }
         }
         UpstreamGrantKind::OAuth => {
-            if grant.credential.is_some() {
+            if grant.credential.is_some() || !grant.credentials.is_empty() {
                 return Err(
                     "OAuth grants accept accessToken only; revoke before changing grant kind"
                         .to_string(),
@@ -5607,12 +5995,36 @@ fn validate_upstream_grant_secret_shape(
             }
         }
         UpstreamGrantKind::Subscription => {
-            if grant.credential.is_some() && grant.access_token.is_some() {
+            if !grant.credentials.is_empty()
+                || grant.credential.is_some() && grant.access_token.is_some()
+            {
                 return Err("subscription grants accept exactly one primary credential".to_string());
             }
         }
     }
     Ok(())
+}
+
+fn normalize_grant_credentials(
+    credentials: BTreeMap<String, String>,
+) -> std::result::Result<BTreeMap<String, String>, String> {
+    let mut normalized = BTreeMap::new();
+    for (name, value) in credentials {
+        let name = name.trim();
+        if name.is_empty()
+            || name.len() > 128
+            || !name
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'-' | b'.'))
+        {
+            return Err("credentials contains an invalid field name".to_string());
+        }
+        if value.is_empty() || value.len() > 16_384 || value.bytes().any(|byte| byte == 0) {
+            return Err("credentials contains an invalid secret value".to_string());
+        }
+        normalized.insert(name.to_string(), value);
+    }
+    Ok(normalized)
 }
 
 fn normalize_grant_optional_text(
@@ -5714,6 +6126,9 @@ fn merge_upstream_grant_secrets(
     if grant.credential.is_none() {
         grant.credential.clone_from(&existing.credential);
     }
+    if grant.credentials.is_empty() {
+        grant.credentials.clone_from(&existing.credentials);
+    }
     if grant.access_token.is_none() {
         grant.access_token.clone_from(&existing.access_token);
     }
@@ -5726,6 +6141,7 @@ fn revoke_upstream_grant(grant: &mut UpstreamGrantRecord) {
     let now = current_iso_timestamp();
     grant.enabled = false;
     grant.credential = None;
+    grant.credentials.clear();
     grant.access_token = None;
     grant.refresh_token = None;
     grant.updated_at = Some(now.clone());
@@ -5763,6 +6179,7 @@ fn admin_upstream_grant_response(
             .credential
             .as_deref()
             .is_some_and(|value| !value.trim().is_empty()),
+        credential_fields: grant.credentials.keys().cloned().collect(),
         has_access_token: grant
             .access_token
             .as_deref()
@@ -5828,6 +6245,10 @@ fn upstream_grant_secret(grant: &UpstreamGrantRecord) -> Option<&str> {
     preferred.filter(|value| !value.trim().is_empty())
 }
 
+fn upstream_grant_has_primary_secret(grant: &UpstreamGrantRecord) -> bool {
+    upstream_grant_secret(grant).is_some() || !grant.credentials.is_empty()
+}
+
 fn upstream_grant_expired(grant: &UpstreamGrantRecord) -> bool {
     grant
         .expires_at
@@ -5860,8 +6281,32 @@ fn upstream_grant_refreshable(grant: &UpstreamGrantRecord) -> bool {
 
 fn upstream_grant_usable(grant: &UpstreamGrantRecord) -> bool {
     grant.enabled
-        && upstream_grant_secret(grant).is_some()
+        && upstream_grant_has_primary_secret(grant)
         && (!upstream_grant_expired(grant) || upstream_grant_refreshable(grant))
+}
+
+fn upstream_grant_credential_field<'a>(
+    grant: &'a UpstreamGrantRecord,
+    field: &str,
+) -> Option<&'a str> {
+    grant
+        .credentials
+        .get(field)
+        .map(String::as_str)
+        .filter(|value| !value.is_empty())
+}
+
+fn upstream_grant_supports_provider(
+    provider: &CompiledProvider,
+    grant: &UpstreamGrantRecord,
+) -> bool {
+    match provider.auth.schemes.first() {
+        Some(AuthScheme::SigV4 { .. }) => {
+            upstream_grant_credential_field(grant, "accessKeyId").is_some()
+                && upstream_grant_credential_field(grant, "secretAccessKey").is_some()
+        }
+        _ => true,
+    }
 }
 
 fn provider_readiness_rows(
@@ -7076,6 +7521,34 @@ fn base64_url_decode(value: &str) -> Result<Vec<u8>> {
         }
     }
     Ok(out)
+}
+
+fn base64_url_encode(value: &[u8]) -> String {
+    const ALPHABET: &[u8; 64] = b"ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+    let mut output = String::with_capacity(value.len().div_ceil(3) * 4);
+    for chunk in value.chunks(3) {
+        let a = chunk[0] as u32;
+        let b = chunk.get(1).copied().unwrap_or_default() as u32;
+        let c = chunk.get(2).copied().unwrap_or_default() as u32;
+        let bits = (a << 16) | (b << 8) | c;
+        output.push(ALPHABET[((bits >> 18) & 0x3f) as usize] as char);
+        output.push(ALPHABET[((bits >> 12) & 0x3f) as usize] as char);
+        if chunk.len() > 1 {
+            output.push(ALPHABET[((bits >> 6) & 0x3f) as usize] as char);
+        }
+        if chunk.len() > 2 {
+            output.push(ALPHABET[(bits & 0x3f) as usize] as char);
+        }
+    }
+    output
+}
+
+fn random_hex(length: u32) -> Result<String> {
+    let crypto = Reflect::get(&js_sys::global(), &JsValue::from_str("crypto")).map_err(js_error)?;
+    let get_random_values = js_function(&crypto, "getRandomValues")?;
+    let bytes = Uint8Array::new_with_length(length);
+    get_random_values.call1(&crypto, &bytes).map_err(js_error)?;
+    Ok(bytes_to_hex(&bytes.to_vec()))
 }
 
 fn default_true() -> bool {
@@ -8481,8 +8954,15 @@ fn apply_auth_headers(
             service,
             region_param,
         } => {
-            let signed = sigv4_headers(env, provider, service, region_param.as_deref(), context)
-                .map_err(HeaderBuildError::Runtime)?;
+            let signed = sigv4_headers(
+                env,
+                provider,
+                grant,
+                service,
+                region_param.as_deref(),
+                context,
+            )
+            .map_err(HeaderBuildError::Runtime)?;
             for (name, value) in signed {
                 headers
                     .set(&name, &value)
@@ -8515,7 +8995,10 @@ async fn upstream_grant_for_request(
             .await
         }
         Some(
-            AuthScheme::Bearer { .. } | AuthScheme::ApiKey { .. } | AuthScheme::QueryApiKey { .. },
+            AuthScheme::Bearer { .. }
+            | AuthScheme::ApiKey { .. }
+            | AuthScheme::QueryApiKey { .. }
+            | AuthScheme::SigV4 { .. },
         ) => selected_upstream_grant(env, provider, auth, None, None, false).await,
         _ => Ok(None),
     }
@@ -8571,7 +9054,7 @@ async fn selected_upstream_grant(
         if upstream_grant_needs_refresh(&grant) {
             grant = refresh_upstream_grant(env, &kv, &key, grant, false).await?;
         }
-        if !upstream_grant_usable(&grant) {
+        if !upstream_grant_usable(&grant) || !upstream_grant_supports_provider(provider, &grant) {
             return Err(HeaderBuildError::Client {
                 code: "upstream_grant_invalid",
                 message: "upstream grant is missing a usable credential",
@@ -8843,6 +9326,11 @@ fn timestamp_after_seconds(seconds: u64) -> String {
     date.to_iso_string().into()
 }
 
+fn timestamp_from_epoch_ms(epoch_ms: u64) -> String {
+    let date = js_sys::Date::new(&JsValue::from_f64(epoch_ms as f64));
+    date.to_iso_string().into()
+}
+
 fn parse_upstream_grant_record(raw: &str) -> Result<UpstreamGrantRecord> {
     let trimmed = raw.trim();
     if trimmed.is_empty() {
@@ -8856,6 +9344,7 @@ fn parse_upstream_grant_record(raw: &str) -> Result<UpstreamGrantRecord> {
             provider: None,
             label: None,
             credential: None,
+            credentials: BTreeMap::new(),
             access_token: Some(trimmed.to_string()),
             refresh_token: None,
             token_type: default_oauth_token_type(),
@@ -8920,14 +9409,26 @@ fn dedupe_preserving_order(values: &mut Vec<String>) {
 fn sigv4_headers(
     env: &Env,
     provider: &CompiledProvider,
+    grant: Option<&UpstreamGrantRecord>,
     service: &str,
     region_param: Option<&str>,
     context: HeaderRequestContext<'_>,
 ) -> Result<BTreeMap<String, String>> {
-    let access_key_id = provider_config_value(env, provider, "access_key_id")?;
-    let secret_access_key = provider_config_value(env, provider, "secret_access_key")?;
+    let access_key_id = grant
+        .and_then(|grant| upstream_grant_credential_field(grant, "accessKeyId"))
+        .map(str::to_string)
+        .map(Ok)
+        .unwrap_or_else(|| provider_config_value(env, provider, "access_key_id"))?;
+    let secret_access_key = grant
+        .and_then(|grant| upstream_grant_credential_field(grant, "secretAccessKey"))
+        .map(str::to_string)
+        .map(Ok)
+        .unwrap_or_else(|| provider_config_value(env, provider, "secret_access_key"))?;
     let region = provider_config_value(env, provider, region_param.unwrap_or("region"))?;
-    let session_token = optional_provider_config_value(env, provider, "session_token");
+    let session_token = grant
+        .and_then(|grant| upstream_grant_credential_field(grant, "sessionToken"))
+        .map(str::to_string)
+        .or_else(|| optional_provider_config_value(env, provider, "session_token"));
     sigv4_headers_at(
         &access_key_id,
         &secret_access_key,
@@ -9422,6 +9923,28 @@ impl DurableObject for PolicyBindingIndexObject {
             put_access_control_connection_in_object(&self.state, connection)?;
             return Response::ok("updated");
         }
+        if req.method() == Method::Post && url.path() == "/oauth-states/put" {
+            let state = serde_json::from_str::<OAuthAuthorizationState>(&req.text().await?)
+                .map_err(|error| {
+                    Error::RustError(format!(
+                        "OAuth authorization state put request is invalid JSON: {error}"
+                    ))
+                })?;
+            put_oauth_authorization_state_in_object(&self.state, state)?;
+            return Response::ok("updated");
+        }
+        if req.method() == Method::Post && url.path() == "/oauth-states/consume" {
+            let request =
+                serde_json::from_str::<OAuthAuthorizationStateConsumeRequest>(&req.text().await?)
+                    .map_err(|error| {
+                    Error::RustError(format!(
+                        "OAuth authorization state consume request is invalid JSON: {error}"
+                    ))
+                })?;
+            return Response::from_json(&OAuthAuthorizationStateConsumeResponse {
+                state: consume_oauth_authorization_state_in_object(&self.state, request)?,
+            });
+        }
         json_error("route_not_found", "route not found", 404)
     }
 }
@@ -9583,6 +10106,14 @@ fn ensure_access_control_schema(sql: &SqlStorage) -> Result<()> {
         "CREATE TABLE IF NOT EXISTS provider_connections (
             provider_id TEXT PRIMARY KEY,
             connection_json TEXT NOT NULL
+        )",
+        None,
+    )?;
+    sql.exec(
+        "CREATE TABLE IF NOT EXISTS oauth_authorization_states (
+            state TEXT PRIMARY KEY,
+            state_json TEXT NOT NULL,
+            expires_at_ms INTEGER NOT NULL
         )",
         None,
     )?;
@@ -10317,6 +10848,76 @@ fn resolve_access_control_connections_in_object(
         connections,
         missing_provider_ids,
     })
+}
+
+fn put_oauth_authorization_state_in_object(
+    state: &State,
+    authorization: OAuthAuthorizationState,
+) -> Result<()> {
+    if authorization.state.len() < 32
+        || authorization.verifier.len() < 43
+        || authorization.actor_email.is_empty()
+        || authorization.grant_key.is_empty()
+        || authorization.provider.is_empty()
+        || authorization.redirect_uri.is_empty()
+        || authorization.expires_at_ms <= Date::now().as_millis()
+    {
+        return Err(Error::RustError(
+            "OAuth authorization state is invalid".to_string(),
+        ));
+    }
+    let sql = state.storage().sql();
+    ensure_access_control_schema(&sql)?;
+    sql.exec_raw(
+        "DELETE FROM oauth_authorization_states WHERE expires_at_ms <= ?",
+        raw_bindings(vec![JsValue::from_f64(Date::now().as_millis() as f64)]),
+    )?;
+    sql.exec_raw(
+        "INSERT OR REPLACE INTO oauth_authorization_states
+            (state, state_json, expires_at_ms) VALUES (?, ?, ?)",
+        raw_bindings(vec![
+            JsValue::from_str(&authorization.state),
+            JsValue::from_str(&serde_json::to_string(&authorization)?),
+            JsValue::from_f64(authorization.expires_at_ms as f64),
+        ]),
+    )?;
+    Ok(())
+}
+
+fn consume_oauth_authorization_state_in_object(
+    state: &State,
+    request: OAuthAuthorizationStateConsumeRequest,
+) -> Result<Option<OAuthAuthorizationState>> {
+    let sql = state.storage().sql();
+    ensure_access_control_schema(&sql)?;
+    let Some(row) = sql
+        .exec_raw(
+            "SELECT state_json FROM oauth_authorization_states WHERE state = ? LIMIT 1",
+            raw_bindings(vec![JsValue::from_str(&request.state)]),
+        )?
+        .to_array::<OAuthAuthorizationStateRow>()?
+        .into_iter()
+        .next()
+    else {
+        return Ok(None);
+    };
+    let authorization =
+        serde_json::from_str::<OAuthAuthorizationState>(&row.state_json).map_err(|error| {
+            Error::RustError(format!(
+                "stored OAuth authorization state is invalid JSON: {error}"
+            ))
+        })?;
+    if authorization.actor_email != request.actor_email {
+        return Ok(None);
+    }
+    sql.exec_raw(
+        "DELETE FROM oauth_authorization_states WHERE state = ?",
+        raw_bindings(vec![JsValue::from_str(&request.state)]),
+    )?;
+    if authorization.expires_at_ms <= Date::now().as_millis() {
+        return Ok(None);
+    }
+    Ok(Some(authorization))
 }
 
 async fn persist_usage_event(namespace: &ObjectNamespace, event: &UsageEvent) -> Result<()> {
@@ -11758,6 +12359,7 @@ mod tests {
             provider: Some(provider.to_string()),
             label: Some("maintainer subscription".to_string()),
             credential: None,
+            credentials: BTreeMap::new(),
             access_token: Some("test-access-token".to_string()),
             refresh_token: Some("test-refresh-token".to_string()),
             token_type: "Bearer".to_string(),
@@ -13727,6 +14329,98 @@ mod tests {
             resolve_grant_template("${grant.accountId}", &grant).unwrap(),
             "acct_test"
         );
+    }
+
+    #[test]
+    fn openai_manifest_declares_browser_oauth_with_account_metadata() {
+        let snapshot = provider_snapshot().unwrap();
+        let authorization = snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.id == "openai")
+            .unwrap()
+            .auth
+            .authorization
+            .as_ref()
+            .unwrap();
+
+        assert_eq!(
+            authorization.authorize_url,
+            "https://auth.openai.com/oauth/authorize"
+        );
+        assert_eq!(authorization.grant_kind, "subscription");
+        assert_eq!(
+            authorization.account_id_json_pointer.as_deref(),
+            Some("/https:~1~1api.openai.com~1auth/chatgpt_account_id")
+        );
+    }
+
+    #[test]
+    fn oauth_callback_metadata_uses_manifest_json_pointers() {
+        let payload = serde_json::json!({
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": "acct_test",
+                "chatgpt_plan_type": "plus"
+            }
+        });
+        let token = format!(
+            "{}.{}.{}",
+            base64_url_encode(br#"{"alg":"none"}"#),
+            base64_url_encode(serde_json::to_string(&payload).unwrap().as_bytes()),
+            base64_url_encode(b"signature")
+        );
+
+        assert_eq!(
+            jwt_json_pointer_string(&token, "/https:~1~1api.openai.com~1auth/chatgpt_account_id")
+                .as_deref(),
+            Some("acct_test")
+        );
+        assert_eq!(
+            jwt_json_pointer_string(&token, "/https:~1~1api.openai.com~1auth/chatgpt_plan_type")
+                .as_deref(),
+            Some("plus")
+        );
+    }
+
+    #[test]
+    fn upstream_grant_routes_accept_browser_authorization_action() {
+        let route = parse_admin_upstream_grant_route("policies/svc_docs/openai/authorize").unwrap();
+        assert_eq!(route.key, "oauth/svc_docs/openai");
+        assert_eq!(route.action.as_deref(), Some("authorize"));
+    }
+
+    #[test]
+    fn sigv4_grants_require_and_hide_multi_field_credentials() {
+        let snapshot = provider_snapshot().unwrap();
+        let provider = snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.id == "aws-bedrock")
+            .unwrap();
+        let mut grant = subscription_test_grant("aws-bedrock");
+        grant.kind = UpstreamGrantKind::ApiKey;
+        grant.credential = None;
+        grant.access_token = None;
+        grant.refresh_token = None;
+        grant.subscription = None;
+        grant.credentials = BTreeMap::from([
+            ("accessKeyId".to_string(), "AKID_PLACEHOLDER".to_string()),
+            (
+                "secretAccessKey".to_string(),
+                "secret-placeholder".to_string(),
+            ),
+        ]);
+
+        assert!(upstream_grant_usable(&grant));
+        assert!(upstream_grant_supports_provider(provider, &grant));
+        let response = admin_upstream_grant_response("oauth/svc_docs/aws-bedrock", &grant).unwrap();
+        let raw = serde_json::to_string(&response).unwrap();
+        assert_eq!(
+            response.credential_fields,
+            vec!["accessKeyId".to_string(), "secretAccessKey".to_string()]
+        );
+        assert!(!raw.contains("AKID_PLACEHOLDER"));
+        assert!(!raw.contains("secret-placeholder"));
     }
 
     #[test]
