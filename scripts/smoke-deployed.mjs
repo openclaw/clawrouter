@@ -3,6 +3,7 @@ import {
   inspectSmokeKeyProviderAccess,
   liveProviderList,
   runLiveProviderSmokes,
+  selectLiveProviderPlans,
   summarizePlan,
 } from "./provider-smoke-plan.mjs";
 
@@ -37,7 +38,14 @@ if (liveProviders.length === 0) {
 if (!smokeKey) {
   throw new Error("CLAWROUTER_SMOKE_KEY is required for live provider smoke");
 }
-await inspectSmokeKeyProviderAccess({ baseUrl, smokeKey, liveProviders });
+const selectedLiveProviders = selectLiveProviderPlans(plan, liveProviders).map(
+  (provider) => provider.id,
+);
+await inspectSmokeKeyProviderAccess({
+  baseUrl,
+  smokeKey,
+  liveProviders: selectedLiveProviders,
+});
 const results = await runLiveProviderSmokes({
   baseUrl,
   smokeKey,
