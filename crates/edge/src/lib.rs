@@ -2648,7 +2648,7 @@ fn provider_connection_types(provider: &CompiledProvider) -> Vec<&'static str> {
                 types.insert("subscription");
             }
             AuthScheme::SigV4 { .. } => {
-                types.insert("sigv4");
+                types.insert("api_key");
             }
             AuthScheme::CloudflareBinding => {
                 types.insert("cloudflare_binding");
@@ -14677,6 +14677,7 @@ mod tests {
 
         assert!(upstream_grant_usable(&grant));
         assert!(upstream_grant_supports_provider(provider, &grant));
+        assert_eq!(provider_connection_types(provider), vec!["api_key"]);
         let response = admin_upstream_grant_response("oauth/svc_docs/aws-bedrock", &grant).unwrap();
         let raw = serde_json::to_string(&response).unwrap();
         assert_eq!(
