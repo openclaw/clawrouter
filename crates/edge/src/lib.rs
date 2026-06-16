@@ -2321,6 +2321,8 @@ struct UpstreamGrantRecord {
 struct OAuthRefreshResponse {
     access_token: String,
     #[serde(default)]
+    id_token: Option<String>,
+    #[serde(default)]
     refresh_token: Option<String>,
     #[serde(default)]
     token_type: Option<String>,
@@ -5748,11 +5750,11 @@ async fn complete_oauth_authorization(
     let account_id = authorization
         .account_id_json_pointer
         .as_deref()
-        .and_then(|pointer| jwt_json_pointer_string(&token.access_token, pointer));
+        .and_then(|pointer| oauth_token_json_pointer_string(&token, pointer));
     let plan = authorization
         .subscription_plan_json_pointer
         .as_deref()
-        .and_then(|pointer| jwt_json_pointer_string(&token.access_token, pointer));
+        .and_then(|pointer| oauth_token_json_pointer_string(&token, pointer));
     let scopes = token
         .scope
         .as_deref()
@@ -5839,6 +5841,14 @@ fn jwt_json_pointer_string(token: &str, pointer: &str) -> Option<String> {
         .map(str::trim)
         .filter(|value| !value.is_empty())
         .map(str::to_string)
+}
+
+fn oauth_token_json_pointer_string(token: &OAuthRefreshResponse, pointer: &str) -> Option<String> {
+    token
+        .id_token
+        .as_deref()
+        .and_then(|id_token| jwt_json_pointer_string(id_token, pointer))
+        .or_else(|| jwt_json_pointer_string(&token.access_token, pointer))
 }
 
 async fn list_admin_upstream_grants(kv: &KvStore) -> Result<Vec<AdminUpstreamGrantResponse>> {
@@ -7001,6 +7011,7 @@ async fn reconcile_access_user_assignments(
         .collect::<BTreeSet<_>>();
     groups.extend(managed_groups);
     record.groups = normalize_access_groups(groups.into_iter().collect())?;
+    // Access admins are derived from the runtime allowlist, never from a persisted user role.
     record.role = AccessRole::User;
     let namespace = access_control_namespace(env)?;
     let user = AccessControlUser {
@@ -14443,28 +14454,53 @@ mod tests {
     }
 
     #[test]
-    fn oauth_callback_metadata_uses_manifest_json_pointers() {
-        let payload = serde_json::json!({
+    fn oauth_callback_metadata_prefers_id_token_with_access_token_fallback() {
+        let access_payload = serde_json::json!({
             "https://api.openai.com/auth": {
-                "chatgpt_account_id": "acct_test",
+                "chatgpt_account_id": "acct_access",
                 "chatgpt_plan_type": "plus"
             }
         });
-        let token = format!(
+        let id_payload = serde_json::json!({
+            "https://api.openai.com/auth": {
+                "chatgpt_account_id": "acct_id"
+            }
+        });
+        let access_token = format!(
             "{}.{}.{}",
             base64_url_encode(br#"{"alg":"none"}"#),
-            base64_url_encode(serde_json::to_string(&payload).unwrap().as_bytes()),
+            base64_url_encode(serde_json::to_string(&access_payload).unwrap().as_bytes()),
             base64_url_encode(b"signature")
         );
+        let id_token = format!(
+            "{}.{}.{}",
+            base64_url_encode(br#"{"alg":"none"}"#),
+            base64_url_encode(serde_json::to_string(&id_payload).unwrap().as_bytes()),
+            base64_url_encode(b"signature")
+        );
+        let token = OAuthRefreshResponse {
+            access_token,
+            id_token: Some(id_token),
+            refresh_token: None,
+            token_type: None,
+            expires_in: None,
+            scope: None,
+        };
 
         assert_eq!(
-            jwt_json_pointer_string(&token, "/https:~1~1api.openai.com~1auth/chatgpt_account_id")
-                .as_deref(),
-            Some("acct_test")
+            oauth_token_json_pointer_string(
+                &token,
+                "/https:~1~1api.openai.com~1auth/chatgpt_account_id"
+            )
+            .as_deref(),
+            Some("acct_id")
         );
         assert_eq!(
-            jwt_json_pointer_string(&token, "/https:~1~1api.openai.com~1auth/chatgpt_plan_type")
-                .as_deref(),
+            oauth_token_json_pointer_string(
+                &token,
+                "/https:~1~1api.openai.com~1auth/chatgpt_plan_type"
+            )
+            .as_deref(),
             Some("plus")
         );
     }
