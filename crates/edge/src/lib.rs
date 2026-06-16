@@ -8541,6 +8541,7 @@ fn endpoint_upstream_grant(
     };
     let Some(path) = transport.endpoint_paths.get(&endpoint.id).cloned() else {
         if !provider_requires_oauth(provider) {
+            // Provider policy grants shared fallback access; endpoint transports augment it.
             return Ok((None, None));
         }
         return Err(HeaderBuildError::Client {
@@ -14517,7 +14518,7 @@ mod tests {
     }
 
     #[test]
-    fn openai_subscription_grants_use_the_manifest_codex_transport() {
+    fn openai_subscription_grants_augment_responses_and_fallback_for_chat() {
         let snapshot = provider_snapshot().unwrap();
         let provider = snapshot
             .providers
