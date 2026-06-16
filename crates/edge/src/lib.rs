@@ -2222,6 +2222,7 @@ struct AccessJwtPayload {
     aud: Option<AccessAud>,
     email: Option<String>,
     exp: Option<u64>,
+    iat: Option<u64>,
     iss: Option<String>,
     nbf: Option<u64>,
     sub: Option<String>,
@@ -3395,7 +3396,7 @@ async fn verified_access_session(headers: &Headers, env: &Env) -> Result<Option<
         return Ok(None);
     };
     let normalized_email = email.to_ascii_lowercase();
-    let Some(identity) = access_role_for_email(env, &normalized_email).await? else {
+    let Some(identity) = access_role_for_email(env, &normalized_email, payload.iat).await? else {
         return Ok(None);
     };
     Ok(Some(AccessSession {
@@ -3553,9 +3554,16 @@ fn access_audiences(payload: &AccessJwtPayload) -> Vec<&str> {
     }
 }
 
-async fn access_role_for_email(env: &Env, email: &str) -> Result<Option<AccessUserIdentity>> {
+async fn access_role_for_email(
+    env: &Env,
+    email: &str,
+    access_issued_at: Option<u64>,
+) -> Result<Option<AccessUserIdentity>> {
     let default_tenant = default_access_tenant(env);
     let user = access_control_user_record(env, email, &default_tenant).await?;
+    let user =
+        reconcile_access_user_assignments_for_access_session(env, email, user, access_issued_at)
+            .await;
     if !user.enabled.unwrap_or(true) {
         return Ok(None);
     }
@@ -3583,38 +3591,35 @@ async fn access_control_user_record(
 ) -> Result<AccessUserRecord> {
     let namespace = access_control_namespace(env)?;
     let mut response = resolve_access_control_users(&namespace, vec![email.to_string()]).await?;
+    if let Some(user) = response.users.pop() {
+        // Existing users reconcile only through the Access JWT issued-at gate or an admin request.
+        return Ok(user.record);
+    }
     let kv = env.kv("POLICY_KV").map_err(|error| {
         Error::RustError(format!(
             "POLICY_KV binding is required before initializing an access user: {error}"
         ))
     })?;
-    let record = if let Some(user) = response.users.pop() {
-        user.record
-    } else {
-        let record = existing_access_user_record(&kv, email)
-            .await?
-            .unwrap_or_else(|| default_access_user_record(default_tenant));
-        let user = AccessControlUser {
-            email: email.to_string(),
-            record,
-        };
-        initialize_access_control_users(&namespace, std::slice::from_ref(&user)).await?;
-        let mut response =
-            resolve_access_control_users(&namespace, vec![email.to_string()]).await?;
-        let user = response.users.pop().ok_or_else(|| {
-            Error::RustError(
-                "access user authority did not initialize the requested user".to_string(),
-            )
-        })?;
-        sync_kv_record_best_effort(
-            &kv,
-            &format!("access/users/{email}"),
-            &user.record,
-            "access user compatibility record",
-        )
-        .await;
-        user.record
+    let record = existing_access_user_record(&kv, email)
+        .await?
+        .unwrap_or_else(|| default_access_user_record(default_tenant));
+    let user = AccessControlUser {
+        email: email.to_string(),
+        record,
     };
+    initialize_access_control_users(&namespace, std::slice::from_ref(&user)).await?;
+    let mut response = resolve_access_control_users(&namespace, vec![email.to_string()]).await?;
+    let user = response.users.pop().ok_or_else(|| {
+        Error::RustError("access user authority did not initialize the requested user".to_string())
+    })?;
+    sync_kv_record_best_effort(
+        &kv,
+        &format!("access/users/{email}"),
+        &user.record,
+        "access user compatibility record",
+    )
+    .await;
+    let record = user.record;
     match reconcile_access_user_assignments(env, &kv, email, record.clone(), None).await {
         Ok((record, _)) => Ok(record),
         Err(error) => {
@@ -3626,6 +3631,63 @@ async fn access_control_user_record(
             Ok(record)
         }
     }
+}
+
+async fn reconcile_access_user_assignments_for_access_session(
+    env: &Env,
+    email: &str,
+    record: AccessUserRecord,
+    access_issued_at: Option<u64>,
+) -> AccessUserRecord {
+    let Some(issued_at) = access_issued_at
+        .and_then(|issued_at| issued_at.checked_mul(1_000))
+        .map(timestamp_from_epoch_ms)
+    else {
+        return record;
+    };
+    let kv = match env.kv("POLICY_KV") {
+        Ok(kv) => kv,
+        Err(error) => {
+            console_error!(
+                "login assignment state lookup failed for {}: {}",
+                email,
+                error
+            );
+            return record;
+        }
+    };
+    let state = match get_assignment_state(&kv, email).await {
+        Ok(state) => state,
+        Err(error) => {
+            console_error!(
+                "login assignment state lookup failed for {}: {}",
+                email,
+                error
+            );
+            return record;
+        }
+    };
+    if !assignment_state_predates_issued_at(&state, &issued_at) {
+        return record;
+    }
+    match reconcile_access_user_assignments(env, &kv, email, record.clone(), None).await {
+        Ok((record, _)) => record,
+        Err(error) => {
+            console_error!(
+                "login assignment reconciliation failed for {}: {}",
+                email,
+                error
+            );
+            record
+        }
+    }
+}
+
+fn assignment_state_predates_issued_at(state: &AssignmentStateRecord, issued_at: &str) -> bool {
+    state
+        .updated_at
+        .as_deref()
+        .is_none_or(|updated_at| updated_at < issued_at)
 }
 
 fn default_access_user_record(default_tenant: &str) -> AccessUserRecord {
@@ -13416,6 +13478,36 @@ mod tests {
     }
 
     #[test]
+    fn assignment_reconciliation_runs_once_per_access_session() {
+        let issued_at = "2026-06-16T00:00:00.000Z";
+        assert!(assignment_state_predates_issued_at(
+            &AssignmentStateRecord::default(),
+            issued_at
+        ));
+        assert!(assignment_state_predates_issued_at(
+            &AssignmentStateRecord {
+                updated_at: Some("2026-06-15T23:59:59.999Z".to_string()),
+                ..AssignmentStateRecord::default()
+            },
+            issued_at
+        ));
+        assert!(!assignment_state_predates_issued_at(
+            &AssignmentStateRecord {
+                updated_at: Some(issued_at.to_string()),
+                ..AssignmentStateRecord::default()
+            },
+            issued_at
+        ));
+        assert!(!assignment_state_predates_issued_at(
+            &AssignmentStateRecord {
+                updated_at: Some("2026-06-16T00:00:00.001Z".to_string()),
+                ..AssignmentStateRecord::default()
+            },
+            issued_at
+        ));
+    }
+
+    #[test]
     fn user_grant_mutations_reconcile_direct_bindings_as_one_authority_request() {
         let request = serde_json::from_str::<AdminAccessUserGrantsRequest>(
             r#"{"tenantId":"openclaw","enabled":true,"groups":["maintainers"],"policyIds":["svc_tools","svc_tools"]}"#,
@@ -14044,6 +14136,7 @@ mod tests {
             ])),
             email: None,
             exp: None,
+            iat: None,
             iss: None,
             nbf: None,
             sub: None,
