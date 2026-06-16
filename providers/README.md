@@ -63,6 +63,9 @@ billing:
 - `routing.modelPrefixes` maps model names like `openai/gpt-4.1-mini` to the
   provider snapshot.
 - `auth.schemes` declares how ClawRouter injects the upstream credential.
+- `auth.authorization` declares a provider-approved browser OAuth flow,
+  including its trusted endpoints, client configuration, scopes, grant kind,
+  and optional account metadata mappings.
 - `adapter` declares the request/response family. Use `custom_adapter` only after
   the declarative format cannot express the provider.
 - `billing.meter` and `billing.counters` produce OpenMeter/Lago/Meteroid style
@@ -91,8 +94,12 @@ or from request path params:
   executable today.
 - OAuth-backed REST providers are executable when `POLICY_KV` has a grant at
   `oauth/<kid>/<tokenRef>` or `oauth/tenants/<tenant>/<tokenRef>`.
-- SigV4 providers are executable when `service.configKeys` declares access key,
-  secret key, and region bindings. Session tokens are optional.
+- SigV4 providers are executable with an access/secret key credential bundle in
+  a scoped upstream grant plus the manifest-declared region binding. Worker
+  access/secret key bindings remain a fallback; session tokens are optional.
+- Browser OAuth is available only when the manifest declares
+  `auth.authorization`, and the provider OAuth client must allow ClawRouter's
+  `/v1/oauth/callback` URI.
 
 ## Smoke Coverage
 
