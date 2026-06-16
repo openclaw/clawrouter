@@ -192,6 +192,10 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         return proxy_manifest_endpoint(req, env, url.path(), ProxyAuthMode::ProxyKey).await;
     }
 
+    if url.path().starts_with("/v1/native/") {
+        return proxy_native_provider(req, env, url.path(), ProxyAuthMode::Client).await;
+    }
+
     Response::from_json(&serde_json::json!({
         "error": {
             "code": "route_not_found",
@@ -295,6 +299,7 @@ fn service_index() -> Result<Response> {
                 "/v1/embeddings"
             ],
             "manifestProxy": "/v1/proxy/{provider}/{endpoint}"
+            ,"nativeProxy": "/v1/native/{provider}/{provider-native-path}"
         }
     }))
 }
@@ -424,11 +429,32 @@ fn route_catalog(snapshot: &ProviderSnapshot) -> Value {
             })
         })
         .collect::<Vec<_>>();
+    let native_proxy = snapshot
+        .providers
+        .iter()
+        .flat_map(|provider| {
+            provider
+                .endpoints
+                .iter()
+                .filter(|endpoint| endpoint.native_proxy)
+                .map(move |endpoint| {
+                    serde_json::json!({
+                        "provider": provider.id,
+                        "endpoint": endpoint.id,
+                        "route": format!("/v1/native/{}{}", provider.id, endpoint.path),
+                        "methods": &endpoint.methods,
+                        "path": &endpoint.path,
+                        "streaming": &endpoint.streaming
+                    })
+                })
+        })
+        .collect::<Vec<_>>();
 
     serde_json::json!({
         "version": "clawrouter.route-catalog.v1",
         "openaiCompatible": openai_compatible,
-        "manifestProxy": manifest_proxy
+        "manifestProxy": manifest_proxy,
+        "nativeProxy": native_proxy
     })
 }
 
@@ -446,6 +472,7 @@ fn openai_compatible_endpoint_paths(
 enum ProxyAuthMode {
     ProxyKey,
     AccessSession,
+    Client,
 }
 
 async fn proxy_openai_compatible(
@@ -556,7 +583,7 @@ async fn proxy_openai_compatible(
     let header_context = HeaderRequestContext {
         method: "POST",
         url: &upstream_url,
-        body: Some(&upstream_body),
+        body: Some(upstream_body.as_bytes()),
     };
     let headers = match provider_headers(
         req.headers(),
@@ -811,7 +838,7 @@ async fn proxy_manifest_endpoint(
     let header_context = HeaderRequestContext {
         method: &upstream_method,
         url: &upstream_url,
-        body: upstream_body.as_deref(),
+        body: upstream_body.as_deref().map(str::as_bytes),
     };
     let headers = match provider_headers(
         req.headers(),
@@ -898,6 +925,297 @@ async fn proxy_manifest_endpoint(
     )
     .await;
     Ok(response)
+}
+
+async fn proxy_native_provider(
+    mut req: Request,
+    env: Env,
+    path: &str,
+    auth_mode: ProxyAuthMode,
+) -> Result<Response> {
+    let snapshot = provider_snapshot()?;
+    let Some(rest) = path.strip_prefix("/v1/native/") else {
+        return json_error("route_not_found", "route not found", 404);
+    };
+    let Some((provider_id, native_rest)) = rest.split_once('/') else {
+        return json_error(
+            "invalid_native_route",
+            "expected /v1/native/<provider>/<provider-native-path>",
+            400,
+        );
+    };
+    let native_path = format!("/{native_rest}");
+    let Some(provider) = snapshot
+        .providers
+        .iter()
+        .find(|provider| provider.id == provider_id)
+    else {
+        return json_error("provider_not_found", "provider is not registered", 404);
+    };
+    let method = req.method().to_string().to_ascii_uppercase();
+    let Some(endpoint) = select_native_endpoint(provider, &method, &native_path) else {
+        return json_error(
+            "native_route_not_allowed",
+            "provider-native path or method is not declared by the provider manifest",
+            404,
+        );
+    };
+    if !supports_native_proxy(provider, endpoint) {
+        return json_error(
+            "provider_endpoint_not_supported",
+            "provider-native endpoint requires edge support that is not configured yet",
+            501,
+        );
+    }
+    let capability = provider
+        .capabilities
+        .iter()
+        .find(|candidate| {
+            candidate.endpoint == endpoint.id
+                && candidate
+                    .methods
+                    .iter()
+                    .any(|candidate| candidate == &method)
+        })
+        .or_else(|| {
+            provider
+                .capabilities
+                .iter()
+                .find(|candidate| candidate.endpoint == endpoint.id)
+        })
+        .map(|capability| capability.id.as_str())
+        .unwrap_or("tool.invoke");
+    let auth = match authorize_request(req.headers(), &env, &provider.id, auth_mode).await? {
+        AuthOutcome::Allowed(auth) => auth,
+        AuthOutcome::Denied(response) => return Ok(response),
+    };
+    let request_id = request_id(req.headers(), endpoint.id.as_str());
+    let audit = ProxyAuditContext {
+        env: &env,
+        auth: &auth,
+        provider: &provider.id,
+        capability,
+        model: None,
+        request_id: &request_id,
+    };
+    if let Some(response) = disabled_provider_connection_response(&env, &provider.id).await? {
+        enqueue_denied_usage(
+            &env,
+            &auth,
+            &provider.id,
+            capability,
+            None,
+            &request_id,
+            response.status_code(),
+        )
+        .await;
+        return Ok(response);
+    }
+    if let Some(response) = preflight_static_budget(&auth.policy)? {
+        enqueue_denied_usage(
+            &env,
+            &auth,
+            &provider.id,
+            capability,
+            None,
+            &request_id,
+            response.status_code(),
+        )
+        .await;
+        return Ok(response);
+    }
+    let incoming_url = req.url()?;
+    let upstream_url =
+        match native_upstream_url(provider, endpoint, &env, &native_path, incoming_url.query()) {
+            Ok(url) => url,
+            Err(error) => {
+                return audit
+                    .failure_response(provider_runtime_error_response(error)?)
+                    .await
+            }
+        };
+    let body = if method_allows_body(&method) {
+        Some(req.bytes().await?)
+    } else {
+        None
+    };
+    let header_context = HeaderRequestContext {
+        method: &method,
+        url: &upstream_url,
+        body: body.as_deref(),
+    };
+    let headers = match native_provider_headers(
+        req.headers(),
+        &env,
+        provider,
+        endpoint,
+        &auth,
+        header_context,
+    )
+    .await
+    {
+        Ok(headers) => headers,
+        Err(HeaderBuildError::Client {
+            code,
+            message,
+            status,
+        }) => {
+            let response = json_error(code, message, status)?;
+            return audit.failure_response(response).await;
+        }
+        Err(HeaderBuildError::Runtime(error)) => {
+            let response = provider_runtime_error_response(error)?;
+            return audit.failure_response(response).await;
+        }
+    };
+    let mut init = RequestInit::new();
+    init.with_method(method_from_str(&method)?)
+        .with_headers(headers);
+    if let Some(body) = body {
+        init.with_body(Some(Uint8Array::from(body.as_slice()).into()));
+    }
+    let upstream_req = match Request::new_with_init(&upstream_url, &init) {
+        Ok(request) => request,
+        Err(error) => {
+            console_error!(
+                "failed to build native upstream request for provider {}: {}",
+                provider.id,
+                error
+            );
+            let response = json_error(
+                "proxy_request_build_failed",
+                "failed to build upstream provider request",
+                500,
+            )?;
+            return audit.failure_response(response).await;
+        }
+    };
+    let budget = match preflight_budget(&env, &auth, capability).await? {
+        BudgetPreflight::Allowed(budget) => budget,
+        BudgetPreflight::Denied(response) => {
+            enqueue_denied_usage(
+                &env,
+                &auth,
+                &provider.id,
+                capability,
+                None,
+                &request_id,
+                response.status_code(),
+            )
+            .await;
+            return Ok(response);
+        }
+    };
+    let started_at_ms = Date::now().as_millis();
+    let mut response = send_upstream_request(upstream_req, &provider.id).await?;
+    let status_code = response.status_code();
+    let tokens = response_usage_tokens(&mut response, capability).await;
+    let response = sanitize_native_response(response, endpoint)?;
+    let budget = settle_budget_after_response(&env, &auth, budget, status_code).await;
+    enqueue_usage(
+        &env,
+        UsageRecord {
+            auth: &auth,
+            provider: &provider.id,
+            capability,
+            model: None,
+            request_id: &request_id,
+            budget,
+            tokens,
+            status: usage_status(status_code),
+            status_code,
+            duration_ms: Date::now().as_millis().saturating_sub(started_at_ms),
+        },
+    )
+    .await;
+    Ok(response)
+}
+
+fn select_native_endpoint<'a>(
+    provider: &'a CompiledProvider,
+    method: &str,
+    path: &str,
+) -> Option<&'a CompiledEndpoint> {
+    provider.endpoints.iter().find(|endpoint| {
+        endpoint.native_proxy
+            && endpoint.methods.iter().any(|candidate| candidate == method)
+            && native_endpoint_path_matches(endpoint, path)
+    })
+}
+
+fn native_endpoint_path_matches(endpoint: &CompiledEndpoint, path: &str) -> bool {
+    let mut template_rest = endpoint.path.as_str();
+    let mut path_rest = path;
+    while let Some(start) = template_rest.find("${") {
+        let literal = &template_rest[..start];
+        let Some(after_literal) = path_rest.strip_prefix(literal) else {
+            return false;
+        };
+        let after_start = &template_rest[start + 2..];
+        let Some(end) = after_start.find('}') else {
+            return false;
+        };
+        let param = &after_start[..end];
+        let next_template = &after_start[end + 1..];
+        let next_literal_end = next_template.find("${").unwrap_or(next_template.len());
+        let next_literal = &next_template[..next_literal_end];
+        let capture_end = if next_literal.is_empty() {
+            after_literal.len()
+        } else {
+            let Some(index) = after_literal.find(next_literal) else {
+                return false;
+            };
+            index
+        };
+        let capture = &after_literal[..capture_end];
+        if path_param_value(endpoint, param, capture).is_err() {
+            return false;
+        }
+        path_rest = &after_literal[capture_end..];
+        template_rest = next_template;
+    }
+    path_rest == template_rest
+}
+
+fn supports_native_proxy(provider: &CompiledProvider, endpoint: &CompiledEndpoint) -> bool {
+    endpoint.native_proxy && supports_manifest_proxy(provider, endpoint)
+}
+
+fn native_upstream_url(
+    provider: &CompiledProvider,
+    endpoint: &CompiledEndpoint,
+    env: &Env,
+    native_path: &str,
+    incoming_query: Option<&str>,
+) -> Result<String> {
+    if !native_endpoint_path_matches(endpoint, native_path) {
+        return Err(Error::RustError(format!(
+            "provider-native path is not allowed for endpoint `{}`",
+            endpoint.id
+        )));
+    }
+    let base = provider.base_urls.get("default").ok_or_else(|| {
+        Error::RustError(format!(
+            "provider `{}` has no default base URL",
+            provider.id
+        ))
+    })?;
+    let base = resolve_template_value(provider, base, Some(env))?;
+    let mut url = format!("{}{}", base.trim_end_matches('/'), native_path);
+    if let Some(query) = incoming_query.filter(|query| !query.is_empty()) {
+        url.push('?');
+        url.push_str(query);
+    }
+    let mut injected = resolved_template_map(provider, &endpoint.query, Some(env))?;
+    for (name, value) in resolved_template_map(provider, &provider.adapter.inject_query, Some(env))?
+    {
+        injected.insert(name, value);
+    }
+    if let Some((param, secret)) = query_api_key(provider, Some(env))? {
+        injected.insert(param, secret);
+    }
+    append_query(&mut url, injected);
+    Ok(url)
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Serialize)]
@@ -5207,7 +5525,20 @@ async fn authorize_request(
     match mode {
         ProxyAuthMode::ProxyKey => authorize_proxy_key(headers, env, provider_id).await,
         ProxyAuthMode::AccessSession => authorize_access_session(headers, env, provider_id).await,
+        ProxyAuthMode::Client => {
+            if proxy_key_header_present(headers)? {
+                authorize_proxy_key(headers, env, provider_id).await
+            } else {
+                authorize_access_session(headers, env, provider_id).await
+            }
+        }
     }
+}
+
+fn proxy_key_header_present(headers: &Headers) -> Result<bool> {
+    let auth = headers.get("authorization")?.unwrap_or_default();
+    let token = auth.strip_prefix("Bearer ").unwrap_or("");
+    Ok(parse_proxy_key(token).is_ok())
 }
 
 async fn disabled_provider_connection_response(
@@ -5881,7 +6212,7 @@ enum HeaderBuildError {
 struct HeaderRequestContext<'a> {
     method: &'a str,
     url: &'a str,
-    body: Option<&'a str>,
+    body: Option<&'a [u8]>,
 }
 
 async fn provider_headers(
@@ -5920,6 +6251,123 @@ async fn provider_headers(
     }
     apply_auth_headers(&headers, env, provider, auth, context).await?;
     Ok(headers)
+}
+
+async fn native_provider_headers(
+    incoming: &Headers,
+    env: &Env,
+    provider: &CompiledProvider,
+    endpoint: &CompiledEndpoint,
+    auth: &AuthorizedKey,
+    context: HeaderRequestContext<'_>,
+) -> std::result::Result<Headers, HeaderBuildError> {
+    let headers = Headers::new();
+    for (name, value) in incoming.entries() {
+        if native_request_header_allowed(provider, endpoint, &name) {
+            headers
+                .set(&name, &value)
+                .map_err(HeaderBuildError::Runtime)?;
+        }
+    }
+    for (name, value) in
+        resolved_template_map(provider, &provider.adapter.inject_headers, Some(env))
+            .map_err(HeaderBuildError::Runtime)?
+    {
+        headers
+            .set(&name, &value)
+            .map_err(HeaderBuildError::Runtime)?;
+    }
+    for (name, value) in resolved_template_map(provider, &endpoint.headers, Some(env))
+        .map_err(HeaderBuildError::Runtime)?
+    {
+        headers
+            .set(&name, &value)
+            .map_err(HeaderBuildError::Runtime)?;
+    }
+    apply_auth_headers(&headers, env, provider, auth, context).await?;
+    Ok(headers)
+}
+
+fn native_request_header_allowed(
+    provider: &CompiledProvider,
+    endpoint: &CompiledEndpoint,
+    name: &str,
+) -> bool {
+    let name = name.to_ascii_lowercase();
+    if matches!(
+        name.as_str(),
+        "authorization"
+            | "cookie"
+            | "host"
+            | "connection"
+            | "content-length"
+            | "proxy-authorization"
+            | "proxy-connection"
+            | "te"
+            | "trailer"
+            | "transfer-encoding"
+            | "upgrade"
+    ) || name.starts_with("cf-")
+    {
+        return false;
+    }
+    matches!(
+        name.as_str(),
+        "accept" | "accept-encoding" | "content-encoding" | "content-type" | "x-request-id"
+    ) || provider
+        .adapter
+        .passthrough_headers
+        .iter()
+        .chain(endpoint.request_headers.iter())
+        .any(|candidate| candidate.eq_ignore_ascii_case(&name))
+}
+
+fn sanitize_native_response(response: Response, endpoint: &CompiledEndpoint) -> Result<Response> {
+    let status = response.status_code();
+    let body = response.body().clone();
+    let headers = Headers::new();
+    for (name, value) in response.headers().entries() {
+        if native_response_header_allowed(endpoint, &name) {
+            headers.set(&name, &value)?;
+        }
+    }
+    headers.set(
+        UPSTREAM_PROVIDER_HEADER,
+        &response
+            .headers()
+            .get(UPSTREAM_PROVIDER_HEADER)?
+            .unwrap_or_default(),
+    )?;
+    Ok(Response::from_body(body)?
+        .with_status(status)
+        .with_headers(headers))
+}
+
+fn native_response_header_allowed(endpoint: &CompiledEndpoint, name: &str) -> bool {
+    let name = name.to_ascii_lowercase();
+    matches!(
+        name.as_str(),
+        "accept-ranges"
+            | "cache-control"
+            | "content-disposition"
+            | "content-encoding"
+            | "content-language"
+            | "content-length"
+            | "content-range"
+            | "content-type"
+            | "etag"
+            | "expires"
+            | "last-modified"
+            | "location"
+            | "retry-after"
+            | "request-id"
+            | "x-request-id"
+    ) || name.starts_with("ratelimit-")
+        || name.starts_with("x-ratelimit-")
+        || endpoint
+            .response_headers
+            .iter()
+            .any(|candidate| candidate.eq_ignore_ascii_case(&name))
 }
 
 fn path_param_value(
@@ -6440,7 +6888,7 @@ fn sigv4_headers_at(
     let date_stamp = amz_date
         .get(0..8)
         .ok_or_else(|| Error::RustError("invalid SigV4 date".to_string()))?;
-    let payload_hash = sha256_hex(context.body.unwrap_or(""));
+    let payload_hash = sha256_hex_bytes(context.body.unwrap_or_default());
     let mut canonical_headers = BTreeMap::from([
         ("host".to_string(), host.clone()),
         ("x-amz-content-sha256".to_string(), payload_hash.clone()),
@@ -9094,7 +9542,7 @@ fn append_query(url: &mut String, query: BTreeMap<String, String>) {
         .map(|(name, value)| format!("{}={}", encode_component(name), encode_component(value)))
         .collect::<Vec<_>>()
         .join("&");
-    url.push('?');
+    url.push(if url.contains('?') { '&' } else { '?' });
     url.push_str(&pairs);
 }
 
@@ -9128,7 +9576,11 @@ fn encode_component(value: &str) -> String {
 }
 
 fn sha256_hex(input: &str) -> String {
-    let digest = Sha256::digest(input.as_bytes());
+    sha256_hex_bytes(input.as_bytes())
+}
+
+fn sha256_hex_bytes(input: &[u8]) -> String {
+    let digest = Sha256::digest(input);
     bytes_to_hex(&digest)
 }
 
@@ -9465,6 +9917,10 @@ mod tests {
             .get("manifestProxy")
             .and_then(Value::as_array)
             .unwrap();
+        let native_routes = catalog
+            .get("nativeProxy")
+            .and_then(Value::as_array)
+            .unwrap();
 
         assert!(openai_routes
             .iter()
@@ -9473,6 +9929,12 @@ mod tests {
             route.get("provider").and_then(Value::as_str) == Some("tavily")
                 && route.get("endpoint").and_then(Value::as_str) == Some("search")
                 && route.get("route").and_then(Value::as_str) == Some("/v1/proxy/tavily/search")
+        }));
+        assert!(native_routes.iter().any(|route| {
+            route.get("provider").and_then(Value::as_str) == Some("anthropic")
+                && route.get("endpoint").and_then(Value::as_str) == Some("messages")
+                && route.get("route").and_then(Value::as_str)
+                    == Some("/v1/native/anthropic/v1/messages")
         }));
         assert!(manifest_routes.iter().any(|route| {
             route.get("provider").and_then(Value::as_str) == Some("replicate")
@@ -10924,6 +11386,108 @@ mod tests {
     }
 
     #[test]
+    fn native_proxy_matches_only_manifest_declared_paths_and_methods() {
+        let snapshot = provider_snapshot().unwrap();
+        let google = snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.id == "google-gemini")
+            .unwrap();
+        let generate = google
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.id == "generate_content")
+            .unwrap();
+        assert!(native_endpoint_path_matches(
+            generate,
+            "/v1beta/models/gemini-2.5-pro:generateContent"
+        ));
+        assert!(!native_endpoint_path_matches(
+            generate,
+            "/v1beta/models/gemini-2.5-pro:streamGenerateContent"
+        ));
+        assert_eq!(
+            select_native_endpoint(
+                google,
+                "POST",
+                "/v1beta/models/gemini-2.5-pro:generateContent"
+            )
+            .map(|endpoint| endpoint.id.as_str()),
+            Some("generate_content")
+        );
+        assert!(select_native_endpoint(
+            google,
+            "DELETE",
+            "/v1beta/models/gemini-2.5-pro:generateContent"
+        )
+        .is_none());
+    }
+
+    #[test]
+    fn native_proxy_relative_paths_still_reject_traversal() {
+        let provider = relative_path_test_provider();
+        let endpoint = provider
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.id == "search")
+            .unwrap();
+        assert!(native_endpoint_path_matches(
+            endpoint,
+            "/v1/repos/openclaw/clawrouter"
+        ));
+        assert!(!native_endpoint_path_matches(
+            endpoint,
+            "/v1/repos/../secrets"
+        ));
+    }
+
+    #[test]
+    fn native_proxy_header_filters_strip_client_credentials_and_cookies() {
+        let snapshot = provider_snapshot().unwrap();
+        let openai = snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.id == "openai")
+            .unwrap();
+        let endpoint = openai
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.id == "responses")
+            .unwrap();
+        assert!(native_request_header_allowed(
+            openai,
+            endpoint,
+            "content-type"
+        ));
+        assert!(native_request_header_allowed(
+            openai,
+            endpoint,
+            "openai-organization"
+        ));
+        assert!(!native_request_header_allowed(
+            openai,
+            endpoint,
+            "authorization"
+        ));
+        assert!(!native_request_header_allowed(openai, endpoint, "cookie"));
+        assert!(native_response_header_allowed(
+            endpoint,
+            "x-ratelimit-limit"
+        ));
+        assert!(!native_response_header_allowed(endpoint, "set-cookie"));
+    }
+
+    #[test]
+    fn native_query_injection_preserves_the_client_query() {
+        let mut url = "https://example.com/v1/models?alt=sse".to_string();
+        append_query(
+            &mut url,
+            BTreeMap::from([("key".to_string(), "secret".to_string())]),
+        );
+        assert_eq!(url, "https://example.com/v1/models?alt=sse&key=secret");
+    }
+
+    #[test]
     fn manifest_proxy_encodes_safe_path_params() {
         let snapshot = provider_snapshot().unwrap();
         let provider = snapshot
@@ -11062,7 +11626,7 @@ mod tests {
         let context = HeaderRequestContext {
             method: "POST",
             url: "https://bedrock-runtime.us-east-1.amazonaws.com/model/anthropic.claude/invoke",
-            body: Some(r#"{"inputText":"ok"}"#),
+            body: Some(br#"{"inputText":"ok"}"#),
         };
         let headers = sigv4_headers_at(
             "AKIDEXAMPLE",
