@@ -2581,7 +2581,7 @@ fn client_catalog_value(snapshot: &ProviderSnapshot, rows: Vec<EntitlementProvid
                 "displayName": provider.display_name,
                 "allowed": true,
                 "executable": row.readiness.executable,
-                "openAiCompatible": openai_compatible,
+                "openaiCompatible": openai_compatible,
                 "nativeBaseUrl": format!("/v1/native/{}", provider.id),
                 "policies": row.policies,
                 "readiness": row.readiness,
@@ -12795,7 +12795,7 @@ mod tests {
             catalog["providers"][0]["nativeBaseUrl"],
             "/v1/native/openai"
         );
-        assert_eq!(catalog["providers"][0]["openAiCompatible"], true);
+        assert_eq!(catalog["providers"][0]["openaiCompatible"], true);
         assert_eq!(
             catalog["providers"][0]["routes"][0]["endpoint"],
             "responses"
@@ -12812,7 +12812,7 @@ mod tests {
             catalog["providers"][0]["models"][0]["capabilities"],
             serde_json::json!(["llm.responses"])
         );
-        assert_eq!(catalog["providers"][1]["openAiCompatible"], false);
+        assert_eq!(catalog["providers"][1]["openaiCompatible"], false);
     }
 
     #[test]
@@ -12822,7 +12822,7 @@ mod tests {
         anthropic.readiness.executable_endpoints = vec!["messages".to_string()];
         let catalog = client_catalog_value(&snapshot, vec![anthropic]);
         let provider = &catalog["providers"][0];
-        assert_eq!(provider["openAiCompatible"], false);
+        assert_eq!(provider["openaiCompatible"], false);
         assert_eq!(provider["nativeBaseUrl"], "/v1/native/anthropic");
         assert_eq!(provider["routes"][0]["path"], "/v1/messages");
         assert_eq!(provider["routes"][0]["requestFormat"], "anthropic.messages");

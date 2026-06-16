@@ -190,8 +190,8 @@ function expectClientCatalog(catalog) {
     throw new Error("credential-scoped client catalog is empty");
   }
   for (const provider of catalog.providers) {
-    if (typeof provider.openAiCompatible !== "boolean") {
-      throw new Error(`client catalog provider ${provider.id} is missing openAiCompatible`);
+    if (typeof provider.openaiCompatible !== "boolean") {
+      throw new Error(`client catalog provider ${provider.id} is missing openaiCompatible`);
     }
     if (!Array.isArray(provider.routes)) {
       throw new Error(`client catalog provider ${provider.id} is missing routes`);
