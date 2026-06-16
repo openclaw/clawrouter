@@ -58,11 +58,12 @@ current deploy job renders and deploys a Worker that can verify Access JWTs.
 `CLAWROUTER_ACCESS_ADMIN_*` controls who is an admin inside ClawRouter.
 `CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS` creates a separate Service Auth
 (`non_identity`) policy for automation. The default path-scoped Access
-destinations are `/dashboard/*`, `/v1/session`, `/v1/entitlements`,
-`/v1/playground/*`, `/v1/admin/*`, and `/v1/oauth/callback`. This stays within Cloudflare's
-per-application destination limit while still protecting the console entrypoint
-and the Access-backed session, entitlement, playground, admin, and OAuth
-callback APIs. Override
+destinations are `/dashboard/*`, `/v1/session`, `/v1/playground/*`,
+`/v1/admin/*`, and `/v1/oauth/callback`. This stays within Cloudflare's
+five-destination per-application limit while still protecting the console
+entrypoint and the Access-backed session, playground, admin, and OAuth callback
+APIs. `/v1/entitlements` still verifies the Access JWT inside the Worker, but is
+not a separate Access application destination. Override
 them with `CLAWROUTER_ACCESS_PATHS` only if the API contract changes. Do not add
 `/` on the shared API hostname: Cloudflare Access
 path inheritance would protect the public `/v1/*` API too. Root reaches Access
