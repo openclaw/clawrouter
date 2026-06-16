@@ -5502,7 +5502,7 @@ async fn list_oauth_grants(kv: &KvStore) -> Result<Vec<OAuthGrantRecord>> {
             grants.push(OAuthGrantRecord {
                 key: key.name,
                 enabled: token.enabled,
-                usable: upstream_grant_usable(&token),
+                usable: upstream_grant_usable_by_declared_provider(&token),
             });
         }
         if list.list_complete {
@@ -6215,7 +6215,7 @@ fn admin_upstream_grant_response(
             .refresh
             .as_ref()
             .and_then(|refresh| refresh.client_secret_config.clone()),
-        usable: upstream_grant_usable(grant),
+        usable: upstream_grant_usable_by_declared_provider(grant),
     })
 }
 
@@ -6299,6 +6299,25 @@ fn upstream_grant_usable(grant: &UpstreamGrantRecord) -> bool {
         && (!upstream_grant_expired(grant) || upstream_grant_refreshable(grant))
 }
 
+fn upstream_grant_usable_by_declared_provider(grant: &UpstreamGrantRecord) -> bool {
+    let usable = upstream_grant_usable(grant);
+    if !usable || grant.credentials.is_empty() {
+        return usable;
+    }
+    let Some(provider_id) = grant.provider.as_deref() else {
+        return false;
+    };
+    provider_snapshot()
+        .ok()
+        .and_then(|snapshot| {
+            snapshot
+                .providers
+                .into_iter()
+                .find(|provider| provider.id == provider_id)
+        })
+        .is_some_and(|provider| upstream_grant_supports_provider(&provider, grant))
+}
+
 fn upstream_grant_credential_field<'a>(
     grant: &'a UpstreamGrantRecord,
     field: &str,
@@ -6319,7 +6338,7 @@ fn upstream_grant_supports_provider(
             upstream_grant_credential_field(grant, "accessKeyId").is_some()
                 && upstream_grant_credential_field(grant, "secretAccessKey").is_some()
         }
-        _ => true,
+        _ => grant.credentials.is_empty(),
     }
 }
 
@@ -12250,21 +12269,18 @@ fn append_native_query(
     injected: BTreeMap<String, String>,
 ) -> Result<()> {
     if let Some(incoming_query) = incoming_query.filter(|query| !query.is_empty()) {
-        let mut parsed = Url::parse("https://clawrouter.invalid/")
-            .map_err(|error| Error::RustError(format!("failed to parse native query: {error}")))?;
-        parsed.set_query(Some(incoming_query));
-        let forwarded = parsed
-            .query_pairs()
-            .filter(|(name, _)| !injected.contains_key(name.as_ref()))
-            .map(|(name, value)| {
-                format!(
-                    "{}={}",
-                    encode_component(name.as_ref()),
-                    encode_component(value.as_ref())
-                )
-            })
-            .collect::<Vec<_>>()
-            .join("&");
+        let forwarded = if incoming_query
+            .split('&')
+            .any(|pair| raw_query_pair_is_controlled(pair, &injected))
+        {
+            incoming_query
+                .split('&')
+                .filter(|pair| !raw_query_pair_is_controlled(pair, &injected))
+                .collect::<Vec<_>>()
+                .join("&")
+        } else {
+            incoming_query.to_string()
+        };
         if !forwarded.is_empty() {
             url.push(if url.contains('?') { '&' } else { '?' });
             url.push_str(&forwarded);
@@ -12272,6 +12288,12 @@ fn append_native_query(
     }
     append_query(url, injected);
     Ok(())
+}
+
+fn raw_query_pair_is_controlled(pair: &str, injected: &BTreeMap<String, String>) -> bool {
+    let raw_name = pair.split_once('=').map(|(name, _)| name).unwrap_or(pair);
+    let query_name = raw_name.replace('+', " ");
+    percent_decode_path_segment(&query_name).is_some_and(|name| injected.contains_key(&name))
 }
 
 fn template_placeholders(template: &str) -> Vec<String> {
@@ -14514,6 +14536,25 @@ mod tests {
     }
 
     #[test]
+    fn named_credential_bundles_require_a_provider_auth_consumer() {
+        let mut grant = subscription_test_grant("anthropic");
+        grant.kind = UpstreamGrantKind::ApiKey;
+        grant.credential = None;
+        grant.access_token = None;
+        grant.refresh_token = None;
+        grant.subscription = None;
+        grant.credentials =
+            BTreeMap::from([("apiKey".to_string(), "secret-placeholder".to_string())]);
+
+        assert!(upstream_grant_usable(&grant));
+        assert!(!upstream_grant_usable_by_declared_provider(&grant));
+        assert_eq!(
+            normalize_upstream_grant(grant, None).unwrap_err(),
+            "upstream grant credentials do not satisfy the provider auth contract"
+        );
+    }
+
+    #[test]
     fn upstream_grant_admin_metadata_never_serializes_secrets() {
         let grant = subscription_test_grant("openai");
         let value = serde_json::to_value(
@@ -14633,7 +14674,7 @@ mod tests {
         let mut url = "https://example.com/v1/models".to_string();
         append_native_query(
             &mut url,
-            Some("tag=one&api-version=caller&tag=two"),
+            Some("tag=one+two&%61pi-version=caller&flag&tag=%2Fraw"),
             BTreeMap::from([
                 ("api-version".to_string(), "configured".to_string()),
                 ("key".to_string(), "secret".to_string()),
@@ -14642,7 +14683,19 @@ mod tests {
         .unwrap();
         assert_eq!(
             url,
-            "https://example.com/v1/models?tag=one&tag=two&api-version=configured&key=secret"
+            "https://example.com/v1/models?tag=one+two&flag&tag=%2Fraw&api-version=configured&key=secret"
+        );
+
+        let mut passthrough = "https://example.com/v1/models".to_string();
+        append_native_query(
+            &mut passthrough,
+            Some("tag=one+two&&flag&empty=&encoded=%2f"),
+            BTreeMap::new(),
+        )
+        .unwrap();
+        assert_eq!(
+            passthrough,
+            "https://example.com/v1/models?tag=one+two&&flag&empty=&encoded=%2f"
         );
     }
 
