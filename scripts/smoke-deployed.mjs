@@ -25,6 +25,19 @@ const aliasedRoutes = await expectOk(`${baseUrl}/api/route`, "route catalog alia
 expectRouteCatalog(aliasedRoutes, "route catalog alias");
 await expectAccessGate(`${baseUrl}/v1/session`, "session access gate");
 await expectAccessGate(`${baseUrl}/v1/playground/v1/chat/completions`, "playground access gate");
+await expectAccessGate(`${baseUrl}/v1/oauth/callback`, "OAuth callback access gate");
+await expectAccessGate(
+  `${baseUrl}/v1/admin/upstream-grants/policies/smoke/openai/authorize`,
+  "OAuth authorization access gate",
+  { method: "POST" },
+);
+await expectClientAuthGate(`${baseUrl}/v1/models`, "models client auth gate");
+await expectClientAuthGate(`${baseUrl}/v1/catalog`, "catalog client auth gate");
+await expectClientAuthGate(
+  `${baseUrl}/v1/native/openai/v1/responses`,
+  "native proxy client auth gate",
+  { method: "POST" },
+);
 const plan = buildProviderSmokePlan(providers);
 if (plan.targetCount !== plan.providerCount) {
   throw new Error(`provider smoke plan is incomplete: ${plan.targetCount}/${plan.providerCount}`);
@@ -96,14 +109,39 @@ async function expectRedirectOrAccessGate(url, name, location) {
   assertAccessGateResponse(response, contentType, body, name);
 }
 
-async function expectAccessGate(url, name) {
+async function expectAccessGate(url, name, init = {}) {
   const response = await fetch(url, {
+    ...init,
     headers: { accept: "text/html,application/json" },
     redirect: "manual",
   });
   const contentType = response.headers.get("content-type") ?? "";
   const body = await response.text();
   assertAccessGateResponse(response, contentType, body, name);
+}
+
+async function expectClientAuthGate(url, name, init = {}) {
+  const response = await fetch(url, {
+    ...init,
+    headers: { accept: "text/html,application/json" },
+    redirect: "manual",
+  });
+  const location = response.headers.get("location") ?? "";
+  if (response.status >= 300 && response.status < 400 && looksLikeAccessRedirect(location, url)) {
+    return;
+  }
+  const contentType = response.headers.get("content-type") ?? "";
+  const body = await response.text();
+  if ((response.status === 401 || response.status === 403) && contentType.includes("application/json")) {
+    let json = null;
+    try {
+      json = JSON.parse(body);
+    } catch {}
+    if (["client_auth_required", "invalid_proxy_key", "access_session_required"].includes(json?.error?.code)) {
+      return;
+    }
+  }
+  throw new Error(`${name} returned ${response.status}, expected a ClawRouter or Cloudflare Access auth challenge`);
 }
 
 function assertAccessGateResponse(response, contentType, body, name) {
