@@ -137,6 +137,16 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
         return user_usage(req.headers(), &env).await.and_then(with_cors);
     }
 
+    if req.method() == Method::Get && api_path == "/v1/models" {
+        return client_models(req.headers(), &env).await.and_then(with_cors);
+    }
+
+    if req.method() == Method::Get && api_path == "/v1/catalog" {
+        return client_catalog(req.headers(), &env)
+            .await
+            .and_then(with_cors);
+    }
+
     if api_path.starts_with("/v1/admin/") {
         return admin_api(req, env, &api_path).await.and_then(with_cors);
     }
@@ -276,6 +286,8 @@ fn service_index() -> Result<Response> {
             "entitlements": "/v1/entitlements",
             "me": "/v1/me",
             "usage": "/v1/usage",
+            "models": "/v1/models",
+            "catalog": "/v1/catalog",
             "keyInspect": "/v1/key/inspect",
             "adminOverview": "/v1/admin/overview",
             "adminUsers": "/v1/admin/users",
@@ -1983,8 +1995,35 @@ async fn access_entitlement_rows_for_session(
             ));
         }
     };
-    let snapshot = provider_snapshot()?;
     let entries = list_session_policy_entries(&kv, env, session).await?;
+    entitlement_rows_for_entries(&entries, env, &kv).await
+}
+
+async fn entitlement_rows_for_policy(
+    policy_id: &str,
+    policy: &AccessPolicy,
+    env: &Env,
+) -> Result<Vec<EntitlementProviderRow>> {
+    let kv = env.kv("POLICY_KV").map_err(|_| {
+        Error::RustError("POLICY_KV binding is required for client discovery".to_string())
+    })?;
+    entitlement_rows_for_entries(
+        &[AccessPolicyEntry {
+            policy_id: policy_id.to_string(),
+            policy: policy.clone(),
+        }],
+        env,
+        &kv,
+    )
+    .await
+}
+
+async fn entitlement_rows_for_entries(
+    entries: &[AccessPolicyEntry],
+    env: &Env,
+    kv: &KvStore,
+) -> Result<Vec<EntitlementProviderRow>> {
+    let snapshot = provider_snapshot()?;
     let grants = list_oauth_grants(&kv).await?;
     let connections = list_provider_connections(env, &kv, &snapshot).await?;
     let health = list_provider_health(&kv).await?;
@@ -2018,6 +2057,170 @@ async fn access_entitlement_rows_for_session(
             }
         })
         .collect())
+}
+
+async fn client_entitlement_rows(
+    headers: &Headers,
+    env: &Env,
+) -> std::result::Result<Vec<EntitlementProviderRow>, Response> {
+    if proxy_key_header_present(headers).map_err(internal_error_response)? {
+        let auth = match authorize_proxy_key_identity(headers, env)
+            .await
+            .map_err(internal_error_response)?
+        {
+            AuthOutcome::Allowed(auth) => auth,
+            AuthOutcome::Denied(response) => return Err(response),
+        };
+        return entitlement_rows_for_policy(&auth.policy_id, &auth.policy, env)
+            .await
+            .map_err(internal_error_response);
+    }
+    let session = verified_access_session(headers, env)
+        .await
+        .map_err(internal_error_response)?
+        .ok_or_else(|| {
+            json_error(
+                "client_auth_required",
+                "a valid ClawRouter proxy key or Cloudflare Access session is required",
+                401,
+            )
+            .unwrap_or_else(|_| Response::error("client authentication required", 401).unwrap())
+        })?;
+    access_entitlement_rows_for_session(&session, env)
+        .await
+        .map_err(internal_error_response)
+}
+
+async fn client_models(headers: &Headers, env: &Env) -> Result<Response> {
+    let rows = match client_entitlement_rows(headers, env).await {
+        Ok(rows) => rows,
+        Err(response) => return Ok(response),
+    };
+    let snapshot = provider_snapshot()?;
+    private_json_response(&client_models_value(&snapshot, &rows))
+}
+
+fn client_models_value(snapshot: &ProviderSnapshot, rows: &[EntitlementProviderRow]) -> Value {
+    let allowed = rows
+        .iter()
+        .filter(|row| row.allowed && row.readiness.executable)
+        .map(|row| row.provider.as_str())
+        .collect::<BTreeSet<_>>();
+    let data = snapshot
+        .providers
+        .iter()
+        .filter(|provider| allowed.contains(provider.id.as_str()))
+        .flat_map(|provider| {
+            provider.models.iter().map(|model| {
+                serde_json::json!({
+                    "id": model.id,
+                    "object": "model",
+                    "owned_by": provider.id,
+                    "capabilities": model.capabilities
+                })
+            })
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "object": "list",
+        "data": data
+    })
+}
+
+async fn client_catalog(headers: &Headers, env: &Env) -> Result<Response> {
+    let rows = match client_entitlement_rows(headers, env).await {
+        Ok(rows) => rows,
+        Err(response) => return Ok(response),
+    };
+    let snapshot = provider_snapshot()?;
+    private_json_response(&client_catalog_value(&snapshot, rows))
+}
+
+fn client_catalog_value(snapshot: &ProviderSnapshot, rows: Vec<EntitlementProviderRow>) -> Value {
+    let providers = rows
+        .into_iter()
+        .filter(|row| row.allowed)
+        .filter_map(|row| {
+            let provider = snapshot
+                .providers
+                .iter()
+                .find(|provider| provider.id == row.provider)?;
+            Some(serde_json::json!({
+                "id": provider.id,
+                "displayName": provider.display_name,
+                "allowed": true,
+                "executable": row.readiness.executable,
+                "nativeBaseUrl": format!("/v1/native/{}", provider.id),
+                "policies": row.policies,
+                "readiness": row.readiness,
+                "connectionTypes": provider_connection_types(provider),
+                "routes": provider.endpoints.iter().filter(|endpoint| endpoint.native_proxy).map(|endpoint| {
+                    serde_json::json!({
+                        "endpoint": endpoint.id,
+                        "methods": endpoint.methods,
+                        "path": endpoint.path,
+                        "streaming": endpoint.streaming
+                    })
+                }).collect::<Vec<_>>(),
+                "models": provider.models
+            }))
+        })
+        .collect::<Vec<_>>();
+    serde_json::json!({
+        "version": "clawrouter.client-catalog.v1",
+        "providers": providers
+    })
+}
+
+fn provider_connection_types(provider: &CompiledProvider) -> Vec<&'static str> {
+    let mut types = BTreeSet::new();
+    for scheme in &provider.auth.schemes {
+        match scheme {
+            AuthScheme::OAuth { .. } => {
+                types.insert("oauth");
+                types.insert("subscription");
+            }
+            AuthScheme::Bearer { .. }
+            | AuthScheme::ApiKey { .. }
+            | AuthScheme::QueryApiKey { .. } => {
+                types.insert("api_key");
+            }
+            AuthScheme::SigV4 { .. } => {
+                types.insert("sigv4");
+            }
+            AuthScheme::CloudflareBinding => {
+                types.insert("cloudflare_binding");
+            }
+        }
+    }
+    types.into_iter().collect()
+}
+
+fn private_json_response(value: &Value) -> Result<Response> {
+    let raw = serde_json::to_vec(value)?;
+    let etag = format!("\"{}\"", sha256_hex_bytes(&raw));
+    let mut response = Response::from_bytes(raw)?;
+    response
+        .headers_mut()
+        .set("content-type", "application/json")?;
+    response
+        .headers_mut()
+        .set("cache-control", "private, max-age=60")?;
+    response
+        .headers_mut()
+        .set("vary", "authorization, cf-access-jwt-assertion")?;
+    response.headers_mut().set("etag", &etag)?;
+    Ok(response)
+}
+
+fn internal_error_response(error: Error) -> Response {
+    console_error!("client discovery failed: {}", error);
+    json_error(
+        "client_discovery_unavailable",
+        "client discovery is temporarily unavailable",
+        503,
+    )
+    .unwrap_or_else(|_| Response::error("client discovery unavailable", 503).unwrap())
 }
 
 fn provider_runtime_error_summary(error: &Error) -> String {
@@ -9616,6 +9819,8 @@ fn cors_enabled_path(path: &str) -> bool {
             | "/v1/entitlements"
             | "/v1/me"
             | "/v1/usage"
+            | "/v1/models"
+            | "/v1/catalog"
             | "/v1/key/inspect"
     ) || path.starts_with("/v1/admin/")
 }
@@ -9682,6 +9887,49 @@ mod tests {
         provider
     }
 
+    fn entitlement_test_row(
+        provider: &str,
+        allowed: bool,
+        executable: bool,
+    ) -> EntitlementProviderRow {
+        EntitlementProviderRow {
+            provider: provider.to_string(),
+            display_name: provider.to_string(),
+            service_kind: "model_provider".to_string(),
+            allowed,
+            policies: allowed
+                .then(|| vec!["maintainers".to_string()])
+                .unwrap_or_default(),
+            readiness: ProviderReadinessRow {
+                id: provider.to_string(),
+                display_name: provider.to_string(),
+                class: "openai_compatible".to_string(),
+                service_kind: "model_provider".to_string(),
+                required_config: Vec::new(),
+                optional_config: Vec::new(),
+                missing_config: Vec::new(),
+                config_present: true,
+                connection_enabled: true,
+                oauth_grant_required: false,
+                oauth_grant_count: 0,
+                openai_compatible: true,
+                manifest_routes: 1,
+                model_count: 1,
+                executable,
+                verified: false,
+                last_checked_at: None,
+                latency_ms: None,
+                status: if executable {
+                    "unverified"
+                } else {
+                    "unsupported"
+                }
+                .to_string(),
+                reasons: Vec::new(),
+            },
+        }
+    }
+
     #[test]
     fn prefix_models_keep_requested_upstream_model() {
         let snapshot = provider_snapshot().unwrap();
@@ -9700,6 +9948,39 @@ mod tests {
         let route = select_model_route(&snapshot, "openai/gpt-4.1-mini").unwrap();
         assert_eq!(route.provider.id, "openai");
         assert_eq!(route.upstream_model, "gpt-4.1-mini");
+    }
+
+    #[test]
+    fn client_catalog_and_models_filter_by_effective_entitlement() {
+        let snapshot = provider_snapshot().unwrap();
+        let rows = vec![
+            entitlement_test_row("openai", true, true),
+            entitlement_test_row("anthropic", false, true),
+            entitlement_test_row("xai", true, false),
+        ];
+        let models = client_models_value(&snapshot, &rows);
+        let ids = models["data"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|model| model["id"].as_str())
+            .collect::<Vec<_>>();
+        assert!(ids.contains(&"openai/gpt-4.1-mini"));
+        assert!(!ids.contains(&"anthropic/default"));
+        assert!(!ids.contains(&"xai/default"));
+
+        let catalog = client_catalog_value(&snapshot, rows);
+        let providers = catalog["providers"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter_map(|provider| provider["id"].as_str())
+            .collect::<Vec<_>>();
+        assert_eq!(providers, vec!["openai", "xai"]);
+        assert_eq!(
+            catalog["providers"][0]["nativeBaseUrl"],
+            "/v1/native/openai"
+        );
     }
 
     #[test]
