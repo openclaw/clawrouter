@@ -300,6 +300,7 @@ fn service_index() -> Result<Response> {
             "adminCredentials": "/v1/admin/credentials",
             "adminConnections": "/v1/admin/connections",
             "adminUpstreamGrants": "/v1/admin/upstream-grants",
+            "adminAssignmentRules": "/v1/admin/assignment-rules",
             "apiAliases": {
                 "routes": ["/api/route", "/api/routes"],
                 "session": "/api/session",
@@ -1787,6 +1788,103 @@ struct AdminUpstreamGrantResponse {
     usable: bool,
 }
 
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+enum AssignmentRuleKind {
+    #[default]
+    ExactEmail,
+    EmailDomain,
+    GithubOrg,
+    GithubTeam,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AssignmentRuleRecord {
+    #[serde(default = "default_assignment_rule_version")]
+    version: u8,
+    #[serde(default = "default_true")]
+    enabled: bool,
+    #[serde(default)]
+    kind: AssignmentRuleKind,
+    subject: String,
+    #[serde(default)]
+    groups: Vec<String>,
+    #[serde(default)]
+    policy_ids: Vec<String>,
+    #[serde(default = "default_binding_priority")]
+    priority: u16,
+    #[serde(default = "default_true")]
+    revoke_on_loss: bool,
+    provenance: String,
+    #[serde(default)]
+    created_at: Option<String>,
+    #[serde(default)]
+    updated_at: Option<String>,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AdminAssignmentRuleResponse {
+    rule_id: String,
+    #[serde(flatten)]
+    rule: AssignmentRuleRecord,
+    generated_group: String,
+}
+
+#[derive(Clone, Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AssignmentEvidence {
+    #[serde(default)]
+    source: String,
+    #[serde(default)]
+    verified: bool,
+    #[serde(default)]
+    github_orgs: Vec<String>,
+    #[serde(default)]
+    github_teams: Vec<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct AssignmentReconcileRequest {
+    #[serde(default)]
+    email: Option<String>,
+    #[serde(default)]
+    all: bool,
+    #[serde(default)]
+    evidence: Option<AssignmentEvidence>,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AssignmentStateEntry {
+    #[serde(default)]
+    groups: Vec<String>,
+    #[serde(default = "default_true")]
+    revoke_on_loss: bool,
+}
+
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AssignmentStateRecord {
+    #[serde(default = "default_assignment_rule_version")]
+    version: u8,
+    #[serde(default)]
+    assignments: BTreeMap<String, AssignmentStateEntry>,
+    #[serde(default)]
+    updated_at: Option<String>,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct AssignmentReconcileResult {
+    email: String,
+    matched_rule_ids: Vec<String>,
+    retained_rule_ids: Vec<String>,
+    groups: Vec<String>,
+}
+
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "lowercase")]
 enum AccessRole {
@@ -2583,6 +2681,87 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
         return json_error("method_not_allowed", "admin method is not allowed", 405);
     }
 
+    if req.method() == Method::Get && path == "/v1/admin/assignment-rules" {
+        let rules = list_assignment_rules(&kv)
+            .await?
+            .into_iter()
+            .map(|(rule_id, rule)| admin_assignment_rule_response(&rule_id, rule))
+            .collect::<Vec<_>>();
+        return Response::from_json(&serde_json::json!({ "rules": rules }));
+    }
+
+    if req.method() == Method::Post && path == "/v1/admin/assignment-rules/reconcile" {
+        let request = match serde_json::from_str::<AssignmentReconcileRequest>(&req.text().await?) {
+            Ok(request) => request,
+            Err(error) => {
+                return json_error(
+                    "invalid_assignment_reconcile_request",
+                    &format!("request body must be assignment reconciliation JSON: {error}"),
+                    400,
+                );
+            }
+        };
+        let results = match reconcile_assignment_request(&env, &kv, request).await {
+            Ok(results) => results,
+            Err(AssignmentReconcileError::Client(message)) => {
+                return json_error("invalid_assignment_reconcile_request", &message, 400);
+            }
+            Err(AssignmentReconcileError::Runtime(error)) => return Err(error),
+        };
+        return Response::from_json(&serde_json::json!({ "results": results }));
+    }
+
+    if let Some(rule_id) = path.strip_prefix("/v1/admin/assignment-rules/") {
+        if req.method() != Method::Put {
+            return json_error("method_not_allowed", "admin method is not allowed", 405);
+        }
+        let rule_id = match validate_assignment_rule_id(rule_id) {
+            Ok(rule_id) => rule_id,
+            Err(message) => return json_error("invalid_assignment_rule", message, 400),
+        };
+        let request = match serde_json::from_str::<AssignmentRuleRecord>(&req.text().await?) {
+            Ok(request) => request,
+            Err(error) => {
+                return json_error(
+                    "invalid_assignment_rule_request",
+                    &format!("request body must be assignment-rule JSON: {error}"),
+                    400,
+                );
+            }
+        };
+        let existing = get_assignment_rule(&kv, &rule_id).await?;
+        let rule = match normalize_assignment_rule(&rule_id, request, existing.as_ref()) {
+            Ok(rule) => rule,
+            Err(message) => return json_error("invalid_assignment_rule", &message, 400),
+        };
+        let policies = authoritative_access_policies(&env, &kv, &rule.policy_ids).await?;
+        let missing_policy_ids = rule
+            .policy_ids
+            .iter()
+            .filter(|policy_id| !policies.contains_key(*policy_id))
+            .cloned()
+            .collect::<Vec<_>>();
+        if !missing_policy_ids.is_empty() {
+            return json_error(
+                "unknown_policy",
+                &format!(
+                    "assignment-rule policies do not exist: {}",
+                    missing_policy_ids.join(",")
+                ),
+                404,
+            );
+        }
+        put_kv_record(
+            &kv,
+            &assignment_rule_key(&rule_id),
+            &rule,
+            "assignment rule",
+        )
+        .await?;
+        sync_assignment_rule_bindings(&env, &kv, &rule_id, existing.as_ref(), &rule).await?;
+        return Response::from_json(&admin_assignment_rule_response(&rule_id, rule));
+    }
+
     if req.method() == Method::Get && path == "/v1/admin/provider-status" {
         let snapshot = provider_snapshot()?;
         let grants = list_oauth_grants(&kv).await?;
@@ -3302,7 +3481,17 @@ async fn access_control_user_record(
         "access user compatibility record",
     )
     .await;
-    Ok(user.record)
+    match reconcile_access_user_assignments(env, &kv, email, user.record.clone(), None).await {
+        Ok((record, _)) => Ok(record),
+        Err(error) => {
+            console_error!(
+                "first-login assignment reconciliation failed closed for {}: {}",
+                email,
+                error
+            );
+            Ok(user.record)
+        }
+    }
 }
 
 fn default_access_user_record(default_tenant: &str) -> AccessUserRecord {
@@ -5961,6 +6150,468 @@ fn enum_label<T: Serialize>(value: &T) -> String {
         .ok()
         .and_then(|value| value.as_str().map(str::to_string))
         .unwrap_or_else(|| "unknown".to_string())
+}
+
+#[derive(Debug)]
+enum AssignmentReconcileError {
+    Client(String),
+    Runtime(Error),
+}
+
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum AssignmentMatch {
+    Match,
+    NoMatch,
+    Unknown,
+}
+
+fn default_assignment_rule_version() -> u8 {
+    1
+}
+
+fn validate_assignment_rule_id(value: &str) -> std::result::Result<String, &'static str> {
+    if value.len() < 4
+        || value.len() > 48
+        || !value
+            .bytes()
+            .all(|byte| byte.is_ascii_lowercase() || byte.is_ascii_digit() || byte == b'_')
+    {
+        return Err("assignment rule id must use 4-48 lowercase letters, numbers, or underscores");
+    }
+    Ok(value.to_string())
+}
+
+fn assignment_rule_key(rule_id: &str) -> String {
+    format!("access/assignment-rules/{rule_id}")
+}
+
+fn assignment_state_key(email: &str) -> String {
+    format!("access/assignment-state/{email}")
+}
+
+fn assignment_rule_group(rule_id: &str) -> String {
+    format!("assignment.{rule_id}")
+}
+
+fn normalize_assignment_domain(value: &str) -> std::result::Result<String, String> {
+    let domain = value.trim().trim_start_matches('@').to_ascii_lowercase();
+    if domain.is_empty()
+        || domain.len() > 253
+        || !domain.contains('.')
+        || domain.starts_with('.')
+        || domain.ends_with('.')
+        || domain.contains("..")
+        || !domain
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'.' | b'-'))
+    {
+        return Err("email-domain subjects must be a valid lowercase domain".to_string());
+    }
+    Ok(domain)
+}
+
+fn normalize_github_subject(value: &str, team: bool) -> std::result::Result<String, String> {
+    let value = value.trim().trim_matches('/').to_ascii_lowercase();
+    let valid_segment = |segment: &str| {
+        !segment.is_empty()
+            && segment.len() <= 100
+            && segment
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'))
+    };
+    if team {
+        let Some((org, team)) = value.split_once('/') else {
+            return Err("GitHub team subjects must use org/team".to_string());
+        };
+        if value.matches('/').count() != 1 || !valid_segment(org) || !valid_segment(team) {
+            return Err("GitHub team subjects must use a valid org/team slug".to_string());
+        }
+    } else if value.contains('/') || !valid_segment(&value) {
+        return Err("GitHub organization subjects must use a valid organization slug".to_string());
+    }
+    Ok(value)
+}
+
+fn normalize_assignment_rule(
+    rule_id: &str,
+    mut rule: AssignmentRuleRecord,
+    existing: Option<&AssignmentRuleRecord>,
+) -> std::result::Result<AssignmentRuleRecord, String> {
+    validate_assignment_rule_id(rule_id).map_err(str::to_string)?;
+    rule.version = default_assignment_rule_version();
+    rule.subject = match rule.kind {
+        AssignmentRuleKind::ExactEmail => {
+            normalize_access_email(&rule.subject).map_err(str::to_string)?
+        }
+        AssignmentRuleKind::EmailDomain => normalize_assignment_domain(&rule.subject)?,
+        AssignmentRuleKind::GithubOrg => normalize_github_subject(&rule.subject, false)?,
+        AssignmentRuleKind::GithubTeam => normalize_github_subject(&rule.subject, true)?,
+    };
+    rule.groups = normalize_access_groups(rule.groups)?;
+    let mut policy_ids = BTreeSet::new();
+    for policy_id in rule.policy_ids {
+        policy_ids.insert(validate_admin_kid(policy_id.trim()).map_err(str::to_string)?);
+    }
+    if policy_ids.len() > 64 {
+        return Err("an assignment rule can grant at most 64 policies".to_string());
+    }
+    rule.policy_ids = policy_ids.into_iter().collect();
+    rule.provenance = rule.provenance.trim().to_string();
+    if rule.provenance.is_empty()
+        || rule.provenance.len() > 256
+        || rule.provenance.bytes().any(|byte| byte.is_ascii_control())
+    {
+        return Err("assignment rule provenance must be 1-256 visible characters".to_string());
+    }
+    let now = current_iso_timestamp();
+    rule.created_at = existing
+        .and_then(|record| record.created_at.clone())
+        .or(rule.created_at)
+        .or_else(|| Some(now.clone()));
+    rule.updated_at = Some(now);
+    Ok(rule)
+}
+
+fn admin_assignment_rule_response(
+    rule_id: &str,
+    rule: AssignmentRuleRecord,
+) -> AdminAssignmentRuleResponse {
+    AdminAssignmentRuleResponse {
+        rule_id: rule_id.to_string(),
+        rule,
+        generated_group: assignment_rule_group(rule_id),
+    }
+}
+
+async fn get_assignment_rule(kv: &KvStore, rule_id: &str) -> Result<Option<AssignmentRuleRecord>> {
+    let Some(record) = kv
+        .get(&assignment_rule_key(rule_id))
+        .text()
+        .await
+        .map_err(|error| Error::RustError(format!("failed to read assignment rule: {error}")))?
+    else {
+        return Ok(None);
+    };
+    serde_json::from_str(&record)
+        .map(Some)
+        .map_err(|error| Error::RustError(format!("assignment rule is invalid JSON: {error}")))
+}
+
+async fn list_assignment_rules(kv: &KvStore) -> Result<BTreeMap<String, AssignmentRuleRecord>> {
+    let mut rules = BTreeMap::new();
+    let mut cursor = None;
+    loop {
+        let mut request = kv
+            .list()
+            .prefix("access/assignment-rules/".to_string())
+            .limit(1000);
+        if let Some(next_cursor) = cursor.take() {
+            request = request.cursor(next_cursor);
+        }
+        let list = request.execute().await.map_err(|error| {
+            Error::RustError(format!("failed to list assignment rules: {error}"))
+        })?;
+        for key in list.keys {
+            let Some(rule_id) = key.name.strip_prefix("access/assignment-rules/") else {
+                continue;
+            };
+            validate_assignment_rule_id(rule_id).map_err(str::to_string)?;
+            let Some(record) = kv.get(&key.name).text().await.map_err(|error| {
+                Error::RustError(format!("failed to read assignment rule: {error}"))
+            })?
+            else {
+                continue;
+            };
+            let rule = serde_json::from_str::<AssignmentRuleRecord>(&record).map_err(|error| {
+                Error::RustError(format!("assignment rule is invalid JSON: {error}"))
+            })?;
+            rules.insert(rule_id.to_string(), rule);
+        }
+        if list.list_complete {
+            break;
+        }
+        let Some(next_cursor) = list.cursor else {
+            break;
+        };
+        cursor = Some(next_cursor);
+    }
+    Ok(rules)
+}
+
+fn normalize_assignment_evidence(
+    mut evidence: AssignmentEvidence,
+) -> std::result::Result<AssignmentEvidence, String> {
+    evidence.source = evidence.source.trim().to_ascii_lowercase();
+    if evidence.source != "github" || !evidence.verified {
+        return Err("GitHub assignment evidence must be explicitly verified".to_string());
+    }
+    evidence.github_orgs = evidence
+        .github_orgs
+        .into_iter()
+        .map(|value| normalize_github_subject(&value, false))
+        .collect::<std::result::Result<BTreeSet<_>, _>>()?
+        .into_iter()
+        .collect();
+    evidence.github_teams = evidence
+        .github_teams
+        .into_iter()
+        .map(|value| normalize_github_subject(&value, true))
+        .collect::<std::result::Result<BTreeSet<_>, _>>()?
+        .into_iter()
+        .collect();
+    Ok(evidence)
+}
+
+fn assignment_rule_match(
+    rule: &AssignmentRuleRecord,
+    email: &str,
+    evidence: Option<&AssignmentEvidence>,
+) -> AssignmentMatch {
+    if !rule.enabled {
+        return AssignmentMatch::NoMatch;
+    }
+    match rule.kind {
+        AssignmentRuleKind::ExactEmail => {
+            if rule.subject == email {
+                AssignmentMatch::Match
+            } else {
+                AssignmentMatch::NoMatch
+            }
+        }
+        AssignmentRuleKind::EmailDomain => {
+            if email
+                .split_once('@')
+                .is_some_and(|(_, domain)| domain == rule.subject)
+            {
+                AssignmentMatch::Match
+            } else {
+                AssignmentMatch::NoMatch
+            }
+        }
+        AssignmentRuleKind::GithubOrg => match evidence {
+            Some(evidence) if evidence.github_orgs.contains(&rule.subject) => {
+                AssignmentMatch::Match
+            }
+            Some(_) => AssignmentMatch::NoMatch,
+            None => AssignmentMatch::Unknown,
+        },
+        AssignmentRuleKind::GithubTeam => match evidence {
+            Some(evidence) if evidence.github_teams.contains(&rule.subject) => {
+                AssignmentMatch::Match
+            }
+            Some(_) => AssignmentMatch::NoMatch,
+            None => AssignmentMatch::Unknown,
+        },
+    }
+}
+
+fn assignment_entry_for_rule(rule_id: &str, rule: &AssignmentRuleRecord) -> AssignmentStateEntry {
+    let mut groups = rule.groups.clone();
+    if !rule.policy_ids.is_empty() {
+        groups.push(assignment_rule_group(rule_id));
+    }
+    groups.sort();
+    groups.dedup();
+    AssignmentStateEntry {
+        groups,
+        revoke_on_loss: rule.revoke_on_loss,
+    }
+}
+
+fn reconcile_assignment_state(
+    email: &str,
+    rules: &BTreeMap<String, AssignmentRuleRecord>,
+    evidence: Option<&AssignmentEvidence>,
+    previous: AssignmentStateRecord,
+) -> (AssignmentStateRecord, Vec<String>, Vec<String>) {
+    reconcile_assignment_state_at(email, rules, evidence, previous, current_iso_timestamp())
+}
+
+fn reconcile_assignment_state_at(
+    email: &str,
+    rules: &BTreeMap<String, AssignmentRuleRecord>,
+    evidence: Option<&AssignmentEvidence>,
+    previous: AssignmentStateRecord,
+    updated_at: String,
+) -> (AssignmentStateRecord, Vec<String>, Vec<String>) {
+    let mut assignments = BTreeMap::new();
+    let mut matched = Vec::new();
+    let mut retained = Vec::new();
+    for (rule_id, rule) in rules {
+        match assignment_rule_match(rule, email, evidence) {
+            AssignmentMatch::Match => {
+                assignments.insert(rule_id.clone(), assignment_entry_for_rule(rule_id, rule));
+                matched.push(rule_id.clone());
+            }
+            AssignmentMatch::Unknown => {
+                if let Some(entry) = previous.assignments.get(rule_id) {
+                    assignments.insert(rule_id.clone(), entry.clone());
+                    retained.push(rule_id.clone());
+                }
+            }
+            AssignmentMatch::NoMatch if rule.enabled && !rule.revoke_on_loss => {
+                if let Some(entry) = previous.assignments.get(rule_id) {
+                    assignments.insert(rule_id.clone(), entry.clone());
+                    retained.push(rule_id.clone());
+                }
+            }
+            AssignmentMatch::NoMatch => {}
+        }
+    }
+    (
+        AssignmentStateRecord {
+            version: default_assignment_rule_version(),
+            assignments,
+            updated_at: Some(updated_at),
+        },
+        matched,
+        retained,
+    )
+}
+
+async fn get_assignment_state(kv: &KvStore, email: &str) -> Result<AssignmentStateRecord> {
+    let Some(record) = kv
+        .get(&assignment_state_key(email))
+        .text()
+        .await
+        .map_err(|error| Error::RustError(format!("failed to read assignment state: {error}")))?
+    else {
+        return Ok(AssignmentStateRecord::default());
+    };
+    serde_json::from_str(&record)
+        .map_err(|error| Error::RustError(format!("assignment state is invalid JSON: {error}")))
+}
+
+fn assignment_state_groups(state: &AssignmentStateRecord) -> BTreeSet<String> {
+    state
+        .assignments
+        .values()
+        .flat_map(|entry| entry.groups.iter().cloned())
+        .collect()
+}
+
+async fn reconcile_access_user_assignments(
+    env: &Env,
+    kv: &KvStore,
+    email: &str,
+    mut record: AccessUserRecord,
+    evidence: Option<&AssignmentEvidence>,
+) -> Result<(AccessUserRecord, AssignmentReconcileResult)> {
+    let email = normalize_access_email(email).map_err(str::to_string)?;
+    let rules = list_assignment_rules(kv).await?;
+    let previous = get_assignment_state(kv, &email).await?;
+    let previous_groups = assignment_state_groups(&previous);
+    let (state, matched_rule_ids, retained_rule_ids) =
+        reconcile_assignment_state(&email, &rules, evidence, previous);
+    let managed_groups = assignment_state_groups(&state);
+    let mut groups = record
+        .groups
+        .into_iter()
+        .filter(|group| !previous_groups.contains(group))
+        .collect::<BTreeSet<_>>();
+    groups.extend(managed_groups);
+    record.groups = normalize_access_groups(groups.into_iter().collect())?;
+    record.role = AccessRole::User;
+    let namespace = access_control_namespace(env)?;
+    let user = AccessControlUser {
+        email: email.clone(),
+        record: record.clone(),
+    };
+    put_access_control_user(&namespace, &user).await?;
+    sync_kv_record_best_effort(
+        kv,
+        &format!("access/users/{email}"),
+        &record,
+        "access user compatibility record",
+    )
+    .await;
+    put_kv_record(
+        kv,
+        &assignment_state_key(&email),
+        &state,
+        "assignment state",
+    )
+    .await?;
+    let result = AssignmentReconcileResult {
+        email,
+        matched_rule_ids,
+        retained_rule_ids,
+        groups: record.groups.clone(),
+    };
+    Ok((record, result))
+}
+
+async fn reconcile_assignment_request(
+    env: &Env,
+    kv: &KvStore,
+    request: AssignmentReconcileRequest,
+) -> std::result::Result<Vec<AssignmentReconcileResult>, AssignmentReconcileError> {
+    if request.all && request.email.is_some() {
+        return Err(AssignmentReconcileError::Client(
+            "use either email or all, not both".to_string(),
+        ));
+    }
+    if request.all && request.evidence.is_some() {
+        return Err(AssignmentReconcileError::Client(
+            "verified GitHub evidence can reconcile only one email".to_string(),
+        ));
+    }
+    let evidence = request
+        .evidence
+        .map(normalize_assignment_evidence)
+        .transpose()
+        .map_err(AssignmentReconcileError::Client)?;
+    let emails = if request.all {
+        list_admin_access_users(env, kv)
+            .await
+            .map_err(AssignmentReconcileError::Runtime)?
+            .into_iter()
+            .map(|user| user.email)
+            .collect::<Vec<_>>()
+    } else {
+        vec![
+            normalize_access_email(request.email.as_deref().unwrap_or_default())
+                .map_err(|message| AssignmentReconcileError::Client(message.to_string()))?,
+        ]
+    };
+    let mut results = Vec::new();
+    for email in emails {
+        let record = access_control_user_record(env, &email, &default_access_tenant(env))
+            .await
+            .map_err(AssignmentReconcileError::Runtime)?;
+        let (_, result) =
+            reconcile_access_user_assignments(env, kv, &email, record, evidence.as_ref())
+                .await
+                .map_err(AssignmentReconcileError::Runtime)?;
+        results.push(result);
+    }
+    Ok(results)
+}
+
+async fn sync_assignment_rule_bindings(
+    env: &Env,
+    kv: &KvStore,
+    rule_id: &str,
+    existing: Option<&AssignmentRuleRecord>,
+    rule: &AssignmentRuleRecord,
+) -> Result<()> {
+    let policy_ids = existing
+        .into_iter()
+        .flat_map(|record| record.policy_ids.iter().cloned())
+        .chain(rule.policy_ids.iter().cloned())
+        .collect::<BTreeSet<_>>();
+    for policy_id in policy_ids.iter() {
+        let binding = normalize_policy_binding(PolicyBindingRecord {
+            policy_id: policy_id.clone(),
+            principal_type: PrincipalType::Group,
+            principal_id: assignment_rule_group(rule_id),
+            enabled: rule.enabled && rule.policy_ids.contains(policy_id),
+            priority: rule.priority,
+        })
+        .map_err(str::to_string)?;
+        put_policy_binding_record(env, kv, &binding).await?;
+    }
+    Ok(())
 }
 
 async fn list_admin_access_users(env: &Env, kv: &KvStore) -> Result<Vec<AdminAccessUserResponse>> {
@@ -11124,6 +11775,26 @@ mod tests {
         }
     }
 
+    fn assignment_test_rule(
+        kind: AssignmentRuleKind,
+        subject: &str,
+        revoke_on_loss: bool,
+    ) -> AssignmentRuleRecord {
+        AssignmentRuleRecord {
+            version: 1,
+            enabled: true,
+            kind,
+            subject: subject.to_string(),
+            groups: vec!["maintainers".to_string()],
+            policy_ids: vec!["svc_models".to_string()],
+            priority: 10,
+            revoke_on_loss,
+            provenance: "test".to_string(),
+            created_at: None,
+            updated_at: None,
+        }
+    }
+
     fn entitlement_test_row(
         provider: &str,
         allowed: bool,
@@ -11831,6 +12502,80 @@ mod tests {
         ])
         .unwrap();
         assert_eq!(groups, vec!["docs", "maintainers"]);
+    }
+
+    #[test]
+    fn assignment_rules_match_verified_identity_evidence_only() {
+        let email_rule = assignment_test_rule(AssignmentRuleKind::EmailDomain, "example.com", true);
+        let github_rule =
+            assignment_test_rule(AssignmentRuleKind::GithubTeam, "openclaw/maintainers", true);
+        let evidence = AssignmentEvidence {
+            source: "github".to_string(),
+            verified: true,
+            github_orgs: vec!["openclaw".to_string()],
+            github_teams: vec!["openclaw/maintainers".to_string()],
+        };
+
+        assert_eq!(
+            assignment_rule_match(&email_rule, "user@example.com", None),
+            AssignmentMatch::Match
+        );
+        assert_eq!(
+            assignment_rule_match(&github_rule, "user@example.com", None),
+            AssignmentMatch::Unknown
+        );
+        assert_eq!(
+            assignment_rule_match(&github_rule, "user@example.com", Some(&evidence)),
+            AssignmentMatch::Match
+        );
+    }
+
+    #[test]
+    fn assignment_reconciliation_retains_unknown_and_revokes_verified_loss() {
+        let rule =
+            assignment_test_rule(AssignmentRuleKind::GithubTeam, "openclaw/maintainers", true);
+        let rules = BTreeMap::from([("maintainers".to_string(), rule)]);
+        let previous = AssignmentStateRecord {
+            version: 1,
+            assignments: BTreeMap::from([(
+                "maintainers".to_string(),
+                AssignmentStateEntry {
+                    groups: vec![
+                        "assignment.maintainers".to_string(),
+                        "maintainers".to_string(),
+                    ],
+                    revoke_on_loss: true,
+                },
+            )]),
+            updated_at: None,
+        };
+        let (unknown, matched, retained) = reconcile_assignment_state_at(
+            "user@example.com",
+            &rules,
+            None,
+            previous.clone(),
+            "2026-06-16T00:00:00.000Z".to_string(),
+        );
+        assert!(matched.is_empty());
+        assert_eq!(retained, vec!["maintainers"]);
+        assert!(unknown.assignments.contains_key("maintainers"));
+
+        let evidence = AssignmentEvidence {
+            source: "github".to_string(),
+            verified: true,
+            github_orgs: Vec::new(),
+            github_teams: Vec::new(),
+        };
+        let (lost, matched, retained) = reconcile_assignment_state_at(
+            "user@example.com",
+            &rules,
+            Some(&evidence),
+            previous,
+            "2026-06-16T00:00:00.000Z".to_string(),
+        );
+        assert!(matched.is_empty());
+        assert!(retained.is_empty());
+        assert!(lost.assignments.is_empty());
     }
 
     #[test]
