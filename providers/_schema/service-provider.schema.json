@@ -53,6 +53,9 @@
           "items": { "$ref": "#/$defs/authScheme" },
           "minItems": 1
         },
+        "authorization": {
+          "$ref": "#/$defs/authAuthorization"
+        },
         "refresh": {
           "$ref": "#/$defs/authRefresh"
         },
@@ -144,6 +147,34 @@
     }
   },
   "$defs": {
+    "authAuthorization": {
+      "type": "object",
+      "required": ["authorizeUrl", "tokenUrl", "scopes"],
+      "additionalProperties": false,
+      "anyOf": [
+        { "required": ["clientId"] },
+        { "required": ["clientIdConfig"] }
+      ],
+      "properties": {
+        "authorizeUrl": { "type": "string", "pattern": "^https://" },
+        "tokenUrl": { "type": "string", "pattern": "^https://" },
+        "clientId": { "type": "string" },
+        "clientIdConfig": { "type": "string" },
+        "clientSecretConfig": { "type": "string" },
+        "scopes": { "type": "array", "items": { "type": "string" } },
+        "grantKind": { "enum": ["oauth", "subscription"] },
+        "extraAuthorizeParams": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "extraTokenParams": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "accountIdJsonPointer": { "type": "string", "pattern": "^/" },
+        "subscriptionPlanJsonPointer": { "type": "string", "pattern": "^/" }
+      }
+    },
     "authRefresh": {
       "type": "object",
       "required": ["tokenUrl"],

@@ -40,6 +40,8 @@ An administrator must be able to:
 3. Distinguish API-key, OAuth, and subscription-backed grants without exposing
    their secrets.
 4. See which transport routes and grants make a provider executable.
+5. Start and complete provider-approved browser OAuth flows without manually
+   handling access or refresh tokens.
 
 ## Security Boundaries
 
@@ -222,6 +224,9 @@ Canonical record:
   "kind": "oauth",
   "provider": "openai",
   "label": "maintainer subscription",
+  "credentials": {
+    "providerSpecificField": "<secret>"
+  },
   "tokenType": "Bearer",
   "accessToken": "<secret>",
   "refreshToken": "<secret>",
@@ -253,8 +258,52 @@ Supported kinds:
 subscription flow. It does not bypass provider terms or imply that every
 subscription transport can be safely proxied.
 
+`credentials` is an optional opaque, write-only credential bundle for auth
+schemes that require multiple fields. ClawRouter interprets only fields
+declared by the provider auth scheme. For SigV4, the canonical fields are
+`accessKeyId`, `secretAccessKey`, and optional `sessionToken`.
+
 Legacy records containing only `accessToken`, `access_token`, or a raw token
 remain readable.
+
+### Browser authorization
+
+A provider may declare a standard browser authorization flow:
+
+```yaml
+auth:
+  authorization:
+    authorizeUrl: https://provider.example/oauth/authorize
+    tokenUrl: https://provider.example/oauth/token
+    clientId: public-client-id
+    scopes: [openid, profile, offline_access]
+    grantKind: subscription
+    extraAuthorizeParams:
+      originator: clawrouter
+    accountIdJsonPointer: /provider/account_id
+```
+
+ClawRouter accepts only authorization and token endpoints, client bindings,
+scopes, extra parameters, grant kind, and JWT metadata pointers approved by the
+provider manifest. It never accepts those values from an admin request.
+
+The browser flow:
+
+1. Requires a verified Cloudflare Access admin session.
+2. Generates a high-entropy state and PKCE verifier.
+3. Stores the state, verifier, initiating admin, target grant key, provider,
+   redirect URI, and expiry in the authoritative Access Control Durable Object.
+4. Returns a provider authorization URL containing the one-time state and
+   `S256` PKCE challenge.
+5. Requires the same verified Access admin on callback.
+6. Atomically consumes the state before exchanging the authorization code.
+7. Exchanges the code only at the manifest-approved token URL.
+8. Persists the resulting canonical upstream grant and redirects back to the
+   upstream-grant admin surface.
+
+Authorization state expires after ten minutes. State values and PKCE verifiers
+are never written to KV, logs, or admin responses after the authorization URL
+is created.
 
 ### Grant selection
 
@@ -288,8 +337,10 @@ New admin endpoints:
 ```text
 GET    /v1/admin/upstream-grants
 PUT    /v1/admin/upstream-grants/<scope>/<scope-id>/<token-ref>
+POST   /v1/admin/upstream-grants/<scope>/<scope-id>/<token-ref>/authorize
 POST   /v1/admin/upstream-grants/<scope>/<scope-id>/<token-ref>/revoke
 POST   /v1/admin/upstream-grants/<scope>/<scope-id>/<token-ref>/refresh
+GET    /v1/oauth/callback
 ```
 
 `scope` is `policies` or `tenants`.
@@ -350,9 +401,12 @@ become wire-preserving routes.
 3. Add authenticated entitlement-filtered `/v1/models` and `/v1/catalog`.
 4. Add canonical upstream-grant records and metadata-only admin APIs.
 5. Add standard OAuth refresh and subscription metadata support.
-6. Update scripts, docs, smoke coverage, and admin readiness.
-7. Add assignment-rule reconciliation in a later isolated change.
-8. Implement OpenClaw core/plugin integration after the ClawRouter contract is
+6. Add one-time browser OAuth authorization and callback handling.
+7. Add opaque multi-field credential bundles for provider auth schemes such as
+   SigV4.
+8. Update scripts, docs, smoke coverage, and admin readiness.
+9. Add assignment-rule reconciliation in a later isolated change.
+10. Implement OpenClaw core/plugin integration after the ClawRouter contract is
    deployed and proven.
 
 ## Acceptance Criteria
@@ -369,6 +423,10 @@ become wire-preserving routes.
   without returning secrets.
 - Expiring standard OAuth grants can refresh through manifest-approved
   configuration.
+- Browser OAuth uses a one-time, expiring, admin-bound PKCE state and persists
+  a canonical grant without exposing tokens to the browser.
+- SigV4 requests can use policy- or tenant-scoped multi-field credential
+  bundles without requiring Worker-global AWS credentials.
 - `/v1/models` and `/v1/catalog` show only caller-entitled providers/models.
 - Existing normalized and manifest-wrapper routes remain compatible.
 - Focused Rust, manifest, script, and deployed smoke tests cover the new

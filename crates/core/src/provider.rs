@@ -94,9 +94,38 @@ pub struct AuthConfig {
     #[serde(default)]
     pub schemes: Vec<AuthScheme>,
     #[serde(default)]
+    pub authorization: Option<AuthAuthorizationConfig>,
+    #[serde(default)]
     pub refresh: Option<AuthRefreshConfig>,
     #[serde(rename = "grantTransports", default)]
     pub grant_transports: BTreeMap<String, GrantTransportConfig>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct AuthAuthorizationConfig {
+    #[serde(rename = "authorizeUrl")]
+    pub authorize_url: String,
+    #[serde(rename = "tokenUrl")]
+    pub token_url: String,
+    #[serde(rename = "clientId", default)]
+    pub client_id: Option<String>,
+    #[serde(rename = "clientIdConfig", default)]
+    pub client_id_config: Option<String>,
+    #[serde(rename = "clientSecretConfig", default)]
+    pub client_secret_config: Option<String>,
+    #[serde(default)]
+    pub scopes: Vec<String>,
+    #[serde(rename = "grantKind", default = "default_oauth_grant_kind")]
+    pub grant_kind: String,
+    #[serde(rename = "extraAuthorizeParams", default)]
+    pub extra_authorize_params: BTreeMap<String, String>,
+    #[serde(rename = "extraTokenParams", default)]
+    pub extra_token_params: BTreeMap<String, String>,
+    #[serde(rename = "accountIdJsonPointer", default)]
+    pub account_id_json_pointer: Option<String>,
+    #[serde(rename = "subscriptionPlanJsonPointer", default)]
+    pub subscription_plan_json_pointer: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -420,6 +449,8 @@ pub enum ProviderError {
     },
     #[error("provider {provider} has invalid OAuth refresh configuration")]
     InvalidAuthRefresh { provider: String },
+    #[error("provider {provider} has invalid OAuth authorization configuration")]
+    InvalidAuthAuthorization { provider: String },
     #[error("provider {provider} has invalid grant transport {transport}")]
     InvalidGrantTransport { provider: String, transport: String },
     #[error("provider {provider} capability {capability} references missing endpoint {endpoint}")]
@@ -475,6 +506,41 @@ pub fn validate_provider_manifest(manifest: &ProviderManifest) -> Result<(), Pro
                 .is_some_and(|value| value.trim().is_empty())
     }) {
         return Err(ProviderError::InvalidAuthRefresh {
+            provider: manifest.id.clone(),
+        });
+    }
+    if manifest
+        .auth
+        .authorization
+        .as_ref()
+        .is_some_and(|authorization| {
+            !authorization.authorize_url.starts_with("https://")
+                || !authorization.token_url.starts_with("https://")
+                || (authorization.client_id.is_none() && authorization.client_id_config.is_none())
+                || authorization
+                    .client_id
+                    .as_deref()
+                    .is_some_and(|value| value.trim().is_empty())
+                || authorization
+                    .client_id_config
+                    .as_deref()
+                    .is_some_and(|value| value.trim().is_empty())
+                || !matches!(authorization.grant_kind.as_str(), "oauth" | "subscription")
+                || authorization
+                    .scopes
+                    .iter()
+                    .any(|scope| scope.trim().is_empty())
+                || authorization
+                    .account_id_json_pointer
+                    .as_deref()
+                    .is_some_and(|pointer| !pointer.starts_with('/'))
+                || authorization
+                    .subscription_plan_json_pointer
+                    .as_deref()
+                    .is_some_and(|pointer| !pointer.starts_with('/'))
+        })
+    {
+        return Err(ProviderError::InvalidAuthAuthorization {
             provider: manifest.id.clone(),
         });
     }
@@ -699,6 +765,10 @@ fn default_post() -> String {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_oauth_grant_kind() -> String {
+    "oauth".to_string()
 }
 
 fn auth_scheme_id(scheme: &AuthScheme) -> String {

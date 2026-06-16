@@ -14,6 +14,18 @@ auth:
       header: Authorization
       format: "Bearer ${secret}"
       secretKind: api_key
+  authorization:
+    authorizeUrl: https://auth.openai.com/oauth/authorize
+    tokenUrl: https://auth.openai.com/oauth/token
+    clientId: app_EMoamEEZ73f0CkXaXp7hrann
+    scopes: [openid, profile, email, offline_access]
+    grantKind: subscription
+    extraAuthorizeParams:
+      id_token_add_organizations: "true"
+      codex_cli_simplified_flow: "true"
+      originator: clawrouter
+    accountIdJsonPointer: /https:~1~1api.openai.com~1auth/chatgpt_account_id
+    subscriptionPlanJsonPointer: /https:~1~1api.openai.com~1auth/chatgpt_plan_type
   refresh:
     tokenUrl: https://auth.openai.com/oauth/token
     clientId: app_EMoamEEZ73f0CkXaXp7hrann
