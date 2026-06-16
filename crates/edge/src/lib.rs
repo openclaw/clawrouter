@@ -579,7 +579,7 @@ async fn proxy_openai_compatible(
         };
         return audit.failure_response(response).await;
     }
-    let grant = match upstream_grant_for_request(&env, route.provider, &auth).await {
+    let grant = match upstream_grant_for_request(&env, route.provider, endpoint, &auth).await {
         Ok(value) => value,
         Err(HeaderBuildError::Client {
             code,
@@ -894,7 +894,7 @@ async fn proxy_manifest_endpoint(
         let response = json_error("invalid_proxy_request", &message, 400)?;
         return audit.failure_response(response).await;
     }
-    let grant = match upstream_grant_for_request(&env, provider, &auth).await {
+    let grant = match upstream_grant_for_request(&env, provider, endpoint, &auth).await {
         Ok(value) => value,
         Err(HeaderBuildError::Client {
             code,
@@ -1151,7 +1151,7 @@ async fn proxy_native_provider(
         return Ok(response);
     }
     let incoming_url = req.url()?;
-    let grant = match upstream_grant_for_request(&env, provider, &auth).await {
+    let grant = match upstream_grant_for_request(&env, provider, endpoint, &auth).await {
         Ok(value) => value,
         Err(HeaderBuildError::Client {
             code,
@@ -6747,12 +6747,20 @@ fn provider_endpoint_has_upstream_grant(
 ) -> bool {
     grants.iter().any(|grant| {
         provider_upstream_grant_matches(provider, grant)
-            && provider
-                .auth
-                .grant_transports
-                .get(&enum_label(&grant.kind))
-                .is_none_or(|transport| transport.endpoint_paths.contains_key(&endpoint.id))
+            && grant_kind_supports_endpoint(provider, endpoint, grant.kind)
     })
+}
+
+fn grant_kind_supports_endpoint(
+    provider: &CompiledProvider,
+    endpoint: &CompiledEndpoint,
+    kind: UpstreamGrantKind,
+) -> bool {
+    provider
+        .auth
+        .grant_transports
+        .get(&enum_label(&kind))
+        .is_none_or(|transport| transport.endpoint_paths.contains_key(&endpoint.id))
 }
 
 fn provider_upstream_grant_matches(provider: &CompiledProvider, grant: &OAuthGrantRecord) -> bool {
@@ -9221,6 +9229,7 @@ fn apply_auth_headers(
 async fn upstream_grant_for_request(
     env: &Env,
     provider: &CompiledProvider,
+    endpoint: &CompiledEndpoint,
     auth: &AuthorizedKey,
 ) -> std::result::Result<Option<UpstreamGrantRecord>, HeaderBuildError> {
     match provider.auth.schemes.first() {
@@ -9232,6 +9241,7 @@ async fn upstream_grant_for_request(
             selected_upstream_grant(
                 env,
                 provider,
+                endpoint,
                 auth,
                 oauth_provider.as_deref(),
                 token_ref.as_deref(),
@@ -9244,7 +9254,7 @@ async fn upstream_grant_for_request(
             | AuthScheme::ApiKey { .. }
             | AuthScheme::QueryApiKey { .. }
             | AuthScheme::SigV4 { .. },
-        ) => selected_upstream_grant(env, provider, auth, None, None, false).await,
+        ) => selected_upstream_grant(env, provider, endpoint, auth, None, None, false).await,
         _ => Ok(None),
     }
 }
@@ -9252,6 +9262,7 @@ async fn upstream_grant_for_request(
 async fn selected_upstream_grant(
     env: &Env,
     provider: &CompiledProvider,
+    endpoint: &CompiledEndpoint,
     auth: &AuthorizedKey,
     oauth_provider: Option<&str>,
     token_ref: Option<&str>,
@@ -9275,6 +9286,11 @@ async fn selected_upstream_grant(
         else {
             continue;
         };
+        if !provider_requires_oauth(provider)
+            && !grant_kind_supports_endpoint(provider, endpoint, grant.kind)
+        {
+            continue;
+        }
         if grant.refresh.is_none() && grant.refresh_token.is_some() {
             grant.refresh = upstream_grant_refresh_from_manifest(provider);
         }
@@ -14687,6 +14703,16 @@ mod tests {
             provider,
             chat,
             &discovery_grants
+        ));
+        assert!(grant_kind_supports_endpoint(
+            provider,
+            responses,
+            UpstreamGrantKind::Subscription
+        ));
+        assert!(!grant_kind_supports_endpoint(
+            provider,
+            chat,
+            UpstreamGrantKind::Subscription
         ));
         let (responses_grant, responses_path) =
             endpoint_upstream_grant(provider, responses, Some(grant.clone())).unwrap();
