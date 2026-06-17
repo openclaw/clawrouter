@@ -1,7 +1,7 @@
 use clawrouter_core::{
     parse_proxy_key, AuthAuthorizationConfig, AuthScheme, CompiledEndpoint, CompiledModel,
     CompiledProvider, GrantTransportConfig, PathParamStyle, ProviderClass, ProviderSnapshot,
-    UsageEvent, UsageStatus,
+    ProxyKeyParts, UsageEvent, UsageStatus,
 };
 use futures_util::future::try_join_all;
 use hmac::{Hmac, Mac};
@@ -7916,9 +7916,28 @@ async fn authorize_request(
 }
 
 fn proxy_key_header_present(headers: &Headers) -> Result<bool> {
+    Ok(proxy_key_from_headers(headers)?.is_some())
+}
+
+fn proxy_key_from_headers(headers: &Headers) -> Result<Option<ProxyKeyParts>> {
     let auth = headers.get("authorization")?.unwrap_or_default();
-    let token = auth.strip_prefix("Bearer ").unwrap_or("");
-    Ok(parse_proxy_key(token).is_ok())
+    let anthropic = headers.get("x-api-key")?.unwrap_or_default();
+    let google = headers.get("x-goog-api-key")?.unwrap_or_default();
+    let azure = headers.get("api-key")?.unwrap_or_default();
+    Ok(parse_proxy_key_candidates([
+        auth.strip_prefix("Bearer ").unwrap_or(""),
+        &anthropic,
+        &google,
+        &azure,
+    ]))
+}
+
+fn parse_proxy_key_candidates<'a>(
+    candidates: impl IntoIterator<Item = &'a str>,
+) -> Option<ProxyKeyParts> {
+    candidates
+        .into_iter()
+        .find_map(|candidate| parse_proxy_key(candidate).ok())
 }
 
 async fn disabled_provider_connection_response(
@@ -7951,11 +7970,9 @@ async fn authorize_proxy_key_for_provider(
     env: &Env,
     provider_id: Option<&str>,
 ) -> Result<AuthOutcome> {
-    let auth = headers.get("authorization")?.unwrap_or_default();
-    let token = auth.strip_prefix("Bearer ").unwrap_or("");
-    let key = match parse_proxy_key(token) {
-        Ok(key) => key,
-        Err(_) => {
+    let key = match proxy_key_from_headers(headers)? {
+        Some(key) => key,
+        None => {
             return json_error(
                 "invalid_proxy_key",
                 "a valid ClawRouter proxy key is required",
@@ -8769,6 +8786,7 @@ fn native_request_header_allowed(
     if matches!(
         name.as_str(),
         "authorization"
+            | "api-key"
             | "cookie"
             | "host"
             | "connection"
@@ -8779,6 +8797,8 @@ fn native_request_header_allowed(
             | "trailer"
             | "transfer-encoding"
             | "upgrade"
+            | "x-api-key"
+            | "x-goog-api-key"
     ) || name.starts_with("cf-")
     {
         return false;
@@ -15021,6 +15041,17 @@ mod tests {
             endpoint,
             "authorization"
         ));
+        assert!(!native_request_header_allowed(openai, endpoint, "api-key"));
+        assert!(!native_request_header_allowed(
+            openai,
+            endpoint,
+            "x-api-key"
+        ));
+        assert!(!native_request_header_allowed(
+            openai,
+            endpoint,
+            "x-goog-api-key"
+        ));
         assert!(!native_request_header_allowed(openai, endpoint, "cookie"));
         assert!(native_response_header_allowed(
             endpoint,
@@ -15047,6 +15078,24 @@ mod tests {
             &manifest_allowed,
             "x-provider-trace"
         ));
+    }
+
+    #[test]
+    fn proxy_key_candidates_accept_native_sdk_credentials_after_bearer() {
+        let key = parse_proxy_key_candidates([
+            "not-a-clawrouter-key",
+            "ocpk_test_native01_secret1234",
+            "ocpk_live_later01_secret5678",
+        ])
+        .unwrap();
+        assert_eq!(key.kid, "native01");
+
+        let key = parse_proxy_key_candidates([
+            "ocpk_live_bearer01_secret1234",
+            "ocpk_test_native01_secret5678",
+        ])
+        .unwrap();
+        assert_eq!(key.kid, "bearer01");
     }
 
     #[test]
