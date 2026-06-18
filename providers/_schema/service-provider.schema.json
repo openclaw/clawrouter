@@ -218,7 +218,8 @@
             "type": { "const": "bearer" },
             "header": { "type": "string" },
             "format": { "type": "string" },
-            "secretKind": { "type": "string" }
+            "secretKind": { "type": "string" },
+            "required": { "type": "boolean", "default": true }
           },
           "additionalProperties": false
         },

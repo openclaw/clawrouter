@@ -16,8 +16,10 @@ export function buildProviderSmokePlan(snapshot, env = process.env) {
     ...splitCsv(env.CLAWROUTER_OPTIONAL_CONFIG_KEYS),
   ]);
   const providerPlans = providers.map((provider) => {
-    const requiredConfig = provider.config_keys.filter((key) => !optionalConfigKeys.has(key));
-    const optionalConfig = provider.config_keys.filter((key) => optionalConfigKeys.has(key));
+    const optionalConfig = provider.config_keys.filter(
+      (key) => optionalConfigKeys.has(key) || optionalAuthConfig(provider, key),
+    );
+    const requiredConfig = provider.config_keys.filter((key) => !optionalConfig.includes(key));
     const missingConfig = requiredConfig.filter((key) => !env[key]);
     const target = smokeTarget(provider, env);
     const oauth = provider.auth_schemes.some((scheme) => scheme.startsWith("oauth:"));
@@ -362,7 +364,10 @@ function supportsManifestProxy(provider, endpoint) {
 
 function supportsEdgeAuth(provider) {
   return provider.auth.schemes.every((scheme) => {
-    if (["bearer", "api_key", "query_api_key"].includes(scheme.type)) {
+    if (scheme.type === "bearer") {
+      return scheme.required === false || providerHasSecretCandidate(provider, scheme.secretKind);
+    }
+    if (["api_key", "query_api_key"].includes(scheme.type)) {
       return providerHasSecretCandidate(provider, scheme.secretKind);
     }
     if (scheme.type === "cloudflare_binding") {
@@ -381,6 +386,16 @@ function supportsEdgeAuth(provider) {
       );
     }
     return false;
+  });
+}
+
+function optionalAuthConfig(provider, key) {
+  return (provider.auth?.schemes ?? []).some((scheme) => {
+    return (
+      scheme.type === "bearer" &&
+      scheme.required === false &&
+      secretBindingCandidates(provider, scheme.secretKind).includes(key)
+    );
   });
 }
 
@@ -514,6 +529,9 @@ function sampleBody(provider, endpoint, method, env) {
   }
   if (provider.id === "tavily" && endpoint.id === "search") {
     return { query: "OpenClaw", max_results: 1 };
+  }
+  if (provider.id === "firecrawl" && endpoint.id === "scrape") {
+    return { url: "https://example.com", formats: ["markdown"] };
   }
   if (provider.id === "google-gemini") {
     return { contents: [{ parts: [{ text: "reply with ok" }] }] };
