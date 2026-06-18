@@ -162,6 +162,8 @@ pub enum AuthScheme {
         format: String,
         #[serde(rename = "secretKind")]
         secret_kind: String,
+        #[serde(default = "default_true")]
+        required: bool,
     },
     ApiKey {
         header: String,
@@ -801,7 +803,17 @@ fn oauth_token_reserved_param(name: &str) -> bool {
 
 fn auth_scheme_id(scheme: &AuthScheme) -> String {
     match scheme {
-        AuthScheme::Bearer { secret_kind, .. } => format!("bearer:{secret_kind}"),
+        AuthScheme::Bearer {
+            secret_kind,
+            required,
+            ..
+        } => {
+            if *required {
+                format!("bearer:{secret_kind}")
+            } else {
+                format!("bearer:{secret_kind}:optional")
+            }
+        }
         AuthScheme::ApiKey { secret_kind, .. } => format!("api_key:{secret_kind}"),
         AuthScheme::QueryApiKey { secret_kind, .. } => format!("query_api_key:{secret_kind}"),
         AuthScheme::OAuth { provider, .. } => provider
@@ -927,6 +939,48 @@ billing:
             vec!["provider", "endpoint"]
         );
         assert_eq!(snapshot.providers[0].billing.counters[0].name, "request");
+    }
+
+    #[test]
+    fn compiles_optional_bearer_auth() {
+        let manifest: ProviderManifest = serde_yaml::from_str(
+            r#"
+schema: clawrouter.service-provider.v1
+id: keyless
+displayName: Keyless
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+      required: false
+baseUrls:
+  default: https://example.com
+capabilities:
+  - id: web.scrape
+    endpoint: scrape
+endpoints:
+  scrape:
+    path: /v1/scrape
+    requestFormat: example.scrape
+    responseFormat: example.scrape
+"#,
+        )
+        .unwrap();
+
+        let snapshot = compile_provider_snapshot(&[manifest]).unwrap();
+        assert_eq!(
+            snapshot.providers[0].auth_schemes,
+            vec!["bearer:api_key:optional"]
+        );
+        assert!(matches!(
+            snapshot.providers[0].auth.schemes[0],
+            AuthScheme::Bearer {
+                required: false,
+                ..
+            }
+        ));
     }
 
     #[test]

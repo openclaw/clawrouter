@@ -63,6 +63,9 @@ billing:
 - `routing.modelPrefixes` maps model names like `openai/gpt-4.1-mini` to the
   provider snapshot.
 - `auth.schemes` declares how ClawRouter injects the upstream credential.
+- Bearer credentials are required by default. Set `required: false` when an
+  upstream offers keyless access and an API key only raises limits; ClawRouter
+  omits the header until a configured key or scoped upstream grant is present.
 - `auth.authorization` declares a provider-approved browser OAuth flow,
   including its trusted endpoints, client configuration, scopes, grant kind,
   and optional account metadata mappings.

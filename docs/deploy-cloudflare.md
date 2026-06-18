@@ -26,6 +26,10 @@ OAuth grants, and operational health.
 - provider config vars declared by manifests, such as `OPENROUTER_SITE_URL`,
   `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_VERSION`, and `AWS_REGION`.
 
+`FIRECRAWL_API_KEY` is optional: Firecrawl's scrape route is usable without it
+at the provider's free rate limit. Configure it when higher Firecrawl limits
+are required.
+
 ## Provision
 
 Authenticate Wrangler first, then create the runtime resources:

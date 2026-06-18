@@ -6654,6 +6654,21 @@ fn provider_connection_enabled(
 }
 
 fn provider_optional_config_keys(provider: &CompiledProvider) -> Vec<String> {
+    let optional_auth_config = provider
+        .auth
+        .schemes
+        .iter()
+        .filter_map(|scheme| match scheme {
+            AuthScheme::Bearer {
+                secret_kind,
+                required: false,
+                ..
+            } => Some(secret_kind.as_str()),
+            _ => None,
+        })
+        .flat_map(|secret_kind| secret_binding_candidates(provider, secret_kind))
+        .collect::<BTreeSet<_>>();
+
     provider
         .config_keys
         .iter()
@@ -6661,7 +6676,7 @@ fn provider_optional_config_keys(provider: &CompiledProvider) -> Vec<String> {
             matches!(
                 key.as_str(),
                 "AWS_SESSION_TOKEN" | "AZURE_OPENAI_COMPLETION_TOKEN_DEPLOYMENTS"
-            )
+            ) || optional_auth_config.contains(*key)
         })
         .cloned()
         .collect()
@@ -8479,9 +8494,12 @@ fn supports_manifest_proxy(provider: &CompiledProvider, endpoint: &CompiledEndpo
 
 fn supports_edge_auth(provider: &CompiledProvider) -> bool {
     provider.auth.schemes.iter().all(|scheme| match scheme {
-        AuthScheme::Bearer { secret_kind, .. }
-        | AuthScheme::ApiKey { secret_kind, .. }
-        | AuthScheme::QueryApiKey { secret_kind, .. } => {
+        AuthScheme::Bearer {
+            secret_kind,
+            required,
+            ..
+        } => !*required || provider_has_secret_candidate(provider, secret_kind),
+        AuthScheme::ApiKey { secret_kind, .. } | AuthScheme::QueryApiKey { secret_kind, .. } => {
             provider_has_secret_candidate(provider, secret_kind)
         }
         AuthScheme::CloudflareBinding => true,
@@ -8962,6 +8980,28 @@ fn provider_secret(env: &Env, provider: &CompiledProvider, secret_kind: &str) ->
     )))
 }
 
+fn optional_provider_secret(
+    env: &Env,
+    provider: &CompiledProvider,
+    secret_kind: &str,
+) -> Option<String> {
+    for binding in secret_binding_candidates(provider, secret_kind) {
+        if let Ok(secret) = env.secret(&binding) {
+            let value = secret.to_string();
+            if !value.trim().is_empty() {
+                return Some(value);
+            }
+        }
+        if let Ok(var) = env.var(&binding) {
+            let value = var.to_string();
+            if !value.trim().is_empty() {
+                return Some(value);
+            }
+        }
+    }
+    None
+}
+
 fn resolve_template_value(
     provider: &CompiledProvider,
     value: &str,
@@ -9184,14 +9224,19 @@ fn apply_auth_headers(
             header,
             format,
             secret_kind,
+            required,
         } => {
-            let secret = grant
-                .and_then(upstream_grant_secret)
-                .map(str::to_string)
-                .map(Ok)
-                .unwrap_or_else(|| {
-                    provider_secret(env, provider, secret_kind).map_err(HeaderBuildError::Runtime)
-                })?;
+            let secret = match grant.and_then(upstream_grant_secret).map(str::to_string) {
+                Some(secret) => secret,
+                None if !*required => {
+                    let Some(secret) = optional_provider_secret(env, provider, secret_kind) else {
+                        return Ok(());
+                    };
+                    secret
+                }
+                None => provider_secret(env, provider, secret_kind)
+                    .map_err(HeaderBuildError::Runtime)?,
+            };
             headers
                 .set(header, &format.replace("${secret}", &secret))
                 .map_err(HeaderBuildError::Runtime)?;
@@ -13023,6 +13068,29 @@ mod tests {
     }
 
     #[test]
+    fn firecrawl_keyless_manifest_is_routable() {
+        let snapshot = provider_snapshot().unwrap();
+        let provider = snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.id == "firecrawl")
+            .unwrap();
+        let endpoint = provider
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.id == "scrape")
+            .unwrap();
+
+        assert!(supports_manifest_proxy(provider, endpoint));
+        assert_eq!(
+            provider_optional_config_keys(provider),
+            vec!["FIRECRAWL_API_KEY".to_string()]
+        );
+        assert_eq!(provider.auth_schemes, vec!["bearer:api_key:optional"]);
+        assert_eq!(endpoint.path, "/v2/scrape");
+    }
+
+    #[test]
     fn manifest_proxy_supports_oauth_with_token_refs() {
         let provider = oauth_test_provider();
         let endpoint = provider
@@ -13086,6 +13154,11 @@ mod tests {
             route.get("provider").and_then(Value::as_str) == Some("tavily")
                 && route.get("endpoint").and_then(Value::as_str) == Some("search")
                 && route.get("route").and_then(Value::as_str) == Some("/v1/proxy/tavily/search")
+        }));
+        assert!(manifest_routes.iter().any(|route| {
+            route.get("provider").and_then(Value::as_str) == Some("firecrawl")
+                && route.get("endpoint").and_then(Value::as_str) == Some("scrape")
+                && route.get("route").and_then(Value::as_str) == Some("/v1/proxy/firecrawl/scrape")
         }));
         assert!(native_routes.iter().any(|route| {
             route.get("provider").and_then(Value::as_str) == Some("anthropic")

@@ -1,0 +1,49 @@
+schema: clawrouter.service-provider.v1
+id: firecrawl
+displayName: Firecrawl
+status: stable
+class: rest_json
+service:
+  platform: firecrawl
+  kind: tool_provider
+  upstreamService: firecrawl
+  configKeys: [FIRECRAWL_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+      required: false
+baseUrls:
+  default: https://api.firecrawl.dev
+routing:
+  nativePrefixes: [clawrouter-firecrawl, firecrawl]
+adapter:
+  request: rest_json
+  response: rest_json
+  error: firecrawl_error
+capabilities:
+  - id: web.scrape
+    endpoint: scrape
+    methods: [POST]
+endpoints:
+  scrape:
+    path: /v2/scrape
+    requestFormat: firecrawl.scrape
+    responseFormat: firecrawl.scrape
+    timeoutMs: 120000
+models:
+  entries: []
+billing:
+  meter: clawrouter.requests
+  dimensions: [provider, endpoint, key, service, subject]
+  counters:
+    - name: request
+      source: request.count
+      unit: request
+tests:
+  fixtures:
+    - name: scrape-basic
+      request: providers/_fixtures/firecrawl/scrape-basic.request.json
+      response: providers/_fixtures/firecrawl/scrape-basic.response.json

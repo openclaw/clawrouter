@@ -1,0 +1,11 @@
+{
+  "success": true,
+  "data": {
+    "markdown": "# Example Domain",
+    "metadata": {
+      "title": "Example Domain",
+      "sourceURL": "https://example.com",
+      "statusCode": 200
+    }
+  }
+}

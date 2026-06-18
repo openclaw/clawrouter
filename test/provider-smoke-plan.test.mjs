@@ -30,6 +30,19 @@ test("bundled OpenAI smoke target uses the catalog default model", () => {
   assert.equal(provider.target.body.model, "openai/gpt-4.1-mini");
 });
 
+test("Firecrawl uses keyless mode without a configured API key", () => {
+  const provider = buildProviderSmokePlan(compileProviderSnapshot(), {}).providers.find(
+    (entry) => entry.id === "firecrawl",
+  );
+  assert.equal(provider.configPresent, true);
+  assert.deepEqual(provider.requiredConfig, []);
+  assert.deepEqual(provider.optionalConfig, ["FIRECRAWL_API_KEY"]);
+  assert.deepEqual(provider.target.envelope.body, {
+    url: "https://example.com",
+    formats: ["markdown"],
+  });
+});
+
 test("gateway failures do not overwrite provider health", async () => {
   await withFetch(
     () =>
