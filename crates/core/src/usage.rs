@@ -27,6 +27,16 @@ pub struct UsageEvent {
     #[serde(default)]
     pub auth_type: String,
     #[serde(default)]
+    pub session_id: Option<String>,
+    #[serde(default)]
+    pub agent_id: Option<String>,
+    #[serde(default)]
+    pub parent_agent_id: Option<String>,
+    #[serde(default)]
+    pub project_id: Option<String>,
+    #[serde(default)]
+    pub client: Option<String>,
+    #[serde(default)]
     pub key_id: String,
     pub request_id: String,
     pub provider: String,
@@ -35,8 +45,22 @@ pub struct UsageEvent {
     pub input_tokens: Option<u64>,
     pub output_tokens: Option<u64>,
     pub total_tokens: Option<u64>,
+    #[serde(default)]
+    pub cached_input_tokens: Option<u64>,
+    #[serde(default)]
+    pub cache_write_input_tokens: Option<u64>,
     pub reserved_cost_micros: u64,
     pub actual_cost_micros: u64,
+    #[serde(default)]
+    pub reserved_input_tokens: Option<u64>,
+    #[serde(default)]
+    pub reserved_output_tokens: Option<u64>,
+    #[serde(default)]
+    pub pricing_ref: Option<String>,
+    #[serde(default)]
+    pub pricing_effective_at: Option<String>,
+    #[serde(default)]
+    pub cost_basis: String,
     #[serde(default)]
     pub status_code: Option<u16>,
     #[serde(default)]
@@ -62,6 +86,11 @@ impl UsageEvent {
             credential_id: None,
             principal_id: None,
             auth_type: String::new(),
+            session_id: None,
+            agent_id: None,
+            parent_agent_id: None,
+            project_id: None,
+            client: None,
             key_id: key_id.into(),
             request_id: request_id.into(),
             provider: provider.into(),
@@ -70,8 +99,15 @@ impl UsageEvent {
             input_tokens: None,
             output_tokens: None,
             total_tokens: None,
+            cached_input_tokens: None,
+            cache_write_input_tokens: None,
             reserved_cost_micros: 0,
             actual_cost_micros: 0,
+            reserved_input_tokens: None,
+            reserved_output_tokens: None,
+            pricing_ref: None,
+            pricing_effective_at: None,
+            cost_basis: String::new(),
             status_code: None,
             duration_ms: None,
             status: UsageStatus::Success,

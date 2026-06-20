@@ -1,11 +1,13 @@
 pub mod budget;
 pub mod key;
+pub mod pricing;
 pub mod provider;
 pub mod routing;
 pub mod usage;
 
 pub use budget::{BudgetDecision, BudgetLedger, BudgetPolicy, Reservation};
 pub use key::{parse_proxy_key, ProxyKeyParts};
+pub use pricing::{ModelPricing, PricedTokenUsage, RequestCostEstimate};
 pub use provider::{
     compile_provider_snapshot, validate_provider_manifest, AuthAuthorizationConfig, AuthScheme,
     Capability, CompiledEndpoint, CompiledModel, CompiledProvider, Endpoint, GrantTransportConfig,

@@ -316,7 +316,51 @@
         "id": { "type": "string" },
         "upstream": { "type": "string" },
         "capabilities": { "type": "array", "items": { "type": "string" } },
-        "pricingRef": { "type": "string" }
+        "pricingRef": { "type": "string" },
+        "pricing": { "$ref": "#/$defs/modelPricing" }
+      }
+    },
+    "modelPricing": {
+      "type": "object",
+      "required": [
+        "effectiveAt",
+        "source",
+        "inputMicrosPerMillion",
+        "outputMicrosPerMillion",
+        "maxInputTokens",
+        "defaultMaxOutputTokens"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "effectiveAt": { "type": "string", "format": "date" },
+        "source": { "type": "string", "pattern": "^https://" },
+        "inputMicrosPerMillion": { "type": "integer", "minimum": 0 },
+        "outputMicrosPerMillion": { "type": "integer", "minimum": 0 },
+        "cachedInputMicrosPerMillion": { "type": "integer", "minimum": 0 },
+        "cacheWrite5mInputMicrosPerMillion": { "type": "integer", "minimum": 0 },
+        "cacheWrite1hInputMicrosPerMillion": { "type": "integer", "minimum": 0 },
+        "maxInputTokens": { "type": "integer", "minimum": 1 },
+        "maxRequestInputTokens": { "type": "integer", "minimum": 1 },
+        "defaultMaxOutputTokens": { "type": "integer", "minimum": 0 },
+        "inputTokenOverhead": { "type": "integer", "minimum": 0 },
+        "longContext": { "$ref": "#/$defs/longContextPricing" }
+      }
+    },
+    "longContextPricing": {
+      "type": "object",
+      "required": [
+        "thresholdInputTokens",
+        "inputMicrosPerMillion",
+        "outputMicrosPerMillion"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "thresholdInputTokens": { "type": "integer", "minimum": 1 },
+        "inputMicrosPerMillion": { "type": "integer", "minimum": 0 },
+        "outputMicrosPerMillion": { "type": "integer", "minimum": 0 },
+        "cachedInputMicrosPerMillion": { "type": "integer", "minimum": 0 },
+        "cacheWrite5mInputMicrosPerMillion": { "type": "integer", "minimum": 0 },
+        "cacheWrite1hInputMicrosPerMillion": { "type": "integer", "minimum": 0 }
       }
     },
     "meterCounter": {

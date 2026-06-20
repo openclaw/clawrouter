@@ -1,16 +1,19 @@
 use clawrouter_core::{
     parse_proxy_key, AuthAuthorizationConfig, AuthScheme, CompiledEndpoint, CompiledModel,
-    CompiledProvider, GrantTransportConfig, PathParamStyle, ProviderClass, ProviderSnapshot,
-    ProxyKeyParts, UsageEvent, UsageStatus,
+    CompiledProvider, GrantTransportConfig, ModelPricing, PathParamStyle, PricedTokenUsage,
+    ProviderClass, ProviderSnapshot, ProxyKeyParts, RequestCostEstimate, UsageEvent, UsageStatus,
 };
-use futures_util::future::try_join_all;
+use futures_channel::oneshot;
+use futures_util::{future::try_join_all, Stream};
 use hmac::{Hmac, Mac};
 use js_sys::{Array, Function, Object, Promise, Reflect, Uint8Array};
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
+use std::pin::Pin;
 use std::sync::atomic::{AtomicU64, Ordering};
+use std::task::{Context as TaskContext, Poll};
 use wasm_bindgen::{JsCast, JsValue};
 use wasm_bindgen_futures::JsFuture;
 use worker::*;
@@ -34,12 +37,24 @@ const USAGE_CLEANUP_INTERVAL_MS: i64 = 86_400_000;
 const USAGE_AUDIT_FIELD_MAX_BYTES: usize = 256;
 const USAGE_AUDIT_PRINCIPAL_MAX_BYTES: usize = 320;
 const USAGE_AUDIT_MODEL_MAX_BYTES: usize = 512;
-const USAGE_TOKEN_RESPONSE_MAX_BYTES: u64 = 128 * 1024;
+const USAGE_TOKEN_RESPONSE_MAX_BYTES: usize = 2 * 1024 * 1024;
+const USAGE_SSE_EVENT_MAX_BYTES: usize = 256 * 1024;
+const USAGE_SSE_EVENT_TAIL_BYTES: usize = 64 * 1024;
+const NATIVE_JSON_INSPECTION_MAX_BYTES: usize = 8 * 1024 * 1024;
+const ANTHROPIC_1M_CONTEXT_MIN_INPUT_TOKENS: u64 = 1_000_000;
 const KV_BULK_GET_MAX_KEYS: usize = 100;
 const UPSTREAM_PROVIDER_HEADER: &str = "x-clawrouter-upstream-provider";
 const CORS_ALLOW_ORIGIN: &str = "*";
 const CORS_ALLOW_METHODS: &str = "GET,POST,PUT,OPTIONS";
-const CORS_ALLOW_HEADERS: &str = "authorization,content-type,x-request-id";
+const CORS_ALLOW_HEADERS: &str = concat!(
+    "authorization,content-type,x-api-key,anthropic-beta,anthropic-version,x-request-id,",
+    "session-id,thread-id,session_id,x-clawrouter-session-id,x-clawrouter-agent-id,",
+    "x-clawrouter-parent-agent-id,x-clawrouter-project-id,x-clawrouter-client,",
+    "anthropic-dangerous-direct-browser-access,x-stainless-retry-count,",
+    "x-stainless-timeout,x-stainless-lang,x-stainless-package-version,x-stainless-os,",
+    "x-stainless-arch,x-stainless-runtime,x-stainless-runtime-version,",
+    "x-stainless-helper-method,x-stainless-helper"
+);
 const CORS_MAX_AGE: &str = "600";
 const ROOT_REDIRECT_PATH: &str = "/dashboard";
 const POLICY_KV_ENTITLEMENTS_REQUIRED: &str =
@@ -68,7 +83,7 @@ const MISSING_ADMIN_HTML: &str = r##"<!doctype html>
 </html>"##;
 
 #[event(fetch)]
-async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
+async fn fetch(req: Request, env: Env, ctx: Context) -> Result<Response> {
     let url = req.url()?;
     let request_path = url.path().to_string();
     let api_path = canonical_api_path(&request_path);
@@ -177,6 +192,7 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                 return proxy_openai_compatible(
                     req,
                     env,
+                    &ctx,
                     playground_path,
                     ProxyAuthMode::AccessSession,
                 )
@@ -193,6 +209,7 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
                 return proxy_manifest_endpoint(
                     req,
                     env,
+                    &ctx,
                     &format!("/v1{playground_path}"),
                     ProxyAuthMode::AccessSession,
                 )
@@ -202,15 +219,24 @@ async fn fetch(req: Request, env: Env, _ctx: Context) -> Result<Response> {
     }
 
     if req.method() == Method::Post && is_openai_compatible_path(url.path()) {
-        return proxy_openai_compatible(req, env, url.path(), ProxyAuthMode::ProxyKey).await;
+        return proxy_openai_compatible(req, env, &ctx, url.path(), ProxyAuthMode::ProxyKey).await;
+    }
+
+    if req.method() == Method::Post
+        && matches!(url.path(), "/v1/messages" | "/v1/messages/count_tokens")
+    {
+        let native_path = format!("/v1/native/anthropic{}", url.path());
+        return proxy_native_provider(req, env, &ctx, &native_path, ProxyAuthMode::ProxyKey)
+            .await
+            .and_then(with_cors);
     }
 
     if req.method() == Method::Post && url.path().starts_with("/v1/proxy/") {
-        return proxy_manifest_endpoint(req, env, url.path(), ProxyAuthMode::ProxyKey).await;
+        return proxy_manifest_endpoint(req, env, &ctx, url.path(), ProxyAuthMode::ProxyKey).await;
     }
 
     if url.path().starts_with("/v1/native/") {
-        return proxy_native_provider(req, env, url.path(), ProxyAuthMode::ProxyKey).await;
+        return proxy_native_provider(req, env, &ctx, url.path(), ProxyAuthMode::ProxyKey).await;
     }
 
     Response::from_json(&serde_json::json!({
@@ -295,6 +321,8 @@ fn service_index() -> Result<Response> {
             "usage": "/v1/usage",
             "models": "/v1/models",
             "catalog": "/v1/catalog",
+            "anthropicMessages": "/v1/messages",
+            "anthropicCountTokens": "/v1/messages/count_tokens",
             "keyInspect": "/v1/key/inspect",
             "adminOverview": "/v1/admin/overview",
             "adminUsers": "/v1/admin/users",
@@ -499,10 +527,12 @@ enum ProxyAuthMode {
 async fn proxy_openai_compatible(
     mut req: Request,
     env: Env,
+    ctx: &Context,
     path: &str,
     auth_mode: ProxyAuthMode,
 ) -> Result<Response> {
     let snapshot = provider_snapshot()?;
+    let attribution = request_attribution(req.headers())?;
     let raw_body = req.text().await?;
     let mut body = serde_json::from_str::<Value>(&raw_body).map_err(|error| {
         Error::RustError(format!("request body must be a JSON object: {error}"))
@@ -532,7 +562,15 @@ async fn proxy_openai_compatible(
             404,
         );
     };
-    let auth = match authorize_request(req.headers(), &env, &route.provider.id, auth_mode).await? {
+    let auth = match authorize_request(
+        req.headers(),
+        &env,
+        &route.provider.id,
+        auth_mode,
+        &attribution,
+    )
+    .await?
+    {
         AuthOutcome::Allowed(auth) => auth,
         AuthOutcome::Denied(response) => return Ok(response),
     };
@@ -545,16 +583,20 @@ async fn proxy_openai_compatible(
         capability,
         model: Some(model.as_str()),
         request_id: &request_id,
+        attribution: &attribution,
     };
     if let Some(response) = disabled_provider_connection_response(&env, &route.provider.id).await? {
         enqueue_denied_usage(
             &env,
-            &auth,
-            &route.provider.id,
-            capability,
-            Some(model.as_str()),
-            &request_id,
-            response.status_code(),
+            DeniedUsageRecord {
+                auth: &auth,
+                provider: &route.provider.id,
+                capability,
+                model: Some(model.as_str()),
+                request_id: &request_id,
+                status_code: response.status_code(),
+                attribution: Some(&attribution),
+            },
         )
         .await;
         return Ok(response);
@@ -562,12 +604,15 @@ async fn proxy_openai_compatible(
     if let Some(response) = preflight_static_budget(&auth.policy)? {
         enqueue_denied_usage(
             &env,
-            &auth,
-            &route.provider.id,
-            capability,
-            Some(model.as_str()),
-            &request_id,
-            response.status_code(),
+            DeniedUsageRecord {
+                auth: &auth,
+                provider: &route.provider.id,
+                capability,
+                model: Some(model.as_str()),
+                request_id: &request_id,
+                status_code: response.status_code(),
+                attribution: Some(&attribution),
+            },
         )
         .await;
         return Ok(response);
@@ -651,7 +696,36 @@ async fn proxy_openai_compatible(
         Some(&env),
         &mut body,
     );
+    if let Err(message) = normalize_openai_list_pricing_request(
+        route.provider,
+        path,
+        route.pricing.is_some() && auth.policy.request_cost_micros.is_none(),
+        &mut body,
+    ) {
+        return audit
+            .failure_response(json_error("unsupported_pricing_mode", message, 400)?)
+            .await;
+    }
+    if let Err(message) = validate_request_tool_pricing(
+        &auth.policy,
+        route.pricing.as_ref(),
+        provider_tool_dialect(route.provider),
+        capability,
+        &body,
+    ) {
+        return audit
+            .failure_response(json_error("fixed_price_required", message, 400)?)
+            .await;
+    }
     let upstream_body = serde_json::to_string(&body)?;
+    let request_cost = RequestCost::for_capability(
+        capability,
+        &auth.policy,
+        route.pricing_ref.as_deref(),
+        route.pricing.as_ref(),
+        upstream_body.as_bytes(),
+        Some(&body),
+    );
 
     let header_context = HeaderRequestContext {
         method: "POST",
@@ -703,53 +777,60 @@ async fn proxy_openai_compatible(
             return audit.failure_response(response).await;
         }
     };
-    let budget = match preflight_budget(&env, &auth, capability).await? {
+    let budget = match preflight_budget(&env, &auth, capability, &request_cost).await? {
         BudgetPreflight::Allowed(budget) => budget,
         BudgetPreflight::Denied(response) => {
             enqueue_denied_usage(
                 &env,
-                &auth,
-                &route.provider.id,
-                capability,
-                Some(model.as_str()),
-                &request_id,
-                response.status_code(),
+                DeniedUsageRecord {
+                    auth: &auth,
+                    provider: &route.provider.id,
+                    capability,
+                    model: Some(model.as_str()),
+                    request_id: &request_id,
+                    status_code: response.status_code(),
+                    attribution: Some(&attribution),
+                },
             )
             .await;
             return Ok(response);
         }
     };
     let started_at_ms = Date::now().as_millis();
-    let mut response = send_upstream_request(upstream_req, &route.provider.id).await?;
+    let response = send_upstream_request(upstream_req, &route.provider.id).await?;
     let status_code = response.status_code();
-    let tokens = response_usage_tokens(&mut response, capability).await;
-    let budget = settle_budget_after_response(&env, &auth, budget, status_code).await;
-    enqueue_usage(
-        &env,
-        UsageRecord {
-            auth: &auth,
-            provider: &route.provider.id,
-            capability,
-            model: Some(model.as_str()),
-            request_id: &request_id,
+    finalize_proxy_response(
+        response,
+        ctx,
+        ProxyCompletion {
+            env: env.clone(),
+            auth,
+            attribution,
+            provider: route.provider.id.clone(),
+            capability: capability.to_string(),
+            model: Some(model),
+            request_id,
             budget,
-            tokens,
-            status: usage_status(status_code),
+            request_cost,
             status_code,
-            duration_ms: Date::now().as_millis().saturating_sub(started_at_ms),
+            started_at_ms,
+            stream_requires_terminal_marker: usage_stream_requires_terminal_marker(
+                route.provider.adapter.stream.as_deref(),
+            ),
         },
     )
-    .await;
-    Ok(response)
+    .await
 }
 
 async fn proxy_manifest_endpoint(
     mut req: Request,
     env: Env,
+    ctx: &Context,
     path: &str,
     mode: ProxyAuthMode,
 ) -> Result<Response> {
     let snapshot = provider_snapshot()?;
+    let attribution = request_attribution(req.headers())?;
     let Some(rest) = path.strip_prefix("/v1/proxy/") else {
         return json_error("route_not_found", "route not found", 404);
     };
@@ -784,10 +865,11 @@ async fn proxy_manifest_endpoint(
         .find(|capability| capability.endpoint == endpoint.id)
         .map(|capability| capability.id.as_str())
         .unwrap_or("tool.invoke");
-    let auth = match authorize_request(req.headers(), &env, &provider.id, mode).await? {
-        AuthOutcome::Allowed(auth) => auth,
-        AuthOutcome::Denied(response) => return Ok(response),
-    };
+    let auth =
+        match authorize_request(req.headers(), &env, &provider.id, mode, &attribution).await? {
+            AuthOutcome::Allowed(auth) => auth,
+            AuthOutcome::Denied(response) => return Ok(response),
+        };
     let request_id = request_id(req.headers(), endpoint_id);
     let audit = ProxyAuditContext {
         env: &env,
@@ -796,16 +878,20 @@ async fn proxy_manifest_endpoint(
         capability,
         model: None,
         request_id: &request_id,
+        attribution: &attribution,
     };
     if let Some(response) = disabled_provider_connection_response(&env, &provider.id).await? {
         enqueue_denied_usage(
             &env,
-            &auth,
-            &provider.id,
-            capability,
-            None,
-            &request_id,
-            response.status_code(),
+            DeniedUsageRecord {
+                auth: &auth,
+                provider: &provider.id,
+                capability,
+                model: None,
+                request_id: &request_id,
+                status_code: response.status_code(),
+                attribution: Some(&attribution),
+            },
         )
         .await;
         return Ok(response);
@@ -813,12 +899,15 @@ async fn proxy_manifest_endpoint(
     if let Some(response) = preflight_static_budget(&auth.policy)? {
         enqueue_denied_usage(
             &env,
-            &auth,
-            &provider.id,
-            capability,
-            None,
-            &request_id,
-            response.status_code(),
+            DeniedUsageRecord {
+                auth: &auth,
+                provider: &provider.id,
+                capability,
+                model: None,
+                request_id: &request_id,
+                status_code: response.status_code(),
+                attribution: Some(&attribution),
+            },
         )
         .await;
         return Ok(response);
@@ -958,9 +1047,71 @@ async fn proxy_manifest_endpoint(
             return audit.failure_response(response).await;
         }
     };
-    let upstream_body = method_allows_body(&upstream_method)
-        .then(|| serde_json::to_string(&proxy.body.unwrap_or(Value::Object(Map::new()))))
+    let mut upstream_body_json = method_allows_body(&upstream_method)
+        .then(|| proxy.body.unwrap_or(Value::Object(Map::new())));
+    let model_selection = upstream_body_json
+        .as_mut()
+        .and_then(|body| normalize_native_model(provider, body));
+    if let Some(upstream_body_json) = upstream_body_json.as_mut() {
+        let listed_pricing = model_selection
+            .as_ref()
+            .and_then(|selection| selection.pricing.as_ref())
+            .is_some()
+            && auth.policy.request_cost_micros.is_none();
+        if let Err(message) = normalize_openai_list_pricing_request(
+            provider,
+            &endpoint.path,
+            listed_pricing,
+            upstream_body_json,
+        ) {
+            return audit
+                .failure_response(json_error("unsupported_pricing_mode", message, 400)?)
+                .await;
+        }
+        let anthropic_beta = req.headers().get("anthropic-beta")?;
+        if let Err(message) = validate_request_beta_pricing(
+            &auth.policy,
+            model_selection
+                .as_ref()
+                .and_then(|selection| selection.pricing.as_ref()),
+            provider_tool_dialect(provider),
+            capability,
+            anthropic_beta.as_deref(),
+        ) {
+            return audit
+                .failure_response(json_error("fixed_price_required", message, 400)?)
+                .await;
+        }
+        if let Err(message) = validate_request_tool_pricing(
+            &auth.policy,
+            model_selection
+                .as_ref()
+                .and_then(|selection| selection.pricing.as_ref()),
+            provider_tool_dialect(provider),
+            capability,
+            upstream_body_json,
+        ) {
+            return audit
+                .failure_response(json_error("fixed_price_required", message, 400)?)
+                .await;
+        }
+    }
+    let upstream_body = upstream_body_json
+        .as_ref()
+        .map(serde_json::to_string)
         .transpose()?;
+    let request_cost = RequestCost::for_capability(
+        capability,
+        &auth.policy,
+        model_selection
+            .as_ref()
+            .and_then(|selection| selection.pricing_ref.as_deref()),
+        model_selection
+            .as_ref()
+            .and_then(|selection| selection.pricing.as_ref()),
+        upstream_body.as_deref().unwrap_or_default().as_bytes(),
+        upstream_body_json.as_ref(),
+    );
     let header_context = HeaderRequestContext {
         method: &upstream_method,
         url: &upstream_url,
@@ -1013,53 +1164,60 @@ async fn proxy_manifest_endpoint(
             return audit.failure_response(response).await;
         }
     };
-    let budget = match preflight_budget(&env, &auth, capability).await? {
+    let budget = match preflight_budget(&env, &auth, capability, &request_cost).await? {
         BudgetPreflight::Allowed(budget) => budget,
         BudgetPreflight::Denied(response) => {
             enqueue_denied_usage(
                 &env,
-                &auth,
-                &provider.id,
-                capability,
-                None,
-                &request_id,
-                response.status_code(),
+                DeniedUsageRecord {
+                    auth: &auth,
+                    provider: &provider.id,
+                    capability,
+                    model: None,
+                    request_id: &request_id,
+                    status_code: response.status_code(),
+                    attribution: Some(&attribution),
+                },
             )
             .await;
             return Ok(response);
         }
     };
     let started_at_ms = Date::now().as_millis();
-    let mut response = send_upstream_request(upstream_req, &provider.id).await?;
+    let response = send_upstream_request(upstream_req, &provider.id).await?;
     let status_code = response.status_code();
-    let tokens = response_usage_tokens(&mut response, capability).await;
-    let budget = settle_budget_after_response(&env, &auth, budget, status_code).await;
-    enqueue_usage(
-        &env,
-        UsageRecord {
-            auth: &auth,
-            provider: &provider.id,
-            capability,
-            model: None,
-            request_id: &request_id,
+    finalize_proxy_response(
+        response,
+        ctx,
+        ProxyCompletion {
+            env: env.clone(),
+            auth,
+            attribution,
+            provider: provider.id.clone(),
+            capability: capability.to_string(),
+            model: model_selection.map(|selection| selection.model),
+            request_id,
             budget,
-            tokens,
-            status: usage_status(status_code),
+            request_cost,
             status_code,
-            duration_ms: Date::now().as_millis().saturating_sub(started_at_ms),
+            started_at_ms,
+            stream_requires_terminal_marker: usage_stream_requires_terminal_marker(
+                provider.adapter.stream.as_deref(),
+            ),
         },
     )
-    .await;
-    Ok(response)
+    .await
 }
 
 async fn proxy_native_provider(
     mut req: Request,
     env: Env,
+    ctx: &Context,
     path: &str,
     auth_mode: ProxyAuthMode,
 ) -> Result<Response> {
     let snapshot = provider_snapshot()?;
+    let attribution = request_attribution(req.headers())?;
     let Some(rest) = path.strip_prefix("/v1/native/") else {
         return json_error("route_not_found", "route not found", 404);
     };
@@ -1111,7 +1269,9 @@ async fn proxy_native_provider(
         })
         .map(|capability| capability.id.as_str())
         .unwrap_or("tool.invoke");
-    let auth = match authorize_request(req.headers(), &env, &provider.id, auth_mode).await? {
+    let auth = match authorize_request(req.headers(), &env, &provider.id, auth_mode, &attribution)
+        .await?
+    {
         AuthOutcome::Allowed(auth) => auth,
         AuthOutcome::Denied(response) => return Ok(response),
     };
@@ -1123,16 +1283,20 @@ async fn proxy_native_provider(
         capability,
         model: None,
         request_id: &request_id,
+        attribution: &attribution,
     };
     if let Some(response) = disabled_provider_connection_response(&env, &provider.id).await? {
         enqueue_denied_usage(
             &env,
-            &auth,
-            &provider.id,
-            capability,
-            None,
-            &request_id,
-            response.status_code(),
+            DeniedUsageRecord {
+                auth: &auth,
+                provider: &provider.id,
+                capability,
+                model: None,
+                request_id: &request_id,
+                status_code: response.status_code(),
+                attribution: Some(&attribution),
+            },
         )
         .await;
         return Ok(response);
@@ -1140,17 +1304,24 @@ async fn proxy_native_provider(
     if let Some(response) = preflight_static_budget(&auth.policy)? {
         enqueue_denied_usage(
             &env,
-            &auth,
-            &provider.id,
-            capability,
-            None,
-            &request_id,
-            response.status_code(),
+            DeniedUsageRecord {
+                auth: &auth,
+                provider: &provider.id,
+                capability,
+                model: None,
+                request_id: &request_id,
+                status_code: response.status_code(),
+                attribution: Some(&attribution),
+            },
         )
         .await;
         return Ok(response);
     }
     let incoming_url = req.url()?;
+    let compatibility_route = matches!(
+        incoming_url.path(),
+        "/v1/messages" | "/v1/messages/count_tokens"
+    );
     let grant = match upstream_grant_for_request(&env, provider, endpoint, &auth).await {
         Ok(value) => value,
         Err(HeaderBuildError::Client {
@@ -1215,11 +1386,126 @@ async fn proxy_native_provider(
                 .await
         }
     };
-    let body = if method_allows_body(&method) {
+    let mut body = if method_allows_body(&method) {
         Some(req.bytes().await?)
     } else {
         None
     };
+    let inspect_json =
+        native_request_needs_json_inspection(compatibility_route, capability, &auth.policy);
+    if inspect_json
+        && body
+            .as_ref()
+            .is_some_and(|body| body.len() > NATIVE_JSON_INSPECTION_MAX_BYTES)
+    {
+        return audit
+            .failure_response(json_error(
+                "request_body_too_large",
+                "native JSON bodies requiring model and pricing inspection are limited to 8 MiB; use a fixed request price on the provider-native route for larger payloads",
+                413,
+            )?)
+            .await;
+    }
+    let mut request_json = if inspect_json {
+        match body.as_deref() {
+            Some(body) => match serde_json::from_slice::<Value>(body) {
+                Ok(value) => Some(value),
+                Err(_) => {
+                    return audit
+                        .failure_response(json_error(
+                            "invalid_json_body",
+                            "request body must be valid JSON",
+                            400,
+                        )?)
+                        .await
+                }
+            },
+            None => None,
+        }
+    } else {
+        None
+    };
+    let model_selection = if compatibility_route {
+        request_json
+            .as_mut()
+            .and_then(|body| normalize_native_model(provider, body))
+    } else {
+        request_json
+            .as_ref()
+            .and_then(|body| select_native_model(provider, body))
+    };
+    if let Some(request_json) = request_json.as_mut() {
+        let listed_pricing = model_selection
+            .as_ref()
+            .and_then(|selection| selection.pricing.as_ref())
+            .is_some()
+            && auth.policy.request_cost_micros.is_none();
+        let pricing_mode_result = if compatibility_route {
+            normalize_openai_list_pricing_request(
+                provider,
+                &native_path,
+                listed_pricing,
+                request_json,
+            )
+        } else {
+            validate_openai_native_list_pricing_request(
+                provider,
+                &native_path,
+                listed_pricing,
+                request_json,
+            )
+        };
+        if let Err(message) = pricing_mode_result {
+            return audit
+                .failure_response(json_error("unsupported_pricing_mode", message, 400)?)
+                .await;
+        }
+        let anthropic_beta = req.headers().get("anthropic-beta")?;
+        if let Err(message) = validate_request_beta_pricing(
+            &auth.policy,
+            model_selection
+                .as_ref()
+                .and_then(|selection| selection.pricing.as_ref()),
+            provider_tool_dialect(provider),
+            capability,
+            anthropic_beta.as_deref(),
+        ) {
+            return audit
+                .failure_response(json_error("fixed_price_required", message, 400)?)
+                .await;
+        }
+        if let Err(message) = validate_request_tool_pricing(
+            &auth.policy,
+            model_selection
+                .as_ref()
+                .and_then(|selection| selection.pricing.as_ref()),
+            provider_tool_dialect(provider),
+            capability,
+            request_json,
+        ) {
+            return audit
+                .failure_response(json_error("fixed_price_required", message, 400)?)
+                .await;
+        }
+    }
+    if compatibility_route {
+        if let Some(request_json) = request_json.as_ref() {
+            body = Some(serde_json::to_vec(request_json)?);
+        }
+    }
+    let request_cost = RequestCost::for_capability(
+        capability,
+        &auth.policy,
+        model_selection
+            .as_ref()
+            .and_then(|selection| selection.pricing_ref.as_deref()),
+        model_selection
+            .as_ref()
+            .and_then(|selection| selection.pricing.as_ref()),
+        body.as_deref().unwrap_or_default(),
+        request_json.as_ref(),
+    );
+    drop(request_json);
     let header_context = HeaderRequestContext {
         method: &method,
         url: &upstream_url,
@@ -1252,7 +1538,7 @@ async fn proxy_native_provider(
     let mut init = RequestInit::new();
     init.with_method(method_from_str(&method)?)
         .with_headers(headers);
-    if let Some(body) = body {
+    if let Some(body) = body.as_ref() {
         init.with_body(Some(Uint8Array::from(body.as_slice()).into()));
     }
     let upstream_req = match Request::new_with_init(&upstream_url, &init) {
@@ -1271,45 +1557,50 @@ async fn proxy_native_provider(
             return audit.failure_response(response).await;
         }
     };
-    let budget = match preflight_budget(&env, &auth, capability).await? {
+    let budget = match preflight_budget(&env, &auth, capability, &request_cost).await? {
         BudgetPreflight::Allowed(budget) => budget,
         BudgetPreflight::Denied(response) => {
             enqueue_denied_usage(
                 &env,
-                &auth,
-                &provider.id,
-                capability,
-                None,
-                &request_id,
-                response.status_code(),
+                DeniedUsageRecord {
+                    auth: &auth,
+                    provider: &provider.id,
+                    capability,
+                    model: None,
+                    request_id: &request_id,
+                    status_code: response.status_code(),
+                    attribution: Some(&attribution),
+                },
             )
             .await;
             return Ok(response);
         }
     };
     let started_at_ms = Date::now().as_millis();
-    let mut response = send_upstream_request(upstream_req, &provider.id).await?;
+    let response = send_upstream_request(upstream_req, &provider.id).await?;
     let status_code = response.status_code();
-    let tokens = response_usage_tokens(&mut response, capability).await;
     let response = sanitize_native_response(response, endpoint)?;
-    let budget = settle_budget_after_response(&env, &auth, budget, status_code).await;
-    enqueue_usage(
-        &env,
-        UsageRecord {
-            auth: &auth,
-            provider: &provider.id,
-            capability,
-            model: None,
-            request_id: &request_id,
+    finalize_proxy_response(
+        response,
+        ctx,
+        ProxyCompletion {
+            env: env.clone(),
+            auth,
+            attribution,
+            provider: provider.id.clone(),
+            capability: capability.to_string(),
+            model: model_selection.map(|selection| selection.model),
+            request_id,
             budget,
-            tokens,
-            status: usage_status(status_code),
+            request_cost,
             status_code,
-            duration_ms: Date::now().as_millis().saturating_sub(started_at_ms),
+            started_at_ms,
+            stream_requires_terminal_marker: usage_stream_requires_terminal_marker(
+                provider.adapter.stream.as_deref(),
+            ),
         },
     )
-    .await;
-    Ok(response)
+    .await
 }
 
 fn select_native_endpoint<'a>(
@@ -2342,6 +2633,7 @@ struct OAuthAuthorizationStartRequest {
     provider: String,
 }
 
+#[derive(Clone)]
 struct AuthorizedKey {
     credential_id: Option<String>,
     principal_id: Option<String>,
@@ -2517,7 +2809,12 @@ async fn client_models(headers: &Headers, env: &Env) -> Result<Response> {
         Err(response) => return Ok(response),
     };
     let snapshot = provider_snapshot()?;
-    private_json_response(&client_models_value(&snapshot, &rows))
+    let value = if headers.get("anthropic-version")?.is_some() {
+        anthropic_models_value(&snapshot, &rows)
+    } else {
+        client_models_value(&snapshot, &rows)
+    };
+    private_json_response(&value)
 }
 
 fn client_models_value(snapshot: &ProviderSnapshot, rows: &[EntitlementProviderRow]) -> Value {
@@ -2543,6 +2840,7 @@ fn client_models_value(snapshot: &ProviderSnapshot, rows: &[EntitlementProviderR
                         "id": model.id,
                         "object": "model",
                         "owned_by": provider.id,
+                        "display_name": format!("{} · {}", provider.display_name, model.id),
                         "capabilities": capabilities
                     })
                 })
@@ -2552,6 +2850,67 @@ fn client_models_value(snapshot: &ProviderSnapshot, rows: &[EntitlementProviderR
     serde_json::json!({
         "object": "list",
         "data": data
+    })
+}
+
+fn anthropic_models_value(snapshot: &ProviderSnapshot, rows: &[EntitlementProviderRow]) -> Value {
+    let allowed = rows
+        .iter()
+        .filter(|row| row.allowed && row.readiness.executable)
+        .map(|row| (row.provider.as_str(), &row.readiness.executable_endpoints))
+        .collect::<BTreeMap<_, _>>();
+    let data = snapshot
+        .providers
+        .iter()
+        .filter_map(|provider| {
+            allowed
+                .get(provider.id.as_str())
+                .map(|endpoints| (provider, *endpoints))
+        })
+        .flat_map(|(provider, endpoints)| {
+            provider.models.iter().filter_map(|model| {
+                let capabilities = executable_model_capabilities(provider, model, endpoints);
+                capabilities
+                    .iter()
+                    .any(|capability| capability == "llm.messages")
+                    .then(|| {
+                        let (max_input_tokens, max_tokens) = model
+                            .pricing
+                            .as_ref()
+                            .map(|pricing| {
+                                (pricing.max_input_tokens, pricing.default_max_output_tokens)
+                            })
+                            .unwrap_or_default();
+                        serde_json::json!({
+                            "id": model.id,
+                            "type": "model",
+                            "display_name": format!("{} · {}", provider.display_name, model.id),
+                            "created_at": "1970-01-01T00:00:00Z",
+                            // Anthropic's ModelInfo schema explicitly permits null when
+                            // model capability metadata is unavailable.
+                            "capabilities": Value::Null,
+                            "max_input_tokens": max_input_tokens,
+                            "max_tokens": max_tokens
+                        })
+                    })
+            })
+        })
+        .collect::<Vec<_>>();
+    let first_id = data
+        .first()
+        .and_then(|model| model.get("id"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    let last_id = data
+        .last()
+        .and_then(|model| model.get("id"))
+        .and_then(Value::as_str)
+        .map(str::to_string);
+    serde_json::json!({
+        "data": data,
+        "first_id": first_id,
+        "has_more": false,
+        "last_id": last_id
     })
 }
 
@@ -2606,7 +2965,8 @@ fn client_catalog_value(snapshot: &ProviderSnapshot, rows: Vec<EntitlementProvid
                             "id": model.id,
                             "upstream": model.upstream,
                             "capabilities": capabilities,
-                            "pricing_ref": model.pricing_ref
+                            "pricing_ref": model.pricing_ref,
+                            "pricing": model.pricing
                         })
                     })
                 }).collect::<Vec<_>>()
@@ -2666,18 +3026,17 @@ fn provider_connection_types(provider: &CompiledProvider) -> Vec<&'static str> {
 
 fn private_json_response(value: &Value) -> Result<Response> {
     let raw = serde_json::to_vec(value)?;
-    let etag = format!("\"{}\"", sha256_hex_bytes(&raw));
     let mut response = Response::from_bytes(raw)?;
     response
         .headers_mut()
         .set("content-type", "application/json")?;
     response
         .headers_mut()
-        .set("cache-control", "private, max-age=60")?;
-    response
-        .headers_mut()
-        .set("vary", "authorization, cf-access-jwt-assertion")?;
-    response.headers_mut().set("etag", &etag)?;
+        .set("cache-control", "private, no-store, max-age=0")?;
+    response.headers_mut().set(
+        "vary",
+        "authorization, x-api-key, x-goog-api-key, api-key, cf-access-jwt-assertion, anthropic-version",
+    )?;
     Ok(response)
 }
 
@@ -7914,8 +8273,9 @@ async fn authorize_proxy_key(
     headers: &Headers,
     env: &Env,
     provider_id: &str,
+    attribution: &AgentAttribution,
 ) -> Result<AuthOutcome> {
-    authorize_proxy_key_for_provider(headers, env, Some(provider_id)).await
+    authorize_proxy_key_for_provider(headers, env, Some(provider_id), Some(attribution)).await
 }
 
 async fn authorize_request(
@@ -7923,10 +8283,15 @@ async fn authorize_request(
     env: &Env,
     provider_id: &str,
     mode: ProxyAuthMode,
+    attribution: &AgentAttribution,
 ) -> Result<AuthOutcome> {
     match mode {
-        ProxyAuthMode::ProxyKey => authorize_proxy_key(headers, env, provider_id).await,
-        ProxyAuthMode::AccessSession => authorize_access_session(headers, env, provider_id).await,
+        ProxyAuthMode::ProxyKey => {
+            authorize_proxy_key(headers, env, provider_id, attribution).await
+        }
+        ProxyAuthMode::AccessSession => {
+            authorize_access_session(headers, env, provider_id, attribution).await
+        }
     }
 }
 
@@ -7977,13 +8342,14 @@ async fn disabled_provider_connection_response(
 }
 
 async fn authorize_proxy_key_identity(headers: &Headers, env: &Env) -> Result<AuthOutcome> {
-    authorize_proxy_key_for_provider(headers, env, None).await
+    authorize_proxy_key_for_provider(headers, env, None, None).await
 }
 
 async fn authorize_proxy_key_for_provider(
     headers: &Headers,
     env: &Env,
     provider_id: Option<&str>,
+    attribution: Option<&AgentAttribution>,
 ) -> Result<AuthOutcome> {
     let key = match proxy_key_from_headers(headers)? {
         Some(key) => key,
@@ -8031,12 +8397,15 @@ async fn authorize_proxy_key_for_provider(
             };
             enqueue_denied_usage(
                 env,
-                &auth,
-                provider_id,
-                "access.denied",
-                None,
-                &request_id(headers, "auth"),
-                response.status_code(),
+                DeniedUsageRecord {
+                    auth: &auth,
+                    provider: provider_id,
+                    capability: "access.denied",
+                    model: None,
+                    request_id: &request_id(headers, "auth"),
+                    status_code: response.status_code(),
+                    attribution,
+                },
             )
             .await;
         }
@@ -8055,12 +8424,15 @@ async fn authorize_proxy_key_for_provider(
         if let Some(provider_id) = provider_id {
             enqueue_denied_usage(
                 env,
-                &authorized,
-                provider_id,
-                "access.denied",
-                None,
-                &request_id(headers, "auth"),
-                response.status_code(),
+                DeniedUsageRecord {
+                    auth: &authorized,
+                    provider: provider_id,
+                    capability: "access.denied",
+                    model: None,
+                    request_id: &request_id(headers, "auth"),
+                    status_code: response.status_code(),
+                    attribution,
+                },
             )
             .await;
         }
@@ -8071,12 +8443,15 @@ async fn authorize_proxy_key_for_provider(
         if let Some(provider_id) = provider_id {
             enqueue_denied_usage(
                 env,
-                &authorized,
-                provider_id,
-                "access.denied",
-                None,
-                &request_id(headers, "auth"),
-                response.status_code(),
+                DeniedUsageRecord {
+                    auth: &authorized,
+                    provider: provider_id,
+                    capability: "access.denied",
+                    model: None,
+                    request_id: &request_id(headers, "auth"),
+                    status_code: response.status_code(),
+                    attribution,
+                },
             )
             .await;
         }
@@ -8091,12 +8466,15 @@ async fn authorize_proxy_key_for_provider(
         if let Some(provider_id) = provider_id {
             enqueue_denied_usage(
                 env,
-                &authorized,
-                provider_id,
-                "access.denied",
-                None,
-                &request_id(headers, "auth"),
-                response.status_code(),
+                DeniedUsageRecord {
+                    auth: &authorized,
+                    provider: provider_id,
+                    capability: "access.denied",
+                    model: None,
+                    request_id: &request_id(headers, "auth"),
+                    status_code: response.status_code(),
+                    attribution,
+                },
             )
             .await;
         }
@@ -8117,12 +8495,15 @@ async fn authorize_proxy_key_for_provider(
             )?;
             enqueue_denied_usage(
                 env,
-                &authorized,
-                provider_id,
-                "access.denied",
-                None,
-                &request_id(headers, "auth"),
-                response.status_code(),
+                DeniedUsageRecord {
+                    auth: &authorized,
+                    provider: provider_id,
+                    capability: "access.denied",
+                    model: None,
+                    request_id: &request_id(headers, "auth"),
+                    status_code: response.status_code(),
+                    attribution,
+                },
             )
             .await;
             return Ok(AuthOutcome::Denied(response));
@@ -8135,6 +8516,7 @@ async fn authorize_access_session(
     headers: &Headers,
     env: &Env,
     provider_id: &str,
+    attribution: &AgentAttribution,
 ) -> Result<AuthOutcome> {
     let Some(session) = verified_access_session(headers, env).await? else {
         return json_error(
@@ -8175,12 +8557,15 @@ async fn authorize_access_session(
         };
         enqueue_denied_usage(
             env,
-            &auth,
-            provider_id,
-            "access.denied",
-            None,
-            &request_id(headers, "auth"),
-            response.status_code(),
+            DeniedUsageRecord {
+                auth: &auth,
+                provider: provider_id,
+                capability: "access.denied",
+                model: None,
+                request_id: &request_id(headers, "auth"),
+                status_code: response.status_code(),
+                attribution: Some(attribution),
+            },
         )
         .await;
         return Ok(AuthOutcome::Denied(response));
@@ -8238,6 +8623,15 @@ struct SelectedRoute<'a> {
     provider: &'a CompiledProvider,
     upstream_model: String,
     capabilities: Vec<String>,
+    pricing_ref: Option<String>,
+    pricing: Option<ModelPricing>,
+}
+
+struct NativeModelSelection {
+    model: String,
+    upstream_model: String,
+    pricing_ref: Option<String>,
+    pricing: Option<ModelPricing>,
 }
 
 fn select_model_route<'a>(
@@ -8257,6 +8651,8 @@ fn select_model_route<'a>(
                 provider,
                 upstream_model: model_entry.upstream.clone(),
                 capabilities: model_entry.capabilities.clone(),
+                pricing_ref: model_entry.pricing_ref.clone(),
+                pricing: model_entry.pricing.clone(),
             });
         }
     }
@@ -8274,8 +8670,50 @@ fn select_model_route<'a>(
                     .iter()
                     .map(|capability| capability.id.clone())
                     .collect(),
+                pricing_ref: None,
+                pricing: None,
             })
         })
+    })
+}
+
+fn normalize_native_model(
+    provider: &CompiledProvider,
+    body: &mut Value,
+) -> Option<NativeModelSelection> {
+    let selection = select_native_model(provider, body)?;
+    body["model"] = Value::String(selection.upstream_model.clone());
+    Some(selection)
+}
+
+fn select_native_model(provider: &CompiledProvider, body: &Value) -> Option<NativeModelSelection> {
+    let model = body.get("model")?.as_str()?.to_string();
+    if let Some(entry) = provider
+        .models
+        .iter()
+        .find(|entry| entry.id == model || entry.upstream == model)
+    {
+        return Some(NativeModelSelection {
+            model,
+            upstream_model: entry.upstream.clone(),
+            pricing_ref: entry.pricing_ref.clone(),
+            pricing: entry.pricing.clone(),
+        });
+    }
+    let mut upstream_model = model.clone();
+    for prefix in &provider.routing.model_prefixes {
+        if let Some(upstream) = model.strip_prefix(prefix) {
+            if !upstream.is_empty() {
+                upstream_model = upstream.to_string();
+                break;
+            }
+        }
+    }
+    Some(NativeModelSelection {
+        model,
+        upstream_model,
+        pricing_ref: None,
+        pricing: None,
     })
 }
 
@@ -8364,6 +8802,230 @@ fn normalize_openai_proxy_body(
     }
 }
 
+fn normalize_openai_list_pricing_request(
+    provider: &CompiledProvider,
+    path: &str,
+    listed_pricing: bool,
+    body: &mut Value,
+) -> std::result::Result<(), &'static str> {
+    if provider.id != "openai"
+        || !listed_pricing
+        || !matches!(path, "/v1/responses" | "/v1/chat/completions")
+    {
+        return Ok(());
+    }
+    let Some(object) = body.as_object_mut() else {
+        return Err("OpenAI list-priced requests must use a JSON object body");
+    };
+    if path == "/v1/responses" && object.get("background").and_then(Value::as_bool) == Some(true) {
+        return Err(
+            "OpenAI background Responses require an explicit fixed policy request price until terminal usage polling is supported",
+        );
+    }
+    match object.get("service_tier") {
+        None | Some(Value::Null) => {
+            object.insert(
+                "service_tier".to_string(),
+                Value::String("default".to_string()),
+            );
+        }
+        Some(Value::String(tier)) if tier == "auto" => {
+            object.insert(
+                "service_tier".to_string(),
+                Value::String("default".to_string()),
+            );
+        }
+        Some(Value::String(tier)) if tier == "default" => {}
+        Some(_) => {
+            return Err(
+                "OpenAI list-price enforcement supports only the default service tier; use a fixed policy price or add versioned tier pricing",
+            )
+        }
+    }
+    if path == "/v1/chat/completions" && object.get("stream").and_then(Value::as_bool) == Some(true)
+    {
+        let stream_options = object
+            .entry("stream_options".to_string())
+            .or_insert_with(|| Value::Object(Map::new()));
+        if stream_options.is_null() {
+            *stream_options = Value::Object(Map::new());
+        }
+        let Some(stream_options) = stream_options.as_object_mut() else {
+            return Err("OpenAI stream_options must be a JSON object");
+        };
+        stream_options.insert("include_usage".to_string(), Value::Bool(true));
+    }
+    Ok(())
+}
+
+fn validate_openai_native_list_pricing_request(
+    provider: &CompiledProvider,
+    path: &str,
+    listed_pricing: bool,
+    body: &Value,
+) -> std::result::Result<(), &'static str> {
+    if provider.id != "openai"
+        || !listed_pricing
+        || !matches!(path, "/v1/responses" | "/v1/chat/completions")
+    {
+        return Ok(());
+    }
+    let Some(object) = body.as_object() else {
+        return Err("OpenAI list-priced requests must use a JSON object body");
+    };
+    if path == "/v1/responses" && object.get("background").and_then(Value::as_bool) == Some(true) {
+        return Err(
+            "OpenAI background Responses require an explicit fixed policy request price until terminal usage polling is supported",
+        );
+    }
+    if object.get("service_tier").and_then(Value::as_str) != Some("default") {
+        return Err(
+            "OpenAI list-priced native requests must explicitly use the default service tier; use the compatibility route for normalization or configure a fixed policy price",
+        );
+    }
+    if path == "/v1/chat/completions"
+        && object.get("stream").and_then(Value::as_bool) == Some(true)
+        && object
+            .get("stream_options")
+            .and_then(|options| options.get("include_usage"))
+            .and_then(Value::as_bool)
+            != Some(true)
+    {
+        return Err(
+            "OpenAI list-priced native chat streams must explicitly request stream usage; use the compatibility route for normalization or configure a fixed policy price",
+        );
+    }
+    Ok(())
+}
+
+fn validate_request_tool_pricing(
+    policy: &AccessPolicy,
+    pricing: Option<&ModelPricing>,
+    dialect: ProviderToolDialect,
+    capability: &str,
+    body: &Value,
+) -> std::result::Result<(), &'static str> {
+    if policy.request_cost_micros.is_some()
+        || pricing.is_none()
+        || capability == "llm.count_tokens"
+        || !request_has_unpriced_provider_tools(dialect, body)
+    {
+        return Ok(());
+    }
+    Err(
+        "server-side tools require an explicit fixed policy request price until versioned tool pricing is configured",
+    )
+}
+
+fn validate_request_beta_pricing(
+    policy: &AccessPolicy,
+    pricing: Option<&ModelPricing>,
+    dialect: ProviderToolDialect,
+    capability: &str,
+    anthropic_beta: Option<&str>,
+) -> std::result::Result<(), &'static str> {
+    if policy.request_cost_micros.is_some()
+        || pricing.is_none()
+        || dialect != ProviderToolDialect::Anthropic
+        || capability == "llm.count_tokens"
+    {
+        return Ok(());
+    }
+    let requests_1m_context = anthropic_beta.is_some_and(|value| {
+        value
+            .split(',')
+            .any(|beta| beta.trim().eq_ignore_ascii_case("context-1m-2025-08-07"))
+    });
+    let has_matching_long_context_price = pricing.is_some_and(|pricing| {
+        pricing.long_context.is_some()
+            && pricing.max_input_tokens >= ANTHROPIC_1M_CONTEXT_MIN_INPUT_TOKENS
+    });
+    if requests_1m_context && !has_matching_long_context_price {
+        return Err(
+            "Anthropic 1M-context beta requests require an explicit fixed policy request price or versioned long-context pricing",
+        );
+    }
+    Ok(())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum ProviderToolDialect {
+    Anthropic,
+    GoogleGemini,
+    OpenAi,
+    Generic,
+}
+
+fn provider_tool_dialect(provider: &CompiledProvider) -> ProviderToolDialect {
+    if provider.class == ProviderClass::AnthropicCompatible
+        || provider.adapter.request.as_deref() == Some("anthropic")
+        || provider.adapter.response.as_deref() == Some("anthropic")
+    {
+        ProviderToolDialect::Anthropic
+    } else if provider.adapter.request.as_deref() == Some("google_gemini")
+        || provider.adapter.response.as_deref() == Some("google_gemini")
+    {
+        ProviderToolDialect::GoogleGemini
+    } else if provider.id == "openai" {
+        ProviderToolDialect::OpenAi
+    } else {
+        ProviderToolDialect::Generic
+    }
+}
+
+fn request_has_unpriced_provider_tools(dialect: ProviderToolDialect, body: &Value) -> bool {
+    (dialect == ProviderToolDialect::Anthropic
+        && body
+            .get("mcp_servers")
+            .and_then(Value::as_array)
+            .is_some_and(|servers| !servers.is_empty()))
+        || body
+            .get("tools")
+            .and_then(Value::as_array)
+            .is_some_and(|tools| {
+                tools
+                    .iter()
+                    .any(|tool| tool_has_unpriced_provider_cost(dialect, tool))
+            })
+}
+
+fn tool_has_unpriced_provider_cost(dialect: ProviderToolDialect, tool: &Value) -> bool {
+    if dialect == ProviderToolDialect::GoogleGemini {
+        return [
+            "google_search",
+            "google_search_retrieval",
+            "url_context",
+            "code_execution",
+        ]
+        .iter()
+        .any(|key| tool.get(*key).is_some());
+    }
+
+    let Some(kind) = tool.get("type").and_then(Value::as_str) else {
+        // Anthropic custom tools and OpenAI-compatible function declarations are
+        // executed by the caller and do not have a provider execution fee.
+        return false;
+    };
+    if dialect == ProviderToolDialect::Anthropic
+        && ["bash_", "text_editor_", "computer_", "memory_"]
+            .iter()
+            .any(|prefix| kind.starts_with(prefix))
+    {
+        return false;
+    }
+    if dialect == ProviderToolDialect::OpenAi && kind == "shell" {
+        return tool
+            .get("environment")
+            .and_then(|environment| environment.get("type"))
+            .and_then(Value::as_str)
+            != Some("local");
+    }
+    !matches!(
+        kind,
+        "function" | "custom" | "namespace" | "local_shell" | "apply_patch"
+    )
+}
+
 fn request_transform_matches_upstream(
     provider: &CompiledProvider,
     transform: &clawrouter_core::provider::FieldRenameTransform,
@@ -8397,6 +9059,10 @@ fn split_config_list(value: &str) -> impl Iterator<Item = &str> {
     value
         .split(|ch: char| ch == ',' || ch == ';' || ch.is_ascii_whitespace())
         .filter(|candidate| !candidate.is_empty())
+}
+
+fn usage_stream_requires_terminal_marker(stream_adapter: Option<&str>) -> bool {
+    matches!(stream_adapter, Some("openai_sse" | "anthropic_sse"))
 }
 
 fn openai_upstream_url(
@@ -8747,11 +9413,18 @@ async fn provider_headers(
             .set(&name, &value)
             .map_err(HeaderBuildError::Runtime)?;
     }
-    for header in &provider.adapter.passthrough_headers {
-        if let Some(value) = incoming.get(header).map_err(HeaderBuildError::Runtime)? {
-            headers
-                .set(header, &value)
-                .map_err(HeaderBuildError::Runtime)?;
+    for header in provider
+        .adapter
+        .passthrough_headers
+        .iter()
+        .chain(endpoint.request_headers.iter())
+    {
+        if native_request_header_allowed(provider, endpoint, header) {
+            if let Some(value) = incoming.get(header).map_err(HeaderBuildError::Runtime)? {
+                headers
+                    .set(header, &value)
+                    .map_err(HeaderBuildError::Runtime)?;
+            }
         }
     }
     apply_grant_transport_headers(&headers, provider, grant)?;
@@ -8768,13 +9441,6 @@ async fn native_provider_headers(
     context: HeaderRequestContext<'_>,
 ) -> std::result::Result<Headers, HeaderBuildError> {
     let headers = Headers::new();
-    for (name, value) in incoming.entries() {
-        if native_request_header_allowed(provider, endpoint, &name) {
-            headers
-                .set(&name, &value)
-                .map_err(HeaderBuildError::Runtime)?;
-        }
-    }
     for (name, value) in
         resolved_template_map(provider, &provider.adapter.inject_headers, Some(env))
             .map_err(HeaderBuildError::Runtime)?
@@ -8789,6 +9455,16 @@ async fn native_provider_headers(
         headers
             .set(&name, &value)
             .map_err(HeaderBuildError::Runtime)?;
+    }
+    // A manifest-declared passthrough is an explicit compatibility contract.
+    // Apply it after defaults so version/beta headers from native SDKs survive,
+    // while native_request_header_allowed still strips credentials and hops.
+    for (name, value) in incoming.entries() {
+        if native_request_header_allowed(provider, endpoint, &name) {
+            headers
+                .set(&name, &value)
+                .map_err(HeaderBuildError::Runtime)?;
+        }
     }
     apply_grant_transport_headers(&headers, provider, grant)?;
     apply_auth_headers(&headers, env, provider, grant, context)?;
@@ -9919,6 +10595,14 @@ fn method_allows_body(method: &str) -> bool {
     !matches!(method, "GET" | "HEAD")
 }
 
+fn native_request_needs_json_inspection(
+    compatibility_route: bool,
+    capability: &str,
+    policy: &AccessPolicy,
+) -> bool {
+    compatibility_route || (capability.starts_with("llm.") && policy.request_cost_micros.is_none())
+}
+
 fn secret_binding_name(provider_id: &str, secret_kind: &str) -> String {
     match (provider_id, secret_kind) {
         ("openai", "api_key") => "OPENAI_API_KEY".to_string(),
@@ -9930,6 +10614,158 @@ fn secret_binding_name(provider_id: &str, secret_kind: &str) -> String {
             provider_id.replace('-', "_").to_uppercase(),
             "API_KEY"
         ),
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct AgentAttribution {
+    session_id: Option<String>,
+    agent_id: Option<String>,
+    parent_agent_id: Option<String>,
+    project_id: Option<String>,
+    client: Option<String>,
+}
+
+#[derive(Default)]
+struct AttributionCandidates {
+    explicit_session_id: Option<String>,
+    claude_session_id: Option<String>,
+    codex_session_id: Option<String>,
+    explicit_agent_id: Option<String>,
+    claude_agent_id: Option<String>,
+    explicit_parent_agent_id: Option<String>,
+    claude_parent_agent_id: Option<String>,
+    project_id: Option<String>,
+    explicit_client: Option<String>,
+}
+
+fn resolve_attribution(candidates: AttributionCandidates) -> AgentAttribution {
+    let client = candidates
+        .explicit_client
+        .or_else(|| {
+            candidates
+                .claude_session_id
+                .as_ref()
+                .map(|_| "claude_code".to_string())
+        })
+        .or_else(|| {
+            candidates
+                .codex_session_id
+                .as_ref()
+                .map(|_| "codex".to_string())
+        });
+    AgentAttribution {
+        session_id: candidates
+            .explicit_session_id
+            .or(candidates.claude_session_id)
+            .or(candidates.codex_session_id),
+        agent_id: candidates.explicit_agent_id.or(candidates.claude_agent_id),
+        parent_agent_id: candidates
+            .explicit_parent_agent_id
+            .or(candidates.claude_parent_agent_id),
+        project_id: candidates.project_id,
+        client,
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum RequestCostBasis {
+    FixedPolicy,
+    ListedPrice,
+    FlatFallback,
+    #[default]
+    None,
+}
+
+impl RequestCostBasis {
+    fn label(self) -> &'static str {
+        match self {
+            Self::FixedPolicy => "fixed_policy",
+            Self::ListedPrice => "listed_price",
+            Self::FlatFallback => "flat_fallback",
+            Self::None => "none",
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default)]
+struct RequestCost {
+    reserve_micros: u64,
+    estimate: RequestCostEstimate,
+    pricing_ref: Option<String>,
+    pricing: Option<ModelPricing>,
+    basis: RequestCostBasis,
+}
+
+impl RequestCost {
+    fn for_capability(
+        capability: &str,
+        policy: &AccessPolicy,
+        pricing_ref: Option<&str>,
+        pricing: Option<&ModelPricing>,
+        request_body: &[u8],
+        request_json: Option<&Value>,
+    ) -> Self {
+        if capability == "llm.count_tokens" {
+            return Self::default();
+        }
+        Self::for_request(policy, pricing_ref, pricing, request_body, request_json)
+    }
+
+    fn for_request(
+        policy: &AccessPolicy,
+        pricing_ref: Option<&str>,
+        pricing: Option<&ModelPricing>,
+        request_body: &[u8],
+        request_json: Option<&Value>,
+    ) -> Self {
+        if let Some(reserve_micros) = policy.request_cost_micros {
+            return Self {
+                reserve_micros,
+                basis: RequestCostBasis::FixedPolicy,
+                ..Self::default()
+            };
+        }
+        if let Some(pricing) = pricing {
+            let estimate = pricing.estimate_request_cost(request_body, request_json);
+            return Self {
+                reserve_micros: estimate.reserved_cost_micros,
+                estimate,
+                pricing_ref: pricing_ref.map(str::to_string),
+                pricing: Some(pricing.clone()),
+                basis: RequestCostBasis::ListedPrice,
+            };
+        }
+        Self {
+            reserve_micros: 1,
+            basis: RequestCostBasis::FlatFallback,
+            ..Self::default()
+        }
+    }
+
+    fn actual_micros(&self, status_code: u16, tokens: UsageTokens, complete: bool) -> u64 {
+        if !(200..=299).contains(&status_code) {
+            return 0;
+        }
+        let Some(pricing) = self.pricing.as_ref() else {
+            return self.reserve_micros;
+        };
+        let Some(input_tokens) = tokens.input else {
+            return self.reserve_micros;
+        };
+        if !complete
+            || (tokens.output.is_none() && pricing.output_tokens_are_billable(input_tokens))
+        {
+            return self.reserve_micros;
+        }
+        pricing.actual_cost_micros(PricedTokenUsage {
+            input_tokens,
+            output_tokens: tokens.output.unwrap_or_default(),
+            cached_input_tokens: tokens.cached_input.unwrap_or_default(),
+            cache_write_5m_input_tokens: tokens.cache_write_5m_input.unwrap_or_default(),
+            cache_write_1h_input_tokens: tokens.cache_write_1h_input.unwrap_or_default(),
+            cache_write_input_tokens: tokens.cache_write_input.unwrap_or_default(),
+        })
     }
 }
 
@@ -11552,6 +12388,7 @@ async fn preflight_budget(
     env: &Env,
     auth: &AuthorizedKey,
     capability: &str,
+    request_cost: &RequestCost,
 ) -> Result<BudgetPreflight> {
     let Some(limit_micros) = auth.policy.monthly_budget_micros else {
         return Ok(BudgetPreflight::Allowed(BudgetUsage::default()));
@@ -11560,8 +12397,16 @@ async fn preflight_budget(
         return json_error("budget_exhausted", "proxy key budget is exhausted", 402)
             .map(BudgetPreflight::Denied);
     }
+    if budget_requires_declared_price(request_cost) {
+        return json_error(
+            "pricing_required",
+            "budgeted requests require versioned manifest pricing or a fixed policy request price",
+            400,
+        )
+        .map(BudgetPreflight::Denied);
+    }
 
-    let cost_micros = auth.policy.request_cost_micros.unwrap_or(1);
+    let cost_micros = request_cost.reserve_micros;
     if cost_micros == 0 {
         return Ok(BudgetPreflight::Allowed(BudgetUsage::default()));
     }
@@ -11607,6 +12452,10 @@ async fn preflight_budget(
         .map(BudgetPreflight::Denied)
 }
 
+fn budget_requires_declared_price(request_cost: &RequestCost) -> bool {
+    request_cost.basis == RequestCostBasis::FlatFallback
+}
+
 async fn reserve_budget(
     namespace: ObjectNamespace,
     tenant_id: &str,
@@ -11636,9 +12485,10 @@ async fn settle_budget_after_response(
     env: &Env,
     auth: &AuthorizedKey,
     mut usage: BudgetUsage,
-    status_code: u16,
+    actual_cost_micros: u64,
 ) -> BudgetUsage {
     if usage.reserved_cost_micros == 0 {
+        usage.actual_cost_micros = actual_cost_micros;
         return usage;
     }
     let Some(reservation_id) = usage.reservation_id.as_deref() else {
@@ -11657,7 +12507,7 @@ async fn settle_budget_after_response(
     };
     let request = BudgetSettleRequest {
         reservation_id: reservation_id.to_string(),
-        actual_cost_micros: actual_request_cost(status_code, usage.reserved_cost_micros),
+        actual_cost_micros,
     };
     usage.actual_cost_micros = request.actual_cost_micros;
     let mut last_error = String::new();
@@ -12229,11 +13079,13 @@ fn current_month_window_key(policy_id: &str) -> Result<String> {
 
 struct UsageRecord<'a> {
     auth: &'a AuthorizedKey,
+    attribution: Option<&'a AgentAttribution>,
     provider: &'a str,
     capability: &'a str,
     model: Option<&'a str>,
     request_id: &'a str,
     budget: BudgetUsage,
+    request_cost: Option<&'a RequestCost>,
     tokens: UsageTokens,
     status: UsageStatus,
     status_code: u16,
@@ -12247,6 +13099,7 @@ struct ProxyAuditContext<'a> {
     capability: &'a str,
     model: Option<&'a str>,
     request_id: &'a str,
+    attribution: &'a AgentAttribution,
 }
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -12254,49 +13107,126 @@ struct UsageTokens {
     input: Option<u64>,
     output: Option<u64>,
     total: Option<u64>,
+    cached_input: Option<u64>,
+    cache_write_total: Option<u64>,
+    cache_write_input: Option<u64>,
+    cache_write_5m_input: Option<u64>,
+    cache_write_1h_input: Option<u64>,
 }
 
-async fn response_usage_tokens(response: &mut Response, capability: &str) -> UsageTokens {
-    if !capability.starts_with("llm.") {
-        return UsageTokens::default();
+impl UsageTokens {
+    fn merge(&mut self, other: Self) {
+        self.input = optional_max(self.input, other.input);
+        self.output = optional_max(self.output, other.output);
+        self.total = optional_max(self.total, other.total);
+        self.cached_input = optional_max(self.cached_input, other.cached_input);
+        self.cache_write_total = optional_max(self.cache_write_total, other.cache_write_total);
+        self.cache_write_5m_input =
+            optional_max(self.cache_write_5m_input, other.cache_write_5m_input);
+        self.cache_write_1h_input =
+            optional_max(self.cache_write_1h_input, other.cache_write_1h_input);
+        self.reconcile_cache_write_breakdown();
+        self.total = optional_max(
+            self.total,
+            self.input
+                .zip(self.output)
+                .map(|(input, output)| input.saturating_add(output)),
+        );
     }
-    let is_json = response
-        .headers()
-        .get("content-type")
-        .ok()
-        .flatten()
-        .is_some_and(|value| value.to_ascii_lowercase().contains("json"));
-    if !is_json {
-        return UsageTokens::default();
+
+    fn reconcile_cache_write_breakdown(&mut self) {
+        let detailed_total = optional_sum([self.cache_write_5m_input, self.cache_write_1h_input]);
+        self.cache_write_total = optional_max(self.cache_write_total, detailed_total);
+        self.cache_write_input = self
+            .cache_write_total
+            .map(|total| total.saturating_sub(detailed_total.unwrap_or_default()));
     }
-    let content_length = response.headers().get("content-length").ok().flatten();
-    if !usage_token_response_size_allowed(content_length.as_deref()) {
-        return UsageTokens::default();
-    }
-    let Ok(mut cloned) = response.cloned() else {
-        return UsageTokens::default();
-    };
-    let Ok(value) = cloned.json::<Value>().await else {
-        return UsageTokens::default();
-    };
-    usage_tokens_from_response(&value)
 }
 
-fn usage_token_response_size_allowed(content_length: Option<&str>) -> bool {
-    content_length
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .is_some_and(|bytes| bytes <= USAGE_TOKEN_RESPONSE_MAX_BYTES)
+fn optional_max(left: Option<u64>, right: Option<u64>) -> Option<u64> {
+    match (left, right) {
+        (Some(left), Some(right)) => Some(left.max(right)),
+        (Some(value), None) | (None, Some(value)) => Some(value),
+        (None, None) => None,
+    }
+}
+
+#[derive(Default)]
+struct JsonUsageAccumulator {
+    body: Vec<u8>,
+    overflowed: bool,
+}
+
+impl JsonUsageAccumulator {
+    fn push(&mut self, chunk: &[u8]) {
+        if !self.overflowed && !append_bounded_usage_body(&mut self.body, chunk) {
+            self.overflowed = true;
+            self.body.clear();
+        }
+    }
+
+    fn finish(self) -> (UsageTokens, Option<UsageStatus>, bool) {
+        if self.overflowed {
+            return (
+                UsageTokens::default(),
+                Some(UsageStatus::ProviderError),
+                false,
+            );
+        }
+        match serde_json::from_slice::<Value>(&self.body) {
+            Ok(value) => (
+                usage_tokens_from_response(&value),
+                json_response_status(&value),
+                true,
+            ),
+            Err(_) => (
+                UsageTokens::default(),
+                Some(UsageStatus::ProviderError),
+                false,
+            ),
+        }
+    }
+
+    fn result(self, transport_complete: bool) -> StreamUsageResult {
+        let (tokens, payload_status, payload_complete) = if transport_complete {
+            self.finish()
+        } else {
+            (UsageTokens::default(), None, false)
+        };
+        let complete = transport_complete && payload_complete;
+        StreamUsageResult {
+            tokens,
+            complete,
+            status: Some(if complete {
+                payload_status.unwrap_or(UsageStatus::Success)
+            } else {
+                UsageStatus::ProviderError
+            }),
+        }
+    }
+}
+
+fn append_bounded_usage_body(body: &mut Vec<u8>, chunk: &[u8]) -> bool {
+    if chunk.len() > USAGE_TOKEN_RESPONSE_MAX_BYTES.saturating_sub(body.len()) {
+        return false;
+    }
+    body.extend_from_slice(chunk);
+    true
 }
 
 fn usage_tokens_from_response(value: &Value) -> UsageTokens {
-    let input = first_json_u64(
+    let base_input = first_json_u64(
         value,
         &[
             &["usage", "input_tokens"],
             &["usage", "inputTokens"],
             &["usage", "prompt_tokens"],
+            &["response", "usage", "input_tokens"],
+            &["response", "usage", "prompt_tokens"],
+            &["message", "usage", "input_tokens"],
             &["usageMetadata", "promptTokenCount"],
             &["meta", "billed_units", "input_tokens"],
+            &["input_tokens"],
         ],
     );
     let output = first_json_u64(
@@ -12305,28 +13235,109 @@ fn usage_tokens_from_response(value: &Value) -> UsageTokens {
             &["usage", "output_tokens"],
             &["usage", "outputTokens"],
             &["usage", "completion_tokens"],
+            &["response", "usage", "output_tokens"],
+            &["response", "usage", "completion_tokens"],
+            &["message", "usage", "output_tokens"],
             &["usageMetadata", "candidatesTokenCount"],
             &["meta", "billed_units", "output_tokens"],
         ],
     );
-    let total = first_json_u64(
+    let cached_input_inclusive = first_json_u64(
+        value,
+        &[
+            &["usage", "input_tokens_details", "cached_tokens"],
+            &["usage", "prompt_tokens_details", "cached_tokens"],
+            &["response", "usage", "input_tokens_details", "cached_tokens"],
+            &[
+                "response",
+                "usage",
+                "prompt_tokens_details",
+                "cached_tokens",
+            ],
+        ],
+    );
+    let cache_read_input = first_json_u64(
+        value,
+        &[
+            &["usage", "cache_read_input_tokens"],
+            &["message", "usage", "cache_read_input_tokens"],
+        ],
+    );
+    let cached_input = optional_max(cached_input_inclusive, cache_read_input);
+    let cache_write_total = first_json_u64(
+        value,
+        &[
+            &["usage", "cache_creation_input_tokens"],
+            &["message", "usage", "cache_creation_input_tokens"],
+        ],
+    );
+    let cache_write_5m_input = first_json_u64(
+        value,
+        &[
+            &["usage", "cache_creation", "ephemeral_5m_input_tokens"],
+            &[
+                "message",
+                "usage",
+                "cache_creation",
+                "ephemeral_5m_input_tokens",
+            ],
+        ],
+    );
+    let cache_write_1h_input = first_json_u64(
+        value,
+        &[
+            &["usage", "cache_creation", "ephemeral_1h_input_tokens"],
+            &[
+                "message",
+                "usage",
+                "cache_creation",
+                "ephemeral_1h_input_tokens",
+            ],
+        ],
+    );
+    let normalized_cache_write_total = optional_max(
+        cache_write_total,
+        optional_sum([cache_write_5m_input, cache_write_1h_input]),
+    );
+    let input_excludes_cache = cache_read_input.is_some()
+        || cache_write_total.is_some()
+        || cache_write_5m_input.is_some()
+        || cache_write_1h_input.is_some();
+    let input = base_input.map(|input| {
+        if input_excludes_cache {
+            input
+                .saturating_add(cached_input.unwrap_or_default())
+                .saturating_add(normalized_cache_write_total.unwrap_or_default())
+        } else {
+            input
+        }
+    });
+    let reported_total = first_json_u64(
         value,
         &[
             &["usage", "total_tokens"],
             &["usage", "totalTokens"],
+            &["response", "usage", "total_tokens"],
             &["usageMetadata", "totalTokenCount"],
+            &["input_tokens"],
         ],
-    )
-    .or_else(|| {
-        input
-            .zip(output)
-            .map(|(input, output)| input.saturating_add(output))
-    });
-    UsageTokens {
+    );
+    let normalized_total = input
+        .zip(output)
+        .map(|(input, output)| input.saturating_add(output));
+    let total = optional_max(reported_total, normalized_total);
+    let mut tokens = UsageTokens {
         input,
         output,
         total,
-    }
+        cached_input,
+        cache_write_total: normalized_cache_write_total,
+        cache_write_input: None,
+        cache_write_5m_input,
+        cache_write_1h_input,
+    };
+    tokens.reconcile_cache_write_breakdown();
+    tokens
 }
 
 fn first_json_u64(value: &Value, paths: &[&[&str]]) -> Option<u64> {
@@ -12337,6 +13348,567 @@ fn first_json_u64(value: &Value, paths: &[&[&str]]) -> Option<u64> {
         }
         current.as_u64()
     })
+}
+
+#[derive(Debug, Default)]
+struct StreamUsageResult {
+    tokens: UsageTokens,
+    complete: bool,
+    status: Option<UsageStatus>,
+}
+
+struct SseUsageParser {
+    line: Vec<u8>,
+    line_tail: VecDeque<u8>,
+    line_overflowed: bool,
+    event_data: Vec<u8>,
+    event_tail: VecDeque<u8>,
+    event_overflowed: bool,
+    event_name: Option<String>,
+    event_has_data: bool,
+    tokens: UsageTokens,
+    terminal: bool,
+    terminal_status: Option<UsageStatus>,
+    anthropic_stream_seen: bool,
+    anthropic_final_usage_seen: bool,
+}
+
+impl SseUsageParser {
+    fn new() -> Self {
+        Self {
+            line: Vec::new(),
+            line_tail: VecDeque::new(),
+            line_overflowed: false,
+            event_data: Vec::new(),
+            event_tail: VecDeque::new(),
+            event_overflowed: false,
+            event_name: None,
+            event_has_data: false,
+            tokens: UsageTokens::default(),
+            terminal: false,
+            terminal_status: None,
+            anthropic_stream_seen: false,
+            anthropic_final_usage_seen: false,
+        }
+    }
+
+    fn push(&mut self, chunk: &[u8]) {
+        for byte in chunk {
+            if *byte == b'\n' {
+                let mut line = std::mem::take(&mut self.line);
+                let mut line_tail = std::mem::take(&mut self.line_tail);
+                if self.line_overflowed && line_tail.back() == Some(&b'\r') {
+                    line_tail.pop_back();
+                } else if !self.line_overflowed && line.last() == Some(&b'\r') {
+                    line.pop();
+                }
+                self.consume_line(&line, &line_tail, self.line_overflowed);
+                self.line_overflowed = false;
+            } else if self.line.len() < USAGE_SSE_EVENT_MAX_BYTES {
+                self.line.push(*byte);
+            } else {
+                self.line_overflowed = true;
+                bounded_tail_extend(&mut self.line_tail, &[*byte]);
+            }
+        }
+    }
+
+    fn finish(&mut self) {
+        if !self.line.is_empty() || self.line_overflowed {
+            let mut line = std::mem::take(&mut self.line);
+            let mut line_tail = std::mem::take(&mut self.line_tail);
+            if self.line_overflowed && line_tail.back() == Some(&b'\r') {
+                line_tail.pop_back();
+            } else if !self.line_overflowed && line.last() == Some(&b'\r') {
+                line.pop();
+            }
+            self.consume_line(&line, &line_tail, self.line_overflowed);
+            self.line_overflowed = false;
+        }
+        self.consume_event();
+    }
+
+    fn consume_line(&mut self, line: &[u8], overflow_tail: &VecDeque<u8>, line_overflowed: bool) {
+        if !line_overflowed && line.is_empty() {
+            self.consume_event();
+            return;
+        }
+        if !line_overflowed {
+            if let Some(event) = line.strip_prefix(b"event:") {
+                let event = event.strip_prefix(b" ").unwrap_or(event);
+                if let Ok(event) = std::str::from_utf8(event) {
+                    self.event_name = Some(event.trim().to_string());
+                }
+                return;
+            }
+        }
+        let Some(data) = line.strip_prefix(b"data:") else {
+            return;
+        };
+        let data = data.strip_prefix(b" ").unwrap_or(data);
+        if self.event_has_data {
+            self.append_event_fragment(b"\n");
+        }
+        self.event_has_data = true;
+        self.append_event_fragment(data);
+        if line_overflowed {
+            self.event_overflowed = true;
+            let overflow_tail = overflow_tail.iter().copied().collect::<Vec<_>>();
+            bounded_tail_extend(&mut self.event_tail, &overflow_tail);
+        }
+    }
+
+    fn append_event_fragment(&mut self, fragment: &[u8]) {
+        bounded_tail_extend(&mut self.event_tail, fragment);
+        let available = USAGE_SSE_EVENT_MAX_BYTES.saturating_sub(self.event_data.len());
+        let retained = available.min(fragment.len());
+        self.event_data.extend_from_slice(&fragment[..retained]);
+        if retained < fragment.len() {
+            self.event_overflowed = true;
+        }
+    }
+
+    fn consume_event(&mut self) {
+        if let Some(status) = self
+            .event_name
+            .as_deref()
+            .and_then(sse_terminal_event_status)
+        {
+            self.record_terminal(status);
+        }
+        if !self.event_overflowed && self.event_data.as_slice() == b"[DONE]" {
+            self.record_terminal(UsageStatus::Success);
+        } else if !self.event_overflowed && !self.event_data.is_empty() {
+            if let Ok(value) = serde_json::from_slice::<Value>(&self.event_data) {
+                if let Some(status) = sse_terminal_event_status_from_value(&value) {
+                    self.record_terminal(status);
+                }
+                let event_type = value.get("type").and_then(Value::as_str);
+                if matches!(
+                    event_type,
+                    Some("message_start" | "message_delta" | "message_stop")
+                ) {
+                    self.anthropic_stream_seen = true;
+                }
+                let mut tokens = usage_tokens_from_response(&value);
+                if event_type == Some("message_start") {
+                    // Anthropic's start event carries only a preliminary output
+                    // count. Settlement must wait for the cumulative delta.
+                    tokens.output = None;
+                    tokens.total = None;
+                } else if event_type == Some("message_delta")
+                    && value
+                        .get("usage")
+                        .and_then(|usage| usage.get("output_tokens"))
+                        .and_then(Value::as_u64)
+                        .is_some()
+                {
+                    self.anthropic_final_usage_seen = true;
+                }
+                self.tokens.merge(tokens);
+            }
+        } else if self.event_overflowed {
+            if let Some(status) = sse_terminal_event_status_from_prefix(&self.event_data) {
+                self.record_terminal(status);
+            }
+            let event_tail = self.event_tail.iter().copied().collect::<Vec<_>>();
+            self.tokens.merge(usage_tokens_from_json_tail(&event_tail));
+        }
+        self.event_data.clear();
+        self.event_tail.clear();
+        self.event_overflowed = false;
+        self.event_name = None;
+        self.event_has_data = false;
+    }
+
+    fn record_terminal(&mut self, status: UsageStatus) {
+        self.terminal = true;
+        if self.terminal_status != Some(UsageStatus::ProviderError) {
+            self.terminal_status = Some(status);
+        }
+    }
+
+    fn result(
+        &self,
+        transport_complete: bool,
+        requires_terminal_marker: bool,
+    ) -> StreamUsageResult {
+        let terminal_complete = !requires_terminal_marker || self.terminal;
+        let usage_complete = !self.anthropic_stream_seen || self.anthropic_final_usage_seen;
+        let complete = transport_complete && terminal_complete && usage_complete;
+        let status = if !complete {
+            UsageStatus::ProviderError
+        } else {
+            self.terminal_status.clone().unwrap_or(UsageStatus::Success)
+        };
+        StreamUsageResult {
+            tokens: self.tokens,
+            complete,
+            status: Some(status),
+        }
+    }
+}
+
+fn sse_terminal_event_status_from_value(value: &Value) -> Option<UsageStatus> {
+    value
+        .get("type")
+        .and_then(Value::as_str)
+        .and_then(sse_terminal_event_status)
+}
+
+fn sse_terminal_event_status(event: &str) -> Option<UsageStatus> {
+    match event {
+        "response.completed" | "message_stop" => Some(UsageStatus::Success),
+        "response.cancelled" | "response.incomplete" | "response.failed" => {
+            Some(UsageStatus::ProviderError)
+        }
+        _ => None,
+    }
+}
+
+fn json_response_status(value: &Value) -> Option<UsageStatus> {
+    value
+        .get("status")
+        .or_else(|| {
+            value
+                .get("response")
+                .and_then(|response| response.get("status"))
+        })
+        .and_then(Value::as_str)
+        .and_then(response_object_status)
+}
+
+fn response_object_status(status: &str) -> Option<UsageStatus> {
+    match status {
+        "completed" => Some(UsageStatus::Success),
+        "cancelled" | "failed" | "incomplete" => Some(UsageStatus::ProviderError),
+        _ => None,
+    }
+}
+
+fn bounded_tail_extend(tail: &mut VecDeque<u8>, fragment: &[u8]) {
+    if fragment.len() >= USAGE_SSE_EVENT_TAIL_BYTES {
+        tail.clear();
+        tail.extend(
+            fragment[fragment.len() - USAGE_SSE_EVENT_TAIL_BYTES..]
+                .iter()
+                .copied(),
+        );
+        return;
+    }
+    while tail.len().saturating_add(fragment.len()) > USAGE_SSE_EVENT_TAIL_BYTES {
+        tail.pop_front();
+    }
+    tail.extend(fragment.iter().copied());
+}
+
+fn sse_terminal_event_status_from_prefix(prefix: &[u8]) -> Option<UsageStatus> {
+    json_field_value(prefix, "type", false)
+        .as_ref()
+        .and_then(Value::as_str)
+        .and_then(sse_terminal_event_status)
+}
+
+fn usage_tokens_from_json_tail(tail: &[u8]) -> UsageTokens {
+    let mut tokens = UsageTokens::default();
+    if let Some(usage) = json_field_value(tail, "usage", true) {
+        tokens.merge(usage_tokens_from_response(
+            &serde_json::json!({"usage": usage}),
+        ));
+    }
+    if let Some(usage_metadata) = json_field_value(tail, "usageMetadata", true) {
+        tokens.merge(usage_tokens_from_response(
+            &serde_json::json!({"usageMetadata": usage_metadata}),
+        ));
+    }
+    if let Some(meta) = json_field_value(tail, "meta", true) {
+        tokens.merge(usage_tokens_from_response(
+            &serde_json::json!({"meta": meta}),
+        ));
+    }
+    tokens
+}
+
+fn json_field_value(bytes: &[u8], field: &str, reverse: bool) -> Option<Value> {
+    let pattern = format!("\"{field}\"");
+    let parse_at = |offset: usize| {
+        let mut cursor = offset + pattern.len();
+        while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+            cursor += 1;
+        }
+        if bytes.get(cursor) != Some(&b':') {
+            return None;
+        }
+        cursor += 1;
+        while bytes.get(cursor).is_some_and(u8::is_ascii_whitespace) {
+            cursor += 1;
+        }
+        let mut deserializer = serde_json::Deserializer::from_slice(bytes.get(cursor..)?);
+        Value::deserialize(&mut deserializer).ok()
+    };
+    if reverse {
+        bytes
+            .windows(pattern.len())
+            .enumerate()
+            .rev()
+            .filter_map(|(offset, candidate)| (candidate == pattern.as_bytes()).then_some(offset))
+            .find_map(parse_at)
+    } else {
+        bytes
+            .windows(pattern.len())
+            .enumerate()
+            .filter_map(|(offset, candidate)| (candidate == pattern.as_bytes()).then_some(offset))
+            .find_map(parse_at)
+    }
+}
+
+struct UsageMeteredStream {
+    inner: Pin<Box<dyn Stream<Item = Result<Vec<u8>>> + 'static>>,
+    parser: SseUsageParser,
+    sender: Option<oneshot::Sender<StreamUsageResult>>,
+    transport_complete: bool,
+    requires_terminal_marker: bool,
+}
+
+impl UsageMeteredStream {
+    fn new(
+        inner: impl Stream<Item = Result<Vec<u8>>> + 'static,
+        requires_terminal_marker: bool,
+        sender: oneshot::Sender<StreamUsageResult>,
+    ) -> Self {
+        Self {
+            inner: Box::pin(inner),
+            parser: SseUsageParser::new(),
+            sender: Some(sender),
+            transport_complete: false,
+            requires_terminal_marker,
+        }
+    }
+
+    fn send_result(&mut self, finish_parser: bool) {
+        if finish_parser {
+            self.parser.finish();
+        }
+        let Some(sender) = self.sender.take() else {
+            return;
+        };
+        let _ = sender.send(
+            self.parser
+                .result(finish_parser, self.requires_terminal_marker),
+        );
+    }
+}
+
+impl Stream for UsageMeteredStream {
+    type Item = Result<Vec<u8>>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
+        match self.inner.as_mut().poll_next(cx) {
+            Poll::Ready(Some(Ok(chunk))) => {
+                self.parser.push(&chunk);
+                Poll::Ready(Some(Ok(chunk)))
+            }
+            Poll::Ready(Some(Err(error))) => {
+                self.send_result(false);
+                Poll::Ready(Some(Err(error)))
+            }
+            Poll::Ready(None) => {
+                self.transport_complete = true;
+                self.send_result(true);
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl Drop for UsageMeteredStream {
+    fn drop(&mut self) {
+        if self.sender.is_some() {
+            self.send_result(self.transport_complete);
+        }
+    }
+}
+
+struct JsonUsageMeteredStream {
+    inner: Pin<Box<dyn Stream<Item = Result<Vec<u8>>> + 'static>>,
+    accumulator: JsonUsageAccumulator,
+    sender: Option<oneshot::Sender<StreamUsageResult>>,
+    transport_complete: bool,
+}
+
+impl JsonUsageMeteredStream {
+    fn new(
+        inner: impl Stream<Item = Result<Vec<u8>>> + 'static,
+        sender: oneshot::Sender<StreamUsageResult>,
+    ) -> Self {
+        Self {
+            inner: Box::pin(inner),
+            accumulator: JsonUsageAccumulator::default(),
+            sender: Some(sender),
+            transport_complete: false,
+        }
+    }
+
+    fn send_result(&mut self, transport_complete: bool) {
+        let Some(sender) = self.sender.take() else {
+            return;
+        };
+        let accumulator = std::mem::take(&mut self.accumulator);
+        let _ = sender.send(accumulator.result(transport_complete));
+    }
+}
+
+impl Stream for JsonUsageMeteredStream {
+    type Item = Result<Vec<u8>>;
+
+    fn poll_next(mut self: Pin<&mut Self>, cx: &mut TaskContext<'_>) -> Poll<Option<Self::Item>> {
+        match self.inner.as_mut().poll_next(cx) {
+            Poll::Ready(Some(Ok(chunk))) => {
+                self.accumulator.push(&chunk);
+                Poll::Ready(Some(Ok(chunk)))
+            }
+            Poll::Ready(Some(Err(error))) => {
+                self.send_result(false);
+                Poll::Ready(Some(Err(error)))
+            }
+            Poll::Ready(None) => {
+                self.transport_complete = true;
+                self.send_result(true);
+                Poll::Ready(None)
+            }
+            Poll::Pending => Poll::Pending,
+        }
+    }
+}
+
+impl Drop for JsonUsageMeteredStream {
+    fn drop(&mut self) {
+        if self.sender.is_some() {
+            self.send_result(self.transport_complete);
+        }
+    }
+}
+
+struct ProxyCompletion {
+    env: Env,
+    auth: AuthorizedKey,
+    attribution: AgentAttribution,
+    provider: String,
+    capability: String,
+    model: Option<String>,
+    request_id: String,
+    budget: BudgetUsage,
+    request_cost: RequestCost,
+    status_code: u16,
+    started_at_ms: u64,
+    stream_requires_terminal_marker: bool,
+}
+
+impl ProxyCompletion {
+    async fn finish(self, result: StreamUsageResult) {
+        let StreamUsageResult {
+            tokens,
+            complete,
+            status,
+        } = result;
+        let actual_cost_micros =
+            self.request_cost
+                .actual_micros(self.status_code, tokens, complete);
+        let budget =
+            settle_budget_after_response(&self.env, &self.auth, self.budget, actual_cost_micros)
+                .await;
+        let status = if (200..=299).contains(&self.status_code) {
+            status.unwrap_or(UsageStatus::Success)
+        } else {
+            usage_status(self.status_code)
+        };
+        enqueue_usage(
+            &self.env,
+            UsageRecord {
+                auth: &self.auth,
+                attribution: Some(&self.attribution),
+                provider: &self.provider,
+                capability: &self.capability,
+                model: self.model.as_deref(),
+                request_id: &self.request_id,
+                budget,
+                request_cost: Some(&self.request_cost),
+                tokens,
+                status,
+                status_code: self.status_code,
+                duration_ms: Date::now().as_millis().saturating_sub(self.started_at_ms),
+            },
+        )
+        .await;
+    }
+}
+
+async fn finalize_proxy_response(
+    mut response: Response,
+    ctx: &Context,
+    completion: ProxyCompletion,
+) -> Result<Response> {
+    if !(200..=299).contains(&response.status_code()) {
+        completion
+            .finish(StreamUsageResult {
+                tokens: UsageTokens::default(),
+                complete: true,
+                status: None,
+            })
+            .await;
+        return Ok(response);
+    }
+    let is_sse = response
+        .headers()
+        .get("content-type")?
+        .is_some_and(|value| value.to_ascii_lowercase().contains("text/event-stream"));
+    let is_json = response
+        .headers()
+        .get("content-type")?
+        .is_some_and(|value| value.to_ascii_lowercase().contains("json"));
+    if !is_sse && is_json && completion.capability.starts_with("llm.") {
+        let status = response.status_code();
+        let headers = response.headers().clone();
+        let stream = response.stream()?;
+        let (sender, receiver) = oneshot::channel();
+        ctx.wait_until(async move {
+            let result = receiver.await.unwrap_or_default();
+            completion.finish(result).await;
+        });
+        return Ok(
+            Response::from_stream(JsonUsageMeteredStream::new(stream, sender))?
+                .with_status(status)
+                .with_headers(headers),
+        );
+    }
+    if !is_sse {
+        completion
+            .finish(StreamUsageResult {
+                tokens: UsageTokens::default(),
+                complete: true,
+                status: None,
+            })
+            .await;
+        return Ok(response);
+    }
+
+    let status = response.status_code();
+    let headers = response.headers().clone();
+    let stream = response.stream()?;
+    let requires_terminal_marker = completion.stream_requires_terminal_marker;
+    let (sender, receiver) = oneshot::channel();
+    ctx.wait_until(async move {
+        let result = receiver.await.unwrap_or_default();
+        completion.finish(result).await;
+    });
+    Ok(Response::from_stream(UsageMeteredStream::new(
+        stream,
+        requires_terminal_marker,
+        sender,
+    ))?
+    .with_status(status)
+    .with_headers(headers))
 }
 
 async fn enqueue_usage(env: &Env, record: UsageRecord<'_>) {
@@ -12365,12 +13937,37 @@ async fn enqueue_usage(env: &Env, record: UsageRecord<'_>) {
     event.credential_id.clone_from(&record.auth.credential_id);
     event.principal_id.clone_from(&record.auth.principal_id);
     event.auth_type = record.auth.auth_type.to_string();
+    if let Some(attribution) = record.attribution {
+        event.session_id.clone_from(&attribution.session_id);
+        event.agent_id.clone_from(&attribution.agent_id);
+        event
+            .parent_agent_id
+            .clone_from(&attribution.parent_agent_id);
+        event.project_id.clone_from(&attribution.project_id);
+        event.client.clone_from(&attribution.client);
+    }
     event.model = record.model.map(str::to_string);
     event.input_tokens = record.tokens.input;
     event.output_tokens = record.tokens.output;
     event.total_tokens = record.tokens.total;
+    event.cached_input_tokens = record.tokens.cached_input;
+    event.cache_write_input_tokens = optional_sum([
+        record.tokens.cache_write_input,
+        record.tokens.cache_write_5m_input,
+        record.tokens.cache_write_1h_input,
+    ]);
     event.reserved_cost_micros = record.budget.reserved_cost_micros;
     event.actual_cost_micros = record.budget.actual_cost_micros;
+    if let Some(request_cost) = record.request_cost {
+        event.reserved_input_tokens = Some(request_cost.estimate.input_tokens_upper_bound);
+        event.reserved_output_tokens = Some(request_cost.estimate.output_tokens_upper_bound);
+        event.pricing_ref.clone_from(&request_cost.pricing_ref);
+        event.pricing_effective_at = request_cost
+            .pricing
+            .as_ref()
+            .map(|pricing| pricing.effective_at.clone());
+        event.cost_basis = request_cost.basis.label().to_string();
+    }
     event.status_code = Some(record.status_code);
     event.duration_ms = Some(record.duration_ms);
     event.status = record.status;
@@ -12384,27 +13981,42 @@ async fn enqueue_usage(env: &Env, record: UsageRecord<'_>) {
     }
 }
 
-async fn enqueue_denied_usage(
-    env: &Env,
-    auth: &AuthorizedKey,
-    provider: &str,
-    capability: &str,
-    model: Option<&str>,
-    request_id: &str,
+fn optional_sum<const N: usize>(values: [Option<u64>; N]) -> Option<u64> {
+    values
+        .into_iter()
+        .fold(None, |sum, value| match (sum, value) {
+            (Some(sum), Some(value)) => Some(sum.saturating_add(value)),
+            (Some(sum), None) => Some(sum),
+            (None, Some(value)) => Some(value),
+            (None, None) => None,
+        })
+}
+
+struct DeniedUsageRecord<'a> {
+    auth: &'a AuthorizedKey,
+    provider: &'a str,
+    capability: &'a str,
+    model: Option<&'a str>,
+    request_id: &'a str,
     status_code: u16,
-) {
+    attribution: Option<&'a AgentAttribution>,
+}
+
+async fn enqueue_denied_usage(env: &Env, record: DeniedUsageRecord<'_>) {
     enqueue_usage(
         env,
         UsageRecord {
-            auth,
-            provider,
-            capability,
-            model,
-            request_id,
+            auth: record.auth,
+            attribution: record.attribution,
+            provider: record.provider,
+            capability: record.capability,
+            model: record.model,
+            request_id: record.request_id,
             budget: BudgetUsage::default(),
+            request_cost: None,
             tokens: UsageTokens::default(),
             status: UsageStatus::Denied,
-            status_code,
+            status_code: record.status_code,
             duration_ms: 0,
         },
     )
@@ -12418,11 +14030,13 @@ impl ProxyAuditContext<'_> {
             self.env,
             UsageRecord {
                 auth: self.auth,
+                attribution: Some(self.attribution),
                 provider: self.provider,
                 capability: self.capability,
                 model: self.model,
                 request_id: self.request_id,
                 budget: BudgetUsage::default(),
+                request_cost: None,
                 tokens: UsageTokens::default(),
                 status: usage_status(status_code),
                 status_code,
@@ -12459,6 +14073,11 @@ fn normalize_usage_event_metadata(event: &mut UsageEvent) {
         .as_deref()
         .map(|value| truncate_audit_metadata(value, USAGE_AUDIT_PRINCIPAL_MAX_BYTES));
     event.auth_type = truncate_audit_metadata(&event.auth_type, USAGE_AUDIT_FIELD_MAX_BYTES);
+    event.session_id = bounded_audit_metadata(event.session_id.take());
+    event.agent_id = bounded_audit_metadata(event.agent_id.take());
+    event.parent_agent_id = bounded_audit_metadata(event.parent_agent_id.take());
+    event.project_id = bounded_audit_metadata(event.project_id.take());
+    event.client = bounded_audit_metadata(event.client.take());
     event.key_id = truncate_audit_metadata(&event.key_id, USAGE_AUDIT_FIELD_MAX_BYTES);
     event.request_id = truncate_audit_metadata(&event.request_id, USAGE_AUDIT_FIELD_MAX_BYTES);
     event.provider = truncate_audit_metadata(&event.provider, USAGE_AUDIT_FIELD_MAX_BYTES);
@@ -12467,6 +14086,13 @@ fn normalize_usage_event_metadata(event: &mut UsageEvent) {
         .model
         .as_deref()
         .map(|value| truncate_audit_metadata(value, USAGE_AUDIT_MODEL_MAX_BYTES));
+    event.pricing_ref = bounded_audit_metadata(event.pricing_ref.take());
+    event.pricing_effective_at = bounded_audit_metadata(event.pricing_effective_at.take());
+    event.cost_basis = truncate_audit_metadata(&event.cost_basis, USAGE_AUDIT_FIELD_MAX_BYTES);
+}
+
+fn bounded_audit_metadata(value: Option<String>) -> Option<String> {
+    value.map(|value| truncate_audit_metadata(&value, USAGE_AUDIT_FIELD_MAX_BYTES))
 }
 
 fn truncate_audit_metadata(value: &str, max_bytes: usize) -> String {
@@ -12492,14 +14118,6 @@ fn usage_status(status: u16) -> UsageStatus {
     }
 }
 
-fn actual_request_cost(status: u16, reserved_cost_micros: u64) -> u64 {
-    if (200..=299).contains(&status) {
-        reserved_cost_micros
-    } else {
-        0
-    }
-}
-
 fn request_id(headers: &Headers, fallback: &str) -> String {
     headers
         .get("x-request-id")
@@ -12508,6 +14126,41 @@ fn request_id(headers: &Headers, fallback: &str) -> String {
         .filter(|value| !value.trim().is_empty())
         .map(|value| truncate_audit_metadata(&value, USAGE_AUDIT_FIELD_MAX_BYTES))
         .unwrap_or_else(|| format!("req_{}_{}", fallback, Date::now().as_millis()))
+}
+
+fn request_attribution(headers: &Headers) -> Result<AgentAttribution> {
+    request_attribution_with(|names| bounded_header(headers, names))
+}
+
+fn request_attribution_with<E>(
+    mut read_header: impl FnMut(&[&str]) -> std::result::Result<Option<String>, E>,
+) -> std::result::Result<AgentAttribution, E> {
+    Ok(resolve_attribution(AttributionCandidates {
+        explicit_session_id: read_header(&["x-clawrouter-session-id"])?,
+        claude_session_id: read_header(&["x-claude-code-session-id"])?,
+        codex_session_id: read_header(&["session-id", "session_id"])?,
+        explicit_agent_id: read_header(&["x-clawrouter-agent-id"])?,
+        claude_agent_id: read_header(&["x-claude-code-agent-id"])?,
+        explicit_parent_agent_id: read_header(&["x-clawrouter-parent-agent-id"])?,
+        claude_parent_agent_id: read_header(&["x-claude-code-parent-agent-id"])?,
+        project_id: read_header(&["x-clawrouter-project-id"])?,
+        explicit_client: read_header(&["x-clawrouter-client"])?,
+    }))
+}
+
+fn bounded_header(headers: &Headers, names: &[&str]) -> Result<Option<String>> {
+    for name in names {
+        if let Some(value) = headers.get(name)? {
+            let value = value.trim();
+            if !value.is_empty() {
+                return Ok(Some(truncate_audit_metadata(
+                    value,
+                    USAGE_AUDIT_FIELD_MAX_BYTES,
+                )));
+            }
+        }
+    }
+    Ok(None)
 }
 
 fn query_value(value: &Value) -> Option<String> {
@@ -12644,6 +14297,8 @@ fn cors_enabled_path(path: &str) -> bool {
             | "/v1/models"
             | "/v1/catalog"
             | "/v1/key/inspect"
+            | "/v1/messages"
+            | "/v1/messages/count_tokens"
     ) || path.starts_with("/v1/admin/")
 }
 
@@ -12820,6 +14475,97 @@ mod tests {
         let route = select_model_route(&snapshot, "openai/gpt-4.1-mini").unwrap();
         assert_eq!(route.provider.id, "openai");
         assert_eq!(route.upstream_model, "gpt-4.1-mini");
+        assert_eq!(
+            route.pricing_ref.as_deref(),
+            Some("openai-gpt-4.1-mini-standard-2026-06-19")
+        );
+        assert_eq!(
+            route.pricing.as_ref().unwrap().output_micros_per_million,
+            1_600_000
+        );
+    }
+
+    #[test]
+    fn native_models_rewrite_public_ids_and_keep_pricing() {
+        let snapshot = provider_snapshot().unwrap();
+        let anthropic = snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.id == "anthropic")
+            .unwrap();
+        let mut body = serde_json::json!({"model": "anthropic/default", "max_tokens": 1024});
+        let original = body.clone();
+        let selected = select_native_model(anthropic, &body).unwrap();
+        assert_eq!(body, original);
+        assert_eq!(selected.model, "anthropic/default");
+        assert_eq!(selected.upstream_model, "claude-sonnet-4-5-20250929");
+        let selection = normalize_native_model(anthropic, &mut body).unwrap();
+        assert_eq!(selection.model, "anthropic/default");
+        assert_eq!(body["model"], "claude-sonnet-4-5-20250929");
+        assert_eq!(
+            selection.pricing.unwrap().input_micros_per_million,
+            3_000_000
+        );
+    }
+
+    #[test]
+    fn manifest_model_requests_keep_catalog_pricing_and_normalization() {
+        let snapshot = provider_snapshot().unwrap();
+        let openai = snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.id == "openai")
+            .unwrap();
+        let mut body = serde_json::json!({
+            "model": "openai/gpt-5.4",
+            "input": "hello",
+            "max_output_tokens": 100
+        });
+        let selection = normalize_native_model(openai, &mut body).unwrap();
+        normalize_openai_list_pricing_request(openai, "/v1/responses", true, &mut body).unwrap();
+        let serialized = serde_json::to_vec(&body).unwrap();
+        let policy = AccessPolicy {
+            enabled: true,
+            generation: "test".to_string(),
+            providers: vec!["openai".to_string()],
+            tenant_id: Some("test".to_string()),
+            token_role: None,
+            monthly_budget_micros: Some(1_000_000),
+            request_cost_micros: None,
+        };
+        let cost = RequestCost::for_request(
+            &policy,
+            selection.pricing_ref.as_deref(),
+            selection.pricing.as_ref(),
+            &serialized,
+            Some(&body),
+        );
+        assert_eq!(body["model"], "gpt-5.4");
+        assert_eq!(body["service_tier"], "default");
+        assert_eq!(cost.basis, RequestCostBasis::ListedPrice);
+        assert!(cost.reserve_micros > 1);
+
+        let count_cost = RequestCost::for_capability(
+            "llm.count_tokens",
+            &policy,
+            selection.pricing_ref.as_deref(),
+            selection.pricing.as_ref(),
+            &serialized,
+            Some(&body),
+        );
+        assert_eq!(count_cost.basis, RequestCostBasis::None);
+        assert_eq!(count_cost.reserve_micros, 0);
+
+        let unpriced_tool_cost = RequestCost::for_capability(
+            "web.search",
+            &policy,
+            None,
+            None,
+            b"{}",
+            Some(&serde_json::json!({})),
+        );
+        assert_eq!(unpriced_tool_cost.basis, RequestCostBasis::FlatFallback);
+        assert!(budget_requires_declared_price(&unpriced_tool_cost));
     }
 
     #[test]
@@ -12881,6 +14627,24 @@ mod tests {
     }
 
     #[test]
+    fn anthropic_model_discovery_uses_the_anthropic_page_shape() {
+        let snapshot = provider_snapshot().unwrap();
+        let mut anthropic = entitlement_test_row("anthropic", true, true);
+        anthropic.readiness.executable_endpoints = vec!["messages".to_string()];
+        let models = anthropic_models_value(&snapshot, &[anthropic]);
+        assert_eq!(models["has_more"], false);
+        assert_eq!(models["first_id"], "anthropic/default");
+        assert_eq!(models["last_id"], "anthropic/default");
+        assert_eq!(models["data"][0]["id"], "anthropic/default");
+        assert_eq!(models["data"][0]["type"], "model");
+        assert_eq!(models["data"][0]["created_at"], "1970-01-01T00:00:00Z");
+        assert!(models["data"][0]["capabilities"].is_null());
+        assert_eq!(models["data"][0]["max_input_tokens"], 200_000);
+        assert_eq!(models["data"][0]["max_tokens"], 64_000);
+        assert!(models["data"][0].get("owned_by").is_none());
+    }
+
+    #[test]
     fn client_catalog_describes_native_transport_formats() {
         let snapshot = provider_snapshot().unwrap();
         let mut anthropic = entitlement_test_row("anthropic", true, true);
@@ -12895,6 +14659,38 @@ mod tests {
             provider["routes"][0]["responseFormat"],
             "anthropic.messages"
         );
+    }
+
+    #[test]
+    fn anthropic_manifest_covers_claude_code_gateway_contract() {
+        let snapshot = provider_snapshot().unwrap();
+        let anthropic = snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.id == "anthropic")
+            .unwrap();
+        let messages = anthropic
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.id == "messages")
+            .unwrap();
+        let count_tokens = anthropic
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.id == "count_tokens")
+            .unwrap();
+        assert_eq!(messages.path, "/v1/messages");
+        assert_eq!(count_tokens.path, "/v1/messages/count_tokens");
+        assert!(native_request_header_allowed(
+            anthropic,
+            messages,
+            "anthropic-beta"
+        ));
+        assert!(native_request_header_allowed(
+            anthropic,
+            messages,
+            "anthropic-version"
+        ));
     }
 
     #[test]
@@ -13030,6 +14826,349 @@ mod tests {
         );
         assert_eq!(generic_body["max_tokens"], 16);
         assert!(generic_body.get("max_completion_tokens").is_none());
+    }
+
+    #[test]
+    fn openai_list_pricing_pins_default_and_rejects_undeclared_tiers() {
+        let snapshot = provider_snapshot().unwrap();
+        let provider = snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.id == "openai")
+            .unwrap();
+        let mut body = serde_json::json!({"model": "gpt-5.4", "input": "hello"});
+        normalize_openai_list_pricing_request(provider, "/v1/responses", true, &mut body).unwrap();
+        assert_eq!(body["service_tier"], "default");
+
+        let mut auto = serde_json::json!({"service_tier": "auto"});
+        normalize_openai_list_pricing_request(provider, "/v1/chat/completions", true, &mut auto)
+            .unwrap();
+        assert_eq!(auto["service_tier"], "default");
+
+        let mut nullable_tier = serde_json::json!({"service_tier": null});
+        normalize_openai_list_pricing_request(
+            provider,
+            "/v1/chat/completions",
+            true,
+            &mut nullable_tier,
+        )
+        .unwrap();
+        assert_eq!(nullable_tier["service_tier"], "default");
+
+        let mut streaming = serde_json::json!({
+            "stream": true,
+            "stream_options": {"include_usage": false, "include_obfuscation": false}
+        });
+        normalize_openai_list_pricing_request(
+            provider,
+            "/v1/chat/completions",
+            true,
+            &mut streaming,
+        )
+        .unwrap();
+        assert_eq!(streaming["stream_options"]["include_usage"], true);
+        assert_eq!(streaming["stream_options"]["include_obfuscation"], false);
+
+        let mut nullable_stream_options = serde_json::json!({
+            "stream": true,
+            "stream_options": null
+        });
+        normalize_openai_list_pricing_request(
+            provider,
+            "/v1/chat/completions",
+            true,
+            &mut nullable_stream_options,
+        )
+        .unwrap();
+        assert_eq!(
+            nullable_stream_options["stream_options"]["include_usage"],
+            true
+        );
+
+        for tier in ["priority", "flex", "scale"] {
+            let mut premium = serde_json::json!({"service_tier": tier});
+            assert!(normalize_openai_list_pricing_request(
+                provider,
+                "/v1/responses",
+                true,
+                &mut premium
+            )
+            .is_err());
+        }
+
+        let mut fixed_price = serde_json::json!({"service_tier": "priority"});
+        normalize_openai_list_pricing_request(provider, "/v1/responses", false, &mut fixed_price)
+            .unwrap();
+        assert_eq!(fixed_price["service_tier"], "priority");
+
+        let mut background = serde_json::json!({"background": true});
+        assert!(normalize_openai_list_pricing_request(
+            provider,
+            "/v1/responses",
+            true,
+            &mut background
+        )
+        .unwrap_err()
+        .contains("background Responses"));
+        normalize_openai_list_pricing_request(provider, "/v1/responses", false, &mut background)
+            .unwrap();
+
+        let native = serde_json::json!({
+            "model": "gpt-5.4",
+            "service_tier": "default",
+            "stream": true,
+            "stream_options": {"include_usage": true}
+        });
+        let original = native.clone();
+        validate_openai_native_list_pricing_request(
+            provider,
+            "/v1/chat/completions",
+            true,
+            &native,
+        )
+        .unwrap();
+        assert_eq!(native, original);
+        assert!(validate_openai_native_list_pricing_request(
+            provider,
+            "/v1/responses",
+            true,
+            &serde_json::json!({"model": "gpt-5.4"}),
+        )
+        .is_err());
+        assert!(validate_openai_native_list_pricing_request(
+            provider,
+            "/v1/chat/completions",
+            true,
+            &serde_json::json!({
+                "service_tier": "default",
+                "stream": true
+            }),
+        )
+        .is_err());
+        assert!(validate_openai_native_list_pricing_request(
+            provider,
+            "/v1/responses",
+            true,
+            &serde_json::json!({
+                "service_tier": "default",
+                "background": true
+            }),
+        )
+        .unwrap_err()
+        .contains("background Responses"));
+    }
+
+    #[test]
+    fn listed_model_pricing_rejects_server_tools_without_a_fixed_price() {
+        let policy = AccessPolicy {
+            enabled: true,
+            generation: "test".to_string(),
+            providers: vec!["anthropic".to_string()],
+            tenant_id: Some("test".to_string()),
+            token_role: None,
+            monthly_budget_micros: Some(1_000_000),
+            request_cost_micros: None,
+        };
+        let pricing = ModelPricing {
+            effective_at: "2026-06-19".to_string(),
+            source: "https://example.com/pricing".to_string(),
+            input_micros_per_million: 1,
+            output_micros_per_million: 1,
+            cached_input_micros_per_million: None,
+            cache_write_5m_input_micros_per_million: None,
+            cache_write_1h_input_micros_per_million: None,
+            max_input_tokens: 1_000,
+            max_request_input_tokens: None,
+            default_max_output_tokens: 100,
+            input_token_overhead: 0,
+            long_context: None,
+        };
+        assert!(validate_request_beta_pricing(
+            &policy,
+            Some(&pricing),
+            ProviderToolDialect::Anthropic,
+            "llm.messages",
+            Some("prompt-caching-2024-07-31, context-1m-2025-08-07"),
+        )
+        .is_err());
+        validate_request_beta_pricing(
+            &policy,
+            Some(&pricing),
+            ProviderToolDialect::Anthropic,
+            "llm.messages",
+            Some("prompt-caching-2024-07-31"),
+        )
+        .unwrap();
+        let mut long_context_pricing = pricing.clone();
+        long_context_pricing.max_input_tokens = ANTHROPIC_1M_CONTEXT_MIN_INPUT_TOKENS;
+        long_context_pricing.long_context = Some(clawrouter_core::pricing::LongContextPricing {
+            threshold_input_tokens: 200_000,
+            input_micros_per_million: 2,
+            output_micros_per_million: 2,
+            cached_input_micros_per_million: None,
+            cache_write_5m_input_micros_per_million: None,
+            cache_write_1h_input_micros_per_million: None,
+        });
+        validate_request_beta_pricing(
+            &policy,
+            Some(&long_context_pricing),
+            ProviderToolDialect::Anthropic,
+            "llm.messages",
+            Some("context-1m-2025-08-07"),
+        )
+        .unwrap();
+        validate_request_beta_pricing(
+            &policy,
+            Some(&pricing),
+            ProviderToolDialect::Anthropic,
+            "llm.count_tokens",
+            Some("context-1m-2025-08-07"),
+        )
+        .unwrap();
+        let server_tool = serde_json::json!({
+            "tools": [{"type": "web_search_20260209", "name": "web_search"}]
+        });
+        assert!(validate_request_tool_pricing(
+            &policy,
+            Some(&pricing),
+            ProviderToolDialect::Anthropic,
+            "llm.messages",
+            &server_tool
+        )
+        .is_err());
+
+        let token_only_web_fetch = serde_json::json!({
+            "tools": [{
+                "type": "web_fetch_20250910",
+                "name": "web_fetch",
+                "max_content_tokens": 500
+            }]
+        });
+        assert!(validate_request_tool_pricing(
+            &policy,
+            Some(&pricing),
+            ProviderToolDialect::Anthropic,
+            "llm.messages",
+            &token_only_web_fetch,
+        )
+        .is_err());
+
+        let mut fixed_policy = policy.clone();
+        fixed_policy.request_cost_micros = Some(100);
+        validate_request_beta_pricing(
+            &fixed_policy,
+            Some(&pricing),
+            ProviderToolDialect::Anthropic,
+            "llm.messages",
+            Some("context-1m-2025-08-07"),
+        )
+        .unwrap();
+        validate_request_tool_pricing(
+            &fixed_policy,
+            Some(&pricing),
+            ProviderToolDialect::Anthropic,
+            "llm.messages",
+            &token_only_web_fetch,
+        )
+        .unwrap();
+
+        let indirect_mcp = serde_json::json!({
+            "mcp_servers": [{
+                "type": "url",
+                "url": "https://example.com/mcp",
+                "name": "remote",
+                "tool_configuration": {"enabled": true}
+            }]
+        });
+        assert!(validate_request_tool_pricing(
+            &policy,
+            Some(&pricing),
+            ProviderToolDialect::Anthropic,
+            "llm.messages",
+            &indirect_mcp,
+        )
+        .is_err());
+
+        for client_tool in [
+            serde_json::json!({"tools": [{"name": "read", "input_schema": {}}]}),
+            serde_json::json!({"tools": [{"type": "function", "function": {"name": "read"}}]}),
+            serde_json::json!({"tools": [{"type": "namespace", "name": "mcp"}]}),
+            serde_json::json!({"tools": [{"type": "local_shell"}]}),
+            serde_json::json!({"tools": [{"type": "bash_20250124", "name": "bash"}]}),
+            serde_json::json!({"tools": [{"type": "text_editor_20250728", "name": "editor"}]}),
+            serde_json::json!({"tools": [{"type": "computer_20250124", "name": "computer"}]}),
+            serde_json::json!({"tools": [{"type": "memory_20250818", "name": "memory"}]}),
+        ] {
+            validate_request_tool_pricing(
+                &policy,
+                Some(&pricing),
+                ProviderToolDialect::Anthropic,
+                "llm.messages",
+                &client_tool,
+            )
+            .unwrap();
+        }
+
+        let local_openai_shell = serde_json::json!({
+            "tools": [{"type": "shell", "environment": {"type": "local"}}]
+        });
+        validate_request_tool_pricing(
+            &policy,
+            Some(&pricing),
+            ProviderToolDialect::OpenAi,
+            "llm.responses",
+            &local_openai_shell,
+        )
+        .unwrap();
+        let hosted_openai_shell = serde_json::json!({
+            "tools": [{"type": "shell", "environment": {"type": "container_auto"}}]
+        });
+        assert!(validate_request_tool_pricing(
+            &policy,
+            Some(&pricing),
+            ProviderToolDialect::OpenAi,
+            "llm.responses",
+            &hosted_openai_shell,
+        )
+        .is_err());
+
+        validate_request_tool_pricing(
+            &policy,
+            Some(&pricing),
+            ProviderToolDialect::Anthropic,
+            "llm.count_tokens",
+            &server_tool,
+        )
+        .unwrap();
+
+        let fixed = AccessPolicy {
+            request_cost_micros: Some(10_000),
+            ..policy
+        };
+        validate_request_tool_pricing(
+            &fixed,
+            Some(&pricing),
+            ProviderToolDialect::Anthropic,
+            "llm.messages",
+            &server_tool,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn tool_pricing_dialect_comes_from_manifest_contract_not_provider_id() {
+        let snapshot = provider_snapshot().unwrap();
+        let mut provider = snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.id == "anthropic")
+            .unwrap()
+            .clone();
+        provider.id = "enterprise-claude-gateway".to_string();
+        assert_eq!(
+            provider_tool_dialect(&provider),
+            ProviderToolDialect::Anthropic
+        );
     }
 
     #[test]
@@ -14154,11 +16293,27 @@ mod tests {
     }
 
     #[test]
-    fn cors_policy_allows_admin_browser_clients() {
+    fn cors_policy_allows_admin_and_anthropic_browser_clients() {
         assert_eq!(CORS_ALLOW_ORIGIN, "*");
         assert_eq!(CORS_ALLOW_METHODS, "GET,POST,PUT,OPTIONS");
         assert!(CORS_ALLOW_HEADERS.contains("authorization"));
         assert!(CORS_ALLOW_HEADERS.contains("content-type"));
+        assert!(CORS_ALLOW_HEADERS.contains("x-clawrouter-client"));
+        for header in [
+            "anthropic-dangerous-direct-browser-access",
+            "x-stainless-retry-count",
+            "x-stainless-timeout",
+            "x-stainless-lang",
+            "x-stainless-package-version",
+            "x-stainless-os",
+            "x-stainless-arch",
+            "x-stainless-runtime",
+            "x-stainless-runtime-version",
+            "x-stainless-helper-method",
+            "x-stainless-helper",
+        ] {
+            assert!(CORS_ALLOW_HEADERS.split(',').any(|value| value == header));
+        }
         assert!(cors_enabled_path("/v1/admin/keys"));
         assert!(cors_enabled_path("/v1/providers"));
         assert!(cors_enabled_path("/v1/routes"));
@@ -14166,6 +16321,8 @@ mod tests {
         assert!(cors_enabled_path("/v1/entitlements"));
         assert!(cors_enabled_path("/v1/me"));
         assert!(cors_enabled_path("/v1/usage"));
+        assert!(cors_enabled_path("/v1/messages"));
+        assert!(cors_enabled_path("/v1/messages/count_tokens"));
         assert!(!cors_enabled_path("/v1/chat/completions"));
         assert!(!cors_enabled_path("/v1/proxy/tavily/search"));
     }
@@ -14436,10 +16593,69 @@ mod tests {
 
     #[test]
     fn budget_settlement_only_charges_successful_upstream_requests() {
-        assert_eq!(actual_request_cost(200, 42), 42);
-        assert_eq!(actual_request_cost(299, 42), 42);
-        assert_eq!(actual_request_cost(400, 42), 0);
-        assert_eq!(actual_request_cost(502, 42), 0);
+        let request_cost = RequestCost {
+            reserve_micros: 42,
+            basis: RequestCostBasis::FixedPolicy,
+            ..RequestCost::default()
+        };
+        assert_eq!(
+            request_cost.actual_micros(200, UsageTokens::default(), true),
+            42
+        );
+        assert_eq!(
+            request_cost.actual_micros(299, UsageTokens::default(), true),
+            42
+        );
+        assert_eq!(
+            request_cost.actual_micros(400, UsageTokens::default(), true),
+            0
+        );
+        assert_eq!(
+            request_cost.actual_micros(502, UsageTokens::default(), true),
+            0
+        );
+    }
+
+    #[test]
+    fn missing_output_usage_keeps_long_context_reservation() {
+        let pricing = ModelPricing {
+            effective_at: "2026-06-19".to_string(),
+            source: "https://example.com/pricing".to_string(),
+            input_micros_per_million: 1,
+            output_micros_per_million: 0,
+            cached_input_micros_per_million: None,
+            cache_write_5m_input_micros_per_million: None,
+            cache_write_1h_input_micros_per_million: None,
+            max_input_tokens: 1_000,
+            max_request_input_tokens: None,
+            default_max_output_tokens: 100,
+            input_token_overhead: 0,
+            long_context: Some(clawrouter_core::pricing::LongContextPricing {
+                threshold_input_tokens: 500,
+                input_micros_per_million: 2,
+                output_micros_per_million: 3,
+                cached_input_micros_per_million: None,
+                cache_write_5m_input_micros_per_million: None,
+                cache_write_1h_input_micros_per_million: None,
+            }),
+        };
+        let request_cost = RequestCost {
+            reserve_micros: 42,
+            pricing: Some(pricing),
+            basis: RequestCostBasis::ListedPrice,
+            ..RequestCost::default()
+        };
+        assert_eq!(
+            request_cost.actual_micros(
+                200,
+                UsageTokens {
+                    input: Some(600),
+                    ..UsageTokens::default()
+                },
+                true,
+            ),
+            42
+        );
     }
 
     #[test]
@@ -14497,6 +16713,7 @@ mod tests {
                 input: Some(12),
                 output: Some(4),
                 total: Some(16),
+                ..UsageTokens::default()
             }
         );
         assert_eq!(
@@ -14510,6 +16727,7 @@ mod tests {
                 input: Some(9),
                 output: Some(3),
                 total: Some(12),
+                ..UsageTokens::default()
             }
         );
         assert_eq!(
@@ -14517,27 +16735,263 @@ mod tests {
                 "usageMetadata": {
                     "promptTokenCount": 8,
                     "candidatesTokenCount": 5,
-                    "totalTokenCount": 13
+                    "totalTokenCount": 17
                 }
             })),
             UsageTokens {
                 input: Some(8),
                 output: Some(5),
-                total: Some(13),
+                total: Some(17),
+                ..UsageTokens::default()
+            }
+        );
+        assert_eq!(
+            usage_tokens_from_response(&serde_json::json!({"input_tokens": 21})),
+            UsageTokens {
+                input: Some(21),
+                total: Some(21),
+                ..UsageTokens::default()
             }
         );
     }
 
     #[test]
-    fn usage_token_extraction_requires_an_explicit_bounded_response_size() {
-        assert!(!usage_token_response_size_allowed(None));
-        assert!(!usage_token_response_size_allowed(Some("invalid")));
-        assert!(usage_token_response_size_allowed(Some(
-            &USAGE_TOKEN_RESPONSE_MAX_BYTES.to_string()
-        )));
-        assert!(!usage_token_response_size_allowed(Some(
-            &(USAGE_TOKEN_RESPONSE_MAX_BYTES + 1).to_string()
-        )));
+    fn usage_tokens_normalize_cache_exclusive_accounting_by_shape() {
+        let tokens = usage_tokens_from_response(&serde_json::json!({
+            "usage": {
+                "input_tokens": 10,
+                "output_tokens": 4,
+                "cache_read_input_tokens": 20,
+                "cache_creation_input_tokens": 8,
+                "cache_creation": {
+                    "ephemeral_5m_input_tokens": 3,
+                    "ephemeral_1h_input_tokens": 5
+                }
+            }
+        }));
+        assert_eq!(tokens.input, Some(38));
+        assert_eq!(tokens.output, Some(4));
+        assert_eq!(tokens.total, Some(42));
+        assert_eq!(tokens.cached_input, Some(20));
+        assert_eq!(tokens.cache_write_total, Some(8));
+        assert_eq!(tokens.cache_write_5m_input, Some(3));
+        assert_eq!(tokens.cache_write_1h_input, Some(5));
+        assert_eq!(tokens.cache_write_input, Some(0));
+    }
+
+    #[test]
+    fn sse_usage_parser_handles_split_openai_final_event() {
+        let mut parser = SseUsageParser::new();
+        parser.push(b"event: response.completed\ndata: {\"type\":\"response.comp");
+        parser.push(b"leted\",\"response\":{\"usage\":{\"input_tokens\":100,\"output_tokens\":20,\"input_tokens_details\":{\"cached_tokens\":40}}}}\n\n");
+        parser.finish();
+        assert_eq!(parser.tokens.input, Some(100));
+        assert_eq!(parser.tokens.output, Some(20));
+        assert_eq!(parser.tokens.total, Some(120));
+        assert_eq!(parser.tokens.cached_input, Some(40));
+        assert!(parser.terminal);
+        assert_eq!(parser.terminal_status, Some(UsageStatus::Success));
+    }
+
+    #[test]
+    fn sse_usage_parser_settles_oversized_openai_terminal_event() {
+        let padding = "x".repeat(USAGE_SSE_EVENT_MAX_BYTES + 8 * 1024);
+        let event = format!(
+            "data: {{\"type\":\"response.completed\",\"response\":{{\"output\":[{{\"text\":\"{padding}\"}}],\"usage\":{{\"input_tokens\":100,\"output_tokens\":20,\"input_tokens_details\":{{\"cached_tokens\":40}}}}}}}}\n\n"
+        );
+        let mut parser = SseUsageParser::new();
+        for chunk in event.as_bytes().chunks(8191) {
+            parser.push(chunk);
+        }
+        parser.finish();
+
+        assert_eq!(parser.tokens.input, Some(100));
+        assert_eq!(parser.tokens.output, Some(20));
+        assert_eq!(parser.tokens.total, Some(120));
+        assert_eq!(parser.tokens.cached_input, Some(40));
+        assert!(parser.terminal);
+        assert_eq!(parser.terminal_status, Some(UsageStatus::Success));
+    }
+
+    #[test]
+    fn sse_usage_parser_merges_anthropic_start_and_delta_usage() {
+        let mut parser = SseUsageParser::new();
+        parser.push(b"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10,\"cache_read_input_tokens\":20}}}\n\n");
+        parser.push(b"data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":7}}\n\n");
+        parser.finish();
+        assert_eq!(parser.tokens.input, Some(30));
+        assert_eq!(parser.tokens.output, Some(7));
+        assert_eq!(parser.tokens.total, Some(37));
+        assert!(!parser.terminal);
+        parser.push(b"data: {\"type\":\"message_stop\"}\n\n");
+        assert!(parser.terminal);
+        assert_eq!(parser.terminal_status, Some(UsageStatus::Success));
+    }
+
+    #[test]
+    fn sse_usage_parser_reconciles_anthropic_cumulative_cache_totals() {
+        let mut parser = SseUsageParser::new();
+        parser.push(b"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10,\"cache_creation_input_tokens\":8,\"cache_creation\":{\"ephemeral_5m_input_tokens\":3,\"ephemeral_1h_input_tokens\":5}}}}\n\n");
+        parser.push(b"data: {\"type\":\"message_delta\",\"usage\":{\"output_tokens\":7,\"cache_creation_input_tokens\":8}}\n\n");
+        parser.push(b"data: {\"type\":\"message_stop\"}\n\n");
+        assert_eq!(parser.tokens.input, Some(18));
+        assert_eq!(parser.tokens.output, Some(7));
+        assert_eq!(parser.tokens.total, Some(25));
+        assert_eq!(parser.tokens.cache_write_total, Some(8));
+        assert_eq!(parser.tokens.cache_write_5m_input, Some(3));
+        assert_eq!(parser.tokens.cache_write_1h_input, Some(5));
+        assert_eq!(parser.tokens.cache_write_input, Some(0));
+    }
+
+    #[test]
+    fn sse_usage_parser_requires_anthropic_final_usage_delta() {
+        let mut parser = SseUsageParser::new();
+        parser.push(b"data: {\"type\":\"message_start\",\"message\":{\"usage\":{\"input_tokens\":10,\"output_tokens\":1}}}\n\n");
+        parser.push(b"data: {\"type\":\"message_stop\"}\n\n");
+        let result = parser.result(true, true);
+        assert_eq!(result.tokens.input, Some(10));
+        assert_eq!(result.tokens.output, None);
+        assert!(!result.complete);
+        assert_eq!(result.status, Some(UsageStatus::ProviderError));
+    }
+
+    #[test]
+    fn sse_usage_parser_requires_a_protocol_terminal_marker() {
+        let mut parser = SseUsageParser::new();
+        parser.push(b"data: {\"usage\":{\"prompt_tokens\":10,\"completion_tokens\":2}}\n\n");
+        parser.finish();
+        assert!(!parser.terminal);
+        let missing_terminal = parser.result(true, true);
+        assert!(!missing_terminal.complete);
+        assert_eq!(missing_terminal.status, Some(UsageStatus::ProviderError));
+        parser.push(b"data: [DONE]\n\n");
+        assert!(parser.terminal);
+        assert_eq!(parser.terminal_status, Some(UsageStatus::Success));
+    }
+
+    #[test]
+    fn sse_usage_parser_accepts_clean_eof_for_non_terminal_protocols() {
+        assert!(usage_stream_requires_terminal_marker(Some("openai_sse")));
+        assert!(usage_stream_requires_terminal_marker(Some("anthropic_sse")));
+        assert!(!usage_stream_requires_terminal_marker(Some("google_sse")));
+        assert!(!usage_stream_requires_terminal_marker(Some("cohere_sse")));
+
+        let parser = SseUsageParser::new();
+        let complete = parser.result(true, false);
+        assert!(complete.complete);
+        assert_eq!(complete.status, Some(UsageStatus::Success));
+
+        let interrupted = parser.result(false, false);
+        assert!(!interrupted.complete);
+        assert_eq!(interrupted.status, Some(UsageStatus::ProviderError));
+    }
+
+    #[test]
+    fn sse_usage_parser_marks_failed_and_incomplete_terminals_as_provider_errors() {
+        for terminal in ["response.failed", "response.incomplete"] {
+            let mut parser = SseUsageParser::new();
+            parser.push(format!("data: {{\"type\":\"{terminal}\"}}\n\n").as_bytes());
+            assert!(parser.terminal);
+            assert_eq!(parser.terminal_status, Some(UsageStatus::ProviderError));
+        }
+    }
+
+    #[test]
+    fn request_attribution_supports_claude_and_explicit_agent_headers() {
+        let attribution = resolve_attribution(AttributionCandidates {
+            claude_session_id: Some("claude-session".to_string()),
+            claude_agent_id: Some("claude-agent".to_string()),
+            explicit_agent_id: Some("explicit-agent".to_string()),
+            project_id: Some("project-a".to_string()),
+            ..AttributionCandidates::default()
+        });
+        assert_eq!(attribution.session_id.as_deref(), Some("claude-session"));
+        assert_eq!(attribution.agent_id.as_deref(), Some("explicit-agent"));
+        assert_eq!(attribution.project_id.as_deref(), Some("project-a"));
+        assert_eq!(attribution.client.as_deref(), Some("claude_code"));
+    }
+
+    #[test]
+    fn request_attribution_reads_codex_session_header() {
+        let attribution = request_attribution_with(|names| {
+            Ok::<_, ()>(
+                names
+                    .contains(&"session-id")
+                    .then(|| "codex-session".to_string()),
+            )
+        })
+        .unwrap();
+        assert_eq!(attribution.session_id.as_deref(), Some("codex-session"));
+        assert_eq!(attribution.client.as_deref(), Some("codex"));
+    }
+
+    #[test]
+    fn oversized_json_usage_retains_the_conservative_reservation() {
+        let mut accumulator = JsonUsageAccumulator::default();
+        accumulator.push(b"{\"data\":\"");
+        accumulator.push(&vec![b'x'; USAGE_TOKEN_RESPONSE_MAX_BYTES + 1]);
+        accumulator.push(br#","usage":{"prompt_tokens":7,"total_tokens":7}}"#);
+        assert!(accumulator.overflowed);
+        assert!(accumulator.body.is_empty());
+        let result = accumulator.result(true);
+        assert_eq!(result.tokens, UsageTokens::default());
+        assert!(!result.complete);
+        assert_eq!(result.status, Some(UsageStatus::ProviderError));
+    }
+
+    #[test]
+    fn json_usage_meter_classifies_incomplete_responses_as_provider_errors() {
+        let mut accumulator = JsonUsageAccumulator::default();
+        accumulator
+            .push(br#"{"status":"incomplete","usage":{"input_tokens":7,"output_tokens":2}}"#);
+        let result = accumulator.result(true);
+        assert_eq!(result.tokens.input, Some(7));
+        assert_eq!(result.tokens.output, Some(2));
+        assert_eq!(result.status, Some(UsageStatus::ProviderError));
+    }
+
+    #[test]
+    fn json_usage_meter_rejects_truncated_json_even_when_transport_completed() {
+        let mut accumulator = JsonUsageAccumulator::default();
+        accumulator.push(br#"{"usage":{"input_tokens":7"#);
+        let result = accumulator.result(true);
+        assert_eq!(result.tokens, UsageTokens::default());
+        assert!(!result.complete);
+        assert_eq!(result.status, Some(UsageStatus::ProviderError));
+    }
+
+    #[test]
+    fn native_json_inspection_is_bounded_and_skips_fixed_price_raw_routes() {
+        let mut policy = AccessPolicy {
+            enabled: true,
+            generation: "test".to_string(),
+            providers: vec!["openai".to_string()],
+            tenant_id: None,
+            token_role: None,
+            monthly_budget_micros: Some(1_000_000),
+            request_cost_micros: None,
+        };
+        assert!(native_request_needs_json_inspection(
+            false,
+            "llm.responses",
+            &policy
+        ));
+        policy.request_cost_micros = Some(100);
+        assert!(!native_request_needs_json_inspection(
+            false,
+            "llm.responses",
+            &policy
+        ));
+        assert!(native_request_needs_json_inspection(
+            true,
+            "llm.messages",
+            &policy
+        ));
+        assert!(!native_request_needs_json_inspection(
+            false,
+            "tool.invoke",
+            &policy
+        ));
     }
 
     #[test]

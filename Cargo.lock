@@ -81,6 +81,7 @@ name = "clawrouter-edge"
 version = "0.1.0"
 dependencies = [
  "clawrouter-core",
+ "futures-channel",
  "futures-util",
  "hmac",
  "js-sys",

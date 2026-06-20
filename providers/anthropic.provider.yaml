@@ -23,25 +23,46 @@ adapter:
   response: anthropic
   stream: anthropic_sse
   error: anthropic_error
+  passthroughHeaders: [anthropic-beta, anthropic-version]
   injectHeaders:
     anthropic-version: "2023-06-01"
 capabilities:
   - id: llm.messages
     endpoint: messages
     methods: [POST]
+  - id: llm.count_tokens
+    endpoint: count_tokens
+    methods: [POST]
 endpoints:
   messages:
     path: /v1/messages
+    requestHeaders: [anthropic-beta, anthropic-version]
     requestFormat: anthropic.messages
     responseFormat: anthropic.messages
     streaming: sse
     timeoutMs: 600000
+  count_tokens:
+    path: /v1/messages/count_tokens
+    requestHeaders: [anthropic-beta, anthropic-version]
+    requestFormat: anthropic.messages
+    responseFormat: anthropic.count_tokens
+    timeoutMs: 120000
 models:
   entries:
     - id: anthropic/default
       upstream: claude-sonnet-4-5-20250929
-      capabilities: [llm.messages]
-      pricingRef: anthropic-default
+      capabilities: [llm.messages, llm.count_tokens]
+      pricingRef: anthropic-claude-sonnet-4-5-standard-2026-06-19
+      pricing:
+        effectiveAt: "2026-05-27"
+        source: https://platform.claude.com/docs/en/about-claude/pricing
+        inputMicrosPerMillion: 3000000
+        cachedInputMicrosPerMillion: 300000
+        cacheWrite5mInputMicrosPerMillion: 3750000
+        cacheWrite1hInputMicrosPerMillion: 6000000
+        outputMicrosPerMillion: 15000000
+        maxInputTokens: 200000
+        defaultMaxOutputTokens: 64000
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

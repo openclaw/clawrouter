@@ -506,10 +506,16 @@ The stored policy and credential shapes are separate:
 A raw stored policy with an empty list allows every configured provider and
 should be reserved for deliberate operator use. `monthlyBudgetMicros: 0` denies
 requests immediately. A non-zero `monthlyBudgetMicros` uses the `BUDGET_LEDGER`
-Durable Object before upstream calls and charges `requestCostMicros` per
-accepted request. If `requestCostMicros` is omitted, ClawRouter charges one
-micro unit per request so budget enforcement still works for keys with a
-monthly budget.
+Durable Object before upstream calls. `requestCostMicros`, when present, is a
+fixed per-request override. When it is omitted, models with versioned manifest
+pricing reserve a conservative token cost and settle against provider-reported
+usage. Any budgeted route without manifest pricing fails closed with
+`pricing_required`; unbudgeted routes retain the one-micro fallback.
+
+When upgrading an existing policy, either add versioned pricing for every
+route it can reach or set `requestCostMicros` before deploying this behavior.
+Then remove the fixed override only after the priced model catalog covers all
+client-selected model IDs.
 
 ## Upstream Grants
 
