@@ -332,6 +332,11 @@ interface UsageAuditEvent {
   credential_id?: string | null;
   principal_id?: string | null;
   auth_type?: string | null;
+  session_id?: string | null;
+  agent_id?: string | null;
+  parent_agent_id?: string | null;
+  project_id?: string | null;
+  client?: string | null;
   key_id?: string | null;
   request_id?: string | null;
   provider: string;
@@ -340,8 +345,15 @@ interface UsageAuditEvent {
   input_tokens?: number | null;
   output_tokens?: number | null;
   total_tokens?: number | null;
+  cached_input_tokens?: number | null;
+  cache_write_input_tokens?: number | null;
   reserved_cost_micros: number;
   actual_cost_micros: number;
+  reserved_input_tokens?: number | null;
+  reserved_output_tokens?: number | null;
+  pricing_ref?: string | null;
+  pricing_effective_at?: string | null;
+  cost_basis?: string | null;
   status_code?: number | null;
   duration_ms?: number | null;
   status: string;
@@ -2104,7 +2116,7 @@ function PolicyPanel({ keys, selected, providers, form, setForm, error, onSave, 
             <label><span>role</span><input value={form.tokenRole} onChange={(event) => setForm({ ...form, tokenRole: event.target.value })} /></label>
             <label><span>status</span><select value={form.enabled ? "active" : "disabled"} onChange={(event) => setForm({ ...form, enabled: event.target.value === "active" })}><option value="active">active</option><option value="disabled">disabled</option></select></label>
             <label><span>monthly budget ($)</span><input inputMode="decimal" value={form.monthlyBudgetMicros} onChange={(event) => setForm({ ...form, monthlyBudgetMicros: event.target.value })} placeholder="unlimited" /></label>
-            <label><span>request cost (micros)</span><input inputMode="decimal" value={form.requestCostMicros} onChange={(event) => setForm({ ...form, requestCostMicros: event.target.value })} placeholder="server default: 1" /></label>
+            <label><span>fixed request cost (micros)</span><input inputMode="decimal" value={form.requestCostMicros} onChange={(event) => setForm({ ...form, requestCostMicros: event.target.value })} placeholder="blank = manifest-priced routes only" title="Required for any budgeted route without manifest pricing; blank uses versioned list pricing where available." /></label>
           </div>
           <div className="editorSectionHeader serviceAccessHeader"><div><strong>Service access</strong><span>{formSelectionLabel}</span></div>{form.allProviders ? <span className="wildcardScope">Wildcard scope · all current and future services</span> : null}</div>
           <div className="inputWithIcon providerFilter"><Search aria-hidden="true" /><input value={providerQuery} onChange={(event) => setProviderQuery(event.target.value)} placeholder="filter services" /></div>
@@ -2220,13 +2232,16 @@ function UsageScreen({ keys, credentials, services, overview, tenants, usageRows
           columnTemplate="92px minmax(170px, 1.2fr) minmax(145px, 1fr) minmax(150px, 1fr) 104px 74px 74px"
           rows={usage.events.map((event) => {
             const service = serviceByProvider.get(event.provider);
+            const verifiedIdentity = event.principal_id ?? event.credential_id ?? event.policy_id ?? event.tenant_id;
+            const agentIdentity = event.agent_id ? `agent ${event.agent_id}` : event.auth_type ?? "authenticated";
+            const agentContext = [event.parent_agent_id && `parent ${event.parent_agent_id}`, event.client && `client ${event.client}`, event.project_id && `project ${event.project_id}`, event.session_id && `session ${event.session_id}`].filter(Boolean).join(" · ");
             return {
               id: event.id,
               cells: [
                 <span className="auditTime" title={formatTimestamp(event.occurred_at_ms, true)}>{formatTimestamp(event.occurred_at_ms)}</span>,
-                <span className="auditIdentity"><strong>{event.principal_id ?? event.credential_id ?? event.policy_id ?? "unknown"}</strong><small>{event.auth_type ?? event.tenant_id}</small></span>,
+                <span className="auditIdentity" title={[`authenticated ${verifiedIdentity}`, agentIdentity, agentContext].filter(Boolean).join(" · ")}><strong>{verifiedIdentity}</strong><small>{agentIdentity}</small>{agentContext ? <small>{agentContext}</small> : null}</span>,
                 <EntityName brandIcon={service?.brandIcon} icon={ServerCog} title={service?.name ?? event.provider} subtitle={event.provider} />,
-                <span className="auditOperation"><strong>{event.capability ?? event.type}</strong><small>{event.model ?? event.request_id ?? "request"}</small></span>,
+                <span className="auditOperation"><strong>{event.capability ?? event.type}</strong><small>{[event.model, event.cost_basis].filter(Boolean).join(" · ") || event.request_id || "request"}</small></span>,
                 <Status label={event.status_code ? `${event.status_code} ${event.status}` : event.status} tone={usageEventTone(event)} />,
                 formatDuration(event.duration_ms),
                 formatMicros(event.actual_cost_micros),
@@ -2801,8 +2816,24 @@ function playgroundRequestPreview(form: PlaygroundForm, mode: "json" | "curl", r
 function demoUsageSnapshot(): UsageSnapshot {
   const now = Date.now();
   const events: UsageAuditEvent[] = [
-    demoUsageEvent("usage_6", now - 26_000, "admin@example.com", "maintainer_models", "openai", "llm.responses", "gpt-4.1", 200, 842, 1000, "success", 1814),
-    demoUsageEvent("usage_5", now - 74_000, "maintainer@example.com", "maintainer_models", "anthropic", "llm.messages", "claude-sonnet", 200, 1180, 1000, "success", 2631),
+    demoUsageEvent("usage_6", now - 26_000, "admin@example.com", "maintainer_models", "openai", "llm.responses", "gpt-5.4", 200, 842, 1000, "success", 1814, {
+      agent_id: "codex/reviewer",
+      parent_agent_id: "codex/orchestrator",
+      project_id: "clawrouter",
+      client: "codex",
+      session_id: "session_7fa2",
+      cost_basis: "model_pricing",
+      pricing_ref: "openai-gpt-5.4-standard-2026-06-19",
+    }),
+    demoUsageEvent("usage_5", now - 74_000, "maintainer@example.com", "maintainer_models", "anthropic", "llm.messages", "claude-sonnet-4-5", 200, 1180, 1000, "success", 2631, {
+      agent_id: "claude/refactor",
+      parent_agent_id: "claude/orchestrator",
+      project_id: "clawrouter",
+      client: "claude-code",
+      session_id: "session_293b",
+      cost_basis: "model_pricing",
+      pricing_ref: "anthropic-claude-sonnet-4-5-standard-2026-06-19",
+    }),
     demoUsageEvent("usage_4", now - 146_000, "admin@example.com", "openclaw_tools", "tavily", "web.search", null, 200, 436, 500, "success", 0),
     demoUsageEvent("usage_3", now - 318_000, "research@example.com", "user_research", "google-gemini", "llm.generate", "gemini-default", 429, 218, 0, "provider_error", 0),
     demoUsageEvent("usage_2", now - 522_000, "admin@example.com", "maintainer_models", "openrouter", "llm.chat", "openrouter/auto", 200, 1640, 1000, "success", 3250),
@@ -2822,7 +2853,7 @@ function demoUsageSnapshot(): UsageSnapshot {
   };
 }
 
-function demoUsageEvent(id: string, occurredAt: number, principal: string, policy: string, providerId: string, capability: string, model: string | null, statusCode: number, durationMs: number, cost: number, status: string, tokens: number): UsageAuditEvent {
+function demoUsageEvent(id: string, occurredAt: number, principal: string, policy: string, providerId: string, capability: string, model: string | null, statusCode: number, durationMs: number, cost: number, status: string, tokens: number, attribution: Partial<UsageAuditEvent> = {}): UsageAuditEvent {
   return {
     id,
     type: "clawrouter.usage.v1",
@@ -2845,6 +2876,7 @@ function demoUsageEvent(id: string, occurredAt: number, principal: string, polic
     status_code: statusCode,
     duration_ms: durationMs,
     status,
+    ...attribution,
   };
 }
 

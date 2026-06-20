@@ -103,6 +103,8 @@ The Worker currently exposes:
 - `POST /v1/chat/completions`
 - `POST /v1/responses`
 - `POST /v1/embeddings`
+- `POST /v1/messages`
+- `POST /v1/messages/count_tokens`
 - `POST /v1/proxy/<provider>/<endpoint>`
 - `<METHOD> /v1/native/<provider>/<provider-native-path>`
 - `GET /v1/admin/overview`
@@ -222,14 +224,24 @@ completion bodies are never stored. `/v1/usage` returns the caller policy's
 budget plus usage summary; `/v1/admin/usage` returns budget rows plus the
 all-tenant usage summary and recent request audit.
 
-Budgeted requests reserve the configured request cost before the upstream call.
-Successful upstream responses settle that charge; non-2xx and transport
-failures synchronously refund the reservation. Failed settlement calls are
+Budgeted requests reserve an upper-bound token cost before the upstream call
+when the selected model has versioned pricing in its provider manifest. An
+explicit policy `requestCostMicros` remains a fixed-cost override; unpriced
+routes retain the one-micro fallback only outside monthly budgets. Budgeted
+calls without versioned pricing fail closed. Successful responses settle
+their actual token cost, including cached input when reported. SSE responses are metered
+inline without buffering the client stream. Missing or interrupted usage stays
+charged at the conservative reservation; non-2xx and transport failures refund
+the reservation. Failed settlement calls are
 persisted to `USAGE_QUEUE` for durable retry while the reservation remains
 charged fail-closed. Messages that exhaust automatic retries move to the
 separate usage DLQ for operator inspection and replay before Cloudflare's
 four-day unconsumed-DLQ retention expires. Internal reservation ids are
 generated independently from caller-supplied request ids.
+
+Codex and Claude Code integration, pricing fields, reservation semantics, and
+agent attribution headers are documented in
+[`docs/agent-spend-control.md`](docs/agent-spend-control.md).
 OAuth, SigV4, and deployment-templated providers execute through the same
 policy-enforced proxy when their manifest-declared grant and remaining runtime
 configuration are present. Provider secrets can come from scoped upstream

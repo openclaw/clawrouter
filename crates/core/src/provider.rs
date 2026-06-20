@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 use thiserror::Error;
 
+use crate::pricing::ModelPricing;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ProviderManifest {
@@ -310,6 +312,8 @@ pub struct ModelEntry {
     pub capabilities: Vec<String>,
     #[serde(rename = "pricingRef", default)]
     pub pricing_ref: Option<String>,
+    #[serde(default)]
+    pub pricing: Option<ModelPricing>,
 }
 
 #[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -382,6 +386,7 @@ pub struct CompiledModel {
     pub upstream: String,
     pub capabilities: Vec<String>,
     pub pricing_ref: Option<String>,
+    pub pricing: Option<ModelPricing>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -425,6 +430,7 @@ pub struct ModelRoute {
     pub upstream: String,
     pub capabilities: Vec<String>,
     pub pricing_ref: Option<String>,
+    pub pricing: Option<ModelPricing>,
 }
 
 #[derive(Debug, Error)]
@@ -467,6 +473,8 @@ pub enum ProviderError {
         model: String,
         capability: String,
     },
+    #[error("provider {provider} model {model} has invalid pricing metadata")]
+    InvalidModelPricing { provider: String, model: String },
     #[error("duplicate provider id {0}")]
     DuplicateProvider(String),
     #[error("duplicate model id {0}")]
@@ -630,6 +638,35 @@ pub fn validate_provider_manifest(manifest: &ProviderManifest) -> Result<(), Pro
         }
     }
     for model in &manifest.models.entries {
+        if model.pricing.as_ref().is_some_and(|pricing| {
+            model
+                .pricing_ref
+                .as_deref()
+                .is_none_or(|value| value.trim().is_empty())
+                || !valid_effective_date(&pricing.effective_at)
+                || !pricing.source.starts_with("https://")
+                || pricing.max_input_tokens == 0
+                || pricing
+                    .max_request_input_tokens
+                    .is_some_and(|limit| limit < pricing.max_input_tokens)
+                || (pricing.default_max_output_tokens == 0
+                    && (pricing.output_micros_per_million > 0
+                        || pricing.long_context.as_ref().is_some_and(|long_context| {
+                            long_context.output_micros_per_million > 0
+                        })))
+                || pricing.long_context.as_ref().is_some_and(|long_context| {
+                    long_context.threshold_input_tokens == 0
+                        || long_context.threshold_input_tokens
+                            >= pricing
+                                .max_request_input_tokens
+                                .unwrap_or(pricing.max_input_tokens)
+                })
+        }) {
+            return Err(ProviderError::InvalidModelPricing {
+                provider: manifest.id.clone(),
+                model: model.id.clone(),
+            });
+        }
         for capability in &model.capabilities {
             if !capability_ids.contains(capability.as_str()) {
                 return Err(ProviderError::MissingModelCapability {
@@ -641,6 +678,42 @@ pub fn validate_provider_manifest(manifest: &ProviderManifest) -> Result<(), Pro
         }
     }
     Ok(())
+}
+
+fn valid_effective_date(value: &str) -> bool {
+    let bytes = value.as_bytes();
+    if bytes.len() != 10
+        || bytes[4] != b'-'
+        || bytes[7] != b'-'
+        || !bytes
+            .iter()
+            .enumerate()
+            .all(|(index, byte)| matches!(index, 4 | 7) || byte.is_ascii_digit())
+    {
+        return false;
+    }
+    let Ok(year) = value[..4].parse::<u16>() else {
+        return false;
+    };
+    let Ok(month) = value[5..7].parse::<u8>() else {
+        return false;
+    };
+    let Ok(day) = value[8..].parse::<u8>() else {
+        return false;
+    };
+    if year == 0 || day == 0 {
+        return false;
+    }
+    let leap_year =
+        year.is_multiple_of(4) && (!year.is_multiple_of(100) || year.is_multiple_of(400));
+    let days_in_month = match month {
+        1 | 3 | 5 | 7 | 8 | 10 | 12 => 31,
+        4 | 6 | 9 | 11 => 30,
+        2 if leap_year => 29,
+        2 => 28,
+        _ => return false,
+    };
+    day <= days_in_month
 }
 
 pub fn compile_provider_snapshot(
@@ -679,6 +752,7 @@ pub fn compile_provider_snapshot(
                     upstream: model.upstream.clone(),
                     capabilities: model.capabilities.clone(),
                     pricing_ref: model.pricing_ref.clone(),
+                    pricing: model.pricing.clone(),
                 },
             );
         }
@@ -754,6 +828,7 @@ pub fn compile_provider_snapshot(
                     upstream: model.upstream.clone(),
                     capabilities: model.capabilities.clone(),
                     pricing_ref: model.pricing_ref.clone(),
+                    pricing: model.pricing.clone(),
                 })
                 .collect(),
             billing: manifest.billing.clone(),
@@ -1318,5 +1393,145 @@ endpoints:
         assert!(!endpoint.native_proxy);
         assert_eq!(endpoint.request_headers, vec!["OpenAI-Organization"]);
         assert_eq!(endpoint.response_headers, vec!["request-id"]);
+    }
+
+    #[test]
+    fn compiles_versioned_model_pricing() {
+        let manifest: ProviderManifest = serde_yaml::from_str(
+            r#"
+schema: clawrouter.service-provider.v1
+id: priced
+displayName: Priced
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://example.com
+capabilities:
+  - id: llm.responses
+    endpoint: responses
+endpoints:
+  responses:
+    path: /v1/responses
+    requestFormat: openai.responses
+    responseFormat: openai.responses
+models:
+  entries:
+    - id: priced/model
+      upstream: model
+      capabilities: [llm.responses]
+      pricingRef: priced-model-2026-06-19
+      pricing:
+        effectiveAt: "2026-06-19"
+        source: https://example.com/pricing
+        inputMicrosPerMillion: 1000000
+        outputMicrosPerMillion: 2000000
+        maxInputTokens: 10000
+        defaultMaxOutputTokens: 1000
+        longContext:
+          thresholdInputTokens: 8000
+          inputMicrosPerMillion: 2000000
+          outputMicrosPerMillion: 3000000
+"#,
+        )
+        .unwrap();
+        let snapshot = compile_provider_snapshot(&[manifest]).unwrap();
+        let model = &snapshot.providers[0].models[0];
+        assert_eq!(
+            model.pricing_ref.as_deref(),
+            Some("priced-model-2026-06-19")
+        );
+        assert_eq!(
+            model.pricing.as_ref().unwrap().output_micros_per_million,
+            2_000_000
+        );
+        assert_eq!(
+            model
+                .pricing
+                .as_ref()
+                .unwrap()
+                .long_context
+                .as_ref()
+                .unwrap()
+                .threshold_input_tokens,
+            8_000
+        );
+    }
+
+    #[test]
+    fn rejects_unversioned_model_pricing() {
+        let mut manifest: ProviderManifest = serde_yaml::from_str(
+            r#"
+schema: clawrouter.service-provider.v1
+id: priced
+displayName: Priced
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+baseUrls:
+  default: https://example.com
+capabilities:
+  - id: llm.responses
+    endpoint: responses
+endpoints:
+  responses:
+    path: /v1/responses
+    requestFormat: openai.responses
+    responseFormat: openai.responses
+models:
+  entries:
+    - id: priced/model
+      upstream: model
+      capabilities: [llm.responses]
+      pricing:
+        effectiveAt: "not-a-date"
+        source: https://example.com/pricing
+        inputMicrosPerMillion: 1000000
+        outputMicrosPerMillion: 2000000
+        maxInputTokens: 10000
+        defaultMaxOutputTokens: 1000
+"#,
+        )
+        .unwrap();
+        assert!(matches!(
+            validate_provider_manifest(&manifest),
+            Err(ProviderError::InvalidModelPricing { .. })
+        ));
+
+        manifest.models.entries[0].pricing_ref = Some("priced-model".to_string());
+        assert!(matches!(
+            validate_provider_manifest(&manifest),
+            Err(ProviderError::InvalidModelPricing { .. })
+        ));
+
+        let pricing = manifest.models.entries[0].pricing.as_mut().unwrap();
+        pricing.effective_at = "2026-06-19".to_string();
+        pricing.default_max_output_tokens = 0;
+        assert!(matches!(
+            validate_provider_manifest(&manifest),
+            Err(ProviderError::InvalidModelPricing { .. })
+        ));
+    }
+
+    #[test]
+    fn validates_effective_dates_as_calendar_dates() {
+        assert!(valid_effective_date("2024-02-29"));
+        assert!(valid_effective_date("2026-06-19"));
+        for invalid in [
+            "0000-01-01",
+            "2026-00-01",
+            "2026-99-99",
+            "2026-02-29",
+            "2026-02-31",
+            "2026-04-31",
+        ] {
+            assert!(!valid_effective_date(invalid), "accepted {invalid}");
+        }
     }
 }

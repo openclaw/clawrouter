@@ -73,6 +73,11 @@ billing:
   the declarative format cannot express the provider.
 - `billing.meter` and `billing.counters` produce OpenMeter/Lago/Meteroid style
   event dimensions without hard-coding provider logic.
+- `models.entries[].pricing` supplies a dated, source-linked list-price snapshot
+  for hard budget reservation and settlement. Rates are integer micro-US-dollars
+  per million tokens. Change `pricingRef` whenever rates or effective dates
+  change. Declare `longContext` when a model changes rates above an input-token
+  threshold; omit `pricing` when a model cannot be priced safely.
 
 ## Edge Support Rules
 

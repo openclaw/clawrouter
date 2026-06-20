@@ -63,7 +63,7 @@ capabilities:
 endpoints:
   responses:
     path: /v1/responses
-    requestHeaders: [session_id, x-client-request-id]
+    requestHeaders: [session-id, thread-id, session_id, x-client-request-id]
     requestFormat: openai.responses
     responseFormat: openai.responses
     streaming: sse
@@ -84,11 +84,44 @@ models:
     - id: openai/gpt-4.1-mini
       upstream: gpt-4.1-mini
       capabilities: [llm.responses, llm.chat]
-      pricingRef: openai-gpt-4.1-mini
+      pricingRef: openai-gpt-4.1-mini-standard-2026-06-19
+      pricing:
+        effectiveAt: "2026-06-19"
+        source: https://platform.openai.com/docs/models/gpt-4.1-mini
+        inputMicrosPerMillion: 400000
+        cachedInputMicrosPerMillion: 100000
+        outputMicrosPerMillion: 1600000
+        maxInputTokens: 1047576
+        defaultMaxOutputTokens: 32768
+    - id: openai/gpt-5.4
+      upstream: gpt-5.4
+      capabilities: [llm.responses, llm.chat]
+      pricingRef: openai-gpt-5.4-standard-2026-06-19
+      pricing:
+        effectiveAt: "2026-06-19"
+        source: https://developers.openai.com/api/docs/models/gpt-5.4/
+        inputMicrosPerMillion: 2500000
+        cachedInputMicrosPerMillion: 250000
+        outputMicrosPerMillion: 15000000
+        maxInputTokens: 1050000
+        defaultMaxOutputTokens: 128000
+        longContext:
+          thresholdInputTokens: 272000
+          inputMicrosPerMillion: 5000000
+          cachedInputMicrosPerMillion: 500000
+          outputMicrosPerMillion: 22500000
     - id: openai/text-embedding-3-large
       upstream: text-embedding-3-large
       capabilities: [llm.embeddings]
-      pricingRef: openai-text-embedding-3-large
+      pricingRef: openai-text-embedding-3-large-standard-2026-06-19
+      pricing:
+        effectiveAt: "2026-06-19"
+        source: https://platform.openai.com/docs/pricing
+        inputMicrosPerMillion: 130000
+        outputMicrosPerMillion: 0
+        maxInputTokens: 8192
+        maxRequestInputTokens: 300000
+        defaultMaxOutputTokens: 0
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
