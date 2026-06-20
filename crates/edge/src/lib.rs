@@ -588,13 +588,15 @@ async fn proxy_openai_compatible(
     if let Some(response) = disabled_provider_connection_response(&env, &route.provider.id).await? {
         enqueue_denied_usage(
             &env,
-            &auth,
-            &route.provider.id,
-            capability,
-            Some(model.as_str()),
-            &request_id,
-            response.status_code(),
-            Some(&attribution),
+            DeniedUsageRecord {
+                auth: &auth,
+                provider: &route.provider.id,
+                capability,
+                model: Some(model.as_str()),
+                request_id: &request_id,
+                status_code: response.status_code(),
+                attribution: Some(&attribution),
+            },
         )
         .await;
         return Ok(response);
@@ -602,13 +604,15 @@ async fn proxy_openai_compatible(
     if let Some(response) = preflight_static_budget(&auth.policy)? {
         enqueue_denied_usage(
             &env,
-            &auth,
-            &route.provider.id,
-            capability,
-            Some(model.as_str()),
-            &request_id,
-            response.status_code(),
-            Some(&attribution),
+            DeniedUsageRecord {
+                auth: &auth,
+                provider: &route.provider.id,
+                capability,
+                model: Some(model.as_str()),
+                request_id: &request_id,
+                status_code: response.status_code(),
+                attribution: Some(&attribution),
+            },
         )
         .await;
         return Ok(response);
@@ -778,13 +782,15 @@ async fn proxy_openai_compatible(
         BudgetPreflight::Denied(response) => {
             enqueue_denied_usage(
                 &env,
-                &auth,
-                &route.provider.id,
-                capability,
-                Some(model.as_str()),
-                &request_id,
-                response.status_code(),
-                Some(&attribution),
+                DeniedUsageRecord {
+                    auth: &auth,
+                    provider: &route.provider.id,
+                    capability,
+                    model: Some(model.as_str()),
+                    request_id: &request_id,
+                    status_code: response.status_code(),
+                    attribution: Some(&attribution),
+                },
             )
             .await;
             return Ok(response);
@@ -877,13 +883,15 @@ async fn proxy_manifest_endpoint(
     if let Some(response) = disabled_provider_connection_response(&env, &provider.id).await? {
         enqueue_denied_usage(
             &env,
-            &auth,
-            &provider.id,
-            capability,
-            None,
-            &request_id,
-            response.status_code(),
-            Some(&attribution),
+            DeniedUsageRecord {
+                auth: &auth,
+                provider: &provider.id,
+                capability,
+                model: None,
+                request_id: &request_id,
+                status_code: response.status_code(),
+                attribution: Some(&attribution),
+            },
         )
         .await;
         return Ok(response);
@@ -891,13 +899,15 @@ async fn proxy_manifest_endpoint(
     if let Some(response) = preflight_static_budget(&auth.policy)? {
         enqueue_denied_usage(
             &env,
-            &auth,
-            &provider.id,
-            capability,
-            None,
-            &request_id,
-            response.status_code(),
-            Some(&attribution),
+            DeniedUsageRecord {
+                auth: &auth,
+                provider: &provider.id,
+                capability,
+                model: None,
+                request_id: &request_id,
+                status_code: response.status_code(),
+                attribution: Some(&attribution),
+            },
         )
         .await;
         return Ok(response);
@@ -1159,13 +1169,15 @@ async fn proxy_manifest_endpoint(
         BudgetPreflight::Denied(response) => {
             enqueue_denied_usage(
                 &env,
-                &auth,
-                &provider.id,
-                capability,
-                None,
-                &request_id,
-                response.status_code(),
-                Some(&attribution),
+                DeniedUsageRecord {
+                    auth: &auth,
+                    provider: &provider.id,
+                    capability,
+                    model: None,
+                    request_id: &request_id,
+                    status_code: response.status_code(),
+                    attribution: Some(&attribution),
+                },
             )
             .await;
             return Ok(response);
@@ -1276,13 +1288,15 @@ async fn proxy_native_provider(
     if let Some(response) = disabled_provider_connection_response(&env, &provider.id).await? {
         enqueue_denied_usage(
             &env,
-            &auth,
-            &provider.id,
-            capability,
-            None,
-            &request_id,
-            response.status_code(),
-            Some(&attribution),
+            DeniedUsageRecord {
+                auth: &auth,
+                provider: &provider.id,
+                capability,
+                model: None,
+                request_id: &request_id,
+                status_code: response.status_code(),
+                attribution: Some(&attribution),
+            },
         )
         .await;
         return Ok(response);
@@ -1290,13 +1304,15 @@ async fn proxy_native_provider(
     if let Some(response) = preflight_static_budget(&auth.policy)? {
         enqueue_denied_usage(
             &env,
-            &auth,
-            &provider.id,
-            capability,
-            None,
-            &request_id,
-            response.status_code(),
-            Some(&attribution),
+            DeniedUsageRecord {
+                auth: &auth,
+                provider: &provider.id,
+                capability,
+                model: None,
+                request_id: &request_id,
+                status_code: response.status_code(),
+                attribution: Some(&attribution),
+            },
         )
         .await;
         return Ok(response);
@@ -1546,13 +1562,15 @@ async fn proxy_native_provider(
         BudgetPreflight::Denied(response) => {
             enqueue_denied_usage(
                 &env,
-                &auth,
-                &provider.id,
-                capability,
-                None,
-                &request_id,
-                response.status_code(),
-                Some(&attribution),
+                DeniedUsageRecord {
+                    auth: &auth,
+                    provider: &provider.id,
+                    capability,
+                    model: None,
+                    request_id: &request_id,
+                    status_code: response.status_code(),
+                    attribution: Some(&attribution),
+                },
             )
             .await;
             return Ok(response);
@@ -8379,13 +8397,15 @@ async fn authorize_proxy_key_for_provider(
             };
             enqueue_denied_usage(
                 env,
-                &auth,
-                provider_id,
-                "access.denied",
-                None,
-                &request_id(headers, "auth"),
-                response.status_code(),
-                attribution,
+                DeniedUsageRecord {
+                    auth: &auth,
+                    provider: provider_id,
+                    capability: "access.denied",
+                    model: None,
+                    request_id: &request_id(headers, "auth"),
+                    status_code: response.status_code(),
+                    attribution,
+                },
             )
             .await;
         }
@@ -8404,13 +8424,15 @@ async fn authorize_proxy_key_for_provider(
         if let Some(provider_id) = provider_id {
             enqueue_denied_usage(
                 env,
-                &authorized,
-                provider_id,
-                "access.denied",
-                None,
-                &request_id(headers, "auth"),
-                response.status_code(),
-                attribution,
+                DeniedUsageRecord {
+                    auth: &authorized,
+                    provider: provider_id,
+                    capability: "access.denied",
+                    model: None,
+                    request_id: &request_id(headers, "auth"),
+                    status_code: response.status_code(),
+                    attribution,
+                },
             )
             .await;
         }
@@ -8421,13 +8443,15 @@ async fn authorize_proxy_key_for_provider(
         if let Some(provider_id) = provider_id {
             enqueue_denied_usage(
                 env,
-                &authorized,
-                provider_id,
-                "access.denied",
-                None,
-                &request_id(headers, "auth"),
-                response.status_code(),
-                attribution,
+                DeniedUsageRecord {
+                    auth: &authorized,
+                    provider: provider_id,
+                    capability: "access.denied",
+                    model: None,
+                    request_id: &request_id(headers, "auth"),
+                    status_code: response.status_code(),
+                    attribution,
+                },
             )
             .await;
         }
@@ -8442,13 +8466,15 @@ async fn authorize_proxy_key_for_provider(
         if let Some(provider_id) = provider_id {
             enqueue_denied_usage(
                 env,
-                &authorized,
-                provider_id,
-                "access.denied",
-                None,
-                &request_id(headers, "auth"),
-                response.status_code(),
-                attribution,
+                DeniedUsageRecord {
+                    auth: &authorized,
+                    provider: provider_id,
+                    capability: "access.denied",
+                    model: None,
+                    request_id: &request_id(headers, "auth"),
+                    status_code: response.status_code(),
+                    attribution,
+                },
             )
             .await;
         }
@@ -8469,13 +8495,15 @@ async fn authorize_proxy_key_for_provider(
             )?;
             enqueue_denied_usage(
                 env,
-                &authorized,
-                provider_id,
-                "access.denied",
-                None,
-                &request_id(headers, "auth"),
-                response.status_code(),
-                attribution,
+                DeniedUsageRecord {
+                    auth: &authorized,
+                    provider: provider_id,
+                    capability: "access.denied",
+                    model: None,
+                    request_id: &request_id(headers, "auth"),
+                    status_code: response.status_code(),
+                    attribution,
+                },
             )
             .await;
             return Ok(AuthOutcome::Denied(response));
@@ -8529,13 +8557,15 @@ async fn authorize_access_session(
         };
         enqueue_denied_usage(
             env,
-            &auth,
-            provider_id,
-            "access.denied",
-            None,
-            &request_id(headers, "auth"),
-            response.status_code(),
-            Some(attribution),
+            DeniedUsageRecord {
+                auth: &auth,
+                provider: provider_id,
+                capability: "access.denied",
+                model: None,
+                request_id: &request_id(headers, "auth"),
+                status_code: response.status_code(),
+                attribution: Some(attribution),
+            },
         )
         .await;
         return Ok(AuthOutcome::Denied(response));
@@ -13962,30 +13992,31 @@ fn optional_sum<const N: usize>(values: [Option<u64>; N]) -> Option<u64> {
         })
 }
 
-async fn enqueue_denied_usage(
-    env: &Env,
-    auth: &AuthorizedKey,
-    provider: &str,
-    capability: &str,
-    model: Option<&str>,
-    request_id: &str,
+struct DeniedUsageRecord<'a> {
+    auth: &'a AuthorizedKey,
+    provider: &'a str,
+    capability: &'a str,
+    model: Option<&'a str>,
+    request_id: &'a str,
     status_code: u16,
-    attribution: Option<&AgentAttribution>,
-) {
+    attribution: Option<&'a AgentAttribution>,
+}
+
+async fn enqueue_denied_usage(env: &Env, record: DeniedUsageRecord<'_>) {
     enqueue_usage(
         env,
         UsageRecord {
-            auth,
-            attribution,
-            provider,
-            capability,
-            model,
-            request_id,
+            auth: record.auth,
+            attribution: record.attribution,
+            provider: record.provider,
+            capability: record.capability,
+            model: record.model,
+            request_id: record.request_id,
             budget: BudgetUsage::default(),
             request_cost: None,
             tokens: UsageTokens::default(),
             status: UsageStatus::Denied,
-            status_code,
+            status_code: record.status_code,
             duration_ms: 0,
         },
     )
