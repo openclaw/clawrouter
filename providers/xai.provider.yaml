@@ -38,10 +38,22 @@ endpoints:
 models:
   entries:
     - id: xai/default
-      upstream: grok
+      upstream: grok-4.3
       capabilities: [llm.chat]
-      pricingRef: xai-default
+      pricingRef: xai-grok-4-3-standard-2026-06-21
+      pricing:
+        effectiveAt: "2026-06-21"
+        source: https://api.x.ai/v1/models/grok-4.3
+        inputMicrosPerMillion: 1250000
+        cachedInputMicrosPerMillion: 200000
+        outputMicrosPerMillion: 2500000
+        maxInputTokens: 1000000
+        defaultMaxOutputTokens: 131072
+        longContext:
+          thresholdInputTokens: 200000
+          inputMicrosPerMillion: 2500000
+          cachedInputMicrosPerMillion: 400000
+          outputMicrosPerMillion: 5000000
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
-

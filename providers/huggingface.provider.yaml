@@ -2,7 +2,7 @@ schema: clawrouter.service-provider.v1
 id: huggingface
 displayName: Hugging Face
 status: stable
-class: rest_json
+class: openai_compatible
 service:
   platform: huggingface
   kind: model_provider
@@ -15,33 +15,32 @@ auth:
       format: "Bearer ${secret}"
       secretKind: api_token
 baseUrls:
-  default: https://api-inference.huggingface.co
+  default: https://router.huggingface.co
 routing:
   nativePrefixes: [clawrouter-huggingface, huggingface]
   modelPrefixes: [huggingface/]
 adapter:
-  request: huggingface
-  response: huggingface
-  stream: sse
-  error: huggingface_error
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
 capabilities:
-  - id: llm.invoke
-    endpoint: model
+  - id: llm.chat
+    endpoint: chat_completions
     methods: [POST]
 endpoints:
-  model:
-    path: /models/${model}
-    pathParams: [model]
-    requestFormat: huggingface.inference
-    responseFormat: huggingface.inference
+  chat_completions:
+    path: /v1/chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
     timeoutMs: 600000
 models:
   entries:
-    - id: huggingface/model
-      upstream: ${model}
-      capabilities: [llm.invoke]
-      pricingRef: huggingface-model
+    - id: huggingface/default
+      upstream: meta-llama/Llama-3.1-8B-Instruct
+      capabilities: [llm.chat]
+      pricingRef: huggingface-router-dynamic
 billing:
-  meter: clawrouter.requests
+  meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
-

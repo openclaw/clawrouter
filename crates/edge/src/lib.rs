@@ -696,7 +696,7 @@ async fn proxy_openai_compatible(
         Some(&env),
         &mut body,
     );
-    if let Err(message) = normalize_openai_list_pricing_request(
+    if let Err(message) = normalize_list_pricing_request(
         route.provider,
         path,
         route.pricing.is_some() && auth.policy.request_cost_micros.is_none(),
@@ -928,7 +928,7 @@ async fn proxy_manifest_endpoint(
             return audit.failure_response(response).await;
         }
     };
-    let proxy = match parse_proxy_request(&raw_body) {
+    let mut proxy = match parse_proxy_request(&raw_body) {
         Ok(proxy) => proxy,
         Err(message) => {
             let response = json_error("invalid_proxy_request", &message, 400)?;
@@ -960,6 +960,7 @@ async fn proxy_manifest_endpoint(
         )?;
         return audit.failure_response(response).await;
     }
+    let path_model_selection = normalize_manifest_path_model(provider, endpoint, &mut proxy);
     let upstream_worker_method = match method_from_str(&upstream_method) {
         Ok(method) => method,
         Err(error) => {
@@ -1049,16 +1050,18 @@ async fn proxy_manifest_endpoint(
     };
     let mut upstream_body_json = method_allows_body(&upstream_method)
         .then(|| proxy.body.unwrap_or(Value::Object(Map::new())));
-    let model_selection = upstream_body_json
-        .as_mut()
-        .and_then(|body| normalize_native_model(provider, body));
+    let model_selection = path_model_selection.or_else(|| {
+        upstream_body_json
+            .as_mut()
+            .and_then(|body| normalize_native_model(provider, body))
+    });
     if let Some(upstream_body_json) = upstream_body_json.as_mut() {
         let listed_pricing = model_selection
             .as_ref()
             .and_then(|selection| selection.pricing.as_ref())
             .is_some()
             && auth.policy.request_cost_micros.is_none();
-        if let Err(message) = normalize_openai_list_pricing_request(
+        if let Err(message) = normalize_list_pricing_request(
             provider,
             &endpoint.path,
             listed_pricing,
@@ -1441,14 +1444,9 @@ async fn proxy_native_provider(
             .is_some()
             && auth.policy.request_cost_micros.is_none();
         let pricing_mode_result = if compatibility_route {
-            normalize_openai_list_pricing_request(
-                provider,
-                &native_path,
-                listed_pricing,
-                request_json,
-            )
+            normalize_list_pricing_request(provider, &native_path, listed_pricing, request_json)
         } else {
-            validate_openai_native_list_pricing_request(
+            validate_native_list_pricing_request(
                 provider,
                 &native_path,
                 listed_pricing,
@@ -8687,7 +8685,11 @@ fn normalize_native_model(
 }
 
 fn select_native_model(provider: &CompiledProvider, body: &Value) -> Option<NativeModelSelection> {
-    let model = body.get("model")?.as_str()?.to_string();
+    select_model_value(provider, body.get("model")?.as_str()?)
+}
+
+fn select_model_value(provider: &CompiledProvider, model: &str) -> Option<NativeModelSelection> {
+    let model = model.to_string();
     if let Some(entry) = provider
         .models
         .iter()
@@ -8715,6 +8717,22 @@ fn select_native_model(provider: &CompiledProvider, body: &Value) -> Option<Nati
         pricing_ref: None,
         pricing: None,
     })
+}
+
+fn normalize_manifest_path_model(
+    provider: &CompiledProvider,
+    endpoint: &CompiledEndpoint,
+    proxy: &mut ManifestProxyRequest,
+) -> Option<NativeModelSelection> {
+    if !endpoint.path_params.iter().any(|param| param == "model") {
+        return None;
+    }
+    let selection = select_model_value(provider, proxy.path_params.get("model")?.as_str()?)?;
+    proxy.path_params.insert(
+        "model".to_string(),
+        Value::String(selection.upstream_model.clone()),
+    );
+    Some(selection)
 }
 
 fn supports_openai_compatible_proxy(provider: &CompiledProvider) -> bool {
@@ -8802,16 +8820,36 @@ fn normalize_openai_proxy_body(
     }
 }
 
-fn normalize_openai_list_pricing_request(
+fn normalize_list_pricing_request(
     provider: &CompiledProvider,
     path: &str,
     listed_pricing: bool,
     body: &mut Value,
 ) -> std::result::Result<(), &'static str> {
-    if provider.id != "openai"
-        || !listed_pricing
-        || !matches!(path, "/v1/responses" | "/v1/chat/completions")
-    {
+    if !listed_pricing {
+        return Ok(());
+    }
+    if provider.id == "google-gemini" {
+        return if request_contains_audio_input(body) {
+            Err(
+                "Gemini audio inputs require an explicit fixed policy request price until modality-specific pricing is supported",
+            )
+        } else {
+            Ok(())
+        };
+    }
+    if provider.id == "xai" && path == "/v1/chat/completions" {
+        let Some(object) = body.as_object() else {
+            return Err("xAI list-priced requests must use a JSON object body");
+        };
+        return match object.get("service_tier") {
+            None | Some(Value::Null) => Ok(()),
+            Some(_) => Err(
+                "xAI list-price enforcement supports only standard processing; use a fixed policy request price for priority processing",
+            ),
+        };
+    }
+    if provider.id != "openai" || !matches!(path, "/v1/responses" | "/v1/chat/completions") {
         return Ok(());
     }
     let Some(object) = body.as_object_mut() else {
@@ -8858,16 +8896,36 @@ fn normalize_openai_list_pricing_request(
     Ok(())
 }
 
-fn validate_openai_native_list_pricing_request(
+fn validate_native_list_pricing_request(
     provider: &CompiledProvider,
     path: &str,
     listed_pricing: bool,
     body: &Value,
 ) -> std::result::Result<(), &'static str> {
-    if provider.id != "openai"
-        || !listed_pricing
-        || !matches!(path, "/v1/responses" | "/v1/chat/completions")
-    {
+    if !listed_pricing {
+        return Ok(());
+    }
+    if provider.id == "google-gemini" {
+        return if request_contains_audio_input(body) {
+            Err(
+                "Gemini audio inputs require an explicit fixed policy request price until modality-specific pricing is supported",
+            )
+        } else {
+            Ok(())
+        };
+    }
+    if provider.id == "xai" && path == "/v1/chat/completions" {
+        let Some(object) = body.as_object() else {
+            return Err("xAI list-priced requests must use a JSON object body");
+        };
+        return match object.get("service_tier") {
+            None | Some(Value::Null) => Ok(()),
+            Some(_) => Err(
+                "xAI list-price enforcement supports only standard processing; use a fixed policy request price for priority processing",
+            ),
+        };
+    }
+    if provider.id != "openai" || !matches!(path, "/v1/responses" | "/v1/chat/completions") {
         return Ok(());
     }
     let Some(object) = body.as_object() else {
@@ -8896,6 +8954,26 @@ fn validate_openai_native_list_pricing_request(
         );
     }
     Ok(())
+}
+
+fn request_contains_audio_input(value: &Value) -> bool {
+    match value {
+        Value::Array(values) => values.iter().any(request_contains_audio_input),
+        Value::Object(object) => {
+            let audio_mime = ["mimeType", "mime_type"].iter().any(|key| {
+                object
+                    .get(*key)
+                    .and_then(Value::as_str)
+                    .is_some_and(|mime| mime.to_ascii_lowercase().starts_with("audio/"))
+            });
+            let audio_type = object
+                .get("type")
+                .and_then(Value::as_str)
+                .is_some_and(|kind| matches!(kind, "audio" | "input_audio"));
+            audio_mime || audio_type || object.values().any(request_contains_audio_input)
+        }
+        _ => false,
+    }
 }
 
 fn validate_request_tool_pricing(
@@ -14522,7 +14600,7 @@ mod tests {
             "max_output_tokens": 100
         });
         let selection = normalize_native_model(openai, &mut body).unwrap();
-        normalize_openai_list_pricing_request(openai, "/v1/responses", true, &mut body).unwrap();
+        normalize_list_pricing_request(openai, "/v1/responses", true, &mut body).unwrap();
         let serialized = serde_json::to_vec(&body).unwrap();
         let policy = AccessPolicy {
             enabled: true,
@@ -14837,35 +14915,24 @@ mod tests {
             .find(|provider| provider.id == "openai")
             .unwrap();
         let mut body = serde_json::json!({"model": "gpt-5.4", "input": "hello"});
-        normalize_openai_list_pricing_request(provider, "/v1/responses", true, &mut body).unwrap();
+        normalize_list_pricing_request(provider, "/v1/responses", true, &mut body).unwrap();
         assert_eq!(body["service_tier"], "default");
 
         let mut auto = serde_json::json!({"service_tier": "auto"});
-        normalize_openai_list_pricing_request(provider, "/v1/chat/completions", true, &mut auto)
-            .unwrap();
+        normalize_list_pricing_request(provider, "/v1/chat/completions", true, &mut auto).unwrap();
         assert_eq!(auto["service_tier"], "default");
 
         let mut nullable_tier = serde_json::json!({"service_tier": null});
-        normalize_openai_list_pricing_request(
-            provider,
-            "/v1/chat/completions",
-            true,
-            &mut nullable_tier,
-        )
-        .unwrap();
+        normalize_list_pricing_request(provider, "/v1/chat/completions", true, &mut nullable_tier)
+            .unwrap();
         assert_eq!(nullable_tier["service_tier"], "default");
 
         let mut streaming = serde_json::json!({
             "stream": true,
             "stream_options": {"include_usage": false, "include_obfuscation": false}
         });
-        normalize_openai_list_pricing_request(
-            provider,
-            "/v1/chat/completions",
-            true,
-            &mut streaming,
-        )
-        .unwrap();
+        normalize_list_pricing_request(provider, "/v1/chat/completions", true, &mut streaming)
+            .unwrap();
         assert_eq!(streaming["stream_options"]["include_usage"], true);
         assert_eq!(streaming["stream_options"]["include_obfuscation"], false);
 
@@ -14873,7 +14940,7 @@ mod tests {
             "stream": true,
             "stream_options": null
         });
-        normalize_openai_list_pricing_request(
+        normalize_list_pricing_request(
             provider,
             "/v1/chat/completions",
             true,
@@ -14887,31 +14954,23 @@ mod tests {
 
         for tier in ["priority", "flex", "scale"] {
             let mut premium = serde_json::json!({"service_tier": tier});
-            assert!(normalize_openai_list_pricing_request(
-                provider,
-                "/v1/responses",
-                true,
-                &mut premium
-            )
-            .is_err());
+            assert!(
+                normalize_list_pricing_request(provider, "/v1/responses", true, &mut premium)
+                    .is_err()
+            );
         }
 
         let mut fixed_price = serde_json::json!({"service_tier": "priority"});
-        normalize_openai_list_pricing_request(provider, "/v1/responses", false, &mut fixed_price)
-            .unwrap();
+        normalize_list_pricing_request(provider, "/v1/responses", false, &mut fixed_price).unwrap();
         assert_eq!(fixed_price["service_tier"], "priority");
 
         let mut background = serde_json::json!({"background": true});
-        assert!(normalize_openai_list_pricing_request(
-            provider,
-            "/v1/responses",
-            true,
-            &mut background
-        )
-        .unwrap_err()
-        .contains("background Responses"));
-        normalize_openai_list_pricing_request(provider, "/v1/responses", false, &mut background)
-            .unwrap();
+        assert!(
+            normalize_list_pricing_request(provider, "/v1/responses", true, &mut background)
+                .unwrap_err()
+                .contains("background Responses")
+        );
+        normalize_list_pricing_request(provider, "/v1/responses", false, &mut background).unwrap();
 
         let native = serde_json::json!({
             "model": "gpt-5.4",
@@ -14920,22 +14979,17 @@ mod tests {
             "stream_options": {"include_usage": true}
         });
         let original = native.clone();
-        validate_openai_native_list_pricing_request(
-            provider,
-            "/v1/chat/completions",
-            true,
-            &native,
-        )
-        .unwrap();
+        validate_native_list_pricing_request(provider, "/v1/chat/completions", true, &native)
+            .unwrap();
         assert_eq!(native, original);
-        assert!(validate_openai_native_list_pricing_request(
+        assert!(validate_native_list_pricing_request(
             provider,
             "/v1/responses",
             true,
             &serde_json::json!({"model": "gpt-5.4"}),
         )
         .is_err());
-        assert!(validate_openai_native_list_pricing_request(
+        assert!(validate_native_list_pricing_request(
             provider,
             "/v1/chat/completions",
             true,
@@ -14945,7 +14999,7 @@ mod tests {
             }),
         )
         .is_err());
-        assert!(validate_openai_native_list_pricing_request(
+        assert!(validate_native_list_pricing_request(
             provider,
             "/v1/responses",
             true,
@@ -14956,6 +15010,67 @@ mod tests {
         )
         .unwrap_err()
         .contains("background Responses"));
+    }
+
+    #[test]
+    fn provider_list_pricing_rejects_unpriced_tiers_and_modalities() {
+        let snapshot = provider_snapshot().unwrap();
+        let xai = snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.id == "xai")
+            .unwrap();
+        let google = snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.id == "google-gemini")
+            .unwrap();
+
+        let mut standard = serde_json::json!({"model": "xai/default"});
+        normalize_list_pricing_request(xai, "/v1/chat/completions", true, &mut standard).unwrap();
+        let mut priority = serde_json::json!({"service_tier": "priority"});
+        assert!(
+            normalize_list_pricing_request(xai, "/v1/chat/completions", true, &mut priority,)
+                .unwrap_err()
+                .contains("standard processing")
+        );
+        normalize_list_pricing_request(xai, "/v1/chat/completions", false, &mut priority).unwrap();
+        assert!(validate_native_list_pricing_request(
+            xai,
+            "/v1/chat/completions",
+            true,
+            &serde_json::json!({"service_tier": "priority"}),
+        )
+        .is_err());
+
+        let mut text = serde_json::json!({
+            "contents": [{"parts": [{"text": "hello"}]}]
+        });
+        normalize_list_pricing_request(
+            google,
+            "/v1beta/models/${model}:generateContent",
+            true,
+            &mut text,
+        )
+        .unwrap();
+        let mut audio = serde_json::json!({
+            "contents": [{"parts": [{"inlineData": {"mimeType": "audio/mpeg", "data": "AA=="}}]}]
+        });
+        assert!(normalize_list_pricing_request(
+            google,
+            "/v1beta/models/${model}:generateContent",
+            true,
+            &mut audio,
+        )
+        .unwrap_err()
+        .contains("audio inputs"));
+        normalize_list_pricing_request(
+            google,
+            "/v1beta/models/${model}:generateContent",
+            false,
+            &mut audio,
+        )
+        .unwrap();
     }
 
     #[test]
@@ -17194,6 +17309,48 @@ mod tests {
         let url =
             manifest_upstream_url(provider, endpoint, &proxy, None, None, None, None).unwrap();
         assert_eq!(url, "https://api.tavily.com/search?topic=news");
+    }
+
+    #[test]
+    fn manifest_path_models_map_to_upstream_and_select_pricing() {
+        let snapshot = provider_snapshot().unwrap();
+        let provider = snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.id == "google-gemini")
+            .unwrap();
+        let endpoint = provider
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.id == "generate_content")
+            .unwrap();
+        let mut proxy = ManifestProxyRequest {
+            method: Some("POST".to_string()),
+            path_params: Map::from_iter([(
+                "model".to_string(),
+                Value::String("google/gemini-default".to_string()),
+            )]),
+            body: Some(serde_json::json!({
+                "contents": [{"parts": [{"text": "hello"}]}]
+            })),
+            ..ManifestProxyRequest::default()
+        };
+
+        let selection = normalize_manifest_path_model(provider, endpoint, &mut proxy).unwrap();
+        assert_eq!(selection.model, "google/gemini-default");
+        assert_eq!(selection.upstream_model, "gemini-2.5-flash");
+        assert_eq!(
+            selection.pricing_ref.as_deref(),
+            Some("google-gemini-2-5-flash-standard-2026-06-21")
+        );
+        assert_eq!(
+            proxy.path_params.get("model").and_then(Value::as_str),
+            Some("gemini-2.5-flash")
+        );
+        assert_eq!(
+            manifest_upstream_url(provider, endpoint, &proxy, None, None, None, None).unwrap(),
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+        );
     }
 
     #[test]

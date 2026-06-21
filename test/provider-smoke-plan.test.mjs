@@ -57,8 +57,11 @@ test("newly budgeted provider defaults compile with dated pricing", () => {
   const snapshot = compileProviderSnapshot();
   const expectations = {
     deepseek: [140000, 280000],
+    "google-gemini": [300000, 2500000],
+    groq: [50000, 80000],
     minimax: [300000, 1200000],
     together: [300000, 300000],
+    xai: [1250000, 2500000],
   };
   for (const [providerId, [input, output]] of Object.entries(expectations)) {
     const model = snapshot.providers.find((provider) => provider.id === providerId).models[0];
@@ -66,6 +69,30 @@ test("newly budgeted provider defaults compile with dated pricing", () => {
     assert.equal(model.pricing.inputMicrosPerMillion, input);
     assert.equal(model.pricing.outputMicrosPerMillion, output);
   }
+  const xai = snapshot.providers.find((provider) => provider.id === "xai").models[0];
+  assert.equal(xai.pricing.source, "https://api.x.ai/v1/models/grok-4.3");
+  assert.equal(xai.pricing.longContext.thresholdInputTokens, 200000);
+  assert.equal(xai.pricing.longContext.inputMicrosPerMillion, 2500000);
+  assert.equal(xai.pricing.longContext.outputMicrosPerMillion, 5000000);
+});
+
+test("live provider defaults compile to current upstream models and transports", () => {
+  const snapshot = compileProviderSnapshot();
+  const upstreams = {
+    "google-gemini": "gemini-2.5-flash",
+    groq: "llama-3.1-8b-instant",
+    huggingface: "meta-llama/Llama-3.1-8B-Instruct",
+    xai: "grok-4.3",
+  };
+  for (const [providerId, upstream] of Object.entries(upstreams)) {
+    const provider = snapshot.providers.find((entry) => entry.id === providerId);
+    assert.equal(provider.models[0].upstream, upstream);
+  }
+  const huggingface = buildProviderSmokePlan(snapshot, {}).providers.find(
+    (provider) => provider.id === "huggingface",
+  );
+  assert.equal(huggingface.target.kind, "openai_chat");
+  assert.equal(huggingface.target.body.model, "huggingface/default");
 });
 
 test("gateway failures do not overwrite provider health", async () => {

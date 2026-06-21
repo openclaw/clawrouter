@@ -47,10 +47,17 @@ endpoints:
 models:
   entries:
     - id: google/gemini-default
-      upstream: gemini
+      upstream: gemini-2.5-flash
       capabilities: [llm.generate, llm.stream]
-      pricingRef: google-gemini-default
+      pricingRef: google-gemini-2-5-flash-standard-2026-06-21
+      pricing:
+        effectiveAt: "2026-06-21"
+        source: https://ai.google.dev/gemini-api/docs/pricing#gemini-2.5-flash
+        inputMicrosPerMillion: 300000
+        cachedInputMicrosPerMillion: 30000
+        outputMicrosPerMillion: 2500000
+        maxInputTokens: 1048576
+        defaultMaxOutputTokens: 65536
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
-

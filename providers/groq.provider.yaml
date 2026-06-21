@@ -38,10 +38,16 @@ endpoints:
 models:
   entries:
     - id: groq/default
-      upstream: groq
+      upstream: llama-3.1-8b-instant
       capabilities: [llm.chat]
-      pricingRef: groq-default
+      pricingRef: groq-llama-3-1-8b-instant-standard-2026-06-21
+      pricing:
+        effectiveAt: "2026-06-21"
+        source: https://groq.com/pricing
+        inputMicrosPerMillion: 50000
+        outputMicrosPerMillion: 80000
+        maxInputTokens: 131072
+        defaultMaxOutputTokens: 131072
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
-
