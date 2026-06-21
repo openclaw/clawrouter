@@ -35,6 +35,7 @@ import {
   playgroundBlockedForService,
   playgroundBlocker,
   playgroundPayload,
+  playgroundServicePreset,
   policyCoversProvider,
   policyUsageFallback,
   readinessLabel,
@@ -121,6 +122,8 @@ interface RouteCatalog {
     route: string;
     methods: string[];
     pathParams?: string[];
+    requestFormat?: string;
+    sampleModel?: string | null;
     streaming?: boolean | null;
   }>;
 }
@@ -473,6 +476,7 @@ const demoDisabledProviderIds = new Set(["aws-bedrock", "cloudflare-ai-gateway"]
 const demoMissingConfigProviderIds = new Set(["azure-openai"]);
 const demo = demoData();
 const demoServiceRoute = demo.routes.manifestProxy.find((route) => route.provider === "tavily") ?? demo.routes.manifestProxy[0];
+const demoServicePreset = playgroundServicePreset(demoServiceRoute);
 const emptyRoutes: RouteCatalog = { openaiCompatible: [], manifestProxy: [] };
 const emptySession: SessionResponse = { authenticated: false, auth: "access", role: "user", email: null, tenantId: "default" };
 const emptyUsageSnapshot: UsageSnapshot = {
@@ -570,10 +574,7 @@ function App() {
     mode: "model",
     model: catalogModels(demo.routes)[0]?.id ?? "",
     endpoint: "/v1/chat/completions",
-    serviceRoute: routeKey(demoServiceRoute),
-    serviceMethod: demoServiceRoute?.methods[0] ?? "POST",
-    servicePath: "search",
-    servicePayload: '{\n  "query": "test"\n}',
+    ...demoServicePreset,
     system: "You are concise and useful.",
     prompt: "Say hello from ClawRouter in one short sentence.",
     maxTokens: "128",
@@ -631,7 +632,7 @@ function App() {
   useEffect(() => {
     if (serviceRoutes.length && !serviceRoutes.some((route) => routeKey(route) === playground.serviceRoute)) {
       const route = serviceRoutes[0];
-      setPlayground((current) => ({ ...current, serviceRoute: routeKey(route), serviceMethod: route.methods[0] ?? "POST" }));
+      setPlayground((current) => ({ ...current, ...playgroundServicePreset(route) }));
     }
   }, [playground.serviceRoute, serviceRoutes]);
 
@@ -1449,7 +1450,7 @@ function App() {
               const proxyRoute = serviceRoutes.find((route) => route.provider === service.provider);
               setPlayground((current) => model
                 ? { ...current, mode: "model", model: model.id }
-                : proxyRoute ? { ...current, mode: "service", serviceRoute: routeKey(proxyRoute), serviceMethod: proxyRoute.methods[0] ?? "POST" } : current);
+                : proxyRoute ? { ...current, mode: "service", ...playgroundServicePreset(proxyRoute) } : current);
               navigateTo("playground");
             }}
             onAdd={(service) => {
@@ -1730,10 +1731,10 @@ function PlaygroundScreen({ form, setForm, models, selected, serviceRoutes, sele
             <>
               <label><span>Service route</span><select value={form.serviceRoute} onChange={(event) => {
                 const route = serviceRoutes.find((item) => routeKey(item) === event.target.value);
-                setForm({ ...form, serviceRoute: event.target.value, serviceMethod: route?.methods[0] ?? "POST" });
+                setForm({ ...form, ...playgroundServicePreset(route) });
               }}>{serviceRoutes.map((route) => <option key={routeKey(route)} value={routeKey(route)}>{route.provider} / {route.endpoint}</option>)}</select></label>
               <label><span>Method</span><select value={form.serviceMethod} onChange={(event) => setForm({ ...form, serviceMethod: event.target.value })}>{methods.map((method) => <option key={method} value={method}>{method}</option>)}</select></label>
-              <label><span>Path / id</span><input value={form.servicePath} onChange={(event) => setForm({ ...form, servicePath: event.target.value })} placeholder="replacement for route variables" /></label>
+              {selectedServiceRoute?.pathParams?.length ? <label><span>{selectedServiceRoute.pathParams.join(" / ")}</span><input value={form.servicePath} onChange={(event) => setForm({ ...form, servicePath: event.target.value })} placeholder="route path value" /></label> : null}
             </>
           )}
         </div>
@@ -1749,7 +1750,7 @@ function PlaygroundScreen({ form, setForm, models, selected, serviceRoutes, sele
         <div className="playgroundHeader">
           <div className="modeTabs" role="tablist" aria-label="playground mode">
             <button type="button" className={form.mode === "model" ? "active" : ""} onClick={() => setForm({ ...form, mode: "model" })}>Model</button>
-            <button type="button" className={form.mode === "service" ? "active" : ""} onClick={() => setForm({ ...form, mode: "service" })}>Service</button>
+            <button type="button" className={form.mode === "service" ? "active" : ""} onClick={() => setForm({ ...form, mode: "service", ...playgroundServicePreset(selectedServiceRoute) })}>Service</button>
           </div>
           <button type="submit" disabled={busy || Boolean(blocker)} title={blocker ?? undefined}><Play className="buttonIcon" aria-hidden="true" /><span>Run request</span></button>
         </div>
@@ -2923,11 +2924,11 @@ function demoData() {
       modelRoute("xai", ["/v1/chat/completions"], [modelEntry("xai/default", ["llm.chat"], ["/v1/chat/completions"])]),
     ],
     manifestProxy: [
-      manifestRoute("replicate", "predictions", "/v1/proxy/replicate/predictions", ["POST"]),
-      manifestRoute("replicate", "prediction", "/v1/proxy/replicate/prediction", ["GET"], ["prediction_id"]),
-      manifestRoute("tavily", "search", "/v1/proxy/tavily/search", ["POST"]),
-      manifestRoute("tavily", "extract", "/v1/proxy/tavily/extract", ["POST"]),
-      manifestRoute("tavily", "crawl", "/v1/proxy/tavily/crawl", ["POST"]),
+      manifestRoute("replicate", "predictions", "/v1/proxy/replicate/predictions", ["POST"], [], "replicate.prediction_create", "replicate/predictions"),
+      manifestRoute("replicate", "prediction", "/v1/proxy/replicate/prediction", ["GET"], ["prediction_id"], "replicate.prediction_get", "replicate/predictions"),
+      manifestRoute("tavily", "search", "/v1/proxy/tavily/search", ["POST"], [], "tavily.search", "tavily/search"),
+      manifestRoute("tavily", "extract", "/v1/proxy/tavily/extract", ["POST"], [], "tavily.extract", "tavily/extract"),
+      manifestRoute("tavily", "crawl", "/v1/proxy/tavily/crawl", ["POST"], [], "tavily.crawl", "tavily/search"),
     ],
   };
   const keys: AccessPolicy[] = [
@@ -3026,8 +3027,8 @@ function modelEntry(id: string, capabilities: string[], endpoints: string[]) {
   return { id, capabilities, endpoints };
 }
 
-function manifestRoute(provider: string, endpoint: string, route: string, methods: string[], pathParams: string[] = []): RouteCatalog["manifestProxy"][number] {
-  return { provider, endpoint, route, methods, pathParams };
+function manifestRoute(provider: string, endpoint: string, route: string, methods: string[], pathParams: string[] = [], requestFormat?: string, sampleModel?: string): RouteCatalog["manifestProxy"][number] {
+  return { provider, endpoint, route, methods, pathParams, requestFormat, sampleModel };
 }
 
 function provider(id: string, display_name: string, providerClass: string, service_kind: string, capabilities: string[], authorizationKind?: "oauth" | "subscription"): ProviderRow {

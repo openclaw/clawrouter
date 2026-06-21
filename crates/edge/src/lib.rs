@@ -468,12 +468,26 @@ fn route_catalog(snapshot: &ProviderSnapshot) -> Value {
         .iter()
         .flat_map(|provider| {
             provider.endpoints.iter().map(move |endpoint| {
+                let endpoint_capabilities = provider
+                    .capabilities
+                    .iter()
+                    .filter(|capability| capability.endpoint == endpoint.id)
+                    .map(|capability| capability.id.as_str())
+                    .collect::<Vec<_>>();
+                let sample_model = provider.models.iter().find(|model| {
+                    model
+                        .capabilities
+                        .iter()
+                        .any(|capability| endpoint_capabilities.contains(&capability.as_str()))
+                });
                 serde_json::json!({
                     "provider": provider.id,
                     "endpoint": endpoint.id,
                     "route": format!("/v1/proxy/{}/{}", provider.id, endpoint.id),
                     "methods": &endpoint.methods,
                     "pathParams": &endpoint.path_params,
+                    "requestFormat": &endpoint.request_format,
+                    "sampleModel": sample_model.map(|model| model.id.as_str()),
                     "streaming": &endpoint.streaming
                 })
             })
@@ -1050,11 +1064,10 @@ async fn proxy_manifest_endpoint(
     };
     let mut upstream_body_json = method_allows_body(&upstream_method)
         .then(|| proxy.body.unwrap_or(Value::Object(Map::new())));
-    let model_selection = path_model_selection.or_else(|| {
-        upstream_body_json
-            .as_mut()
-            .and_then(|body| normalize_native_model(provider, body))
-    });
+    let body_model_selection = upstream_body_json
+        .as_mut()
+        .and_then(|body| normalize_native_model(provider, body));
+    let model_selection = path_model_selection.or(body_model_selection);
     if let Some(upstream_body_json) = upstream_body_json.as_mut() {
         let listed_pricing = model_selection
             .as_ref()
@@ -8690,11 +8703,9 @@ fn select_native_model(provider: &CompiledProvider, body: &Value) -> Option<Nati
 
 fn select_model_value(provider: &CompiledProvider, model: &str) -> Option<NativeModelSelection> {
     let model = model.to_string();
-    if let Some(entry) = provider
-        .models
-        .iter()
-        .find(|entry| entry.id == model || entry.upstream == model)
-    {
+    if let Some(entry) = provider.models.iter().find(|entry| {
+        (entry.id == model && !contains_template(&entry.upstream)) || entry.upstream == model
+    }) {
         return Some(NativeModelSelection {
             model,
             upstream_model: entry.upstream.clone(),
@@ -8724,12 +8735,13 @@ fn normalize_manifest_path_model(
     endpoint: &CompiledEndpoint,
     proxy: &mut ManifestProxyRequest,
 ) -> Option<NativeModelSelection> {
-    if !endpoint.path_params.iter().any(|param| param == "model") {
-        return None;
-    }
-    let selection = select_model_value(provider, proxy.path_params.get("model")?.as_str()?)?;
+    let param = endpoint
+        .path_params
+        .iter()
+        .find(|param| matches!(param.as_str(), "model" | "deployment"))?;
+    let selection = select_model_value(provider, proxy.path_params.get(param)?.as_str()?)?;
     proxy.path_params.insert(
-        "model".to_string(),
+        param.to_string(),
         Value::String(selection.upstream_model.clone()),
     );
     Some(selection)
@@ -15408,6 +15420,8 @@ mod tests {
             route.get("provider").and_then(Value::as_str) == Some("tavily")
                 && route.get("endpoint").and_then(Value::as_str) == Some("search")
                 && route.get("route").and_then(Value::as_str) == Some("/v1/proxy/tavily/search")
+                && route.get("requestFormat").and_then(Value::as_str) == Some("tavily.search")
+                && route.get("sampleModel").and_then(Value::as_str) == Some("tavily/search")
         }));
         assert!(manifest_routes.iter().any(|route| {
             route.get("provider").and_then(Value::as_str) == Some("firecrawl")
@@ -15432,6 +15446,33 @@ mod tests {
                             .any(|param| param.as_str() == Some("prediction_id"))
                     })
         }));
+
+        for route in manifest_routes {
+            assert!(route.get("requestFormat").is_some_and(Value::is_string));
+            let provider_id = route.get("provider").and_then(Value::as_str).unwrap();
+            let endpoint_id = route.get("endpoint").and_then(Value::as_str).unwrap();
+            let provider = snapshot
+                .providers
+                .iter()
+                .find(|provider| provider.id == provider_id)
+                .unwrap();
+            let endpoint_capabilities = provider
+                .capabilities
+                .iter()
+                .filter(|capability| capability.endpoint == endpoint_id)
+                .map(|capability| capability.id.as_str())
+                .collect::<Vec<_>>();
+            let expected_model = provider.models.iter().find(|model| {
+                model
+                    .capabilities
+                    .iter()
+                    .any(|capability| endpoint_capabilities.contains(&capability.as_str()))
+            });
+            assert_eq!(
+                route.get("sampleModel").and_then(Value::as_str),
+                expected_model.map(|model| model.id.as_str())
+            );
+        }
 
         for route in openai_routes {
             let provider_id = route.get("provider").and_then(Value::as_str).unwrap();
@@ -17351,6 +17392,40 @@ mod tests {
             manifest_upstream_url(provider, endpoint, &proxy, None, None, None, None).unwrap(),
             "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
         );
+    }
+
+    #[test]
+    fn manifest_path_models_strip_public_prefixes_for_template_catalog_entries() {
+        let snapshot = provider_snapshot().unwrap();
+        let provider = snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.id == "azure-openai")
+            .unwrap();
+        let endpoint = provider
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.id == "chat_completions")
+            .unwrap();
+        let mut proxy = ManifestProxyRequest {
+            path_params: Map::from_iter([(
+                "deployment".to_string(),
+                Value::String("azure-openai/deployment".to_string()),
+            )]),
+            body: Some(serde_json::json!({
+                "model": "azure-openai/deployment",
+                "messages": [{"role": "user", "content": "hello"}]
+            })),
+            ..ManifestProxyRequest::default()
+        };
+
+        let path_selection = normalize_manifest_path_model(provider, endpoint, &mut proxy).unwrap();
+        assert_eq!(path_selection.upstream_model, "deployment");
+        assert_eq!(proxy.path_params["deployment"], "deployment");
+        let body = proxy.body.as_mut().unwrap();
+        let selection = normalize_native_model(provider, body).unwrap();
+        assert_eq!(selection.upstream_model, "deployment");
+        assert_eq!(body["model"], "deployment");
     }
 
     #[test]
