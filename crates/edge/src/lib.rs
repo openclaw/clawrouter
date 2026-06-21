@@ -1074,6 +1074,15 @@ async fn proxy_manifest_endpoint(
     });
     let model_selection = path_model_selection.or(body_model_selection);
     if let Some(upstream_body_json) = upstream_body_json.as_mut() {
+        if let Some(selection) = model_selection.as_ref() {
+            normalize_openai_proxy_body(
+                provider,
+                manifest_transform_path(endpoint),
+                &selection.upstream_model,
+                Some(&env),
+                upstream_body_json,
+            );
+        }
         let listed_pricing = model_selection
             .as_ref()
             .and_then(|selection| selection.pricing.as_ref())
@@ -8886,6 +8895,15 @@ fn normalize_openai_proxy_body(
     }
 }
 
+fn manifest_transform_path(endpoint: &CompiledEndpoint) -> &str {
+    match endpoint.request_format.as_str() {
+        "openai.chat_completions" => "/v1/chat/completions",
+        "openai.embeddings" => "/v1/embeddings",
+        "openai.responses" => "/v1/responses",
+        _ => &endpoint.path,
+    }
+}
+
 fn normalize_list_pricing_request(
     provider: &CompiledProvider,
     path: &str,
@@ -14970,6 +14988,41 @@ mod tests {
         );
         assert_eq!(generic_body["max_tokens"], 16);
         assert!(generic_body.get("max_completion_tokens").is_none());
+    }
+
+    #[test]
+    fn azure_manifest_chat_requests_use_completion_token_limit() {
+        let snapshot = provider_snapshot().unwrap();
+        let provider = snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.id == "azure-openai")
+            .unwrap();
+        let endpoint = provider
+            .endpoints
+            .iter()
+            .find(|endpoint| endpoint.id == "chat_completions")
+            .unwrap();
+        let mut provider = provider.clone();
+        provider.adapter.request_transforms.rename_fields[0].upstreams =
+            vec!["configured-deployment".to_string()];
+        provider.adapter.request_transforms.rename_fields[0].upstream_config = None;
+        let mut body = serde_json::json!({
+            "model": "configured-deployment",
+            "messages": [{"role": "user", "content": "reply with ok"}],
+            "max_tokens": 16
+        });
+
+        normalize_openai_proxy_body(
+            &provider,
+            manifest_transform_path(endpoint),
+            "configured-deployment",
+            None,
+            &mut body,
+        );
+
+        assert!(body.get("max_tokens").is_none());
+        assert_eq!(body["max_completion_tokens"], 16);
     }
 
     #[test]
