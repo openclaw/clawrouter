@@ -8,6 +8,7 @@ import {
   playgroundAccessEndpoint,
   playgroundBlocker,
   playgroundPayload,
+  playgroundServicePreset,
   policyUsageFallback,
   reconcileDirectUserBindings,
   readinessTone,
@@ -121,6 +122,64 @@ test("playground payloads preserve model and service semantics", () => {
     body: { detail: true },
   });
   assert.equal(playgroundAccessEndpoint(form, route), "/v1/playground/proxy/replicate/prediction");
+});
+
+test("service route presets replace stale body, method, and path values", () => {
+  const countTokens = {
+    provider: "anthropic",
+    endpoint: "count_tokens",
+    route: "/v1/proxy/anthropic/count_tokens",
+    methods: ["POST"],
+    pathParams: [],
+    requestFormat: "anthropic.messages",
+    sampleModel: "anthropic/default",
+  };
+  assert.deepEqual(playgroundServicePreset(countTokens), {
+    serviceRoute: "anthropic:count_tokens:/v1/proxy/anthropic/count_tokens",
+    serviceMethod: "POST",
+    servicePath: "",
+    servicePayload: JSON.stringify({
+      model: "anthropic/default",
+      messages: [{ role: "user", content: "Reply with ok." }],
+    }, null, 2),
+  });
+
+  const google = {
+    provider: "google-gemini",
+    endpoint: "generate_content",
+    route: "/v1/proxy/google-gemini/generate_content",
+    methods: ["POST"],
+    pathParams: ["model"],
+    requestFormat: "google.generate_content",
+    sampleModel: "google/gemini-default",
+  };
+  const preset = playgroundServicePreset(google);
+  assert.equal(preset.servicePath, "google/gemini-default");
+  assert.deepEqual(JSON.parse(preset.servicePayload), {
+    contents: [{ parts: [{ text: "Reply with ok." }] }],
+  });
+});
+
+test("service route presets cover every bundled request format family", () => {
+  const cases = [
+    ["aws_bedrock.invoke", "invoke_model"],
+    ["cloudflare_ai_gateway.universal", "universal"],
+    ["cohere.chat", "chat"],
+    ["cohere.embed", "embed"],
+    ["firecrawl.scrape", "scrape"],
+    ["openai.chat_completions", "chat_completions"],
+    ["openai.embeddings", "embeddings"],
+    ["openai.responses", "responses"],
+    ["replicate.prediction_create", "predictions"],
+    ["tavily.search", "search"],
+    ["tavily.extract", "extract"],
+    ["tavily.crawl", "crawl"],
+  ];
+  for (const [requestFormat, endpoint] of cases) {
+    const preset = playgroundServicePreset({ provider: "test", endpoint, route: `/v1/proxy/test/${endpoint}`, methods: ["POST"], requestFormat, sampleModel: "test/default" });
+    assert.doesNotThrow(() => JSON.parse(preset.servicePayload), requestFormat);
+    assert.notEqual(preset.servicePayload, "{}", requestFormat);
+  }
 });
 
 test("budget parsing and fallback summaries keep blocked and wildcard states explicit", () => {

@@ -11,6 +11,8 @@ export interface RouteCatalog {
     route: string;
     methods: string[];
     pathParams?: string[];
+    requestFormat?: string;
+    sampleModel?: string | null;
     streaming?: boolean | null;
   }>;
 }
@@ -433,6 +435,58 @@ export function playgroundPayload(form: PlaygroundForm, route?: RouteCatalog["ma
     return { model: form.model, input: form.prompt, instructions: form.system || undefined, max_output_tokens: maxTokens, temperature };
   }
   return { model: form.model, messages: [...(form.system ? [{ role: "system", content: form.system }] : []), { role: "user", content: form.prompt }], max_tokens: maxTokens, temperature };
+}
+
+export function playgroundServicePreset(route?: RouteCatalog["manifestProxy"][number]) {
+  const model = route?.sampleModel ?? `${route?.provider ?? "provider"}/default`;
+  const format = route?.requestFormat ?? `${route?.provider ?? ""}.${route?.endpoint ?? ""}`;
+  let body: unknown = {};
+
+  if (format === "anthropic.messages") {
+    body = {
+      model,
+      messages: [{ role: "user", content: "Reply with ok." }],
+      ...(route?.endpoint === "messages" ? { max_tokens: 16 } : {}),
+    };
+  } else if (format === "aws_bedrock.invoke") {
+    body = {
+      anthropic_version: "bedrock-2023-05-31",
+      max_tokens: 16,
+      messages: [{ role: "user", content: "Reply with ok." }],
+    };
+  } else if (format === "cloudflare_ai_gateway.universal") {
+    body = [{ provider: "workers-ai", endpoint: "@cf/meta/llama-3.1-8b-instruct", query: { prompt: "Reply with ok." } }];
+  } else if (format === "cohere.chat") {
+    body = { model, messages: [{ role: "user", content: "Reply with ok." }] };
+  } else if (format === "cohere.embed") {
+    body = { model, texts: ["OpenClaw"], input_type: "search_document", embedding_types: ["float"] };
+  } else if (format === "firecrawl.scrape") {
+    body = { url: "https://example.com", formats: ["markdown"] };
+  } else if (format === "google.generate_content") {
+    body = { contents: [{ parts: [{ text: "Reply with ok." }] }] };
+  } else if (format === "openai.chat_completions") {
+    body = { model, messages: [{ role: "user", content: "Reply with ok." }], max_tokens: 16 };
+  } else if (format === "openai.embeddings") {
+    body = { model, input: "OpenClaw" };
+  } else if (format === "openai.responses") {
+    body = { model, input: "Reply with ok.", max_output_tokens: 16 };
+  } else if (format === "replicate.prediction_create") {
+    body = { version: "MODEL_VERSION", input: { prompt: "A small red crab." } };
+  } else if (format === "tavily.search") {
+    body = { query: "OpenClaw", max_results: 1 };
+  } else if (format === "tavily.extract") {
+    body = { urls: ["https://example.com"] };
+  } else if (format === "tavily.crawl") {
+    body = { url: "https://example.com", max_depth: 1, limit: 1 };
+  }
+
+  const pathParam = route?.pathParams?.[0];
+  return {
+    serviceRoute: routeKey(route),
+    serviceMethod: route?.methods[0] ?? "POST",
+    servicePath: pathParam === "model" || pathParam === "deployment" ? model : pathParam ? pathParam.replaceAll("_", "-") : "",
+    servicePayload: JSON.stringify(body, null, 2),
+  };
 }
 
 export function playgroundAccessEndpoint(form: PlaygroundForm, route?: RouteCatalog["manifestProxy"][number]) {
