@@ -38,10 +38,17 @@ endpoints:
 models:
   entries:
     - id: deepseek/default
-      upstream: deepseek-chat
+      upstream: deepseek-v4-flash
       capabilities: [llm.chat]
-      pricingRef: deepseek-default
+      pricingRef: deepseek-v4-flash-standard-2026-06-21
+      pricing:
+        effectiveAt: "2026-06-21"
+        source: https://api-docs.deepseek.com/quick_start/pricing
+        inputMicrosPerMillion: 140000
+        cachedInputMicrosPerMillion: 2800
+        outputMicrosPerMillion: 280000
+        maxInputTokens: 1000000
+        defaultMaxOutputTokens: 384000
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
-
