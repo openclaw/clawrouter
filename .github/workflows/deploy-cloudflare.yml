@@ -31,7 +31,12 @@ on:
       access_allowed_domains:
         description: "Comma-separated email domains allowed through Cloudflare Access"
         required: false
-        default: "openclaw.ai"
+        default: ""
+        type: string
+      access_github_orgs:
+        description: "Comma-separated GitHub organizations or org/team selectors allowed through Access"
+        required: false
+        default: "openclaw"
         type: string
       access_admin_emails:
         description: "Comma-separated emails treated as ClawRouter admins"
@@ -48,6 +53,11 @@ on:
         required: false
         default: ""
         type: string
+      configure_provider_secrets:
+        description: "Upload configured provider transport secrets before deployment"
+        required: false
+        default: false
+        type: boolean
       skip_kv_write_preflight:
         description: "Deprecated: ignored for real deploys because Wrangler requires KV write permission for KV bindings"
         required: false
@@ -76,6 +86,7 @@ jobs:
       CLAWROUTER_ACCESS_DEFAULT_TENANT: ${{ vars.CLAWROUTER_ACCESS_DEFAULT_TENANT }}
       CLAWROUTER_ACCESS_ALLOWED_EMAILS: ${{ inputs.access_allowed_emails }}
       CLAWROUTER_ACCESS_ALLOWED_DOMAINS: ${{ inputs.access_allowed_domains }}
+      CLAWROUTER_ACCESS_GITHUB_ORGS: ${{ inputs.access_github_orgs }}
       CLAWROUTER_ACCESS_IDP_IDS: ${{ inputs.access_idp_ids }}
       CLAWROUTER_BASE_URL: ${{ inputs.worker_url }}
       CLAWROUTER_SMOKE_KEY: ${{ secrets.CLAWROUTER_SMOKE_KEY }}
@@ -109,6 +120,38 @@ jobs:
           CLAWROUTER_ACCESS_ADMIN_DOMAINS: ${{ inputs.access_admin_domains || vars.CLAWROUTER_ACCESS_ADMIN_DOMAINS }}
         run: pnpm cf:access -- --write-github-env
       - run: pnpm cf:config
+      - if: ${{ inputs.configure_provider_secrets }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.CLAWROUTER_PROVIDER_ANTHROPIC_API_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.CLAWROUTER_PROVIDER_AWS_ACCESS_KEY_ID }}
+          AWS_REGION: ${{ secrets.CLAWROUTER_PROVIDER_AWS_REGION }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.CLAWROUTER_PROVIDER_AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.CLAWROUTER_PROVIDER_AWS_SESSION_TOKEN }}
+          AZURE_OPENAI_API_KEY: ${{ secrets.CLAWROUTER_PROVIDER_AZURE_OPENAI_API_KEY }}
+          AZURE_OPENAI_API_VERSION: ${{ secrets.CLAWROUTER_PROVIDER_AZURE_OPENAI_API_VERSION }}
+          AZURE_OPENAI_COMPLETION_TOKEN_DEPLOYMENTS: ${{ secrets.CLAWROUTER_PROVIDER_AZURE_OPENAI_COMPLETION_TOKEN_DEPLOYMENTS }}
+          AZURE_OPENAI_ENDPOINT: ${{ secrets.CLAWROUTER_PROVIDER_AZURE_OPENAI_ENDPOINT }}
+          CLAWROUTER_PROVIDER_CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLAWROUTER_PROVIDER_CLOUDFLARE_ACCOUNT_ID }}
+          CLAWROUTER_PROVIDER_CLOUDFLARE_AI_GATEWAY_ID: ${{ secrets.CLAWROUTER_PROVIDER_CLOUDFLARE_AI_GATEWAY_ID }}
+          CLAWROUTER_PROVIDER_CLOUDFLARE_API_TOKEN: ${{ secrets.CLAWROUTER_PROVIDER_CLOUDFLARE_API_TOKEN }}
+          COHERE_API_KEY: ${{ secrets.CLAWROUTER_PROVIDER_COHERE_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.CLAWROUTER_PROVIDER_DEEPSEEK_API_KEY }}
+          FIRECRAWL_API_KEY: ${{ secrets.CLAWROUTER_PROVIDER_FIRECRAWL_API_KEY }}
+          FIREWORKS_API_KEY: ${{ secrets.CLAWROUTER_PROVIDER_FIREWORKS_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.CLAWROUTER_PROVIDER_GOOGLE_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.CLAWROUTER_PROVIDER_GROQ_API_KEY }}
+          HUGGINGFACE_API_TOKEN: ${{ secrets.CLAWROUTER_PROVIDER_HUGGINGFACE_API_TOKEN }}
+          MINIMAX_API_KEY: ${{ secrets.CLAWROUTER_PROVIDER_MINIMAX_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.CLAWROUTER_PROVIDER_MISTRAL_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.CLAWROUTER_PROVIDER_OPENAI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.CLAWROUTER_PROVIDER_OPENROUTER_API_KEY }}
+          OPENROUTER_SITE_URL: https://openclaw.ai
+          PERPLEXITY_API_KEY: ${{ secrets.CLAWROUTER_PROVIDER_PERPLEXITY_API_KEY }}
+          REPLICATE_API_TOKEN: ${{ secrets.CLAWROUTER_PROVIDER_REPLICATE_API_TOKEN }}
+          TAVILY_API_KEY: ${{ secrets.CLAWROUTER_PROVIDER_TAVILY_API_KEY }}
+          TOGETHER_API_KEY: ${{ secrets.CLAWROUTER_PROVIDER_TOGETHER_API_KEY }}
+          XAI_API_KEY: ${{ secrets.CLAWROUTER_PROVIDER_XAI_API_KEY }}
+        run: pnpm cf:secrets
       - run: pnpm exec wrangler deploy --config .wrangler.generated.toml
       - env:
           CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY: ${{ secrets.CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY }}
