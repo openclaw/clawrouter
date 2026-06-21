@@ -974,7 +974,10 @@ async fn proxy_manifest_endpoint(
         )?;
         return audit.failure_response(response).await;
     }
-    let path_model_selection = normalize_manifest_path_model(provider, endpoint, &mut proxy);
+    let path_model_selection =
+        normalize_manifest_path_model(provider, endpoint, &mut proxy, |template| {
+            resolve_template_value(provider, template, Some(&env)).ok()
+        });
     let upstream_worker_method = match method_from_str(&upstream_method) {
         Ok(method) => method,
         Err(error) => {
@@ -1064,9 +1067,11 @@ async fn proxy_manifest_endpoint(
     };
     let mut upstream_body_json = method_allows_body(&upstream_method)
         .then(|| proxy.body.unwrap_or(Value::Object(Map::new())));
-    let body_model_selection = upstream_body_json
-        .as_mut()
-        .and_then(|body| normalize_native_model(provider, body));
+    let body_model_selection = upstream_body_json.as_mut().and_then(|body| {
+        normalize_manifest_body_model(provider, body, |template| {
+            resolve_template_value(provider, template, Some(&env)).ok()
+        })
+    });
     let model_selection = path_model_selection.or(body_model_selection);
     if let Some(upstream_body_json) = upstream_body_json.as_mut() {
         let listed_pricing = model_selection
@@ -7045,7 +7050,9 @@ fn provider_optional_config_keys(provider: &CompiledProvider) -> Vec<String> {
         .filter(|key| {
             matches!(
                 key.as_str(),
-                "AWS_SESSION_TOKEN" | "AZURE_OPENAI_COMPLETION_TOKEN_DEPLOYMENTS"
+                "AWS_SESSION_TOKEN"
+                    | "AZURE_OPENAI_COMPLETION_TOKEN_DEPLOYMENTS"
+                    | "AZURE_OPENAI_DEPLOYMENT"
             ) || optional_auth_config.contains(*key)
         })
         .cloned()
@@ -8730,16 +8737,63 @@ fn select_model_value(provider: &CompiledProvider, model: &str) -> Option<Native
     })
 }
 
-fn normalize_manifest_path_model(
+fn select_manifest_model_value<F>(
+    provider: &CompiledProvider,
+    model: &str,
+    resolve_template: F,
+) -> Option<NativeModelSelection>
+where
+    F: FnOnce(&str) -> Option<String>,
+{
+    if let Some(entry) = provider
+        .models
+        .iter()
+        .find(|entry| entry.id == model && contains_template(&entry.upstream))
+    {
+        if let Some(upstream_model) = resolve_template(&entry.upstream) {
+            return Some(NativeModelSelection {
+                model: model.to_string(),
+                upstream_model,
+                pricing_ref: entry.pricing_ref.clone(),
+                pricing: entry.pricing.clone(),
+            });
+        }
+    }
+    select_model_value(provider, model)
+}
+
+fn normalize_manifest_body_model<F>(
+    provider: &CompiledProvider,
+    body: &mut Value,
+    resolve_template: F,
+) -> Option<NativeModelSelection>
+where
+    F: FnOnce(&str) -> Option<String>,
+{
+    let selection =
+        select_manifest_model_value(provider, body.get("model")?.as_str()?, resolve_template)?;
+    body["model"] = Value::String(selection.upstream_model.clone());
+    Some(selection)
+}
+
+fn normalize_manifest_path_model<F>(
     provider: &CompiledProvider,
     endpoint: &CompiledEndpoint,
     proxy: &mut ManifestProxyRequest,
-) -> Option<NativeModelSelection> {
+    resolve_template: F,
+) -> Option<NativeModelSelection>
+where
+    F: FnOnce(&str) -> Option<String>,
+{
     let param = endpoint
         .path_params
         .iter()
         .find(|param| matches!(param.as_str(), "model" | "deployment"))?;
-    let selection = select_model_value(provider, proxy.path_params.get(param)?.as_str()?)?;
+    let selection = select_manifest_model_value(
+        provider,
+        proxy.path_params.get(param)?.as_str()?,
+        resolve_template,
+    )?;
     proxy.path_params.insert(
         param.to_string(),
         Value::String(selection.upstream_model.clone()),
@@ -17377,7 +17431,8 @@ mod tests {
             ..ManifestProxyRequest::default()
         };
 
-        let selection = normalize_manifest_path_model(provider, endpoint, &mut proxy).unwrap();
+        let selection =
+            normalize_manifest_path_model(provider, endpoint, &mut proxy, |_| None).unwrap();
         assert_eq!(selection.model, "google/gemini-default");
         assert_eq!(selection.upstream_model, "gemini-2.5-flash");
         assert_eq!(
@@ -17419,13 +17474,19 @@ mod tests {
             ..ManifestProxyRequest::default()
         };
 
-        let path_selection = normalize_manifest_path_model(provider, endpoint, &mut proxy).unwrap();
-        assert_eq!(path_selection.upstream_model, "deployment");
-        assert_eq!(proxy.path_params["deployment"], "deployment");
+        let path_selection = normalize_manifest_path_model(provider, endpoint, &mut proxy, |_| {
+            Some("configured-deployment".to_string())
+        })
+        .unwrap();
+        assert_eq!(path_selection.upstream_model, "configured-deployment");
+        assert_eq!(proxy.path_params["deployment"], "configured-deployment");
         let body = proxy.body.as_mut().unwrap();
-        let selection = normalize_native_model(provider, body).unwrap();
-        assert_eq!(selection.upstream_model, "deployment");
-        assert_eq!(body["model"], "deployment");
+        let selection = normalize_manifest_body_model(provider, body, |_| {
+            Some("configured-deployment".to_string())
+        })
+        .unwrap();
+        assert_eq!(selection.upstream_model, "configured-deployment");
+        assert_eq!(body["model"], "configured-deployment");
     }
 
     #[test]

@@ -13,13 +13,17 @@ const kvPreviewId = process.env.CLAWROUTER_POLICY_KV_PREVIEW_ID ?? kvId;
 const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
 const strict = process.env.CLAWROUTER_STRICT_CONFIG !== "0";
 const omitRoutes = process.env.CLAWROUTER_OMIT_ROUTES === "1";
-const workerVars = [
-  "CLAWROUTER_ACCESS_TEAM_DOMAIN",
-  "CLAWROUTER_ACCESS_AUD",
-  "CLAWROUTER_ACCESS_ADMIN_EMAILS",
-  "CLAWROUTER_ACCESS_ADMIN_DOMAINS",
-  "CLAWROUTER_ACCESS_DEFAULT_TENANT",
-];
+const workerVars = {
+  CLAWROUTER_ACCESS_TEAM_DOMAIN: process.env.CLAWROUTER_ACCESS_TEAM_DOMAIN,
+  CLAWROUTER_ACCESS_AUD: process.env.CLAWROUTER_ACCESS_AUD,
+  CLAWROUTER_ACCESS_ADMIN_EMAILS: process.env.CLAWROUTER_ACCESS_ADMIN_EMAILS,
+  CLAWROUTER_ACCESS_ADMIN_DOMAINS: process.env.CLAWROUTER_ACCESS_ADMIN_DOMAINS,
+  CLAWROUTER_ACCESS_DEFAULT_TENANT: process.env.CLAWROUTER_ACCESS_DEFAULT_TENANT,
+  AZURE_OPENAI_DEPLOYMENT: providerModelSuffix(
+    process.env.AZURE_OPENAI_DEPLOYMENT ?? process.env.CLAWROUTER_SMOKE_MODEL_AZURE_OPENAI,
+    "azure-openai/",
+  ),
+};
 
 if (strict && !kvId) {
   throw new Error("CLAWROUTER_POLICY_KV_ID is required to render deploy config");
@@ -51,9 +55,9 @@ if (accountId && !/^account_id = /m.test(config)) {
   config = config.replace(/^name = .+$/m, (line) => `${line}\naccount_id = "${accountId}"`);
 }
 
-const renderedVars = workerVars
-  .filter((name) => process.env[name])
-  .map((name) => `${name} = ${JSON.stringify(process.env[name])}`);
+const renderedVars = Object.entries(workerVars)
+  .filter(([, value]) => value)
+  .map(([name, value]) => `${name} = ${JSON.stringify(value)}`);
 if (renderedVars.length > 0) {
   config = `${config.trimEnd()}
 
@@ -65,6 +69,11 @@ ${renderedVars.join("\n")}
 mkdirSync(dirname(target), { recursive: true });
 writeFileSync(target, config);
 console.log(`rendered ${target}`);
+
+function providerModelSuffix(value, prefix) {
+  const normalized = value?.trim();
+  return normalized?.startsWith(prefix) ? normalized.slice(prefix.length) : normalized;
+}
 
 function removeTomlArrayBlocks(input, name) {
   const header = `[[${name}]]`;

@@ -10,24 +10,28 @@ test("rendered config keeps the usage queue and dead-letter queue distinct", () 
   const target = join(dir, "wrangler.toml");
 
   try {
+    const env = {
+      ...process.env,
+      CLAWROUTER_STRICT_CONFIG: "0",
+      CLAWROUTER_USAGE_QUEUE: "test-usage",
+      CLAWROUTER_USAGE_DLQ: "test-usage-dead-letter",
+      CLAWROUTER_SMOKE_MODEL_AZURE_OPENAI: "azure-openai/prod-chat",
+    };
+    delete env.AZURE_OPENAI_DEPLOYMENT;
     const result = spawnSync(
       process.execPath,
       [resolve("scripts/render-wrangler-config.mjs"), resolve("wrangler.toml"), target],
       {
         cwd: resolve("."),
         encoding: "utf8",
-        env: {
-          ...process.env,
-          CLAWROUTER_STRICT_CONFIG: "0",
-          CLAWROUTER_USAGE_QUEUE: "test-usage",
-          CLAWROUTER_USAGE_DLQ: "test-usage-dead-letter",
-        },
+        env,
       },
     );
     assert.equal(result.status, 0, result.stderr);
     const config = readFileSync(target, "utf8");
     assert.equal(config.match(/^queue = "test-usage"$/gm)?.length, 2);
     assert.match(config, /^dead_letter_queue = "test-usage-dead-letter"$/m);
+    assert.match(config, /^AZURE_OPENAI_DEPLOYMENT = "prod-chat"$/m);
   } finally {
     rmSync(dir, { force: true, recursive: true });
   }
