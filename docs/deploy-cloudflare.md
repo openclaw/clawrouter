@@ -44,7 +44,7 @@ domain as ready:
 ```sh
 export CLOUDFLARE_ACCOUNT_ID=...
 export CLOUDFLARE_API_TOKEN=... # must be able to manage Zero Trust Access apps/policies
-export CLAWROUTER_ACCESS_ALLOWED_DOMAINS=openclaw.ai
+export CLAWROUTER_ACCESS_GITHUB_ORGS=openclaw
 export CLAWROUTER_ACCESS_ADMIN_EMAILS=you@example.com
 pnpm cf:access
 ```
@@ -58,7 +58,12 @@ without calling Cloudflare, or `-- --set-github-vars` to write the non-secret
 GitHub Actions variables after provisioning. In GitHub Actions,
 `-- --write-github-env` writes those same values into `GITHUB_ENV` so the
 current deploy job renders and deploys a Worker that can verify Access JWTs.
-`CLAWROUTER_ACCESS_ALLOWED_*` controls who can pass Cloudflare Access;
+`CLAWROUTER_ACCESS_GITHUB_ORGS` accepts `org` or `org/team` selectors and
+resolves the account's sole GitHub identity provider. Set
+`CLAWROUTER_ACCESS_GITHUB_IDP_ID` when multiple GitHub identity providers
+exist. `CLAWROUTER_ACCESS_ALLOWED_*` remains available for explicit email or
+email-domain exceptions; multiple include rules are ORed by Cloudflare Access.
+These settings control who can pass Cloudflare Access;
 `CLAWROUTER_ACCESS_ADMIN_*` controls who is an admin inside ClawRouter.
 `CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS` creates a separate Service Auth
 (`non_identity`) policy for automation. The default path-scoped Access
@@ -109,8 +114,9 @@ CLAWROUTER_ACCESS_DEFAULT_TENANT      # optional, defaults to default
 
 The `Deploy Cloudflare` workflow can provision Access and deploy in one run
 when `CLOUDFLARE_API_TOKEN` has Zero Trust Access application/policy
-permissions. Dispatch it with `provision_access=true`, set the allowlist inputs
-such as `access_allowed_domains=openclaw.ai`, set `access_domain` if the console
+permissions. Dispatch it with `provision_access=true`; the repository default
+uses `access_github_orgs=openclaw` and no email-domain exception. Set
+`access_domain` if the console
 host is not `clawrouter.openclaw.ai`, and optionally set `access_admin_emails`
 or `access_admin_domains`. The workflow runs
 `pnpm cf:access -- --write-github-env` before rendering the Wrangler config, so
@@ -144,6 +150,14 @@ export CLAWROUTER_ADMIN_TOKEN_SHA256=$(printf '%s' "$CLAWROUTER_ADMIN_TOKEN" | s
 printf '%s' "$CLAWROUTER_ADMIN_TOKEN_SHA256" | pnpm exec wrangler secret put CLAWROUTER_ADMIN_TOKEN_SHA256 --config .wrangler.generated.toml
 pnpm exec wrangler secret put OPENAI_API_KEY --config .wrangler.generated.toml
 ```
+
+For a controlled bulk rotation, the deploy workflow can stream temporary
+repository secrets to `wrangler secret bulk` without writing values to disk.
+Store each temporary transport secret as
+`CLAWROUTER_PROVIDER_<WORKER_BINDING>`, dispatch with
+`configure_provider_secrets=true`, verify the live provider smoke, then delete
+the temporary GitHub secrets. `pnpm cf:secrets -- --dry-run` prints binding
+names only; the live command sends a JSON object to Wrangler over stdin.
 
 AWS Bedrock uses SigV4. Bind these values before enabling the Bedrock provider:
 

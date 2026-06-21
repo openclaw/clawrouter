@@ -70,6 +70,12 @@ Rates are integer micro-US-dollars per million tokens. Update `pricingRef` and
 the equivalent public API list price for governance; it is not an invoice for
 the subscription.
 
+Bundled dated pricing also covers Together Qwen 2.5 7B, DeepSeek V4 Flash, and
+MiniMax M3, including DeepSeek cached input and MiniMax's long-context tier.
+Dynamic catalogs such as OpenRouter and generic Hugging Face model routes stay
+unpriced: monthly-budget policies fail closed unless an operator supplies a
+fixed `requestCostMicros` override.
+
 Long-context tiers are selected conservatively from the preflight input bound
 and exactly from reported input usage during settlement. For OpenAI list-priced
 routes, ClawRouter pins absent or `auto` service tiers to `default`; premium or
