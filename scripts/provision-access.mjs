@@ -25,7 +25,6 @@ const adminDomains = csv(process.env.CLAWROUTER_ACCESS_ADMIN_DOMAINS);
 const accessAllowedEmails = csv(process.env.CLAWROUTER_ACCESS_ALLOWED_EMAILS);
 const accessAllowedDomains = csv(process.env.CLAWROUTER_ACCESS_ALLOWED_DOMAINS);
 const githubOrganizations = csv(process.env.CLAWROUTER_ACCESS_GITHUB_ORGS);
-const configuredGithubIdpId = process.env.CLAWROUTER_ACCESS_GITHUB_IDP_ID?.trim() || "";
 const allowedEmails =
   accessAllowedEmails.length > 0
     ? accessAllowedEmails
@@ -40,6 +39,9 @@ const allowedDomains =
       : adminDomains;
 const serviceTokenIds = csv(process.env.CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS);
 const allowedIdps = csv(process.env.CLAWROUTER_ACCESS_IDP_IDS);
+const configuredGithubIdpId =
+  process.env.CLAWROUTER_ACCESS_GITHUB_IDP_ID?.trim() ||
+  (allowedIdps.length === 1 ? allowedIdps[0] : "");
 const defaultTenant =
   process.env.CLAWROUTER_ACCESS_DEFAULT_TENANT?.trim() || "default";
 const repo = process.env.CLAWROUTER_GITHUB_REPO?.trim() || "openclaw/clawrouter";
@@ -480,6 +482,9 @@ function printPlan({ app, policies, teamDomain, aud, created, updated }) {
   }
   if (githubOrganizations.length > 0) {
     console.log(`githubOrganizations=${githubOrganizations.join(",")}`);
+    console.log(
+      `githubIdentityProviderSource=${configuredGithubIdpId ? "configured" : "discovered"}`,
+    );
   }
   console.log(
     `humanIncludeKinds=${[

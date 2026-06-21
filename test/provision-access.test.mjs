@@ -35,12 +35,14 @@ test("Access provisioning supports an exact GitHub organization rule", () => {
       CLAWROUTER_ACCESS_ADMIN_EMAILS: "break-glass@example.com",
       CLAWROUTER_ACCESS_ADMIN_DOMAINS: "example.com",
       CLAWROUTER_ACCESS_GITHUB_ORGS: "openclaw,openclaw/maintainers",
+      CLAWROUTER_ACCESS_IDP_IDS: "github-idp-explicit",
       CLAWROUTER_ACCESS_DOMAIN: "clawrouter.example.com",
     },
   });
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /^githubOrganizations=openclaw,openclaw\/maintainers$/m);
+  assert.match(result.stdout, /^githubIdentityProviderSource=configured$/m);
   assert.match(result.stdout, /^policy=ClawRouter Console Users decision=allow$/m);
   assert.match(result.stdout, /^humanIncludeKinds=github-organization$/m);
 });

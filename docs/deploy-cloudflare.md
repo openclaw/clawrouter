@@ -61,7 +61,8 @@ current deploy job renders and deploys a Worker that can verify Access JWTs.
 `CLAWROUTER_ACCESS_GITHUB_ORGS` accepts `org` or `org/team` selectors and
 resolves the account's sole GitHub identity provider. Set
 `CLAWROUTER_ACCESS_GITHUB_IDP_ID` when multiple GitHub identity providers
-exist. `CLAWROUTER_ACCESS_ALLOWED_*` remains available for explicit email or
+exist, or set one `CLAWROUTER_ACCESS_IDP_IDS` value when the deployment token
+cannot list identity providers. `CLAWROUTER_ACCESS_ALLOWED_*` remains available for explicit email or
 email-domain exceptions; multiple include rules are ORed by Cloudflare Access.
 These settings control who can pass Cloudflare Access;
 `CLAWROUTER_ACCESS_ADMIN_*` controls who is an admin inside ClawRouter.
