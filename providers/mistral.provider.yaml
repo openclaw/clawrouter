@@ -49,6 +49,17 @@ models:
       upstream: mistral-small-latest
       capabilities: [llm.chat]
       pricingRef: mistral-default
+    - id: mistral/mistral-embed
+      upstream: mistral-embed
+      capabilities: [llm.embeddings]
+      pricingRef: mistral-embed-23-12-standard-2026-06-21
+      pricing:
+        effectiveAt: "2026-06-21"
+        source: https://docs.mistral.ai/models/mistral-embed-23-12
+        inputMicrosPerMillion: 100000
+        outputMicrosPerMillion: 0
+        maxInputTokens: 8192
+        defaultMaxOutputTokens: 0
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

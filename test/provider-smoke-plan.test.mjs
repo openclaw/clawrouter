@@ -74,6 +74,13 @@ test("newly budgeted provider defaults compile with dated pricing", () => {
   assert.equal(xai.pricing.longContext.thresholdInputTokens, 200000);
   assert.equal(xai.pricing.longContext.inputMicrosPerMillion, 2500000);
   assert.equal(xai.pricing.longContext.outputMicrosPerMillion, 5000000);
+  const mistralEmbed = snapshot.providers
+    .find((provider) => provider.id === "mistral")
+    .models.find((model) => model.id === "mistral/mistral-embed");
+  assert.equal(mistralEmbed.upstream, "mistral-embed");
+  assert.deepEqual(mistralEmbed.capabilities, ["llm.embeddings"]);
+  assert.equal(mistralEmbed.pricing.inputMicrosPerMillion, 100000);
+  assert.equal(mistralEmbed.pricing.outputMicrosPerMillion, 0);
 });
 
 test("live provider defaults compile to current upstream models and transports", () => {
