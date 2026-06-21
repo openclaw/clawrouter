@@ -70,8 +70,9 @@ Rates are integer micro-US-dollars per million tokens. Update `pricingRef` and
 the equivalent public API list price for governance; it is not an invoice for
 the subscription.
 
-Bundled dated pricing also covers Together Qwen 2.5 7B, DeepSeek V4 Flash, and
-MiniMax M3, including DeepSeek cached input and MiniMax's long-context tier.
+Bundled dated pricing also covers Together Qwen 2.5 7B, DeepSeek V4 Flash,
+MiniMax M3, Google Gemini 2.5 Flash, Groq Llama 3.1 8B Instant, and xAI Grok
+4.3, including provider cache and long-context tiers where applicable.
 Dynamic catalogs such as OpenRouter and generic Hugging Face model routes stay
 unpriced: monthly-budget policies fail closed unless an operator supplies a
 fixed `requestCostMicros` override.
