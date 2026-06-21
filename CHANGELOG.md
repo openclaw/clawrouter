@@ -10,3 +10,4 @@
 - Generate route-specific Playground service requests so switching providers no longer sends stale bodies or path values.
 - Resolve configured dynamic model aliases for Playground service routes such as Azure OpenAI deployments.
 - Apply provider request transforms to manifest-proxy calls so service routes match model-proxy behavior.
+- Add the Mistral embedding model and list pricing so embedding requests no longer select a chat-only model.
