@@ -537,11 +537,14 @@ function sampleBody(provider, endpoint, method, env) {
     return { contents: [{ parts: [{ text: "reply with ok" }] }] };
   }
   if (provider.id === "anthropic") {
-    return {
+    const body = {
       model: provider.models.find((model) => !model.upstream.includes("${"))?.upstream,
-      max_tokens: 16,
       messages: [{ role: "user", content: "reply with ok" }],
     };
+    if (endpoint.id === "messages") {
+      body.max_tokens = 16;
+    }
+    return body;
   }
   if (provider.id === "cohere") {
     return { model: "command", messages: [{ role: "user", content: "reply with ok" }] };

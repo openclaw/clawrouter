@@ -40,7 +40,14 @@ models:
     - id: together/default
       upstream: Qwen/Qwen2.5-7B-Instruct-Turbo
       capabilities: [llm.chat]
-      pricingRef: together-default
+      pricingRef: together-qwen-2-5-7b-instruct-turbo-2026-06-21
+      pricing:
+        effectiveAt: "2026-06-21"
+        source: https://www.together.ai/pricing
+        inputMicrosPerMillion: 300000
+        outputMicrosPerMillion: 300000
+        maxInputTokens: 32768
+        defaultMaxOutputTokens: 8192
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

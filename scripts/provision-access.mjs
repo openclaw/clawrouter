@@ -24,41 +24,46 @@ const adminEmails = csv(process.env.CLAWROUTER_ACCESS_ADMIN_EMAILS);
 const adminDomains = csv(process.env.CLAWROUTER_ACCESS_ADMIN_DOMAINS);
 const accessAllowedEmails = csv(process.env.CLAWROUTER_ACCESS_ALLOWED_EMAILS);
 const accessAllowedDomains = csv(process.env.CLAWROUTER_ACCESS_ALLOWED_DOMAINS);
-const allowedEmails = accessAllowedEmails.length > 0 ? accessAllowedEmails : adminEmails;
-const allowedDomains = accessAllowedDomains.length > 0 ? accessAllowedDomains : adminDomains;
+const githubOrganizations = csv(process.env.CLAWROUTER_ACCESS_GITHUB_ORGS);
+const configuredGithubIdpId = process.env.CLAWROUTER_ACCESS_GITHUB_IDP_ID?.trim() || "";
+const allowedEmails =
+  accessAllowedEmails.length > 0
+    ? accessAllowedEmails
+    : githubOrganizations.length > 0
+      ? []
+      : adminEmails;
+const allowedDomains =
+  accessAllowedDomains.length > 0
+    ? accessAllowedDomains
+    : githubOrganizations.length > 0
+      ? []
+      : adminDomains;
 const serviceTokenIds = csv(process.env.CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS);
 const allowedIdps = csv(process.env.CLAWROUTER_ACCESS_IDP_IDS);
 const defaultTenant =
   process.env.CLAWROUTER_ACCESS_DEFAULT_TENANT?.trim() || "default";
-const requestedAutoRedirect = process.env.CLAWROUTER_ACCESS_AUTO_REDIRECT?.trim();
-if (requestedAutoRedirect === "1" && allowedIdps.length !== 1) {
-  throw new Error(
-    "CLAWROUTER_ACCESS_AUTO_REDIRECT=1 requires exactly one CLAWROUTER_ACCESS_IDP_IDS value",
-  );
-}
-const autoRedirect =
-  requestedAutoRedirect === "1" ||
-  (requestedAutoRedirect !== "0" && allowedIdps.length === 1);
 const repo = process.env.CLAWROUTER_GITHUB_REPO?.trim() || "openclaw/clawrouter";
 const setGitHubVars = Boolean(args["set-github-vars"]);
 const writeGitHubEnv = Boolean(args["write-github-env"]);
 const keepExtraPolicies = process.env.CLAWROUTER_ACCESS_KEEP_EXTRA_POLICIES === "1";
 
-const humanInclude = buildHumanPolicyInclude({
-  allowedEmails,
-  allowedDomains,
-  allowEveryone: process.env.CLAWROUTER_ACCESS_ALLOW_EVERYONE === "1",
-});
 const serviceInclude = serviceTokenIds.map((tokenId) => ({
   service_token: { token_id: tokenId },
 }));
 
-if (humanInclude.length === 0 && serviceInclude.length === 0) {
+if (
+  allowedEmails.length === 0 &&
+  allowedDomains.length === 0 &&
+  githubOrganizations.length === 0 &&
+  process.env.CLAWROUTER_ACCESS_ALLOW_EVERYONE !== "1" &&
+  serviceInclude.length === 0
+) {
   throw new Error(
     [
       "refusing to create an Access policy with no include rules",
       "set CLAWROUTER_ACCESS_ALLOWED_EMAILS, CLAWROUTER_ACCESS_ALLOWED_DOMAINS,",
-      "CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS, or CLAWROUTER_ACCESS_ALLOW_EVERYONE=1",
+      "CLAWROUTER_ACCESS_GITHUB_ORGS, CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS,",
+      "or CLAWROUTER_ACCESS_ALLOW_EVERYONE=1",
     ].join(" "),
   );
 }
@@ -66,6 +71,30 @@ if (humanInclude.length === 0 && serviceInclude.length === 0) {
 if (!dryRun && !token) {
   throw new Error("CLOUDFLARE_API_TOKEN is required unless --dry-run is set");
 }
+
+const githubIdpId =
+  githubOrganizations.length === 0
+    ? ""
+    : configuredGithubIdpId ||
+      (dryRun ? "<github-identity-provider-id>" : await githubIdentityProviderId());
+const effectiveAllowedIdps =
+  allowedIdps.length > 0 ? allowedIdps : githubIdpId ? [githubIdpId] : [];
+const requestedAutoRedirect = process.env.CLAWROUTER_ACCESS_AUTO_REDIRECT?.trim();
+if (requestedAutoRedirect === "1" && effectiveAllowedIdps.length !== 1) {
+  throw new Error(
+    "CLAWROUTER_ACCESS_AUTO_REDIRECT=1 requires exactly one effective identity provider",
+  );
+}
+const autoRedirect =
+  requestedAutoRedirect === "1" ||
+  (requestedAutoRedirect !== "0" && effectiveAllowedIdps.length === 1);
+const humanInclude = buildHumanPolicyInclude({
+  allowedEmails,
+  allowedDomains,
+  githubOrganizations,
+  githubIdpId,
+  allowEveryone: process.env.CLAWROUTER_ACCESS_ALLOW_EVERYONE === "1",
+});
 
 const appPayload = {
   name: appName,
@@ -76,8 +105,8 @@ const appPayload = {
   app_launcher_visible: false,
   auto_redirect_to_identity: autoRedirect,
 };
-if (allowedIdps.length > 0) {
-  appPayload.allowed_idps = allowedIdps;
+if (effectiveAllowedIdps.length > 0) {
+  appPayload.allowed_idps = effectiveAllowedIdps;
 }
 
 const policyPayloads = [
@@ -210,6 +239,26 @@ async function getAccessOrganization() {
   }
 }
 
+async function githubIdentityProviderId() {
+  const providers = asArray(
+    await request("GET", `/accounts/${accountId}/access/identity_providers`),
+  );
+  const githubProviders = providers.filter(
+    (provider) =>
+      provider.type === "github" &&
+      (allowedIdps.length === 0 || allowedIdps.includes(provider.id)),
+  );
+  if (githubProviders.length !== 1) {
+    throw new Error(
+      [
+        `expected exactly one GitHub identity provider, found ${githubProviders.length}`,
+        "set CLAWROUTER_ACCESS_GITHUB_IDP_ID explicitly when the account has multiple providers",
+      ].join("; "),
+    );
+  }
+  return githubProviders[0].id;
+}
+
 async function findAccessApplication(targetName, targetHost, targetDomains) {
   const apps = asArray(await request("GET", `/accounts/${accountId}/access/apps?per_page=100`));
   return (
@@ -278,6 +327,8 @@ async function request(method, path, body) {
 function buildHumanPolicyInclude({
   allowedEmails: emails,
   allowedDomains: domains,
+  githubOrganizations: organizations,
+  githubIdpId: identityProviderId,
   allowEveryone,
 }) {
   const rules = [];
@@ -287,10 +338,34 @@ function buildHumanPolicyInclude({
   for (const domainValue of domains) {
     rules.push({ email_domain: { domain: domainValue } });
   }
+  for (const subject of organizations) {
+    rules.push(githubOrganizationRule(subject, identityProviderId));
+  }
   if (allowEveryone) {
     rules.push({ everyone: {} });
   }
   return rules;
+}
+
+function githubOrganizationRule(subject, identityProviderId) {
+  const parts = subject.split("/");
+  if (
+    !identityProviderId ||
+    parts.length > 2 ||
+    parts.some((part) => !/^[A-Za-z0-9](?:[A-Za-z0-9-]{0,38})$/.test(part))
+  ) {
+    throw new Error(
+      `invalid GitHub organization rule ${JSON.stringify(subject)}; expected org or org/team`,
+    );
+  }
+  const [name, team] = parts;
+  return {
+    "github-organization": {
+      identity_provider_id: identityProviderId,
+      name,
+      ...(team ? { team } : {}),
+    },
+  };
 }
 
 function accessTeamDomain(organization) {
@@ -403,6 +478,18 @@ function printPlan({ app, policies, teamDomain, aud, created, updated }) {
   for (const policy of policies.filter((entry) => entry.include.length > 0)) {
     console.log(`policy=${policy.name} decision=${policy.decision}`);
   }
+  if (githubOrganizations.length > 0) {
+    console.log(`githubOrganizations=${githubOrganizations.join(",")}`);
+  }
+  console.log(
+    `humanIncludeKinds=${[
+      ...new Set(
+        policies
+          .filter((entry) => entry.decision === "allow")
+          .flatMap((entry) => entry.include.flatMap((rule) => Object.keys(rule))),
+      ),
+    ].join(",")}`,
+  );
   console.log(`created=${created}`);
   console.log(`updated=${updated}`);
   console.log(`teamDomain=${teamDomain || "<pending>"}`);

@@ -43,6 +43,31 @@ test("Firecrawl uses keyless mode without a configured API key", () => {
   });
 });
 
+test("Anthropic count_tokens smoke omits messages-only max_tokens", () => {
+  const provider = buildProviderSmokePlan(compileProviderSnapshot(), {}).providers.find(
+    (entry) => entry.id === "anthropic",
+  );
+  assert.equal(provider.target.kind, "manifest_proxy");
+  assert.equal(provider.target.endpoint, "count_tokens");
+  assert.equal(provider.target.envelope.body.max_tokens, undefined);
+  assert.equal(provider.target.envelope.body.model, "claude-sonnet-4-5-20250929");
+});
+
+test("newly budgeted provider defaults compile with dated pricing", () => {
+  const snapshot = compileProviderSnapshot();
+  const expectations = {
+    deepseek: [140000, 280000],
+    minimax: [300000, 1200000],
+    together: [300000, 300000],
+  };
+  for (const [providerId, [input, output]] of Object.entries(expectations)) {
+    const model = snapshot.providers.find((provider) => provider.id === providerId).models[0];
+    assert.equal(model.pricing.effectiveAt, "2026-06-21");
+    assert.equal(model.pricing.inputMicrosPerMillion, input);
+    assert.equal(model.pricing.outputMicrosPerMillion, output);
+  }
+});
+
 test("gateway failures do not overwrite provider health", async () => {
   await withFetch(
     () =>

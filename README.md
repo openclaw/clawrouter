@@ -61,7 +61,7 @@ edge gate with:
 ```sh
 CLOUDFLARE_ACCOUNT_ID=... \
 CLOUDFLARE_API_TOKEN=... \
-CLAWROUTER_ACCESS_ALLOWED_DOMAINS=openclaw.ai \
+CLAWROUTER_ACCESS_GITHUB_ORGS=openclaw \
 CLAWROUTER_ACCESS_ADMIN_EMAILS=you@example.com \
 pnpm cf:access
 ```
@@ -80,7 +80,9 @@ deployment smoke.
 
 The `Deploy Cloudflare` workflow can do the Access step too: dispatch it with
 `provision_access=true` after adding a `CLOUDFLARE_API_TOKEN` that can manage
-Zero Trust Access apps and policies. Real deploys also require KV write
+Zero Trust Access apps and policies. The production default admits verified
+members of the `openclaw` GitHub organization through the configured GitHub
+identity provider. Real deploys also require KV write
 permission because Wrangler validates the Worker `POLICY_KV` binding while
 publishing. Keep `access_domain` set to the console hostname; `worker_url` is
 only the post-deploy smoke-test target.
