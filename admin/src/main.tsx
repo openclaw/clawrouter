@@ -23,6 +23,7 @@ import {
 } from "lucide-react";
 import providerIconManifest from "../../crates/edge/src/provider-icons.json";
 import { installAutoRefresh } from "./auto-refresh";
+import { consoleStatusPresentation } from "./status-display";
 import {
   accessFormFromUser,
   accessMap,
@@ -614,10 +615,11 @@ function App() {
   const selectedUser = selectedUserEmail ? users.find((user) => user.email === selectedUserEmail) : undefined;
   const selectedModel = models.find((model) => model.id === playground.model) ?? models[0];
   const selectedServiceRoute = serviceRoutes.find((route) => routeKey(route) === playground.serviceRoute) ?? serviceRoutes[0];
-  const busy = status === "loading" || ["saving", "running", "revoking", "issuing", "enabling", "disabling", "connecting"].some((prefix) => status.startsWith(prefix));
+  const statusPresentation = consoleStatusPresentation(status, demoMode);
+  const busy = statusPresentation.tone === "pending";
   const busyRef = useRef(busy);
   busyRef.current = busy;
-  const statusTone = statusKind(status);
+  const statusTone = statusPresentation.tone;
 
   useEffect(() => {
     if (localDemoRole() === "user") {
@@ -1541,14 +1543,17 @@ function App() {
           </div>
           <div className="topActions">
             <span className={`status ${session.role === "admin" ? "active" : "neutral"}`}>{session.role}</span>
-            <span className="refreshMeta" title="Automatically refreshes every 30 seconds and when this tab regains focus">
-              <span>Last updated</span>
-              {lastUpdatedAt ? <time dateTime={new Date(lastUpdatedAt).toISOString()}>{formatTimestamp(lastUpdatedAt)}</time> : <span>updating…</span>}
+            <span className={`connectionMeta connectionMeta-${statusTone}`} title="Automatically refreshes every 30 seconds and when this tab regains focus">
+              <span className="connectionDot" aria-hidden="true" />
+              <strong>{statusPresentation.label}</strong>
+              <span className="connectionSeparator" aria-hidden="true">·</span>
+              <span>Updated</span>
+              {lastUpdatedAt ? <time dateTime={new Date(lastUpdatedAt).toISOString()}>{formatTimestamp(lastUpdatedAt)}</time> : <span>pending</span>}
             </span>
           </div>
         </header>
 
-        <div className={`statusBar statusBar-${statusTone}`} role="status" aria-live="polite"><strong>{statusLabel(statusTone)}</strong><span>{status}</span>{demoMode ? <em>demo</em> : null}</div>
+        {statusPresentation.showBar ? <div className={`statusBar statusBar-${statusTone}`} role="status" aria-live="polite"><strong>{statusPresentation.label}</strong><span>{status}</span>{demoMode ? <em>demo</em> : null}</div> : null}
 
         {view === "home" ? (
           <DashboardScreen
@@ -2706,13 +2711,6 @@ function kindIcon(kind: string): IconComponent {
   return Boxes;
 }
 
-function statusKind(status: string) {
-  if (status.includes("error") || status.includes("failed") || status.includes("select") || status.includes("invalid") || status.includes("must") || status.includes("returned") || status.includes("paste")) return "error";
-  if (status === "loading" || status.startsWith("saving") || status.startsWith("running") || status.startsWith("revoking") || status.startsWith("connecting")) return "pending";
-  if (status.includes("loaded") || status.includes("saved") || status.includes("connected") || status.includes("ready") || status.includes("revoked")) return "success";
-  return "neutral";
-}
-
 function oauthCallbackStatus() {
   const params = new URLSearchParams(window.location.search);
   const outcome = params.get("oauth");
@@ -2720,10 +2718,6 @@ function oauthCallbackStatus() {
   if (outcome === "connected") return `${provider} connected`;
   if (outcome === "failed") return `${provider} OAuth failed`;
   return null;
-}
-
-function statusLabel(kind: ReturnType<typeof statusKind>) {
-  return kind === "success" ? "ready" : kind === "pending" ? "working" : kind === "error" ? "needs attention" : "standby";
 }
 
 function isLocalDemoAllowed() {

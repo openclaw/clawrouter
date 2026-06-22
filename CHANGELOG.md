@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Collapse healthy gateway status into the header while retaining the full status row for work, warnings, and errors.
 - Automatically refresh dashboard data every 30 seconds and on tab focus without overwriting unsaved admin edits.
 - Merge overlapping model and manifest routes into one catalog entry per provider.
 - Add role-aware user and admin dashboards with service readiness, shared quota pools, traffic diagrams, and privacy-safe Access-session usage totals.
