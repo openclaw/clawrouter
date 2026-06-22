@@ -1,7 +1,8 @@
 import snapshotJson from "./generated/provider-snapshot.json";
-import { resolveConnection, resolveConnections } from "./authority";
+import { listConnections, resolveConnection } from "./authority";
+import { grantsVisibleToPolicies, type GrantRecord } from "./grant-scope";
 import type {
-  AuthorizedIdentity, CompiledEndpoint, CompiledModel, CompiledProvider, Env,
+  AccessPolicyEntry, AuthorizedIdentity, CompiledEndpoint, CompiledModel, CompiledProvider, Env,
   ProviderConnection, ProviderHealth, ProviderSnapshot, UpstreamGrant,
 } from "./types";
 import { HttpError } from "./utils";
@@ -109,19 +110,33 @@ export function routeCatalog() {
 }
 
 export async function providerReadiness(env: Env): Promise<Readiness[]> {
-  const [grants, health, storedConnections] = await Promise.all([
-    listGrantRecords(env), listHealth(env), resolveConnections(env, snapshot.providers.map((provider) => provider.id)),
-  ]);
+  const { grants, health, connections } = await readinessInputs(env);
+  return providerReadinessFromState(env, grants, [...connections.values()], health);
+}
+
+export async function providerReadinessForPolicies(env: Env, policies: AccessPolicyEntry[]): Promise<Readiness[]> {
+  const { grants, health, connections } = await readinessInputs(env);
+  const visibleGrants = grantsVisibleToPolicies(grants, policies);
+  return providerReadinessFromState(env, visibleGrants, [...connections.values()], health);
+}
+
+export function providerReadinessFromState(env: Env, grants: GrantRecord[], storedConnections: ProviderConnection[], health: Map<string, ProviderHealth>): Readiness[] {
   const connections = new Map(storedConnections.map((connection) => [connection.providerId, connection]));
   return snapshot.providers.map((provider) => readinessFor(provider, env, grants, connections.get(provider.id) ?? { providerId: provider.id, enabled: true }, health.get(provider.id)));
 }
 
+async function readinessInputs(env: Env) {
+  const [grants, health, storedConnections] = await Promise.all([listGrantRecords(env), listHealth(env), listConnections(env, snapshot.providers.map((provider) => provider.id))]);
+  const connections = new Map(storedConnections.map((connection) => [connection.providerId, connection]));
+  return { grants, health, connections };
+}
+
 export async function readinessForIdentity(env: Env, auth: AuthorizedIdentity): Promise<Readiness[]> {
-  const all = await providerReadiness(env);
+  const all = await providerReadinessForPolicies(env, [{ policyId: auth.policyId, policy: auth.policy }]);
   return all.filter((row) => auth.policy.providers.length === 0 || auth.policy.providers.includes(row.id));
 }
 
-function readinessFor(provider: CompiledProvider, env: Env, grants: GrantEntry[], connection: ProviderConnection, health?: ProviderHealth): Readiness {
+function readinessFor(provider: CompiledProvider, env: Env, grants: GrantRecord[], connection: ProviderConnection, health?: ProviderHealth): Readiness {
   const optionalConfig = provider.auth.schemes.every((scheme) => scheme.type === "bearer" && scheme.required === false) ? provider.config_keys.filter((key) => secretConfigKey(key)) : [];
   const requiredConfig = provider.config_keys.filter((key) => !optionalConfig.includes(key));
   const providerGrants = grants.filter((entry) => entry.grant.enabled !== false && entry.grant.provider === provider.id && grantUsable(entry.grant));
@@ -266,8 +281,8 @@ export async function signSigV4(provider: CompiledProvider, url: URL, method: st
   headers.delete("host");
 }
 
-export async function listGrantRecords(env: Env): Promise<GrantEntry[]> {
-  const entries: GrantEntry[] = [];
+export async function listGrantRecords(env: Env): Promise<GrantRecord[]> {
+  const entries: GrantRecord[] = [];
   let cursor: string | undefined;
   do {
     const page = await env.POLICY_KV.list({ prefix: "oauth/", cursor });
@@ -289,8 +304,6 @@ export async function listHealth(env: Env): Promise<Map<string, ProviderHealth>>
   }
   return result;
 }
-
-interface GrantEntry { key: string; grant: UpstreamGrant }
 
 async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env): Promise<UpstreamGrant | null> {
   const tokenRef = provider.auth.schemes.find((scheme) => scheme.type === "oauth")?.tokenRef ?? provider.id;
@@ -349,7 +362,7 @@ function grantUsable(grant: UpstreamGrant): boolean {
   return !!(grant.credential || grant.accessToken || Object.keys(grant.credentials ?? {}).length);
 }
 
-function grantSatisfiesConfig(key: string, grants: GrantEntry[]): boolean {
+function grantSatisfiesConfig(key: string, grants: GrantRecord[]): boolean {
   if (secretConfigKey(key)) return grants.length > 0;
   const fields: Record<string, string> = { AWS_ACCESS_KEY_ID: "accessKeyId", AWS_SECRET_ACCESS_KEY: "secretAccessKey", AWS_SESSION_TOKEN: "sessionToken" };
   const field = fields[key];

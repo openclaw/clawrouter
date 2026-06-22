@@ -10,11 +10,14 @@ const persistence = `.wrangler/e2e-${process.pid}`;
 const adminToken = "local-e2e-admin-token";
 const proxySecret = "secret_1234";
 const proxyKey = `clawrouter-live-migrate-${proxySecret}`;
+const legacySecret = "legacy_secret_1234";
+const legacyKey = `clawrouter-live-legacy-${legacySecret}`;
 const generation = "migration_e2e";
 writeFileSync(config, `${readFileSync("wrangler.toml", "utf8").trim()}\n\n[[kv_namespaces]]\nbinding = "POLICY_KV"\nid = "local-e2e"\n`);
 mkdirSync(persistence, { recursive: true });
 putLocalKv("policies/migrate", { enabled: true, generation, providers: ["firecrawl", "replicate"], tenantId: "default", tokenRole: "service", retainRequestContent: true });
 putLocalKv("credentials/migrate", { enabled: true, secretSha256: sha256(proxySecret), policyId: "migrate", policyGeneration: generation });
+putLocalKv("keys/legacy", { enabled: true, secretSha256: sha256(legacySecret), generation: "legacy", providers: ["firecrawl"], tenantId: "default", retainRequestContent: true });
 
 const child = spawn("pnpm", ["exec", "wrangler", "dev", "--local", "--ip", "127.0.0.1", "--port", String(port), "--persist-to", persistence, "--config", config, "--var", `CLAWROUTER_ADMIN_TOKEN_SHA256:${sha256(adminToken)}`, "--log-level", "info"], {
   cwd: process.cwd(),
@@ -47,6 +50,17 @@ try {
   const inspectionBody = await inspection.json();
   assert.equal(inspection.status, 200, JSON.stringify(inspectionBody));
   assert.equal(inspectionBody.verification, "verified", "KV-only credential migrates into authority on first use");
+  const bootstrap = await fetch(`${base}/v1/admin/bootstrap`, { headers: { authorization: `Bearer ${adminToken}` } });
+  assert.equal(bootstrap.status, 200);
+  const bootstrapBody = await bootstrap.json();
+  assert.ok(bootstrapBody.policies.some((policy) => policy.policyId === "migrate"));
+  assert.ok(bootstrapBody.credentials.some((credential) => credential.credentialId === "migrate"));
+  assert.ok(bootstrapBody.policies.some((policy) => policy.policyId === "legacy"));
+  assert.ok(bootstrapBody.credentials.some((credential) => credential.credentialId === "legacy"));
+  assert.equal(bootstrapBody.providers.length, 20);
+  assert.equal(new Set(bootstrapBody.providers.map((provider) => provider.id)).size, 20);
+  const legacyInspection = await fetch(`${base}/v1/key/inspect`, { headers: { authorization: `Bearer ${legacyKey}` } });
+  assert.equal(legacyInspection.status, 200, "bootstrap imports genuine combined legacy keys before setting migration markers");
   const clientCatalog = await fetch(`${base}/v1/catalog`, { headers: { authorization: `Bearer ${proxyKey}` } });
   assert.equal(clientCatalog.status, 200);
   assert.deepEqual((await clientCatalog.json()).providers.map((provider) => provider.id), ["firecrawl", "replicate"]);

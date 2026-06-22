@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef } from "react";
-import { effectiveAccess, errorMessage, policyUsageFallback, tenantSummaryFallback } from "./domain";
+import { effectiveAccess, errorMessage, policyCoversProvider, policyUsageFallback } from "./domain";
 import { useAccessAdmin } from "./hooks/use-access-admin";
 import { useCatalog } from "./hooks/use-catalog";
 import { usePlayground } from "./hooks/use-playground";
@@ -7,20 +7,13 @@ import { useSession } from "./hooks/use-session";
 import { useUsage } from "./hooks/use-usage";
 import { installAutoRefresh } from "./auto-refresh";
 import { demo } from "./ui-config";
-import { adminOverviewFromPolicies, localDemoRole, oauthCallbackStatus, request, settled } from "./ui-helpers";
+import { localDemoRole, oauthCallbackStatus, request, settled } from "./ui-helpers";
 import type {
-  AccessPolicy,
   AccessUser,
-  AdminOverview,
-  AdminTenantSummary,
+  AdminBootstrapResponse,
   AdminUsageRow,
-  AssignmentRule,
   EntitlementsResponse,
-  PolicyBinding,
-  ProviderConnection,
-  ProviderReadiness,
   ProviderResponse,
-  ProxyCredential,
   RefreshOptions,
   RouteCatalog,
   SessionResponse,
@@ -35,6 +28,7 @@ export function useConsoleController() {
   const usage = useUsage(session.allowDemo);
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
   const refreshBackgroundRef = useRef(false);
+  const catalogLoadedRef = useRef(false);
   const refreshRef = useRef<(options?: RefreshOptions) => Promise<void>>(async () => undefined);
   const refreshCurrent = useCallback(() => refreshRef.current(), []);
   const access = useAccessAdmin({
@@ -118,14 +112,20 @@ export function useConsoleController() {
         session.setStatus("loading");
         access.setLoaded(false);
       }
-      const [sessionData, providerData, routeData] = await Promise.all([
+      const staticCatalog = catalogLoadedRef.current
+        ? Promise.resolve({ providerData: { providers: catalog.providers }, routeData: catalog.routes })
+        : Promise.all([
+          request<ProviderResponse>(session.gatewayOrigin, "/v1/providers"),
+          request<RouteCatalog>(session.gatewayOrigin, "/v1/routes"),
+        ]).then(([providerData, routeData]) => ({ providerData, routeData }));
+      const [sessionData, { providerData, routeData }] = await Promise.all([
         request<SessionResponse>(session.gatewayOrigin, "/v1/session"),
-        request<ProviderResponse>(session.gatewayOrigin, "/v1/providers"),
-        request<RouteCatalog>(session.gatewayOrigin, "/v1/routes"),
+        staticCatalog,
       ]);
       session.setValue(sessionData);
       catalog.setProviders(providerData.providers);
       catalog.setRoutes(routeData);
+      catalogLoadedRef.current = true;
       let warnings = sessionData.entitlementsError ? [`entitlements unavailable: ${sessionData.entitlementsError}`] : [];
       const sessionEntitlements: EntitlementsResponse | null = sessionData.entitlements
         ? {
@@ -143,7 +143,7 @@ export function useConsoleController() {
           warnings = [...warnings, `entitlements unavailable: ${entitlementResult.error}`];
         }
       }
-      if (sessionData.role === "admin") warnings = await loadAdminData(sessionData, providerData, routeData, background, warnings);
+      if (sessionData.role === "admin") warnings = await loadAdminData(sessionData, providerData, background, warnings);
       else warnings = await loadUserData(sessionData, warnings);
       session.setDemoMode(false);
       session.setLastUpdatedAt(Date.now());
@@ -159,51 +159,30 @@ export function useConsoleController() {
     }
   }
 
-  async function loadAdminData(sessionData: SessionResponse, providerData: ProviderResponse, routeData: RouteCatalog, background: boolean, initialWarnings: string[]) {
+  async function loadAdminData(sessionData: SessionResponse, providerData: ProviderResponse, background: boolean, initialWarnings: string[]) {
     let warnings = initialWarnings;
-    const [policyData, credentialData, connectionData, userData, bindingData, readinessData, upstreamGrantData, assignmentRuleData] = await Promise.all([
-      request<{ policies: AccessPolicy[] }>(session.gatewayOrigin, "/v1/admin/policies"),
-      request<{ credentials: ProxyCredential[] }>(session.gatewayOrigin, "/v1/admin/credentials"),
-      request<{ connections: ProviderConnection[] }>(session.gatewayOrigin, "/v1/admin/connections"),
-      request<{ users: AccessUser[] }>(session.gatewayOrigin, "/v1/admin/access-users"),
-      request<{ bindings: PolicyBinding[] }>(session.gatewayOrigin, "/v1/admin/policy-bindings"),
-      request<{ providers: ProviderReadiness[] }>(session.gatewayOrigin, "/v1/admin/provider-status"),
-      request<{ grants: UpstreamGrant[] }>(session.gatewayOrigin, "/v1/admin/upstream-grants"),
-      request<{ rules: AssignmentRule[] }>(session.gatewayOrigin, "/v1/admin/assignment-rules"),
-    ]);
+    const data = await request<AdminBootstrapResponse>(session.gatewayOrigin, "/v1/admin/bootstrap");
     access.hydrateAdmin({
-      policies: policyData.policies,
-      credentials: credentialData.credentials,
-      connections: connectionData.connections,
-      users: userData.users,
-      bindings: bindingData.bindings,
-      grants: upstreamGrantData.grants,
-      rules: assignmentRuleData.rules,
+      policies: data.policies,
+      credentials: data.credentials,
+      connections: data.connections,
+      users: data.users,
+      bindings: data.bindings,
+      grants: data.grants,
+      rules: data.rules,
     }, background, sessionData, providerData.providers);
-    catalog.mergeReadiness(readinessData.providers);
-    const [overviewResult, tenantResult, usageResult] = await Promise.all([
-      settled(() => request<AdminOverview>(session.gatewayOrigin, "/v1/admin/overview")),
-      settled(() => request<{ tenants: AdminTenantSummary[] }>(session.gatewayOrigin, "/v1/admin/tenants")),
-      background
-        ? settled(() => request<{ policies?: AdminUsageRow[]; keys?: AdminUsageRow[]; usage: UsageSnapshot }>(session.gatewayOrigin, "/v1/admin/usage"))
-        : Promise.resolve(null),
-    ]);
-    if (overviewResult.ok) usage.setAdminOverview(overviewResult.value);
-    else {
-      usage.setAdminOverview(adminOverviewFromPolicies(policyData.policies, credentialData.credentials, providerData.providers, routeData));
-      warnings = [...warnings, `overview unavailable: ${overviewResult.error}`];
-    }
-    if (tenantResult.ok) usage.setTenantSummaries(tenantResult.value.tenants);
-    else {
-      usage.setTenantSummaries(tenantSummaryFallback(policyData.policies, credentialData.credentials));
-      warnings = [...warnings, `tenant summary unavailable: ${tenantResult.error}`];
-    }
+    catalog.mergeReadiness(data.providers);
+    usage.setAdminOverview(data.overview);
+    usage.setTenantSummaries(data.tenants);
+    const usageResult = background && (session.view === "home" || session.view === "usage")
+      ? await settled(() => request<{ policies?: AdminUsageRow[]; keys?: AdminUsageRow[]; usage: UsageSnapshot }>(session.gatewayOrigin, "/v1/admin/usage"))
+      : null;
     if (usageResult?.ok) {
       usage.setRows(usageResult.value.policies ?? usageResult.value.keys ?? []);
       usage.setSnapshot(usageResult.value.usage);
       usage.setLoaded(true);
     } else if (usageResult) warnings = [...warnings, `usage ledger unavailable: ${usageResult.error}`];
-    else usage.resetLedger();
+    else if (!background) usage.resetLedger();
     if (!background && session.view === "usage") usage.requestRefresh();
     return warnings;
   }
@@ -252,7 +231,6 @@ export function useConsoleController() {
   function loadUserDemo() {
     const user = demo.users.find((candidate) => candidate.email === "research@example.com") ?? demo.users.find((candidate) => candidate.role === "user")!;
     const effective = effectiveAccess(user, demo.keys, demo.bindings, demo.services);
-    const policyIds = new Set(effective.policies.map((policy) => policy.policyId));
     const providerIds = new Set(effective.services.map((service) => service.provider));
     const providerUsage = demo.usage.providers.filter((provider) => providerIds.has(provider.provider));
     const summary = providerUsage.reduce<UsageSummary>((current, provider) => ({
@@ -263,18 +241,19 @@ export function useConsoleController() {
       totalTokens: current.totalTokens + provider.totalTokens,
       actualCostMicros: current.actualCostMicros + provider.actualCostMicros,
     }), { requestCount: 0, successCount: 0, errorCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, actualCostMicros: 0 });
+    const contentRetention = {
+      enabled: !user.contentRetentionDisabled && effective.policies.some((policy) => policy.retainRequestContent),
+      retentionDays: 30,
+      policyEnabled: effective.policies.some((policy) => policy.retainRequestContent),
+      userExempt: user.contentRetentionDisabled,
+    };
     const entitlements: EntitlementsResponse = {
-      session: { ...demo.session, ...user, auth: "demo" },
-      contentRetention: {
-        enabled: !user.contentRetentionDisabled && effective.policies.some((policy) => policy.retainRequestContent),
-        retentionDays: 30,
-        policyEnabled: effective.policies.some((policy) => policy.retainRequestContent),
-        userExempt: user.contentRetentionDisabled,
-      },
+      session: { ...demo.session, ...user, auth: "demo", contentRetention },
+      contentRetention,
       providers: demo.entitlements.providers.map((provider) => ({
         ...provider,
         allowed: providerIds.has(provider.provider),
-        policies: provider.policies.filter((policyId) => policyIds.has(policyId)),
+        policies: effective.policies.filter((policy) => policyCoversProvider(policy, provider.provider)).map((policy) => policy.policyId),
       })),
     };
     session.setValue(entitlements.session);

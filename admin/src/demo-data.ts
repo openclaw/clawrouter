@@ -1,3 +1,13 @@
+import { accessMap, effectiveAccess, policyCoversProvider, policyUsageFallback, readinessMap, tenantSummaryFallback } from "./domain";
+import { demoCatalog } from "./demo-catalog";
+import { demoDisabledProviderIds, demoMissingConfigProviderIds } from "./ui-config";
+import { adminOverviewFromPolicies, serviceItems } from "./ui-helpers";
+import type {
+  AccessPolicy, AccessRole, AccessUser, AssignmentRule, EntitlementsResponse, PolicyBinding,
+  ProviderConnection, ProviderReadiness, ProviderRow, ProxyCredential, RouteCatalog, UpstreamGrant,
+  UsageAuditEvent, UsageSnapshot,
+} from "./ui-types";
+
 export function demoUsageSnapshot(): UsageSnapshot {
   const now = Date.now();
   const events: UsageAuditEvent[] = [
@@ -66,59 +76,10 @@ export function demoUsageEvent(id: string, occurredAt: number, principal: string
 }
 
 export function demoData() {
-  const providers = [
-    provider("anthropic", "Anthropic", "anthropic_compatible", "model_provider", ["llm.messages"]),
-    provider("aws-bedrock", "AWS Bedrock", "custom_adapter", "model_provider", ["llm.invoke", "llm.stream"]),
-    provider("azure-openai", "Azure OpenAI", "openai_compatible", "model_provider", ["llm.chat", "llm.embeddings"]),
-    provider("cloudflare-ai-gateway", "Cloudflare AI Gateway", "cloudflare_ai_gateway", "gateway_platform", ["llm.chat", "llm.responses"]),
-    provider("cohere", "Cohere", "rest_json", "model_provider", ["llm.chat", "llm.embeddings"]),
-    provider("deepseek", "DeepSeek", "openai_compatible", "model_provider", ["llm.chat"]),
-    provider("fireworks", "Fireworks AI", "openai_compatible", "model_provider", ["llm.chat"]),
-    provider("google-gemini", "Google Gemini", "rest_json", "model_provider", ["llm.generate", "llm.stream"]),
-    provider("groq", "Groq", "openai_compatible", "model_provider", ["llm.chat"]),
-    provider("huggingface", "Hugging Face", "rest_json", "model_provider", ["llm.invoke"]),
-    provider("minimax", "MiniMax", "openai_compatible", "model_provider", ["llm.chat"]),
-    provider("mistral", "Mistral AI", "openai_compatible", "model_provider", ["llm.chat", "llm.embeddings"]),
-    provider("openai", "OpenAI", "openai_compatible", "model_provider", ["llm.responses", "llm.chat", "llm.embeddings"], "subscription"),
-    provider("openrouter", "OpenRouter", "openai_compatible", "gateway_platform", ["llm.chat"]),
-    provider("perplexity", "Perplexity", "openai_compatible", "model_provider", ["llm.chat"]),
-    provider("replicate", "Replicate", "rest_json", "tool_provider", ["media.predict", "media.prediction.read"]),
-    provider("tavily", "Tavily", "rest_json", "tool_provider", ["web.search", "web.extract", "web.crawl"]),
-    provider("together", "Together AI", "openai_compatible", "model_provider", ["llm.chat"]),
-    provider("xai", "xAI", "openai_compatible", "model_provider", ["llm.chat"]),
-  ];
-  const routes: RouteCatalog = {
-    openaiCompatible: [
-      modelRoute("anthropic", ["/v1/messages"], [modelEntry("anthropic/default", ["llm.messages"], ["/v1/messages"])]),
-      modelRoute("aws-bedrock", ["/model/{model}/invoke", "/model/{model}/invoke-with-response-stream"], [modelEntry("bedrock/model", ["llm.invoke", "llm.stream"], ["/model/{model}/invoke", "/model/{model}/invoke-with-response-stream"])]),
-      modelRoute("azure-openai", ["/openai/deployments/{deployment}/chat/completions", "/openai/deployments/{deployment}/embeddings"], [modelEntry("azure-openai/deployment", ["llm.chat", "llm.embeddings"], ["/openai/deployments/{deployment}/chat/completions", "/openai/deployments/{deployment}/embeddings"])]),
-      modelRoute("cloudflare-ai-gateway", ["/"], [modelEntry("cloudflare-ai-gateway/auto", ["llm.chat", "llm.responses"], ["/"])]),
-      modelRoute("cohere", ["/v2/chat", "/v2/embed"], [modelEntry("cohere/default", ["llm.chat", "llm.embeddings"], ["/v2/chat", "/v2/embed"])]),
-      modelRoute("deepseek", ["/chat/completions"], [modelEntry("deepseek/default", ["llm.chat"], ["/chat/completions"])]),
-      modelRoute("fireworks", ["/v1/chat/completions"], [modelEntry("fireworks/default", ["llm.chat"], ["/v1/chat/completions"])]),
-      modelRoute("google-gemini", ["/v1beta/models/{model}:generateContent", "/v1beta/models/{model}:streamGenerateContent"], [modelEntry("google/gemini-default", ["llm.generate", "llm.stream"], ["/v1beta/models/{model}:generateContent", "/v1beta/models/{model}:streamGenerateContent"])]),
-      modelRoute("groq", ["/v1/chat/completions"], [modelEntry("groq/default", ["llm.chat"], ["/v1/chat/completions"])]),
-      modelRoute("huggingface", ["/models/{model}"], [modelEntry("huggingface/model", ["llm.invoke"], ["/models/{model}"])]),
-      modelRoute("minimax", ["/v1/chat/completions"], [modelEntry("minimax/MiniMax-M3", ["llm.chat"], ["/v1/chat/completions"])]),
-      modelRoute("mistral", ["/v1/chat/completions", "/v1/embeddings"], [modelEntry("mistral/default", ["llm.chat"], ["/v1/chat/completions"])]),
-      modelRoute("openai", ["/v1/responses", "/v1/chat/completions", "/v1/embeddings"], [modelEntry("openai/gpt-4.1-mini", ["llm.responses", "llm.chat"], ["/v1/responses", "/v1/chat/completions"]), modelEntry("openai/text-embedding-3-large", ["llm.embeddings"], ["/v1/embeddings"])]),
-      modelRoute("openrouter", ["/v1/chat/completions"], [modelEntry("openrouter/auto", ["llm.chat"], ["/v1/chat/completions"])]),
-      modelRoute("perplexity", ["/chat/completions"], [modelEntry("perplexity/default", ["llm.chat"], ["/chat/completions"])]),
-      modelRoute("together", ["/v1/chat/completions"], [modelEntry("together/default", ["llm.chat"], ["/v1/chat/completions"])]),
-      modelRoute("xai", ["/v1/chat/completions"], [modelEntry("xai/default", ["llm.chat"], ["/v1/chat/completions"])]),
-    ],
-    manifestProxy: [
-      manifestRoute("openai", "responses", "/v1/proxy/openai/responses", ["POST"], [], "openai.responses", "openai/gpt-4.1-mini"),
-      manifestRoute("replicate", "predictions", "/v1/proxy/replicate/predictions", ["POST"], [], "replicate.prediction_create", "replicate/predictions"),
-      manifestRoute("replicate", "prediction", "/v1/proxy/replicate/prediction", ["GET"], ["prediction_id"], "replicate.prediction_get", "replicate/predictions"),
-      manifestRoute("tavily", "search", "/v1/proxy/tavily/search", ["POST"], [], "tavily.search", "tavily/search"),
-      manifestRoute("tavily", "extract", "/v1/proxy/tavily/extract", ["POST"], [], "tavily.extract", "tavily/extract"),
-      manifestRoute("tavily", "crawl", "/v1/proxy/tavily/crawl", ["POST"], [], "tavily.crawl", "tavily/search"),
-    ],
-  };
+  const { providers, routes } = demoCatalog();
   const keys: AccessPolicy[] = [
     { policyId: "maintainer_models", enabled: true, providers: ["anthropic", "aws-bedrock", "azure-openai", "cloudflare-ai-gateway", "cohere", "deepseek", "fireworks", "google-gemini", "groq", "huggingface", "minimax", "mistral", "openai", "openrouter", "perplexity", "together", "xai"], tenantId: "openclaw", tokenRole: "maintainer", monthlyBudgetMicros: 250000000, requestCostMicros: 1000, retainRequestContent: true },
-    { policyId: "openclaw_tools", enabled: true, providers: ["replicate", "tavily"], tenantId: "openclaw", tokenRole: "tooling", monthlyBudgetMicros: 75000000, requestCostMicros: 500, retainRequestContent: true },
+    { policyId: "openclaw_tools", enabled: true, providers: ["firecrawl", "replicate", "tavily"], tenantId: "openclaw", tokenRole: "tooling", monthlyBudgetMicros: 75000000, requestCostMicros: 500, retainRequestContent: true },
     { policyId: "user_research", enabled: true, providers: ["openai", "google-gemini", "tavily"], tenantId: "research", tokenRole: "user", monthlyBudgetMicros: 50000000, requestCostMicros: 1000, retainRequestContent: true },
     { policyId: "sandbox_eval", enabled: false, providers: ["openai"], tenantId: "sandbox", tokenRole: "sandbox", monthlyBudgetMicros: 5000000, requestCostMicros: 500, retainRequestContent: true },
   ];
@@ -205,24 +166,3 @@ export function demoReadiness(provider: ProviderRow, routes: RouteCatalog): Prov
     reasons: status === "verified" ? [] : status === "disabled" ? ["Provider connection is disabled by an administrator."] : status === "grant_required" ? ["OAuth grant required before service calls can run."] : status === "missing_config" ? ["Provider config is not present in the runtime environment."] : ["Provider is declared but has no executable route."],
   };
 }
-
-export function modelRoute(provider: string, endpoints: string[], models: RouteCatalog["openaiCompatible"][number]["models"]): RouteCatalog["openaiCompatible"][number] {
-  return { provider, endpoints, models };
-}
-
-export function modelEntry(id: string, capabilities: string[], endpoints: string[]) {
-  return { id, capabilities, endpoints };
-}
-
-export function manifestRoute(provider: string, endpoint: string, route: string, methods: string[], pathParams: string[] = [], requestFormat?: string, sampleModel?: string): RouteCatalog["manifestProxy"][number] {
-  return { provider, endpoint, route, methods, pathParams, requestFormat, sampleModel };
-}
-
-export function provider(id: string, display_name: string, providerClass: string, service_kind: string, capabilities: string[], authorizationKind?: "oauth" | "subscription"): ProviderRow {
-  return { id, display_name, class: providerClass, service_kind, meter: "request", capabilities: capabilities.map((capability) => ({ id: capability })), auth: authorizationKind ? { authorization: { grantKind: authorizationKind } } : undefined };
-}
-import { accessMap, effectiveAccess, policyCoversProvider, policyUsageFallback, readinessMap, tenantSummaryFallback } from "./domain";
-import { demoDisabledProviderIds, demoMissingConfigProviderIds } from "./ui-config";
-import { adminOverviewFromPolicies, serviceItems } from "./ui-helpers";
-import type { AccessForm,AccessPolicy,AccessRole,AccessTab,AccessUser,AdminOverview,AdminTenantSummary,AdminUsageRow,AssignmentRule,AssignmentRuleForm,BindingForm,BrandIcon,BudgetStatus,ContentRetention,CredentialForm,EntitlementsResponse,IconComponent,OutcomeTone,PlaygroundForm,PlaygroundHttpResponse,PlaygroundTurn,PolicyBinding,PolicyForm,ProviderAccess,ProviderConnection,ProviderReadiness,ProviderResponse,ProviderRow,ProviderUsageSummary,ProxyCredential,RefreshOptions,RetainedRequestContent,RouteCatalog,ServiceItem,ServiceOutcome,SessionResponse,UpstreamGrant,UpstreamGrantForm,UsageAuditEvent,UsageSnapshot,UsageSummary,View } from "./ui-types";
-

@@ -1,14 +1,13 @@
 import { accessIdentity } from "./access";
+import { finalizeAccounting, reserveBudget, type BudgetReservation, type EstimatedCost } from "./accounting";
 import { resolveCredentials, resolvePolicies, resolveUsers } from "./authority";
+import { retainRequestContent } from "./content-retention";
 import {
   assertProviderAccess, capabilityForPath, copyRequestHeaders, endpointForPath, modelRoute, providerById,
   resolveTemplate, signSigV4, transformRequestBody, upstreamAuth, upstreamPath,
 } from "./providers";
 import { actualModelCost, estimateModelCost } from "./pricing";
-import type {
-  AuthorizedIdentity, BudgetReserveRequest, BudgetSettleRequest, CompiledEndpoint,
-  CompiledModel, CompiledProvider, ContentRecord, Env, QueueMessage, UsageEvent,
-} from "./types";
+import type { AuthorizedIdentity, CompiledEndpoint, CompiledModel, CompiledProvider, Env, UsageEvent } from "./types";
 import {
   clampAudit, errorResponse, HttpError, parseProxyKey, randomId, readJson, safeEqual, sha256Hex,
 } from "./utils";
@@ -23,11 +22,6 @@ interface ProxySelection {
   body: Record<string, unknown>;
   pathParams: Record<string, string>;
   method: string;
-}
-
-interface BudgetReservation {
-  reservationId: string | null;
-  reservedMicros: number;
 }
 
 export async function proxyOpenAi(request: Request, env: Env, context: ExecutionContext, path: string, mode: AuthMode): Promise<Response> {
@@ -148,22 +142,33 @@ export async function inspectKey(headers: Headers, env: Env): Promise<Response> 
 async function proxySelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, queryInput: Record<string, unknown> = {}, preauthenticated: AuthorizedIdentity | null = null): Promise<Response> {
   const auth = preauthenticated ?? (mode === "access" ? await accessIdentity(request.headers, env, selection.provider.id) : await authenticateProxyKey(request.headers, env));
   if (auth instanceof Response) return auth;
-  try { await assertProviderAccess(selection.provider, auth, env); }
-  catch (error) { return error instanceof HttpError ? errorResponse(error.code, error.message, error.status) : errorResponse("provider_unavailable", "provider authorization failed", 503); }
   const requestId = request.headers.get("x-request-id") ?? randomId("req");
   const started = Date.now();
+  const cost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability);
+  try { await assertProviderAccess(selection.provider, auth, env); }
+  catch (error) {
+    const failure = error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "provider authorization failed");
+    auditFailure(context, env, auth, selection, request, requestId, started, cost, failure.status, failure.status === 403 ? "denied" : "provider_error");
+    return errorResponse(failure.code, failure.message, failure.status);
+  }
   let upstream;
   try { upstream = await upstreamAuth(selection.provider, selection.endpoint, auth, env); }
-  catch (error) { return error instanceof HttpError ? errorResponse(error.code, error.message, error.status) : errorResponse("provider_not_configured", "provider is not configured", 503); }
-  const cost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability);
+  catch (error) {
+    const failure = error instanceof HttpError ? error : new HttpError(503, "provider_not_configured", "provider is not configured");
+    auditFailure(context, env, auth, selection, request, requestId, started, cost, failure.status, "provider_error");
+    return errorResponse(failure.code, failure.message, failure.status);
+  }
   let reservation: BudgetReservation;
   try { reservation = await reserveBudget(env, auth, selection.capability, cost); }
-  catch (error) { return error instanceof HttpError ? errorResponse(error.code, error.message, error.status) : errorResponse("budget_store_unavailable", "budget ledger is unavailable", 503); }
+  catch (error) {
+    const failure = error instanceof HttpError ? error : new HttpError(503, "budget_store_unavailable", "budget ledger is unavailable");
+    auditFailure(context, env, auth, selection, request, requestId, started, cost, failure.status, failure.status === 402 ? "denied" : failure.status < 500 ? "client_error" : "provider_error");
+    return errorResponse(failure.code, failure.message, failure.status);
+  }
   let content: string | null;
-  try { content = await retainContent(env, auth, selection, requestId); }
+  try { content = await retainRequestContent(env, auth, selection, requestId); }
   catch {
-    await settleBudget(env, auth, reservation, 0);
-    await enqueueUsage(env, usageEvent(auth, selection, request, requestId, started, 503, null, cost, reservation, null, "provider_error"));
+    context.waitUntil(finalizeAccounting(env, auth, reservation, 0, usageEvent(auth, selection, request, requestId, started, 503, null, cost, reservation, null, "provider_error")));
     return errorResponse("content_retention_unavailable", "required request-content retention is temporarily unavailable", 503);
   }
   const headers = new Headers(upstream.headers);
@@ -179,8 +184,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   try { await signSigV4(selection.provider, url, selection.method, requestBody, headers, env, upstream.grant); }
   catch (error) {
     clearTimeout(timeout);
-    await settleBudget(env, auth, reservation, 0);
-    await enqueueUsage(env, usageEvent(auth, selection, request, requestId, started, 503, null, cost, reservation, content, "provider_error"));
+    context.waitUntil(finalizeAccounting(env, auth, reservation, 0, usageEvent(auth, selection, request, requestId, started, 503, null, cost, reservation, content, "provider_error")));
     return error instanceof HttpError ? errorResponse(error.code, error.message, error.status) : errorResponse("provider_not_configured", "provider signing configuration is invalid", 503);
   }
   let response: Response;
@@ -188,8 +192,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     response = await fetch(url, { method: selection.method, headers, body: requestBody, signal: controller.signal });
   } catch (error) {
     clearTimeout(timeout);
-    await settleBudget(env, auth, reservation, 0);
-    await enqueueUsage(env, usageEvent(auth, selection, request, requestId, started, 502, null, cost, reservation, content, error instanceof DOMException && error.name === "AbortError" ? "timeout" : "provider_error"));
+    context.waitUntil(finalizeAccounting(env, auth, reservation, 0, usageEvent(auth, selection, request, requestId, started, 502, null, cost, reservation, content, error instanceof DOMException && error.name === "AbortError" ? "timeout" : "provider_error")));
     return errorResponse("provider_unavailable", `upstream request to provider ${selection.provider.id} failed`, 502, undefined);
   }
   clearTimeout(timeout);
@@ -200,6 +203,11 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   outputHeaders.set("x-clawrouter-upstream-provider", selection.provider.id);
   outputHeaders.set("x-clawrouter-content-retention", auth.policy.retainRequestContent !== false && !auth.contentRetentionDisabled ? "on; retention-days=30" : "off");
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers: outputHeaders });
+}
+
+function auditFailure(context: ExecutionContext, env: Env, auth: AuthorizedIdentity, selection: ProxySelection, request: Request, requestId: string, started: number, cost: Cost, statusCode: number, status: UsageEvent["status"]): void {
+  const reservation = { reservationId: null, reservedMicros: 0 };
+  context.waitUntil(finalizeAccounting(env, auth, reservation, 0, usageEvent(auth, selection, request, requestId, started, statusCode, null, cost, reservation, null, status)));
 }
 
 async function preauthenticate(request: Request, env: Env, mode: AuthMode, providerId?: string): Promise<AuthorizedIdentity | Response | null> {
@@ -216,11 +224,10 @@ async function finalizeResponse(response: Response, env: Env, auth: AuthorizedId
   } catch { /* usage is best-effort; reservation stays conservative */ }
   const measured = tokens ? actualCost(selection.model, tokens, auth.policy.requestCostMicros) : null;
   const actual = response.ok && measured != null ? measured : response.ok ? estimated.reserveMicros : 0;
-  await settleBudget(env, auth, reservation, actual);
-  await enqueueUsage(env, usageEvent(auth, selection, request, requestId, started, response.status, tokens, estimated, reservation, content, response.ok ? "success" : response.status < 500 ? "client_error" : "provider_error", actual));
+  await finalizeAccounting(env, auth, reservation, actual, usageEvent(auth, selection, request, requestId, started, response.status, tokens, estimated, reservation, content, response.ok ? "success" : response.status < 500 ? "client_error" : "provider_error", actual));
 }
 
-interface Cost { reserveMicros: number; basis: string; inputTokens: number | null; outputTokens: number | null }
+type Cost = EstimatedCost;
 interface Tokens { input: number | null; output: number | null; total: number | null; cached: number | null; cacheWrite: number | null; cacheWrite5m: number | null; cacheWrite1h: number | null }
 
 function estimateCost(model: CompiledModel | null, body: Record<string, unknown>, fixed: number | null | undefined, capability: string): Cost {
@@ -239,47 +246,6 @@ function actualCost(model: CompiledModel | null, tokens: Tokens, fixed: number |
   return actualModelCost(pricing, tokens);
 }
 
-async function reserveBudget(env: Env, auth: AuthorizedIdentity, capability: string, cost: Cost): Promise<BudgetReservation> {
-  const limit = auth.policy.monthlyBudgetMicros;
-  if (limit == null) return { reservationId: null, reservedMicros: 0 };
-  if (limit === 0) throw new HttpError(402, "budget_exhausted", "proxy key budget is exhausted");
-  if (cost.basis === "flat_fallback") throw new HttpError(400, "pricing_required", "budgeted requests require versioned manifest pricing or a fixed policy request price");
-  const reservationId = randomId("budget");
-  const tenant = auth.policy.tenantId ?? "default";
-  const policyId = `${tenant}/${auth.policyId}`;
-  const request: BudgetReserveRequest = { policyId, windowKey: `${policyId}/${new Date().toISOString().slice(0, 7)}`, limitMicros: limit, costMicros: cost.reserveMicros, reservationId, capability };
-  const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(`${tenant}:${auth.policyId}`));
-  const response = await stub.fetch("https://clawrouter.internal/reserve", { method: "POST", body: JSON.stringify(request) });
-  const result = await response.json<{ allowed: boolean; chargedMicros: number }>();
-  if (!result.allowed) throw new HttpError(402, "budget_exhausted", "proxy key budget is exhausted");
-  return { reservationId, reservedMicros: result.chargedMicros };
-}
-
-async function settleBudget(env: Env, auth: AuthorizedIdentity, reservation: BudgetReservation, actualCostMicros: number): Promise<void> {
-  if (!reservation.reservationId) return;
-  const tenant = auth.policy.tenantId ?? "default";
-  const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(`${tenant}:${auth.policyId}`));
-  const body: BudgetSettleRequest = { reservationId: reservation.reservationId, actualCostMicros };
-  const response = await stub.fetch("https://clawrouter.internal/settle", { method: "POST", body: JSON.stringify(body) });
-  if (!response.ok) await env.USAGE_QUEUE.send({ kind: "budget_settlement", tenant_id: tenant, policy_id: auth.policyId, request: body });
-}
-
-async function retainContent(env: Env, auth: AuthorizedIdentity, selection: ProxySelection, requestId: string): Promise<string | null> {
-  if (auth.policy.retainRequestContent === false || auth.contentRetentionDisabled || !selection.capability.startsWith("llm.")) return null;
-  const contentRef = randomId("content");
-  const occurredAtMs = Date.now();
-  const record: ContentRecord = {
-    version: "clawrouter.retained-request.v1", contentRef, requestId, occurredAtMs, expiresAtMs: occurredAtMs + 30 * 86_400_000,
-    tenantId: auth.policy.tenantId ?? "default", policyId: auth.policyId, credentialId: auth.credentialId,
-    principalId: auth.principalId, provider: selection.provider.id, capability: selection.capability,
-    model: selection.model?.id ?? null, body: selection.body,
-  };
-  await env.CONTENT_ARCHIVE.put(contentKey(record.tenantId, contentRef), JSON.stringify(record), { httpMetadata: { contentType: "application/json" }, customMetadata: { expiresAt: String(record.expiresAtMs) } });
-  return contentRef;
-}
-
-export function contentKey(tenant: string, ref: string): string { return `v1/${encodeURIComponent(tenant)}/${encodeURIComponent(ref)}.json`; }
-
 function usageEvent(auth: AuthorizedIdentity, selection: ProxySelection, request: Request, requestId: string, started: number, statusCode: number, tokens: Tokens | null, cost: Cost, reservation: BudgetReservation, contentRef: string | null, status: UsageEvent["status"], actual = 0): UsageEvent {
   return {
     id: randomId("usage"), type: "clawrouter.usage.v1", occurred_at_ms: Date.now(), tenant_id: auth.policy.tenantId ?? "default",
@@ -296,8 +262,6 @@ function usageEvent(auth: AuthorizedIdentity, selection: ProxySelection, request
     duration_ms: Date.now() - started, content_retained: !!contentRef, content_ref: contentRef, status,
   };
 }
-
-async function enqueueUsage(env: Env, event: UsageEvent): Promise<void> { await env.USAGE_QUEUE.send(event satisfies QueueMessage); }
 
 function extractTokens(value: unknown): Tokens | null {
   if (!value || typeof value !== "object") return null;

@@ -1,15 +1,16 @@
 import { authorizeAdmin } from "./access";
 import {
-  authorityCall, listBindings, listCredentials, listPolicies, listUsers, resolveConnections,
+  authorityCall, listBindings, listConnections, listCredentials, listPolicies, listUsers,
 } from "./authority";
 import {
   listAssignmentRules, normalizeAssignmentEvidence, reconcileUserAssignments,
   type AssignmentEvidence,
 } from "./assignments";
-import { usageSnapshot } from "./ledgers";
+import { contentKey } from "./content-retention";
+import { usageSnapshots } from "./ledgers";
 import { startOAuth } from "./oauth";
-import { contentKey } from "./proxy";
-import { listGrantRecords, listHealth, providerReadiness, refreshStoredGrant, snapshot } from "./providers";
+import { listGrantRecords, listHealth, providerReadiness, providerReadinessFromState, refreshStoredGrant, snapshot } from "./providers";
+import type { AdminBootstrapResponse } from "../shared/contracts";
 import type {
   AccessControlUser, AccessPolicy, AccessPolicyEntry, AssignmentRule, Env, PolicyBinding,
   ProviderConnection, ProxyCredential, ProxyCredentialEntry, UpstreamGrant,
@@ -23,6 +24,7 @@ export async function adminApi(request: Request, env: Env, path: string): Promis
   if (authorization instanceof Response) return authorization;
   try {
     if (request.method === "GET" && path === "/v1/admin/content") return getContent(request, env);
+    if (request.method === "GET" && path === "/v1/admin/bootstrap") return privateJson(await adminBootstrap(env));
     if (request.method === "GET" && path === "/v1/admin/overview") return privateJson(await overview(env));
     if (request.method === "GET" && ["/v1/admin/tenants", "/v1/admin/users"].includes(path)) return privateJson({ tenants: await tenants(env) });
     if (request.method === "GET" && path === "/v1/admin/usage") return adminUsage(env);
@@ -65,6 +67,10 @@ async function getContent(request: Request, env: Env): Promise<Response> {
 
 async function overview(env: Env) {
   const policies = await listPolicies(env), credentials = await listCredentials(env);
+  return overviewFrom(policies, credentials);
+}
+
+function overviewFrom(policies: AccessPolicyEntry[], credentials: ProxyCredentialEntry[]) {
   const active = new Map(policies.map((entry) => [entry.policyId, entry.policy.enabled]));
   return {
     policiesTotal: policies.length, policiesActive: policies.filter((entry) => entry.policy.enabled).length,
@@ -78,6 +84,10 @@ async function overview(env: Env) {
 
 async function tenants(env: Env) {
   const policies = await listPolicies(env), credentials = await listCredentials(env);
+  return tenantsFrom(policies, credentials);
+}
+
+function tenantsFrom(policies: AccessPolicyEntry[], credentials: ProxyCredentialEntry[]) {
   const groups = new Map<string, { tenantId: string; policies: number; activePolicies: number; keys: number; activeKeys: number; providers: Set<string>; allProviders: boolean; monthlyBudgetMicros: number; requestCostMicros: number }>();
   for (const entry of policies) {
     const id = entry.policy.tenantId ?? "default";
@@ -98,7 +108,7 @@ async function tenants(env: Env) {
 async function adminUsage(env: Env): Promise<Response> {
   const policies = await listPolicies(env);
   const rows = await Promise.all(policies.map(async (entry) => ({ ...legacyKeyResponse(entry), budget: await budgetStatus(env, entry) })));
-  return privateJson({ policies: rows, keys: rows, usage: await usageSnapshot(env, null) });
+  return privateJson({ policies: rows, keys: rows, usage: await usageSnapshots(env, policies.map((entry) => ({ policyId: entry.policyId, tenantId: entry.policy.tenantId ?? "default" }))) });
 }
 
 async function budgetStatus(env: Env, entry: AccessPolicyEntry) {
@@ -113,17 +123,51 @@ async function budgetStatus(env: Env, entry: AccessPolicyEntry) {
 }
 
 async function credentialResponses(env: Env) {
-  const policies = new Map((await listPolicies(env)).map((entry) => [entry.policyId, entry.policy]));
-  return (await listCredentials(env)).map((entry) => {
+  return credentialResponsesFrom(await listPolicies(env), await listCredentials(env));
+}
+
+function credentialResponsesFrom(policyEntries: AccessPolicyEntry[], credentialEntries: ProxyCredentialEntry[]) {
+  const policies = new Map(policyEntries.map((entry) => [entry.policyId, entry.policy]));
+  return credentialEntries.map((entry) => {
     const policy = policies.get(entry.credential.policyId), generationMatches = !!policy && entry.credential.policyGeneration === policy.generation;
     return { credentialId: entry.credentialId, policyId: entry.credential.policyId, enabled: entry.credential.enabled, policyEnabled: policy?.enabled ?? false, generationMatches, active: entry.credential.enabled && !!policy?.enabled && generationMatches, principalId: entry.credential.principalId ?? null };
   });
 }
 
 async function connections(env: Env): Promise<ProviderConnection[]> {
-  const stored = await resolveConnections(env, snapshot.providers.map((provider) => provider.id));
+  const stored = await listConnections(env, snapshot.providers.map((provider) => provider.id));
+  return connectionsFrom(stored);
+}
+
+function connectionsFrom(stored: ProviderConnection[]): ProviderConnection[] {
   const byId = new Map(stored.map((connection) => [connection.providerId, connection]));
   return snapshot.providers.map((provider) => byId.get(provider.id) ?? { providerId: provider.id, enabled: true, label: null });
+}
+
+async function adminBootstrap(env: Env): Promise<AdminBootstrapResponse> {
+  const [policies, credentials, users, bindings, storedConnections, grants, rules, health] = await Promise.all([
+    listPolicies(env),
+    listCredentials(env),
+    listUsers(env),
+    listBindings(env),
+    listConnections(env, snapshot.providers.map((provider) => provider.id)),
+    listGrantRecords(env),
+    assignmentRules(env),
+    listHealth(env),
+  ]);
+  const connectionRows = connectionsFrom(storedConnections);
+  return {
+    policies: policies.map(policyResponse),
+    credentials: credentialResponsesFrom(policies, credentials),
+    connections: connectionRows,
+    users: users.map(userResponse),
+    bindings,
+    providers: providerReadinessFromState(env, grants, connectionRows, health),
+    grants: grants.map(({ key, grant }) => grantResponse(key, grant)),
+    rules,
+    overview: overviewFrom(policies, credentials),
+    tenants: tenantsFrom(policies, credentials),
+  };
 }
 
 async function putBinding(request: Request, env: Env): Promise<Response> {
@@ -132,7 +176,6 @@ async function putBinding(request: Request, env: Env): Promise<Response> {
   const existing = (await listBindings(env)).filter((item) => item.principalType === binding.principalType && item.principalId === binding.principalId);
   const seed = { principal: { principalType: binding.principalType, principalId: binding.principalId }, bindings: existing };
   await authorityCall(env, "/mutate", { seed, binding });
-  await env.POLICY_KV.put(bindingKvKey(binding), JSON.stringify(binding));
   return privateJson(binding);
 }
 
@@ -140,7 +183,7 @@ async function putUser(request: Request, env: Env, encodedEmail: string): Promis
   const email = normalizeEmail(decodeURIComponent(encodedEmail)); if (!email) throw new HttpError(400, "invalid_access_user", "invalid access user email");
   const patch = await readJson<AccessControlUser["record"]>(request), existing = (await listUsers(env)).find((item) => item.email === email)?.record ?? {};
   const user: AccessControlUser = { email, record: { ...existing, ...patch, role: "user", groups: normalizeGroups(patch.groups ?? existing.groups ?? []) } };
-  await authorityCall(env, "/users/put", user); await env.POLICY_KV.put(`access/users/${email}`, JSON.stringify(user.record));
+  await authorityCall(env, "/users/put", user);
   return privateJson(userResponse(user));
 }
 
@@ -149,11 +192,10 @@ async function putUserGrants(request: Request, env: Env, encodedEmail: string): 
   const body = await readJson<AccessControlUser["record"] & { policyIds?: string[] }>(request);
   const ids = [...new Set(body.policyIds ?? [])];
   const known = new Set((await listPolicies(env)).map((entry) => entry.policyId)); if (ids.some((id) => !known.has(id))) throw new HttpError(404, "unknown_policy", "one or more policies do not exist");
-  const user: AccessControlUser = { email, record: { ...body, role: "user", groups: normalizeGroups(body.groups ?? []) } };
+  const existing = (await listUsers(env)).find((item) => item.email === email)?.record ?? {};
+  const user: AccessControlUser = { email, record: { ...existing, ...body, role: "user", groups: normalizeGroups(body.groups ?? existing.groups ?? []) } };
   const principal = { principalType: "user" as const, principalId: email }, bindings = (await listBindings(env)).filter((item) => item.principalType === "user" && item.principalId === email);
   const result = await authorityCall<{ bindings: PolicyBinding[] }>(env, "/users/put-bindings", { user, policyIds: ids, seed: { principal, bindings } });
-  await env.POLICY_KV.put(`access/users/${email}`, JSON.stringify(user.record));
-  await Promise.all(result.bindings.map((binding) => env.POLICY_KV.put(bindingKvKey(binding), JSON.stringify(binding))));
   return privateJson({ user: userResponse(user), bindings: result.bindings });
 }
 
@@ -165,7 +207,7 @@ async function policyMutation(request: Request, env: Env, rest: string): Promise
   if (revoke && request.method === "POST") { if (!existing) throw new HttpError(404, "unknown_policy", "policy not found"); policy = { ...existing, enabled: false }; }
   else if (request.method === "PUT") policy = normalizePolicy(await readJson<Partial<AccessPolicy> & { allProviders?: boolean }>(request), existing);
   else throw new HttpError(405, "method_not_allowed", "admin method is not allowed");
-  const entry = { policyId: id, policy }; await authorityCall(env, "/policies/put", entry); await env.POLICY_KV.put(`policies/${id}`, JSON.stringify(policy));
+  const entry = { policyId: id, policy }; await authorityCall(env, "/policies/put", entry);
   return privateJson(policyResponse(entry));
 }
 
@@ -180,14 +222,14 @@ async function credentialMutation(request: Request, env: Env, rest: string): Pro
     if (!body.secretSha256 || !/^[0-9a-f]{64}$/i.test(body.secretSha256)) throw new HttpError(400, "invalid_credential", "secretSha256 must be a SHA-256 hex digest");
     credential = { enabled: body.enabled ?? true, secretSha256: body.secretSha256.toLowerCase(), policyId: policy.policyId, policyGeneration: policy.policy.generation, principalId: body.principalId ?? null };
   } else throw new HttpError(405, "method_not_allowed", "admin method is not allowed");
-  const entry: ProxyCredentialEntry = { credentialId: id, credential }; await authorityCall(env, "/credentials/put", entry); await env.POLICY_KV.put(`credentials/${id}`, JSON.stringify(credential));
+  const entry: ProxyCredentialEntry = { credentialId: id, credential }; await authorityCall(env, "/credentials/put", entry);
   return privateJson((await credentialResponses(env)).find((item) => item.credentialId === id));
 }
 
 async function putConnection(request: Request, env: Env, encodedId: string): Promise<Response> {
   const id = decodeURIComponent(encodedId), provider = snapshot.providers.find((item) => item.id === id); if (!provider) throw new HttpError(404, "unknown_provider", "provider does not exist");
   const body = await readJson<Partial<ProviderConnection>>(request), connection: ProviderConnection = { providerId: id, enabled: body.enabled ?? true, label: body.label ?? null };
-  await authorityCall(env, "/connections/put", connection); await env.POLICY_KV.put(`connections/${id}`, JSON.stringify(connection)); return privateJson(connection);
+  await authorityCall(env, "/connections/put", connection); return privateJson(connection);
 }
 
 async function upstreamGrantMutation(request: Request, env: Env, rest: string): Promise<Response> {
@@ -221,6 +263,8 @@ async function putAssignmentRule(request: Request, env: Env, encodedId: string):
   if (rule.policyIds.some((policyId) => !known.has(policyId))) throw new HttpError(404, "unknown_policy", "one or more assignment policies do not exist");
   await env.POLICY_KV.put(key, JSON.stringify(rule));
   await syncAssignmentBindings(env, id, existing, rule);
+  const rules = await assignmentRules(env);
+  for (const user of await listUsers(env)) await reconcileUserAssignments(user, rules, env);
   return privateJson(assignmentResponse(id, rule));
 }
 
@@ -231,7 +275,6 @@ async function syncAssignmentBindings(env: Env, id: string, existing: Assignment
   for (const policyId of policyIds) {
     const binding: PolicyBinding = { ...principal, policyId, enabled: rule.enabled && rule.policyIds.includes(policyId), priority: rule.priority };
     await authorityCall(env, "/mutate", { seed: { principal, bindings: current }, binding });
-    await env.POLICY_KV.put(bindingKvKey(binding), JSON.stringify(binding));
   }
 }
 
@@ -247,7 +290,7 @@ async function reconcileAssignments(request: Request, env: Env): Promise<Respons
   const targets = body.all ? users : users.filter((user) => user.email === email);
   const rules = await assignmentRules(env), results = [];
   for (const user of targets) {
-    const result = await reconcileUserAssignments(user, rules, env, evidence);
+    const result = await reconcileUserAssignments(user, rules, env, evidence, true);
     results.push({ email: user.email, matchedRuleIds: result.matchedRuleIds, retainedRuleIds: result.retainedRuleIds, groups: result.user.record.groups ?? [] });
   }
   return privateJson({ results });
@@ -298,10 +341,8 @@ function revokeGrant(value: UpstreamGrant): UpstreamGrant { const { credential: 
 
 function policyResponse(entry: AccessPolicyEntry) { return { policyId: entry.policyId, enabled: entry.policy.enabled, providers: entry.policy.providers, tenantId: entry.policy.tenantId ?? null, tokenRole: entry.policy.tokenRole ?? null, monthlyBudgetMicros: entry.policy.monthlyBudgetMicros ?? null, requestCostMicros: entry.policy.requestCostMicros ?? null, retainRequestContent: entry.policy.retainRequestContent !== false }; }
 function legacyKeyResponse(entry: AccessPolicyEntry) { return { kid: entry.policyId, ...policyResponse(entry) }; }
-function userResponse(user: AccessControlUser) { return { email: user.email, role: "user", tenantId: user.record.tenantId ?? "default", enabled: user.record.enabled ?? true, groups: user.record.groups ?? [], contentRetentionDisabled: user.record.contentRetentionDisabled ?? false }; }
-function grantResponse(key: string, grant: UpstreamGrant) { const parts = key.split("/"), tenant = parts[1] === "tenants"; return { key, scope: tenant ? "tenants" : "policies", scopeId: tenant ? parts[2] : parts[1], tokenRef: tenant ? parts[3] : parts[2], version: grant.version ?? 1, enabled: grant.enabled ?? true, kind: grant.kind ?? "oauth", provider: grant.provider ?? null, label: grant.label ?? null, tokenType: grant.tokenType ?? "Bearer", expiresAt: grant.expiresAt ?? null, scopes: grant.scopes ?? [], accountId: grant.accountId ?? null, subscription: grant.subscription ?? null, createdAt: grant.createdAt ?? null, updatedAt: grant.updatedAt ?? null, revokedAt: grant.revokedAt ?? null, hasCredential: !!grant.credential || Object.keys(grant.credentials ?? {}).length > 0, credentialFields: Object.keys(grant.credentials ?? {}).sort(), hasAccessToken: !!grant.accessToken, hasRefreshToken: !!grant.refreshToken, refreshConfigured: !!grant.refresh, refreshTokenUrl: grant.refresh?.tokenUrl ?? null, clientIdConfig: grant.refresh?.clientIdConfig ?? null, clientSecretConfig: grant.refresh?.clientSecretConfig ?? null, usable: grant.enabled !== false && !!(grant.credential || grant.accessToken || Object.keys(grant.credentials ?? {}).length) }; }
+function userResponse(user: AccessControlUser) { return { email: user.email, role: "user" as const, tenantId: user.record.tenantId ?? "default", enabled: user.record.enabled ?? true, groups: user.record.groups ?? [], contentRetentionDisabled: user.record.contentRetentionDisabled ?? false }; }
+function grantResponse(key: string, grant: UpstreamGrant) { const parts = key.split("/"), tenant = parts[1] === "tenants"; return { key, scope: tenant ? "tenants" as const : "policies" as const, scopeId: tenant ? parts[2] : parts[1], tokenRef: tenant ? parts[3] : parts[2], version: grant.version ?? 1, enabled: grant.enabled ?? true, kind: grant.kind ?? "oauth", provider: grant.provider ?? null, label: grant.label ?? null, tokenType: grant.tokenType ?? "Bearer", expiresAt: grant.expiresAt ?? null, scopes: grant.scopes ?? [], accountId: grant.accountId ?? null, subscription: grant.subscription ?? null, createdAt: grant.createdAt ?? null, updatedAt: grant.updatedAt ?? null, revokedAt: grant.revokedAt ?? null, hasCredential: !!grant.credential || Object.keys(grant.credentials ?? {}).length > 0, credentialFields: Object.keys(grant.credentials ?? {}).sort(), hasAccessToken: !!grant.accessToken, hasRefreshToken: !!grant.refreshToken, refreshConfigured: !!grant.refresh, refreshTokenUrl: grant.refresh?.tokenUrl ?? null, clientIdConfig: grant.refresh?.clientIdConfig ?? null, clientSecretConfig: grant.refresh?.clientSecretConfig ?? null, usable: grant.enabled !== false && !!(grant.credential || grant.accessToken || Object.keys(grant.credentials ?? {}).length) }; }
 function assignmentResponse(ruleId: string, rule: AssignmentRule) { return { ruleId, ...rule, generatedGroup: `assignment.${ruleId}` }; }
-function assignmentRuleKey(id: string) { return `assignment/rules/${id}`; }
-function bindingKvKey(binding: PolicyBinding) { return `access/bindings/${binding.principalType}/${encodeURIComponent(binding.principalId)}/${binding.policyId}`; }
 function normalizeGroups(values: string[]) { return [...new Set(values.map((value) => value.trim().toLowerCase()).filter(Boolean))].sort(); }
 function sum(values: Array<number | null | undefined>) { return values.reduce<number>((total, value) => total + (value ?? 0), 0); }

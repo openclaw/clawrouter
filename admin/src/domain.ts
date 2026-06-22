@@ -1,177 +1,24 @@
-export interface RouteCatalog {
-  openaiCompatible: Array<{
-    provider: string;
-    models: Array<{ id: string; capabilities: string[]; endpoints: string[] }>;
-    modelPrefixes?: string[];
-    endpoints: string[];
-  }>;
-  manifestProxy: Array<{
-    provider: string;
-    endpoint: string;
-    route: string;
-    methods: string[];
-    pathParams?: string[];
-    requestFormat?: string;
-    sampleModel?: string | null;
-    models?: Array<{ id: string; capabilities: string[] }>;
-    streaming?: boolean | null;
-  }>;
-}
-
-export interface AccessPolicy {
-  policyId: string;
-  enabled: boolean;
-  providers: string[];
-  tenantId?: string | null;
-  tokenRole?: string | null;
-  monthlyBudgetMicros?: number | null;
-  requestCostMicros?: number | null;
-  retainRequestContent: boolean;
-}
+import type {
+  AccessForm,
+  AccessPolicy,
+  AccessUser,
+  AdminTenantSummary,
+  AdminUsageRow,
+  BindingForm,
+  PlaygroundForm,
+  PolicyBinding,
+  ProviderAccess,
+  ProviderReadiness,
+  RouteCatalog,
+  ServiceItem,
+  ServiceOutcome,
+} from "./ui-types";
 
 export interface CredentialSummary {
   credentialId: string;
   policyId: string;
   enabled: boolean;
   active?: boolean;
-}
-
-export interface ProviderReadiness {
-  id: string;
-  displayName: string;
-  class: string;
-  serviceKind: string;
-  requiredConfig: string[];
-  optionalConfig: string[];
-  missingConfig: string[];
-  configPresent: boolean;
-  oauthGrantRequired: boolean;
-  oauthGrantCount: number;
-  upstreamGrantCount: number;
-  openaiCompatible: boolean;
-  manifestRoutes: number;
-  modelCount: number;
-  connectionEnabled?: boolean;
-  verified?: boolean;
-  lastCheckedAt?: string | null;
-  latencyMs?: number | null;
-  executable: boolean;
-  status: string;
-  reasons: string[];
-}
-
-export interface ProviderAccess {
-  provider: string;
-  displayName: string;
-  serviceKind: string;
-  allowed: boolean;
-  policies: string[];
-  readiness: ProviderReadiness;
-}
-
-export interface AccessUser {
-  email: string;
-  role: "admin" | "user";
-  tenantId: string;
-  enabled: boolean;
-  groups: string[];
-  contentRetentionDisabled: boolean;
-}
-
-export interface PolicyBinding {
-  policyId: string;
-  principalType: "user" | "group";
-  principalId: string;
-  enabled: boolean;
-  priority: number;
-}
-
-export interface AccessForm {
-  email: string;
-  tenantId: string;
-  enabled: boolean;
-  groups: string;
-  contentRetentionDisabled: boolean;
-  policyIds: string[];
-}
-
-export interface BindingForm {
-  policyId: string;
-  principalType: "user" | "group";
-  principalId: string;
-  enabled: boolean;
-  priority: string;
-}
-
-export interface BudgetStatus {
-  configured: boolean;
-  ledger: string;
-  windowKey?: string | null;
-  limitMicros?: number | null;
-  spentMicros?: number | null;
-  remainingMicros?: number | null;
-}
-
-export interface AdminUsageRow {
-  policyId?: string;
-  kid: string;
-  tenantId: string;
-  enabled: boolean;
-  providers: string[];
-  tokenRole?: string | null;
-  monthlyBudgetMicros?: number | null;
-  requestCostMicros?: number | null;
-  budget: BudgetStatus;
-}
-
-export interface AdminTenantSummary {
-  tenantId: string;
-  policies?: number;
-  activePolicies?: number;
-  keys: number;
-  activeKeys: number;
-  providers: string[];
-  allProviders?: boolean;
-  monthlyBudgetMicros: number;
-  requestCostMicros: number;
-}
-
-export interface ServiceItem {
-  id: string;
-  name: string;
-  provider: string;
-  kind: string;
-  category: string;
-  capabilities: string[];
-  surfaces: string[];
-  route: string;
-  routeCount: number;
-  models: number;
-  modelIds: string[];
-  access?: ProviderAccess;
-  readiness?: ProviderReadiness;
-}
-
-export interface ServiceOutcome {
-  label: string;
-  detail: string;
-  tone: "active" | "revoked" | "neutral";
-  playable: boolean;
-  blocked: boolean;
-}
-
-export interface PlaygroundForm {
-  mode: "model" | "service";
-  model: string;
-  endpoint: "/v1/chat/completions" | "/v1/responses";
-  serviceRoute: string;
-  serviceMethod: string;
-  servicePath: string;
-  servicePayload: string;
-  system: string;
-  prompt: string;
-  maxTokens: string;
-  temperature: string;
 }
 
 export interface PlaygroundMessage {

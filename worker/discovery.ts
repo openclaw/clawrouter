@@ -1,6 +1,6 @@
 import { publicSession, sessionPolicies, verifiedAccessSession } from "./access";
 import { authenticateProxyKey } from "./proxy";
-import { providerReadiness, snapshot, type Readiness } from "./providers";
+import { providerReadinessForPolicies, snapshot, type Readiness } from "./providers";
 import type { AccessPolicyEntry, AccessSession, AuthorizedIdentity, CompiledProvider, Env } from "./types";
 import { errorResponse, privateJson, sha256Hex } from "./utils";
 
@@ -94,7 +94,7 @@ async function entitlementRows(session: AccessSession, env: Env): Promise<Entitl
 }
 
 async function entitlementRowsForEntries(entries: AccessPolicyEntry[], env: Env): Promise<EntitlementRow[]> {
-  const readiness = await providerReadiness(env);
+  const readiness = await providerReadinessForPolicies(env, entries);
   return snapshot.providers.map((provider) => {
     const policies = entries.filter((entry) => entry.policy.enabled && (!entry.policy.providers.length || entry.policy.providers.includes(provider.id))).map((entry) => entry.policyId);
     return { provider: provider.id, displayName: provider.display_name, serviceKind: provider.service_kind, allowed: policies.length > 0, policies, readiness: readiness.find((row) => row.id === provider.id)! };
