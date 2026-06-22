@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Collapse provider-readiness connection checks into one authority lookup so cold catalog requests no longer fan out across provider Durable Objects.
 - Replace the Rust/Wasm data plane and provider compiler with a modular TypeScript Worker while preserving Durable Object storage and public API contracts.
 - Add a persistent Light/Dark console toggle, refine interactive states and page alignment, and simplify the signed-in identity footer.
 - Normalize current OpenAI reasoning-model token limits and omit unsupported Playground temperature values.

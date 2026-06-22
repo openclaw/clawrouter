@@ -1,5 +1,5 @@
 import snapshotJson from "./generated/provider-snapshot.json";
-import { resolveConnection } from "./authority";
+import { resolveConnection, resolveConnections } from "./authority";
 import type {
   AuthorizedIdentity, CompiledEndpoint, CompiledModel, CompiledProvider, Env,
   ProviderConnection, ProviderHealth, ProviderSnapshot, UpstreamGrant,
@@ -109,12 +109,11 @@ export function routeCatalog() {
 }
 
 export async function providerReadiness(env: Env): Promise<Readiness[]> {
-  const grants = await listGrantRecords(env);
-  const health = await listHealth(env);
-  return Promise.all(snapshot.providers.map(async (provider) => {
-    const connection = await connectionFor(env, provider.id);
-    return readinessFor(provider, env, grants, connection, health.get(provider.id));
-  }));
+  const [grants, health, storedConnections] = await Promise.all([
+    listGrantRecords(env), listHealth(env), resolveConnections(env, snapshot.providers.map((provider) => provider.id)),
+  ]);
+  const connections = new Map(storedConnections.map((connection) => [connection.providerId, connection]));
+  return snapshot.providers.map((provider) => readinessFor(provider, env, grants, connections.get(provider.id) ?? { providerId: provider.id, enabled: true }, health.get(provider.id)));
 }
 
 export async function readinessForIdentity(env: Env, auth: AuthorizedIdentity): Promise<Readiness[]> {

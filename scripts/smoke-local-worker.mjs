@@ -47,6 +47,9 @@ try {
   const inspectionBody = await inspection.json();
   assert.equal(inspection.status, 200, JSON.stringify(inspectionBody));
   assert.equal(inspectionBody.verification, "verified", "KV-only credential migrates into authority on first use");
+  const clientCatalog = await fetch(`${base}/v1/catalog`, { headers: { authorization: `Bearer ${proxyKey}` } });
+  assert.equal(clientCatalog.status, 200);
+  assert.deepEqual((await clientCatalog.json()).providers.map((provider) => provider.id), ["firecrawl", "replicate"]);
   const mismatch = await fetch(`${base}/v1/proxy/firecrawl/scrape`, { method: "POST", headers: { authorization: `Bearer ${proxyKey}`, "content-type": "application/json" }, body: JSON.stringify({ body: { model: "openai/gpt-5.5", url: "https://example.com" } }) });
   assert.equal(mismatch.status, 400);
   assert.equal((await mismatch.json()).error.code, "model_provider_mismatch");
