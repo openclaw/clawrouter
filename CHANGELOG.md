@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Show proxied Gravatar thumbnails for signed-in users without exposing email hashes or user network metadata to the browser.
 - Make repeated content-retention provisioning tolerate an existing lifecycle rule.
 - Resolve configured model aliases in OpenAI-compatible Playground requests instead of forwarding manifest placeholders.
 - Rebuild the Playground as a multi-turn chat with a bottom model/service composer and per-turn request/response inspection.

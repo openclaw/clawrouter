@@ -1781,7 +1781,9 @@ h2 {
 }
 
 .contextIcon {
+  position: relative;
   display: grid !important;
+  overflow: hidden;
   width: 30px;
   height: 30px;
   place-items: center;
@@ -1793,6 +1795,21 @@ h2 {
 .contextIcon svg {
   width: 14px;
   height: 14px;
+}
+
+.contextIcon img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 140ms ease-out;
+}
+
+.contextIconLoaded img {
+  opacity: 1;
 }
 
 .tenantSwitch strong {
