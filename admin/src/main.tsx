@@ -28,6 +28,7 @@ import {
   effectiveAccess,
   errorMessage,
   grantNamesForService,
+  knownPolicyProviders,
   optionalCurrencyMicros,
   optionalNumber,
   parseGroups,
@@ -796,14 +797,15 @@ function App() {
     try {
       setPolicyError("");
       setStatus("saving policy");
-      if (!policyForm.allProviders && !policyForm.providers.length) throw new Error("select at least one service");
+      const policyProviders = knownPolicyProviders(policyForm.providers, providers.map((provider) => provider.id));
+      if (!policyForm.allProviders && !policyProviders.length) throw new Error("select at least one service");
       if (!/^[A-Za-z0-9_]{4,}$/.test(policyForm.policyId)) throw new Error("policy id must use 4 or more letters, numbers, or underscores");
       const existingPolicy = keys.some((key) => key.policyId === policyForm.policyId);
       if (existingPolicy && selectedPolicyId !== policyForm.policyId) throw new Error("policy id already exists; select it from the policy list to edit it");
       const next: AccessPolicy = {
         policyId: policyForm.policyId,
         enabled: policyForm.enabled,
-        providers: policyForm.allProviders ? [] : policyForm.providers,
+        providers: policyForm.allProviders ? [] : policyProviders,
         tenantId: policyForm.tenantId || "default",
         tokenRole: policyForm.tokenRole || null,
         monthlyBudgetMicros: optionalCurrencyMicros(policyForm.monthlyBudgetMicros) ?? null,
