@@ -1,4 +1,125 @@
 
+.requestDrawer summary::-webkit-details-marker {
+  display: none;
+}
+
+.requestDrawer summary span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.requestDrawer summary strong {
+  color: var(--muted);
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.requestDrawerToolbar {
+  display: flex;
+  justify-content: flex-end;
+  border-top: 1px solid var(--border);
+  padding: 6px 10px;
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 10px;
+}
+
+.formGrid.compact {
+  padding: 0;
+}
+
+.full {
+  grid-column: 1 / -1;
+}
+
+.splitHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-bottom: 1px solid var(--border);
+}
+
+.splitHeader .panelTitle {
+  padding: 10px;
+}
+
+.segmented {
+  display: flex;
+  gap: 4px;
+  padding-right: 10px;
+}
+
+.segmented button {
+  min-height: 26px;
+  padding: 4px 8px;
+}
+
+.segmented button.active {
+  border-color: var(--primary);
+  background: var(--primary-100);
+  color: var(--primary);
+}
+
+.presetRow {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 5px;
+}
+
+.matrixHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  border-top: 1px solid var(--border);
+  padding-top: 9px;
+}
+
+.matrixHeader span {
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.providerFilter {
+  margin-top: -2px;
+}
+
+.serviceGroups {
+  display: grid;
+  gap: 8px;
+  max-height: 330px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.serviceGroup {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+}
+
+.serviceGroupHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 5px;
+}
+
+.serviceGroupHeader strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--foreground-strong);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .serviceGroupHeader span {
   color: var(--muted);
   font-size: 11px;
@@ -305,7 +426,7 @@ select,
 textarea {
   min-height: 36px;
   border-radius: var(--radius);
-  background: #ffffff;
+  background: var(--surface-raised);
   padding: 7px 9px;
   font-size: 12px;
 }
@@ -380,7 +501,7 @@ h2 {
   overflow: visible !important;
   border-radius: 0 !important;
   background: var(--primary);
-  color: white !important;
+  color: var(--primary-foreground) !important;
 }
 
 .brandMark svg {
@@ -441,7 +562,7 @@ h2 {
 .navTabs button:hover {
   border-color: transparent;
   border-left-color: var(--border-strong);
-  background: #f1f3ed;
+  background: var(--surface-muted);
   color: var(--foreground-strong);
 }
 
@@ -466,13 +587,13 @@ h2 {
   border: 0;
   border-top: 1px solid var(--border);
   border-radius: 0;
-  background: #f1f3ed;
+  background: var(--surface-muted);
   padding: 11px 12px;
 }
 
 .tenantSwitch > div {
   display: grid;
-  gap: 1px;
+  gap: 0;
   min-width: 0;
 }
 
@@ -485,7 +606,7 @@ h2 {
   place-items: center;
   border-radius: 50%;
   background: var(--success);
-  color: white !important;
+  color: var(--primary-foreground) !important;
 }
 
 .contextIcon svg {
@@ -502,152 +623,4 @@ h2 {
   object-fit: cover;
   opacity: 0;
   transition: opacity 140ms ease-out;
-}
-
-.contextIconLoaded img {
-  opacity: 1;
-}
-
-.tenantSwitch strong {
-  font-size: 11px;
-  font-weight: 600;
-}
-
-.tenantSwitch span,
-.tenantSwitch small {
-  color: var(--muted);
-  font-size: 10px;
-}
-
-.workspace {
-  min-width: 0;
-  padding: 0 0 20px;
-}
-
-.topbar {
-  position: sticky;
-  top: 0;
-  z-index: 10;
-  min-height: var(--header-height);
-  border-bottom: 1px solid var(--border);
-  background: rgb(251 252 248 / 0.96);
-  padding: 0 14px;
-  backdrop-filter: blur(8px);
-}
-
-.pageTitle {
-  gap: 9px;
-}
-
-.pageTitle > div {
-  gap: 2px;
-}
-
-.pageTitle h1 {
-  font-size: 15px;
-}
-
-.pageTitle p {
-  font-family: "DM Mono", ui-monospace, monospace;
-  font-size: 10px;
-  text-transform: uppercase;
-}
-
-.pageIcon {
-  width: 30px;
-  height: 30px;
-  border: 1px solid var(--border);
-  background: var(--primary-100);
-  color: var(--success);
-}
-
-.pageIconSvg {
-  width: 14px;
-  height: 14px;
-}
-
-.topActions {
-  gap: 7px;
-}
-
-.connectionMeta {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: var(--muted);
-  font-family: "DM Mono", ui-monospace, monospace;
-  font-size: 9px;
-  line-height: 1.15;
-  text-transform: uppercase;
-  white-space: nowrap;
-}
-
-.connectionMeta strong,
-.connectionMeta time,
-.connectionMeta > span:last-child {
-  color: var(--foreground);
-  font-size: 9px;
-  font-variant-numeric: tabular-nums;
-}
-
-.connectionMeta strong {
-  font-weight: 700;
-}
-
-.connectionDot {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--muted);
-  box-shadow: 0 0 0 2px #f1f5f9;
-}
-
-.connectionMeta-success .connectionDot { background: var(--success); box-shadow: 0 0 0 2px var(--success-bg); }
-.connectionMeta-pending .connectionDot,
-.connectionMeta-neutral .connectionDot { background: var(--warning); box-shadow: 0 0 0 2px var(--warning-bg); }
-.connectionMeta-error .connectionDot { background: var(--danger); box-shadow: 0 0 0 2px var(--danger-bg); }
-.connectionSeparator { color: var(--border-strong); }
-
-.buttonSecondary,
-.segmented button,
-.presetRow button {
-  border-color: var(--border);
-  background: var(--background);
-  color: var(--foreground-strong);
-}
-
-.buttonSecondary:hover:not(:disabled),
-.segmented button:hover:not(:disabled),
-.presetRow button:hover:not(:disabled) {
-  border-color: var(--border-strong);
-  background: #f1f3ed;
-  color: var(--foreground-strong);
-}
-
-.statusBar {
-  min-height: 28px;
-  margin: 0;
-  border: 0;
-  border-bottom: 1px solid var(--border);
-  border-radius: 0;
-  background: #f1f3ed;
-  padding: 4px 14px;
-}
-
-.statusBar span {
-  font-size: 10px;
-}
-
-.statusBar strong,
-.status {
-  min-height: 18px;
-  border-radius: 2px;
-  padding: 2px 6px;
-  font-size: 10px;
-  letter-spacing: 0;
-}
-
-.statusBar em {
-  border-radius: 2px;
-  font-size: 10px;
 }

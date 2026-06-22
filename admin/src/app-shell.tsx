@@ -1,4 +1,6 @@
 export function AppShell({ controller }: { controller: ReturnType<typeof useConsoleController> }) {
+  const [theme, setTheme] = React.useState(initialTheme);
+  React.useEffect(() => { applyTheme(theme); }, [theme]);
   const { view, setView, gatewayOrigin, allowDemo, session, setSession, providers, setProviders, routes, setRoutes, keys, setKeys, credentials, setCredentials, connections, setConnections, upstreamGrants, setUpstreamGrants, assignmentRules, setAssignmentRules, policyDataLoaded, setPolicyDataLoaded, users, setUsers, bindings, setBindings, adminOverview, setAdminOverview, tenantSummaries, setTenantSummaries, usageRows, setUsageRows, usageSnapshot, setUsageSnapshot, usageLoaded, setUsageLoaded, usageRefreshKey, setUsageRefreshKey, entitlements, setEntitlements, providerReadiness, setProviderReadiness, policyForm, setPolicyForm, credentialForm, setCredentialForm, bindingForm, setBindingForm, upstreamGrantForm, setUpstreamGrantForm, assignmentRuleForm, setAssignmentRuleForm, accessTab, setAccessTab, accessForm, setAccessForm, query, setQuery, kind, setKind, selectedServiceId, setSelectedServiceId, selectedPolicyId, setSelectedPolicyId, selectedCredentialId, setSelectedCredentialId, selectedBindingKey, setSelectedBindingKey, selectedUpstreamGrantKey, setSelectedUpstreamGrantKey, selectedAssignmentRuleId, setSelectedAssignmentRuleId, selectedUserEmail, setSelectedUserEmail, status, setStatus, lastUpdatedAt, setLastUpdatedAt, demoMode, setDemoMode, issuedKey, setIssuedKey, policyError, setPolicyError, userError, setUserError, playgroundError, setPlaygroundError, playground, setPlayground, playgroundTurns, setPlaygroundTurns, selectedPlaygroundTurnId, setSelectedPlaygroundTurnId, requestMode, setRequestMode, refreshPromiseRef, refreshBackgroundRef, refreshRef, accessByProvider, services, models, serviceRoutes, kinds, filteredServices, selectedService, selectedPolicy, selectedCredential, selectedBinding, selectedUpstreamGrant, selectedAssignmentRule, selectedUser, selectedModel, selectedServiceRoute, statusPresentation, busy, busyRef, statusTone, refresh, refreshData, loadUserDemo, savePolicy, issueCredential, revokeCredential, saveBinding, saveUpstreamGrant, revokeUpstreamGrant, refreshUpstreamGrant, authorizeUpstreamGrant, saveAssignmentRule, reconcileAssignments, setProviderConnection, refreshUsageLedger, saveUser, revoke, runPlayground, editPolicy, startNewPolicy, startNewUser, editBinding, editUpstreamGrant, startNewUpstreamGrant, editAssignmentRule, startNewAssignmentRule, applyPreset, togglePolicyProvider, setPolicyProviderGroup, applyDemoKeys, applyDemoCredentials, navigateTo } = controller;
   return (
     <main className="appShell">
@@ -32,12 +34,10 @@ export function AppShell({ controller }: { controller: ReturnType<typeof useCons
             </div>
           ) : null}
         </nav>
-        <div className="tenantSwitch">
+        <div className="tenantSwitch" title={`${session.tenantId ?? "default"} tenant · ${session.role}`}>
           <UserAvatar email={session.email} />
           <div>
-            <span>Active context</span>
             <strong>{session.email ?? "not signed in"}</strong>
-            <small>{session.tenantId ?? "default"} · {session.role}</small>
           </div>
         </div>
       </aside>
@@ -52,6 +52,7 @@ export function AppShell({ controller }: { controller: ReturnType<typeof useCons
             </div>
           </div>
           <div className="topActions">
+            <ThemeToggle value={theme} onChange={setTheme} />
             <span className={`status ${session.contentRetention?.enabled ? "active" : "neutral"}`} title={session.contentRetention ? session.contentRetention.enabled ? `Request content retained for ${session.contentRetention.retentionDays} days` : "Request content retention is off for this identity" : "Loading request content retention status"}>
               retention {session.contentRetention ? session.contentRetention.enabled ? `on · ${session.contentRetention.retentionDays}d` : "off" : "pending"}
             </span>
@@ -241,11 +242,11 @@ export function AppShell({ controller }: { controller: ReturnType<typeof useCons
 import React from "react";
 import { Route } from "lucide-react";
 import { accessFormFromUser, playgroundServicePreset } from "./domain";
-import { BrandMark,EntityName,InlineError,InlineNote,InspectorHeader,OutcomeStatus,PanelTitle,ReadinessStatus,Status,viewIcon,viewSubtitle,viewTitle } from "./components";
+import { BrandMark,EntityName,InlineError,InlineNote,InspectorHeader,OutcomeStatus,PanelTitle,ReadinessStatus,Status,ThemeToggle,viewIcon,viewSubtitle,viewTitle } from "./components";
 import { DashboardScreen, CatalogScreen, UserAvatar } from "./screens/dashboard-catalog";
 import { PlaygroundScreen } from "./screens/playground";
 import { PoliciesScreen } from "./screens/access";
 import { UsageScreen, UsersScreen } from "./screens/users-usage";
-import { defaultBinding, navItems } from "./ui-config";
+import { applyTheme, defaultBinding, initialTheme, navItems } from "./ui-config";
 import { formatTimestamp } from "./ui-helpers";
 import { useConsoleController } from "./use-console-controller";

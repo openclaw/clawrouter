@@ -1,4 +1,23 @@
 
+const themeStorageKey = "clawrouter-theme";
+
+export function readTheme(): Theme {
+  try {
+    const stored = window.localStorage.getItem(themeStorageKey);
+    if (stored === "light" || stored === "dark") return stored;
+  } catch { /* storage can be unavailable in privacy-restricted contexts */ }
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+export function applyTheme(theme: Theme) {
+  document.documentElement.dataset.theme = theme;
+  document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute("content", theme === "dark" ? "#0d120f" : "#fbfcf8");
+  try { window.localStorage.setItem(themeStorageKey, theme); } catch { /* preference still applies for this page */ }
+}
+
+export const initialTheme = readTheme();
+applyTheme(initialTheme);
+
 export const pathViews: Record<string, View> = {
   "/": "home",
   "/access": "policies",
@@ -95,4 +114,4 @@ export const adminViews = new Set<View>(["policies", "users", "usage"]);
 import { BarChart3, Boxes, FlaskConical, KeyRound, LayoutDashboard, Users } from "lucide-react";
 import { playgroundServicePreset } from "./domain";
 import { demoData } from "./demo-data";
-import type { AccessForm, AccessTab, AssignmentRuleForm, BindingForm, CredentialForm, IconComponent, PlaygroundHttpResponse, PolicyForm, RouteCatalog, SessionResponse, UpstreamGrantForm, UsageSnapshot, View } from "./ui-types";
+import type { AccessForm, AccessTab, AssignmentRuleForm, BindingForm, CredentialForm, IconComponent, PlaygroundHttpResponse, PolicyForm, RouteCatalog, SessionResponse, Theme, UpstreamGrantForm, UsageSnapshot, View } from "./ui-types";

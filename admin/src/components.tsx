@@ -35,6 +35,11 @@ export function InlineNote({ children }: { children: React.ReactNode }) {
   return <div className="inlineNote">{children}</div>;
 }
 
+export function ThemeToggle({ value, onChange }: { value: Theme; onChange: (theme: Theme) => void }) {
+  const dark = value === "dark", next = dark ? "light" : "dark";
+  return <button className={`themeToggle${dark ? " active" : ""}`} type="button" role="switch" aria-checked={dark} aria-label={`${dark ? "Dark" : "Light"} mode`} title={`Switch to ${next} mode`} onClick={() => onChange(next)}><span>{dark ? <Moon aria-hidden="true" /> : <Sun aria-hidden="true" />}</span></button>;
+}
+
 export function Status({ label, tone }: { label: string; tone: OutcomeTone }) {
   const Icon = tone === "active" ? CheckCircle2 : tone === "revoked" ? CircleSlash2 : null;
   return <span className={`status ${tone}`}>{Icon ? <Icon aria-hidden="true" /> : null}{label}</span>;
@@ -89,8 +94,7 @@ export function kindIcon(kind: string): IconComponent {
   return Boxes;
 }
 import React from "react";
-import { Boxes, CheckCircle2, CircleSlash2, FlaskConical, ServerCog } from "lucide-react";
+import { Boxes, CheckCircle2, CircleSlash2, FlaskConical, Moon, ServerCog, Sun } from "lucide-react";
 import { readinessLabel, readinessTone } from "./domain";
 import { navItems } from "./ui-config";
-import type { BrandIcon, IconComponent, OutcomeTone, ProviderReadiness, ServiceOutcome, View } from "./ui-types";
-
+import type { BrandIcon, IconComponent, OutcomeTone, ProviderReadiness, ServiceOutcome, Theme, View } from "./ui-types";

@@ -1,4 +1,5 @@
 export type View = "home" | "catalog" | "playground" | "policies" | "users" | "usage";
+export type Theme = "light" | "dark";
 export type RefreshOptions = { background?: boolean };
 export type AccessRole = "admin" | "user";
 export type IconComponent = React.ComponentType<React.SVGProps<SVGSVGElement>>;

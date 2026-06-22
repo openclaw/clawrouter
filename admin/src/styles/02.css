@@ -1,4 +1,96 @@
 
+.catalogMeta strong {
+  overflow: hidden;
+  color: var(--foreground-strong);
+  font-size: 13px;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.catalogMeta span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kindTabs {
+  display: flex;
+  grid-column: 1 / -1;
+  gap: 4px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.kindTabs::-webkit-scrollbar {
+  display: none;
+}
+
+.kindTabs button {
+  flex: 0 0 auto;
+  min-height: 26px;
+  border-color: var(--border);
+  background: var(--background);
+  color: var(--foreground);
+  padding: 4px 7px;
+}
+
+.kindTabs button:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--soft-background);
+  color: var(--foreground-strong);
+}
+
+.kindTabs button.active {
+  border-color: #c9d0ff;
+  background: var(--primary-100);
+  color: var(--primary);
+}
+
+.kindTabs button span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.72);
+  color: inherit;
+  padding: 0 4px;
+  font-size: 10px;
+  font-weight: 700;
+}
+
+.inputWithIcon {
+  position: relative;
+}
+
+.inputWithIcon svg {
+  position: absolute;
+  left: 8px;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  color: var(--light-slate);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.inputWithIcon input {
+  padding-left: 28px;
+}
+
+.overviewStrip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 0;
+  border-bottom: 1px solid var(--border);
+  background: var(--background);
+}
+
 .metric {
   display: grid;
   gap: 2px;
@@ -199,14 +291,14 @@
 
 .grantChip {
   overflow: hidden;
-  border: 1px solid #dbe3f0;
-  background: #f8fafc;
+  border: 1px solid var(--border);
+  background: var(--surface-muted);
   color: var(--foreground);
   text-overflow: ellipsis;
 }
 
 .grantMore {
-  border: 1px solid #dbe3f0;
+  border: 1px solid var(--border);
   color: var(--muted);
 }
 
@@ -527,125 +619,4 @@
   font-size: 12px;
   font-weight: 600;
   list-style: none;
-}
-
-.requestDrawer summary::-webkit-details-marker {
-  display: none;
-}
-
-.requestDrawer summary span {
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-}
-
-.requestDrawer summary strong {
-  color: var(--muted);
-  font-size: 10px;
-  text-transform: uppercase;
-}
-
-.requestDrawerToolbar {
-  display: flex;
-  justify-content: flex-end;
-  border-top: 1px solid var(--border);
-  padding: 6px 10px;
-}
-
-.formGrid {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 8px;
-  padding: 10px;
-}
-
-.formGrid.compact {
-  padding: 0;
-}
-
-.full {
-  grid-column: 1 / -1;
-}
-
-.splitHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  border-bottom: 1px solid var(--border);
-}
-
-.splitHeader .panelTitle {
-  padding: 10px;
-}
-
-.segmented {
-  display: flex;
-  gap: 4px;
-  padding-right: 10px;
-}
-
-.segmented button {
-  min-height: 26px;
-  padding: 4px 8px;
-}
-
-.segmented button.active {
-  border-color: var(--primary);
-  background: var(--primary-100);
-  color: var(--primary);
-}
-
-.presetRow {
-  display: grid;
-  grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 5px;
-}
-
-.matrixHeader {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
-  border-top: 1px solid var(--border);
-  padding-top: 9px;
-}
-
-.matrixHeader span {
-  color: var(--muted);
-  font-size: 11px;
-}
-
-.providerFilter {
-  margin-top: -2px;
-}
-
-.serviceGroups {
-  display: grid;
-  gap: 8px;
-  max-height: 330px;
-  overflow: auto;
-  padding-right: 2px;
-}
-
-.serviceGroup {
-  display: grid;
-  gap: 4px;
-  min-width: 0;
-}
-
-.serviceGroupHeader {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) auto auto auto;
-  align-items: center;
-  gap: 5px;
-}
-
-.serviceGroupHeader strong {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--foreground-strong);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
