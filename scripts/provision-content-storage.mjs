@@ -1,21 +1,25 @@
 import { spawnSync } from "node:child_process";
+import { resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 
 const bucket = process.env.CLAWROUTER_CONTENT_BUCKET ?? "clawrouter-content";
 
-runAllowExists(["r2", "bucket", "create", bucket]);
-runAllowExists([
-  "r2",
-  "bucket",
-  "lifecycle",
-  "add",
-  bucket,
-  "request-content-v1-30-days",
-  "v1/",
-  "--expire-days",
-  "30",
-  "-y",
-]);
-console.log(`CONTENT_ARCHIVE=${bucket} retention=30d`);
+if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
+  runAllowExists(["r2", "bucket", "create", bucket]);
+  runAllowExists([
+    "r2",
+    "bucket",
+    "lifecycle",
+    "add",
+    bucket,
+    "request-content-v1-30-days",
+    "v1/",
+    "--expire-days",
+    "30",
+    "-y",
+  ]);
+  console.log(`CONTENT_ARCHIVE=${bucket} retention=30d`);
+}
 
 function runAllowExists(args) {
   const result = spawnSync("pnpm", ["exec", "wrangler", ...args], {
@@ -26,9 +30,13 @@ function runAllowExists(args) {
     process.stdout.write(output);
     return;
   }
-  if (/already exists|already has|duplicate/i.test(output)) {
+  if (isAlreadyConfigured(output)) {
     console.log(`${args.join(" ")} already configured`);
     return;
   }
   throw new Error(output || `wrangler ${args.join(" ")} failed`);
+}
+
+export function isAlreadyConfigured(output) {
+  return /already exists|already has|duplicate|rule ids must be unique/i.test(output);
 }
