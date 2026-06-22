@@ -16,6 +16,7 @@ test("Access provisioning protects the browser OAuth callback by default", () =>
 
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /clawrouter\.example\.com\/dashboard\/\*/);
+  assert.match(result.stdout, /clawrouter\.example\.com\/v1\/session\*/);
   assert.match(result.stdout, /clawrouter\.example\.com\/v1\/admin\/\*/);
   assert.match(result.stdout, /clawrouter\.example\.com\/v1\/oauth\/callback/);
   assert.doesNotMatch(result.stdout, /clawrouter\.example\.com\/v1\/entitlements/);

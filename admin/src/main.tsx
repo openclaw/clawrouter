@@ -2,12 +2,15 @@ import React, { FormEvent, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   BarChart3,
+  Activity,
+  ArrowUpRight,
   Boxes,
   CheckCircle2,
   ChevronRight,
   CircleSlash2,
   FlaskConical,
   KeyRound,
+  LayoutDashboard,
   LogIn,
   Play,
   Plus,
@@ -50,15 +53,16 @@ import {
 } from "./domain";
 import "./style.css";
 
-type View = "catalog" | "playground" | "policies" | "users" | "usage";
+type View = "home" | "catalog" | "playground" | "policies" | "users" | "usage";
 
 const pathViews: Record<string, View> = {
-  "/": "catalog",
+  "/": "home",
   "/access": "policies",
   "/admin": "policies",
   "/catalog": "catalog",
   "/console": "catalog",
-  "/dashboard": "catalog",
+  "/dashboard": "home",
+  "/dashboard/home": "home",
   "/dashboard/access": "policies",
   "/dashboard/catalog": "catalog",
   "/dashboard/playground": "playground",
@@ -73,6 +77,7 @@ const pathViews: Record<string, View> = {
 };
 
 const viewPaths: Record<View, string> = {
+  home: "/dashboard/home",
   catalog: "/dashboard/catalog",
   playground: "/dashboard/playground",
   policies: "/dashboard/access",
@@ -518,6 +523,7 @@ const rolePresets = {
 };
 
 const navItems: Array<{ id: View; label: string; icon: IconComponent; section: "workspace" | "admin" }> = [
+  { id: "home", label: "Dashboard", icon: LayoutDashboard, section: "workspace" },
   { id: "catalog", label: "Catalog", icon: Boxes, section: "workspace" },
   { id: "playground", label: "Playground", icon: FlaskConical, section: "workspace" },
   { id: "policies", label: "Access", icon: KeyRound, section: "admin" },
@@ -605,6 +611,10 @@ function App() {
   const statusTone = statusKind(status);
 
   useEffect(() => {
+    if (localDemoRole() === "user") {
+      loadUserDemo();
+      return;
+    }
     void refresh();
   }, []);
 
@@ -619,7 +629,7 @@ function App() {
   }, [session.role, status, view]);
 
   useEffect(() => {
-    if (view === "usage" && session.role === "admin" && policyDataLoaded && !demoMode && !usageLoaded) {
+    if ((view === "home" || view === "usage") && session.role === "admin" && policyDataLoaded && !demoMode && !usageLoaded) {
       void refreshUsageLedger();
     }
   }, [demoMode, policyDataLoaded, session.role, usageLoaded, usageRefreshKey, view]);
@@ -742,9 +752,17 @@ function App() {
         setBindings([]);
         setAdminOverview(null);
         setTenantSummaries([]);
-        setUsageRows([]);
-        setUsageSnapshot(emptyUsageSnapshot);
-        setUsageLoaded(false);
+        const accessUsageResult = await settled(() => request<{ policies: AdminUsageRow[]; usage: UsageSnapshot }>(gatewayOrigin, "/v1/session/usage"));
+        if (accessUsageResult.ok) {
+          setUsageRows(accessUsageResult.value.policies);
+          setUsageSnapshot(accessUsageResult.value.usage);
+          setUsageLoaded(true);
+        } else {
+          setUsageRows([]);
+          setUsageSnapshot(emptyUsageSnapshot);
+          setUsageLoaded(false);
+          refreshWarnings = [...refreshWarnings, `quota status unavailable: ${accessUsageResult.error}`];
+        }
         setSelectedUserEmail(user.email);
         setAccessForm(accessFormFromUser(user, []));
       }
@@ -790,6 +808,50 @@ function App() {
       setDemoMode(false);
       setStatus(`load error: ${message}`);
     }
+  }
+
+  function loadUserDemo() {
+    const user = demo.users.find((candidate) => candidate.email === "research@example.com") ?? demo.users.find((candidate) => candidate.role === "user")!;
+    const access = effectiveAccess(user, demo.keys, demo.bindings, demo.services);
+    const policyIds = new Set(access.policies.map((policy) => policy.policyId));
+    const providers = new Set(access.services.map((service) => service.provider));
+    const providerUsage = demo.usage.providers.filter((provider) => providers.has(provider.provider));
+    const usageSummary = providerUsage.reduce<UsageSummary>((summary, provider) => ({
+      ...summary,
+      requestCount: summary.requestCount + provider.requestCount,
+      successCount: summary.successCount + provider.successCount,
+      errorCount: summary.errorCount + provider.errorCount,
+      totalTokens: summary.totalTokens + provider.totalTokens,
+      actualCostMicros: summary.actualCostMicros + provider.actualCostMicros,
+    }), { requestCount: 0, successCount: 0, errorCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, actualCostMicros: 0 });
+    const entitlements = {
+      session: { ...demo.session, ...user, auth: "demo" },
+      providers: demo.entitlements.providers.map((provider) => ({
+        ...provider,
+        allowed: providers.has(provider.provider),
+        policies: provider.policies.filter((policyId) => policyIds.has(policyId)),
+      })),
+    };
+    setSession(entitlements.session);
+    setProviders(demo.providers);
+    setRoutes(demo.routes);
+    setKeys([]);
+    setCredentials([]);
+    setConnections([]);
+    setUpstreamGrants([]);
+    setAssignmentRules([]);
+    setPolicyDataLoaded(false);
+    setUsers([user]);
+    setBindings([]);
+    setAdminOverview(null);
+    setTenantSummaries([]);
+    setUsageRows(access.policies.map(policyUsageFallback));
+    setUsageSnapshot({ ...demo.usage, summary: usageSummary, providers: providerUsage, events: [] });
+    setUsageLoaded(true);
+    setEntitlements(entitlements);
+    setProviderReadiness(readinessMap(entitlements.providers.map((provider) => provider.readiness)));
+    setStatus("local user demo loaded");
+    setDemoMode(true);
   }
 
   async function savePolicy(event: FormEvent) {
@@ -1432,6 +1494,25 @@ function App() {
 
         <div className={`statusBar statusBar-${statusTone}`} role="status" aria-live="polite"><strong>{statusLabel(statusTone)}</strong><span>{status}</span>{demoMode ? <em>demo</em> : null}</div>
 
+        {view === "home" ? (
+          <DashboardScreen
+            session={session}
+            services={services}
+            policies={keys}
+            credentials={credentials}
+            users={users}
+            tenants={tenantSummaries}
+            overview={adminOverview}
+            usageRows={usageRows}
+            usage={usageSnapshot}
+            usageLoaded={usageLoaded}
+            onOpenCatalog={() => navigateTo("catalog")}
+            onOpenPlayground={() => navigateTo("playground")}
+            onOpenUsage={() => navigateTo("usage")}
+            onOpenAccess={() => navigateTo("policies")}
+          />
+        ) : null}
+
         {view === "catalog" ? (
           <CatalogScreen
             services={filteredServices}
@@ -1574,6 +1655,151 @@ function App() {
       </section>
     </main>
   );
+}
+
+function DashboardScreen({ session, services, policies, credentials, users, tenants, overview, usageRows, usage, usageLoaded, onOpenCatalog, onOpenPlayground, onOpenUsage, onOpenAccess }: {
+  session: SessionResponse;
+  services: ServiceItem[];
+  policies: AccessPolicy[];
+  credentials: ProxyCredential[];
+  users: AccessUser[];
+  tenants: AdminTenantSummary[];
+  overview: AdminOverview | null;
+  usageRows: AdminUsageRow[];
+  usage: UsageSnapshot;
+  usageLoaded: boolean;
+  onOpenCatalog: () => void;
+  onOpenPlayground: () => void;
+  onOpenUsage: () => void;
+  onOpenAccess: () => void;
+}) {
+  const isAdmin = session.role === "admin";
+  const grantedServices = services.filter((service) => service.access?.allowed);
+  const visibleServices = isAdmin ? services : grantedServices;
+  const usableServices = grantedServices.filter((service) => serviceOutcome(service).playable);
+  const configuredServices = services.filter((service) => service.readiness?.executable);
+  const attentionServices = visibleServices.filter((service) => !serviceOutcome(service).playable);
+  const rows = (usageRows.length ? usageRows : isAdmin ? policies.map(policyUsageFallback) : []).filter((row) => row.enabled);
+  const successRate = usage.summary.requestCount ? Math.round((usage.summary.successCount / usage.summary.requestCount) * 100) : 100;
+  const servicePercent = isAdmin
+    ? services.length ? Math.round((configuredServices.length / services.length) * 100) : 0
+    : grantedServices.length ? Math.round((usableServices.length / grantedServices.length) * 100) : 0;
+  const providerMaximum = Math.max(1, ...usage.providers.map((provider) => provider.requestCount));
+  const displayName = session.email?.split("@")[0] ?? (isAdmin ? "operator" : "member");
+  const activePolicies = policies.filter((policy) => policy.enabled).length;
+  const activeCredentials = credentials.filter((credential) => credential.enabled && credential.active !== false).length;
+
+  return (
+    <div className="dashboardCanvas">
+      <section className={`dashboardHero ${isAdmin ? "admin" : "member"}`}>
+        <div className="heroCopy">
+          <span className="heroEyebrow">{isAdmin ? "gateway operations" : "personal access"} · {session.tenantId ?? "default"}</span>
+          <h2>{isAdmin ? "Every route, budget, and identity—under control." : `Your services are ready, ${displayName}.`}</h2>
+          <p>{isAdmin ? "Live posture across the complete gateway. Drill into access or usage when a signal needs attention." : "See what you can call, how healthy it is, and the shared quota pools backing your access."}</p>
+          <div className="heroActions">
+            <button type="button" onClick={onOpenCatalog}>Explore services <ArrowUpRight aria-hidden="true" /></button>
+            <button type="button" className="heroButtonSecondary" onClick={onOpenPlayground}><Play aria-hidden="true" /> Open playground</button>
+          </div>
+        </div>
+        <div className="heroMeters" aria-label="gateway status summary">
+          <RadialMeter label={isAdmin ? "configured" : "usable"} value={isAdmin ? configuredServices.length : usableServices.length} total={isAdmin ? services.length : grantedServices.length} tone="green" />
+          <RadialMeter label="success" value={successRate} total={100} suffix="%" tone={successRate >= 95 ? "green" : "amber"} />
+          <RadialMeter label="requests" value={usage.summary.requestCount} total={Math.max(usage.summary.requestCount, 100)} display={formatCount(usage.summary.requestCount)} tone="blue" />
+        </div>
+      </section>
+
+      <section className="dashboardStats" aria-label="access overview">
+        <DashboardStat label={isAdmin ? "catalog coverage" : "available services"} value={isAdmin ? `${configuredServices.length}/${services.length}` : String(grantedServices.length)} note={isAdmin ? `${services.length - configuredServices.length} need attention` : `${usableServices.length} ready to call`} />
+        <DashboardStat label="shared activity" value={formatCount(usage.summary.totalTokens)} note={`${formatCount(usage.summary.requestCount)} requests · ${successRate}% success`} />
+        <DashboardStat label={isAdmin ? "active policies" : "quota pools"} value={String(isAdmin ? overview?.policiesActive ?? activePolicies : rows.length)} note={isAdmin ? `${overview?.tenantsTotal ?? tenants.length} tenants` : usageLoaded ? "live policy ledgers" : "status unavailable"} />
+        <DashboardStat label="actual spend" value={formatMicros(usage.summary.actualCostMicros)} note={isAdmin ? `${usage.providers.length} active providers` : "across your policy pools"} />
+      </section>
+
+      <div className="dashboardGrid">
+        <section className="dashboardPanel servicePanel">
+          <DashboardPanelHeader eyebrow={isAdmin ? "service estate" : "your access"} title={isAdmin ? "Provider readiness" : "Services you can use"} meta={`${isAdmin ? configuredServices.length : usableServices.length} ready`} action="View catalog" onAction={onOpenCatalog} />
+          <div className="serviceSpectrum" role="img" aria-label={`${servicePercent}% of ${isAdmin ? "catalog services are configured" : "granted services are usable"}`}>
+            <span className="serviceSpectrumReady" style={{ width: `${servicePercent}%` }} />
+            <span className="serviceSpectrumBlocked" style={{ width: `${100 - servicePercent}%` }} />
+          </div>
+          <div className="dashboardServiceGrid">
+            {visibleServices.slice(0, isAdmin ? 10 : 8).map((service, index) => {
+              const outcome = serviceOutcome(service);
+              return (
+                <article className={`dashboardService ${outcome.playable ? "ready" : "attention"}`} key={service.id} style={{ "--reveal": `${index * 35}ms` } as React.CSSProperties}>
+                  <span className="dashboardServiceMark"><BrandMark brandIcon={service.brandIcon} fallback={kindIcon(service.kind)} /></span>
+                  <span><strong>{service.name}</strong><small>{kindLabel(service.kind)} · {outcome.detail}</small></span>
+                  <Status label={outcome.label} tone={outcome.tone} />
+                </article>
+              );
+            })}
+            {!visibleServices.length ? <div className="dashboardEmpty"><CircleSlash2 aria-hidden="true" /><strong>No services assigned</strong><p>Ask an administrator to bind a service policy to your identity or group.</p></div> : null}
+          </div>
+          {visibleServices.length > (isAdmin ? 10 : 8) ? <button className="dashboardTextAction" type="button" onClick={onOpenCatalog}>Show {visibleServices.length - (isAdmin ? 10 : 8)} more services <ChevronRight aria-hidden="true" /></button> : null}
+        </section>
+
+        <section className="dashboardPanel quotaPanel">
+          <DashboardPanelHeader eyebrow="policy budgets" title={isAdmin ? "Budget posture" : "Your shared quotas"} meta={usageLoaded ? "live ledger" : "policy fallback"} />
+          <p className="panelIntro">{isAdmin ? "Spend and remaining capacity across active policies." : "Your requests draw from these shared policy pools; totals may include activity from teammates on the same policy."}</p>
+          <div className="quotaList">
+            {rows.slice(0, 6).map((row) => {
+              const percent = budgetPercent(row);
+              const limit = row.budget.limitMicros ?? row.monthlyBudgetMicros;
+              const remaining = row.budget.remainingMicros;
+              return (
+                <article className="quotaRow" key={usagePolicyId(row)}>
+                  <RadialMeter label="used" value={percent ?? 0} total={100} suffix="%" display={percent === null ? limit === undefined || limit === null ? "∞" : "—" : `${Math.round(percent)}%`} compact tone={percent !== null && percent >= 90 ? "amber" : "green"} />
+                  <span className="quotaIdentity"><strong>{usagePolicyId(row)}</strong><small>{row.tokenRole ?? "custom"} · {effectiveProviderCount(row.providers, services)} services</small></span>
+                  <span className="quotaNumbers"><strong>{remaining === undefined || remaining === null ? formatBudget(limit) : formatMicros(remaining)}</strong><small>{remaining === undefined || remaining === null ? "monthly limit" : `remaining of ${formatBudget(limit)}`}</small></span>
+                </article>
+              );
+            })}
+            {!rows.length ? <div className="dashboardEmpty"><Activity aria-hidden="true" /><strong>No quota pools assigned</strong><p>Usage will appear when an access policy is bound to your account.</p></div> : null}
+          </div>
+          {isAdmin ? <button className="dashboardTextAction" type="button" onClick={onOpenUsage}>Open full usage ledger <ChevronRight aria-hidden="true" /></button> : null}
+        </section>
+
+        <section className="dashboardPanel activityPanel">
+          <DashboardPanelHeader eyebrow="traffic shape" title="Provider activity" meta={`${usage.providers.length} active`} />
+          <div className="activityDiagram">
+            {usage.providers.slice(0, 7).map((provider) => {
+              const service = services.find((candidate) => candidate.provider === provider.provider);
+              const width = Math.max(4, Math.round((provider.requestCount / providerMaximum) * 100));
+              return <div className="activityBar" key={provider.provider}><EntityName brandIcon={service?.brandIcon} icon={ServerCog} title={service?.name ?? provider.provider} subtitle={`${formatCount(provider.totalTokens)} tokens`} /><span className="activityTrack"><span style={{ width: `${width}%` }} /></span><strong>{formatCount(provider.requestCount)}</strong></div>;
+            })}
+            {!usage.providers.length ? <div className="dashboardEmpty"><BarChart3 aria-hidden="true" /><strong>No activity yet</strong><p>Provider traffic will build this diagram as requests pass through the gateway.</p></div> : null}
+          </div>
+        </section>
+
+        {isAdmin ? (
+          <section className="dashboardPanel operationsPanel">
+            <DashboardPanelHeader eyebrow="administration" title="Control plane" meta={`${attentionServices.length} signals`} action="Manage access" onAction={onOpenAccess} />
+            <div className="operationsDiagram">
+              <div><span>identities</span><strong>{users.length}</strong><small>{users.filter((user) => user.enabled).length} enabled</small></div>
+              <div><span>credentials</span><strong>{activeCredentials}</strong><small>{credentials.length} provisioned</small></div>
+              <div><span>tenants</span><strong>{overview?.tenantsTotal ?? tenants.length}</strong><small>{overview?.policiesTotal ?? policies.length} policies</small></div>
+              <div className={attentionServices.length ? "needsAttention" : "healthy"}><span>service alerts</span><strong>{attentionServices.length}</strong><small>{attentionServices.length ? "configuration required" : "all clear"}</small></div>
+            </div>
+            <div className="operationsFooter"><ShieldCheck aria-hidden="true" /><span><strong>Access boundary active</strong><small>Identity, policy, quota, then provider</small></span></div>
+          </section>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function DashboardPanelHeader({ eyebrow, title, meta, action, onAction }: { eyebrow: string; title: string; meta: string; action?: string; onAction?: () => void }) {
+  return <header className="dashboardPanelHeader"><div><span>{eyebrow}</span><h2>{title}</h2></div>{action && onAction ? <button type="button" onClick={onAction}>{action}<ArrowUpRight aria-hidden="true" /></button> : <small>{meta}</small>}</header>;
+}
+
+function DashboardStat({ label, value, note }: { label: string; value: string; note: string }) {
+  return <div><span>{label}</span><strong>{value}</strong><small>{note}</small></div>;
+}
+
+function RadialMeter({ label, value, total, display, suffix = "", compact = false, tone }: { label: string; value: number; total: number; display?: string; suffix?: string; compact?: boolean; tone: "green" | "amber" | "blue" }) {
+  const percent = total > 0 ? Math.min(100, Math.max(0, (value / total) * 100)) : 0;
+  const shown = display ?? (suffix ? `${Math.round(value)}${suffix}` : `${formatCount(value)}/${formatCount(total)}`);
+  return <div className={`radialMeter ${compact ? "compact" : ""} ${tone}`} style={{ "--meter": `${percent}%` } as React.CSSProperties} aria-label={`${label}: ${shown}`}><div><strong>{shown}</strong><span>{label}</span></div></div>;
 }
 
 function CatalogScreen({ services, allServices, selected, policies, connections, query, setQuery, kind, setKind, kinds, canAdminister, onSelect, onSetConnection, onPlay, onAdd }: {
@@ -2385,11 +2611,12 @@ function ReadinessStatus({ readiness }: { readiness?: ProviderReadiness }) {
 }
 
 function viewTitle(view: View) {
-  return ({ catalog: "Catalog", playground: "Playground", policies: "Access", users: "Users", usage: "Usage" } as const)[view];
+  return ({ home: "Dashboard", catalog: "Catalog", playground: "Playground", policies: "Access", users: "Users", usage: "Usage" } as const)[view];
 }
 
 function viewSubtitle(view: View) {
   return {
+    home: "Services, quotas, and gateway posture",
     catalog: "Service access catalog",
     playground: "Run through the same access path",
     policies: "Policies, credentials, and principal bindings",
@@ -2446,6 +2673,11 @@ function statusLabel(kind: ReturnType<typeof statusKind>) {
 function isLocalDemoAllowed() {
   const params = new URLSearchParams(window.location.search);
   return params.has("demo") || ["localhost", "127.0.0.1", "::1"].includes(window.location.hostname);
+}
+
+function localDemoRole(): AccessRole | null {
+  if (!["localhost", "127.0.0.1", "::1"].includes(window.location.hostname)) return null;
+  return new URLSearchParams(window.location.search).get("demo") === "user" ? "user" : null;
 }
 
 async function settled<T>(loader: () => Promise<T>): Promise<{ ok: true; value: T } | { ok: false; error: string }> {
@@ -2606,6 +2838,14 @@ function formatBudget(value: number | null | undefined) {
   if (value === undefined || value === null) return "unlimited";
   if (value === 0) return "blocked";
   return formatMicros(value);
+}
+
+function budgetPercent(row: AdminUsageRow) {
+  const limit = row.budget.limitMicros ?? row.monthlyBudgetMicros;
+  const spent = row.budget.spentMicros;
+  if (row.budget.ledger === "blocked" || limit === 0) return 100;
+  if (limit === undefined || limit === null || spent === undefined || spent === null) return null;
+  return Math.min(100, Math.max(0, (spent / limit) * 100));
 }
 
 function formatMicros(value: number | null | undefined) {

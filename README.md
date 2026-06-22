@@ -68,13 +68,13 @@ pnpm cf:access
 
 Then redeploy with the printed `CLAWROUTER_ACCESS_TEAM_DOMAIN` and
 `CLAWROUTER_ACCESS_AUD` values. `/` redirects to the Access-protected
-`/dashboard` path, `/dashboard` redirects to `/dashboard/catalog`, and canonical console views live under `/dashboard/*`, while
+`/dashboard` path, `/dashboard` redirects to the role-aware `/dashboard/home`, and canonical console views live under `/dashboard/*`, while
 public `/v1` catalog and proxy routes stay normal. The Access app must also
-protect `/v1/session`, `/v1/playground/*`, `/v1/admin/*`, and
+protect `/v1/session*`, `/v1/playground/*`, `/v1/admin/*`, and
 `/v1/oauth/callback` so the browser console can bootstrap identity,
-entitlements, playground calls, admin mutations, and OAuth callbacks from a
+entitlements, session quota usage, playground calls, admin mutations, and OAuth callbacks from a
 verified Access session. A ClawRouter `access_session_required` JSON body on
-`/dashboard/*`, `/v1/session`, `/v1/playground/*`, or `/v1/oauth/callback` means the Access app is not
+`/dashboard/*`, `/v1/session`, `/v1/session/usage`, `/v1/playground/*`, or `/v1/oauth/callback` means the Access app is not
 in front of that console path yet, and `pnpm cf:smoke` treats that as a failed
 deployment smoke.
 
