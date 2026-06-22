@@ -3981,7 +3981,6 @@ select:disabled {
 
 .composerControls select {
   width: auto;
-  max-width: min(48%, 300px);
   min-height: 28px;
   border: 0;
   border-radius: 8px;
@@ -3989,6 +3988,17 @@ select:disabled {
   padding: 4px 26px 4px 9px;
   font-size: 10px;
   font-weight: 650;
+}
+
+.composerControls .providerPicker {
+  flex: 0 1 150px;
+  max-width: 34%;
+  background: #e4e9e2;
+}
+
+.composerControls .modelPicker {
+  flex: 1 1 210px;
+  max-width: 330px;
 }
 
 .composerStatus {
@@ -4132,7 +4142,8 @@ select:disabled {
   .chatTranscript { padding: 22px 12px 28px; }
   .composerDock { padding: 10px 10px 12px; }
   .composerStatus { display: none; }
-  .composerControls select { max-width: 56%; }
+  .composerControls .providerPicker { max-width: 38%; }
+  .composerControls .modelPicker { max-width: 46%; }
   .composerInspect span { display: none; }
   .chatMessage { max-width: 94%; }
 }

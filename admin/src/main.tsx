@@ -140,6 +140,7 @@ interface RouteCatalog {
     pathParams?: string[];
     requestFormat?: string;
     sampleModel?: string | null;
+    models?: Array<{ id: string; capabilities: string[] }>;
     streaming?: boolean | null;
   }>;
 }
@@ -2144,16 +2145,45 @@ function PlaygroundScreen({ form, setForm, models, selected, serviceRoutes, sele
     element?.scrollTo({ top: element.scrollHeight, behavior: turns.length > 1 ? "smooth" : "auto" });
   }, [busy, turns.length]);
 
+  const providerIds = Array.from(new Set([
+    ...models.map((model) => model.provider),
+    ...serviceRoutes.map((route) => route.provider),
+  ])).sort((left, right) => providerName(left, readinessByProvider).localeCompare(providerName(right, readinessByProvider)));
+  const activeProvider = selectedProvider ?? providerIds[0] ?? "";
+  const providerModels = models.filter((model) => model.provider === activeProvider);
+  const providerRoutes = serviceRoutes.filter((route) => route.provider === activeProvider);
+  const serviceModelTargets = providerModels.length ? [] : serviceModelOptions(providerRoutes);
+  const routeTargets = providerModels.length || serviceModelTargets.length ? [] : providerRoutes;
+  const selectedServiceModel = serviceModelFromForm(form, selectedServiceRoute);
+  const targetValue = form.mode === "model"
+    ? `model:${form.model}`
+    : serviceModelTargets.find((target) => routeKey(target.route) === form.serviceRoute && target.model === selectedServiceModel)?.value
+      ?? `service:${form.serviceRoute}`;
+
+  function selectProvider(provider: string) {
+    const model = models.find((item) => item.provider === provider);
+    if (model) {
+      setForm({ ...form, mode: "model", model: model.id });
+      return;
+    }
+    const routes = serviceRoutes.filter((item) => item.provider === provider);
+    const target = serviceModelOptions(routes)[0];
+    setForm({ ...form, mode: "service", ...playgroundServicePreset(target?.route ?? routes[0], target?.model) });
+  }
+
   function selectTarget(value: string) {
     if (value.startsWith("model:")) {
       setForm({ ...form, mode: "model", model: value.slice(6) });
       return;
     }
+    const modelTarget = serviceModelTargets.find((target) => target.value === value);
+    if (modelTarget) {
+      setForm({ ...form, mode: "service", ...playgroundServicePreset(modelTarget.route, modelTarget.model) });
+      return;
+    }
     const route = serviceRoutes.find((item) => routeKey(item) === value.slice(8));
     setForm({ ...form, mode: "service", ...playgroundServicePreset(route) });
   }
-
-  const targetValue = form.mode === "model" ? `model:${form.model}` : `service:${form.serviceRoute}`;
   return (
     <form className="playgroundLayout chatPlayground" onSubmit={onRun}>
       <section className="chatWorkspace">
@@ -2214,13 +2244,13 @@ function PlaygroundScreen({ form, setForm, models, selected, serviceRoutes, sele
               rows={2}
             />
             <div className="composerControls">
-              <select aria-label="Model or service" value={targetValue} onChange={(event) => selectTarget(event.target.value)}>
-                <optgroup label="Models">
-                  {models.map((model) => <option key={`${model.provider}:${model.id}`} value={`model:${model.id}`}>{model.id}</option>)}
-                </optgroup>
-                <optgroup label="Services">
-                  {serviceRoutes.map((route) => <option key={routeKey(route)} value={`service:${routeKey(route)}`}>{route.provider} / {route.endpoint}</option>)}
-                </optgroup>
+              <select className="providerPicker" aria-label="Provider" value={activeProvider} onChange={(event) => selectProvider(event.target.value)}>
+                {providerIds.map((provider) => <option key={provider} value={provider}>{providerName(provider, readinessByProvider)}</option>)}
+              </select>
+              <select className="modelPicker" aria-label="Model or route" value={targetValue} onChange={(event) => selectTarget(event.target.value)}>
+                {providerModels.map((model) => <option key={model.id} value={`model:${model.id}`}>{shortModelName(model.id, activeProvider)}</option>)}
+                {serviceModelTargets.map((target) => <option key={target.value} value={target.value}>{shortModelName(target.model, activeProvider)}</option>)}
+                {routeTargets.map((route) => <option key={routeKey(route)} value={`service:${routeKey(route)}`}>{route.endpoint.replaceAll("_", " ")}</option>)}
               </select>
               <span className="composerStatus"><span className={`connectionDot ${selectedReadiness?.executable ? "ready" : ""}`} />{readinessLabel(selectedReadiness)}</span>
               <button type="button" className="composerInspect" onClick={() => setSelectedTurnId(selectedTurnId === "setup" ? "" : "setup")}><SlidersHorizontal aria-hidden="true" /><span>Controls</span></button>
@@ -3210,7 +3240,47 @@ function effectiveProviderCount(providerIds: string[], services: ServiceItem[], 
 }
 
 function catalogModels(routes: RouteCatalog): CatalogModel[] {
-  return routes.openaiCompatible.flatMap((route) => route.models.map((model) => ({ id: model.id, provider: route.provider, capabilities: model.capabilities })));
+  return routes.openaiCompatible.flatMap((route) => route.models
+    .filter((model) => model.capabilities.some((capability) => capability === "llm.chat" || capability === "llm.responses"))
+    .map((model) => ({ id: model.id, provider: route.provider, capabilities: model.capabilities })));
+}
+
+function providerName(provider: string, readinessByProvider: Record<string, ProviderReadiness>) {
+  return readinessByProvider[provider]?.displayName ?? provider.split("-").map((part) => part[0]?.toUpperCase() + part.slice(1)).join(" ");
+}
+
+function shortModelName(model: string, provider: string) {
+  const prefix = `${provider}/`;
+  return model.startsWith(prefix) ? model.slice(prefix.length) : model;
+}
+
+function serviceModelOptions(routes: RouteCatalog["manifestProxy"]) {
+  const seen = new Set<string>();
+  return [...routes].sort((left, right) => serviceRouteRank(left) - serviceRouteRank(right)).flatMap((route) => (route.models ?? []).flatMap((model) => {
+    if (seen.has(model.id)) return [];
+    seen.add(model.id);
+    return [{
+      model: model.id,
+      route,
+      value: `service-model:${routeKey(route)}:${model.id}`,
+    }];
+  }));
+}
+
+function serviceRouteRank(route: RouteCatalog["manifestProxy"][number]) {
+  if (["messages", "chat", "chat_completions", "generate_content", "responses"].includes(route.endpoint)) return 0;
+  if (route.streaming) return 2;
+  return 1;
+}
+
+function serviceModelFromForm(form: PlaygroundForm, route?: RouteCatalog["manifestProxy"][number]) {
+  if (route?.pathParams?.includes("model")) return form.servicePath;
+  try {
+    const body = JSON.parse(form.servicePayload) as { model?: unknown };
+    return typeof body.model === "string" ? body.model : "";
+  } catch {
+    return "";
+  }
 }
 
 function groupedProviders(providers: ProviderRow[], query: string) {

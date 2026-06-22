@@ -37,7 +37,7 @@ endpoints:
     timeoutMs: 600000
 models:
   entries:
-    - id: xai/default
+    - id: xai/grok-4.3
       upstream: grok-4.3
       capabilities: [llm.chat]
       pricingRef: xai-grok-4-3-standard-2026-06-21

@@ -45,11 +45,14 @@ endpoints:
     timeoutMs: 120000
 models:
   entries:
-    - id: cohere/default
-      upstream: cohere
-      capabilities: [llm.chat, llm.embeddings]
-      pricingRef: cohere-default
+    - id: cohere/command-a-plus-05-2026
+      upstream: command-a-plus-05-2026
+      capabilities: [llm.chat]
+      pricingRef: cohere-command-a-plus-05-2026
+    - id: cohere/embed-v4.0
+      upstream: embed-v4.0
+      capabilities: [llm.embeddings]
+      pricingRef: cohere-embed-v4-0
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
-

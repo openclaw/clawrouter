@@ -37,17 +37,18 @@ endpoints:
     timeoutMs: 600000
 models:
   entries:
-    - id: groq/default
-      upstream: llama-3.1-8b-instant
+    - id: groq/gpt-oss-120b
+      upstream: openai/gpt-oss-120b
       capabilities: [llm.chat]
-      pricingRef: groq-llama-3-1-8b-instant-standard-2026-06-21
+      pricingRef: groq-gpt-oss-120b-standard-2026-06-22
       pricing:
-        effectiveAt: "2026-06-21"
-        source: https://groq.com/pricing
-        inputMicrosPerMillion: 50000
-        outputMicrosPerMillion: 80000
+        effectiveAt: "2026-06-22"
+        source: https://console.groq.com/docs/model/openai/gpt-oss-120b
+        inputMicrosPerMillion: 150000
+        cachedInputMicrosPerMillion: 75000
+        outputMicrosPerMillion: 600000
         maxInputTokens: 131072
-        defaultMaxOutputTokens: 131072
+        defaultMaxOutputTokens: 65536
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

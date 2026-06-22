@@ -37,12 +37,24 @@ endpoints:
     timeoutMs: 600000
 models:
   entries:
-    - id: deepseek/default
+    - id: deepseek/deepseek-v4-pro
+      upstream: deepseek-v4-pro
+      capabilities: [llm.chat]
+      pricingRef: deepseek-v4-pro-standard-2026-06-22
+      pricing:
+        effectiveAt: "2026-06-22"
+        source: https://api-docs.deepseek.com/quick_start/pricing
+        inputMicrosPerMillion: 435000
+        cachedInputMicrosPerMillion: 3625
+        outputMicrosPerMillion: 870000
+        maxInputTokens: 1000000
+        defaultMaxOutputTokens: 384000
+    - id: deepseek/deepseek-v4-flash
       upstream: deepseek-v4-flash
       capabilities: [llm.chat]
-      pricingRef: deepseek-v4-flash-standard-2026-06-21
+      pricingRef: deepseek-v4-flash-standard-2026-06-22
       pricing:
-        effectiveAt: "2026-06-21"
+        effectiveAt: "2026-06-22"
         source: https://api-docs.deepseek.com/quick_start/pricing
         inputMicrosPerMillion: 140000
         cachedInputMicrosPerMillion: 2800

@@ -13,6 +13,7 @@ export interface RouteCatalog {
     pathParams?: string[];
     requestFormat?: string;
     sampleModel?: string | null;
+    models?: Array<{ id: string; capabilities: string[] }>;
     streaming?: boolean | null;
   }>;
 }
@@ -495,8 +496,8 @@ function textFromContent(content: unknown[]) {
   }).join("\n");
 }
 
-export function playgroundServicePreset(route?: RouteCatalog["manifestProxy"][number]) {
-  const model = route?.sampleModel ?? `${route?.provider ?? "provider"}/default`;
+export function playgroundServicePreset(route?: RouteCatalog["manifestProxy"][number], selectedModel?: string) {
+  const model = selectedModel ?? route?.sampleModel ?? `${route?.provider ?? "provider"}/default`;
   const format = route?.requestFormat ?? `${route?.provider ?? ""}.${route?.endpoint ?? ""}`;
   let body: unknown = {};
 

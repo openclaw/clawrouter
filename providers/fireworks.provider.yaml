@@ -37,10 +37,22 @@ endpoints:
     timeoutMs: 600000
 models:
   entries:
-    - id: fireworks/default
+    - id: fireworks/glm-5.2
+      upstream: accounts/fireworks/models/glm-5p2
+      capabilities: [llm.chat]
+      pricingRef: fireworks-glm-5p2-standard-2026-06-22
+      pricing:
+        effectiveAt: "2026-06-22"
+        source: https://fireworks.ai/blog/glm-5p2
+        inputMicrosPerMillion: 1400000
+        cachedInputMicrosPerMillion: 260000
+        outputMicrosPerMillion: 4400000
+        maxInputTokens: 1048576
+        defaultMaxOutputTokens: 131072
+    - id: fireworks/gpt-oss-120b
       upstream: accounts/fireworks/models/gpt-oss-120b
       capabilities: [llm.chat]
-      pricingRef: fireworks-default
+      pricingRef: fireworks-gpt-oss-120b
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

@@ -199,6 +199,9 @@ test("service route presets replace stale body, method, and path values", () => 
   assert.deepEqual(JSON.parse(preset.servicePayload), {
     contents: [{ parts: [{ text: "Reply with ok." }] }],
   });
+
+  const latestPreset = playgroundServicePreset(google, "google/gemini-3.5-flash");
+  assert.equal(latestPreset.servicePath, "google/gemini-3.5-flash");
 });
 
 test("service route presets cover every bundled request format family", () => {

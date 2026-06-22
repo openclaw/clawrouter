@@ -37,11 +37,17 @@ endpoints:
     timeoutMs: 600000
 models:
   entries:
-    - id: perplexity/default
-      upstream: sonar
+    - id: perplexity/sonar-pro
+      upstream: sonar-pro
       capabilities: [llm.chat]
-      pricingRef: perplexity-default
+      pricingRef: perplexity-sonar-pro-standard-2026-06-22
+      pricing:
+        effectiveAt: "2026-06-22"
+        source: https://docs.perplexity.ai/docs/sonar/models/sonar-pro
+        inputMicrosPerMillion: 3000000
+        outputMicrosPerMillion: 15000000
+        maxInputTokens: 200000
+        defaultMaxOutputTokens: 8192
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]
-
