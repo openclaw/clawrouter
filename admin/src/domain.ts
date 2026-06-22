@@ -25,6 +25,7 @@ export interface AccessPolicy {
   tokenRole?: string | null;
   monthlyBudgetMicros?: number | null;
   requestCostMicros?: number | null;
+  retainRequestContent: boolean;
 }
 
 export interface CredentialSummary {
@@ -73,6 +74,7 @@ export interface AccessUser {
   tenantId: string;
   enabled: boolean;
   groups: string[];
+  contentRetentionDisabled: boolean;
 }
 
 export interface PolicyBinding {
@@ -88,6 +90,7 @@ export interface AccessForm {
   tenantId: string;
   enabled: boolean;
   groups: string;
+  contentRetentionDisabled: boolean;
   policyIds: string[];
 }
 
@@ -289,6 +292,7 @@ export function accessFormFromUser(user: AccessUser, bindings: PolicyBinding[]):
     tenantId: user.tenantId,
     enabled: user.enabled,
     groups: user.groups.join(", "),
+    contentRetentionDisabled: user.contentRetentionDisabled,
     policyIds: bindings
       .filter((binding) => binding.enabled && binding.principalType === "user" && binding.principalId === user.email)
       .sort((a, b) => a.priority - b.priority || a.policyId.localeCompare(b.policyId))
