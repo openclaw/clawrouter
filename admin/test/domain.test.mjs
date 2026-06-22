@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   directUserBindingChanges,
   effectiveAccess,
+  knownPolicyProviders,
   optionalCurrencyMicros,
   optionalNumber,
   playgroundAccessEndpoint,
@@ -81,6 +82,13 @@ test("direct user binding changes separate removals from additions", () => {
 
   assert.deepEqual(changes.removals.map((binding) => binding.policyId), ["models"]);
   assert.deepEqual(changes.additions.map((binding) => binding.policyId), ["tools"]);
+});
+
+test("policy edits discard stale provider ids before saving", () => {
+  assert.deepEqual(
+    knownPolicyProviders(["openai", "github", "firecrawl", "openai"], ["firecrawl", "openai"]),
+    ["firecrawl", "openai"],
+  );
 });
 
 test("service outcome and playground blocker require both access and readiness", () => {

@@ -11,3 +11,4 @@
 - Resolve configured dynamic model aliases for Playground service routes such as Azure OpenAI deployments.
 - Apply provider request transforms to manifest-proxy calls so service routes match model-proxy behavior.
 - Add the Mistral embedding model and list pricing so embedding requests no longer select a chat-only model.
+- Remove stale provider IDs when editing policies so valid access changes are not blocked by obsolete catalog entries.
