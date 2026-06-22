@@ -420,6 +420,10 @@ export function unique(values: string[]) {
   return Array.from(new Set(values.filter(Boolean)));
 }
 
+export function catalogProviderIds(providerIds: string[], modelProviderIds: string[], proxyProviderIds: string[]) {
+  return unique([...providerIds, ...modelProviderIds, ...proxyProviderIds]).sort();
+}
+
 export function knownPolicyProviders(selected: string[], available: string[]) {
   const known = new Set(available);
   return unique(selected.filter((provider) => known.has(provider))).sort();

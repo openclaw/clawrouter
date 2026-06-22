@@ -27,6 +27,7 @@ import {
   accessMap,
   bindingFormFromBinding,
   bindingKey,
+  catalogProviderIds,
   currencyInput,
   effectiveAccess,
   errorMessage,
@@ -2956,69 +2957,45 @@ function adminOverviewFromPolicies(keys: AccessPolicy[], credentials: ProxyCrede
 
 function serviceItems(providers: ProviderRow[], routes: RouteCatalog, readinessByProvider: Record<string, ProviderReadiness> = {}, accessByProvider: Map<string, ProviderAccess> = new Map()): ServiceItem[] {
   const providerById = new Map(providers.map((provider) => [provider.id, provider]));
-  const modelServices = routes.openaiCompatible.map((route) => {
-    const provider = providerById.get(route.provider);
-    const modelCapabilities = route.models.flatMap((model) => model.capabilities);
-    const modelEndpoints = route.models.flatMap((model) => model.endpoints);
-    return {
-      id: `${route.provider}:llm`,
-      name: provider?.display_name || route.provider,
-      provider: route.provider,
-      kind: provider?.service_kind || "llm",
-      category: provider?.class || "model route",
-      capabilities: unique([...(provider?.capabilities.map((capability) => capability.id) ?? []), ...modelCapabilities]),
-      surfaces: unique([...route.endpoints, ...modelEndpoints]),
-      route: route.endpoints.join(", ") || "/v1/chat/completions",
-      routeCount: unique([...route.endpoints, ...modelEndpoints]).length,
-      models: route.models.length,
-      modelIds: route.models.map((model) => model.id),
-      access: accessByProvider.get(route.provider),
-      readiness: readinessByProvider[route.provider],
-      brandIcon: providerBrandIcon(route.provider),
-    };
-  });
+  const modelRoutesByProvider = routes.openaiCompatible.reduce((groups, route) => {
+    groups.set(route.provider, [...(groups.get(route.provider) ?? []), route]);
+    return groups;
+  }, new Map<string, RouteCatalog["openaiCompatible"]>());
   const proxyRoutesByProvider = routes.manifestProxy.reduce((groups, route) => {
     groups.set(route.provider, [...(groups.get(route.provider) ?? []), route]);
     return groups;
   }, new Map<string, RouteCatalog["manifestProxy"]>());
-  const toolServices = Array.from(proxyRoutesByProvider.entries()).map(([providerId, providerRoutes]) => {
+  const providerIds = catalogProviderIds(
+    providers.map((provider) => provider.id),
+    routes.openaiCompatible.map((route) => route.provider),
+    routes.manifestProxy.map((route) => route.provider),
+  );
+  return providerIds.map((providerId) => {
     const provider = providerById.get(providerId);
+    const modelRoutes = modelRoutesByProvider.get(providerId) ?? [];
+    const providerRoutes = proxyRoutesByProvider.get(providerId) ?? [];
+    const models = modelRoutes.flatMap((route) => route.models);
+    const modelEndpoints = models.flatMap((model) => model.endpoints);
+    const publicRoutes = modelRoutes.flatMap((route) => route.endpoints);
+    const proxyRoutes = providerRoutes.map((route) => route.route);
+    const routePaths = unique([...publicRoutes, ...modelEndpoints, ...proxyRoutes]);
     return {
-      id: `${providerId}:service`,
+      id: `${providerId}:${modelRoutes.length ? "llm" : providerRoutes.length ? "service" : "provider"}`,
       name: provider?.display_name || providerId,
       provider: providerId,
-      kind: provider?.service_kind || "service",
-      category: provider?.class || "manifest proxy",
-      capabilities: provider?.capabilities.map((capability) => capability.id) ?? [],
-      surfaces: unique(providerRoutes.flatMap((route) => route.methods)),
-      route: providerRoutes.map((route) => route.route).join(", "),
-      routeCount: providerRoutes.length,
-      models: 0,
-      modelIds: [],
+      kind: provider?.service_kind || (modelRoutes.length ? "llm" : "service"),
+      category: provider?.class || (modelRoutes.length ? "model route" : "manifest proxy"),
+      capabilities: unique([...(provider?.capabilities.map((capability) => capability.id) ?? []), ...models.flatMap((model) => model.capabilities)]),
+      surfaces: unique([...publicRoutes, ...modelEndpoints, ...providerRoutes.flatMap((route) => route.methods)]),
+      route: routePaths.join(", ") || "/v1/proxy",
+      routeCount: routePaths.length,
+      models: models.length,
+      modelIds: models.map((model) => model.id),
       access: accessByProvider.get(providerId),
       readiness: readinessByProvider[providerId],
       brandIcon: providerBrandIcon(providerId),
     };
   });
-  const providerServices = providers
-    .filter((provider) => !modelServices.some((service) => service.provider === provider.id) && !toolServices.some((service) => service.provider === provider.id))
-    .map((provider) => ({
-      id: `${provider.id}:provider`,
-      name: provider.display_name || provider.id,
-      provider: provider.id,
-      kind: provider.service_kind,
-      category: provider.class,
-      capabilities: provider.capabilities.map((capability) => capability.id),
-      surfaces: ["provider"],
-      route: "/v1/proxy",
-      routeCount: 0,
-      models: 0,
-      modelIds: [],
-      access: accessByProvider.get(provider.id),
-      readiness: readinessByProvider[provider.id],
-      brandIcon: providerBrandIcon(provider.id),
-    }));
-  return [...modelServices, ...toolServices, ...providerServices].sort((a, b) => a.provider.localeCompare(b.provider) || a.name.localeCompare(b.name));
 }
 
 function matchesServiceQuery(item: ServiceItem, query: string) {
@@ -3166,6 +3143,7 @@ function demoData() {
       modelRoute("xai", ["/v1/chat/completions"], [modelEntry("xai/default", ["llm.chat"], ["/v1/chat/completions"])]),
     ],
     manifestProxy: [
+      manifestRoute("openai", "responses", "/v1/proxy/openai/responses", ["POST"], [], "openai.responses", "openai/gpt-4.1-mini"),
       manifestRoute("replicate", "predictions", "/v1/proxy/replicate/predictions", ["POST"], [], "replicate.prediction_create", "replicate/predictions"),
       manifestRoute("replicate", "prediction", "/v1/proxy/replicate/prediction", ["GET"], ["prediction_id"], "replicate.prediction_get", "replicate/predictions"),
       manifestRoute("tavily", "search", "/v1/proxy/tavily/search", ["POST"], [], "tavily.search", "tavily/search"),
