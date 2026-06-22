@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Replace the Rust/Wasm data plane and provider compiler with a modular TypeScript Worker while preserving Durable Object storage and public API contracts.
 - Normalize current OpenAI reasoning-model token limits and omit unsupported Playground temperature values.
 - Add current flagship model catalogs, including GPT-5.5, Claude Opus 4.8, Gemini 3.5 Flash, and GLM-5.2, with a provider-first Playground picker.
 - Show proxied Gravatar thumbnails for signed-in users without exposing email hashes or user network metadata to the browser.

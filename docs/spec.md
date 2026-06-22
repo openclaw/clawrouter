@@ -3,12 +3,12 @@
 The living design source is currently maintained at:
 
 ```text
-~/.spec/2026-06-05-clawrouter-rust-wasm-cloudflare-spec.md
+docs/spec.md
 ```
 
 The implementation in this repository follows that RFC:
 
-- Rust/Wasm edge data plane
+- modular TypeScript edge data plane
 - TypeScript admin frontend
 - Durable Object budget ledgers
 - Durable Object access-control authority
@@ -37,8 +37,8 @@ The intended add-provider path is:
 
 1. Add `providers/<id>.provider.yaml`.
 2. Add request/response fixtures if the adapter is new or risky.
-3. Run `cargo run -p clawrouter -- provider compile providers/*.provider.yaml`.
-4. Add a Rust/Wasm adapter only if the declarative families cannot represent the
+3. Run `pnpm provider:compile`.
+4. Add a focused TypeScript adapter only if the declarative families cannot represent the
    upstream contract.
 
 The provider catalog is broader than the live executable edge path. Cataloged

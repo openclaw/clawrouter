@@ -1,0 +1,652 @@
+
+.grantChip,
+.grantMore,
+.emptyGrant {
+  font-size: 10px;
+}
+
+.inspectorHeader h2,
+.panelTitle h2 {
+  font-size: 15px;
+}
+
+.inspectorHeader p {
+  font-size: 12px;
+}
+
+.facts dt {
+  font-size: 10px;
+}
+
+.facts dd {
+  font-size: 11px;
+}
+
+.miniList button {
+  min-height: 34px;
+  font-size: 11px;
+}
+
+.miniList button span {
+  font-size: 10px;
+}
+
+.metric span,
+.metric small {
+  font-size: 10px;
+}
+
+.metric strong {
+  font-size: 20px;
+}
+
+.grantsLayout {
+  grid-template-columns: minmax(390px, 0.85fr) minmax(520px, 1.15fr);
+}
+
+.grantListPane {
+  min-height: calc(100vh - var(--header-height) - 53px);
+}
+
+.grantListPane .tableHead,
+.grantListPane .tableBody {
+  min-width: 0;
+}
+
+.grantListHeader button {
+  min-height: 30px;
+}
+
+.grantOverview {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.grantEditor {
+  gap: 14px;
+  min-height: calc(100vh - var(--header-height) - 53px);
+  padding: 16px;
+}
+
+.grantEditor form {
+  gap: 0;
+}
+
+.grantEditorFields {
+  display: grid;
+  gap: 13px;
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.grantEditorHeader,
+.editorSectionHeader,
+.tableSectionHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.grantEditorHeader {
+  border-bottom: 1px solid var(--border);
+  padding-bottom: 13px;
+}
+
+.editorSectionHeader {
+  border-top: 1px solid var(--border);
+  padding-top: 13px;
+}
+
+.editorSectionHeader > div,
+.tableSectionHeader > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.editorSectionHeader strong,
+.tableSectionHeader strong {
+  color: var(--foreground-strong);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.editorSectionHeader span,
+.tableSectionHeader span {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.grantEditor .formGrid {
+  padding: 0;
+}
+
+.serviceAccessHeader {
+  align-items: end;
+}
+
+.wildcardScope {
+  border: 1px solid var(--border);
+  background: var(--warning-bg);
+  color: var(--warning) !important;
+  padding: 4px 6px;
+  font-family: inherit;
+  font-size: 10px !important;
+  font-weight: 600;
+}
+
+.grantEditor .serviceGroups {
+  max-height: 440px;
+}
+
+.grantEditor .serviceMatrix {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.grantEditor .serviceMatrix label {
+  grid-template-columns: 18px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  min-height: 42px;
+  padding: 5px 7px;
+}
+
+.grantEditor .serviceMatrix input {
+  grid-row: 1 / 3;
+}
+
+.grantEditor .serviceMatrix small {
+  grid-column: 2;
+  font-size: 10px;
+}
+
+.grantEditor .serviceMatrix span {
+  font-family: inherit;
+  font-size: 12px;
+  font-weight: 500;
+}
+
+.grantEditor .inspectorActions {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+}
+
+.usageMainPane {
+  min-height: calc(100vh - var(--header-height) - 53px);
+}
+
+.tableSectionHeader {
+  min-height: 48px;
+  border-bottom: 1px solid var(--border);
+  padding: 8px 12px;
+}
+
+.tableSectionHeader > span {
+  border: 1px solid var(--border);
+  background: #f1f3ed;
+  padding: 3px 6px;
+}
+
+.usageMainPane .tableRow {
+  min-height: 58px;
+}
+
+.budgetUsage {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.budgetUsage > span:first-child {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.budgetUsage strong {
+  overflow: hidden;
+  color: var(--foreground-strong);
+  font-size: 11px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.budgetUsage small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.budgetTrack {
+  display: block;
+  height: 4px;
+  overflow: hidden;
+  background: var(--soft-background);
+}
+
+.budgetTrack > span {
+  display: block;
+  height: 100%;
+  background: var(--success);
+}
+
+.budgetTrack.exhausted > span {
+  background: var(--danger);
+}
+
+.usageInspector {
+  gap: 14px;
+}
+
+.attentionGrid {
+  display: grid;
+  gap: 7px;
+}
+
+.attentionMetric {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 9px;
+  min-height: 44px;
+  border-left: 3px solid var(--border-strong);
+  background: #f1f3ed;
+  padding: 7px 9px;
+}
+
+.attentionMetric strong {
+  color: var(--foreground-strong);
+  font-size: 19px;
+  line-height: 1;
+  text-align: center;
+}
+
+.attentionMetric span {
+  color: var(--foreground);
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.attentionMetric.warning {
+  border-left-color: var(--warning);
+  background: var(--warning-bg);
+}
+
+.attentionMetric.danger {
+  border-left-color: var(--danger);
+  background: var(--danger-bg);
+}
+
+.attentionMetric.healthy {
+  border-left-color: var(--success);
+  background: var(--success-bg);
+}
+
+@media (max-width: 1180px) {
+  .grantsLayout {
+    grid-template-columns: 1fr;
+  }
+
+  .grantListPane,
+  .grantEditor,
+  .usageMainPane {
+    min-height: 0;
+  }
+}
+
+@media (max-width: 720px) {
+  .navTabs button {
+    gap: 4px;
+    padding-inline: 6px;
+    font-size: 11px;
+  }
+
+  .grantOverview,
+  .grantEditor .serviceMatrix {
+    grid-template-columns: 1fr;
+  }
+
+  .grantEditorHeader,
+  .editorSectionHeader,
+  .tableSectionHeader {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .serviceAccessHeader {
+    align-items: stretch;
+  }
+}
+
+/* Request workbench and audit ledger */
+.playgroundCanvas {
+  display: grid;
+  grid-template-columns: minmax(0, 1.08fr) minmax(360px, 0.92fr);
+  min-height: calc(100vh - var(--header-height) - 176px);
+  border-bottom: 1px solid var(--border);
+}
+
+.playgroundCanvas .promptComposer {
+  align-content: start;
+  min-width: 0;
+  border-right: 1px solid var(--border);
+  border-bottom: 0;
+}
+
+.playgroundCanvas .responsePane {
+  grid-template-rows: auto minmax(0, 1fr);
+  min-height: 100%;
+  border-bottom: 0;
+}
+
+.playgroundCanvas .responsePane pre {
+  min-height: 100%;
+  max-height: calc(100vh - var(--header-height) - 224px);
+  overflow: auto;
+}
+
+.playgroundCanvas .mainPrompt {
+  min-height: clamp(360px, 49vh, 680px);
+}
+
+.playgroundCanvas .servicePayload {
+  min-height: clamp(480px, 62vh, 760px);
+}
+
+.usageLayout {
+  grid-template-columns: minmax(0, 1fr) minmax(286px, 318px);
+}
+
+.usageMainPane .overviewStrip {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.usageMainPane .tableRow {
+  min-height: 52px;
+}
+
+.usageMainPane .entityTable {
+  overflow-x: auto;
+}
+
+.usageMainPane .tableHead,
+.usageMainPane .tableRow {
+  min-width: 940px;
+}
+
+.secondaryTableHeader {
+  margin-top: 18px;
+  border-top: 1px solid var(--border);
+}
+
+.auditTime {
+  font-family: "DM Mono", ui-monospace, monospace;
+  font-size: 10px;
+  color: var(--muted);
+  white-space: nowrap;
+}
+
+.auditIdentity,
+.auditOperation {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.auditIdentity strong,
+.auditOperation strong {
+  overflow: hidden;
+  color: var(--foreground-strong);
+  font-size: 10px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.auditIdentity small,
+.auditOperation small {
+  overflow: hidden;
+  color: var(--muted);
+  font-family: "DM Mono", ui-monospace, monospace;
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tableAction {
+  min-height: 30px;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.retainedContent {
+  border: 1px solid var(--border);
+  padding: 0 14px 14px;
+  background: var(--background);
+}
+
+.retainedContent pre {
+  max-height: 320px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--border);
+  background: var(--code-bg);
+  color: var(--code-fg);
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.emptyTable {
+  border-bottom: 1px solid var(--border);
+  color: var(--muted);
+  padding: 18px 12px;
+  font-size: 11px;
+}
+
+.providerUsageList {
+  display: grid;
+  border-top: 1px solid var(--border);
+}
+
+.providerUsageList > div {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  min-height: 44px;
+  border-bottom: 1px solid var(--border);
+  padding: 6px 0;
+}
+
+.providerUsageList > div > span {
+  display: grid;
+  justify-items: end;
+  gap: 2px;
+}
+
+.providerUsageList > div > span strong {
+  color: var(--foreground-strong);
+  font-family: "DM Mono", ui-monospace, monospace;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.providerUsageList > div > span small,
+.providerUsageList > p {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+@media (max-width: 980px) {
+  .playgroundCanvas {
+    grid-template-columns: 1fr;
+  }
+
+  .playgroundCanvas .promptComposer {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .playgroundCanvas .responsePane pre {
+    min-height: 320px;
+    max-height: 520px;
+  }
+
+  .usageMainPane .overviewStrip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+/* Canonical access resources */
+.accessWorkspace {
+  min-width: 0;
+}
+
+.accessWorkspace > .entityLayout {
+  margin-top: 0;
+}
+
+.resourceTabs {
+  display: flex;
+  align-items: end;
+  gap: 2px;
+  margin: 12px 12px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.resourceTabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: 2px 2px 0 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 6px 10px;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.resourceTabs button span {
+  min-width: 16px;
+  border-radius: 2px;
+  background: #f1f3ed;
+  padding: 1px 4px;
+  font-family: "DM Mono", ui-monospace, monospace;
+  font-size: 10px;
+  text-align: center;
+}
+
+.resourceTabs button.active {
+  border-color: var(--border);
+  border-bottom-color: var(--background);
+  background: var(--background);
+  color: var(--foreground-strong);
+}
+
+.resourceTabs button.active span {
+  background: var(--success-bg);
+  color: var(--success);
+}
+
+.inlineActions {
+  display: flex;
+  gap: 5px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.checkLabel {
+  display: flex;
+  gap: 7px;
+  align-items: center;
+  min-height: 30px;
+  align-self: end;
+  border: 1px solid var(--border);
+  padding: 5px 8px;
+}
+
+.checkLabel input {
+  width: 14px;
+  min-height: 14px;
+  margin: 0;
+}
+
+.checkLabel span {
+  color: var(--foreground-strong);
+  font-size: 11px;
+  font-weight: 500;
+  text-transform: none;
+}
+
+.userListHeader {
+  display: grid;
+  grid-template-columns: minmax(220px, 360px) auto;
+  justify-content: space-between;
+}
+
+.userListHeader .inputWithIcon {
+  width: 100%;
+}
+
+.issuedKey code {
+  overflow-wrap: anywhere;
+}
+
+input[readonly],
+select:disabled {
+  background: #f1f3ed;
+  color: var(--muted);
+}
+
+@media (max-width: 720px) {
+  .resourceTabs {
+    margin-inline: 8px;
+    overflow-x: auto;
+  }
+
+  .resourceTabs button {
+    min-height: 44px;
+    white-space: nowrap;
+  }
+
+  .userListHeader {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* Role-aware control room */
+.dashboardCanvas {
+  display: grid;
+  gap: 12px;
+  margin: 12px;
+  color: var(--foreground-strong);
+}
+
+.dashboardHero {
+  position: relative;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  min-height: 230px;
+  overflow: hidden;
+  border: 1px solid #26312d;
+  background:
+    linear-gradient(rgb(255 255 255 / 0.035) 1px, transparent 1px),
+    linear-gradient(90deg, rgb(255 255 255 / 0.035) 1px, transparent 1px),
+    radial-gradient(circle at 82% 24%, rgb(35 172 118 / 0.2), transparent 32%),
+    #111815;
+  background-size: 24px 24px, 24px 24px, auto, auto;
+  color: #f4f7f2;
+  padding: 32px 36px;
+}

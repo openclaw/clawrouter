@@ -98,9 +98,6 @@ jobs:
       CLAWROUTER_OMIT_ROUTES: "1"
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -109,7 +106,7 @@ jobs:
           version: 11.5.1
       - run: pnpm install --frozen-lockfile
       - run: pnpm cf:preflight
-      - run: cargo test --workspace
+      - run: pnpm worker:check
       - run: pnpm --dir admin check
       - run: pnpm --dir admin test
       - run: pnpm --dir admin build

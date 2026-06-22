@@ -1,0 +1,653 @@
+
+.serviceGroupHeader span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.serviceGroupHeader button {
+  min-height: 23px;
+  padding: 3px 6px;
+}
+
+.serviceMatrix {
+  display: grid;
+  gap: 4px;
+}
+
+.serviceMatrix label {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  min-height: 28px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--background);
+  padding: 4px 7px;
+}
+
+.serviceMatrix input {
+  width: 15px;
+  min-height: 15px;
+  margin: 0;
+}
+
+.serviceMatrix span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--foreground-strong);
+  font-size: 12px;
+  font-weight: 500;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.serviceMatrix small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+@media (max-width: 1180px) {
+  .appShell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    position: static;
+    grid-template-columns: minmax(160px, auto) minmax(180px, 1fr);
+    grid-template-rows: var(--header-height) auto;
+    height: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+    padding: 0 12px 12px;
+  }
+
+  .brandBlock {
+    border-bottom: 0;
+  }
+
+  .tenantSwitch {
+    align-self: center;
+    justify-self: end;
+    width: min(300px, 100%);
+  }
+
+  .navTabs {
+    grid-column: 1 / -1;
+    display: flex;
+    overflow-x: auto;
+  }
+
+  .navTabs button {
+    width: auto;
+    white-space: nowrap;
+  }
+
+  .entityLayout,
+  .playgroundLayout {
+    grid-template-columns: 1fr;
+  }
+
+  .inspector {
+    position: static;
+  }
+}
+
+@media (max-width: 760px) {
+  .workspace {
+    padding: 0 10px 16px;
+  }
+
+  .topbar,
+  .statusBar,
+  .splitHeader {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .sidebar {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto;
+    gap: 6px;
+    padding: 6px 10px 8px;
+  }
+
+  .brandBlock {
+    min-height: 28px;
+  }
+
+  .tenantSwitch {
+    justify-self: stretch;
+    width: 100%;
+  }
+
+  .navTabs {
+    grid-column: auto;
+  }
+
+  .topbar {
+    padding: 8px 0;
+  }
+
+  .pageTitle p {
+    white-space: normal;
+  }
+
+  .inspectorActions {
+    width: 100%;
+  }
+
+  .inspectorActions button {
+    width: 100%;
+  }
+
+  .topActions {
+    flex-wrap: wrap;
+    justify-content: flex-start;
+    width: 100%;
+  }
+
+  .topActions button {
+    flex: 0 0 auto;
+  }
+
+  .statusBar {
+    align-items: center;
+    flex-direction: row;
+    flex-wrap: wrap;
+  }
+
+  .statusBar span {
+    white-space: normal;
+  }
+
+  .catalogControls,
+  .overviewStrip,
+  .playgroundToolbar,
+  .formGrid,
+  .presetRow {
+    grid-template-columns: 1fr;
+  }
+
+  .metric {
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .metric:last-child {
+    border-bottom: 0;
+  }
+
+  .statusBar em {
+    margin-left: 0;
+  }
+
+  .navTabs {
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    gap: 0;
+  }
+
+  .navTabs button {
+    flex: 0 0 auto;
+    justify-content: center;
+    gap: 4px;
+    padding-inline: 5px;
+    font-size: 11px;
+    text-align: center;
+  }
+
+  .navTabs .navIcon {
+    width: 13px;
+    height: 13px;
+  }
+
+  .tableHead {
+    display: none;
+  }
+
+  .tableBody {
+    min-width: 0;
+  }
+
+  .tableRow {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 6px;
+    min-height: 0;
+    padding: 10px;
+  }
+
+  .tableRow > span {
+    display: grid;
+    grid-template-columns: minmax(86px, 0.36fr) minmax(0, 1fr);
+    gap: 9px;
+    white-space: normal;
+  }
+
+  .tableRow > span::before {
+    content: attr(data-label);
+    color: var(--muted);
+    font-size: 11px;
+    font-weight: 700;
+    text-transform: uppercase;
+  }
+
+  .entityTitle,
+  .entityName small {
+    white-space: normal;
+  }
+
+  .facts {
+    grid-template-columns: 1fr;
+  }
+
+  .serviceMatrix label {
+    grid-template-columns: 18px minmax(0, 1fr);
+  }
+
+  .serviceMatrix small {
+    grid-column: 2;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+  }
+}
+
+/* Workbench visual system */
+
+code,
+pre,
+.navGroupLabel,
+.status,
+.statusBar strong,
+.statusBar em,
+.sectionTitle,
+.panelTitle span,
+.tableHead span,
+label > span,
+.tenantSwitch span,
+.tenantSwitch small,
+.metric span,
+.metric small {
+  font-family: "DM Mono", ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+}
+
+button {
+  min-height: 32px;
+  border-color: var(--primary);
+  border-radius: var(--radius);
+  background: var(--primary);
+  padding: 6px 10px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--primary-hover);
+  background: var(--primary-hover);
+}
+
+input,
+select,
+textarea {
+  min-height: 36px;
+  border-radius: var(--radius);
+  background: #ffffff;
+  padding: 7px 9px;
+  font-size: 12px;
+}
+
+textarea {
+  line-height: 1.55;
+}
+
+label {
+  gap: 6px;
+}
+
+label > span,
+.tableHead span,
+.sectionTitle,
+.panelTitle span,
+.tenantSwitch span,
+.tenantSwitch small {
+  font-size: 10px;
+  font-weight: 500;
+}
+
+h1 {
+  font-size: 16px;
+  font-weight: 650;
+}
+
+h2 {
+  font-size: 14px;
+  font-weight: 650;
+}
+
+.appShell {
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  min-height: 100vh;
+  background: var(--soft-background);
+}
+
+.sidebar {
+  position: sticky;
+  top: 0;
+  grid-template-rows: var(--header-height) minmax(0, 1fr) auto;
+  gap: 0;
+  height: 100vh;
+  border-right: 1px solid var(--border);
+  background: var(--background);
+  padding: 0;
+}
+
+.brandBlock {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  grid-template-rows: auto;
+  align-items: center;
+  gap: 9px;
+  min-height: var(--header-height);
+  border-bottom: 1px solid var(--border);
+  padding: 0 12px;
+}
+
+.brandBlock::before {
+  display: none;
+}
+
+.brandMark {
+  display: grid !important;
+  grid-column: auto;
+  grid-row: auto;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  overflow: visible !important;
+  border-radius: 0 !important;
+  background: var(--primary);
+  color: white !important;
+}
+
+.brandMark svg {
+  width: 17px;
+  height: 17px;
+}
+
+.brandBlock > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.brandBlock strong {
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.brandBlock > div > span {
+  font-family: "DM Mono", ui-monospace, monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.navTabs {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+  overflow: auto;
+  padding: 14px 8px;
+}
+
+.navGroup {
+  display: grid;
+  gap: 2px;
+}
+
+.navGroupLabel {
+  color: var(--muted);
+  padding: 0 7px 5px;
+  font-size: 10px;
+  font-weight: 500;
+  text-transform: uppercase;
+}
+
+.navTabs button {
+  position: relative;
+  min-height: 34px;
+  border: 0;
+  border-left: 3px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--foreground);
+  padding: 6px 8px;
+  font-weight: 500;
+}
+
+.navTabs button:hover {
+  border-color: transparent;
+  border-left-color: var(--border-strong);
+  background: #f1f3ed;
+  color: var(--foreground-strong);
+}
+
+.navTabs button.active {
+  border-color: transparent;
+  border-left-color: var(--success);
+  background: var(--primary-100);
+  color: var(--foreground-strong);
+}
+
+.navIcon {
+  width: 15px;
+  height: 15px;
+}
+
+.tenantSwitch {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 9px;
+  align-items: center;
+  min-width: 0;
+  border: 0;
+  border-top: 1px solid var(--border);
+  border-radius: 0;
+  background: #f1f3ed;
+  padding: 11px 12px;
+}
+
+.tenantSwitch > div {
+  display: grid;
+  gap: 1px;
+  min-width: 0;
+}
+
+.contextIcon {
+  position: relative;
+  display: grid !important;
+  overflow: hidden;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--success);
+  color: white !important;
+}
+
+.contextIcon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.contextIcon img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 140ms ease-out;
+}
+
+.contextIconLoaded img {
+  opacity: 1;
+}
+
+.tenantSwitch strong {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.tenantSwitch span,
+.tenantSwitch small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.workspace {
+  min-width: 0;
+  padding: 0 0 20px;
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  min-height: var(--header-height);
+  border-bottom: 1px solid var(--border);
+  background: rgb(251 252 248 / 0.96);
+  padding: 0 14px;
+  backdrop-filter: blur(8px);
+}
+
+.pageTitle {
+  gap: 9px;
+}
+
+.pageTitle > div {
+  gap: 2px;
+}
+
+.pageTitle h1 {
+  font-size: 15px;
+}
+
+.pageTitle p {
+  font-family: "DM Mono", ui-monospace, monospace;
+  font-size: 10px;
+  text-transform: uppercase;
+}
+
+.pageIcon {
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--border);
+  background: var(--primary-100);
+  color: var(--success);
+}
+
+.pageIconSvg {
+  width: 14px;
+  height: 14px;
+}
+
+.topActions {
+  gap: 7px;
+}
+
+.connectionMeta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  color: var(--muted);
+  font-family: "DM Mono", ui-monospace, monospace;
+  font-size: 9px;
+  line-height: 1.15;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.connectionMeta strong,
+.connectionMeta time,
+.connectionMeta > span:last-child {
+  color: var(--foreground);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.connectionMeta strong {
+  font-weight: 700;
+}
+
+.connectionDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  box-shadow: 0 0 0 2px #f1f5f9;
+}
+
+.connectionMeta-success .connectionDot { background: var(--success); box-shadow: 0 0 0 2px var(--success-bg); }
+.connectionMeta-pending .connectionDot,
+.connectionMeta-neutral .connectionDot { background: var(--warning); box-shadow: 0 0 0 2px var(--warning-bg); }
+.connectionMeta-error .connectionDot { background: var(--danger); box-shadow: 0 0 0 2px var(--danger-bg); }
+.connectionSeparator { color: var(--border-strong); }
+
+.buttonSecondary,
+.segmented button,
+.presetRow button {
+  border-color: var(--border);
+  background: var(--background);
+  color: var(--foreground-strong);
+}
+
+.buttonSecondary:hover:not(:disabled),
+.segmented button:hover:not(:disabled),
+.presetRow button:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: #f1f3ed;
+  color: var(--foreground-strong);
+}
+
+.statusBar {
+  min-height: 28px;
+  margin: 0;
+  border: 0;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+  background: #f1f3ed;
+  padding: 4px 14px;
+}
+
+.statusBar span {
+  font-size: 10px;
+}
+
+.statusBar strong,
+.status {
+  min-height: 18px;
+  border-radius: 2px;
+  padding: 2px 6px;
+  font-size: 10px;
+  letter-spacing: 0;
+}
+
+.statusBar em {
+  border-radius: 2px;
+  font-size: 10px;
+}

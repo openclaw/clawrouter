@@ -1,0 +1,309 @@
+import { authorizeAdmin } from "./access";
+import {
+  authorityCall, listBindings, listCredentials, listPolicies, listUsers,
+} from "./authority";
+import {
+  listAssignmentRules, normalizeAssignmentEvidence, reconcileUserAssignments,
+  type AssignmentEvidence,
+} from "./assignments";
+import { usageSnapshot } from "./ledgers";
+import { startOAuth } from "./oauth";
+import { contentKey } from "./proxy";
+import { listGrantRecords, listHealth, providerReadiness, refreshStoredGrant, snapshot } from "./providers";
+import type {
+  AccessControlUser, AccessPolicy, AccessPolicyEntry, AssignmentRule, Env, PolicyBinding,
+  ProviderConnection, ProxyCredential, ProxyCredentialEntry, UpstreamGrant,
+} from "./types";
+import {
+  cleanId, errorResponse, HttpError, normalizeEmail, nowIso, privateJson, randomId, readJson,
+} from "./utils";
+
+export async function adminApi(request: Request, env: Env, path: string): Promise<Response> {
+  const authorization = await authorizeAdmin(request, env);
+  if (authorization instanceof Response) return authorization;
+  try {
+    if (request.method === "GET" && path === "/v1/admin/content") return getContent(request, env);
+    if (request.method === "GET" && path === "/v1/admin/overview") return privateJson(await overview(env));
+    if (request.method === "GET" && ["/v1/admin/tenants", "/v1/admin/users"].includes(path)) return privateJson({ tenants: await tenants(env) });
+    if (request.method === "GET" && path === "/v1/admin/usage") return adminUsage(env);
+    if (request.method === "GET" && path === "/v1/admin/policies") return privateJson({ policies: (await listPolicies(env)).map(policyResponse) });
+    if (request.method === "GET" && path === "/v1/admin/credentials") return privateJson({ credentials: await credentialResponses(env) });
+    if (request.method === "GET" && path === "/v1/admin/connections") return privateJson({ connections: await connections(env) });
+    if (request.method === "GET" && path === "/v1/admin/access-users") return privateJson({ users: (await listUsers(env)).map(userResponse) });
+    if (request.method === "GET" && path === "/v1/admin/policy-bindings") return privateJson({ bindings: await listBindings(env) });
+    if (request.method === "GET" && path === "/v1/admin/provider-status") return privateJson({ providers: await providerReadiness(env) });
+    if (request.method === "GET" && path === "/v1/admin/provider-health") return privateJson({ providers: [...(await listHealth(env)).values()] });
+    if (request.method === "GET" && path === "/v1/admin/upstream-grants") return privateJson({ grants: (await listGrantRecords(env)).map(({ key, grant }) => grantResponse(key, grant)) });
+    if (request.method === "GET" && path === "/v1/admin/assignment-rules") return privateJson({ rules: await assignmentRules(env) });
+
+    if (path === "/v1/admin/policy-bindings" && request.method === "PUT") return putBinding(request, env);
+    if (path === "/v1/admin/assignment-rules/reconcile" && request.method === "POST") return reconcileAssignments(request, env);
+    if (path.startsWith("/v1/admin/assignment-rules/") && request.method === "PUT") return putAssignmentRule(request, env, path.slice("/v1/admin/assignment-rules/".length));
+    if (path.startsWith("/v1/admin/access-user-grants/") && request.method === "PUT") return putUserGrants(request, env, path.slice("/v1/admin/access-user-grants/".length));
+    if (path.startsWith("/v1/admin/access-users/") && request.method === "PUT") return putUser(request, env, path.slice("/v1/admin/access-users/".length));
+    if (path.startsWith("/v1/admin/policies/")) return policyMutation(request, env, path.slice("/v1/admin/policies/".length));
+    if (path.startsWith("/v1/admin/credentials/")) return credentialMutation(request, env, path.slice("/v1/admin/credentials/".length));
+    if (path.startsWith("/v1/admin/connections/") && request.method === "PUT") return putConnection(request, env, path.slice("/v1/admin/connections/".length));
+    if (path.startsWith("/v1/admin/upstream-grants/")) return upstreamGrantMutation(request, env, path.slice("/v1/admin/upstream-grants/".length));
+    if (path === "/v1/admin/keys" && request.method === "GET") return privateJson({ keys: (await listPolicies(env)).map(legacyKeyResponse) });
+    if (path.startsWith("/v1/admin/keys/")) return legacyKeyMutation(request, env, path.slice("/v1/admin/keys/".length));
+    return errorResponse("route_not_found", "admin route not found", 404);
+  } catch (error) {
+    if (error instanceof HttpError) return errorResponse(error.code, error.message, error.status);
+    console.error("admin request failed", error instanceof Error ? error.message : String(error));
+    return errorResponse("admin_error", "admin request failed", 500);
+  }
+}
+
+async function getContent(request: Request, env: Env): Promise<Response> {
+  const url = new URL(request.url), tenant = url.searchParams.get("tenant"), ref = url.searchParams.get("ref");
+  if (!tenant || !ref || tenant.length > 256 || ref.length > 256) throw new HttpError(400, "invalid_content_lookup", "tenant and ref query parameters are required");
+  const object = await env.CONTENT_ARCHIVE.get(contentKey(tenant, ref));
+  if (!object) throw new HttpError(404, "content_not_found", "retained request content was not found");
+  return privateJson(await object.json());
+}
+
+async function overview(env: Env) {
+  const policies = await listPolicies(env), credentials = await listCredentials(env);
+  const active = new Map(policies.map((entry) => [entry.policyId, entry.policy.enabled]));
+  return {
+    policiesTotal: policies.length, policiesActive: policies.filter((entry) => entry.policy.enabled).length,
+    keysTotal: credentials.length, keysActive: credentials.filter((entry) => entry.credential.enabled && active.get(entry.credential.policyId)).length,
+    tenantsTotal: new Set(policies.map((entry) => entry.policy.tenantId ?? "default")).size,
+    providerCount: snapshot.providers.length, openaiCompatibleProviders: snapshot.providers.filter((provider) => provider.class === "openai_compatible").length,
+    manifestRoutes: snapshot.providers.reduce((sum, provider) => sum + provider.endpoints.length, 0),
+    monthlyBudgetMicros: sum(policies.map((entry) => entry.policy.monthlyBudgetMicros)), requestCostMicros: sum(policies.map((entry) => entry.policy.requestCostMicros)),
+  };
+}
+
+async function tenants(env: Env) {
+  const policies = await listPolicies(env), credentials = await listCredentials(env);
+  const groups = new Map<string, { tenantId: string; policies: number; activePolicies: number; keys: number; activeKeys: number; providers: Set<string>; allProviders: boolean; monthlyBudgetMicros: number; requestCostMicros: number }>();
+  for (const entry of policies) {
+    const id = entry.policy.tenantId ?? "default";
+    const row = groups.get(id) ?? { tenantId: id, policies: 0, activePolicies: 0, keys: 0, activeKeys: 0, providers: new Set(), allProviders: false, monthlyBudgetMicros: 0, requestCostMicros: 0 };
+    row.policies += 1; row.activePolicies += Number(entry.policy.enabled); row.allProviders ||= entry.policy.providers.length === 0;
+    entry.policy.providers.forEach((provider) => row.providers.add(provider));
+    row.monthlyBudgetMicros += entry.policy.monthlyBudgetMicros ?? 0; row.requestCostMicros += entry.policy.requestCostMicros ?? 0;
+    groups.set(id, row);
+  }
+  const byId = new Map(policies.map((entry) => [entry.policyId, entry.policy]));
+  for (const entry of credentials) {
+    const policy = byId.get(entry.credential.policyId); if (!policy) continue;
+    const row = groups.get(policy.tenantId ?? "default")!; row.keys += 1; row.activeKeys += Number(entry.credential.enabled && policy.enabled && entry.credential.policyGeneration === policy.generation);
+  }
+  return [...groups.values()].map((row) => ({ ...row, providers: [...row.providers].sort() }));
+}
+
+async function adminUsage(env: Env): Promise<Response> {
+  const policies = await listPolicies(env);
+  const rows = await Promise.all(policies.map(async (entry) => ({ ...legacyKeyResponse(entry), budget: await budgetStatus(env, entry) })));
+  return privateJson({ policies: rows, keys: rows, usage: await usageSnapshot(env, null) });
+}
+
+async function budgetStatus(env: Env, entry: AccessPolicyEntry) {
+  const limit = entry.policy.monthlyBudgetMicros;
+  if (limit == null) return { configured: false, ledger: "unmetered", windowKey: null, limitMicros: null, spentMicros: null, remainingMicros: null };
+  const tenant = entry.policy.tenantId ?? "default", policyId = `${tenant}/${entry.policyId}`, windowKey = `${policyId}/${new Date().toISOString().slice(0, 7)}`;
+  if (limit === 0) return { configured: true, ledger: "blocked", windowKey, limitMicros: 0, spentMicros: 0, remainingMicros: 0 };
+  const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(`${tenant}:${entry.policyId}`));
+  const url = new URL("https://clawrouter.internal/status"); url.searchParams.set("policy_id", policyId); url.searchParams.set("window_key", windowKey); url.searchParams.set("limit_micros", String(limit));
+  const status = await (await stub.fetch(url)).json<{ spentMicros: number; remainingMicros: number }>();
+  return { configured: true, ledger: "durable_object", windowKey, limitMicros: limit, ...status };
+}
+
+async function credentialResponses(env: Env) {
+  const policies = new Map((await listPolicies(env)).map((entry) => [entry.policyId, entry.policy]));
+  return (await listCredentials(env)).map((entry) => {
+    const policy = policies.get(entry.credential.policyId), generationMatches = !!policy && entry.credential.policyGeneration === policy.generation;
+    return { credentialId: entry.credentialId, policyId: entry.credential.policyId, enabled: entry.credential.enabled, policyEnabled: policy?.enabled ?? false, generationMatches, active: entry.credential.enabled && !!policy?.enabled && generationMatches, principalId: entry.credential.principalId ?? null };
+  });
+}
+
+async function connections(env: Env): Promise<ProviderConnection[]> {
+  return Promise.all(snapshot.providers.map(async (provider) => {
+    const result = await authorityCall<{ connections: ProviderConnection[] }>(env, "/connections/resolve", { providerIds: [provider.id] }, connectionObject(provider.id));
+    return result.connections[0] ?? { providerId: provider.id, enabled: true, label: null };
+  }));
+}
+
+async function putBinding(request: Request, env: Env): Promise<Response> {
+  const binding = normalizeBinding(await readJson<PolicyBinding>(request));
+  if (!(await listPolicies(env)).some((entry) => entry.policyId === binding.policyId)) throw new HttpError(404, "unknown_policy", "bound policy does not exist");
+  const existing = (await listBindings(env)).filter((item) => item.principalType === binding.principalType && item.principalId === binding.principalId);
+  const seed = { principal: { principalType: binding.principalType, principalId: binding.principalId }, bindings: existing };
+  await authorityCall(env, "/mutate", { seed, binding });
+  await env.POLICY_KV.put(bindingKvKey(binding), JSON.stringify(binding));
+  return privateJson(binding);
+}
+
+async function putUser(request: Request, env: Env, encodedEmail: string): Promise<Response> {
+  const email = normalizeEmail(decodeURIComponent(encodedEmail)); if (!email) throw new HttpError(400, "invalid_access_user", "invalid access user email");
+  const patch = await readJson<AccessControlUser["record"]>(request), existing = (await listUsers(env)).find((item) => item.email === email)?.record ?? {};
+  const user: AccessControlUser = { email, record: { ...existing, ...patch, role: "user", groups: normalizeGroups(patch.groups ?? existing.groups ?? []) } };
+  await authorityCall(env, "/users/put", user); await env.POLICY_KV.put(`access/users/${email}`, JSON.stringify(user.record));
+  return privateJson(userResponse(user));
+}
+
+async function putUserGrants(request: Request, env: Env, encodedEmail: string): Promise<Response> {
+  const email = normalizeEmail(decodeURIComponent(encodedEmail)); if (!email) throw new HttpError(400, "invalid_access_user", "invalid access user email");
+  const body = await readJson<AccessControlUser["record"] & { policyIds?: string[] }>(request);
+  const ids = [...new Set(body.policyIds ?? [])];
+  const known = new Set((await listPolicies(env)).map((entry) => entry.policyId)); if (ids.some((id) => !known.has(id))) throw new HttpError(404, "unknown_policy", "one or more policies do not exist");
+  const user: AccessControlUser = { email, record: { ...body, role: "user", groups: normalizeGroups(body.groups ?? []) } };
+  const principal = { principalType: "user" as const, principalId: email }, bindings = (await listBindings(env)).filter((item) => item.principalType === "user" && item.principalId === email);
+  const result = await authorityCall<{ bindings: PolicyBinding[] }>(env, "/users/put-bindings", { user, policyIds: ids, seed: { principal, bindings } });
+  await env.POLICY_KV.put(`access/users/${email}`, JSON.stringify(user.record));
+  await Promise.all(result.bindings.map((binding) => env.POLICY_KV.put(bindingKvKey(binding), JSON.stringify(binding))));
+  return privateJson({ user: userResponse(user), bindings: result.bindings });
+}
+
+async function policyMutation(request: Request, env: Env, rest: string): Promise<Response> {
+  const revoke = rest.endsWith("/revoke"), id = cleanId(decodeURIComponent(revoke ? rest.slice(0, -7) : rest));
+  if (!id) throw new HttpError(400, "invalid_policy", "invalid policy id");
+  const existing = (await listPolicies(env)).find((entry) => entry.policyId === id)?.policy;
+  let policy: AccessPolicy;
+  if (revoke && request.method === "POST") { if (!existing) throw new HttpError(404, "unknown_policy", "policy not found"); policy = { ...existing, enabled: false }; }
+  else if (request.method === "PUT") policy = normalizePolicy(await readJson<Partial<AccessPolicy> & { allProviders?: boolean }>(request), existing);
+  else throw new HttpError(405, "method_not_allowed", "admin method is not allowed");
+  const entry = { policyId: id, policy }; await authorityCall(env, "/policies/put", entry); await env.POLICY_KV.put(`policies/${id}`, JSON.stringify(policy));
+  return privateJson(policyResponse(entry));
+}
+
+async function credentialMutation(request: Request, env: Env, rest: string): Promise<Response> {
+  const revoke = rest.endsWith("/revoke"), id = cleanId(decodeURIComponent(revoke ? rest.slice(0, -7) : rest)); if (!id) throw new HttpError(400, "invalid_credential", "invalid credential id");
+  const existing = (await listCredentials(env)).find((entry) => entry.credentialId === id)?.credential;
+  let credential: ProxyCredential;
+  if (revoke && request.method === "POST") { if (!existing) throw new HttpError(404, "unknown_credential", "credential not found"); credential = { ...existing, enabled: false }; }
+  else if (request.method === "PUT") {
+    const body = await readJson<Partial<ProxyCredential>>(request); const policy = (await listPolicies(env)).find((entry) => entry.policyId === body.policyId);
+    if (!policy) throw new HttpError(404, "unknown_policy", "credential policy does not exist");
+    if (!body.secretSha256 || !/^[0-9a-f]{64}$/i.test(body.secretSha256)) throw new HttpError(400, "invalid_credential", "secretSha256 must be a SHA-256 hex digest");
+    credential = { enabled: body.enabled ?? true, secretSha256: body.secretSha256.toLowerCase(), policyId: policy.policyId, policyGeneration: policy.policy.generation, principalId: body.principalId ?? null };
+  } else throw new HttpError(405, "method_not_allowed", "admin method is not allowed");
+  const entry: ProxyCredentialEntry = { credentialId: id, credential }; await authorityCall(env, "/credentials/put", entry); await env.POLICY_KV.put(`credentials/${id}`, JSON.stringify(credential));
+  return privateJson((await credentialResponses(env)).find((item) => item.credentialId === id));
+}
+
+async function putConnection(request: Request, env: Env, encodedId: string): Promise<Response> {
+  const id = decodeURIComponent(encodedId), provider = snapshot.providers.find((item) => item.id === id); if (!provider) throw new HttpError(404, "unknown_provider", "provider does not exist");
+  const body = await readJson<Partial<ProviderConnection>>(request), connection: ProviderConnection = { providerId: id, enabled: body.enabled ?? true, label: body.label ?? null };
+  await authorityCall(env, "/connections/put", connection, connectionObject(id)); await env.POLICY_KV.put(`connections/${id}`, JSON.stringify(connection)); return privateJson(connection);
+}
+
+async function upstreamGrantMutation(request: Request, env: Env, rest: string): Promise<Response> {
+  const parts = rest.split("/").map(decodeURIComponent), action = ["revoke", "refresh", "authorize"].includes(parts.at(-1) ?? "") ? parts.pop() : null;
+  if (parts.length !== 3 || !["policies", "tenants"].includes(parts[0])) throw new HttpError(400, "invalid_upstream_grant_route", "invalid upstream grant route");
+  const [scope, scopeId, tokenRef] = parts, key = scope === "policies" ? `oauth/${scopeId}/${tokenRef}` : `oauth/tenants/${scopeId}/${tokenRef}`;
+  const existing = await env.POLICY_KV.get<UpstreamGrant>(key, "json");
+  if (action === "authorize" && request.method === "POST") {
+    const body = await readJson<{ provider: string }>(request);
+    return startOAuth(request, env, key, body.provider);
+  }
+  if (action === "refresh" && request.method === "POST") return privateJson(grantResponse(key, await refreshStoredGrant(env, key)));
+  let grant: UpstreamGrant;
+  if (action === "revoke" && request.method === "POST") { if (!existing) throw new HttpError(404, "unknown_upstream_grant", "upstream grant is not registered"); grant = revokeGrant(existing); }
+  else if (!action && request.method === "PUT") grant = normalizeGrant(await readJson<UpstreamGrant>(request), existing);
+  else throw new HttpError(405, "method_not_allowed", "admin method is not allowed");
+  await env.POLICY_KV.put(key, JSON.stringify(grant)); return privateJson(grantResponse(key, grant));
+}
+
+async function assignmentRules(env: Env) {
+  return listAssignmentRules(env);
+}
+
+async function putAssignmentRule(request: Request, env: Env, encodedId: string): Promise<Response> {
+  const id = cleanId(decodeURIComponent(encodedId)); if (!id) throw new HttpError(400, "invalid_assignment_rule", "invalid assignment rule id");
+  const key = `access/assignment-rules/${id}`;
+  const body = await readJson<Partial<AssignmentRule>>(request), existing = await env.POLICY_KV.get<AssignmentRule>(key, "json"), now = nowIso();
+  const rule: AssignmentRule = { version: 1, enabled: body.enabled ?? true, kind: body.kind ?? "exact_email", subject: String(body.subject ?? "").trim().toLowerCase(), groups: normalizeGroups(body.groups ?? []), policyIds: [...new Set(body.policyIds ?? [])], priority: body.priority ?? 100, revokeOnLoss: body.revokeOnLoss ?? true, provenance: body.provenance ?? "cloudflare_access", createdAt: existing?.createdAt ?? now, updatedAt: now };
+  if (!rule.subject) throw new HttpError(400, "invalid_assignment_rule", "assignment rule subject is required");
+  const known = new Set((await listPolicies(env)).map((entry) => entry.policyId));
+  if (rule.policyIds.some((policyId) => !known.has(policyId))) throw new HttpError(404, "unknown_policy", "one or more assignment policies do not exist");
+  await env.POLICY_KV.put(key, JSON.stringify(rule));
+  await syncAssignmentBindings(env, id, existing, rule);
+  return privateJson(assignmentResponse(id, rule));
+}
+
+async function syncAssignmentBindings(env: Env, id: string, existing: AssignmentRule | null, rule: AssignmentRule): Promise<void> {
+  const principal = { principalType: "group" as const, principalId: `assignment.${id}` };
+  const current = (await listBindings(env)).filter((binding) => binding.principalType === principal.principalType && binding.principalId === principal.principalId);
+  const policyIds = new Set([...(existing?.policyIds ?? []), ...rule.policyIds]);
+  for (const policyId of policyIds) {
+    const binding: PolicyBinding = { ...principal, policyId, enabled: rule.enabled && rule.policyIds.includes(policyId), priority: rule.priority };
+    await authorityCall(env, "/mutate", { seed: { principal, bindings: current }, binding });
+    await env.POLICY_KV.put(bindingKvKey(binding), JSON.stringify(binding));
+  }
+}
+
+async function reconcileAssignments(request: Request, env: Env): Promise<Response> {
+  const body = await readJson<{ email?: string; all?: boolean; evidence?: AssignmentEvidence }>(request);
+  if (body.all && body.email) throw new HttpError(400, "invalid_assignment_reconcile", "use either email or all, not both");
+  if (body.all && body.evidence) throw new HttpError(400, "invalid_assignment_reconcile", "verified GitHub evidence can reconcile only one email");
+  let evidence: AssignmentEvidence | undefined;
+  try { evidence = normalizeAssignmentEvidence(body.evidence); }
+  catch (error) { throw new HttpError(400, "invalid_assignment_evidence", error instanceof Error ? error.message : "invalid assignment evidence"); }
+  const users = await listUsers(env), email = normalizeEmail(body.email ?? "");
+  if (!body.all && !email) throw new HttpError(400, "invalid_assignment_reconcile", "email or all is required");
+  const targets = body.all ? users : users.filter((user) => user.email === email);
+  const rules = await assignmentRules(env), results = [];
+  for (const user of targets) {
+    const result = await reconcileUserAssignments(user, rules, env, evidence);
+    results.push({ email: user.email, matchedRuleIds: result.matchedRuleIds, retainedRuleIds: result.retainedRuleIds, groups: result.user.record.groups ?? [] });
+  }
+  return privateJson({ results });
+}
+
+async function legacyKeyMutation(request: Request, env: Env, rest: string): Promise<Response> {
+  const revoke = rest.endsWith("/revoke"), id = revoke ? rest.slice(0, -7) : rest;
+  if (revoke) return credentialMutation(request, env, `${id}/revoke`);
+  if (request.method !== "PUT") throw new HttpError(405, "method_not_allowed", "admin method is not allowed");
+  const body = await readJson<{ secretSha256?: string; providers?: string[]; allProviders?: boolean; enabled?: boolean; tenantId?: string; tokenRole?: string; monthlyBudgetMicros?: number; requestCostMicros?: number; retainRequestContent?: boolean }>(request);
+  const existingPolicy = (await listPolicies(env)).find((entry) => entry.policyId === id)?.policy;
+  const existingCredential = (await listCredentials(env)).find((entry) => entry.credentialId === id)?.credential;
+  const desiredPolicy = normalizePolicy(body, existingPolicy);
+  const policyChanged = !!existingPolicy && JSON.stringify(desiredPolicy) !== JSON.stringify(existingPolicy);
+  const secretChanged = !!existingCredential && !!body.secretSha256 && body.secretSha256.toLowerCase() !== existingCredential.secretSha256.toLowerCase();
+  if (policyChanged && secretChanged) throw new HttpError(409, "combined_policy_secret_rotation", "legacy key updates cannot change policy scope and secret together");
+  const secretSha256 = body.secretSha256 ?? existingCredential?.secretSha256;
+  if (!secretSha256) throw new HttpError(400, "invalid_credential", "secretSha256 is required when creating a legacy key");
+  const policyResult = await policyMutation(new Request(request.url, { method: "PUT", headers: request.headers, body: JSON.stringify(body) }), env, id);
+  if (!policyResult.ok) return policyResult;
+  return credentialMutation(new Request(request.url, { method: "PUT", headers: request.headers, body: JSON.stringify({ secretSha256, policyId: id, enabled: body.enabled }) }), env, id);
+}
+
+function normalizePolicy(body: Partial<AccessPolicy> & { allProviders?: boolean }, existing?: AccessPolicy): AccessPolicy {
+  if (!body.providers && !body.allProviders) throw new HttpError(400, "invalid_policy", "providers or allProviders is required");
+  const providers = [...new Set(body.providers ?? [])].sort(); if (!providers.length && !body.allProviders) throw new HttpError(400, "invalid_policy", "empty provider scope requires allProviders");
+  if (providers.some((id) => !snapshot.providers.some((provider) => provider.id === id))) throw new HttpError(400, "invalid_policy", "policy contains an unknown provider");
+  const monthlyBudgetMicros = normalizeBudgetValue(body.monthlyBudgetMicros, "monthlyBudgetMicros");
+  const requestCostMicros = normalizeBudgetValue(body.requestCostMicros, "requestCostMicros");
+  return { enabled: body.enabled ?? true, generation: existing?.generation ?? randomId("policy"), providers, tenantId: body.tenantId ?? "default", tokenRole: body.tokenRole ?? "service", monthlyBudgetMicros, requestCostMicros, retainRequestContent: body.retainRequestContent ?? true };
+}
+
+function normalizeBudgetValue(value: number | null | undefined, field: string): number | null {
+  if (value == null) return null;
+  if (!Number.isSafeInteger(value) || value < 0) throw new HttpError(400, "invalid_policy", `${field} must be a non-negative safe integer`);
+  return value;
+}
+
+function normalizeBinding(value: PolicyBinding): PolicyBinding {
+  const principalId = value.principalType === "user" ? normalizeEmail(value.principalId) : value.principalId.trim().toLowerCase();
+  if (!principalId || !cleanId(value.policyId)) throw new HttpError(400, "invalid_policy_binding", "invalid policy binding"); return { ...value, principalId, enabled: value.enabled ?? true, priority: value.priority ?? 100 };
+}
+function normalizeGrant(value: UpstreamGrant, existing: UpstreamGrant | null): UpstreamGrant {
+  const now = nowIso(), grant = { ...existing, ...value, version: 1, enabled: value.enabled ?? true, kind: value.kind ?? "oauth", tokenType: value.tokenType ?? "Bearer", scopes: value.scopes ?? [], credentials: value.credentials ?? {}, createdAt: existing?.createdAt ?? now, updatedAt: now, revokedAt: null };
+  if (!grant.provider) throw new HttpError(400, "invalid_upstream_grant", "provider is required"); if (!grant.credential && !grant.accessToken && !Object.keys(grant.credentials ?? {}).length) throw new HttpError(400, "invalid_upstream_grant", "grant credential is required"); return grant;
+}
+function revokeGrant(value: UpstreamGrant): UpstreamGrant { const { credential: _, credentials: __, accessToken: ___, refreshToken: ____, ...safe } = value; return { ...safe, enabled: false, credentials: {}, updatedAt: nowIso(), revokedAt: nowIso() }; }
+
+function policyResponse(entry: AccessPolicyEntry) { return { policyId: entry.policyId, enabled: entry.policy.enabled, providers: entry.policy.providers, tenantId: entry.policy.tenantId ?? null, tokenRole: entry.policy.tokenRole ?? null, monthlyBudgetMicros: entry.policy.monthlyBudgetMicros ?? null, requestCostMicros: entry.policy.requestCostMicros ?? null, retainRequestContent: entry.policy.retainRequestContent !== false }; }
+function legacyKeyResponse(entry: AccessPolicyEntry) { return { kid: entry.policyId, ...policyResponse(entry) }; }
+function userResponse(user: AccessControlUser) { return { email: user.email, role: "user", tenantId: user.record.tenantId ?? "default", enabled: user.record.enabled ?? true, groups: user.record.groups ?? [], contentRetentionDisabled: user.record.contentRetentionDisabled ?? false }; }
+function grantResponse(key: string, grant: UpstreamGrant) { const parts = key.split("/"), tenant = parts[1] === "tenants"; return { key, scope: tenant ? "tenants" : "policies", scopeId: tenant ? parts[2] : parts[1], tokenRef: tenant ? parts[3] : parts[2], version: grant.version ?? 1, enabled: grant.enabled ?? true, kind: grant.kind ?? "oauth", provider: grant.provider ?? null, label: grant.label ?? null, tokenType: grant.tokenType ?? "Bearer", expiresAt: grant.expiresAt ?? null, scopes: grant.scopes ?? [], accountId: grant.accountId ?? null, subscription: grant.subscription ?? null, createdAt: grant.createdAt ?? null, updatedAt: grant.updatedAt ?? null, revokedAt: grant.revokedAt ?? null, hasCredential: !!grant.credential || Object.keys(grant.credentials ?? {}).length > 0, credentialFields: Object.keys(grant.credentials ?? {}).sort(), hasAccessToken: !!grant.accessToken, hasRefreshToken: !!grant.refreshToken, refreshConfigured: !!grant.refresh, refreshTokenUrl: grant.refresh?.tokenUrl ?? null, clientIdConfig: grant.refresh?.clientIdConfig ?? null, clientSecretConfig: grant.refresh?.clientSecretConfig ?? null, usable: grant.enabled !== false && !!(grant.credential || grant.accessToken || Object.keys(grant.credentials ?? {}).length) }; }
+function assignmentResponse(ruleId: string, rule: AssignmentRule) { return { ruleId, ...rule, generatedGroup: `assignment.${ruleId}` }; }
+function assignmentRuleKey(id: string) { return `assignment/rules/${id}`; }
+function bindingKvKey(binding: PolicyBinding) { return `access/bindings/${binding.principalType}/${encodeURIComponent(binding.principalId)}/${binding.policyId}`; }
+function connectionObject(id: string) { return `provider-connection:${encodeURIComponent(id)}`; }
+function normalizeGroups(values: string[]) { return [...new Set(values.map((value) => value.trim().toLowerCase()).filter(Boolean))].sort(); }
+function sum(values: Array<number | null | undefined>) { return values.reduce<number>((total, value) => total + (value ?? 0), 0); }

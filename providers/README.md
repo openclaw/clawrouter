@@ -2,9 +2,9 @@
 
 ClawRouter providers are single-file manifests. A maintainer should be able to add
 most API platforms by adding `providers/<id>.provider.yaml`, fixtures when useful,
-and no Rust code.
+and no Worker code.
 
-Use a custom Rust/Wasm adapter only when the platform cannot be represented as:
+Use a focused TypeScript adapter only when the platform cannot be represented as:
 
 - an OpenAI-compatible model API
 - an Anthropic-compatible model API
