@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  catalogProviderIds,
   directUserBindingChanges,
   effectiveAccess,
   knownPolicyProviders,
@@ -16,6 +17,17 @@ import {
   serviceOutcome,
   tenantSummaryFallback,
 } from "../src/domain.ts";
+
+test("catalog providers appear once when route families overlap", () => {
+  assert.deepEqual(
+    catalogProviderIds(
+      ["openai", "tavily", "declared-only"],
+      ["openai"],
+      ["openai", "tavily"],
+    ),
+    ["declared-only", "openai", "tavily"],
+  );
+});
 
 const services = [
   service("openai", true),

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Merge overlapping model and manifest routes into one catalog entry per provider.
 - Add role-aware user and admin dashboards with service readiness, shared quota pools, traffic diagrams, and privacy-safe Access-session usage totals.
 - Gate the Cloudflare console by verified GitHub organization membership and support secure bulk provider-secret deployment.
 - Add versioned list pricing for Together Qwen 2.5 7B, DeepSeek V4 Flash, and MiniMax M3 budget enforcement.
