@@ -48,6 +48,7 @@ import {
   playgroundBlocker,
   playgroundPayload,
   playgroundServicePreset,
+  playgroundSupportsTemperature,
   policyCoversProvider,
   policyUsageFallback,
   readinessLabel,
@@ -2290,7 +2291,7 @@ function PlaygroundScreen({ form, setForm, models, selected, serviceRoutes, sele
                   <label><span>System instructions</span><textarea className="systemPrompt" value={form.system} onChange={(event) => setForm({ ...form, system: event.target.value })} /></label>
                   <div className="playgroundSettingPair">
                     <label><span>Max tokens</span><input inputMode="numeric" value={form.maxTokens} onChange={(event) => setForm({ ...form, maxTokens: event.target.value })} /></label>
-                    <label><span>Temperature</span><input inputMode="decimal" value={form.temperature} onChange={(event) => setForm({ ...form, temperature: event.target.value })} /></label>
+                    <label><span>Temperature</span><input inputMode="decimal" value={playgroundSupportsTemperature(form.model) ? form.temperature : ""} disabled={!playgroundSupportsTemperature(form.model)} placeholder={playgroundSupportsTemperature(form.model) ? undefined : "not supported"} onChange={(event) => setForm({ ...form, temperature: event.target.value })} /></label>
                   </div>
                 </>
               ) : (

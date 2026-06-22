@@ -449,12 +449,16 @@ export function playgroundPayload(form: PlaygroundForm, route?: RouteCatalog["ma
     };
   }
   const maxTokens = optionalNumber(form.maxTokens);
-  const temperature = optionalDecimal(form.temperature);
+  const temperature = playgroundSupportsTemperature(form.model) ? optionalDecimal(form.temperature) : undefined;
   const messages = [...conversation, { role: "user" as const, content: form.prompt }];
   if (form.endpoint === "/v1/responses") {
     return { model: form.model, input: messages, instructions: form.system || undefined, max_output_tokens: maxTokens, temperature };
   }
   return { model: form.model, messages: [...(form.system ? [{ role: "system", content: form.system }] : []), ...messages], max_tokens: maxTokens, temperature };
+}
+
+export function playgroundSupportsTemperature(model: string) {
+  return !/^openai\/gpt-5\.(?:4|5)(?:$|-)/.test(model);
 }
 
 export function playgroundResponseText(raw: string) {

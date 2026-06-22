@@ -50,6 +50,12 @@ adapter:
   stream: openai_sse
   error: openai_error
   passthroughHeaders: [OpenAI-Organization, OpenAI-Project]
+  requestTransforms:
+    renameFields:
+      - from: max_tokens
+        to: max_completion_tokens
+        paths: [/v1/chat/completions]
+        upstreams: [gpt-5.5, gpt-5.4]
 capabilities:
   - id: llm.responses
     endpoint: responses
