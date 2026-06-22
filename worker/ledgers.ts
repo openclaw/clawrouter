@@ -1,14 +1,18 @@
 import type { BudgetReserveRequest, BudgetSettleRequest, Env, QueueMessage, UsageEvent } from "./types";
-import { errorResponse, json } from "./utils";
+import { emptyUsageSnapshot, mergeUsageSnapshots, usageShardName, type UsageSnapshot } from "./usage-sharding.ts";
+import { errorResponse, json } from "./utils.ts";
 
 const reservationLeaseMs = 15 * 60 * 1_000;
 const chargeRetentionMs = 45 * 86_400_000;
 const usageRetentionMs = 30 * 86_400_000;
+const legacyUsageReadUntilMs = Date.parse("2026-07-23T00:00:00.000Z");
 
 export class BudgetLedgerObject implements DurableObject {
   private sql: SqlStorage;
+  private state: DurableObjectState;
 
-  constructor(private state: DurableObjectState) {
+  constructor(state: DurableObjectState) {
+    this.state = state;
     this.sql = state.storage.sql;
     this.ensureSchema();
   }
@@ -96,7 +100,8 @@ export class BudgetLedgerObject implements DurableObject {
 
 export class UsageLedgerObject implements DurableObject {
   private sql: SqlStorage;
-  constructor(private state: DurableObjectState) { this.sql = state.storage.sql; this.ensureSchema(); }
+  private state: DurableObjectState;
+  constructor(state: DurableObjectState) { this.state = state; this.sql = state.storage.sql; this.ensureSchema(); }
 
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
@@ -105,7 +110,7 @@ export class UsageLedgerObject implements DurableObject {
       if (!(await this.state.storage.getAlarm())) await this.state.storage.setAlarm(Date.now() + 86_400_000);
       return new Response("accepted");
     }
-    if (request.method === "GET" && url.pathname === "/snapshot") return json(this.snapshot(url.searchParams.get("policy_id"), Math.min(100, Number(url.searchParams.get("limit")) || 100)));
+    if (request.method === "GET" && url.pathname === "/snapshot") return json(this.snapshot(url.searchParams.getAll("policy_id"), Math.min(100, Number(url.searchParams.get("limit")) || 100)));
     return errorResponse("route_not_found", "route not found", 404);
   }
 
@@ -125,11 +130,12 @@ export class UsageLedgerObject implements DurableObject {
     this.cleanup();
   }
 
-  private snapshot(policyId: string | null, limit: number) {
+  private snapshot(policyIds: string[], limit: number) {
     this.cleanup();
     const cutoff = Date.now() - usageRetentionMs;
-    const where = policyId ? "policy_id = ? AND occurred_at_ms >= ?" : "occurred_at_ms >= ?";
-    const params = policyId ? [policyId, cutoff] : [cutoff];
+    const uniquePolicyIds = [...new Set(policyIds.filter(Boolean))];
+    const where = uniquePolicyIds.length ? `policy_id IN (${uniquePolicyIds.map(() => "?").join(", ")}) AND occurred_at_ms >= ?` : "occurred_at_ms >= ?";
+    const params = [...uniquePolicyIds, cutoff];
     const events = rows<{ event_json: string }>(this.sql.exec(`SELECT event_json FROM usage_events WHERE ${where} ORDER BY occurred_at_ms DESC LIMIT ?`, ...params, limit)).map((row) => JSON.parse(row.event_json));
     const summary = first<SummaryRow>(this.sql.exec(`SELECT COUNT(*) AS request_count, COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count, COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) AS error_count, COALESCE(SUM(input_tokens), 0) AS input_tokens, COALESCE(SUM(output_tokens), 0) AS output_tokens, COALESCE(SUM(total_tokens), 0) AS total_tokens, COALESCE(SUM(actual_cost_micros), 0) AS actual_cost_micros FROM usage_events WHERE ${where}`, ...params) as unknown as Iterable<SummaryRow>) ?? emptySummary();
     const providers = rows<ProviderRow>(this.sql.exec(`SELECT provider, COUNT(*) AS request_count, COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count, COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) AS error_count, COALESCE(SUM(total_tokens), 0) AS total_tokens, COALESCE(SUM(actual_cost_micros), 0) AS actual_cost_micros FROM usage_events WHERE ${where} GROUP BY provider ORDER BY request_count DESC`, ...params) as unknown as Iterable<ProviderRow>);
@@ -147,23 +153,43 @@ export class UsageLedgerObject implements DurableObject {
 export async function queue(batch: MessageBatch<QueueMessage>, env: Env): Promise<void> {
   for (const message of batch.messages) {
     try {
-      if ("type" in message.body) await usageStub(env).fetch("https://clawrouter.internal/ingest", { method: "POST", body: JSON.stringify(message.body) });
+      let response: Response;
+      if ("type" in message.body) response = await usageStub(env, message.body.tenant_id, message.body.policy_id).fetch("https://clawrouter.internal/ingest", { method: "POST", body: JSON.stringify(message.body) });
       else {
         const job = message.body;
         const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(`${job.tenant_id}:${job.policy_id}`));
-        await stub.fetch("https://clawrouter.internal/settle", { method: "POST", body: JSON.stringify(job.request) });
+        response = await stub.fetch("https://clawrouter.internal/settle", { method: "POST", body: JSON.stringify(job.request) });
       }
+      if (!response.ok) throw new Error(`ledger queue write returned ${response.status}`);
       message.ack();
     } catch { message.retry(); }
   }
 }
 
-export async function usageSnapshot(env: Env, policyId: string | null, limit = 100) {
+export async function usageSnapshot(env: Env, tenantId: string, policyId: string, limit = 100): Promise<UsageSnapshot> {
+  return usageSnapshots(env, [{ tenantId, policyId }], limit);
+}
+
+export async function usageSnapshots(env: Env, policies: Array<{ policyId: string; tenantId: string }>, limit = 100): Promise<UsageSnapshot> {
+  if (!policies.length) return emptyUsageSnapshot();
+  const current = await Promise.all(policies.map((policy) => currentUsageSnapshot(env, policy.tenantId, policy.policyId, limit)));
+  if (Date.now() >= legacyUsageReadUntilMs) return mergeUsageSnapshots(current, limit);
   const url = new URL("https://clawrouter.internal/snapshot");
-  if (policyId) url.searchParams.set("policy_id", policyId);
+  for (const policyId of [...new Set(policies.map((policy) => policy.policyId))]) url.searchParams.append("policy_id", policyId);
   url.searchParams.set("limit", String(limit));
-  const response = await usageStub(env).fetch(url);
-  return response.json();
+  const legacyResponse = await legacyUsageStub(env).fetch(url);
+  if (!legacyResponse.ok) return mergeUsageSnapshots(current, limit);
+  const legacy = await legacyResponse.json<UsageSnapshot>();
+  return mergeUsageSnapshots([legacy, ...current], limit);
+}
+
+async function currentUsageSnapshot(env: Env, tenantId: string, policyId: string, limit: number): Promise<UsageSnapshot> {
+  const url = new URL("https://clawrouter.internal/snapshot");
+  url.searchParams.set("policy_id", policyId);
+  url.searchParams.set("limit", String(limit));
+  const response = await usageStub(env, tenantId, policyId).fetch(url);
+  if (!response.ok) throw new Error(`usage snapshot returned ${response.status}`);
+  return response.json<UsageSnapshot>();
 }
 
 export async function budgetStatus(env: Env, policyId: string, policy: { tenantId?: string | null; monthlyBudgetMicros?: number | null }) {
@@ -184,7 +210,8 @@ export async function budgetStatus(env: Env, policyId: string, policy: { tenantI
   }
 }
 
-export function usageStub(env: Env): DurableObjectStub { return env.USAGE_LEDGER.get(env.USAGE_LEDGER.idFromName("global")); }
+export function usageStub(env: Env, tenantId: string, policyId: string): DurableObjectStub { return env.USAGE_LEDGER.get(env.USAGE_LEDGER.idFromName(usageShardName(tenantId, policyId))); }
+function legacyUsageStub(env: Env): DurableObjectStub { return env.USAGE_LEDGER.get(env.USAGE_LEDGER.idFromName("global")); }
 
 function numberParam(url: URL, name: string): number | null { const value = Number(url.searchParams.get(name)); return Number.isSafeInteger(value) && value >= 0 ? value : null; }
 function rows<T>(cursor: Iterable<T>): T[] { return [...cursor]; }

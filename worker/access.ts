@@ -24,12 +24,10 @@ export async function verifiedAccessSession(headers: Headers, env: Env): Promise
   const role = adminRole(email, env) ? "admin" : "user";
   let user = (await resolveUsers(env, [email]))[0];
   if (!user) {
-    const fromKv = await env.POLICY_KV.get<AccessControlUser["record"]>(`access/users/${email}`, "json");
-    user = { email, record: fromKv ?? { role: "user", tenantId: env.CLAWROUTER_ACCESS_DEFAULT_TENANT ?? "default", enabled: true, groups: [], contentRetentionDisabled: false } };
+    user = { email, record: { role: "user", tenantId: env.CLAWROUTER_ACCESS_DEFAULT_TENANT ?? "default", enabled: true, groups: [], contentRetentionDisabled: false } };
     await authorityCall(env, "/users/put", user);
-    await env.POLICY_KV.put(`access/users/${email}`, JSON.stringify(user.record));
   }
-  user = await reconcileEmailAssignments(user, env);
+  if (!user.record.assignmentState) user = (await reconcileUserAssignments(user, await listAssignmentRules(env), env)).user;
   if (user.record.enabled === false) return null;
   return {
     authenticated: true,
@@ -113,10 +111,6 @@ function adminRole(email: string, env: Env): boolean {
   if (commaSet(env.CLAWROUTER_ACCESS_ADMIN_EMAILS).has(email)) return true;
   const domain = email.split("@")[1];
   return !!domain && commaSet(env.CLAWROUTER_ACCESS_ADMIN_DOMAINS).has(domain);
-}
-
-async function reconcileEmailAssignments(user: AccessControlUser, env: Env): Promise<AccessControlUser> {
-  return (await reconcileUserAssignments(user, await listAssignmentRules(env), env)).user;
 }
 
 async function selectProviderPolicy(entries: AccessPolicyEntry[], providerId: string, tenantId: string, env: Env): Promise<AccessPolicyEntry> {

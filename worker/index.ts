@@ -3,7 +3,7 @@ import { adminApi } from "./admin";
 import {
   avatarResponse, catalogResponse, entitlementResponse, meResponse, modelsResponse, sessionResponse,
 } from "./discovery";
-import { budgetStatus, BudgetLedgerObject, queue, UsageLedgerObject, usageSnapshot } from "./ledgers";
+import { budgetStatus, BudgetLedgerObject, queue, UsageLedgerObject, usageSnapshot, usageSnapshots } from "./ledgers";
 import { oauthCallback } from "./oauth";
 import { routeCatalog, snapshot } from "./providers";
 import { authenticateProxyKey, inspectKey, proxyManifest, proxyNative, proxyOpenAi } from "./proxy";
@@ -79,33 +79,16 @@ async function dashboardShell(request: Request, env: Env): Promise<Response> {
 async function userUsage(request: Request, env: Env): Promise<Response> {
   const auth = await authenticateProxyKey(request.headers, env);
   if (auth instanceof Response) return auth;
-  return privateJson({ policyId: auth.policyId, budget: await budgetStatus(env, auth.policyId, auth.policy), usage: await usageSnapshot(env, auth.policyId) });
+  return privateJson({ policyId: auth.policyId, budget: await budgetStatus(env, auth.policyId, auth.policy), usage: await usageSnapshot(env, auth.policy.tenantId ?? "default", auth.policyId) });
 }
 
 async function sessionUsage(request: Request, env: Env): Promise<Response> {
   const session = await verifiedAccessSession(request.headers, env);
   if (!session) return errorResponse("access_session_required", "a verified Cloudflare Access session is required", 401);
   const policies = await sessionPolicies(session, env);
-  const snapshots = await Promise.all(policies.map((entry) => usageSnapshot(env, entry.policyId)));
-  const usage = mergeUsage(snapshots as UsageSnapshot[]);
+  const usage = await usageSnapshots(env, policies.map((entry) => ({ policyId: entry.policyId, tenantId: entry.policy.tenantId ?? session.tenantId })));
   const policyRows = await Promise.all(policies.map(async (entry) => ({ policyId: entry.policyId, kid: entry.policyId, tenantId: entry.policy.tenantId ?? session.tenantId, enabled: entry.policy.enabled, providers: entry.policy.providers, tokenRole: entry.policy.tokenRole ?? null, monthlyBudgetMicros: entry.policy.monthlyBudgetMicros ?? null, requestCostMicros: entry.policy.requestCostMicros ?? null, budget: await budgetStatus(env, entry.policyId, entry.policy) })));
   return privateJson({ session: publicSession(session), policies: policyRows, usage });
-}
-
-interface UsageSnapshot { ledger: string; summary: Record<string, number>; providers: Array<Record<string, number | string>>; events: Array<Record<string, unknown>> }
-
-function mergeUsage(values: UsageSnapshot[]): UsageSnapshot {
-  const summary: Record<string, number> = { requestCount: 0, successCount: 0, errorCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, actualCostMicros: 0 };
-  const providers = new Map<string, Record<string, number | string>>();
-  for (const value of values) {
-    for (const [key, amount] of Object.entries(value.summary)) summary[key] = (summary[key] ?? 0) + amount;
-    for (const row of value.providers) {
-      const id = String(row.provider), target = providers.get(id) ?? { provider: id, requestCount: 0, successCount: 0, errorCount: 0, totalTokens: 0, actualCostMicros: 0 };
-      for (const [key, amount] of Object.entries(row)) if (key !== "provider") target[key] = Number(target[key] ?? 0) + Number(amount);
-      providers.set(id, target);
-    }
-  }
-  return { ledger: "durable_object", summary, providers: [...providers.values()], events: [] };
 }
 
 function sameOrigin(request: Request): boolean { const url = new URL(request.url), origin = request.headers.get("origin"), site = request.headers.get("sec-fetch-site"); return origin === url.origin || (!origin && (!site || ["same-origin", "same-site", "none"].includes(site))); }
@@ -119,7 +102,7 @@ function serviceIndex() {
       health: "/v1/health", providers: "/v1/providers", routes: "/v1/routes", session: "/v1/session", entitlements: "/v1/entitlements",
       sessionUsage: "/v1/session/usage", me: "/v1/me", usage: "/v1/usage", models: "/v1/models", catalog: "/v1/catalog",
       anthropicMessages: "/v1/messages", anthropicCountTokens: "/v1/messages/count_tokens", keyInspect: "/v1/key/inspect",
-      adminOverview: "/v1/admin/overview", adminUsers: "/v1/admin/users", adminUsage: "/v1/admin/usage", adminPolicies: "/v1/admin/policies",
+      adminBootstrap: "/v1/admin/bootstrap", adminOverview: "/v1/admin/overview", adminUsers: "/v1/admin/users", adminUsage: "/v1/admin/usage", adminPolicies: "/v1/admin/policies",
       adminCredentials: "/v1/admin/credentials", adminConnections: "/v1/admin/connections", adminAccessUsers: "/v1/admin/access-users",
       adminAssignmentRules: "/v1/admin/assignment-rules", oauthCallback: "/v1/oauth/callback",
       openaiCompatible: ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"], manifestProxy: "/v1/proxy/{provider}/{endpoint}", nativeProxy: "/v1/native/{provider}/{provider-native-path}",

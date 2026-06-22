@@ -90,7 +90,11 @@ export interface AccessUserRecord {
   enabled?: boolean | null;
   groups?: string[];
   contentRetentionDisabled?: boolean;
+  assignmentState?: AssignmentState;
 }
+
+export interface AssignmentStateEntry { groups: string[]; revokeOnLoss: boolean }
+export interface AssignmentState { version: 1; revision: string; assignments: Record<string, AssignmentStateEntry>; updatedAt: string | null }
 
 export interface AccessControlUser { email: string; record: AccessUserRecord }
 
