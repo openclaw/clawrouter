@@ -2,24 +2,25 @@
 
 ClawRouter’s edge runtime is a TypeScript Worker. Revocation-critical runtime
 policy lives in serialized Durable Object authority so access can be revoked
-without a redeploy. Cloudflare KV stores migration seeds, compatibility copies,
-OAuth grants, and operational health.
+without a redeploy. Cloudflare KV stores one-time migration seeds, assignment
+rules, OAuth grants, and operational health.
 
 ## Required Bindings
 
-- `POLICY_KV`: migration seeds and compatibility copies for access policies,
-  issued credential hashes, principal bindings, users, and provider
-  connections, plus OAuth grants and provider health records.
+- `POLICY_KV`: one-time migration seeds for access policies, issued credential
+  hashes, principal bindings, users, and provider connections, plus assignment
+  rules, OAuth grants, and provider health records. After each resource family
+  is marked migrated, request paths do not fall back to its KV records.
 - `USAGE_QUEUE`: metered usage events and durable budget-settlement retries,
   with this Worker configured as producer and consumer.
 - usage DLQ, named by `CLAWROUTER_USAGE_DLQ`: separate queue for usage or
   settlement messages that exhaust automatic retries.
 - `BUDGET_LEDGER`: SQLite-backed Durable Object budget ledger.
 - `ACCESS_CONTROL`: SQLite-backed Durable Object authority for policies,
-  credential hashes, user state, per-provider kill-switch shards, serialized
-  user/group policy-binding mutations, and session entitlement lookup.
-- `USAGE_LEDGER`: SQLite-backed Durable Object request audit and reporting
-  ledger. It retains bounded metadata for 30 days and never stores prompt or
+  credential hashes, user state, provider kill switches, serialized user/group
+  policy-binding mutations, and session entitlement lookup.
+- `USAGE_LEDGER`: tenant/policy-sharded SQLite-backed Durable Object request
+  audit and reporting ledgers. They retain bounded metadata for 30 days and never store prompt or
   completion bodies. Request content retention uses the separate `CONTENT_ARCHIVE`
   R2 binding and never writes bodies to this ledger.
 - `CONTENT_ARCHIVE`: encrypted R2 storage for policy-retained LLM request bodies.
@@ -289,8 +290,8 @@ not bypass policy bindings.
 }
 ```
 
-`GET /v1/session` reports the verified Access session and carries the console
-bootstrap entitlements/readiness payload when `POLICY_KV` is available.
+`GET /v1/session` reports the verified Access session and carries its
+policy-scoped entitlements/readiness payload.
 `GET /v1/entitlements` remains available for deployments that also protect that
 compatibility route. The admin UI can call admin routes through the same-origin
 Access session; the admin bearer token is only a fallback for automation or
@@ -315,8 +316,8 @@ POST /v1/admin/assignment-rules/reconcile
 omitted fields. `PUT /v1/admin/access-user-grants/<email>` atomically updates
 the identity and replaces its complete direct-policy set.
 
-The authoritative record is stored in `ACCESS_CONTROL` and mirrored to
-`POLICY_KV` at `access/users/<email>` for compatibility:
+The authoritative record is stored in `ACCESS_CONTROL`. A pre-existing
+`POLICY_KV` record at `access/users/<email>` is imported once during migration:
 
 ```json
 {
@@ -328,8 +329,8 @@ The authoritative record is stored in `ACCESS_CONTROL` and mirrored to
 ```
 
 Bindings are indexed in `ACCESS_CONTROL` by principal so the request path reads
-only the signed-in user and their groups. `POLICY_KV` keeps compatibility
-copies:
+only the signed-in user and their groups. Pre-existing `POLICY_KV` records are
+one-time migration input:
 
 ```json
 {
@@ -344,8 +345,10 @@ copies:
 Lower priority numbers win when multiple bindings allow the same provider.
 
 Automatic assignment rules are stored separately from users and manual
-bindings. Exact-email and verified email-domain rules reconcile on first
-Cloudflare Access login and through the admin reconcile endpoint. Policy grants
+bindings. Authentication performs at most one assignment-state migration;
+unchanged sessions are read-only. Saving a rule reconciles known users, and the
+admin endpoint supports explicit reconciliation with verified external
+evidence. Policy grants
 use a rule-owned `assignment.<rule-id>` group, so reconciliation never replaces
 manual direct user bindings. GitHub organization/team rules require explicit
 verified GitHub evidence for one user; a reconcile without GitHub evidence
@@ -387,6 +390,7 @@ secret manager; only its SHA-256 hash belongs in the Worker and GitHub Actions.
 
 ```text
 GET /v1/admin/overview
+GET /v1/admin/bootstrap
 GET /v1/admin/tenants
 GET /v1/admin/usage
 GET /v1/admin/policies
@@ -434,12 +438,12 @@ API materializes a same-id policy and credential and accepts the same shape as
 `pnpm cf:key:put`, but with `secretSha256` instead of a raw key secret.
 
 Access user records are not role-grant records. Cloudflare Access creates the
-identity, `access/users/<email>` stores tenant/status/groups, policy bindings
+identity, `ACCESS_CONTROL` stores tenant/status/groups, policy bindings
 grant service access, and ClawRouter admin rights come from the Access admin
 email/domain allowlist configured on the Worker. `ACCESS_CONTROL` makes
 policies, credentials, user status, binding mutations, and session grant
-resolution strongly consistent. Provider kill switches use one authority object
-per provider so proxy traffic does not serialize through a global object.
+resolution strongly consistent. Provider kill switches use the same serialized
+authority; provider requests only resolve the selected connection.
 
 ## Keys and Revocation
 

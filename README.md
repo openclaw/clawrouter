@@ -9,11 +9,12 @@ Current implementation target:
 - TypeScript data plane on Cloudflare Workers
 - Durable Object budget ledgers
 - serialized Durable Object access-control authority
+- tenant/policy-sharded Durable Object usage ledgers
 - TypeScript admin/control UI
 - declarative service provider manifests
 - OpenClaw-native `clawrouter-` key routing
-- Cloudflare KV-backed migration and compatibility records, version 1
-  API-key/OAuth/subscription grants, and provider health
+- Cloudflare KV-backed one-time migration seeds, version 1
+  API-key/OAuth/subscription grants, assignment rules, and provider health
 
 ## Provider Registry
 
@@ -110,6 +111,7 @@ The Worker currently exposes:
 - `POST /v1/proxy/<provider>/<endpoint>`
 - `<METHOD> /v1/native/<provider>/<provider-native-path>`
 - `GET /v1/admin/overview`
+- `GET /v1/admin/bootstrap`
 - `GET /v1/admin/tenants`
 - `GET /v1/admin/usage`
 - `GET /v1/admin/policies`
@@ -146,8 +148,7 @@ OpenAI-compatible proxy requests route by the request body `model` field, for
 example `openai/gpt-4.1-mini`. Before an upstream provider secret is used, the
 Worker verifies the issued credential and its policy from serialized
 `ACCESS_CONTROL` Durable Object authority. `credentials/<credential-id>` and
-`policies/<policy-id>` in `POLICY_KV` seed migration and remain compatibility
-copies:
+`policies/<policy-id>` in `POLICY_KV` are one-time migration seeds:
 
 ```json
 {"enabled":true,"secretSha256":"<sha256 of key secret>","policyId":"team_docs","policyGeneration":"policy_..."}
@@ -218,8 +219,8 @@ curl "$CLAWROUTER_BASE_URL/v1/proxy/tavily/search" \
 The Worker resolves `provider` and `endpoint` from the compiled provider
 snapshot, applies manifest path/query/header/auth mapping, forwards the request,
 and emits a usage event to `USAGE_QUEUE`. The same Worker consumes that queue
-into the bounded `USAGE_LEDGER` reporting Durable Object and replays unsettled
-budget updates. Audit events retain
+into tenant/policy-sharded, bounded `USAGE_LEDGER` reporting Durable Objects and
+replays unsettled budget updates. Audit events retain
 identity, policy, credential, provider, route capability, model, timing,
 outcome, tokens when safely available, and cost for 30 days. Prompt and
 completion bodies are never stored in the usage ledger. LLM request bodies are stored separately for
@@ -237,9 +238,10 @@ calls without versioned pricing fail closed. Successful responses settle
 their actual token cost, including cached input when reported. SSE responses are metered
 inline without buffering the client stream. Missing or interrupted usage stays
 charged at the conservative reservation; non-2xx and transport failures refund
-the reservation. Failed settlement calls are
-persisted to `USAGE_QUEUE` for durable retry while the reservation remains
-charged fail-closed. Messages that exhaust automatic retries move to the
+the reservation. Failed settlement calls are persisted to `USAGE_QUEUE` for
+durable retry while the reservation remains charged fail-closed. Settlement and
+audit delivery are independent: failure of either cannot suppress the provider
+response or the other accounting operation. Messages that exhaust automatic retries move to the
 separate usage DLQ for operator inspection and replay before Cloudflare's
 four-day unconsumed-DLQ retention expires. Internal reservation ids are
 generated independently from caller-supplied request ids.
@@ -251,3 +253,6 @@ OAuth, SigV4, and deployment-templated providers execute through the same
 policy-enforced proxy when their manifest-declared grant and remaining runtime
 configuration are present. Provider secrets can come from scoped upstream
 grants instead of Worker-global bindings.
+
+Control-plane boundaries, migration rules, refresh behavior, and failure
+semantics are summarized in [Architecture](docs/architecture.md).
