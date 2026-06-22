@@ -16,6 +16,7 @@ import {
   LayoutDashboard,
   LogIn,
   MessageSquare,
+  Moon,
   Play,
   Plus,
   RefreshCw,
@@ -24,6 +25,7 @@ import {
   ServerCog,
   SlidersHorizontal,
   ShieldCheck,
+  Sun,
   Users,
 } from "lucide-react";
 import providerIconManifest from "../../crates/edge/src/provider-icons.json";
@@ -66,6 +68,27 @@ import "./style.css";
 
 type View = "home" | "catalog" | "playground" | "policies" | "users" | "usage";
 type RefreshOptions = { background?: boolean };
+type Theme = "light" | "dark";
+
+const themeStorageKey = "clawrouter-theme";
+
+function readTheme(): Theme {
+  try {
+    const stored = window.localStorage.getItem(themeStorageKey);
+    if (stored === "light" || stored === "dark") return stored;
+  } catch {
+    // Storage may be unavailable in privacy-restricted browser contexts.
+  }
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
+}
+
+function applyTheme(theme: Theme) {
+  document.documentElement.dataset.theme = theme;
+  document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute("content", theme === "dark" ? "#0d120f" : "#fbfcf8");
+}
+
+const initialTheme = readTheme();
+applyTheme(initialTheme);
 
 const pathViews: Record<string, View> = {
   "/": "home",
@@ -602,6 +625,7 @@ const adminViews = new Set<View>(["policies", "users", "usage"]);
 
 function App() {
   const [view, setView] = useState<View>(initialViewFromPath);
+  const [theme, setTheme] = useState<Theme>(initialTheme);
   const gatewayOrigin = window.location.origin;
   const allowDemo = isLocalDemoAllowed();
   const [session, setSession] = useState<SessionResponse>(allowDemo ? demo.session : emptySession);
@@ -710,6 +734,15 @@ function App() {
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
+
+  useEffect(() => {
+    applyTheme(theme);
+    try {
+      window.localStorage.setItem(themeStorageKey, theme);
+    } catch {
+      // The active preference still applies for this page lifetime.
+    }
+  }, [theme]);
 
   useEffect(() => {
     if (status !== "loading" && session.role !== "admin" && adminViews.has(view)) navigateTo("catalog", true);
@@ -1630,12 +1663,10 @@ function App() {
             </div>
           ) : null}
         </nav>
-        <div className="tenantSwitch">
+        <div className="tenantSwitch" title={`${session.tenantId ?? "default"} tenant · ${session.role}`}>
           <UserAvatar email={session.email} />
           <div>
-            <span>Active context</span>
             <strong>{session.email ?? "not signed in"}</strong>
-            <small>{session.tenantId ?? "default"} · {session.role}</small>
           </div>
         </div>
       </aside>
@@ -1650,6 +1681,7 @@ function App() {
             </div>
           </div>
           <div className="topActions">
+            <ThemeToggle value={theme} onChange={setTheme} />
             <span className={`status ${session.contentRetention?.enabled ? "active" : "neutral"}`} title={session.contentRetention ? session.contentRetention.enabled ? `Request content retained for ${session.contentRetention.retentionDays} days` : "Request content retention is off for this identity" : "Loading request content retention status"}>
               retention {session.contentRetention ? session.contentRetention.enabled ? `on · ${session.contentRetention.retentionDays}d` : "off" : "pending"}
             </span>
@@ -1849,6 +1881,16 @@ function UserAvatar({ email }: { email?: string | null }) {
       <ShieldCheck aria-hidden="true" />
       {email ? <img src="/v1/session/avatar" alt="" loading="lazy" decoding="async" onLoad={() => setLoaded(true)} onError={() => setLoaded(false)} /> : null}
     </span>
+  );
+}
+
+function ThemeToggle({ value, onChange }: { value: Theme; onChange: (theme: Theme) => void }) {
+  const dark = value === "dark";
+  const nextTheme = dark ? "light" : "dark";
+  return (
+    <button className={`themeToggle${dark ? " active" : ""}`} type="button" role="switch" aria-checked={dark} aria-label={`${dark ? "Dark" : "Light"} mode`} title={`Switch to ${nextTheme} mode`} onClick={() => onChange(nextTheme)}>
+      <span>{dark ? <Moon aria-hidden="true" /> : <Sun aria-hidden="true" />}</span>
+    </button>
   );
 }
 

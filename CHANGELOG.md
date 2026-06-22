@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add a persistent Light/Dark console toggle, refine interactive states and page alignment, and simplify the signed-in identity footer.
 - Normalize current OpenAI reasoning-model token limits and omit unsupported Playground temperature values.
 - Add current flagship model catalogs, including GPT-5.5, Claude Opus 4.8, Gemini 3.5 Flash, and GLM-5.2, with a provider-first Playground picker.
 - Show proxied Gravatar thumbnails for signed-in users without exposing email hashes or user network metadata to the browser.
