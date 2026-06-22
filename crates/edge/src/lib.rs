@@ -505,6 +505,22 @@ fn route_catalog(snapshot: &ProviderSnapshot) -> Value {
                         .iter()
                         .any(|capability| endpoint_capabilities.contains(&capability.as_str()))
                 });
+                let models = provider
+                    .models
+                    .iter()
+                    .filter(|model| {
+                        model
+                            .capabilities
+                            .iter()
+                            .any(|capability| endpoint_capabilities.contains(&capability.as_str()))
+                    })
+                    .map(|model| {
+                        serde_json::json!({
+                            "id": &model.id,
+                            "capabilities": &model.capabilities
+                        })
+                    })
+                    .collect::<Vec<_>>();
                 serde_json::json!({
                     "provider": provider.id,
                     "endpoint": endpoint.id,
@@ -513,6 +529,7 @@ fn route_catalog(snapshot: &ProviderSnapshot) -> Value {
                     "pathParams": &endpoint.path_params,
                     "requestFormat": &endpoint.request_format,
                     "sampleModel": sample_model.map(|model| model.id.as_str()),
+                    "models": models,
                     "streaming": &endpoint.streaming
                 })
             })
@@ -15221,18 +15238,19 @@ mod tests {
             .iter()
             .find(|provider| provider.id == "anthropic")
             .unwrap();
-        let mut body = serde_json::json!({"model": "anthropic/default", "max_tokens": 1024});
+        let mut body =
+            serde_json::json!({"model": "anthropic/claude-opus-4-8", "max_tokens": 1024});
         let original = body.clone();
         let selected = select_native_model(anthropic, &body).unwrap();
         assert_eq!(body, original);
-        assert_eq!(selected.model, "anthropic/default");
-        assert_eq!(selected.upstream_model, "claude-sonnet-4-5-20250929");
+        assert_eq!(selected.model, "anthropic/claude-opus-4-8");
+        assert_eq!(selected.upstream_model, "claude-opus-4-8");
         let selection = normalize_native_model(anthropic, &mut body).unwrap();
-        assert_eq!(selection.model, "anthropic/default");
-        assert_eq!(body["model"], "claude-sonnet-4-5-20250929");
+        assert_eq!(selection.model, "anthropic/claude-opus-4-8");
+        assert_eq!(body["model"], "claude-opus-4-8");
         assert_eq!(
             selection.pricing.unwrap().input_micros_per_million,
-            3_000_000
+            5_000_000
         );
     }
 
@@ -15362,14 +15380,14 @@ mod tests {
         anthropic.readiness.executable_endpoints = vec!["messages".to_string()];
         let models = anthropic_models_value(&snapshot, &[anthropic]);
         assert_eq!(models["has_more"], false);
-        assert_eq!(models["first_id"], "anthropic/default");
-        assert_eq!(models["last_id"], "anthropic/default");
-        assert_eq!(models["data"][0]["id"], "anthropic/default");
+        assert_eq!(models["first_id"], "anthropic/claude-opus-4-8");
+        assert_eq!(models["last_id"], "anthropic/claude-haiku-4-5");
+        assert_eq!(models["data"][0]["id"], "anthropic/claude-opus-4-8");
         assert_eq!(models["data"][0]["type"], "model");
         assert_eq!(models["data"][0]["created_at"], "1970-01-01T00:00:00Z");
         assert!(models["data"][0]["capabilities"].is_null());
-        assert_eq!(models["data"][0]["max_input_tokens"], 200_000);
-        assert_eq!(models["data"][0]["max_tokens"], 64_000);
+        assert_eq!(models["data"][0]["max_input_tokens"], 1_000_000);
+        assert_eq!(models["data"][0]["max_tokens"], 128_000);
         assert!(models["data"][0].get("owned_by").is_none());
     }
 
@@ -16132,6 +16150,19 @@ mod tests {
                 && route.get("route").and_then(Value::as_str) == Some("/v1/proxy/tavily/search")
                 && route.get("requestFormat").and_then(Value::as_str) == Some("tavily.search")
                 && route.get("sampleModel").and_then(Value::as_str) == Some("tavily/search")
+        }));
+        assert!(manifest_routes.iter().any(|route| {
+            route.get("provider").and_then(Value::as_str) == Some("anthropic")
+                && route.get("endpoint").and_then(Value::as_str) == Some("messages")
+                && route
+                    .get("models")
+                    .and_then(Value::as_array)
+                    .is_some_and(|models| {
+                        models.iter().any(|model| {
+                            model.get("id").and_then(Value::as_str)
+                                == Some("anthropic/claude-opus-4-8")
+                        })
+                    })
         }));
         assert!(manifest_routes.iter().any(|route| {
             route.get("provider").and_then(Value::as_str) == Some("firecrawl")
@@ -18207,7 +18238,7 @@ mod tests {
             method: Some("POST".to_string()),
             path_params: Map::from_iter([(
                 "model".to_string(),
-                Value::String("google/gemini-default".to_string()),
+                Value::String("google/gemini-3.5-flash".to_string()),
             )]),
             body: Some(serde_json::json!({
                 "contents": [{"parts": [{"text": "hello"}]}]
@@ -18217,19 +18248,19 @@ mod tests {
 
         let selection =
             normalize_manifest_path_model(provider, endpoint, &mut proxy, |_| None).unwrap();
-        assert_eq!(selection.model, "google/gemini-default");
-        assert_eq!(selection.upstream_model, "gemini-2.5-flash");
+        assert_eq!(selection.model, "google/gemini-3.5-flash");
+        assert_eq!(selection.upstream_model, "gemini-3.5-flash");
         assert_eq!(
             selection.pricing_ref.as_deref(),
-            Some("google-gemini-2-5-flash-standard-2026-06-21")
+            Some("google-gemini-3-5-flash-standard-2026-06-22")
         );
         assert_eq!(
             proxy.path_params.get("model").and_then(Value::as_str),
-            Some("gemini-2.5-flash")
+            Some("gemini-3.5-flash")
         );
         assert_eq!(
             manifest_upstream_url(provider, endpoint, &proxy, None, None, None, None).unwrap(),
-            "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent"
+            "https://generativelanguage.googleapis.com/v1beta/models/gemini-3.5-flash:generateContent"
         );
     }
 

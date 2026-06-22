@@ -37,17 +37,18 @@ endpoints:
     timeoutMs: 600000
 models:
   entries:
-    - id: together/default
-      upstream: Qwen/Qwen2.5-7B-Instruct-Turbo
+    - id: together/glm-5.2
+      upstream: zai-org/GLM-5.2
       capabilities: [llm.chat]
-      pricingRef: together-qwen-2-5-7b-instruct-turbo-2026-06-21
+      pricingRef: together-glm-5-2-standard-2026-06-22
       pricing:
-        effectiveAt: "2026-06-21"
-        source: https://www.together.ai/pricing
-        inputMicrosPerMillion: 300000
-        outputMicrosPerMillion: 300000
-        maxInputTokens: 32768
-        defaultMaxOutputTokens: 8192
+        effectiveAt: "2026-06-22"
+        source: https://docs.together.ai/docs/serverless/models
+        inputMicrosPerMillion: 1400000
+        cachedInputMicrosPerMillion: 260000
+        outputMicrosPerMillion: 4400000
+        maxInputTokens: 262144
+        defaultMaxOutputTokens: 131072
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add current flagship model catalogs, including GPT-5.5, Claude Opus 4.8, Gemini 3.5 Flash, and GLM-5.2, with a provider-first Playground picker.
 - Show proxied Gravatar thumbnails for signed-in users without exposing email hashes or user network metadata to the browser.
 - Make repeated content-retention provisioning tolerate an existing lifecycle rule.
 - Resolve configured model aliases in OpenAI-compatible Playground requests instead of forwarding manifest placeholders.

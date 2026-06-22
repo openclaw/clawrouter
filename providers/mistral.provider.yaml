@@ -45,10 +45,28 @@ endpoints:
     timeoutMs: 120000
 models:
   entries:
-    - id: mistral/default
-      upstream: mistral-small-latest
+    - id: mistral/mistral-medium-3-5
+      upstream: mistral-medium-3-5
       capabilities: [llm.chat]
-      pricingRef: mistral-default
+      pricingRef: mistral-medium-3-5-standard-2026-06-22
+      pricing:
+        effectiveAt: "2026-06-22"
+        source: https://docs.mistral.ai/models/model-cards/mistral-medium-3-5-26-04
+        inputMicrosPerMillion: 1500000
+        outputMicrosPerMillion: 7500000
+        maxInputTokens: 262144
+        defaultMaxOutputTokens: 65536
+    - id: mistral/mistral-small-2603
+      upstream: mistral-small-2603
+      capabilities: [llm.chat]
+      pricingRef: mistral-small-4-standard-2026-06-22
+      pricing:
+        effectiveAt: "2026-06-22"
+        source: https://docs.mistral.ai/getting-started/models/
+        inputMicrosPerMillion: 150000
+        outputMicrosPerMillion: 600000
+        maxInputTokens: 262144
+        defaultMaxOutputTokens: 65536
     - id: mistral/mistral-embed
       upstream: mistral-embed
       capabilities: [llm.embeddings]

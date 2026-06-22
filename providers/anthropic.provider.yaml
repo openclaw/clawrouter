@@ -49,18 +49,46 @@ endpoints:
     timeoutMs: 120000
 models:
   entries:
-    - id: anthropic/default
-      upstream: claude-sonnet-4-5-20250929
+    - id: anthropic/claude-opus-4-8
+      upstream: claude-opus-4-8
       capabilities: [llm.messages, llm.count_tokens]
-      pricingRef: anthropic-claude-sonnet-4-5-standard-2026-06-19
+      pricingRef: anthropic-claude-opus-4-8-standard-2026-06-22
       pricing:
-        effectiveAt: "2026-05-27"
+        effectiveAt: "2026-06-22"
+        source: https://platform.claude.com/docs/en/about-claude/pricing
+        inputMicrosPerMillion: 5000000
+        cachedInputMicrosPerMillion: 500000
+        cacheWrite5mInputMicrosPerMillion: 6250000
+        cacheWrite1hInputMicrosPerMillion: 10000000
+        outputMicrosPerMillion: 25000000
+        maxInputTokens: 1000000
+        defaultMaxOutputTokens: 128000
+    - id: anthropic/claude-sonnet-4-6
+      upstream: claude-sonnet-4-6
+      capabilities: [llm.messages, llm.count_tokens]
+      pricingRef: anthropic-claude-sonnet-4-6-standard-2026-06-22
+      pricing:
+        effectiveAt: "2026-06-22"
         source: https://platform.claude.com/docs/en/about-claude/pricing
         inputMicrosPerMillion: 3000000
         cachedInputMicrosPerMillion: 300000
         cacheWrite5mInputMicrosPerMillion: 3750000
         cacheWrite1hInputMicrosPerMillion: 6000000
         outputMicrosPerMillion: 15000000
+        maxInputTokens: 1000000
+        defaultMaxOutputTokens: 64000
+    - id: anthropic/claude-haiku-4-5
+      upstream: claude-haiku-4-5
+      capabilities: [llm.messages, llm.count_tokens]
+      pricingRef: anthropic-claude-haiku-4-5-standard-2026-06-22
+      pricing:
+        effectiveAt: "2026-06-22"
+        source: https://platform.claude.com/docs/en/about-claude/pricing
+        inputMicrosPerMillion: 1000000
+        cachedInputMicrosPerMillion: 100000
+        cacheWrite5mInputMicrosPerMillion: 1250000
+        cacheWrite1hInputMicrosPerMillion: 2000000
+        outputMicrosPerMillion: 5000000
         maxInputTokens: 200000
         defaultMaxOutputTokens: 64000
 billing:

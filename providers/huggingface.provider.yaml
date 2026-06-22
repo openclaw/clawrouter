@@ -37,8 +37,8 @@ endpoints:
     timeoutMs: 600000
 models:
   entries:
-    - id: huggingface/default
-      upstream: meta-llama/Llama-3.1-8B-Instruct
+    - id: huggingface/gpt-oss-120b-fastest
+      upstream: openai/gpt-oss-120b:fastest
       capabilities: [llm.chat]
       pricingRef: huggingface-router-dynamic
 billing:

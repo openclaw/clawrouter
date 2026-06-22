@@ -46,16 +46,16 @@ endpoints:
     timeoutMs: 600000
 models:
   entries:
-    - id: google/gemini-default
-      upstream: gemini-2.5-flash
+    - id: google/gemini-3.5-flash
+      upstream: gemini-3.5-flash
       capabilities: [llm.generate, llm.stream]
-      pricingRef: google-gemini-2-5-flash-standard-2026-06-21
+      pricingRef: google-gemini-3-5-flash-standard-2026-06-22
       pricing:
-        effectiveAt: "2026-06-21"
-        source: https://ai.google.dev/gemini-api/docs/pricing#gemini-2.5-flash
-        inputMicrosPerMillion: 300000
-        cachedInputMicrosPerMillion: 30000
-        outputMicrosPerMillion: 2500000
+        effectiveAt: "2026-06-22"
+        source: https://ai.google.dev/gemini-api/docs/pricing#gemini-3.5-flash
+        inputMicrosPerMillion: 1500000
+        cachedInputMicrosPerMillion: 150000
+        outputMicrosPerMillion: 9000000
         maxInputTokens: 1048576
         defaultMaxOutputTokens: 65536
 billing:

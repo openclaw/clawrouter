@@ -37,23 +37,18 @@ endpoints:
     timeoutMs: 600000
 models:
   entries:
-    - id: minimax/MiniMax-M3
-      upstream: MiniMax-M3
+    - id: minimax/MiniMax-M2.7
+      upstream: MiniMax-M2.7
       capabilities: [llm.chat]
-      pricingRef: minimax-m3-standard-2026-06-21
+      pricingRef: minimax-m2-7-standard-2026-06-22
       pricing:
-        effectiveAt: "2026-06-21"
+        effectiveAt: "2026-06-22"
         source: https://platform.minimax.io/docs/guides/pricing-paygo
         inputMicrosPerMillion: 300000
         cachedInputMicrosPerMillion: 60000
         outputMicrosPerMillion: 1200000
-        maxInputTokens: 1000000
-        defaultMaxOutputTokens: 128000
-        longContext:
-          thresholdInputTokens: 512000
-          inputMicrosPerMillion: 600000
-          cachedInputMicrosPerMillion: 120000
-          outputMicrosPerMillion: 2400000
+        maxInputTokens: 204800
+        defaultMaxOutputTokens: 131072
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

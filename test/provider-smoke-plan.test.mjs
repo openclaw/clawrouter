@@ -27,7 +27,7 @@ test("bundled OpenAI smoke target uses the catalog default model", () => {
   const provider = buildProviderSmokePlan(compileProviderSnapshot(), {}).providers.find(
     (entry) => entry.id === "openai",
   );
-  assert.equal(provider.target.body.model, "openai/gpt-4.1-mini");
+  assert.equal(provider.target.body.model, "openai/gpt-5.5");
 });
 
 test("Firecrawl uses keyless mode without a configured API key", () => {
@@ -50,22 +50,22 @@ test("Anthropic count_tokens smoke omits messages-only max_tokens", () => {
   assert.equal(provider.target.kind, "manifest_proxy");
   assert.equal(provider.target.endpoint, "count_tokens");
   assert.equal(provider.target.envelope.body.max_tokens, undefined);
-  assert.equal(provider.target.envelope.body.model, "claude-sonnet-4-5-20250929");
+  assert.equal(provider.target.envelope.body.model, "claude-opus-4-8");
 });
 
 test("newly budgeted provider defaults compile with dated pricing", () => {
   const snapshot = compileProviderSnapshot();
   const expectations = {
-    deepseek: [140000, 280000],
-    "google-gemini": [300000, 2500000],
-    groq: [50000, 80000],
-    minimax: [300000, 1200000],
-    together: [300000, 300000],
-    xai: [1250000, 2500000],
+    deepseek: ["2026-06-22", 435000, 870000],
+    "google-gemini": ["2026-06-22", 1500000, 9000000],
+    groq: ["2026-06-22", 150000, 600000],
+    minimax: ["2026-06-22", 300000, 1200000],
+    together: ["2026-06-22", 1400000, 4400000],
+    xai: ["2026-06-21", 1250000, 2500000],
   };
-  for (const [providerId, [input, output]] of Object.entries(expectations)) {
+  for (const [providerId, [effectiveAt, input, output]] of Object.entries(expectations)) {
     const model = snapshot.providers.find((provider) => provider.id === providerId).models[0];
-    assert.equal(model.pricing.effectiveAt, "2026-06-21");
+    assert.equal(model.pricing.effectiveAt, effectiveAt);
     assert.equal(model.pricing.inputMicrosPerMillion, input);
     assert.equal(model.pricing.outputMicrosPerMillion, output);
   }
@@ -86,9 +86,9 @@ test("newly budgeted provider defaults compile with dated pricing", () => {
 test("live provider defaults compile to current upstream models and transports", () => {
   const snapshot = compileProviderSnapshot();
   const upstreams = {
-    "google-gemini": "gemini-2.5-flash",
-    groq: "llama-3.1-8b-instant",
-    huggingface: "meta-llama/Llama-3.1-8B-Instruct",
+    "google-gemini": "gemini-3.5-flash",
+    groq: "openai/gpt-oss-120b",
+    huggingface: "openai/gpt-oss-120b:fastest",
     xai: "grok-4.3",
   };
   for (const [providerId, upstream] of Object.entries(upstreams)) {
@@ -99,7 +99,7 @@ test("live provider defaults compile to current upstream models and transports",
     (provider) => provider.id === "huggingface",
   );
   assert.equal(huggingface.target.kind, "openai_chat");
-  assert.equal(huggingface.target.body.model, "huggingface/default");
+  assert.equal(huggingface.target.body.model, "huggingface/gpt-oss-120b-fastest");
 });
 
 test("gateway failures do not overwrite provider health", async () => {
