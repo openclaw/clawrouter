@@ -173,6 +173,11 @@ export interface PlaygroundForm {
   temperature: string;
 }
 
+export interface PlaygroundMessage {
+  role: "user" | "assistant";
+  content: string;
+}
+
 export interface CatalogModel {
   id: string;
   provider: string;
@@ -433,7 +438,7 @@ export function knownPolicyProviders(selected: string[], available: string[]) {
   return unique(selected.filter((provider) => known.has(provider))).sort();
 }
 
-export function playgroundPayload(form: PlaygroundForm, route?: RouteCatalog["manifestProxy"][number]) {
+export function playgroundPayload(form: PlaygroundForm, route?: RouteCatalog["manifestProxy"][number], conversation: PlaygroundMessage[] = []) {
   if (form.mode === "service") {
     const body = form.servicePayload.trim() ? JSON.parse(form.servicePayload) : {};
     return {
@@ -444,10 +449,50 @@ export function playgroundPayload(form: PlaygroundForm, route?: RouteCatalog["ma
   }
   const maxTokens = optionalNumber(form.maxTokens);
   const temperature = optionalDecimal(form.temperature);
+  const messages = [...conversation, { role: "user" as const, content: form.prompt }];
   if (form.endpoint === "/v1/responses") {
-    return { model: form.model, input: form.prompt, instructions: form.system || undefined, max_output_tokens: maxTokens, temperature };
+    return { model: form.model, input: messages, instructions: form.system || undefined, max_output_tokens: maxTokens, temperature };
   }
-  return { model: form.model, messages: [...(form.system ? [{ role: "system", content: form.system }] : []), { role: "user", content: form.prompt }], max_tokens: maxTokens, temperature };
+  return { model: form.model, messages: [...(form.system ? [{ role: "system", content: form.system }] : []), ...messages], max_tokens: maxTokens, temperature };
+}
+
+export function playgroundResponseText(raw: string) {
+  let value: unknown;
+  try {
+    value = JSON.parse(raw);
+  } catch {
+    return raw;
+  }
+  if (!value || typeof value !== "object") return raw;
+  const record = value as Record<string, unknown>;
+  if (typeof record.output_text === "string") return record.output_text;
+  if (typeof record.output === "string") return record.output;
+
+  const choices = Array.isArray(record.choices) ? record.choices : [];
+  const choice = choices[0] as Record<string, unknown> | undefined;
+  const message = choice?.message as Record<string, unknown> | undefined;
+  if (typeof message?.content === "string") return message.content;
+  if (typeof choice?.text === "string") return choice.text;
+
+  const content = Array.isArray(record.content) ? record.content : [];
+  const contentText = textFromContent(content);
+  if (contentText) return contentText;
+
+  const output = Array.isArray(record.output) ? record.output : [];
+  const outputText = output.flatMap((item) => {
+    if (!item || typeof item !== "object") return [];
+    return textFromContent(Array.isArray((item as Record<string, unknown>).content) ? (item as Record<string, unknown>).content as unknown[] : []) || [];
+  }).join("\n");
+  return outputText || raw;
+}
+
+function textFromContent(content: unknown[]) {
+  return content.flatMap((item) => {
+    if (typeof item === "string") return [item];
+    if (!item || typeof item !== "object") return [];
+    const record = item as Record<string, unknown>;
+    return typeof record.text === "string" ? [record.text] : [];
+  }).join("\n");
 }
 
 export function playgroundServicePreset(route?: RouteCatalog["manifestProxy"][number]) {
