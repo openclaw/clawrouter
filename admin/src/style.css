@@ -1857,23 +1857,43 @@ h2 {
   gap: 7px;
 }
 
-.refreshMeta {
-  display: grid;
-  justify-items: end;
-  gap: 1px;
+.connectionMeta {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
   color: var(--muted);
   font-family: "DM Mono", ui-monospace, monospace;
-  font-size: 8px;
+  font-size: 9px;
   line-height: 1.15;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
-.refreshMeta time,
-.refreshMeta > span:last-child {
+.connectionMeta strong,
+.connectionMeta time,
+.connectionMeta > span:last-child {
   color: var(--foreground);
   font-size: 9px;
   font-variant-numeric: tabular-nums;
 }
+
+.connectionMeta strong {
+  font-weight: 700;
+}
+
+.connectionDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  box-shadow: 0 0 0 2px #f1f5f9;
+}
+
+.connectionMeta-success .connectionDot { background: var(--success); box-shadow: 0 0 0 2px var(--success-bg); }
+.connectionMeta-pending .connectionDot,
+.connectionMeta-neutral .connectionDot { background: var(--warning); box-shadow: 0 0 0 2px var(--warning-bg); }
+.connectionMeta-error .connectionDot { background: var(--danger); box-shadow: 0 0 0 2px var(--danger-bg); }
+.connectionSeparator { color: var(--border-strong); }
 
 .buttonSecondary,
 .segmented button,
