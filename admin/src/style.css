@@ -413,38 +413,42 @@ pre {
   gap: 6px;
 }
 
-.themeSwitcher {
-  display: grid;
-  grid-template-columns: repeat(3, 26px);
-  gap: 1px;
+.themeToggle {
+  position: relative;
+  display: flex;
+  justify-content: flex-start;
+  width: 50px;
+  min-height: 28px;
   border: 1px solid var(--border);
-  background: var(--surface-muted);
+  border-radius: 999px;
+  background: var(--surface-soft);
   padding: 2px;
 }
 
-.themeSwitcher button {
-  width: 26px;
-  min-height: 24px;
-  border: 0;
-  border-radius: 2px;
-  background: transparent;
-  color: var(--muted);
-  padding: 0;
-}
-
-.themeSwitcher button:hover:not(:disabled) {
-  border: 0;
-  background: var(--surface-hover);
-  color: var(--foreground-strong);
-}
-
-.themeSwitcher button.active {
+.themeToggle span {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 50%;
   background: var(--surface-raised);
-  box-shadow: inset 0 0 0 1px var(--border);
-  color: var(--success);
+  box-shadow: 0 1px 3px var(--shadow);
+  color: var(--warning);
+  transition: transform 150ms ease-out, background-color 150ms ease-out, color 150ms ease-out;
 }
 
-.themeSwitcher svg {
+.themeToggle:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+}
+
+.themeToggle.active span {
+  background: var(--primary);
+  color: var(--primary-foreground);
+  transform: translateX(22px);
+}
+
+.themeToggle svg {
   width: 13px;
   height: 13px;
 }
@@ -1888,9 +1892,10 @@ h2 {
   top: 0;
   z-index: 10;
   min-height: var(--header-height);
+  margin: 0 12px;
   border-bottom: 1px solid var(--border);
   background: var(--surface-translucent);
-  padding: 0 14px;
+  padding: 0;
   backdrop-filter: blur(8px);
 }
 
@@ -2545,6 +2550,7 @@ h2 {
     position: static;
     align-items: center;
     flex-direction: row;
+    margin: 0;
     padding: 8px 10px;
   }
 

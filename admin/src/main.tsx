@@ -16,7 +16,6 @@ import {
   LayoutDashboard,
   LogIn,
   MessageSquare,
-  Monitor,
   Moon,
   Play,
   Plus,
@@ -69,35 +68,27 @@ import "./style.css";
 
 type View = "home" | "catalog" | "playground" | "policies" | "users" | "usage";
 type RefreshOptions = { background?: boolean };
-type ThemePreference = "light" | "system" | "dark";
+type Theme = "light" | "dark";
 
 const themeStorageKey = "clawrouter-theme";
 
-function readThemePreference(): ThemePreference {
+function readTheme(): Theme {
   try {
     const stored = window.localStorage.getItem(themeStorageKey);
-    if (stored === "light" || stored === "dark" || stored === "system") return stored;
+    if (stored === "light" || stored === "dark") return stored;
   } catch {
     // Storage may be unavailable in privacy-restricted browser contexts.
   }
-  return "system";
+  return window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
 }
 
-function resolvedTheme(preference: ThemePreference): "light" | "dark" {
-  return preference === "system"
-    ? window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
-    : preference;
-}
-
-function applyTheme(preference: ThemePreference) {
-  const theme = resolvedTheme(preference);
+function applyTheme(theme: Theme) {
   document.documentElement.dataset.theme = theme;
-  document.documentElement.dataset.themePreference = preference;
   document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute("content", theme === "dark" ? "#0d120f" : "#fbfcf8");
 }
 
-const initialThemePreference = readThemePreference();
-applyTheme(initialThemePreference);
+const initialTheme = readTheme();
+applyTheme(initialTheme);
 
 const pathViews: Record<string, View> = {
   "/": "home",
@@ -634,7 +625,7 @@ const adminViews = new Set<View>(["policies", "users", "usage"]);
 
 function App() {
   const [view, setView] = useState<View>(initialViewFromPath);
-  const [themePreference, setThemePreference] = useState<ThemePreference>(initialThemePreference);
+  const [theme, setTheme] = useState<Theme>(initialTheme);
   const gatewayOrigin = window.location.origin;
   const allowDemo = isLocalDemoAllowed();
   const [session, setSession] = useState<SessionResponse>(allowDemo ? demo.session : emptySession);
@@ -745,18 +736,13 @@ function App() {
   }, []);
 
   useEffect(() => {
-    const colorScheme = window.matchMedia("(prefers-color-scheme: dark)");
-    const updateTheme = () => applyTheme(themePreference);
-    updateTheme();
+    applyTheme(theme);
     try {
-      window.localStorage.setItem(themeStorageKey, themePreference);
+      window.localStorage.setItem(themeStorageKey, theme);
     } catch {
       // The active preference still applies for this page lifetime.
     }
-    if (themePreference !== "system") return;
-    colorScheme.addEventListener("change", updateTheme);
-    return () => colorScheme.removeEventListener("change", updateTheme);
-  }, [themePreference]);
+  }, [theme]);
 
   useEffect(() => {
     if (status !== "loading" && session.role !== "admin" && adminViews.has(view)) navigateTo("catalog", true);
@@ -1695,7 +1681,7 @@ function App() {
             </div>
           </div>
           <div className="topActions">
-            <ThemeSwitcher value={themePreference} onChange={setThemePreference} />
+            <ThemeToggle value={theme} onChange={setTheme} />
             <span className={`status ${session.contentRetention?.enabled ? "active" : "neutral"}`} title={session.contentRetention ? session.contentRetention.enabled ? `Request content retained for ${session.contentRetention.retentionDays} days` : "Request content retention is off for this identity" : "Loading request content retention status"}>
               retention {session.contentRetention ? session.contentRetention.enabled ? `on · ${session.contentRetention.retentionDays}d` : "off" : "pending"}
             </span>
@@ -1898,20 +1884,13 @@ function UserAvatar({ email }: { email?: string | null }) {
   );
 }
 
-function ThemeSwitcher({ value, onChange }: { value: ThemePreference; onChange: (preference: ThemePreference) => void }) {
-  const options: Array<{ value: ThemePreference; label: string; icon: IconComponent }> = [
-    { value: "light", label: "Light theme", icon: Sun },
-    { value: "system", label: "Use system theme", icon: Monitor },
-    { value: "dark", label: "Dark theme", icon: Moon },
-  ];
+function ThemeToggle({ value, onChange }: { value: Theme; onChange: (theme: Theme) => void }) {
+  const dark = value === "dark";
+  const nextTheme = dark ? "light" : "dark";
   return (
-    <div className="themeSwitcher" role="group" aria-label="Color theme">
-      {options.map(({ value: option, label, icon: Icon }) => (
-        <button key={option} type="button" className={value === option ? "active" : ""} aria-pressed={value === option} aria-label={label} title={label} onClick={() => onChange(option)}>
-          <Icon aria-hidden="true" />
-        </button>
-      ))}
-    </div>
+    <button className={`themeToggle${dark ? " active" : ""}`} type="button" role="switch" aria-checked={dark} aria-label={`${dark ? "Dark" : "Light"} mode`} title={`Switch to ${nextTheme} mode`} onClick={() => onChange(nextTheme)}>
+      <span>{dark ? <Moon aria-hidden="true" /> : <Sun aria-hidden="true" />}</span>
+    </button>
   );
 }
 
