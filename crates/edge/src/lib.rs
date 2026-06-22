@@ -33,6 +33,9 @@ const OAUTH_AUTHORIZATION_TTL_MS: u64 = 10 * 60 * 1_000;
 const UPSTREAM_GRANT_REFRESH_WINDOW_MS: f64 = 5.0 * 60.0 * 1_000.0;
 const USAGE_EVENT_LIMIT: usize = 100;
 const USAGE_EVENT_RETENTION_MS: u64 = 30 * 86_400_000;
+const CONTENT_RETENTION_DAYS: u64 = 30;
+const CONTENT_RETENTION_MS: u64 = CONTENT_RETENTION_DAYS * 86_400_000;
+const CONTENT_RETENTION_HEADER: &str = "x-clawrouter-content-retention";
 const USAGE_CLEANUP_INTERVAL_MS: i64 = 86_400_000;
 const USAGE_AUDIT_FIELD_MAX_BYTES: usize = 256;
 const USAGE_AUDIT_PRINCIPAL_MAX_BYTES: usize = 320;
@@ -202,7 +205,8 @@ async fn fetch(req: Request, env: Env, ctx: Context) -> Result<Response> {
                     playground_path,
                     ProxyAuthMode::AccessSession,
                 )
-                .await;
+                .await
+                .and_then(with_cors);
             }
             if playground_path.starts_with("/proxy/") {
                 if !access_admin_csrf_allowed(&req.method(), req.headers(), &url)? {
@@ -219,13 +223,16 @@ async fn fetch(req: Request, env: Env, ctx: Context) -> Result<Response> {
                     &format!("/v1{playground_path}"),
                     ProxyAuthMode::AccessSession,
                 )
-                .await;
+                .await
+                .and_then(with_cors);
             }
         }
     }
 
     if req.method() == Method::Post && is_openai_compatible_path(url.path()) {
-        return proxy_openai_compatible(req, env, &ctx, url.path(), ProxyAuthMode::ProxyKey).await;
+        return proxy_openai_compatible(req, env, &ctx, url.path(), ProxyAuthMode::ProxyKey)
+            .await
+            .and_then(with_cors);
     }
 
     if req.method() == Method::Post
@@ -238,11 +245,15 @@ async fn fetch(req: Request, env: Env, ctx: Context) -> Result<Response> {
     }
 
     if req.method() == Method::Post && url.path().starts_with("/v1/proxy/") {
-        return proxy_manifest_endpoint(req, env, &ctx, url.path(), ProxyAuthMode::ProxyKey).await;
+        return proxy_manifest_endpoint(req, env, &ctx, url.path(), ProxyAuthMode::ProxyKey)
+            .await
+            .and_then(with_cors);
     }
 
     if url.path().starts_with("/v1/native/") {
-        return proxy_native_provider(req, env, &ctx, url.path(), ProxyAuthMode::ProxyKey).await;
+        return proxy_native_provider(req, env, &ctx, url.path(), ProxyAuthMode::ProxyKey)
+            .await
+            .and_then(with_cors);
     }
 
     Response::from_json(&serde_json::json!({
@@ -334,6 +345,7 @@ fn service_index() -> Result<Response> {
             "adminOverview": "/v1/admin/overview",
             "adminUsers": "/v1/admin/users",
             "adminUsage": "/v1/admin/usage",
+            "adminContent": "/v1/admin/content?tenant={tenant}&ref={contentRef}",
             "adminAccessUsers": "/v1/admin/access-users",
             "adminAccessUserGrants": "/v1/admin/access-user-grants/{email}",
             "adminKeys": "/v1/admin/keys",
@@ -558,6 +570,7 @@ async fn proxy_openai_compatible(
     let mut body = serde_json::from_str::<Value>(&raw_body).map_err(|error| {
         Error::RustError(format!("request body must be a JSON object: {error}"))
     })?;
+    let retained_body = body.clone();
     let model = body
         .get("model")
         .and_then(Value::as_str)
@@ -817,6 +830,29 @@ async fn proxy_openai_compatible(
             return Ok(response);
         }
     };
+    let content_ref = match retain_request_content(
+        &env,
+        &auth,
+        &route.provider.id,
+        capability,
+        Some(&model),
+        &request_id,
+        retained_body,
+    )
+    .await
+    {
+        Ok(content_ref) => content_ref,
+        Err(_) => {
+            settle_budget_after_response(&env, &auth, budget, 0).await;
+            return audit
+                .failure_response(json_error(
+                    "content_retention_unavailable",
+                    "request content retention is required but unavailable",
+                    503,
+                )?)
+                .await;
+        }
+    };
     let started_at_ms = Date::now().as_millis();
     let response = send_upstream_request(upstream_req, &route.provider.id).await?;
     let status_code = response.status_code();
@@ -838,6 +874,7 @@ async fn proxy_openai_compatible(
             stream_requires_terminal_marker: usage_stream_requires_terminal_marker(
                 route.provider.adapter.stream.as_deref(),
             ),
+            content_ref,
         },
     )
     .await
@@ -949,6 +986,7 @@ async fn proxy_manifest_endpoint(
             return audit.failure_response(response).await;
         }
     };
+    let retained_body = serde_json::from_str::<Value>(&raw_body).ok();
     let mut proxy = match parse_proxy_request(&raw_body) {
         Ok(proxy) => proxy,
         Err(message) => {
@@ -1220,6 +1258,35 @@ async fn proxy_manifest_endpoint(
             return Ok(response);
         }
     };
+    let content_ref = if let Some(retained_body) = retained_body {
+        match retain_request_content(
+            &env,
+            &auth,
+            &provider.id,
+            capability,
+            model_selection
+                .as_ref()
+                .map(|selection| selection.model.as_str()),
+            &request_id,
+            retained_body,
+        )
+        .await
+        {
+            Ok(content_ref) => content_ref,
+            Err(_) => {
+                settle_budget_after_response(&env, &auth, budget, 0).await;
+                return audit
+                    .failure_response(json_error(
+                        "content_retention_unavailable",
+                        "request content retention is required but unavailable",
+                        503,
+                    )?)
+                    .await;
+            }
+        }
+    } else {
+        None
+    };
     let started_at_ms = Date::now().as_millis();
     let response = send_upstream_request(upstream_req, &provider.id).await?;
     let status_code = response.status_code();
@@ -1241,6 +1308,7 @@ async fn proxy_manifest_endpoint(
             stream_requires_terminal_marker: usage_stream_requires_terminal_marker(
                 provider.adapter.stream.as_deref(),
             ),
+            content_ref,
         },
     )
     .await
@@ -1428,6 +1496,33 @@ async fn proxy_native_provider(
     } else {
         None
     };
+    let retained_body = if content_retention_view(&auth).enabled && capability.starts_with("llm.") {
+        match body.as_deref() {
+            Some(body) => match serde_json::from_slice::<Value>(body) {
+                Ok(body) => Some(body),
+                Err(_) => {
+                    return audit
+                        .failure_response(json_error(
+                            "invalid_json_body",
+                            "request body must be valid JSON when content retention is enabled",
+                            400,
+                        )?)
+                        .await;
+                }
+            },
+            None => {
+                return audit
+                    .failure_response(json_error(
+                        "invalid_json_body",
+                        "request body is required when content retention is enabled",
+                        400,
+                    )?)
+                    .await;
+            }
+        }
+    } else {
+        None
+    };
     let inspect_json =
         native_request_needs_json_inspection(compatibility_route, capability, &auth.policy);
     if inspect_json
@@ -1608,6 +1703,35 @@ async fn proxy_native_provider(
             return Ok(response);
         }
     };
+    let content_ref = if let Some(retained_body) = retained_body {
+        match retain_request_content(
+            &env,
+            &auth,
+            &provider.id,
+            capability,
+            model_selection
+                .as_ref()
+                .map(|selection| selection.model.as_str()),
+            &request_id,
+            retained_body,
+        )
+        .await
+        {
+            Ok(content_ref) => content_ref,
+            Err(_) => {
+                settle_budget_after_response(&env, &auth, budget, 0).await;
+                return audit
+                    .failure_response(json_error(
+                        "content_retention_unavailable",
+                        "request content retention is required but unavailable",
+                        503,
+                    )?)
+                    .await;
+            }
+        }
+    } else {
+        None
+    };
     let started_at_ms = Date::now().as_millis();
     let response = send_upstream_request(upstream_req, &provider.id).await?;
     let status_code = response.status_code();
@@ -1630,6 +1754,7 @@ async fn proxy_native_provider(
             stream_requires_terminal_marker: usage_stream_requires_terminal_marker(
                 provider.adapter.stream.as_deref(),
             ),
+            content_ref,
         },
     )
     .await
@@ -1743,6 +1868,8 @@ struct AccessPolicy {
     monthly_budget_micros: Option<u64>,
     #[serde(default)]
     request_cost_micros: Option<u64>,
+    #[serde(default = "default_true")]
+    retain_request_content: bool,
 }
 
 #[derive(Debug, Clone, Deserialize, PartialEq, Serialize)]
@@ -1753,6 +1880,8 @@ struct ProxyCredential {
     policy_id: String,
     #[serde(default = "legacy_policy_generation")]
     policy_generation: String,
+    #[serde(default)]
+    principal_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -1772,6 +1901,8 @@ struct LegacyKeyPolicy {
     monthly_budget_micros: Option<u64>,
     #[serde(default)]
     request_cost_micros: Option<u64>,
+    #[serde(default = "default_true")]
+    retain_request_content: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -1817,6 +1948,8 @@ struct AdminKeyPolicyRequest {
     #[serde(default)]
     request_cost_micros: Option<u64>,
     #[serde(default = "default_true")]
+    retain_request_content: bool,
+    #[serde(default = "default_true")]
     enabled: bool,
 }
 
@@ -1836,6 +1969,8 @@ struct AdminAccessPolicyRequest {
     #[serde(default)]
     request_cost_micros: Option<u64>,
     #[serde(default = "default_true")]
+    retain_request_content: bool,
+    #[serde(default = "default_true")]
     enabled: bool,
 }
 
@@ -1850,6 +1985,7 @@ struct AdminKeyPolicyResponse {
     token_role: Option<String>,
     monthly_budget_micros: Option<u64>,
     request_cost_micros: Option<u64>,
+    retain_request_content: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1862,6 +1998,7 @@ struct AdminAccessPolicyResponse {
     token_role: Option<String>,
     monthly_budget_micros: Option<u64>,
     request_cost_micros: Option<u64>,
+    retain_request_content: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -1873,6 +2010,7 @@ struct AdminCredentialResponse {
     policy_enabled: bool,
     generation_matches: bool,
     active: bool,
+    principal_id: Option<String>,
 }
 
 #[derive(Debug, Serialize)]
@@ -1886,6 +2024,34 @@ struct KeyProfileResponse {
     token_role: Option<String>,
     monthly_budget_micros: Option<u64>,
     request_cost_micros: Option<u64>,
+    content_retention: ContentRetentionView,
+}
+
+#[derive(Clone, Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct ContentRetentionView {
+    enabled: bool,
+    retention_days: u64,
+    policy_enabled: bool,
+    user_exempt: bool,
+}
+
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct RetainedRequestContent {
+    version: &'static str,
+    content_ref: String,
+    request_id: String,
+    occurred_at_ms: u64,
+    expires_at_ms: u64,
+    tenant_id: String,
+    policy_id: String,
+    credential_id: Option<String>,
+    principal_id: Option<String>,
+    provider: String,
+    capability: String,
+    model: Option<String>,
+    body: Value,
 }
 
 #[derive(Debug, Serialize)]
@@ -2055,6 +2221,7 @@ struct ProviderReadinessRow {
 struct EntitlementsResponse {
     session: AccessSession,
     providers: Vec<EntitlementProviderRow>,
+    content_retention: ContentRetentionView,
 }
 
 #[derive(Debug, Serialize)]
@@ -2066,6 +2233,7 @@ struct SessionProfileResponse {
     entitlements: Option<SessionEntitlements>,
     #[serde(skip_serializing_if = "Option::is_none")]
     entitlements_error: Option<String>,
+    content_retention: ContentRetentionView,
 }
 
 #[derive(Debug, Serialize)]
@@ -2239,6 +2407,8 @@ struct AccessSession {
     subject: Option<String>,
     tenant_id: String,
     groups: Vec<String>,
+    #[serde(skip_serializing)]
+    content_retention_disabled: bool,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -2252,6 +2422,8 @@ struct AccessUserRecord {
     enabled: Option<bool>,
     #[serde(default)]
     groups: Vec<String>,
+    #[serde(default)]
+    content_retention_disabled: bool,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2263,6 +2435,8 @@ struct AdminAccessUserPatchRequest {
     enabled: Option<bool>,
     #[serde(default)]
     groups: Option<Vec<String>>,
+    #[serde(default)]
+    content_retention_disabled: Option<bool>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -2282,12 +2456,14 @@ struct AdminAccessUserResponse {
     tenant_id: String,
     enabled: bool,
     groups: Vec<String>,
+    content_retention_disabled: bool,
 }
 
 struct AccessUserIdentity {
     role: AccessRole,
     tenant_id: String,
     groups: Vec<String>,
+    content_retention_disabled: bool,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -2672,6 +2848,7 @@ struct AuthorizedKey {
     auth_type: &'static str,
     policy_id: String,
     policy: AccessPolicy,
+    content_retention_disabled: bool,
 }
 
 enum AuthOutcome {
@@ -2688,6 +2865,7 @@ struct AccessPolicyEntry {
 
 async fn session_profile(headers: &Headers, env: &Env) -> Result<Response> {
     if let Some(session) = verified_access_session(headers, env).await? {
+        let content_retention = session_content_retention(env, &session).await?;
         let (entitlements, entitlements_error) =
             match access_entitlement_rows_for_session(&session, env).await {
                 Ok(providers) => (Some(SessionEntitlements { providers }), None),
@@ -2697,6 +2875,7 @@ async fn session_profile(headers: &Headers, env: &Env) -> Result<Response> {
             session,
             entitlements,
             entitlements_error,
+            content_retention,
         });
     }
     Response::from_json(&serde_json::json!({
@@ -2724,7 +2903,33 @@ async fn access_entitlements(headers: &Headers, env: &Env) -> Result<Response> {
         }
         Err(error) => return Err(error),
     };
-    Response::from_json(&EntitlementsResponse { session, providers })
+    let content_retention = session_content_retention(env, &session).await?;
+    Response::from_json(&EntitlementsResponse {
+        session,
+        providers,
+        content_retention,
+    })
+}
+
+async fn session_content_retention(
+    env: &Env,
+    session: &AccessSession,
+) -> Result<ContentRetentionView> {
+    let kv = env.kv("POLICY_KV").map_err(|error| {
+        Error::RustError(format!(
+            "POLICY_KV binding is required for retention disclosure: {error}"
+        ))
+    })?;
+    let policy_enabled = list_session_policy_entries(&kv, env, session)
+        .await?
+        .iter()
+        .any(|entry| entry.policy.enabled && entry.policy.retain_request_content);
+    Ok(ContentRetentionView {
+        enabled: policy_enabled && !session.content_retention_disabled,
+        retention_days: CONTENT_RETENTION_DAYS,
+        policy_enabled,
+        user_exempt: session.content_retention_disabled,
+    })
 }
 
 async fn access_entitlement_rows_for_session(
@@ -2739,6 +2944,7 @@ async fn access_entitlement_rows_for_session(
             ));
         }
     };
+
     let entries = list_session_policy_entries(&kv, env, session).await?;
     entitlement_rows_for_entries(&entries, env, &kv).await
 }
@@ -3105,6 +3311,48 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
         }
     };
 
+    if req.method() == Method::Get && path == "/v1/admin/content" {
+        let params = url.query_pairs().collect::<BTreeMap<_, _>>();
+        let tenant_id = params
+            .get("tenant")
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty() && value.len() <= 256);
+        let content_ref = params
+            .get("ref")
+            .map(|value| value.trim())
+            .filter(|value| !value.is_empty() && value.len() <= 256);
+        let (Some(tenant_id), Some(content_ref)) = (tenant_id, content_ref) else {
+            return json_error(
+                "invalid_content_lookup",
+                "tenant and ref query parameters are required",
+                400,
+            );
+        };
+        let bucket = env.bucket("CONTENT_ARCHIVE").map_err(|error| {
+            Error::RustError(format!("CONTENT_ARCHIVE binding is unavailable: {error}"))
+        })?;
+        let Some(object) = bucket
+            .get(&content_archive_key(tenant_id, content_ref))
+            .execute()
+            .await?
+        else {
+            return json_error(
+                "content_not_found",
+                "retained request content was not found",
+                404,
+            );
+        };
+        let body = object
+            .body()
+            .ok_or_else(|| Error::RustError("retained request body is unavailable".to_string()))?
+            .text()
+            .await?;
+        let record = serde_json::from_str::<Value>(&body).map_err(|error| {
+            Error::RustError(format!("retained request content is invalid JSON: {error}"))
+        })?;
+        return private_json_response(&record);
+    }
+
     if req.method() == Method::Get && path == "/v1/admin/overview" {
         let reporting = admin_reporting_snapshot(&env, &kv).await?;
         let snapshot = provider_snapshot()?;
@@ -3464,6 +3712,13 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
                 );
             }
             credential.secret_sha256 = credential.secret_sha256.to_ascii_lowercase();
+            credential.principal_id = match credential.principal_id.take() {
+                Some(principal_id) => match normalize_access_email(&principal_id) {
+                    Ok(principal_id) => Some(principal_id),
+                    Err(message) => return json_error("invalid_credential", message, 400),
+                },
+                None => None,
+            };
             if validate_admin_kid(&credential.policy_id).is_err() {
                 return json_error("unknown_policy", "credential policy is not registered", 404);
             };
@@ -3804,6 +4059,7 @@ async fn verified_access_session(headers: &Headers, env: &Env) -> Result<Option<
         subject: payload.sub,
         tenant_id: identity.tenant_id,
         groups: identity.groups,
+        content_retention_disabled: identity.content_retention_disabled,
     }))
 }
 
@@ -3964,6 +4220,7 @@ async fn access_role_for_email(
     if !user.enabled.unwrap_or(true) {
         return Ok(None);
     }
+    let content_retention_disabled = user.content_retention_disabled;
     let tenant_id = user
         .tenant_id
         .filter(|tenant| !tenant.trim().is_empty())
@@ -3978,6 +4235,7 @@ async fn access_role_for_email(
         role,
         tenant_id,
         groups,
+        content_retention_disabled,
     }))
 }
 
@@ -4093,6 +4351,7 @@ fn default_access_user_record(default_tenant: &str) -> AccessUserRecord {
         tenant_id: Some(default_tenant.to_string()),
         enabled: Some(true),
         groups: Vec::new(),
+        content_retention_disabled: false,
     }
 }
 
@@ -4109,6 +4368,9 @@ fn apply_access_user_patch(
     }
     if let Some(groups) = patch.groups {
         record.groups = normalize_access_groups(groups)?;
+    }
+    if let Some(disabled) = patch.content_retention_disabled {
+        record.content_retention_disabled = disabled;
     }
     Ok(record)
 }
@@ -4307,6 +4569,7 @@ impl AdminKeyPolicyRequest {
             token_role,
             monthly_budget_micros: self.monthly_budget_micros,
             request_cost_micros: self.request_cost_micros,
+            retain_request_content: self.retain_request_content,
         })
     }
 }
@@ -4328,6 +4591,7 @@ impl AdminAccessPolicyRequest {
             token_role: normalize_token_role(self.token_role)?,
             monthly_budget_micros: self.monthly_budget_micros,
             request_cost_micros: self.request_cost_micros,
+            retain_request_content: self.retain_request_content,
         })
     }
 }
@@ -4342,6 +4606,7 @@ impl LegacyKeyPolicy {
             token_role: self.token_role.clone(),
             monthly_budget_micros: self.monthly_budget_micros,
             request_cost_micros: self.request_cost_micros,
+            retain_request_content: self.retain_request_content,
         }
     }
 
@@ -4351,6 +4616,7 @@ impl LegacyKeyPolicy {
             secret_sha256: self.secret_sha256.clone(),
             policy_id: policy_id.to_string(),
             policy_generation: self.generation.clone(),
+            principal_id: None,
         }
     }
 }
@@ -4462,6 +4728,7 @@ fn admin_policy_response(
         token_role: policy.token_role.clone(),
         monthly_budget_micros: policy.monthly_budget_micros,
         request_cost_micros: policy.request_cost_micros,
+        retain_request_content: policy.retain_request_content,
     }
 }
 
@@ -4477,6 +4744,7 @@ fn admin_access_policy_response(
         token_role: policy.token_role.clone(),
         monthly_budget_micros: policy.monthly_budget_micros,
         request_cost_micros: policy.request_cost_micros,
+        retain_request_content: policy.retain_request_content,
     }
 }
 
@@ -4495,6 +4763,7 @@ fn admin_credential_response(
         policy_enabled,
         generation_matches,
         active: credential.enabled && policy_enabled && generation_matches,
+        principal_id: credential.principal_id.clone(),
     }
 }
 
@@ -4511,6 +4780,7 @@ fn key_profile_response(auth: &AuthorizedKey) -> KeyProfileResponse {
         token_role: auth.policy.token_role.clone(),
         monthly_budget_micros: auth.policy.monthly_budget_micros,
         request_cost_micros: auth.policy.request_cost_micros,
+        content_retention: content_retention_view(auth),
     }
 }
 
@@ -5411,6 +5681,7 @@ fn legacy_compatibility_tombstone(
         token_role: policy.token_role.clone(),
         monthly_budget_micros: policy.monthly_budget_micros,
         request_cost_micros: policy.request_cost_micros,
+        retain_request_content: policy.retain_request_content,
     }
 }
 
@@ -7885,6 +8156,7 @@ fn access_user_response(
             .unwrap_or_else(|| default_access_tenant(env)),
         enabled: record.enabled.unwrap_or(true),
         groups: normalize_access_groups(record.groups).map_err(Error::RustError)?,
+        content_retention_disabled: record.content_retention_disabled,
     })
 }
 
@@ -8523,10 +8795,11 @@ async fn authorize_proxy_key_for_provider(
         if let Some(provider_id) = provider_id {
             let auth = AuthorizedKey {
                 credential_id: Some(key.kid),
-                principal_id: None,
+                principal_id: credential.principal_id.clone(),
                 auth_type: "proxy_key",
                 policy_id: credential.policy_id,
                 policy: denied_access_policy(None),
+                content_retention_disabled: false,
             };
             enqueue_denied_usage(
                 env,
@@ -8545,12 +8818,21 @@ async fn authorize_proxy_key_for_provider(
         return Ok(AuthOutcome::Denied(response));
     };
     let generation_matches = credential_policy_generation_matches(&credential, &policy);
+    let content_retention_disabled = match credential.principal_id.as_deref() {
+        Some(principal_id) => {
+            access_control_user_record(env, principal_id, &default_access_tenant(env))
+                .await?
+                .content_retention_disabled
+        }
+        None => false,
+    };
     let authorized = AuthorizedKey {
         credential_id: Some(key.kid),
-        principal_id: None,
+        principal_id: credential.principal_id,
         auth_type: "proxy_key",
         policy_id: credential.policy_id,
         policy,
+        content_retention_disabled,
     };
     if !credential.enabled {
         let response = json_error("proxy_key_revoked", "proxy key is revoked", 403)?;
@@ -8687,6 +8969,7 @@ async fn authorize_access_session(
             auth_type: "access",
             policy_id: "access_unbound".to_string(),
             policy: denied_access_policy(Some(session.tenant_id)),
+            content_retention_disabled: session.content_retention_disabled,
         };
         enqueue_denied_usage(
             env,
@@ -8717,6 +9000,7 @@ async fn authorize_access_session(
         auth_type: "access",
         policy_id: selected_entry.policy_id.clone(),
         policy: selected_entry.policy.clone(),
+        content_retention_disabled: session.content_retention_disabled,
     }))
 }
 
@@ -8736,6 +9020,7 @@ fn denied_access_policy(tenant_id: Option<String>) -> AccessPolicy {
         token_role: None,
         monthly_budget_micros: None,
         request_cost_micros: None,
+        retain_request_content: true,
     }
 }
 
@@ -12087,6 +12372,12 @@ fn normalize_access_control_credential(credential: &mut ProxyCredentialEntry) ->
         ));
     }
     credential.credential.secret_sha256 = credential.credential.secret_sha256.to_ascii_lowercase();
+    credential.credential.principal_id = credential
+        .credential
+        .principal_id
+        .take()
+        .map(|principal_id| normalize_access_email(&principal_id).map_err(str::to_string))
+        .transpose()?;
     Ok(())
 }
 
@@ -13331,6 +13622,70 @@ fn budget_object_name(tenant_id: &str, kid: &str) -> String {
     format!("{tenant_id}:{kid}")
 }
 
+fn content_retention_view(auth: &AuthorizedKey) -> ContentRetentionView {
+    let policy_enabled = auth.policy.retain_request_content;
+    let user_exempt = auth.content_retention_disabled;
+    ContentRetentionView {
+        enabled: policy_enabled && !user_exempt,
+        retention_days: CONTENT_RETENTION_DAYS,
+        policy_enabled,
+        user_exempt,
+    }
+}
+
+fn content_archive_key(tenant_id: &str, content_ref: &str) -> String {
+    format!(
+        "v1/{}/{}.json",
+        encode_component(tenant_id),
+        encode_component(content_ref)
+    )
+}
+
+async fn retain_request_content(
+    env: &Env,
+    auth: &AuthorizedKey,
+    provider: &str,
+    capability: &str,
+    model: Option<&str>,
+    request_id: &str,
+    body: Value,
+) -> Result<Option<String>> {
+    if !content_retention_view(auth).enabled || !capability.starts_with("llm.") {
+        return Ok(None);
+    }
+    let occurred_at_ms = Date::now().as_millis();
+    let content_ref = usage_event_id().replacen("usage_", "content_", 1);
+    let record = RetainedRequestContent {
+        version: "clawrouter.retained-request.v1",
+        content_ref: content_ref.clone(),
+        request_id: request_id.to_string(),
+        occurred_at_ms,
+        expires_at_ms: occurred_at_ms.saturating_add(CONTENT_RETENTION_MS),
+        tenant_id: tenant_id(auth),
+        policy_id: auth.policy_id.clone(),
+        credential_id: auth.credential_id.clone(),
+        principal_id: auth.principal_id.clone(),
+        provider: provider.to_string(),
+        capability: capability.to_string(),
+        model: model.map(str::to_string),
+        body,
+    };
+    let bucket = env.bucket("CONTENT_ARCHIVE").map_err(|error| {
+        Error::RustError(format!("CONTENT_ARCHIVE binding is unavailable: {error}"))
+    })?;
+    bucket
+        .put(
+            &content_archive_key(&record.tenant_id, &content_ref),
+            serde_json::to_vec(&record)?,
+        )
+        .execute()
+        .await
+        .map_err(|error| {
+            Error::RustError(format!("request content archive write failed: {error}"))
+        })?;
+    Ok(Some(content_ref))
+}
+
 fn budget_reservation_id() -> String {
     let seq = next_usage_event_sequence();
     let nonce = (js_sys::Math::random() * MAX_SQL_BUDGET_MICROS as f64) as u64;
@@ -13358,6 +13713,7 @@ struct UsageRecord<'a> {
     status: UsageStatus,
     status_code: u16,
     duration_ms: u64,
+    content_ref: Option<String>,
 }
 
 struct ProxyAuditContext<'a> {
@@ -14071,6 +14427,7 @@ struct ProxyCompletion {
     status_code: u16,
     started_at_ms: u64,
     stream_requires_terminal_marker: bool,
+    content_ref: Option<String>,
 }
 
 impl ProxyCompletion {
@@ -14106,6 +14463,7 @@ impl ProxyCompletion {
                 status,
                 status_code: self.status_code,
                 duration_ms: Date::now().as_millis().saturating_sub(self.started_at_ms),
+                content_ref: self.content_ref,
             },
         )
         .await;
@@ -14117,6 +14475,15 @@ async fn finalize_proxy_response(
     ctx: &Context,
     completion: ProxyCompletion,
 ) -> Result<Response> {
+    let retention = content_retention_view(&completion.auth);
+    response.headers_mut().set(
+        CONTENT_RETENTION_HEADER,
+        if retention.enabled {
+            "on; retention-days=30"
+        } else {
+            "off"
+        },
+    )?;
     if !(200..=299).contains(&response.status_code()) {
         completion
             .finish(StreamUsageResult {
@@ -14238,6 +14605,8 @@ async fn enqueue_usage(env: &Env, record: UsageRecord<'_>) {
     }
     event.status_code = Some(record.status_code);
     event.duration_ms = Some(record.duration_ms);
+    event.content_retained = record.content_ref.is_some();
+    event.content_ref = record.content_ref;
     event.status = record.status;
     normalize_usage_event_metadata(&mut event);
     if let Err(error) = queue.send(event).await {
@@ -14286,6 +14655,7 @@ async fn enqueue_denied_usage(env: &Env, record: DeniedUsageRecord<'_>) {
             status: UsageStatus::Denied,
             status_code: record.status_code,
             duration_ms: 0,
+            content_ref: None,
         },
     )
     .await;
@@ -14309,6 +14679,7 @@ impl ProxyAuditContext<'_> {
                 status: usage_status(status_code),
                 status_code,
                 duration_ms: 0,
+                content_ref: None,
             },
         )
         .await;
@@ -14340,6 +14711,10 @@ fn normalize_usage_event_metadata(event: &mut UsageEvent) {
         .principal_id
         .as_deref()
         .map(|value| truncate_audit_metadata(value, USAGE_AUDIT_PRINCIPAL_MAX_BYTES));
+    event.content_ref = event
+        .content_ref
+        .as_deref()
+        .map(|value| truncate_audit_metadata(value, USAGE_AUDIT_FIELD_MAX_BYTES));
     event.auth_type = truncate_audit_metadata(&event.auth_type, USAGE_AUDIT_FIELD_MAX_BYTES);
     event.session_id = bounded_audit_metadata(event.session_id.take());
     event.agent_id = bounded_audit_metadata(event.agent_id.take());
@@ -14553,22 +14928,27 @@ fn cors_preflight() -> Result<Response> {
 }
 
 fn cors_enabled_path(path: &str) -> bool {
-    matches!(
-        path,
-        "/v1/health"
-            | "/v1/providers"
-            | "/v1/routes"
-            | "/v1/session"
-            | "/v1/entitlements"
-            | "/v1/session/usage"
-            | "/v1/me"
-            | "/v1/usage"
-            | "/v1/models"
-            | "/v1/catalog"
-            | "/v1/key/inspect"
-            | "/v1/messages"
-            | "/v1/messages/count_tokens"
-    ) || path.starts_with("/v1/admin/")
+    is_openai_compatible_path(path)
+        || path.starts_with("/v1/proxy/")
+        || path.starts_with("/v1/native/")
+        || path.starts_with("/v1/playground")
+        || matches!(
+            path,
+            "/v1/health"
+                | "/v1/providers"
+                | "/v1/routes"
+                | "/v1/session"
+                | "/v1/entitlements"
+                | "/v1/session/usage"
+                | "/v1/me"
+                | "/v1/usage"
+                | "/v1/models"
+                | "/v1/catalog"
+                | "/v1/key/inspect"
+                | "/v1/messages"
+                | "/v1/messages/count_tokens"
+        )
+        || path.starts_with("/v1/admin/")
 }
 
 fn with_cors(mut response: Response) -> Result<Response> {
@@ -14581,6 +14961,9 @@ fn with_cors(mut response: Response) -> Result<Response> {
     response
         .headers_mut()
         .set("access-control-allow-headers", CORS_ALLOW_HEADERS)?;
+    response
+        .headers_mut()
+        .set("access-control-expose-headers", CONTENT_RETENTION_HEADER)?;
     response
         .headers_mut()
         .set("access-control-max-age", CORS_MAX_AGE)?;
@@ -14801,6 +15184,7 @@ mod tests {
             token_role: None,
             monthly_budget_micros: Some(1_000_000),
             request_cost_micros: None,
+            retain_request_content: true,
         };
         let cost = RequestCost::for_request(
             &policy,
@@ -15309,6 +15693,7 @@ mod tests {
             token_role: None,
             monthly_budget_micros: Some(1_000_000),
             request_cost_micros: None,
+            retain_request_content: true,
         };
         let pricing = ModelPricing {
             effective_at: "2026-06-19".to_string(),
@@ -15775,6 +16160,7 @@ mod tests {
             secret_sha256: sha256_hex("secret"),
             policy_id: "svc_docs".to_string(),
             policy_generation: "gen_1".to_string(),
+            principal_id: None,
         };
         let policy = AccessPolicy {
             enabled: true,
@@ -15784,6 +16170,7 @@ mod tests {
             token_role: Some("service".to_string()),
             monthly_budget_micros: Some(100),
             request_cost_micros: Some(10),
+            retain_request_content: true,
         };
 
         assert_eq!(key_verification("secret", &credential), "verified");
@@ -15846,6 +16233,7 @@ mod tests {
             token_role: Some("service".to_string()),
             monthly_budget_micros: Some(100),
             request_cost_micros: Some(10),
+            retain_request_content: true,
         };
         let policy = legacy.access_policy();
         let credential = legacy.credential("svc_docs");
@@ -15888,12 +16276,14 @@ mod tests {
             token_role: Some("service".to_string()),
             monthly_budget_micros: Some(100),
             request_cost_micros: Some(10),
+            retain_request_content: true,
         };
         let existing_credential = ProxyCredential {
             enabled: true,
             secret_sha256: sha256_hex("old-secret"),
             policy_id: "svc_docs".to_string(),
             policy_generation: existing_policy.generation.clone(),
+            principal_id: None,
         };
         let mut updated_policy = AccessPolicy {
             generation: new_policy_generation(),
@@ -15932,6 +16322,7 @@ mod tests {
             token_role: Some("User".to_string()),
             monthly_budget_micros: Some(100),
             request_cost_micros: Some(10),
+            retain_request_content: true,
         };
         let legacy = request.try_into_policy(None, false).unwrap();
         let policy = legacy.access_policy();
@@ -15959,6 +16350,7 @@ mod tests {
             token_role: Some("bad role!".to_string()),
             monthly_budget_micros: Some(100),
             request_cost_micros: Some(10),
+            retain_request_content: true,
         };
         assert_eq!(
             request.try_into_policy(None, false).unwrap_err(),
@@ -15978,6 +16370,7 @@ mod tests {
             token_role: Some("service".to_string()),
             monthly_budget_micros: Some(200),
             request_cost_micros: Some(20),
+            retain_request_content: true,
         };
         let policy = request
             .try_into_policy(Some(existing_hash.clone()), false)
@@ -15993,6 +16386,7 @@ mod tests {
             token_role: None,
             monthly_budget_micros: None,
             request_cost_micros: None,
+            retain_request_content: true,
         };
         assert_eq!(
             new_key.try_into_policy(None, false).unwrap_err(),
@@ -16010,6 +16404,7 @@ mod tests {
             token_role: Some("user".to_string()),
             monthly_budget_micros: Some(100),
             request_cost_micros: Some(10),
+            retain_request_content: true,
         };
 
         assert!(policy_allows_provider(&policy, "openai"));
@@ -16236,6 +16631,7 @@ mod tests {
             subject: None,
             tenant_id: "ops".to_string(),
             groups: Vec::new(),
+            content_retention_disabled: false,
         };
 
         assert_eq!(
@@ -16257,6 +16653,7 @@ mod tests {
             subject: None,
             tenant_id: "docs".to_string(),
             groups: (0..64).map(|index| format!("group-{index}")).collect(),
+            content_retention_disabled: false,
         };
         let bindings = vec![
             PolicyBindingRecord {
@@ -16312,6 +16709,7 @@ mod tests {
             token_role: Some("service".to_string()),
             monthly_budget_micros: Some(100),
             request_cost_micros: Some(10),
+            retain_request_content: true,
         };
         let revoked_policy = AccessPolicy {
             enabled: false,
@@ -16326,6 +16724,7 @@ mod tests {
                     secret_sha256: sha256_hex("a"),
                     policy_id: "shared".to_string(),
                     policy_generation: active_policy.generation.clone(),
+                    principal_id: None,
                 },
             ),
             (
@@ -16335,6 +16734,7 @@ mod tests {
                     secret_sha256: sha256_hex("b"),
                     policy_id: "shared".to_string(),
                     policy_generation: active_policy.generation.clone(),
+                    principal_id: None,
                 },
             ),
             (
@@ -16344,6 +16744,7 @@ mod tests {
                     secret_sha256: sha256_hex("c"),
                     policy_id: "revoked".to_string(),
                     policy_generation: revoked_policy.generation.clone(),
+                    principal_id: None,
                 },
             ),
             (
@@ -16353,6 +16754,7 @@ mod tests {
                     secret_sha256: sha256_hex("d"),
                     policy_id: "shared".to_string(),
                     policy_generation: "stale_generation".to_string(),
+                    principal_id: None,
                 },
             ),
         ];
@@ -16387,6 +16789,7 @@ mod tests {
                         secret_sha256: sha256_hex("missing"),
                         policy_id: "missing".to_string(),
                         policy_generation: "gen_missing".to_string(),
+                        principal_id: None,
                     },
                 )],
             ]
@@ -16416,6 +16819,7 @@ mod tests {
                 token_role: Some("user".to_string()),
                 monthly_budget_micros: Some(100),
                 request_cost_micros: Some(10),
+                retain_request_content: true,
             },
             AdminKeyPolicyResponse {
                 kid: "svc_ops".to_string(),
@@ -16426,6 +16830,7 @@ mod tests {
                 token_role: Some("ops".to_string()),
                 monthly_budget_micros: Some(200),
                 request_cost_micros: None,
+                retain_request_content: true,
             },
             AdminKeyPolicyResponse {
                 kid: "svc_default".to_string(),
@@ -16436,6 +16841,7 @@ mod tests {
                 token_role: Some("service".to_string()),
                 monthly_budget_micros: None,
                 request_cost_micros: Some(5),
+                retain_request_content: true,
             },
             AdminKeyPolicyResponse {
                 kid: "svc_retired".to_string(),
@@ -16446,6 +16852,7 @@ mod tests {
                 token_role: Some("sandbox".to_string()),
                 monthly_budget_micros: Some(50),
                 request_cost_micros: None,
+                retain_request_content: true,
             },
         ];
         let keys = vec![
@@ -16518,6 +16925,7 @@ mod tests {
             token_role: None,
             monthly_budget_micros: None,
             request_cost_micros: None,
+            retain_request_content: true,
         };
         assert_eq!(
             bad_hash.try_into_policy(None, false).unwrap_err(),
@@ -16533,6 +16941,7 @@ mod tests {
             token_role: None,
             monthly_budget_micros: None,
             request_cost_micros: None,
+            retain_request_content: true,
         };
         assert_eq!(
             wildcard_providers.try_into_policy(None, false).unwrap_err(),
@@ -16547,6 +16956,7 @@ mod tests {
             token_role: None,
             monthly_budget_micros: None,
             request_cost_micros: None,
+            retain_request_content: true,
         };
         let wildcard_policy = wildcard_providers.try_into_policy(None, true).unwrap();
         assert!(wildcard_policy.providers.is_empty());
@@ -16561,6 +16971,7 @@ mod tests {
             token_role: None,
             monthly_budget_micros: None,
             request_cost_micros: None,
+            retain_request_content: true,
         };
         assert!(explicit_wildcard
             .try_into_policy(None, false)
@@ -16577,6 +16988,7 @@ mod tests {
             token_role: None,
             monthly_budget_micros: None,
             request_cost_micros: None,
+            retain_request_content: true,
         };
         assert_eq!(
             omitted_providers.try_into_policy(None, false).unwrap_err(),
@@ -16591,6 +17003,7 @@ mod tests {
             token_role: None,
             monthly_budget_micros: None,
             request_cost_micros: None,
+            retain_request_content: true,
         };
         assert_eq!(
             validate_policy_providers(&unknown_provider).unwrap_err(),
@@ -16605,6 +17018,7 @@ mod tests {
             token_role: None,
             monthly_budget_micros: Some(MAX_SQL_BUDGET_MICROS + 1),
             request_cost_micros: None,
+            retain_request_content: true,
         };
         assert_eq!(
             validate_policy_budget(&invalid_budget).unwrap_err(),
@@ -16759,8 +17173,10 @@ mod tests {
         assert!(cors_enabled_path("/v1/usage"));
         assert!(cors_enabled_path("/v1/messages"));
         assert!(cors_enabled_path("/v1/messages/count_tokens"));
-        assert!(!cors_enabled_path("/v1/chat/completions"));
-        assert!(!cors_enabled_path("/v1/proxy/tavily/search"));
+        assert!(cors_enabled_path("/v1/chat/completions"));
+        assert!(cors_enabled_path("/v1/proxy/tavily/search"));
+        assert!(cors_enabled_path("/v1/native/openai/v1/responses"));
+        assert_eq!(CONTENT_RETENTION_HEADER, "x-clawrouter-content-retention");
     }
 
     #[test]
@@ -16909,6 +17325,7 @@ mod tests {
                 tenant_id: Some("default".to_string()),
                 enabled: Some(false),
                 groups: vec![" Docs ".to_string(), "docs".to_string()],
+                content_retention_disabled: false,
             },
         };
 
@@ -16927,6 +17344,7 @@ mod tests {
             tenant_id: Some("old".to_string()),
             enabled: Some(false),
             groups: vec!["maintainers".to_string()],
+            content_retention_disabled: true,
         };
         let patch = serde_json::from_str::<AdminAccessUserPatchRequest>(
             r#"{"tenantId":"new","enabled":true}"#,
@@ -16936,6 +17354,7 @@ mod tests {
         assert_eq!(updated.tenant_id.as_deref(), Some("new"));
         assert_eq!(updated.enabled, Some(true));
         assert_eq!(updated.groups, vec!["maintainers"]);
+        assert!(updated.content_retention_disabled);
 
         let clear =
             serde_json::from_str::<AdminAccessUserPatchRequest>(r#"{"groups":[]}"#).unwrap();
@@ -16943,6 +17362,16 @@ mod tests {
             .unwrap()
             .groups
             .is_empty());
+
+        let clear_exemption = serde_json::from_str::<AdminAccessUserPatchRequest>(
+            r#"{"contentRetentionDisabled":false}"#,
+        )
+        .unwrap();
+        assert!(
+            !apply_access_user_patch(updated, clear_exemption)
+                .unwrap()
+                .content_retention_disabled
+        );
     }
 
     #[test]
@@ -17407,6 +17836,7 @@ mod tests {
             token_role: None,
             monthly_budget_micros: Some(1_000_000),
             request_cost_micros: None,
+            retain_request_content: true,
         };
         assert!(native_request_needs_json_inspection(
             false,
@@ -17550,6 +17980,7 @@ mod tests {
                 token_role: None,
                 monthly_budget_micros: None,
                 request_cost_micros: None,
+                retain_request_content: true,
             },
         };
         let research = AccessPolicyEntry {
@@ -17586,6 +18017,7 @@ mod tests {
                 token_role: None,
                 monthly_budget_micros: None,
                 request_cost_micros: None,
+                retain_request_content: true,
             },
         };
         let research = AccessPolicyEntry {
@@ -18264,7 +18696,9 @@ mod tests {
                 token_role: Some("service".to_string()),
                 monthly_budget_micros: None,
                 request_cost_micros: None,
+                retain_request_content: true,
             },
+            content_retention_disabled: false,
         };
 
         assert_eq!(
@@ -18290,6 +18724,34 @@ mod tests {
                 "oauth/svc_docs/oauth-test",
                 "oauth/tenants/default/oauth-test",
             ]
+        );
+    }
+
+    #[test]
+    fn content_retention_defaults_on_and_user_exemption_wins() {
+        let policy: AccessPolicy =
+            serde_json::from_str(r#"{"enabled":true,"providers":["openai"]}"#).unwrap();
+        let mut auth = AuthorizedKey {
+            credential_id: Some("cred_docs".to_string()),
+            principal_id: Some("user@example.com".to_string()),
+            auth_type: "proxy_key",
+            policy_id: "svc_docs".to_string(),
+            policy,
+            content_retention_disabled: false,
+        };
+        assert!(content_retention_view(&auth).enabled);
+        auth.content_retention_disabled = true;
+        let retention = content_retention_view(&auth);
+        assert!(!retention.enabled);
+        assert!(retention.policy_enabled);
+        assert!(retention.user_exempt);
+    }
+
+    #[test]
+    fn content_archive_keys_are_tenant_scoped_and_encoded() {
+        assert_eq!(
+            content_archive_key("team/docs", "req 1"),
+            "v1/team%2Fdocs/req%201.json"
         );
     }
 

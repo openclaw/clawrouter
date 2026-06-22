@@ -65,6 +65,10 @@ pub struct UsageEvent {
     pub status_code: Option<u16>,
     #[serde(default)]
     pub duration_ms: Option<u64>,
+    #[serde(default)]
+    pub content_retained: bool,
+    #[serde(default)]
+    pub content_ref: Option<String>,
     pub status: UsageStatus,
 }
 
@@ -110,6 +114,8 @@ impl UsageEvent {
             cost_basis: String::new(),
             status_code: None,
             duration_ms: None,
+            content_retained: false,
+            content_ref: None,
             status: UsageStatus::Success,
         }
     }
@@ -146,6 +152,8 @@ mod tests {
         assert!(event.auth_type.is_empty());
         assert!(event.status_code.is_none());
         assert!(event.duration_ms.is_none());
+        assert!(!event.content_retained);
+        assert!(event.content_ref.is_none());
     }
 
     #[test]
