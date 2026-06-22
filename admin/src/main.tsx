@@ -146,6 +146,7 @@ interface AccessPolicy {
   tokenRole?: string | null;
   monthlyBudgetMicros?: number | null;
   requestCostMicros?: number | null;
+  retainRequestContent: boolean;
 }
 
 interface ProxyCredential {
@@ -155,6 +156,7 @@ interface ProxyCredential {
   policyEnabled?: boolean;
   generationMatches?: boolean;
   active?: boolean;
+  principalId?: string | null;
 }
 
 interface ProviderConnection {
@@ -215,6 +217,14 @@ interface SessionResponse {
   groups?: string[];
   entitlements?: { providers: ProviderAccess[] } | null;
   entitlementsError?: string | null;
+  contentRetention?: ContentRetention;
+}
+
+interface ContentRetention {
+  enabled: boolean;
+  retentionDays: number;
+  policyEnabled: boolean;
+  userExempt: boolean;
 }
 
 interface ProviderReadiness {
@@ -253,6 +263,7 @@ interface ProviderAccess {
 interface EntitlementsResponse {
   session: SessionResponse;
   providers: ProviderAccess[];
+  contentRetention: ContentRetention;
 }
 
 interface AccessUser {
@@ -261,6 +272,7 @@ interface AccessUser {
   tenantId: string;
   enabled: boolean;
   groups: string[];
+  contentRetentionDisabled: boolean;
 }
 
 interface PolicyBinding {
@@ -370,6 +382,8 @@ interface UsageAuditEvent {
   status_code?: number | null;
   duration_ms?: number | null;
   status: string;
+  content_retained?: boolean;
+  content_ref?: string | null;
 }
 
 interface UsageSnapshot {
@@ -377,6 +391,17 @@ interface UsageSnapshot {
   summary: UsageSummary;
   providers: ProviderUsageSummary[];
   events: UsageAuditEvent[];
+}
+
+interface RetainedRequestContent {
+  requestId: string;
+  occurredAtMs: number;
+  expiresAtMs: number;
+  principalId?: string | null;
+  provider: string;
+  capability: string;
+  model?: string | null;
+  body: unknown;
 }
 
 interface ServiceItem {
@@ -415,6 +440,7 @@ interface PolicyForm {
   requestCostMicros: string;
   providers: string[];
   allProviders: boolean;
+  retainRequestContent: boolean;
 }
 
 interface AccessForm {
@@ -423,11 +449,13 @@ interface AccessForm {
   enabled: boolean;
   groups: string;
   policyIds: string[];
+  contentRetentionDisabled: boolean;
 }
 
 interface CredentialForm {
   credentialId: string;
   policyId: string;
+  principalId: string;
 }
 
 interface BindingForm {
@@ -505,6 +533,7 @@ const defaultPolicy: PolicyForm = {
   requestCostMicros: "1000",
   providers: ["openai", "tavily"],
   allProviders: false,
+  retainRequestContent: true,
 };
 
 const defaultAccess: AccessForm = {
@@ -513,8 +542,9 @@ const defaultAccess: AccessForm = {
   enabled: true,
   groups: "",
   policyIds: [],
+  contentRetentionDisabled: false,
 };
-const defaultCredential: CredentialForm = { credentialId: "", policyId: "" };
+const defaultCredential: CredentialForm = { credentialId: "", policyId: "", principalId: "" };
 const defaultBinding: BindingForm = { policyId: "", principalType: "group", principalId: "", enabled: true, priority: "100" };
 const defaultUpstreamGrant: UpstreamGrantForm = { scope: "policies", scopeId: "", tokenRef: "", kind: "api_key", provider: "", label: "", enabled: true, credential: "", credentialBundle: "", accessToken: "", refreshToken: "", accountId: "", expiresAt: "" };
 const defaultAssignmentRule: AssignmentRuleForm = { ruleId: "", enabled: true, kind: "email_domain", subject: "", groups: "", policyIds: [], priority: "100", revokeOnLoss: true, provenance: "cloudflare_access" };
@@ -560,7 +590,7 @@ function App() {
   const [entitlements, setEntitlements] = useState<EntitlementsResponse | null>(allowDemo ? demo.entitlements : null);
   const [providerReadiness, setProviderReadiness] = useState<Record<string, ProviderReadiness>>(allowDemo ? readinessMap(demo.entitlements.providers.map((item) => item.readiness)) : {});
   const [policyForm, setPolicyForm] = useState<PolicyForm>(allowDemo && demo.keys[0] ? policyFormFromPolicy(demo.keys[0]) : defaultPolicy);
-  const [credentialForm, setCredentialForm] = useState<CredentialForm>(allowDemo && demo.keys[0] ? { credentialId: "", policyId: demo.keys[0].policyId } : defaultCredential);
+  const [credentialForm, setCredentialForm] = useState<CredentialForm>(allowDemo && demo.keys[0] ? { credentialId: "", policyId: demo.keys[0].policyId, principalId: "" } : defaultCredential);
   const [bindingForm, setBindingForm] = useState<BindingForm>(allowDemo && demo.keys[0] ? { ...defaultBinding, policyId: demo.keys[0].policyId } : defaultBinding);
   const [upstreamGrantForm, setUpstreamGrantForm] = useState<UpstreamGrantForm>(allowDemo && demo.upstreamGrants[0] ? upstreamGrantFormFromGrant(demo.upstreamGrants[0]) : defaultUpstreamGrant);
   const [assignmentRuleForm, setAssignmentRuleForm] = useState<AssignmentRuleForm>(allowDemo && demo.assignmentRules[0] ? assignmentRuleFormFromRule(demo.assignmentRules[0]) : defaultAssignmentRule);
@@ -703,7 +733,7 @@ function App() {
       setRoutes(routeData);
       let refreshWarnings = sessionData.entitlementsError ? [`entitlements unavailable: ${sessionData.entitlementsError}`] : [];
       const sessionEntitlements = sessionData.entitlements
-        ? { session: sessionData, providers: sessionData.entitlements.providers }
+        ? { session: sessionData, providers: sessionData.entitlements.providers, contentRetention: sessionData.contentRetention ?? { enabled: false, retentionDays: 30, policyEnabled: false, userExempt: false } }
         : null;
       if (sessionEntitlements) {
         setEntitlements(sessionEntitlements);
@@ -742,7 +772,7 @@ function App() {
           setPolicyForm(refreshedPolicy ? policyFormFromPolicy(refreshedPolicy) : { ...defaultPolicy, policyId: "", tenantId: sessionData.tenantId ?? "default", providers: [...defaultPolicy.providers] });
           const refreshedCredential = credentialData.credentials.find((credential) => credential.credentialId === selectedCredentialId) ?? credentialData.credentials[0];
           setSelectedCredentialId(refreshedCredential?.credentialId ?? "");
-          setCredentialForm({ credentialId: "", policyId: refreshedPolicy?.policyId ?? policyData.policies[0]?.policyId ?? "" });
+          setCredentialForm({ credentialId: "", policyId: refreshedPolicy?.policyId ?? policyData.policies[0]?.policyId ?? "", principalId: "" });
           const refreshedBinding = bindingData.bindings.find((binding) => bindingKey(binding) === selectedBindingKey) ?? bindingData.bindings[0];
           setSelectedBindingKey(refreshedBinding ? bindingKey(refreshedBinding) : "");
           setBindingForm(refreshedBinding ? bindingFormFromBinding(refreshedBinding) : { ...defaultBinding, policyId: refreshedPolicy?.policyId ?? "" });
@@ -796,6 +826,7 @@ function App() {
           tenantId: sessionData.tenantId ?? "default",
           enabled: sessionData.authenticated,
           groups: sessionData.groups ?? [],
+          contentRetentionDisabled: sessionData.contentRetention?.userExempt ?? false,
         };
         setKeys([]);
         setCredentials([]);
@@ -848,7 +879,7 @@ function App() {
         setSelectedPolicyId(demo.keys[0]?.policyId ?? "");
         setPolicyForm(demo.keys[0] ? policyFormFromPolicy(demo.keys[0]) : defaultPolicy);
         setSelectedCredentialId(demo.credentials[0]?.credentialId ?? "");
-        setCredentialForm({ credentialId: "", policyId: demo.keys[0]?.policyId ?? "" });
+        setCredentialForm({ credentialId: "", policyId: demo.keys[0]?.policyId ?? "", principalId: "" });
         setSelectedBindingKey(demo.bindings[0] ? bindingKey(demo.bindings[0]) : "");
         setBindingForm(demo.bindings[0] ? bindingFormFromBinding(demo.bindings[0]) : defaultBinding);
         setSelectedUpstreamGrantKey(demo.upstreamGrants[0]?.key ?? "");
@@ -883,6 +914,12 @@ function App() {
     }), { requestCount: 0, successCount: 0, errorCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, actualCostMicros: 0 });
     const entitlements = {
       session: { ...demo.session, ...user, auth: "demo" },
+      contentRetention: {
+        enabled: !user.contentRetentionDisabled && access.policies.some((policy) => policy.retainRequestContent),
+        retentionDays: 30,
+        policyEnabled: access.policies.some((policy) => policy.retainRequestContent),
+        userExempt: user.contentRetentionDisabled,
+      },
       providers: demo.entitlements.providers.map((provider) => ({
         ...provider,
         allowed: providers.has(provider.provider),
@@ -930,6 +967,7 @@ function App() {
         tokenRole: policyForm.tokenRole || null,
         monthlyBudgetMicros: optionalCurrencyMicros(policyForm.monthlyBudgetMicros) ?? null,
         requestCostMicros: optionalNumber(policyForm.requestCostMicros) ?? null,
+        retainRequestContent: policyForm.retainRequestContent,
       };
       if (demoMode) {
         applyDemoKeys((current) => [next, ...current.filter((key) => key.policyId !== next.policyId)]);
@@ -965,14 +1003,16 @@ function App() {
       setStatus("issuing credential");
       const secret = generateSecret();
       const revealedKey = `clawrouter-live-${credentialId}-${secret}`;
-      const next: ProxyCredential = { credentialId, policyId, enabled: true };
+      const principalId = credentialForm.principalId.trim().toLowerCase() || null;
+      if (principalId && !principalId.includes("@")) throw new Error("owner must be a valid user email");
+      const next: ProxyCredential = { credentialId, policyId, enabled: true, principalId };
       if (demoMode) {
         applyDemoCredentials((current) => [next, ...current]);
       } else {
         await request<ProxyCredential>(gatewayOrigin, `/v1/admin/credentials/${encodeURIComponent(credentialId)}`, {
           method: "PUT",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ enabled: true, policyId, secretSha256: await sha256Hex(secret) }),
+          body: JSON.stringify({ enabled: true, policyId, principalId, secretSha256: await sha256Hex(secret) }),
         });
         setIssuedKey(revealedKey);
         try {
@@ -980,14 +1020,14 @@ function App() {
         } catch (error) {
           const message = errorMessage(error);
           setSelectedCredentialId(credentialId);
-          setCredentialForm({ credentialId: "", policyId });
+          setCredentialForm({ credentialId: "", policyId, principalId: credentialForm.principalId });
           setPolicyError(`credential issued, but refresh failed: ${message}`);
           setStatus("issued credential; refresh failed");
           return;
         }
       }
       setSelectedCredentialId(credentialId);
-      setCredentialForm({ credentialId: "", policyId });
+      setCredentialForm({ credentialId: "", policyId, principalId: credentialForm.principalId });
       setIssuedKey(revealedKey);
       setStatus("issued credential");
     } catch (error) {
@@ -1282,6 +1322,7 @@ function App() {
         tenantId: accessForm.tenantId || "default",
         enabled: accessForm.enabled,
         groups: parseGroups(accessForm.groups),
+        contentRetentionDisabled: accessForm.contentRetentionDisabled,
       };
       const nextBindings = reconcileDirectUserBindings(bindings, email, keys, accessForm.policyIds);
       if (demoMode) {
@@ -1299,6 +1340,7 @@ function App() {
           tenantId: next.tenantId,
           enabled: next.enabled,
           groups: next.groups,
+          contentRetentionDisabled: next.contentRetentionDisabled,
           policyIds: accessForm.policyIds,
         }),
       });
@@ -1542,6 +1584,9 @@ function App() {
             </div>
           </div>
           <div className="topActions">
+            <span className={`status ${session.contentRetention?.enabled ? "active" : "neutral"}`} title={session.contentRetention ? session.contentRetention.enabled ? `Request content retained for ${session.contentRetention.retentionDays} days` : "Request content retention is off for this identity" : "Loading request content retention status"}>
+              retention {session.contentRetention ? session.contentRetention.enabled ? `on · ${session.contentRetention.retentionDays}d` : "off" : "pending"}
+            </span>
             <span className={`status ${session.role === "admin" ? "active" : "neutral"}`}>{session.role}</span>
             <span className={`connectionMeta connectionMeta-${statusTone}`} title="Automatically refreshes every 30 seconds and when this tab regains focus">
               <span className="connectionDot" aria-hidden="true" />
@@ -1667,7 +1712,7 @@ function App() {
             onEdit={editPolicy}
             onEditCredential={(credential) => {
               setSelectedCredentialId(credential.credentialId);
-              setCredentialForm({ credentialId: "", policyId: credential.policyId });
+              setCredentialForm({ credentialId: "", policyId: credential.policyId, principalId: credential.principalId ?? "" });
               setIssuedKey("");
             }}
             onEditBinding={editBinding}
@@ -2283,7 +2328,7 @@ function CredentialPanel({ policies, credentials, selected, form, setForm, issue
           <Metric label="inactive" value={String(Array.from(outcomes.values()).filter((outcome) => !outcome.active).length)} meta="revoked, stale, or policy-disabled" />
         </div>
         <div className="tableSectionHeader"><div><strong>Issued credentials</strong><span>Machine access bound to policies</span></div><span>secrets reveal once</span></div>
-        <EntityTable columns={["credential", "policy", "state"]} columnTemplate="minmax(220px, 1.3fr) minmax(180px, 1fr) 110px" rows={credentials.map((credential) => { const outcome = outcomes.get(credential.credentialId)!; return { id: credential.credentialId, active: selected?.credentialId === credential.credentialId, onClick: () => onEdit(credential), cells: [<EntityName icon={KeyRound} title={credential.credentialId} subtitle="proxy credential" />, credential.policyId, <Status label={outcome.label} tone={outcome.tone} />] }; })} />
+        <EntityTable columns={["credential", "policy", "owner", "state"]} columnTemplate="minmax(190px, 1.25fr) minmax(150px, .9fr) minmax(180px, 1fr) 110px" rows={credentials.map((credential) => { const outcome = outcomes.get(credential.credentialId)!; return { id: credential.credentialId, active: selected?.credentialId === credential.credentialId, onClick: () => onEdit(credential), cells: [<EntityName icon={KeyRound} title={credential.credentialId} subtitle="proxy credential" />, credential.policyId, credential.principalId ?? "unassigned", <Status label={outcome.label} tone={outcome.tone} />] }; })} />
       </section>
       <aside className="inspector">
         <form onSubmit={onIssue}>
@@ -2293,10 +2338,11 @@ function CredentialPanel({ policies, credentials, selected, form, setForm, issue
           <div className="formGrid compact">
             <label className="full"><span>credential id</span><input value={form.credentialId} onChange={(event) => setForm({ ...form, credentialId: event.target.value })} placeholder="auto-generated when blank" /></label>
             <label className="full"><span>policy</span><select value={form.policyId} onChange={(event) => setForm({ ...form, policyId: event.target.value })}>{policies.map((policy) => <option key={policy.policyId} value={policy.policyId}>{policy.policyId}</option>)}</select></label>
+            <label className="full"><span>owner email</span><input type="email" value={form.principalId} onChange={(event) => setForm({ ...form, principalId: event.target.value })} placeholder="required for per-user retention exemption" /></label>
           </div>
-          <InlineNote>Credentials are optional. Maintainers using Cloudflare Access do not need a proxy key.</InlineNote>
+          <InlineNote>The owner sees policy retention status through the token profile and response header. Their exemption wins before content is stored.</InlineNote>
           <div className="inspectorActions"><button type="submit" disabled={busy || !form.policyId}><Plus className="buttonIcon" aria-hidden="true" /><span>Issue credential</span></button></div>
-          {selected ? <><div className="sectionTitle">Selected credential</div><dl className="facts"><dt>id</dt><dd>{selected.credentialId}</dd><dt>policy</dt><dd>{selected.policyId}</dd><dt>state</dt><dd>{selectedOutcome?.label ?? "inactive"}</dd></dl><div className="inspectorActions"><button type="button" className="buttonDanger" disabled={busy || !selected.enabled} onClick={() => onRevoke(selected.credentialId)}><CircleSlash2 className="buttonIcon" aria-hidden="true" /><span>Revoke credential</span></button></div></> : null}
+          {selected ? <><div className="sectionTitle">Selected credential</div><dl className="facts"><dt>id</dt><dd>{selected.credentialId}</dd><dt>policy</dt><dd>{selected.policyId}</dd><dt>owner</dt><dd>{selected.principalId ?? "unassigned"}</dd><dt>state</dt><dd>{selectedOutcome?.label ?? "inactive"}</dd></dl><div className="inspectorActions"><button type="button" className="buttonDanger" disabled={busy || !selected.enabled} onClick={() => onRevoke(selected.credentialId)}><CircleSlash2 className="buttonIcon" aria-hidden="true" /><span>Revoke credential</span></button></div></> : null}
         </form>
       </aside>
     </div>
@@ -2380,9 +2426,9 @@ function PolicyPanel({ keys, selected, providers, form, setForm, error, onSave, 
         </div>
         <div className="tableSectionHeader grantListHeader"><div><strong>Access policies</strong><span>{keys.length} configured policies</span></div><button type="button" disabled={busy} onClick={onNew}><Plus className="buttonIcon" aria-hidden="true" /><span>New policy</span></button></div>
         <EntityTable
-          columns={["policy", "tenant", "scope", "state"]}
-          columnTemplate="minmax(170px, 1.35fr) minmax(96px, 0.8fr) minmax(100px, 0.8fr) 88px"
-          rows={keys.map((key) => ({ id: key.policyId, active: selected?.policyId === key.policyId, onClick: busy ? undefined : () => onEdit(key), cells: [<EntityName icon={KeyRound} title={key.policyId} subtitle={key.tokenRole ?? "custom"} />, key.tenantId ?? "default", key.providers.length ? `${key.providers.length} services` : "all services", <Status label={key.enabled ? "active" : "revoked"} tone={key.enabled ? "active" : "revoked"} />] }))}
+          columns={["policy", "tenant", "scope", "retention", "state"]}
+          columnTemplate="minmax(170px, 1.35fr) minmax(90px, 0.7fr) minmax(96px, 0.75fr) 86px 88px"
+          rows={keys.map((key) => ({ id: key.policyId, active: selected?.policyId === key.policyId, onClick: busy ? undefined : () => onEdit(key), cells: [<EntityName icon={KeyRound} title={key.policyId} subtitle={key.tokenRole ?? "custom"} />, key.tenantId ?? "default", key.providers.length ? `${key.providers.length} services` : "all services", <Status label={key.retainRequestContent ? "30 days" : "off"} tone={key.retainRequestContent ? "active" : "neutral"} />, <Status label={key.enabled ? "active" : "revoked"} tone={key.enabled ? "active" : "revoked"} />] }))}
         />
       </section>
       <aside className="inspector wideInspector grantEditor">
@@ -2407,7 +2453,9 @@ function PolicyPanel({ keys, selected, providers, form, setForm, error, onSave, 
             <label><span>status</span><select value={form.enabled ? "active" : "disabled"} onChange={(event) => setForm({ ...form, enabled: event.target.value === "active" })}><option value="active">active</option><option value="disabled">disabled</option></select></label>
             <label><span>monthly budget ($)</span><input inputMode="decimal" value={form.monthlyBudgetMicros} onChange={(event) => setForm({ ...form, monthlyBudgetMicros: event.target.value })} placeholder="unlimited" /></label>
             <label><span>fixed request cost (micros)</span><input inputMode="decimal" value={form.requestCostMicros} onChange={(event) => setForm({ ...form, requestCostMicros: event.target.value })} placeholder="blank = manifest-priced routes only" title="Required for any budgeted route without manifest pricing; blank uses versioned list pricing where available." /></label>
+            <label className="full"><span>request content retention</span><select value={form.retainRequestContent ? "enabled" : "disabled"} onChange={(event) => setForm({ ...form, retainRequestContent: event.target.value === "enabled" })}><option value="enabled">enabled · retain 30 days</option><option value="disabled">disabled</option></select></label>
           </div>
+          <InlineNote>Enabled by default. Users see this setting before use. A per-user exemption always overrides the policy.</InlineNote>
           <div className="editorSectionHeader serviceAccessHeader"><div><strong>Service access</strong><span>{formSelectionLabel}</span></div>{form.allProviders ? <span className="wildcardScope">Wildcard scope · all current and future services</span> : null}</div>
           <div className="inputWithIcon providerFilter"><Search aria-hidden="true" /><input value={providerQuery} onChange={(event) => setProviderQuery(event.target.value)} placeholder="filter services" /></div>
           <div className="serviceGroups">
@@ -2463,9 +2511,9 @@ function UsersScreen({ users, selected, policies, bindings, services, form, setF
     <div className="entityLayout">
       <section className="mainPane">
         <div className="tableSectionHeader userListHeader"><label className="inputWithIcon"><Search aria-hidden="true" /><input value={userQuery} onChange={(event) => setUserQuery(event.target.value)} placeholder="search identities or groups" /></label><button type="button" onClick={onNew} disabled={busy}><Plus className="buttonIcon" aria-hidden="true" /><span>New identity</span></button></div>
-        <EntityTable columns={["identity", "role", "tenant", "policies", "services", "status"]} columnTemplate="minmax(260px, 1.5fr) 90px 130px 96px 96px 116px" rows={visibleUsers.map((user) => {
+        <EntityTable columns={["identity", "role", "tenant", "policies", "services", "retention", "status"]} columnTemplate="minmax(240px, 1.5fr) 80px 110px 78px 78px 92px 104px" rows={visibleUsers.map((user) => {
           const access = accessForUser(user);
-          return { id: user.email, active: selected?.email === user.email, onClick: () => onSelect(user), cells: [<EntityName icon={Users} title={user.email} subtitle="Cloudflare Access" />, user.role, user.tenantId, String(access.policies.length), String(access.services.length), <Status label={user.enabled ? "enabled" : "disabled"} tone={user.enabled ? "active" : "revoked"} />] };
+          return { id: user.email, active: selected?.email === user.email, onClick: () => onSelect(user), cells: [<EntityName icon={Users} title={user.email} subtitle="Cloudflare Access" />, user.role, user.tenantId, String(access.policies.length), String(access.services.length), <Status label={user.contentRetentionDisabled ? "exempt" : "policy"} tone={user.contentRetentionDisabled ? "neutral" : "active"} />, <Status label={user.enabled ? "enabled" : "disabled"} tone={user.enabled ? "active" : "revoked"} />] };
         })} />
       </section>
       <aside className="inspector">
@@ -2478,7 +2526,9 @@ function UsersScreen({ users, selected, policies, bindings, services, form, setF
             <label><span>tenant</span><input value={form.tenantId} onChange={(event) => setForm({ ...form, tenantId: event.target.value })} /></label>
             <label><span>status</span><select value={form.enabled ? "enabled" : "disabled"} onChange={(event) => setForm({ ...form, enabled: event.target.value === "enabled" })}><option value="enabled">enabled</option><option value="disabled">disabled</option></select></label>
             <label className="full"><span>groups</span><input value={form.groups} onChange={(event) => setForm({ ...form, groups: event.target.value })} placeholder="maintainers, docs" /></label>
+            <label className="full"><span>request content retention</span><select value={form.contentRetentionDisabled ? "exempt" : "policy"} onChange={(event) => setForm({ ...form, contentRetentionDisabled: event.target.value === "exempt" })}><option value="policy">follow policy · retained by default</option><option value="exempt">exempt · never retain</option></select></label>
           </div>
+          <InlineNote>Exemption wins across browser sessions and every proxy credential owned by this user.</InlineNote>
           <dl className="facts"><dt>granted services</dt><dd>{selectedAccess.services.length}</dd><dt>active policies</dt><dd>{selectedAccess.policies.length}</dd><dt>console role</dt><dd>{selected?.role ?? "user"}</dd><dt>tenant</dt><dd>{selected?.tenantId ?? form.tenantId}</dd></dl>
           <div className="sectionTitle">Direct policies</div>
           <div className="serviceMatrix">{policies.map((policy) => <label key={policy.policyId}><input type="checkbox" checked={form.policyIds.includes(policy.policyId)} onChange={() => setForm({ ...form, policyIds: form.policyIds.includes(policy.policyId) ? form.policyIds.filter((id) => id !== policy.policyId) : [...form.policyIds, policy.policyId].sort() })} /><span>{policy.policyId}</span><small>{effectiveProviderCount(policy.providers, services)} services</small></label>)}</div>
@@ -2497,6 +2547,22 @@ function UsersScreen({ users, selected, policies, bindings, services, form, setF
 }
 
 function UsageScreen({ keys, credentials, services, overview, tenants, usageRows, usage, usageLoaded }: { keys: AccessPolicy[]; credentials: ProxyCredential[]; services: ServiceItem[]; overview: AdminOverview | null; tenants: AdminTenantSummary[]; usageRows: AdminUsageRow[]; usage: UsageSnapshot; usageLoaded: boolean }) {
+  const [retainedContent, setRetainedContent] = useState<RetainedRequestContent | null>(null);
+  const [contentError, setContentError] = useState("");
+  const [contentLoading, setContentLoading] = useState(false);
+  async function inspectContent(event: UsageAuditEvent) {
+    if (!event.content_ref) return;
+    setContentLoading(true);
+    setContentError("");
+    try {
+      setRetainedContent(await request<RetainedRequestContent>(window.location.origin, `/v1/admin/content?tenant=${encodeURIComponent(event.tenant_id)}&ref=${encodeURIComponent(event.content_ref)}`));
+    } catch (error) {
+      setRetainedContent(null);
+      setContentError(errorMessage(error));
+    } finally {
+      setContentLoading(false);
+    }
+  }
   const activePolicies = keys.filter((key) => key.enabled);
   const readyServices = readyCount(services);
   const blockedServices = services.filter((service) => service.readiness && !service.readiness.executable);
@@ -2518,8 +2584,8 @@ function UsageScreen({ keys, credentials, services, overview, tenants, usageRows
         </div>
         <div className="tableSectionHeader"><div><strong>Recent requests</strong><span>{usage.events.length} most recent audit events</span></div><span>{usageLoaded ? usage.ledger : "unavailable"}</span></div>
         <EntityTable
-          columns={["time", "identity", "service", "operation", "outcome", "latency", "cost"]}
-          columnTemplate="92px minmax(170px, 1.2fr) minmax(145px, 1fr) minmax(150px, 1fr) 104px 74px 74px"
+          columns={["time", "identity", "service", "operation", "outcome", "content", "cost"]}
+          columnTemplate="92px minmax(170px, 1.2fr) minmax(145px, 1fr) minmax(150px, 1fr) 104px 90px 74px"
           rows={usage.events.map((event) => {
             const service = serviceByProvider.get(event.provider);
             const verifiedIdentity = event.principal_id ?? event.credential_id ?? event.policy_id ?? event.tenant_id;
@@ -2533,7 +2599,7 @@ function UsageScreen({ keys, credentials, services, overview, tenants, usageRows
                 <EntityName brandIcon={service?.brandIcon} icon={ServerCog} title={service?.name ?? event.provider} subtitle={event.provider} />,
                 <span className="auditOperation"><strong>{event.capability ?? event.type}</strong><small>{[event.model, event.cost_basis].filter(Boolean).join(" · ") || event.request_id || "request"}</small></span>,
                 <Status label={event.status_code ? `${event.status_code} ${event.status}` : event.status} tone={usageEventTone(event)} />,
-                formatDuration(event.duration_ms),
+                event.content_retained ? <button type="button" className="tableAction" onClick={() => void inspectContent(event)}>View</button> : <span title={event.duration_ms ? `Latency ${formatDuration(event.duration_ms)}` : undefined}>not stored</span>,
                 formatMicros(event.actual_cost_micros),
               ],
             };
@@ -2545,6 +2611,9 @@ function UsageScreen({ keys, credentials, services, overview, tenants, usageRows
       </section>
       <aside className="inspector usageInspector">
         <InspectorHeader icon={BarChart3} title="Request activity" subtitle={`${readyServices}/${services.length} services executable`} />
+        {contentLoading ? <InlineNote>Loading retained request…</InlineNote> : null}
+        {contentError ? <InlineError message={contentError} /> : null}
+        {retainedContent ? <section className="retainedContent"><div className="sectionTitle">Retained request</div><dl className="facts"><dt>request</dt><dd>{retainedContent.requestId}</dd><dt>identity</dt><dd>{retainedContent.principalId ?? "credential"}</dd><dt>service</dt><dd>{retainedContent.provider}</dd><dt>expires</dt><dd>{formatTimestamp(retainedContent.expiresAtMs, true)}</dd></dl><pre>{JSON.stringify(retainedContent.body, null, 2)}</pre><button type="button" className="buttonSecondary" onClick={() => setRetainedContent(null)}>Close</button></section> : null}
         <div className="attentionGrid">
           <div className={blockedServices.length ? "attentionMetric warning" : "attentionMetric healthy"}><strong>{blockedServices.length}</strong><span>services need configuration</span></div>
           {usageLoaded ? (
@@ -2562,7 +2631,7 @@ function UsageScreen({ keys, credentials, services, overview, tenants, usageRows
         }) : <p>No provider activity yet.</p>}</div>
         <div className="sectionTitle">Tenant coverage</div>
         <div className="miniList">{tenantRows.length ? tenantRows.slice(0, 8).map((tenant) => <button type="button" key={tenant.tenantId}>{tenant.tenantId}<span>{tenant.activePolicies ?? tenant.activeKeys}/{tenant.policies ?? tenant.keys} policies · {effectiveProviderCount(tenant.providers, services, tenant.allProviders)} services</span></button>) : <p>No tenant policies yet.</p>}</div>
-        <dl className="facts"><dt>ledger</dt><dd>{usage.ledger}</dd><dt>retention</dt><dd>30 days of request metadata</dd><dt>policies</dt><dd>{overview?.policiesActive ?? activePolicies.length} active</dd><dt>tenants</dt><dd>{overview?.tenantsTotal ?? tenantRows.length}</dd></dl>
+        <dl className="facts"><dt>ledger</dt><dd>{usage.ledger}</dd><dt>metadata</dt><dd>30 days</dd><dt>request content</dt><dd>policy controlled · 30 days</dd><dt>policies</dt><dd>{overview?.policiesActive ?? activePolicies.length} active</dd><dt>tenants</dt><dd>{overview?.tenantsTotal ?? tenantRows.length}</dd></dl>
       </aside>
     </div>
   );
@@ -2985,6 +3054,7 @@ function policyFormFromPolicy(key: AccessPolicy): PolicyForm {
     requestCostMicros: key.requestCostMicros?.toString() ?? "",
     providers: key.providers,
     allProviders: key.providers.length === 0,
+    retainRequestContent: key.retainRequestContent,
   };
 }
 
@@ -3201,15 +3271,15 @@ function demoData() {
     ],
   };
   const keys: AccessPolicy[] = [
-    { policyId: "maintainer_models", enabled: true, providers: ["anthropic", "aws-bedrock", "azure-openai", "cloudflare-ai-gateway", "cohere", "deepseek", "fireworks", "google-gemini", "groq", "huggingface", "minimax", "mistral", "openai", "openrouter", "perplexity", "together", "xai"], tenantId: "openclaw", tokenRole: "maintainer", monthlyBudgetMicros: 250000000, requestCostMicros: 1000 },
-    { policyId: "openclaw_tools", enabled: true, providers: ["replicate", "tavily"], tenantId: "openclaw", tokenRole: "tooling", monthlyBudgetMicros: 75000000, requestCostMicros: 500 },
-    { policyId: "user_research", enabled: true, providers: ["openai", "google-gemini", "tavily"], tenantId: "research", tokenRole: "user", monthlyBudgetMicros: 50000000, requestCostMicros: 1000 },
-    { policyId: "sandbox_eval", enabled: false, providers: ["openai"], tenantId: "sandbox", tokenRole: "sandbox", monthlyBudgetMicros: 5000000, requestCostMicros: 500 },
+    { policyId: "maintainer_models", enabled: true, providers: ["anthropic", "aws-bedrock", "azure-openai", "cloudflare-ai-gateway", "cohere", "deepseek", "fireworks", "google-gemini", "groq", "huggingface", "minimax", "mistral", "openai", "openrouter", "perplexity", "together", "xai"], tenantId: "openclaw", tokenRole: "maintainer", monthlyBudgetMicros: 250000000, requestCostMicros: 1000, retainRequestContent: true },
+    { policyId: "openclaw_tools", enabled: true, providers: ["replicate", "tavily"], tenantId: "openclaw", tokenRole: "tooling", monthlyBudgetMicros: 75000000, requestCostMicros: 500, retainRequestContent: true },
+    { policyId: "user_research", enabled: true, providers: ["openai", "google-gemini", "tavily"], tenantId: "research", tokenRole: "user", monthlyBudgetMicros: 50000000, requestCostMicros: 1000, retainRequestContent: true },
+    { policyId: "sandbox_eval", enabled: false, providers: ["openai"], tenantId: "sandbox", tokenRole: "sandbox", monthlyBudgetMicros: 5000000, requestCostMicros: 500, retainRequestContent: true },
   ];
   const credentials: ProxyCredential[] = [
-    { credentialId: "maintainer_cli", policyId: "maintainer_models", enabled: true },
+    { credentialId: "maintainer_cli", policyId: "maintainer_models", enabled: true, principalId: "maintainer@example.com" },
     { credentialId: "openclaw_tools_ci", policyId: "openclaw_tools", enabled: true },
-    { credentialId: "research_notebook", policyId: "user_research", enabled: false },
+    { credentialId: "research_notebook", policyId: "user_research", enabled: false, principalId: "research@example.com" },
   ];
   const connections: ProviderConnection[] = providers.map((item) => ({ providerId: item.id, enabled: !demoDisabledProviderIds.has(item.id) }));
   const upstreamGrants: UpstreamGrant[] = [
@@ -3220,9 +3290,9 @@ function demoData() {
     { ruleId: "maintainers", version: 1, enabled: true, kind: "email_domain", subject: "example.com", groups: ["maintainers"], policyIds: ["maintainer_models", "openclaw_tools"], priority: 10, revokeOnLoss: true, provenance: "cloudflare_access", generatedGroup: "assignment.maintainers", createdAt: "2026-06-16T00:00:00.000Z", updatedAt: "2026-06-16T00:00:00.000Z" },
   ];
   const users: AccessUser[] = [
-    { email: "admin@example.com", role: "admin", tenantId: "openclaw", enabled: true, groups: ["maintainers"] },
-    { email: "maintainer@example.com", role: "user", tenantId: "docs", enabled: true, groups: ["maintainers"] },
-    { email: "research@example.com", role: "user", tenantId: "research", enabled: true, groups: [] },
+    { email: "admin@example.com", role: "admin", tenantId: "openclaw", enabled: true, groups: ["maintainers"], contentRetentionDisabled: false },
+    { email: "maintainer@example.com", role: "user", tenantId: "docs", enabled: true, groups: ["maintainers"], contentRetentionDisabled: false },
+    { email: "research@example.com", role: "user", tenantId: "research", enabled: true, groups: [], contentRetentionDisabled: true },
   ];
   const bindings: PolicyBinding[] = [
     { policyId: "maintainer_models", principalType: "group", principalId: "maintainers", enabled: true, priority: 10 },
@@ -3230,10 +3300,12 @@ function demoData() {
     { policyId: "user_research", principalType: "user", principalId: "research@example.com", enabled: true, priority: 100 },
   ];
   const models = routes.openaiCompatible.flatMap((route) => route.models.map((model) => ({ ...model, provider: route.provider })));
-  const session = { authenticated: true, auth: "demo", role: "admin" as AccessRole, email: "admin@example.com", tenantId: "openclaw", groups: ["maintainers"] };
+  const contentRetention = { enabled: true, retentionDays: 30, policyEnabled: true, userExempt: false };
+  const session = { authenticated: true, auth: "demo", role: "admin" as AccessRole, email: "admin@example.com", tenantId: "openclaw", groups: ["maintainers"], contentRetention };
   const sessionPolicies = effectiveAccess(users[0], keys, bindings, []).policies;
   const entitlements: EntitlementsResponse = {
     session,
+    contentRetention,
     providers: providers.map((item) => {
       const policies = sessionPolicies.filter((key) => policyCoversProvider(key, item.id)).map((key) => key.policyId);
       return {

@@ -3012,6 +3012,30 @@ label > span,
   white-space: nowrap;
 }
 
+.tableAction {
+  min-height: 30px;
+  padding: 5px 10px;
+  font-size: 12px;
+}
+
+.retainedContent {
+  border: 1px solid var(--border);
+  padding: 0 14px 14px;
+  background: var(--background);
+}
+
+.retainedContent pre {
+  max-height: 320px;
+  overflow: auto;
+  padding: 12px;
+  border: 1px solid var(--border);
+  background: var(--code-bg);
+  color: var(--code-fg);
+  font-size: 11px;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
 .emptyTable {
   border-bottom: 1px solid var(--border);
   color: var(--muted);

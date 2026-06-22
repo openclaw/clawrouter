@@ -20,7 +20,11 @@ OAuth grants, and operational health.
   user/group policy-binding mutations, and session entitlement lookup.
 - `USAGE_LEDGER`: SQLite-backed Durable Object request audit and reporting
   ledger. It retains bounded metadata for 30 days and never stores prompt or
-  completion bodies.
+  completion bodies. Request content retention uses the separate `CONTENT_ARCHIVE`
+  R2 binding and never writes bodies to this ledger.
+- `CONTENT_ARCHIVE`: encrypted R2 storage for policy-retained LLM request bodies.
+  `pnpm cf:deploy` creates the bucket and installs a 30-day lifecycle rule before
+  every deploy. Run `pnpm cf:content:provision` directly when provisioning only.
 - provider secrets such as `OPENAI_API_KEY`, `OPENROUTER_API_KEY`,
   `MINIMAX_API_KEY`, and `TAVILY_API_KEY`.
 - provider config vars declared by manifests, such as `OPENROUTER_SITE_URL`,
@@ -106,6 +110,7 @@ variables when the console is protected by Cloudflare Access:
 ```text
 CLAWROUTER_USAGE_QUEUE                 # optional, defaults to clawrouter-usage
 CLAWROUTER_USAGE_DLQ                   # optional, defaults to clawrouter-usage-dead-letter
+CLAWROUTER_CONTENT_BUCKET              # optional, defaults to clawrouter-content
 CLAWROUTER_ACCESS_TEAM_DOMAIN
 CLAWROUTER_ACCESS_AUD
 CLAWROUTER_ACCESS_ADMIN_EMAILS        # comma-separated admin emails

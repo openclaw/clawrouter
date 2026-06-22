@@ -222,7 +222,10 @@ into the bounded `USAGE_LEDGER` reporting Durable Object and replays unsettled
 budget updates. Audit events retain
 identity, policy, credential, provider, route capability, model, timing,
 outcome, tokens when safely available, and cost for 30 days. Prompt and
-completion bodies are never stored. `/v1/usage` returns the caller policy's
+completion bodies are never stored in the usage ledger. LLM request bodies are stored separately for
+30 days when the access policy enables request-content retention (the default)
+and the credential owner is not exempt; see [Content retention](docs/content-retention.md).
+`/v1/usage` returns the caller policy's
 budget plus usage summary; `/v1/admin/usage` returns budget rows plus the
 all-tenant usage summary and recent request audit.
 

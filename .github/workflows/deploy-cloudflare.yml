@@ -79,6 +79,7 @@ jobs:
       CLAWROUTER_USAGE_QUEUE: ${{ vars.CLAWROUTER_USAGE_QUEUE || 'clawrouter-usage' }}
       CLAWROUTER_USAGE_DLQ: ${{ vars.CLAWROUTER_USAGE_DLQ || 'clawrouter-usage-dead-letter' }}
       CLAWROUTER_WORKER_NAME: ${{ vars.CLAWROUTER_WORKER_NAME || 'clawrouter-edge' }}
+      CLAWROUTER_CONTENT_BUCKET: ${{ vars.CLAWROUTER_CONTENT_BUCKET || 'clawrouter-content' }}
       CLAWROUTER_ACCESS_TEAM_DOMAIN: ${{ vars.CLAWROUTER_ACCESS_TEAM_DOMAIN }}
       CLAWROUTER_ACCESS_AUD: ${{ vars.CLAWROUTER_ACCESS_AUD }}
       CLAWROUTER_ACCESS_ADMIN_EMAILS: ${{ vars.CLAWROUTER_ACCESS_ADMIN_EMAILS }}
@@ -112,6 +113,7 @@ jobs:
       - run: pnpm --dir admin check
       - run: pnpm --dir admin test
       - run: pnpm --dir admin build
+      - run: pnpm cf:content:provision
       - if: ${{ inputs.provision_access }}
         env:
           CLAWROUTER_ACCESS_DOMAIN: ${{ inputs.access_domain }}
