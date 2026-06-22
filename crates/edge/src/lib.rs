@@ -3332,7 +3332,7 @@ async fn admin_api(mut req: Request, env: Env, path: &str) -> Result<Response> {
             Error::RustError(format!("CONTENT_ARCHIVE binding is unavailable: {error}"))
         })?;
         let Some(object) = bucket
-            .get(&content_archive_key(tenant_id, content_ref))
+            .get(content_archive_key(tenant_id, content_ref))
             .execute()
             .await?
         else {
@@ -13675,7 +13675,7 @@ async fn retain_request_content(
     })?;
     bucket
         .put(
-            &content_archive_key(&record.tenant_id, &content_ref),
+            content_archive_key(&record.tenant_id, &content_ref),
             serde_json::to_vec(&record)?,
         )
         .execute()
