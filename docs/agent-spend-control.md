@@ -172,7 +172,8 @@ Clients and gateway adapters may send:
 Explicit ClawRouter identifiers take precedence over client-native identifiers.
 Recent audit events include the resolved session, agent hierarchy, project,
 pricing version, reservation bounds, actual tokens, and settled cost. Prompts
-and completions are never stored by the spend-control path.
+and completions are never stored by the spend-control path. Optional request-content
+retention is a separate policy-controlled R2 archive; see [Content retention](content-retention.md).
 
 ## Current boundary
 

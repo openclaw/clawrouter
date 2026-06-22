@@ -17,6 +17,10 @@ max_batch_size = 50
 max_batch_timeout = 5
 max_retries = 5
 
+[[r2_buckets]]
+binding = "CONTENT_ARCHIVE"
+bucket_name = "clawrouter-content"
+
 [[durable_objects.bindings]]
 name = "BUDGET_LEDGER"
 class_name = "BudgetLedgerObject"

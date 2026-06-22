@@ -8,6 +8,8 @@ const workerName = process.env.CLAWROUTER_WORKER_NAME ?? "clawrouter-edge";
 const queueName = process.env.CLAWROUTER_USAGE_QUEUE ?? "clawrouter-usage";
 const queueDlqName =
   process.env.CLAWROUTER_USAGE_DLQ ?? "clawrouter-usage-dead-letter";
+const contentBucketName =
+  process.env.CLAWROUTER_CONTENT_BUCKET ?? "clawrouter-content";
 const kvId = process.env.CLAWROUTER_POLICY_KV_ID;
 const kvPreviewId = process.env.CLAWROUTER_POLICY_KV_PREVIEW_ID ?? kvId;
 const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
@@ -35,6 +37,10 @@ config = config.replace(/^queue = ".+"$/gm, `queue = "${queueName}"`);
 config = config.replace(
   /^dead_letter_queue = ".+"$/gm,
   `dead_letter_queue = "${queueDlqName}"`,
+);
+config = config.replace(
+  /^bucket_name = ".+"$/gm,
+  `bucket_name = "${contentBucketName}"`,
 );
 if (omitRoutes) {
   config = removeTomlArrayBlocks(config, "routes");
