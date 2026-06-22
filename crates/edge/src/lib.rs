@@ -15611,6 +15611,26 @@ mod tests {
     }
 
     #[test]
+    fn openai_reasoning_chat_requests_use_completion_token_limit() {
+        let snapshot = provider_snapshot().unwrap();
+        let provider = snapshot
+            .providers
+            .iter()
+            .find(|provider| provider.id == "openai")
+            .unwrap();
+        let mut body = serde_json::json!({
+            "model": "gpt-5.5",
+            "messages": [{"role": "user", "content": "reply with ok"}],
+            "max_tokens": 16
+        });
+
+        normalize_openai_proxy_body(provider, "/v1/chat/completions", "gpt-5.5", None, &mut body);
+
+        assert!(body.get("max_tokens").is_none());
+        assert_eq!(body["max_completion_tokens"], 16);
+    }
+
+    #[test]
     fn azure_manifest_chat_requests_use_completion_token_limit() {
         let snapshot = provider_snapshot().unwrap();
         let provider = snapshot
