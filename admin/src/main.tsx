@@ -1,4 +1,4 @@
-import React, { FormEvent, useEffect, useMemo, useState } from "react";
+import React, { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
   BarChart3,
@@ -22,6 +22,7 @@ import {
   Users,
 } from "lucide-react";
 import providerIconManifest from "../../crates/edge/src/provider-icons.json";
+import { installAutoRefresh } from "./auto-refresh";
 import {
   accessFormFromUser,
   accessMap,
@@ -55,6 +56,7 @@ import {
 import "./style.css";
 
 type View = "home" | "catalog" | "playground" | "policies" | "users" | "usage";
+type RefreshOptions = { background?: boolean };
 
 const pathViews: Record<string, View> = {
   "/": "home",
@@ -573,6 +575,7 @@ function App() {
   const [selectedAssignmentRuleId, setSelectedAssignmentRuleId] = useState(allowDemo ? demo.assignmentRules[0]?.ruleId ?? "" : "");
   const [selectedUserEmail, setSelectedUserEmail] = useState(demo.users[0]?.email ?? "");
   const [status, setStatus] = useState(allowDemo ? "local demo data loaded" : "loading");
+  const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(allowDemo ? Date.now() : null);
   const [demoMode, setDemoMode] = useState(allowDemo);
   const [issuedKey, setIssuedKey] = useState("");
   const [policyError, setPolicyError] = useState("");
@@ -590,6 +593,9 @@ function App() {
   });
   const [playgroundResult, setPlaygroundResult] = useState("Run a request to see the raw response.");
   const [requestMode, setRequestMode] = useState<"json" | "curl">("json");
+  const refreshPromiseRef = useRef<Promise<void> | null>(null);
+  const refreshBackgroundRef = useRef(false);
+  const refreshRef = useRef<(options?: RefreshOptions) => Promise<void>>(async () => undefined);
 
   const accessByProvider = useMemo(() => accessMap(entitlements), [entitlements]);
   const services = useMemo(() => serviceItems(providers, routes, providerReadiness, accessByProvider), [accessByProvider, providerReadiness, providers, routes]);
@@ -609,6 +615,8 @@ function App() {
   const selectedModel = models.find((model) => model.id === playground.model) ?? models[0];
   const selectedServiceRoute = serviceRoutes.find((route) => routeKey(route) === playground.serviceRoute) ?? serviceRoutes[0];
   const busy = status === "loading" || ["saving", "running", "revoking", "issuing", "enabling", "disabling", "connecting"].some((prefix) => status.startsWith(prefix));
+  const busyRef = useRef(busy);
+  busyRef.current = busy;
   const statusTone = statusKind(status);
 
   useEffect(() => {
@@ -618,6 +626,17 @@ function App() {
     }
     void refresh();
   }, []);
+
+  useEffect(() => {
+    refreshRef.current = refresh;
+  });
+
+  useEffect(() => {
+    if (demoMode) return;
+    return installAutoRefresh(() => {
+      if (!busyRef.current) void refreshRef.current({ background: true });
+    });
+  }, [demoMode]);
 
   useEffect(() => {
     const onPopState = () => setView(initialViewFromPath());
@@ -648,10 +667,30 @@ function App() {
     }
   }, [playground.serviceRoute, serviceRoutes]);
 
-  async function refresh() {
+  function refresh(options: RefreshOptions = {}): Promise<void> {
+    if (refreshPromiseRef.current) {
+      if (!options.background && refreshBackgroundRef.current) {
+        return refreshPromiseRef.current.then(() => refresh(options));
+      }
+      return refreshPromiseRef.current;
+    }
+    refreshBackgroundRef.current = options.background ?? false;
+    const operation = refreshData(options).finally(() => {
+      if (refreshPromiseRef.current === operation) {
+        refreshPromiseRef.current = null;
+        refreshBackgroundRef.current = false;
+      }
+    });
+    refreshPromiseRef.current = operation;
+    return operation;
+  }
+
+  async function refreshData({ background = false }: RefreshOptions) {
     try {
-      setStatus("loading");
-      setPolicyDataLoaded(false);
+      if (!background) {
+        setStatus("loading");
+        setPolicyDataLoaded(false);
+      }
       const [sessionData, providerData, routeData] = await Promise.all([
         request<SessionResponse>(gatewayOrigin, "/v1/session"),
         request<ProviderResponse>(gatewayOrigin, "/v1/providers"),
@@ -693,30 +732,35 @@ function App() {
         setConnections(connectionData.connections);
         setUpstreamGrants(upstreamGrantData.grants);
         setAssignmentRules(assignmentRuleData.rules);
-        const refreshedPolicy = policyData.policies.find((policy) => policy.policyId === selectedPolicyId) ?? policyData.policies[0];
-        setSelectedPolicyId(refreshedPolicy?.policyId ?? "");
-        setPolicyForm(refreshedPolicy ? policyFormFromPolicy(refreshedPolicy) : { ...defaultPolicy, policyId: "", tenantId: sessionData.tenantId ?? "default", providers: [...defaultPolicy.providers] });
-        const refreshedCredential = credentialData.credentials.find((credential) => credential.credentialId === selectedCredentialId) ?? credentialData.credentials[0];
-        setSelectedCredentialId(refreshedCredential?.credentialId ?? "");
-        setCredentialForm({ credentialId: "", policyId: refreshedPolicy?.policyId ?? policyData.policies[0]?.policyId ?? "" });
-        const refreshedBinding = bindingData.bindings.find((binding) => bindingKey(binding) === selectedBindingKey) ?? bindingData.bindings[0];
-        setSelectedBindingKey(refreshedBinding ? bindingKey(refreshedBinding) : "");
-        setBindingForm(refreshedBinding ? bindingFormFromBinding(refreshedBinding) : { ...defaultBinding, policyId: refreshedPolicy?.policyId ?? "" });
-        const refreshedGrant = upstreamGrantData.grants.find((grant) => grant.key === selectedUpstreamGrantKey) ?? upstreamGrantData.grants[0];
-        setSelectedUpstreamGrantKey(refreshedGrant?.key ?? "");
-        setUpstreamGrantForm(refreshedGrant ? upstreamGrantFormFromGrant(refreshedGrant) : { ...defaultUpstreamGrant, scopeId: refreshedPolicy?.policyId ?? "", provider: providerData.providers[0]?.id ?? "", tokenRef: providerData.providers[0]?.id ?? "" });
-        const refreshedRule = assignmentRuleData.rules.find((rule) => rule.ruleId === selectedAssignmentRuleId) ?? assignmentRuleData.rules[0];
-        setSelectedAssignmentRuleId(refreshedRule?.ruleId ?? "");
-        setAssignmentRuleForm(refreshedRule ? assignmentRuleFormFromRule(refreshedRule) : defaultAssignmentRule);
         setUsers(userData.users);
         setBindings(bindingData.bindings);
-        const refreshedUser = userData.users.find((user) => user.email === selectedUserEmail) ?? userData.users[0];
-        setSelectedUserEmail(refreshedUser?.email ?? "");
-        setAccessForm(refreshedUser ? accessFormFromUser(refreshedUser, bindingData.bindings) : defaultAccess);
+        if (!background) {
+          const refreshedPolicy = policyData.policies.find((policy) => policy.policyId === selectedPolicyId) ?? policyData.policies[0];
+          setSelectedPolicyId(refreshedPolicy?.policyId ?? "");
+          setPolicyForm(refreshedPolicy ? policyFormFromPolicy(refreshedPolicy) : { ...defaultPolicy, policyId: "", tenantId: sessionData.tenantId ?? "default", providers: [...defaultPolicy.providers] });
+          const refreshedCredential = credentialData.credentials.find((credential) => credential.credentialId === selectedCredentialId) ?? credentialData.credentials[0];
+          setSelectedCredentialId(refreshedCredential?.credentialId ?? "");
+          setCredentialForm({ credentialId: "", policyId: refreshedPolicy?.policyId ?? policyData.policies[0]?.policyId ?? "" });
+          const refreshedBinding = bindingData.bindings.find((binding) => bindingKey(binding) === selectedBindingKey) ?? bindingData.bindings[0];
+          setSelectedBindingKey(refreshedBinding ? bindingKey(refreshedBinding) : "");
+          setBindingForm(refreshedBinding ? bindingFormFromBinding(refreshedBinding) : { ...defaultBinding, policyId: refreshedPolicy?.policyId ?? "" });
+          const refreshedGrant = upstreamGrantData.grants.find((grant) => grant.key === selectedUpstreamGrantKey) ?? upstreamGrantData.grants[0];
+          setSelectedUpstreamGrantKey(refreshedGrant?.key ?? "");
+          setUpstreamGrantForm(refreshedGrant ? upstreamGrantFormFromGrant(refreshedGrant) : { ...defaultUpstreamGrant, scopeId: refreshedPolicy?.policyId ?? "", provider: providerData.providers[0]?.id ?? "", tokenRef: providerData.providers[0]?.id ?? "" });
+          const refreshedRule = assignmentRuleData.rules.find((rule) => rule.ruleId === selectedAssignmentRuleId) ?? assignmentRuleData.rules[0];
+          setSelectedAssignmentRuleId(refreshedRule?.ruleId ?? "");
+          setAssignmentRuleForm(refreshedRule ? assignmentRuleFormFromRule(refreshedRule) : defaultAssignmentRule);
+          const refreshedUser = userData.users.find((user) => user.email === selectedUserEmail) ?? userData.users[0];
+          setSelectedUserEmail(refreshedUser?.email ?? "");
+          setAccessForm(refreshedUser ? accessFormFromUser(refreshedUser, bindingData.bindings) : defaultAccess);
+        }
         setProviderReadiness((current) => ({ ...current, ...readinessMap(readinessData.providers) }));
-        const [overviewResult, tenantResult] = await Promise.all([
+        const [overviewResult, tenantResult, usageResult] = await Promise.all([
           settled(() => request<AdminOverview>(gatewayOrigin, "/v1/admin/overview")),
           settled(() => request<{ tenants: AdminTenantSummary[] }>(gatewayOrigin, "/v1/admin/tenants")),
+          background
+            ? settled(() => request<{ policies?: AdminUsageRow[]; keys?: AdminUsageRow[]; usage: UsageSnapshot }>(gatewayOrigin, "/v1/admin/usage"))
+            : Promise.resolve(null),
         ]);
         if (overviewResult.ok) {
           setAdminOverview(overviewResult.value);
@@ -730,11 +774,19 @@ function App() {
           setTenantSummaries(tenantSummaryFallback(policyData.policies, credentialData.credentials));
           refreshWarnings = [...refreshWarnings, `tenant summary unavailable: ${tenantResult.error}`];
         }
-        setUsageRows([]);
-        setUsageSnapshot(emptyUsageSnapshot);
-        setUsageLoaded(false);
+        if (usageResult?.ok) {
+          setUsageRows(usageResult.value.policies ?? usageResult.value.keys ?? []);
+          setUsageSnapshot(usageResult.value.usage);
+          setUsageLoaded(true);
+        } else if (usageResult) {
+          refreshWarnings = [...refreshWarnings, `usage ledger unavailable: ${usageResult.error}`];
+        } else {
+          setUsageRows([]);
+          setUsageSnapshot(emptyUsageSnapshot);
+          setUsageLoaded(false);
+        }
         setPolicyDataLoaded(true);
-        if (view === "usage") setUsageRefreshKey((current) => current + 1);
+        if (!background && view === "usage") setUsageRefreshKey((current) => current + 1);
       } else {
         const user = {
           email: sessionData.email ?? "access-user",
@@ -768,7 +820,8 @@ function App() {
         setAccessForm(accessFormFromUser(user, []));
       }
       setDemoMode(false);
-      setStatus(refreshWarnings.length ? refreshWarnings.join("; ") : oauthCallbackStatus() ?? "connected");
+      setLastUpdatedAt(Date.now());
+      if (!background) setStatus(refreshWarnings.length ? refreshWarnings.join("; ") : oauthCallbackStatus() ?? "connected");
     } catch (error) {
       const message = errorMessage(error);
       if (allowDemo) {
@@ -803,11 +856,12 @@ function App() {
         setSelectedUserEmail(demo.users[0]?.email ?? "");
         setAccessForm(demo.users[0] ? accessFormFromUser(demo.users[0], demo.bindings) : defaultAccess);
         setDemoMode(true);
+        setLastUpdatedAt(Date.now());
         setStatus("local demo data loaded");
         return;
       }
       setDemoMode(false);
-      setStatus(`load error: ${message}`);
+      if (!background) setStatus(`load error: ${message}`);
     }
   }
 
@@ -851,6 +905,7 @@ function App() {
     setUsageLoaded(true);
     setEntitlements(entitlements);
     setProviderReadiness(readinessMap(entitlements.providers.map((provider) => provider.readiness)));
+    setLastUpdatedAt(Date.now());
     setStatus("local user demo loaded");
     setDemoMode(true);
   }
@@ -1486,10 +1541,10 @@ function App() {
           </div>
           <div className="topActions">
             <span className={`status ${session.role === "admin" ? "active" : "neutral"}`}>{session.role}</span>
-            <button type="button" className="buttonSecondary" onClick={refresh} disabled={busy}>
-              <RefreshCw className="buttonIcon" aria-hidden="true" />
-              <span>Sync gateway</span>
-            </button>
+            <span className="refreshMeta" title="Automatically refreshes every 30 seconds and when this tab regains focus">
+              <span>Last updated</span>
+              {lastUpdatedAt ? <time dateTime={new Date(lastUpdatedAt).toISOString()}>{formatTimestamp(lastUpdatedAt)}</time> : <span>updating…</span>}
+            </span>
           </div>
         </header>
 

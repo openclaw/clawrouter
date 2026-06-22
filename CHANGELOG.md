@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Automatically refresh dashboard data every 30 seconds and on tab focus without overwriting unsaved admin edits.
 - Merge overlapping model and manifest routes into one catalog entry per provider.
 - Add role-aware user and admin dashboards with service readiness, shared quota pools, traffic diagrams, and privacy-safe Access-session usage totals.
 - Gate the Cloudflare console by verified GitHub organization membership and support secure bulk provider-secret deployment.
