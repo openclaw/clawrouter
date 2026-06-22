@@ -651,7 +651,16 @@ async fn proxy_openai_compatible(
         .await;
         return Ok(response);
     }
-    if let Err(error) = openai_endpoint_path(endpoint, &route.upstream_model) {
+    let upstream_model = match resolve_selected_upstream_model(&route, |provider, template| {
+        resolve_template_value(provider, template, Some(&env))
+    }) {
+        Ok(value) => value,
+        Err(error) => {
+            let response = provider_runtime_error_response(error)?;
+            return audit.failure_response(response).await;
+        }
+    };
+    if let Err(error) = openai_endpoint_path(endpoint, &upstream_model) {
         let response = match error {
             OpenAiProxyUrlError::Client(message) => json_error("invalid_model", &message, 400)?,
             OpenAiProxyUrlError::Runtime(error) => provider_runtime_error_response(error)?,
@@ -707,7 +716,7 @@ async fn proxy_openai_compatible(
         route.provider,
         endpoint,
         &env,
-        &route.upstream_model,
+        &upstream_model,
         query_auth,
         grant.as_ref(),
         transport_path.as_deref(),
@@ -722,14 +731,8 @@ async fn proxy_openai_compatible(
             return audit.failure_response(response).await;
         }
     };
-    body["model"] = Value::String(route.upstream_model.clone());
-    normalize_openai_proxy_body(
-        route.provider,
-        path,
-        &route.upstream_model,
-        Some(&env),
-        &mut body,
-    );
+    body["model"] = Value::String(upstream_model.clone());
+    normalize_openai_proxy_body(route.provider, path, &upstream_model, Some(&env), &mut body);
     if let Err(message) = normalize_list_pricing_request(
         route.provider,
         path,
@@ -9060,11 +9063,7 @@ fn select_model_route<'a>(
         if !supports_openai_compatible_proxy(provider) {
             continue;
         }
-        if let Some(model_entry) = provider
-            .models
-            .iter()
-            .find(|entry| entry.id == model && !contains_template(&entry.upstream))
-        {
+        if let Some(model_entry) = provider.models.iter().find(|entry| entry.id == model) {
             return Some(SelectedRoute {
                 provider,
                 upstream_model: model_entry.upstream.clone(),
@@ -9093,6 +9092,20 @@ fn select_model_route<'a>(
             })
         })
     })
+}
+
+fn resolve_selected_upstream_model<F>(
+    route: &SelectedRoute<'_>,
+    resolve_template: F,
+) -> Result<String>
+where
+    F: FnOnce(&CompiledProvider, &str) -> Result<String>,
+{
+    if contains_template(&route.upstream_model) {
+        resolve_template(route.provider, &route.upstream_model)
+    } else {
+        Ok(route.upstream_model.clone())
+    }
 }
 
 fn normalize_native_model(
@@ -15354,6 +15367,41 @@ mod tests {
         assert_eq!(route.upstream_model, "my-deployment");
         assert!(select_model_route(&snapshot, "cohere/default").is_none());
         assert!(select_model_route(&snapshot, "cloudflare-ai-gateway/auto").is_none());
+    }
+
+    #[test]
+    fn openai_proxy_resolves_configured_catalog_model_aliases() {
+        let snapshot = provider_snapshot().unwrap();
+        let route = select_model_route(&snapshot, "azure-openai/deployment").unwrap();
+        assert_eq!(route.upstream_model, "${deployment}");
+        let upstream_model = resolve_selected_upstream_model(&route, |provider, template| {
+            (provider.id == "azure-openai" && template == "${deployment}")
+                .then(|| "configured-deployment".to_string())
+                .ok_or_else(|| Error::RustError("unexpected template".to_string()))
+        })
+        .unwrap();
+        assert_eq!(route.provider.id, "azure-openai");
+        assert_eq!(upstream_model, "configured-deployment");
+        assert_eq!(
+            route.pricing_ref.as_deref(),
+            Some("azure-openai-deployment")
+        );
+    }
+
+    #[test]
+    fn configured_catalog_model_aliases_preserve_runtime_errors() {
+        let snapshot = provider_snapshot().unwrap();
+        let route = select_model_route(&snapshot, "azure-openai/deployment").unwrap();
+        let result = resolve_selected_upstream_model(&route, |provider, _| {
+            Err(Error::RustError(format!(
+                "missing Cloudflare config value `deployment` for provider `{}`",
+                provider.id
+            )))
+        });
+        let Err(error) = result else {
+            panic!("expected runtime configuration error");
+        };
+        assert!(provider_runtime_config_error_message(&error).is_some());
     }
 
     #[test]
