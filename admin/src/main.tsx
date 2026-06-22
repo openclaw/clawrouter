@@ -47,6 +47,7 @@ import {
   playgroundBlockedForService,
   playgroundBlocker,
   playgroundPayload,
+  preferredPlaygroundEndpoint,
   playgroundServicePreset,
   playgroundSupportsTemperature,
   policyCoversProvider,
@@ -2164,7 +2165,7 @@ function PlaygroundScreen({ form, setForm, models, selected, serviceRoutes, sele
   function selectProvider(provider: string) {
     const model = models.find((item) => item.provider === provider);
     if (model) {
-      setForm({ ...form, mode: "model", model: model.id });
+      setForm({ ...form, mode: "model", model: model.id, endpoint: preferredPlaygroundEndpoint(model) });
       return;
     }
     const routes = serviceRoutes.filter((item) => item.provider === provider);
@@ -2174,7 +2175,8 @@ function PlaygroundScreen({ form, setForm, models, selected, serviceRoutes, sele
 
   function selectTarget(value: string) {
     if (value.startsWith("model:")) {
-      setForm({ ...form, mode: "model", model: value.slice(6) });
+      const model = models.find((item) => item.id === value.slice(6));
+      setForm({ ...form, mode: "model", model: value.slice(6), ...(model ? { endpoint: preferredPlaygroundEndpoint(model) } : {}) });
       return;
     }
     const modelTarget = serviceModelTargets.find((target) => target.value === value);
@@ -2287,7 +2289,7 @@ function PlaygroundScreen({ form, setForm, models, selected, serviceRoutes, sele
             <div className="playgroundToolbar">
               {form.mode === "model" ? (
                 <>
-                  <label><span>Endpoint</span><select value={form.endpoint} onChange={(event) => setForm({ ...form, endpoint: event.target.value as PlaygroundForm["endpoint"] })}><option value="/v1/chat/completions">chat completions</option><option value="/v1/responses">responses</option></select></label>
+                  <label><span>Endpoint</span><select value={form.endpoint} onChange={(event) => setForm({ ...form, endpoint: event.target.value as PlaygroundForm["endpoint"] })}>{selected?.capabilities.includes("llm.chat") ? <option value="/v1/chat/completions">chat completions</option> : null}{selected?.capabilities.includes("llm.responses") ? <option value="/v1/responses">responses</option> : null}</select></label>
                   <label><span>System instructions</span><textarea className="systemPrompt" value={form.system} onChange={(event) => setForm({ ...form, system: event.target.value })} /></label>
                   <div className="playgroundSettingPair">
                     <label><span>Max tokens</span><input inputMode="numeric" value={form.maxTokens} onChange={(event) => setForm({ ...form, maxTokens: event.target.value })} /></label>

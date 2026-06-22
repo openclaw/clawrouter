@@ -185,6 +185,10 @@ export interface CatalogModel {
   capabilities: string[];
 }
 
+export function preferredPlaygroundEndpoint(model: CatalogModel): PlaygroundForm["endpoint"] {
+  return model.capabilities.includes("llm.responses") ? "/v1/responses" : "/v1/chat/completions";
+}
+
 export function readinessMap(readiness: ProviderReadiness[]) {
   return Object.fromEntries(readiness.map((item) => [item.id, item]));
 }

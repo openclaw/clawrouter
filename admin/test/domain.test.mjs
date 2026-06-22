@@ -10,6 +10,7 @@ import {
   playgroundAccessEndpoint,
   playgroundBlocker,
   playgroundPayload,
+  preferredPlaygroundEndpoint,
   playgroundResponseText,
   playgroundServicePreset,
   playgroundSupportsTemperature,
@@ -164,6 +165,11 @@ test("playground omits unsupported temperature for current OpenAI reasoning mode
   assert.equal(playgroundSupportsTemperature("openai/gpt-4.1-mini"), true);
   const payload = playgroundPayload({ ...modelForm(), model: "openai/gpt-5.5", temperature: "0.7" });
   assert.equal(payload.temperature, undefined);
+});
+
+test("playground model switches choose an endpoint the model supports", () => {
+  assert.equal(preferredPlaygroundEndpoint({ id: "openai/gpt-5.5", provider: "openai", capabilities: ["llm.chat", "llm.responses"] }), "/v1/responses");
+  assert.equal(preferredPlaygroundEndpoint({ id: "groq/gpt-oss-120b", provider: "groq", capabilities: ["llm.chat"] }), "/v1/chat/completions");
 });
 
 test("playground responses show assistant text while preserving arbitrary responses", () => {
