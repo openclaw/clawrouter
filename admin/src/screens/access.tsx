@@ -148,7 +148,7 @@ export function AssignmentRulePanel({ policies, rules, selected, form, setForm, 
       <section className="mainPane">
         <div className="overviewStrip">
           <Metric label="active rules" value={String(rules.filter((rule) => rule.enabled).length)} meta={`${rules.length} total`} />
-          <Metric label="email rules" value={String(rules.filter((rule) => rule.kind.startsWith("email") || rule.kind === "exact_email").length)} meta="reconcile on login" />
+          <Metric label="email rules" value={String(rules.filter((rule) => rule.kind.startsWith("email") || rule.kind === "exact_email").length)} meta="reconcile on rule change" />
           <Metric label="GitHub rules" value={String(rules.filter((rule) => rule.kind.startsWith("github")).length)} meta="verified evidence only" />
         </div>
         <div className="tableSectionHeader"><div><strong>Automatic assignments</strong><span>Identity evidence to managed group access</span></div><div className="inlineActions"><button type="button" className="buttonSecondary" onClick={onReconcile} disabled={busy}><RefreshCw className="buttonIcon" aria-hidden="true" /><span>Reconcile all</span></button><button type="button" onClick={onNew} disabled={busy}><Plus className="buttonIcon" aria-hidden="true" /><span>New rule</span></button></div></div>

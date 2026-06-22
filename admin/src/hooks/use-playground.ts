@@ -1,4 +1,4 @@
-import { type FormEvent, useEffect, useState } from "react";
+import { type FormEvent, useEffect, useRef, useState } from "react";
 import {
   playgroundAccessEndpoint,
   playgroundBlocker,
@@ -24,6 +24,7 @@ interface PlaygroundDependencies {
 }
 
 export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serviceRoutes, accessByProvider, providerReadiness }: PlaygroundDependencies) {
+  const initializedModelsRef = useRef(false);
   const [form, setForm] = useState<PlaygroundForm>({
     mode: "model",
     model: catalogModels(demo.routes)[0]?.id ?? "",
@@ -42,10 +43,14 @@ export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serv
   const selectedServiceRoute = serviceRoutes.find((route) => routeKey(route) === form.serviceRoute) ?? serviceRoutes[0];
 
   useEffect(() => {
-    if (models.length && !models.some((model) => model.id === form.model)) {
-      setForm((current) => ({ ...current, model: models[0].id }));
+    if (!models.length) return;
+    if (!initializedModelsRef.current || !models.some((model) => model.id === form.model)) {
+      initializedModelsRef.current = true;
+      const usable = models.filter((model) => accessByProvider.get(model.provider)?.allowed && providerReadiness[model.provider]?.executable);
+      const preferred = usable.find((model) => model.provider === "openai") ?? usable[0] ?? models[0];
+      setForm((current) => ({ ...current, model: preferred.id }));
     }
-  }, [form.model, models]);
+  }, [accessByProvider, form.model, models, providerReadiness]);
 
   useEffect(() => {
     if (serviceRoutes.length && !serviceRoutes.some((route) => routeKey(route) === form.serviceRoute)) {
