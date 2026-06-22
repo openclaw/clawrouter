@@ -16,6 +16,8 @@ import {
   LayoutDashboard,
   LogIn,
   MessageSquare,
+  Monitor,
+  Moon,
   Play,
   Plus,
   RefreshCw,
@@ -24,6 +26,7 @@ import {
   ServerCog,
   SlidersHorizontal,
   ShieldCheck,
+  Sun,
   Users,
 } from "lucide-react";
 import providerIconManifest from "../../crates/edge/src/provider-icons.json";
@@ -66,6 +69,35 @@ import "./style.css";
 
 type View = "home" | "catalog" | "playground" | "policies" | "users" | "usage";
 type RefreshOptions = { background?: boolean };
+type ThemePreference = "light" | "system" | "dark";
+
+const themeStorageKey = "clawrouter-theme";
+
+function readThemePreference(): ThemePreference {
+  try {
+    const stored = window.localStorage.getItem(themeStorageKey);
+    if (stored === "light" || stored === "dark" || stored === "system") return stored;
+  } catch {
+    // Storage may be unavailable in privacy-restricted browser contexts.
+  }
+  return "system";
+}
+
+function resolvedTheme(preference: ThemePreference): "light" | "dark" {
+  return preference === "system"
+    ? window.matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light"
+    : preference;
+}
+
+function applyTheme(preference: ThemePreference) {
+  const theme = resolvedTheme(preference);
+  document.documentElement.dataset.theme = theme;
+  document.documentElement.dataset.themePreference = preference;
+  document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute("content", theme === "dark" ? "#0d120f" : "#fbfcf8");
+}
+
+const initialThemePreference = readThemePreference();
+applyTheme(initialThemePreference);
 
 const pathViews: Record<string, View> = {
   "/": "home",
@@ -602,6 +634,7 @@ const adminViews = new Set<View>(["policies", "users", "usage"]);
 
 function App() {
   const [view, setView] = useState<View>(initialViewFromPath);
+  const [themePreference, setThemePreference] = useState<ThemePreference>(initialThemePreference);
   const gatewayOrigin = window.location.origin;
   const allowDemo = isLocalDemoAllowed();
   const [session, setSession] = useState<SessionResponse>(allowDemo ? demo.session : emptySession);
@@ -710,6 +743,20 @@ function App() {
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, []);
+
+  useEffect(() => {
+    const colorScheme = window.matchMedia("(prefers-color-scheme: dark)");
+    const updateTheme = () => applyTheme(themePreference);
+    updateTheme();
+    try {
+      window.localStorage.setItem(themeStorageKey, themePreference);
+    } catch {
+      // The active preference still applies for this page lifetime.
+    }
+    if (themePreference !== "system") return;
+    colorScheme.addEventListener("change", updateTheme);
+    return () => colorScheme.removeEventListener("change", updateTheme);
+  }, [themePreference]);
 
   useEffect(() => {
     if (status !== "loading" && session.role !== "admin" && adminViews.has(view)) navigateTo("catalog", true);
@@ -1630,12 +1677,10 @@ function App() {
             </div>
           ) : null}
         </nav>
-        <div className="tenantSwitch">
+        <div className="tenantSwitch" title={`${session.tenantId ?? "default"} tenant · ${session.role}`}>
           <UserAvatar email={session.email} />
           <div>
-            <span>Active context</span>
             <strong>{session.email ?? "not signed in"}</strong>
-            <small>{session.tenantId ?? "default"} · {session.role}</small>
           </div>
         </div>
       </aside>
@@ -1650,6 +1695,7 @@ function App() {
             </div>
           </div>
           <div className="topActions">
+            <ThemeSwitcher value={themePreference} onChange={setThemePreference} />
             <span className={`status ${session.contentRetention?.enabled ? "active" : "neutral"}`} title={session.contentRetention ? session.contentRetention.enabled ? `Request content retained for ${session.contentRetention.retentionDays} days` : "Request content retention is off for this identity" : "Loading request content retention status"}>
               retention {session.contentRetention ? session.contentRetention.enabled ? `on · ${session.contentRetention.retentionDays}d` : "off" : "pending"}
             </span>
@@ -1849,6 +1895,23 @@ function UserAvatar({ email }: { email?: string | null }) {
       <ShieldCheck aria-hidden="true" />
       {email ? <img src="/v1/session/avatar" alt="" loading="lazy" decoding="async" onLoad={() => setLoaded(true)} onError={() => setLoaded(false)} /> : null}
     </span>
+  );
+}
+
+function ThemeSwitcher({ value, onChange }: { value: ThemePreference; onChange: (preference: ThemePreference) => void }) {
+  const options: Array<{ value: ThemePreference; label: string; icon: IconComponent }> = [
+    { value: "light", label: "Light theme", icon: Sun },
+    { value: "system", label: "Use system theme", icon: Monitor },
+    { value: "dark", label: "Dark theme", icon: Moon },
+  ];
+  return (
+    <div className="themeSwitcher" role="group" aria-label="Color theme">
+      {options.map(({ value: option, label, icon: Icon }) => (
+        <button key={option} type="button" className={value === option ? "active" : ""} aria-pressed={value === option} aria-label={label} title={label} onClick={() => onChange(option)}>
+          <Icon aria-hidden="true" />
+        </button>
+      ))}
+    </div>
   );
 }
 
