@@ -180,5 +180,5 @@ retention is a separate policy-controlled R2 archive; see [Content retention](co
 The first enforcement slice covers token-priced model calls. Provider tool-call
 fees and unknown dynamic models require either manifest pricing or a policy
 `requestCostMicros` override. Durable Objects remain the authoritative ledger;
-the protocol and pricing types live in provider-neutral Rust so another durable
+the protocol and pricing types live in provider-neutral TypeScript so another durable
 backend can implement the same reserve/settle contract.

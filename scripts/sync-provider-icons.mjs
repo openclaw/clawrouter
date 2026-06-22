@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-const output = new URL("../crates/edge/src/provider-icons.json", import.meta.url);
+const output = new URL("../admin/src/provider-icons.json", import.meta.url);
 
 const lobePackage = "@lobehub/icons-static-svg@latest";
 

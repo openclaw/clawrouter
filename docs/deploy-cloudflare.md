@@ -1,6 +1,6 @@
 # Deploy ClawRouter on Cloudflare
 
-ClawRouter’s edge runtime is a Rust/Wasm Worker. Revocation-critical runtime
+ClawRouter’s edge runtime is a TypeScript Worker. Revocation-critical runtime
 policy lives in serialized Durable Object authority so access can be revoked
 without a redeploy. Cloudflare KV stores migration seeds, compatibility copies,
 OAuth grants, and operational health.

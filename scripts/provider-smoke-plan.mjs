@@ -177,8 +177,8 @@ export function compileProviderSnapshot() {
     .sort()
     .map((file) => `providers/${file}`);
   const result = spawnSync(
-    "cargo",
-    ["run", "-p", "clawrouter", "--", "provider", "compile", ...providerFiles],
+    process.execPath,
+    ["scripts/compile-providers.mjs", ...providerFiles],
     {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "inherit"],

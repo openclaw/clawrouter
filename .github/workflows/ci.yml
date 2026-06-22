@@ -11,20 +11,6 @@ env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
 
 jobs:
-  rust:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          components: clippy, rustfmt
-          targets: wasm32-unknown-unknown
-      - run: cargo fmt --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
-      - run: cargo build -p clawrouter-edge --target wasm32-unknown-unknown
-      - run: cargo run -p clawrouter -- provider compile providers/*.provider.yaml > /tmp/provider-snapshot.json
-
   admin:
     runs-on: ubuntu-latest
     steps:
@@ -44,9 +30,6 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -54,6 +37,9 @@ jobs:
         with:
           version: 11.5.1
       - run: pnpm install --frozen-lockfile
+      - run: pnpm worker:check
+      - run: pnpm worker:e2e
+      - run: pnpm provider:compile -- --output /tmp/provider-snapshot.json
       - run: pnpm test:scripts
       - run: pnpm provider:smoke-plan
       - run: CLAWROUTER_STRICT_CONFIG=0 pnpm cf:config

@@ -6,7 +6,7 @@ It brokers proxy keys, service identities, versioned upstream grants, budgets, a
 
 Current implementation target:
 
-- Rust/Wasm data plane on Cloudflare Workers
+- TypeScript data plane on Cloudflare Workers
 - Durable Object budget ledgers
 - serialized Durable Object access-control authority
 - TypeScript admin/control UI
@@ -25,7 +25,7 @@ providers/<service>.provider.yaml
 
 That file declares the service id, auth scheme, OAuth platform mapping when needed,
 base URLs, route templates, adapter family, model/capability mapping, and billing
-meters. The Rust compiler turns those files into a provider snapshot consumed by
+meters. The TypeScript compiler turns those files into a provider snapshot consumed by
 the edge runtime and admin UI.
 
 Built-in starter coverage:
@@ -40,7 +40,7 @@ Built-in starter coverage:
 Validate the catalog with:
 
 ```sh
-cargo run -p clawrouter -- provider compile providers/*.provider.yaml
+pnpm provider:compile
 ```
 
 Before a real Cloudflare deploy, run:

@@ -1,10 +1,15 @@
 name = "clawrouter-edge"
-main = "crates/edge/build/index.js"
+main = "worker/index.ts"
 compatibility_date = "2026-06-05"
 keep_vars = true
 
 [build]
-command = "npm --prefix admin run build && cargo install -q worker-build --version 0.8.3 && ${HOME}/.cargo/bin/worker-build --release crates/edge"
+command = "pnpm provider:compile -- --output worker/generated/provider-snapshot.json && pnpm --dir admin build"
+
+[assets]
+directory = "./admin/dist"
+binding = "ASSETS"
+run_worker_first = true
 
 [[queues.producers]]
 binding = "USAGE_QUEUE"

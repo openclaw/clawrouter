@@ -3,10 +3,12 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "check": "pnpm --dir admin check && pnpm --dir admin test && cargo test --workspace",
-    "build": "pnpm --dir admin build && cargo build --workspace",
+    "check": "pnpm worker:check && pnpm --dir admin check && pnpm --dir admin test && pnpm test:scripts",
+    "build": "pnpm provider:compile -- --output worker/generated/provider-snapshot.json && pnpm --dir admin build && pnpm worker:check",
+    "worker:check": "tsc -p worker/tsconfig.json --noEmit && node --test worker/test/*.test.mjs",
+    "worker:e2e": "node scripts/smoke-local-worker.mjs",
     "test:scripts": "node --test test/*.test.mjs",
-    "provider:compile": "cargo run -p clawrouter -- provider compile providers/*.provider.yaml",
+    "provider:compile": "node scripts/compile-providers.mjs providers/*.provider.yaml",
     "provider:icons": "node scripts/sync-provider-icons.mjs",
     "provider:smoke-plan": "node scripts/provider-smoke-plan.mjs --strict",
     "cf:preflight": "node scripts/deploy-preflight.mjs",
@@ -16,7 +18,7 @@
     "cf:content:provision": "node scripts/provision-content-storage.mjs",
     "cf:access": "node scripts/provision-access.mjs",
     "cf:secrets": "node scripts/put-provider-secrets.mjs",
-    "cf:deploy": "pnpm --dir admin build && pnpm cf:content:provision && pnpm cf:config && wrangler deploy --config .wrangler.generated.toml",
+    "cf:deploy": "pnpm provider:compile -- --output worker/generated/provider-snapshot.json && pnpm --dir admin build && pnpm cf:content:provision && pnpm cf:config && wrangler deploy --config .wrangler.generated.toml",
     "cf:key:put": "node scripts/key-put.mjs",
     "cf:key:revoke": "node scripts/key-revoke.mjs",
     "cf:oauth:put": "node scripts/oauth-put.mjs",
@@ -24,6 +26,9 @@
     "cf:smoke": "node scripts/smoke-deployed.mjs"
   },
   "devDependencies": {
+    "@cloudflare/workers-types": "^4.20260617.0",
+    "typescript": "^5.9.3",
+    "yaml": "^2.8.1",
     "wrangler": "^4.98.0"
   }
 }
