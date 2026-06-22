@@ -1628,7 +1628,7 @@ function App() {
           ) : null}
         </nav>
         <div className="tenantSwitch">
-          <span className="contextIcon"><ShieldCheck aria-hidden="true" /></span>
+          <UserAvatar email={session.email} />
           <div>
             <span>Active context</span>
             <strong>{session.email ?? "not signed in"}</strong>
@@ -1831,6 +1831,21 @@ function App() {
         {view === "usage" && session.role === "admin" ? <UsageScreen keys={keys} credentials={credentials} services={services} overview={adminOverview} tenants={tenantSummaries} usageRows={usageRows} usage={usageSnapshot} usageLoaded={usageLoaded} /> : null}
       </section>
     </main>
+  );
+}
+
+function UserAvatar({ email }: { email?: string | null }) {
+  const [loaded, setLoaded] = useState(false);
+
+  useEffect(() => {
+    setLoaded(false);
+  }, [email]);
+
+  return (
+    <span className={`contextIcon${loaded ? " contextIconLoaded" : ""}`}>
+      <ShieldCheck aria-hidden="true" />
+      {email ? <img src="/v1/session/avatar" alt="" loading="lazy" decoding="async" onLoad={() => setLoaded(true)} onError={() => setLoaded(false)} /> : null}
+    </span>
   );
 }
 

@@ -144,6 +144,12 @@ async fn fetch(req: Request, env: Env, ctx: Context) -> Result<Response> {
             .and_then(with_cors);
     }
 
+    if req.method() == Method::Get && api_path == "/v1/session/avatar" {
+        return session_avatar(req.headers(), &env)
+            .await
+            .and_then(with_cors);
+    }
+
     if req.method() == Method::Get && api_path == "/v1/entitlements" {
         return access_entitlements(req.headers(), &env)
             .await
@@ -2889,6 +2895,63 @@ async fn session_profile(headers: &Headers, env: &Env) -> Result<Response> {
         "subject": null,
         "tenantId": null
     }))
+}
+
+async fn session_avatar(headers: &Headers, env: &Env) -> Result<Response> {
+    let Some(session) = verified_access_session(headers, env).await? else {
+        return json_error(
+            "access_session_required",
+            "avatar access requires a verified Cloudflare Access session",
+            401,
+        );
+    };
+    let request = Request::new(&gravatar_avatar_url(&session.email), Method::Get)?;
+    let mut upstream = match Fetch::Request(request).send().await {
+        Ok(response) => response,
+        Err(_) => return private_avatar_error(502),
+    };
+    if upstream.status_code() != 200 {
+        return private_avatar_error(404);
+    }
+    let content_type = upstream
+        .headers()
+        .get("content-type")?
+        .and_then(|value| value.split(';').next().map(str::trim).map(str::to_string));
+    let Some(content_type) = content_type.filter(|value| {
+        matches!(
+            value.as_str(),
+            "image/gif" | "image/jpeg" | "image/png" | "image/webp"
+        )
+    }) else {
+        return private_avatar_error(502);
+    };
+    let bytes = upstream.bytes().await?;
+    if bytes.len() > 1024 * 1024 {
+        return private_avatar_error(502);
+    }
+    let mut response = Response::from_bytes(bytes)?;
+    response.headers_mut().set("content-type", &content_type)?;
+    response
+        .headers_mut()
+        .set("cache-control", "private, no-store, max-age=0")?;
+    response.headers_mut().set(
+        "vary",
+        "cf-access-jwt-assertion, cf-access-authenticated-user-email",
+    )?;
+    Ok(response)
+}
+
+fn gravatar_avatar_url(email: &str) -> String {
+    let hash = sha256_hex(&email.trim().to_ascii_lowercase());
+    format!("https://www.gravatar.com/avatar/{hash}?s=60&d=identicon&r=g")
+}
+
+fn private_avatar_error(status: u16) -> Result<Response> {
+    let mut response = Response::empty()?.with_status(status);
+    response
+        .headers_mut()
+        .set("cache-control", "private, no-store, max-age=0")?;
+    Ok(response)
 }
 
 async fn access_entitlements(headers: &Headers, env: &Env) -> Result<Response> {
@@ -16255,6 +16318,20 @@ mod tests {
             "policy_generation_mismatch"
         );
         assert_eq!(policy.request_cost_micros, Some(10));
+    }
+
+    #[test]
+    fn gravatar_avatar_urls_hash_normalized_emails() {
+        let url = gravatar_avatar_url("  Person@Example.COM ");
+        assert_eq!(
+            url,
+            format!(
+                "https://www.gravatar.com/avatar/{}?s=60&d=identicon&r=g",
+                sha256_hex("person@example.com")
+            )
+        );
+        assert!(!url.contains("Person"));
+        assert!(!url.contains("example.com"));
     }
 
     #[test]
