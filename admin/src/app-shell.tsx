@@ -1,7 +1,20 @@
-export function AppShell({ controller }: { controller: ReturnType<typeof useConsoleController> }) {
+export function AppShell() {
   const [theme, setTheme] = React.useState(initialTheme);
   React.useEffect(() => { applyTheme(theme); }, [theme]);
-  const { view, setView, gatewayOrigin, allowDemo, session, setSession, providers, setProviders, routes, setRoutes, keys, setKeys, credentials, setCredentials, connections, setConnections, upstreamGrants, setUpstreamGrants, assignmentRules, setAssignmentRules, policyDataLoaded, setPolicyDataLoaded, users, setUsers, bindings, setBindings, adminOverview, setAdminOverview, tenantSummaries, setTenantSummaries, usageRows, setUsageRows, usageSnapshot, setUsageSnapshot, usageLoaded, setUsageLoaded, usageRefreshKey, setUsageRefreshKey, entitlements, setEntitlements, providerReadiness, setProviderReadiness, policyForm, setPolicyForm, credentialForm, setCredentialForm, bindingForm, setBindingForm, upstreamGrantForm, setUpstreamGrantForm, assignmentRuleForm, setAssignmentRuleForm, accessTab, setAccessTab, accessForm, setAccessForm, query, setQuery, kind, setKind, selectedServiceId, setSelectedServiceId, selectedPolicyId, setSelectedPolicyId, selectedCredentialId, setSelectedCredentialId, selectedBindingKey, setSelectedBindingKey, selectedUpstreamGrantKey, setSelectedUpstreamGrantKey, selectedAssignmentRuleId, setSelectedAssignmentRuleId, selectedUserEmail, setSelectedUserEmail, status, setStatus, lastUpdatedAt, setLastUpdatedAt, demoMode, setDemoMode, issuedKey, setIssuedKey, policyError, setPolicyError, userError, setUserError, playgroundError, setPlaygroundError, playground, setPlayground, playgroundTurns, setPlaygroundTurns, selectedPlaygroundTurnId, setSelectedPlaygroundTurnId, requestMode, setRequestMode, refreshPromiseRef, refreshBackgroundRef, refreshRef, accessByProvider, services, models, serviceRoutes, kinds, filteredServices, selectedService, selectedPolicy, selectedCredential, selectedBinding, selectedUpstreamGrant, selectedAssignmentRule, selectedUser, selectedModel, selectedServiceRoute, statusPresentation, busy, busyRef, statusTone, refresh, refreshData, loadUserDemo, savePolicy, issueCredential, revokeCredential, saveBinding, saveUpstreamGrant, revokeUpstreamGrant, refreshUpstreamGrant, authorizeUpstreamGrant, saveAssignmentRule, reconcileAssignments, setProviderConnection, refreshUsageLedger, saveUser, revoke, runPlayground, editPolicy, startNewPolicy, startNewUser, editBinding, editUpstreamGrant, startNewUpstreamGrant, editAssignmentRule, startNewAssignmentRule, applyPreset, togglePolicyProvider, setPolicyProviderGroup, applyDemoKeys, applyDemoCredentials, navigateTo } = controller;
+  const { session: shell, catalog, access, usage, playground: playgroundDomain } = useConsole();
+  const { view, value: session, status, lastUpdatedAt, demoMode, statusPresentation, busy, statusTone, navigateTo } = shell;
+  const { providers, providerReadiness, accessByProvider, services, models, serviceRoutes, query, setQuery, kind, setKind, kinds, filteredServices, selectedService, setSelectedServiceId } = catalog;
+  const { policies, credentials: credentialState, connections: connectionState, bindings: bindingState, upstream, assignments, users: userState, tab } = access;
+  const { items: keys, selected: selectedPolicy, selectedId: selectedPolicyId, form: policyForm, setForm: setPolicyForm, error: policyError, save: savePolicy, revoke, edit: editPolicy, startNew: startNewPolicy, applyPreset, toggleProvider: togglePolicyProvider, setProviderGroup: setPolicyProviderGroup } = policies;
+  const { items: credentials, selected: selectedCredential, form: credentialForm, setForm: setCredentialForm, issuedKey, issue: issueCredential, revoke: revokeCredential, setSelectedId: setSelectedCredentialId, setIssuedKey } = credentialState;
+  const { items: connections, setEnabled: setProviderConnection } = connectionState;
+  const { items: bindings, selected: selectedBinding, form: bindingForm, setForm: setBindingForm, save: saveBinding, edit: editBinding, startNew: startNewBinding } = bindingState;
+  const { items: upstreamGrants, selected: selectedUpstreamGrant, form: upstreamGrantForm, setForm: setUpstreamGrantForm, save: saveUpstreamGrant, revoke: revokeUpstreamGrant, refresh: refreshUpstreamGrant, authorize: authorizeUpstreamGrant, edit: editUpstreamGrant, startNew: startNewUpstreamGrant } = upstream;
+  const { items: assignmentRules, selected: selectedAssignmentRule, form: assignmentRuleForm, setForm: setAssignmentRuleForm, save: saveAssignmentRule, reconcile: reconcileAssignments, edit: editAssignmentRule, startNew: startNewAssignmentRule } = assignments;
+  const { items: users, selected: selectedUser, setSelectedEmail: setSelectedUserEmail, form: accessForm, setForm: setAccessForm, error: userError, save: saveUser, startNew: startNewUser } = userState;
+  const { value: accessTab, set: setAccessTab } = tab;
+  const { adminOverview, tenantSummaries, rows: usageRows, snapshot: usageSnapshot, loaded: usageLoaded } = usage;
+  const { form: playground, setForm: setPlayground, turns: playgroundTurns, selectedTurnId: selectedPlaygroundTurnId, setSelectedTurnId: setSelectedPlaygroundTurnId, requestMode, setRequestMode, error: playgroundError, selectedModel, selectedServiceRoute, run: runPlayground, resetConversation } = playgroundDomain;
   return (
     <main className="appShell">
       <aside className="sidebar">
@@ -138,12 +151,7 @@ export function AppShell({ controller }: { controller: ReturnType<typeof useCons
             setSelectedTurnId={setSelectedPlaygroundTurnId}
             error={playgroundError}
             onRun={runPlayground}
-            onNewConversation={() => {
-              setPlaygroundTurns([]);
-              setSelectedPlaygroundTurnId("");
-              setPlaygroundError("");
-              setPlayground((current) => ({ ...current, prompt: "" }));
-            }}
+            onNewConversation={resetConversation}
             busy={busy}
           />
         ) : null}
@@ -193,10 +201,7 @@ export function AppShell({ controller }: { controller: ReturnType<typeof useCons
               setIssuedKey("");
             }}
             onEditBinding={editBinding}
-            onNewBinding={() => {
-              setSelectedBindingKey("");
-              setBindingForm({ ...defaultBinding, policyId: selectedPolicyId || keys[0]?.policyId || "" });
-            }}
+            onNewBinding={startNewBinding}
             onEditUpstreamGrant={editUpstreamGrant}
             onNewUpstreamGrant={startNewUpstreamGrant}
             onEditAssignmentRule={editAssignmentRule}
@@ -247,6 +252,6 @@ import { DashboardScreen, CatalogScreen, UserAvatar } from "./screens/dashboard-
 import { PlaygroundScreen } from "./screens/playground";
 import { PoliciesScreen } from "./screens/access";
 import { UsageScreen, UsersScreen } from "./screens/users-usage";
-import { applyTheme, defaultBinding, initialTheme, navItems } from "./ui-config";
+import { applyTheme, initialTheme, navItems } from "./ui-config";
 import { formatTimestamp } from "./ui-helpers";
-import { useConsoleController } from "./use-console-controller";
+import { useConsole } from "./console-controller-context";
