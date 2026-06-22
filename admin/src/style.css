@@ -1857,6 +1857,24 @@ h2 {
   gap: 7px;
 }
 
+.refreshMeta {
+  display: grid;
+  justify-items: end;
+  gap: 1px;
+  color: var(--muted);
+  font-family: "DM Mono", ui-monospace, monospace;
+  font-size: 8px;
+  line-height: 1.15;
+  text-transform: uppercase;
+}
+
+.refreshMeta time,
+.refreshMeta > span:last-child {
+  color: var(--foreground);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
 .buttonSecondary,
 .segmented button,
 .presetRow button {
