@@ -304,12 +304,16 @@ export async function resolveBindings(env: Env, principals: Principal[]): Promis
   await authorityCall(env, "/initialize", seeds);
   return sortBindings([...result.bindings, ...seeds.flatMap((seed) => seed.bindings)]);
 }
+export async function resolveConnections(env: Env, providerIds: string[]): Promise<ProviderConnection[]> {
+  const ids = [...new Set(providerIds)];
+  const result = await authorityCall<{ connections: ProviderConnection[]; missingProviderIds: string[] }>(env, "/connections/resolve", { providerIds: ids });
+  const seeded = (await Promise.all(result.missingProviderIds.map((id) => env.POLICY_KV.get<ProviderConnection>(`connections/${id}`, "json")))).filter(Boolean) as ProviderConnection[];
+  if (seeded.length) await authorityCall(env, "/connections/initialize", seeded);
+  return [...result.connections, ...seeded];
+}
+
 export async function resolveConnection(env: Env, providerId: string): Promise<ProviderConnection | null> {
-  const result = await authorityCall<{ connections: ProviderConnection[] }>(env, "/connections/resolve", { providerIds: [providerId] }, `provider-connection:${encodeURIComponent(providerId)}`);
-  if (result.connections[0]) return result.connections[0];
-  const connection = await env.POLICY_KV.get<ProviderConnection>(`connections/${providerId}`, "json");
-  if (connection) await authorityCall(env, "/connections/initialize", [connection], `provider-connection:${encodeURIComponent(providerId)}`);
-  return connection;
+  return (await resolveConnections(env, [providerId]))[0] ?? null;
 }
 
 async function listKvJson<T>(env: Env, prefix: string): Promise<Array<[string, T]>> {

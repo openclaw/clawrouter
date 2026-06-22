@@ -88,13 +88,13 @@ async function expectOk(url, name) {
 }
 
 async function expectAuthenticatedOk(url, name, token) {
-  const response = await fetch(url, {
-    headers: { authorization: `Bearer ${token}` },
-  });
-  if (!response.ok) {
-    throw new Error(`${name} failed with ${response.status}`);
+  for (let attempt = 0; attempt < 4; attempt += 1) {
+    const response = await fetch(url, { headers: { authorization: `Bearer ${token}` } });
+    if (response.ok) return response.json();
+    if (response.status < 500 || attempt === 3) throw new Error(`${name} failed with ${response.status}`);
+    await new Promise((resolve) => setTimeout(resolve, 1_000 * (attempt + 1)));
   }
-  return response.json();
+  throw new Error(`${name} failed after retries`);
 }
 
 async function expectRedirect(url, name, location) {

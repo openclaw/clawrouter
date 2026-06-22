@@ -1,6 +1,6 @@
 import { authorizeAdmin } from "./access";
 import {
-  authorityCall, listBindings, listCredentials, listPolicies, listUsers,
+  authorityCall, listBindings, listCredentials, listPolicies, listUsers, resolveConnections,
 } from "./authority";
 import {
   listAssignmentRules, normalizeAssignmentEvidence, reconcileUserAssignments,
@@ -121,10 +121,9 @@ async function credentialResponses(env: Env) {
 }
 
 async function connections(env: Env): Promise<ProviderConnection[]> {
-  return Promise.all(snapshot.providers.map(async (provider) => {
-    const result = await authorityCall<{ connections: ProviderConnection[] }>(env, "/connections/resolve", { providerIds: [provider.id] }, connectionObject(provider.id));
-    return result.connections[0] ?? { providerId: provider.id, enabled: true, label: null };
-  }));
+  const stored = await resolveConnections(env, snapshot.providers.map((provider) => provider.id));
+  const byId = new Map(stored.map((connection) => [connection.providerId, connection]));
+  return snapshot.providers.map((provider) => byId.get(provider.id) ?? { providerId: provider.id, enabled: true, label: null });
 }
 
 async function putBinding(request: Request, env: Env): Promise<Response> {
@@ -188,7 +187,7 @@ async function credentialMutation(request: Request, env: Env, rest: string): Pro
 async function putConnection(request: Request, env: Env, encodedId: string): Promise<Response> {
   const id = decodeURIComponent(encodedId), provider = snapshot.providers.find((item) => item.id === id); if (!provider) throw new HttpError(404, "unknown_provider", "provider does not exist");
   const body = await readJson<Partial<ProviderConnection>>(request), connection: ProviderConnection = { providerId: id, enabled: body.enabled ?? true, label: body.label ?? null };
-  await authorityCall(env, "/connections/put", connection, connectionObject(id)); await env.POLICY_KV.put(`connections/${id}`, JSON.stringify(connection)); return privateJson(connection);
+  await authorityCall(env, "/connections/put", connection); await env.POLICY_KV.put(`connections/${id}`, JSON.stringify(connection)); return privateJson(connection);
 }
 
 async function upstreamGrantMutation(request: Request, env: Env, rest: string): Promise<Response> {
@@ -304,6 +303,5 @@ function grantResponse(key: string, grant: UpstreamGrant) { const parts = key.sp
 function assignmentResponse(ruleId: string, rule: AssignmentRule) { return { ruleId, ...rule, generatedGroup: `assignment.${ruleId}` }; }
 function assignmentRuleKey(id: string) { return `assignment/rules/${id}`; }
 function bindingKvKey(binding: PolicyBinding) { return `access/bindings/${binding.principalType}/${encodeURIComponent(binding.principalId)}/${binding.policyId}`; }
-function connectionObject(id: string) { return `provider-connection:${encodeURIComponent(id)}`; }
 function normalizeGroups(values: string[]) { return [...new Set(values.map((value) => value.trim().toLowerCase()).filter(Boolean))].sort(); }
 function sum(values: Array<number | null | undefined>) { return values.reduce<number>((total, value) => total + (value ?? 0), 0); }
