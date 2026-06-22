@@ -213,7 +213,7 @@ Tables and provider rows are dense, left-aligned, and border-separated. Entity r
 
 ### Playground
 
-Playground is prompt-first. The main surface is a large composer for system and user prompts with compact controls for model, endpoint, tokens, temperature, and run. Response stays visible beside or below the composer. Raw JSON/curl request output is hidden in a disclosure by default and opened only when the user wants to inspect it. The playground is not a toy demo; it uses the same proxy-key policy path as production calls.
+Playground is conversation-first. The main surface is a multi-turn transcript with a bottom composer that owns model/service selection and send state. System instructions and generation controls stay in a compact inspector; selecting a turn reveals its route, latency, retention status, and exact request/response payloads. The playground is not a toy demo; it uses the same policy path and conversation context as production calls.
 
 ## 6. Do's and Don'ts
 

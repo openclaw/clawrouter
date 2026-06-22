@@ -10,6 +10,7 @@ import {
   playgroundAccessEndpoint,
   playgroundBlocker,
   playgroundPayload,
+  playgroundResponseText,
   playgroundServicePreset,
   policyUsageFallback,
   reconcileDirectUserBindings,
@@ -142,6 +143,26 @@ test("playground payloads preserve model and service semantics", () => {
     body: { detail: true },
   });
   assert.equal(playgroundAccessEndpoint(form, route), "/v1/playground/proxy/replicate/prediction");
+});
+
+test("playground model requests include the current conversation", () => {
+  assert.deepEqual(playgroundPayload(modelForm(), undefined, [
+    { role: "user", content: "first" },
+    { role: "assistant", content: "answer" },
+  ]).messages, [
+    { role: "system", content: "be concise" },
+    { role: "user", content: "first" },
+    { role: "assistant", content: "answer" },
+    { role: "user", content: "hello" },
+  ]);
+});
+
+test("playground responses show assistant text while preserving arbitrary responses", () => {
+  assert.equal(playgroundResponseText('{"choices":[{"message":{"content":"hello"}}]}'), "hello");
+  assert.equal(playgroundResponseText('{"content":[{"type":"text","text":"hi from anthropic"}]}'), "hi from anthropic");
+  assert.equal(playgroundResponseText('{"output":[{"content":[{"type":"output_text","text":"response text"}]}]}'), "response text");
+  assert.equal(playgroundResponseText('{"query":"result"}'), '{"query":"result"}');
+  assert.equal(playgroundResponseText("plain text"), "plain text");
 });
 
 test("service route presets replace stale body, method, and path values", () => {

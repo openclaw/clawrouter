@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Rebuild the Playground as a multi-turn chat with a bottom model/service composer and per-turn request/response inspection.
 - Add default-on, policy-controlled 30-day request-content retention with visible user disclosure, per-user exemptions, token ownership, and admin inspection.
 - Collapse healthy gateway status into the header while retaining the full status row for work, warnings, and errors.
 - Automatically refresh dashboard data every 30 seconds and on tab focus without overwriting unsaved admin edits.

@@ -1,10 +1,13 @@
 import React, { FormEvent, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot } from "react-dom/client";
 import {
+  ArrowUp,
   BarChart3,
   Activity,
   ArrowUpRight,
+  Bot,
   Boxes,
+  Bug,
   CheckCircle2,
   ChevronRight,
   CircleSlash2,
@@ -12,12 +15,14 @@ import {
   KeyRound,
   LayoutDashboard,
   LogIn,
+  MessageSquare,
   Play,
   Plus,
   RefreshCw,
   Route,
   Search,
   ServerCog,
+  SlidersHorizontal,
   ShieldCheck,
   Users,
 } from "lucide-react";
@@ -53,6 +58,7 @@ import {
   serviceOutcome,
   tenantSummaryFallback,
   unique,
+  playgroundResponseText,
 } from "./domain";
 import "./style.css";
 
@@ -510,6 +516,31 @@ interface PlaygroundForm {
   temperature: string;
 }
 
+interface PlaygroundTurn {
+  id: string;
+  mode: PlaygroundForm["mode"];
+  prompt: string;
+  response: string;
+  rawResponse: string;
+  request: string;
+  provider: string;
+  model: string;
+  endpoint: string;
+  status: number | null;
+  durationMs: number;
+  retention: string;
+  error?: string;
+}
+
+interface PlaygroundHttpResponse {
+  ok: boolean;
+  raw: string;
+  status: number;
+  statusText: string;
+  contentType: string;
+  retention: string;
+}
+
 const demoDisabledProviderIds = new Set(["aws-bedrock", "cloudflare-ai-gateway"]);
 const demoMissingConfigProviderIds = new Set(["azure-openai"]);
 const demo = demoData();
@@ -622,7 +653,8 @@ function App() {
     maxTokens: "128",
     temperature: "0.7",
   });
-  const [playgroundResult, setPlaygroundResult] = useState("Run a request to see the raw response.");
+  const [playgroundTurns, setPlaygroundTurns] = useState<PlaygroundTurn[]>([]);
+  const [selectedPlaygroundTurnId, setSelectedPlaygroundTurnId] = useState("");
   const [requestMode, setRequestMode] = useState<"json" | "curl">("json");
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
   const refreshBackgroundRef = useRef(false);
@@ -1387,16 +1419,34 @@ function App() {
 
   async function runPlayground(event: FormEvent) {
     event.preventDefault();
+    const startedAt = performance.now();
+    const prompt = playground.mode === "model" ? playground.prompt.trim() : playground.servicePayload.trim();
+    const conversation = playground.mode === "model"
+      ? playgroundTurns.filter((turn) => turn.mode === "model" && !turn.error).flatMap((turn) => [
+        { role: "user" as const, content: turn.prompt },
+        { role: "assistant" as const, content: turn.response },
+      ])
+      : [];
+    const provider = playground.mode === "model" ? selectedModel?.provider ?? "unknown" : selectedServiceRoute?.provider ?? "unknown";
+    const model = playground.mode === "model" ? selectedModel?.id ?? playground.model : selectedServiceRoute?.endpoint ?? playground.serviceRoute;
+    const endpoint = playgroundAccessEndpoint(playground, selectedServiceRoute);
+    let requestPreview = "";
     try {
+      if (!prompt) throw new Error(playground.mode === "model" ? "Enter a message." : "Enter a JSON request body.");
       setPlaygroundError("");
       setStatus("running playground");
       const guard = playgroundBlocker(playground, selectedModel, selectedServiceRoute, accessByProvider, providerReadiness);
       if (guard) throw new Error(guard);
-      const payload = playgroundPayload(playground, selectedServiceRoute);
+      const payload = playgroundPayload(playground, selectedServiceRoute, conversation);
+      requestPreview = JSON.stringify(payload, null, 2);
       if (demoMode) {
-        setPlaygroundResult(JSON.stringify(playground.mode === "model"
+        const raw = JSON.stringify(playground.mode === "model"
           ? { provider: selectedModel?.provider, model: selectedModel?.id, output: "Hello from ClawRouter demo mode." }
-          : { provider: selectedServiceRoute?.provider, route: selectedServiceRoute?.route, output: "Service proxy demo response." }, null, 2));
+          : { provider: selectedServiceRoute?.provider, route: selectedServiceRoute?.route, output: "Service proxy demo response." }, null, 2);
+        const turn = createPlaygroundTurn({ mode: playground.mode, prompt, raw, request: requestPreview, provider, model, endpoint, status: 200, durationMs: Math.max(1, Math.round(performance.now() - startedAt)), retention: "demo" });
+        setPlaygroundTurns((current) => [...current, turn]);
+        setSelectedPlaygroundTurnId(turn.id);
+        if (playground.mode === "model") setPlayground((current) => ({ ...current, prompt: "" }));
         setStatus("playground ready");
         return;
       }
@@ -1406,12 +1456,25 @@ function App() {
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),
       });
-      setPlaygroundResult(result);
+      const responseError = result.ok ? undefined : playgroundResponseText(result.raw) || `Request failed with HTTP ${result.status}`;
+      const turn = createPlaygroundTurn({ mode: playground.mode, prompt, raw: result.raw, request: requestPreview, provider, model, endpoint, status: result.status, durationMs: Math.max(1, Math.round(performance.now() - startedAt)), retention: result.retention, error: responseError });
+      setPlaygroundTurns((current) => [...current, turn]);
+      setSelectedPlaygroundTurnId(turn.id);
+      if (responseError) {
+        setPlaygroundError(responseError);
+        setStatus(responseError);
+        return;
+      }
+      if (playground.mode === "model") setPlayground((current) => ({ ...current, prompt: "" }));
       setStatus("playground ready");
     } catch (error) {
       const message = errorMessage(error);
+      const turn = createPlaygroundTurn({ mode: playground.mode, prompt, raw: message, request: requestPreview, provider, model, endpoint, status: null, durationMs: Math.max(1, Math.round(performance.now() - startedAt)), retention: "unknown", error: message });
+      if (prompt) {
+        setPlaygroundTurns((current) => [...current, turn]);
+        setSelectedPlaygroundTurnId(turn.id);
+      }
       setPlaygroundError(message);
-      setPlaygroundResult(message);
       setStatus(message);
     }
   }
@@ -1664,9 +1727,17 @@ function App() {
             readinessByProvider={providerReadiness}
             requestMode={requestMode}
             setRequestMode={setRequestMode}
-            result={playgroundResult}
+            turns={playgroundTurns}
+            selectedTurnId={selectedPlaygroundTurnId}
+            setSelectedTurnId={setSelectedPlaygroundTurnId}
             error={playgroundError}
             onRun={runPlayground}
+            onNewConversation={() => {
+              setPlaygroundTurns([]);
+              setSelectedPlaygroundTurnId("");
+              setPlaygroundError("");
+              setPlayground((current) => ({ ...current, prompt: "" }));
+            }}
             busy={busy}
           />
         ) : null}
@@ -2025,7 +2096,7 @@ function GrantChips({ names }: { names: string[] }) {
   );
 }
 
-function PlaygroundScreen({ form, setForm, models, selected, serviceRoutes, selectedServiceRoute, accessByProvider, readinessByProvider, requestMode, setRequestMode, result, error, onRun, busy }: {
+function PlaygroundScreen({ form, setForm, models, selected, serviceRoutes, selectedServiceRoute, accessByProvider, readinessByProvider, requestMode, setRequestMode, turns, selectedTurnId, setSelectedTurnId, error, onRun, onNewConversation, busy }: {
   form: PlaygroundForm;
   setForm: (form: PlaygroundForm) => void;
   models: CatalogModel[];
@@ -2036,90 +2107,167 @@ function PlaygroundScreen({ form, setForm, models, selected, serviceRoutes, sele
   readinessByProvider: Record<string, ProviderReadiness>;
   requestMode: "json" | "curl";
   setRequestMode: (mode: "json" | "curl") => void;
-  result: string;
+  turns: PlaygroundTurn[];
+  selectedTurnId: string;
+  setSelectedTurnId: (id: string) => void;
   error: string;
   onRun: (event: FormEvent) => void;
+  onNewConversation: () => void;
   busy: boolean;
 }) {
-  const request = playgroundRequestPreview(form, requestMode, selectedServiceRoute);
+  const transcript = useRef<HTMLDivElement>(null);
   const blocker = playgroundBlocker(form, selected, selectedServiceRoute, accessByProvider, readinessByProvider);
   const selectedProvider = form.mode === "model" ? selected?.provider : selectedServiceRoute?.provider;
   const selectedAccess = selectedProvider ? accessByProvider.get(selectedProvider) : undefined;
   const selectedReadiness = selectedProvider ? readinessByProvider[selectedProvider] : undefined;
   const methods = selectedServiceRoute?.methods.length ? selectedServiceRoute.methods : ["POST"];
+  const selectedTurn = turns.find((turn) => turn.id === selectedTurnId);
+  const currentRequest = playgroundRequestPreview(form, requestMode, selectedServiceRoute);
+
+  useEffect(() => {
+    const element = transcript.current;
+    element?.scrollTo({ top: element.scrollHeight, behavior: turns.length > 1 ? "smooth" : "auto" });
+  }, [busy, turns.length]);
+
+  function selectTarget(value: string) {
+    if (value.startsWith("model:")) {
+      setForm({ ...form, mode: "model", model: value.slice(6) });
+      return;
+    }
+    const route = serviceRoutes.find((item) => routeKey(item) === value.slice(8));
+    setForm({ ...form, mode: "service", ...playgroundServicePreset(route) });
+  }
+
+  const targetValue = form.mode === "model" ? `model:${form.model}` : `service:${form.serviceRoute}`;
   return (
-    <form className="playgroundLayout" onSubmit={onRun}>
-      <aside className="playgroundSettings">
-        <PanelTitle icon={ServerCog} title="Request setup" meta={form.mode === "model" ? "model invocation" : "service proxy"} />
-        <div className="playgroundToolbar">
-          {form.mode === "model" ? (
-            <>
-              <label><span>Model</span><select value={form.model} onChange={(event) => setForm({ ...form, model: event.target.value })}>{models.map((model) => <option key={`${model.provider}:${model.id}`} value={model.id}>{model.id}</option>)}</select></label>
-              <label><span>Endpoint</span><select value={form.endpoint} onChange={(event) => setForm({ ...form, endpoint: event.target.value as PlaygroundForm["endpoint"] })}><option value="/v1/chat/completions">chat completions</option><option value="/v1/responses">responses</option></select></label>
-              <div className="playgroundSettingPair">
-                <label><span>Max tokens</span><input value={form.maxTokens} onChange={(event) => setForm({ ...form, maxTokens: event.target.value })} /></label>
-                <label><span>Temperature</span><input value={form.temperature} onChange={(event) => setForm({ ...form, temperature: event.target.value })} /></label>
+    <form className="playgroundLayout chatPlayground" onSubmit={onRun}>
+      <section className="chatWorkspace">
+        <header className="chatHeader">
+          <div>
+            <span className="conversationKicker"><MessageSquare aria-hidden="true" /> Live conversation</span>
+            <strong>{form.mode === "model" ? selected?.id ?? "Select a model" : `${selectedServiceRoute?.provider ?? "service"} / ${selectedServiceRoute?.endpoint ?? "route"}`}</strong>
+          </div>
+          <button type="button" className="buttonSecondary" onClick={onNewConversation}><Plus className="buttonIcon" aria-hidden="true" /> New chat</button>
+        </header>
+
+        <div className="chatTranscript" ref={transcript} aria-live="polite">
+          {!turns.length ? (
+            <div className="chatEmpty">
+              <span><Bot aria-hidden="true" /></span>
+              <h2>Test the route as a conversation.</h2>
+              <p>Choose any granted model or service, send a message, then click a response to inspect the exact gateway exchange.</p>
+              <div className="promptSuggestions">
+                {["Explain this service in two sentences.", "Return a concise JSON example.", "What can you help me test?"].map((prompt) => (
+                  <button key={prompt} type="button" onClick={() => setForm({ ...form, mode: "model", prompt })}>{prompt}</button>
+                ))}
               </div>
-            </>
-          ) : (
-            <>
-              <label><span>Service route</span><select value={form.serviceRoute} onChange={(event) => {
-                const route = serviceRoutes.find((item) => routeKey(item) === event.target.value);
-                setForm({ ...form, ...playgroundServicePreset(route) });
-              }}>{serviceRoutes.map((route) => <option key={routeKey(route)} value={routeKey(route)}>{route.provider} / {route.endpoint}</option>)}</select></label>
-              <label><span>Method</span><select value={form.serviceMethod} onChange={(event) => setForm({ ...form, serviceMethod: event.target.value })}>{methods.map((method) => <option key={method} value={method}>{method}</option>)}</select></label>
-              {selectedServiceRoute?.pathParams?.length ? <label><span>{selectedServiceRoute.pathParams.join(" / ")}</span><input value={form.servicePath} onChange={(event) => setForm({ ...form, servicePath: event.target.value })} placeholder="route path value" /></label> : null}
-            </>
-          )}
+            </div>
+          ) : turns.map((turn) => (
+            <article key={turn.id} className={`chatExchange ${selectedTurnId === turn.id ? "selected" : ""}`}>
+              <button type="button" className="chatMessage chatMessageUser" onClick={() => setSelectedTurnId(turn.id)} aria-label="Inspect user message">
+                <span className="messageRole">You</span>
+                <span className="messageBody">{turn.prompt}</span>
+              </button>
+              <button type="button" className={`chatMessage chatMessageAssistant ${turn.error ? "errored" : ""}`} onClick={() => setSelectedTurnId(turn.id)} aria-label="Inspect assistant response">
+                <span className="assistantMark"><Bot aria-hidden="true" /></span>
+                <span className="messageContent">
+                  <span className="messageRole">{turn.error ? "Gateway error" : turn.provider}</span>
+                  <span className="messageBody">{turn.response}</span>
+                  <span className="messageMeta">{turn.status ?? "failed"} · {turn.durationMs} ms · click to inspect</span>
+                </span>
+              </button>
+            </article>
+          ))}
+          {busy ? <div className="chatThinking"><span /><span /><span /><em>Gateway is responding</em></div> : null}
         </div>
-        {blocker ? <InlineNote>{blocker}</InlineNote> : null}
-        <dl className="facts">
-          <dt>provider</dt><dd>{selectedProvider ?? "none"}</dd>
-          <dt>readiness</dt><dd>{readinessLabel(selectedReadiness)}</dd>
-          <dt>access</dt><dd>{selectedAccess ? (selectedAccess.allowed ? selectedAccess.policies.join(", ") || "session" : "not granted") : "unknown"}</dd>
-          <dt>endpoint</dt><dd>{playgroundAccessEndpoint(form, selectedServiceRoute)}</dd>
-        </dl>
-      </aside>
-      <section className="promptPane">
-        <div className="playgroundHeader">
-          <div className="modeTabs" role="tablist" aria-label="playground mode">
-            <button type="button" className={form.mode === "model" ? "active" : ""} onClick={() => setForm({ ...form, mode: "model" })}>Model</button>
-            <button type="button" className={form.mode === "service" ? "active" : ""} onClick={() => setForm({ ...form, mode: "service", ...playgroundServicePreset(selectedServiceRoute) })}>Service</button>
+
+        <div className="composerDock">
+          {error && !turns.length ? <InlineError message={error} /> : null}
+          {blocker ? <InlineNote>{blocker}</InlineNote> : null}
+          <div className="composerShell">
+            <textarea
+              aria-label={form.mode === "model" ? "Message" : "JSON request body"}
+              value={form.mode === "model" ? form.prompt : form.servicePayload}
+              onChange={(event) => setForm(form.mode === "model" ? { ...form, prompt: event.target.value } : { ...form, servicePayload: event.target.value })}
+              onKeyDown={(event) => {
+                if (event.key === "Enter" && !event.shiftKey) {
+                  event.preventDefault();
+                  event.currentTarget.form?.requestSubmit();
+                }
+              }}
+              placeholder={form.mode === "model" ? "Message the model…" : "Enter the service JSON body…"}
+              rows={2}
+            />
+            <div className="composerControls">
+              <select aria-label="Model or service" value={targetValue} onChange={(event) => selectTarget(event.target.value)}>
+                <optgroup label="Models">
+                  {models.map((model) => <option key={`${model.provider}:${model.id}`} value={`model:${model.id}`}>{model.id}</option>)}
+                </optgroup>
+                <optgroup label="Services">
+                  {serviceRoutes.map((route) => <option key={routeKey(route)} value={`service:${routeKey(route)}`}>{route.provider} / {route.endpoint}</option>)}
+                </optgroup>
+              </select>
+              <span className="composerStatus"><span className={`connectionDot ${selectedReadiness?.executable ? "ready" : ""}`} />{readinessLabel(selectedReadiness)}</span>
+              <button type="button" className="composerInspect" onClick={() => setSelectedTurnId(selectedTurnId === "setup" ? "" : "setup")}><SlidersHorizontal aria-hidden="true" /><span>Controls</span></button>
+              <button type="submit" className="composerSend" disabled={busy || Boolean(blocker)} title={blocker ?? "Send message"}><ArrowUp aria-hidden="true" /><span className="srOnly">Send</span></button>
+            </div>
           </div>
-          <button type="submit" disabled={busy || Boolean(blocker)} title={blocker ?? undefined}><Play className="buttonIcon" aria-hidden="true" /><span>Run request</span></button>
+          <p className="composerHint">Enter to send · Shift+Enter for a new line · requests use your active access policy</p>
         </div>
-        {error ? <InlineError message={error} /> : null}
-        <div className="runtimeStrip">
-          <ReadinessStatus readiness={selectedReadiness} />
-          <span>{selectedAccess ? (selectedAccess.allowed ? `allowed by ${selectedAccess.policies.join(", ") || "session"}` : "not granted") : "access unknown"}</span>
-          <span>{selectedProvider ?? "no provider"}</span>
-        </div>
-        <div className="playgroundCanvas">
-          {form.mode === "model" ? (
-            <div className="promptComposer">
-              <label><span>System instructions</span><textarea className="systemPrompt" value={form.system} onChange={(event) => setForm({ ...form, system: event.target.value })} /></label>
-              <label><span>User prompt</span><textarea className="mainPrompt" value={form.prompt} onChange={(event) => setForm({ ...form, prompt: event.target.value })} /></label>
-            </div>
-          ) : (
-            <div className="promptComposer">
-              <label><span>JSON body</span><textarea className="mainPrompt servicePayload" value={form.servicePayload} onChange={(event) => setForm({ ...form, servicePayload: event.target.value })} /></label>
-            </div>
-          )}
-          <section className="responsePane">
-            <div className="splitHeader">
-              <PanelTitle icon={ChevronRight} title="Response" meta="raw response" />
-            </div>
-            <pre>{result}</pre>
-          </section>
-        </div>
-        <details className="requestDrawer">
-          <summary><span><ServerCog className="buttonIcon" aria-hidden="true" />Inspect request</span><strong>{requestMode}</strong></summary>
-          <div className="requestDrawerToolbar">
-            <div className="segmented"><button type="button" className={requestMode === "json" ? "active" : ""} onClick={() => setRequestMode("json")}>JSON</button><button type="button" className={requestMode === "curl" ? "active" : ""} onClick={() => setRequestMode("curl")}>curl</button></div>
-          </div>
-          <pre>{request}</pre>
-        </details>
       </section>
+
+      <aside className="playgroundInspector">
+        {selectedTurn ? (
+          <>
+            <div className="inspectorTopline">
+              <PanelTitle icon={Bug} title="Turn inspector" meta={`${selectedTurn.status ?? "failed"} · ${selectedTurn.durationMs} ms`} />
+              <button type="button" className="iconButton" onClick={() => setSelectedTurnId("")} aria-label="Close turn inspector">×</button>
+            </div>
+            <dl className="facts chatFacts">
+              <dt>provider</dt><dd>{selectedTurn.provider}</dd>
+              <dt>model / route</dt><dd>{selectedTurn.model}</dd>
+              <dt>endpoint</dt><dd>{selectedTurn.endpoint}</dd>
+              <dt>retention</dt><dd>{selectedTurn.retention}</dd>
+            </dl>
+            <div className="inspectorTabs segmented">
+              <button type="button" className={requestMode === "json" ? "active" : ""} onClick={() => setRequestMode("json")}>Request</button>
+              <button type="button" className={requestMode === "curl" ? "active" : ""} onClick={() => setRequestMode("curl")}>Response</button>
+            </div>
+            <pre className="debugPayload">{requestMode === "json" ? selectedTurn.request : selectedTurn.rawResponse}</pre>
+          </>
+        ) : (
+          <>
+            <PanelTitle icon={SlidersHorizontal} title="Conversation controls" meta={form.mode === "model" ? "model invocation" : "service proxy"} />
+            <div className="playgroundToolbar">
+              {form.mode === "model" ? (
+                <>
+                  <label><span>Endpoint</span><select value={form.endpoint} onChange={(event) => setForm({ ...form, endpoint: event.target.value as PlaygroundForm["endpoint"] })}><option value="/v1/chat/completions">chat completions</option><option value="/v1/responses">responses</option></select></label>
+                  <label><span>System instructions</span><textarea className="systemPrompt" value={form.system} onChange={(event) => setForm({ ...form, system: event.target.value })} /></label>
+                  <div className="playgroundSettingPair">
+                    <label><span>Max tokens</span><input inputMode="numeric" value={form.maxTokens} onChange={(event) => setForm({ ...form, maxTokens: event.target.value })} /></label>
+                    <label><span>Temperature</span><input inputMode="decimal" value={form.temperature} onChange={(event) => setForm({ ...form, temperature: event.target.value })} /></label>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <label><span>Method</span><select value={form.serviceMethod} onChange={(event) => setForm({ ...form, serviceMethod: event.target.value })}>{methods.map((method) => <option key={method} value={method}>{method}</option>)}</select></label>
+                  {selectedServiceRoute?.pathParams?.length ? <label><span>{selectedServiceRoute.pathParams.join(" / ")}</span><input value={form.servicePath} onChange={(event) => setForm({ ...form, servicePath: event.target.value })} placeholder="route path value" /></label> : null}
+                </>
+              )}
+            </div>
+            <dl className="facts chatFacts">
+              <dt>provider</dt><dd>{selectedProvider ?? "none"}</dd>
+              <dt>readiness</dt><dd>{readinessLabel(selectedReadiness)}</dd>
+              <dt>access</dt><dd>{selectedAccess ? (selectedAccess.allowed ? selectedAccess.policies.join(", ") || "session" : "not granted") : "unknown"}</dd>
+              <dt>endpoint</dt><dd>{playgroundAccessEndpoint(form, selectedServiceRoute)}</dd>
+            </dl>
+            <details className="requestDrawer">
+              <summary><span><ServerCog className="buttonIcon" aria-hidden="true" /> Preview request</span></summary>
+              <pre>{currentRequest}</pre>
+            </details>
+          </>
+        )}
+      </aside>
     </form>
   );
 }
@@ -2815,23 +2963,45 @@ async function request<T>(baseUrl: string, path: string, init: RequestInit = {})
   return response.json() as Promise<T>;
 }
 
-async function playgroundRequest(baseUrl: string, path: string, init: RequestInit = {}): Promise<string> {
+async function playgroundRequest(baseUrl: string, path: string, init: RequestInit = {}): Promise<PlaygroundHttpResponse> {
   const headers = new Headers(init.headers);
   const response = await fetch(`${baseUrl.replace(/\/$/, "")}${path}`, { ...init, credentials: "same-origin", headers });
   const contentType = response.headers.get("content-type") ?? "";
+  const retention = response.headers.get("x-clawrouter-content-retention") ?? "unknown";
   const body = await response.arrayBuffer();
   const text = isTextualResponse(contentType) ? new TextDecoder().decode(body) : "";
-  if (!response.ok) throw new Error(text.trim() || `${path} failed with ${response.status}`);
-  if (response.status === 204 || body.byteLength === 0) return `HTTP ${response.status} ${response.statusText || "No Content"}`.trim();
+  let raw = "";
+  if (response.status === 204 || body.byteLength === 0) raw = `HTTP ${response.status} ${response.statusText || "No Content"}`.trim();
   if (contentType.includes("application/json") || contentType.includes("+json")) {
     try {
-      return JSON.stringify(JSON.parse(text), null, 2);
+      raw = JSON.stringify(JSON.parse(text), null, 2);
     } catch {
-      return text;
+      raw = text;
     }
+  } else if (text) {
+    raw = text;
+  } else if (!raw) {
+    raw = `HTTP ${response.status} ${response.statusText || "OK"}\n${contentType || "binary"} response (${body.byteLength} bytes)`;
   }
-  if (text) return text;
-  return `HTTP ${response.status} ${response.statusText || "OK"}\n${contentType || "binary"} response (${body.byteLength} bytes)`;
+  return { ok: response.ok, raw, status: response.status, statusText: response.statusText, contentType, retention };
+}
+
+function createPlaygroundTurn(input: Omit<PlaygroundTurn, "id" | "response" | "rawResponse"> & { raw: string }): PlaygroundTurn {
+  return {
+    id: crypto.randomUUID(),
+    mode: input.mode,
+    prompt: input.prompt,
+    response: input.error ?? playgroundResponseText(input.raw),
+    rawResponse: input.raw,
+    request: input.request,
+    provider: input.provider,
+    model: input.model,
+    endpoint: input.endpoint,
+    status: input.status,
+    durationMs: input.durationMs,
+    retention: input.retention,
+    error: input.error,
+  };
 }
 
 function isTextualResponse(contentType: string) {
