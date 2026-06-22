@@ -94,7 +94,7 @@ async fn fetch(req: Request, env: Env, ctx: Context) -> Result<Response> {
         return redirect_to(&redirect_location(ROOT_REDIRECT_PATH, url.query()));
     }
     if req.method() == Method::Get && request_path == ROOT_REDIRECT_PATH {
-        return redirect_to(&redirect_location("/dashboard/catalog", url.query()));
+        return redirect_to(&redirect_location("/dashboard/home", url.query()));
     }
     if req.method() == Method::Get {
         if let Some(target) = legacy_interface_redirect(url.path()) {
@@ -143,6 +143,12 @@ async fn fetch(req: Request, env: Env, ctx: Context) -> Result<Response> {
 
     if req.method() == Method::Get && api_path == "/v1/entitlements" {
         return access_entitlements(req.headers(), &env)
+            .await
+            .and_then(with_cors);
+    }
+
+    if req.method() == Method::Get && api_path == "/v1/session/usage" {
+        return access_session_usage(req.headers(), &env)
             .await
             .and_then(with_cors);
     }
@@ -317,6 +323,7 @@ fn service_index() -> Result<Response> {
             "routes": "/v1/routes",
             "session": "/v1/session",
             "entitlements": "/v1/entitlements",
+            "sessionUsage": "/v1/session/usage",
             "me": "/v1/me",
             "usage": "/v1/usage",
             "models": "/v1/models",
@@ -4155,6 +4162,45 @@ async fn user_usage(headers: &Headers, env: &Env) -> Result<Response> {
     }))
 }
 
+async fn access_session_usage(headers: &Headers, env: &Env) -> Result<Response> {
+    let Some(session) = verified_access_session(headers, env).await? else {
+        return json_error(
+            "access_session_required",
+            "usage requires a verified Cloudflare Access session",
+            401,
+        );
+    };
+    let kv = match env.kv("POLICY_KV") {
+        Ok(kv) => kv,
+        Err(_) => {
+            return json_error(
+                "policy_store_unavailable",
+                POLICY_KV_ENTITLEMENTS_REQUIRED,
+                503,
+            );
+        }
+    };
+    let entries = list_session_policy_entries(&kv, env, &session).await?;
+    let mut policies = Vec::with_capacity(entries.len());
+    let mut usage = empty_usage_snapshot("durable_object");
+    for entry in entries {
+        if !entry.policy.enabled {
+            continue;
+        }
+        let policy_id = entry.policy_id;
+        let policy = entry.policy;
+        policies.push(
+            admin_usage_row(env, admin_policy_response(&policy_id, &policy_id, &policy)).await?,
+        );
+        merge_usage_snapshot(&mut usage, usage_snapshot(env, Some(&policy_id), 0).await?);
+    }
+    usage.events.clear();
+    Response::from_json(&serde_json::json!({
+        "policies": policies,
+        "usage": usage
+    }))
+}
+
 async fn inspect_proxy_key(headers: &Headers, env: &Env) -> Result<Response> {
     let auth = headers.get("authorization")?.unwrap_or_default();
     let token = auth.strip_prefix("Bearer ").unwrap_or("");
@@ -4606,6 +4652,66 @@ fn empty_usage_snapshot(ledger: &str) -> UsageSnapshot {
         providers: Vec::new(),
         events: Vec::new(),
     }
+}
+
+fn merge_usage_snapshot(target: &mut UsageSnapshot, source: UsageSnapshot) {
+    if source.ledger != "durable_object" {
+        target.ledger = source.ledger;
+    }
+    target.summary.request_count = target
+        .summary
+        .request_count
+        .saturating_add(source.summary.request_count);
+    target.summary.success_count = target
+        .summary
+        .success_count
+        .saturating_add(source.summary.success_count);
+    target.summary.error_count = target
+        .summary
+        .error_count
+        .saturating_add(source.summary.error_count);
+    target.summary.input_tokens = target
+        .summary
+        .input_tokens
+        .saturating_add(source.summary.input_tokens);
+    target.summary.output_tokens = target
+        .summary
+        .output_tokens
+        .saturating_add(source.summary.output_tokens);
+    target.summary.total_tokens = target
+        .summary
+        .total_tokens
+        .saturating_add(source.summary.total_tokens);
+    target.summary.actual_cost_micros = target
+        .summary
+        .actual_cost_micros
+        .saturating_add(source.summary.actual_cost_micros);
+    for provider in source.providers {
+        if let Some(existing) = target
+            .providers
+            .iter_mut()
+            .find(|existing| existing.provider == provider.provider)
+        {
+            existing.request_count = existing
+                .request_count
+                .saturating_add(provider.request_count);
+            existing.success_count = existing
+                .success_count
+                .saturating_add(provider.success_count);
+            existing.error_count = existing.error_count.saturating_add(provider.error_count);
+            existing.total_tokens = existing.total_tokens.saturating_add(provider.total_tokens);
+            existing.actual_cost_micros = existing
+                .actual_cost_micros
+                .saturating_add(provider.actual_cost_micros);
+        } else {
+            target.providers.push(provider);
+        }
+    }
+    target.providers.sort_by(|a, b| {
+        b.request_count
+            .cmp(&a.request_count)
+            .then_with(|| a.provider.cmp(&b.provider))
+    });
 }
 
 fn response_tenant_id(entry: &AdminKeyPolicyResponse) -> String {
@@ -14454,6 +14560,7 @@ fn cors_enabled_path(path: &str) -> bool {
             | "/v1/routes"
             | "/v1/session"
             | "/v1/entitlements"
+            | "/v1/session/usage"
             | "/v1/me"
             | "/v1/usage"
             | "/v1/models"
@@ -16556,6 +16663,71 @@ mod tests {
     }
 
     #[test]
+    fn session_usage_merges_effective_policy_totals_without_events() {
+        let mut target = UsageSnapshot {
+            ledger: "durable_object".to_string(),
+            summary: UsageSummary {
+                request_count: 2,
+                success_count: 2,
+                total_tokens: 30,
+                actual_cost_micros: 120,
+                ..UsageSummary::default()
+            },
+            providers: vec![ProviderUsageSummary {
+                provider: "openai".to_string(),
+                request_count: 2,
+                success_count: 2,
+                error_count: 0,
+                total_tokens: 30,
+                actual_cost_micros: 120,
+            }],
+            events: Vec::new(),
+        };
+        let source = UsageSnapshot {
+            ledger: "durable_object".to_string(),
+            summary: UsageSummary {
+                request_count: 4,
+                success_count: 3,
+                error_count: 1,
+                total_tokens: 90,
+                actual_cost_micros: 380,
+                ..UsageSummary::default()
+            },
+            providers: vec![
+                ProviderUsageSummary {
+                    provider: "anthropic".to_string(),
+                    request_count: 3,
+                    success_count: 2,
+                    error_count: 1,
+                    total_tokens: 70,
+                    actual_cost_micros: 300,
+                },
+                ProviderUsageSummary {
+                    provider: "openai".to_string(),
+                    request_count: 1,
+                    success_count: 1,
+                    error_count: 0,
+                    total_tokens: 20,
+                    actual_cost_micros: 80,
+                },
+            ],
+            events: Vec::new(),
+        };
+
+        merge_usage_snapshot(&mut target, source);
+
+        assert_eq!(target.summary.request_count, 6);
+        assert_eq!(target.summary.success_count, 5);
+        assert_eq!(target.summary.error_count, 1);
+        assert_eq!(target.summary.total_tokens, 120);
+        assert_eq!(target.summary.actual_cost_micros, 500);
+        assert_eq!(target.providers[0].provider, "anthropic");
+        assert_eq!(target.providers[1].provider, "openai");
+        assert_eq!(target.providers[1].request_count, 3);
+        assert!(target.events.is_empty());
+    }
+
+    #[test]
     fn cors_policy_allows_admin_and_anthropic_browser_clients() {
         assert_eq!(CORS_ALLOW_ORIGIN, "*");
         assert_eq!(CORS_ALLOW_METHODS, "GET,POST,PUT,OPTIONS");
@@ -16582,6 +16754,7 @@ mod tests {
         assert!(cors_enabled_path("/v1/routes"));
         assert!(cors_enabled_path("/v1/session"));
         assert!(cors_enabled_path("/v1/entitlements"));
+        assert!(cors_enabled_path("/v1/session/usage"));
         assert!(cors_enabled_path("/v1/me"));
         assert!(cors_enabled_path("/v1/usage"));
         assert!(cors_enabled_path("/v1/messages"));
@@ -16593,6 +16766,7 @@ mod tests {
     #[test]
     fn interface_routes_require_the_admin_shell() {
         assert!(!interface_path("/dashboard"));
+        assert!(interface_path("/dashboard/home"));
         assert!(interface_path("/dashboard/access"));
         assert!(interface_path("/dashboard/catalog"));
         assert!(interface_path("/dashboard/playground"));
@@ -16656,8 +16830,8 @@ mod tests {
             "/dashboard?demo"
         );
         assert_eq!(
-            redirect_location("/dashboard/catalog", Some("demo")),
-            "/dashboard/catalog?demo"
+            redirect_location("/dashboard/home", Some("demo")),
+            "/dashboard/home?demo"
         );
     }
 

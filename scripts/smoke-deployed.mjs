@@ -13,8 +13,8 @@ const smokeKey = process.env.CLAWROUTER_SMOKE_KEY;
 
 await expectOk(`${baseUrl}/v1/health`, "health");
 await expectRedirect(`${baseUrl}/`, "root redirect", "/dashboard");
-await expectRedirectOrAccessGate(`${baseUrl}/dashboard`, "dashboard redirect", "/dashboard/catalog");
-await expectAccessGate(`${baseUrl}/dashboard/catalog`, "catalog access gate");
+await expectRedirectOrAccessGate(`${baseUrl}/dashboard`, "dashboard redirect", "/dashboard/home");
+await expectAccessGate(`${baseUrl}/dashboard/home`, "dashboard access gate");
 await expectRedirect(`${baseUrl}/catalog`, "legacy catalog redirect", "/dashboard/catalog");
 const providers = await expectOk(`${baseUrl}/v1/providers`, "providers");
 if (!Array.isArray(providers.providers) || providers.providers.length < 19) {
@@ -25,6 +25,7 @@ expectRouteCatalog(routes, "route catalog");
 const aliasedRoutes = await expectOk(`${baseUrl}/api/route`, "route catalog alias");
 expectRouteCatalog(aliasedRoutes, "route catalog alias");
 await expectAccessGate(`${baseUrl}/v1/session`, "session access gate");
+await expectAccessGate(`${baseUrl}/v1/session/usage`, "session usage access gate");
 await expectClientAuthGate(`${baseUrl}/v1/entitlements`, "entitlements Worker auth gate");
 await expectAccessGate(`${baseUrl}/v1/playground/v1/chat/completions`, "playground access gate");
 await expectAccessGate(`${baseUrl}/v1/oauth/callback`, "OAuth callback access gate");
