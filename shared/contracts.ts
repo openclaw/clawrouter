@@ -154,6 +154,7 @@ export interface BudgetStatus { configured: boolean; ledger: string; windowKey?:
 export interface AdminUsageRow { policyId?: string; kid: string; tenantId: string; enabled: boolean; providers: string[]; tokenRole?: string | null; monthlyBudgetMicros?: number | null; requestCostMicros?: number | null; budget: BudgetStatus }
 export interface UsageSummary { requestCount: number; successCount: number; errorCount: number; inputTokens: number; outputTokens: number; totalTokens: number; actualCostMicros: number }
 export interface ProviderUsageSummary { provider: string; requestCount: number; successCount: number; errorCount: number; totalTokens: number; actualCostMicros: number }
+export interface UsageDailySummary { dayStartMs: number; requestCount: number; successCount: number; errorCount: number; totalTokens: number; actualCostMicros: number }
 export interface UsageAuditEvent {
   id: string;
   type: string;
@@ -191,7 +192,7 @@ export interface UsageAuditEvent {
   content_retained?: boolean;
   content_ref?: string | null;
 }
-export interface UsageSnapshot { ledger: string; summary: UsageSummary; providers: ProviderUsageSummary[]; events: UsageAuditEvent[] }
+export interface UsageSnapshot { ledger: string; summary: UsageSummary; providers: ProviderUsageSummary[]; daily?: UsageDailySummary[]; events: UsageAuditEvent[] }
 export interface RetainedRequestContent { requestId: string; occurredAtMs: number; expiresAtMs: number; principalId?: string | null; provider: string; capability: string; model?: string | null; body: unknown }
 
 export interface AdminBootstrapResponse {
