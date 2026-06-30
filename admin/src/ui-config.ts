@@ -11,7 +11,7 @@ export function readTheme(): Theme {
 
 export function applyTheme(theme: Theme) {
   document.documentElement.dataset.theme = theme;
-  document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute("content", theme === "dark" ? "#0d120f" : "#fbfcf8");
+  document.querySelector<HTMLMetaElement>('meta[name="theme-color"]')?.setAttribute("content", theme === "dark" ? "#0d120f" : "#f5f7fb");
   try { window.localStorage.setItem(themeStorageKey, theme); } catch { /* preference still applies for this page */ }
 }
 

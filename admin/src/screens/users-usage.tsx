@@ -84,19 +84,56 @@ export function UsageScreen({ keys, credentials, services, overview, tenants, us
   const rows = usageRows.length ? usageRows : keys.map(policyUsageFallback);
   const tenantRows = tenants.length ? tenants : tenantSummaryFallback(keys, credentials);
   const serviceByProvider = new Map(services.map((service) => [service.provider, service]));
-  const successRate = usage.summary.requestCount ? Math.round((usage.summary.successCount / usage.summary.requestCount) * 100) : 0;
+  const successRate = usage.summary.requestCount ? Math.round((usage.summary.successCount / usage.summary.requestCount) * 100) : null;
   const untrackedRows = rows.filter((row) => row.enabled && row.budget.ledger === "untracked");
   const exhaustedRows = rows.filter((row) => row.enabled && row.budget.configured && row.budget.remainingMicros !== undefined && row.budget.remainingMicros !== null && row.budget.remainingMicros <= 0);
   const ledgerFailureRows = rows.filter((row) => row.enabled && (row.budget.ledger === "unavailable" || row.budget.ledger === "invalid_policy"));
   return (
-    <div className="entityLayout usageLayout">
-      <section className="mainPane usageMainPane">
-        <div className="overviewStrip">
-          <Metric label="requests" value={formatCount(usage.summary.requestCount)} meta={`${formatCount(usage.summary.totalTokens)} tokens`} />
-          <Metric label="success rate" value={`${successRate}%`} meta={`${formatCount(usage.summary.successCount)} successful`} />
-          <Metric label="errors" value={formatCount(usage.summary.errorCount)} meta="upstream and policy outcomes" />
-          <Metric label="actual spend" value={formatMicros(usage.summary.actualCostMicros)} meta={`${usage.providers.length} active services`} />
-        </div>
+    <div className="usageCanvas">
+      <section className="usageSummaryGrid" aria-label="Usage summary">
+        <Metric label="requests" value={formatCount(usage.summary.requestCount)} meta={`${formatCount(usage.summary.totalTokens)} tokens`} />
+        <Metric label="success rate" value={successRate === null ? "—" : `${successRate}%`} meta={successRate === null ? "No requests in this period" : `${formatCount(usage.summary.successCount)} successful`} />
+        <Metric label="errors" value={formatCount(usage.summary.errorCount)} meta="upstream and policy outcomes" />
+        <Metric label="actual spend" value={formatMicros(usage.summary.actualCostMicros)} meta={`${usage.providers.length} active providers`} />
+      </section>
+
+      <section className="analyticsPanel usageTrafficPanel">
+        <header className="analyticsPanelHeader">
+          <div><span>Traffic</span><h2>Request activity</h2><p>Daily routed requests across every active policy.</p></div>
+          <div className="analyticsPanelControls"><span className={`ledgerBadge ${usageLoaded ? "ready" : "unavailable"}`}>{usageLoaded ? "Live ledger" : "Ledger unavailable"}</span><span className="periodBadge"><CalendarDays aria-hidden="true" />Last 30 days · UTC</span></div>
+        </header>
+        <TrafficAreaChart usage={usage} />
+      </section>
+
+      <div className="usageInsightsGrid">
+        <section className="analyticsPanel usageProviderPanel">
+          <header className="analyticsPanelHeader"><div><span>Provider mix</span><h2>Traffic distribution</h2><p>Request volume, success, tokens, and actual spend.</p></div><small>{usage.providers.length} active</small></header>
+          <ProviderUsageChart providers={usage.providers} services={services} />
+        </section>
+
+        <section className="analyticsPanel usageHealthPanel">
+          <header className="analyticsPanelHeader"><div><span>Operational health</span><h2>Signals needing attention</h2><p>Configuration and budget conditions that can block traffic.</p></div><Activity aria-hidden="true" /></header>
+          <div className="attentionGrid">
+            <div className={blockedServices.length ? "attentionMetric warning" : "attentionMetric healthy"}><strong>{blockedServices.length}</strong><span>services need configuration</span></div>
+            {usageLoaded ? <>
+              <div className={untrackedRows.length ? "attentionMetric warning" : "attentionMetric healthy"}><strong>{untrackedRows.length}</strong><span>policies not reporting spend</span></div>
+              <div className={ledgerFailureRows.length ? "attentionMetric danger" : "attentionMetric healthy"}><strong>{ledgerFailureRows.length}</strong><span>budget ledger failures</span></div>
+            </> : <div className="attentionMetric danger"><strong>!</strong><span>live usage ledger unavailable</span></div>}
+            <div className={exhaustedRows.length ? "attentionMetric danger" : "attentionMetric healthy"}><strong>{exhaustedRows.length}</strong><span>policies out of budget</span></div>
+          </div>
+          <div className="usageHealthFooter">
+            <div><span>Executable services</span><strong>{readyServices}/{services.length}</strong></div>
+            <div><span>Active policies</span><strong>{overview?.policiesActive ?? activePolicies.length}</strong></div>
+            <div><span>Tenants</span><strong>{overview?.tenantsTotal ?? tenantRows.length}</strong></div>
+          </div>
+        </section>
+      </div>
+
+      {contentLoading ? <InlineNote>Loading retained request…</InlineNote> : null}
+      {contentError ? <InlineError message={contentError} /> : null}
+      {retainedContent ? <section className="analyticsPanel retainedContentPanel"><header className="analyticsPanelHeader"><div><span>Request content</span><h2>Retained request</h2><p>{retainedContent.requestId}</p></div><button type="button" className="buttonSecondary" onClick={() => setRetainedContent(null)}>Close</button></header><dl className="facts"><dt>identity</dt><dd>{retainedContent.principalId ?? "credential"}</dd><dt>service</dt><dd>{retainedContent.provider}</dd><dt>expires</dt><dd>{formatTimestamp(retainedContent.expiresAtMs, true)}</dd></dl><pre>{JSON.stringify(retainedContent.body, null, 2)}</pre></section> : null}
+
+      <section className="analyticsPanel usageTablePanel">
         <div className="tableSectionHeader"><div><strong>Recent requests</strong><span>{usage.events.length} most recent audit events</span></div><span>{usageLoaded ? usage.ledger : "unavailable"}</span></div>
         <EntityTable
           columns={["time", "identity", "service", "operation", "outcome", "content", "cost"]}
@@ -121,33 +158,12 @@ export function UsageScreen({ keys, credentials, services, overview, tenants, us
           })}
         />
         {!usage.events.length ? <div className="emptyTable">No request audit events recorded yet.</div> : null}
+      </section>
+
+      <section className="analyticsPanel usageTablePanel budgetTablePanel">
         <div className="tableSectionHeader secondaryTableHeader"><div><strong>Policy budgets</strong><span>{rows.length} configured policies</span></div><span>{usageLoaded ? "live ledger" : "policy fallback"}</span></div>
         <EntityTable columns={["policy", "tenant", "budget usage", "services", "health"]} columnTemplate="minmax(210px, 1.15fr) minmax(120px, 0.7fr) minmax(250px, 1.45fr) 96px 120px" rows={rows.map((row) => ({ id: usagePolicyId(row), cells: [<EntityName icon={KeyRound} title={usagePolicyId(row)} subtitle={row.tokenRole ?? "custom"} />, row.tenantId, <BudgetUsage row={row} />, effectiveProviderCount(row.providers, services), <UsageHealth row={row} />] }))} />
       </section>
-      <aside className="inspector usageInspector">
-        <InspectorHeader icon={BarChart3} title="Request activity" subtitle={`${readyServices}/${services.length} services executable`} />
-        {contentLoading ? <InlineNote>Loading retained request…</InlineNote> : null}
-        {contentError ? <InlineError message={contentError} /> : null}
-        {retainedContent ? <section className="retainedContent"><div className="sectionTitle">Retained request</div><dl className="facts"><dt>request</dt><dd>{retainedContent.requestId}</dd><dt>identity</dt><dd>{retainedContent.principalId ?? "credential"}</dd><dt>service</dt><dd>{retainedContent.provider}</dd><dt>expires</dt><dd>{formatTimestamp(retainedContent.expiresAtMs, true)}</dd></dl><pre>{JSON.stringify(retainedContent.body, null, 2)}</pre><button type="button" className="buttonSecondary" onClick={() => setRetainedContent(null)}>Close</button></section> : null}
-        <div className="attentionGrid">
-          <div className={blockedServices.length ? "attentionMetric warning" : "attentionMetric healthy"}><strong>{blockedServices.length}</strong><span>services need configuration</span></div>
-          {usageLoaded ? (
-            <>
-              <div className={untrackedRows.length ? "attentionMetric warning" : "attentionMetric healthy"}><strong>{untrackedRows.length}</strong><span>policies not reporting spend</span></div>
-              <div className={ledgerFailureRows.length ? "attentionMetric danger" : "attentionMetric healthy"}><strong>{ledgerFailureRows.length}</strong><span>budget ledger failures</span></div>
-            </>
-          ) : <div className="attentionMetric danger"><strong>!</strong><span>live usage ledger unavailable</span></div>}
-          <div className={exhaustedRows.length ? "attentionMetric danger" : "attentionMetric healthy"}><strong>{exhaustedRows.length}</strong><span>policies out of budget</span></div>
-        </div>
-        <div className="sectionTitle">Provider usage</div>
-        <div className="providerUsageList">{usage.providers.length ? usage.providers.map((provider) => {
-          const service = serviceByProvider.get(provider.provider);
-          return <div key={provider.provider}><EntityName brandIcon={service?.brandIcon} icon={ServerCog} title={service?.name ?? provider.provider} subtitle={`${formatCount(provider.totalTokens)} tokens · ${formatMicros(provider.actualCostMicros)}`} /><span><strong>{formatCount(provider.requestCount)}</strong><small>{provider.errorCount ? `${provider.errorCount} errors` : "healthy"}</small></span></div>;
-        }) : <p>No provider activity yet.</p>}</div>
-        <div className="sectionTitle">Tenant coverage</div>
-        <div className="miniList">{tenantRows.length ? tenantRows.slice(0, 8).map((tenant) => <button type="button" key={tenant.tenantId}>{tenant.tenantId}<span>{tenant.activePolicies ?? tenant.activeKeys}/{tenant.policies ?? tenant.keys} policies · {effectiveProviderCount(tenant.providers, services, tenant.allProviders)} services</span></button>) : <p>No tenant policies yet.</p>}</div>
-        <dl className="facts"><dt>ledger</dt><dd>{usage.ledger}</dd><dt>metadata</dt><dd>30 days</dd><dt>request content</dt><dd>policy controlled · 30 days</dd><dt>policies</dt><dd>{overview?.policiesActive ?? activePolicies.length} active</dd><dt>tenants</dt><dd>{overview?.tenantsTotal ?? tenantRows.length}</dd></dl>
-      </aside>
     </div>
   );
 }
@@ -204,8 +220,9 @@ export function EntityTable({ columns, columnTemplate, rows }: { columns: string
   );
 }
 import React, { type FormEvent, useState } from "react";
-import { Activity, BarChart3, CheckCircle2, KeyRound, Plus, Search, ServerCog, ShieldCheck, Users } from "lucide-react";
+import { Activity, CalendarDays, KeyRound, Plus, Search, ServerCog, ShieldCheck, Users } from "lucide-react";
 import { bindingKey, effectiveAccess, errorMessage, policyUsageFallback, tenantSummaryFallback } from "../domain";
 import { EntityName, InlineError, InlineNote, InspectorHeader, PanelTitle, Status, kindLabel } from "../components";
+import { ProviderUsageChart, TrafficAreaChart } from "../analytics-charts";
 import { budgetPercent, effectiveProviderCount, formatBudget, formatCount, formatDuration, formatMicros, formatTimestamp, providerBrandIcon, readyCount, request, usageEventTone, usagePolicyId } from "../ui-helpers";
 import type { AccessForm,AccessPolicy,AccessRole,AccessTab,AccessUser,AdminOverview,AdminTenantSummary,AdminUsageRow,AssignmentRule,AssignmentRuleForm,BindingForm,BrandIcon,BudgetStatus,ContentRetention,CredentialForm,EntitlementsResponse,IconComponent,OutcomeTone,PlaygroundForm,PlaygroundHttpResponse,PlaygroundTurn,PolicyBinding,PolicyForm,ProviderAccess,ProviderConnection,ProviderReadiness,ProviderResponse,ProviderRow,ProviderUsageSummary,ProxyCredential,RefreshOptions,RetainedRequestContent,RouteCatalog,ServiceItem,ServiceOutcome,SessionResponse,UpstreamGrant,UpstreamGrantForm,UsageAuditEvent,UsageSnapshot,UsageSummary,View } from "../ui-types";

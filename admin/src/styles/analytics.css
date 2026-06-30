@@ -1,0 +1,959 @@
+/* Data-first dashboard and usage surfaces */
+
+.workspace {
+  padding: 0 18px 24px;
+}
+
+.topbar {
+  margin: 0 2px;
+  background: var(--soft-background);
+}
+
+.brandMark {
+  border-radius: var(--radius) !important;
+  background: var(--primary);
+}
+
+.brandBlock > div > span,
+.navGroupLabel,
+.metric span,
+.metric small,
+.dashboardEyebrow,
+.dashboardPanelHeader span,
+.analyticsPanelHeader > div > span {
+  font-family: inherit;
+}
+
+.navTabs button {
+  border: 0;
+  border-radius: var(--radius);
+  padding-inline: 10px;
+}
+
+.navTabs button:hover,
+.navTabs button.active {
+  border: 0;
+  background: var(--primary-100);
+}
+
+.navTabs button.active {
+  color: var(--primary);
+}
+
+.tenantSwitch {
+  background: var(--surface-muted);
+}
+
+.tenantSwitch span {
+  overflow: hidden;
+  font-family: inherit;
+  font-size: 10px;
+  font-weight: 400;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.tenantSwitch > div {
+  gap: 2px;
+}
+
+.contextIcon {
+  background: var(--primary);
+}
+
+.dashboardCanvas,
+.usageCanvas {
+  display: grid;
+  gap: 18px;
+  margin: 20px 2px 0;
+  color: var(--foreground-strong);
+}
+
+.dashboardOverviewHeader {
+  display: flex;
+  align-items: flex-end;
+  justify-content: space-between;
+  gap: 24px;
+  padding: 2px 2px 0;
+}
+
+.dashboardOverviewHeader > div:first-child {
+  display: grid;
+  gap: 6px;
+}
+
+.dashboardEyebrow,
+.dashboardPanelHeader span,
+.analyticsPanelHeader > div > span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 650;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.dashboardOverviewHeader h2 {
+  font-size: 23px;
+  font-weight: 650;
+  letter-spacing: -0.02em;
+}
+
+.dashboardOverviewHeader p {
+  max-width: 70ch;
+  font-size: 12px;
+}
+
+.dashboardOverviewActions {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 8px;
+}
+
+.dashboardOverviewActions svg {
+  width: 14px;
+  height: 14px;
+}
+
+.dashboardStats,
+.usageSummaryGrid {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--background);
+}
+
+.usageSummaryGrid {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+}
+
+.dashboardStats > div,
+.usageSummaryGrid .metric {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+  border: 0;
+  border-right: 1px solid var(--border);
+  padding: 16px 18px;
+}
+
+.dashboardStats > div:last-child,
+.usageSummaryGrid .metric:last-child {
+  border-right: 0;
+}
+
+.dashboardStats span,
+.usageSummaryGrid .metric > span {
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.dashboardStats strong,
+.usageSummaryGrid .metric strong {
+  margin: 0;
+  color: var(--foreground-strong);
+  font-family: inherit;
+  font-size: 25px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+  letter-spacing: -0.025em;
+}
+
+.dashboardStats small,
+.usageSummaryGrid .metric small {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.dashboardAnalyticsGrid,
+.usageInsightsGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(340px, 0.75fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.usageInsightsGrid {
+  grid-template-columns: minmax(0, 1.25fr) minmax(340px, 0.75fr);
+}
+
+.dashboardPanel,
+.analyticsPanel {
+  min-width: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--background);
+}
+
+.dashboardPanelHeader,
+.analyticsPanelHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  min-height: 68px;
+  border-bottom: 1px solid var(--border);
+  padding: 13px 16px;
+}
+
+.dashboardPanelHeader > div:first-child,
+.analyticsPanelHeader > div:first-child {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.dashboardPanelHeader h2,
+.analyticsPanelHeader h2 {
+  font-size: 15px;
+  font-weight: 650;
+}
+
+.dashboardPanelHeader small,
+.analyticsPanelHeader small,
+.analyticsPanelHeader p {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.dashboardPanelHeader > .dashboardPanelMeta,
+.analyticsPanelControls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.dashboardPanelHeader button {
+  min-height: 28px;
+  border: 1px solid var(--border);
+  background: var(--background);
+  color: var(--foreground-strong);
+  padding: 4px 8px;
+}
+
+.dashboardPanelHeader button:hover:not(:disabled) {
+  border-color: var(--border-strong);
+  background: var(--surface-hover);
+  color: var(--primary);
+}
+
+.dashboardChartBody {
+  padding: 8px 12px 4px;
+}
+
+.dashboardGrid {
+  display: grid;
+  grid-template-columns: minmax(0, 1.35fr) minmax(340px, 0.65fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.servicePanel {
+  grid-row: span 2;
+}
+
+.dashboardServiceGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.dashboardService {
+  min-height: 64px;
+  border-color: var(--border);
+  box-shadow: none !important;
+}
+
+.dashboardService.attention {
+  background: var(--attention-bg);
+}
+
+.dashboardServiceMark {
+  border-radius: var(--radius);
+}
+
+.serviceSpectrum {
+  height: 4px;
+}
+
+.serviceSpectrumReady {
+  background: var(--chart-primary);
+}
+
+.quotaRow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto 44px;
+  grid-template-rows: auto auto;
+  gap: 7px 10px;
+  min-height: 72px;
+  padding: 12px 14px;
+}
+
+.quotaIdentity {
+  grid-column: 1;
+  grid-row: 1;
+}
+
+.quotaNumbers {
+  grid-column: 2;
+  grid-row: 1;
+}
+
+.quotaTrack {
+  grid-column: 1 / 3;
+  grid-row: 2;
+  display: block;
+  height: 5px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--track-bg);
+}
+
+.quotaTrack span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--chart-primary);
+}
+
+.quotaTrack.warning span {
+  background: var(--warning);
+}
+
+.quotaPercent {
+  grid-column: 3;
+  grid-row: 1 / 3;
+  align-self: center;
+  color: var(--foreground-strong);
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.operationsDiagram strong,
+.quotaNumbers strong {
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+.operationsDiagram .needsAttention,
+.operationsDiagram .healthy {
+  box-shadow: none;
+}
+
+.operationsDiagram .needsAttention {
+  background: var(--attention-bg);
+}
+
+.operationsDiagram .healthy {
+  background: var(--healthy-bg);
+}
+
+/* Usage */
+
+.usageCanvas {
+  padding-bottom: 12px;
+}
+
+.usageTrafficPanel > .trafficChart {
+  padding: 10px 14px 8px;
+}
+
+.periodBadge,
+.ledgerBadge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 30px;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  background: var(--background);
+  color: var(--foreground);
+  padding: 5px 10px;
+  font-size: 10px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.periodBadge svg {
+  width: 13px;
+  height: 13px;
+}
+
+.ledgerBadge.ready::before,
+.ledgerBadge.unavailable::before {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--success);
+  content: "";
+}
+
+.ledgerBadge.unavailable::before {
+  background: var(--danger);
+}
+
+.usageHealthPanel > .analyticsPanelHeader > svg {
+  width: 18px;
+  height: 18px;
+  color: var(--primary);
+}
+
+.usageHealthPanel .attentionGrid {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+  padding: 14px;
+}
+
+.usageHealthPanel .attentionMetric {
+  grid-template-columns: 30px minmax(0, 1fr);
+  min-height: 56px;
+  border: 1px solid var(--border);
+  border-left: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-muted);
+  padding: 8px;
+}
+
+.usageHealthPanel .attentionMetric.warning {
+  border-color: color-mix(in srgb, var(--warning) 28%, var(--border));
+  background: var(--warning-bg);
+}
+
+.usageHealthPanel .attentionMetric.danger {
+  border-color: color-mix(in srgb, var(--danger) 28%, var(--border));
+  background: var(--danger-bg);
+}
+
+.usageHealthPanel .attentionMetric.healthy {
+  border-color: color-mix(in srgb, var(--success) 22%, var(--border));
+  background: var(--healthy-bg);
+}
+
+.usageHealthFooter {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  border-top: 1px solid var(--border);
+}
+
+.usageHealthFooter > div {
+  display: grid;
+  gap: 3px;
+  border-right: 1px solid var(--border);
+  padding: 12px;
+}
+
+.usageHealthFooter > div:last-child {
+  border-right: 0;
+}
+
+.usageHealthFooter span {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.usageHealthFooter strong {
+  font-size: 16px;
+  font-variant-numeric: tabular-nums;
+  font-weight: 600;
+}
+
+.usageTablePanel .tableSectionHeader {
+  min-height: 62px;
+  border-top: 0;
+  padding: 12px 16px;
+}
+
+.usageTablePanel .secondaryTableHeader {
+  margin-top: 0;
+}
+
+.usageTablePanel .entityTable {
+  overflow-x: auto;
+}
+
+.retainedContentPanel .facts {
+  padding: 14px 16px;
+}
+
+.retainedContentPanel pre {
+  max-height: 420px;
+}
+
+/* Charts */
+
+.trafficChart {
+  position: relative;
+  min-width: 0;
+}
+
+.trafficChart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.trafficChartScroll {
+  min-width: 0;
+}
+
+.chartGridLine {
+  stroke: var(--border);
+  stroke-width: 1;
+  vector-effect: non-scaling-stroke;
+}
+
+.chartAxisLabel {
+  fill: var(--muted);
+  font-family: inherit;
+  font-size: 10px;
+}
+
+.chartAreaStart {
+  stop-color: var(--chart-primary-soft);
+  stop-opacity: 0.55;
+}
+
+.chartAreaEnd {
+  stop-color: var(--chart-primary-faint);
+  stop-opacity: 0.12;
+}
+
+.chartLine {
+  fill: none;
+  stroke: var(--chart-primary);
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  stroke-width: 2.25;
+  vector-effect: non-scaling-stroke;
+}
+
+.chartErrorPoint {
+  fill: var(--chart-error);
+  stroke: var(--background);
+  stroke-width: 1.5;
+  vector-effect: non-scaling-stroke;
+}
+
+.chartHitTarget {
+  fill: transparent;
+  outline: none;
+}
+
+.chartFocus line {
+  stroke: var(--border-strong);
+  stroke-dasharray: 3 3;
+  vector-effect: non-scaling-stroke;
+}
+
+.chartFocus circle {
+  fill: var(--background);
+  stroke: var(--chart-primary);
+  stroke-width: 2;
+  vector-effect: non-scaling-stroke;
+}
+
+.chartLegend {
+  display: flex;
+  justify-content: center;
+  gap: 18px;
+  padding: 2px 0 8px;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.chartLegend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chartLegend i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--chart-primary);
+}
+
+.chartLegend i.errors {
+  background: var(--chart-error);
+}
+
+.chartTooltip {
+  position: absolute;
+  z-index: 2;
+  top: 12px;
+  display: grid;
+  gap: 2px;
+  min-width: 132px;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-translucent);
+  box-shadow: 0 8px 18px var(--shadow);
+  color: var(--foreground);
+  padding: 8px 10px;
+  font-size: 9px;
+  pointer-events: none;
+  transform: translateX(-8px);
+}
+
+.chartTooltip strong {
+  color: var(--foreground-strong);
+  font-size: 10px;
+}
+
+.chartTooltip em {
+  margin-top: 2px;
+  color: var(--success);
+  font-style: normal;
+  font-weight: 600;
+}
+
+.chartTooltip em.error {
+  color: var(--chart-error);
+}
+
+.chartEmpty {
+  position: absolute;
+  inset: 30% 20% auto;
+  display: grid;
+  justify-items: center;
+  gap: 4px;
+  color: var(--muted);
+  text-align: center;
+  pointer-events: none;
+}
+
+.chartEmpty strong {
+  color: var(--foreground-strong);
+  font-size: 12px;
+}
+
+.chartEmpty span {
+  font-size: 10px;
+}
+
+.providerChart {
+  display: grid;
+  padding: 6px 16px 12px;
+}
+
+.providerChartRow {
+  display: grid;
+  grid-template-columns: minmax(148px, 0.85fr) minmax(90px, 1fr) 58px;
+  align-items: center;
+  gap: 12px;
+  min-height: 55px;
+  border-bottom: 1px solid var(--border);
+}
+
+.providerChartRow:last-child {
+  border-bottom: 0;
+}
+
+.providerChartIdentity {
+  display: grid;
+  grid-template-columns: 28px minmax(0, 1fr);
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+}
+
+.providerChartIdentity > span:last-child,
+.providerChartValue {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.providerChartIdentity strong,
+.providerChartIdentity small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.providerChartIdentity strong {
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.providerChartIdentity small,
+.providerChartValue small {
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.providerChartMark {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  background: var(--surface-muted);
+}
+
+.providerChartMark svg {
+  width: 14px;
+  height: 14px;
+}
+
+.providerChartTrack {
+  display: flex;
+  height: 7px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--track-bg);
+}
+
+.providerChartTrack > span {
+  display: block;
+  height: 100%;
+}
+
+.providerChartSuccess {
+  background: var(--chart-primary);
+}
+
+.providerChartErrors {
+  background: var(--chart-error);
+}
+
+.providerChartValue {
+  justify-items: end;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+.providerChartValue strong {
+  color: var(--foreground-strong);
+  font-size: 11px;
+  font-weight: 600;
+}
+
+.providerChartLegend {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding-top: 10px;
+  color: var(--muted);
+  font-size: 9px;
+}
+
+.providerChartLegend span {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.providerChartLegend i {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--chart-primary);
+}
+
+.providerChartLegend i.errors {
+  background: var(--chart-error);
+}
+
+.providerChartLegend .providerChartLegendMeta {
+  margin-left: auto;
+}
+
+.chartListEmpty {
+  display: grid;
+  justify-items: center;
+  gap: 5px;
+  padding: 38px 16px;
+  color: var(--muted);
+  text-align: center;
+}
+
+.chartListEmpty svg {
+  width: 20px;
+  height: 20px;
+}
+
+.chartListEmpty strong {
+  color: var(--foreground-strong);
+  font-size: 11px;
+}
+
+.chartListEmpty span {
+  font-size: 10px;
+}
+
+@media (max-width: 1180px) {
+  .dashboardAnalyticsGrid,
+  .dashboardGrid,
+  .usageInsightsGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .servicePanel {
+    grid-row: auto;
+  }
+}
+
+@media (max-width: 900px) {
+  .dashboardStats {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+
+  .dashboardStats > div:nth-child(3) {
+    border-right: 0;
+  }
+
+  .dashboardStats > div:nth-child(-n + 3) {
+    border-bottom: 1px solid var(--border);
+  }
+
+  .usageSummaryGrid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .usageSummaryGrid .metric:nth-child(2) {
+    border-right: 0;
+  }
+
+  .usageSummaryGrid .metric:nth-child(-n + 2) {
+    border-bottom: 1px solid var(--border);
+  }
+}
+
+@media (max-width: 760px) {
+  .workspace {
+    padding: 0 10px 16px;
+  }
+
+  .dashboardCanvas,
+  .usageCanvas {
+    gap: 12px;
+    margin-top: 12px;
+  }
+
+  .dashboardOverviewHeader,
+  .analyticsPanelHeader {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .dashboardOverviewActions {
+    width: 100%;
+  }
+
+  .dashboardOverviewActions button {
+    flex: 1;
+  }
+
+  .dashboardStats {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .dashboardStats > div,
+  .dashboardStats > div:nth-child(3) {
+    border-right: 1px solid var(--border);
+    border-bottom: 1px solid var(--border);
+  }
+
+  .dashboardStats > div:nth-child(even) {
+    border-right: 0;
+  }
+
+  .dashboardStats > div:last-child {
+    grid-column: 1 / -1;
+    border-right: 0;
+    border-bottom: 0;
+  }
+
+  .dashboardServiceGrid,
+  .usageHealthPanel .attentionGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .analyticsPanelControls {
+    justify-content: flex-start;
+  }
+
+  .providerChartRow {
+    grid-template-columns: minmax(130px, 1fr) 52px;
+    gap: 9px;
+    padding-block: 8px;
+  }
+
+  .providerChartTrack {
+    grid-column: 1 / -1;
+    grid-row: 2;
+  }
+
+  .usageTablePanel .tableHead {
+    display: none;
+  }
+
+  .usageTablePanel .tableHead,
+  .usageTablePanel .tableRow {
+    min-width: 0;
+  }
+
+  .chartAxisLabel {
+    font-size: 12px;
+  }
+
+  .trafficChartScroll {
+    overflow-x: auto;
+  }
+
+  .trafficChartScroll svg {
+    min-width: 680px;
+  }
+
+  .chartTooltip {
+    position: static;
+    width: max-content;
+    max-width: calc(100% - 24px);
+    margin: 0 12px 8px;
+    transform: none;
+  }
+}
+
+@media (max-width: 520px) {
+  .dashboardStats,
+  .usageSummaryGrid {
+    grid-template-columns: 1fr;
+  }
+
+  .dashboardStats > div,
+  .dashboardStats > div:nth-child(even),
+  .dashboardStats > div:nth-child(3),
+  .usageSummaryGrid .metric,
+  .usageSummaryGrid .metric:nth-child(2) {
+    grid-column: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--border);
+  }
+
+  .dashboardStats > div:last-child,
+  .usageSummaryGrid .metric:last-child {
+    border-bottom: 0;
+  }
+
+  .dashboardOverviewActions {
+    flex-direction: column;
+  }
+
+  .analyticsPanelControls {
+    align-items: stretch;
+    flex-direction: column;
+  }
+}

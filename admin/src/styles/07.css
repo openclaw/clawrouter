@@ -469,10 +469,10 @@
   --light-slate: #69766e;
   --border: #28332c;
   --border-strong: #46554c;
-  --primary: #1f7255;
-  --primary-hover: #2b8c6a;
-  --primary-100: #1a2821;
-  --primary-foreground: #f1f5f2;
+  --primary: #8b8df8;
+  --primary-hover: #a5a6fb;
+  --primary-100: #24243d;
+  --primary-foreground: #111827;
   --success: #62d3a4;
   --success-bg: #153126;
   --danger: #ff9380;
@@ -499,6 +499,10 @@
   --hero-action-hover: #2b8c6a;
   --hero-action-foreground: #f1f5f2;
   --shadow: rgb(0 0 0 / 0.34);
+  --chart-primary: #60a5fa;
+  --chart-primary-soft: #1d4ed8;
+  --chart-primary-faint: #172033;
+  --chart-error: #fb923c;
 }
 
 :root[data-theme="dark"] ::selection {

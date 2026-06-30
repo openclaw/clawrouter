@@ -44,8 +44,38 @@ export function demoUsageSnapshot(): UsageSnapshot {
       { provider: "openrouter", requestCount: 88, successCount: 82, errorCount: 6, totalTokens: 347_538, actualCostMicros: 538_100 },
       { provider: "replicate", requestCount: 36, successCount: 25, errorCount: 11, totalTokens: 0, actualCostMicros: 0 },
     ],
+    daily: demoDailyUsage(now, 1284, 37, 1_864_553, 8_432_100),
     events,
   };
+}
+
+function demoDailyUsage(now: number, requests: number, errors: number, tokens: number, costMicros: number) {
+  const dayMs = 86_400_000;
+  const today = Math.floor(now / dayMs) * dayMs;
+  const weights = [31, 34, 29, 36, 39, 33, 27, 41, 44, 38, 46, 49, 43, 35, 52, 55, 48, 58, 62, 54, 47, 64, 69, 61, 73, 67, 76, 81, 72, 88];
+  const requestSeries = distributeTotal(requests, weights);
+  const errorSeries = distributeTotal(errors, weights.map((weight, index) => weight * (index % 7 === 2 ? 2 : 1)));
+  const tokenSeries = distributeTotal(tokens, weights.map((weight, index) => weight * (index % 5 === 0 ? 1.18 : 1)));
+  const costSeries = distributeTotal(costMicros, weights.map((weight, index) => weight * (index % 6 === 4 ? 1.25 : 1)));
+  return weights.map((_, index) => ({
+    dayStartMs: today - (weights.length - index - 1) * dayMs,
+    requestCount: requestSeries[index],
+    successCount: requestSeries[index] - errorSeries[index],
+    errorCount: errorSeries[index],
+    totalTokens: tokenSeries[index],
+    actualCostMicros: costSeries[index],
+  }));
+}
+
+function distributeTotal(total: number, weights: number[]) {
+  const sum = weights.reduce((value, weight) => value + weight, 0);
+  const values = weights.map((weight) => Math.floor((total * weight) / sum));
+  let remainder = total - values.reduce((value, amount) => value + amount, 0);
+  for (let index = values.length - 1; remainder > 0; index = (index - 1 + values.length) % values.length) {
+    values[index] += 1;
+    remainder -= 1;
+  }
+  return values;
 }
 
 export function demoUsageEvent(id: string, occurredAt: number, principal: string, policy: string, providerId: string, capability: string, model: string | null, statusCode: number, durationMs: number, cost: number, status: string, tokens: number, attribution: Partial<UsageAuditEvent> = {}): UsageAuditEvent {

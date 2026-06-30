@@ -36,40 +36,46 @@ export function DashboardScreen({ session, services, policies, credentials, user
   const configuredServices = services.filter((service) => service.readiness?.executable);
   const attentionServices = visibleServices.filter((service) => !serviceOutcome(service).playable);
   const rows = (usageRows.length ? usageRows : isAdmin ? policies.map(policyUsageFallback) : []).filter((row) => row.enabled);
-  const successRate = usage.summary.requestCount ? Math.round((usage.summary.successCount / usage.summary.requestCount) * 100) : 100;
+  const successRate = usage.summary.requestCount ? Math.round((usage.summary.successCount / usage.summary.requestCount) * 100) : null;
   const servicePercent = isAdmin
     ? services.length ? Math.round((configuredServices.length / services.length) * 100) : 0
     : grantedServices.length ? Math.round((usableServices.length / grantedServices.length) * 100) : 0;
-  const providerMaximum = Math.max(1, ...usage.providers.map((provider) => provider.requestCount));
   const displayName = session.email?.split("@")[0] ?? (isAdmin ? "operator" : "member");
   const activePolicies = policies.filter((policy) => policy.enabled).length;
   const activeCredentials = credentials.filter((credential) => credential.enabled && credential.active !== false).length;
 
   return (
     <div className="dashboardCanvas">
-      <section className={`dashboardHero ${isAdmin ? "admin" : "member"}`}>
-        <div className="heroCopy">
-          <span className="heroEyebrow">{isAdmin ? "gateway operations" : "personal access"} · {session.tenantId ?? "default"}</span>
-          <h2>{isAdmin ? "Every route, budget, and identity—under control." : `Your services are ready, ${displayName}.`}</h2>
-          <p>{isAdmin ? "Live posture across the complete gateway. Drill into access or usage when a signal needs attention." : "See what you can call, how healthy it is, and the shared quota pools backing your access."}</p>
-          <div className="heroActions">
-            <button type="button" onClick={onOpenCatalog}>Explore services <ArrowUpRight aria-hidden="true" /></button>
-            <button type="button" className="heroButtonSecondary" onClick={onOpenPlayground}><Play aria-hidden="true" /> Open playground</button>
-          </div>
+      <header className="dashboardOverviewHeader">
+        <div>
+          <span className="dashboardEyebrow">{isAdmin ? "Gateway overview" : "Personal access"} · {session.tenantId ?? "default"}</span>
+          <h2>{isAdmin ? "Routing and access at a glance" : `Your gateway, ${displayName}`}</h2>
+          <p>{isAdmin ? "Thirty-day traffic, provider health, and shared policy budgets in one operational view." : "See the services you can call, their current health, and the shared quotas behind your access."}</p>
         </div>
-        <div className="heroMeters" aria-label="gateway status summary">
-          <RadialMeter label={isAdmin ? "configured" : "usable"} value={isAdmin ? configuredServices.length : usableServices.length} total={isAdmin ? services.length : grantedServices.length} tone="green" />
-          <RadialMeter label="success" value={successRate} total={100} suffix="%" tone={successRate >= 95 ? "green" : "amber"} />
-          <RadialMeter label="requests" value={usage.summary.requestCount} total={Math.max(usage.summary.requestCount, 100)} display={formatCount(usage.summary.requestCount)} tone="blue" />
+        <div className="dashboardOverviewActions">
+          <button type="button" className="buttonSecondary" onClick={onOpenCatalog}>View catalog <ArrowUpRight aria-hidden="true" /></button>
+          <button type="button" onClick={onOpenPlayground}><Play aria-hidden="true" /> Open playground</button>
         </div>
-      </section>
+      </header>
 
       <section className="dashboardStats" aria-label="access overview">
         <DashboardStat label={isAdmin ? "catalog coverage" : "available services"} value={isAdmin ? `${configuredServices.length}/${services.length}` : String(grantedServices.length)} note={isAdmin ? `${services.length - configuredServices.length} need attention` : `${usableServices.length} ready to call`} />
-        <DashboardStat label="shared activity" value={formatCount(usage.summary.totalTokens)} note={`${formatCount(usage.summary.requestCount)} requests · ${successRate}% success`} />
+        <DashboardStat label="requests" value={formatCount(usage.summary.requestCount)} note={`${formatCount(usage.summary.totalTokens)} tokens in 30 days`} />
+        <DashboardStat label="success rate" value={successRate === null ? "—" : `${successRate}%`} note={successRate === null ? "No requests in this period" : `${formatCount(usage.summary.successCount)} successful`} />
         <DashboardStat label={isAdmin ? "active policies" : "quota pools"} value={String(isAdmin ? overview?.policiesActive ?? activePolicies : rows.length)} note={isAdmin ? `${overview?.tenantsTotal ?? tenants.length} tenants` : usageLoaded ? "live policy ledgers" : "status unavailable"} />
         <DashboardStat label="actual spend" value={formatMicros(usage.summary.actualCostMicros)} note={isAdmin ? `${usage.providers.length} active providers` : "across your policy pools"} />
       </section>
+
+      <div className="dashboardAnalyticsGrid">
+        <section className="dashboardPanel dashboardTrafficPanel">
+          <DashboardPanelHeader eyebrow="Last 30 days" title="Request activity" meta="UTC daily totals" action={isAdmin ? "Open usage" : undefined} onAction={isAdmin ? onOpenUsage : undefined} />
+          <div className="dashboardChartBody"><TrafficAreaChart usage={usage} compact /></div>
+        </section>
+        <section className="dashboardPanel dashboardProviderPanel">
+          <DashboardPanelHeader eyebrow="Provider mix" title="Traffic distribution" meta={`${usage.providers.length} active`} />
+          <ProviderUsageChart providers={usage.providers} services={services} limit={5} />
+        </section>
+      </div>
 
       <div className="dashboardGrid">
         <section className="dashboardPanel servicePanel">
@@ -104,27 +110,16 @@ export function DashboardScreen({ session, services, policies, credentials, user
               const remaining = row.budget.remainingMicros;
               return (
                 <article className="quotaRow" key={usagePolicyId(row)}>
-                  <RadialMeter label="used" value={percent ?? 0} total={100} suffix="%" display={percent === null ? limit === undefined || limit === null ? "∞" : "—" : `${Math.round(percent)}%`} compact tone={percent !== null && percent >= 90 ? "amber" : "green"} />
                   <span className="quotaIdentity"><strong>{usagePolicyId(row)}</strong><small>{row.tokenRole ?? "custom"} · {effectiveProviderCount(row.providers, services)} services</small></span>
                   <span className="quotaNumbers"><strong>{remaining === undefined || remaining === null ? formatBudget(limit) : formatMicros(remaining)}</strong><small>{remaining === undefined || remaining === null ? "monthly limit" : `remaining of ${formatBudget(limit)}`}</small></span>
+                  <span className={`quotaTrack${percent !== null && percent >= 90 ? " warning" : ""}`}><span style={{ width: `${percent ?? 0}%` }} /></span>
+                  <strong className="quotaPercent">{percent === null ? limit === undefined || limit === null ? "∞" : "—" : `${Math.round(percent)}%`}</strong>
                 </article>
               );
             })}
             {!rows.length ? <div className="dashboardEmpty"><Activity aria-hidden="true" /><strong>No quota pools assigned</strong><p>Usage will appear when an access policy is bound to your account.</p></div> : null}
           </div>
           {isAdmin ? <button className="dashboardTextAction" type="button" onClick={onOpenUsage}>Open full usage ledger <ChevronRight aria-hidden="true" /></button> : null}
-        </section>
-
-        <section className="dashboardPanel activityPanel">
-          <DashboardPanelHeader eyebrow="traffic shape" title="Provider activity" meta={`${usage.providers.length} active`} />
-          <div className="activityDiagram">
-            {usage.providers.slice(0, 7).map((provider) => {
-              const service = services.find((candidate) => candidate.provider === provider.provider);
-              const width = Math.max(4, Math.round((provider.requestCount / providerMaximum) * 100));
-              return <div className="activityBar" key={provider.provider}><EntityName brandIcon={service?.brandIcon} icon={ServerCog} title={service?.name ?? provider.provider} subtitle={`${formatCount(provider.totalTokens)} tokens`} /><span className="activityTrack"><span style={{ width: `${width}%` }} /></span><strong>{formatCount(provider.requestCount)}</strong></div>;
-            })}
-            {!usage.providers.length ? <div className="dashboardEmpty"><BarChart3 aria-hidden="true" /><strong>No activity yet</strong><p>Provider traffic will build this diagram as requests pass through the gateway.</p></div> : null}
-          </div>
         </section>
 
         {isAdmin ? (
@@ -145,17 +140,11 @@ export function DashboardScreen({ session, services, policies, credentials, user
 }
 
 export function DashboardPanelHeader({ eyebrow, title, meta, action, onAction }: { eyebrow: string; title: string; meta: string; action?: string; onAction?: () => void }) {
-  return <header className="dashboardPanelHeader"><div><span>{eyebrow}</span><h2>{title}</h2></div>{action && onAction ? <button type="button" onClick={onAction}>{action}<ArrowUpRight aria-hidden="true" /></button> : <small>{meta}</small>}</header>;
+  return <header className="dashboardPanelHeader"><div><span>{eyebrow}</span><h2>{title}</h2></div><div className="dashboardPanelMeta"><small>{meta}</small>{action && onAction ? <button type="button" onClick={onAction}>{action}<ArrowUpRight aria-hidden="true" /></button> : null}</div></header>;
 }
 
 export function DashboardStat({ label, value, note }: { label: string; value: string; note: string }) {
   return <div><span>{label}</span><strong>{value}</strong><small>{note}</small></div>;
-}
-
-export function RadialMeter({ label, value, total, display, suffix = "", compact = false, tone }: { label: string; value: number; total: number; display?: string; suffix?: string; compact?: boolean; tone: "green" | "amber" | "blue" }) {
-  const percent = total > 0 ? Math.min(100, Math.max(0, (value / total) * 100)) : 0;
-  const shown = display ?? (suffix ? `${Math.round(value)}${suffix}` : `${formatCount(value)}/${formatCount(total)}`);
-  return <div className={`radialMeter ${compact ? "compact" : ""} ${tone}`} style={{ "--meter": `${percent}%` } as React.CSSProperties} aria-label={`${label}: ${shown}`}><div><strong>{shown}</strong><span>{label}</span></div></div>;
 }
 
 export function CatalogScreen({ services, allServices, selected, policies, connections, query, setQuery, kind, setKind, kinds, canAdminister, onSelect, onSetConnection, onPlay, onAdd }: {
@@ -278,6 +267,7 @@ import React, { useEffect, useState } from "react";
 import { Activity, ArrowUpRight, BarChart3, Boxes, Bug, CheckCircle2, ChevronRight, CircleSlash2, FlaskConical, Play, Plus, Search, ServerCog, ShieldCheck, SlidersHorizontal, Users } from "lucide-react";
 import { grantNamesForService, playgroundBlockedForService, policyCoversProvider, policyUsageFallback, readinessLabel, serviceOutcome } from "../domain";
 import { BrandMark, EntityName, InlineNote, InspectorHeader, OutcomeStatus, PanelTitle, ReadinessStatus, Status, kindIcon, kindLabel } from "../components";
+import { ProviderUsageChart, TrafficAreaChart } from "../analytics-charts";
 import { budgetPercent, effectiveProviderCount, formatBudget, formatCount, formatDuration, formatMicros, formatRelativeTime, matchesServiceQuery, providerBrandIcon, readyCount, usagePolicyId } from "../ui-helpers";
 import { EntityTable } from "./users-usage";
 import type { AccessForm,AccessPolicy,AccessRole,AccessTab,AccessUser,AdminOverview,AdminTenantSummary,AdminUsageRow,AssignmentRule,AssignmentRuleForm,BindingForm,BrandIcon,BudgetStatus,ContentRetention,CredentialForm,EntitlementsResponse,IconComponent,OutcomeTone,PlaygroundForm,PlaygroundHttpResponse,PlaygroundTurn,PolicyBinding,PolicyForm,ProviderAccess,ProviderConnection,ProviderReadiness,ProviderResponse,ProviderRow,ProviderUsageSummary,ProxyCredential,RefreshOptions,RetainedRequestContent,RouteCatalog,ServiceItem,ServiceOutcome,SessionResponse,UpstreamGrant,UpstreamGrantForm,UsageAuditEvent,UsageSnapshot,UsageSummary,View } from "../ui-types";
