@@ -1,8 +1,9 @@
 import { useState } from "react";
 import { initialAccessTab, demo } from "../ui-config";
-import type { AccessPolicy, AccessTab, AccessUser, AssignmentRule, PolicyBinding, ProviderConnection, ProviderReadiness, ProviderRow, ProxyCredential, RouteCatalog, SessionResponse, UpstreamGrant } from "../ui-types";
+import type { AccessPolicy, AccessTab, AccessUser, AssignmentRule, FusionConfig, PolicyBinding, ProviderConnection, ProviderReadiness, ProviderRow, ProxyCredential, RouteCatalog, SessionResponse, UpstreamGrant } from "../ui-types";
 import { useAssignmentAdmin } from "./access/use-assignment-admin";
 import { useConnectionAdmin } from "./access/use-connection-admin";
+import { useFusionAdmin } from "./access/use-fusion-admin";
 import { usePolicyAdmin } from "./access/use-policy-admin";
 import { usePrincipalAdmin } from "./access/use-principal-admin";
 import { useUpstreamAdmin } from "./access/use-upstream-admin";
@@ -28,6 +29,7 @@ interface AdminRecords {
   bindings: PolicyBinding[];
   grants: UpstreamGrant[];
   rules: AssignmentRule[];
+  fusion: FusionConfig;
 }
 
 export function useAccessAdmin(dependencies: Dependencies) {
@@ -39,6 +41,7 @@ export function useAccessAdmin(dependencies: Dependencies) {
   const connection = useConnectionAdmin({ allowDemo, gatewayOrigin, demoMode, setStatus, setProviderReadiness, refresh });
   const upstream = useUpstreamAdmin({ allowDemo, gatewayOrigin, demoMode, providers, policies: policy.policies.items, selectedPolicyId: policy.policies.selectedId, setError: policy.policies.setError, setStatus, refresh });
   const assignment = useAssignmentAdmin({ allowDemo, gatewayOrigin, demoMode, setError: policy.policies.setError, setStatus, refresh });
+  const fusion = useFusionAdmin({ allowDemo, gatewayOrigin, demoMode, setStatus, refresh });
 
   function hydrateAdmin(records: AdminRecords, background: boolean, sessionData: SessionResponse, providerRows: ProviderRow[]) {
     policy.hydrate(records.policies, records.credentials, background, sessionData);
@@ -47,6 +50,7 @@ export function useAccessAdmin(dependencies: Dependencies) {
     principal.hydrate(records.users, records.bindings, background, policyId);
     upstream.hydrate(records.grants, background, policyId, providerRows);
     assignment.hydrate(records.rules, background);
+    fusion.hydrate(records.fusion, background);
     setLoaded(true);
   }
 
@@ -55,12 +59,13 @@ export function useAccessAdmin(dependencies: Dependencies) {
     connection.hydrate([]);
     upstream.hydrate([], false, "", []);
     assignment.hydrate([], false);
+    fusion.hydrate({ ...demo.fusion, enabled: false }, false);
     principal.hydrateUser(user);
     setLoaded(false);
   }
 
   function hydrateDemo() {
-    hydrateAdmin({ policies: demo.keys, credentials: demo.credentials, connections: demo.connections, users: demo.users, bindings: demo.bindings, grants: demo.upstreamGrants, rules: demo.assignmentRules }, false, demo.session, demo.providers);
+    hydrateAdmin({ policies: demo.keys, credentials: demo.credentials, connections: demo.connections, users: demo.users, bindings: demo.bindings, grants: demo.upstreamGrants, rules: demo.assignmentRules, fusion: demo.fusion }, false, demo.session, demo.providers);
   }
 
   function editPolicy(item: AccessPolicy) {
@@ -78,6 +83,7 @@ export function useAccessAdmin(dependencies: Dependencies) {
     bindings: principal.bindings,
     upstream: upstream.upstream,
     assignments: assignment.assignments,
+    fusion: fusion.fusion,
     users: principal.users,
     hydrateAdmin,
     hydrateUser,

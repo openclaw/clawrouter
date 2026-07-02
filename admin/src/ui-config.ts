@@ -54,7 +54,7 @@ export function initialViewFromPath(): View {
 
 export function initialAccessTab(): AccessTab {
   const resource = new URLSearchParams(window.location.search).get("resource");
-  return resource === "credentials" || resource === "bindings" || resource === "upstream" || resource === "assignments" ? resource : "policies";
+  return resource === "credentials" || resource === "bindings" || resource === "upstream" || resource === "assignments" || resource === "fusion" ? resource : "policies";
 }
 export const demoDisabledProviderIds = new Set(["aws-bedrock", "cloudflare-ai-gateway"]);
 export const demoMissingConfigProviderIds = new Set(["azure-openai"]);
@@ -94,6 +94,18 @@ export const defaultCredential: CredentialForm = { credentialId: "", policyId: "
 export const defaultBinding: BindingForm = { policyId: "", principalType: "group", principalId: "", enabled: true, priority: "100" };
 export const defaultUpstreamGrant: UpstreamGrantForm = { scope: "policies", scopeId: "", tokenRef: "", kind: "api_key", provider: "", label: "", enabled: true, credential: "", credentialBundle: "", accessToken: "", refreshToken: "", accountId: "", expiresAt: "" };
 export const defaultAssignmentRule: AssignmentRuleForm = { ruleId: "", enabled: true, kind: "email_domain", subject: "", groups: "", policyIds: [], priority: "100", revokeOnLoss: true, provenance: "cloudflare_access" };
+export const defaultFusion: FusionConfig = {
+  version: 1,
+  enabled: false,
+  modelId: "clawrouter/fusion",
+  adviserModels: ["local/qwen3:8b"],
+  aggregatorModel: "openai/gpt-4.1-mini",
+  adviserTimeoutMs: 15000,
+  maxOutputTokens: 768,
+  maxInputChars: 24000,
+  maxProposalChars: 6000,
+  temperature: 0.2,
+};
 
 export const rolePresets = {
   sandbox: { budget: "5000000", request: "500", providers: ["openai", "openrouter"] },
@@ -114,4 +126,4 @@ export const adminViews = new Set<View>(["policies", "users", "usage"]);
 import { BarChart3, Boxes, FlaskConical, KeyRound, LayoutDashboard, Users } from "lucide-react";
 import { playgroundServicePreset } from "./domain";
 import { demoData } from "./demo-data";
-import type { AccessForm, AccessTab, AssignmentRuleForm, BindingForm, CredentialForm, IconComponent, PlaygroundHttpResponse, PolicyForm, RouteCatalog, SessionResponse, Theme, UpstreamGrantForm, UsageSnapshot, View } from "./ui-types";
+import type { AccessForm, AccessTab, AssignmentRuleForm, BindingForm, CredentialForm, FusionConfig, IconComponent, PlaygroundHttpResponse, PolicyForm, RouteCatalog, SessionResponse, Theme, UpstreamGrantForm, UsageSnapshot, View } from "./ui-types";

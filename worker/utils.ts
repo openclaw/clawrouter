@@ -11,7 +11,11 @@ const corsHeaders = {
     "x-stainless-runtime", "x-stainless-runtime-version", "x-stainless-helper-method",
     "x-stainless-helper",
   ].join(","),
-  "access-control-expose-headers": "x-clawrouter-content-retention,x-clawrouter-upstream-provider",
+  "access-control-expose-headers": [
+    "x-clawrouter-content-retention", "x-clawrouter-upstream-provider", "x-clawrouter-fusion",
+    "x-clawrouter-fusion-aggregator", "x-clawrouter-fusion-adviser-count", "x-clawrouter-fusion-failed-count",
+    "x-clawrouter-fusion-latency-ms", "x-clawrouter-fusion-advisers",
+  ].join(","),
   "access-control-max-age": "600",
 };
 
