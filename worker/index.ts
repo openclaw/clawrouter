@@ -104,7 +104,7 @@ function serviceIndex() {
       anthropicMessages: "/v1/messages", anthropicCountTokens: "/v1/messages/count_tokens", keyInspect: "/v1/key/inspect",
       adminBootstrap: "/v1/admin/bootstrap", adminOverview: "/v1/admin/overview", adminUsers: "/v1/admin/users", adminUsage: "/v1/admin/usage", adminPolicies: "/v1/admin/policies",
       adminCredentials: "/v1/admin/credentials", adminConnections: "/v1/admin/connections", adminAccessUsers: "/v1/admin/access-users",
-      adminAssignmentRules: "/v1/admin/assignment-rules", oauthCallback: "/v1/oauth/callback",
+      adminAssignmentRules: "/v1/admin/assignment-rules", adminFusion: "/v1/admin/fusion", oauthCallback: "/v1/oauth/callback",
       openaiCompatible: ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"], manifestProxy: "/v1/proxy/{provider}/{endpoint}", nativeProxy: "/v1/native/{provider}/{provider-native-path}",
     },
   };

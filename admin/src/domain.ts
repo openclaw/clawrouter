@@ -309,7 +309,7 @@ export function playgroundPayload(form: PlaygroundForm, route?: RouteCatalog["ma
 }
 
 export function playgroundSupportsTemperature(model: string) {
-  return !/^openai\/gpt-5\.(?:4|5)(?:$|-)/.test(model);
+  return model !== "clawrouter/fusion" && !/^openai\/gpt-5\.(?:4|5)(?:$|-)/.test(model);
 }
 
 export function playgroundResponseText(raw: string) {

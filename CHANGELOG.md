@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add an on-demand `clawrouter/fusion` chat model with parallel local or hosted advisers, a policy-native final synthesizer, OpenAI-compatible Ollama/LM Studio routing, bounded fail-open orchestration, and web-console configuration.
 - Make accounting finalization independently retryable, scope readiness to entitled policies, move canonical access state out of KV fallback paths, shard usage by tenant/policy, consolidate admin bootstrap refreshes, and split shared contracts and access controllers into focused modules.
 - Collapse provider-readiness connection checks into one authority lookup so cold catalog requests no longer fan out across provider Durable Objects.
 - Replace the Rust/Wasm data plane and provider compiler with a modular TypeScript Worker while preserving Durable Object storage and public API contracts.

@@ -170,6 +170,7 @@ export function useConsoleController() {
       bindings: data.bindings,
       grants: data.grants,
       rules: data.rules,
+      fusion: data.fusion,
     }, background, sessionData, providerData.providers);
     catalog.mergeReadiness(data.providers);
     usage.setAdminOverview(data.overview);

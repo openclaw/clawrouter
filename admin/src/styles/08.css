@@ -1,0 +1,153 @@
+.fusionWorkspace {
+  grid-template-columns: minmax(0, 1fr) minmax(330px, 390px);
+}
+
+.fusionWorkspace .tableSectionHeader code,
+.fusionInspector code {
+  font-family: "DM Mono", ui-monospace, monospace;
+  font-size: 0.95em;
+}
+
+.fusionTopology {
+  display: grid;
+  grid-template-columns: minmax(150px, 0.8fr) 30px minmax(210px, 1.1fr) 30px minmax(180px, 0.9fr);
+  align-items: stretch;
+  gap: 0;
+  margin: 16px;
+  border: 1px solid var(--border-strong);
+  background: var(--surface-muted);
+}
+
+.fusionInput,
+.fusionOutput,
+.fusionAdvisers > div {
+  display: grid;
+  align-content: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 14px;
+  background: var(--background);
+}
+
+.fusionInput span,
+.fusionOutput span,
+.fusionAdvisers span {
+  color: var(--light-slate);
+  font-family: "DM Mono", ui-monospace, monospace;
+  font-size: 9px;
+  letter-spacing: 0.08em;
+}
+
+.fusionInput strong,
+.fusionOutput strong,
+.fusionAdvisers strong {
+  overflow: hidden;
+  color: var(--foreground-strong);
+  font-family: "DM Mono", ui-monospace, monospace;
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fusionInput small,
+.fusionOutput small,
+.fusionAdvisers small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.fusionOutput {
+  background: var(--primary);
+}
+
+.fusionOutput span,
+.fusionOutput small {
+  color: color-mix(in srgb, var(--primary-foreground) 70%, transparent);
+}
+
+.fusionOutput strong {
+  color: var(--primary-foreground);
+}
+
+.fusionAdvisers {
+  display: grid;
+  gap: 1px;
+  background: var(--border);
+}
+
+.fusionAdvisers > div {
+  grid-template-columns: 24px minmax(0, 1fr);
+  padding: 9px 11px;
+}
+
+.fusionAdvisers > div small {
+  grid-column: 2;
+}
+
+.fusionArrow {
+  display: grid;
+  place-items: center;
+  border-inline: 1px solid var(--border);
+  color: var(--muted);
+  font-family: "DM Mono", ui-monospace, monospace;
+  font-size: 14px;
+}
+
+.fusionPrinciples {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 8px;
+  margin: 0 16px 16px;
+}
+
+.fusionPrinciples article {
+  border: 1px solid var(--border);
+  padding: 12px;
+  background: var(--background);
+}
+
+.fusionPrinciples strong {
+  color: var(--foreground-strong);
+  font-size: 11px;
+}
+
+.fusionPrinciples p {
+  margin: 5px 0 0;
+  color: var(--muted);
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.fusionInspector textarea {
+  min-height: 92px;
+  font-family: "DM Mono", ui-monospace, monospace;
+  font-size: 11px;
+}
+
+@media (max-width: 1180px) {
+  .fusionTopology {
+    grid-template-columns: 1fr;
+  }
+
+  .fusionArrow {
+    min-height: 28px;
+    border-block: 1px solid var(--border);
+    border-inline: 0;
+    transform: rotate(90deg);
+  }
+
+  .fusionPrinciples {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 760px) {
+  .fusionWorkspace {
+    grid-template-columns: 1fr;
+  }
+
+  .fusionTopology,
+  .fusionPrinciples {
+    margin-inline: 10px;
+  }
+}

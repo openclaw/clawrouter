@@ -33,8 +33,9 @@ try {
   const health = await json(`${base}/v1/health`);
   assert.deepEqual(health, { ok: true, service: "clawrouter-edge", runtime: "typescript" });
   const providers = await json(`${base}/v1/providers`);
-  assert.equal(providers.providers.length, 20);
-  assert.equal(new Set(providers.providers.map((provider) => provider.id)).size, 20);
+  assert.equal(providers.providers.length, 21);
+  assert.equal(new Set(providers.providers.map((provider) => provider.id)).size, 21);
+  assert.ok(providers.providers.some((provider) => provider.id === "local-openai"));
   const routes = await json(`${base}/v1/routes`);
   assert.ok(routes.openaiCompatible.some((route) => route.provider === "openai"));
   assert.ok(routes.manifestProxy.some((route) => route.provider === "anthropic" && route.endpoint === "count_tokens"));
@@ -57,8 +58,10 @@ try {
   assert.ok(bootstrapBody.credentials.some((credential) => credential.credentialId === "migrate"));
   assert.ok(bootstrapBody.policies.some((policy) => policy.policyId === "legacy"));
   assert.ok(bootstrapBody.credentials.some((credential) => credential.credentialId === "legacy"));
-  assert.equal(bootstrapBody.providers.length, 20);
-  assert.equal(new Set(bootstrapBody.providers.map((provider) => provider.id)).size, 20);
+  assert.equal(bootstrapBody.providers.length, 21);
+  assert.equal(new Set(bootstrapBody.providers.map((provider) => provider.id)).size, 21);
+  assert.equal(bootstrapBody.fusion.modelId, "clawrouter/fusion");
+  assert.equal(bootstrapBody.fusion.enabled, false);
   const legacyInspection = await fetch(`${base}/v1/key/inspect`, { headers: { authorization: `Bearer ${legacyKey}` } });
   assert.equal(legacyInspection.status, 200, "bootstrap imports genuine combined legacy keys before setting migration markers");
   const clientCatalog = await fetch(`${base}/v1/catalog`, { headers: { authorization: `Bearer ${proxyKey}` } });

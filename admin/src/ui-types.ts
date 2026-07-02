@@ -11,6 +11,7 @@ import type {
   BudgetStatus,
   ContentRetention,
   EntitlementsResponse,
+  FusionConfig,
   PolicyBinding,
   ProviderAccess,
   ProviderConnection,
@@ -40,6 +41,7 @@ export type {
   BudgetStatus,
   ContentRetention,
   EntitlementsResponse,
+  FusionConfig,
   PolicyBinding,
   ProviderAccess,
   ProviderConnection,
@@ -100,7 +102,7 @@ export interface CredentialForm { credentialId: string; policyId: string; princi
 export interface BindingForm { policyId: string; principalType: "user" | "group"; principalId: string; enabled: boolean; priority: string }
 export interface UpstreamGrantForm { scope: "policies" | "tenants"; scopeId: string; tokenRef: string; kind: UpstreamGrant["kind"]; provider: string; label: string; enabled: boolean; credential: string; credentialBundle: string; accessToken: string; refreshToken: string; accountId: string; expiresAt: string }
 export interface AssignmentRuleForm { ruleId: string; enabled: boolean; kind: AssignmentRule["kind"]; subject: string; groups: string; policyIds: string[]; priority: string; revokeOnLoss: boolean; provenance: string }
-export type AccessTab = "policies" | "credentials" | "bindings" | "upstream" | "assignments";
+export type AccessTab = "policies" | "credentials" | "bindings" | "upstream" | "assignments" | "fusion";
 
 export interface PlaygroundForm {
   mode: "model" | "service";

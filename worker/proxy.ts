@@ -3,6 +3,10 @@ import { finalizeAccounting, reserveBudget, type BudgetReservation, type Estimat
 import { resolveCredentials, resolvePolicies, resolveUsers } from "./authority";
 import { retainRequestContent } from "./content-retention";
 import {
+  FUSION_MODEL_ID, buildAggregatorBody, collectFusionProposals,
+} from "./fusion";
+import { loadFusionConfig } from "./fusion-config";
+import {
   assertProviderAccess, capabilityForPath, copyRequestHeaders, endpointForPath, modelRoute, providerById,
   resolveTemplate, signSigV4, transformRequestBody, upstreamAuth, upstreamPath,
 } from "./providers";
@@ -22,6 +26,7 @@ interface ProxySelection {
   body: Record<string, unknown>;
   pathParams: Record<string, string>;
   method: string;
+  timeoutMs?: number;
 }
 
 export async function proxyOpenAi(request: Request, env: Env, context: ExecutionContext, path: string, mode: AuthMode): Promise<Response> {
@@ -30,6 +35,24 @@ export async function proxyOpenAi(request: Request, env: Env, context: Execution
   const body = await readJson<Record<string, unknown>>(request);
   const modelId = typeof body.model === "string" ? body.model : "";
   if (!modelId) return errorResponse("model_required", "model is required", 400);
+  if (modelId === FUSION_MODEL_ID) {
+    if (path !== "/v1/chat/completions") return errorResponse("fusion_capability_unsupported", `${FUSION_MODEL_ID} supports only /v1/chat/completions`, 400);
+    return proxyFusion(request, env, context, mode, body, preauthenticated);
+  }
+  return proxyConcreteOpenAi(request, env, context, path, mode, body, preauthenticated);
+}
+
+async function proxyConcreteOpenAi(
+  request: Request,
+  env: Env,
+  context: ExecutionContext,
+  path: string,
+  mode: AuthMode,
+  body: Record<string, unknown>,
+  preauthenticated: AuthorizedIdentity | null,
+  timeoutMs?: number,
+): Promise<Response> {
+  const modelId = typeof body.model === "string" ? body.model : "";
   const route = modelRoute(modelId);
   if (!route) return errorResponse("model_not_found", `model ${modelId} is not registered`, 404);
   const capability = capabilityForPath(path);
@@ -37,7 +60,35 @@ export async function proxyOpenAi(request: Request, env: Env, context: Execution
   if (!capability || !endpoint || !route.model.capabilities.includes(capability)) return errorResponse("model_capability_unsupported", `model ${modelId} does not support ${path}`, 400);
   const upstreamModel = resolvedUpstreamModel(route.provider, route.model, env);
   const transformed = transformRequestBody(route.provider, path, upstreamModel, { ...body, model: upstreamModel }, env);
-  return proxySelected(request, env, context, mode, { provider: route.provider, endpoint, model: route.model, capability, body: transformed, pathParams: { model: upstreamModel, deployment: upstreamModel }, method: "POST" }, {}, preauthenticated);
+  return proxySelected(request, env, context, mode, { provider: route.provider, endpoint, model: route.model, capability, body: transformed, pathParams: { model: upstreamModel, deployment: upstreamModel }, method: "POST", timeoutMs }, {}, preauthenticated);
+}
+
+async function proxyFusion(
+  request: Request,
+  env: Env,
+  context: ExecutionContext,
+  mode: AuthMode,
+  body: Record<string, unknown>,
+  preauthenticated: AuthorizedIdentity | null,
+): Promise<Response> {
+  const config = await loadFusionConfig(env);
+  if (!config.enabled) return errorResponse("fusion_disabled", `${FUSION_MODEL_ID} is not enabled`, 404);
+  const result = await collectFusionProposals(config, body, async (model, adviserBody, timeoutMs, index) => {
+    const headers = new Headers(request.headers);
+    headers.set("x-request-id", randomId(`fusion-adviser-${index + 1}`));
+    const adviserRequest = new Request(request.url, { method: "POST", headers, signal: request.signal });
+    return proxyConcreteOpenAi(adviserRequest, env, context, "/v1/chat/completions", mode, adviserBody, preauthenticated, timeoutMs);
+  });
+  const aggregatorBody = buildAggregatorBody(body, config, result.proposals);
+  const response = await proxyConcreteOpenAi(request, env, context, "/v1/chat/completions", mode, aggregatorBody, preauthenticated);
+  const headers = new Headers(response.headers);
+  headers.set("x-clawrouter-fusion", result.proposals.length ? "advisers" : "aggregator-only");
+  headers.set("x-clawrouter-fusion-aggregator", config.aggregatorModel);
+  headers.set("x-clawrouter-fusion-adviser-count", String(result.proposals.length));
+  headers.set("x-clawrouter-fusion-failed-count", String(result.failedModels.length));
+  headers.set("x-clawrouter-fusion-latency-ms", String(result.durationMs));
+  if (result.proposals.length) headers.set("x-clawrouter-fusion-advisers", result.proposals.map((proposal) => proposal.model).join(","));
+  return new Response(response.body, { status: response.status, statusText: response.statusText, headers });
 }
 
 export async function proxyManifest(request: Request, env: Env, context: ExecutionContext, path: string, mode: AuthMode): Promise<Response> {
@@ -179,7 +230,8 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   for (const [name, value] of Object.entries(selection.endpoint.query)) url.searchParams.set(name, resolveTemplate(selection.provider, value, env));
   for (const [name, value] of Object.entries(queryInput)) if (value != null) url.searchParams.set(name, String(value));
   const controller = new AbortController();
-  const timeout = setTimeout(() => controller.abort(), selection.endpoint.timeout_ms ?? 120_000);
+  const endpointTimeout = selection.endpoint.timeout_ms ?? 120_000;
+  const timeout = setTimeout(() => controller.abort(), Math.min(selection.timeoutMs ?? endpointTimeout, endpointTimeout));
   const requestBody = ["GET", "HEAD"].includes(selection.method) ? undefined : JSON.stringify(selection.body);
   try { await signSigV4(selection.provider, url, selection.method, requestBody, headers, env, upstream.grant); }
   catch (error) {
