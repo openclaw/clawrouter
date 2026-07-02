@@ -8,9 +8,10 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   const compiled = JSON.parse(execFileSync(process.execPath, ["scripts/compile-providers.mjs", ...files], { encoding: "utf8" }));
   const generated = JSON.parse(readFileSync("worker/generated/provider-snapshot.json", "utf8"));
   assert.deepEqual(compiled, generated);
-  assert.equal(compiled.providers.length, 20);
+  assert.equal(compiled.providers.length, 21);
   assert.equal(compiled.model_index["openai/gpt-5.5"].provider, "openai");
   assert.equal(compiled.model_index["anthropic/claude-opus-4-8"].provider, "anthropic");
+  assert.equal(compiled.model_index["local/default"].provider, "local-openai");
   assert.ok(compiled.capability_index["llm.chat"].length >= 10);
 });
 

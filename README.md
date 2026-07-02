@@ -33,7 +33,8 @@ Built-in starter coverage:
 
 - model APIs: OpenAI, Anthropic, Google Gemini, Azure OpenAI, AWS Bedrock,
   MiniMax, Mistral, Cohere, xAI, Groq, Perplexity, DeepSeek, Together, Fireworks,
-  Hugging Face, Replicate
+  Hugging Face, Replicate, and operator-hosted OpenAI-compatible runtimes such as
+  Ollama and LM Studio
 - gateway APIs: OpenRouter, Cloudflare AI Gateway
 - tool/API platforms: Tavily, Firecrawl (keyless starter access; API key
   optional for higher limits)
@@ -123,6 +124,7 @@ The Worker currently exposes:
 - `GET /v1/admin/provider-health`
 - `GET /v1/admin/upstream-grants`
 - `GET /v1/admin/assignment-rules`
+- `GET /v1/admin/fusion`
 - `PUT /v1/admin/access-users/<email>`
 - `PUT /v1/admin/access-user-grants/<email>`
 - `PUT /v1/admin/policy-bindings`
@@ -131,6 +133,7 @@ The Worker currently exposes:
 - `PUT /v1/admin/connections/<provider-id>`
 - `PUT /v1/admin/upstream-grants/<policies|tenants>/<scope-id>/<token-ref>`
 - `PUT /v1/admin/assignment-rules/<rule-id>`
+- `PUT /v1/admin/fusion`
 - `POST /v1/admin/policies/<policy-id>/revoke`
 - `POST /v1/admin/credentials/<credential-id>/revoke`
 - `POST /v1/admin/upstream-grants/<policies|tenants>/<scope-id>/<token-ref>/revoke`
@@ -171,6 +174,14 @@ writes make revocation and scope reductions immediate; generation mismatches
 still fail closed during migration or incomplete rotations. Canonical policy
 edits preserve their generation. The legacy key mutation alias rejects changing
 policy scope and secret together.
+
+`clawrouter/fusion` is an optional virtual chat model. Selecting it fans a
+bounded text-only prompt out to as many as four configured adviser models,
+then asks one configured synthesizer model for the final response. Every
+subrequest uses normal ClawRouter policy, budget, retention, readiness, and
+usage-accounting paths. Configure it under **Access → Fusion**; see
+[Fusion routing](docs/fusion-router.md) for architecture, local-runtime setup,
+security boundaries, and cost behavior.
 
 `GET /v1/catalog` is the credential-scoped client integration contract. It
 returns only allowed providers and executable models. Each provider row reports

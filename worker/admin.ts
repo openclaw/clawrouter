@@ -7,10 +7,12 @@ import {
   type AssignmentEvidence,
 } from "./assignments";
 import { contentKey } from "./content-retention";
+import { loadFusionConfig, storeFusionConfig } from "./fusion-config";
 import { usageSnapshots } from "./ledgers";
 import { startOAuth } from "./oauth";
 import { listGrantRecords, listHealth, providerReadiness, providerReadinessFromState, refreshStoredGrant, snapshot } from "./providers";
 import type { AdminBootstrapResponse } from "../shared/contracts";
+import type { FusionConfig } from "../shared/contracts";
 import type {
   AccessControlUser, AccessPolicy, AccessPolicyEntry, AssignmentRule, Env, PolicyBinding,
   ProviderConnection, ProxyCredential, ProxyCredentialEntry, UpstreamGrant,
@@ -37,9 +39,11 @@ export async function adminApi(request: Request, env: Env, path: string): Promis
     if (request.method === "GET" && path === "/v1/admin/provider-health") return privateJson({ providers: [...(await listHealth(env)).values()] });
     if (request.method === "GET" && path === "/v1/admin/upstream-grants") return privateJson({ grants: (await listGrantRecords(env)).map(({ key, grant }) => grantResponse(key, grant)) });
     if (request.method === "GET" && path === "/v1/admin/assignment-rules") return privateJson({ rules: await assignmentRules(env) });
+    if (request.method === "GET" && path === "/v1/admin/fusion") return privateJson(await loadFusionConfig(env));
 
     if (path === "/v1/admin/policy-bindings" && request.method === "PUT") return putBinding(request, env);
     if (path === "/v1/admin/assignment-rules/reconcile" && request.method === "POST") return reconcileAssignments(request, env);
+    if (path === "/v1/admin/fusion" && request.method === "PUT") return privateJson(await storeFusionConfig(env, await readJson<Partial<FusionConfig>>(request)));
     if (path.startsWith("/v1/admin/assignment-rules/") && request.method === "PUT") return putAssignmentRule(request, env, path.slice("/v1/admin/assignment-rules/".length));
     if (path.startsWith("/v1/admin/access-user-grants/") && request.method === "PUT") return putUserGrants(request, env, path.slice("/v1/admin/access-user-grants/".length));
     if (path.startsWith("/v1/admin/access-users/") && request.method === "PUT") return putUser(request, env, path.slice("/v1/admin/access-users/".length));
@@ -145,7 +149,7 @@ function connectionsFrom(stored: ProviderConnection[]): ProviderConnection[] {
 }
 
 async function adminBootstrap(env: Env): Promise<AdminBootstrapResponse> {
-  const [policies, credentials, users, bindings, storedConnections, grants, rules, health] = await Promise.all([
+  const [policies, credentials, users, bindings, storedConnections, grants, rules, health, fusion] = await Promise.all([
     listPolicies(env),
     listCredentials(env),
     listUsers(env),
@@ -154,6 +158,7 @@ async function adminBootstrap(env: Env): Promise<AdminBootstrapResponse> {
     listGrantRecords(env),
     assignmentRules(env),
     listHealth(env),
+    loadFusionConfig(env),
   ]);
   const connectionRows = connectionsFrom(storedConnections);
   return {
@@ -165,6 +170,7 @@ async function adminBootstrap(env: Env): Promise<AdminBootstrapResponse> {
     providers: providerReadinessFromState(env, grants, connectionRows, health),
     grants: grants.map(({ key, grant }) => grantResponse(key, grant)),
     rules,
+    fusion,
     overview: overviewFrom(policies, credentials),
     tenants: tenantsFrom(policies, credentials),
   };

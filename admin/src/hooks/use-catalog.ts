@@ -19,7 +19,13 @@ export function useCatalog(allowDemo: boolean) {
     () => serviceItems(providers, routes, providerReadiness, accessByProvider),
     [accessByProvider, providerReadiness, providers, routes],
   );
-  const models = useMemo(() => catalogModels(routes), [routes]);
+  const models = useMemo(() => {
+    const catalog = catalogModels(routes);
+    const fusion = accessByProvider.get("clawrouter");
+    return fusion?.allowed
+      ? [{ id: "clawrouter/fusion", provider: "clawrouter", capabilities: ["llm.chat"] }, ...catalog]
+      : catalog;
+  }, [accessByProvider, routes]);
   const serviceRoutes = useMemo(() => routes.manifestProxy, [routes]);
   const kinds = useMemo(() => ["all", ...Array.from(new Set(services.map((item) => item.kind))).sort()], [services]);
   const filteredServices = useMemo(

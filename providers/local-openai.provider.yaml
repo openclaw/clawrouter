@@ -1,0 +1,63 @@
+schema: clawrouter.service-provider.v1
+id: local-openai
+displayName: Local OpenAI-compatible
+description: Operator-hosted Ollama, LM Studio, vLLM, or another OpenAI-compatible endpoint.
+tags: [local, ollama, lm-studio, openai-compatible]
+status: experimental
+class: openai_compatible
+service:
+  platform: local-openai
+  kind: model_provider
+  upstreamService: local-openai
+  configKeys: [LOCAL_OPENAI_BASE_URL, LOCAL_OPENAI_API_KEY]
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+      required: false
+baseUrls:
+  default: ${local_openai_base_url}
+routing:
+  nativePrefixes: [clawrouter-local, local-openai, local]
+  modelPrefixes: [local/]
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+capabilities:
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+endpoints:
+  chat_completions:
+    path: /v1/chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+models:
+  entries:
+    - id: local/default
+      upstream: default
+      capabilities: [llm.chat]
+      pricingRef: local-compute-zero-api-charge-v1
+      pricing:
+        effectiveAt: "2026-07-02"
+        source: https://docs.ollama.com/api/openai-compatibility
+        inputMicrosPerMillion: 0
+        outputMicrosPerMillion: 0
+        maxInputTokens: 131072
+        defaultMaxOutputTokens: 4096
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
+  counters:
+    - name: input_tokens
+      source: usage.prompt_tokens
+      unit: token
+    - name: output_tokens
+      source: usage.completion_tokens
+      unit: token

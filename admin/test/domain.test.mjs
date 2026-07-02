@@ -163,6 +163,7 @@ test("playground omits unsupported temperature for current OpenAI reasoning mode
   assert.equal(playgroundSupportsTemperature("openai/gpt-5.5"), false);
   assert.equal(playgroundSupportsTemperature("openai/gpt-5.4"), false);
   assert.equal(playgroundSupportsTemperature("openai/gpt-4.1-mini"), true);
+  assert.equal(playgroundSupportsTemperature("clawrouter/fusion"), false);
   const payload = playgroundPayload({ ...modelForm(), model: "openai/gpt-5.5", temperature: "0.7" });
   assert.equal(payload.temperature, undefined);
 });
