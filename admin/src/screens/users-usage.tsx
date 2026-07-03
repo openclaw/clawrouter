@@ -140,9 +140,19 @@ export function UsageScreen({ keys, credentials, services, overview, tenants, us
           <div className={exhaustedRows.length ? "attentionMetric danger" : "attentionMetric healthy"}><strong>{exhaustedRows.length}</strong><span>policies out of budget</span></div>
         </div>
         <div className="sectionTitle">Provider usage</div>
-        <div className="providerUsageList">{usage.providers.length ? usage.providers.map((provider) => {
+        <div className="providerShareList">{usage.providers.length ? usage.providers.map((provider) => {
           const service = serviceByProvider.get(provider.provider);
-          return <div key={provider.provider}><EntityName brandIcon={service?.brandIcon} icon={ServerCog} title={service?.name ?? provider.provider} subtitle={`${formatCount(provider.totalTokens)} tokens · ${formatMicros(provider.actualCostMicros)}`} /><span><strong>{formatCount(provider.requestCount)}</strong><small>{provider.errorCount ? `${provider.errorCount} errors` : "healthy"}</small></span></div>;
+          const maxRequests = Math.max(1, ...usage.providers.map((item) => item.requestCount));
+          return (
+            <div className="providerShare" key={provider.provider}>
+              <span className="providerShareMark"><BrandMark brandIcon={service?.brandIcon} fallback={ServerCog} /></span>
+              <span className="providerShareBody">
+                <span className="providerShareHead"><strong>{service?.name ?? provider.provider}</strong><em>{formatCount(provider.requestCount)}</em></span>
+                <span className="providerShareTrack"><span style={{ width: `${Math.max(4, Math.round((provider.requestCount / maxRequests) * 100))}%` }} /></span>
+                <span className="providerShareMeta">{formatCount(provider.totalTokens)} tokens · {formatMicros(provider.actualCostMicros)}{provider.errorCount ? <i> · {provider.errorCount} errors</i> : null}</span>
+              </span>
+            </div>
+          );
         }) : <p>No provider activity yet.</p>}</div>
         <div className="sectionTitle">Tenant coverage</div>
         <div className="miniList">{tenantRows.length ? tenantRows.slice(0, 8).map((tenant) => <button type="button" key={tenant.tenantId}>{tenant.tenantId}<span>{tenant.activePolicies ?? tenant.activeKeys}/{tenant.policies ?? tenant.keys} policies · {effectiveProviderCount(tenant.providers, services, tenant.allProviders)} services</span></button>) : <p>No tenant policies yet.</p>}</div>
@@ -206,6 +216,6 @@ export function EntityTable({ columns, columnTemplate, rows }: { columns: string
 import React, { type FormEvent, useState } from "react";
 import { Activity, BarChart3, CheckCircle2, KeyRound, Plus, Search, ServerCog, ShieldCheck, Users } from "lucide-react";
 import { bindingKey, effectiveAccess, errorMessage, policyUsageFallback, tenantSummaryFallback } from "../domain";
-import { EntityName, InlineError, InlineNote, InspectorHeader, PanelTitle, Status, kindLabel } from "../components";
+import { BrandMark, EntityName, InlineError, InlineNote, InspectorHeader, PanelTitle, Status, kindLabel } from "../components";
 import { budgetPercent, effectiveProviderCount, formatBudget, formatCount, formatDuration, formatMicros, formatTimestamp, providerBrandIcon, readyCount, request, usageEventTone, usagePolicyId } from "../ui-helpers";
 import type { AccessForm,AccessPolicy,AccessRole,AccessTab,AccessUser,AdminOverview,AdminTenantSummary,AdminUsageRow,AssignmentRule,AssignmentRuleForm,BindingForm,BrandIcon,BudgetStatus,ContentRetention,CredentialForm,EntitlementsResponse,IconComponent,OutcomeTone,PlaygroundForm,PlaygroundHttpResponse,PlaygroundTurn,PolicyBinding,PolicyForm,ProviderAccess,ProviderConnection,ProviderReadiness,ProviderResponse,ProviderRow,ProviderUsageSummary,ProxyCredential,RefreshOptions,RetainedRequestContent,RouteCatalog,ServiceItem,ServiceOutcome,SessionResponse,UpstreamGrant,UpstreamGrantForm,UsageAuditEvent,UsageSnapshot,UsageSummary,View } from "../ui-types";
