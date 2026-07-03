@@ -5,7 +5,7 @@
 }
 
 .usageMainPane {
-  min-height: calc(100vh - var(--header-height) - 57px);
+  min-height: calc(100vh - var(--header-height) - 1px);
 }
 
 .usageMainPane .overviewStrip {
@@ -118,14 +118,17 @@
   gap: 7px;
 }
 
+/* Attention rail: one calm bordered row per signal — the tone lives in the
+   rail and the numeral, not a full-panel wash. Only danger keeps a wash. */
 .attentionMetric {
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr);
   align-items: center;
   gap: 10px;
   min-height: 44px;
+  border: 1px solid var(--line);
   border-left: 3px solid var(--line-strong);
-  background: var(--surface-muted);
+  background: var(--panel);
   padding: 7px 9px;
 }
 
@@ -147,7 +150,10 @@
 
 .attentionMetric.warning {
   border-left-color: var(--warn);
-  background: var(--warn-wash);
+}
+
+.attentionMetric.warning strong {
+  color: var(--warn);
 }
 
 .attentionMetric.danger {
@@ -155,9 +161,16 @@
   background: var(--bad-wash);
 }
 
+.attentionMetric.danger strong {
+  color: var(--bad);
+}
+
 .attentionMetric.healthy {
   border-left-color: var(--ok);
-  background: var(--ok-wash);
+}
+
+.attentionMetric.healthy strong {
+  color: var(--ok);
 }
 
 .providerUsageList {
@@ -198,7 +211,7 @@
 .retainedContent {
   border: 1px solid var(--line);
   background: var(--panel);
-  padding: 0 14px 14px;
+  padding: 0 16px 16px;
 }
 
 .retainedContent .sectionTitle {

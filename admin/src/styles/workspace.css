@@ -1,13 +1,13 @@
 /* Workspace panes: entity layouts, inspector rail, forms, and editors. */
 
+/* Views join the racked frame: no outer margins, the topbar (or tab band)
+   supplies the top hairline and the view closes with its own bottom one. */
 .entityLayout {
   display: grid;
   grid-template-columns: minmax(0, 1fr) minmax(282px, 320px);
   align-items: start;
-  margin: 14px;
-  border: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
   background: var(--panel);
-  box-shadow: 0 1px 2px var(--shadow);
 }
 
 .mainPane {
@@ -17,15 +17,15 @@
 
 .inspector {
   position: sticky;
-  top: calc(var(--header-height) + 14px);
+  top: var(--header-height);
   display: grid;
   align-content: start;
   gap: 12px;
   min-width: 0;
-  min-height: calc(100vh - var(--header-height) - 57px);
+  min-height: calc(100vh - var(--header-height) - 1px);
   border-left: 1px solid var(--line);
   background: var(--panel);
-  padding: 14px;
+  padding: 14px 16px;
 }
 
 .wideInspector {
@@ -71,7 +71,7 @@
   border: 1px solid var(--line);
   border-radius: var(--radius-tag);
   background: var(--surface-muted);
-  color: var(--accent);
+  color: var(--ink);
 }
 
 .inspectorIcon svg,
@@ -88,7 +88,7 @@
   width: 14px;
   height: 14px;
   flex: 0 0 auto;
-  color: var(--accent);
+  color: var(--muted);
 }
 
 .sectionTitle {
@@ -102,7 +102,7 @@
   content: "";
   width: 10px;
   height: 2px;
-  background: var(--accent);
+  background: var(--line-strong);
 }
 
 .inlineError {
@@ -128,9 +128,9 @@
 .inlineNote {
   min-width: 0;
   border-left: 3px solid var(--warn);
-  background: var(--warn-wash);
+  background: var(--surface-muted);
   color: var(--text);
-  padding: 8px 9px;
+  padding: 8px 10px;
   font-size: 12px;
   line-height: 1.45;
 }
@@ -208,19 +208,21 @@
 
 .facts {
   display: grid;
-  grid-template-columns: 92px minmax(0, 1fr);
-  gap: 7px 9px;
+  grid-template-columns: 118px minmax(0, 1fr);
+  gap: 7px 10px;
   border-top: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
   padding: 10px 0;
 }
 
 .facts dt {
+  align-self: baseline;
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: 9.5px;
   font-weight: 500;
   letter-spacing: 0.07em;
+  line-height: 1.6;
   text-transform: uppercase;
 }
 
@@ -339,7 +341,7 @@
   gap: 8px 12px;
   border-bottom: 1px solid var(--line);
   background: var(--panel);
-  padding: 11px 12px 9px;
+  padding: 11px 16px 9px;
 }
 
 .catalogMeta {
@@ -434,7 +436,7 @@
   gap: 3px;
   min-width: 0;
   border-right: 1px solid var(--line);
-  padding: 12px;
+  padding: 12px 16px;
 }
 
 .metric:last-child {
@@ -487,7 +489,7 @@
 .tableSectionHeader {
   min-height: 48px;
   border-bottom: 1px solid var(--line);
-  padding: 8px 12px;
+  padding: 8px 16px;
 }
 
 .tableSectionHeader > div,
@@ -537,8 +539,9 @@
   display: flex;
   align-items: end;
   gap: 2px;
-  margin: 14px 14px 0;
   border-bottom: 1px solid var(--line);
+  background: var(--surface-muted);
+  padding: 6px 16px 0;
 }
 
 .resourceTabs button {
@@ -589,16 +592,12 @@
   min-width: 0;
 }
 
-.accessWorkspace > .entityLayout {
-  margin-top: 0;
-}
-
 .grantsLayout {
   grid-template-columns: minmax(390px, 0.85fr) minmax(520px, 1.15fr);
 }
 
 .grantListPane {
-  min-height: calc(100vh - var(--header-height) - 57px);
+  min-height: calc(100vh - var(--header-height) - 42px);
 }
 
 .grantListPane .tableHead,
@@ -616,7 +615,7 @@
 
 .grantEditor {
   gap: 14px;
-  min-height: calc(100vh - var(--header-height) - 57px);
+  min-height: calc(100vh - var(--header-height) - 42px);
   padding: 16px;
 }
 
@@ -850,13 +849,9 @@
 }
 
 @media (max-width: 760px) {
-  .entityLayout {
-    margin: 8px;
-  }
-
   .resourceTabs {
-    margin-inline: 8px;
     overflow-x: auto;
+    padding-inline: 12px;
   }
 
   .resourceTabs button {

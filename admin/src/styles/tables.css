@@ -21,7 +21,7 @@
   min-height: 32px;
   border-bottom: 1px solid var(--line);
   background: var(--surface-muted);
-  padding: 7px 12px;
+  padding: 7px 16px;
 }
 
 .tableBody {
@@ -38,7 +38,7 @@
   border-radius: 0;
   background: transparent;
   color: var(--text);
-  padding: 6px 12px 6px 9px;
+  padding: 6px 16px 6px 13px;
   font-weight: 440;
   text-align: left;
 }

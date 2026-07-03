@@ -3,16 +3,14 @@
 .playgroundLayout {
   display: grid;
   align-items: start;
-  margin: 14px;
-  border: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
   background: var(--panel);
-  box-shadow: 0 1px 2px var(--shadow);
 }
 
 .chatPlayground {
   grid-template-columns: minmax(0, 1fr) 340px;
   align-items: stretch;
-  height: calc(100vh - var(--header-height) - 28px);
+  height: calc(100vh - var(--header-height) - 1px);
   min-height: 620px;
   overflow: hidden;
 }
@@ -36,7 +34,7 @@
   min-height: 62px;
   border-bottom: 1px solid var(--line);
   background: var(--surface-translucent);
-  padding: 10px 18px;
+  padding: 10px 16px;
 }
 
 .chatHeader > div {
@@ -154,7 +152,7 @@
   border: 1px solid var(--line);
   border-radius: 12px 12px 3px 12px;
   background: var(--surface-muted);
-  padding: 10px 13px;
+  padding: 10px 16px;
 }
 
 .chatMessageUser:hover:not(:disabled) {
@@ -386,7 +384,7 @@
 .inspectorTopline {
   min-height: 62px;
   border-bottom: 1px solid var(--line);
-  padding: 10px 13px;
+  padding: 10px 16px;
 }
 
 .inspectorTopline {
@@ -401,7 +399,7 @@
   grid-template-columns: 1fr;
   gap: 12px;
   border-bottom: 1px solid var(--line);
-  padding: 13px;
+  padding: 13px 16px;
 }
 
 .playgroundSettingPair {
@@ -411,7 +409,7 @@
 }
 
 .playgroundInspector .systemPrompt { min-height: 118px; }
-.playgroundInspector .chatFacts { margin: 13px; }
+.playgroundInspector .chatFacts { margin: 13px 16px; }
 
 .requestDrawer {
   border-top: 1px solid var(--line);
@@ -424,7 +422,7 @@
   gap: 10px;
   min-height: 38px;
   background: var(--surface-muted);
-  padding: 8px 13px;
+  padding: 8px 16px;
   cursor: pointer;
   list-style: none;
 }
@@ -458,7 +456,7 @@
   display: grid;
   grid-template-columns: 1fr 1fr;
   gap: 2px;
-  margin: 0 13px 10px;
+  margin: 0 16px 10px;
   border-radius: var(--radius);
   background: var(--surface-muted);
   padding: 2px;
@@ -480,7 +478,7 @@
 
 .debugPayload {
   max-height: none;
-  margin: 0 13px 13px;
+  margin: 0 16px 16px;
   border: 1px solid var(--hero-line);
   white-space: pre-wrap;
   overflow-wrap: anywhere;
@@ -505,7 +503,6 @@
     overflow: visible;
   }
 
-  .playgroundLayout { margin: 8px; }
   .chatWorkspace { min-height: 680px; }
   .chatTranscript { max-height: 560px; }
   .playgroundInspector { border-top: 1px solid var(--line); border-left: 0; }
