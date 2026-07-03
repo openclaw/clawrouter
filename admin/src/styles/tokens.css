@@ -1,0 +1,134 @@
+/* Patchboard design tokens: copper signal accent on graphite ink (dark)
+   and blueprint-paper porcelain (light). Archivo Variable carries the UI
+   voice (width axis: condensed labels, extended display); Spline Sans Mono
+   carries every numeral, code path, and stencil label. */
+
+:root {
+  color-scheme: light dark;
+
+  --font-sans: "Archivo Variable", "Archivo", "Helvetica Neue", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "Spline Sans Mono Variable", "Spline Sans Mono", ui-monospace, "SF Mono", Menlo, Consolas, monospace;
+
+  --canvas: #f2f0ea;
+  --panel: #fbfaf7;
+  --surface-raised: #ffffff;
+  --surface-muted: #f0ede5;
+  --surface-hover: #ebe7dd;
+  --surface-translucent: rgb(251 250 247 / 0.94);
+
+  --ink: #1b1d20;
+  --text: #43474c;
+  --muted: #6b6f75;
+  --faint: #9599a0;
+
+  --line: #ded9cd;
+  --line-strong: #b5afa0;
+
+  --accent: #bc3c08;
+  --accent-hover: #98300a;
+  --accent-contrast: #ffffff;
+  --accent-wash: #f5e3d3;
+  --accent-soft: #f8efe4;
+
+  --ok: #17734a;
+  --ok-wash: #e0efe4;
+  --warn: #8f5f06;
+  --warn-wash: #f7eed2;
+  --bad: #b3341f;
+  --bad-wash: #f8e7e1;
+  --info-wash: #e9ecf1;
+
+  --code-bg: #17191d;
+  --code-fg: #edeee9;
+  --track: #e1dcd0;
+  --shadow: rgb(27 29 32 / 0.09);
+
+  --hero-ink: #17191d;
+  --hero-line: #2c2f35;
+  --hero-text: #f0eee8;
+  --hero-muted: #a3a7ad;
+  --hero-grid: rgb(240 238 232 / 0.045);
+  --hero-signal: rgb(255 122 69 / 0.55);
+  --hero-action: #f2ede3;
+  --hero-action-hover: #ffffff;
+  --hero-action-foreground: #17191d;
+
+  --chat-canvas: rgb(242 240 234 / 0.82);
+  --chat-grid: #d9d4c7;
+  --composer-bg: #faf9f5;
+
+  --radius: 4px;
+  --radius-tag: 2px;
+  --header-height: 56px;
+  --sidebar-width: 216px;
+
+  color: var(--text);
+  background: var(--canvas);
+  font-family: var(--font-sans);
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+:root[data-theme="light"] {
+  color-scheme: light;
+}
+
+:root[data-theme="dark"] {
+  color-scheme: dark;
+
+  --canvas: #0c0e11;
+  --panel: #121418;
+  --surface-raised: #191c21;
+  --surface-muted: #16181d;
+  --surface-hover: #1e2127;
+  --surface-translucent: rgb(18 20 24 / 0.92);
+
+  --ink: #ecede9;
+  --text: #c2c5c9;
+  --muted: #8e9298;
+  --faint: #63676d;
+
+  --line: #24272d;
+  --line-strong: #3c4048;
+
+  --accent: #ff7847;
+  --accent-hover: #ff9066;
+  --accent-contrast: #1c0e07;
+  --accent-wash: rgb(255 120 71 / 0.16);
+  --accent-soft: rgb(255 120 71 / 0.08);
+
+  --ok: #4cc98a;
+  --ok-wash: rgb(76 201 138 / 0.14);
+  --warn: #e3b25c;
+  --warn-wash: rgb(227 178 92 / 0.14);
+  --bad: #f0705a;
+  --bad-wash: rgb(240 112 90 / 0.14);
+  --info-wash: rgb(126 156 216 / 0.14);
+
+  --code-bg: #08090b;
+  --code-fg: #e6e7e3;
+  --track: #23262c;
+  --shadow: rgb(0 0 0 / 0.5);
+
+  --hero-ink: #101216;
+  --hero-line: #262a30;
+  --hero-text: #f0eee8;
+  --hero-muted: #9da1a7;
+  --hero-grid: rgb(240 238 232 / 0.04);
+  --hero-signal: rgb(255 120 71 / 0.5);
+  --hero-action: #ecede9;
+  --hero-action-hover: #ffffff;
+  --hero-action-foreground: #101216;
+
+  --chat-canvas: rgb(12 14 17 / 0.84);
+  --chat-grid: #1d2026;
+  --composer-bg: #101216;
+}
+
+:root[data-theme="dark"] ::selection {
+  background: rgb(255 120 71 / 0.32);
+}
+
+::selection {
+  background: rgb(194 65 12 / 0.22);
+}
