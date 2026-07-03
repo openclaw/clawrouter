@@ -5,7 +5,7 @@
 }
 
 .usageMainPane {
-  min-height: calc(100vh - var(--header-height) - 57px);
+  min-height: calc(100vh - var(--header-height) - 1px);
 }
 
 .usageMainPane .overviewStrip {
@@ -118,14 +118,17 @@
   gap: 7px;
 }
 
+/* Attention rail: one calm bordered row per signal — the tone lives in the
+   rail and the numeral, not a full-panel wash. Only danger keeps a wash. */
 .attentionMetric {
   display: grid;
   grid-template-columns: 34px minmax(0, 1fr);
   align-items: center;
   gap: 10px;
   min-height: 44px;
+  border: 1px solid var(--line);
   border-left: 3px solid var(--line-strong);
-  background: var(--surface-muted);
+  background: var(--panel);
   padding: 7px 9px;
 }
 
@@ -147,7 +150,10 @@
 
 .attentionMetric.warning {
   border-left-color: var(--warn);
-  background: var(--warn-wash);
+}
+
+.attentionMetric.warning strong {
+  color: var(--warn);
 }
 
 .attentionMetric.danger {
@@ -155,42 +161,112 @@
   background: var(--bad-wash);
 }
 
-.attentionMetric.healthy {
-  border-left-color: var(--ok);
-  background: var(--ok-wash);
+.attentionMetric.danger strong {
+  color: var(--bad);
 }
 
-.providerUsageList {
+.attentionMetric.healthy {
+  border-left-color: var(--ok);
+}
+
+.attentionMetric.healthy strong {
+  color: var(--ok);
+}
+
+/* Ranked share readout: each provider gets a copper share bar scaled to the
+   busiest provider, with request numerals and a mono meta line. */
+.providerShareList {
   display: grid;
   border-top: 1px solid var(--line);
 }
 
-.providerUsageList > div {
+.providerShare {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
-  align-items: center;
-  gap: 8px;
-  min-height: 44px;
+  grid-template-columns: 24px minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
   border-bottom: 1px solid var(--line);
-  padding: 6px 0;
+  padding: 10px 0;
 }
 
-.providerUsageList > div > span {
+.providerShareMark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-tag);
+  background: var(--surface-raised);
+}
+
+.providerShareMark svg,
+.providerShareMark img {
+  width: 14px;
+  height: 14px;
+}
+
+.providerShareBody {
   display: grid;
-  justify-items: end;
-  gap: 2px;
+  gap: 5px;
+  min-width: 0;
 }
 
-.providerUsageList > div > span strong {
+.providerShareHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  min-width: 0;
+}
+
+.providerShareHead strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 560;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.providerShareHead em {
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
+  font-style: normal;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
 
-.providerUsageList > div > span small,
-.providerUsageList > p {
+.providerShareTrack {
+  display: block;
+  height: 5px;
+  overflow: hidden;
+  background: var(--track);
+}
+
+.providerShareTrack > span {
+  display: block;
+  height: 100%;
+  background: linear-gradient(90deg, var(--accent-hover), var(--accent));
+}
+
+.providerShareMeta {
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.providerShareMeta i {
+  color: var(--warn);
+  font-style: normal;
+  font-weight: 600;
+}
+
+.providerShareList > p {
   color: var(--muted);
   font-size: 10px;
 }
@@ -198,7 +274,7 @@
 .retainedContent {
   border: 1px solid var(--line);
   background: var(--panel);
-  padding: 0 14px 14px;
+  padding: 0 16px 16px;
 }
 
 .retainedContent .sectionTitle {

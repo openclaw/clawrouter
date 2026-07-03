@@ -30,6 +30,10 @@
   --accent-wash: #f5e3d3;
   --accent-soft: #f8efe4;
 
+  --action: #1b1d20;
+  --action-hover: #34383f;
+  --action-contrast: #f7f5f0;
+
   --ok: #17734a;
   --ok-wash: #e0efe4;
   --warn: #8f5f06;
@@ -96,6 +100,10 @@
   --accent-contrast: #1c0e07;
   --accent-wash: rgb(255 120 71 / 0.16);
   --accent-soft: rgb(255 120 71 / 0.08);
+
+  --action: #ecede9;
+  --action-hover: #ffffff;
+  --action-contrast: #101216;
 
   --ok: #4cc98a;
   --ok-wash: rgb(76 201 138 / 0.14);

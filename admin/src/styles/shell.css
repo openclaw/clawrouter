@@ -200,9 +200,11 @@
 
 .workspace {
   min-width: 0;
-  padding: 0 0 20px;
+  padding: 0;
 }
 
+/* Racked frame: the topbar is a full-bleed band whose hairline runs the
+   whole workspace width and meets the sidebar border — no floating gaps. */
 .topbar {
   position: sticky;
   top: 0;
@@ -212,9 +214,9 @@
   justify-content: space-between;
   gap: 10px;
   min-height: var(--header-height);
-  margin: 0 14px;
   border-bottom: 1px solid var(--line);
   background: var(--surface-translucent);
+  padding: 0 16px;
   backdrop-filter: blur(8px);
 }
 
@@ -248,17 +250,12 @@
   align-items: center;
   justify-content: center;
   flex: 0 0 auto;
-  width: 30px;
-  height: 30px;
-  border: 1px solid var(--line);
-  border-radius: var(--radius);
-  background: var(--accent-soft);
-  color: var(--accent);
+  color: var(--muted);
 }
 
 .pageIconSvg {
-  width: 14px;
-  height: 14px;
+  width: 16px;
+  height: 16px;
 }
 
 .topActions {
@@ -266,7 +263,12 @@
   flex: 0 0 auto;
   align-items: center;
   justify-content: flex-end;
-  gap: 8px;
+  gap: 10px;
+}
+
+.topActions .connectionMeta {
+  border-left: 1px solid var(--line);
+  padding-left: 12px;
 }
 
 .themeToggle {
@@ -355,7 +357,7 @@
   min-height: 28px;
   border-bottom: 1px solid var(--line);
   background: var(--surface-muted);
-  padding: 4px 14px;
+  padding: 4px 16px;
 }
 
 .statusBar span {
@@ -497,8 +499,7 @@
 
   .topbar {
     position: static;
-    margin: 0;
-    padding: 8px 10px;
+    padding: 8px 12px;
   }
 
   .pageTitle p {
@@ -509,8 +510,9 @@
     display: none;
   }
 
-  .workspace {
-    padding: 0 0 16px;
+  .topActions .connectionMeta {
+    border-left: 0;
+    padding-left: 0;
   }
 
   .statusBar {

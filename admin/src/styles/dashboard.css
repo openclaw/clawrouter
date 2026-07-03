@@ -1,9 +1,10 @@
-/* Control-room dashboard: switchboard hero, stat rail, service panels. */
+/* Control-room dashboard: switchboard hero, stat rail, service panels.
+   The canvas is a seamless rack — sections meet on shared hairlines instead
+   of floating in gutters. */
 
 .dashboardCanvas {
   display: grid;
-  gap: 14px;
-  margin: 14px;
+  gap: 0;
   color: var(--ink);
 }
 
@@ -13,7 +14,7 @@
   grid-template-columns: minmax(0, 1fr) auto;
   min-height: 232px;
   overflow: hidden;
-  border: 1px solid var(--hero-line);
+  border-bottom: 1px solid var(--line);
   background:
     linear-gradient(var(--hero-grid) 1px, transparent 1px),
     linear-gradient(90deg, var(--hero-grid) 1px, transparent 1px),
@@ -238,16 +239,15 @@
 .dashboardStats {
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  border: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
   background: var(--panel);
-  box-shadow: 0 1px 2px var(--shadow);
 }
 
 .dashboardStats > div {
   display: grid;
   gap: 3px;
   border-right: 1px solid var(--line);
-  padding: 15px 18px;
+  padding: 15px 16px;
 }
 
 .dashboardStats > div:last-child { border-right: 0; }
@@ -270,15 +270,20 @@
 .dashboardGrid {
   display: grid;
   grid-template-columns: minmax(0, 1.45fr) minmax(340px, 0.85fr);
-  gap: 14px;
-  align-items: start;
+  gap: 0;
+  align-items: stretch;
 }
 
 .dashboardPanel {
   min-width: 0;
-  border: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
   background: var(--panel);
-  box-shadow: 0 1px 2px var(--shadow);
+}
+
+/* Left rack column carries the shared vertical hairline. */
+.servicePanel,
+.activityPanel {
+  border-right: 1px solid var(--line);
 }
 
 .dashboardPanelHeader {
@@ -288,7 +293,7 @@
   gap: 12px;
   min-height: 64px;
   border-bottom: 1px solid var(--line);
-  padding: 11px 14px;
+  padding: 11px 16px;
 }
 
 .dashboardPanelHeader > div {
@@ -341,7 +346,7 @@
   min-height: 66px;
   border-right: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
-  padding: 9px 12px;
+  padding: 9px 16px;
   animation: dashboardReveal 340ms ease-out both;
   animation-delay: var(--reveal);
 }
@@ -367,16 +372,16 @@
 .dashboardService > span:nth-child(2) { display: grid; gap: 2px; min-width: 0; }
 .dashboardService > span:nth-child(2) strong { overflow: hidden; color: var(--ink); font-size: 11.5px; font-weight: 560; text-overflow: ellipsis; white-space: nowrap; }
 .dashboardService > span:nth-child(2) small { overflow: hidden; color: var(--muted); font-size: 9.5px; text-overflow: ellipsis; white-space: nowrap; }
-.dashboardService.attention { box-shadow: inset 3px 0 var(--warn); background: var(--warn-wash); }
+.dashboardService.attention { box-shadow: inset 3px 0 var(--warn); }
 
 .dashboardTextAction {
   justify-content: flex-start;
-  margin: 7px 14px;
+  margin: 7px 16px;
 }
 
 .panelIntro {
   border-bottom: 1px solid var(--line);
-  padding: 11px 14px;
+  padding: 11px 16px;
   font-size: 10.5px;
 }
 
@@ -389,7 +394,7 @@
   gap: 10px;
   min-height: 72px;
   border-bottom: 1px solid var(--line);
-  padding: 10px 14px;
+  padding: 10px 16px;
 }
 
 .quotaIdentity,
@@ -406,7 +411,7 @@
 .quotaNumbers { justify-items: end; text-align: right; }
 .quotaNumbers strong { font-family: var(--font-mono); font-weight: 500; font-variant-numeric: tabular-nums; }
 
-.activityDiagram { display: grid; padding: 8px 14px 12px; }
+.activityDiagram { display: grid; padding: 8px 16px 12px; }
 
 .activityBar {
   display: grid;
@@ -440,21 +445,23 @@
   min-height: 96px;
   border-right: 1px solid var(--line);
   border-bottom: 1px solid var(--line);
-  padding: 14px;
+  padding: 14px 16px;
 }
 
 .operationsDiagram > div:nth-child(even) { border-right: 0; }
 .operationsDiagram span { color: var(--muted); }
 .operationsDiagram strong { color: var(--ink); font-family: var(--font-mono); font-size: 25px; font-weight: 460; font-variant-numeric: tabular-nums; }
 .operationsDiagram small { align-self: end; color: var(--muted); font-size: 9.5px; }
-.operationsDiagram .needsAttention { box-shadow: inset 3px 0 var(--warn); background: var(--warn-wash); }
-.operationsDiagram .healthy { box-shadow: inset 3px 0 var(--ok); background: var(--ok-wash); }
+.operationsDiagram .needsAttention { box-shadow: inset 3px 0 var(--warn); }
+.operationsDiagram .needsAttention strong { color: var(--warn); }
+.operationsDiagram .healthy { box-shadow: inset 3px 0 var(--ok); }
+.operationsDiagram .healthy strong { color: var(--ok); }
 
 .operationsFooter {
   display: flex;
   align-items: center;
   gap: 10px;
-  padding: 13px 14px;
+  padding: 13px 16px;
   color: var(--accent);
 }
 
@@ -481,10 +488,11 @@
   .heroMeters { justify-content: start; margin-top: 28px; padding-left: 0; }
   .dashboardGrid { grid-template-columns: 1fr; }
   .quotaPanel { grid-row: auto; }
+  .servicePanel,
+  .activityPanel { border-right: 0; }
 }
 
 @media (max-width: 760px) {
-  .dashboardCanvas { margin: 8px; }
   .dashboardHero { padding: 25px 20px; }
   .heroCopy h2 { font-size: 28px; }
   .heroMeters { gap: 10px; overflow-x: auto; }
