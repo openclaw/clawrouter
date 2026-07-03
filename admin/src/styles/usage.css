@@ -188,24 +188,28 @@
   padding: 6px 0;
 }
 
-.providerUsageList > div > span {
+/* :last-child keeps this off the row's .entityName, which is also a direct
+   span child — an unscoped selector here grid-stacks the icon and name. */
+.providerUsageList > div > span:last-child {
   display: grid;
   justify-items: end;
   gap: 2px;
+  text-align: right;
 }
 
-.providerUsageList > div > span strong {
+.providerUsageList > div > span:last-child strong {
   color: var(--ink);
   font-family: var(--font-mono);
-  font-size: 10px;
+  font-size: 11px;
   font-weight: 500;
   font-variant-numeric: tabular-nums;
 }
 
-.providerUsageList > div > span small,
+.providerUsageList > div > span:last-child small,
 .providerUsageList > p {
   color: var(--muted);
   font-size: 10px;
+  white-space: nowrap;
 }
 
 .retainedContent {
