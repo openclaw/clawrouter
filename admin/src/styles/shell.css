@@ -1,0 +1,527 @@
+/* Application shell: sidebar rail, top bar, status strip. */
+
+.appShell {
+  display: grid;
+  grid-template-columns: var(--sidebar-width) minmax(0, 1fr);
+  min-height: 100vh;
+  background: var(--canvas);
+}
+
+.sidebar {
+  position: sticky;
+  top: 0;
+  align-self: start;
+  display: grid;
+  grid-template-rows: var(--header-height) minmax(0, 1fr) auto;
+  height: 100vh;
+  border-right: 1px solid var(--line);
+  background: var(--panel);
+}
+
+.brandBlock {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  min-height: var(--header-height);
+  border-bottom: 1px solid var(--line);
+  padding: 0 12px;
+}
+
+.brandMark {
+  display: grid;
+  width: 34px;
+  height: 34px;
+  place-items: center;
+  border-radius: var(--radius);
+  background: var(--hero-ink);
+  color: var(--accent);
+  box-shadow: inset 0 0 0 1px var(--hero-line);
+}
+
+.brandMark svg {
+  width: 17px;
+  height: 17px;
+}
+
+.brandBlock > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.brandBlock strong {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 15px;
+  font-weight: 700;
+  font-stretch: 106%;
+  line-height: 1.05;
+  letter-spacing: -0.01em;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.brandBlock > div > span {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.navTabs {
+  display: grid;
+  align-content: start;
+  gap: 18px;
+  overflow: auto;
+  padding: 14px 8px;
+}
+
+.navGroup {
+  display: grid;
+  gap: 2px;
+}
+
+.navGroupLabel {
+  padding: 0 8px 6px;
+}
+
+.navTabs button {
+  position: relative;
+  justify-content: start;
+  width: 100%;
+  min-height: 34px;
+  border: 0;
+  border-left: 3px solid transparent;
+  border-radius: 0;
+  background: transparent;
+  color: var(--text);
+  padding: 6px 9px;
+  font-weight: 520;
+  text-align: left;
+}
+
+.navTabs button:hover:not(:disabled) {
+  border-color: transparent;
+  border-left-color: var(--line-strong);
+  background: var(--surface-muted);
+  color: var(--ink);
+}
+
+.navTabs button.active {
+  border-color: transparent;
+  border-left-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+.navTabs button.active .navIcon {
+  color: var(--accent);
+}
+
+.navIcon {
+  width: 15px;
+  height: 15px;
+  flex: 0 0 auto;
+}
+
+.tenantSwitch {
+  display: grid;
+  grid-template-columns: 30px minmax(0, 1fr);
+  gap: 10px;
+  align-items: center;
+  min-width: 0;
+  border-top: 1px solid var(--line);
+  background: var(--surface-muted);
+  padding: 12px;
+}
+
+.tenantSwitch > div {
+  display: grid;
+  min-width: 0;
+}
+
+.tenantSwitch strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.tenantSwitch small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-transform: none;
+  letter-spacing: 0;
+}
+
+.contextIcon {
+  position: relative;
+  display: grid;
+  overflow: hidden;
+  width: 30px;
+  height: 30px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--accent-contrast);
+}
+
+.contextIcon svg {
+  width: 14px;
+  height: 14px;
+}
+
+.contextIcon img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  border-radius: inherit;
+  object-fit: cover;
+  opacity: 0;
+  transition: opacity 140ms ease-out;
+}
+
+.contextIconLoaded img {
+  opacity: 1;
+}
+
+.workspace {
+  min-width: 0;
+  padding: 0 0 20px;
+}
+
+.topbar {
+  position: sticky;
+  top: 0;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  min-height: var(--header-height);
+  margin: 0 14px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-translucent);
+  backdrop-filter: blur(8px);
+}
+
+.pageTitle {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+}
+
+.pageTitle > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.pageTitle p {
+  max-width: 78ch;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.09em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.pageIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.pageIconSvg {
+  width: 14px;
+  height: 14px;
+}
+
+.topActions {
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.themeToggle {
+  position: relative;
+  display: flex;
+  justify-content: flex-start;
+  width: 50px;
+  min-height: 28px;
+  border: 1px solid var(--line);
+  border-radius: 999px;
+  background: var(--surface-muted);
+  padding: 2px;
+}
+
+.themeToggle:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--surface-hover);
+}
+
+.themeToggle span {
+  display: grid;
+  width: 22px;
+  height: 22px;
+  place-items: center;
+  border-radius: 50%;
+  background: var(--surface-raised);
+  box-shadow: 0 1px 3px var(--shadow);
+  color: var(--warn);
+  transition: transform 150ms ease-out, background-color 150ms ease-out, color 150ms ease-out;
+}
+
+.themeToggle.active span {
+  background: var(--accent);
+  color: var(--accent-contrast);
+  transform: translateX(22px);
+}
+
+.themeToggle svg {
+  width: 13px;
+  height: 13px;
+}
+
+.connectionMeta {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 9px;
+  letter-spacing: 0.05em;
+  line-height: 1.15;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.connectionMeta strong,
+.connectionMeta time,
+.connectionMeta > span:last-child {
+  color: var(--text);
+  font-size: 9px;
+  font-variant-numeric: tabular-nums;
+}
+
+.connectionMeta strong {
+  font-weight: 700;
+}
+
+.connectionDot {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  box-shadow: 0 0 0 2px var(--info-wash);
+}
+
+.connectionMeta-success .connectionDot { background: var(--ok); box-shadow: 0 0 0 2px var(--ok-wash); }
+.connectionMeta-pending .connectionDot,
+.connectionMeta-neutral .connectionDot { background: var(--warn); box-shadow: 0 0 0 2px var(--warn-wash); }
+.connectionMeta-error .connectionDot { background: var(--bad); box-shadow: 0 0 0 2px var(--bad-wash); }
+.connectionSeparator { color: var(--line-strong); }
+
+.statusBar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 28px;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-muted);
+  padding: 4px 14px;
+}
+
+.statusBar span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.statusBar em {
+  margin-left: auto;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-tag);
+  color: var(--muted);
+  padding: 1px 6px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-style: normal;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.statusBar strong {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-height: 19px;
+  border-radius: var(--radius-tag);
+  padding: 2px 6px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.statusBar-neutral strong { background: var(--info-wash); color: var(--muted); }
+.statusBar-success strong { background: var(--ok-wash); color: var(--ok); }
+.statusBar-pending strong { background: var(--warn-wash); color: var(--warn); }
+.statusBar-error strong { background: var(--bad-wash); color: var(--bad); }
+.statusBar-error { border-bottom-color: var(--bad); }
+
+@media (max-width: 1180px) {
+  .appShell {
+    grid-template-columns: 1fr;
+  }
+
+  .sidebar {
+    position: static;
+    grid-template-columns: auto minmax(0, 1fr) auto;
+    grid-template-rows: var(--header-height);
+    height: auto;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .brandBlock {
+    border-right: 1px solid var(--line);
+    border-bottom: 0;
+  }
+
+  .navTabs {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    padding: 8px 10px;
+  }
+
+  .navGroup {
+    display: flex;
+    gap: 2px;
+  }
+
+  .navGroupLabel {
+    display: none;
+  }
+
+  .navTabs button {
+    width: auto;
+    border-left: 0;
+    border-bottom: 3px solid transparent;
+    white-space: nowrap;
+  }
+
+  .navTabs button:hover:not(:disabled),
+  .navTabs button.active {
+    border-left-color: transparent;
+  }
+
+  .navTabs button.active {
+    border-bottom-color: var(--accent);
+  }
+
+  .tenantSwitch {
+    align-self: stretch;
+    border-top: 0;
+    border-left: 1px solid var(--line);
+  }
+}
+
+@media (max-width: 720px) {
+  .sidebar {
+    grid-template-columns: 1fr;
+    grid-template-rows: auto auto auto;
+  }
+
+  .brandBlock {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .navTabs {
+    grid-row: 3;
+    overflow-x: auto;
+    padding: 6px 8px;
+  }
+
+  .navTabs button {
+    flex: 0 0 auto;
+    gap: 4px;
+    padding-inline: 6px;
+    font-size: 11px;
+  }
+
+  .navIcon {
+    width: 13px;
+    height: 13px;
+  }
+
+  .tenantSwitch {
+    grid-row: 2;
+    border-left: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .topbar {
+    position: static;
+    margin: 0;
+    padding: 8px 10px;
+  }
+
+  .pageTitle p {
+    white-space: normal;
+  }
+
+  .topActions .status {
+    display: none;
+  }
+
+  .workspace {
+    padding: 0 0 16px;
+  }
+
+  .statusBar {
+    flex-wrap: wrap;
+  }
+
+  .statusBar span {
+    white-space: normal;
+  }
+
+  .statusBar em {
+    margin-left: 0;
+  }
+}

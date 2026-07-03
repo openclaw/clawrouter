@@ -1,0 +1,327 @@
+/* Element defaults, controls, and shared atoms. */
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  min-width: 0;
+  min-height: 100%;
+  margin: 0;
+  background: var(--canvas);
+}
+
+body {
+  font-size: 13px;
+}
+
+h1,
+h2,
+p,
+dl {
+  margin: 0;
+}
+
+h1 {
+  color: var(--ink);
+  font-size: 17px;
+  font-weight: 700;
+  font-stretch: 104%;
+  line-height: 1.12;
+  letter-spacing: -0.01em;
+}
+
+h2 {
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 660;
+  font-stretch: 102%;
+  line-height: 1.25;
+}
+
+p {
+  color: var(--muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+  overflow-wrap: anywhere;
+}
+
+code,
+pre {
+  font-family: var(--font-mono);
+}
+
+pre {
+  margin: 0;
+  max-height: 300px;
+  overflow: auto;
+  background: var(--code-bg);
+  color: var(--code-fg);
+  padding: 12px;
+  font-size: 11px;
+  line-height: 1.55;
+}
+
+/* Stencil label: the mono microtype voice used for every eyebrow,
+   table header, and form label across the console. */
+label > span,
+.tableHead span,
+.sectionTitle,
+.panelTitle span,
+.tenantSwitch span,
+.tenantSwitch small,
+.navGroupLabel {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  min-height: 32px;
+  border: 1px solid var(--accent);
+  border-radius: var(--radius);
+  background: var(--accent);
+  color: var(--accent-contrast);
+  padding: 6px 12px;
+  cursor: pointer;
+  font: inherit;
+  font-size: 12.5px;
+  font-weight: 640;
+  line-height: 1.2;
+  transition:
+    background-color 120ms ease-out,
+    border-color 120ms ease-out,
+    color 120ms ease-out,
+    box-shadow 120ms ease-out;
+}
+
+button:hover:not(:disabled) {
+  border-color: var(--accent-hover);
+  background: var(--accent-hover);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.buttonSecondary,
+.segmented button,
+.presetRow button {
+  border-color: var(--line);
+  background: var(--panel);
+  color: var(--ink);
+}
+
+.buttonSecondary:hover:not(:disabled),
+.segmented button:hover:not(:disabled),
+.presetRow button:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+.buttonDanger {
+  border-color: var(--bad);
+  background: transparent;
+  color: var(--bad);
+}
+
+.buttonDanger:hover:not(:disabled) {
+  border-color: var(--bad);
+  background: var(--bad-wash);
+  color: var(--bad);
+}
+
+.tableAction {
+  min-height: 28px;
+  border-color: var(--line);
+  background: var(--surface-raised);
+  color: var(--ink);
+  padding: 4px 10px;
+  font-size: 11.5px;
+}
+
+.tableAction:hover:not(:disabled) {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.iconButton {
+  width: 28px;
+  min-width: 28px;
+  min-height: 28px;
+  border-color: var(--line);
+  background: var(--surface-raised);
+  color: var(--muted);
+  padding: 0;
+  font-size: 17px;
+  font-weight: 400;
+}
+
+.iconButton:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+.buttonIcon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+}
+
+input,
+select,
+textarea {
+  width: 100%;
+  min-width: 0;
+  min-height: 34px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  color: var(--ink);
+  padding: 7px 10px;
+  font: inherit;
+  font-size: 12.5px;
+  transition:
+    border-color 120ms ease-out,
+    box-shadow 120ms ease-out;
+}
+
+textarea {
+  min-height: 84px;
+  resize: vertical;
+  line-height: 1.55;
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: var(--faint);
+}
+
+input:hover,
+select:hover,
+textarea:hover {
+  border-color: var(--line-strong);
+}
+
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible {
+  outline: 0;
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--accent-wash);
+}
+
+input[readonly],
+select:disabled {
+  background: var(--surface-muted);
+  color: var(--muted);
+}
+
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+label {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+}
+
+/* Status tag: rectangular stencil chip for every state readout. */
+.status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: fit-content;
+  max-width: 100%;
+  min-height: 19px;
+  border: 1px solid transparent;
+  border-radius: var(--radius-tag);
+  padding: 2px 6px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  line-height: 1.2;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.status svg {
+  width: 11px;
+  height: 11px;
+}
+
+.status.neutral {
+  border-color: var(--line);
+  background: var(--info-wash);
+  color: var(--muted);
+}
+
+.status.active {
+  border-color: transparent;
+  background: var(--ok-wash);
+  color: var(--ok);
+}
+
+.status.revoked {
+  border-color: transparent;
+  background: var(--bad-wash);
+  color: var(--bad);
+}
+
+.srOnly {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  clip-path: inset(50%);
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-strong) transparent;
+}
+
+*::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+*::-webkit-scrollbar-thumb {
+  border: 3px solid transparent;
+  border-radius: 8px;
+  background: var(--line-strong);
+  background-clip: padding-box;
+}
+
+*::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    scroll-behavior: auto !important;
+    transition-duration: 0.01ms !important;
+    animation: none !important;
+  }
+}

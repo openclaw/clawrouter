@@ -1,7 +1,8 @@
-@import "./styles/01.css";
-@import "./styles/02.css";
-@import "./styles/03.css";
-@import "./styles/04.css";
-@import "./styles/05.css";
-@import "./styles/06.css";
-@import "./styles/07.css";
+@import "./styles/tokens.css";
+@import "./styles/base.css";
+@import "./styles/shell.css";
+@import "./styles/tables.css";
+@import "./styles/workspace.css";
+@import "./styles/dashboard.css";
+@import "./styles/playground.css";
+@import "./styles/usage.css";

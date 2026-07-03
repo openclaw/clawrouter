@@ -1,0 +1,910 @@
+/* Workspace panes: entity layouts, inspector rail, forms, and editors. */
+
+.entityLayout {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(282px, 320px);
+  align-items: start;
+  margin: 14px;
+  border: 1px solid var(--line);
+  background: var(--panel);
+  box-shadow: 0 1px 2px var(--shadow);
+}
+
+.mainPane {
+  min-width: 0;
+  overflow: hidden;
+}
+
+.inspector {
+  position: sticky;
+  top: calc(var(--header-height) + 14px);
+  display: grid;
+  align-content: start;
+  gap: 12px;
+  min-width: 0;
+  min-height: calc(100vh - var(--header-height) - 57px);
+  border-left: 1px solid var(--line);
+  background: var(--panel);
+  padding: 14px;
+}
+
+.wideInspector {
+  min-width: 0;
+}
+
+.inspector form {
+  display: grid;
+  gap: 12px;
+}
+
+.inspectorHeader,
+.panelTitle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+
+.inspectorHeader > div,
+.panelTitle > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.inspectorHeader h2,
+.panelTitle h2 {
+  font-size: 15px;
+}
+
+.inspectorHeader p {
+  font-size: 12px;
+}
+
+.inspectorIcon {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: 0 0 auto;
+  width: 32px;
+  height: 32px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-tag);
+  background: var(--surface-muted);
+  color: var(--accent);
+}
+
+.inspectorIcon svg,
+.inspectorIcon img {
+  width: 15px;
+  height: 15px;
+}
+
+.inspectorIcon img {
+  border-radius: 2px;
+}
+
+.panelIcon {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  color: var(--accent);
+}
+
+.sectionTitle {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+}
+
+.sectionTitle::before {
+  content: "";
+  width: 10px;
+  height: 2px;
+  background: var(--accent);
+}
+
+.inlineError {
+  display: flex;
+  align-items: flex-start;
+  gap: 7px;
+  min-width: 0;
+  border-left: 3px solid var(--bad);
+  background: var(--bad-wash);
+  color: var(--bad);
+  padding: 8px 9px;
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.inlineError svg {
+  width: 14px;
+  height: 14px;
+  flex: 0 0 auto;
+  margin-top: 1px;
+}
+
+.inlineNote {
+  min-width: 0;
+  border-left: 3px solid var(--warn);
+  background: var(--warn-wash);
+  color: var(--text);
+  padding: 8px 9px;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.outcomeCallout,
+.grantSummary {
+  display: grid;
+  gap: 6px;
+  min-width: 0;
+  border-left: 3px solid var(--line-strong);
+  background: var(--surface-muted);
+  padding: 9px;
+}
+
+.outcomeCallout {
+  grid-template-columns: auto minmax(0, 1fr);
+  align-items: start;
+}
+
+.outcomeCallout p {
+  font-size: 12px;
+}
+
+.outcomeCallout.active {
+  border-left-color: var(--ok);
+}
+
+.outcomeCallout.revoked {
+  border-left-color: var(--bad);
+}
+
+.grantSummary strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 13px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.grantSummary span {
+  color: var(--muted);
+  font-size: 12px;
+  line-height: 1.4;
+}
+
+.issuedKey {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 9px;
+  align-items: end;
+  border: 1px solid var(--accent);
+  background: var(--accent-soft);
+  padding: 8px 9px;
+}
+
+.issuedKey span {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--accent);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+.issuedKey code {
+  display: block;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 11px;
+  overflow-wrap: anywhere;
+}
+
+.facts {
+  display: grid;
+  grid-template-columns: 92px minmax(0, 1fr);
+  gap: 7px 9px;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  padding: 10px 0;
+}
+
+.facts dt {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+}
+
+.facts dd {
+  min-width: 0;
+  margin: 0;
+  overflow-wrap: anywhere;
+  color: var(--text);
+  font-size: 11px;
+}
+
+.miniList {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.miniList button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  width: 100%;
+  min-height: 32px;
+  border-color: var(--line);
+  border-radius: var(--radius-tag);
+  background: var(--surface-raised);
+  color: var(--ink);
+  padding: 5px 9px;
+  font-size: 11px;
+  font-weight: 520;
+  text-align: left;
+}
+
+.miniList button:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+.miniList button span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 440;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.inspectorActions {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  flex-wrap: wrap;
+}
+
+.formGrid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  padding: 12px;
+}
+
+.formGrid.compact {
+  padding: 0;
+}
+
+.full {
+  grid-column: 1 / -1;
+}
+
+.segmented {
+  display: flex;
+  gap: 4px;
+}
+
+.segmented button {
+  min-height: 27px;
+  padding: 4px 9px;
+}
+
+.segmented button.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--accent);
+}
+
+.presetRow {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.inputWithIcon {
+  position: relative;
+}
+
+.inputWithIcon svg {
+  position: absolute;
+  left: 9px;
+  top: 50%;
+  width: 14px;
+  height: 14px;
+  color: var(--faint);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.inputWithIcon input {
+  padding-left: 30px;
+}
+
+.catalogControls {
+  display: grid;
+  grid-template-columns: minmax(190px, 0.35fr) minmax(280px, 1fr);
+  gap: 8px 12px;
+  border-bottom: 1px solid var(--line);
+  background: var(--panel);
+  padding: 11px 12px 9px;
+}
+
+.catalogMeta {
+  display: grid;
+  align-content: end;
+  gap: 2px;
+  min-width: 0;
+  padding-bottom: 1px;
+}
+
+.catalogMeta strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 14px;
+  font-weight: 660;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.catalogMeta span {
+  overflow: hidden;
+  color: var(--muted);
+  font-size: 11px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kindTabs {
+  display: flex;
+  grid-column: 1 / -1;
+  gap: 4px;
+  min-width: 0;
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.kindTabs::-webkit-scrollbar {
+  display: none;
+}
+
+.kindTabs button {
+  flex: 0 0 auto;
+  min-height: 28px;
+  border-color: var(--line);
+  border-radius: var(--radius-tag);
+  background: var(--surface-raised);
+  color: var(--text);
+  padding: 4px 8px;
+  font-size: 11px;
+}
+
+.kindTabs button:hover:not(:disabled) {
+  border-color: var(--line-strong);
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+.kindTabs button.active {
+  border-color: var(--accent);
+  background: var(--accent-soft);
+  color: var(--ink);
+}
+
+.kindTabs button span {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 16px;
+  height: 16px;
+  border-radius: var(--radius-tag);
+  color: var(--muted);
+  padding: 0 3px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 600;
+}
+
+.kindTabs button.active span {
+  color: var(--accent);
+}
+
+.overviewStrip {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-muted);
+}
+
+.metric {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+  border-right: 1px solid var(--line);
+  padding: 12px;
+}
+
+.metric:last-child {
+  border-right: 0;
+}
+
+.metric span,
+.metric small {
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 500;
+  letter-spacing: 0.08em;
+  text-overflow: ellipsis;
+  text-transform: uppercase;
+  white-space: nowrap;
+}
+
+.metric strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-family: var(--font-mono);
+  font-size: 20px;
+  font-weight: 480;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.15;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.metric small {
+  font-size: 10.5px;
+  font-weight: 440;
+  letter-spacing: 0;
+  text-transform: none;
+  font-family: var(--font-sans);
+}
+
+.tableSectionHeader,
+.editorSectionHeader,
+.grantEditorHeader {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.tableSectionHeader {
+  min-height: 48px;
+  border-bottom: 1px solid var(--line);
+  padding: 8px 12px;
+}
+
+.tableSectionHeader > div,
+.editorSectionHeader > div {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+
+.tableSectionHeader strong,
+.editorSectionHeader strong {
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 660;
+}
+
+.tableSectionHeader span,
+.editorSectionHeader span {
+  color: var(--muted);
+  font-size: 10.5px;
+}
+
+.tableSectionHeader > span {
+  border: 1px solid var(--line);
+  border-radius: var(--radius-tag);
+  background: var(--surface-muted);
+  padding: 3px 6px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+.secondaryTableHeader {
+  margin-top: 18px;
+  border-top: 1px solid var(--line);
+}
+
+.inlineActions {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.resourceTabs {
+  display: flex;
+  align-items: end;
+  gap: 2px;
+  margin: 14px 14px 0;
+  border-bottom: 1px solid var(--line);
+}
+
+.resourceTabs button {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  min-height: 34px;
+  border: 1px solid transparent;
+  border-bottom: 0;
+  border-radius: var(--radius-tag) var(--radius-tag) 0 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 6px 11px;
+  font-size: 11.5px;
+  font-weight: 540;
+}
+
+.resourceTabs button:hover:not(:disabled) {
+  border-color: transparent;
+  background: var(--surface-hover);
+  color: var(--ink);
+}
+
+.resourceTabs button.active {
+  border-color: var(--line);
+  border-bottom-color: var(--panel);
+  background: var(--panel);
+  color: var(--ink);
+  box-shadow: inset 0 2px 0 var(--accent);
+}
+
+.resourceTabs button span {
+  min-width: 16px;
+  border-radius: var(--radius-tag);
+  background: var(--surface-muted);
+  padding: 1px 4px;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  text-align: center;
+}
+
+.resourceTabs button.active span {
+  background: var(--accent-wash);
+  color: var(--accent);
+}
+
+.accessWorkspace {
+  min-width: 0;
+}
+
+.accessWorkspace > .entityLayout {
+  margin-top: 0;
+}
+
+.grantsLayout {
+  grid-template-columns: minmax(390px, 0.85fr) minmax(520px, 1.15fr);
+}
+
+.grantListPane {
+  min-height: calc(100vh - var(--header-height) - 57px);
+}
+
+.grantListPane .tableHead,
+.grantListPane .tableBody {
+  min-width: 0;
+}
+
+.grantListHeader button {
+  min-height: 30px;
+}
+
+.grantOverview {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.grantEditor {
+  gap: 14px;
+  min-height: calc(100vh - var(--header-height) - 57px);
+  padding: 16px;
+}
+
+.grantEditor form {
+  gap: 0;
+}
+
+.grantEditorFields {
+  display: grid;
+  gap: 14px;
+  min-width: 0;
+  margin: 0;
+  border: 0;
+  padding: 0;
+}
+
+.grantEditorHeader {
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 13px;
+}
+
+.editorSectionHeader {
+  border-top: 1px solid var(--line);
+  padding-top: 13px;
+}
+
+.grantEditor .formGrid {
+  padding: 0;
+}
+
+.serviceAccessHeader {
+  align-items: end;
+}
+
+.wildcardScope {
+  border: 1px solid var(--warn);
+  border-radius: var(--radius-tag);
+  background: var(--warn-wash);
+  color: var(--warn) !important;
+  padding: 4px 7px;
+  font-family: var(--font-mono);
+  font-size: 9.5px !important;
+  font-weight: 600;
+  letter-spacing: 0.03em;
+  text-transform: uppercase;
+}
+
+.providerFilter {
+  margin-top: -2px;
+}
+
+.serviceGroups {
+  display: grid;
+  gap: 10px;
+  max-height: 440px;
+  overflow: auto;
+  padding-right: 2px;
+}
+
+.serviceGroup {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.serviceGroupHeader {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto auto auto;
+  align-items: center;
+  gap: 5px;
+}
+
+.serviceGroupHeader strong {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 620;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.serviceGroupHeader span {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.serviceGroupHeader button {
+  min-height: 24px;
+  padding: 3px 7px;
+  font-size: 11px;
+}
+
+.serviceMatrix {
+  display: grid;
+  gap: 5px;
+}
+
+.serviceMatrix label {
+  display: grid;
+  grid-template-columns: 18px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 7px;
+  min-height: 31px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-tag);
+  background: var(--surface-raised);
+  padding: 4px 8px;
+}
+
+.serviceMatrix label:hover {
+  border-color: var(--line-strong);
+}
+
+.serviceMatrix input {
+  width: 15px;
+  min-height: 15px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.serviceMatrix span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 12px;
+  font-weight: 520;
+  letter-spacing: 0;
+  text-overflow: ellipsis;
+  text-transform: none;
+  white-space: nowrap;
+}
+
+.serviceMatrix small {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.grantEditor .serviceGroups {
+  max-height: 440px;
+}
+
+.grantEditor .serviceMatrix {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 6px;
+}
+
+.grantEditor .serviceMatrix label {
+  grid-template-columns: 18px minmax(0, 1fr);
+  grid-template-rows: auto auto;
+  min-height: 42px;
+  padding: 5px 8px;
+}
+
+.grantEditor .serviceMatrix input {
+  grid-row: 1 / 3;
+}
+
+.grantEditor .serviceMatrix small {
+  grid-column: 2;
+}
+
+.grantEditor .inspectorActions {
+  border-top: 1px solid var(--line);
+  padding-top: 13px;
+}
+
+.checkLabel {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-height: 34px;
+  align-self: end;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+  padding: 5px 9px;
+}
+
+.checkLabel input {
+  width: 14px;
+  min-height: 14px;
+  margin: 0;
+  accent-color: var(--accent);
+}
+
+.checkLabel span {
+  color: var(--ink);
+  font-family: var(--font-sans);
+  font-size: 11.5px;
+  font-weight: 520;
+  letter-spacing: 0;
+  text-transform: none;
+}
+
+.userListHeader {
+  display: grid;
+  grid-template-columns: minmax(220px, 360px) auto;
+  justify-content: space-between;
+}
+
+.userListHeader .inputWithIcon {
+  width: 100%;
+}
+
+@media (max-width: 1180px) {
+  .entityLayout,
+  .grantsLayout {
+    grid-template-columns: 1fr;
+  }
+
+  .inspector {
+    position: static;
+    min-height: 0;
+    border-left: 0;
+    border-top: 1px solid var(--line);
+  }
+
+  .grantListPane,
+  .grantEditor {
+    min-height: 0;
+  }
+}
+
+@media (max-width: 760px) {
+  .entityLayout {
+    margin: 8px;
+  }
+
+  .resourceTabs {
+    margin-inline: 8px;
+    overflow-x: auto;
+  }
+
+  .resourceTabs button {
+    min-height: 44px;
+    white-space: nowrap;
+  }
+
+  .catalogControls,
+  .overviewStrip,
+  .formGrid,
+  .presetRow,
+  .grantOverview,
+  .userListHeader,
+  .grantEditor .serviceMatrix {
+    grid-template-columns: 1fr;
+  }
+
+  .metric {
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+
+  .metric:last-child {
+    border-bottom: 0;
+  }
+
+  .tableSectionHeader,
+  .editorSectionHeader,
+  .grantEditorHeader,
+  .serviceAccessHeader {
+    align-items: stretch;
+    flex-direction: column;
+  }
+
+  .facts {
+    grid-template-columns: 1fr;
+  }
+
+  .serviceMatrix label {
+    grid-template-columns: 18px minmax(0, 1fr);
+  }
+
+  .serviceMatrix small {
+    grid-column: 2;
+  }
+
+  .inspectorActions,
+  .inspectorActions button {
+    width: 100%;
+  }
+}
