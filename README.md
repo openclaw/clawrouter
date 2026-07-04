@@ -16,6 +16,16 @@ Current implementation target:
 - Cloudflare KV-backed one-time migration seeds, version 1
   API-key/OAuth/subscription grants, assignment rules, and provider health
 
+## OpenClaw client
+
+OpenClaw includes a bundled `@openclaw/clawrouter` plugin. One policy-scoped
+credential discovers allowed models, routes supported OpenAI-compatible and
+native provider protocols, and reports managed budget usage without installing
+or authenticating every upstream provider plugin on the OpenClaw host.
+
+See [Use ClawRouter with OpenClaw](docs/openclaw.md) for credential setup,
+dynamic model discovery, multi-provider smoke tests, and quota verification.
+
 ## Provider Registry
 
 Provider support is data-driven. Most integrations are added by creating one file:
