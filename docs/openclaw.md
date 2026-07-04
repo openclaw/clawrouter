@@ -21,12 +21,17 @@ once. Store it in an approved secret manager before leaving the page.
 
 ## Configure OpenClaw
 
-The plugin is included with OpenClaw and enabled by default.
+The plugin is bundled with OpenClaw. Enable it explicitly:
 
 ```sh
 export CLAWROUTER_API_KEY="<issued credential>"
 openclaw onboard --auth-choice clawrouter-api-key
+openclaw plugins enable clawrouter
 ```
+
+If your OpenClaw configuration sets `plugins.allow`, add `clawrouter` before
+enabling the plugin. OpenClaw can store the proxy credential in its auth
+profile; it does not need to remain in the shell environment after setup.
 
 For a self-hosted ClawRouter origin, configure the provider base URL:
 
@@ -54,6 +59,8 @@ openclaw models set clawrouter/<provider>/<model>
 
 Use model refs exactly as returned. The first segment is always `clawrouter`;
 the remaining path preserves the upstream provider and model namespace.
+If your OpenClaw configuration uses `agents.defaults.models` as an allowlist,
+add each selected ClawRouter ref to that map.
 
 ClawRouter's credential-scoped `GET /v1/catalog` response is authoritative.
 OpenClaw advertises a model only when the policy grants its provider, the
