@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Document first-party OpenClaw setup, credential-scoped dynamic model discovery, supported transports, multi-provider smoke testing, and quota reporting on a standalone integration page.
 - Join the console into a full-bleed racked frame with a flush header, connected hairlines, and one 16px alignment datum; make action buttons monochrome so copper is reserved for state, selection, and focus; calm right-rail notes, facts, and attention metrics; and replace the provider-usage list with a ranked share readout with per-provider error callouts.
 - Redesign the console with the Patchboard visual system: copper-on-graphite dark and blueprint-paper light themes, bundled Archivo and Spline Sans Mono variable fonts, semantic stylesheet modules replacing the numbered append-only files, and higher-contrast status, focus, and selection states.
 - Make accounting finalization independently retryable, scope readiness to entitled policies, move canonical access state out of KV fallback paths, shard usage by tenant/policy, consolidate admin bootstrap refreshes, and split shared contracts and access controllers into focused modules.
