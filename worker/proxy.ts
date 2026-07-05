@@ -140,7 +140,7 @@ export async function inspectKey(headers: Headers, env: Env): Promise<Response> 
 }
 
 async function proxySelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, queryInput: Record<string, unknown> = {}, preauthenticated: AuthorizedIdentity | null = null): Promise<Response> {
-  const auth = preauthenticated ?? (mode === "access" ? await accessIdentity(request.headers, env, selection.provider.id) : await authenticateProxyKey(request.headers, env));
+  const auth = preauthenticated ?? (mode === "access" ? await accessIdentity(request, env, selection.provider.id) : await authenticateProxyKey(request.headers, env));
   if (auth instanceof Response) return auth;
   const requestId = request.headers.get("x-request-id") ?? randomId("req");
   const started = Date.now();
@@ -212,7 +212,7 @@ function auditFailure(context: ExecutionContext, env: Env, auth: AuthorizedIdent
 
 async function preauthenticate(request: Request, env: Env, mode: AuthMode, providerId?: string): Promise<AuthorizedIdentity | Response | null> {
   if (mode === "proxy_key") return authenticateProxyKey(request.headers, env);
-  return providerId ? accessIdentity(request.headers, env, providerId) : null;
+  return providerId ? accessIdentity(request, env, providerId) : null;
 }
 
 async function finalizeResponse(response: Response, env: Env, auth: AuthorizedIdentity, selection: ProxySelection, request: Request, requestId: string, started: number, estimated: Cost, reservation: BudgetReservation, content: string | null): Promise<void> {

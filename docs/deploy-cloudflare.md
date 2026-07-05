@@ -350,10 +350,14 @@ unchanged sessions are read-only. Saving a rule reconciles known users, and the
 admin endpoint supports explicit reconciliation with verified external
 evidence. Policy grants
 use a rule-owned `assignment.<rule-id>` group, so reconciliation never replaces
-manual direct user bindings. GitHub organization/team rules require explicit
-verified GitHub evidence for one user; a reconcile without GitHub evidence
-retains existing GitHub-derived assignments instead of treating unknown
-membership as loss.
+manual direct user bindings. On a GitHub Access sign-in, the Worker reads
+Cloudflare Access's same-origin identity endpoint, requires the identity email
+to match the verified Access JWT, and uses its organization/team records as
+verified evidence for enabled GitHub rules. This refresh also enforces
+`revokeOnLoss` when organization or team membership changes; unchanged evidence
+does not write authority state. The cookie and raw identity response are never stored. Explicit admin reconciliation remains
+available; a reconcile without GitHub evidence retains existing GitHub-derived
+assignments instead of treating unknown membership as loss.
 
 ```json
 {

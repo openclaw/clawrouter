@@ -1,4 +1,5 @@
 import { authorityCall, resolveBindings, resolvePolicies, resolveUsers } from "./authority";
+import { assignmentEvidenceFromAccessIdentity } from "./assignment-evaluator";
 import { listAssignmentRules, reconcileUserAssignments } from "./assignments";
 import type { AccessControlUser, AccessPolicyEntry, AccessSession, AuthorizedIdentity, Env } from "./types";
 import { commaSet, errorResponse, normalizeEmail, parseBearer, safeEqual, sha256Hex } from "./utils";
@@ -15,7 +16,8 @@ interface AccessJwtPayload {
 
 interface Jwk { kid?: string; kty?: string; n?: string; e?: string; alg?: string; use?: string }
 
-export async function verifiedAccessSession(headers: Headers, env: Env): Promise<AccessSession | null> {
+export async function verifiedAccessSession(request: Request, env: Env): Promise<AccessSession | null> {
+  const headers = request.headers;
   const assertion = headers.get("cf-access-jwt-assertion");
   if (!assertion || !env.CLAWROUTER_ACCESS_TEAM_DOMAIN || !env.CLAWROUTER_ACCESS_AUD) return null;
   const payload = await verifyAccessJwt(assertion, env.CLAWROUTER_ACCESS_TEAM_DOMAIN, env.CLAWROUTER_ACCESS_AUD);
@@ -27,7 +29,10 @@ export async function verifiedAccessSession(headers: Headers, env: Env): Promise
     user = { email, record: { role: "user", tenantId: env.CLAWROUTER_ACCESS_DEFAULT_TENANT ?? "default", enabled: true, groups: [], contentRetentionDisabled: false } };
     await authorityCall(env, "/users/put", user);
   }
-  if (!user.record.assignmentState) user = (await reconcileUserAssignments(user, await listAssignmentRules(env), env)).user;
+  const rules = await listAssignmentRules(env);
+  const hasGithubRules = rules.some((rule) => rule.enabled && ["github_org", "github_team"].includes(rule.kind));
+  const evidence = hasGithubRules ? await verifiedGithubEvidence(request, email) : undefined;
+  if (!user.record.assignmentState || evidence) user = (await reconcileUserAssignments(user, rules, env, evidence, !!evidence)).user;
   if (user.record.enabled === false) return null;
   return {
     authenticated: true,
@@ -41,8 +46,8 @@ export async function verifiedAccessSession(headers: Headers, env: Env): Promise
   };
 }
 
-export async function accessIdentity(headers: Headers, env: Env, providerId?: string): Promise<AuthorizedIdentity | Response> {
-  const session = await verifiedAccessSession(headers, env);
+export async function accessIdentity(request: Request, env: Env, providerId?: string): Promise<AuthorizedIdentity | Response> {
+  const session = await verifiedAccessSession(request, env);
   if (!session) return errorResponse("access_session_required", "a verified Cloudflare Access session is required", 401);
   const principals = [
     { principalType: "user" as const, principalId: session.email },
@@ -74,7 +79,7 @@ export async function sessionPolicies(session: AccessSession, env: Env): Promise
 }
 
 export async function authorizeAdmin(request: Request, env: Env): Promise<AccessSession | Response> {
-  const session = await verifiedAccessSession(request.headers, env);
+  const session = await verifiedAccessSession(request, env);
   if (session) {
     if (session.role !== "admin") return errorResponse("access_admin_required", "administrator access is required", 403);
     if (!["GET", "HEAD"].includes(request.method) && !sameOrigin(request)) return errorResponse("access_csrf_required", "same-origin browser request required", 403);
@@ -111,6 +116,21 @@ function adminRole(email: string, env: Env): boolean {
   if (commaSet(env.CLAWROUTER_ACCESS_ADMIN_EMAILS).has(email)) return true;
   const domain = email.split("@")[1];
   return !!domain && commaSet(env.CLAWROUTER_ACCESS_ADMIN_DOMAINS).has(domain);
+}
+
+async function verifiedGithubEvidence(request: Request, email: string) {
+  const cookie = request.headers.get("cookie");
+  if (!cookie) return undefined;
+  const url = new URL("/cdn-cgi/access/get-identity", request.url);
+  try {
+    const response = await fetch(url, { headers: { accept: "application/json", cookie }, redirect: "manual" });
+    if (!response.ok) return undefined;
+    const body = await response.text();
+    if (body.length > 64 * 1024) return undefined;
+    return assignmentEvidenceFromAccessIdentity(JSON.parse(body), email);
+  } catch {
+    return undefined;
+  }
 }
 
 async function selectProviderPolicy(entries: AccessPolicyEntry[], providerId: string, tenantId: string, env: Env): Promise<AccessPolicyEntry> {

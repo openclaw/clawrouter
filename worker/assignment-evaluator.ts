@@ -9,6 +9,32 @@ export interface AssignmentEvidence {
 
 export interface AssignmentRuleEntry extends AssignmentRule { ruleId: string; generatedGroup: string }
 
+export function assignmentEvidenceFromAccessIdentity(value: unknown, expectedEmail: string): AssignmentEvidence | undefined {
+  if (!value || typeof value !== "object") return undefined;
+  const identity = value as Record<string, unknown>;
+  const email = typeof identity.email === "string" ? identity.email.trim().toLowerCase() : "";
+  const idp = identity.idp && typeof identity.idp === "object" ? identity.idp as Record<string, unknown> : null;
+  if (!email || email !== expectedEmail.trim().toLowerCase() || idp?.type !== "github") return undefined;
+  if (!Array.isArray(identity.orgs) || !Array.isArray(identity.teams)) return undefined;
+
+  const organizations = records(identity.orgs);
+  const teams = records(identity.teams);
+  if (organizations.length !== identity.orgs.length || teams.length !== identity.teams.length) return undefined;
+  const namesById = new Map(organizations.flatMap((organization) => {
+    const id = scalarString(organization.id), name = scalarString(organization.name).toLowerCase();
+    return id && name ? [[id, name] as const] : [];
+  }));
+  if (namesById.size !== organizations.length) return undefined;
+  const githubOrgs = normalizeGroups(organizations.map((organization) => scalarString(organization.name)));
+  const githubTeams = normalizeGroups(teams.flatMap((team) => {
+    const organization = namesById.get(scalarString(team.org_id));
+    const name = scalarString(team.name).toLowerCase();
+    return organization && name ? [`${organization}/${name}`] : [];
+  }));
+  if (githubTeams.length !== teams.length) return undefined;
+  return { source: "github", verified: true, githubOrgs, githubTeams };
+}
+
 export function withLegacyAssignmentState(user: AccessControlUser, legacy: Partial<AssignmentState> | null): AccessControlUser {
   if (user.record.assignmentState || !legacy?.assignments || typeof legacy.assignments !== "object") return user;
   const assignments = Object.fromEntries(Object.entries(legacy.assignments).flatMap(([ruleId, entry]) => {
@@ -45,6 +71,9 @@ export function evaluateUserAssignments(user: AccessControlUser, rules: Assignme
   const previousGroups = new Set(Object.values(previous.assignments).flatMap((entry) => entry.groups));
   const manual = (user.record.groups ?? []).filter((group) => !previousGroups.has(group) && !group.startsWith("assignment."));
   const groups = normalizeGroups([...manual, ...Object.values(assignments).flatMap((entry) => entry.groups)]);
+  if (previous.revision === revision && JSON.stringify(previous.assignments) === JSON.stringify(assignments) && JSON.stringify(normalizeGroups(user.record.groups ?? [])) === JSON.stringify(groups)) {
+    return { changed: false as const, user, matchedRuleIds, retainedRuleIds };
+  }
   const assignmentState: AssignmentState = { version: 1, revision, assignments, updatedAt: new Date().toISOString() };
   const updated: AccessControlUser = { ...user, record: { ...user.record, role: "user", groups, assignmentState } };
   return { changed: true as const, user: updated, matchedRuleIds, retainedRuleIds };
@@ -76,3 +105,5 @@ function assignmentEntry(rule: AssignmentRuleEntry): AssignmentStateEntry {
 }
 
 function normalizeGroups(groups: string[]) { return [...new Set(groups.map((group) => group.trim().toLowerCase()).filter(Boolean))].sort(); }
+function records(value: unknown): Array<Record<string, unknown>> { return Array.isArray(value) ? value.filter((item): item is Record<string, unknown> => !!item && typeof item === "object") : []; }
+function scalarString(value: unknown): string { return typeof value === "string" || typeof value === "number" ? String(value).trim() : ""; }

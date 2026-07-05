@@ -68,7 +68,7 @@ async function route(request: Request, env: Env, context: ExecutionContext): Pro
 }
 
 async function dashboardShell(request: Request, env: Env): Promise<Response> {
-  const session = await verifiedAccessSession(request.headers, env);
+  const session = await verifiedAccessSession(request, env);
   if (!session) return errorResponse("access_session_required", "a verified Cloudflare Access session is required", 401);
   const url = new URL(request.url); url.pathname = "/";
   const response = await env.ASSETS.fetch(new Request(url, request));
@@ -83,7 +83,7 @@ async function userUsage(request: Request, env: Env): Promise<Response> {
 }
 
 async function sessionUsage(request: Request, env: Env): Promise<Response> {
-  const session = await verifiedAccessSession(request.headers, env);
+  const session = await verifiedAccessSession(request, env);
   if (!session) return errorResponse("access_session_required", "a verified Cloudflare Access session is required", 401);
   const policies = await sessionPolicies(session, env);
   const usage = await usageSnapshots(env, policies.map((entry) => ({ policyId: entry.policyId, tenantId: entry.policy.tenantId ?? session.tenantId })));
