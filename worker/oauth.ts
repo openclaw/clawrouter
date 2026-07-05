@@ -26,7 +26,7 @@ export async function startOAuth(request: Request, env: Env, grantKey: string, p
 }
 
 export async function oauthCallback(request: Request, env: Env): Promise<Response> {
-  const session = await verifiedAccessSession(request.headers, env);
+  const session = await verifiedAccessSession(request, env);
   if (!session || session.role !== "admin") return errorResponse("access_admin_required", "OAuth callback requires a verified Access admin", 403);
   const url = new URL(request.url), stateId = url.searchParams.get("state"), code = url.searchParams.get("code"), providerError = url.searchParams.get("error");
   if (!stateId) return errorResponse("invalid_oauth_callback", "OAuth state is missing", 400);

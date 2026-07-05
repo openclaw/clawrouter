@@ -5,7 +5,7 @@ import type { AccessPolicyEntry, AccessSession, AuthorizedIdentity, CompiledProv
 import { errorResponse, privateJson, sha256Hex } from "./utils";
 
 export async function sessionResponse(request: Request, env: Env): Promise<Response> {
-  const session = await verifiedAccessSession(request.headers, env);
+  const session = await verifiedAccessSession(request, env);
   if (!session) return errorResponse("access_session_required", "a verified Cloudflare Access session is required", 401);
   let entitlements: { providers: EntitlementRow[] } | undefined;
   let entitlementsError: string | undefined;
@@ -15,13 +15,13 @@ export async function sessionResponse(request: Request, env: Env): Promise<Respo
 }
 
 export async function entitlementResponse(request: Request, env: Env): Promise<Response> {
-  const session = await verifiedAccessSession(request.headers, env);
+  const session = await verifiedAccessSession(request, env);
   if (!session) return errorResponse("access_session_required", "entitlements require a verified Cloudflare Access session", 401);
   return privateJson({ session: publicSession(session), providers: await entitlementRows(session, env), contentRetention: await retentionView(session, env) });
 }
 
 export async function avatarResponse(request: Request, env: Env): Promise<Response> {
-  const session = await verifiedAccessSession(request.headers, env);
+  const session = await verifiedAccessSession(request, env);
   if (!session) return errorResponse("access_session_required", "avatar access requires a verified Cloudflare Access session", 401);
   const hash = await sha256Hex(session.email.trim().toLowerCase());
   const upstream = await fetch(`https://www.gravatar.com/avatar/${hash}?s=60&d=identicon&r=g`);
@@ -73,7 +73,7 @@ export async function catalogResponse(request: Request, env: Env): Promise<Respo
 }
 
 export async function meResponse(request: Request, env: Env): Promise<Response> {
-  const session = await verifiedAccessSession(request.headers, env);
+  const session = await verifiedAccessSession(request, env);
   if (session) return privateJson(publicSession(session));
   const auth = await authenticateProxyKey(request.headers, env);
   if (auth instanceof Response) return auth;
@@ -108,7 +108,7 @@ async function clientEntitlements(request: Request, env: Env): Promise<Entitleme
     if (auth instanceof Response) return auth;
     return entitlementRowsForEntries([{ policyId: auth.policyId, policy: auth.policy }], env);
   }
-  const session = await verifiedAccessSession(request.headers, env);
+  const session = await verifiedAccessSession(request, env);
   return session ? entitlementRows(session, env) : errorResponse("client_auth_required", "a valid ClawRouter proxy key or Cloudflare Access session is required", 401);
 }
 
