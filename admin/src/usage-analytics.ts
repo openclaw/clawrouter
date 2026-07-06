@@ -1,6 +1,49 @@
-import type { UsageDailySummary, UsageSnapshot, UsageSummary } from "./ui-types";
+import type { UsageAuditEvent, UsageDailySummary, UsageSnapshot, UsageSummary } from "./ui-types";
 
 export const usageDayMs = 86_400_000;
+
+export interface UsageEventGroup {
+  id: string;
+  compound: boolean;
+  events: UsageAuditEvent[];
+  primary: UsageAuditEvent;
+  occurredAtMs: number;
+  durationMs: number | null;
+  actualCostMicros: number;
+  successCount: number;
+  expectedCallCount: number;
+  complete: boolean;
+}
+
+export function usageEventGroups(events: UsageAuditEvent[]): UsageEventGroup[] {
+  const grouped = new Map<string, UsageAuditEvent[]>();
+  const order: string[] = [];
+  for (const event of events) {
+    const key = event.compound_request_id ? `compound:${event.compound_request_id}` : `event:${event.id}`;
+    if (!grouped.has(key)) order.push(key);
+    grouped.set(key, [...(grouped.get(key) ?? []), event]);
+  }
+  return order.map((key) => summarizeUsageEvents(key, grouped.get(key) ?? []));
+}
+
+function summarizeUsageEvents(key: string, events: UsageAuditEvent[]): UsageEventGroup {
+  const primary = events.find((event) => event.compound_request_stage === "fusion_synthesizer") ?? events[0];
+  if (!primary) throw new Error("usage event group cannot be empty");
+  const startedAt = Math.min(...events.map((event) => event.compound_request_started_at_ms ?? event.occurred_at_ms - Math.max(0, event.duration_ms ?? 0)));
+  const occurredAtMs = Math.max(...events.map((event) => event.occurred_at_ms));
+  return {
+    id: key,
+    compound: Boolean(primary.compound_request_id),
+    events: [...events].sort((left, right) => (left.compound_request_index ?? Number.MAX_SAFE_INTEGER) - (right.compound_request_index ?? Number.MAX_SAFE_INTEGER)),
+    primary,
+    occurredAtMs,
+    durationMs: events.some((event) => event.duration_ms != null) ? occurredAtMs - startedAt : null,
+    actualCostMicros: events.reduce((total, event) => total + event.actual_cost_micros, 0),
+    successCount: events.filter((event) => event.status === "success").length,
+    expectedCallCount: Math.max(...events.map((event) => event.compound_request_size ?? events.length)),
+    complete: !primary.compound_request_id || events.length >= Math.max(...events.map((event) => event.compound_request_size ?? events.length)),
+  };
+}
 
 export function usageTimeline(snapshot: UsageSnapshot, days = 30, now = Date.now()): UsageDailySummary[] {
   const today = Math.floor(now / usageDayMs) * usageDayMs;

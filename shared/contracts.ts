@@ -184,6 +184,11 @@ export interface UsageAuditEvent {
   client?: string | null;
   key_id?: string | null;
   request_id?: string | null;
+  compound_request_id?: string | null;
+  compound_request_stage?: "fusion_adviser" | "fusion_synthesizer" | null;
+  compound_request_index?: number | null;
+  compound_request_size?: number | null;
+  compound_request_started_at_ms?: number | null;
   provider: string;
   capability?: string | null;
   model?: string | null;

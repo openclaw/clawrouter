@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { niceChartMaximum, syntheticUsageTimeline, usageDayMs, usageTimeline } from "../src/usage-analytics.ts";
+import { niceChartMaximum, syntheticUsageTimeline, usageDayMs, usageEventGroups, usageTimeline } from "../src/usage-analytics.ts";
 
 const summary = { requestCount: 10, successCount: 9, errorCount: 1, inputTokens: 80, outputTokens: 20, totalTokens: 100, actualCostMicros: 500 };
 
@@ -47,4 +47,32 @@ test("synthetic usage timelines preserve their scoped summary totals", () => {
   assert.equal(timeline.reduce((total, point) => total + point.errorCount, 0), summary.errorCount);
   assert.equal(timeline.reduce((total, point) => total + point.totalTokens, 0), summary.totalTokens);
   assert.equal(timeline.reduce((total, point) => total + point.actualCostMicros, 0), summary.actualCostMicros);
+});
+
+test("compound Fusion calls collapse into one request with aggregate cost and wall time", () => {
+  const base = { type: "clawrouter.usage.v1", tenant_id: "tenant", provider: "openai", reserved_cost_micros: 0, status: "success", compound_request_id: "req_fusion", compound_request_size: 3, compound_request_started_at_ms: 900 };
+  const groups = usageEventGroups([
+    { ...base, id: "synth", occurred_at_ms: 2_000, duration_ms: 400, actual_cost_micros: 30, compound_request_stage: "fusion_synthesizer", compound_request_index: null },
+    { ...base, id: "adviser-2", occurred_at_ms: 1_500, duration_ms: 300, actual_cost_micros: 20, compound_request_stage: "fusion_adviser", compound_request_index: 2 },
+    { ...base, id: "adviser-1", occurred_at_ms: 1_450, duration_ms: 350, actual_cost_micros: 10, compound_request_stage: "fusion_adviser", compound_request_index: 1 },
+    { ...base, id: "ordinary", occurred_at_ms: 900, duration_ms: 50, actual_cost_micros: 5, compound_request_id: null },
+  ]);
+  assert.equal(groups.length, 2);
+  assert.equal(groups[0].primary.id, "synth");
+  assert.deepEqual(groups[0].events.map((event) => event.id), ["adviser-1", "adviser-2", "synth"]);
+  assert.equal(groups[0].actualCostMicros, 60);
+  assert.equal(groups[0].durationMs, 1100);
+  assert.equal(groups[0].complete, true);
+  assert.equal(groups[1].compound, false);
+});
+
+test("truncated Fusion groups are explicitly partial", () => {
+  const base = { type: "clawrouter.usage.v1", tenant_id: "tenant", provider: "openai", reserved_cost_micros: 10, actual_cost_micros: 10, status: "success", compound_request_id: "req_partial", compound_request_size: 4 };
+  const [group] = usageEventGroups([
+    { ...base, id: "synth", occurred_at_ms: 2_000, compound_request_stage: "fusion_synthesizer" },
+    { ...base, id: "adviser", occurred_at_ms: 1_000, compound_request_stage: "fusion_adviser", compound_request_index: 1 },
+  ]);
+  assert.equal(group.complete, false);
+  assert.equal(group.expectedCallCount, 4);
+  assert.equal(group.actualCostMicros, 20);
 });
