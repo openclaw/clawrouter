@@ -182,19 +182,18 @@ async function putBinding(request: Request, env: Env): Promise<Response> {
 
 async function putUser(request: Request, env: Env, encodedEmail: string): Promise<Response> {
   const email = normalizeEmail(decodeURIComponent(encodedEmail)); if (!email) throw new HttpError(400, "invalid_access_user", "invalid access user email");
-  const patch = await readJson<AccessControlUser["record"]>(request), existing = (await listUsers(env)).find((item) => item.email === email)?.record ?? {};
-  const user: AccessControlUser = { email, record: { ...existing, ...patch, role: "user", groups: normalizeGroups(patch.groups ?? existing.groups ?? []) } };
+  const existing = (await listUsers(env)).find((item) => item.email === email)?.record ?? {};
+  const user: AccessControlUser = { email, record: normalizeUserMutation(await readJson<unknown>(request), existing).record };
   await authorityCall(env, "/users/put", user);
   return privateJson(userResponse(user));
 }
 
 async function putUserGrants(request: Request, env: Env, encodedEmail: string): Promise<Response> {
   const email = normalizeEmail(decodeURIComponent(encodedEmail)); if (!email) throw new HttpError(400, "invalid_access_user", "invalid access user email");
-  const body = await readJson<AccessControlUser["record"] & { policyIds?: string[] }>(request);
-  const ids = [...new Set(body.policyIds ?? [])];
-  const known = new Set((await listPolicies(env)).map((entry) => entry.policyId)); if (ids.some((id) => !known.has(id))) throw new HttpError(404, "unknown_policy", "one or more policies do not exist");
   const existing = (await listUsers(env)).find((item) => item.email === email)?.record ?? {};
-  const user: AccessControlUser = { email, record: { ...existing, ...body, role: "user", groups: normalizeGroups(body.groups ?? existing.groups ?? []) } };
+  const { record, policyIds: ids } = normalizeUserMutation(await readJson<unknown>(request), existing, true);
+  const known = new Set((await listPolicies(env)).map((entry) => entry.policyId)); if (ids.some((id) => !known.has(id))) throw new HttpError(404, "unknown_policy", "one or more policies do not exist");
+  const user: AccessControlUser = { email, record };
   const principal = { principalType: "user" as const, principalId: email }, bindings = (await listBindings(env)).filter((item) => item.principalType === "user" && item.principalId === email);
   const result = await authorityCall<{ bindings: PolicyBinding[] }>(env, "/users/put-bindings", { user, policyIds: ids, seed: { principal, bindings } });
   return privateJson({ user: userResponse(user), bindings: result.bindings });
@@ -394,6 +393,43 @@ function normalizeBinding(value: unknown): PolicyBinding {
   const priority = binding.priority === undefined ? 100 : binding.priority;
   if (!Number.isSafeInteger(priority) || (priority as number) < 0) throw new HttpError(400, "invalid_policy_binding", "priority must be a non-negative safe integer");
   return { policyId, principalType, principalId, enabled, priority: priority as number };
+}
+
+function normalizeUserMutation(value: unknown, existing: AccessControlUser["record"], includePolicyIds = false): { record: AccessControlUser["record"]; policyIds: string[] } {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new HttpError(400, "invalid_access_user", "access user must be an object");
+  const body = value as Record<string, unknown>;
+  const tenantId = userTenant(body.tenantId, existing.tenantId);
+  const enabled = userBoolean(body.enabled, "enabled", existing.enabled ?? true, true);
+  const groups = body.groups === undefined ? normalizeGroups(existing.groups ?? []) : userGroups(body.groups);
+  const contentRetentionDisabled = userBoolean(body.contentRetentionDisabled, "contentRetentionDisabled", existing.contentRetentionDisabled ?? false);
+  const record: AccessControlUser["record"] = { role: "user", tenantId, enabled, groups, contentRetentionDisabled };
+  if (existing.assignmentState) record.assignmentState = existing.assignmentState;
+  let policyIds: string[] = [];
+  if (includePolicyIds) {
+    const requestedPolicyIds = body.policyIds === undefined ? [] : body.policyIds;
+    if (!Array.isArray(requestedPolicyIds) || requestedPolicyIds.some((id) => typeof id !== "string" || !cleanId(id))) throw new HttpError(400, "invalid_access_user", "policyIds must be an array of policy ids");
+    policyIds = [...new Set(requestedPolicyIds.map((id) => cleanId(id as string)!))];
+  }
+  return { record, policyIds };
+}
+
+function userTenant(value: unknown, existing: string | null | undefined): string {
+  if (value === undefined) return existing ?? "default";
+  if (value === null) return "default";
+  if (typeof value !== "string" || !value.trim()) throw new HttpError(400, "invalid_access_user", "tenantId must be a non-empty string or null");
+  return value.trim();
+}
+
+function userBoolean(value: unknown, field: string, fallback: boolean, allowNull = false): boolean {
+  if (value === undefined) return fallback;
+  if (value === null && allowNull) return true;
+  if (typeof value !== "boolean") throw new HttpError(400, "invalid_access_user", `${field} must be a boolean${allowNull ? " or null" : ""}`);
+  return value;
+}
+
+function userGroups(value: unknown): string[] {
+  if (!Array.isArray(value) || value.some((group) => typeof group !== "string")) throw new HttpError(400, "invalid_access_user", "groups must be an array of strings");
+  return normalizeGroups(value as string[]);
 }
 function normalizeGrant(value: UpstreamGrant, existing: UpstreamGrant | null): UpstreamGrant {
   const now = nowIso(), grant = { ...existing, ...value, version: 1, enabled: value.enabled ?? true, kind: value.kind ?? "oauth", tokenType: value.tokenType ?? "Bearer", scopes: value.scopes ?? [], credentials: value.credentials ?? existing?.credentials ?? {}, createdAt: existing?.createdAt ?? now, updatedAt: now, revokedAt: null };

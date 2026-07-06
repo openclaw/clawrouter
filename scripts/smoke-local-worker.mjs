@@ -176,6 +176,38 @@ try {
   assert.equal(bindingsAfterInvalid.status, 200);
   const retainedBinding = (await bindingsAfterInvalid.json()).bindings.find((binding) => binding.principalType === "group" && binding.principalId === "members" && binding.policyId === "migrate");
   assert.deepEqual(retainedBinding, { policyId: "migrate", principalType: "group", principalId: "members", enabled: true, priority: 10 }, "rejected binding payloads do not overwrite the stored canonical binding");
+  const invalidUserUrl = `${base}/v1/admin/access-users/invalid-shape%40example.com`;
+  const invalidGrantUrl = `${base}/v1/admin/access-user-grants/invalid-shape%40example.com`;
+  for (const [userMutationId, url, body] of [
+    ["invalid_null_body", invalidUserUrl, null],
+    ["invalid_array_body", invalidUserUrl, []],
+    ["invalid_enabled", invalidUserUrl, { enabled: "false" }],
+    ["invalid_tenant", invalidUserUrl, { tenantId: {} }],
+    ["invalid_groups", invalidUserUrl, { groups: "members" }],
+    ["invalid_null_groups", invalidUserUrl, { groups: null }],
+    ["invalid_group_entry", invalidUserUrl, { groups: [{}] }],
+    ["invalid_retention", invalidUserUrl, { contentRetentionDisabled: "false" }],
+    ["invalid_null_retention", invalidUserUrl, { contentRetentionDisabled: null }],
+    ["invalid_grant_null_body", invalidGrantUrl, null],
+    ["invalid_policy_ids", invalidGrantUrl, { policyIds: "migrate" }],
+    ["invalid_policy_ids_object", invalidGrantUrl, { policyIds: {} }],
+    ["invalid_policy_id_entry", invalidGrantUrl, { policyIds: [{}] }],
+    ["invalid_null_policy_ids", invalidGrantUrl, { policyIds: null }],
+  ]) {
+    const invalidUserMutation = await fetch(url, { method: "PUT", headers: userHeaders, body: JSON.stringify(body) });
+    assert.equal(invalidUserMutation.status, 400, `malformed access-user mutation ${userMutationId} is rejected`);
+    assert.equal((await invalidUserMutation.json()).error.code, "invalid_access_user");
+  }
+  const canonicalUserUrl = `${base}/v1/admin/access-users/shape%40example.com`;
+  const canonicalUser = await fetch(canonicalUserUrl, { method: "PUT", headers: userHeaders, body: JSON.stringify({ tenantId: " Team ", enabled: false, groups: [" Members ", "members"], contentRetentionDisabled: true, role: "admin", assignmentState: { injected: true }, ignored: true }) });
+  assert.equal(canonicalUser.status, 200);
+  assert.deepEqual(await canonicalUser.json(), { email: "shape@example.com", role: "user", tenantId: "Team", enabled: false, groups: ["members"], contentRetentionDisabled: true });
+  const canonicalGrantUrl = `${base}/v1/admin/access-user-grants/shape%40example.com`;
+  const canonicalGrant = await fetch(canonicalGrantUrl, { method: "PUT", headers: userHeaders, body: JSON.stringify({ enabled: true, policyIds: ["migrate", "migrate"] }) });
+  assert.equal(canonicalGrant.status, 200);
+  const canonicalGrantBody = await canonicalGrant.json();
+  assert.deepEqual(canonicalGrantBody.user, { email: "shape@example.com", role: "user", tenantId: "Team", enabled: true, groups: ["members"], contentRetentionDisabled: true }, "grant updates preserve omitted identity fields");
+  assert.deepEqual(canonicalGrantBody.bindings.filter((binding) => binding.enabled).map((binding) => binding.policyId), ["migrate"]);
   console.log(`local Worker smoke passed on ${base}`);
 } catch (error) {
   throw new Error(`${error instanceof Error ? error.message : String(error)}\nwrangler output:\n${output}`);
