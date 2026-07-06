@@ -34,10 +34,11 @@ Related systems use three main cost/quality patterns:
   answers, then aggregate or rank them.
 
 ClawRouter's first fusion model uses the ensemble pattern behind an explicit
-model id. It needs no training set, works with arbitrary registered models, and
-lets clients decide when the extra call is worthwhile. The local advisers plus
-one cloud synthesizer make the API-spend/quality tradeoff directly configurable;
-an automatic learned selector can remain a separate future activation policy.
+model id. It needs no training set, works with registered OpenAI-compatible
+chat-completion models, and lets clients decide when the extra call is
+worthwhile. The local advisers plus one cloud synthesizer make the
+API-spend/quality tradeoff directly configurable; an automatic learned selector
+can remain a separate future activation policy.
 
 ## Configure
 
@@ -48,6 +49,9 @@ Open the admin console, select **Access**, then **Fusion**. Configure:
 - adviser timeout and output-token limits;
 - input and injected-proposal character limits; and
 - adviser temperature.
+
+Every selected model must expose OpenAI chat-completions request and response
+formats. Provider-native chat routes without that wire contract are rejected.
 
 A cost-oriented starting point is one or two `local/*` advisers with
 `openai/gpt-4.1-mini` as the synthesizer. Use a stronger synthesizer only for a
