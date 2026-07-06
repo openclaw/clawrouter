@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Preserve stored multi-field upstream credential bundles when editing grant metadata.
 - Accept HTTP bearer authentication schemes case-insensitively for admin API tokens.
 - Validate provider request paths and templates before reserving budget so malformed manifest requests fail without temporarily consuming quota.
 - Automatically bind GitHub organization and team assignment rules from Cloudflare Access's verified same-origin identity on first sign-in, including existing users whose prior reconciliation lacked GitHub evidence.

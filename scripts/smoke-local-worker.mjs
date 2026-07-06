@@ -77,6 +77,12 @@ try {
   assert.equal((await directManifestGet.json()).error.code, "provider_not_configured", "GET manifest routes parse path params without a JSON envelope");
   const grant = await fetch(`${base}/v1/admin/upstream-grants/policies/migrate/replicate`, { method: "PUT", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" }, body: JSON.stringify({ provider: "replicate", kind: "api_key", credential: "local-e2e-token" }) });
   assert.equal(grant.status, 200);
+  const bundledGrantUrl = `${base}/v1/admin/upstream-grants/policies/migrate/aws_bundle`;
+  const bundledGrant = await fetch(bundledGrantUrl, { method: "PUT", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" }, body: JSON.stringify({ provider: "aws-bedrock", kind: "api_key", label: "original", credentials: { AWS_ACCESS_KEY_ID: "local", AWS_SECRET_ACCESS_KEY: "local", AWS_REGION: "us-east-1" } }) });
+  assert.equal(bundledGrant.status, 200);
+  const updatedBundledGrant = await fetch(bundledGrantUrl, { method: "PUT", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" }, body: JSON.stringify({ provider: "aws-bedrock", kind: "api_key", label: "updated" }) });
+  assert.equal(updatedBundledGrant.status, 200, "upstream grant metadata updates preserve stored credential bundles");
+  assert.deepEqual((await updatedBundledGrant.json()).credentialFields, ["AWS_ACCESS_KEY_ID", "AWS_REGION", "AWS_SECRET_ACCESS_KEY"]);
   const missingPathParam = await fetch(`${base}/v1/proxy/replicate/prediction`, { headers: { authorization: `Bearer ${proxyKey}` } });
   assert.equal(missingPathParam.status, 400);
   assert.equal((await missingPathParam.json()).error.code, "missing_path_param");
