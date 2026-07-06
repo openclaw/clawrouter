@@ -257,9 +257,8 @@ async function assignmentRules(env: Env) {
 async function putAssignmentRule(request: Request, env: Env, encodedId: string): Promise<Response> {
   const id = cleanId(decodeURIComponent(encodedId)); if (!id) throw new HttpError(400, "invalid_assignment_rule", "invalid assignment rule id");
   const key = `access/assignment-rules/${id}`;
-  const body = await readJson<Partial<AssignmentRule>>(request), existing = await env.POLICY_KV.get<AssignmentRule>(key, "json"), now = nowIso();
-  const rule: AssignmentRule = { version: 1, enabled: body.enabled ?? true, kind: body.kind ?? "exact_email", subject: String(body.subject ?? "").trim().toLowerCase(), groups: normalizeGroups(body.groups ?? []), policyIds: [...new Set(body.policyIds ?? [])], priority: body.priority ?? 100, revokeOnLoss: body.revokeOnLoss ?? true, provenance: body.provenance ?? "cloudflare_access", createdAt: existing?.createdAt ?? now, updatedAt: now };
-  if (!rule.subject) throw new HttpError(400, "invalid_assignment_rule", "assignment rule subject is required");
+  const body = await readJson<Record<string, unknown>>(request), existing = await env.POLICY_KV.get<AssignmentRule>(key, "json"), now = nowIso();
+  const rule = normalizeAssignmentRule(body, existing, now);
   const known = new Set((await listPolicies(env)).map((entry) => entry.policyId));
   if (rule.policyIds.some((policyId) => !known.has(policyId))) throw new HttpError(404, "unknown_policy", "one or more assignment policies do not exist");
   await env.POLICY_KV.put(key, JSON.stringify(rule));
@@ -267,6 +266,32 @@ async function putAssignmentRule(request: Request, env: Env, encodedId: string):
   const rules = await assignmentRules(env);
   for (const user of await listUsers(env)) await reconcileUserAssignments(user, rules, env);
   return privateJson(assignmentResponse(id, rule));
+}
+
+function normalizeAssignmentRule(body: Record<string, unknown>, existing: AssignmentRule | null, now: string): AssignmentRule {
+  const kinds: AssignmentRule["kind"][] = ["exact_email", "email_domain", "github_org", "github_team"];
+  const kind = body.kind === undefined ? "exact_email" : body.kind;
+  if (typeof kind !== "string" || !kinds.includes(kind as AssignmentRule["kind"])) throw new HttpError(400, "invalid_assignment_rule", "assignment rule kind is invalid");
+  if (typeof body.subject !== "string" || !body.subject.trim()) throw new HttpError(400, "invalid_assignment_rule", "assignment rule subject is required");
+  const groups = assignmentRuleStrings(body.groups, "groups"), policyIds = assignmentRuleStrings(body.policyIds, "policyIds");
+  const priority = body.priority === undefined ? 100 : body.priority;
+  if (!Number.isSafeInteger(priority) || (priority as number) < 0) throw new HttpError(400, "invalid_assignment_rule", "assignment rule priority must be a non-negative safe integer");
+  const enabled = assignmentRuleBoolean(body.enabled, "enabled", true), revokeOnLoss = assignmentRuleBoolean(body.revokeOnLoss, "revokeOnLoss", true);
+  const provenance = body.provenance === undefined ? "cloudflare_access" : body.provenance;
+  if (typeof provenance !== "string" || !provenance.trim()) throw new HttpError(400, "invalid_assignment_rule", "assignment rule provenance is required");
+  return { version: 1, enabled, kind: kind as AssignmentRule["kind"], subject: body.subject.trim().toLowerCase(), groups: normalizeGroups(groups), policyIds: [...new Set(policyIds)], priority: priority as number, revokeOnLoss, provenance: provenance.trim(), createdAt: existing?.createdAt ?? now, updatedAt: now };
+}
+
+function assignmentRuleStrings(value: unknown, field: string): string[] {
+  if (value === undefined) return [];
+  if (!Array.isArray(value) || value.some((item) => typeof item !== "string")) throw new HttpError(400, "invalid_assignment_rule", `assignment rule ${field} must be an array of strings`);
+  return value as string[];
+}
+
+function assignmentRuleBoolean(value: unknown, field: string, fallback: boolean): boolean {
+  if (value === undefined) return fallback;
+  if (typeof value !== "boolean") throw new HttpError(400, "invalid_assignment_rule", `assignment rule ${field} must be a boolean`);
+  return value;
 }
 
 async function syncAssignmentBindings(env: Env, id: string, existing: AssignmentRule | null, rule: AssignmentRule): Promise<void> {
