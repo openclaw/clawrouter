@@ -80,18 +80,19 @@ test("fusion runs advisers concurrently, tolerates failures, and injects untrust
 
 test("fusion fails open when adviser bodies stall or exceed their byte bound", async () => {
   const stalledConfig = { ...normalizeFusionConfig({ adviserModels: ["local/stalled"] }), adviserTimeoutMs: 25 };
-  let cancelled = false;
-  const stalled = await collectFusionProposals(stalledConfig, { messages: [] }, async () => new Response(new ReadableStream({
+  let aborted = false;
+  const stalled = await collectFusionProposals(stalledConfig, { messages: [] }, async (_model, _body, _timeout, _index, signal) => new Response(new ReadableStream({
     start(controller) {
       controller.enqueue(new TextEncoder().encode('{"choices":[{"message":{"content":"partial'));
-    },
-    cancel() {
-      cancelled = true;
+      signal.addEventListener("abort", () => {
+        aborted = true;
+        controller.error(signal.reason);
+      }, { once: true });
     },
   })));
   assert.deepEqual(stalled.proposals, []);
   assert.deepEqual(stalled.failedModels, ["local/stalled"]);
-  assert.equal(cancelled, true);
+  assert.equal(aborted, true);
 
   const oversizedConfig = normalizeFusionConfig({ adviserModels: ["local/oversized"], maxProposalChars: 256 });
   const oversized = await collectFusionProposals(oversizedConfig, { messages: [] }, async () => Response.json({

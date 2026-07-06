@@ -30,7 +30,7 @@ export interface FusionRunResult {
 }
 
 type ChatMessage = { role: string; content: unknown };
-type InvokeModel = (model: string, body: Record<string, unknown>, timeoutMs: number, index: number) => Promise<Response>;
+type InvokeModel = (model: string, body: Record<string, unknown>, timeoutMs: number, index: number, signal: AbortSignal) => Promise<Response>;
 
 export function normalizeFusionConfig(input: unknown): FusionConfig {
   if (!input || typeof input !== "object" || Array.isArray(input)) throw new HttpError(400, "fusion_config_invalid", "fusion configuration must be a JSON object");
@@ -92,17 +92,24 @@ function modelSupportsTemperature(model: string): boolean {
 export async function collectFusionProposals(config: FusionConfig, original: Record<string, unknown>, invoke: InvokeModel): Promise<FusionRunResult> {
   const startedAt = Date.now();
   const settled = await Promise.all(config.adviserModels.map(async (model, index) => {
+    const controller = new AbortController();
     const deadline = Date.now() + config.adviserTimeoutMs;
+    const timeout = setTimeout(() => controller.abort(new Error("fusion adviser deadline exceeded")), config.adviserTimeoutMs);
+    let bodyComplete = false;
     try {
-      const response = await beforeDeadline(invoke(model, buildAdviserBody(original, model, config, index), config.adviserTimeoutMs, index), deadline);
+      const response = await beforeDeadline(invoke(model, buildAdviserBody(original, model, config, index), config.adviserTimeoutMs, index, controller.signal), deadline);
       if (!response.ok) return { model, failed: true as const };
       const maxResponseBytes = ADVISER_RESPONSE_OVERHEAD_BYTES + config.maxProposalChars * 6;
       const content = completionText(await readJsonBeforeDeadline(response, maxResponseBytes, deadline)).trim();
+      bodyComplete = true;
       return content
         ? { model, content: content.slice(0, config.maxProposalChars) }
         : { model, failed: true as const };
     } catch {
       return { model, failed: true as const };
+    } finally {
+      clearTimeout(timeout);
+      if (!bodyComplete && !controller.signal.aborted) controller.abort(new Error("fusion adviser failed before its response completed"));
     }
   }));
   return {

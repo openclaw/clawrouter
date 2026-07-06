@@ -27,11 +27,18 @@ putLocalKv("policies/fusion_local", { enabled: true, generation, providers: ["lo
 putLocalKv("credentials/fusionlocal", { enabled: true, secretSha256: sha256(fusionSecret), policyId: "fusion_local", policyGeneration: generation });
 const upstreamPort = await availablePort();
 const upstreamCalls = [];
+let stalledUpstreamClosed = false;
 const upstreamServer = createHttpServer(async (request, response) => {
   let raw = "";
   for await (const chunk of request) raw += chunk;
   const body = JSON.parse(raw);
   upstreamCalls.push(body);
+  if (body.model === "stall") {
+    response.on("close", () => { stalledUpstreamClosed = true; });
+    response.writeHead(200, { "content-type": "application/json" });
+    response.write('{"choices":[{"message":{"content":"partial');
+    return;
+  }
   const content = body.model === "adviser"
     ? "local proposal"
     : JSON.stringify(body.messages).includes("local proposal") ? "fused answer" : "proposal missing";
@@ -116,6 +123,15 @@ try {
   assert.equal(fusionResponse.headers.get("x-clawrouter-fusion-adviser-count"), "1");
   assert.equal(fusionResponse.headers.get("x-clawrouter-fusion-failed-count"), "0");
   assert.deepEqual(upstreamCalls.map((call) => call.model), ["adviser", "final"]);
+  const stalledCallStart = upstreamCalls.length;
+  const stalledFusionConfig = { ...localFusionConfig, adviserModels: ["local/stall"], adviserTimeoutMs: 1_000 };
+  assert.equal((await fetch(`${base}/v1/admin/fusion`, { method: "PUT", headers: adminHeaders, body: JSON.stringify(stalledFusionConfig) })).status, 200);
+  const stalledFusionResponse = await fetch(`${base}/v1/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${fusionKey}`, "content-type": "application/json" }, body: JSON.stringify({ model: "clawrouter/fusion", messages: [{ role: "user", content: "solve after timeout" }] }) });
+  assert.equal(stalledFusionResponse.status, 200, JSON.stringify(await stalledFusionResponse.clone().json()));
+  assert.equal(stalledFusionResponse.headers.get("x-clawrouter-fusion-adviser-count"), "0");
+  assert.equal(stalledFusionResponse.headers.get("x-clawrouter-fusion-failed-count"), "1");
+  await waitUntil(() => stalledUpstreamClosed, "timed-out adviser upstream connection did not close");
+  assert.deepEqual(upstreamCalls.slice(stalledCallStart).map((call) => call.model), ["stall", "final"]);
   const fusionUsage = await fetch(`${base}/v1/usage`, { headers: { authorization: `Bearer ${fusionKey}` } });
   assert.equal(fusionUsage.status, 200);
   assert.equal((await fusionUsage.json()).budget.spentMicros, 0, "dynamic local models retain zero-price accounting under a budgeted policy");
@@ -357,6 +373,14 @@ try {
 }
 
 async function json(url) { const response = await fetch(url); assert.equal(response.status, 200, `${url} returned ${response.status}`); return response.json(); }
+async function waitUntil(predicate, message) {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(message);
+}
 async function waitUntilReady(url) {
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {

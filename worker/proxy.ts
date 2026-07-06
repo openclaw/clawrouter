@@ -103,10 +103,10 @@ async function proxyFusion(
   if (aggregatorSelection instanceof Response) return aggregatorSelection;
   const aggregatorBudget = await reserveSelected(request, env, context, mode, aggregatorSelection, preauthenticated);
   if (aggregatorBudget instanceof Response) return aggregatorBudget;
-  const result = await collectFusionProposals(config, body, async (model, adviserBody, timeoutMs, index) => {
+  const result = await collectFusionProposals(config, body, async (model, adviserBody, timeoutMs, index, signal) => {
     const headers = new Headers(request.headers);
     headers.set("x-request-id", randomId(`fusion-adviser-${index + 1}`));
-    const adviserRequest = new Request(request.url, { method: "POST", headers, signal: request.signal });
+    const adviserRequest = new Request(request.url, { method: "POST", headers, signal: AbortSignal.any([request.signal, signal]) });
     return proxyConcreteOpenAi(adviserRequest, env, context, "/v1/chat/completions", mode, adviserBody, preauthenticated, timeoutMs);
   });
   const aggregatorBody = buildAggregatorBody(body, config, result.proposals);
@@ -282,7 +282,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   const timeout = setTimeout(() => controller.abort(), Math.min(selection.timeoutMs ?? endpointTimeout, endpointTimeout));
   let response: Response;
   try {
-    response = await fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal: controller.signal });
+    response = await fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal: AbortSignal.any([request.signal, controller.signal]) });
   } catch (error) {
     clearTimeout(timeout);
     context.waitUntil(finalizeAccounting(env, auth, reservation, 0, usageEvent(auth, selection, request, requestId, started, 502, null, cost, reservation, content, error instanceof DOMException && error.name === "AbortError" ? "timeout" : "provider_error")));
