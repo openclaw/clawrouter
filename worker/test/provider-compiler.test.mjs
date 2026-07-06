@@ -11,6 +11,8 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.equal(compiled.providers.length, 20);
   assert.equal(compiled.model_index["openai/gpt-5.5"].provider, "openai");
   assert.equal(compiled.model_index["anthropic/claude-opus-4-8"].provider, "anthropic");
+  assert.deepEqual(compiled.providers.find((provider) => provider.id === "aws-bedrock").optional_config_keys, ["AWS_SESSION_TOKEN"]);
+  assert.deepEqual(compiled.providers.find((provider) => provider.id === "azure-openai").optional_config_keys, ["AZURE_OPENAI_COMPLETION_TOKEN_DEPLOYMENTS"]);
   assert.ok(compiled.capability_index["llm.chat"].length >= 10);
 });
 

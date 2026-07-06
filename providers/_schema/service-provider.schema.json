@@ -40,7 +40,8 @@
         },
         "upstreamService": { "type": "string" },
         "oauthProvider": { "type": "string" },
-        "configKeys": { "type": "array", "items": { "type": "string" } }
+        "configKeys": { "type": "array", "items": { "type": "string" } },
+        "optionalConfigKeys": { "type": "array", "items": { "type": "string" } }
       }
     },
     "auth": {

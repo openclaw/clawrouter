@@ -15,6 +15,7 @@ service:
       AZURE_OPENAI_COMPLETION_TOKEN_DEPLOYMENTS,
       AZURE_OPENAI_DEPLOYMENT,
     ]
+  optionalConfigKeys: [AZURE_OPENAI_COMPLETION_TOKEN_DEPLOYMENTS]
 auth:
   schemes:
     - type: api_key

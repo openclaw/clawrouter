@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Honor manifest-declared optional provider bindings in readiness so valid configurations are not reported as incomplete.
 - Preserve stored multi-field upstream credential bundles when editing grant metadata.
 - Accept HTTP bearer authentication schemes case-insensitively for admin API tokens.
 - Validate provider request paths and templates before reserving budget so malformed manifest requests fail without temporarily consuming quota.
