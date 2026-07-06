@@ -227,6 +227,28 @@ try {
   const connectionsAfterMutation = await fetch(`${base}/v1/admin/connections`, { headers: userHeaders });
   assert.equal(connectionsAfterMutation.status, 200);
   assert.deepEqual((await connectionsAfterMutation.json()).connections.find((connection) => connection.providerId === "openai"), { providerId: "openai", enabled: false, label: "Ops" });
+  const invalidCredentialUrl = `${base}/v1/admin/credentials/invalid_shape`;
+  const credentialDigest = sha256("credential-shape");
+  for (const [credentialMutationId, body] of [
+    ["invalid_null_body", null],
+    ["invalid_array_body", []],
+    ["invalid_policy_id", { policyId: {}, secretSha256: credentialDigest }],
+    ["invalid_enabled", { policyId: "migrate", secretSha256: credentialDigest, enabled: "false" }],
+    ["invalid_null_enabled", { policyId: "migrate", secretSha256: credentialDigest, enabled: null }],
+    ["invalid_digest", { policyId: "migrate", secretSha256: "not-a-digest" }],
+    ["invalid_principal", { policyId: "migrate", secretSha256: credentialDigest, principalId: {} }],
+    ["invalid_principal_email", { policyId: "migrate", secretSha256: credentialDigest, principalId: "not-an-email" }],
+  ]) {
+    const invalidCredential = await fetch(invalidCredentialUrl, { method: "PUT", headers: userHeaders, body: JSON.stringify(body) });
+    assert.equal(invalidCredential.status, 400, `malformed proxy credential ${credentialMutationId} is rejected`);
+    assert.equal((await invalidCredential.json()).error.code, "invalid_credential");
+  }
+  const canonicalCredential = await fetch(`${base}/v1/admin/credentials/shape_credential`, { method: "PUT", headers: userHeaders, body: JSON.stringify({ policyId: " migrate ", secretSha256: credentialDigest.toUpperCase(), enabled: false, principalId: " Owner@Example.com ", policyGeneration: "injected", ignored: true }) });
+  assert.equal(canonicalCredential.status, 200);
+  assert.deepEqual(await canonicalCredential.json(), { credentialId: "shape_credential", policyId: "migrate", enabled: false, policyEnabled: true, generationMatches: true, active: false, principalId: "owner@example.com" });
+  const credentialsAfterMutation = await fetch(`${base}/v1/admin/credentials`, { headers: userHeaders });
+  assert.equal(credentialsAfterMutation.status, 200);
+  assert.deepEqual((await credentialsAfterMutation.json()).credentials.find((credential) => credential.credentialId === "shape_credential"), { credentialId: "shape_credential", policyId: "migrate", enabled: false, policyEnabled: true, generationMatches: true, active: false, principalId: "owner@example.com" });
   console.log(`local Worker smoke passed on ${base}`);
 } catch (error) {
   throw new Error(`${error instanceof Error ? error.message : String(error)}\nwrangler output:\n${output}`);

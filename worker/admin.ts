@@ -217,10 +217,9 @@ async function credentialMutation(request: Request, env: Env, rest: string): Pro
   let credential: ProxyCredential;
   if (revoke && request.method === "POST") { if (!existing) throw new HttpError(404, "unknown_credential", "credential not found"); credential = { ...existing, enabled: false }; }
   else if (request.method === "PUT") {
-    const body = await readJson<Partial<ProxyCredential>>(request); const policy = (await listPolicies(env)).find((entry) => entry.policyId === body.policyId);
+    const body = normalizeCredential(await readJson<unknown>(request)); const policy = (await listPolicies(env)).find((entry) => entry.policyId === body.policyId);
     if (!policy) throw new HttpError(404, "unknown_policy", "credential policy does not exist");
-    if (!body.secretSha256 || !/^[0-9a-f]{64}$/i.test(body.secretSha256)) throw new HttpError(400, "invalid_credential", "secretSha256 must be a SHA-256 hex digest");
-    credential = { enabled: body.enabled ?? true, secretSha256: body.secretSha256.toLowerCase(), policyId: policy.policyId, policyGeneration: policy.policy.generation, principalId: body.principalId ?? null };
+    credential = { ...body, policyId: policy.policyId, policyGeneration: policy.policy.generation };
   } else throw new HttpError(405, "method_not_allowed", "admin method is not allowed");
   const entry: ProxyCredentialEntry = { credentialId: id, credential }; await authorityCall(env, "/credentials/put", entry);
   return privateJson((await credentialResponses(env)).find((item) => item.credentialId === id));
@@ -403,6 +402,27 @@ function normalizeConnection(value: unknown, providerId: string): ProviderConnec
   if (body.label !== undefined && body.label !== null && typeof body.label !== "string") throw new HttpError(400, "invalid_provider_connection", "label must be a string or null");
   const label = typeof body.label === "string" ? body.label.trim() || null : null;
   return { providerId, enabled, label };
+}
+
+function normalizeCredential(value: unknown): Omit<ProxyCredential, "policyGeneration"> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new HttpError(400, "invalid_credential", "credential must be an object");
+  const body = value as Record<string, unknown>;
+  if (typeof body.policyId !== "string") throw new HttpError(400, "invalid_credential", "policyId must be a string");
+  const policyId = cleanId(body.policyId);
+  if (!policyId) throw new HttpError(400, "invalid_credential", "policyId is invalid");
+  if (typeof body.secretSha256 !== "string" || !/^[0-9a-f]{64}$/i.test(body.secretSha256)) throw new HttpError(400, "invalid_credential", "secretSha256 must be a SHA-256 hex digest");
+  const enabled = body.enabled === undefined ? true : body.enabled;
+  if (typeof enabled !== "boolean") throw new HttpError(400, "invalid_credential", "enabled must be a boolean");
+  let principalId: string | null = null;
+  if (body.principalId !== undefined && body.principalId !== null) {
+    if (typeof body.principalId !== "string") throw new HttpError(400, "invalid_credential", "principalId must be an email or null");
+    const candidate = body.principalId.trim();
+    if (candidate) {
+      principalId = normalizeEmail(candidate);
+      if (!principalId) throw new HttpError(400, "invalid_credential", "principalId must be a valid email");
+    }
+  }
+  return { enabled, secretSha256: body.secretSha256.toLowerCase(), policyId, principalId };
 }
 
 function normalizeUserMutation(value: unknown, existing: AccessControlUser["record"], includePolicyIds = false): { record: AccessControlUser["record"]; policyIds: string[] } {
