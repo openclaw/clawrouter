@@ -13,9 +13,18 @@ const proxySecret = "secret_1234";
 const proxyKey = `clawrouter-live-migrate-${proxySecret}`;
 const legacySecret = "legacy_secret_1234";
 const legacyKey = `clawrouter-live-legacy-${legacySecret}`;
+const generation = "migration_e2e";
+writeFileSync(config, `${readFileSync("wrangler.toml", "utf8").trim()}\n\n[[kv_namespaces]]\nbinding = "POLICY_KV"\nid = "local-e2e"\n`);
+mkdirSync(persistence, { recursive: true });
+putLocalKv("policies/migrate", { enabled: true, generation, providers: ["firecrawl", "replicate"], tenantId: "default", tokenRole: "service", monthlyBudgetMicros: 10_000, requestCostMicros: 100, retainRequestContent: true });
+putLocalKv("credentials/migrate", { enabled: true, secretSha256: sha256(proxySecret), policyId: "migrate", policyGeneration: generation });
+putLocalKv("keys/legacy", { enabled: true, secretSha256: sha256(legacySecret), generation: "legacy", providers: ["firecrawl"], tenantId: "default", retainRequestContent: true });
+putLocalKv("oauth/migrate/legacy_invalid", { provider: "aws-bedrock", kind: "api_key", credentials: Object.fromEntries([["access" + "KeyId", "local"], ["secret" + "AccessKey", "   "]]) });
+
 const fusionSecret = "fusion123";
 const fusionKey = `clawrouter-live-fusionlocal-${fusionSecret}`;
-const generation = "migration_e2e";
+putLocalKv("policies/fusion_local", { enabled: true, generation, providers: ["local-openai"], tenantId: "default", tokenRole: "service", monthlyBudgetMicros: 10_000, retainRequestContent: false });
+putLocalKv("credentials/fusionlocal", { enabled: true, secretSha256: sha256(fusionSecret), policyId: "fusion_local", policyGeneration: generation });
 const upstreamPort = await availablePort();
 const upstreamCalls = [];
 const upstreamServer = createHttpServer(async (request, response) => {
@@ -30,14 +39,6 @@ const upstreamServer = createHttpServer(async (request, response) => {
   response.end(JSON.stringify({ choices: [{ message: { role: "assistant", content } }], usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 } }));
 });
 await new Promise((resolve, reject) => upstreamServer.listen(upstreamPort, "127.0.0.1", resolve).once("error", reject));
-writeFileSync(config, `${readFileSync("wrangler.toml", "utf8").trim()}\n\n[[kv_namespaces]]\nbinding = "POLICY_KV"\nid = "local-e2e"\n`);
-mkdirSync(persistence, { recursive: true });
-putLocalKv("policies/migrate", { enabled: true, generation, providers: ["firecrawl", "replicate"], tenantId: "default", tokenRole: "service", monthlyBudgetMicros: 10_000, requestCostMicros: 100, retainRequestContent: true });
-putLocalKv("credentials/migrate", { enabled: true, secretSha256: sha256(proxySecret), policyId: "migrate", policyGeneration: generation });
-putLocalKv("policies/fusion_local", { enabled: true, generation, providers: ["local-openai"], tenantId: "default", tokenRole: "service", monthlyBudgetMicros: 10_000, retainRequestContent: false });
-putLocalKv("credentials/fusionlocal", { enabled: true, secretSha256: sha256(fusionSecret), policyId: "fusion_local", policyGeneration: generation });
-putLocalKv("keys/legacy", { enabled: true, secretSha256: sha256(legacySecret), generation: "legacy", providers: ["firecrawl"], tenantId: "default", retainRequestContent: true });
-putLocalKv("oauth/migrate/legacy_invalid", { provider: "aws-bedrock", kind: "api_key", credentials: Object.fromEntries([["access" + "KeyId", "local"], ["secret" + "AccessKey", "   "]]) });
 
 const child = spawn("pnpm", ["exec", "wrangler", "dev", "--local", "--ip", "127.0.0.1", "--port", String(port), "--persist-to", persistence, "--config", config, "--var", `CLAWROUTER_ADMIN_TOKEN_SHA256:${sha256(adminToken)}`, "--var", `LOCAL_OPENAI_BASE_URL:http://127.0.0.1:${upstreamPort}`, "--var", "AWS_REGION:us-east-1", "--var", "AWS_SESSION_TOKEN:", "--log-level", "info"], {
   cwd: process.cwd(),
