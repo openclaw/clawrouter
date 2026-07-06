@@ -6,7 +6,8 @@
     "dev": "vite --host 127.0.0.1",
     "build": "tsc --noEmit && vite build",
     "check": "tsc --noEmit",
-    "test": "node --test test/*.test.mjs"
+    "test": "node --test test/*.test.mjs",
+    "test:browser": "pnpm build && playwright test"
   },
   "dependencies": {
     "@fontsource-variable/archivo": "^5.2.8",
@@ -20,6 +21,8 @@
     "vite": "^7.2.7"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.12.1",
+    "@playwright/test": "^1.61.1",
     "@types/react": "^19.2.7",
     "@types/react-dom": "^19.2.3"
   }

@@ -46,8 +46,8 @@ export function TrafficAreaChart({ usage, compact = false }: { usage: UsageSnaps
   }
 
   return (
-    <div className={`trafficChart${compact ? " compact" : ""}`} role={hasTraffic ? "group" : undefined} aria-label={hasTraffic ? "Interactive request activity chart. Use left and right arrow keys to inspect each day." : undefined} tabIndex={hasTraffic ? 0 : undefined} onFocus={() => setActiveIndex(points.length - 1)} onBlur={() => setActiveIndex(null)} onKeyDown={selectWithKeyboard}>
-      <div className="trafficChartScroll" ref={scrollRef}><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={chartLabel} onMouseLeave={() => setActiveIndex(null)}>
+    <div className={`trafficChart${compact ? " compact" : ""}`} role={hasTraffic ? "group" : undefined} aria-label={hasTraffic ? "Interactive request activity chart. Use left and right arrow keys to inspect each day." : undefined}>
+      <div className="trafficChartScroll" ref={scrollRef} tabIndex={hasTraffic ? 0 : undefined} onFocus={() => setActiveIndex(points.length - 1)} onBlur={() => setActiveIndex(null)} onKeyDown={selectWithKeyboard}><svg viewBox={`0 0 ${width} ${height}`} role="img" aria-label={chartLabel} onMouseLeave={() => setActiveIndex(null)}>
         <defs>
           <linearGradient id="trafficAreaFill" x1="0" y1="0" x2="0" y2="1">
             <stop offset="0%" className="chartAreaStart" />
@@ -93,7 +93,7 @@ export function ProviderUsageChart({ providers, services, limit = 6 }: { provide
         return (
           <div className="providerChartRow" role="listitem" key={provider.provider}>
             <span className="providerChartIdentity"><span className="providerChartMark"><BrandMark brandIcon={service?.brandIcon} fallback={ServerCog} /></span><span><strong>{providerLabel}</strong><small>{formatCount(provider.totalTokens)} tokens · {successRate}% success</small></span></span>
-            <span className="providerChartTrack" aria-label={`${provider.requestCount} requests, ${provider.errorCount} errors`}><span className="providerChartSuccess" style={{ width: `${successWidth}%` }} /><span className="providerChartErrors" style={{ width: `${errorWidth}%` }} /></span>
+            <span className="providerChartTrack" role="img" aria-label={`${provider.requestCount} requests, ${provider.errorCount} errors`}><span className="providerChartSuccess" style={{ width: `${successWidth}%` }} /><span className="providerChartErrors" style={{ width: `${errorWidth}%` }} /></span>
             <span className="providerChartValue"><strong>{formatCount(provider.requestCount)}</strong><small>{formatMicros(provider.actualCostMicros)}</small></span>
           </div>
         );

@@ -4,6 +4,7 @@ import {
   avatarResponse, catalogResponse, entitlementResponse, meResponse, modelsResponse, sessionResponse,
 } from "./discovery";
 import { budgetStatus, BudgetLedgerObject, queue, UsageLedgerObject, usageSnapshot, usageSnapshots } from "./ledgers";
+import { dashboardSecurityHeaders } from "./dashboard-security";
 import { oauthCallback } from "./oauth";
 import { routeCatalog, snapshot } from "./providers";
 import { authenticateProxyKey, inspectKey, proxyManifest, proxyNative, proxyOpenAi } from "./proxy";
@@ -72,7 +73,7 @@ async function dashboardShell(request: Request, env: Env): Promise<Response> {
   if (!session) return errorResponse("access_session_required", "a verified Cloudflare Access session is required", 401);
   const url = new URL(request.url); url.pathname = "/";
   const response = await env.ASSETS.fetch(new Request(url, request));
-  const headers = new Headers(response.headers); headers.set("cache-control", "private, no-store");
+  const headers = dashboardSecurityHeaders(response.headers);
   return new Response(response.body, { status: response.status, headers });
 }
 

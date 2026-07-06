@@ -32,7 +32,7 @@
 .fusionInput span,
 .fusionOutput span,
 .fusionAdvisers span {
-  color: var(--faint);
+  color: var(--muted);
   font-family: var(--font-mono);
   font-size: 9px;
   letter-spacing: 0.08em;
@@ -190,7 +190,7 @@
 
 .fusionReadinessCalls article > span,
 .fusionReadinessCalls article > b {
-  color: var(--faint);
+  color: var(--muted);
   font-family: var(--font-mono);
   font-size: 9px;
 }

@@ -6,3 +6,5 @@ node_modules/
 .dev.vars
 *.log
 .DS_Store
+admin/test-results/
+admin/playwright-report/
