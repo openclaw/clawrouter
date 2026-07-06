@@ -585,7 +585,7 @@
 
 .resourceTabs button.active span {
   background: var(--accent-wash);
-  color: var(--accent);
+  color: var(--accent-hover);
 }
 
 .accessWorkspace {

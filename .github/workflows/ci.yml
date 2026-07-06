@@ -28,6 +28,8 @@ jobs:
       - run: pnpm --dir admin check
       - run: pnpm --dir admin test
       - run: pnpm --dir admin build
+      - run: pnpm --dir admin exec playwright install --with-deps chromium
+      - run: pnpm --dir admin exec playwright test
 
   worker-package:
     runs-on: ubuntu-latest
