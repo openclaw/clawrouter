@@ -50,6 +50,8 @@ try {
   const inspectionBody = await inspection.json();
   assert.equal(inspection.status, 200, JSON.stringify(inspectionBody));
   assert.equal(inspectionBody.verification, "verified", "KV-only credential migrates into authority on first use");
+  const lowercaseAdminAuth = await fetch(`${base}/v1/admin/overview`, { headers: { authorization: `bearer ${adminToken}` } });
+  assert.equal(lowercaseAdminAuth.status, 200, "HTTP bearer auth scheme matching is case-insensitive");
   const bootstrap = await fetch(`${base}/v1/admin/bootstrap`, { headers: { authorization: `Bearer ${adminToken}` } });
   assert.equal(bootstrap.status, 200);
   const bootstrapBody = await bootstrap.json();

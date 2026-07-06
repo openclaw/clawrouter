@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Accept HTTP bearer authentication schemes case-insensitively for admin API tokens.
 - Validate provider request paths and templates before reserving budget so malformed manifest requests fail without temporarily consuming quota.
 - Automatically bind GitHub organization and team assignment rules from Cloudflare Access's verified same-origin identity on first sign-in, including existing users whose prior reconciliation lacked GitHub evidence.
 - Document first-party OpenClaw setup, plugin and model allowlists, credential-scoped dynamic model discovery, supported transports, multi-provider smoke testing, and quota reporting on a standalone integration page.
