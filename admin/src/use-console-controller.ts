@@ -8,6 +8,7 @@ import { useUsage } from "./hooks/use-usage";
 import { installAutoRefresh } from "./auto-refresh";
 import { demo } from "./ui-config";
 import { localDemoRole, oauthCallbackStatus, request, settled } from "./ui-helpers";
+import { syntheticUsageTimeline } from "./usage-analytics";
 import type {
   AccessUser,
   AdminBootstrapResponse,
@@ -264,7 +265,7 @@ export function useConsoleController() {
     usage.setAdminOverview(null);
     usage.setTenantSummaries([]);
     usage.setRows(effective.policies.map(policyUsageFallback));
-    usage.setSnapshot({ ...demo.usage, summary, providers: providerUsage, events: [] });
+    usage.setSnapshot({ ...demo.usage, summary, providers: providerUsage, daily: syntheticUsageTimeline(Date.now(), summary), events: [] });
     usage.setLoaded(true);
     session.setLastUpdatedAt(Date.now());
     session.setStatus("local user demo loaded");

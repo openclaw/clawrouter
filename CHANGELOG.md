@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add accessible 30-day request and provider analytics to Dashboard and Usage while preserving rolling usage totals across mixed-version deployments.
 - Reject non-object OpenAI, manifest, and native proxy request bodies before routing or budget reservation.
 - Reject malformed admin mutation roots and scalar reconciliation flags before control-plane work.
 - Validate and canonicalize proxy-credential policy, digest, state, and owner fields before activation.

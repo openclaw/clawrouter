@@ -15,6 +15,7 @@ export function AppShell() {
   const { value: accessTab, set: setAccessTab } = tab;
   const { adminOverview, tenantSummaries, rows: usageRows, snapshot: usageSnapshot, loaded: usageLoaded } = usage;
   const { form: playground, setForm: setPlayground, turns: playgroundTurns, selectedTurnId: selectedPlaygroundTurnId, setSelectedTurnId: setSelectedPlaygroundTurnId, requestMode, setRequestMode, error: playgroundError, selectedModel, selectedServiceRoute, run: runPlayground, resetConversation } = playgroundDomain;
+  const retentionLabel = session.contentRetention ? session.contentRetention.enabled ? `${session.contentRetention.retentionDays}d` : "off" : "pending";
   return (
     <main className="appShell">
       <aside className="sidebar">
@@ -47,10 +48,11 @@ export function AppShell() {
             </div>
           ) : null}
         </nav>
-        <div className="tenantSwitch" title={`${session.tenantId ?? "default"} tenant · ${session.role}`}>
+        <div className="tenantSwitch" title={`${session.tenantId ?? "default"} tenant · ${session.role} · retention ${retentionLabel}`}>
           <UserAvatar email={session.email} />
           <div>
             <strong>{session.email ?? "not signed in"}</strong>
+            <span>{session.tenantId ?? "default"} · {session.role} · retention {retentionLabel}</span>
           </div>
         </div>
       </aside>
@@ -65,11 +67,6 @@ export function AppShell() {
             </div>
           </div>
           <div className="topActions">
-            <ThemeToggle value={theme} onChange={setTheme} />
-            <span className={`status ${session.contentRetention?.enabled ? "active" : "neutral"}`} title={session.contentRetention ? session.contentRetention.enabled ? `Request content retained for ${session.contentRetention.retentionDays} days` : "Request content retention is off for this identity" : "Loading request content retention status"}>
-              retention {session.contentRetention ? session.contentRetention.enabled ? `on · ${session.contentRetention.retentionDays}d` : "off" : "pending"}
-            </span>
-            <span className={`status ${session.role === "admin" ? "active" : "neutral"}`}>{session.role}</span>
             <span className={`connectionMeta connectionMeta-${statusTone}`} title="Automatically refreshes every 30 seconds and when this tab regains focus">
               <span className="connectionDot" aria-hidden="true" />
               <strong>{statusPresentation.label}</strong>
@@ -77,6 +74,7 @@ export function AppShell() {
               <span>Updated</span>
               {lastUpdatedAt ? <time dateTime={new Date(lastUpdatedAt).toISOString()}>{formatTimestamp(lastUpdatedAt)}</time> : <span>pending</span>}
             </span>
+            <ThemeToggle value={theme} onChange={setTheme} />
           </div>
         </header>
 

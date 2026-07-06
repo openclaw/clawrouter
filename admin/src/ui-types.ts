@@ -24,6 +24,7 @@ import type {
   SessionResponse,
   UpstreamGrant,
   UsageAuditEvent,
+  UsageDailySummary,
   UsageSnapshot,
   UsageSummary,
 } from "../../shared/contracts";
@@ -53,6 +54,7 @@ export type {
   SessionResponse,
   UpstreamGrant,
   UsageAuditEvent,
+  UsageDailySummary,
   UsageSnapshot,
   UsageSummary,
 } from "../../shared/contracts";

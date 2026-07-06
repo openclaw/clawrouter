@@ -2,6 +2,7 @@ import { accessMap, effectiveAccess, policyCoversProvider, policyUsageFallback, 
 import { demoCatalog } from "./demo-catalog";
 import { demoDisabledProviderIds, demoMissingConfigProviderIds } from "./ui-config";
 import { adminOverviewFromPolicies, serviceItems } from "./ui-helpers";
+import { syntheticUsageTimeline } from "./usage-analytics";
 import type {
   AccessPolicy, AccessRole, AccessUser, AssignmentRule, EntitlementsResponse, PolicyBinding,
   ProviderConnection, ProviderReadiness, ProviderRow, ProxyCredential, RouteCatalog, UpstreamGrant,
@@ -10,6 +11,7 @@ import type {
 
 export function demoUsageSnapshot(): UsageSnapshot {
   const now = Date.now();
+  const summary = { requestCount: 1284, successCount: 1247, errorCount: 37, inputTokens: 1_482_402, outputTokens: 382_151, totalTokens: 1_864_553, actualCostMicros: 8_432_100 };
   const events: UsageAuditEvent[] = [
     demoUsageEvent("usage_6", now - 26_000, "admin@example.com", "maintainer_models", "openai", "llm.responses", "gpt-5.4", 200, 842, 1000, "success", 1814, {
       agent_id: "codex/reviewer",
@@ -36,7 +38,7 @@ export function demoUsageSnapshot(): UsageSnapshot {
   ];
   return {
     ledger: "ready",
-    summary: { requestCount: 1284, successCount: 1247, errorCount: 37, inputTokens: 1_482_402, outputTokens: 382_151, totalTokens: 1_864_553, actualCostMicros: 8_432_100 },
+    summary,
     providers: [
       { provider: "openai", requestCount: 604, successCount: 596, errorCount: 8, totalTokens: 904_814, actualCostMicros: 3_904_000 },
       { provider: "anthropic", requestCount: 382, successCount: 374, errorCount: 8, totalTokens: 612_201, actualCostMicros: 3_120_000 },
@@ -44,6 +46,7 @@ export function demoUsageSnapshot(): UsageSnapshot {
       { provider: "openrouter", requestCount: 88, successCount: 82, errorCount: 6, totalTokens: 347_538, actualCostMicros: 538_100 },
       { provider: "replicate", requestCount: 36, successCount: 25, errorCount: 11, totalTokens: 0, actualCostMicros: 0 },
     ],
+    daily: syntheticUsageTimeline(now, summary),
     events,
   };
 }

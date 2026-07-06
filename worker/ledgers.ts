@@ -1,10 +1,11 @@
 import type { BudgetReserveRequest, BudgetSettleRequest, Env, QueueMessage, UsageEvent } from "./types";
-import { emptyUsageSnapshot, mergeUsageSnapshots, usageShardName, type UsageSnapshot } from "./usage-sharding.ts";
+import { emptyUsageSnapshot, mergeUsageSnapshots, usageCutoffs, usageDayMs, usageShardName, type UsageSnapshot } from "./usage-sharding.ts";
 import { errorResponse, json } from "./utils.ts";
 
 const reservationLeaseMs = 15 * 60 * 1_000;
 const chargeRetentionMs = 45 * 86_400_000;
-const usageRetentionMs = 30 * 86_400_000;
+const usageWindowDays = 30;
+const usageRetentionMs = usageWindowDays * usageDayMs;
 const legacyUsageReadUntilMs = Date.parse("2026-07-23T00:00:00.000Z");
 
 export class BudgetLedgerObject implements DurableObject {
@@ -132,14 +133,16 @@ export class UsageLedgerObject implements DurableObject {
 
   private snapshot(policyIds: string[], limit: number) {
     this.cleanup();
-    const cutoff = Date.now() - usageRetentionMs;
+    const cutoffs = usageCutoffs(Date.now(), usageWindowDays);
     const uniquePolicyIds = [...new Set(policyIds.filter(Boolean))];
     const where = uniquePolicyIds.length ? `policy_id IN (${uniquePolicyIds.map(() => "?").join(", ")}) AND occurred_at_ms >= ?` : "occurred_at_ms >= ?";
-    const params = [...uniquePolicyIds, cutoff];
+    const params = [...uniquePolicyIds, cutoffs.rolling];
+    const dailyParams = [...uniquePolicyIds, cutoffs.daily];
     const events = rows<{ event_json: string }>(this.sql.exec(`SELECT event_json FROM usage_events WHERE ${where} ORDER BY occurred_at_ms DESC LIMIT ?`, ...params, limit)).map((row) => JSON.parse(row.event_json));
     const summary = first<SummaryRow>(this.sql.exec(`SELECT COUNT(*) AS request_count, COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count, COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) AS error_count, COALESCE(SUM(input_tokens), 0) AS input_tokens, COALESCE(SUM(output_tokens), 0) AS output_tokens, COALESCE(SUM(total_tokens), 0) AS total_tokens, COALESCE(SUM(actual_cost_micros), 0) AS actual_cost_micros FROM usage_events WHERE ${where}`, ...params) as unknown as Iterable<SummaryRow>) ?? emptySummary();
     const providers = rows<ProviderRow>(this.sql.exec(`SELECT provider, COUNT(*) AS request_count, COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count, COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) AS error_count, COALESCE(SUM(total_tokens), 0) AS total_tokens, COALESCE(SUM(actual_cost_micros), 0) AS actual_cost_micros FROM usage_events WHERE ${where} GROUP BY provider ORDER BY request_count DESC`, ...params) as unknown as Iterable<ProviderRow>);
-    return { ledger: "durable_object", summary: camelSummary(summary), providers: providers.map(camelProvider), events };
+    const daily = rows<DailyRow>(this.sql.exec(`SELECT CAST(occurred_at_ms / 86400000 AS INTEGER) * 86400000 AS day_start_ms, COUNT(*) AS request_count, COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count, COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) AS error_count, COALESCE(SUM(total_tokens), 0) AS total_tokens, COALESCE(SUM(actual_cost_micros), 0) AS actual_cost_micros FROM usage_events WHERE ${where} GROUP BY CAST(occurred_at_ms / 86400000 AS INTEGER) ORDER BY day_start_ms`, ...dailyParams) as unknown as Iterable<DailyRow>);
+    return { ledger: "durable_object", summary: camelSummary(summary), providers: providers.map(camelProvider), daily: daily.map(camelDaily), events };
   }
 
   private cleanup(): void { this.sql.exec("DELETE FROM usage_events WHERE occurred_at_ms < ?", Date.now() - usageRetentionMs); }
@@ -219,6 +222,8 @@ function first<T>(cursor: Iterable<T>): T | undefined { return rows(cursor)[0]; 
 
 interface SummaryRow { request_count: number; success_count: number; error_count: number; input_tokens: number; output_tokens: number; total_tokens: number; actual_cost_micros: number }
 interface ProviderRow { provider: string; request_count: number; success_count: number; error_count: number; total_tokens: number; actual_cost_micros: number }
+interface DailyRow { day_start_ms: number; request_count: number; success_count: number; error_count: number; total_tokens: number; actual_cost_micros: number }
 function emptySummary(): SummaryRow { return { request_count: 0, success_count: 0, error_count: 0, input_tokens: 0, output_tokens: 0, total_tokens: 0, actual_cost_micros: 0 }; }
 function camelSummary(row: SummaryRow) { return { requestCount: row.request_count, successCount: row.success_count, errorCount: row.error_count, inputTokens: row.input_tokens, outputTokens: row.output_tokens, totalTokens: row.total_tokens, actualCostMicros: row.actual_cost_micros }; }
 function camelProvider(row: ProviderRow) { return { provider: row.provider, requestCount: row.request_count, successCount: row.success_count, errorCount: row.error_count, totalTokens: row.total_tokens, actualCostMicros: row.actual_cost_micros }; }
+function camelDaily(row: DailyRow) { return { dayStartMs: row.day_start_ms, requestCount: row.request_count, successCount: row.success_count, errorCount: row.error_count, totalTokens: row.total_tokens, actualCostMicros: row.actual_cost_micros }; }
