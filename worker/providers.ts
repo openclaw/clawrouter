@@ -1,6 +1,6 @@
 import snapshotJson from "./generated/provider-snapshot.json";
 import { listConnections, resolveConnection } from "./authority";
-import { grantUsable as canonicalGrantUsable } from "./grant-selection";
+import { grantUsable as canonicalGrantUsable, selectGrant } from "./grant-selection";
 import { grantsVisibleToPolicies, type GrantRecord } from "./grant-scope";
 import type {
   AccessPolicyEntry, AuthorizedIdentity, CompiledEndpoint, CompiledModel, CompiledProvider, Env,
@@ -37,6 +37,7 @@ export interface Readiness {
 
 export interface UpstreamAuth {
   grant: UpstreamGrant | null;
+  grantKey: string | null;
   baseUrl: string;
   headers: Headers;
   query: URLSearchParams;
@@ -188,8 +189,9 @@ export async function assertProviderAccess(provider: CompiledProvider, auth: Aut
   if (!connection.enabled) throw new HttpError(503, "provider_disabled", `provider ${provider.id} is disabled`);
 }
 
-export async function upstreamAuth(provider: CompiledProvider, endpoint: CompiledEndpoint, auth: AuthorizedIdentity, env: Env): Promise<UpstreamAuth> {
-  const grant = await grantFor(provider, auth, env);
+export async function upstreamAuth(provider: CompiledProvider, endpoint: CompiledEndpoint, auth: AuthorizedIdentity, env: Env, excludedGrantKeys: ReadonlySet<string> = new Set()): Promise<UpstreamAuth> {
+  const selected = await grantFor(provider, auth, env, excludedGrantKeys);
+  const grant = selected?.grant ?? null;
   const headers = new Headers();
   const query = new URLSearchParams();
   const scheme = provider.auth.schemes.find((candidate) => candidate.type !== "oauth") ?? provider.auth.schemes[0];
@@ -205,6 +207,7 @@ export async function upstreamAuth(provider: CompiledProvider, endpoint: Compile
   if (transport && grant) for (const [name, value] of Object.entries(transport.headers)) headers.set(name, grantTemplate(value, grant));
   return {
     grant,
+    grantKey: selected?.key ?? null,
     baseUrl: transport?.baseUrl ?? resolveTemplate(provider, provider.base_urls.default, env),
     headers,
     query,
@@ -308,14 +311,11 @@ export async function listHealth(env: Env): Promise<Map<string, ProviderHealth>>
   return result;
 }
 
-async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env): Promise<UpstreamGrant | null> {
+async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedKeys: ReadonlySet<string>): Promise<{ key: string; grant: UpstreamGrant } | null> {
   const tokenRef = provider.auth.schemes.find((scheme) => scheme.type === "oauth")?.tokenRef ?? provider.id;
   const tenant = auth.policy.tenantId ?? "default";
-  for (const key of [`oauth/${auth.policyId}/${tokenRef}`, `oauth/tenants/${tenant}/${tokenRef}`]) {
-    const grant = await env.POLICY_KV.get<UpstreamGrant>(key, "json");
-    if (grant && grant.enabled !== false && (!grant.provider || grant.provider === provider.id) && grantUsable(grant)) return refreshGrant(key, grant, provider, env, false);
-  }
-  return null;
+  const selected = await selectGrant(provider.id, auth.policyId, tenant, tokenRef, env, excludedKeys);
+  return selected ? { key: selected.key, grant: await refreshGrant(selected.key, selected.grant, provider, env, false) } : null;
 }
 
 export async function refreshStoredGrant(env: Env, key: string): Promise<UpstreamGrant> {

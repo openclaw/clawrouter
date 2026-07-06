@@ -7,7 +7,7 @@ import {
   type AssignmentEvidence,
 } from "./assignments";
 import { contentKey } from "./content-retention";
-import { grantUsable, validCredentialBundle } from "./grant-selection";
+import { grantPriority, grantUsable, syncGrantPoolIndex, validCredentialBundle, validGrantSegment } from "./grant-selection";
 import { assertFusionModels, loadFusionConfig, storeFusionConfig } from "./fusion-config";
 import { fusionReadiness } from "./fusion-readiness";
 import { normalizeFusionConfig } from "./fusion";
@@ -273,24 +273,31 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string): 
   const parts = rest.split("/").map(decodeURIComponent), action = ["revoke", "refresh", "authorize"].includes(parts.at(-1) ?? "") ? parts.pop() : null;
   if (parts.length !== 3 || !["policies", "tenants"].includes(parts[0])) throw new HttpError(400, "invalid_upstream_grant_route", "invalid upstream grant route");
   const [scope, scopeId, tokenRef] = parts, key = scope === "policies" ? `oauth/${scopeId}/${tokenRef}` : `oauth/tenants/${scopeId}/${tokenRef}`;
+  if (!validGrantSegment(scopeId) || !validGrantSegment(tokenRef) || scope === "policies" && scopeId === "tenants") throw new HttpError(400, "invalid_upstream_grant_route", "scope id and token reference must be valid single key segments");
   if (action === "authorize" && request.method === "POST") {
     const body = mutationObject(await readJson<unknown>(request), "invalid_upstream_grant", "OAuth authorization");
     if (typeof body.provider !== "string" || !body.provider.trim()) throw new HttpError(400, "invalid_upstream_grant", "provider is required");
-    return startOAuth(request, env, key, body.provider.trim());
+    const priority = body.priority ?? 100;
+    if (!Number.isInteger(priority) || (priority as number) < 0 || (priority as number) > 1_000_000) throw new HttpError(400, "invalid_upstream_grant", "grant priority must be an integer from 0 to 1000000");
+    return startOAuth(request, env, key, body.provider.trim(), priority as number);
   }
   if (action === "refresh" && request.method === "POST") return privateJson(validatedGrantResponse(key, await refreshStoredGrant(env, key)));
   let grant: UpstreamGrant;
+  let existing: UpstreamGrant | null;
   if (action === "revoke" && request.method === "POST") {
-    const existing = await env.POLICY_KV.get<UpstreamGrant>(key, "json");
+    existing = await env.POLICY_KV.get<UpstreamGrant>(key, "json");
     if (!existing) throw new HttpError(404, "unknown_upstream_grant", "upstream grant is not registered"); grant = revokeGrant(existing);
   }
   else if (!action && request.method === "PUT") {
     const body = mutationObject(await readJson<unknown>(request), "invalid_upstream_grant", "upstream grant");
-    const existing = await env.POLICY_KV.get<UpstreamGrant>(key, "json");
+    existing = await env.POLICY_KV.get<UpstreamGrant>(key, "json");
     grant = normalizeGrant(body, existing);
   }
   else throw new HttpError(405, "method_not_allowed", "admin method is not allowed");
-  await env.POLICY_KV.put(key, JSON.stringify(grant)); return privateJson(validatedGrantResponse(key, grant));
+  await syncGrantPoolIndex(env, key, existing, grant);
+  try { await env.POLICY_KV.put(key, JSON.stringify(grant)); }
+  catch (error) { await syncGrantPoolIndex(env, key, grant, existing).catch(() => undefined); throw error; }
+  return privateJson(validatedGrantResponse(key, grant));
 }
 
 async function assignmentRules(env: Env) {
@@ -424,7 +431,7 @@ function normalizeBudgetValue(value: unknown, field: string): number | null {
 function validatedGrantResponse(key: string, grant: UpstreamGrant) {
   const credentialFields = grant.credentials && validCredentialBundle(grant.credentials) ? Object.keys(grant.credentials).sort() : [];
   const accessFlag = typeof grant.accessToken === "string" && grant.accessToken.trim().length > 0, refreshFlag = typeof grant.refreshToken === "string" && grant.refreshToken.trim().length > 0;
-  return { ...grantResponse(key, grant), hasCredential: (typeof grant.credential === "string" && grant.credential.trim().length > 0) || credentialFields.length > 0, credentialFields, ["hasAccess" + "Token"]: accessFlag, ["hasRefresh" + "Token"]: refreshFlag, usable: grant.enabled !== false && grantUsable(grant) };
+  return { ...grantResponse(key, grant), priority: grantPriority(grant), hasCredential: (typeof grant.credential === "string" && grant.credential.trim().length > 0) || credentialFields.length > 0, credentialFields, ["hasAccess" + "Token"]: accessFlag, ["hasRefresh" + "Token"]: refreshFlag, usable: grant.enabled !== false && grantUsable(grant) };
 }
 
 function normalizeBinding(value: unknown): PolicyBinding {
@@ -510,7 +517,9 @@ function userGroups(value: unknown): string[] {
 }
 function normalizeGrant(value: unknown, existing: UpstreamGrant | null): UpstreamGrant {
   const body = mutationObject(value, "invalid_upstream_grant", "upstream grant");
-  const now = nowIso(), grant = { ...existing, ...body, version: 1, enabled: body.enabled ?? true, kind: body.kind ?? "oauth", tokenType: body.tokenType ?? "Bearer", scopes: body.scopes ?? [], credentials: body.credentials ?? existing?.credentials ?? {}, createdAt: existing?.createdAt ?? now, updatedAt: now, revokedAt: null } as UpstreamGrant;
+  const priority = body.priority ?? existing?.priority ?? 100;
+  if (!Number.isInteger(priority) || (priority as number) < 0 || (priority as number) > 1_000_000) throw new HttpError(400, "invalid_upstream_grant", "grant priority must be an integer from 0 to 1000000");
+  const now = nowIso(), grant = { ...existing, ...body, version: 1, enabled: body.enabled ?? true, priority, kind: body.kind ?? "oauth", tokenType: body.tokenType ?? "Bearer", scopes: body.scopes ?? [], credentials: body.credentials ?? existing?.credentials ?? {}, createdAt: existing?.createdAt ?? now, updatedAt: now, revokedAt: null } as UpstreamGrant;
   if (!grant.provider) throw new HttpError(400, "invalid_upstream_grant", "provider is required");
   if (!snapshot.providers.some((provider) => provider.id === grant.provider)) throw new HttpError(400, "unknown_provider", "upstream grant provider is not registered");
   if (!validCredentialBundle(grant.credentials) || [grant.credential, grant.accessToken, grant.refreshToken].some((secret) => secret != null && (typeof secret !== "string" || !secret.trim().length))) throw new HttpError(400, "invalid_upstream_grant", "grant credentials must use non-empty string values");

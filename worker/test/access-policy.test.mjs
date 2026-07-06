@@ -18,7 +18,10 @@ test("provider policy selection skips stored malformed credential bundles", asyn
       ["oauth/empty/openai", { enabled: true, provider: "openai", ...malformed }],
       ["oauth/valid/openai", { enabled: true, provider: "openai", credential: "configured" }],
     ]);
-    const env = { POLICY_KV: { get: async (key) => stored.get(key) ?? null } };
+    const env = {
+      POLICY_KV: { get: async (key) => Array.isArray(key) ? new Map(key.map((item) => [item, stored.get(item) ?? null])) : stored.get(key) ?? null },
+      ACCESS_CONTROL: { idFromName: (name) => name, get: () => ({ fetch: async () => Response.json({ keys: [] }) }) },
+    };
     assert.equal((await selectProviderPolicy(entries, "openai", "default", env)).policyId, "valid");
   }
 });
