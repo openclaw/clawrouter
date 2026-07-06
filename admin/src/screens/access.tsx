@@ -54,9 +54,13 @@ export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selec
   onSetProviderGroup: (ids: string[], checked: boolean) => void;
   busy: boolean;
 }) {
+  const resourceTabsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    resourceTabsRef.current?.querySelector('[role="tab"][aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [tab]);
   return (
     <div className="accessWorkspace">
-      <div className="resourceTabs" role="tablist" aria-label="access resources">
+      <div ref={resourceTabsRef} className="resourceTabs" role="tablist" aria-label="access resources">
         <button type="button" role="tab" aria-selected={tab === "policies"} className={tab === "policies" ? "active" : ""} onClick={() => setTab("policies")}>Policies <span>{keys.length}</span></button>
         <button type="button" role="tab" aria-selected={tab === "credentials"} className={tab === "credentials" ? "active" : ""} onClick={() => setTab("credentials")}>Credentials <span>{credentials.length}</span></button>
         <button type="button" role="tab" aria-selected={tab === "bindings"} className={tab === "bindings" ? "active" : ""} onClick={() => setTab("bindings")}>Bindings <span>{bindings.filter((binding) => binding.enabled).length}</span></button>
@@ -425,7 +429,7 @@ export function PolicyPanel({ keys, selected, providers, form, setForm, error, o
     </div>
   );
 }
-import React, { type FormEvent, useState } from "react";
+import React, { type FormEvent, useEffect, useRef, useState } from "react";
 import { CircleSlash2, KeyRound, LogIn, Plus, RefreshCw, Search, ServerCog, ShieldCheck, Users } from "lucide-react";
 import { bindingKey, type CatalogModel } from "../domain";
 import { EntityName, InlineError, InlineNote, InspectorHeader, Status, kindLabel } from "../components";

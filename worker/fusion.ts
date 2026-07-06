@@ -31,23 +31,25 @@ export interface FusionRunResult {
 type ChatMessage = { role: string; content: unknown };
 type InvokeModel = (model: string, body: Record<string, unknown>, timeoutMs: number, index: number) => Promise<Response>;
 
-export function normalizeFusionConfig(input: Partial<FusionConfig>): FusionConfig {
-  const requestedAdvisers = input.adviserModels ?? DEFAULT_FUSION_CONFIG.adviserModels;
+export function normalizeFusionConfig(input: unknown): FusionConfig {
+  if (!input || typeof input !== "object" || Array.isArray(input)) throw new HttpError(400, "fusion_config_invalid", "fusion configuration must be a JSON object");
+  const value = input as Partial<FusionConfig>;
+  const requestedAdvisers = value.adviserModels ?? DEFAULT_FUSION_CONFIG.adviserModels;
   if (!Array.isArray(requestedAdvisers) || requestedAdvisers.some((model) => !cleanModel(model))) throw new HttpError(400, "fusion_model_invalid", "fusion adviser model ids are invalid");
   const adviserModels = uniqueModels(requestedAdvisers).slice(0, MAX_ADVISERS);
-  const aggregatorModel = cleanModel(input.aggregatorModel ?? DEFAULT_FUSION_CONFIG.aggregatorModel);
+  const aggregatorModel = cleanModel(value.aggregatorModel ?? DEFAULT_FUSION_CONFIG.aggregatorModel);
   if (!aggregatorModel) throw new HttpError(400, "fusion_model_invalid", "fusion aggregator model id is invalid");
   const config: FusionConfig = {
     version: 1,
-    enabled: input.enabled === true,
+    enabled: value.enabled === true,
     modelId: FUSION_MODEL_ID,
     adviserModels,
     aggregatorModel,
-    adviserTimeoutMs: boundedInteger(input.adviserTimeoutMs, DEFAULT_FUSION_CONFIG.adviserTimeoutMs, 1_000, 120_000),
-    maxOutputTokens: boundedInteger(input.maxOutputTokens, DEFAULT_FUSION_CONFIG.maxOutputTokens, 64, 4_096),
-    maxInputChars: boundedInteger(input.maxInputChars, DEFAULT_FUSION_CONFIG.maxInputChars, 1_000, 200_000),
-    maxProposalChars: boundedInteger(input.maxProposalChars, DEFAULT_FUSION_CONFIG.maxProposalChars, 256, 20_000),
-    temperature: boundedNumber(input.temperature, DEFAULT_FUSION_CONFIG.temperature, 0, 2),
+    adviserTimeoutMs: boundedInteger(value.adviserTimeoutMs, DEFAULT_FUSION_CONFIG.adviserTimeoutMs, 1_000, 120_000),
+    maxOutputTokens: boundedInteger(value.maxOutputTokens, DEFAULT_FUSION_CONFIG.maxOutputTokens, 64, 4_096),
+    maxInputChars: boundedInteger(value.maxInputChars, DEFAULT_FUSION_CONFIG.maxInputChars, 1_000, 200_000),
+    maxProposalChars: boundedInteger(value.maxProposalChars, DEFAULT_FUSION_CONFIG.maxProposalChars, 256, 20_000),
+    temperature: boundedNumber(value.temperature, DEFAULT_FUSION_CONFIG.temperature, 0, 2),
   };
   if (config.enabled && !config.adviserModels.length) throw new HttpError(400, "fusion_advisers_required", "fusion requires at least one adviser model");
   if ([...config.adviserModels, config.aggregatorModel].includes(FUSION_MODEL_ID)) throw new HttpError(400, "fusion_recursive_model", "fusion cannot use itself as an adviser or aggregator");

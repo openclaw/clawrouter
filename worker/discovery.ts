@@ -2,7 +2,7 @@ import { publicSession, sessionPolicies, verifiedAccessSession } from "./access"
 import { loadFusionConfig } from "./fusion-config";
 import { FUSION_MODEL_ID } from "./fusion";
 import { authenticateProxyKey } from "./proxy";
-import { modelRoute, providerReadinessForPolicies, snapshot, type Readiness } from "./providers";
+import { endpointForPath, modelRoute, providerReadinessForPolicies, snapshot, type Readiness } from "./providers";
 import type { AccessPolicyEntry, AccessSession, AuthorizedIdentity, CompiledProvider, Env } from "./types";
 import { errorResponse, privateJson, sha256Hex } from "./utils";
 
@@ -91,7 +91,7 @@ export async function catalogResponse(request: Request, env: Env): Promise<Respo
     readiness: fusion.readiness,
     connectionTypes: ["compound"],
     routes: [],
-    models: [{ id: FUSION_MODEL_ID, upstream: FUSION_MODEL_ID, capabilities: ["llm.chat"], pricing_ref: null, pricing: null }],
+    models: fusion.readiness.executable ? [{ id: FUSION_MODEL_ID, upstream: FUSION_MODEL_ID, capabilities: ["llm.chat"], pricing_ref: null, pricing: null }] : [],
   });
   return privateJson({ version: "clawrouter.client-catalog.v1", providers });
 }
@@ -133,12 +133,9 @@ async function fusionEntitlement(rows: EntitlementRow[], env: Env): Promise<Enti
   const aggregator = modelRoute(config.aggregatorModel);
   const aggregatorAccess = aggregator ? rows.find((row) => row.provider === aggregator.provider.id) : undefined;
   const advisers = config.adviserModels.map((model) => modelRoute(model)).filter((route): route is NonNullable<ReturnType<typeof modelRoute>> => !!route);
-  const readyAdvisers = advisers.filter((route) => {
-    const row = rows.find((candidate) => candidate.provider === route.provider.id);
-    return row?.allowed && row.readiness.executable;
-  });
+  const readyAdvisers = advisers.filter((route) => routeExecutable(route, rows));
   const allowed = aggregatorAccess?.allowed === true;
-  const executable = allowed && aggregatorAccess?.readiness.executable === true;
+  const executable = !!aggregator && routeExecutable(aggregator, rows);
   const reasons = [
     ...(!allowed ? ["No active policy grants the configured fusion aggregator provider."] : []),
     ...(allowed && !executable ? [aggregatorAccess?.readiness.reasons[0] ?? "The configured fusion aggregator is unavailable."] : []),
@@ -176,6 +173,12 @@ async function fusionEntitlement(rows: EntitlementRow[], env: Env): Promise<Enti
     policies: aggregatorAccess?.policies ?? [],
     readiness,
   };
+}
+
+function routeExecutable(route: NonNullable<ReturnType<typeof modelRoute>>, rows: EntitlementRow[]): boolean {
+  const row = rows.find((candidate) => candidate.provider === route.provider.id);
+  const endpoint = endpointForPath(route.provider, "/v1/chat/completions");
+  return !!endpoint && row?.allowed === true && row.readiness.executableEndpoints.includes(endpoint.id);
 }
 
 async function clientEntitlements(request: Request, env: Env): Promise<EntitlementRow[] | Response> {

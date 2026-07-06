@@ -4,7 +4,7 @@
 
 .fusionWorkspace .tableSectionHeader code,
 .fusionInspector code {
-  font-family: "DM Mono", ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 0.95em;
 }
 
@@ -14,7 +14,7 @@
   align-items: stretch;
   gap: 0;
   margin: 16px;
-  border: 1px solid var(--border-strong);
+  border: 1px solid var(--line-strong);
   background: var(--surface-muted);
 }
 
@@ -26,14 +26,14 @@
   gap: 5px;
   min-width: 0;
   padding: 14px;
-  background: var(--background);
+  background: var(--panel);
 }
 
 .fusionInput span,
 .fusionOutput span,
 .fusionAdvisers span {
-  color: var(--light-slate);
-  font-family: "DM Mono", ui-monospace, monospace;
+  color: var(--faint);
+  font-family: var(--font-mono);
   font-size: 9px;
   letter-spacing: 0.08em;
 }
@@ -42,8 +42,8 @@
 .fusionOutput strong,
 .fusionAdvisers strong {
   overflow: hidden;
-  color: var(--foreground-strong);
-  font-family: "DM Mono", ui-monospace, monospace;
+  color: var(--ink);
+  font-family: var(--font-mono);
   font-size: 11px;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -57,22 +57,23 @@
 }
 
 .fusionOutput {
-  background: var(--primary);
+  border-top: 2px solid var(--accent);
+  background: var(--hero-ink);
 }
 
 .fusionOutput span,
 .fusionOutput small {
-  color: color-mix(in srgb, var(--primary-foreground) 70%, transparent);
+  color: var(--hero-muted);
 }
 
 .fusionOutput strong {
-  color: var(--primary-foreground);
+  color: var(--hero-text);
 }
 
 .fusionAdvisers {
   display: grid;
   gap: 1px;
-  background: var(--border);
+  background: var(--line);
 }
 
 .fusionAdvisers > div {
@@ -87,9 +88,9 @@
 .fusionArrow {
   display: grid;
   place-items: center;
-  border-inline: 1px solid var(--border);
-  color: var(--muted);
-  font-family: "DM Mono", ui-monospace, monospace;
+  border-inline: 1px solid var(--line);
+  color: var(--faint);
+  font-family: var(--font-mono);
   font-size: 14px;
 }
 
@@ -101,13 +102,13 @@
 }
 
 .fusionPrinciples article {
-  border: 1px solid var(--border);
+  border: 1px solid var(--line);
   padding: 12px;
-  background: var(--background);
+  background: var(--panel);
 }
 
 .fusionPrinciples strong {
-  color: var(--foreground-strong);
+  color: var(--ink);
   font-size: 11px;
 }
 
@@ -120,7 +121,7 @@
 
 .fusionInspector textarea {
   min-height: 92px;
-  font-family: "DM Mono", ui-monospace, monospace;
+  font-family: var(--font-mono);
   font-size: 11px;
 }
 
@@ -131,7 +132,7 @@
 
   .fusionArrow {
     min-height: 28px;
-    border-block: 1px solid var(--border);
+    border-block: 1px solid var(--line);
     border-inline: 0;
     transform: rotate(90deg);
   }

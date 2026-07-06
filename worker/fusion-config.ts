@@ -17,7 +17,7 @@ export async function loadFusionConfig(env: Env): Promise<FusionConfig> {
   }
 }
 
-export async function storeFusionConfig(env: Env, input: Partial<FusionConfig>): Promise<FusionConfig> {
+export async function storeFusionConfig(env: Env, input: unknown): Promise<FusionConfig> {
   const config = normalizeFusionConfig(input);
   assertFusionModels(config);
   await env.POLICY_KV.put(FUSION_CONFIG_KEY, JSON.stringify(config));

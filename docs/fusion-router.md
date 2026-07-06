@@ -55,8 +55,11 @@ fusion profile where its quality justifies the added token price.
 
 Enable the configuration to advertise `clawrouter/fusion` through `/v1/models`,
 `/v1/catalog`, and the Playground. The synthesizer provider must be allowed and
-executable for the caller. Unavailable advisers fail open; if every adviser
-fails, the synthesizer answers the original request by itself.
+its chat-completions route must be executable for the caller; otherwise the
+virtual model stays hidden. ClawRouter preflights that final route before it
+starts advisers, so a denied or unavailable synthesizer cannot spend adviser
+budget. Unavailable advisers fail open; if every adviser fails, the synthesizer
+answers the original request by itself.
 
 Each adviser and the synthesizer is a separate normal ClawRouter request. The
 caller's policy must grant all providers that should participate. Budgets are

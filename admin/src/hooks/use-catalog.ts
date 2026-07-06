@@ -22,7 +22,7 @@ export function useCatalog(allowDemo: boolean) {
   const models = useMemo(() => {
     const catalog = catalogModels(routes);
     const fusion = accessByProvider.get("clawrouter");
-    return fusion?.allowed
+    return fusion?.allowed && fusion.readiness.executable
       ? [{ id: "clawrouter/fusion", provider: "clawrouter", capabilities: ["llm.chat"] }, ...catalog]
       : catalog;
   }, [accessByProvider, routes]);

@@ -29,6 +29,12 @@ interface ProxySelection {
   timeoutMs?: number;
 }
 
+interface PreparedUpstream {
+  headers: Headers;
+  url: URL;
+  requestBody: string | undefined;
+}
+
 export async function proxyOpenAi(request: Request, env: Env, context: ExecutionContext, path: string, mode: AuthMode): Promise<Response> {
   const preauthenticated = await preauthenticate(request, env, mode);
   if (preauthenticated instanceof Response) return preauthenticated;
@@ -52,15 +58,25 @@ async function proxyConcreteOpenAi(
   preauthenticated: AuthorizedIdentity | null,
   timeoutMs?: number,
 ): Promise<Response> {
+  const selection = concreteOpenAiSelection(path, body, env, timeoutMs);
+  return selection instanceof Response ? selection : proxySelected(request, env, context, mode, selection, {}, preauthenticated);
+}
+
+function concreteOpenAiSelection(path: string, body: Record<string, unknown>, env: Env, timeoutMs?: number): ProxySelection | Response {
   const modelId = typeof body.model === "string" ? body.model : "";
   const route = modelRoute(modelId);
   if (!route) return errorResponse("model_not_found", `model ${modelId} is not registered`, 404);
   const capability = capabilityForPath(path);
   const endpoint = endpointForPath(route.provider, path);
   if (!capability || !endpoint || !route.model.capabilities.includes(capability)) return errorResponse("model_capability_unsupported", `model ${modelId} does not support ${path}`, 400);
-  const upstreamModel = resolvedUpstreamModel(route.provider, route.model, env);
-  const transformed = transformRequestBody(route.provider, path, upstreamModel, { ...body, model: upstreamModel }, env);
-  return proxySelected(request, env, context, mode, { provider: route.provider, endpoint, model: route.model, capability, body: transformed, pathParams: { model: upstreamModel, deployment: upstreamModel }, method: "POST", timeoutMs }, {}, preauthenticated);
+  try {
+    const upstreamModel = resolvedUpstreamModel(route.provider, route.model, env);
+    const transformed = transformRequestBody(route.provider, path, upstreamModel, { ...body, model: upstreamModel }, env);
+    return { provider: route.provider, endpoint, model: route.model, capability, body: transformed, pathParams: { model: upstreamModel, deployment: upstreamModel }, method: "POST", timeoutMs };
+  } catch (error) {
+    const failure = error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
+    return errorResponse(failure.code, failure.message, failure.status);
+  }
 }
 
 async function proxyFusion(
@@ -73,6 +89,10 @@ async function proxyFusion(
 ): Promise<Response> {
   const config = await loadFusionConfig(env);
   if (!config.enabled) return errorResponse("fusion_disabled", `${FUSION_MODEL_ID} is not enabled`, 404);
+  const aggregatorSelection = concreteOpenAiSelection("/v1/chat/completions", buildAggregatorBody(body, config, []), env);
+  if (aggregatorSelection instanceof Response) return aggregatorSelection;
+  const aggregatorFailure = await preflightSelected(request, env, mode, aggregatorSelection, preauthenticated);
+  if (aggregatorFailure) return aggregatorFailure;
   const result = await collectFusionProposals(config, body, async (model, adviserBody, timeoutMs, index) => {
     const headers = new Headers(request.headers);
     headers.set("x-request-id", randomId(`fusion-adviser-${index + 1}`));
@@ -213,37 +233,17 @@ export async function inspectKey(headers: Headers, env: Env): Promise<Response> 
 }
 
 async function proxySelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, queryInput: Record<string, unknown> = {}, preauthenticated: AuthorizedIdentity | null = null): Promise<Response> {
-  const auth = preauthenticated ?? (mode === "access" ? await accessIdentity(request, env, selection.provider.id) : await authenticateProxyKey(request.headers, env));
+  const auth = await selectedAuth(request, env, mode, selection, preauthenticated);
   if (auth instanceof Response) return auth;
   const requestId = request.headers.get("x-request-id") ?? randomId("req");
   const started = Date.now();
   const cost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability);
-  try { await assertProviderAccess(selection.provider, auth, env); }
+  let prepared: PreparedUpstream;
+  try { prepared = await prepareSelected(request, env, selection, queryInput, auth); }
   catch (error) {
-    const failure = error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "provider authorization failed");
-    auditFailure(context, env, auth, selection, request, requestId, started, cost, failure.status, failure.status === 403 ? "denied" : "provider_error");
-    return errorResponse(failure.code, failure.message, failure.status);
-  }
-  let upstream;
-  try { upstream = await upstreamAuth(selection.provider, selection.endpoint, auth, env); }
-  catch (error) {
-    const failure = error instanceof HttpError ? error : new HttpError(503, "provider_not_configured", "provider is not configured");
-    auditFailure(context, env, auth, selection, request, requestId, started, cost, failure.status, "provider_error");
-    return errorResponse(failure.code, failure.message, failure.status);
-  }
-  let headers: Headers, url: URL, requestBody: string | undefined;
-  try {
-    headers = new Headers(upstream.headers);
-    copyRequestHeaders(request.headers, selection.provider, selection.endpoint, headers, env);
-    const path = upstreamPath(selection.provider, selection.endpoint, selection.pathParams, env, upstream);
-    url = new URL(`${upstream.baseUrl.replace(/\/$/, "")}${path}`);
-    upstream.query.forEach((value, name) => url.searchParams.set(name, value));
-    for (const [name, value] of Object.entries(selection.endpoint.query)) url.searchParams.set(name, resolveTemplate(selection.provider, value, env));
-    for (const [name, value] of Object.entries(queryInput)) if (value != null) url.searchParams.set(name, String(value));
-    requestBody = ["GET", "HEAD"].includes(selection.method) ? undefined : JSON.stringify(selection.body);
-  } catch (error) {
-    const failure = error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
-    auditFailure(context, env, auth, selection, request, requestId, started, cost, failure.status, failure.status < 500 ? "client_error" : "provider_error");
+    const failure = selectedFailure(error);
+    const status = failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error";
+    auditFailure(context, env, auth, selection, request, requestId, started, cost, failure.status, status);
     return errorResponse(failure.code, failure.message, failure.status);
   }
   let reservation: BudgetReservation;
@@ -262,15 +262,9 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   const controller = new AbortController();
   const endpointTimeout = selection.endpoint.timeout_ms ?? 120_000;
   const timeout = setTimeout(() => controller.abort(), Math.min(selection.timeoutMs ?? endpointTimeout, endpointTimeout));
-  try { await signSigV4(selection.provider, url, selection.method, requestBody, headers, env, upstream.grant); }
-  catch (error) {
-    clearTimeout(timeout);
-    context.waitUntil(finalizeAccounting(env, auth, reservation, 0, usageEvent(auth, selection, request, requestId, started, 503, null, cost, reservation, content, "provider_error")));
-    return error instanceof HttpError ? errorResponse(error.code, error.message, error.status) : errorResponse("provider_not_configured", "provider signing configuration is invalid", 503);
-  }
   let response: Response;
   try {
-    response = await fetch(url, { method: selection.method, headers, body: requestBody, signal: controller.signal });
+    response = await fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal: controller.signal });
   } catch (error) {
     clearTimeout(timeout);
     context.waitUntil(finalizeAccounting(env, auth, reservation, 0, usageEvent(auth, selection, request, requestId, started, 502, null, cost, reservation, content, error instanceof DOMException && error.name === "AbortError" ? "timeout" : "provider_error")));
@@ -284,6 +278,48 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   outputHeaders.set("x-clawrouter-upstream-provider", selection.provider.id);
   outputHeaders.set("x-clawrouter-content-retention", auth.policy.retainRequestContent !== false && !auth.contentRetentionDisabled ? "on; retention-days=30" : "off");
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers: outputHeaders });
+}
+
+async function preflightSelected(request: Request, env: Env, mode: AuthMode, selection: ProxySelection, preauthenticated: AuthorizedIdentity | null): Promise<Response | null> {
+  const auth = await selectedAuth(request, env, mode, selection, preauthenticated);
+  if (auth instanceof Response) return auth;
+  try {
+    await prepareSelected(request, env, selection, {}, auth);
+    return null;
+  } catch (error) {
+    const failure = selectedFailure(error);
+    return errorResponse(failure.code, failure.message, failure.status);
+  }
+}
+
+async function selectedAuth(request: Request, env: Env, mode: AuthMode, selection: ProxySelection, preauthenticated: AuthorizedIdentity | null): Promise<AuthorizedIdentity | Response> {
+  return preauthenticated ?? (mode === "access" ? accessIdentity(request, env, selection.provider.id) : authenticateProxyKey(request.headers, env));
+}
+
+async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: Record<string, unknown>, auth: AuthorizedIdentity): Promise<PreparedUpstream> {
+  try { await assertProviderAccess(selection.provider, auth, env); }
+  catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "provider authorization failed"); }
+  let upstream;
+  try { upstream = await upstreamAuth(selection.provider, selection.endpoint, auth, env); }
+  catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_not_configured", "provider is not configured"); }
+  try {
+    const headers = new Headers(upstream.headers);
+    copyRequestHeaders(request.headers, selection.provider, selection.endpoint, headers, env);
+    const path = upstreamPath(selection.provider, selection.endpoint, selection.pathParams, env, upstream);
+    const url = new URL(`${upstream.baseUrl.replace(/\/$/, "")}${path}`);
+    upstream.query.forEach((value, name) => url.searchParams.set(name, value));
+    for (const [name, value] of Object.entries(selection.endpoint.query)) url.searchParams.set(name, resolveTemplate(selection.provider, value, env));
+    for (const [name, value] of Object.entries(queryInput)) if (value != null) url.searchParams.set(name, String(value));
+    const requestBody = ["GET", "HEAD"].includes(selection.method) ? undefined : JSON.stringify(selection.body);
+    await signSigV4(selection.provider, url, selection.method, requestBody, headers, env, upstream.grant);
+    return { headers, url, requestBody };
+  } catch (error) {
+    throw error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
+  }
+}
+
+function selectedFailure(error: unknown): HttpError {
+  return error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "provider request preflight failed");
 }
 
 function auditFailure(context: ExecutionContext, env: Env, auth: AuthorizedIdentity, selection: ProxySelection, request: Request, requestId: string, started: number, cost: Cost, statusCode: number, status: UsageEvent["status"]): void {

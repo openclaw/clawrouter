@@ -22,6 +22,8 @@ test("fusion configuration validates concrete chat models and bounds adviser cou
   assert.equal(config.temperature, 2);
   assert.throws(() => normalizeFusionConfig({ enabled: true, adviserModels: [FUSION_MODEL_ID] }), /cannot use itself/);
   assert.throws(() => normalizeFusionConfig({ enabled: true, aggregatorModel: "not a model" }), /invalid/);
+  assert.throws(() => normalizeFusionConfig(null), /JSON object/);
+  assert.throws(() => normalizeFusionConfig([]), /JSON object/);
 });
 
 test("local adviser messages retain bounded text but never images or tool schemas", () => {

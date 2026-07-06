@@ -13,7 +13,6 @@ import { usageSnapshots } from "./ledgers";
 import { startOAuth } from "./oauth";
 import { listGrantRecords, listHealth, providerReadiness, providerReadinessFromState, refreshStoredGrant, snapshot } from "./providers";
 import type { AdminBootstrapResponse } from "../shared/contracts";
-import type { FusionConfig } from "../shared/contracts";
 import type {
   AccessControlUser, AccessPolicy, AccessPolicyEntry, AssignmentRule, Env, PolicyBinding,
   ProviderConnection, ProxyCredential, ProxyCredentialEntry, UpstreamGrant,
@@ -44,7 +43,7 @@ export async function adminApi(request: Request, env: Env, path: string): Promis
 
     if (path === "/v1/admin/policy-bindings" && request.method === "PUT") return putBinding(request, env);
     if (path === "/v1/admin/assignment-rules/reconcile" && request.method === "POST") return reconcileAssignments(request, env);
-    if (path === "/v1/admin/fusion" && request.method === "PUT") return privateJson(await storeFusionConfig(env, await readJson<Partial<FusionConfig>>(request)));
+    if (path === "/v1/admin/fusion" && request.method === "PUT") return privateJson(await storeFusionConfig(env, await readJson<unknown>(request)));
     if (path.startsWith("/v1/admin/assignment-rules/") && request.method === "PUT") return putAssignmentRule(request, env, path.slice("/v1/admin/assignment-rules/".length));
     if (path.startsWith("/v1/admin/access-user-grants/") && request.method === "PUT") return putUserGrants(request, env, path.slice("/v1/admin/access-user-grants/".length));
     if (path.startsWith("/v1/admin/access-users/") && request.method === "PUT") return putUser(request, env, path.slice("/v1/admin/access-users/".length));
