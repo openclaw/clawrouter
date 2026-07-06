@@ -15,7 +15,7 @@ const legacyKey = `clawrouter-live-legacy-${legacySecret}`;
 const generation = "migration_e2e";
 writeFileSync(config, `${readFileSync("wrangler.toml", "utf8").trim()}\n\n[[kv_namespaces]]\nbinding = "POLICY_KV"\nid = "local-e2e"\n`);
 mkdirSync(persistence, { recursive: true });
-putLocalKv("policies/migrate", { enabled: true, generation, providers: ["firecrawl", "replicate"], tenantId: "default", tokenRole: "service", retainRequestContent: true });
+putLocalKv("policies/migrate", { enabled: true, generation, providers: ["firecrawl", "replicate"], tenantId: "default", tokenRole: "service", monthlyBudgetMicros: 10_000, requestCostMicros: 100, retainRequestContent: true });
 putLocalKv("credentials/migrate", { enabled: true, secretSha256: sha256(proxySecret), policyId: "migrate", policyGeneration: generation });
 putLocalKv("keys/legacy", { enabled: true, secretSha256: sha256(legacySecret), generation: "legacy", providers: ["firecrawl"], tenantId: "default", retainRequestContent: true });
 
@@ -73,6 +73,14 @@ try {
   const directManifestGet = await fetch(`${base}/v1/proxy/replicate/prediction?prediction_id=pred_123`, { headers: { authorization: `Bearer ${proxyKey}` } });
   assert.equal(directManifestGet.status, 503);
   assert.equal((await directManifestGet.json()).error.code, "provider_not_configured", "GET manifest routes parse path params without a JSON envelope");
+  const grant = await fetch(`${base}/v1/admin/upstream-grants/policies/migrate/replicate`, { method: "PUT", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" }, body: JSON.stringify({ provider: "replicate", kind: "api_key", credential: "local-e2e-token" }) });
+  assert.equal(grant.status, 200);
+  const missingPathParam = await fetch(`${base}/v1/proxy/replicate/prediction`, { headers: { authorization: `Bearer ${proxyKey}` } });
+  assert.equal(missingPathParam.status, 400);
+  assert.equal((await missingPathParam.json()).error.code, "missing_path_param");
+  const usageAfterInvalidRequest = await fetch(`${base}/v1/usage`, { headers: { authorization: `Bearer ${proxyKey}` } });
+  assert.equal(usageAfterInvalidRequest.status, 200);
+  assert.equal((await usageAfterInvalidRequest.json()).budget.spentMicros, 0, "invalid manifest requests must not reserve budget");
   const combined = await fetch(`${base}/v1/admin/keys/migrate`, { method: "PUT", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" }, body: JSON.stringify({ secretSha256: sha256("different_secret_1234"), providers: ["openai"], enabled: true }) });
   assert.equal(combined.status, 409);
   assert.equal((await combined.json()).error.code, "combined_policy_secret_rotation");

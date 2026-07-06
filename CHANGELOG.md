@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Validate provider request paths and templates before reserving budget so malformed manifest requests fail without temporarily consuming quota.
 - Automatically bind GitHub organization and team assignment rules from Cloudflare Access's verified same-origin identity on first sign-in, including existing users whose prior reconciliation lacked GitHub evidence.
 - Document first-party OpenClaw setup, plugin and model allowlists, credential-scoped dynamic model discovery, supported transports, multi-provider smoke testing, and quota reporting on a standalone integration page.
 - Join the console into a full-bleed racked frame with a flush header, connected hairlines, and one 16px alignment datum; make action buttons monochrome so copper is reserved for state, selection, and focus; calm right-rail notes, facts, and attention metrics; and replace the provider-usage list with a ranked share readout with per-provider error callouts.
