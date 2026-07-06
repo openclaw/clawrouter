@@ -1,7 +1,7 @@
 # Console redesign — "Patchboard"
 
 Visual system for the ClawRouter browser console (July 2026). Screenshots in
-this directory are demo-mode captures at 1440×1000 used for the redesign PR.
+this directory are matching-viewport demo captures used for visual review.
 
 ## System
 
@@ -28,3 +28,5 @@ this directory are demo-mode captures at 1440×1000 used for the redesign PR.
 - `before-*.png` — previous design, light theme.
 - `after-*.png` — Patchboard, light theme.
 - `after-dark-*.png` — Patchboard, dark theme.
+- `analytics-before-*.png` / `analytics-after-*.png` — Dashboard and Usage
+  before/after evidence for the data-first analytics layout.
