@@ -21,6 +21,11 @@ putLocalKv("credentials/migrate", { enabled: true, secretSha256: sha256(proxySec
 putLocalKv("keys/legacy", { enabled: true, secretSha256: sha256(legacySecret), generation: "legacy", providers: ["firecrawl"], tenantId: "default", retainRequestContent: true });
 putLocalKv("oauth/migrate/legacy_invalid", { provider: "aws-bedrock", kind: "api_key", credentials: Object.fromEntries([["access" + "KeyId", "local"], ["secret" + "AccessKey", "   "]]) });
 
+const failoverSecret = "failover123";
+const failoverKey = `clawrouter-live-failover-${failoverSecret}`;
+putLocalKv("policies/failover", { enabled: true, generation, providers: ["local-openai"], tenantId: "default", tokenRole: "service", requestCostMicros: 1, retainRequestContent: false });
+putLocalKv("credentials/failover", { enabled: true, secretSha256: sha256(failoverSecret), policyId: "failover", policyGeneration: generation });
+
 const fusionSecret = "fusion123";
 const fusionKey = `clawrouter-live-fusionlocal-${fusionSecret}`;
 putLocalKv("policies/fusion_local", { enabled: true, generation, providers: ["local-openai", "openai"], tenantId: "default", tokenRole: "service", monthlyBudgetMicros: 1, retainRequestContent: false });
@@ -28,12 +33,21 @@ putLocalKv("policies/fusion_ready", { enabled: true, generation, providers: ["lo
 putLocalKv("credentials/fusionlocal", { enabled: true, secretSha256: sha256(fusionSecret), policyId: "fusion_local", policyGeneration: generation });
 const upstreamPort = await availablePort();
 const upstreamCalls = [];
+const failoverCalls = [];
 let stalledUpstreamClosed = false;
 const upstreamServer = createHttpServer(async (request, response) => {
   let raw = "";
   for await (const chunk of request) raw += chunk;
   const body = JSON.parse(raw);
   upstreamCalls.push(body);
+  const authorization = request.headers.authorization ?? "";
+  if (body.model === "default" && authorization === "Bearer rate-limited") {
+    failoverCalls.push(authorization);
+    response.writeHead(429, { "content-type": "application/json", "retry-after": "120", "x-ratelimit-limit-requests": "100", "x-ratelimit-remaining-requests": "0", "x-ratelimit-reset-requests": "120" });
+    response.end(JSON.stringify({ error: { message: "fixture rate limit" } }));
+    return;
+  }
+  if (body.model === "default" && authorization === "Bearer healthy") failoverCalls.push(authorization);
   if (body.model === "stall") {
     response.on("close", () => { stalledUpstreamClosed = true; });
     response.writeHead(200, { "content-type": "application/json" });
@@ -43,7 +57,7 @@ const upstreamServer = createHttpServer(async (request, response) => {
   const content = body.model === "adviser"
     ? "local proposal"
     : JSON.stringify(body.messages).includes("local proposal") ? "fused answer" : "proposal missing";
-  response.writeHead(200, { "content-type": "application/json" });
+  response.writeHead(200, { "content-type": "application/json", ...(authorization === "Bearer healthy" ? { "x-clawrouter-grant-failover": "1", "x-ratelimit-limit-requests": "100", "x-ratelimit-remaining-requests": "80", "x-ratelimit-reset-requests": "120" } : {}) });
   response.end(JSON.stringify({ choices: [{ message: { role: "assistant", content } }], usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 } }));
 });
 await new Promise((resolve, reject) => upstreamServer.listen(upstreamPort, "127.0.0.1", resolve).once("error", reject));
@@ -436,6 +450,31 @@ try {
   const usageAfterInvalidBodies = await fetch(`${base}/v1/usage`, { headers: { authorization: `Bearer ${proxyKey}` } });
   assert.equal(usageAfterInvalidBodies.status, 200);
   assert.equal((await usageAfterInvalidBodies.json()).budget.spentMicros, 0, "invalid JSON body shapes must not reserve budget");
+  for (const [tokenRef, credential] of [["local-a-primary", "rate-limited"], ["local-b-backup", "healthy"]]) {
+    const stored = await fetch(`${base}/v1/admin/upstream-grants/policies/failover/${tokenRef}`, { method: "PUT", headers: adminHeaders, body: JSON.stringify({ provider: "local-openai", kind: "api_key", priority: 10, credential }) });
+    assert.equal(stored.status, 200, JSON.stringify(await stored.clone().json()));
+  }
+  const failoverRequest = () => fetch(`${base}/v1/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${failoverKey}`, "content-type": "application/json" }, body: JSON.stringify({ model: "local/default", messages: [{ role: "user", content: "route around quota" }] }) });
+  const failedOver = await failoverRequest();
+  assert.equal(failedOver.status, 200, JSON.stringify(await failedOver.clone().json()));
+  assert.equal(failedOver.headers.get("x-clawrouter-grant-failover"), "1");
+  assert.deepEqual(failoverCalls, ["Bearer rate-limited", "Bearer healthy"]);
+  await waitUntil(async () => {
+    const grants = await fetch(`${base}/v1/admin/upstream-grants`, { headers: adminHeaders });
+    const primary = (await grants.json()).grants.find((item) => item.tokenRef === "local-a-primary");
+    return primary?.quotaStatus === "cooldown" && primary.lastProviderSignal === "rate_limited" && primary.quotaWindows[0]?.remaining === 0;
+  }, "rate-limited grant state was not visible to administrators");
+  const routedAround = await failoverRequest();
+  assert.equal(routedAround.status, 200);
+  assert.equal(routedAround.headers.get("x-clawrouter-grant-failover"), null);
+  assert.deepEqual(failoverCalls, ["Bearer rate-limited", "Bearer healthy", "Bearer healthy"], "cooldown state skips the exhausted grant on the next request");
+  const callsBeforeUnavailablePool = upstreamCalls.length;
+  const revokedBackup = await fetch(`${base}/v1/admin/upstream-grants/policies/failover/local-b-backup/revoke`, { method: "POST", headers: adminHeaders });
+  assert.equal(revokedBackup.status, 200);
+  const unavailablePool = await failoverRequest();
+  assert.equal(unavailablePool.status, 503);
+  assert.equal((await unavailablePool.json()).error.code, "upstream_grant_pool_unavailable");
+  assert.equal(upstreamCalls.length, callsBeforeUnavailablePool, "cooled scoped grants never fall through to an unscoped provider credential");
   console.log(`local Worker smoke passed on ${base}`);
 } catch (error) {
   throw new Error(`${error instanceof Error ? error.message : String(error)}\nwrangler output:\n${output}`);

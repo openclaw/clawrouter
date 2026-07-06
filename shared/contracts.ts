@@ -108,6 +108,17 @@ export interface UpstreamGrant {
   hasRefreshToken: boolean;
   refreshConfigured: boolean;
   usable: boolean;
+  quotaStatus: "unknown" | "available" | "limited" | "cooldown";
+  quotaObservedAt?: string | null;
+  cooldownUntil?: string | null;
+  quotaSource?: "provider_response" | null;
+  lastProviderSignal?: "quota" | "rate_limited" | "authentication" | null;
+  quotaWindows: Array<{
+    kind: "requests" | "tokens" | "generic";
+    remaining: number | null;
+    limit: number | null;
+    resetAt: string | null;
+  }>;
 }
 
 export interface AssignmentRule {

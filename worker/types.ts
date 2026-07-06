@@ -156,6 +156,23 @@ export interface UpstreamGrant {
   revokedAt?: string | null;
 }
 
+export interface GrantQuotaWindow {
+  kind: "requests" | "tokens" | "generic";
+  remaining: number | null;
+  limit: number | null;
+  resetAt: string | null;
+}
+
+export interface GrantRuntimeState {
+  status: "available" | "limited" | "cooldown";
+  observedAt: string;
+  source: "provider_response";
+  cooldownUntil: string | null;
+  lastSignal: "quota" | "rate_limited" | "authentication";
+  grantRevision: string | null;
+  windows: GrantQuotaWindow[];
+}
+
 export interface AssignmentRule {
   version: number;
   enabled: boolean;

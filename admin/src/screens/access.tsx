@@ -188,7 +188,7 @@ export function UpstreamGrantPanel({ policies, providers, grants, selected, form
   busy: boolean;
 }) {
   const active = grants.filter((grant) => grant.enabled).length;
-  const usable = grants.filter((grant) => grant.usable).length;
+  const usable = grants.filter((grant) => grant.usable && grant.quotaStatus !== "cooldown").length;
   const refreshable = grants.filter((grant) => grant.refreshConfigured && grant.hasRefreshToken).length;
   const selectedProvider = providers.find((provider) => provider.id === form.provider);
   const authorizationKind = selectedProvider?.auth?.authorization?.grantKind;
@@ -204,7 +204,7 @@ export function UpstreamGrantPanel({ policies, providers, grants, selected, form
         <EntityTable
           columns={["connection", "scope", "provider", "priority", "state"]}
           columnTemplate="minmax(220px, 1.4fr) minmax(150px, 1fr) minmax(130px, .8fr) 90px 100px"
-          rows={grants.map((grant) => ({ id: grant.key, active: selected?.key === grant.key, onClick: () => onEdit(grant), cells: [<EntityName icon={ServerCog} title={grant.label || grant.tokenRef} subtitle={`${grant.tokenRef} · ${grant.kind.replace("_", " ")}`} />, `${grant.scope === "policies" ? "policy" : "tenant"} · ${grant.scopeId}`, grant.provider ?? "legacy", String(grant.priority), <Status label={grant.usable ? "usable" : grant.enabled ? "blocked" : "revoked"} tone={grant.usable ? "active" : "revoked"} />] }))}
+          rows={grants.map((grant) => { const state = grantRoutingState(grant); return { id: grant.key, active: selected?.key === grant.key, onClick: () => onEdit(grant), cells: [<EntityName icon={ServerCog} title={grant.label || grant.tokenRef} subtitle={`${grant.tokenRef} · ${grant.kind.replace("_", " ")}`} />, `${grant.scope === "policies" ? "policy" : "tenant"} · ${grant.scopeId}`, grant.provider ?? "legacy", String(grant.priority), <Status label={state.label} tone={state.tone} />] }; })}
         />
       </section>
       <aside className="inspector">
@@ -226,13 +226,32 @@ export function UpstreamGrantPanel({ policies, providers, grants, selected, form
             <label><span>expires at</span><input value={form.expiresAt} onChange={(event) => setForm({ ...form, expiresAt: event.target.value })} placeholder="ISO-8601 or blank" /></label>
             <label><span>state</span><select value={form.enabled ? "enabled" : "disabled"} onChange={(event) => setForm({ ...form, enabled: event.target.value === "enabled" })}><option value="enabled">enabled</option><option value="disabled">disabled</option></select></label>
           </div>
-          <InlineNote>Lower priorities route first. Equal priorities use a stable grant order. Secret values are write-only.</InlineNote>
-          {selected ? <dl className="facts"><dt>primary secret</dt><dd>{selected.hasCredential || selected.hasAccessToken || selected.credentialFields.length ? "stored" : "missing"}</dd><dt>credential fields</dt><dd>{selected.credentialFields.length ? selected.credentialFields.join(", ") : "none"}</dd><dt>refresh token</dt><dd>{selected.hasRefreshToken ? "stored" : "none"}</dd><dt>refresh config</dt><dd>{selected.refreshConfigured ? "manifest approved" : "none"}</dd><dt>state</dt><dd>{selected.usable ? "usable" : "blocked"}</dd></dl> : null}
+          <InlineNote>Lower priorities route first. Equal priorities prefer the strongest observed provider quota, then stable grant order. Secret values are write-only.</InlineNote>
+          {selected ? <dl className="facts"><dt>primary secret</dt><dd>{selected.hasCredential || selected.hasAccessToken || selected.credentialFields.length ? "stored" : "missing"}</dd><dt>credential fields</dt><dd>{selected.credentialFields.length ? selected.credentialFields.join(", ") : "none"}</dd><dt>refresh token</dt><dd>{selected.hasRefreshToken ? "stored" : "none"}</dd><dt>refresh config</dt><dd>{selected.refreshConfigured ? "manifest approved" : "none"}</dd><dt>routing state</dt><dd>{grantRoutingState(selected).label}</dd><dt>provider signal</dt><dd>{selected.lastProviderSignal ? `${selected.lastProviderSignal.replace("_", " ")} · ${quotaTimestamp(selected.quotaObservedAt)}` : "not observed"}</dd><dt>cooldown</dt><dd>{selected.cooldownUntil ? `until ${quotaTimestamp(selected.cooldownUntil)}` : "none"}</dd><dt>quota windows</dt><dd>{selected.quotaWindows.length ? selected.quotaWindows.map(quotaWindowLabel).join("; ") : "not reported"}</dd></dl> : null}
           <div className="inspectorActions">{authorizationKind ? <button type="button" disabled={busy || !form.scopeId || !form.tokenRef || !form.provider} onClick={onAuthorize}><LogIn className="buttonIcon" aria-hidden="true" /><span>{selected ? "Reconnect" : "Connect"} with provider</span></button> : null}<button type="submit" className={authorizationKind ? "buttonSecondary" : undefined} disabled={busy || !form.scopeId || !form.tokenRef || !form.provider}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save grant</span></button>{selected?.refreshConfigured && selected.hasRefreshToken ? <button type="button" className="buttonSecondary" disabled={busy || !selected.enabled} onClick={() => onRefresh(selected)}><RefreshCw className="buttonIcon" aria-hidden="true" /><span>Refresh</span></button> : null}{selected ? <button type="button" className="buttonDanger" disabled={busy || !selected.enabled} onClick={() => onRevoke(selected)}><CircleSlash2 className="buttonIcon" aria-hidden="true" /><span>Revoke</span></button> : null}</div>
         </form>
       </aside>
     </div>
   );
+}
+
+function grantRoutingState(grant: UpstreamGrant): { label: string; tone: OutcomeTone } {
+  if (!grant.enabled) return { label: "revoked", tone: "revoked" };
+  if (!grant.usable) return { label: "blocked", tone: "revoked" };
+  if (grant.quotaStatus === "cooldown") return { label: "cooldown", tone: "neutral" };
+  if (grant.quotaStatus === "limited") return { label: "limited", tone: "neutral" };
+  return { label: "usable", tone: "active" };
+}
+
+function quotaTimestamp(value: string | null | undefined): string {
+  if (!value) return "unknown";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime()) ? "unknown" : date.toLocaleString([], { dateStyle: "medium", timeStyle: "short" });
+}
+
+function quotaWindowLabel(window: UpstreamGrant["quotaWindows"][number]): string {
+  const remaining = window.remaining == null ? "?" : String(window.remaining), limit = window.limit == null ? "?" : String(window.limit);
+  return `${window.kind} ${remaining}/${limit}${window.resetAt ? ` resets ${quotaTimestamp(window.resetAt)}` : ""}`;
 }
 
 export function AssignmentRulePanel({ policies, rules, selected, form, setForm, error, onSave, onEdit, onNew, onReconcile, busy }: {

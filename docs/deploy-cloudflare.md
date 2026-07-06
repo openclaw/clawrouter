@@ -591,6 +591,24 @@ The direct `cf:oauth:*` compatibility helpers remain appropriate for the
 provider-id default grant; use the admin API or console for additional pool
 members so the control plane updates their indexes.
 
+ClawRouter passively reads standard `RateLimit-*`, `X-RateLimit-*`, Anthropic
+request/token limit, and `Retry-After` response headers. It stores only bounded
+numeric windows, reset times, and sanitized status metadata in the serialized
+access authority; response bodies and credential values are never included.
+Active cooldowns are skipped. Within one configured priority, grants with a
+known higher remaining ratio route first, followed by grants without current
+quota evidence and the stable canonical key. Expired windows stop influencing
+selection automatically.
+
+For an upstream 401, 403, or 429, ClawRouter records a five-minute
+authentication cooldown or the provider's bounded rate-limit reset and can try
+one other grant. The retry is limited to LLM capabilities and GET/HEAD service
+routes, never applies to 5xx or network failures, and consumes the original
+budget reservation and usage record. `x-clawrouter-grant-failover: 1` marks a
+response served by the alternate without disclosing either grant key. The
+admin console shows each grant's last provider signal, cooldown, and reported
+request/token windows.
+
 Secrets are never accepted in argv. Supply `accessToken`, `credential`,
 `credentials-json`, and an optional `refreshToken` only through the matching
 `--*-stdin`, `--*-env`, or `--*-file` option. Only one secret can use stdin in

@@ -1,6 +1,6 @@
 import snapshotJson from "./generated/provider-snapshot.json";
 import { listConnections, resolveConnection } from "./authority";
-import { grantUsable as canonicalGrantUsable, selectGrant } from "./grant-selection";
+import { grantRevision, grantUsable as canonicalGrantUsable, resolveGrantSelection } from "./grant-selection";
 import { grantsVisibleToPolicies, type GrantRecord } from "./grant-scope";
 import type {
   AccessPolicyEntry, AuthorizedIdentity, CompiledEndpoint, CompiledModel, CompiledProvider, Env,
@@ -38,6 +38,7 @@ export interface Readiness {
 export interface UpstreamAuth {
   grant: UpstreamGrant | null;
   grantKey: string | null;
+  grantRevision: string | null;
   baseUrl: string;
   headers: Headers;
   query: URLSearchParams;
@@ -190,7 +191,9 @@ export async function assertProviderAccess(provider: CompiledProvider, auth: Aut
 }
 
 export async function upstreamAuth(provider: CompiledProvider, endpoint: CompiledEndpoint, auth: AuthorizedIdentity, env: Env, excludedGrantKeys: ReadonlySet<string> = new Set()): Promise<UpstreamAuth> {
-  const selected = await grantFor(provider, auth, env, excludedGrantKeys);
+  const resolution = await grantFor(provider, auth, env, excludedGrantKeys);
+  const selected = resolution.selected;
+  if (!selected && resolution.hasConfiguredGrant) throw new HttpError(503, "upstream_grant_pool_unavailable", `provider ${provider.id} has no available scoped upstream grant`);
   const grant = selected?.grant ?? null;
   const headers = new Headers();
   const query = new URLSearchParams();
@@ -208,6 +211,7 @@ export async function upstreamAuth(provider: CompiledProvider, endpoint: Compile
   return {
     grant,
     grantKey: selected?.key ?? null,
+    grantRevision: grant ? grantRevision(grant) : null,
     baseUrl: transport?.baseUrl ?? resolveTemplate(provider, provider.base_urls.default, env),
     headers,
     query,
@@ -311,11 +315,11 @@ export async function listHealth(env: Env): Promise<Map<string, ProviderHealth>>
   return result;
 }
 
-async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedKeys: ReadonlySet<string>): Promise<{ key: string; grant: UpstreamGrant } | null> {
+async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedKeys: ReadonlySet<string>): Promise<{ selected: { key: string; grant: UpstreamGrant } | null; hasConfiguredGrant: boolean }> {
   const tokenRef = provider.auth.schemes.find((scheme) => scheme.type === "oauth")?.tokenRef ?? provider.id;
   const tenant = auth.policy.tenantId ?? "default";
-  const selected = await selectGrant(provider.id, auth.policyId, tenant, tokenRef, env, excludedKeys);
-  return selected ? { key: selected.key, grant: await refreshGrant(selected.key, selected.grant, provider, env, false) } : null;
+  const resolution = await resolveGrantSelection(provider.id, auth.policyId, tenant, tokenRef, env, excludedKeys);
+  return { selected: resolution.selected ? { key: resolution.selected.key, grant: await refreshGrant(resolution.selected.key, resolution.selected.grant, provider, env, false) } : null, hasConfiguredGrant: resolution.hasConfiguredGrant };
 }
 
 export async function refreshStoredGrant(env: Env, key: string): Promise<UpstreamGrant> {
