@@ -38,6 +38,19 @@ export interface ProxyCredential {
 
 export interface ProviderConnection { providerId: string; enabled: boolean; label?: string | null }
 
+export interface FusionConfig {
+  version: 1;
+  enabled: boolean;
+  modelId: "clawrouter/fusion";
+  adviserModels: string[];
+  aggregatorModel: string;
+  adviserTimeoutMs: number;
+  maxOutputTokens: number;
+  maxInputChars: number;
+  maxProposalChars: number;
+  temperature: number;
+}
+
 export interface UpstreamGrant {
   key: string;
   scope: "policies" | "tenants";
@@ -204,6 +217,7 @@ export interface AdminBootstrapResponse {
   providers: ProviderReadiness[];
   grants: UpstreamGrant[];
   rules: AssignmentRule[];
+  fusion: FusionConfig;
   overview: AdminOverview;
   tenants: AdminTenantSummary[];
 }

@@ -2,7 +2,8 @@ import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { createServer } from "node:net";
+import { createServer as createHttpServer } from "node:http";
+import { createServer as createTcpServer } from "node:net";
 
 const port = await availablePort();
 const config = `.wrangler.local-e2e-${process.pid}.toml`;
@@ -20,7 +21,33 @@ putLocalKv("credentials/migrate", { enabled: true, secretSha256: sha256(proxySec
 putLocalKv("keys/legacy", { enabled: true, secretSha256: sha256(legacySecret), generation: "legacy", providers: ["firecrawl"], tenantId: "default", retainRequestContent: true });
 putLocalKv("oauth/migrate/legacy_invalid", { provider: "aws-bedrock", kind: "api_key", credentials: Object.fromEntries([["access" + "KeyId", "local"], ["secret" + "AccessKey", "   "]]) });
 
-const child = spawn("pnpm", ["exec", "wrangler", "dev", "--local", "--ip", "127.0.0.1", "--port", String(port), "--persist-to", persistence, "--config", config, "--var", `CLAWROUTER_ADMIN_TOKEN_SHA256:${sha256(adminToken)}`, "--var", "AWS_REGION:us-east-1", "--var", "AWS_SESSION_TOKEN:", "--log-level", "info"], {
+const fusionSecret = "fusion123";
+const fusionKey = `clawrouter-live-fusionlocal-${fusionSecret}`;
+putLocalKv("policies/fusion_local", { enabled: true, generation, providers: ["local-openai", "openai"], tenantId: "default", tokenRole: "service", monthlyBudgetMicros: 1, retainRequestContent: false });
+putLocalKv("credentials/fusionlocal", { enabled: true, secretSha256: sha256(fusionSecret), policyId: "fusion_local", policyGeneration: generation });
+const upstreamPort = await availablePort();
+const upstreamCalls = [];
+let stalledUpstreamClosed = false;
+const upstreamServer = createHttpServer(async (request, response) => {
+  let raw = "";
+  for await (const chunk of request) raw += chunk;
+  const body = JSON.parse(raw);
+  upstreamCalls.push(body);
+  if (body.model === "stall") {
+    response.on("close", () => { stalledUpstreamClosed = true; });
+    response.writeHead(200, { "content-type": "application/json" });
+    response.write('{"choices":[{"message":{"content":"partial');
+    return;
+  }
+  const content = body.model === "adviser"
+    ? "local proposal"
+    : JSON.stringify(body.messages).includes("local proposal") ? "fused answer" : "proposal missing";
+  response.writeHead(200, { "content-type": "application/json" });
+  response.end(JSON.stringify({ choices: [{ message: { role: "assistant", content } }], usage: { prompt_tokens: 12, completion_tokens: 4, total_tokens: 16 } }));
+});
+await new Promise((resolve, reject) => upstreamServer.listen(upstreamPort, "127.0.0.1", resolve).once("error", reject));
+
+const child = spawn("pnpm", ["exec", "wrangler", "dev", "--local", "--ip", "127.0.0.1", "--port", String(port), "--persist-to", persistence, "--config", config, "--var", `CLAWROUTER_ADMIN_TOKEN_SHA256:${sha256(adminToken)}`, "--var", `LOCAL_OPENAI_BASE_URL:http://127.0.0.1:${upstreamPort}`, "--var", "OPENAI_API_KEY:fixture", "--var", "AWS_REGION:us-east-1", "--var", "AWS_SESSION_TOKEN:", "--log-level", "info"], {
   cwd: process.cwd(),
   env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
   stdio: ["ignore", "pipe", "pipe"],
@@ -34,8 +61,9 @@ try {
   const health = await json(`${base}/v1/health`);
   assert.deepEqual(health, { ok: true, service: "clawrouter-edge", runtime: "typescript" });
   const providers = await json(`${base}/v1/providers`);
-  assert.equal(providers.providers.length, 20);
-  assert.equal(new Set(providers.providers.map((provider) => provider.id)).size, 20);
+  assert.equal(providers.providers.length, 21);
+  assert.equal(new Set(providers.providers.map((provider) => provider.id)).size, 21);
+  assert.ok(providers.providers.some((provider) => provider.id === "local-openai"));
   const routes = await json(`${base}/v1/routes`);
   assert.ok(routes.openaiCompatible.some((route) => route.provider === "openai"));
   assert.ok(routes.manifestProxy.some((route) => route.provider === "anthropic" && route.endpoint === "count_tokens"));
@@ -60,8 +88,58 @@ try {
   assert.ok(bootstrapBody.credentials.some((credential) => credential.credentialId === "migrate"));
   assert.ok(bootstrapBody.policies.some((policy) => policy.policyId === "legacy"));
   assert.ok(bootstrapBody.credentials.some((credential) => credential.credentialId === "legacy"));
-  assert.equal(bootstrapBody.providers.length, 20);
-  assert.equal(new Set(bootstrapBody.providers.map((provider) => provider.id)).size, 20);
+  assert.equal(bootstrapBody.providers.length, 21);
+  assert.equal(new Set(bootstrapBody.providers.map((provider) => provider.id)).size, 21);
+  assert.equal(bootstrapBody.fusion.modelId, "clawrouter/fusion");
+  assert.equal(bootstrapBody.fusion.enabled, false);
+  const adminHeaders = { authorization: `Bearer ${adminToken}`, "content-type": "application/json" };
+  for (const body of [null, []]) {
+    const invalidFusion = await fetch(`${base}/v1/admin/fusion`, { method: "PUT", headers: adminHeaders, body: JSON.stringify(body) });
+    assert.equal(invalidFusion.status, 400);
+    assert.equal((await invalidFusion.json()).error.code, "fusion_config_invalid");
+  }
+  for (const model of ["cohere/command-a-plus-05-2026", "cloudflare-ai-gateway/auto"]) {
+    const incompatibleFusion = await fetch(`${base}/v1/admin/fusion`, { method: "PUT", headers: adminHeaders, body: JSON.stringify({ ...bootstrapBody.fusion, adviserModels: [model] }) });
+    assert.equal(incompatibleFusion.status, 400);
+    assert.equal((await incompatibleFusion.json()).error.code, "fusion_model_incompatible");
+  }
+  const deniedFusionConfig = { ...bootstrapBody.fusion, enabled: true, adviserModels: ["local/adviser"], aggregatorModel: "openai/gpt-4.1-mini" };
+  assert.equal((await fetch(`${base}/v1/admin/fusion`, { method: "PUT", headers: adminHeaders, body: JSON.stringify(deniedFusionConfig) })).status, 200);
+  const deniedModels = await fetch(`${base}/v1/models`, { headers: { authorization: `Bearer ${proxyKey}` } });
+  assert.equal(deniedModels.status, 200);
+  assert.equal((await deniedModels.json()).data.some((model) => model.id === "clawrouter/fusion"), false, "fusion stays hidden until its synthesizer route is executable for the caller");
+  const budgetBlockedFusion = await fetch(`${base}/v1/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${fusionKey}`, "content-type": "application/json" }, body: JSON.stringify({ model: "clawrouter/fusion", messages: [{ role: "user", content: "solve" }] }) });
+  assert.equal(budgetBlockedFusion.status, 402);
+  assert.equal((await budgetBlockedFusion.json()).error.code, "budget_exhausted");
+  assert.equal(upstreamCalls.length, 0, "synthesizer budget reservation blocks adviser spend before the final answer can be funded");
+  const localFusionConfig = { ...deniedFusionConfig, aggregatorModel: "local/final" };
+  assert.equal((await fetch(`${base}/v1/admin/fusion`, { method: "PUT", headers: adminHeaders, body: JSON.stringify(localFusionConfig) })).status, 200);
+  const upstreamCallsBeforeMalformedFusion = upstreamCalls.length;
+  const malformedFusion = await fetch(`${base}/v1/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${fusionKey}`, "content-type": "application/json" }, body: JSON.stringify({ model: "clawrouter/fusion", messages: [null] }) });
+  assert.equal(malformedFusion.status, 400);
+  assert.equal((await malformedFusion.json()).error.code, "fusion_messages_invalid");
+  assert.equal(upstreamCalls.length, upstreamCallsBeforeMalformedFusion, "malformed fusion messages never reach an upstream model");
+  const fusionModels = await fetch(`${base}/v1/models`, { headers: { authorization: `Bearer ${fusionKey}` } });
+  assert.equal(fusionModels.status, 200);
+  assert.equal((await fusionModels.json()).data.some((model) => model.id === "clawrouter/fusion"), true);
+  const fusionResponse = await fetch(`${base}/v1/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${fusionKey}`, "content-type": "application/json" }, body: JSON.stringify({ model: "clawrouter/fusion", messages: [{ role: "user", content: "solve" }] }) });
+  assert.equal(fusionResponse.status, 200, JSON.stringify(await fusionResponse.clone().json()));
+  assert.equal((await fusionResponse.json()).choices[0].message.content, "fused answer");
+  assert.equal(fusionResponse.headers.get("x-clawrouter-fusion-adviser-count"), "1");
+  assert.equal(fusionResponse.headers.get("x-clawrouter-fusion-failed-count"), "0");
+  assert.deepEqual(upstreamCalls.map((call) => call.model), ["adviser", "final"]);
+  const stalledCallStart = upstreamCalls.length;
+  const stalledFusionConfig = { ...localFusionConfig, adviserModels: ["local/stall"], adviserTimeoutMs: 1_000 };
+  assert.equal((await fetch(`${base}/v1/admin/fusion`, { method: "PUT", headers: adminHeaders, body: JSON.stringify(stalledFusionConfig) })).status, 200);
+  const stalledFusionResponse = await fetch(`${base}/v1/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${fusionKey}`, "content-type": "application/json" }, body: JSON.stringify({ model: "clawrouter/fusion", messages: [{ role: "user", content: "solve after timeout" }] }) });
+  assert.equal(stalledFusionResponse.status, 200, JSON.stringify(await stalledFusionResponse.clone().json()));
+  assert.equal(stalledFusionResponse.headers.get("x-clawrouter-fusion-adviser-count"), "0");
+  assert.equal(stalledFusionResponse.headers.get("x-clawrouter-fusion-failed-count"), "1");
+  await waitUntil(() => stalledUpstreamClosed, "timed-out adviser upstream connection did not close");
+  assert.deepEqual(upstreamCalls.slice(stalledCallStart).map((call) => call.model), ["stall", "final"]);
+  const fusionUsage = await fetch(`${base}/v1/usage`, { headers: { authorization: `Bearer ${fusionKey}` } });
+  assert.equal(fusionUsage.status, 200);
+  assert.equal((await fusionUsage.json()).budget.spentMicros, 0, "dynamic local models retain zero-price accounting under a budgeted policy");
   const legacyInvalidGrant = bootstrapBody.grants.find((entry) => entry.tokenRef === "legacy_invalid");
   assert.equal(legacyInvalidGrant.hasCredential, false, "stored empty credential bundles are not reported as configured");
   assert.deepEqual(legacyInvalidGrant.credentialFields, []);
@@ -293,11 +371,21 @@ try {
 } finally {
   child.kill("SIGTERM");
   await Promise.race([new Promise((resolve) => child.once("exit", resolve)), new Promise((resolve) => setTimeout(resolve, 5_000))]);
+  upstreamServer.closeAllConnections();
+  await new Promise((resolve) => upstreamServer.close(resolve));
   rmSync(config, { force: true });
   rmSync(persistence, { recursive: true, force: true });
 }
 
 async function json(url) { const response = await fetch(url); assert.equal(response.status, 200, `${url} returned ${response.status}`); return response.json(); }
+async function waitUntil(predicate, message) {
+  const deadline = Date.now() + 2_000;
+  while (Date.now() < deadline) {
+    if (predicate()) return;
+    await new Promise((resolve) => setTimeout(resolve, 25));
+  }
+  throw new Error(message);
+}
 async function waitUntilReady(url) {
   const deadline = Date.now() + 60_000;
   while (Date.now() < deadline) {
@@ -307,6 +395,6 @@ async function waitUntilReady(url) {
   }
   throw new Error("wrangler local server did not become ready");
 }
-function availablePort() { return new Promise((resolve, reject) => { const server = createServer(); server.once("error", reject); server.listen(0, "127.0.0.1", () => { const address = server.address(); server.close(() => resolve(address.port)); }); }); }
+function availablePort() { return new Promise((resolve, reject) => { const server = createTcpServer(); server.once("error", reject); server.listen(0, "127.0.0.1", () => { const address = server.address(); server.close(() => resolve(address.port)); }); }); }
 function sha256(value) { return createHash("sha256").update(value).digest("hex"); }
 function putLocalKv(key, value) { execFileSync("pnpm", ["exec", "wrangler", "kv", "key", "put", key, JSON.stringify(value), "--binding", "POLICY_KV", "--local", "--persist-to", persistence, "--config", config], { cwd: process.cwd(), env: { ...process.env, WRANGLER_SEND_METRICS: "false" }, stdio: "ignore" }); }

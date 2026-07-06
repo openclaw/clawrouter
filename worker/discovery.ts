@@ -1,6 +1,8 @@
 import { publicSession, sessionPolicies, verifiedAccessSession } from "./access";
+import { loadFusionConfig } from "./fusion-config";
+import { FUSION_MODEL_ID } from "./fusion";
 import { authenticateProxyKey } from "./proxy";
-import { providerReadinessForPolicies, snapshot, type Readiness } from "./providers";
+import { endpointForPath, modelRoute, providerReadinessForPolicies, snapshot, type Readiness } from "./providers";
 import type { AccessPolicyEntry, AccessSession, AuthorizedIdentity, CompiledProvider, Env } from "./types";
 import { errorResponse, privateJson, sha256Hex } from "./utils";
 
@@ -48,13 +50,21 @@ export async function modelsResponse(request: Request, env: Env): Promise<Respon
     const capabilities = executableCapabilities(provider, model.capabilities, allowed.get(provider.id) ?? []);
     return capabilities.length ? [{ id: model.id, object: "model", owned_by: provider.id, display_name: `${provider.display_name} · ${model.id}`, capabilities }] : [];
   }));
+  const fusion = rows.find((row) => row.provider === "clawrouter");
+  if (fusion?.allowed && fusion.readiness.executable) data.unshift({
+    id: FUSION_MODEL_ID,
+    object: "model",
+    owned_by: "clawrouter",
+    display_name: "ClawRouter · Fusion",
+    capabilities: ["llm.chat"],
+  });
   return privateJson({ object: "list", data });
 }
 
 export async function catalogResponse(request: Request, env: Env): Promise<Response> {
   const rows = await clientEntitlements(request, env);
   if (rows instanceof Response) return rows;
-  const providers = rows.filter((row) => row.allowed).flatMap((row) => {
+  const providers = rows.filter((row) => row.allowed && row.provider !== "clawrouter").flatMap((row) => {
     const provider = snapshot.providers.find((candidate) => candidate.id === row.provider);
     if (!provider) return [];
     const endpoints = row.readiness.executableEndpoints;
@@ -68,6 +78,20 @@ export async function catalogResponse(request: Request, env: Env): Promise<Respo
         return capabilities.length ? [{ id: model.id, upstream: model.upstream, capabilities, pricing_ref: model.pricing_ref, pricing: model.pricing }] : [];
       }),
     }];
+  });
+  const fusion = rows.find((row) => row.provider === "clawrouter" && row.allowed);
+  if (fusion) providers.unshift({
+    id: "clawrouter",
+    displayName: "ClawRouter Fusion",
+    allowed: true,
+    executable: fusion.readiness.executable,
+    openaiCompatible: true,
+    nativeBaseUrl: "/v1",
+    policies: fusion.policies,
+    readiness: fusion.readiness,
+    connectionTypes: ["compound"],
+    routes: [],
+    models: fusion.readiness.executable ? [{ id: FUSION_MODEL_ID, upstream: FUSION_MODEL_ID, capabilities: ["llm.chat"], pricing_ref: null, pricing: null }] : [],
   });
   return privateJson({ version: "clawrouter.client-catalog.v1", providers });
 }
@@ -95,10 +119,66 @@ async function entitlementRows(session: AccessSession, env: Env): Promise<Entitl
 
 async function entitlementRowsForEntries(entries: AccessPolicyEntry[], env: Env): Promise<EntitlementRow[]> {
   const readiness = await providerReadinessForPolicies(env, entries);
-  return snapshot.providers.map((provider) => {
+  const rows = snapshot.providers.map((provider) => {
     const policies = entries.filter((entry) => entry.policy.enabled && (!entry.policy.providers.length || entry.policy.providers.includes(provider.id))).map((entry) => entry.policyId);
     return { provider: provider.id, displayName: provider.display_name, serviceKind: provider.service_kind, allowed: policies.length > 0, policies, readiness: readiness.find((row) => row.id === provider.id)! };
   });
+  const fusion = await fusionEntitlement(rows, env);
+  return fusion ? [...rows, fusion] : rows;
+}
+
+async function fusionEntitlement(rows: EntitlementRow[], env: Env): Promise<EntitlementRow | null> {
+  const config = await loadFusionConfig(env);
+  if (!config.enabled) return null;
+  const aggregator = modelRoute(config.aggregatorModel);
+  const aggregatorAccess = aggregator ? rows.find((row) => row.provider === aggregator.provider.id) : undefined;
+  const advisers = config.adviserModels.map((model) => modelRoute(model)).filter((route): route is NonNullable<ReturnType<typeof modelRoute>> => !!route);
+  const readyAdvisers = advisers.filter((route) => routeExecutable(route, rows));
+  const allowed = aggregatorAccess?.allowed === true;
+  const executable = !!aggregator && routeExecutable(aggregator, rows);
+  const reasons = [
+    ...(!allowed ? ["No active policy grants the configured fusion aggregator provider."] : []),
+    ...(allowed && !executable ? [aggregatorAccess?.readiness.reasons[0] ?? "The configured fusion aggregator is unavailable."] : []),
+    ...(readyAdvisers.length < advisers.length ? [`${readyAdvisers.length}/${advisers.length} advisers are currently executable; unavailable advisers fail open.`] : []),
+  ];
+  const readiness: Readiness = {
+    id: "clawrouter",
+    displayName: "ClawRouter Fusion",
+    class: "virtual_router",
+    serviceKind: "model_router",
+    requiredConfig: [],
+    optionalConfig: [],
+    missingConfig: [],
+    configPresent: true,
+    connectionEnabled: true,
+    oauthGrantRequired: false,
+    oauthGrantCount: 0,
+    upstreamGrantCount: aggregatorAccess?.readiness.upstreamGrantCount ?? 0,
+    openaiCompatible: true,
+    manifestRoutes: 1,
+    executableEndpoints: executable ? ["chat_completions"] : [],
+    modelCount: 1,
+    executable,
+    verified: executable && aggregatorAccess?.readiness.verified === true,
+    lastCheckedAt: aggregatorAccess?.readiness.lastCheckedAt ?? null,
+    latencyMs: aggregatorAccess?.readiness.latencyMs ?? null,
+    status: executable ? "configured" : "unavailable",
+    reasons,
+  };
+  return {
+    provider: "clawrouter",
+    displayName: "ClawRouter Fusion",
+    serviceKind: "model_router",
+    allowed,
+    policies: aggregatorAccess?.policies ?? [],
+    readiness,
+  };
+}
+
+function routeExecutable(route: NonNullable<ReturnType<typeof modelRoute>>, rows: EntitlementRow[]): boolean {
+  const row = rows.find((candidate) => candidate.provider === route.provider.id);
+  const endpoint = endpointForPath(route.provider, "/v1/chat/completions");
+  return !!endpoint && row?.allowed === true && row.readiness.executableEndpoints.includes(endpoint.id);
 }
 
 async function clientEntitlements(request: Request, env: Env): Promise<EntitlementRow[] | Response> {

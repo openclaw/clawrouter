@@ -4,7 +4,7 @@ import { demoDisabledProviderIds, demoMissingConfigProviderIds } from "./ui-conf
 import { adminOverviewFromPolicies, serviceItems } from "./ui-helpers";
 import { syntheticUsageTimeline } from "./usage-analytics";
 import type {
-  AccessPolicy, AccessRole, AccessUser, AssignmentRule, EntitlementsResponse, PolicyBinding,
+  AccessPolicy, AccessRole, AccessUser, AssignmentRule, EntitlementsResponse, FusionConfig, PolicyBinding,
   ProviderConnection, ProviderReadiness, ProviderRow, ProxyCredential, RouteCatalog, UpstreamGrant,
   UsageAuditEvent, UsageSnapshot,
 } from "./ui-types";
@@ -99,6 +99,18 @@ export function demoData() {
   const assignmentRules: AssignmentRule[] = [
     { ruleId: "maintainers", version: 1, enabled: true, kind: "email_domain", subject: "example.com", groups: ["maintainers"], policyIds: ["maintainer_models", "openclaw_tools"], priority: 10, revokeOnLoss: true, provenance: "cloudflare_access", generatedGroup: "assignment.maintainers", createdAt: "2026-06-16T00:00:00.000Z", updatedAt: "2026-06-16T00:00:00.000Z" },
   ];
+  const fusion: FusionConfig = {
+    version: 1,
+    enabled: true,
+    modelId: "clawrouter/fusion",
+    adviserModels: ["local/qwen3:8b", "openai/gpt-4.1-mini"],
+    aggregatorModel: "openai/gpt-5.4",
+    adviserTimeoutMs: 15000,
+    maxOutputTokens: 768,
+    maxInputChars: 24000,
+    maxProposalChars: 6000,
+    temperature: 0.2,
+  };
   const users: AccessUser[] = [
     { email: "admin@example.com", role: "admin", tenantId: "openclaw", enabled: true, groups: ["maintainers"], contentRetentionDisabled: false },
     { email: "maintainer@example.com", role: "user", tenantId: "docs", enabled: true, groups: ["maintainers"], contentRetentionDisabled: false },
@@ -116,7 +128,7 @@ export function demoData() {
   const entitlements: EntitlementsResponse = {
     session,
     contentRetention,
-    providers: providers.map((item) => {
+    providers: [...providers.map((item) => {
       const policies = sessionPolicies.filter((key) => policyCoversProvider(key, item.id)).map((key) => key.policyId);
       return {
         provider: item.id,
@@ -126,7 +138,20 @@ export function demoData() {
         policies,
         readiness: demoReadiness(item, routes),
       };
-    }),
+    }), {
+      provider: "clawrouter",
+      displayName: "ClawRouter Fusion",
+      serviceKind: "model_router",
+      allowed: true,
+      policies: ["maintainer_models"],
+      readiness: {
+        id: "clawrouter", displayName: "ClawRouter Fusion", class: "virtual_router", serviceKind: "model_router",
+        requiredConfig: [], optionalConfig: [], missingConfig: [], configPresent: true, connectionEnabled: true,
+        oauthGrantRequired: false, oauthGrantCount: 0, upstreamGrantCount: 1, openaiCompatible: true,
+        manifestRoutes: 1, executableEndpoints: ["chat_completions"], modelCount: 1, executable: true,
+        verified: true, lastCheckedAt: new Date().toISOString(), latencyMs: 0, status: "configured", reasons: ["1/2 advisers are currently executable; unavailable advisers fail open."],
+      },
+    }],
   };
   const accessByProvider = accessMap(entitlements);
   const readinessByProvider = readinessMap(entitlements.providers.map((item) => item.readiness));
@@ -134,7 +159,7 @@ export function demoData() {
   const usage = demoUsageSnapshot();
   const tenants = tenantSummaryFallback(keys, credentials);
   const overview = adminOverviewFromPolicies(keys, credentials, providers, routes);
-  return { session, providers, routes, keys, credentials, connections, upstreamGrants, assignmentRules, users, bindings, overview, tenants, usageRows, usage, entitlements, services: serviceItems(providers, routes, readinessByProvider, accessByProvider), models };
+  return { session, providers, routes, keys, credentials, connections, upstreamGrants, assignmentRules, fusion, users, bindings, overview, tenants, usageRows, usage, entitlements, services: serviceItems(providers, routes, readinessByProvider, accessByProvider), models };
 }
 
 export function demoReadiness(provider: ProviderRow, routes: RouteCatalog): ProviderReadiness {

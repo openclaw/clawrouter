@@ -99,6 +99,9 @@ or from request path params:
   fragments.
 - OpenAI-compatible providers may use one endpoint path param, such as Azure
   OpenAI’s deployment name; ClawRouter fills it from the routed model suffix.
+- The bundled `local-openai` provider maps arbitrary `local/<model>` ids to an
+  operator-hosted OpenAI-compatible endpoint. Set `LOCAL_OPENAI_BASE_URL` to
+  the server root, without `/v1`; `LOCAL_OPENAI_API_KEY` is optional.
 - bearer, header API key, query API key, and Cloudflare binding auth are
   executable today.
 - OAuth-backed REST providers are executable when `POLICY_KV` has a grant at

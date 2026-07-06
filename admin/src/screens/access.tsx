@@ -1,4 +1,4 @@
-export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selectedCredential, bindings, selectedBinding, upstreamGrants, selectedUpstreamGrant, assignmentRules, selectedAssignmentRule, providers, form, setForm, credentialForm, setCredentialForm, bindingForm, setBindingForm, upstreamGrantForm, setUpstreamGrantForm, assignmentRuleForm, setAssignmentRuleForm, issuedKey, error, onSave, onIssueCredential, onRevokeCredential, onSaveBinding, onSaveUpstreamGrant, onRevokeUpstreamGrant, onRefreshUpstreamGrant, onAuthorizeUpstreamGrant, onSaveAssignmentRule, onReconcileAssignments, onNew, onEdit, onEditCredential, onEditBinding, onNewBinding, onEditUpstreamGrant, onNewUpstreamGrant, onEditAssignmentRule, onNewAssignmentRule, onRevoke, onPreset, onToggleProvider, onSetProviderGroup, busy }: {
+export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selectedCredential, bindings, selectedBinding, upstreamGrants, selectedUpstreamGrant, assignmentRules, selectedAssignmentRule, fusionConfig, setFusionConfig, fusionModels, providers, form, setForm, credentialForm, setCredentialForm, bindingForm, setBindingForm, upstreamGrantForm, setUpstreamGrantForm, assignmentRuleForm, setAssignmentRuleForm, issuedKey, error, fusionError, onSave, onIssueCredential, onRevokeCredential, onSaveBinding, onSaveUpstreamGrant, onRevokeUpstreamGrant, onRefreshUpstreamGrant, onAuthorizeUpstreamGrant, onSaveAssignmentRule, onReconcileAssignments, onSaveFusion, onNew, onEdit, onEditCredential, onEditBinding, onNewBinding, onEditUpstreamGrant, onNewUpstreamGrant, onEditAssignmentRule, onNewAssignmentRule, onRevoke, onPreset, onToggleProvider, onSetProviderGroup, busy }: {
   tab: AccessTab;
   setTab: (tab: AccessTab) => void;
   keys: AccessPolicy[];
@@ -11,6 +11,9 @@ export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selec
   selectedUpstreamGrant?: UpstreamGrant;
   assignmentRules: AssignmentRule[];
   selectedAssignmentRule?: AssignmentRule;
+  fusionConfig: FusionConfig;
+  setFusionConfig: React.Dispatch<React.SetStateAction<FusionConfig>>;
+  fusionModels: CatalogModel[];
   providers: ProviderRow[];
   form: PolicyForm;
   setForm: (form: PolicyForm) => void;
@@ -24,6 +27,7 @@ export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selec
   setAssignmentRuleForm: (form: AssignmentRuleForm) => void;
   issuedKey: string;
   error: string;
+  fusionError: string;
   onSave: (event: FormEvent) => void;
   onIssueCredential: (event: FormEvent) => void;
   onRevokeCredential: (credentialId: string) => void;
@@ -34,6 +38,7 @@ export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selec
   onAuthorizeUpstreamGrant: () => void;
   onSaveAssignmentRule: (event: FormEvent) => void;
   onReconcileAssignments: () => void;
+  onSaveFusion: (event: FormEvent) => void;
   onNew: () => void;
   onEdit: (policy: AccessPolicy) => void;
   onEditCredential: (credential: ProxyCredential) => void;
@@ -49,22 +54,90 @@ export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selec
   onSetProviderGroup: (ids: string[], checked: boolean) => void;
   busy: boolean;
 }) {
+  const resourceTabsRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    resourceTabsRef.current?.querySelector('[role="tab"][aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [tab]);
   return (
     <div className="accessWorkspace">
-      <div className="resourceTabs" role="tablist" aria-label="access resources">
+      <div ref={resourceTabsRef} className="resourceTabs" role="tablist" aria-label="access resources">
         <button type="button" role="tab" aria-selected={tab === "policies"} className={tab === "policies" ? "active" : ""} onClick={() => setTab("policies")}>Policies <span>{keys.length}</span></button>
         <button type="button" role="tab" aria-selected={tab === "credentials"} className={tab === "credentials" ? "active" : ""} onClick={() => setTab("credentials")}>Credentials <span>{credentials.length}</span></button>
         <button type="button" role="tab" aria-selected={tab === "bindings"} className={tab === "bindings" ? "active" : ""} onClick={() => setTab("bindings")}>Bindings <span>{bindings.filter((binding) => binding.enabled).length}</span></button>
         <button type="button" role="tab" aria-selected={tab === "upstream"} className={tab === "upstream" ? "active" : ""} onClick={() => setTab("upstream")}>Upstream <span>{upstreamGrants.filter((grant) => grant.enabled).length}</span></button>
         <button type="button" role="tab" aria-selected={tab === "assignments"} className={tab === "assignments" ? "active" : ""} onClick={() => setTab("assignments")}>Assignments <span>{assignmentRules.filter((rule) => rule.enabled).length}</span></button>
+        <button type="button" role="tab" aria-selected={tab === "fusion"} className={tab === "fusion" ? "active" : ""} onClick={() => setTab("fusion")}>Fusion <span>{fusionConfig.enabled ? "on" : "off"}</span></button>
       </div>
       {tab === "policies" ? <PolicyPanel keys={keys} selected={selected} providers={providers} form={form} setForm={setForm} error={error} onSave={onSave} onNew={onNew} onEdit={onEdit} onRevoke={onRevoke} onPreset={onPreset} onToggleProvider={onToggleProvider} onSetProviderGroup={onSetProviderGroup} busy={busy} /> : null}
       {tab === "credentials" ? <CredentialPanel policies={keys} credentials={credentials} selected={selectedCredential} form={credentialForm} setForm={setCredentialForm} issuedKey={issuedKey} error={error} onIssue={onIssueCredential} onEdit={onEditCredential} onRevoke={onRevokeCredential} busy={busy} /> : null}
       {tab === "bindings" ? <BindingPanel policies={keys} bindings={bindings} selected={selectedBinding} form={bindingForm} setForm={setBindingForm} error={error} onSave={onSaveBinding} onEdit={onEditBinding} onNew={onNewBinding} busy={busy} /> : null}
       {tab === "upstream" ? <UpstreamGrantPanel policies={keys} providers={providers} grants={upstreamGrants} selected={selectedUpstreamGrant} form={upstreamGrantForm} setForm={setUpstreamGrantForm} error={error} onSave={onSaveUpstreamGrant} onEdit={onEditUpstreamGrant} onNew={onNewUpstreamGrant} onRefresh={onRefreshUpstreamGrant} onAuthorize={onAuthorizeUpstreamGrant} onRevoke={onRevokeUpstreamGrant} busy={busy} /> : null}
       {tab === "assignments" ? <AssignmentRulePanel policies={keys} rules={assignmentRules} selected={selectedAssignmentRule} form={assignmentRuleForm} setForm={setAssignmentRuleForm} error={error} onSave={onSaveAssignmentRule} onEdit={onEditAssignmentRule} onNew={onNewAssignmentRule} onReconcile={onReconcileAssignments} busy={busy} /> : null}
+      {tab === "fusion" ? <FusionPanel config={fusionConfig} setConfig={setFusionConfig} models={fusionModels} error={fusionError} onSave={onSaveFusion} busy={busy} /> : null}
     </div>
   );
+}
+
+export function FusionPanel({ config, setConfig, models, error, onSave, busy }: {
+  config: FusionConfig;
+  setConfig: React.Dispatch<React.SetStateAction<FusionConfig>>;
+  models: CatalogModel[];
+  error: string;
+  onSave: (event: FormEvent) => void;
+  busy: boolean;
+}) {
+  const choices = models.filter((model) => model.id !== config.modelId);
+  return (
+    <div className="entityLayout fusionWorkspace">
+      <section className="mainPane">
+        <div className="overviewStrip">
+          <Metric label="virtual model" value="fusion" meta={config.enabled ? "selectable now" : "disabled"} />
+          <Metric label="parallel advisers" value={String(config.adviserModels.length)} meta="maximum four" />
+          <Metric label="synthesizer" value={shortFusionModel(config.aggregatorModel)} meta="final answer authority" />
+        </div>
+        <div className="tableSectionHeader"><div><strong>On-demand intelligence route</strong><span>Select <code>{config.modelId}</code> only when a turn deserves the ensemble.</span></div><Status label={config.enabled ? "active" : "disabled"} tone={config.enabled ? "active" : "neutral"} /></div>
+        <div className="fusionTopology" aria-label="Fusion request flow">
+          <div className="fusionInput"><span>01</span><strong>{config.modelId}</strong><small>explicit model selection</small></div>
+          <div className="fusionArrow" aria-hidden="true">→</div>
+          <div className="fusionAdvisers">
+            {config.adviserModels.map((model, index) => <div key={`${model}-${index}`}><span>{String(index + 1).padStart(2, "0")}</span><strong>{model}</strong><small>private, bounded proposal</small></div>)}
+            {!config.adviserModels.length ? <div><span>—</span><strong>No advisers</strong><small>Add at least one model</small></div> : null}
+          </div>
+          <div className="fusionArrow" aria-hidden="true">→</div>
+          <div className="fusionOutput"><span>FINAL</span><strong>{config.aggregatorModel}</strong><small>verify, resolve, synthesize</small></div>
+        </div>
+        <div className="fusionPrinciples">
+          <article><strong>Policy-native</strong><p>Every adviser and final call keeps normal provider grants, budgets, retention, and usage accounting.</p></article>
+          <article><strong>Fail-open advisers</strong><p>Unavailable advisers are omitted; the configured synthesizer still answers.</p></article>
+          <article><strong>Tool-safe</strong><p>Tool definitions stay out of adviser requests and remain available to the final model.</p></article>
+        </div>
+      </section>
+      <aside className="inspector wideInspector fusionInspector">
+        <form onSubmit={onSave}>
+          <InspectorHeader icon={ServerCog} title="Configure fusion" subtitle="one sparse adviser layer + one final synthesizer" />
+          {error ? <InlineError message={error} /> : null}
+          <div className="formGrid compact">
+            <label className="full"><span>state</span><select value={config.enabled ? "enabled" : "disabled"} onChange={(event) => setConfig((current) => ({ ...current, enabled: event.target.value === "enabled" }))}><option value="enabled">enabled · advertise model</option><option value="disabled">disabled</option></select></label>
+            <label className="full"><span>final synthesizer</span><input list="fusion-model-options" value={config.aggregatorModel} onChange={(event) => setConfig((current) => ({ ...current, aggregatorModel: event.target.value }))} placeholder="openai/gpt-4.1-mini" /></label>
+            <label className="full"><span>adviser models · one per line, maximum four</span><textarea value={config.adviserModels.join("\n")} onChange={(event) => setConfig((current) => ({ ...current, adviserModels: event.target.value.split(/[\n,]+/).map((model) => model.trim()).filter(Boolean).slice(0, 4) }))} placeholder={"local/qwen3:8b\nopenai/gpt-4.1-mini"} /></label>
+            <datalist id="fusion-model-options">{choices.map((model) => <option key={model.id} value={model.id}>{model.provider}</option>)}</datalist>
+            <label><span>adviser timeout (ms)</span><input type="number" min="1000" max="120000" value={config.adviserTimeoutMs} onChange={(event) => setConfig((current) => ({ ...current, adviserTimeoutMs: Number(event.target.value) }))} /></label>
+            <label><span>proposal tokens</span><input type="number" min="64" max="4096" value={config.maxOutputTokens} onChange={(event) => setConfig((current) => ({ ...current, maxOutputTokens: Number(event.target.value) }))} /></label>
+            <label><span>local input chars</span><input type="number" min="1000" max="200000" value={config.maxInputChars} onChange={(event) => setConfig((current) => ({ ...current, maxInputChars: Number(event.target.value) }))} /></label>
+            <label><span>injected chars / adviser</span><input type="number" min="256" max="20000" value={config.maxProposalChars} onChange={(event) => setConfig((current) => ({ ...current, maxProposalChars: Number(event.target.value) }))} /></label>
+            <label className="full"><span>adviser temperature</span><input type="number" min="0" max="2" step="0.1" value={config.temperature} onChange={(event) => setConfig((current) => ({ ...current, temperature: Number(event.target.value) }))} /></label>
+          </div>
+          <InlineNote><code>local/*</code> targets the Local OpenAI-compatible provider. A hosted Cloudflare Worker cannot reach your laptop&apos;s loopback address; configure a network-reachable endpoint, or run ClawRouter locally with Ollama/LM Studio.</InlineNote>
+          <div className="inspectorActions"><button type="submit" disabled={busy || !config.aggregatorModel.trim() || !config.adviserModels.length}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save fusion model</span></button></div>
+        </form>
+      </aside>
+    </div>
+  );
+}
+
+function shortFusionModel(model: string) {
+  const value = model.split("/").at(-1) ?? model;
+  return value.length > 18 ? `${value.slice(0, 16)}…` : value;
 }
 
 export function UpstreamGrantPanel({ policies, providers, grants, selected, form, setForm, error, onSave, onEdit, onNew, onRefresh, onAuthorize, onRevoke, busy }: {
@@ -356,11 +429,11 @@ export function PolicyPanel({ keys, selected, providers, form, setForm, error, o
     </div>
   );
 }
-import React, { type FormEvent, useState } from "react";
+import React, { type FormEvent, useEffect, useRef, useState } from "react";
 import { CircleSlash2, KeyRound, LogIn, Plus, RefreshCw, Search, ServerCog, ShieldCheck, Users } from "lucide-react";
-import { bindingKey } from "../domain";
+import { bindingKey, type CatalogModel } from "../domain";
 import { EntityName, InlineError, InlineNote, InspectorHeader, Status, kindLabel } from "../components";
 import { rolePresets } from "../ui-config";
 import { credentialOutcome, groupedProviders } from "../ui-helpers";
 import { EntityTable, Metric } from "./users-usage";
-import type { AccessForm,AccessPolicy,AccessRole,AccessTab,AccessUser,AdminOverview,AdminTenantSummary,AdminUsageRow,AssignmentRule,AssignmentRuleForm,BindingForm,BrandIcon,BudgetStatus,ContentRetention,CredentialForm,EntitlementsResponse,IconComponent,OutcomeTone,PlaygroundForm,PlaygroundHttpResponse,PlaygroundTurn,PolicyBinding,PolicyForm,ProviderAccess,ProviderConnection,ProviderReadiness,ProviderResponse,ProviderRow,ProviderUsageSummary,ProxyCredential,RefreshOptions,RetainedRequestContent,RouteCatalog,ServiceItem,ServiceOutcome,SessionResponse,UpstreamGrant,UpstreamGrantForm,UsageAuditEvent,UsageSnapshot,UsageSummary,View } from "../ui-types";
+import type { AccessForm,AccessPolicy,AccessRole,AccessTab,AccessUser,AdminOverview,AdminTenantSummary,AdminUsageRow,AssignmentRule,AssignmentRuleForm,BindingForm,BrandIcon,BudgetStatus,ContentRetention,CredentialForm,EntitlementsResponse,FusionConfig,IconComponent,OutcomeTone,PlaygroundForm,PlaygroundHttpResponse,PlaygroundTurn,PolicyBinding,PolicyForm,ProviderAccess,ProviderConnection,ProviderReadiness,ProviderResponse,ProviderRow,ProviderUsageSummary,ProxyCredential,RefreshOptions,RetainedRequestContent,RouteCatalog,ServiceItem,ServiceOutcome,SessionResponse,UpstreamGrant,UpstreamGrantForm,UsageAuditEvent,UsageSnapshot,UsageSummary,View } from "../ui-types";

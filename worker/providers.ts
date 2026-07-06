@@ -60,14 +60,15 @@ export function modelRoute(model: string): { provider: CompiledProvider; model: 
     const upstream = model.slice(prefix.length);
     if (!upstream) continue;
     const template = provider.models[0];
+    const inheritsTemplatePricing = provider.id === "local-openai";
     return {
       provider,
       model: {
         id: model,
         upstream,
         capabilities: template?.capabilities ?? provider.capabilities.map((item) => item.id),
-        pricing_ref: null,
-        pricing: null,
+        pricing_ref: inheritsTemplatePricing ? template?.pricing_ref ?? null : null,
+        pricing: inheritsTemplatePricing ? template?.pricing ?? null : null,
       },
     };
   }

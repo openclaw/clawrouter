@@ -4,13 +4,14 @@ export function AppShell() {
   const { session: shell, catalog, access, usage, playground: playgroundDomain } = useConsole();
   const { view, value: session, status, lastUpdatedAt, demoMode, statusPresentation, busy, statusTone, navigateTo } = shell;
   const { providers, providerReadiness, accessByProvider, services, models, serviceRoutes, query, setQuery, kind, setKind, kinds, filteredServices, selectedService, setSelectedServiceId } = catalog;
-  const { policies, credentials: credentialState, connections: connectionState, bindings: bindingState, upstream, assignments, users: userState, tab } = access;
+  const { policies, credentials: credentialState, connections: connectionState, bindings: bindingState, upstream, assignments, fusion, users: userState, tab } = access;
   const { items: keys, selected: selectedPolicy, selectedId: selectedPolicyId, form: policyForm, setForm: setPolicyForm, error: policyError, save: savePolicy, revoke, edit: editPolicy, startNew: startNewPolicy, applyPreset, toggleProvider: togglePolicyProvider, setProviderGroup: setPolicyProviderGroup } = policies;
   const { items: credentials, selected: selectedCredential, form: credentialForm, setForm: setCredentialForm, issuedKey, issue: issueCredential, revoke: revokeCredential, setSelectedId: setSelectedCredentialId, setIssuedKey } = credentialState;
   const { items: connections, setEnabled: setProviderConnection } = connectionState;
   const { items: bindings, selected: selectedBinding, form: bindingForm, setForm: setBindingForm, save: saveBinding, edit: editBinding, startNew: startNewBinding } = bindingState;
   const { items: upstreamGrants, selected: selectedUpstreamGrant, form: upstreamGrantForm, setForm: setUpstreamGrantForm, save: saveUpstreamGrant, revoke: revokeUpstreamGrant, refresh: refreshUpstreamGrant, authorize: authorizeUpstreamGrant, edit: editUpstreamGrant, startNew: startNewUpstreamGrant } = upstream;
   const { items: assignmentRules, selected: selectedAssignmentRule, form: assignmentRuleForm, setForm: setAssignmentRuleForm, save: saveAssignmentRule, reconcile: reconcileAssignments, edit: editAssignmentRule, startNew: startNewAssignmentRule } = assignments;
+  const { config: fusionConfig, setConfig: setFusionConfig, error: fusionError, save: saveFusion } = fusion;
   const { items: users, selected: selectedUser, setSelectedEmail: setSelectedUserEmail, form: accessForm, setForm: setAccessForm, error: userError, save: saveUser, startNew: startNewUser } = userState;
   const { value: accessTab, set: setAccessTab } = tab;
   const { adminOverview, tenantSummaries, rows: usageRows, snapshot: usageSnapshot, loaded: usageLoaded } = usage;
@@ -168,6 +169,9 @@ export function AppShell() {
             selectedUpstreamGrant={selectedUpstreamGrant}
             assignmentRules={assignmentRules}
             selectedAssignmentRule={selectedAssignmentRule}
+            fusionConfig={fusionConfig}
+            setFusionConfig={setFusionConfig}
+            fusionModels={models}
             providers={providers}
             form={policyForm}
             setForm={setPolicyForm}
@@ -181,6 +185,7 @@ export function AppShell() {
             setAssignmentRuleForm={setAssignmentRuleForm}
             issuedKey={issuedKey}
             error={policyError}
+            fusionError={fusionError}
             onSave={savePolicy}
             onIssueCredential={issueCredential}
             onRevokeCredential={revokeCredential}
@@ -191,6 +196,7 @@ export function AppShell() {
             onAuthorizeUpstreamGrant={authorizeUpstreamGrant}
             onSaveAssignmentRule={saveAssignmentRule}
             onReconcileAssignments={reconcileAssignments}
+            onSaveFusion={saveFusion}
             onNew={startNewPolicy}
             onEdit={editPolicy}
             onEditCredential={(credential) => {
