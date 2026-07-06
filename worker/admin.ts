@@ -172,7 +172,7 @@ async function adminBootstrap(env: Env): Promise<AdminBootstrapResponse> {
 }
 
 async function putBinding(request: Request, env: Env): Promise<Response> {
-  const binding = normalizeBinding(await readJson<PolicyBinding>(request));
+  const binding = normalizeBinding(await readJson<unknown>(request));
   if (!(await listPolicies(env)).some((entry) => entry.policyId === binding.policyId)) throw new HttpError(404, "unknown_policy", "bound policy does not exist");
   const existing = (await listBindings(env)).filter((item) => item.principalType === binding.principalType && item.principalId === binding.principalId);
   const seed = { principal: { principalType: binding.principalType, principalId: binding.principalId }, bindings: existing };
@@ -202,10 +202,16 @@ async function putUserGrants(request: Request, env: Env, encodedEmail: string): 
 async function policyMutation(request: Request, env: Env, rest: string): Promise<Response> {
   const revoke = rest.endsWith("/revoke"), id = cleanId(decodeURIComponent(revoke ? rest.slice(0, -7) : rest));
   if (!id) throw new HttpError(400, "invalid_policy", "invalid policy id");
-  const existing = (await listPolicies(env)).find((entry) => entry.policyId === id)?.policy;
   let policy: AccessPolicy;
-  if (revoke && request.method === "POST") { if (!existing) throw new HttpError(404, "unknown_policy", "policy not found"); policy = { ...existing, enabled: false }; }
-  else if (request.method === "PUT") policy = normalizePolicy(await readJson<Partial<AccessPolicy> & { allProviders?: boolean }>(request), existing);
+  if (revoke && request.method === "POST") {
+    const existing = (await listPolicies(env)).find((entry) => entry.policyId === id)?.policy;
+    if (!existing) throw new HttpError(404, "unknown_policy", "policy not found"); policy = { ...existing, enabled: false };
+  }
+  else if (request.method === "PUT") {
+    const body = mutationObject(await readJson<unknown>(request), "invalid_policy", "policy");
+    const existing = (await listPolicies(env)).find((entry) => entry.policyId === id)?.policy;
+    policy = normalizePolicy(body, existing);
+  }
   else throw new HttpError(405, "method_not_allowed", "admin method is not allowed");
   const entry = { policyId: id, policy }; await authorityCall(env, "/policies/put", entry);
   return privateJson(policyResponse(entry));
@@ -235,15 +241,22 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string): 
   const parts = rest.split("/").map(decodeURIComponent), action = ["revoke", "refresh", "authorize"].includes(parts.at(-1) ?? "") ? parts.pop() : null;
   if (parts.length !== 3 || !["policies", "tenants"].includes(parts[0])) throw new HttpError(400, "invalid_upstream_grant_route", "invalid upstream grant route");
   const [scope, scopeId, tokenRef] = parts, key = scope === "policies" ? `oauth/${scopeId}/${tokenRef}` : `oauth/tenants/${scopeId}/${tokenRef}`;
-  const existing = await env.POLICY_KV.get<UpstreamGrant>(key, "json");
   if (action === "authorize" && request.method === "POST") {
-    const body = await readJson<{ provider: string }>(request);
-    return startOAuth(request, env, key, body.provider);
+    const body = mutationObject(await readJson<unknown>(request), "invalid_upstream_grant", "OAuth authorization");
+    if (typeof body.provider !== "string" || !body.provider.trim()) throw new HttpError(400, "invalid_upstream_grant", "provider is required");
+    return startOAuth(request, env, key, body.provider.trim());
   }
   if (action === "refresh" && request.method === "POST") return privateJson(validatedGrantResponse(key, await refreshStoredGrant(env, key)));
   let grant: UpstreamGrant;
-  if (action === "revoke" && request.method === "POST") { if (!existing) throw new HttpError(404, "unknown_upstream_grant", "upstream grant is not registered"); grant = revokeGrant(existing); }
-  else if (!action && request.method === "PUT") grant = normalizeGrant(await readJson<UpstreamGrant>(request), existing);
+  if (action === "revoke" && request.method === "POST") {
+    const existing = await env.POLICY_KV.get<UpstreamGrant>(key, "json");
+    if (!existing) throw new HttpError(404, "unknown_upstream_grant", "upstream grant is not registered"); grant = revokeGrant(existing);
+  }
+  else if (!action && request.method === "PUT") {
+    const body = mutationObject(await readJson<unknown>(request), "invalid_upstream_grant", "upstream grant");
+    const existing = await env.POLICY_KV.get<UpstreamGrant>(key, "json");
+    grant = normalizeGrant(body, existing);
+  }
   else throw new HttpError(405, "method_not_allowed", "admin method is not allowed");
   await env.POLICY_KV.put(key, JSON.stringify(grant)); return privateJson(validatedGrantResponse(key, grant));
 }
@@ -255,7 +268,7 @@ async function assignmentRules(env: Env) {
 async function putAssignmentRule(request: Request, env: Env, encodedId: string): Promise<Response> {
   const id = cleanId(decodeURIComponent(encodedId)); if (!id) throw new HttpError(400, "invalid_assignment_rule", "invalid assignment rule id");
   const key = `access/assignment-rules/${id}`;
-  const body = await readJson<Record<string, unknown>>(request), existing = await env.POLICY_KV.get<AssignmentRule>(key, "json"), now = nowIso();
+  const body = mutationObject(await readJson<unknown>(request), "invalid_assignment_rule", "assignment rule"), existing = await env.POLICY_KV.get<AssignmentRule>(key, "json"), now = nowIso();
   const rule = normalizeAssignmentRule(body, existing, now);
   const known = new Set((await listPolicies(env)).map((entry) => entry.policyId));
   if (rule.policyIds.some((policyId) => !known.has(policyId))) throw new HttpError(404, "unknown_policy", "one or more assignment policies do not exist");
@@ -303,15 +316,18 @@ async function syncAssignmentBindings(env: Env, id: string, existing: Assignment
 }
 
 async function reconcileAssignments(request: Request, env: Env): Promise<Response> {
-  const body = await readJson<{ email?: string; all?: boolean; evidence?: AssignmentEvidence }>(request);
-  if (body.all && body.email) throw new HttpError(400, "invalid_assignment_reconcile", "use either email or all, not both");
-  if (body.all && body.evidence) throw new HttpError(400, "invalid_assignment_reconcile", "verified GitHub evidence can reconcile only one email");
+  const body = mutationObject(await readJson<unknown>(request), "invalid_assignment_reconcile", "assignment reconciliation");
+  if (body.all !== undefined && typeof body.all !== "boolean") throw new HttpError(400, "invalid_assignment_reconcile", "all must be a boolean");
+  if (body.email !== undefined && typeof body.email !== "string") throw new HttpError(400, "invalid_assignment_reconcile", "email must be a string");
+  const all = body.all === true, requestedEmail = body.email as string | undefined;
+  if (all && requestedEmail !== undefined) throw new HttpError(400, "invalid_assignment_reconcile", "use either email or all, not both");
+  if (all && body.evidence !== undefined) throw new HttpError(400, "invalid_assignment_reconcile", "verified GitHub evidence can reconcile only one email");
   let evidence: AssignmentEvidence | undefined;
-  try { evidence = normalizeAssignmentEvidence(body.evidence); }
+  try { evidence = normalizeAssignmentEvidence(body.evidence as AssignmentEvidence | undefined); }
   catch (error) { throw new HttpError(400, "invalid_assignment_evidence", error instanceof Error ? error.message : "invalid assignment evidence"); }
-  const users = await listUsers(env), email = normalizeEmail(body.email ?? "");
-  if (!body.all && !email) throw new HttpError(400, "invalid_assignment_reconcile", "email or all is required");
-  const targets = body.all ? users : users.filter((user) => user.email === email);
+  const users = await listUsers(env), email = normalizeEmail(requestedEmail ?? "");
+  if (!all && !email) throw new HttpError(400, "invalid_assignment_reconcile", "email or all is required");
+  const targets = all ? users : users.filter((user) => user.email === email);
   const rules = await assignmentRules(env), results = [];
   for (const user of targets) {
     const result = await reconcileUserAssignments(user, rules, env, evidence, true);
@@ -324,26 +340,29 @@ async function legacyKeyMutation(request: Request, env: Env, rest: string): Prom
   const revoke = rest.endsWith("/revoke"), id = revoke ? rest.slice(0, -7) : rest;
   if (revoke) return credentialMutation(request, env, `${id}/revoke`);
   if (request.method !== "PUT") throw new HttpError(405, "method_not_allowed", "admin method is not allowed");
-  const body = await readJson<{ secretSha256?: string; providers?: string[]; allProviders?: boolean; enabled?: boolean; tenantId?: string; tokenRole?: string; monthlyBudgetMicros?: number; requestCostMicros?: number; retainRequestContent?: boolean }>(request);
+  const body = mutationObject(await readJson<unknown>(request), "invalid_policy", "legacy key");
+  if (body.secretSha256 !== undefined && (typeof body.secretSha256 !== "string" || !/^[0-9a-f]{64}$/i.test(body.secretSha256))) throw new HttpError(400, "invalid_credential", "secretSha256 must be a SHA-256 hex digest");
+  const requestedSecret = typeof body.secretSha256 === "string" ? body.secretSha256.toLowerCase() : undefined;
   const existingPolicy = (await listPolicies(env)).find((entry) => entry.policyId === id)?.policy;
   const existingCredential = (await listCredentials(env)).find((entry) => entry.credentialId === id)?.credential;
   const desiredPolicy = normalizePolicy(body, existingPolicy);
   const policyChanged = !!existingPolicy && JSON.stringify(desiredPolicy) !== JSON.stringify(existingPolicy);
-  const secretChanged = !!existingCredential && !!body.secretSha256 && body.secretSha256.toLowerCase() !== existingCredential.secretSha256.toLowerCase();
+  const secretChanged = !!existingCredential && !!requestedSecret && requestedSecret !== existingCredential.secretSha256.toLowerCase();
   if (policyChanged && secretChanged) throw new HttpError(409, "combined_policy_secret_rotation", "legacy key updates cannot change policy scope and secret together");
-  const secretSha256 = body.secretSha256 ?? existingCredential?.secretSha256;
+  const secretSha256 = requestedSecret ?? existingCredential?.secretSha256;
   if (!secretSha256) throw new HttpError(400, "invalid_credential", "secretSha256 is required when creating a legacy key");
   const policyResult = await policyMutation(new Request(request.url, { method: "PUT", headers: request.headers, body: JSON.stringify(body) }), env, id);
   if (!policyResult.ok) return policyResult;
   return credentialMutation(new Request(request.url, { method: "PUT", headers: request.headers, body: JSON.stringify({ secretSha256, policyId: id, enabled: body.enabled }) }), env, id);
 }
 
-function normalizePolicy(body: Partial<AccessPolicy> & { allProviders?: boolean }, existing?: AccessPolicy): AccessPolicy {
+function normalizePolicy(value: unknown, existing?: AccessPolicy): AccessPolicy {
+  const body = mutationObject(value, "invalid_policy", "policy");
   if (body.providers !== undefined && (!Array.isArray(body.providers) || body.providers.some((id) => typeof id !== "string"))) throw new HttpError(400, "invalid_policy", "providers must be an array of strings");
   if (body.allProviders !== undefined && typeof body.allProviders !== "boolean") throw new HttpError(400, "invalid_policy", "allProviders must be a boolean");
   const allProviders = body.allProviders === true;
   if (!body.providers && !allProviders) throw new HttpError(400, "invalid_policy", "providers or allProviders is required");
-  const providers = [...new Set(body.providers ?? [])].sort();
+  const providers = [...new Set((body.providers ?? []) as string[])].sort();
   if (allProviders && providers.length) throw new HttpError(400, "invalid_policy", "allProviders requires an empty provider scope");
   if (!providers.length && !allProviders) throw new HttpError(400, "invalid_policy", "empty provider scope requires allProviders");
   if (providers.some((id) => !snapshot.providers.some((provider) => provider.id === id))) throw new HttpError(400, "invalid_policy", "policy contains an unknown provider");
@@ -364,9 +383,9 @@ function policyString(value: unknown, field: string, fallback: string): string {
   return value.trim();
 }
 
-function normalizeBudgetValue(value: number | null | undefined, field: string): number | null {
+function normalizeBudgetValue(value: unknown, field: string): number | null {
   if (value == null) return null;
-  if (!Number.isSafeInteger(value) || value < 0) throw new HttpError(400, "invalid_policy", `${field} must be a non-negative safe integer`);
+  if (typeof value !== "number" || !Number.isSafeInteger(value) || value < 0) throw new HttpError(400, "invalid_policy", `${field} must be a non-negative safe integer`);
   return value;
 }
 
@@ -377,8 +396,7 @@ function validatedGrantResponse(key: string, grant: UpstreamGrant) {
 }
 
 function normalizeBinding(value: unknown): PolicyBinding {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new HttpError(400, "invalid_policy_binding", "policy binding must be an object");
-  const binding = value as Partial<PolicyBinding>;
+  const binding = mutationObject(value, "invalid_policy_binding", "policy binding") as Partial<PolicyBinding>;
   const principalType = binding.principalType;
   if (principalType !== "user" && principalType !== "group") throw new HttpError(400, "invalid_policy_binding", "principalType must be user or group");
   if (typeof binding.principalId !== "string") throw new HttpError(400, "invalid_policy_binding", "principalId must be a string");
@@ -395,8 +413,7 @@ function normalizeBinding(value: unknown): PolicyBinding {
 }
 
 function normalizeConnection(value: unknown, providerId: string): ProviderConnection {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new HttpError(400, "invalid_provider_connection", "provider connection must be an object");
-  const body = value as Record<string, unknown>;
+  const body = mutationObject(value, "invalid_provider_connection", "provider connection");
   const enabled = body.enabled === undefined ? true : body.enabled;
   if (typeof enabled !== "boolean") throw new HttpError(400, "invalid_provider_connection", "enabled must be a boolean");
   if (body.label !== undefined && body.label !== null && typeof body.label !== "string") throw new HttpError(400, "invalid_provider_connection", "label must be a string or null");
@@ -405,8 +422,7 @@ function normalizeConnection(value: unknown, providerId: string): ProviderConnec
 }
 
 function normalizeCredential(value: unknown): Omit<ProxyCredential, "policyGeneration"> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new HttpError(400, "invalid_credential", "credential must be an object");
-  const body = value as Record<string, unknown>;
+  const body = mutationObject(value, "invalid_credential", "credential");
   if (typeof body.policyId !== "string") throw new HttpError(400, "invalid_credential", "policyId must be a string");
   const policyId = cleanId(body.policyId);
   if (!policyId) throw new HttpError(400, "invalid_credential", "policyId is invalid");
@@ -426,8 +442,7 @@ function normalizeCredential(value: unknown): Omit<ProxyCredential, "policyGener
 }
 
 function normalizeUserMutation(value: unknown, existing: AccessControlUser["record"], includePolicyIds = false): { record: AccessControlUser["record"]; policyIds: string[] } {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new HttpError(400, "invalid_access_user", "access user must be an object");
-  const body = value as Record<string, unknown>;
+  const body = mutationObject(value, "invalid_access_user", "access user");
   const tenantId = userTenant(body.tenantId, existing.tenantId);
   const enabled = userBoolean(body.enabled, "enabled", existing.enabled ?? true, true);
   const groups = body.groups === undefined ? normalizeGroups(existing.groups ?? []) : userGroups(body.groups);
@@ -461,8 +476,9 @@ function userGroups(value: unknown): string[] {
   if (!Array.isArray(value) || value.some((group) => typeof group !== "string")) throw new HttpError(400, "invalid_access_user", "groups must be an array of strings");
   return normalizeGroups(value as string[]);
 }
-function normalizeGrant(value: UpstreamGrant, existing: UpstreamGrant | null): UpstreamGrant {
-  const now = nowIso(), grant = { ...existing, ...value, version: 1, enabled: value.enabled ?? true, kind: value.kind ?? "oauth", tokenType: value.tokenType ?? "Bearer", scopes: value.scopes ?? [], credentials: value.credentials ?? existing?.credentials ?? {}, createdAt: existing?.createdAt ?? now, updatedAt: now, revokedAt: null };
+function normalizeGrant(value: unknown, existing: UpstreamGrant | null): UpstreamGrant {
+  const body = mutationObject(value, "invalid_upstream_grant", "upstream grant");
+  const now = nowIso(), grant = { ...existing, ...body, version: 1, enabled: body.enabled ?? true, kind: body.kind ?? "oauth", tokenType: body.tokenType ?? "Bearer", scopes: body.scopes ?? [], credentials: body.credentials ?? existing?.credentials ?? {}, createdAt: existing?.createdAt ?? now, updatedAt: now, revokedAt: null } as UpstreamGrant;
   if (!grant.provider) throw new HttpError(400, "invalid_upstream_grant", "provider is required");
   if (!snapshot.providers.some((provider) => provider.id === grant.provider)) throw new HttpError(400, "unknown_provider", "upstream grant provider is not registered");
   if (!validCredentialBundle(grant.credentials) || [grant.credential, grant.accessToken, grant.refreshToken].some((secret) => secret != null && (typeof secret !== "string" || !secret.trim().length))) throw new HttpError(400, "invalid_upstream_grant", "grant credentials must use non-empty string values");
@@ -478,3 +494,7 @@ function grantResponse(key: string, grant: UpstreamGrant) { const parts = key.sp
 function assignmentResponse(ruleId: string, rule: AssignmentRule) { return { ruleId, ...rule, generatedGroup: `assignment.${ruleId}` }; }
 function normalizeGroups(values: string[]) { return [...new Set(values.map((value) => value.trim().toLowerCase()).filter(Boolean))].sort(); }
 function sum(values: Array<number | null | undefined>) { return values.reduce<number>((total, value) => total + (value ?? 0), 0); }
+function mutationObject(value: unknown, code: string, label: string): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new HttpError(400, code, `${label} must be an object`);
+  return value as Record<string, unknown>;
+}
