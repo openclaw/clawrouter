@@ -65,6 +65,7 @@ export function UsageScreen({ keys, credentials, services, overview, tenants, us
   const [retainedContent, setRetainedContent] = useState<RetainedRequestContent | null>(null);
   const [contentError, setContentError] = useState("");
   const [contentLoading, setContentLoading] = useState(false);
+  const [expandedRequestId, setExpandedRequestId] = useState<string | null>(null);
   const contentFeedbackRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     if (contentLoading || contentError || retainedContent) contentFeedbackRef.current?.scrollIntoView({ block: "nearest" });
@@ -92,6 +93,7 @@ export function UsageScreen({ keys, credentials, services, overview, tenants, us
   const untrackedRows = rows.filter((row) => row.enabled && row.budget.ledger === "untracked");
   const exhaustedRows = rows.filter((row) => row.enabled && row.budget.configured && row.budget.remainingMicros !== undefined && row.budget.remainingMicros !== null && row.budget.remainingMicros <= 0);
   const ledgerFailureRows = rows.filter((row) => row.enabled && (row.budget.ledger === "unavailable" || row.budget.ledger === "invalid_policy"));
+  const requestGroups = usageEventGroups(usage.events);
   return (
     <div className="usageCanvas">
       <section className="usageSummaryGrid" aria-label="Usage summary">
@@ -140,26 +142,32 @@ export function UsageScreen({ keys, credentials, services, overview, tenants, us
       </div> : null}
 
       <section className="analyticsPanel usageTablePanel">
-        <div className="tableSectionHeader"><div><strong>Recent requests</strong><span>{usage.events.length} most recent audit events</span></div><span>{usageLoaded ? usage.ledger : "unavailable"}</span></div>
+        <div className="tableSectionHeader"><div><strong>Recent requests</strong><span>{requestGroups.length} requests · {usage.events.length} billable calls</span></div><span>{usageLoaded ? usage.ledger : "unavailable"}</span></div>
         <EntityTable
           columns={["time", "identity", "service", "operation", "outcome", "content", "cost"]}
           columnTemplate="92px minmax(170px, 1.2fr) minmax(145px, 1fr) minmax(150px, 1fr) 104px 90px 74px"
-          rows={usage.events.map((event) => {
-            const service = serviceByProvider.get(event.provider);
+          rows={requestGroups.map((group) => {
+            const event = group.primary;
+            const service = group.compound ? undefined : serviceByProvider.get(event.provider);
             const verifiedIdentity = event.principal_id ?? event.credential_id ?? event.policy_id ?? event.tenant_id;
             const agentIdentity = event.agent_id ? `agent ${event.agent_id}` : event.auth_type ?? "authenticated";
             const agentContext = [event.parent_agent_id && `parent ${event.parent_agent_id}`, event.client && `client ${event.client}`, event.project_id && `project ${event.project_id}`, event.session_id && `session ${event.session_id}`].filter(Boolean).join(" · ");
             return {
-              id: event.id,
+              id: group.id,
               cells: [
-                <span className="auditTime" title={formatTimestamp(event.occurred_at_ms, true)}>{formatTimestamp(event.occurred_at_ms)}</span>,
+                <span className="auditTime" title={formatTimestamp(group.occurredAtMs, true)}>{formatTimestamp(group.occurredAtMs)}</span>,
                 <span className="auditIdentity" title={[`authenticated ${verifiedIdentity}`, agentIdentity, agentContext].filter(Boolean).join(" · ")}><strong>{verifiedIdentity}</strong><small>{agentIdentity}</small>{agentContext ? <small>{agentContext}</small> : null}</span>,
-                <EntityName brandIcon={service?.brandIcon} icon={ServerCog} title={service?.name ?? event.provider} subtitle={event.provider} />,
-                <span className="auditOperation"><strong>{event.capability ?? event.type}</strong><small>{[event.model, event.cost_basis].filter(Boolean).join(" · ") || event.request_id || "request"}</small></span>,
-                <Status label={event.status_code ? `${event.status_code} ${event.status}` : event.status} tone={usageEventTone(event)} />,
-                event.content_retained ? <button type="button" className="tableAction" onClick={() => void inspectContent(event)}>View</button> : <span title={event.duration_ms ? `Latency ${formatDuration(event.duration_ms)}` : undefined}>not stored</span>,
-                formatMicros(event.actual_cost_micros),
+                <EntityName brandIcon={service?.brandIcon} icon={ServerCog} title={group.compound ? "ClawRouter Fusion" : service?.name ?? event.provider} subtitle={group.compound ? `${group.events.length} model calls` : event.provider} />,
+                group.compound
+                  ? <button type="button" className="compoundRequestToggle" aria-expanded={expandedRequestId === group.id} onClick={() => setExpandedRequestId((current) => current === group.id ? null : group.id)}><strong>Fusion ensemble</strong><small>{group.complete ? `${group.events.length} calls` : `${group.events.length}/${group.expectedCallCount} calls · partial`}</small></button>
+                  : <span className="auditOperation"><strong>{event.capability ?? event.type}</strong><small>{[event.model, event.cost_basis].filter(Boolean).join(" · ") || event.request_id || "request"}</small></span>,
+                <Status label={group.compound ? `${group.successCount}/${group.events.length} succeeded` : event.status_code ? `${event.status_code} ${event.status}` : event.status} tone={usageEventTone(event)} />,
+                group.compound
+                  ? <span title={group.durationMs != null ? `End-to-end latency ${formatDuration(group.durationMs)}` : undefined}>{group.events.filter((item) => item.content_retained).length} stored</span>
+                  : event.content_retained ? <button type="button" className="tableAction" onClick={() => void inspectContent(event)}>View</button> : <span title={event.duration_ms ? `Latency ${formatDuration(event.duration_ms)}` : undefined}>not stored</span>,
+                `${group.complete ? "" : "≥"}${formatMicros(group.actualCostMicros)}`,
               ],
+              detail: group.compound && expandedRequestId === group.id ? <CompoundRequestCalls group={group} onInspect={inspectContent} /> : undefined,
             };
           })}
         />
@@ -172,6 +180,25 @@ export function UsageScreen({ keys, credentials, services, overview, tenants, us
       </section>
     </div>
   );
+}
+
+function CompoundRequestCalls({ group, onInspect }: { group: UsageEventGroup; onInspect: (event: UsageAuditEvent) => Promise<void> }) {
+  return (
+    <div className="compoundRequest" aria-label="Fusion billable calls">
+      <div className="compoundRequestHeader"><strong>{group.complete ? "Billable call detail" : "Partial billable call detail"}</strong><span>{group.durationMs != null ? `${group.complete ? "End-to-end" : "Visible span"} ${formatDuration(group.durationMs)}` : "Latency unavailable"} · {group.complete ? formatMicros(group.actualCostMicros) : `at least ${formatMicros(group.actualCostMicros)}`}</span></div>
+      <div className="compoundRequestCalls">
+        {group.events.map((event) => <div key={event.id}>
+          <span><strong>{compoundStage(event)}</strong><small>{event.provider} · {event.model ?? event.capability ?? "request"}</small></span>
+          <span><small>{event.duration_ms != null ? formatDuration(event.duration_ms) : "—"} · {formatMicros(event.actual_cost_micros)}</small>{event.content_retained ? <button type="button" className="tableAction" onClick={() => void onInspect(event)}>View</button> : null}</span>
+        </div>)}
+      </div>
+      {!group.complete ? <p className="compoundRequestWarning">This recent-event window contains {group.events.length} of {group.expectedCallCount} calls. Totals exclude older calls outside the window.</p> : null}
+    </div>
+  );
+}
+
+function compoundStage(event: UsageAuditEvent) {
+  return event.compound_request_stage === "fusion_synthesizer" ? "Synthesizer" : `Adviser ${event.compound_request_index ?? ""}`.trim();
 }
 
 export function Metric({ label, value, meta }: { label: string; value: string; meta: string }) {
@@ -211,16 +238,19 @@ export function UsageHealth({ row }: { row: AdminUsageRow }) {
   return <Status label="healthy" tone="active" />;
 }
 
-export function EntityTable({ columns, columnTemplate, rows }: { columns: string[]; columnTemplate?: string; rows: Array<{ id: string; active?: boolean; onClick?: () => void; cells: React.ReactNode[] }> }) {
+export function EntityTable({ columns, columnTemplate, rows }: { columns: string[]; columnTemplate?: string; rows: Array<{ id: string; active?: boolean; onClick?: () => void; cells: React.ReactNode[]; detail?: React.ReactNode }> }) {
   return (
     <div className="entityTable" style={{ "--cols": columns.length, "--columns": columnTemplate } as React.CSSProperties}>
       <div className="tableHead">{columns.map((column) => <span key={column}>{column}</span>)}</div>
       <div className="tableBody">{rows.map((row) => {
         const content = row.cells.map((cell, index) => <span key={index} data-label={columns[index]}>{cell}</span>);
         const className = `tableRow${row.active ? " selected" : ""}${row.onClick ? " interactive" : ""}`;
-        return row.onClick
-          ? <button type="button" key={row.id} className={className} onClick={row.onClick}>{content}</button>
-          : <div key={row.id} className={className}>{content}</div>;
+        return <React.Fragment key={row.id}>
+          {row.onClick
+            ? <button type="button" className={className} onClick={row.onClick}>{content}</button>
+            : <div className={className}>{content}</div>}
+          {row.detail ? <div className="tableRowDetail">{row.detail}</div> : null}
+        </React.Fragment>;
       })}</div>
     </div>
   );
@@ -230,5 +260,6 @@ import { Activity, CalendarDays, KeyRound, Plus, Search, ServerCog, ShieldCheck,
 import { bindingKey, effectiveAccess, errorMessage, policyUsageFallback, tenantSummaryFallback } from "../domain";
 import { EntityName, InlineError, InlineNote, InspectorHeader, PanelTitle, Status, kindLabel } from "../components";
 import { ProviderUsageChart, TrafficAreaChart } from "../analytics-charts";
+import { usageEventGroups, type UsageEventGroup } from "../usage-analytics";
 import { budgetPercent, effectiveProviderCount, formatBudget, formatCount, formatDuration, formatMicros, formatTimestamp, providerBrandIcon, readyCount, request, usageEventTone, usagePolicyId } from "../ui-helpers";
 import type { AccessForm,AccessPolicy,AccessRole,AccessTab,AccessUser,AdminOverview,AdminTenantSummary,AdminUsageRow,AssignmentRule,AssignmentRuleForm,BindingForm,BrandIcon,BudgetStatus,ContentRetention,CredentialForm,EntitlementsResponse,IconComponent,OutcomeTone,PlaygroundForm,PlaygroundHttpResponse,PlaygroundTurn,PolicyBinding,PolicyForm,ProviderAccess,ProviderConnection,ProviderReadiness,ProviderResponse,ProviderRow,ProviderUsageSummary,ProxyCredential,RefreshOptions,RetainedRequestContent,RouteCatalog,ServiceItem,ServiceOutcome,SessionResponse,UpstreamGrant,UpstreamGrantForm,UsageAuditEvent,UsageSnapshot,UsageSummary,View } from "../ui-types";

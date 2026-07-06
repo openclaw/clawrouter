@@ -30,6 +30,11 @@ interface ProxySelection {
   timeoutMs?: number;
 }
 
+interface ProxySelectionFailure {
+  response: Response;
+  auditSelection: ProxySelection | null;
+}
+
 interface PreparedUpstream {
   headers: Headers;
   url: URL;
@@ -43,6 +48,14 @@ interface ReservedProxyBudget {
   providerId: string;
   modelId: string | null;
   capability: string;
+}
+
+interface CompoundRequestContext {
+  id: string;
+  stage: "fusion_adviser" | "fusion_synthesizer";
+  index: number | null;
+  size: number;
+  startedAtMs: number;
 }
 
 export async function proxyOpenAi(request: Request, env: Env, context: ExecutionContext, path: string, mode: AuthMode): Promise<Response> {
@@ -68,26 +81,42 @@ async function proxyConcreteOpenAi(
   preauthenticated: AuthorizedIdentity | null,
   timeoutMs?: number,
   reservedBudget?: ReservedProxyBudget,
+  compound?: CompoundRequestContext,
+  auditAuth?: AuthorizedIdentity,
 ): Promise<Response> {
-  const selection = concreteOpenAiSelection(path, body, env, timeoutMs);
-  return selection instanceof Response ? selection : proxySelected(request, env, context, mode, selection, {}, preauthenticated, reservedBudget);
+  const result = concreteOpenAiSelection(path, body, env, timeoutMs);
+  if (isSelectionFailure(result)) {
+    if (compound && result.auditSelection) await auditSelectionFailure(request, env, context, mode, result.auditSelection, preauthenticated, result.response.status, compound, auditAuth);
+    return result.response;
+  }
+  return proxySelected(request, env, context, mode, result, {}, preauthenticated, reservedBudget, compound, auditAuth);
 }
 
-function concreteOpenAiSelection(path: string, body: Record<string, unknown>, env: Env, timeoutMs?: number): ProxySelection | Response {
+function concreteOpenAiSelection(path: string, body: Record<string, unknown>, env: Env, timeoutMs?: number): ProxySelection | ProxySelectionFailure {
   const modelId = typeof body.model === "string" ? body.model : "";
   const route = modelRoute(modelId);
-  if (!route) return errorResponse("model_not_found", `model ${modelId} is not registered`, 404);
+  if (!route) return selectionFailure(errorResponse("model_not_found", `model ${modelId} is not registered`, 404));
   const capability = capabilityForPath(path);
   const endpoint = endpointForPath(route.provider, path);
-  if (!capability || !endpoint || !route.model.capabilities.includes(capability)) return errorResponse("model_capability_unsupported", `model ${modelId} does not support ${path}`, 400);
+  if (!capability || !endpoint || !route.model.capabilities.includes(capability)) return selectionFailure(errorResponse("model_capability_unsupported", `model ${modelId} does not support ${path}`, 400));
   try {
     const upstreamModel = resolvedUpstreamModel(route.provider, route.model, env);
     const transformed = transformRequestBody(route.provider, path, upstreamModel, { ...body, model: upstreamModel }, env);
     return { provider: route.provider, endpoint, model: route.model, capability, body: transformed, pathParams: { model: upstreamModel, deployment: upstreamModel }, method: "POST", timeoutMs };
   } catch (error) {
     const failure = error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
-    return errorResponse(failure.code, failure.message, failure.status);
+    return selectionFailure(errorResponse(failure.code, failure.message, failure.status), {
+      provider: route.provider, endpoint, model: route.model, capability, body, pathParams: { model: modelId, deployment: modelId }, method: "POST", timeoutMs,
+    });
   }
+}
+
+function selectionFailure(response: Response, auditSelection: ProxySelection | null = null): ProxySelectionFailure {
+  return { response, auditSelection };
+}
+
+function isSelectionFailure(value: ProxySelection | ProxySelectionFailure): value is ProxySelectionFailure {
+  return "response" in value;
 }
 
 async function proxyFusion(
@@ -98,21 +127,40 @@ async function proxyFusion(
   body: Record<string, unknown>,
   preauthenticated: AuthorizedIdentity | null,
 ): Promise<Response> {
+  const compoundStartedAtMs = Date.now();
   const config = await loadFusionConfig(env);
   if (!config.enabled) return errorResponse("fusion_disabled", `${FUSION_MODEL_ID} is not enabled`, 404);
   if (!fusionMessagesValid(body.messages)) return errorResponse("fusion_messages_invalid", "fusion messages must be an array of objects with string roles", 400);
+  const requestId = request.headers.get("x-request-id") ?? randomId("req");
+  const compoundRequestId = randomId("fusion");
+  const compoundRequestSize = config.adviserModels.length + 1;
+  const fusionHeaders = new Headers(request.headers);
+  fusionHeaders.set("x-request-id", requestId);
+  // The original body was already parsed. Concrete routes serialize their transformed body separately.
+  const fusionRequest = new Request(request.url, { method: request.method, headers: fusionHeaders, signal: request.signal });
   const aggregatorSelection = concreteOpenAiSelection("/v1/chat/completions", buildAggregatorBody(body, config, buildFusionReservationProposals(config)), env);
-  if (aggregatorSelection instanceof Response) return aggregatorSelection;
-  const aggregatorBudget = await reserveSelected(request, env, context, mode, aggregatorSelection, preauthenticated);
+  if (isSelectionFailure(aggregatorSelection)) {
+    if (aggregatorSelection.auditSelection) await auditSelectionFailure(fusionRequest, env, context, mode, aggregatorSelection.auditSelection, preauthenticated, aggregatorSelection.response.status, {
+      id: compoundRequestId, stage: "fusion_synthesizer", index: null, size: 1, startedAtMs: compoundStartedAtMs,
+    });
+    return aggregatorSelection.response;
+  }
+  const aggregatorBudget = await reserveSelected(fusionRequest, env, context, mode, aggregatorSelection, preauthenticated, {
+    id: compoundRequestId, stage: "fusion_synthesizer", index: null, size: 1, startedAtMs: compoundStartedAtMs,
+  });
   if (aggregatorBudget instanceof Response) return aggregatorBudget;
   const result = await collectFusionProposals(config, body, async (model, adviserBody, timeoutMs, index, signal) => {
-    const headers = new Headers(request.headers);
+    const headers = new Headers(fusionRequest.headers);
     headers.set("x-request-id", randomId(`fusion-adviser-${index + 1}`));
-    const adviserRequest = new Request(request.url, { method: "POST", headers, signal: AbortSignal.any([request.signal, signal]) });
-    return proxyConcreteOpenAi(adviserRequest, env, context, "/v1/chat/completions", mode, adviserBody, preauthenticated, timeoutMs);
+    const adviserRequest = new Request(fusionRequest.url, { method: "POST", headers, signal: AbortSignal.any([fusionRequest.signal, signal]) });
+    return proxyConcreteOpenAi(adviserRequest, env, context, "/v1/chat/completions", mode, adviserBody, preauthenticated, timeoutMs, undefined, {
+      id: compoundRequestId, stage: "fusion_adviser", index: index + 1, size: compoundRequestSize, startedAtMs: compoundStartedAtMs,
+    }, aggregatorBudget.auth);
   });
   const aggregatorBody = buildAggregatorBody(body, config, result.proposals);
-  const response = await proxyConcreteOpenAi(request, env, context, "/v1/chat/completions", mode, aggregatorBody, preauthenticated, undefined, aggregatorBudget);
+  const response = await proxyConcreteOpenAi(fusionRequest, env, context, "/v1/chat/completions", mode, aggregatorBody, preauthenticated, undefined, aggregatorBudget, {
+    id: compoundRequestId, stage: "fusion_synthesizer", index: null, size: compoundRequestSize, startedAtMs: compoundStartedAtMs,
+  });
   const headers = new Headers(response.headers);
   headers.set("x-clawrouter-fusion", result.proposals.length ? "advisers" : "aggregator-only");
   headers.set("x-clawrouter-fusion-aggregator", config.aggregatorModel);
@@ -244,15 +292,21 @@ export async function inspectKey(headers: Headers, env: Env): Promise<Response> 
   });
 }
 
-async function proxySelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, queryInput: Record<string, unknown> = {}, preauthenticated: AuthorizedIdentity | null = null, reservedBudget?: ReservedProxyBudget): Promise<Response> {
+async function proxySelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, queryInput: Record<string, unknown> = {}, preauthenticated: AuthorizedIdentity | null = null, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, auditAuth?: AuthorizedIdentity): Promise<Response> {
   const auth = reservedBudget?.auth ?? await selectedAuth(request, env, mode, selection, preauthenticated);
-  if (auth instanceof Response) return auth;
+  if (auth instanceof Response) {
+    if (compound && auditAuth) {
+      const requestId = request.headers.get("x-request-id") ?? randomId("req");
+      auditFailure(context, env, auditAuth, selection, request, requestId, Date.now(), estimateCost(selection.model, selection.body, auditAuth.policy.requestCostMicros, selection.capability), auth.status, auth.status === 403 ? "denied" : auth.status < 500 ? "client_error" : "provider_error", compound);
+    }
+    return auth;
+  }
   const requestId = request.headers.get("x-request-id") ?? randomId("req");
   const started = Date.now();
   const estimatedCost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability);
   const cost = reservedBudget?.cost ?? estimatedCost;
   if (reservedBudget && (reservedBudget.providerId !== selection.provider.id || reservedBudget.modelId !== selection.model?.id || reservedBudget.capability !== selection.capability || estimatedCost.reserveMicros > reservedBudget.cost.reserveMicros)) {
-    context.waitUntil(finalizeAccounting(env, auth, reservedBudget.reservation, 0, usageEvent(auth, selection, request, requestId, started, 500, null, cost, reservedBudget.reservation, null, "provider_error")));
+    context.waitUntil(finalizeAccounting(env, auth, reservedBudget.reservation, 0, usageEvent(auth, selection, request, requestId, started, 500, null, cost, reservedBudget.reservation, null, "provider_error", 0, compound)));
     return errorResponse("fusion_reservation_invalid", "fusion synthesizer reservation does not cover the final request", 500);
   }
   let prepared: PreparedUpstream;
@@ -260,8 +314,8 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   catch (error) {
     const failure = selectedFailure(error);
     const status = failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error";
-    if (reservedBudget) context.waitUntil(finalizeAccounting(env, auth, reservedBudget.reservation, 0, usageEvent(auth, selection, request, requestId, started, failure.status, null, cost, reservedBudget.reservation, null, status)));
-    else auditFailure(context, env, auth, selection, request, requestId, started, cost, failure.status, status);
+    if (reservedBudget) context.waitUntil(finalizeAccounting(env, auth, reservedBudget.reservation, 0, usageEvent(auth, selection, request, requestId, started, failure.status, null, cost, reservedBudget.reservation, null, status, 0, compound)));
+    else auditFailure(context, env, auth, selection, request, requestId, started, cost, failure.status, status, compound);
     return errorResponse(failure.code, failure.message, failure.status);
   }
   let reservation = reservedBudget?.reservation;
@@ -269,14 +323,14 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     try { reservation = await reserveBudget(env, auth, selection.capability, cost); }
     catch (error) {
       const failure = error instanceof HttpError ? error : new HttpError(503, "budget_store_unavailable", "budget ledger is unavailable");
-      auditFailure(context, env, auth, selection, request, requestId, started, cost, failure.status, failure.status === 402 ? "denied" : failure.status < 500 ? "client_error" : "provider_error");
+      auditFailure(context, env, auth, selection, request, requestId, started, cost, failure.status, failure.status === 402 ? "denied" : failure.status < 500 ? "client_error" : "provider_error", compound);
       return errorResponse(failure.code, failure.message, failure.status);
     }
   }
   let content: string | null;
   try { content = await retainRequestContent(env, auth, selection, requestId); }
   catch {
-    context.waitUntil(finalizeAccounting(env, auth, reservation, 0, usageEvent(auth, selection, request, requestId, started, 503, null, cost, reservation, null, "provider_error")));
+    context.waitUntil(finalizeAccounting(env, auth, reservation, 0, usageEvent(auth, selection, request, requestId, started, 503, null, cost, reservation, null, "provider_error", 0, compound)));
     return errorResponse("content_retention_unavailable", "required request-content retention is temporarily unavailable", 503);
   }
   const controller = new AbortController();
@@ -287,12 +341,12 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     response = await fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal: AbortSignal.any([request.signal, controller.signal]) });
   } catch (error) {
     clearTimeout(timeout);
-    context.waitUntil(finalizeAccounting(env, auth, reservation, 0, usageEvent(auth, selection, request, requestId, started, 502, null, cost, reservation, content, error instanceof DOMException && error.name === "AbortError" ? "timeout" : "provider_error")));
+    context.waitUntil(finalizeAccounting(env, auth, reservation, 0, usageEvent(auth, selection, request, requestId, started, 502, null, cost, reservation, content, error instanceof DOMException && error.name === "AbortError" ? "timeout" : "provider_error", 0, compound)));
     return errorResponse("provider_unavailable", `upstream request to provider ${selection.provider.id} failed`, 502, undefined);
   }
   clearTimeout(timeout);
   const clone = response.clone();
-  context.waitUntil(finalizeResponse(clone, env, auth, selection, request, requestId, started, cost, reservation, content));
+  context.waitUntil(finalizeResponse(clone, env, auth, selection, request, requestId, started, cost, reservation, content, compound));
   const outputHeaders = new Headers(response.headers);
   for (const name of ["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "set-cookie", "trailer", "transfer-encoding", "upgrade"]) outputHeaders.delete(name);
   outputHeaders.set("x-clawrouter-upstream-provider", selection.provider.id);
@@ -300,7 +354,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers: outputHeaders });
 }
 
-async function reserveSelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, preauthenticated: AuthorizedIdentity | null): Promise<ReservedProxyBudget | Response> {
+async function reserveSelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, preauthenticated: AuthorizedIdentity | null, compound?: CompoundRequestContext): Promise<ReservedProxyBudget | Response> {
   const auth = await selectedAuth(request, env, mode, selection, preauthenticated);
   if (auth instanceof Response) return auth;
   const requestId = request.headers.get("x-request-id") ?? randomId("req");
@@ -311,7 +365,7 @@ async function reserveSelected(request: Request, env: Env, context: ExecutionCon
   } catch (error) {
     const failure = selectedFailure(error);
     const status = failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error";
-    auditFailure(context, env, auth, selection, request, requestId, started, cost, failure.status, status);
+    auditFailure(context, env, auth, selection, request, requestId, started, cost, failure.status, status, compound);
     return errorResponse(failure.code, failure.message, failure.status);
   }
   try {
@@ -319,7 +373,7 @@ async function reserveSelected(request: Request, env: Env, context: ExecutionCon
     return { auth, reservation, cost, providerId: selection.provider.id, modelId: selection.model?.id ?? null, capability: selection.capability };
   } catch (error) {
     const failure = error instanceof HttpError ? error : new HttpError(503, "budget_store_unavailable", "budget ledger is unavailable");
-    auditFailure(context, env, auth, selection, request, requestId, started, cost, failure.status, failure.status === 402 ? "denied" : failure.status < 500 ? "client_error" : "provider_error");
+    auditFailure(context, env, auth, selection, request, requestId, started, cost, failure.status, failure.status === 402 ? "denied" : failure.status < 500 ? "client_error" : "provider_error", compound);
     return errorResponse(failure.code, failure.message, failure.status);
   }
 }
@@ -354,9 +408,18 @@ function selectedFailure(error: unknown): HttpError {
   return error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "provider request preflight failed");
 }
 
-function auditFailure(context: ExecutionContext, env: Env, auth: AuthorizedIdentity, selection: ProxySelection, request: Request, requestId: string, started: number, cost: Cost, statusCode: number, status: UsageEvent["status"]): void {
+function auditFailure(context: ExecutionContext, env: Env, auth: AuthorizedIdentity, selection: ProxySelection, request: Request, requestId: string, started: number, cost: Cost, statusCode: number, status: UsageEvent["status"], compound?: CompoundRequestContext): void {
   const reservation = { reservationId: null, reservedMicros: 0 };
-  context.waitUntil(finalizeAccounting(env, auth, reservation, 0, usageEvent(auth, selection, request, requestId, started, statusCode, null, cost, reservation, null, status)));
+  context.waitUntil(finalizeAccounting(env, auth, reservation, 0, usageEvent(auth, selection, request, requestId, started, statusCode, null, cost, reservation, null, status, 0, compound)));
+}
+
+async function auditSelectionFailure(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, preauthenticated: AuthorizedIdentity | null, statusCode: number, compound: CompoundRequestContext, auditAuth?: AuthorizedIdentity): Promise<void> {
+  const selected = await selectedAuth(request, env, mode, selection, preauthenticated);
+  const auth = selected instanceof Response ? auditAuth : selected;
+  if (!auth) return;
+  const requestId = request.headers.get("x-request-id") ?? randomId("req");
+  const status = statusCode === 403 ? "denied" : statusCode < 500 ? "client_error" : "provider_error";
+  auditFailure(context, env, auth, selection, request, requestId, Date.now(), estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability), statusCode, status, compound);
 }
 
 async function preauthenticate(request: Request, env: Env, mode: AuthMode, providerId?: string): Promise<AuthorizedIdentity | Response | null> {
@@ -364,7 +427,7 @@ async function preauthenticate(request: Request, env: Env, mode: AuthMode, provi
   return providerId ? accessIdentity(request, env, providerId) : null;
 }
 
-async function finalizeResponse(response: Response, env: Env, auth: AuthorizedIdentity, selection: ProxySelection, request: Request, requestId: string, started: number, estimated: Cost, reservation: BudgetReservation, content: string | null): Promise<void> {
+async function finalizeResponse(response: Response, env: Env, auth: AuthorizedIdentity, selection: ProxySelection, request: Request, requestId: string, started: number, estimated: Cost, reservation: BudgetReservation, content: string | null, compound?: CompoundRequestContext): Promise<void> {
   let tokens: Tokens | null = null;
   try {
     const contentType = response.headers.get("content-type") ?? "";
@@ -373,7 +436,7 @@ async function finalizeResponse(response: Response, env: Env, auth: AuthorizedId
   } catch { /* usage is best-effort; reservation stays conservative */ }
   const measured = tokens ? actualCost(selection.model, tokens, auth.policy.requestCostMicros) : null;
   const actual = response.ok && measured != null ? measured : response.ok ? estimated.reserveMicros : 0;
-  await finalizeAccounting(env, auth, reservation, actual, usageEvent(auth, selection, request, requestId, started, response.status, tokens, estimated, reservation, content, response.ok ? "success" : response.status < 500 ? "client_error" : "provider_error", actual));
+  await finalizeAccounting(env, auth, reservation, actual, usageEvent(auth, selection, request, requestId, started, response.status, tokens, estimated, reservation, content, response.ok ? "success" : response.status < 500 ? "client_error" : "provider_error", actual, compound));
 }
 
 type Cost = EstimatedCost;
@@ -395,14 +458,17 @@ function actualCost(model: CompiledModel | null, tokens: Tokens, fixed: number |
   return actualModelCost(pricing, tokens);
 }
 
-function usageEvent(auth: AuthorizedIdentity, selection: ProxySelection, request: Request, requestId: string, started: number, statusCode: number, tokens: Tokens | null, cost: Cost, reservation: BudgetReservation, contentRef: string | null, status: UsageEvent["status"], actual = 0): UsageEvent {
+function usageEvent(auth: AuthorizedIdentity, selection: ProxySelection, request: Request, requestId: string, started: number, statusCode: number, tokens: Tokens | null, cost: Cost, reservation: BudgetReservation, contentRef: string | null, status: UsageEvent["status"], actual = 0, compound?: CompoundRequestContext): UsageEvent {
   return {
     id: randomId("usage"), type: "clawrouter.usage.v1", occurred_at_ms: Date.now(), tenant_id: auth.policy.tenantId ?? "default",
     policy_id: auth.policyId, credential_id: auth.credentialId, principal_id: auth.principalId, auth_type: auth.authType,
     session_id: clampAudit(request.headers.get("x-clawrouter-session-id") ?? request.headers.get("session-id")),
     agent_id: clampAudit(request.headers.get("x-clawrouter-agent-id")), parent_agent_id: clampAudit(request.headers.get("x-clawrouter-parent-agent-id")),
     project_id: clampAudit(request.headers.get("x-clawrouter-project-id")), client: clampAudit(request.headers.get("x-clawrouter-client")),
-    key_id: auth.credentialId ?? auth.policyId, request_id: requestId, provider: selection.provider.id, capability: selection.capability,
+    key_id: auth.credentialId ?? auth.policyId, request_id: requestId,
+    compound_request_id: compound?.id ?? null, compound_request_stage: compound?.stage ?? null, compound_request_index: compound?.index ?? null,
+    compound_request_size: compound?.size ?? null, compound_request_started_at_ms: compound?.startedAtMs ?? null,
+    provider: selection.provider.id, capability: selection.capability,
     model: selection.model?.id ?? null, input_tokens: tokens?.input ?? null, output_tokens: tokens?.output ?? null,
     total_tokens: tokens?.total ?? null, cached_input_tokens: tokens?.cached ?? null, cache_write_input_tokens: tokens?.cacheWrite ?? null,
     reserved_cost_micros: reservation.reservedMicros, actual_cost_micros: actual, reserved_input_tokens: cost.inputTokens,

@@ -71,7 +71,13 @@ Each adviser and the synthesizer is a separate normal ClawRouter request. The
 caller's policy must grant all providers that should participate. Budgets are
 reserved and usage is recorded per subrequest, so a two-adviser fusion request
 can account for three model calls. A failed adviser can still consume upstream
-tokens before its failure becomes visible.
+tokens before its failure becomes visible. Usage events retain their individual
+request ids and also carry a shared `compound_request_id`, stage, and adviser
+index. The Usage console groups those calls into one expandable Fusion request
+with aggregate spend and end-to-end latency measured from Fusion entry; opening
+it preserves the billable subrequest detail. A request rejected during final
+route preflight or budget reservation appears as a one-call failed Fusion group
+because adviser fan-out never began.
 
 ## Ollama and LM Studio
 

@@ -108,7 +108,7 @@ try {
   const deniedModels = await fetch(`${base}/v1/models`, { headers: { authorization: `Bearer ${proxyKey}` } });
   assert.equal(deniedModels.status, 200);
   assert.equal((await deniedModels.json()).data.some((model) => model.id === "clawrouter/fusion"), false, "fusion stays hidden until its synthesizer route is executable for the caller");
-  const budgetBlockedFusion = await fetch(`${base}/v1/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${fusionKey}`, "content-type": "application/json" }, body: JSON.stringify({ model: "clawrouter/fusion", messages: [{ role: "user", content: "solve" }] }) });
+  const budgetBlockedFusion = await fetch(`${base}/v1/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${fusionKey}`, "content-type": "application/json", "x-request-id": "fusion-e2e-budget-blocked" }, body: JSON.stringify({ model: "clawrouter/fusion", messages: [{ role: "user", content: "solve" }] }) });
   assert.equal(budgetBlockedFusion.status, 402);
   assert.equal((await budgetBlockedFusion.json()).error.code, "budget_exhausted");
   assert.equal(upstreamCalls.length, 0, "synthesizer budget reservation blocks adviser spend before the final answer can be funded");
@@ -122,24 +122,68 @@ try {
   const fusionModels = await fetch(`${base}/v1/models`, { headers: { authorization: `Bearer ${fusionKey}` } });
   assert.equal(fusionModels.status, 200);
   assert.equal((await fusionModels.json()).data.some((model) => model.id === "clawrouter/fusion"), true);
-  const fusionResponse = await fetch(`${base}/v1/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${fusionKey}`, "content-type": "application/json" }, body: JSON.stringify({ model: "clawrouter/fusion", messages: [{ role: "user", content: "solve" }] }) });
+  const fusionResponse = await fetch(`${base}/v1/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${fusionKey}`, "content-type": "application/json", "x-request-id": "fusion-e2e-retry" }, body: JSON.stringify({ model: "clawrouter/fusion", messages: [{ role: "user", content: "solve" }] }) });
   assert.equal(fusionResponse.status, 200, JSON.stringify(await fusionResponse.clone().json()));
   assert.equal((await fusionResponse.json()).choices[0].message.content, "fused answer");
   assert.equal(fusionResponse.headers.get("x-clawrouter-fusion-adviser-count"), "1");
   assert.equal(fusionResponse.headers.get("x-clawrouter-fusion-failed-count"), "0");
   assert.deepEqual(upstreamCalls.map((call) => call.model), ["adviser", "final"]);
+  const selectionFailureCallStart = upstreamCalls.length;
+  const selectionFailureConfig = { ...localFusionConfig, adviserModels: ["azure-openai/deployment"] };
+  assert.equal((await fetch(`${base}/v1/admin/fusion`, { method: "PUT", headers: adminHeaders, body: JSON.stringify(selectionFailureConfig) })).status, 200);
+  const selectionFailureResponse = await fetch(`${base}/v1/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${fusionKey}`, "content-type": "application/json", "x-request-id": "fusion-e2e-selection-failure" }, body: JSON.stringify({ model: "clawrouter/fusion", messages: [{ role: "user", content: "solve without configured adviser" }] }) });
+  assert.equal(selectionFailureResponse.status, 200, JSON.stringify(await selectionFailureResponse.clone().json()));
+  assert.equal(selectionFailureResponse.headers.get("x-clawrouter-fusion-adviser-count"), "0");
+  assert.equal(selectionFailureResponse.headers.get("x-clawrouter-fusion-failed-count"), "1");
+  assert.deepEqual(upstreamCalls.slice(selectionFailureCallStart).map((call) => call.model), ["final"], "selection failures are audited without attempting the invalid upstream route");
   const stalledCallStart = upstreamCalls.length;
   const stalledFusionConfig = { ...localFusionConfig, adviserModels: ["local/stall"], adviserTimeoutMs: 1_000 };
   assert.equal((await fetch(`${base}/v1/admin/fusion`, { method: "PUT", headers: adminHeaders, body: JSON.stringify(stalledFusionConfig) })).status, 200);
-  const stalledFusionResponse = await fetch(`${base}/v1/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${fusionKey}`, "content-type": "application/json" }, body: JSON.stringify({ model: "clawrouter/fusion", messages: [{ role: "user", content: "solve after timeout" }] }) });
+  const stalledFusionResponse = await fetch(`${base}/v1/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${fusionKey}`, "content-type": "application/json", "x-request-id": "fusion-e2e-retry" }, body: JSON.stringify({ model: "clawrouter/fusion", messages: [{ role: "user", content: "solve after timeout" }] }) });
   assert.equal(stalledFusionResponse.status, 200, JSON.stringify(await stalledFusionResponse.clone().json()));
   assert.equal(stalledFusionResponse.headers.get("x-clawrouter-fusion-adviser-count"), "0");
   assert.equal(stalledFusionResponse.headers.get("x-clawrouter-fusion-failed-count"), "1");
   await waitUntil(() => stalledUpstreamClosed, "timed-out adviser upstream connection did not close");
   assert.deepEqual(upstreamCalls.slice(stalledCallStart).map((call) => call.model), ["stall", "final"]);
-  const fusionUsage = await fetch(`${base}/v1/usage`, { headers: { authorization: `Bearer ${fusionKey}` } });
-  assert.equal(fusionUsage.status, 200);
-  assert.equal((await fusionUsage.json()).budget.spentMicros, 0, "dynamic local models retain zero-price accounting under a budgeted policy");
+  let fusionUsageBody;
+  await waitUntil(async () => {
+    const fusionUsage = await fetch(`${base}/v1/usage`, { headers: { authorization: `Bearer ${fusionKey}` } });
+    assert.equal(fusionUsage.status, 200);
+    fusionUsageBody = await fusionUsage.json();
+    const synthesizers = fusionUsageBody.usage.events.filter((event) => event.request_id === "fusion-e2e-retry" && event.compound_request_stage === "fusion_synthesizer");
+    const visibleCompoundIds = new Set(synthesizers.map((event) => event.compound_request_id));
+    const blocked = fusionUsageBody.usage.events.find((event) => event.request_id === "fusion-e2e-budget-blocked");
+    const selectionSynthesizer = fusionUsageBody.usage.events.find((event) => event.request_id === "fusion-e2e-selection-failure" && event.compound_request_stage === "fusion_synthesizer");
+    const selectionEvents = selectionSynthesizer ? fusionUsageBody.usage.events.filter((event) => event.compound_request_id === selectionSynthesizer.compound_request_id) : [];
+    return visibleCompoundIds.size >= 2 && fusionUsageBody.usage.events.filter((event) => visibleCompoundIds.has(event.compound_request_id)).length >= 4 && blocked?.compound_request_stage === "fusion_synthesizer" && selectionEvents.length >= 2;
+  }, "fusion usage lineage was not delivered");
+  const compoundIds = [...new Set(fusionUsageBody.usage.events.filter((event) => event.request_id === "fusion-e2e-retry").map((event) => event.compound_request_id))];
+  assert.equal(compoundIds.length, 2, "reused caller request ids must not merge separate Fusion invocations");
+  const lineage = fusionUsageBody.usage.events
+    .filter((event) => compoundIds.includes(event.compound_request_id))
+    .map((event) => ({ request_id: event.request_id, compound_request_id: event.compound_request_id, stage: event.compound_request_stage, index: event.compound_request_index, model: event.model }));
+  assert.equal(lineage.length, 4, JSON.stringify(lineage));
+  assert.equal(fusionUsageBody.budget.spentMicros, 0, "dynamic local models retain zero-price accounting under a budgeted policy");
+  const blockedLineage = fusionUsageBody.usage.events.find((event) => event.request_id === "fusion-e2e-budget-blocked");
+  assert.equal(blockedLineage.status_code, 402);
+  assert.equal(blockedLineage.compound_request_stage, "fusion_synthesizer");
+  assert.equal(blockedLineage.compound_request_size, 1, "pre-fan-out rejection is a complete one-call Fusion group");
+  assert.ok(blockedLineage.compound_request_started_at_ms <= blockedLineage.occurred_at_ms);
+  const selectionSynthesizer = fusionUsageBody.usage.events.find((event) => event.request_id === "fusion-e2e-selection-failure" && event.compound_request_stage === "fusion_synthesizer");
+  const selectionLineage = fusionUsageBody.usage.events.filter((event) => event.compound_request_id === selectionSynthesizer.compound_request_id);
+  assert.equal(selectionLineage.length, 2);
+  const selectionAdviser = selectionLineage.find((event) => event.compound_request_stage === "fusion_adviser");
+  assert.equal(selectionAdviser.provider, "azure-openai");
+  assert.equal(selectionAdviser.status_code, 503);
+  for (const compoundId of compoundIds) {
+    const events = fusionUsageBody.usage.events.filter((event) => event.compound_request_id === compoundId);
+    assert.deepEqual(events.map((event) => event.compound_request_stage).sort(), ["fusion_adviser", "fusion_synthesizer"]);
+    assert.equal(events.find((event) => event.compound_request_stage === "fusion_synthesizer").request_id, "fusion-e2e-retry");
+    assert.notEqual(events.find((event) => event.compound_request_stage === "fusion_adviser").request_id, "fusion-e2e-retry");
+    assert.equal(events.find((event) => event.compound_request_stage === "fusion_adviser").compound_request_index, 1);
+    assert.ok(events.every((event) => event.compound_request_size === 2));
+    assert.equal(new Set(events.map((event) => event.compound_request_started_at_ms)).size, 1);
+  }
   const legacyInvalidGrant = bootstrapBody.grants.find((entry) => entry.tokenRef === "legacy_invalid");
   assert.equal(legacyInvalidGrant.hasCredential, false, "stored empty credential bundles are not reported as configured");
   assert.deepEqual(legacyInvalidGrant.credentialFields, []);
@@ -379,9 +423,9 @@ try {
 
 async function json(url) { const response = await fetch(url); assert.equal(response.status, 200, `${url} returned ${response.status}`); return response.json(); }
 async function waitUntil(predicate, message) {
-  const deadline = Date.now() + 2_000;
+  const deadline = Date.now() + 5_000;
   while (Date.now() < deadline) {
-    if (predicate()) return;
+    if (await predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 25));
   }
   throw new Error(message);

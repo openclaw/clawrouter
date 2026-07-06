@@ -13,6 +13,33 @@ export function demoUsageSnapshot(): UsageSnapshot {
   const now = Date.now();
   const summary = { requestCount: 1284, successCount: 1247, errorCount: 37, inputTokens: 1_482_402, outputTokens: 382_151, totalTokens: 1_864_553, actualCostMicros: 8_432_100 };
   const events: UsageAuditEvent[] = [
+    demoUsageEvent("usage_fusion_final", now - 18_000, "admin@example.com", "maintainer_models", "openai", "llm.chat", "openai/gpt-4.1-mini", 200, 690, 1900, "success", 1512, {
+      request_id: "req_fusion_7",
+      compound_request_id: "req_fusion_7",
+      compound_request_stage: "fusion_synthesizer",
+      compound_request_index: null,
+      compound_request_size: 3,
+      compound_request_started_at_ms: now - 19_100,
+      cost_basis: "manifest_pricing",
+    }),
+    demoUsageEvent("usage_fusion_adviser_2", now - 18_420, "admin@example.com", "maintainer_models", "openai", "llm.chat", "openai/gpt-4.1-mini", 503, 244, 0, "provider_error", 0, {
+      request_id: "fusion-adviser-2-demo",
+      compound_request_id: "req_fusion_7",
+      compound_request_stage: "fusion_adviser",
+      compound_request_index: 2,
+      compound_request_size: 3,
+      compound_request_started_at_ms: now - 19_100,
+      cost_basis: "manifest_pricing",
+    }),
+    demoUsageEvent("usage_fusion_adviser_1", now - 18_510, "admin@example.com", "maintainer_models", "local-openai", "llm.chat", "local/qwen3:8b", 200, 410, 0, "success", 846, {
+      request_id: "fusion-adviser-1-demo",
+      compound_request_id: "req_fusion_7",
+      compound_request_stage: "fusion_adviser",
+      compound_request_index: 1,
+      compound_request_size: 3,
+      compound_request_started_at_ms: now - 19_100,
+      cost_basis: "manifest_pricing",
+    }),
     demoUsageEvent("usage_6", now - 26_000, "admin@example.com", "maintainer_models", "openai", "llm.responses", "gpt-5.4", 200, 842, 1000, "success", 1814, {
       agent_id: "codex/reviewer",
       parent_agent_id: "codex/orchestrator",
