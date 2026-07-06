@@ -341,12 +341,29 @@ async function legacyKeyMutation(request: Request, env: Env, rest: string): Prom
 }
 
 function normalizePolicy(body: Partial<AccessPolicy> & { allProviders?: boolean }, existing?: AccessPolicy): AccessPolicy {
-  if (!body.providers && !body.allProviders) throw new HttpError(400, "invalid_policy", "providers or allProviders is required");
-  const providers = [...new Set(body.providers ?? [])].sort(); if (!providers.length && !body.allProviders) throw new HttpError(400, "invalid_policy", "empty provider scope requires allProviders");
+  if (body.providers !== undefined && (!Array.isArray(body.providers) || body.providers.some((id) => typeof id !== "string"))) throw new HttpError(400, "invalid_policy", "providers must be an array of strings");
+  if (body.allProviders !== undefined && typeof body.allProviders !== "boolean") throw new HttpError(400, "invalid_policy", "allProviders must be a boolean");
+  const allProviders = body.allProviders === true;
+  if (!body.providers && !allProviders) throw new HttpError(400, "invalid_policy", "providers or allProviders is required");
+  const providers = [...new Set(body.providers ?? [])].sort();
+  if (allProviders && providers.length) throw new HttpError(400, "invalid_policy", "allProviders requires an empty provider scope");
+  if (!providers.length && !allProviders) throw new HttpError(400, "invalid_policy", "empty provider scope requires allProviders");
   if (providers.some((id) => !snapshot.providers.some((provider) => provider.id === id))) throw new HttpError(400, "invalid_policy", "policy contains an unknown provider");
   const monthlyBudgetMicros = normalizeBudgetValue(body.monthlyBudgetMicros, "monthlyBudgetMicros");
   const requestCostMicros = normalizeBudgetValue(body.requestCostMicros, "requestCostMicros");
-  return { enabled: body.enabled ?? true, generation: existing?.generation ?? randomId("policy"), providers, tenantId: body.tenantId ?? "default", tokenRole: body.tokenRole ?? "service", monthlyBudgetMicros, requestCostMicros, retainRequestContent: body.retainRequestContent ?? true };
+  return { enabled: policyBoolean(body.enabled, "enabled", true), generation: existing?.generation ?? randomId("policy"), providers, tenantId: policyString(body.tenantId, "tenantId", "default"), tokenRole: policyString(body.tokenRole, "tokenRole", "service"), monthlyBudgetMicros, requestCostMicros, retainRequestContent: policyBoolean(body.retainRequestContent, "retainRequestContent", true) };
+}
+
+function policyBoolean(value: unknown, field: string, fallback: boolean): boolean {
+  if (value === undefined) return fallback;
+  if (typeof value !== "boolean") throw new HttpError(400, "invalid_policy", `${field} must be a boolean`);
+  return value;
+}
+
+function policyString(value: unknown, field: string, fallback: string): string {
+  if (value == null) return fallback;
+  if (typeof value !== "string" || !value.trim()) throw new HttpError(400, "invalid_policy", `${field} must be a non-empty string`);
+  return value.trim();
 }
 
 function normalizeBudgetValue(value: number | null | undefined, field: string): number | null {
