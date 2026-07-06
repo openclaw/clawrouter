@@ -158,6 +158,21 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     auditFailure(context, env, auth, selection, request, requestId, started, cost, failure.status, "provider_error");
     return errorResponse(failure.code, failure.message, failure.status);
   }
+  let headers: Headers, url: URL, requestBody: string | undefined;
+  try {
+    headers = new Headers(upstream.headers);
+    copyRequestHeaders(request.headers, selection.provider, selection.endpoint, headers, env);
+    const path = upstreamPath(selection.provider, selection.endpoint, selection.pathParams, env, upstream);
+    url = new URL(`${upstream.baseUrl.replace(/\/$/, "")}${path}`);
+    upstream.query.forEach((value, name) => url.searchParams.set(name, value));
+    for (const [name, value] of Object.entries(selection.endpoint.query)) url.searchParams.set(name, resolveTemplate(selection.provider, value, env));
+    for (const [name, value] of Object.entries(queryInput)) if (value != null) url.searchParams.set(name, String(value));
+    requestBody = ["GET", "HEAD"].includes(selection.method) ? undefined : JSON.stringify(selection.body);
+  } catch (error) {
+    const failure = error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
+    auditFailure(context, env, auth, selection, request, requestId, started, cost, failure.status, failure.status < 500 ? "client_error" : "provider_error");
+    return errorResponse(failure.code, failure.message, failure.status);
+  }
   let reservation: BudgetReservation;
   try { reservation = await reserveBudget(env, auth, selection.capability, cost); }
   catch (error) {
@@ -171,16 +186,8 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     context.waitUntil(finalizeAccounting(env, auth, reservation, 0, usageEvent(auth, selection, request, requestId, started, 503, null, cost, reservation, null, "provider_error")));
     return errorResponse("content_retention_unavailable", "required request-content retention is temporarily unavailable", 503);
   }
-  const headers = new Headers(upstream.headers);
-  copyRequestHeaders(request.headers, selection.provider, selection.endpoint, headers, env);
-  const path = upstreamPath(selection.provider, selection.endpoint, selection.pathParams, env, upstream);
-  const url = new URL(`${upstream.baseUrl.replace(/\/$/, "")}${path}`);
-  upstream.query.forEach((value, name) => url.searchParams.set(name, value));
-  for (const [name, value] of Object.entries(selection.endpoint.query)) url.searchParams.set(name, resolveTemplate(selection.provider, value, env));
-  for (const [name, value] of Object.entries(queryInput)) if (value != null) url.searchParams.set(name, String(value));
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), selection.endpoint.timeout_ms ?? 120_000);
-  const requestBody = ["GET", "HEAD"].includes(selection.method) ? undefined : JSON.stringify(selection.body);
   try { await signSigV4(selection.provider, url, selection.method, requestBody, headers, env, upstream.grant); }
   catch (error) {
     clearTimeout(timeout);
