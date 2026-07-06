@@ -273,6 +273,20 @@ try {
   const grantsAfterInvalidRoots = await fetch(`${base}/v1/admin/upstream-grants`, { headers: userHeaders });
   assert.equal(grantsAfterInvalidRoots.status, 200);
   assert.equal((await grantsAfterInvalidRoots.json()).grants.some((grant) => grant.tokenRef === "invalid_root"), false, "malformed grant mutations do not create grant state");
+  const proxyHeaders = { authorization: `Bearer ${proxyKey}`, "content-type": "application/json" };
+  for (const [proxyMutationId, url, body] of [
+    ["openai_null", `${base}/v1/chat/completions`, null],
+    ["manifest_null", `${base}/v1/proxy/replicate/prediction`, null],
+    ["manifest_method", `${base}/v1/proxy/replicate/prediction`, { method: 1 }],
+    ["native_null", `${base}/v1/native/firecrawl/v2/scrape`, null],
+  ]) {
+    const invalidProxyBody = await fetch(url, { method: "POST", headers: proxyHeaders, body: JSON.stringify(body) });
+    assert.equal(invalidProxyBody.status, 400, `malformed proxy request ${proxyMutationId} is rejected`);
+    assert.equal((await invalidProxyBody.json()).error.code, "invalid_request_body");
+  }
+  const usageAfterInvalidBodies = await fetch(`${base}/v1/usage`, { headers: { authorization: `Bearer ${proxyKey}` } });
+  assert.equal(usageAfterInvalidBodies.status, 200);
+  assert.equal((await usageAfterInvalidBodies.json()).budget.spentMicros, 0, "invalid JSON body shapes must not reserve budget");
   console.log(`local Worker smoke passed on ${base}`);
 } catch (error) {
   throw new Error(`${error instanceof Error ? error.message : String(error)}\nwrangler output:\n${output}`);
