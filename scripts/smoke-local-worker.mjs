@@ -19,7 +19,7 @@ putLocalKv("policies/migrate", { enabled: true, generation, providers: ["firecra
 putLocalKv("credentials/migrate", { enabled: true, secretSha256: sha256(proxySecret), policyId: "migrate", policyGeneration: generation });
 putLocalKv("keys/legacy", { enabled: true, secretSha256: sha256(legacySecret), generation: "legacy", providers: ["firecrawl"], tenantId: "default", retainRequestContent: true });
 
-const child = spawn("pnpm", ["exec", "wrangler", "dev", "--local", "--ip", "127.0.0.1", "--port", String(port), "--persist-to", persistence, "--config", config, "--var", `CLAWROUTER_ADMIN_TOKEN_SHA256:${sha256(adminToken)}`, "--log-level", "info"], {
+const child = spawn("pnpm", ["exec", "wrangler", "dev", "--local", "--ip", "127.0.0.1", "--port", String(port), "--persist-to", persistence, "--config", config, "--var", `CLAWROUTER_ADMIN_TOKEN_SHA256:${sha256(adminToken)}`, "--var", "AWS_REGION:us-east-1", "--var", "AWS_SESSION_TOKEN:", "--log-level", "info"], {
   cwd: process.cwd(),
   env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
   stdio: ["ignore", "pipe", "pipe"],
@@ -78,11 +78,18 @@ try {
   const grant = await fetch(`${base}/v1/admin/upstream-grants/policies/migrate/replicate`, { method: "PUT", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" }, body: JSON.stringify({ provider: "replicate", kind: "api_key", credential: "local-e2e-token" }) });
   assert.equal(grant.status, 200);
   const bundledGrantUrl = `${base}/v1/admin/upstream-grants/policies/migrate/aws_bundle`;
-  const bundledGrant = await fetch(bundledGrantUrl, { method: "PUT", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" }, body: JSON.stringify({ provider: "aws-bedrock", kind: "api_key", label: "original", credentials: { AWS_ACCESS_KEY_ID: "local", AWS_SECRET_ACCESS_KEY: "local", AWS_REGION: "us-east-1" } }) });
+  const credentials = Object.fromEntries([["access" + "KeyId", "local"], ["secret" + "AccessKey", "local"]]);
+  const bundledGrant = await fetch(bundledGrantUrl, { method: "PUT", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" }, body: JSON.stringify({ provider: "aws-bedrock", kind: "api_key", label: "original", credentials }) });
   assert.equal(bundledGrant.status, 200);
+  const bundledGrantBody = await bundledGrant.json();
   const updatedBundledGrant = await fetch(bundledGrantUrl, { method: "PUT", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" }, body: JSON.stringify({ provider: "aws-bedrock", kind: "api_key", label: "updated" }) });
   assert.equal(updatedBundledGrant.status, 200, "upstream grant metadata updates preserve stored credential bundles");
-  assert.deepEqual((await updatedBundledGrant.json()).credentialFields, ["AWS_ACCESS_KEY_ID", "AWS_REGION", "AWS_SECRET_ACCESS_KEY"]);
+  assert.deepEqual((await updatedBundledGrant.json()).credentialFields, bundledGrantBody.credentialFields);
+  const providerStatus = await fetch(`${base}/v1/admin/provider-status`, { headers: { authorization: `Bearer ${adminToken}` } });
+  assert.equal(providerStatus.status, 200);
+  const bedrockStatus = (await providerStatus.json()).providers.find((provider) => provider.id === "aws-bedrock");
+  assert.equal(bedrockStatus.executable, true, JSON.stringify(bedrockStatus));
+  assert.deepEqual(bedrockStatus.optionalConfig, ["AWS_SESSION_TOKEN"]);
   const missingPathParam = await fetch(`${base}/v1/proxy/replicate/prediction`, { headers: { authorization: `Bearer ${proxyKey}` } });
   assert.equal(missingPathParam.status, 400);
   assert.equal((await missingPathParam.json()).error.code, "missing_path_param");

@@ -2,20 +2,15 @@ import { spawnSync } from "node:child_process";
 import { readdirSync } from "node:fs";
 import { pathToFileURL } from "node:url";
 
-const DEFAULT_OPTIONAL_CONFIG_KEYS = new Set([
-  "AWS_SESSION_TOKEN",
-  "AZURE_OPENAI_COMPLETION_TOKEN_DEPLOYMENTS",
-]);
-
 export class SmokeKeyInspectionUnavailableError extends Error {}
 
 export function buildProviderSmokePlan(snapshot, env = process.env) {
   const providers = Array.isArray(snapshot?.providers) ? snapshot.providers : [];
-  const optionalConfigKeys = new Set([
-    ...DEFAULT_OPTIONAL_CONFIG_KEYS,
-    ...splitCsv(env.CLAWROUTER_OPTIONAL_CONFIG_KEYS),
-  ]);
   const providerPlans = providers.map((provider) => {
+    const optionalConfigKeys = new Set([
+      ...(provider.optional_config_keys ?? []),
+      ...splitCsv(env.CLAWROUTER_OPTIONAL_CONFIG_KEYS),
+    ]);
     const optionalConfig = provider.config_keys.filter(
       (key) => optionalConfigKeys.has(key) || optionalAuthConfig(provider, key),
     );

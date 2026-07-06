@@ -122,6 +122,7 @@ function compileProvider(manifest, ids) {
     service_platform: manifest.service?.platform ?? manifest.id,
     service_kind: manifest.service?.kind ?? "api_provider",
     config_keys: manifest.service?.configKeys ?? [],
+    optional_config_keys: manifest.service?.optionalConfigKeys ?? [],
     auth,
     auth_schemes: auth.schemes.map(authSchemeId),
     base_urls: manifest.baseUrls,
@@ -167,6 +168,8 @@ function validateManifest(manifest) {
   if (!manifest.baseUrls?.default) throw new Error(`provider ${manifest.id} is missing baseUrls.default`);
   if (!Object.keys(manifest.endpoints ?? {}).length) throw new Error(`provider ${manifest.id} has no endpoints`);
   if (!(manifest.capabilities ?? []).length) throw new Error(`provider ${manifest.id} has no capabilities`);
+  const configKeys = new Set(manifest.service?.configKeys ?? []);
+  for (const key of manifest.service?.optionalConfigKeys ?? []) if (!configKeys.has(key)) throw new Error(`provider ${manifest.id} optional config key ${key} is not declared in configKeys`);
   for (const capability of manifest.capabilities) {
     if (!manifest.endpoints[capability.endpoint]) throw new Error(`provider ${manifest.id} capability ${capability.id} references missing endpoint ${capability.endpoint}`);
   }

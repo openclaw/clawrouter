@@ -137,7 +137,8 @@ export async function readinessForIdentity(env: Env, auth: AuthorizedIdentity): 
 }
 
 function readinessFor(provider: CompiledProvider, env: Env, grants: GrantRecord[], connection: ProviderConnection, health?: ProviderHealth): Readiness {
-  const optionalConfig = provider.auth.schemes.every((scheme) => scheme.type === "bearer" && scheme.required === false) ? provider.config_keys.filter((key) => secretConfigKey(key)) : [];
+  const configuredOptional = new Set((envValue(env, "CLAWROUTER_OPTIONAL_CONFIG_KEYS") ?? "").split(",").map((key) => key.trim()).filter(Boolean));
+  const optionalConfig = provider.config_keys.filter((key) => provider.optional_config_keys.includes(key) || configuredOptional.has(key) || (provider.auth.schemes.every((scheme) => scheme.type === "bearer" && scheme.required === false) && secretConfigKey(key)));
   const requiredConfig = provider.config_keys.filter((key) => !optionalConfig.includes(key));
   const providerGrants = grants.filter((entry) => entry.grant.enabled !== false && entry.grant.provider === provider.id && grantUsable(entry.grant));
   const hasGrant = providerGrants.length > 0;

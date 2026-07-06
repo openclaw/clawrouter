@@ -23,6 +23,7 @@ service:
   platform: example
   kind: api_provider
   configKeys: [EXAMPLE_API_KEY, EXAMPLE_SITE_URL]
+  optionalConfigKeys: [EXAMPLE_SITE_URL]
 auth:
   schemes:
     - type: bearer
@@ -105,6 +106,9 @@ or from request path params:
 - SigV4 providers are executable with an access/secret key credential bundle in
   a scoped upstream grant plus the manifest-declared region binding. Worker
   access/secret key bindings remain a fallback; session tokens are optional.
+- Declare runtime bindings that do not gate executability in
+  `service.optionalConfigKeys`; every optional key must also appear in
+  `service.configKeys`.
 - Browser OAuth is available only when the manifest declares
   `auth.authorization`, and the provider OAuth client must allow ClawRouter's
   `/v1/oauth/callback` URI.
