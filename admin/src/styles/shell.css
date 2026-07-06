@@ -462,6 +462,16 @@
   }
 }
 
+@media (min-width: 721px) and (max-width: 900px) {
+  .tenantSwitch {
+    grid-template-columns: 30px;
+  }
+
+  .tenantSwitch > div {
+    display: none;
+  }
+}
+
 @media (max-width: 720px) {
   .sidebar {
     grid-template-columns: 1fr;

@@ -15,7 +15,7 @@ export function AppShell() {
   const { value: accessTab, set: setAccessTab } = tab;
   const { adminOverview, tenantSummaries, rows: usageRows, snapshot: usageSnapshot, loaded: usageLoaded } = usage;
   const { form: playground, setForm: setPlayground, turns: playgroundTurns, selectedTurnId: selectedPlaygroundTurnId, setSelectedTurnId: setSelectedPlaygroundTurnId, requestMode, setRequestMode, error: playgroundError, selectedModel, selectedServiceRoute, run: runPlayground, resetConversation } = playgroundDomain;
-  const retentionLabel = session.contentRetention ? session.contentRetention.enabled ? `${session.contentRetention.retentionDays} days` : "off" : "pending";
+  const retentionLabel = session.contentRetention ? session.contentRetention.enabled ? `${session.contentRetention.retentionDays}d` : "off" : "pending";
   return (
     <main className="appShell">
       <aside className="sidebar">
@@ -52,8 +52,7 @@ export function AppShell() {
           <UserAvatar email={session.email} />
           <div>
             <strong>{session.email ?? "not signed in"}</strong>
-            <span>{session.tenantId ?? "default"} · {session.role}</span>
-            <span>Retention {retentionLabel}</span>
+            <span>{session.tenantId ?? "default"} · {session.role} · retention {retentionLabel}</span>
           </div>
         </div>
       </aside>

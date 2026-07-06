@@ -65,6 +65,10 @@ export function UsageScreen({ keys, credentials, services, overview, tenants, us
   const [retainedContent, setRetainedContent] = useState<RetainedRequestContent | null>(null);
   const [contentError, setContentError] = useState("");
   const [contentLoading, setContentLoading] = useState(false);
+  const contentFeedbackRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (contentLoading || contentError || retainedContent) contentFeedbackRef.current?.scrollIntoView({ block: "nearest" });
+  }, [contentError, contentLoading, retainedContent]);
   async function inspectContent(event: UsageAuditEvent) {
     if (!event.content_ref) return;
     setContentLoading(true);
@@ -129,9 +133,11 @@ export function UsageScreen({ keys, credentials, services, overview, tenants, us
         </section>
       </div>
 
-      {contentLoading ? <InlineNote>Loading retained request…</InlineNote> : null}
-      {contentError ? <InlineError message={contentError} /> : null}
-      {retainedContent ? <section className="analyticsPanel retainedContentPanel"><header className="analyticsPanelHeader"><div><span>Request content</span><h2>Retained request</h2><p>{retainedContent.requestId}</p></div><button type="button" className="buttonSecondary" onClick={() => setRetainedContent(null)}>Close</button></header><dl className="facts"><dt>identity</dt><dd>{retainedContent.principalId ?? "credential"}</dd><dt>service</dt><dd>{retainedContent.provider}</dd><dt>expires</dt><dd>{formatTimestamp(retainedContent.expiresAtMs, true)}</dd></dl><pre>{JSON.stringify(retainedContent.body, null, 2)}</pre></section> : null}
+      {contentLoading || contentError || retainedContent ? <div ref={contentFeedbackRef} className="retainedContentFeedback" aria-live="polite">
+        {contentLoading ? <InlineNote>Loading retained request…</InlineNote> : null}
+        {contentError ? <InlineError message={contentError} /> : null}
+        {retainedContent ? <section className="analyticsPanel retainedContentPanel"><header className="analyticsPanelHeader"><div><span>Request content</span><h2>Retained request</h2><p>{retainedContent.requestId}</p></div><button type="button" className="buttonSecondary" onClick={() => setRetainedContent(null)}>Close</button></header><dl className="facts"><dt>identity</dt><dd>{retainedContent.principalId ?? "credential"}</dd><dt>service</dt><dd>{retainedContent.provider}</dd><dt>expires</dt><dd>{formatTimestamp(retainedContent.expiresAtMs, true)}</dd></dl><pre>{JSON.stringify(retainedContent.body, null, 2)}</pre></section> : null}
+      </div> : null}
 
       <section className="analyticsPanel usageTablePanel">
         <div className="tableSectionHeader"><div><strong>Recent requests</strong><span>{usage.events.length} most recent audit events</span></div><span>{usageLoaded ? usage.ledger : "unavailable"}</span></div>
@@ -219,7 +225,7 @@ export function EntityTable({ columns, columnTemplate, rows }: { columns: string
     </div>
   );
 }
-import React, { type FormEvent, useState } from "react";
+import React, { type FormEvent, useEffect, useRef, useState } from "react";
 import { Activity, CalendarDays, KeyRound, Plus, Search, ServerCog, ShieldCheck, Users } from "lucide-react";
 import { bindingKey, effectiveAccess, errorMessage, policyUsageFallback, tenantSummaryFallback } from "../domain";
 import { EntityName, InlineError, InlineNote, InspectorHeader, PanelTitle, Status, kindLabel } from "../components";
