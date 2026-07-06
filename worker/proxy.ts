@@ -27,7 +27,7 @@ interface ProxySelection {
 export async function proxyOpenAi(request: Request, env: Env, context: ExecutionContext, path: string, mode: AuthMode): Promise<Response> {
   const preauthenticated = await preauthenticate(request, env, mode);
   if (preauthenticated instanceof Response) return preauthenticated;
-  const body = await readJson<Record<string, unknown>>(request);
+  const body = requestObject(await readJson<unknown>(request));
   const modelId = typeof body.model === "string" ? body.model : "";
   if (!modelId) return errorResponse("model_required", "model is required", 400);
   const route = modelRoute(modelId);
@@ -48,9 +48,9 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
   if (!provider || !endpoint) return errorResponse("route_not_found", "manifest proxy route not found", 404);
   const preauthenticated = await preauthenticate(request, env, mode, provider.id);
   if (preauthenticated instanceof Response) return preauthenticated;
-  const envelope: { method?: string; pathParams?: Record<string, string>; query?: Record<string, unknown>; body?: Record<string, unknown> } = request.method === "GET" || request.method === "HEAD"
+  const envelope = request.method === "GET" || request.method === "HEAD"
     ? directManifestEnvelope(request, endpoint)
-    : await readJson<{ method?: string; pathParams?: Record<string, string>; query?: Record<string, unknown>; body?: Record<string, unknown> }>(request);
+    : manifestEnvelope(await readJson<unknown>(request));
   const method = (envelope.method ?? endpoint.method).toUpperCase();
   if (!endpoint.methods.includes(method)) return errorResponse("method_not_allowed", `endpoint does not allow ${method}`, 405);
   const body = envelope.body ?? {};
@@ -67,7 +67,7 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
   return response;
 }
 
-function directManifestEnvelope(request: Request, endpoint: CompiledEndpoint) {
+function directManifestEnvelope(request: Request, endpoint: CompiledEndpoint): { method: string; pathParams: Record<string, string>; query: Record<string, unknown>; body: Record<string, unknown> } {
   const query = new URL(request.url).searchParams;
   const pathParams: Record<string, string> = {};
   for (const name of endpoint.path_params) {
@@ -76,6 +76,28 @@ function directManifestEnvelope(request: Request, endpoint: CompiledEndpoint) {
     query.delete(name);
   }
   return { method: request.method, pathParams, query: searchParamsRecord(query), body: {} };
+}
+
+function manifestEnvelope(value: unknown): { method?: string; pathParams: Record<string, string>; query: Record<string, unknown>; body: Record<string, unknown> } {
+  const envelope = requestObject(value, "manifest request");
+  if (envelope.method !== undefined && typeof envelope.method !== "string") throw new HttpError(400, "invalid_request_body", "manifest method must be a string");
+  const pathParams = optionalObject(envelope.pathParams, "manifest pathParams");
+  if (Object.values(pathParams).some((item) => typeof item !== "string")) throw new HttpError(400, "invalid_request_body", "manifest pathParams values must be strings");
+  return {
+    method: envelope.method as string | undefined,
+    pathParams: pathParams as Record<string, string>,
+    query: optionalObject(envelope.query, "manifest query"),
+    body: optionalObject(envelope.body, "manifest body"),
+  };
+}
+
+function optionalObject(value: unknown, label: string): Record<string, unknown> {
+  return value === undefined ? {} : requestObject(value, label);
+}
+
+function requestObject(value: unknown, label = "request body"): Record<string, unknown> {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new HttpError(400, "invalid_request_body", `${label} must be a JSON object`);
+  return value as Record<string, unknown>;
 }
 
 export async function proxyNative(request: Request, env: Env, context: ExecutionContext, path: string): Promise<Response> {
@@ -89,7 +111,7 @@ export async function proxyNative(request: Request, env: Env, context: Execution
   if (!endpoint || !endpoint.native_proxy) return errorResponse("route_not_found", "native provider route not found", 404);
   const method = request.method.toUpperCase();
   if (!endpoint.methods.includes(method)) return errorResponse("method_not_allowed", `endpoint does not allow ${method}`, 405);
-  const body = request.method === "GET" || request.method === "HEAD" ? {} : await readJson<Record<string, unknown>>(request);
+  const body = request.method === "GET" || request.method === "HEAD" ? {} : requestObject(await readJson<unknown>(request));
   const modelId = typeof body.model === "string" ? body.model : null;
   const globalModel = modelId ? modelRoute(modelId) : null;
   if (globalModel && globalModel.provider.id !== provider.id) return errorResponse("model_provider_mismatch", `model ${modelId} does not belong to provider ${provider.id}`, 400);
