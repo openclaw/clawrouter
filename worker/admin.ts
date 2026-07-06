@@ -378,9 +378,22 @@ function validatedGrantResponse(key: string, grant: UpstreamGrant) {
   return { ...grantResponse(key, grant), hasCredential: (typeof grant.credential === "string" && grant.credential.trim().length > 0) || credentialFields.length > 0, credentialFields, ["hasAccess" + "Token"]: accessFlag, ["hasRefresh" + "Token"]: refreshFlag, usable: grant.enabled !== false && grantUsable(grant) };
 }
 
-function normalizeBinding(value: PolicyBinding): PolicyBinding {
-  const principalId = value.principalType === "user" ? normalizeEmail(value.principalId) : value.principalId.trim().toLowerCase();
-  if (!principalId || !cleanId(value.policyId)) throw new HttpError(400, "invalid_policy_binding", "invalid policy binding"); return { ...value, principalId, enabled: value.enabled ?? true, priority: value.priority ?? 100 };
+function normalizeBinding(value: unknown): PolicyBinding {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new HttpError(400, "invalid_policy_binding", "policy binding must be an object");
+  const binding = value as Partial<PolicyBinding>;
+  const principalType = binding.principalType;
+  if (principalType !== "user" && principalType !== "group") throw new HttpError(400, "invalid_policy_binding", "principalType must be user or group");
+  if (typeof binding.principalId !== "string") throw new HttpError(400, "invalid_policy_binding", "principalId must be a string");
+  const principalId = principalType === "user" ? normalizeEmail(binding.principalId) : binding.principalId.trim().toLowerCase();
+  if (!principalId) throw new HttpError(400, "invalid_policy_binding", "principalId is invalid");
+  if (typeof binding.policyId !== "string") throw new HttpError(400, "invalid_policy_binding", "policyId must be a string");
+  const policyId = cleanId(binding.policyId);
+  if (!policyId) throw new HttpError(400, "invalid_policy_binding", "policyId is invalid");
+  const enabled = binding.enabled === undefined ? true : binding.enabled;
+  if (typeof enabled !== "boolean") throw new HttpError(400, "invalid_policy_binding", "enabled must be a boolean");
+  const priority = binding.priority === undefined ? 100 : binding.priority;
+  if (!Number.isSafeInteger(priority) || (priority as number) < 0) throw new HttpError(400, "invalid_policy_binding", "priority must be a non-negative safe integer");
+  return { policyId, principalType, principalId, enabled, priority: priority as number };
 }
 function normalizeGrant(value: UpstreamGrant, existing: UpstreamGrant | null): UpstreamGrant {
   const now = nowIso(), grant = { ...existing, ...value, version: 1, enabled: value.enabled ?? true, kind: value.kind ?? "oauth", tokenType: value.tokenType ?? "Bearer", scopes: value.scopes ?? [], credentials: value.credentials ?? existing?.credentials ?? {}, createdAt: existing?.createdAt ?? now, updatedAt: now, revokedAt: null };

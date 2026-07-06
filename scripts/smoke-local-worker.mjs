@@ -151,6 +151,31 @@ try {
     assert.equal(invalidPolicy.status, 400, `malformed policy ${policyId} is rejected`);
     assert.equal((await invalidPolicy.json()).error.code, "invalid_policy");
   }
+  const normalizedBinding = await fetch(`${base}/v1/admin/policy-bindings`, { method: "PUT", headers: userHeaders, body: JSON.stringify({ policyId: " migrate ", principalType: "group", principalId: " Members ", priority: 10, ignored: true }) });
+  assert.equal(normalizedBinding.status, 200);
+  assert.deepEqual(await normalizedBinding.json(), { policyId: "migrate", principalType: "group", principalId: "members", enabled: true, priority: 10 });
+  for (const [bindingId, body] of [
+    ["invalid_null_body", null],
+    ["invalid_array_body", []],
+    ["invalid_principal_type", { policyId: "migrate", principalType: "service", principalId: "bot" }],
+    ["invalid_principal_id", { policyId: "migrate", principalType: "group", principalId: {} }],
+    ["invalid_user_email", { policyId: "migrate", principalType: "user", principalId: "not-an-email" }],
+    ["invalid_empty_group", { policyId: "migrate", principalType: "group", principalId: "   " }],
+    ["invalid_policy_id", { policyId: {}, principalType: "group", principalId: "members" }],
+    ["invalid_enabled", { policyId: "migrate", principalType: "group", principalId: "members", enabled: "false" }],
+    ["invalid_null_enabled", { policyId: "migrate", principalType: "group", principalId: "members", enabled: null }],
+    ["invalid_priority", { policyId: "migrate", principalType: "group", principalId: "members", priority: -1 }],
+    ["invalid_fractional_priority", { policyId: "migrate", principalType: "group", principalId: "members", priority: 1.5 }],
+    ["invalid_string_priority", { policyId: "migrate", principalType: "group", principalId: "members", priority: "10" }],
+  ]) {
+    const invalidBinding = await fetch(`${base}/v1/admin/policy-bindings`, { method: "PUT", headers: userHeaders, body: JSON.stringify(body) });
+    assert.equal(invalidBinding.status, 400, `malformed policy binding ${bindingId} is rejected`);
+    assert.equal((await invalidBinding.json()).error.code, "invalid_policy_binding");
+  }
+  const bindingsAfterInvalid = await fetch(`${base}/v1/admin/policy-bindings`, { headers: userHeaders });
+  assert.equal(bindingsAfterInvalid.status, 200);
+  const retainedBinding = (await bindingsAfterInvalid.json()).bindings.find((binding) => binding.principalType === "group" && binding.principalId === "members" && binding.policyId === "migrate");
+  assert.deepEqual(retainedBinding, { policyId: "migrate", principalType: "group", principalId: "members", enabled: true, priority: 10 }, "rejected binding payloads do not overwrite the stored canonical binding");
   console.log(`local Worker smoke passed on ${base}`);
 } catch (error) {
   throw new Error(`${error instanceof Error ? error.message : String(error)}\nwrangler output:\n${output}`);

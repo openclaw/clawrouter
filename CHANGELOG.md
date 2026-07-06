@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Validate and canonicalize policy-binding principals, flags, and priorities before persistence.
 - Validate policy wildcard, provider, boolean, and metadata shapes before granting access.
 - Validate assignment-rule kinds, collections, booleans, and priorities before persisting them.
 - Reject upstream grants for providers absent from the compiled catalog.
