@@ -8,10 +8,12 @@ import {
 } from "./assignments";
 import { contentKey } from "./content-retention";
 import { grantUsable, validCredentialBundle } from "./grant-selection";
-import { loadFusionConfig, storeFusionConfig } from "./fusion-config";
-import { usageSnapshots } from "./ledgers";
+import { assertFusionModels, loadFusionConfig, storeFusionConfig } from "./fusion-config";
+import { fusionReadiness } from "./fusion-readiness";
+import { normalizeFusionConfig } from "./fusion";
+import { budgetStatus as policyBudgetStatus, usageSnapshots } from "./ledgers";
 import { startOAuth } from "./oauth";
-import { listGrantRecords, listHealth, providerReadiness, providerReadinessFromState, refreshStoredGrant, snapshot } from "./providers";
+import { endpointForPath, listGrantRecords, listHealth, modelRoute, providerReadiness, providerReadinessForPolicies, providerReadinessFromState, refreshStoredGrant, snapshot } from "./providers";
 import type { AdminBootstrapResponse } from "../shared/contracts";
 import type {
   AccessControlUser, AccessPolicy, AccessPolicyEntry, AssignmentRule, Env, PolicyBinding,
@@ -43,6 +45,7 @@ export async function adminApi(request: Request, env: Env, path: string): Promis
 
     if (path === "/v1/admin/policy-bindings" && request.method === "PUT") return putBinding(request, env);
     if (path === "/v1/admin/assignment-rules/reconcile" && request.method === "POST") return reconcileAssignments(request, env);
+    if (path === "/v1/admin/fusion/preview" && request.method === "POST") return previewFusion(request, env);
     if (path === "/v1/admin/fusion" && request.method === "PUT") return privateJson(await storeFusionConfig(env, await readJson<unknown>(request)));
     if (path.startsWith("/v1/admin/assignment-rules/") && request.method === "PUT") return putAssignmentRule(request, env, path.slice("/v1/admin/assignment-rules/".length));
     if (path.startsWith("/v1/admin/access-user-grants/") && request.method === "PUT") return putUserGrants(request, env, path.slice("/v1/admin/access-user-grants/".length));
@@ -59,6 +62,30 @@ export async function adminApi(request: Request, env: Env, path: string): Promis
     console.error("admin request failed", error instanceof Error ? error.message : String(error));
     return errorResponse("admin_error", "admin request failed", 500);
   }
+}
+
+async function previewFusion(request: Request, env: Env): Promise<Response> {
+  const value = await readJson<unknown>(request);
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new HttpError(400, "fusion_preview_invalid", "fusion readiness preview must be a JSON object");
+  const input = value as { policyId?: unknown; config?: unknown };
+  const policyId = typeof input.policyId === "string" ? cleanId(input.policyId) : null;
+  if (!policyId) throw new HttpError(400, "fusion_policy_required", "a policy is required to preview fusion readiness");
+  const entry = (await listPolicies(env)).find((candidate) => candidate.policyId === policyId);
+  if (!entry) throw new HttpError(404, "fusion_policy_not_found", "fusion readiness policy was not found");
+  const config = normalizeFusionConfig(input.config);
+  assertFusionModels(config);
+  const [readiness, budget] = await Promise.all([providerReadinessForPolicies(env, [entry]), policyBudgetStatus(env, entry.policyId, entry.policy)]);
+  const routes = [...config.adviserModels, config.aggregatorModel].map((modelId) => {
+    const route = modelRoute(modelId)!;
+    return {
+      modelId,
+      providerId: route.provider.id,
+      providerDisplayName: route.provider.display_name,
+      endpointId: endpointForPath(route.provider, "/v1/chat/completions")!.id,
+      model: route.model,
+    };
+  });
+  return privateJson(fusionReadiness(config, entry, readiness, routes, budget));
 }
 
 async function getContent(request: Request, env: Env): Promise<Response> {

@@ -119,6 +119,122 @@
   line-height: 1.45;
 }
 
+.fusionReadiness {
+  margin: 0 16px 16px;
+  border: 1px solid var(--line-strong);
+  background: var(--panel);
+}
+
+.fusionReadiness-empty {
+  display: grid;
+  gap: 4px;
+  padding: 14px;
+  color: var(--muted);
+  font-size: 11px;
+}
+
+.fusionReadiness-empty strong {
+  color: var(--ink);
+}
+
+.fusionReadinessHeader,
+.fusionReadinessEstimate {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 12px 14px;
+}
+
+.fusionReadinessHeader {
+  border-bottom: 1px solid var(--line);
+}
+
+.fusionReadinessHeader > div {
+  display: grid;
+  gap: 3px;
+}
+
+.fusionReadinessHeader strong,
+.fusionReadinessEstimate strong {
+  color: var(--ink);
+  font-size: 11px;
+}
+
+.fusionReadinessHeader span,
+.fusionReadinessEstimate span,
+.fusionReadinessEstimate small {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.fusionReadinessHeader code,
+.fusionReadinessCalls strong {
+  font-family: var(--font-mono);
+}
+
+.fusionReadinessCalls {
+  display: grid;
+  gap: 1px;
+  background: var(--line);
+}
+
+.fusionReadinessCalls article {
+  display: grid;
+  grid-template-columns: 44px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 10px;
+  padding: 10px 14px;
+  background: var(--panel);
+}
+
+.fusionReadinessCalls article > span,
+.fusionReadinessCalls article > b {
+  color: var(--faint);
+  font-family: var(--font-mono);
+  font-size: 9px;
+}
+
+.fusionReadinessCalls article.ready > span {
+  color: var(--ok);
+}
+
+.fusionReadinessCalls article.blocked > span,
+.fusionReadinessCalls article.blocked em {
+  color: var(--bad);
+}
+
+.fusionReadinessCalls article > div {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+}
+
+.fusionReadinessCalls strong {
+  overflow: hidden;
+  color: var(--ink);
+  font-size: 10px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.fusionReadinessCalls small,
+.fusionReadinessCalls em {
+  color: var(--muted);
+  font-size: 9px;
+  font-style: normal;
+}
+
+.fusionReadinessEstimate {
+  display: grid;
+  grid-template-columns: 1fr auto;
+  border-top: 1px solid var(--line);
+}
+
+.fusionReadinessEstimate small {
+  grid-column: 1 / -1;
+}
+
 .fusionInspector textarea {
   min-height: 92px;
   font-family: var(--font-mono);
@@ -148,7 +264,8 @@
   }
 
   .fusionTopology,
-  .fusionPrinciples {
+  .fusionPrinciples,
+  .fusionReadiness {
     margin-inline: 10px;
   }
 }

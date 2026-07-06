@@ -1,4 +1,4 @@
-export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selectedCredential, bindings, selectedBinding, upstreamGrants, selectedUpstreamGrant, assignmentRules, selectedAssignmentRule, fusionConfig, setFusionConfig, fusionModels, providers, form, setForm, credentialForm, setCredentialForm, bindingForm, setBindingForm, upstreamGrantForm, setUpstreamGrantForm, assignmentRuleForm, setAssignmentRuleForm, issuedKey, error, fusionError, onSave, onIssueCredential, onRevokeCredential, onSaveBinding, onSaveUpstreamGrant, onRevokeUpstreamGrant, onRefreshUpstreamGrant, onAuthorizeUpstreamGrant, onSaveAssignmentRule, onReconcileAssignments, onSaveFusion, onNew, onEdit, onEditCredential, onEditBinding, onNewBinding, onEditUpstreamGrant, onNewUpstreamGrant, onEditAssignmentRule, onNewAssignmentRule, onRevoke, onPreset, onToggleProvider, onSetProviderGroup, busy }: {
+export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selectedCredential, bindings, selectedBinding, upstreamGrants, selectedUpstreamGrant, assignmentRules, selectedAssignmentRule, fusionConfig, fusionReadiness, fusionPolicyId, onSelectFusionPolicy, setFusionConfig, fusionModels, providers, form, setForm, credentialForm, setCredentialForm, bindingForm, setBindingForm, upstreamGrantForm, setUpstreamGrantForm, assignmentRuleForm, setAssignmentRuleForm, issuedKey, error, fusionError, onSave, onIssueCredential, onRevokeCredential, onSaveBinding, onSaveUpstreamGrant, onRevokeUpstreamGrant, onRefreshUpstreamGrant, onAuthorizeUpstreamGrant, onSaveAssignmentRule, onReconcileAssignments, onSaveFusion, onCheckFusion, onNew, onEdit, onEditCredential, onEditBinding, onNewBinding, onEditUpstreamGrant, onNewUpstreamGrant, onEditAssignmentRule, onNewAssignmentRule, onRevoke, onPreset, onToggleProvider, onSetProviderGroup, busy }: {
   tab: AccessTab;
   setTab: (tab: AccessTab) => void;
   keys: AccessPolicy[];
@@ -12,6 +12,9 @@ export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selec
   assignmentRules: AssignmentRule[];
   selectedAssignmentRule?: AssignmentRule;
   fusionConfig: FusionConfig;
+  fusionReadiness: FusionReadiness | null;
+  fusionPolicyId: string;
+  onSelectFusionPolicy: (policyId: string) => void;
   setFusionConfig: React.Dispatch<React.SetStateAction<FusionConfig>>;
   fusionModels: CatalogModel[];
   providers: ProviderRow[];
@@ -39,6 +42,7 @@ export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selec
   onSaveAssignmentRule: (event: FormEvent) => void;
   onReconcileAssignments: () => void;
   onSaveFusion: (event: FormEvent) => void;
+  onCheckFusion: () => void;
   onNew: () => void;
   onEdit: (policy: AccessPolicy) => void;
   onEditCredential: (credential: ProxyCredential) => void;
@@ -73,17 +77,22 @@ export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selec
       {tab === "bindings" ? <BindingPanel policies={keys} bindings={bindings} selected={selectedBinding} form={bindingForm} setForm={setBindingForm} error={error} onSave={onSaveBinding} onEdit={onEditBinding} onNew={onNewBinding} busy={busy} /> : null}
       {tab === "upstream" ? <UpstreamGrantPanel policies={keys} providers={providers} grants={upstreamGrants} selected={selectedUpstreamGrant} form={upstreamGrantForm} setForm={setUpstreamGrantForm} error={error} onSave={onSaveUpstreamGrant} onEdit={onEditUpstreamGrant} onNew={onNewUpstreamGrant} onRefresh={onRefreshUpstreamGrant} onAuthorize={onAuthorizeUpstreamGrant} onRevoke={onRevokeUpstreamGrant} busy={busy} /> : null}
       {tab === "assignments" ? <AssignmentRulePanel policies={keys} rules={assignmentRules} selected={selectedAssignmentRule} form={assignmentRuleForm} setForm={setAssignmentRuleForm} error={error} onSave={onSaveAssignmentRule} onEdit={onEditAssignmentRule} onNew={onNewAssignmentRule} onReconcile={onReconcileAssignments} busy={busy} /> : null}
-      {tab === "fusion" ? <FusionPanel config={fusionConfig} setConfig={setFusionConfig} models={fusionModels} error={fusionError} onSave={onSaveFusion} busy={busy} /> : null}
+      {tab === "fusion" ? <FusionPanel config={fusionConfig} readiness={fusionReadiness} policies={keys} policyId={fusionPolicyId} onSelectPolicy={onSelectFusionPolicy} setConfig={setFusionConfig} models={fusionModels} error={fusionError} onSave={onSaveFusion} onCheck={onCheckFusion} busy={busy} /> : null}
     </div>
   );
 }
 
-export function FusionPanel({ config, setConfig, models, error, onSave, busy }: {
+export function FusionPanel({ config, readiness, policies, policyId, onSelectPolicy, setConfig, models, error, onSave, onCheck, busy }: {
   config: FusionConfig;
+  readiness: FusionReadiness | null;
+  policies: AccessPolicy[];
+  policyId: string;
+  onSelectPolicy: (policyId: string) => void;
   setConfig: React.Dispatch<React.SetStateAction<FusionConfig>>;
   models: CatalogModel[];
   error: string;
   onSave: (event: FormEvent) => void;
+  onCheck: () => void;
   busy: boolean;
 }) {
   const choices = models.filter((model) => model.id !== config.modelId);
@@ -111,12 +120,14 @@ export function FusionPanel({ config, setConfig, models, error, onSave, busy }: 
           <article><strong>Fail-open advisers</strong><p>Unavailable advisers are omitted; the configured synthesizer still answers.</p></article>
           <article><strong>Tool-safe</strong><p>Tool definitions stay out of adviser requests and remain available to the final model.</p></article>
         </div>
+        <FusionReadinessPanel readiness={readiness} />
       </section>
       <aside className="inspector wideInspector fusionInspector">
         <form onSubmit={onSave}>
           <InspectorHeader icon={ServerCog} title="Configure fusion" subtitle="one sparse adviser layer + one final synthesizer" />
           {error ? <InlineError message={error} /> : null}
           <div className="formGrid compact">
+            <label className="full"><span>readiness policy</span><select value={policyId} onChange={(event) => onSelectPolicy(event.target.value)}>{policies.map((policy) => <option key={policy.policyId} value={policy.policyId}>{policy.policyId}{policy.enabled ? "" : " · disabled"}</option>)}</select></label>
             <label className="full"><span>state</span><select value={config.enabled ? "enabled" : "disabled"} onChange={(event) => setConfig((current) => ({ ...current, enabled: event.target.value === "enabled" }))}><option value="enabled">enabled · advertise model</option><option value="disabled">disabled</option></select></label>
             <label className="full"><span>final synthesizer</span><input list="fusion-model-options" value={config.aggregatorModel} onChange={(event) => setConfig((current) => ({ ...current, aggregatorModel: event.target.value }))} placeholder="openai/gpt-4.1-mini" /></label>
             <label className="full"><span>adviser models · one per line, maximum four</span><textarea value={config.adviserModels.join("\n")} onChange={(event) => setConfig((current) => ({ ...current, adviserModels: event.target.value.split(/[\n,]+/).map((model) => model.trim()).filter(Boolean).slice(0, 4) }))} placeholder={"local/qwen3:8b\nopenai/gpt-4.1-mini"} /></label>
@@ -128,10 +139,30 @@ export function FusionPanel({ config, setConfig, models, error, onSave, busy }: 
             <label className="full"><span>adviser temperature</span><input type="number" min="0" max="2" step="0.1" value={config.temperature} onChange={(event) => setConfig((current) => ({ ...current, temperature: Number(event.target.value) }))} /></label>
           </div>
           <InlineNote><code>local/*</code> targets the Local OpenAI-compatible provider. A hosted Cloudflare Worker cannot reach your laptop&apos;s loopback address; configure a network-reachable endpoint, or run ClawRouter locally with Ollama/LM Studio.</InlineNote>
-          <div className="inspectorActions"><button type="submit" disabled={busy || !config.aggregatorModel.trim() || !config.adviserModels.length}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save fusion model</span></button></div>
+          <div className="inspectorActions"><button type="button" className="buttonSecondary" disabled={busy || !policyId || !config.aggregatorModel.trim()} onClick={onCheck}><RefreshCw className="buttonIcon" aria-hidden="true" /><span>Check readiness</span></button><button type="submit" disabled={busy || !policyId || !config.aggregatorModel.trim() || !config.adviserModels.length}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save fusion model</span></button></div>
         </form>
       </aside>
     </div>
+  );
+}
+
+function FusionReadinessPanel({ readiness }: { readiness: FusionReadiness | null }) {
+  if (!readiness) return <div className="fusionReadiness fusionReadiness-empty"><strong>Readiness pending</strong><span>Select a policy and check the draft profile before enabling it.</span></div>;
+  return (
+    <section className="fusionReadiness" aria-label="Fusion readiness">
+      <div className="fusionReadinessHeader">
+        <div><strong>Policy preflight</strong><span><code>{readiness.policyId}</code> · {readiness.readyAdviserCount}/{readiness.adviserCount} advisers executable · {readiness.callCount} maximum calls</span></div>
+        <Status label={readiness.executable ? readiness.advertisable ? "ready" : "executable" : "blocked"} tone={readiness.executable ? "active" : "revoked"} />
+      </div>
+      <div className="fusionReadinessCalls">
+        {readiness.calls.map((call) => <article key={`${call.stage}-${call.index ?? "final"}`} className={call.executable ? "ready" : "blocked"}>
+          <span>{call.stage === "synthesizer" ? "FINAL" : `A${call.index}`}</span>
+          <div><strong>{call.model}</strong><small>{call.provider} · {call.status}</small>{call.reasons.map((reason) => <em key={reason}>{reason}</em>)}</div>
+          <b>{formatMicros(call.estimatedReservationMicros)}</b>
+        </article>)}
+      </div>
+      <div className="fusionReadinessEstimate"><span>Eligible-call reservation</span><strong>{formatMicros(readiness.estimatedReservationMicros)}</strong><small>{readiness.estimateNote} {readiness.budgetConfigured ? `${readiness.remainingBudgetMicros == null ? "Budget unavailable" : `${formatMicros(readiness.remainingBudgetMicros)} remains`}${readiness.budgetSufficientForAll === false ? "; not enough for every eligible call" : ""}.` : "Policy is unmetered."}</small></div>
+    </section>
   );
 }
 
@@ -434,6 +465,6 @@ import { CircleSlash2, KeyRound, LogIn, Plus, RefreshCw, Search, ServerCog, Shie
 import { bindingKey, type CatalogModel } from "../domain";
 import { EntityName, InlineError, InlineNote, InspectorHeader, Status, kindLabel } from "../components";
 import { rolePresets } from "../ui-config";
-import { credentialOutcome, groupedProviders } from "../ui-helpers";
+import { credentialOutcome, formatMicros, groupedProviders } from "../ui-helpers";
 import { EntityTable, Metric } from "./users-usage";
-import type { AccessForm,AccessPolicy,AccessRole,AccessTab,AccessUser,AdminOverview,AdminTenantSummary,AdminUsageRow,AssignmentRule,AssignmentRuleForm,BindingForm,BrandIcon,BudgetStatus,ContentRetention,CredentialForm,EntitlementsResponse,FusionConfig,IconComponent,OutcomeTone,PlaygroundForm,PlaygroundHttpResponse,PlaygroundTurn,PolicyBinding,PolicyForm,ProviderAccess,ProviderConnection,ProviderReadiness,ProviderResponse,ProviderRow,ProviderUsageSummary,ProxyCredential,RefreshOptions,RetainedRequestContent,RouteCatalog,ServiceItem,ServiceOutcome,SessionResponse,UpstreamGrant,UpstreamGrantForm,UsageAuditEvent,UsageSnapshot,UsageSummary,View } from "../ui-types";
+import type { AccessForm,AccessPolicy,AccessRole,AccessTab,AccessUser,AdminOverview,AdminTenantSummary,AdminUsageRow,AssignmentRule,AssignmentRuleForm,BindingForm,BrandIcon,BudgetStatus,ContentRetention,CredentialForm,EntitlementsResponse,FusionConfig,FusionReadiness,IconComponent,OutcomeTone,PlaygroundForm,PlaygroundHttpResponse,PlaygroundTurn,PolicyBinding,PolicyForm,ProviderAccess,ProviderConnection,ProviderReadiness,ProviderResponse,ProviderRow,ProviderUsageSummary,ProxyCredential,RefreshOptions,RetainedRequestContent,RouteCatalog,ServiceItem,ServiceOutcome,SessionResponse,UpstreamGrant,UpstreamGrantForm,UsageAuditEvent,UsageSnapshot,UsageSummary,View } from "../ui-types";

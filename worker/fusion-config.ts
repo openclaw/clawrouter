@@ -24,7 +24,7 @@ export async function storeFusionConfig(env: Env, input: unknown): Promise<Fusio
   return config;
 }
 
-function assertFusionModels(config: FusionConfig): void {
+export function assertFusionModels(config: FusionConfig): void {
   for (const model of [...config.adviserModels, config.aggregatorModel]) {
     if (model === FUSION_MODEL_ID) throw new HttpError(400, "fusion_recursive_model", "fusion cannot use itself as an adviser or aggregator");
     const route = modelRoute(model);

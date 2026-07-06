@@ -67,6 +67,17 @@ before advisers run, so an unfunded final answer fails without adviser spend.
 Unavailable advisers fail open; if every adviser fails, the synthesizer
 answers the original request by itself.
 
+The web console checks an unsaved profile against one selected policy before
+enabling it. `POST /v1/admin/fusion/preview` accepts a policy id and draft
+configuration, then reports every adviser and synthesizer route, policy access,
+executable and recently verified state, maximum call count, and a reservation
+estimate. The preflight also rejects deterministic pricing, exhausted-budget,
+and synthesizer-reservation failures before adviser fan-out. Fixed per-request
+policy pricing makes each eligible call's configured price exact, although
+fail-open adviser reservations can still be lower. Otherwise adviser bounds are
+exact while the synthesizer uses the manifest maximum input and default output;
+live request preflight remains authoritative when callers request more output.
+
 Each adviser and the synthesizer is a separate normal ClawRouter request. The
 caller's policy must grant all providers that should participate. Budgets are
 reserved and usage is recorded per subrequest, so a two-adviser fusion request
