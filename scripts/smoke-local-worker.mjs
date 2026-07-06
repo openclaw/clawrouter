@@ -123,6 +123,16 @@ try {
   assert.equal((await fetch(ruleUrl, { method: "PUT", headers: userHeaders, body: JSON.stringify({ ...rule, enabled: false }) })).status, 200);
   const secondReconcile = await fetch(`${base}/v1/admin/assignment-rules/reconcile`, { method: "POST", headers: userHeaders, body: JSON.stringify({ email: "member@example.com" }) });
   assert.deepEqual((await secondReconcile.json()).results[0].groups, ["manual"]);
+  for (const [ruleId, body] of [
+    ["invalid_kind", { ...rule, kind: "unsupported" }],
+    ["invalid_groups", { ...rule, groups: "members" }],
+    ["invalid_priority", { ...rule, priority: -1 }],
+    ["invalid_enabled", { ...rule, enabled: "yes" }],
+  ]) {
+    const invalidRule = await fetch(`${base}/v1/admin/assignment-rules/${ruleId}`, { method: "PUT", headers: userHeaders, body: JSON.stringify(body) });
+    assert.equal(invalidRule.status, 400, `malformed assignment rule ${ruleId} is rejected`);
+    assert.equal((await invalidRule.json()).error.code, "invalid_assignment_rule");
+  }
   for (const invalidBudget of [-1, 1.5, Number.MAX_SAFE_INTEGER + 1]) {
     const invalidPolicy = await fetch(`${base}/v1/admin/policies/invalid-budget`, { method: "PUT", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" }, body: JSON.stringify({ providers: ["openai"], monthlyBudgetMicros: invalidBudget }) });
     assert.equal(invalidPolicy.status, 400);
