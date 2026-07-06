@@ -75,7 +75,7 @@ export async function sha256Hex(value: string): Promise<string> {
 
 export function parseBearer(headers: Headers): string | null {
   const value = headers.get("authorization");
-  return value?.startsWith("Bearer ") ? value.slice(7).trim() : null;
+  return value?.match(/^Bearer[ \t]+(.+)$/i)?.[1].trim() || null;
 }
 
 export function parseProxyKey(input: string): { mode: "live" | "test"; kid: string; secret: string } | null {
