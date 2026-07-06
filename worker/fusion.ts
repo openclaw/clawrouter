@@ -109,6 +109,12 @@ export async function collectFusionProposals(config: FusionConfig, original: Rec
   };
 }
 
+export function buildFusionReservationProposals(config: FusionConfig): FusionProposal[] {
+  // JSON escapes NUL as six ASCII bytes, the maximum expansion per UTF-16 code unit.
+  const content = "\0".repeat(config.maxProposalChars);
+  return config.adviserModels.map((model) => ({ model, content }));
+}
+
 export function buildLocalMessages(messages: ChatMessage[], maxInputChars: number): ChatMessage[] {
   const normalized = messages.flatMap((message) => {
     const content = contentText(message.content);

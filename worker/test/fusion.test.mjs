@@ -4,6 +4,7 @@ import {
   FUSION_MODEL_ID,
   buildAdviserBody,
   buildAggregatorBody,
+  buildFusionReservationProposals,
   buildLocalMessages,
   collectFusionProposals,
   normalizeFusionConfig,
@@ -76,3 +77,22 @@ test("fusion runs advisers concurrently, tolerates failures, and injects untrust
   const reasoningConfig = normalizeFusionConfig({ aggregatorModel: "openai/gpt-5.4" });
   assert.equal(buildAggregatorBody({ messages: [], temperature: 0.7 }, reasoningConfig, []).temperature, undefined);
 });
+
+test("fusion reservation proposals cover worst-case JSON encoding", () => {
+  const config = normalizeFusionConfig({ adviserModels: ["local/adviser"], maxProposalChars: 256 });
+  const original = { messages: [{ role: "user", content: "solve" }] };
+  const reservedBytes = encodedBytes(buildAggregatorBody(original, config, buildFusionReservationProposals(config)));
+  for (const content of [
+    "\0".repeat(256),
+    "\\\"\n\r\t".repeat(51).slice(0, 256),
+    "😀".repeat(128),
+    "é".repeat(256),
+  ]) {
+    const actualBytes = encodedBytes(buildAggregatorBody(original, config, [{ model: "local/adviser", content }]));
+    assert.ok(actualBytes <= reservedBytes, `${actualBytes} exceeds ${reservedBytes}`);
+  }
+});
+
+function encodedBytes(value) {
+  return new TextEncoder().encode(JSON.stringify(value)).byteLength;
+}

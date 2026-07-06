@@ -3,7 +3,7 @@ import { finalizeAccounting, reserveBudget, type BudgetReservation, type Estimat
 import { resolveCredentials, resolvePolicies, resolveUsers } from "./authority";
 import { retainRequestContent } from "./content-retention";
 import {
-  FUSION_MODEL_ID, buildAggregatorBody, collectFusionProposals,
+  FUSION_MODEL_ID, buildAggregatorBody, buildFusionReservationProposals, collectFusionProposals,
 } from "./fusion";
 import { loadFusionConfig } from "./fusion-config";
 import {
@@ -99,8 +99,7 @@ async function proxyFusion(
 ): Promise<Response> {
   const config = await loadFusionConfig(env);
   if (!config.enabled) return errorResponse("fusion_disabled", `${FUSION_MODEL_ID} is not enabled`, 404);
-  const maximumProposals = config.adviserModels.map((model) => ({ model, content: "x".repeat(config.maxProposalChars) }));
-  const aggregatorSelection = concreteOpenAiSelection("/v1/chat/completions", buildAggregatorBody(body, config, maximumProposals), env);
+  const aggregatorSelection = concreteOpenAiSelection("/v1/chat/completions", buildAggregatorBody(body, config, buildFusionReservationProposals(config)), env);
   if (aggregatorSelection instanceof Response) return aggregatorSelection;
   const aggregatorBudget = await reserveSelected(request, env, context, mode, aggregatorSelection, preauthenticated);
   if (aggregatorBudget instanceof Response) return aggregatorBudget;
