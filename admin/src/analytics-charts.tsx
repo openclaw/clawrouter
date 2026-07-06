@@ -65,7 +65,7 @@ export function TrafficAreaChart({ usage, compact = false }: { usage: UsageSnaps
           <path className="chartLine" d={line} />
           {points.map((point, index) => point.errorCount ? <circle className="chartErrorPoint" key={point.dayStartMs} cx={x(index)} cy={y(point.requestCount)} r={compact ? 2.2 : 2.8}><title>{`${point.errorCount} errors on ${formatChartDay(point.dayStartMs, true)}`}</title></circle> : null)}
         </> : null}
-        {points.map((point, index) => <rect key={point.dayStartMs} className="chartHitTarget" x={x(index) - chartWidth / points.length / 2} y={inset.top} width={chartWidth / points.length} height={chartHeight} onMouseEnter={() => setActiveIndex(index)} onClick={() => setActiveIndex(index)} />)}
+        {trendAvailable && hasTraffic ? points.map((point, index) => <rect key={point.dayStartMs} className="chartHitTarget" x={x(index) - chartWidth / points.length / 2} y={inset.top} width={chartWidth / points.length} height={chartHeight} onMouseEnter={() => setActiveIndex(index)} onClick={() => setActiveIndex(index)} />) : null}
         {selected ? <g className="chartFocus" pointerEvents="none">
           <line x1={selectedX} x2={selectedX} y1={inset.top} y2={inset.top + chartHeight} />
           <circle cx={selectedX} cy={y(selected.requestCount)} r="4" />

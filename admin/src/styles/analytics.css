@@ -792,14 +792,11 @@
 }
 
 @media (max-width: 760px) {
-  .workspace {
-    padding: 0 10px 16px;
-  }
-
   .dashboardCanvas,
   .usageCanvas {
     gap: 12px;
-    margin-top: 12px;
+    margin: 12px 10px 0;
+    padding-bottom: 16px;
   }
 
   .dashboardOverviewHeader,
