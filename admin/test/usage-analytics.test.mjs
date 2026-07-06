@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { niceChartMaximum, usageDayMs, usageTimeline } from "../src/usage-analytics.ts";
+import { niceChartMaximum, syntheticUsageTimeline, usageDayMs, usageTimeline } from "../src/usage-analytics.ts";
 
 const summary = { requestCount: 10, successCount: 9, errorCount: 1, inputTokens: 80, outputTokens: 20, totalTokens: 100, actualCostMicros: 500 };
 
@@ -37,4 +37,14 @@ test("chart maximum rounds to readable tick intervals", () => {
   assert.equal(niceChartMaximum(1), 4);
   assert.equal(niceChartMaximum(11), 16);
   assert.equal(niceChartMaximum(1_284), 1_600);
+});
+
+test("synthetic usage timelines preserve their scoped summary totals", () => {
+  const timeline = syntheticUsageTimeline(Date.UTC(2026, 5, 24, 18), summary);
+  assert.equal(timeline.length, 30);
+  assert.equal(timeline.reduce((total, point) => total + point.requestCount, 0), summary.requestCount);
+  assert.equal(timeline.reduce((total, point) => total + point.successCount, 0), summary.successCount);
+  assert.equal(timeline.reduce((total, point) => total + point.errorCount, 0), summary.errorCount);
+  assert.equal(timeline.reduce((total, point) => total + point.totalTokens, 0), summary.totalTokens);
+  assert.equal(timeline.reduce((total, point) => total + point.actualCostMicros, 0), summary.actualCostMicros);
 });
