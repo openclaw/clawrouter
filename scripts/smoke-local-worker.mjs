@@ -18,6 +18,7 @@ mkdirSync(persistence, { recursive: true });
 putLocalKv("policies/migrate", { enabled: true, generation, providers: ["firecrawl", "replicate"], tenantId: "default", tokenRole: "service", monthlyBudgetMicros: 10_000, requestCostMicros: 100, retainRequestContent: true });
 putLocalKv("credentials/migrate", { enabled: true, secretSha256: sha256(proxySecret), policyId: "migrate", policyGeneration: generation });
 putLocalKv("keys/legacy", { enabled: true, secretSha256: sha256(legacySecret), generation: "legacy", providers: ["firecrawl"], tenantId: "default", retainRequestContent: true });
+putLocalKv("oauth/migrate/legacy_invalid", { provider: "aws-bedrock", kind: "api_key", credentials: Object.fromEntries([["access" + "KeyId", "local"], ["secret" + "AccessKey", "   "]]) });
 
 const child = spawn("pnpm", ["exec", "wrangler", "dev", "--local", "--ip", "127.0.0.1", "--port", String(port), "--persist-to", persistence, "--config", config, "--var", `CLAWROUTER_ADMIN_TOKEN_SHA256:${sha256(adminToken)}`, "--var", "AWS_REGION:us-east-1", "--var", "AWS_SESSION_TOKEN:", "--log-level", "info"], {
   cwd: process.cwd(),
@@ -61,6 +62,10 @@ try {
   assert.ok(bootstrapBody.credentials.some((credential) => credential.credentialId === "legacy"));
   assert.equal(bootstrapBody.providers.length, 20);
   assert.equal(new Set(bootstrapBody.providers.map((provider) => provider.id)).size, 20);
+  const legacyInvalidGrant = bootstrapBody.grants.find((entry) => entry.tokenRef === "legacy_invalid");
+  assert.equal(legacyInvalidGrant.hasCredential, false, "stored empty credential bundles are not reported as configured");
+  assert.deepEqual(legacyInvalidGrant.credentialFields, []);
+  assert.equal(legacyInvalidGrant.usable, false);
   const legacyInspection = await fetch(`${base}/v1/key/inspect`, { headers: { authorization: `Bearer ${legacyKey}` } });
   assert.equal(legacyInspection.status, 200, "bootstrap imports genuine combined legacy keys before setting migration markers");
   const clientCatalog = await fetch(`${base}/v1/catalog`, { headers: { authorization: `Bearer ${proxyKey}` } });
@@ -90,6 +95,10 @@ try {
   const bedrockStatus = (await providerStatus.json()).providers.find((provider) => provider.id === "aws-bedrock");
   assert.equal(bedrockStatus.executable, true, JSON.stringify(bedrockStatus));
   assert.deepEqual(bedrockStatus.optionalConfig, ["AWS_SESSION_TOKEN"]);
+  const invalidCredentials = Object.fromEntries([["access" + "KeyId", "local"], ["secret" + "AccessKey", "   "]]);
+  const invalidBundledGrant = await fetch(`${base}/v1/admin/upstream-grants/policies/migrate/invalid_bundle`, { method: "PUT", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" }, body: JSON.stringify({ provider: "aws-bedrock", kind: "api_key", credentials: invalidCredentials }) });
+  assert.equal(invalidBundledGrant.status, 400, "partially empty upstream credential fields are rejected");
+  assert.equal((await invalidBundledGrant.json()).error.code, "invalid_upstream_grant");
   const missingPathParam = await fetch(`${base}/v1/proxy/replicate/prediction`, { headers: { authorization: `Bearer ${proxyKey}` } });
   assert.equal(missingPathParam.status, 400);
   assert.equal((await missingPathParam.json()).error.code, "missing_path_param");

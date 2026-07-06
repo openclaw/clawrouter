@@ -1,5 +1,6 @@
 import snapshotJson from "./generated/provider-snapshot.json";
 import { listConnections, resolveConnection } from "./authority";
+import { grantUsable as canonicalGrantUsable } from "./grant-selection";
 import { grantsVisibleToPolicies, type GrantRecord } from "./grant-scope";
 import type {
   AccessPolicyEntry, AuthorizedIdentity, CompiledEndpoint, CompiledModel, CompiledProvider, Env,
@@ -360,7 +361,7 @@ async function refreshGrant(key: string, grant: UpstreamGrant, provider: Compile
 }
 
 function grantUsable(grant: UpstreamGrant): boolean {
-  return !!(grant.credential || grant.accessToken || Object.keys(grant.credentials ?? {}).length);
+  return canonicalGrantUsable(grant);
 }
 
 function grantSatisfiesConfig(key: string, grants: GrantRecord[]): boolean {

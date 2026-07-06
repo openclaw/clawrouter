@@ -1,6 +1,7 @@
 import { authorityCall, resolveBindings, resolvePolicies, resolveUsers } from "./authority";
 import { assignmentEvidenceFromAccessIdentity } from "./assignment-evaluator";
 import { listAssignmentRules, reconcileUserAssignments } from "./assignments";
+import { selectProviderPolicy } from "./grant-selection";
 import type { AccessControlUser, AccessPolicyEntry, AccessSession, AuthorizedIdentity, Env } from "./types";
 import { commaSet, errorResponse, normalizeEmail, parseBearer, safeEqual, sha256Hex } from "./utils";
 
@@ -131,17 +132,6 @@ async function verifiedGithubEvidence(request: Request, email: string) {
   } catch {
     return undefined;
   }
-}
-
-async function selectProviderPolicy(entries: AccessPolicyEntry[], providerId: string, tenantId: string, env: Env): Promise<AccessPolicyEntry> {
-  for (const entry of entries) {
-    const tenant = entry.policy.tenantId ?? tenantId;
-    for (const key of [`oauth/${entry.policyId}/${providerId}`, `oauth/tenants/${tenant}/${providerId}`]) {
-      const grant = await env.POLICY_KV.get<{ enabled?: boolean; credential?: string; accessToken?: string; credentials?: Record<string, string> }>(key, "json");
-      if (grant?.enabled !== false && !!(grant?.credential || grant?.accessToken || Object.keys(grant?.credentials ?? {}).length)) return entry;
-    }
-  }
-  return entries[0];
 }
 
 async function verifyAccessJwt(token: string, teamDomain: string, expectedAud: string): Promise<AccessJwtPayload | null> {
