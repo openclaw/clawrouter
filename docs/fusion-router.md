@@ -58,7 +58,9 @@ Enable the configuration to advertise `clawrouter/fusion` through `/v1/models`,
 its chat-completions route must be executable for the caller; otherwise the
 virtual model stays hidden. ClawRouter preflights that final route before it
 starts advisers, so a denied or unavailable synthesizer cannot spend adviser
-budget. Unavailable advisers fail open; if every adviser fails, the synthesizer
+budget. It also reserves the final model's worst-case configured proposal input
+before advisers run, so an unfunded final answer fails without adviser spend.
+Unavailable advisers fail open; if every adviser fails, the synthesizer
 answers the original request by itself.
 
 Each adviser and the synthesizer is a separate normal ClawRouter request. The

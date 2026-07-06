@@ -23,7 +23,7 @@ putLocalKv("oauth/migrate/legacy_invalid", { provider: "aws-bedrock", kind: "api
 
 const fusionSecret = "fusion123";
 const fusionKey = `clawrouter-live-fusionlocal-${fusionSecret}`;
-putLocalKv("policies/fusion_local", { enabled: true, generation, providers: ["local-openai"], tenantId: "default", tokenRole: "service", monthlyBudgetMicros: 10_000, retainRequestContent: false });
+putLocalKv("policies/fusion_local", { enabled: true, generation, providers: ["local-openai", "openai"], tenantId: "default", tokenRole: "service", monthlyBudgetMicros: 1, retainRequestContent: false });
 putLocalKv("credentials/fusionlocal", { enabled: true, secretSha256: sha256(fusionSecret), policyId: "fusion_local", policyGeneration: generation });
 const upstreamPort = await availablePort();
 const upstreamCalls = [];
@@ -40,7 +40,7 @@ const upstreamServer = createHttpServer(async (request, response) => {
 });
 await new Promise((resolve, reject) => upstreamServer.listen(upstreamPort, "127.0.0.1", resolve).once("error", reject));
 
-const child = spawn("pnpm", ["exec", "wrangler", "dev", "--local", "--ip", "127.0.0.1", "--port", String(port), "--persist-to", persistence, "--config", config, "--var", `CLAWROUTER_ADMIN_TOKEN_SHA256:${sha256(adminToken)}`, "--var", `LOCAL_OPENAI_BASE_URL:http://127.0.0.1:${upstreamPort}`, "--var", "AWS_REGION:us-east-1", "--var", "AWS_SESSION_TOKEN:", "--log-level", "info"], {
+const child = spawn("pnpm", ["exec", "wrangler", "dev", "--local", "--ip", "127.0.0.1", "--port", String(port), "--persist-to", persistence, "--config", config, "--var", `CLAWROUTER_ADMIN_TOKEN_SHA256:${sha256(adminToken)}`, "--var", `LOCAL_OPENAI_BASE_URL:http://127.0.0.1:${upstreamPort}`, "--var", "OPENAI_API_KEY:fixture", "--var", "AWS_REGION:us-east-1", "--var", "AWS_SESSION_TOKEN:", "--log-level", "info"], {
   cwd: process.cwd(),
   env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
   stdio: ["ignore", "pipe", "pipe"],
@@ -93,13 +93,13 @@ try {
   }
   const deniedFusionConfig = { ...bootstrapBody.fusion, enabled: true, adviserModels: ["local/adviser"], aggregatorModel: "openai/gpt-4.1-mini" };
   assert.equal((await fetch(`${base}/v1/admin/fusion`, { method: "PUT", headers: adminHeaders, body: JSON.stringify(deniedFusionConfig) })).status, 200);
-  const deniedModels = await fetch(`${base}/v1/models`, { headers: { authorization: `Bearer ${fusionKey}` } });
+  const deniedModels = await fetch(`${base}/v1/models`, { headers: { authorization: `Bearer ${proxyKey}` } });
   assert.equal(deniedModels.status, 200);
   assert.equal((await deniedModels.json()).data.some((model) => model.id === "clawrouter/fusion"), false, "fusion stays hidden until its synthesizer route is executable for the caller");
-  const deniedFusion = await fetch(`${base}/v1/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${fusionKey}`, "content-type": "application/json" }, body: JSON.stringify({ model: "clawrouter/fusion", messages: [{ role: "user", content: "solve" }] }) });
-  assert.equal(deniedFusion.status, 403);
-  assert.equal((await deniedFusion.json()).error.code, "provider_not_allowed");
-  assert.equal(upstreamCalls.length, 0, "synthesizer preflight blocks adviser spend when the final provider is denied");
+  const budgetBlockedFusion = await fetch(`${base}/v1/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${fusionKey}`, "content-type": "application/json" }, body: JSON.stringify({ model: "clawrouter/fusion", messages: [{ role: "user", content: "solve" }] }) });
+  assert.equal(budgetBlockedFusion.status, 402);
+  assert.equal((await budgetBlockedFusion.json()).error.code, "budget_exhausted");
+  assert.equal(upstreamCalls.length, 0, "synthesizer budget reservation blocks adviser spend before the final answer can be funded");
   const localFusionConfig = { ...deniedFusionConfig, aggregatorModel: "local/final" };
   assert.equal((await fetch(`${base}/v1/admin/fusion`, { method: "PUT", headers: adminHeaders, body: JSON.stringify(localFusionConfig) })).status, 200);
   const fusionModels = await fetch(`${base}/v1/models`, { headers: { authorization: `Bearer ${fusionKey}` } });

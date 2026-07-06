@@ -36,9 +36,13 @@ test("local adviser messages retain bounded text but never images or tool schema
   assert.equal(body.model, "local/qwen3:8b");
   assert.equal(body.stream, false);
   assert.equal(body.reasoning_effort, "none");
+  assert.equal(body.temperature, 0.2);
   assert.equal(body.tools, undefined);
   assert.doesNotMatch(JSON.stringify(body), /base64|image_url|shell/);
   assert.match(JSON.stringify(body), /tool output/);
+
+  const reasoningBody = buildAdviserBody({ messages }, "openai/gpt-5.4", normalizeFusionConfig({}), 0);
+  assert.equal(reasoningBody.temperature, undefined);
 });
 
 test("fusion runs advisers concurrently, tolerates failures, and injects untrusted drafts", async () => {
@@ -62,10 +66,13 @@ test("fusion runs advisers concurrently, tolerates failures, and injects untrust
   assert.deepEqual(result.proposals, [{ model: "local/qwen3:8b", content: "local proposal" }]);
   assert.deepEqual(result.failedModels, ["openai/gpt-4.1-mini"]);
 
-  const body = buildAggregatorBody({ model: FUSION_MODEL_ID, messages: [{ role: "user", content: "solve" }], tools: [{ type: "function" }] }, config, result.proposals);
+  const body = buildAggregatorBody({ model: FUSION_MODEL_ID, messages: [{ role: "user", content: "solve" }], tools: [{ type: "function" }], temperature: 0.7 }, config, result.proposals);
   assert.equal(body.model, "openai/gpt-5.4");
   assert.deepEqual(body.tools, [{ type: "function" }]);
   const instruction = body.messages.find((message) => message.role === "system");
   assert.match(instruction.content, /untrusted evidence/);
   assert.match(instruction.content, /local proposal/);
+
+  const reasoningConfig = normalizeFusionConfig({ aggregatorModel: "openai/gpt-5.4" });
+  assert.equal(buildAggregatorBody({ messages: [], temperature: 0.7 }, reasoningConfig, []).temperature, undefined);
 });

@@ -35,6 +35,15 @@ interface PreparedUpstream {
   requestBody: string | undefined;
 }
 
+interface ReservedProxyBudget {
+  auth: AuthorizedIdentity;
+  reservation: BudgetReservation;
+  cost: EstimatedCost;
+  providerId: string;
+  modelId: string | null;
+  capability: string;
+}
+
 export async function proxyOpenAi(request: Request, env: Env, context: ExecutionContext, path: string, mode: AuthMode): Promise<Response> {
   const preauthenticated = await preauthenticate(request, env, mode);
   if (preauthenticated instanceof Response) return preauthenticated;
@@ -57,9 +66,10 @@ async function proxyConcreteOpenAi(
   body: Record<string, unknown>,
   preauthenticated: AuthorizedIdentity | null,
   timeoutMs?: number,
+  reservedBudget?: ReservedProxyBudget,
 ): Promise<Response> {
   const selection = concreteOpenAiSelection(path, body, env, timeoutMs);
-  return selection instanceof Response ? selection : proxySelected(request, env, context, mode, selection, {}, preauthenticated);
+  return selection instanceof Response ? selection : proxySelected(request, env, context, mode, selection, {}, preauthenticated, reservedBudget);
 }
 
 function concreteOpenAiSelection(path: string, body: Record<string, unknown>, env: Env, timeoutMs?: number): ProxySelection | Response {
@@ -89,10 +99,11 @@ async function proxyFusion(
 ): Promise<Response> {
   const config = await loadFusionConfig(env);
   if (!config.enabled) return errorResponse("fusion_disabled", `${FUSION_MODEL_ID} is not enabled`, 404);
-  const aggregatorSelection = concreteOpenAiSelection("/v1/chat/completions", buildAggregatorBody(body, config, []), env);
+  const maximumProposals = config.adviserModels.map((model) => ({ model, content: "x".repeat(config.maxProposalChars) }));
+  const aggregatorSelection = concreteOpenAiSelection("/v1/chat/completions", buildAggregatorBody(body, config, maximumProposals), env);
   if (aggregatorSelection instanceof Response) return aggregatorSelection;
-  const aggregatorFailure = await preflightSelected(request, env, mode, aggregatorSelection, preauthenticated);
-  if (aggregatorFailure) return aggregatorFailure;
+  const aggregatorBudget = await reserveSelected(request, env, context, mode, aggregatorSelection, preauthenticated);
+  if (aggregatorBudget instanceof Response) return aggregatorBudget;
   const result = await collectFusionProposals(config, body, async (model, adviserBody, timeoutMs, index) => {
     const headers = new Headers(request.headers);
     headers.set("x-request-id", randomId(`fusion-adviser-${index + 1}`));
@@ -100,7 +111,7 @@ async function proxyFusion(
     return proxyConcreteOpenAi(adviserRequest, env, context, "/v1/chat/completions", mode, adviserBody, preauthenticated, timeoutMs);
   });
   const aggregatorBody = buildAggregatorBody(body, config, result.proposals);
-  const response = await proxyConcreteOpenAi(request, env, context, "/v1/chat/completions", mode, aggregatorBody, preauthenticated);
+  const response = await proxyConcreteOpenAi(request, env, context, "/v1/chat/completions", mode, aggregatorBody, preauthenticated, undefined, aggregatorBudget);
   const headers = new Headers(response.headers);
   headers.set("x-clawrouter-fusion", result.proposals.length ? "advisers" : "aggregator-only");
   headers.set("x-clawrouter-fusion-aggregator", config.aggregatorModel);
@@ -232,26 +243,34 @@ export async function inspectKey(headers: Headers, env: Env): Promise<Response> 
   });
 }
 
-async function proxySelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, queryInput: Record<string, unknown> = {}, preauthenticated: AuthorizedIdentity | null = null): Promise<Response> {
-  const auth = await selectedAuth(request, env, mode, selection, preauthenticated);
+async function proxySelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, queryInput: Record<string, unknown> = {}, preauthenticated: AuthorizedIdentity | null = null, reservedBudget?: ReservedProxyBudget): Promise<Response> {
+  const auth = reservedBudget?.auth ?? await selectedAuth(request, env, mode, selection, preauthenticated);
   if (auth instanceof Response) return auth;
   const requestId = request.headers.get("x-request-id") ?? randomId("req");
   const started = Date.now();
-  const cost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability);
+  const estimatedCost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability);
+  const cost = reservedBudget?.cost ?? estimatedCost;
+  if (reservedBudget && (reservedBudget.providerId !== selection.provider.id || reservedBudget.modelId !== selection.model?.id || reservedBudget.capability !== selection.capability || estimatedCost.reserveMicros > reservedBudget.cost.reserveMicros)) {
+    context.waitUntil(finalizeAccounting(env, auth, reservedBudget.reservation, 0, usageEvent(auth, selection, request, requestId, started, 500, null, cost, reservedBudget.reservation, null, "provider_error")));
+    return errorResponse("fusion_reservation_invalid", "fusion synthesizer reservation does not cover the final request", 500);
+  }
   let prepared: PreparedUpstream;
   try { prepared = await prepareSelected(request, env, selection, queryInput, auth); }
   catch (error) {
     const failure = selectedFailure(error);
     const status = failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error";
-    auditFailure(context, env, auth, selection, request, requestId, started, cost, failure.status, status);
+    if (reservedBudget) context.waitUntil(finalizeAccounting(env, auth, reservedBudget.reservation, 0, usageEvent(auth, selection, request, requestId, started, failure.status, null, cost, reservedBudget.reservation, null, status)));
+    else auditFailure(context, env, auth, selection, request, requestId, started, cost, failure.status, status);
     return errorResponse(failure.code, failure.message, failure.status);
   }
-  let reservation: BudgetReservation;
-  try { reservation = await reserveBudget(env, auth, selection.capability, cost); }
-  catch (error) {
-    const failure = error instanceof HttpError ? error : new HttpError(503, "budget_store_unavailable", "budget ledger is unavailable");
-    auditFailure(context, env, auth, selection, request, requestId, started, cost, failure.status, failure.status === 402 ? "denied" : failure.status < 500 ? "client_error" : "provider_error");
-    return errorResponse(failure.code, failure.message, failure.status);
+  let reservation = reservedBudget?.reservation;
+  if (!reservation) {
+    try { reservation = await reserveBudget(env, auth, selection.capability, cost); }
+    catch (error) {
+      const failure = error instanceof HttpError ? error : new HttpError(503, "budget_store_unavailable", "budget ledger is unavailable");
+      auditFailure(context, env, auth, selection, request, requestId, started, cost, failure.status, failure.status === 402 ? "denied" : failure.status < 500 ? "client_error" : "provider_error");
+      return errorResponse(failure.code, failure.message, failure.status);
+    }
   }
   let content: string | null;
   try { content = await retainRequestContent(env, auth, selection, requestId); }
@@ -280,14 +299,26 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers: outputHeaders });
 }
 
-async function preflightSelected(request: Request, env: Env, mode: AuthMode, selection: ProxySelection, preauthenticated: AuthorizedIdentity | null): Promise<Response | null> {
+async function reserveSelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, preauthenticated: AuthorizedIdentity | null): Promise<ReservedProxyBudget | Response> {
   const auth = await selectedAuth(request, env, mode, selection, preauthenticated);
   if (auth instanceof Response) return auth;
+  const requestId = request.headers.get("x-request-id") ?? randomId("req");
+  const started = Date.now();
+  const cost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability);
   try {
     await prepareSelected(request, env, selection, {}, auth);
-    return null;
   } catch (error) {
     const failure = selectedFailure(error);
+    const status = failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error";
+    auditFailure(context, env, auth, selection, request, requestId, started, cost, failure.status, status);
+    return errorResponse(failure.code, failure.message, failure.status);
+  }
+  try {
+    const reservation = await reserveBudget(env, auth, selection.capability, cost);
+    return { auth, reservation, cost, providerId: selection.provider.id, modelId: selection.model?.id ?? null, capability: selection.capability };
+  } catch (error) {
+    const failure = error instanceof HttpError ? error : new HttpError(503, "budget_store_unavailable", "budget ledger is unavailable");
+    auditFailure(context, env, auth, selection, request, requestId, started, cost, failure.status, failure.status === 402 ? "denied" : failure.status < 500 ? "client_error" : "provider_error");
     return errorResponse(failure.code, failure.message, failure.status);
   }
 }

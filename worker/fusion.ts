@@ -62,7 +62,7 @@ export function buildAdviserBody(original: Record<string, unknown>, model: strin
     model,
     stream: false,
     ...(model.startsWith("local/") ? { reasoning_effort: "none" } : {}),
-    temperature: config.temperature,
+    ...(modelSupportsTemperature(model) ? { temperature: config.temperature } : {}),
     max_tokens: config.maxOutputTokens,
     messages: [
       {
@@ -75,12 +75,17 @@ export function buildAdviserBody(original: Record<string, unknown>, model: strin
 }
 
 export function buildAggregatorBody(original: Record<string, unknown>, config: FusionConfig, proposals: FusionProposal[]): Record<string, unknown> {
-  const body = { ...original, model: config.aggregatorModel };
+  const body: Record<string, unknown> = { ...original, model: config.aggregatorModel };
+  if (!modelSupportsTemperature(config.aggregatorModel)) delete body.temperature;
   if (!proposals.length || !Array.isArray(original.messages)) return body;
   const messages = [...original.messages] as ChatMessage[];
   const firstNonSystem = messages.findIndex((message) => message.role !== "system");
   messages.splice(firstNonSystem === -1 ? messages.length : firstNonSystem, 0, fusionInstruction(proposals));
   return { ...body, messages };
+}
+
+function modelSupportsTemperature(model: string): boolean {
+  return !/^openai\/gpt-5\.(?:4|5)(?:$|-)/.test(model);
 }
 
 export async function collectFusionProposals(config: FusionConfig, original: Record<string, unknown>, invoke: InvokeModel): Promise<FusionRunResult> {
