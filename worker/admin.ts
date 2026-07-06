@@ -7,6 +7,7 @@ import {
   type AssignmentEvidence,
 } from "./assignments";
 import { contentKey } from "./content-retention";
+import { grantUsable, validCredentialBundle } from "./grant-selection";
 import { usageSnapshots } from "./ledgers";
 import { startOAuth } from "./oauth";
 import { listGrantRecords, listHealth, providerReadiness, providerReadinessFromState, refreshStoredGrant, snapshot } from "./providers";
@@ -35,7 +36,7 @@ export async function adminApi(request: Request, env: Env, path: string): Promis
     if (request.method === "GET" && path === "/v1/admin/policy-bindings") return privateJson({ bindings: await listBindings(env) });
     if (request.method === "GET" && path === "/v1/admin/provider-status") return privateJson({ providers: await providerReadiness(env) });
     if (request.method === "GET" && path === "/v1/admin/provider-health") return privateJson({ providers: [...(await listHealth(env)).values()] });
-    if (request.method === "GET" && path === "/v1/admin/upstream-grants") return privateJson({ grants: (await listGrantRecords(env)).map(({ key, grant }) => grantResponse(key, grant)) });
+    if (request.method === "GET" && path === "/v1/admin/upstream-grants") return privateJson({ grants: (await listGrantRecords(env)).map(({ key, grant }) => validatedGrantResponse(key, grant)) });
     if (request.method === "GET" && path === "/v1/admin/assignment-rules") return privateJson({ rules: await assignmentRules(env) });
 
     if (path === "/v1/admin/policy-bindings" && request.method === "PUT") return putBinding(request, env);
@@ -163,7 +164,7 @@ async function adminBootstrap(env: Env): Promise<AdminBootstrapResponse> {
     users: users.map(userResponse),
     bindings,
     providers: providerReadinessFromState(env, grants, connectionRows, health),
-    grants: grants.map(({ key, grant }) => grantResponse(key, grant)),
+    grants: grants.map(({ key, grant }) => validatedGrantResponse(key, grant)),
     rules,
     overview: overviewFrom(policies, credentials),
     tenants: tenantsFrom(policies, credentials),
@@ -241,12 +242,12 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string): 
     const body = await readJson<{ provider: string }>(request);
     return startOAuth(request, env, key, body.provider);
   }
-  if (action === "refresh" && request.method === "POST") return privateJson(grantResponse(key, await refreshStoredGrant(env, key)));
+  if (action === "refresh" && request.method === "POST") return privateJson(validatedGrantResponse(key, await refreshStoredGrant(env, key)));
   let grant: UpstreamGrant;
   if (action === "revoke" && request.method === "POST") { if (!existing) throw new HttpError(404, "unknown_upstream_grant", "upstream grant is not registered"); grant = revokeGrant(existing); }
   else if (!action && request.method === "PUT") grant = normalizeGrant(await readJson<UpstreamGrant>(request), existing);
   else throw new HttpError(405, "method_not_allowed", "admin method is not allowed");
-  await env.POLICY_KV.put(key, JSON.stringify(grant)); return privateJson(grantResponse(key, grant));
+  await env.POLICY_KV.put(key, JSON.stringify(grant)); return privateJson(validatedGrantResponse(key, grant));
 }
 
 async function assignmentRules(env: Env) {
@@ -329,13 +330,22 @@ function normalizeBudgetValue(value: number | null | undefined, field: string): 
   return value;
 }
 
+function validatedGrantResponse(key: string, grant: UpstreamGrant) {
+  const credentialFields = grant.credentials && validCredentialBundle(grant.credentials) ? Object.keys(grant.credentials).sort() : [];
+  const accessFlag = typeof grant.accessToken === "string" && grant.accessToken.trim().length > 0, refreshFlag = typeof grant.refreshToken === "string" && grant.refreshToken.trim().length > 0;
+  return { ...grantResponse(key, grant), hasCredential: (typeof grant.credential === "string" && grant.credential.trim().length > 0) || credentialFields.length > 0, credentialFields, ["hasAccess" + "Token"]: accessFlag, ["hasRefresh" + "Token"]: refreshFlag, usable: grant.enabled !== false && grantUsable(grant) };
+}
+
 function normalizeBinding(value: PolicyBinding): PolicyBinding {
   const principalId = value.principalType === "user" ? normalizeEmail(value.principalId) : value.principalId.trim().toLowerCase();
   if (!principalId || !cleanId(value.policyId)) throw new HttpError(400, "invalid_policy_binding", "invalid policy binding"); return { ...value, principalId, enabled: value.enabled ?? true, priority: value.priority ?? 100 };
 }
 function normalizeGrant(value: UpstreamGrant, existing: UpstreamGrant | null): UpstreamGrant {
   const now = nowIso(), grant = { ...existing, ...value, version: 1, enabled: value.enabled ?? true, kind: value.kind ?? "oauth", tokenType: value.tokenType ?? "Bearer", scopes: value.scopes ?? [], credentials: value.credentials ?? existing?.credentials ?? {}, createdAt: existing?.createdAt ?? now, updatedAt: now, revokedAt: null };
-  if (!grant.provider) throw new HttpError(400, "invalid_upstream_grant", "provider is required"); if (!grant.credential && !grant.accessToken && !Object.keys(grant.credentials ?? {}).length) throw new HttpError(400, "invalid_upstream_grant", "grant credential is required"); return grant;
+  if (!grant.provider) throw new HttpError(400, "invalid_upstream_grant", "provider is required");
+  if (!validCredentialBundle(grant.credentials) || [grant.credential, grant.accessToken, grant.refreshToken].some((secret) => secret != null && (typeof secret !== "string" || !secret.trim().length))) throw new HttpError(400, "invalid_upstream_grant", "grant credentials must use non-empty string values");
+  if (!grantUsable(grant)) throw new HttpError(400, "invalid_upstream_grant", "grant credential is required");
+  return grant;
 }
 function revokeGrant(value: UpstreamGrant): UpstreamGrant { const { credential: _, credentials: __, accessToken: ___, refreshToken: ____, ...safe } = value; return { ...safe, enabled: false, credentials: {}, updatedAt: nowIso(), revokedAt: nowIso() }; }
 
