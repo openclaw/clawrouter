@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Reject upstream grants for providers absent from the compiled catalog.
 - Reject empty or malformed upstream credential bundles instead of reporting unusable grants as ready.
 - Honor manifest-declared optional provider bindings in readiness so valid configurations are not reported as incomplete.
 - Preserve stored multi-field upstream credential bundles when editing grant metadata.
