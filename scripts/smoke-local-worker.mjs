@@ -208,6 +208,25 @@ try {
   const canonicalGrantBody = await canonicalGrant.json();
   assert.deepEqual(canonicalGrantBody.user, { email: "shape@example.com", role: "user", tenantId: "Team", enabled: true, groups: ["members"], contentRetentionDisabled: true }, "grant updates preserve omitted identity fields");
   assert.deepEqual(canonicalGrantBody.bindings.filter((binding) => binding.enabled).map((binding) => binding.policyId), ["migrate"]);
+  const connectionUrl = `${base}/v1/admin/connections/openai`;
+  for (const [connectionMutationId, body] of [
+    ["invalid_null_body", null],
+    ["invalid_array_body", []],
+    ["invalid_enabled", { enabled: "false" }],
+    ["invalid_null_enabled", { enabled: null }],
+    ["invalid_label", { label: {} }],
+    ["invalid_array_label", { label: [] }],
+  ]) {
+    const invalidConnection = await fetch(connectionUrl, { method: "PUT", headers: userHeaders, body: JSON.stringify(body) });
+    assert.equal(invalidConnection.status, 400, `malformed provider connection ${connectionMutationId} is rejected`);
+    assert.equal((await invalidConnection.json()).error.code, "invalid_provider_connection");
+  }
+  const canonicalConnection = await fetch(connectionUrl, { method: "PUT", headers: userHeaders, body: JSON.stringify({ providerId: "missing", enabled: false, label: " Ops ", ignored: true }) });
+  assert.equal(canonicalConnection.status, 200);
+  assert.deepEqual(await canonicalConnection.json(), { providerId: "openai", enabled: false, label: "Ops" });
+  const connectionsAfterMutation = await fetch(`${base}/v1/admin/connections`, { headers: userHeaders });
+  assert.equal(connectionsAfterMutation.status, 200);
+  assert.deepEqual((await connectionsAfterMutation.json()).connections.find((connection) => connection.providerId === "openai"), { providerId: "openai", enabled: false, label: "Ops" });
   console.log(`local Worker smoke passed on ${base}`);
 } catch (error) {
   throw new Error(`${error instanceof Error ? error.message : String(error)}\nwrangler output:\n${output}`);

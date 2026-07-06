@@ -228,7 +228,7 @@ async function credentialMutation(request: Request, env: Env, rest: string): Pro
 
 async function putConnection(request: Request, env: Env, encodedId: string): Promise<Response> {
   const id = decodeURIComponent(encodedId), provider = snapshot.providers.find((item) => item.id === id); if (!provider) throw new HttpError(404, "unknown_provider", "provider does not exist");
-  const body = await readJson<Partial<ProviderConnection>>(request), connection: ProviderConnection = { providerId: id, enabled: body.enabled ?? true, label: body.label ?? null };
+  const connection = normalizeConnection(await readJson<unknown>(request), id);
   await authorityCall(env, "/connections/put", connection); return privateJson(connection);
 }
 
@@ -393,6 +393,16 @@ function normalizeBinding(value: unknown): PolicyBinding {
   const priority = binding.priority === undefined ? 100 : binding.priority;
   if (!Number.isSafeInteger(priority) || (priority as number) < 0) throw new HttpError(400, "invalid_policy_binding", "priority must be a non-negative safe integer");
   return { policyId, principalType, principalId, enabled, priority: priority as number };
+}
+
+function normalizeConnection(value: unknown, providerId: string): ProviderConnection {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new HttpError(400, "invalid_provider_connection", "provider connection must be an object");
+  const body = value as Record<string, unknown>;
+  const enabled = body.enabled === undefined ? true : body.enabled;
+  if (typeof enabled !== "boolean") throw new HttpError(400, "invalid_provider_connection", "enabled must be a boolean");
+  if (body.label !== undefined && body.label !== null && typeof body.label !== "string") throw new HttpError(400, "invalid_provider_connection", "label must be a string or null");
+  const label = typeof body.label === "string" ? body.label.trim() || null : null;
+  return { providerId, enabled, label };
 }
 
 function normalizeUserMutation(value: unknown, existing: AccessControlUser["record"], includePolicyIds = false): { record: AccessControlUser["record"]; policyIds: string[] } {
