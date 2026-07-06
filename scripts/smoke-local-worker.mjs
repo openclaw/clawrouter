@@ -138,6 +138,19 @@ try {
     assert.equal(invalidPolicy.status, 400);
     assert.equal((await invalidPolicy.json()).error.code, "invalid_policy");
   }
+  for (const [policyId, body] of [
+    ["invalid_wildcard", { providers: [], allProviders: "true" }],
+    ["invalid_null_wildcard", { providers: null, allProviders: true }],
+    ["invalid_mixed_scope", { providers: ["openai"], allProviders: true }],
+    ["invalid_enabled_policy", { providers: ["openai"], enabled: "false" }],
+    ["invalid_null_enabled", { providers: ["openai"], enabled: null }],
+    ["invalid_tenant", { providers: ["openai"], tenantId: {} }],
+    ["invalid_providers", { providers: {} }],
+  ]) {
+    const invalidPolicy = await fetch(`${base}/v1/admin/policies/${policyId}`, { method: "PUT", headers: userHeaders, body: JSON.stringify(body) });
+    assert.equal(invalidPolicy.status, 400, `malformed policy ${policyId} is rejected`);
+    assert.equal((await invalidPolicy.json()).error.code, "invalid_policy");
+  }
   console.log(`local Worker smoke passed on ${base}`);
 } catch (error) {
   throw new Error(`${error instanceof Error ? error.message : String(error)}\nwrangler output:\n${output}`);
