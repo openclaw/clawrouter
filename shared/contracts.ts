@@ -51,6 +51,38 @@ export interface FusionConfig {
   temperature: number;
 }
 
+export interface FusionReadinessCall {
+  stage: "adviser" | "synthesizer";
+  index: number | null;
+  model: string;
+  provider: string;
+  policyAllowed: boolean;
+  executable: boolean;
+  verified: boolean;
+  status: string;
+  reasons: string[];
+  estimatedReservationMicros: number;
+  estimateBasis: "policy_fixed" | "manifest_pricing" | "flat_fallback";
+}
+
+export interface FusionReadiness {
+  policyId: string;
+  policyEnabled: boolean;
+  configEnabled: boolean;
+  executable: boolean;
+  advertisable: boolean;
+  readyAdviserCount: number;
+  adviserCount: number;
+  callCount: number;
+  estimatedReservationMicros: number;
+  budgetConfigured: boolean;
+  budgetLedger: string;
+  remainingBudgetMicros: number | null;
+  budgetSufficientForAll: boolean | null;
+  estimateNote: string;
+  calls: FusionReadinessCall[];
+}
+
 export interface UpstreamGrant {
   key: string;
   scope: "policies" | "tenants";

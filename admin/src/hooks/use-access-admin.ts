@@ -41,7 +41,7 @@ export function useAccessAdmin(dependencies: Dependencies) {
   const connection = useConnectionAdmin({ allowDemo, gatewayOrigin, demoMode, setStatus, setProviderReadiness, refresh });
   const upstream = useUpstreamAdmin({ allowDemo, gatewayOrigin, demoMode, providers, policies: policy.policies.items, selectedPolicyId: policy.policies.selectedId, setError: policy.policies.setError, setStatus, refresh });
   const assignment = useAssignmentAdmin({ allowDemo, gatewayOrigin, demoMode, setError: policy.policies.setError, setStatus, refresh });
-  const fusion = useFusionAdmin({ allowDemo, gatewayOrigin, demoMode, setStatus, refresh });
+  const fusion = useFusionAdmin({ allowDemo, gatewayOrigin, demoMode, policies: policy.policies.items, selectedPolicyId: policy.policies.selectedId, setStatus, refresh });
 
   function hydrateAdmin(records: AdminRecords, background: boolean, sessionData: SessionResponse, providerRows: ProviderRow[]) {
     policy.hydrate(records.policies, records.credentials, background, sessionData);
@@ -50,7 +50,7 @@ export function useAccessAdmin(dependencies: Dependencies) {
     principal.hydrate(records.users, records.bindings, background, policyId);
     upstream.hydrate(records.grants, background, policyId, providerRows);
     assignment.hydrate(records.rules, background);
-    fusion.hydrate(records.fusion, background);
+    fusion.hydrate(records.fusion, background, policyId, records.policies.map((item) => item.policyId));
     setLoaded(true);
   }
 

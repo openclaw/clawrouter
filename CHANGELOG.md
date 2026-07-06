@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add policy-specific Fusion readiness preflight with route, grant, pricing, budget, and eligible-call reservation status before enabling a profile.
 - Group Fusion adviser and synthesizer usage into one expandable request with shared lineage, aggregate cost, end-to-end latency, and preserved billable-call detail.
 - Add an on-demand `clawrouter/fusion` chat model with parallel local or hosted advisers, a policy-native final synthesizer, OpenAI-compatible Ollama/LM Studio routing, bounded fail-open orchestration, and web-console configuration.
 - Add accessible 30-day request and provider analytics to Dashboard and Usage while preserving rolling usage totals across mixed-version deployments.
