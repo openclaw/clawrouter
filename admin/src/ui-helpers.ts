@@ -161,6 +161,12 @@ export function demoGrantFromForm(form: UpstreamGrantForm, existing?: UpstreamGr
     hasRefreshToken,
     refreshConfigured: existing?.refreshConfigured ?? hasRefreshToken,
     usable: form.enabled && (form.kind === "api_key" ? hasCredential || effectiveCredentialFields.length > 0 : hasAccessToken || form.kind === "subscription" && hasCredential),
+    quotaStatus: existing?.quotaStatus ?? "unknown",
+    quotaObservedAt: existing?.quotaObservedAt ?? null,
+    cooldownUntil: existing?.cooldownUntil ?? null,
+    quotaSource: existing?.quotaSource ?? null,
+    lastProviderSignal: existing?.lastProviderSignal ?? null,
+    quotaWindows: existing?.quotaWindows ?? [],
   };
 }
 

@@ -35,6 +35,26 @@ test("revoked grants leave the pool and policy selection sees indexed grants", a
   assert.equal(await selectGrant("openai", "policy_b", "tenant_a", "openai", env), null);
 });
 
+test("grant pools skip cooldowns and prefer stronger quota within one priority", async () => {
+  const env = mockEnv();
+  await putGrant(env, "oauth/policy_a/openai-a", grant("openai", "a", 10));
+  await putGrant(env, "oauth/policy_a/openai-b", grant("openai", "b", 10));
+  await putGrant(env, "oauth/policy_a/openai-c", grant("openai", "c", 10));
+  env.runtime.set("oauth/policy_a/openai-a", runtime("cooldown", 90, new Date(Date.now() + 60_000).toISOString()));
+  env.runtime.set("oauth/policy_a/openai-b", runtime("limited", 20));
+  env.runtime.set("oauth/policy_a/openai-c", runtime("available", 80));
+  assert.equal((await selectGrant("openai", "policy_a", "tenant_a", "openai", env))?.key, "oauth/policy_a/openai-c");
+});
+
+test("grant updates invalidate runtime state observed for the old credential", async () => {
+  const env = mockEnv();
+  const key = "oauth/policy_a/openai";
+  const oldRevision = new Date(Date.now() - 10_000).toISOString();
+  await putGrant(env, key, { ...grant("openai", "rotated", 10), updatedAt: new Date(Date.now() - 5_000).toISOString() });
+  env.runtime.set(key, { ...runtime("cooldown", 0, new Date(Date.now() + 60_000).toISOString()), grantRevision: oldRevision });
+  assert.equal((await selectGrant("openai", "policy_a", "tenant_a", "openai", env))?.key, key);
+});
+
 test("grant key segments reject ambiguous or undiscoverable values", () => {
   assert.equal(validGrantSegment("openai-backup"), true);
   assert.equal(validGrantSegment("nested/grant"), false);
@@ -50,6 +70,10 @@ function policy(policyId) {
   return { policyId, policy: { enabled: true, generation: "g1", providers: ["openai"], tenantId: "tenant_a", retainRequestContent: true } };
 }
 
+function runtime(status, remaining, cooldownUntil = null) {
+  return { status, observedAt: new Date().toISOString(), source: "provider_response", cooldownUntil, lastSignal: "quota", grantRevision: null, windows: [{ kind: "requests", remaining, limit: 100, resetAt: new Date(Date.now() + 60_000).toISOString() }] };
+}
+
 async function putGrant(env, key, value) {
   const previous = env.values.get(key) ?? null;
   env.values.set(key, value);
@@ -59,8 +83,9 @@ async function putGrant(env, key, value) {
 function mockEnv(initial = {}) {
   const values = new Map(Object.entries(initial));
   const pools = new Map();
+  const runtime = new Map();
   return {
-    values,
+    values, runtime,
     POLICY_KV: {
       async get(key) {
         if (Array.isArray(key)) return new Map(key.map((item) => [item, structuredClone(values.get(item) ?? null)]));
@@ -75,11 +100,12 @@ function mockEnv(initial = {}) {
           const path = new URL(url).pathname, body = JSON.parse(init.body);
           if (path === "/grant-pools/resolve") {
             const policy = poolKey("policies", body.policyId, body.providerId), tenant = poolKey("tenants", body.tenantId, body.providerId);
-            const keys = [
+            const keys = [...new Set([
+              ...(body.defaultKeys ?? []),
               ...[...(pools.get(policy) ?? [])].sort().map((ref) => `oauth/${body.policyId}/${ref}`),
               ...[...(pools.get(tenant) ?? [])].sort().map((ref) => `oauth/tenants/${body.tenantId}/${ref}`),
-            ];
-            return Response.json({ keys });
+            ])];
+            return Response.json({ keys, states: Object.fromEntries(keys.flatMap((key) => runtime.has(key) ? [[key, runtime.get(key)]] : [])) });
           }
           if (path === "/grant-pools/sync") {
             if (body.previousProvider && (body.previousProvider !== body.provider || !body.enabled)) pools.get(poolKey(body.scope, body.scopeId, body.previousProvider))?.delete(body.tokenRef);
@@ -90,6 +116,8 @@ function mockEnv(initial = {}) {
             }
             return new Response("updated");
           }
+          if (path === "/grant-pools/feedback") { runtime.set(body.key, body.state); return new Response("updated"); }
+          if (path === "/grant-pools/states") return Response.json({ states: Object.fromEntries(body.keys.flatMap((key) => runtime.has(key) ? [[key, runtime.get(key)]] : [])) });
           return new Response("not found", { status: 404 });
         } };
       },

@@ -7,10 +7,11 @@ readiness, retention, budget, forwarding, and accounting in that order.
 ## Control plane
 
 `ACCESS_CONTROL` is canonical for policies, proxy credentials, users, policy
-bindings, provider connections, and OAuth authorization state. Existing KV data
-is imported once per resource family and recorded with a Durable Object migration
-marker. After that marker, missing records remain missing; request paths never
-resurrect stale KV state. Assignment rules, scoped upstream grants, and provider
+bindings, provider connections, OAuth authorization state, upstream-grant pool
+membership, and sanitized grant runtime state. Existing KV data is imported
+once per resource family and recorded with a Durable Object migration marker.
+After that marker, missing records remain missing; request paths never resurrect
+stale KV state. Assignment rules, scoped upstream-grant secrets, and provider
 health remain in KV because they have separate lifecycle and consistency needs.
 
 Authentication is read-only after an existing user receives versioned
@@ -34,8 +35,11 @@ provider and model drift.
 3. Reserve the conservative budget before provider work.
 4. Retain eligible LLM request content in R2 when policy requires it. Storage
    failure is fail-closed and prevents the upstream call.
-5. Sign and forward the provider request.
-6. Settle budget and enqueue the usage event independently. Either failure is
+5. Select a non-cooled grant by configured priority, current provider-reported
+   quota ratio, and stable key; then sign and forward the provider request.
+6. On an upstream 401, 403, or 429, record sanitized grant state and try at most
+   one same-provider alternate for an LLM or GET/HEAD route.
+7. Settle budget and enqueue the single final usage event independently. Either failure is
    retried without masking the provider response or suppressing the other task.
 
 Usage events are queued into a Durable Object shard named by tenant and policy.

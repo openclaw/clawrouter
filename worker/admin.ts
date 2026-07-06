@@ -7,7 +7,7 @@ import {
   type AssignmentEvidence,
 } from "./assignments";
 import { contentKey } from "./content-retention";
-import { grantPriority, grantUsable, syncGrantPoolIndex, validCredentialBundle, validGrantSegment } from "./grant-selection";
+import { currentGrantRuntime, grantPriority, grantRuntimeStates, grantUsable, syncGrantPoolIndex, validCredentialBundle, validGrantSegment } from "./grant-selection";
 import { assertFusionModels, loadFusionConfig, storeFusionConfig } from "./fusion-config";
 import { fusionReadiness } from "./fusion-readiness";
 import { normalizeFusionConfig } from "./fusion";
@@ -17,7 +17,7 @@ import { endpointForPath, listGrantRecords, listHealth, modelRoute, providerRead
 import type { AdminBootstrapResponse } from "../shared/contracts";
 import type {
   AccessControlUser, AccessPolicy, AccessPolicyEntry, AssignmentRule, Env, PolicyBinding,
-  ProviderConnection, ProxyCredential, ProxyCredentialEntry, UpstreamGrant,
+  GrantRuntimeState, ProviderConnection, ProxyCredential, ProxyCredentialEntry, UpstreamGrant,
 } from "./types";
 import {
   cleanId, errorResponse, HttpError, normalizeEmail, nowIso, privateJson, randomId, readJson,
@@ -39,7 +39,7 @@ export async function adminApi(request: Request, env: Env, path: string): Promis
     if (request.method === "GET" && path === "/v1/admin/policy-bindings") return privateJson({ bindings: await listBindings(env) });
     if (request.method === "GET" && path === "/v1/admin/provider-status") return privateJson({ providers: await providerReadiness(env) });
     if (request.method === "GET" && path === "/v1/admin/provider-health") return privateJson({ providers: [...(await listHealth(env)).values()] });
-    if (request.method === "GET" && path === "/v1/admin/upstream-grants") return privateJson({ grants: (await listGrantRecords(env)).map(({ key, grant }) => validatedGrantResponse(key, grant)) });
+    if (request.method === "GET" && path === "/v1/admin/upstream-grants") return privateJson({ grants: await upstreamGrantResponses(env, await listGrantRecords(env)) });
     if (request.method === "GET" && path === "/v1/admin/assignment-rules") return privateJson({ rules: await assignmentRules(env) });
     if (request.method === "GET" && path === "/v1/admin/fusion") return privateJson(await loadFusionConfig(env));
 
@@ -195,7 +195,7 @@ async function adminBootstrap(env: Env): Promise<AdminBootstrapResponse> {
     users: users.map(userResponse),
     bindings,
     providers: providerReadinessFromState(env, grants, connectionRows, health),
-    grants: grants.map(({ key, grant }) => validatedGrantResponse(key, grant)),
+    grants: await upstreamGrantResponses(env, grants),
     rules,
     fusion,
     overview: overviewFrom(policies, credentials),
@@ -428,10 +428,18 @@ function normalizeBudgetValue(value: unknown, field: string): number | null {
   return value;
 }
 
-function validatedGrantResponse(key: string, grant: UpstreamGrant) {
+async function upstreamGrantResponses(env: Env, grants: Array<{ key: string; grant: UpstreamGrant }>) {
+  const states = await grantRuntimeStates(env, grants.map(({ key }) => key));
+  return grants.map(({ key, grant }) => validatedGrantResponse(key, grant, states[key]));
+}
+
+function validatedGrantResponse(key: string, grant: UpstreamGrant, runtime?: GrantRuntimeState) {
+  runtime = currentGrantRuntime(grant, runtime) ?? undefined;
   const credentialFields = grant.credentials && validCredentialBundle(grant.credentials) ? Object.keys(grant.credentials).sort() : [];
   const accessFlag = typeof grant.accessToken === "string" && grant.accessToken.trim().length > 0, refreshFlag = typeof grant.refreshToken === "string" && grant.refreshToken.trim().length > 0;
-  return { ...grantResponse(key, grant), priority: grantPriority(grant), hasCredential: (typeof grant.credential === "string" && grant.credential.trim().length > 0) || credentialFields.length > 0, credentialFields, ["hasAccess" + "Token"]: accessFlag, ["hasRefresh" + "Token"]: refreshFlag, usable: grant.enabled !== false && grantUsable(grant) };
+  const coolingDown = !!runtime?.cooldownUntil && Date.parse(runtime.cooldownUntil) > Date.now();
+  const quotaStatus: "unknown" | "available" | "limited" | "cooldown" = coolingDown ? "cooldown" : runtime?.status === "cooldown" ? "unknown" : runtime?.status ?? "unknown";
+  return { ...grantResponse(key, grant), priority: grantPriority(grant), hasCredential: (typeof grant.credential === "string" && grant.credential.trim().length > 0) || credentialFields.length > 0, credentialFields, ["hasAccess" + "Token"]: accessFlag, ["hasRefresh" + "Token"]: refreshFlag, usable: grant.enabled !== false && grantUsable(grant), quotaStatus, quotaObservedAt: runtime?.observedAt ?? null, cooldownUntil: coolingDown ? runtime?.cooldownUntil ?? null : null, quotaSource: runtime?.source ?? null, lastProviderSignal: runtime?.lastSignal ?? null, quotaWindows: runtime?.windows ?? [] };
 }
 
 function normalizeBinding(value: unknown): PolicyBinding {

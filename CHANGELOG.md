@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Track provider-reported quota and authentication state per upstream grant, prefer stronger equal-priority grants, expose cooldowns in the console, and retry one safe request against a same-provider alternate after 401, 403, or 429 responses.
 - Add policy- and tenant-scoped same-provider grant pools with bounded indexes, deterministic priority selection, legacy default-grant compatibility, and admin-console controls.
 - Add desktop/mobile dashboard visual regression, automated WCAG AA checks, visible-keyboard-focus proof, and restrictive browser security headers.
 - Add policy-specific Fusion readiness preflight with route, grant, pricing, budget, and eligible-call reservation status before enabling a profile.
