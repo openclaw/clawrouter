@@ -334,7 +334,7 @@ function normalizeBinding(value: PolicyBinding): PolicyBinding {
   if (!principalId || !cleanId(value.policyId)) throw new HttpError(400, "invalid_policy_binding", "invalid policy binding"); return { ...value, principalId, enabled: value.enabled ?? true, priority: value.priority ?? 100 };
 }
 function normalizeGrant(value: UpstreamGrant, existing: UpstreamGrant | null): UpstreamGrant {
-  const now = nowIso(), grant = { ...existing, ...value, version: 1, enabled: value.enabled ?? true, kind: value.kind ?? "oauth", tokenType: value.tokenType ?? "Bearer", scopes: value.scopes ?? [], credentials: value.credentials ?? {}, createdAt: existing?.createdAt ?? now, updatedAt: now, revokedAt: null };
+  const now = nowIso(), grant = { ...existing, ...value, version: 1, enabled: value.enabled ?? true, kind: value.kind ?? "oauth", tokenType: value.tokenType ?? "Bearer", scopes: value.scopes ?? [], credentials: value.credentials ?? existing?.credentials ?? {}, createdAt: existing?.createdAt ?? now, updatedAt: now, revokedAt: null };
   if (!grant.provider) throw new HttpError(400, "invalid_upstream_grant", "provider is required"); if (!grant.credential && !grant.accessToken && !Object.keys(grant.credentials ?? {}).length) throw new HttpError(400, "invalid_upstream_grant", "grant credential is required"); return grant;
 }
 function revokeGrant(value: UpstreamGrant): UpstreamGrant { const { credential: _, credentials: __, accessToken: ___, refreshToken: ____, ...safe } = value; return { ...safe, enabled: false, credentials: {}, updatedAt: nowIso(), revokedAt: nowIso() }; }
