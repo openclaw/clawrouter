@@ -249,6 +249,30 @@ try {
   const credentialsAfterMutation = await fetch(`${base}/v1/admin/credentials`, { headers: userHeaders });
   assert.equal(credentialsAfterMutation.status, 200);
   assert.deepEqual((await credentialsAfterMutation.json()).credentials.find((credential) => credential.credentialId === "shape_credential"), { credentialId: "shape_credential", policyId: "migrate", enabled: false, policyEnabled: true, generationMatches: true, active: false, principalId: "owner@example.com" });
+  const policiesBeforeInvalidRoots = await fetch(`${base}/v1/admin/policies`, { headers: userHeaders });
+  assert.equal(policiesBeforeInvalidRoots.status, 200);
+  const migratePolicyBeforeInvalidRoots = (await policiesBeforeInvalidRoots.json()).policies.find((policy) => policy.policyId === "migrate");
+  for (const [mutationId, url, method, body, errorCode] of [
+    ["policy_null", `${base}/v1/admin/policies/invalid_root`, "PUT", null, "invalid_policy"],
+    ["assignment_null", `${base}/v1/admin/assignment-rules/invalid_root`, "PUT", null, "invalid_assignment_rule"],
+    ["reconcile_null", `${base}/v1/admin/assignment-rules/reconcile`, "POST", null, "invalid_assignment_reconcile"],
+    ["reconcile_string_flag", `${base}/v1/admin/assignment-rules/reconcile`, "POST", { all: "false" }, "invalid_assignment_reconcile"],
+    ["reconcile_object_email", `${base}/v1/admin/assignment-rules/reconcile`, "POST", { email: {} }, "invalid_assignment_reconcile"],
+    ["legacy_null", `${base}/v1/admin/keys/migrate`, "PUT", null, "invalid_policy"],
+    ["legacy_object_digest", `${base}/v1/admin/keys/migrate`, "PUT", { providers: ["firecrawl", "replicate"], secretSha256: {} }, "invalid_credential"],
+    ["grant_null", `${base}/v1/admin/upstream-grants/policies/migrate/invalid_root`, "PUT", null, "invalid_upstream_grant"],
+    ["oauth_authorize_null", `${base}/v1/admin/upstream-grants/policies/migrate/invalid_root/authorize`, "POST", null, "invalid_upstream_grant"],
+  ]) {
+    const invalidMutation = await fetch(url, { method, headers: userHeaders, body: JSON.stringify(body) });
+    assert.equal(invalidMutation.status, 400, `malformed admin mutation ${mutationId} is rejected`);
+    assert.equal((await invalidMutation.json()).error.code, errorCode);
+  }
+  const policiesAfterInvalidRoots = await fetch(`${base}/v1/admin/policies`, { headers: userHeaders });
+  assert.equal(policiesAfterInvalidRoots.status, 200);
+  assert.deepEqual((await policiesAfterInvalidRoots.json()).policies.find((policy) => policy.policyId === "migrate"), migratePolicyBeforeInvalidRoots, "malformed legacy mutations do not partially update policy state");
+  const grantsAfterInvalidRoots = await fetch(`${base}/v1/admin/upstream-grants`, { headers: userHeaders });
+  assert.equal(grantsAfterInvalidRoots.status, 200);
+  assert.equal((await grantsAfterInvalidRoots.json()).grants.some((grant) => grant.tokenRef === "invalid_root"), false, "malformed grant mutations do not create grant state");
   console.log(`local Worker smoke passed on ${base}`);
 } catch (error) {
   throw new Error(`${error instanceof Error ? error.message : String(error)}\nwrangler output:\n${output}`);

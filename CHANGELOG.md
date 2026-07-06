@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Reject malformed admin mutation roots and scalar reconciliation flags before control-plane work.
 - Validate and canonicalize proxy-credential policy, digest, state, and owner fields before activation.
 - Validate and canonicalize provider-connection flags and labels before persistence.
 - Validate and canonicalize access-user identity and policy-grant payloads before persistence.
