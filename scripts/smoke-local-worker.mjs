@@ -91,6 +91,11 @@ try {
     assert.equal(invalidFusion.status, 400);
     assert.equal((await invalidFusion.json()).error.code, "fusion_config_invalid");
   }
+  for (const model of ["cohere/command-a-plus-05-2026", "cloudflare-ai-gateway/auto"]) {
+    const incompatibleFusion = await fetch(`${base}/v1/admin/fusion`, { method: "PUT", headers: adminHeaders, body: JSON.stringify({ ...bootstrapBody.fusion, adviserModels: [model] }) });
+    assert.equal(incompatibleFusion.status, 400);
+    assert.equal((await incompatibleFusion.json()).error.code, "fusion_model_incompatible");
+  }
   const deniedFusionConfig = { ...bootstrapBody.fusion, enabled: true, adviserModels: ["local/adviser"], aggregatorModel: "openai/gpt-4.1-mini" };
   assert.equal((await fetch(`${base}/v1/admin/fusion`, { method: "PUT", headers: adminHeaders, body: JSON.stringify(deniedFusionConfig) })).status, 200);
   const deniedModels = await fetch(`${base}/v1/models`, { headers: { authorization: `Bearer ${proxyKey}` } });

@@ -1,6 +1,6 @@
 import type { FusionConfig } from "../shared/contracts";
 import { DEFAULT_FUSION_CONFIG, FUSION_MODEL_ID, normalizeFusionConfig } from "./fusion";
-import { modelRoute } from "./providers";
+import { endpointForPath, modelRoute } from "./providers";
 import type { Env } from "./types";
 import { HttpError } from "./utils";
 
@@ -30,5 +30,9 @@ function assertFusionModels(config: FusionConfig): void {
     const route = modelRoute(model);
     if (!route) throw new HttpError(400, "fusion_model_not_found", `fusion model ${model} is not registered`);
     if (!route.model.capabilities.includes("llm.chat")) throw new HttpError(400, "fusion_model_incompatible", `fusion model ${model} does not support chat completions`);
+    const endpoint = endpointForPath(route.provider, "/v1/chat/completions");
+    if (endpoint?.request_format !== "openai.chat_completions" || endpoint.response_format !== "openai.chat_completions") {
+      throw new HttpError(400, "fusion_model_incompatible", `fusion model ${model} is not OpenAI chat-completions compatible`);
+    }
   }
 }
