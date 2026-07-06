@@ -123,6 +123,7 @@ export interface OAuthState {
   actorEmail: string;
   grantKey: string;
   provider: string;
+  priority?: number;
   redirectUri: string;
   expiresAtMs: number;
 }
@@ -130,6 +131,7 @@ export interface OAuthState {
 export interface UpstreamGrant {
   version?: number;
   enabled?: boolean;
+  priority?: number;
   kind?: "api_key" | "oauth" | "subscription";
   provider?: string | null;
   label?: string | null;

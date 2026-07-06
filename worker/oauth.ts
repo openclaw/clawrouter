@@ -1,10 +1,11 @@
 import { authorizeAdmin, verifiedAccessSession } from "./access";
 import { authorityCall } from "./authority";
+import { syncGrantPoolIndex } from "./grant-selection";
 import { providerById } from "./providers";
 import type { Env, OAuthState, UpstreamGrant } from "./types";
 import { errorResponse, nowIso, privateJson } from "./utils";
 
-export async function startOAuth(request: Request, env: Env, grantKey: string, providerId: string): Promise<Response> {
+export async function startOAuth(request: Request, env: Env, grantKey: string, providerId: string, priority: number): Promise<Response> {
   const actor = await authorizeAdmin(request, env);
   if (actor instanceof Response) return actor;
   if (actor.email === "token-admin") return errorResponse("access_admin_required", "browser OAuth requires a Cloudflare Access admin session", 403);
@@ -16,7 +17,7 @@ export async function startOAuth(request: Request, env: Env, grantKey: string, p
   const challenge = base64Url(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(verifier))));
   const stateId = base64Url(crypto.getRandomValues(new Uint8Array(32)));
   const callback = `${new URL(request.url).origin}/v1/oauth/callback`;
-  const state: OAuthState = { state: stateId, verifier, actorEmail: actor.email, grantKey, provider: providerId, redirectUri: callback, expiresAtMs: Date.now() + 10 * 60_000 };
+  const state: OAuthState = { state: stateId, verifier, actorEmail: actor.email, grantKey, provider: providerId, priority, redirectUri: callback, expiresAtMs: Date.now() + 10 * 60_000 };
   await authorityCall(env, "/oauth-states/put", state);
   const url = new URL(config.authorizeUrl);
   url.searchParams.set("response_type", "code"); url.searchParams.set("client_id", clientId); url.searchParams.set("redirect_uri", callback);
@@ -59,7 +60,10 @@ export async function oauthCallback(request: Request, env: Env): Promise<Respons
     subscription: { ...existing?.subscription, plan: jsonPointer(idPayload, config.subscriptionPlanJsonPointer) ?? existing?.subscription?.plan },
     createdAt: existing?.createdAt ?? now, updatedAt: now, revokedAt: null,
   };
-  await env.POLICY_KV.put(state.grantKey, JSON.stringify(grant));
+  grant.priority = Number.isInteger(state.priority) ? state.priority : existing?.priority ?? 100;
+  await syncGrantPoolIndex(env, state.grantKey, existing, grant);
+  try { await env.POLICY_KV.put(state.grantKey, JSON.stringify(grant)); }
+  catch (error) { await syncGrantPoolIndex(env, state.grantKey, grant, existing).catch(() => undefined); throw error; }
   return callbackPage(true, `${provider.display_name} connection saved.`);
 }
 

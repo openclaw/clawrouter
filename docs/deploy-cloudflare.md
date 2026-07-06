@@ -583,6 +583,14 @@ Use the provider id as `tokenRef` for the provider's default connection.
 Provider manifests may declare a different explicit token reference when a
 provider needs multiple named connection contracts.
 
+To create a same-provider pool, save multiple admin grants with distinct token
+references, the same `provider`, and an integer `priority` from 0 through
+1000000. Lower values route first; ties use the stable canonical grant key.
+Admin writes and browser OAuth maintain the bounded pool index automatically.
+The direct `cf:oauth:*` compatibility helpers remain appropriate for the
+provider-id default grant; use the admin API or console for additional pool
+members so the control plane updates their indexes.
+
 Secrets are never accepted in argv. Supply `accessToken`, `credential`,
 `credentials-json`, and an optional `refreshToken` only through the matching
 `--*-stdin`, `--*-env`, or `--*-file` option. Only one secret can use stdin in

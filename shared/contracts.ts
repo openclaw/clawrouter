@@ -90,6 +90,7 @@ export interface UpstreamGrant {
   tokenRef: string;
   version: number;
   enabled: boolean;
+  priority: number;
   kind: "api_key" | "oauth" | "subscription";
   provider?: string | null;
   label?: string | null;

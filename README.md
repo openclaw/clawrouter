@@ -218,6 +218,12 @@ or files, never argv.
 Revocation retains grant metadata in a disabled tombstone while removing
 secrets. See `docs/deploy-cloudflare.md` for the complete operator flow.
 
+The admin API and console can register multiple token references for the same
+scope and provider. ClawRouter maintains a bounded pool index outside the
+secret-bearing grant records, prefers the lowest numeric `priority`, and uses
+the canonical grant key as the deterministic tie-breaker. Existing grants
+whose token reference is the provider id remain compatible without an index.
+
 Admin endpoints accept a verified Cloudflare Access admin session or
 `Authorization: Bearer <admin-token>` against `CLAWROUTER_ADMIN_TOKEN_SHA256`.
 Provider-approved browser OAuth starts only from a verified Access admin

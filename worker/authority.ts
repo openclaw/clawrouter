@@ -8,9 +8,11 @@ type Principal = { principalType: "user" | "group"; principalId: string };
 type Seed = { principal: Principal; bindings: PolicyBinding[] };
 
 export class PolicyBindingIndexObject implements DurableObject {
+  private state: DurableObjectState;
   private sql: SqlStorage;
 
-  constructor(private state: DurableObjectState) {
+  constructor(state: DurableObjectState) {
+    this.state = state;
     this.sql = state.storage.sql;
     this.ensureSchema();
   }
@@ -45,6 +47,8 @@ export class PolicyBindingIndexObject implements DurableObject {
       if (path === "/connections/initialize") { this.initializeConnections(await readJson<ProviderConnection[]>(request)); return new Response("initialized"); }
       if (path === "/connections/initialize-all") { this.initializeConnections(await readJson<ProviderConnection[]>(request)); this.putMeta("connections_global_initialized"); return new Response("initialized"); }
       if (path === "/connections/put") { this.putConnection(await readJson<ProviderConnection>(request)); return new Response("updated"); }
+      if (path === "/grant-pools/resolve") return json({ keys: this.resolveGrantPool(await readJson<GrantPoolResolveRequest>(request)) });
+      if (path === "/grant-pools/sync") { this.syncGrantPool(await readJson<GrantPoolSyncRequest>(request)); return new Response("updated"); }
       if (path === "/oauth-states/put") { this.putOAuthState(await readJson<OAuthState>(request)); return new Response("updated"); }
       if (path === "/oauth-states/consume") return json({ state: this.consumeOAuthState(await readJson<{ state: string; actorEmail: string }>(request)) });
       return errorResponse("route_not_found", "route not found", 404);
@@ -61,6 +65,7 @@ export class PolicyBindingIndexObject implements DurableObject {
     this.sql.exec("CREATE TABLE IF NOT EXISTS access_policies (policy_id TEXT PRIMARY KEY, policy_json TEXT NOT NULL)");
     this.sql.exec("CREATE TABLE IF NOT EXISTS proxy_credentials (credential_id TEXT PRIMARY KEY, credential_json TEXT NOT NULL)");
     this.sql.exec("CREATE TABLE IF NOT EXISTS provider_connections (provider_id TEXT PRIMARY KEY, connection_json TEXT NOT NULL)");
+    this.sql.exec("CREATE TABLE IF NOT EXISTS upstream_grant_pool_members (scope TEXT NOT NULL, scope_id TEXT NOT NULL, provider_id TEXT NOT NULL, token_ref TEXT NOT NULL, PRIMARY KEY (scope, scope_id, provider_id, token_ref))");
     this.sql.exec("CREATE TABLE IF NOT EXISTS oauth_authorization_states (state TEXT PRIMARY KEY, state_json TEXT NOT NULL, expires_at_ms INTEGER NOT NULL)");
   }
 
@@ -208,6 +213,36 @@ export class PolicyBindingIndexObject implements DurableObject {
     return { initialized: this.hasMeta("connections_global_initialized"), connections, missingProviderIds };
   }
 
+  private resolveGrantPool(input: GrantPoolResolveRequest): string[] {
+    const providerId = grantSegment(input.providerId, "providerId");
+    const policyId = grantPoolScopeId(input.policyId);
+    const tenantId = grantPoolScopeId(input.tenantId);
+    return [
+      ...(policyId ? this.poolTokenRefs("policies", policyId, providerId).map((tokenRef) => `oauth/${policyId}/${tokenRef}`) : []),
+      ...(tenantId ? this.poolTokenRefs("tenants", tenantId, providerId).map((tokenRef) => `oauth/tenants/${tenantId}/${tokenRef}`) : []),
+    ];
+  }
+
+  private syncGrantPool(input: GrantPoolSyncRequest): void {
+    const scope = input.scope === "policies" || input.scope === "tenants" ? input.scope : null;
+    if (!scope) throw new Error("grant pool scope is invalid");
+    const scopeId = grantSegment(input.scopeId, "scopeId"), tokenRef = grantSegment(input.tokenRef, "tokenRef");
+    const previousProvider = input.previousProvider == null ? null : grantSegment(input.previousProvider, "previousProvider");
+    const provider = input.provider == null ? null : grantSegment(input.provider, "provider");
+    const adding = input.enabled === true && provider !== null;
+    if (adding && !this.hasPoolMember(scope, scopeId, provider, tokenRef) && this.poolTokenRefs(scope, scopeId, provider).length >= 32) throw new Error("grant pool cannot contain more than 32 members per scope and provider");
+    if (previousProvider && (previousProvider !== provider || !adding)) this.sql.exec("DELETE FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND provider_id = ? AND token_ref = ?", scope, scopeId, previousProvider, tokenRef);
+    if (adding) this.sql.exec("INSERT OR IGNORE INTO upstream_grant_pool_members (scope, scope_id, provider_id, token_ref) VALUES (?, ?, ?, ?)", scope, scopeId, provider, tokenRef);
+  }
+
+  private poolTokenRefs(scope: "policies" | "tenants", scopeId: string, providerId: string): string[] {
+    return rows<{ token_ref: string }>(this.sql.exec("SELECT token_ref FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND provider_id = ? ORDER BY token_ref LIMIT 33", scope, scopeId, providerId)).map((row) => row.token_ref);
+  }
+
+  private hasPoolMember(scope: "policies" | "tenants", scopeId: string, providerId: string, tokenRef: string): boolean {
+    return rows(this.sql.exec("SELECT token_ref FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND provider_id = ? AND token_ref = ?", scope, scopeId, providerId, tokenRef)).length > 0;
+  }
+
   private putOAuthState(value: OAuthState): void {
     this.sql.exec("INSERT OR REPLACE INTO oauth_authorization_states (state, state_json, expires_at_ms) VALUES (?, ?, ?)", value.state, JSON.stringify(value), value.expiresAtMs);
   }
@@ -221,6 +256,17 @@ export class PolicyBindingIndexObject implements DurableObject {
 }
 
 interface UserBindingsRequest { user: AccessControlUser; policyIds: string[]; seed: Seed }
+interface GrantPoolResolveRequest { policyId: string; tenantId: string; providerId: string }
+interface GrantPoolSyncRequest { scope: "policies" | "tenants"; scopeId: string; tokenRef: string; previousProvider: string | null; provider: string | null; enabled: boolean }
+
+function grantSegment(value: unknown, field: string): string {
+  if (typeof value !== "string" || !value.length || value.length > 256 || value.includes("/") || /[\u0000-\u001f\u007f]/.test(value)) throw new Error(`${field} must be a valid grant key segment`);
+  return value;
+}
+
+function grantPoolScopeId(value: unknown): string | null {
+  return typeof value === "string" && value.length > 0 && value.length <= 256 && !value.includes("/") && !/[\u0000-\u001f\u007f]/.test(value) ? value : null;
+}
 
 export async function authorityCall<T>(env: Env, path: string, body: unknown, objectName = "policy-bindings"): Promise<T> {
   const stub = env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName(objectName));

@@ -104,7 +104,7 @@ export interface PolicyForm {
 export interface AccessForm { email: string; tenantId: string; enabled: boolean; groups: string; policyIds: string[]; contentRetentionDisabled: boolean }
 export interface CredentialForm { credentialId: string; policyId: string; principalId: string }
 export interface BindingForm { policyId: string; principalType: "user" | "group"; principalId: string; enabled: boolean; priority: string }
-export interface UpstreamGrantForm { scope: "policies" | "tenants"; scopeId: string; tokenRef: string; kind: UpstreamGrant["kind"]; provider: string; label: string; enabled: boolean; credential: string; credentialBundle: string; accessToken: string; refreshToken: string; accountId: string; expiresAt: string }
+export interface UpstreamGrantForm { scope: "policies" | "tenants"; scopeId: string; tokenRef: string; kind: UpstreamGrant["kind"]; provider: string; label: string; enabled: boolean; priority: string; credential: string; credentialBundle: string; accessToken: string; refreshToken: string; accountId: string; expiresAt: string }
 export interface AssignmentRuleForm { ruleId: string; enabled: boolean; kind: AssignmentRule["kind"]; subject: string; groups: string; policyIds: string[]; priority: string; revokeOnLoss: boolean; provenance: string }
 export type AccessTab = "policies" | "credentials" | "bindings" | "upstream" | "assignments" | "fusion";
 

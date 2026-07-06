@@ -36,11 +36,13 @@ export function useUpstreamAdmin({ allowDemo, gatewayOrigin, demoMode, providers
       setError("");
       const scopeId = form.scopeId.trim(), tokenRef = form.tokenRef.trim(), provider = form.provider.trim();
       if (!scopeId || !tokenRef || !provider) throw new Error("scope, token reference, and provider are required");
+      const priority = Number(form.priority);
+      if (!Number.isInteger(priority) || priority < 0 || priority > 1_000_000) throw new Error("priority must be an integer from 0 to 1000000");
       const credentialBundle = parseCredentialBundle(form.credentialBundle);
       const primarySecret = form.kind === "api_key" ? form.credential.trim() || Object.keys(credentialBundle).length : form.accessToken.trim();
       if (!selected && !primarySecret) throw new Error("a new upstream grant requires its primary secret");
       const body = {
-        version: 1, enabled: form.enabled, kind: form.kind, provider, label: form.label.trim() || undefined,
+        version: 1, enabled: form.enabled, priority, kind: form.kind, provider, label: form.label.trim() || undefined,
         tokenType: selected?.tokenType ?? "Bearer", expiresAt: form.expiresAt.trim() || undefined, scopes: selected?.scopes ?? [],
         accountId: form.accountId.trim() || undefined, subscription: selected?.subscription ?? undefined,
         ...(form.credential.trim() ? { credential: form.credential.trim() } : {}),
@@ -93,10 +95,12 @@ export function useUpstreamAdmin({ allowDemo, gatewayOrigin, demoMode, providers
       setError("");
       const scopeId = form.scopeId.trim(), tokenRef = form.tokenRef.trim(), provider = form.provider.trim();
       if (!scopeId || !tokenRef || !provider) throw new Error("scope, token reference, and provider are required");
+      const priority = Number(form.priority);
+      if (!Number.isInteger(priority) || priority < 0 || priority > 1_000_000) throw new Error("priority must be an integer from 0 to 1000000");
       if (!providers.find((item) => item.id === provider)?.auth?.authorization) throw new Error("selected provider does not support browser OAuth");
       setStatus("connecting upstream grant");
       if (demoMode) { setStatus("browser OAuth unavailable in local demo"); return; }
-      const result = await request<{ authorizationUrl: string }>(gatewayOrigin, `/v1/admin/upstream-grants/${form.scope}/${encodeURIComponent(scopeId)}/${encodeURIComponent(tokenRef)}/authorize`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider }) });
+      const result = await request<{ authorizationUrl: string }>(gatewayOrigin, `/v1/admin/upstream-grants/${form.scope}/${encodeURIComponent(scopeId)}/${encodeURIComponent(tokenRef)}/authorize`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider, priority }) });
       window.location.assign(result.authorizationUrl);
     } catch (caught) { handleError(caught); }
   }
