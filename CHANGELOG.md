@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Validate and canonicalize provider-connection flags and labels before persistence.
 - Validate and canonicalize access-user identity and policy-grant payloads before persistence.
 - Validate and canonicalize policy-binding principals, flags, and priorities before persistence.
 - Validate policy wildcard, provider, boolean, and metadata shapes before granting access.
