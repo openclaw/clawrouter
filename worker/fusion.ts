@@ -3,6 +3,7 @@ import { HttpError } from "./utils.ts";
 
 export const FUSION_MODEL_ID = "clawrouter/fusion" as const;
 const MAX_ADVISERS = 4;
+const ADVISER_RESPONSE_OVERHEAD_BYTES = 16 * 1024;
 
 export const DEFAULT_FUSION_CONFIG: FusionConfig = {
   version: 1,
@@ -91,10 +92,12 @@ function modelSupportsTemperature(model: string): boolean {
 export async function collectFusionProposals(config: FusionConfig, original: Record<string, unknown>, invoke: InvokeModel): Promise<FusionRunResult> {
   const startedAt = Date.now();
   const settled = await Promise.all(config.adviserModels.map(async (model, index) => {
+    const deadline = Date.now() + config.adviserTimeoutMs;
     try {
-      const response = await invoke(model, buildAdviserBody(original, model, config, index), config.adviserTimeoutMs, index);
+      const response = await beforeDeadline(invoke(model, buildAdviserBody(original, model, config, index), config.adviserTimeoutMs, index), deadline);
       if (!response.ok) return { model, failed: true as const };
-      const content = completionText(await response.json<unknown>()).trim();
+      const maxResponseBytes = ADVISER_RESPONSE_OVERHEAD_BYTES + config.maxProposalChars * 6;
+      const content = completionText(await readJsonBeforeDeadline(response, maxResponseBytes, deadline)).trim();
       return content
         ? { model, content: content.slice(0, config.maxProposalChars) }
         : { model, failed: true as const };
@@ -107,6 +110,44 @@ export async function collectFusionProposals(config: FusionConfig, original: Rec
     failedModels: settled.filter((item) => "failed" in item).map((item) => item.model),
     durationMs: Date.now() - startedAt,
   };
+}
+
+async function readJsonBeforeDeadline(response: Response, maxBytes: number, deadline: number): Promise<unknown> {
+  if (!response.body) throw new Error("fusion adviser response has no body");
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let bytes = 0;
+  let complete = false;
+  let text = "";
+  try {
+    while (true) {
+      const { done, value } = await beforeDeadline(reader.read(), deadline);
+      if (done) {
+        complete = true;
+        break;
+      }
+      bytes += value.byteLength;
+      if (bytes > maxBytes) throw new Error("fusion adviser response exceeds byte limit");
+      text += decoder.decode(value, { stream: true });
+    }
+    return JSON.parse(text + decoder.decode());
+  } finally {
+    if (!complete) void reader.cancel().catch(() => undefined);
+  }
+}
+
+async function beforeDeadline<T>(operation: Promise<T>, deadline: number): Promise<T> {
+  const remaining = deadline - Date.now();
+  if (remaining <= 0) throw new Error("fusion adviser deadline exceeded");
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  const expired = new Promise<never>((_resolve, reject) => {
+    timeout = setTimeout(() => reject(new Error("fusion adviser deadline exceeded")), remaining);
+  });
+  try {
+    return await Promise.race([operation, expired]);
+  } finally {
+    if (timeout) clearTimeout(timeout);
+  }
 }
 
 export function buildFusionReservationProposals(config: FusionConfig): FusionProposal[] {

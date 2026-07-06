@@ -78,6 +78,29 @@ test("fusion runs advisers concurrently, tolerates failures, and injects untrust
   assert.equal(buildAggregatorBody({ messages: [], temperature: 0.7 }, reasoningConfig, []).temperature, undefined);
 });
 
+test("fusion fails open when adviser bodies stall or exceed their byte bound", async () => {
+  const stalledConfig = { ...normalizeFusionConfig({ adviserModels: ["local/stalled"] }), adviserTimeoutMs: 25 };
+  let cancelled = false;
+  const stalled = await collectFusionProposals(stalledConfig, { messages: [] }, async () => new Response(new ReadableStream({
+    start(controller) {
+      controller.enqueue(new TextEncoder().encode('{"choices":[{"message":{"content":"partial'));
+    },
+    cancel() {
+      cancelled = true;
+    },
+  })));
+  assert.deepEqual(stalled.proposals, []);
+  assert.deepEqual(stalled.failedModels, ["local/stalled"]);
+  assert.equal(cancelled, true);
+
+  const oversizedConfig = normalizeFusionConfig({ adviserModels: ["local/oversized"], maxProposalChars: 256 });
+  const oversized = await collectFusionProposals(oversizedConfig, { messages: [] }, async () => Response.json({
+    choices: [{ message: { content: "x".repeat(32_000) } }],
+  }));
+  assert.deepEqual(oversized.proposals, []);
+  assert.deepEqual(oversized.failedModels, ["local/oversized"]);
+});
+
 test("fusion reservation proposals cover worst-case JSON encoding", () => {
   const config = normalizeFusionConfig({ adviserModels: ["local/adviser"], maxProposalChars: 256 });
   const original = { messages: [{ role: "user", content: "solve" }] };
