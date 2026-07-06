@@ -4,6 +4,7 @@ import { resolveCredentials, resolvePolicies, resolveUsers } from "./authority";
 import { retainRequestContent } from "./content-retention";
 import {
   FUSION_MODEL_ID, buildAggregatorBody, buildFusionReservationProposals, collectFusionProposals,
+  fusionMessagesValid,
 } from "./fusion";
 import { loadFusionConfig } from "./fusion-config";
 import {
@@ -99,6 +100,7 @@ async function proxyFusion(
 ): Promise<Response> {
   const config = await loadFusionConfig(env);
   if (!config.enabled) return errorResponse("fusion_disabled", `${FUSION_MODEL_ID} is not enabled`, 404);
+  if (!fusionMessagesValid(body.messages)) return errorResponse("fusion_messages_invalid", "fusion messages must be an array of objects with string roles", 400);
   const aggregatorSelection = concreteOpenAiSelection("/v1/chat/completions", buildAggregatorBody(body, config, buildFusionReservationProposals(config)), env);
   if (aggregatorSelection instanceof Response) return aggregatorSelection;
   const aggregatorBudget = await reserveSelected(request, env, context, mode, aggregatorSelection, preauthenticated);

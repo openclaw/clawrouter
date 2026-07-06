@@ -114,6 +114,11 @@ try {
   assert.equal(upstreamCalls.length, 0, "synthesizer budget reservation blocks adviser spend before the final answer can be funded");
   const localFusionConfig = { ...deniedFusionConfig, aggregatorModel: "local/final" };
   assert.equal((await fetch(`${base}/v1/admin/fusion`, { method: "PUT", headers: adminHeaders, body: JSON.stringify(localFusionConfig) })).status, 200);
+  const upstreamCallsBeforeMalformedFusion = upstreamCalls.length;
+  const malformedFusion = await fetch(`${base}/v1/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${fusionKey}`, "content-type": "application/json" }, body: JSON.stringify({ model: "clawrouter/fusion", messages: [null] }) });
+  assert.equal(malformedFusion.status, 400);
+  assert.equal((await malformedFusion.json()).error.code, "fusion_messages_invalid");
+  assert.equal(upstreamCalls.length, upstreamCallsBeforeMalformedFusion, "malformed fusion messages never reach an upstream model");
   const fusionModels = await fetch(`${base}/v1/models`, { headers: { authorization: `Bearer ${fusionKey}` } });
   assert.equal(fusionModels.status, 200);
   assert.equal((await fusionModels.json()).data.some((model) => model.id === "clawrouter/fusion"), true);

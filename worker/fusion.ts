@@ -58,7 +58,7 @@ export function normalizeFusionConfig(input: unknown): FusionConfig {
 }
 
 export function buildAdviserBody(original: Record<string, unknown>, model: string, config: FusionConfig, index: number): Record<string, unknown> {
-  const messages = buildLocalMessages(Array.isArray(original.messages) ? original.messages as ChatMessage[] : [], config.maxInputChars);
+  const messages = buildLocalMessages(fusionMessagesValid(original.messages) ? original.messages : [], config.maxInputChars);
   return {
     model,
     stream: false,
@@ -78,11 +78,15 @@ export function buildAdviserBody(original: Record<string, unknown>, model: strin
 export function buildAggregatorBody(original: Record<string, unknown>, config: FusionConfig, proposals: FusionProposal[]): Record<string, unknown> {
   const body: Record<string, unknown> = { ...original, model: config.aggregatorModel };
   if (!modelSupportsTemperature(config.aggregatorModel)) delete body.temperature;
-  if (!proposals.length || !Array.isArray(original.messages)) return body;
+  if (!proposals.length || !fusionMessagesValid(original.messages)) return body;
   const messages = [...original.messages] as ChatMessage[];
   const firstNonSystem = messages.findIndex((message) => message.role !== "system");
   messages.splice(firstNonSystem === -1 ? messages.length : firstNonSystem, 0, fusionInstruction(proposals));
   return { ...body, messages };
+}
+
+export function fusionMessagesValid(value: unknown): value is ChatMessage[] {
+  return Array.isArray(value) && value.every((message) => !!message && typeof message === "object" && !Array.isArray(message) && typeof (message as { role?: unknown }).role === "string");
 }
 
 function modelSupportsTemperature(model: string): boolean {
