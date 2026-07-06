@@ -343,6 +343,7 @@ function normalizeBinding(value: PolicyBinding): PolicyBinding {
 function normalizeGrant(value: UpstreamGrant, existing: UpstreamGrant | null): UpstreamGrant {
   const now = nowIso(), grant = { ...existing, ...value, version: 1, enabled: value.enabled ?? true, kind: value.kind ?? "oauth", tokenType: value.tokenType ?? "Bearer", scopes: value.scopes ?? [], credentials: value.credentials ?? existing?.credentials ?? {}, createdAt: existing?.createdAt ?? now, updatedAt: now, revokedAt: null };
   if (!grant.provider) throw new HttpError(400, "invalid_upstream_grant", "provider is required");
+  if (!snapshot.providers.some((provider) => provider.id === grant.provider)) throw new HttpError(400, "unknown_provider", "upstream grant provider is not registered");
   if (!validCredentialBundle(grant.credentials) || [grant.credential, grant.accessToken, grant.refreshToken].some((secret) => secret != null && (typeof secret !== "string" || !secret.trim().length))) throw new HttpError(400, "invalid_upstream_grant", "grant credentials must use non-empty string values");
   if (!grantUsable(grant)) throw new HttpError(400, "invalid_upstream_grant", "grant credential is required");
   return grant;

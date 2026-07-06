@@ -99,6 +99,9 @@ try {
   const invalidBundledGrant = await fetch(`${base}/v1/admin/upstream-grants/policies/migrate/invalid_bundle`, { method: "PUT", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" }, body: JSON.stringify({ provider: "aws-bedrock", kind: "api_key", credentials: invalidCredentials }) });
   assert.equal(invalidBundledGrant.status, 400, "partially empty upstream credential fields are rejected");
   assert.equal((await invalidBundledGrant.json()).error.code, "invalid_upstream_grant");
+  const unknownProviderGrant = await fetch(`${base}/v1/admin/upstream-grants/policies/migrate/unknown_provider`, { method: "PUT", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" }, body: JSON.stringify({ provider: "missing-provider", kind: "api_key", credential: "local" }) });
+  assert.equal(unknownProviderGrant.status, 400, "upstream grants require a catalog provider");
+  assert.equal((await unknownProviderGrant.json()).error.code, "unknown_provider");
   const missingPathParam = await fetch(`${base}/v1/proxy/replicate/prediction`, { headers: { authorization: `Bearer ${proxyKey}` } });
   assert.equal(missingPathParam.status, 400);
   assert.equal((await missingPathParam.json()).error.code, "missing_path_param");
