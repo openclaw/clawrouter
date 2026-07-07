@@ -37,6 +37,11 @@ const noFailoverKey = `clawrouter-live-no_failover-${noFailoverSecret}`;
 putLocalKv("policies/no_failover", { enabled: true, generation, providers: ["local-openai"], tenantId: "default", tokenRole: "service", requestCostMicros: 1, retainRequestContent: false, grantRouting: { ...routingDefaults, strategy: "priority", failover: false } });
 putLocalKv("credentials/no_failover", { enabled: true, secretSha256: sha256(noFailoverSecret), policyId: "no_failover", policyGeneration: generation });
 
+const restrictedSecret = "restricted123";
+const restrictedKey = `clawrouter-live-restricted-${restrictedSecret}`;
+putLocalKv("policies/restricted", { enabled: true, generation, providers: ["local-openai"], tenantId: "default", tokenRole: "service", requestCostMicros: 1, retainRequestContent: false, grantRouting: { ...routingDefaults, eligibleGrants: { "local-openai": [] } } });
+putLocalKv("credentials/restricted", { enabled: true, secretSha256: sha256(restrictedSecret), policyId: "restricted", policyGeneration: generation });
+
 const fusionSecret = "fusion123";
 const fusionKey = `clawrouter-live-fusionlocal-${fusionSecret}`;
 putLocalKv("policies/fusion_local", { enabled: true, generation, providers: ["local-openai", "openai"], tenantId: "default", tokenRole: "service", monthlyBudgetMicros: 1, retainRequestContent: false });
@@ -451,6 +456,7 @@ try {
     ["legacy_object_digest", `${base}/v1/admin/keys/migrate`, "PUT", { providers: ["firecrawl", "replicate"], secretSha256: {} }, "invalid_credential"],
     ["grant_null", `${base}/v1/admin/upstream-grants/policies/migrate/invalid_root`, "PUT", null, "invalid_upstream_grant"],
     ["oauth_authorize_null", `${base}/v1/admin/upstream-grants/policies/migrate/invalid_root/authorize`, "POST", null, "invalid_upstream_grant"],
+    ["oauth_authorize_weight", `${base}/v1/admin/upstream-grants/policies/migrate/invalid_root/authorize`, "POST", { provider: "openai", weight: 0 }, "invalid_upstream_grant"],
   ]) {
     const invalidMutation = await fetch(url, { method, headers: userHeaders, body: JSON.stringify(body) });
     assert.equal(invalidMutation.status, 400, `malformed admin mutation ${mutationId} is rejected`);
@@ -476,6 +482,11 @@ try {
   const usageAfterInvalidBodies = await fetch(`${base}/v1/usage`, { headers: { authorization: `Bearer ${proxyKey}` } });
   assert.equal(usageAfterInvalidBodies.status, 200);
   assert.equal((await usageAfterInvalidBodies.json()).budget.spentMicros, 0, "invalid JSON body shapes must not reserve budget");
+  const callsBeforeRestrictedPool = upstreamCalls.length;
+  const restrictedPool = await fetch(`${base}/v1/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${restrictedKey}`, "content-type": "application/json" }, body: JSON.stringify({ model: "local/default", messages: [{ role: "user", content: "restricted pool" }] }) });
+  assert.equal(restrictedPool.status, 503);
+  assert.equal((await restrictedPool.json()).error.code, "upstream_grant_pool_unavailable");
+  assert.equal(upstreamCalls.length, callsBeforeRestrictedPool, "an explicit empty eligibility list never falls back to the provider environment credential");
   for (const [tokenRef, credential, weight = 1] of [["rotate-a", "rotate-a", 1], ["rotate-b", "rotate-b", 5]]) {
     const stored = await fetch(`${base}/v1/admin/upstream-grants/policies/rotation/${tokenRef}`, { method: "PUT", headers: adminHeaders, body: JSON.stringify({ provider: "local-openai", kind: "api_key", priority: 10, weight, credential }) });
     assert.equal(stored.status, 200, JSON.stringify(await stored.clone().json()));

@@ -169,6 +169,7 @@ export interface OAuthState {
   grantKey: string;
   provider: string;
   priority?: number;
+  weight?: number;
   redirectUri: string;
   expiresAtMs: number;
 }

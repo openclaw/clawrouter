@@ -279,7 +279,9 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string): 
     if (typeof body.provider !== "string" || !body.provider.trim()) throw new HttpError(400, "invalid_upstream_grant", "provider is required");
     const priority = body.priority ?? 100;
     if (!Number.isInteger(priority) || (priority as number) < 0 || (priority as number) > 1_000_000) throw new HttpError(400, "invalid_upstream_grant", "grant priority must be an integer from 0 to 1000000");
-    return startOAuth(request, env, key, body.provider.trim(), priority as number);
+    const weight = body.weight ?? 1;
+    if (typeof weight !== "number" || !Number.isFinite(weight) || weight <= 0 || weight > 1_000_000) throw new HttpError(400, "invalid_upstream_grant", "grant weight must be a number greater than 0 and at most 1000000");
+    return startOAuth(request, env, key, body.provider.trim(), priority as number, weight);
   }
   if (action === "refresh" && request.method === "POST") return privateJson(await upstreamGrantResponse(env, key, await refreshStoredGrant(env, key)));
   if (action === "quota-refresh" && request.method === "POST") {
