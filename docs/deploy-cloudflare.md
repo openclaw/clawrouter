@@ -106,7 +106,8 @@ CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY # optional smoke-only upstream k
 ```
 
 Set the queue variables when overriding their defaults. Set the Access
-variables when the console is protected by Cloudflare Access:
+variables when the console is protected by Cloudflare Access. Bedrock also
+uses one non-secret Region variable:
 
 ```text
 CLAWROUTER_USAGE_QUEUE                 # optional, defaults to clawrouter-usage
@@ -117,6 +118,7 @@ CLAWROUTER_ACCESS_AUD
 CLAWROUTER_ACCESS_ADMIN_EMAILS        # comma-separated admin emails
 CLAWROUTER_ACCESS_ADMIN_DOMAINS       # optional comma-separated admin domains
 CLAWROUTER_ACCESS_DEFAULT_TENANT      # optional, defaults to default
+CLAWROUTER_PROVIDER_AWS_REGION        # non-secret Bedrock Region, for example us-east-1
 ```
 
 The `Deploy Cloudflare` workflow can provision Access and deploy in one run
@@ -166,14 +168,26 @@ Store each temporary transport secret as
 the temporary GitHub secrets. `pnpm cf:secrets -- --dry-run` prints binding
 names only; the live command sends a JSON object to Wrangler over stdin.
 
+Provider configuration values are not included in that secret bulk operation.
+In particular, `AWS_REGION` is a non-secret Worker variable rendered under
+`[vars]`, not a Wrangler secret.
+
 AWS Bedrock uses SigV4. Bind these values before enabling the Bedrock provider:
 
 ```sh
+export AWS_REGION=us-east-1
+pnpm cf:config
 pnpm exec wrangler secret put AWS_ACCESS_KEY_ID --config .wrangler.generated.toml
 pnpm exec wrangler secret put AWS_SECRET_ACCESS_KEY --config .wrangler.generated.toml
 pnpm exec wrangler secret put AWS_SESSION_TOKEN --config .wrangler.generated.toml # optional
-pnpm exec wrangler secret put AWS_REGION --config .wrangler.generated.toml
 ```
+
+For GitHub Actions, set `CLAWROUTER_PROVIDER_AWS_REGION` as a repository
+variable. The deploy workflow maps it to `AWS_REGION` while rendering the
+Worker; provider secret bulk uploads only the access key, secret key, and
+optional session token. See [Amazon Bedrock](aws-bedrock.md) for IAM,
+credential grants, raw request formats, fixed-cost policy requirements, and
+live smoke configuration.
 
 Cloudflare AI Gateway needs the gateway coordinates plus the API token used for
 gateway authentication. The manifest binds account and gateway IDs from Worker
@@ -240,6 +254,20 @@ Select more golden providers with a comma-separated list:
 export CLAWROUTER_SMOKE_LIVE_PROVIDERS=openai,tavily
 pnpm cf:smoke
 ```
+
+Bedrock live smokes require a model and matching model-native body. The default
+targets Amazon Nova; override both together when the Region, IAM policy, or
+model differs:
+
+```sh
+export CLAWROUTER_SMOKE_LIVE_PROVIDERS=aws-bedrock
+export CLAWROUTER_SMOKE_MODEL_AWS_BEDROCK=bedrock/amazon.nova-lite-v1:0
+export CLAWROUTER_SMOKE_BODY_AWS_BEDROCK='{"schemaVersion":"messages-v1","messages":[{"role":"user","content":[{"text":"Reply with exactly: ok"}]}],"inferenceConfig":{"maxTokens":16}}'
+pnpm cf:smoke
+```
+
+See [Amazon Bedrock](aws-bedrock.md) before selecting another model: request
+bodies are model-specific and the smoke operation is raw `InvokeModel`.
 
 For GitHub Actions deploys, `worker_url`, `live_providers`, and the smoke key
 are mandatory. When the current Worker exposes key inspection, preflight blocks
@@ -669,6 +697,10 @@ pnpm cf:oauth:put -- \
   --label "maintainer Bedrock" \
   --credentials-json-env AWS_BEDROCK_CREDENTIALS
 ```
+
+Bedrock grants require `accessKeyId`, `secretAccessKey`, and optional
+`sessionToken`. They share the deployment's rendered `AWS_REGION`; grant-local
+Region values are not supported. See [Amazon Bedrock](aws-bedrock.md).
 
 For example, add refresh and subscription metadata without exposing either
 token in argv:
