@@ -49,6 +49,12 @@ Built-in starter coverage:
 - tool/API platforms: Tavily, Firecrawl (keyless starter access; API key
   optional for higher limits)
 
+Amazon Bedrock support signs native `InvokeModel` and
+`InvokeModelWithResponseStream` calls from the Cloudflare Worker. It uses
+model-specific JSON rather than OpenAI or Converse normalization. See
+[Amazon Bedrock](docs/aws-bedrock.md) for IAM, credentials, Region, policy,
+headers, invocation, smoke-test, and limitation details.
+
 Validate the catalog with:
 
 ```sh

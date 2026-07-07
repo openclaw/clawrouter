@@ -35,20 +35,47 @@ endpoints:
   invoke_model:
     path: /model/${model}/invoke
     pathParams: [model]
+    pathParamStyles:
+      model: opaque_segment
+    headers:
+      content-type: application/json
+    requestHeaders:
+      - accept
+      - x-amzn-bedrock-guardrailidentifier
+      - x-amzn-bedrock-guardrailtrace
+      - x-amzn-bedrock-guardrailversion
+      - x-amzn-bedrock-performanceconfig-latency
+      - x-amzn-bedrock-request-metadata
+      - x-amzn-bedrock-service-tier
+      - x-amzn-bedrock-trace
     requestFormat: aws_bedrock.invoke
     responseFormat: aws_bedrock.invoke
     timeoutMs: 600000
   invoke_model_stream:
     path: /model/${model}/invoke-with-response-stream
     pathParams: [model]
+    pathParamStyles:
+      model: opaque_segment
+    headers:
+      content-type: application/json
+    requestHeaders:
+      - accept
+      - x-amzn-bedrock-accept
+      - x-amzn-bedrock-guardrailidentifier
+      - x-amzn-bedrock-guardrailtrace
+      - x-amzn-bedrock-guardrailversion
+      - x-amzn-bedrock-performanceconfig-latency
+      - x-amzn-bedrock-request-metadata
+      - x-amzn-bedrock-service-tier
+      - x-amzn-bedrock-trace
     requestFormat: aws_bedrock.invoke
     responseFormat: aws_bedrock.eventstream
     streaming: aws_eventstream
     timeoutMs: 600000
 models:
   entries:
-    - id: bedrock/model
-      upstream: ${model}
+    - id: bedrock/amazon.nova-lite-v1:0
+      upstream: amazon.nova-lite-v1:0
       capabilities: [llm.invoke, llm.stream]
       pricingRef: aws-bedrock-model
 billing:

@@ -237,8 +237,8 @@ export function copyRequestHeaders(incoming: Headers, provider: CompiledProvider
     const value = incoming.get(name);
     if (value) target.set(name, value);
   }
-  for (const [name, value] of Object.entries(endpoint.headers)) target.set(name, resolveTemplate(provider, value, env));
   target.set("content-type", incoming.get("content-type") ?? "application/json");
+  for (const [name, value] of Object.entries(endpoint.headers)) target.set(name, resolveTemplate(provider, value, env));
 }
 
 export function transformRequestBody(provider: CompiledProvider, path: string, model: string, body: Record<string, unknown>, env: Env): Record<string, unknown> {
@@ -262,21 +262,26 @@ export function resolveTemplate(provider: CompiledProvider, value: string, env: 
   });
 }
 
-export async function signSigV4(provider: CompiledProvider, url: URL, method: string, body: string | undefined, headers: Headers, env: Env, grant: UpstreamGrant | null): Promise<void> {
+export async function signSigV4(provider: CompiledProvider, url: URL, method: string, body: string | undefined, headers: Headers, env: Env, grant: UpstreamGrant | null, now = new Date()): Promise<void> {
   const scheme = provider.auth.schemes.find((candidate) => candidate.type === "sig_v4");
   if (!scheme || scheme.type !== "sig_v4") return;
-  const credentials = grant?.credentials ?? {};
-  const accessKeyId = credentials.accessKeyId ?? envValue(env, "AWS_ACCESS_KEY_ID");
-  const secretAccessKey = credentials.secretAccessKey ?? envValue(env, "AWS_SECRET_ACCESS_KEY");
-  const sessionToken = credentials.sessionToken ?? envValue(env, "AWS_SESSION_TOKEN");
+  const credentials = grant?.credentials;
+  const accessKeyId = grant ? credentials?.accessKeyId : envValue(env, "AWS_ACCESS_KEY_ID");
+  const secretAccessKey = grant ? credentials?.secretAccessKey : envValue(env, "AWS_SECRET_ACCESS_KEY");
+  const sessionToken = grant ? credentials?.sessionToken : envValue(env, "AWS_SESSION_TOKEN");
   const region = envValue(env, "AWS_REGION");
-  if (!accessKeyId || !secretAccessKey || !region) throw new HttpError(503, "provider_not_configured", "AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and AWS_REGION are required");
-  const date = new Date(), amzDate = date.toISOString().replace(/[:-]|\.\d{3}/g, ""), dateStamp = amzDate.slice(0, 8);
+  if (!accessKeyId || !secretAccessKey || !region) {
+    const message = grant
+      ? "selected AWS grant must contain accessKeyId and secretAccessKey; AWS_REGION is required"
+      : "AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, and AWS_REGION are required";
+    throw new HttpError(503, "provider_not_configured", message);
+  }
+  const amzDate = now.toISOString().replace(/[:-]|\.\d{3}/g, ""), dateStamp = amzDate.slice(0, 8);
   const payloadHash = await sha256(body ?? "");
   headers.set("host", url.host); headers.set("x-amz-date", amzDate); headers.set("x-amz-content-sha256", payloadHash);
   if (sessionToken) headers.set("x-amz-security-token", sessionToken);
   const headerNames: string[] = []; headers.forEach((_, name) => headerNames.push(name.toLowerCase()));
-  const signedHeaderNames = headerNames.filter((name) => name === "host" || name.startsWith("x-amz-")).sort();
+  const signedHeaderNames = headerNames.filter((name) => name === "host" || name === "content-type" || name.startsWith("x-amz-") || name.startsWith("x-amzn-")).sort();
   const canonicalHeaders = signedHeaderNames.map((name) => `${name}:${headers.get(name)!.trim().replace(/\s+/g, " ")}\n`).join("");
   const signedHeaders = signedHeaderNames.join(";");
   const queryEntries: Array<[string, string]> = []; url.searchParams.forEach((value, key) => queryEntries.push([key, value]));
@@ -482,6 +487,10 @@ async function boundedJson(response: Response, limit: number): Promise<unknown> 
 }
 
 function encodePathParam(value: string, style: string): string {
+  if (style === "opaque_segment") {
+    if (/^[.]{1,2}$/.test(value) || /[\u0000-\u001f\u007f]/.test(value)) throw new HttpError(400, "invalid_path_param", "opaque path parameter is unsafe");
+    return awsEncode(value);
+  }
   if (style === "relative_path") {
     if (value.startsWith("/") || value.endsWith("/") || value.includes("\\") || value.includes("?") || value.includes("#")) throw new HttpError(400, "invalid_path_param", "relative path parameter is unsafe");
     const segments = value.split("/");
