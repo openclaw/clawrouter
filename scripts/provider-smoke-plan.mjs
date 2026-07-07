@@ -316,6 +316,7 @@ function smokeMethod(endpoint) {
 
 function preferredEndpointId(providerId) {
   return {
+    "aws-bedrock": "invoke_model",
     cohere: "chat",
     tavily: "search",
   }[providerId];
@@ -496,6 +497,9 @@ function samplePathParam(provider, endpoint, param, env) {
     return "status";
   }
   if (param === "model") {
+    const override = manifestSmokeModelOverride(provider, env);
+    if (override) return override;
+    if (provider.id === "aws-bedrock") return "amazon.nova-lite-v1:0";
     return (
       provider.models.find((model) => !model.upstream.includes("${"))?.upstream ?? "smoke-model"
     );
@@ -544,6 +548,26 @@ function sampleBody(provider, endpoint, method, env) {
   if (provider.id === "cohere") {
     return { model: "command", messages: [{ role: "user", content: "reply with ok" }] };
   }
+  if (provider.id === "aws-bedrock") {
+    const override = env.CLAWROUTER_SMOKE_BODY_AWS_BEDROCK;
+    if (override) {
+      let parsed;
+      try {
+        parsed = JSON.parse(override);
+      } catch {
+        throw new Error("CLAWROUTER_SMOKE_BODY_AWS_BEDROCK must contain valid JSON");
+      }
+      if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+        throw new Error("CLAWROUTER_SMOKE_BODY_AWS_BEDROCK must contain a JSON object");
+      }
+      return parsed;
+    }
+    return {
+      schemaVersion: "messages-v1",
+      messages: [{ role: "user", content: [{ text: "reply with ok" }] }],
+      inferenceConfig: { maxTokens: 16 },
+    };
+  }
   if (provider.id === "cloudflare-ai-gateway") {
     const step = {
       provider: "openai",
@@ -563,6 +587,19 @@ function sampleBody(provider, endpoint, method, env) {
     return [step];
   }
   return {};
+}
+
+function manifestSmokeModelOverride(provider, env) {
+  const raw = env[`CLAWROUTER_SMOKE_MODEL_${envName(provider.id)}`];
+  const value = typeof raw === "string" ? raw.trim() : "";
+  if (!value) return null;
+  if (value.length > 2048 || /[\u0000-\u001f\u007f]/.test(value)) {
+    throw new Error(`smoke model override for ${provider.id} is invalid`);
+  }
+  const catalog = provider.models.find((model) => model.id === value);
+  if (catalog && !catalog.upstream.includes("${")) return catalog.upstream;
+  const prefix = (provider.routing.modelPrefixes ?? []).find((candidate) => value.startsWith(candidate));
+  return prefix ? value.slice(prefix.length) : value;
 }
 
 function methodAllowsBody(method) {

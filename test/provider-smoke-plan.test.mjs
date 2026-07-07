@@ -30,6 +30,65 @@ test("bundled OpenAI smoke target uses the catalog default model", () => {
   assert.equal(provider.target.body.model, "openai/gpt-5.5");
 });
 
+test("AWS Bedrock smoke uses an executable Nova InvokeModel request", () => {
+  const provider = buildProviderSmokePlan(compileProviderSnapshot(), {
+    AWS_ACCESS_KEY_ID: "access-key",
+    AWS_SECRET_ACCESS_KEY: "secret-key",
+    AWS_REGION: "us-east-1",
+  }).providers.find((entry) => entry.id === "aws-bedrock");
+
+  assert.equal(provider.configPresent, true);
+  assert.deepEqual(provider.requiredConfig, [
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_REGION",
+  ]);
+  assert.deepEqual(provider.optionalConfig, ["AWS_SESSION_TOKEN"]);
+  assert.equal(provider.target.kind, "manifest_proxy");
+  assert.equal(provider.target.endpoint, "invoke_model");
+  assert.deepEqual(provider.target.envelope.pathParams, {
+    model: "amazon.nova-lite-v1:0",
+  });
+  assert.deepEqual(provider.target.envelope.body, {
+    schemaVersion: "messages-v1",
+    messages: [{ role: "user", content: [{ text: "reply with ok" }] }],
+    inferenceConfig: { maxTokens: 16 },
+  });
+});
+
+test("AWS Bedrock smoke accepts model and native body overrides", () => {
+  const body = {
+    anthropic_version: "bedrock-2023-05-31",
+    max_tokens: 8,
+    messages: [{ role: "user", content: "reply with ok" }],
+  };
+  const provider = buildProviderSmokePlan(compileProviderSnapshot(), {
+    CLAWROUTER_SMOKE_MODEL_AWS_BEDROCK: "bedrock/custom.model-v1:0",
+    CLAWROUTER_SMOKE_BODY_AWS_BEDROCK: JSON.stringify(body),
+  }).providers.find((entry) => entry.id === "aws-bedrock");
+
+  assert.equal(provider.target.envelope.pathParams.model, "custom.model-v1:0");
+  assert.deepEqual(provider.target.envelope.body, body);
+});
+
+test("AWS Bedrock smoke rejects malformed body overrides", () => {
+  const snapshot = compileProviderSnapshot();
+  assert.throws(
+    () =>
+      buildProviderSmokePlan(snapshot, {
+        CLAWROUTER_SMOKE_BODY_AWS_BEDROCK: "not-json",
+      }),
+    /must contain valid JSON/,
+  );
+  assert.throws(
+    () =>
+      buildProviderSmokePlan(snapshot, {
+        CLAWROUTER_SMOKE_BODY_AWS_BEDROCK: "[]",
+      }),
+    /must contain a JSON object/,
+  );
+});
+
 test("Firecrawl uses keyless mode without a configured API key", () => {
   const provider = buildProviderSmokePlan(compileProviderSnapshot(), {}).providers.find(
     (entry) => entry.id === "firecrawl",

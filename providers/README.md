@@ -98,6 +98,9 @@ or from request path params:
 - `endpoint.path` may contain `${name}` placeholders when the endpoint declares
   matching `pathParams`; callers pass those as single safe path segments by
   default.
+- `pathParamStyles.<name>: opaque_segment` keeps a value in one encoded segment
+  while permitting reserved characters such as `/` inside an opaque resource
+  identifier.
 - `pathParamStyles.<name>: relative_path` allows slash-delimited REST paths and
   still rejects absolute paths, empty segments, `.`, `..`, query strings, and
   fragments.

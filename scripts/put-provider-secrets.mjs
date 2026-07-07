@@ -4,7 +4,6 @@ import { pathToFileURL } from "node:url";
 export const providerSecretNames = [
   "ANTHROPIC_API_KEY",
   "AWS_ACCESS_KEY_ID",
-  "AWS_REGION",
   "AWS_SECRET_ACCESS_KEY",
   "AWS_SESSION_TOKEN",
   "AZURE_OPENAI_API_KEY",

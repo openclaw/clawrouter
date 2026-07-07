@@ -11,6 +11,7 @@ test("provider secret selection keeps only the declared non-empty bindings", () 
   assert.deepEqual(
     configuredProviderSecrets({
       CLOUDFLARE_API_TOKEN: "deploy-token-must-not-be-uploaded",
+      AWS_REGION: "us-west-2",
       OPENAI_API_KEY: "secret",
       OPENROUTER_SITE_URL: "https://example.com",
       XAI_API_KEY: "",
@@ -30,6 +31,7 @@ test("provider secret selection keeps only the declared non-empty bindings", () 
   assert.equal(providerSecretNames.includes("COHERE_API_KEY"), true);
   assert.equal(providerSecretNames.includes("REPLICATE_API_TOKEN"), true);
   assert.equal(providerSecretNames.includes("TAVILY_API_KEY"), true);
+  assert.equal(providerSecretNames.includes("AWS_REGION"), false);
 });
 
 test("provider secret dry-run reports names without values", () => {

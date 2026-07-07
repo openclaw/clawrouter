@@ -188,18 +188,38 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
     : manifestEnvelope(await readJson<unknown>(request));
   const method = (envelope.method ?? endpoint.method).toUpperCase();
   if (!endpoint.methods.includes(method)) return errorResponse("method_not_allowed", `endpoint does not allow ${method}`, 405);
-  const body = envelope.body ?? {};
-  const modelId = typeof body.model === "string" ? body.model : null;
-  const globalModel = modelId ? modelRoute(modelId) : null;
-  if (globalModel && globalModel.provider.id !== provider.id) return errorResponse("model_provider_mismatch", `model ${modelId} does not belong to provider ${provider.id}`, 400);
-  const resolvedModel = modelId ? providerModelRoute(provider, modelId) : null;
-  const model = modelId ? resolvedModel?.model ?? null : provider.models[0] ?? null;
-  const upstreamModel = model ? resolvedUpstreamModel(provider, model, env) : null;
-  const transformed = model ? transformRequestBody(provider, endpoint.path, upstreamModel!, { ...body, ...(modelId ? { model: upstreamModel } : {}) }, env) : body;
+  const prepared = prepareManifestRequest(provider, endpoint, envelope.body ?? {}, envelope.pathParams ?? {}, env);
   const capability = provider.capabilities.find((item) => item.endpoint === endpoint.id)?.id ?? endpoint.id;
-  const pathParams = normalizeModelPathParams(provider, endpoint, envelope.pathParams ?? {}, resolvedModel, env);
-  const response = await proxySelected(request, env, context, mode, { provider, endpoint, model, capability, body: transformed, pathParams, method }, envelope.query, preauthenticated);
+  const response = await proxySelected(request, env, context, mode, { provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method }, envelope.query, preauthenticated);
   return response;
+}
+
+export function prepareManifestRequest(provider: CompiledProvider, endpoint: CompiledEndpoint, body: Record<string, unknown>, inputPathParams: Record<string, string>, env: Env): { model: CompiledModel | null; body: Record<string, unknown>; pathParams: Record<string, string> } {
+  const modelId = typeof body.model === "string" ? body.model : null;
+  const bodyRoute = modelId ? providerModelRoute(provider, modelId) : null;
+  const globalBodyRoute = modelId ? modelRoute(modelId) : null;
+  if (globalBodyRoute && globalBodyRoute.provider.id !== provider.id) throw new HttpError(400, "model_provider_mismatch", `model ${modelId} does not belong to provider ${provider.id}`);
+
+  const pathModelId = inputPathParams.model ?? inputPathParams.deployment ?? null;
+  const pathRoute = pathModelId ? providerModelRoute(provider, pathModelId) : null;
+  const globalPathRoute = pathModelId ? modelRoute(pathModelId) : null;
+  if (globalPathRoute && globalPathRoute.provider.id !== provider.id) throw new HttpError(400, "model_provider_mismatch", `model ${pathModelId} does not belong to provider ${provider.id}`);
+
+  const bodyUpstream = bodyRoute ? resolvedUpstreamModel(provider, bodyRoute.model, env) : null;
+  const pathUpstream = pathRoute ? resolvedUpstreamModel(provider, pathRoute.model, env) : pathModelId;
+  if (bodyUpstream && pathUpstream && bodyUpstream !== pathUpstream) throw new HttpError(400, "model_path_mismatch", "body model and path model must resolve to the same upstream model");
+
+  const model = bodyRoute?.model ?? pathRoute?.model ?? (!modelId && !pathModelId ? provider.models[0] ?? null : null);
+  const upstreamModel = bodyUpstream ?? pathUpstream ?? (model && !model.upstream.includes("${") ? model.upstream : null);
+  const pathParams = normalizeModelPathParams(provider, endpoint, inputPathParams, bodyRoute, env);
+  const transformedInput = { ...body };
+  if (endpoint.path_params.some((name) => name === "model" || name === "deployment")) delete transformedInput.model;
+  else if (modelId && upstreamModel) transformedInput.model = upstreamModel;
+  return {
+    model,
+    body: model && upstreamModel ? transformRequestBody(provider, endpoint.path, upstreamModel, transformedInput, env) : transformedInput,
+    pathParams,
+  };
 }
 
 function directManifestEnvelope(request: Request, endpoint: CompiledEndpoint): { method: string; pathParams: Record<string, string>; query: Record<string, unknown>; body: Record<string, unknown> } {
@@ -469,6 +489,7 @@ async function finalizeResponse(response: Response, env: Env, auth: AuthorizedId
     const contentType = response.headers.get("content-type") ?? "";
     if (contentType.includes("json")) tokens = extractTokens(JSON.parse(await readLimited(response, 2 * 1024 * 1024)));
     else if (contentType.includes("text/event-stream")) tokens = extractSseTokens(await readLimited(response, 2 * 1024 * 1024));
+    else await drainResponseBody(response.body);
   } catch { /* usage is best-effort; reservation stays conservative */ }
   const measured = tokens ? actualCost(selection.model, tokens, auth.policy.requestCostMicros) : null;
   const actual = response.ok && measured != null ? measured : response.ok ? estimated.reserveMicros : 0;
@@ -558,6 +579,19 @@ async function readLimited(response: Response, limit: number): Promise<string> {
   } finally { if (size > limit) await reader.cancel(); }
 }
 
+export async function drainResponseBody(body: ReadableStream<Uint8Array> | null): Promise<void> {
+  if (!body) return;
+  const reader = body.getReader();
+  try {
+    while (!(await reader.read()).done) { /* discard without buffering the cloned stream */ }
+  } catch (error) {
+    await reader.cancel().catch(() => undefined);
+    throw error;
+  } finally {
+    reader.releaseLock();
+  }
+}
+
 function pickNumber(value: Record<string, unknown>, ...keys: string[]): number | null { for (const key of keys) { const number = numeric(value[key]); if (number != null) return number; } return null; }
 function numeric(value: unknown): number | null { return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : null; }
 function searchParamsRecord(params: URLSearchParams): Record<string, string> { const result: Record<string, string> = {}; params.forEach((value, key) => { result[key] = value; }); return result; }
@@ -582,7 +616,20 @@ function providerModelRoute(provider: CompiledProvider, value: string): { provid
   const global = modelRoute(value);
   if (global?.provider.id === provider.id) return global;
   const model = provider.models.find((candidate) => candidate.id === value || candidate.upstream === value);
-  return model ? { provider, model } : null;
+  if (model) return { provider, model };
+  const template = provider.models.find((candidate) => candidate.upstream.includes("${")) ?? provider.models[0];
+  if (!template || !value) return null;
+  const inheritsTemplatePricing = provider.id === "local-openai";
+  return {
+    provider,
+    model: {
+      ...template,
+      id: value,
+      upstream: value,
+      pricing_ref: inheritsTemplatePricing ? template.pricing_ref : null,
+      pricing: inheritsTemplatePricing ? template.pricing : null,
+    },
+  };
 }
 
 function nativeMatch(endpoint: CompiledEndpoint, path: string): boolean {

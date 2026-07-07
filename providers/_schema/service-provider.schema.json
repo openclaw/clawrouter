@@ -380,7 +380,7 @@
         "pathParams": { "type": "array", "items": { "type": "string" } },
         "pathParamStyles": {
           "type": "object",
-          "additionalProperties": { "enum": ["segment", "relative_path"] }
+          "additionalProperties": { "enum": ["segment", "opaque_segment", "relative_path"] }
         },
         "requestFormat": { "type": "string" },
         "responseFormat": { "type": "string" },

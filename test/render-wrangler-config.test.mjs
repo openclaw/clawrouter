@@ -31,6 +31,7 @@ test("rendered config keeps the usage queue and dead-letter queue distinct", () 
       CLAWROUTER_USAGE_DLQ: "test-usage-dead-letter",
       CLAWROUTER_CONTENT_BUCKET: "test-content",
       CLAWROUTER_SMOKE_MODEL_AZURE_OPENAI: "azure-openai/prod-chat",
+      AWS_REGION: "us-west-2",
     };
     delete env.AZURE_OPENAI_DEPLOYMENT;
     const result = spawnSync(
@@ -47,6 +48,7 @@ test("rendered config keeps the usage queue and dead-letter queue distinct", () 
     assert.equal(config.match(/^queue = "test-usage"$/gm)?.length, 2);
     assert.match(config, /^dead_letter_queue = "test-usage-dead-letter"$/m);
     assert.match(config, /^AZURE_OPENAI_DEPLOYMENT = "prod-chat"$/m);
+    assert.match(config, /^AWS_REGION = "us-west-2"$/m);
     assert.match(config, /^bucket_name = "test-content"$/m);
   } finally {
     rmSync(dir, { force: true, recursive: true });
