@@ -220,6 +220,7 @@ function validateManifest(manifest) {
 }
 
 function validateQuota(providerId, quota) {
+  if (quota != null && (typeof quota !== "object" || Array.isArray(quota))) throw new Error(`provider ${providerId} quota must be an object`);
   const kinds = new Set(["requests", "tokens", "input_tokens", "output_tokens", "credits", "subscription", "generic"]);
   const grantKinds = new Set(["api_key", "oauth", "subscription"]);
   const validateBase = (window, source) => {
@@ -230,7 +231,9 @@ function validateQuota(providerId, quota) {
   if (!Array.isArray(responseHeaders) || responseHeaders.length > 12) throw new Error(`provider ${providerId} has too many response quota windows`);
   for (const window of responseHeaders) {
     validateBase(window, "response");
-    const headers = ["limitHeaders", "remainingHeaders", "usedHeaders", "resetHeaders"].flatMap((field) => window[field] ?? []);
+    const fields = ["limitHeaders", "remainingHeaders", "usedHeaders", "resetHeaders"];
+    for (const field of fields) if (window[field] != null && !Array.isArray(window[field])) throw new Error(`provider ${providerId} quota window ${window.id} ${field} must be an array`);
+    const headers = fields.flatMap((field) => window[field] ?? []);
     if (!headers.length && window.fixedLimit == null) throw new Error(`provider ${providerId} quota window ${window.id} has no response source`);
     if (headers.some((header) => typeof header !== "string" || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(header))) throw new Error(`provider ${providerId} quota window ${window.id} has an invalid header`);
   }
@@ -241,6 +244,7 @@ function validateQuota(providerId, quota) {
     if (!probe.url?.startsWith("https://")) throw new Error(`provider ${providerId} quota probe URL must use https`);
     if (probe.method != null && !["GET", "POST"].includes(probe.method)) throw new Error(`provider ${providerId} quota probe method is invalid`);
     if (!Array.isArray(probe.windows) || !probe.windows.length || probe.windows.length > 12) throw new Error(`provider ${providerId} quota probe has invalid windows`);
+    if (probe.headers != null && (typeof probe.headers !== "object" || Array.isArray(probe.headers))) throw new Error(`provider ${providerId} quota probe headers must be an object`);
     for (const [name, value] of Object.entries(probe.headers ?? {})) if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name) || typeof value !== "string") throw new Error(`provider ${providerId} quota probe has an invalid header`);
     for (const window of probe.windows) {
       validateBase(window, "probe");
