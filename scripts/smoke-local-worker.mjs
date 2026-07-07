@@ -488,6 +488,11 @@ try {
     const rows = (await grants.json()).grants.filter((item) => item.scopeId === "rotation");
     return rows.length === 2 && rows.every((item) => item.selectedCount === 2 && item.lastSelectedAt);
   }, "grant selection counters were not visible to administrators");
+  const selectedGrantUpdate = await fetch(`${base}/v1/admin/upstream-grants/policies/rotation/rotate-a`, { method: "PUT", headers: adminHeaders, body: JSON.stringify({ provider: "local-openai", kind: "api_key", priority: 10, weight: 1, credential: "rotate-a", label: "updated" }) });
+  assert.equal(selectedGrantUpdate.status, 200);
+  assert.equal((await selectedGrantUpdate.json()).selectedCount, 2, "grant mutation responses preserve authority selection counters");
+  const actionNamedGrant = await fetch(`${base}/v1/admin/upstream-grants/policies/migrate/quota-refresh`, { method: "PUT", headers: adminHeaders, body: JSON.stringify({ provider: "local-openai", kind: "api_key", credential: "action-named" }) });
+  assert.equal(actionNamedGrant.status, 200, "action names remain valid three-segment grant references");
   const updateRotationPolicy = async (grantRouting) => {
     const response = await fetch(`${base}/v1/admin/policies/rotation`, { method: "PUT", headers: adminHeaders, body: JSON.stringify({ enabled: true, providers: ["local-openai"], tenantId: "default", tokenRole: "service", requestCostMicros: 1, retainRequestContent: false, grantRouting }) });
     assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));

@@ -270,7 +270,7 @@ async function putConnection(request: Request, env: Env, encodedId: string): Pro
 }
 
 async function upstreamGrantMutation(request: Request, env: Env, rest: string): Promise<Response> {
-  const parts = rest.split("/").map(decodeURIComponent), action = ["revoke", "refresh", "quota-refresh", "authorize"].includes(parts.at(-1) ?? "") ? parts.pop() : null;
+  const parts = rest.split("/").map(decodeURIComponent), action = parts.length === 4 && ["revoke", "refresh", "quota-refresh", "authorize"].includes(parts.at(-1) ?? "") ? parts.pop() : null;
   if (parts.length !== 3 || !["policies", "tenants"].includes(parts[0])) throw new HttpError(400, "invalid_upstream_grant_route", "invalid upstream grant route");
   const [scope, scopeId, tokenRef] = parts, key = scope === "policies" ? `oauth/${scopeId}/${tokenRef}` : `oauth/tenants/${scopeId}/${tokenRef}`;
   if (!validGrantSegment(scopeId) || !validGrantSegment(tokenRef) || scope === "policies" && scopeId === "tenants") throw new HttpError(400, "invalid_upstream_grant_route", "scope id and token reference must be valid single key segments");
@@ -281,12 +281,12 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string): 
     if (!Number.isInteger(priority) || (priority as number) < 0 || (priority as number) > 1_000_000) throw new HttpError(400, "invalid_upstream_grant", "grant priority must be an integer from 0 to 1000000");
     return startOAuth(request, env, key, body.provider.trim(), priority as number);
   }
-  if (action === "refresh" && request.method === "POST") return privateJson(validatedGrantResponse(key, await refreshStoredGrant(env, key)));
+  if (action === "refresh" && request.method === "POST") return privateJson(await upstreamGrantResponse(env, key, await refreshStoredGrant(env, key)));
   if (action === "quota-refresh" && request.method === "POST") {
     await refreshStoredGrantQuota(env, key);
     const grant = await env.POLICY_KV.get<UpstreamGrant>(key, "json");
     if (!grant) throw new HttpError(404, "unknown_upstream_grant", "upstream grant is not registered");
-    return privateJson(validatedGrantResponse(key, grant, (await grantRuntimeStates(env, [key]))[key]));
+    return privateJson(await upstreamGrantResponse(env, key, grant));
   }
   let grant: UpstreamGrant;
   let existing: UpstreamGrant | null;
@@ -303,7 +303,7 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string): 
   await syncGrantPoolIndex(env, key, existing, grant);
   try { await env.POLICY_KV.put(key, JSON.stringify(grant)); }
   catch (error) { await syncGrantPoolIndex(env, key, grant, existing).catch(() => undefined); throw error; }
-  return privateJson(validatedGrantResponse(key, grant));
+  return privateJson(await upstreamGrantResponse(env, key, grant));
 }
 
 async function assignmentRules(env: Env) {
@@ -461,6 +461,10 @@ async function upstreamGrantResponses(env: Env, grants: Array<{ key: string; gra
   const keys = grants.map(({ key }) => key);
   const [states, stats] = await Promise.all([grantRuntimeStates(env, keys), grantSelectionStats(env, keys)]);
   return grants.map(({ key, grant }) => validatedGrantResponse(key, grant, states[key], stats[key]));
+}
+
+async function upstreamGrantResponse(env: Env, key: string, grant: UpstreamGrant) {
+  return (await upstreamGrantResponses(env, [{ key, grant }]))[0];
 }
 
 function validatedGrantResponse(key: string, grant: UpstreamGrant, runtime?: GrantRuntimeState, stats?: { selectedCount: number; lastSelectedAt: string | null }) {
