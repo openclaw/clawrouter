@@ -7,13 +7,13 @@ import {
   type AssignmentEvidence,
 } from "./assignments";
 import { contentKey } from "./content-retention";
-import { currentGrantRuntime, grantPriority, grantRuntimeStates, grantUsable, syncGrantPoolIndex, validCredentialBundle, validGrantSegment } from "./grant-selection";
+import { currentGrantRuntime, grantPriority, grantRoutingPolicy, grantRuntimeStates, grantSelectionStats, grantUsable, grantWeight, syncGrantPoolIndex, validCredentialBundle, validGrantSegment } from "./grant-selection";
 import { assertFusionModels, loadFusionConfig, storeFusionConfig } from "./fusion-config";
 import { fusionReadiness } from "./fusion-readiness";
 import { normalizeFusionConfig } from "./fusion";
 import { budgetStatus as policyBudgetStatus, usageSnapshots } from "./ledgers";
 import { startOAuth } from "./oauth";
-import { endpointForPath, listGrantRecords, listHealth, modelRoute, providerReadiness, providerReadinessForPolicies, providerReadinessFromState, refreshStoredGrant, snapshot } from "./providers";
+import { endpointForPath, listGrantRecords, listHealth, modelRoute, providerReadiness, providerReadinessForPolicies, providerReadinessFromState, refreshStoredGrant, refreshStoredGrantQuota, snapshot } from "./providers";
 import type { AdminBootstrapResponse } from "../shared/contracts";
 import type {
   AccessControlUser, AccessPolicy, AccessPolicyEntry, AssignmentRule, Env, PolicyBinding,
@@ -270,7 +270,7 @@ async function putConnection(request: Request, env: Env, encodedId: string): Pro
 }
 
 async function upstreamGrantMutation(request: Request, env: Env, rest: string): Promise<Response> {
-  const parts = rest.split("/").map(decodeURIComponent), action = ["revoke", "refresh", "authorize"].includes(parts.at(-1) ?? "") ? parts.pop() : null;
+  const parts = rest.split("/").map(decodeURIComponent), action = parts.length === 4 && ["revoke", "refresh", "quota-refresh", "authorize"].includes(parts.at(-1) ?? "") ? parts.pop() : null;
   if (parts.length !== 3 || !["policies", "tenants"].includes(parts[0])) throw new HttpError(400, "invalid_upstream_grant_route", "invalid upstream grant route");
   const [scope, scopeId, tokenRef] = parts, key = scope === "policies" ? `oauth/${scopeId}/${tokenRef}` : `oauth/tenants/${scopeId}/${tokenRef}`;
   if (!validGrantSegment(scopeId) || !validGrantSegment(tokenRef) || scope === "policies" && scopeId === "tenants") throw new HttpError(400, "invalid_upstream_grant_route", "scope id and token reference must be valid single key segments");
@@ -279,9 +279,17 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string): 
     if (typeof body.provider !== "string" || !body.provider.trim()) throw new HttpError(400, "invalid_upstream_grant", "provider is required");
     const priority = body.priority ?? 100;
     if (!Number.isInteger(priority) || (priority as number) < 0 || (priority as number) > 1_000_000) throw new HttpError(400, "invalid_upstream_grant", "grant priority must be an integer from 0 to 1000000");
-    return startOAuth(request, env, key, body.provider.trim(), priority as number);
+    const weight = body.weight ?? 1;
+    if (typeof weight !== "number" || !Number.isFinite(weight) || weight <= 0 || weight > 1_000_000) throw new HttpError(400, "invalid_upstream_grant", "grant weight must be a number greater than 0 and at most 1000000");
+    return startOAuth(request, env, key, body.provider.trim(), priority as number, weight);
   }
-  if (action === "refresh" && request.method === "POST") return privateJson(validatedGrantResponse(key, await refreshStoredGrant(env, key)));
+  if (action === "refresh" && request.method === "POST") return privateJson(await upstreamGrantResponse(env, key, await refreshStoredGrant(env, key)));
+  if (action === "quota-refresh" && request.method === "POST") {
+    await refreshStoredGrantQuota(env, key);
+    const grant = await env.POLICY_KV.get<UpstreamGrant>(key, "json");
+    if (!grant) throw new HttpError(404, "unknown_upstream_grant", "upstream grant is not registered");
+    return privateJson(await upstreamGrantResponse(env, key, grant));
+  }
   let grant: UpstreamGrant;
   let existing: UpstreamGrant | null;
   if (action === "revoke" && request.method === "POST") {
@@ -297,7 +305,7 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string): 
   await syncGrantPoolIndex(env, key, existing, grant);
   try { await env.POLICY_KV.put(key, JSON.stringify(grant)); }
   catch (error) { await syncGrantPoolIndex(env, key, grant, existing).catch(() => undefined); throw error; }
-  return privateJson(validatedGrantResponse(key, grant));
+  return privateJson(await upstreamGrantResponse(env, key, grant));
 }
 
 async function assignmentRules(env: Env) {
@@ -407,7 +415,30 @@ function normalizePolicy(value: unknown, existing?: AccessPolicy): AccessPolicy 
   if (providers.some((id) => !snapshot.providers.some((provider) => provider.id === id))) throw new HttpError(400, "invalid_policy", "policy contains an unknown provider");
   const monthlyBudgetMicros = normalizeBudgetValue(body.monthlyBudgetMicros, "monthlyBudgetMicros");
   const requestCostMicros = normalizeBudgetValue(body.requestCostMicros, "requestCostMicros");
-  return { enabled: policyBoolean(body.enabled, "enabled", true), generation: existing?.generation ?? randomId("policy"), providers, tenantId: policyString(body.tenantId, "tenantId", "default"), tokenRole: policyString(body.tokenRole, "tokenRole", "service"), monthlyBudgetMicros, requestCostMicros, retainRequestContent: policyBoolean(body.retainRequestContent, "retainRequestContent", true) };
+  const grantRouting = normalizeGrantRouting(body.grantRouting, existing?.grantRouting);
+  return { enabled: policyBoolean(body.enabled, "enabled", true), generation: existing?.generation ?? randomId("policy"), providers, tenantId: policyString(body.tenantId, "tenantId", "default"), tokenRole: policyString(body.tokenRole, "tokenRole", "service"), monthlyBudgetMicros, requestCostMicros, retainRequestContent: policyBoolean(body.retainRequestContent, "retainRequestContent", true), grantRouting };
+}
+
+function normalizeGrantRouting(value: unknown, existing?: AccessPolicy["grantRouting"]): AccessPolicy["grantRouting"] {
+  if (value === undefined) return grantRoutingPolicy(existing);
+  const body = mutationObject(value, "invalid_policy", "grantRouting");
+  const strategy = body.strategy ?? "most_remaining";
+  if (typeof strategy !== "string" || !["priority", "round_robin", "least_used", "most_remaining", "weighted_random"].includes(strategy)) throw new HttpError(400, "invalid_policy", "grantRouting strategy is invalid");
+  const stickiness = body.stickiness ?? "none";
+  if (typeof stickiness !== "string" || !["none", "identity", "session"].includes(stickiness)) throw new HttpError(400, "invalid_policy", "grantRouting stickiness is invalid");
+  const failover = policyBoolean(body.failover, "grantRouting.failover", true);
+  const staleState = body.staleState ?? "allow";
+  if (staleState !== "allow" && staleState !== "deny") throw new HttpError(400, "invalid_policy", "grantRouting staleState must be allow or deny");
+  const staleAfterSeconds = body.staleAfterSeconds ?? 300;
+  if (!Number.isSafeInteger(staleAfterSeconds) || (staleAfterSeconds as number) < 30 || (staleAfterSeconds as number) > 86_400) throw new HttpError(400, "invalid_policy", "grantRouting staleAfterSeconds must be an integer from 30 to 86400");
+  const eligible = body.eligibleGrants ?? {};
+  if (!eligible || typeof eligible !== "object" || Array.isArray(eligible)) throw new HttpError(400, "invalid_policy", "grantRouting eligibleGrants must map providers to token references");
+  const eligibleGrants: Record<string, string[]> = {};
+  for (const [providerId, rawRefs] of Object.entries(eligible as Record<string, unknown>)) {
+    if (!snapshot.providers.some((provider) => provider.id === providerId) || !Array.isArray(rawRefs) || rawRefs.length > 32 || rawRefs.some((ref) => typeof ref !== "string" || !validGrantSegment(ref))) throw new HttpError(400, "invalid_policy", "grantRouting eligibleGrants contains an invalid provider or token reference");
+    eligibleGrants[providerId] = [...new Set(rawRefs as string[])].sort();
+  }
+  return { strategy: strategy as AccessPolicy["grantRouting"]["strategy"], stickiness: stickiness as AccessPolicy["grantRouting"]["stickiness"], failover, staleState, staleAfterSeconds: staleAfterSeconds as number, eligibleGrants };
 }
 
 function policyBoolean(value: unknown, field: string, fallback: boolean): boolean {
@@ -429,17 +460,22 @@ function normalizeBudgetValue(value: unknown, field: string): number | null {
 }
 
 async function upstreamGrantResponses(env: Env, grants: Array<{ key: string; grant: UpstreamGrant }>) {
-  const states = await grantRuntimeStates(env, grants.map(({ key }) => key));
-  return grants.map(({ key, grant }) => validatedGrantResponse(key, grant, states[key]));
+  const keys = grants.map(({ key }) => key);
+  const [states, stats] = await Promise.all([grantRuntimeStates(env, keys), grantSelectionStats(env, keys)]);
+  return grants.map(({ key, grant }) => validatedGrantResponse(key, grant, states[key], stats[key]));
 }
 
-function validatedGrantResponse(key: string, grant: UpstreamGrant, runtime?: GrantRuntimeState) {
+async function upstreamGrantResponse(env: Env, key: string, grant: UpstreamGrant) {
+  return (await upstreamGrantResponses(env, [{ key, grant }]))[0];
+}
+
+function validatedGrantResponse(key: string, grant: UpstreamGrant, runtime?: GrantRuntimeState, stats?: { selectedCount: number; lastSelectedAt: string | null }) {
   runtime = currentGrantRuntime(grant, runtime) ?? undefined;
   const credentialFields = grant.credentials && validCredentialBundle(grant.credentials) ? Object.keys(grant.credentials).sort() : [];
   const accessFlag = typeof grant.accessToken === "string" && grant.accessToken.trim().length > 0, refreshFlag = typeof grant.refreshToken === "string" && grant.refreshToken.trim().length > 0;
   const coolingDown = !!runtime?.cooldownUntil && Date.parse(runtime.cooldownUntil) > Date.now();
   const quotaStatus: "unknown" | "available" | "limited" | "cooldown" = coolingDown ? "cooldown" : runtime?.status === "cooldown" ? "unknown" : runtime?.status ?? "unknown";
-  return { ...grantResponse(key, grant), priority: grantPriority(grant), hasCredential: (typeof grant.credential === "string" && grant.credential.trim().length > 0) || credentialFields.length > 0, credentialFields, ["hasAccess" + "Token"]: accessFlag, ["hasRefresh" + "Token"]: refreshFlag, usable: grant.enabled !== false && grantUsable(grant), quotaStatus, quotaObservedAt: runtime?.observedAt ?? null, cooldownUntil: coolingDown ? runtime?.cooldownUntil ?? null : null, quotaSource: runtime?.source ?? null, lastProviderSignal: runtime?.lastSignal ?? null, quotaWindows: runtime?.windows ?? [] };
+  return { ...grantResponse(key, grant), priority: grantPriority(grant), weight: grantWeight(grant), hasCredential: (typeof grant.credential === "string" && grant.credential.trim().length > 0) || credentialFields.length > 0, credentialFields, ["hasAccess" + "Token"]: accessFlag, ["hasRefresh" + "Token"]: refreshFlag, usable: grant.enabled !== false && grantUsable(grant), selectedCount: stats?.selectedCount ?? 0, lastSelectedAt: stats?.lastSelectedAt ?? null, quotaStatus, quotaObservedAt: runtime?.observedAt ?? null, cooldownUntil: coolingDown ? runtime?.cooldownUntil ?? null : null, quotaSource: runtime?.source ?? null, lastProviderSignal: runtime?.lastSignal ?? null, quotaWindows: runtime?.windows ?? [] };
 }
 
 function normalizeBinding(value: unknown): PolicyBinding {
@@ -527,7 +563,9 @@ function normalizeGrant(value: unknown, existing: UpstreamGrant | null): Upstrea
   const body = mutationObject(value, "invalid_upstream_grant", "upstream grant");
   const priority = body.priority ?? existing?.priority ?? 100;
   if (!Number.isInteger(priority) || (priority as number) < 0 || (priority as number) > 1_000_000) throw new HttpError(400, "invalid_upstream_grant", "grant priority must be an integer from 0 to 1000000");
-  const now = nowIso(), grant = { ...existing, ...body, version: 1, enabled: body.enabled ?? true, priority, kind: body.kind ?? "oauth", tokenType: body.tokenType ?? "Bearer", scopes: body.scopes ?? [], credentials: body.credentials ?? existing?.credentials ?? {}, createdAt: existing?.createdAt ?? now, updatedAt: now, revokedAt: null } as UpstreamGrant;
+  const weight = body.weight ?? existing?.weight ?? 1;
+  if (typeof weight !== "number" || !Number.isFinite(weight) || weight <= 0 || weight > 1_000_000) throw new HttpError(400, "invalid_upstream_grant", "grant weight must be a number greater than 0 and at most 1000000");
+  const now = nowIso(), grant = { ...existing, ...body, version: 1, enabled: body.enabled ?? true, priority, weight, kind: body.kind ?? "oauth", tokenType: body.tokenType ?? "Bearer", scopes: body.scopes ?? [], credentials: body.credentials ?? existing?.credentials ?? {}, createdAt: existing?.createdAt ?? now, updatedAt: now, revokedAt: null } as UpstreamGrant;
   if (!grant.provider) throw new HttpError(400, "invalid_upstream_grant", "provider is required");
   if (!snapshot.providers.some((provider) => provider.id === grant.provider)) throw new HttpError(400, "unknown_provider", "upstream grant provider is not registered");
   if (!validCredentialBundle(grant.credentials) || [grant.credential, grant.accessToken, grant.refreshToken].some((secret) => secret != null && (typeof secret !== "string" || !secret.trim().length))) throw new HttpError(400, "invalid_upstream_grant", "grant credentials must use non-empty string values");
@@ -536,7 +574,7 @@ function normalizeGrant(value: unknown, existing: UpstreamGrant | null): Upstrea
 }
 function revokeGrant(value: UpstreamGrant): UpstreamGrant { const { credential: _, credentials: __, accessToken: ___, refreshToken: ____, ...safe } = value; return { ...safe, enabled: false, credentials: {}, updatedAt: nowIso(), revokedAt: nowIso() }; }
 
-function policyResponse(entry: AccessPolicyEntry) { return { policyId: entry.policyId, enabled: entry.policy.enabled, providers: entry.policy.providers, tenantId: entry.policy.tenantId ?? null, tokenRole: entry.policy.tokenRole ?? null, monthlyBudgetMicros: entry.policy.monthlyBudgetMicros ?? null, requestCostMicros: entry.policy.requestCostMicros ?? null, retainRequestContent: entry.policy.retainRequestContent !== false }; }
+function policyResponse(entry: AccessPolicyEntry) { return { policyId: entry.policyId, enabled: entry.policy.enabled, providers: entry.policy.providers, tenantId: entry.policy.tenantId ?? null, tokenRole: entry.policy.tokenRole ?? null, monthlyBudgetMicros: entry.policy.monthlyBudgetMicros ?? null, requestCostMicros: entry.policy.requestCostMicros ?? null, retainRequestContent: entry.policy.retainRequestContent !== false, grantRouting: grantRoutingPolicy(entry.policy.grantRouting) }; }
 function legacyKeyResponse(entry: AccessPolicyEntry) { return { kid: entry.policyId, ...policyResponse(entry) }; }
 function userResponse(user: AccessControlUser) { return { email: user.email, role: "user" as const, tenantId: user.record.tenantId ?? "default", enabled: user.record.enabled ?? true, groups: user.record.groups ?? [], contentRetentionDisabled: user.record.contentRetentionDisabled ?? false }; }
 function grantResponse(key: string, grant: UpstreamGrant) { const parts = key.split("/"), tenant = parts[1] === "tenants"; return { key, scope: tenant ? "tenants" as const : "policies" as const, scopeId: tenant ? parts[2] : parts[1], tokenRef: tenant ? parts[3] : parts[2], version: grant.version ?? 1, enabled: grant.enabled ?? true, kind: grant.kind ?? "oauth", provider: grant.provider ?? null, label: grant.label ?? null, tokenType: grant.tokenType ?? "Bearer", expiresAt: grant.expiresAt ?? null, scopes: grant.scopes ?? [], accountId: grant.accountId ?? null, subscription: grant.subscription ?? null, createdAt: grant.createdAt ?? null, updatedAt: grant.updatedAt ?? null, revokedAt: grant.revokedAt ?? null, hasCredential: !!grant.credential || Object.keys(grant.credentials ?? {}).length > 0, credentialFields: Object.keys(grant.credentials ?? {}).sort(), hasAccessToken: !!grant.accessToken, hasRefreshToken: !!grant.refreshToken, refreshConfigured: !!grant.refresh, refreshTokenUrl: grant.refresh?.tokenUrl ?? null, clientIdConfig: grant.refresh?.clientIdConfig ?? null, clientSecretConfig: grant.refresh?.clientSecretConfig ?? null, usable: grant.enabled !== false && !!(grant.credential || grant.accessToken || Object.keys(grant.credentials ?? {}).length) }; }

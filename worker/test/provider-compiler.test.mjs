@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { readFileSync, readdirSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import test from "node:test";
 
 test("TypeScript provider compiler is deterministic and preserves the catalog contract", () => {
@@ -13,6 +15,10 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.equal(compiled.model_index["anthropic/claude-opus-4-8"].provider, "anthropic");
   assert.deepEqual(compiled.providers.find((provider) => provider.id === "aws-bedrock").optional_config_keys, ["AWS_SESSION_TOKEN"]);
   assert.deepEqual(compiled.providers.find((provider) => provider.id === "azure-openai").optional_config_keys, ["AZURE_OPENAI_COMPLETION_TOKEN_DEPLOYMENTS"]);
+  const openai = compiled.providers.find((provider) => provider.id === "openai");
+  assert.deepEqual(openai.quota.responseHeaders.map((window) => window.id), ["rpm", "tpm", "subscription-primary", "subscription-secondary", "credits"]);
+  assert.deepEqual(openai.quota.probes[0].grantKinds, ["subscription"]);
+  assert.equal(openai.quota.probes[0].url, "https://chatgpt.com/backend-api/wham/usage");
   assert.equal(compiled.model_index["local/default"].provider, "local-openai");
   assert.ok(compiled.capability_index["llm.chat"].length >= 10);
 });
@@ -39,4 +45,16 @@ test("capabilities can share a non-literal endpoint without losing unified route
   const gateway = snapshot.providers.find((provider) => provider.id === "cloudflare-ai-gateway");
   assert.deepEqual(gateway.capabilities.map(({ id, endpoint }) => [id, endpoint]), [["llm.chat", "universal"], ["llm.responses", "universal"]]);
   assert.deepEqual(gateway.models[0].capabilities, ["llm.chat", "llm.responses"]);
+});
+
+test("quota header sources must retain their declared array shape", () => {
+  const directory = mkdtempSync(join(tmpdir(), "clawrouter-provider-"));
+  const manifest = join(directory, "openai.provider.yaml");
+  try {
+    const invalid = readFileSync("providers/openai.provider.yaml", "utf8").replace("limitHeaders: [x-ratelimit-limit-requests]", "limitHeaders: x-ratelimit-limit-requests");
+    writeFileSync(manifest, invalid);
+    assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), /limitHeaders must be an array/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
 });

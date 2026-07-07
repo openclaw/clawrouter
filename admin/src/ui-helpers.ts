@@ -103,6 +103,7 @@ export function upstreamGrantFormFromGrant(grant: UpstreamGrant): UpstreamGrantF
     label: grant.label ?? "",
     enabled: grant.enabled,
     priority: String(grant.priority),
+    weight: String(grant.weight),
     credential: "",
     credentialBundle: "",
     accessToken: "",
@@ -144,6 +145,7 @@ export function demoGrantFromForm(form: UpstreamGrantForm, existing?: UpstreamGr
     version: 1,
     enabled: form.enabled,
     priority: Number(form.priority),
+    weight: Number(form.weight),
     kind: form.kind,
     provider: form.provider.trim(),
     label: form.label.trim() || null,
@@ -161,6 +163,8 @@ export function demoGrantFromForm(form: UpstreamGrantForm, existing?: UpstreamGr
     hasRefreshToken,
     refreshConfigured: existing?.refreshConfigured ?? hasRefreshToken,
     usable: form.enabled && (form.kind === "api_key" ? hasCredential || effectiveCredentialFields.length > 0 : hasAccessToken || form.kind === "subscription" && hasCredential),
+    selectedCount: existing?.selectedCount ?? 0,
+    lastSelectedAt: existing?.lastSelectedAt ?? null,
     quotaStatus: existing?.quotaStatus ?? "unknown",
     quotaObservedAt: existing?.quotaObservedAt ?? null,
     cooldownUntil: existing?.cooldownUntil ?? null,
@@ -343,6 +347,12 @@ export function policyFormFromPolicy(key: AccessPolicy): PolicyForm {
     providers: key.providers,
     allProviders: key.providers.length === 0,
     retainRequestContent: key.retainRequestContent,
+    grantStrategy: key.grantRouting.strategy,
+    grantStickiness: key.grantRouting.stickiness,
+    grantFailover: key.grantRouting.failover,
+    grantStaleState: key.grantRouting.staleState,
+    grantStaleAfterSeconds: String(key.grantRouting.staleAfterSeconds),
+    eligibleGrants: Object.keys(key.grantRouting.eligibleGrants).length ? JSON.stringify(Object.fromEntries(Object.entries(key.grantRouting.eligibleGrants).sort(([a], [b]) => a.localeCompare(b))), null, 2) : "",
   };
 }
 

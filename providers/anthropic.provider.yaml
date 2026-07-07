@@ -26,6 +26,36 @@ adapter:
   passthroughHeaders: [anthropic-beta, anthropic-version]
   injectHeaders:
     anthropic-version: "2023-06-01"
+quota:
+  responseHeaders:
+    - id: rpm
+      kind: requests
+      unit: request
+      window: minute
+      limitHeaders: [anthropic-ratelimit-requests-limit]
+      remainingHeaders: [anthropic-ratelimit-requests-remaining]
+      resetHeaders: [anthropic-ratelimit-requests-reset]
+    - id: tpm
+      kind: tokens
+      unit: token
+      window: minute
+      limitHeaders: [anthropic-ratelimit-tokens-limit]
+      remainingHeaders: [anthropic-ratelimit-tokens-remaining]
+      resetHeaders: [anthropic-ratelimit-tokens-reset]
+    - id: itpm
+      kind: input_tokens
+      unit: token
+      window: minute
+      limitHeaders: [anthropic-ratelimit-input-tokens-limit]
+      remainingHeaders: [anthropic-ratelimit-input-tokens-remaining]
+      resetHeaders: [anthropic-ratelimit-input-tokens-reset]
+    - id: otpm
+      kind: output_tokens
+      unit: token
+      window: minute
+      limitHeaders: [anthropic-ratelimit-output-tokens-limit]
+      remainingHeaders: [anthropic-ratelimit-output-tokens-remaining]
+      resetHeaders: [anthropic-ratelimit-output-tokens-reset]
 capabilities:
   - id: llm.messages
     endpoint: messages

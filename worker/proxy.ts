@@ -8,13 +8,13 @@ import {
 } from "./fusion";
 import { loadFusionConfig } from "./fusion-config";
 import { observeGrantQuota, shouldFailoverGrant } from "./grant-quota";
-import { recordGrantRuntime } from "./grant-selection";
+import { grantRoutingPolicy, recordGrantRuntime } from "./grant-selection";
 import {
   assertProviderAccess, capabilityForPath, copyRequestHeaders, endpointForPath, modelRoute, providerById,
   resolveTemplate, signSigV4, transformRequestBody, upstreamAuth, upstreamPath,
 } from "./providers";
 import { actualModelCost, estimateModelCost } from "./pricing";
-import type { AuthorizedIdentity, CompiledEndpoint, CompiledModel, CompiledProvider, Env, UsageEvent } from "./types";
+import type { AuthorizedIdentity, CompiledEndpoint, CompiledModel, CompiledProvider, CompiledQuotaConfig, Env, UsageEvent } from "./types";
 import {
   clampAudit, errorResponse, HttpError, parseProxyKey, randomId, readJson, safeEqual, sha256Hex,
 } from "./utils";
@@ -344,12 +344,12 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   let grantFailover = false;
   try {
     response = await fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal: AbortSignal.any([request.signal, controller.signal]) });
-    captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, response);
-    if (shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey)) {
+    captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response);
+    if (shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
       try {
         const retry = await prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]));
         const retryResponse = await fetch(retry.url, { method: selection.method, headers: retry.headers, body: retry.requestBody, signal: AbortSignal.any([request.signal, controller.signal]) });
-        captureGrantRuntime(context, env, retry.grantKey, retry.grantRevision, retryResponse);
+        captureGrantRuntime(context, env, retry.grantKey, retry.grantRevision, selection.provider.quota, retryResponse);
         void response.body?.cancel().catch(() => undefined);
         response = retryResponse;
         grantFailover = true;
@@ -381,7 +381,7 @@ async function reserveSelected(request: Request, env: Env, context: ExecutionCon
   const started = Date.now();
   const cost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability);
   try {
-    await prepareSelected(request, env, selection, {}, auth);
+    await prepareSelected(request, env, selection, {}, auth, new Set(), false);
   } catch (error) {
     const failure = selectedFailure(error);
     const status = failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error";
@@ -402,11 +402,12 @@ async function selectedAuth(request: Request, env: Env, mode: AuthMode, selectio
   return preauthenticated ?? (mode === "access" ? accessIdentity(request, env, selection.provider.id) : authenticateProxyKey(request.headers, env));
 }
 
-async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: Record<string, unknown>, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set()): Promise<PreparedUpstream> {
+async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: Record<string, unknown>, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true): Promise<PreparedUpstream> {
   try { await assertProviderAccess(selection.provider, auth, env); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "provider authorization failed"); }
   let upstream;
-  try { upstream = await upstreamAuth(selection.provider, selection.endpoint, auth, env, excludedGrantKeys); }
+  const stickyHash = await grantStickyHash(request, auth);
+  try { upstream = await upstreamAuth(selection.provider, selection.endpoint, auth, env, excludedGrantKeys, stickyHash, recordSelection); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_not_configured", "provider is not configured"); }
   try {
     const headers = new Headers(upstream.headers);
@@ -424,10 +425,19 @@ async function prepareSelected(request: Request, env: Env, selection: ProxySelec
   }
 }
 
-function captureGrantRuntime(context: ExecutionContext, env: Env, key: string | null, revision: string | null, response: Response): void {
+function captureGrantRuntime(context: ExecutionContext, env: Env, key: string | null, revision: string | null, quota: CompiledQuotaConfig, response: Response): void {
   if (!key) return;
-  const state = observeGrantQuota(response);
+  const state = observeGrantQuota(response, quota);
   if (state) context.waitUntil(recordGrantRuntime(env, key, { ...state, grantRevision: revision }).catch(() => undefined));
+}
+
+async function grantStickyHash(request: Request, auth: AuthorizedIdentity): Promise<string | null> {
+  const routing = grantRoutingPolicy(auth.policy.grantRouting);
+  if (routing.stickiness === "none") return null;
+  const identity = auth.principalId ?? auth.credentialId ?? auth.policyId;
+  if (routing.stickiness === "identity") return sha256Hex(`identity:${identity}`);
+  const rawSession = ["session-id", "x-session-id", "thread-id", "conversation-id"].map((name) => request.headers.get(name)?.trim()).find((value) => value && value.length <= 256 && !/[\u0000-\u001f\u007f]/.test(value));
+  return sha256Hex(`session:${rawSession ?? identity}`);
 }
 
 function selectedFailure(error: unknown): HttpError {

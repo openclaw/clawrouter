@@ -584,30 +584,60 @@ Provider manifests may declare a different explicit token reference when a
 provider needs multiple named connection contracts.
 
 To create a same-provider pool, save multiple admin grants with distinct token
-references, the same `provider`, and an integer `priority` from 0 through
-1000000. Lower values route first; ties use the stable canonical grant key.
-Admin writes and browser OAuth maintain the bounded pool index automatically.
+references, the same `provider`, an integer `priority` from 0 through 1000000,
+and an optional positive `weight` up to 1000000. Lower priorities form the first
+active tier; routing never spills into a higher tier while a lower tier has an
+eligible grant. Admin writes and browser OAuth maintain the bounded pool index
+automatically.
 The direct `cf:oauth:*` compatibility helpers remain appropriate for the
 provider-id default grant; use the admin API or console for additional pool
 members so the control plane updates their indexes.
 
-ClawRouter passively reads standard `RateLimit-*`, `X-RateLimit-*`, Anthropic
-request/token limit, and `Retry-After` response headers. It stores only bounded
-numeric windows, reset times, and sanitized status metadata in the serialized
-access authority; response bodies and credential values are never included.
-Active cooldowns are skipped. Within one configured priority, grants with a
-known higher remaining ratio route first, followed by grants without current
-quota evidence and the stable canonical key. Expired windows stop influencing
-selection automatically.
+Each access policy has a `grantRouting` object. Existing policies default to
+quota-aware `most_remaining` selection, failover enabled, stale state allowed
+for five minutes, and no explicit grant restriction:
+
+```json
+{
+  "strategy": "most_remaining",
+  "stickiness": "none",
+  "failover": true,
+  "staleState": "allow",
+  "staleAfterSeconds": 300,
+  "eligibleGrants": {
+    "openai": ["openai-primary", "openai-backup"]
+  }
+}
+```
+
+`strategy` may be `priority`, `round_robin`, `least_used`, `most_remaining`, or
+`weighted_random`. `stickiness` may be `none`, `identity`, or `session`;
+identity and session values are hashed before selection and are not persisted as
+raw identifiers. `eligibleGrants` is a per-provider token-reference allowlist;
+an explicit empty list denies every grant for that provider and never falls back
+to a provider-wide environment credential.
+Set `staleState` to `deny` to fail closed when all eligible grants lack fresh
+quota evidence. Set `failover` to `false` when a policy must never retry a
+request with another credential. The console exposes these controls and each
+grant's selection count and last-selected time.
+
+Provider manifests declare the response headers used to collect request, token,
+input-token, output-token, subscription-window, or credit quota. ClawRouter
+stores only bounded numeric windows, reset times, and sanitized status metadata
+in the access authority; response bodies and credential values are never
+included. Active cooldowns are skipped, and expired windows stop influencing
+selection automatically. A manifest can also declare a bounded quota probe for
+providers that expose per-grant usage outside normal responses. Probes run only
+after an administrator selects **Refresh quota** in the grant console; they have
+a ten-second timeout and never run in the request hot path.
 
 For an upstream 401, 403, or 429, ClawRouter records a five-minute
 authentication cooldown or the provider's bounded rate-limit reset and can try
-one other grant. The retry is limited to LLM capabilities and GET/HEAD service
-routes, never applies to 5xx or network failures, and consumes the original
-budget reservation and usage record. `x-clawrouter-grant-failover: 1` marks a
-response served by the alternate without disclosing either grant key. The
-admin console shows each grant's last provider signal, cooldown, and reported
-request/token windows.
+one other grant when policy failover is enabled. The retry is limited to LLM
+capabilities and GET/HEAD service routes, never applies to 5xx or network
+failures, and consumes the original budget reservation and usage record.
+`x-clawrouter-grant-failover: 1` marks a response served by the alternate without
+disclosing either grant key.
 
 Secrets are never accepted in argv. Supply `accessToken`, `credential`,
 `credentials-json`, and an optional `refreshToken` only through the matching

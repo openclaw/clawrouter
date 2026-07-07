@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { selectGrant, selectProviderPolicy, syncGrantPoolIndex, validGrantSegment } from "../grant-selection.ts";
+import { resolveGrantSelection, selectGrant, selectProviderPolicy, syncGrantPoolIndex, validGrantSegment } from "../grant-selection.ts";
 
 test("grant pools select the lowest-priority usable grant deterministically", async () => {
   const env = mockEnv();
@@ -55,6 +55,44 @@ test("grant updates invalidate runtime state observed for the old credential", a
   assert.equal((await selectGrant("openai", "policy_a", "tenant_a", "openai", env))?.key, key);
 });
 
+test("policy eligibility and stale-state controls fail closed before selection", async () => {
+  const env = mockEnv();
+  await putGrant(env, "oauth/policy_a/openai-a", grant("openai", "a", 10));
+  await putGrant(env, "oauth/policy_a/openai-b", grant("openai", "b", 10));
+  env.runtime.set("oauth/policy_a/openai-a", runtime("available", 80));
+  const routing = { strategy: "most_remaining", stickiness: "none", failover: true, staleState: "deny", staleAfterSeconds: 300, eligibleGrants: { openai: ["openai-b"] } };
+  assert.equal(await selectGrant("openai", "policy_a", "tenant_a", "openai", env, new Set(), routing), null);
+  routing.eligibleGrants.openai = ["openai-a"];
+  assert.equal((await selectGrant("openai", "policy_a", "tenant_a", "openai", env, new Set(), routing))?.key, "oauth/policy_a/openai-a");
+});
+
+test("empty eligibility and stale-state deny policies block environment credential fallback", async () => {
+  const env = mockEnv();
+  const eligibleRouting = { strategy: "round_robin", stickiness: "none", failover: true, staleState: "allow", staleAfterSeconds: 300, eligibleGrants: { openai: [] } };
+  const eligible = await resolveGrantSelection("openai", "policy_a", "tenant_a", "openai", env, new Set(), eligibleRouting);
+  assert.equal(eligible.selected, null);
+  assert.equal(eligible.hasConfiguredGrant, true);
+
+  const staleRouting = { ...eligibleRouting, staleState: "deny", eligibleGrants: {} };
+  const stale = await resolveGrantSelection("openai", "policy_a", "tenant_a", "openai", env, new Set(), staleRouting);
+  assert.equal(stale.selected, null);
+  assert.equal(stale.hasConfiguredGrant, true);
+});
+
+test("selection delegates strategy, weight, and privacy-safe stickiness to the authority", async () => {
+  const env = mockEnv();
+  await putGrant(env, "oauth/policy_a/openai-a", { ...grant("openai", "a", 10), weight: 1 });
+  await putGrant(env, "oauth/policy_a/openai-b", { ...grant("openai", "b", 10), weight: 7 });
+  const routing = { strategy: "weighted_random", stickiness: "session", failover: false, staleState: "allow", staleAfterSeconds: 300, eligibleGrants: {} };
+  await selectGrant("openai", "policy_a", "tenant_a", "openai", env, new Set(), routing, "a".repeat(64));
+  assert.equal(env.selections.length, 1);
+  assert.equal(env.selections[0].strategy, "weighted_random");
+  assert.equal(env.selections[0].stickyHash, "a".repeat(64));
+  assert.deepEqual(env.selections[0].candidates.map(({ weight }) => weight), [1, 7]);
+  await resolveGrantSelection("openai", "policy_a", "tenant_a", "openai", env, new Set(), routing, null, false);
+  assert.equal(env.selections.length, 1);
+});
+
 test("grant key segments reject ambiguous or undiscoverable values", () => {
   assert.equal(validGrantSegment("openai-backup"), true);
   assert.equal(validGrantSegment("nested/grant"), false);
@@ -84,8 +122,9 @@ function mockEnv(initial = {}) {
   const values = new Map(Object.entries(initial));
   const pools = new Map();
   const runtime = new Map();
+  const selections = [];
   return {
-    values, runtime,
+    values, runtime, selections,
     POLICY_KV: {
       async get(key) {
         if (Array.isArray(key)) return new Map(key.map((item) => [item, structuredClone(values.get(item) ?? null)]));
@@ -118,6 +157,12 @@ function mockEnv(initial = {}) {
           }
           if (path === "/grant-pools/feedback") { runtime.set(body.key, body.state); return new Response("updated"); }
           if (path === "/grant-pools/states") return Response.json({ states: Object.fromEntries(body.keys.flatMap((key) => runtime.has(key) ? [[key, runtime.get(key)]] : [])) });
+          if (path === "/grant-pools/select") {
+            selections.push(body);
+            const selected = [...body.candidates].sort((a, b) => (b.remainingRatio ?? -1) - (a.remainingRatio ?? -1) || a.key.localeCompare(b.key))[0];
+            return Response.json({ selectedKey: selected.key, selectedCount: 1, lastSelectedAt: new Date().toISOString() });
+          }
+          if (path === "/grant-pools/stats") return Response.json({ stats: Object.fromEntries(body.keys.map((key) => [key, { selectedCount: 0, lastSelectedAt: null }])) });
           return new Response("not found", { status: 404 });
         } };
       },

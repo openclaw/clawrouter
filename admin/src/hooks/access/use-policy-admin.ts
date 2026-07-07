@@ -1,5 +1,5 @@
 import { type FormEvent, useState } from "react";
-import { currencyInput, errorMessage, knownPolicyProviders, optionalCurrencyMicros, optionalNumber, unique } from "../../domain";
+import { currencyInput, errorMessage, knownPolicyProviders, optionalCurrencyMicros, optionalNumber, parseEligibleGrants, unique } from "../../domain";
 import { defaultCredential, defaultPolicy, demo, rolePresets } from "../../ui-config";
 import { generateSecret, policyFormFromPolicy, request, sha256Hex } from "../../ui-helpers";
 import type { AccessPolicy, CredentialForm, PolicyForm, ProviderRow, ProxyCredential, RouteCatalog, SessionResponse } from "../../ui-types";
@@ -59,6 +59,14 @@ export function usePolicyAdmin({ allowDemo, gatewayOrigin, session, demoMode, pr
         monthlyBudgetMicros: optionalCurrencyMicros(policyForm.monthlyBudgetMicros) ?? null,
         requestCostMicros: optionalNumber(policyForm.requestCostMicros) ?? null,
         retainRequestContent: policyForm.retainRequestContent,
+        grantRouting: {
+          strategy: policyForm.grantStrategy,
+          stickiness: policyForm.grantStickiness,
+          failover: policyForm.grantFailover,
+          staleState: policyForm.grantStaleState,
+          staleAfterSeconds: optionalNumber(policyForm.grantStaleAfterSeconds) ?? 300,
+          eligibleGrants: parseEligibleGrants(policyForm.eligibleGrants),
+        },
       };
       if (demoMode) {
         applyDemoKeys((current) => [next, ...current.filter((key) => key.policyId !== next.policyId)]);

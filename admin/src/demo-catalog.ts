@@ -10,6 +10,7 @@ interface CatalogSnapshot {
     meter?: string | null;
     capabilities: Array<{ id: string; endpoint: string }>;
     auth: { authorization?: { grantKind?: "oauth" | "subscription" } | null };
+    quota?: { probes?: Array<{ grantKinds?: Array<"api_key" | "oauth" | "subscription"> }> };
     routing: { modelPrefixes?: string[] };
     models: Array<{ id: string; capabilities: string[] }>;
     endpoints: Array<{ id: string; methods: string[]; path_params: string[]; request_format?: string | null; response_format?: string | null; streaming?: string | null }>;
@@ -27,6 +28,7 @@ export function demoCatalog(): { providers: ProviderRow[]; routes: RouteCatalog 
     meter: provider.meter,
     capabilities: provider.capabilities.map((capability) => ({ id: capability.id })),
     auth: provider.auth.authorization ? { authorization: { grantKind: provider.auth.authorization.grantKind } } : undefined,
+    quota: provider.quota,
   }));
   const routes: RouteCatalog = {
     openaiCompatible: catalogSnapshot.providers.filter((provider) => provider.class === "openai_compatible").map((provider) => ({

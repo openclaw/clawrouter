@@ -12,7 +12,40 @@ export interface CompiledProvider {
   native_prefixes: string[]; adapter: { request: string | null; response: string | null; stream: string | null; error: string | null; passthroughHeaders: string[]; injectHeaders: Record<string, string>; injectQuery: Record<string, string>; requestTransforms: { renameFields: Array<{ from: string; to: string; paths: string[]; upstreams: string[]; upstreamConfig: string | null }> } };
   capabilities: Array<{ id: string; endpoint: string; methods: string[] }>;
   endpoints: CompiledEndpoint[]; models: CompiledModel[]; billing: { meter: string | null; dimensions: string[]; counters: Array<{ name: string; source: string; unit?: string | null }> }; meter: string | null;
+  quota: CompiledQuotaConfig;
 }
+
+export type GrantQuotaKind = "requests" | "tokens" | "input_tokens" | "output_tokens" | "credits" | "subscription" | "generic";
+export interface CompiledQuotaWindow {
+  id: string;
+  kind: GrantQuotaKind;
+  unit: string | null;
+  window: string | null;
+  limitHeaders: string[];
+  remainingHeaders: string[];
+  usedHeaders: string[];
+  resetHeaders: string[];
+  fixedLimit: number | null;
+}
+export interface CompiledQuotaProbeWindow {
+  id: string;
+  kind: GrantQuotaKind;
+  unit: string | null;
+  window: string | null;
+  limitPointer: string | null;
+  remainingPointer: string | null;
+  usedPointer: string | null;
+  resetPointer: string | null;
+  fixedLimit: number | null;
+}
+export interface CompiledQuotaProbe {
+  grantKinds: Array<NonNullable<UpstreamGrant["kind"]>>;
+  url: string;
+  method: "GET" | "POST";
+  headers: Record<string, string>;
+  windows: CompiledQuotaProbeWindow[];
+}
+export interface CompiledQuotaConfig { responseHeaders: CompiledQuotaWindow[]; probes: CompiledQuotaProbe[] }
 
 export type AuthScheme =
   | { type: "bearer"; header: string; format: string; secretKind: string; required: boolean }
@@ -55,6 +88,18 @@ export interface AccessPolicy {
   monthlyBudgetMicros?: number | null;
   requestCostMicros?: number | null;
   retainRequestContent: boolean;
+  grantRouting: GrantRoutingPolicy;
+}
+
+export type GrantSelectionStrategy = "priority" | "round_robin" | "least_used" | "most_remaining" | "weighted_random";
+export type GrantStickiness = "none" | "identity" | "session";
+export interface GrantRoutingPolicy {
+  strategy: GrantSelectionStrategy;
+  stickiness: GrantStickiness;
+  failover: boolean;
+  staleState: "allow" | "deny";
+  staleAfterSeconds: number;
+  eligibleGrants: Record<string, string[]>;
 }
 
 export interface AccessPolicyEntry { policyId: string; policy: AccessPolicy }
@@ -124,6 +169,7 @@ export interface OAuthState {
   grantKey: string;
   provider: string;
   priority?: number;
+  weight?: number;
   redirectUri: string;
   expiresAtMs: number;
 }
@@ -132,6 +178,7 @@ export interface UpstreamGrant {
   version?: number;
   enabled?: boolean;
   priority?: number;
+  weight?: number;
   kind?: "api_key" | "oauth" | "subscription";
   provider?: string | null;
   label?: string | null;
@@ -157,7 +204,10 @@ export interface UpstreamGrant {
 }
 
 export interface GrantQuotaWindow {
-  kind: "requests" | "tokens" | "generic";
+  id: string;
+  kind: GrantQuotaKind;
+  unit: string | null;
+  window: string | null;
   remaining: number | null;
   limit: number | null;
   resetAt: string | null;
@@ -166,7 +216,7 @@ export interface GrantQuotaWindow {
 export interface GrantRuntimeState {
   status: "available" | "limited" | "cooldown";
   observedAt: string;
-  source: "provider_response";
+  source: "provider_response" | "provider_probe";
   cooldownUntil: string | null;
   lastSignal: "quota" | "rate_limited" | "authentication";
   grantRevision: string | null;

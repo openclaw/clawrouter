@@ -80,6 +80,12 @@ export const defaultPolicy: PolicyForm = {
   providers: ["openai", "tavily"],
   allProviders: false,
   retainRequestContent: true,
+  grantStrategy: "most_remaining",
+  grantStickiness: "none",
+  grantFailover: true,
+  grantStaleState: "allow",
+  grantStaleAfterSeconds: "300",
+  eligibleGrants: "",
 };
 
 export const defaultAccess: AccessForm = {
@@ -92,7 +98,7 @@ export const defaultAccess: AccessForm = {
 };
 export const defaultCredential: CredentialForm = { credentialId: "", policyId: "", principalId: "" };
 export const defaultBinding: BindingForm = { policyId: "", principalType: "group", principalId: "", enabled: true, priority: "100" };
-export const defaultUpstreamGrant: UpstreamGrantForm = { scope: "policies", scopeId: "", tokenRef: "", kind: "api_key", provider: "", label: "", enabled: true, priority: "100", credential: "", credentialBundle: "", accessToken: "", refreshToken: "", accountId: "", expiresAt: "" };
+export const defaultUpstreamGrant: UpstreamGrantForm = { scope: "policies", scopeId: "", tokenRef: "", kind: "api_key", provider: "", label: "", enabled: true, priority: "100", weight: "1", credential: "", credentialBundle: "", accessToken: "", refreshToken: "", accountId: "", expiresAt: "" };
 export const defaultAssignmentRule: AssignmentRuleForm = { ruleId: "", enabled: true, kind: "email_domain", subject: "", groups: "", policyIds: [], priority: "100", revokeOnLoss: true, provenance: "cloudflare_access" };
 export const defaultFusion: FusionConfig = {
   version: 1,

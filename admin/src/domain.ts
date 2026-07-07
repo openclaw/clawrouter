@@ -32,6 +32,20 @@ export interface CatalogModel {
   capabilities: string[];
 }
 
+export function parseEligibleGrants(value: string): Record<string, string[]> {
+  if (!value.trim()) return {};
+  let parsed: unknown;
+  try { parsed = JSON.parse(value); }
+  catch { throw new Error("eligible grants must be a JSON provider-to-token-reference map"); }
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("eligible grants must be a JSON provider-to-token-reference map");
+  const result: Record<string, string[]> = {};
+  for (const [provider, rawRefs] of Object.entries(parsed as Record<string, unknown>)) {
+    if (!/^[a-z0-9][a-z0-9-]*$/.test(provider) || !Array.isArray(rawRefs) || rawRefs.length > 32 || rawRefs.some((ref) => typeof ref !== "string" || !ref || ref.length > 256 || ref.includes("/") || /[\u0000-\u001f\u007f]/.test(ref))) throw new Error("eligible grants contain an invalid provider or token reference");
+    result[provider] = [...new Set(rawRefs as string[])].sort();
+  }
+  return result;
+}
+
 export function preferredPlaygroundEndpoint(model: CatalogModel): PlaygroundForm["endpoint"] {
   return model.capabilities.includes("llm.responses") ? "/v1/responses" : "/v1/chat/completions";
 }

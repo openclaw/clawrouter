@@ -74,6 +74,10 @@ billing:
   the declarative format cannot express the provider.
 - `billing.meter` and `billing.counters` produce OpenMeter/Lago/Meteroid style
   event dimensions without hard-coding provider logic.
+- `quota.responseHeaders` maps provider response headers into named quota
+  windows. `quota.probes` declares bounded, admin-triggered reads for providers
+  that expose per-grant quota outside normal responses; probes never run in the
+  request hot path.
 - `models.entries[].pricing` supplies a dated, source-linked list-price snapshot
   for hard budget reservation and settlement. Rates are integer micro-US-dollars
   per million tokens. Change `pricingRef` whenever rates or effective dates

@@ -9,7 +9,7 @@ export function AppShell() {
   const { items: credentials, selected: selectedCredential, form: credentialForm, setForm: setCredentialForm, issuedKey, issue: issueCredential, revoke: revokeCredential, setSelectedId: setSelectedCredentialId, setIssuedKey } = credentialState;
   const { items: connections, setEnabled: setProviderConnection } = connectionState;
   const { items: bindings, selected: selectedBinding, form: bindingForm, setForm: setBindingForm, save: saveBinding, edit: editBinding, startNew: startNewBinding } = bindingState;
-  const { items: upstreamGrants, selected: selectedUpstreamGrant, form: upstreamGrantForm, setForm: setUpstreamGrantForm, save: saveUpstreamGrant, revoke: revokeUpstreamGrant, refresh: refreshUpstreamGrant, authorize: authorizeUpstreamGrant, edit: editUpstreamGrant, startNew: startNewUpstreamGrant } = upstream;
+  const { items: upstreamGrants, selected: selectedUpstreamGrant, form: upstreamGrantForm, setForm: setUpstreamGrantForm, save: saveUpstreamGrant, revoke: revokeUpstreamGrant, refresh: refreshUpstreamGrant, refreshQuota: refreshUpstreamGrantQuota, authorize: authorizeUpstreamGrant, edit: editUpstreamGrant, startNew: startNewUpstreamGrant } = upstream;
   const { items: assignmentRules, selected: selectedAssignmentRule, form: assignmentRuleForm, setForm: setAssignmentRuleForm, save: saveAssignmentRule, reconcile: reconcileAssignments, edit: editAssignmentRule, startNew: startNewAssignmentRule } = assignments;
   const { config: fusionConfig, setConfig: setFusionConfig, policyId: fusionPolicyId, setPolicyId: setFusionPolicyId, readiness: fusionReadiness, error: fusionError, save: saveFusion, check: checkFusion } = fusion;
   const { items: users, selected: selectedUser, setSelectedEmail: setSelectedUserEmail, form: accessForm, setForm: setAccessForm, error: userError, save: saveUser, startNew: startNewUser } = userState;
@@ -196,6 +196,7 @@ export function AppShell() {
             onSaveUpstreamGrant={saveUpstreamGrant}
             onRevokeUpstreamGrant={revokeUpstreamGrant}
             onRefreshUpstreamGrant={refreshUpstreamGrant}
+            onRefreshUpstreamGrantQuota={refreshUpstreamGrantQuota}
             onAuthorizeUpstreamGrant={authorizeUpstreamGrant}
             onSaveAssignmentRule={saveAssignmentRule}
             onReconcileAssignments={reconcileAssignments}
