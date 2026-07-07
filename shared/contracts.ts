@@ -6,6 +6,7 @@ export interface ProviderRow {
   meter?: string | null;
   capabilities: Array<{ id: string }>;
   auth?: { authorization?: { grantKind?: "oauth" | "subscription" } | null };
+  quota?: { probes?: Array<{ grantKinds?: Array<"api_key" | "oauth" | "subscription"> }> };
 }
 
 export interface ProviderResponse { providers: ProviderRow[] }
@@ -24,6 +25,18 @@ export interface AccessPolicy {
   monthlyBudgetMicros?: number | null;
   requestCostMicros?: number | null;
   retainRequestContent: boolean;
+  grantRouting: GrantRoutingPolicy;
+}
+
+export type GrantSelectionStrategy = "priority" | "round_robin" | "least_used" | "most_remaining" | "weighted_random";
+export type GrantStickiness = "none" | "identity" | "session";
+export interface GrantRoutingPolicy {
+  strategy: GrantSelectionStrategy;
+  stickiness: GrantStickiness;
+  failover: boolean;
+  staleState: "allow" | "deny";
+  staleAfterSeconds: number;
+  eligibleGrants: Record<string, string[]>;
 }
 
 export interface ProxyCredential {
@@ -91,6 +104,7 @@ export interface UpstreamGrant {
   version: number;
   enabled: boolean;
   priority: number;
+  weight: number;
   kind: "api_key" | "oauth" | "subscription";
   provider?: string | null;
   label?: string | null;
@@ -108,13 +122,18 @@ export interface UpstreamGrant {
   hasRefreshToken: boolean;
   refreshConfigured: boolean;
   usable: boolean;
+  selectedCount: number;
+  lastSelectedAt?: string | null;
   quotaStatus: "unknown" | "available" | "limited" | "cooldown";
   quotaObservedAt?: string | null;
   cooldownUntil?: string | null;
-  quotaSource?: "provider_response" | null;
+  quotaSource?: "provider_response" | "provider_probe" | null;
   lastProviderSignal?: "quota" | "rate_limited" | "authentication" | null;
   quotaWindows: Array<{
-    kind: "requests" | "tokens" | "generic";
+    id: string;
+    kind: "requests" | "tokens" | "input_tokens" | "output_tokens" | "credits" | "subscription" | "generic";
+    unit: string | null;
+    window: string | null;
     remaining: number | null;
     limit: number | null;
     resetAt: string | null;

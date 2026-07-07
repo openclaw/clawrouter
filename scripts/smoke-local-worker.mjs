@@ -26,6 +26,17 @@ const failoverKey = `clawrouter-live-failover-${failoverSecret}`;
 putLocalKv("policies/failover", { enabled: true, generation, providers: ["local-openai"], tenantId: "default", tokenRole: "service", requestCostMicros: 1, retainRequestContent: false });
 putLocalKv("credentials/failover", { enabled: true, secretSha256: sha256(failoverSecret), policyId: "failover", policyGeneration: generation });
 
+const rotationSecret = "rotation123";
+const rotationKey = `clawrouter-live-rotation-${rotationSecret}`;
+const routingDefaults = { strategy: "round_robin", stickiness: "none", failover: true, staleState: "allow", staleAfterSeconds: 300, eligibleGrants: {} };
+putLocalKv("policies/rotation", { enabled: true, generation, providers: ["local-openai"], tenantId: "default", tokenRole: "service", requestCostMicros: 1, retainRequestContent: false, grantRouting: routingDefaults });
+putLocalKv("credentials/rotation", { enabled: true, secretSha256: sha256(rotationSecret), policyId: "rotation", policyGeneration: generation });
+
+const noFailoverSecret = "nofail123";
+const noFailoverKey = `clawrouter-live-no_failover-${noFailoverSecret}`;
+putLocalKv("policies/no_failover", { enabled: true, generation, providers: ["local-openai"], tenantId: "default", tokenRole: "service", requestCostMicros: 1, retainRequestContent: false, grantRouting: { ...routingDefaults, strategy: "priority", failover: false } });
+putLocalKv("credentials/no_failover", { enabled: true, secretSha256: sha256(noFailoverSecret), policyId: "no_failover", policyGeneration: generation });
+
 const fusionSecret = "fusion123";
 const fusionKey = `clawrouter-live-fusionlocal-${fusionSecret}`;
 putLocalKv("policies/fusion_local", { enabled: true, generation, providers: ["local-openai", "openai"], tenantId: "default", tokenRole: "service", monthlyBudgetMicros: 1, retainRequestContent: false });
@@ -34,6 +45,8 @@ putLocalKv("credentials/fusionlocal", { enabled: true, secretSha256: sha256(fusi
 const upstreamPort = await availablePort();
 const upstreamCalls = [];
 const failoverCalls = [];
+const rotationCalls = [];
+const noFailoverCalls = [];
 let stalledUpstreamClosed = false;
 const upstreamServer = createHttpServer(async (request, response) => {
   let raw = "";
@@ -47,7 +60,15 @@ const upstreamServer = createHttpServer(async (request, response) => {
     response.end(JSON.stringify({ error: { message: "fixture rate limit" } }));
     return;
   }
+  if (body.model === "default" && authorization === "Bearer no-fail-primary") {
+    noFailoverCalls.push(authorization);
+    response.writeHead(429, { "content-type": "application/json", "retry-after": "120" });
+    response.end(JSON.stringify({ error: { message: "fixture rate limit" } }));
+    return;
+  }
   if (body.model === "default" && authorization === "Bearer healthy") failoverCalls.push(authorization);
+  if (body.model === "default" && ["Bearer rotate-a", "Bearer rotate-b", "Bearer rotate-c"].includes(authorization)) rotationCalls.push(authorization);
+  if (body.model === "default" && authorization === "Bearer no-fail-backup") noFailoverCalls.push(authorization);
   if (body.model === "stall") {
     response.on("close", () => { stalledUpstreamClosed = true; });
     response.writeHead(200, { "content-type": "application/json" });
@@ -309,6 +330,11 @@ try {
     ["invalid_null_enabled", { providers: ["openai"], enabled: null }],
     ["invalid_tenant", { providers: ["openai"], tenantId: {} }],
     ["invalid_providers", { providers: {} }],
+    ["invalid_routing_strategy", { providers: ["openai"], grantRouting: { ...routingDefaults, strategy: "random" } }],
+    ["invalid_routing_stickiness", { providers: ["openai"], grantRouting: { ...routingDefaults, stickiness: "cookie" } }],
+    ["invalid_routing_staleness", { providers: ["openai"], grantRouting: { ...routingDefaults, staleAfterSeconds: 1 } }],
+    ["invalid_routing_failover", { providers: ["openai"], grantRouting: { ...routingDefaults, failover: "false" } }],
+    ["invalid_routing_eligibility", { providers: ["openai"], grantRouting: { ...routingDefaults, eligibleGrants: { openai: ["bad/ref"] } } }],
   ]) {
     const invalidPolicy = await fetch(`${base}/v1/admin/policies/${policyId}`, { method: "PUT", headers: userHeaders, body: JSON.stringify(body) });
     assert.equal(invalidPolicy.status, 400, `malformed policy ${policyId} is rejected`);
@@ -450,6 +476,46 @@ try {
   const usageAfterInvalidBodies = await fetch(`${base}/v1/usage`, { headers: { authorization: `Bearer ${proxyKey}` } });
   assert.equal(usageAfterInvalidBodies.status, 200);
   assert.equal((await usageAfterInvalidBodies.json()).budget.spentMicros, 0, "invalid JSON body shapes must not reserve budget");
+  for (const [tokenRef, credential, weight = 1] of [["rotate-a", "rotate-a", 1], ["rotate-b", "rotate-b", 5]]) {
+    const stored = await fetch(`${base}/v1/admin/upstream-grants/policies/rotation/${tokenRef}`, { method: "PUT", headers: adminHeaders, body: JSON.stringify({ provider: "local-openai", kind: "api_key", priority: 10, weight, credential }) });
+    assert.equal(stored.status, 200, JSON.stringify(await stored.clone().json()));
+  }
+  const rotationRequest = (sessionId) => fetch(`${base}/v1/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${rotationKey}`, "content-type": "application/json", ...(sessionId ? { "session-id": sessionId } : {}) }, body: JSON.stringify({ model: "local/default", messages: [{ role: "user", content: "rotate grant" }] }) });
+  for (let index = 0; index < 4; index += 1) assert.equal((await rotationRequest()).status, 200);
+  assert.deepEqual(rotationCalls, ["Bearer rotate-a", "Bearer rotate-b", "Bearer rotate-a", "Bearer rotate-b"], "round-robin selection is serialized by the authority");
+  await waitUntil(async () => {
+    const grants = await fetch(`${base}/v1/admin/upstream-grants`, { headers: adminHeaders });
+    const rows = (await grants.json()).grants.filter((item) => item.scopeId === "rotation");
+    return rows.length === 2 && rows.every((item) => item.selectedCount === 2 && item.lastSelectedAt);
+  }, "grant selection counters were not visible to administrators");
+  const updateRotationPolicy = async (grantRouting) => {
+    const response = await fetch(`${base}/v1/admin/policies/rotation`, { method: "PUT", headers: adminHeaders, body: JSON.stringify({ enabled: true, providers: ["local-openai"], tenantId: "default", tokenRole: "service", requestCostMicros: 1, retainRequestContent: false, grantRouting }) });
+    assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
+  };
+  await updateRotationPolicy({ ...routingDefaults, strategy: "least_used" });
+  assert.equal((await rotationRequest()).status, 200);
+  assert.equal((await rotationRequest()).status, 200);
+  assert.deepEqual(rotationCalls.slice(-2), ["Bearer rotate-a", "Bearer rotate-b"], "least-used selection balances authority counters");
+  await updateRotationPolicy({ ...routingDefaults, strategy: "weighted_random", stickiness: "session" });
+  const stickyStart = rotationCalls.length;
+  for (let index = 0; index < 3; index += 1) assert.equal((await rotationRequest("session-alpha")).status, 200);
+  assert.equal(new Set(rotationCalls.slice(stickyStart)).size, 1, "session stickiness is deterministic across requests");
+  await updateRotationPolicy({ ...routingDefaults, strategy: "priority", eligibleGrants: { "local-openai": ["rotate-b"] } });
+  assert.equal((await rotationRequest()).status, 200);
+  assert.equal(rotationCalls.at(-1), "Bearer rotate-b", "policy eligibility restricts the grant pool");
+  const freshOnly = await fetch(`${base}/v1/admin/upstream-grants/policies/rotation/rotate-c`, { method: "PUT", headers: adminHeaders, body: JSON.stringify({ provider: "local-openai", kind: "api_key", priority: 10, credential: "rotate-c" }) });
+  assert.equal(freshOnly.status, 200);
+  await updateRotationPolicy({ ...routingDefaults, strategy: "priority", staleState: "deny", eligibleGrants: { "local-openai": ["rotate-c"] } });
+  const staleClosed = await rotationRequest();
+  assert.equal(staleClosed.status, 503);
+  assert.equal((await staleClosed.json()).error.code, "upstream_grant_pool_unavailable", "fail-closed stale state rejects an unobserved grant");
+  for (const [tokenRef, credential] of [["no-fail-a", "no-fail-primary"], ["no-fail-b", "no-fail-backup"]]) {
+    const stored = await fetch(`${base}/v1/admin/upstream-grants/policies/no_failover/${tokenRef}`, { method: "PUT", headers: adminHeaders, body: JSON.stringify({ provider: "local-openai", kind: "api_key", priority: 10, credential }) });
+    assert.equal(stored.status, 200);
+  }
+  const noFailoverResponse = await fetch(`${base}/v1/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${noFailoverKey}`, "content-type": "application/json" }, body: JSON.stringify({ model: "local/default", messages: [{ role: "user", content: "do not retry" }] }) });
+  assert.equal(noFailoverResponse.status, 429);
+  assert.deepEqual(noFailoverCalls, ["Bearer no-fail-primary"], "policy-disabled failover performs one upstream attempt");
   for (const [tokenRef, credential] of [["local-a-primary", "rate-limited"], ["local-b-backup", "healthy"]]) {
     const stored = await fetch(`${base}/v1/admin/upstream-grants/policies/failover/${tokenRef}`, { method: "PUT", headers: adminHeaders, body: JSON.stringify({ provider: "local-openai", kind: "api_key", priority: 10, credential }) });
     assert.equal(stored.status, 200, JSON.stringify(await stored.clone().json()));
@@ -476,6 +542,14 @@ try {
   assert.equal((await unavailablePool.json()).error.code, "upstream_grant_pool_unavailable");
   assert.equal(upstreamCalls.length, callsBeforeUnavailablePool, "cooled scoped grants never fall through to an unscoped provider credential");
   console.log(`local Worker smoke passed on ${base}`);
+  if (process.env.CLAWROUTER_E2E_HOLD_FILE) {
+    writeFileSync(process.env.CLAWROUTER_E2E_HOLD_FILE, `${JSON.stringify({ base, adminToken, rotationKey, noFailoverKey })}\n`, { mode: 0o600 });
+    console.log("local Worker held for external behavior validation");
+    await new Promise((resolve) => {
+      process.once("SIGINT", resolve);
+      process.once("SIGTERM", resolve);
+    });
+  }
 } catch (error) {
   throw new Error(`${error instanceof Error ? error.message : String(error)}\nwrangler output:\n${output}`);
 } finally {

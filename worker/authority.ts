@@ -1,6 +1,6 @@
 import type {
   AccessControlUser, AccessPolicyEntry, AccessUserRecord, Env, OAuthState, PolicyBinding,
-  GrantRuntimeState, ProviderConnection, ProxyCredentialEntry,
+  GrantRoutingPolicy, GrantRuntimeState, ProviderConnection, ProxyCredentialEntry,
 } from "./types";
 import { errorResponse, json, normalizeEmail, readJson } from "./utils.ts";
 
@@ -51,6 +51,8 @@ export class PolicyBindingIndexObject implements DurableObject {
       if (path === "/grant-pools/sync") { this.syncGrantPool(await readJson<GrantPoolSyncRequest>(request)); return new Response("updated"); }
       if (path === "/grant-pools/feedback") { this.putGrantRuntime(await readJson<GrantRuntimeFeedbackRequest>(request)); return new Response("updated"); }
       if (path === "/grant-pools/states") return json({ states: this.grantRuntimeStates((await readJson<GrantRuntimeStatesRequest>(request)).keys) });
+      if (path === "/grant-pools/select") return json(this.selectGrant(await readJson<GrantPoolSelectRequest>(request)));
+      if (path === "/grant-pools/stats") return json({ stats: this.grantSelectionStats((await readJson<GrantRuntimeStatesRequest>(request)).keys) });
       if (path === "/oauth-states/put") { this.putOAuthState(await readJson<OAuthState>(request)); return new Response("updated"); }
       if (path === "/oauth-states/consume") return json({ state: this.consumeOAuthState(await readJson<{ state: string; actorEmail: string }>(request)) });
       return errorResponse("route_not_found", "route not found", 404);
@@ -69,6 +71,8 @@ export class PolicyBindingIndexObject implements DurableObject {
     this.sql.exec("CREATE TABLE IF NOT EXISTS provider_connections (provider_id TEXT PRIMARY KEY, connection_json TEXT NOT NULL)");
     this.sql.exec("CREATE TABLE IF NOT EXISTS upstream_grant_pool_members (scope TEXT NOT NULL, scope_id TEXT NOT NULL, provider_id TEXT NOT NULL, token_ref TEXT NOT NULL, PRIMARY KEY (scope, scope_id, provider_id, token_ref))");
     this.sql.exec("CREATE TABLE IF NOT EXISTS upstream_grant_runtime (grant_key TEXT PRIMARY KEY, state_json TEXT NOT NULL)");
+    this.sql.exec("CREATE TABLE IF NOT EXISTS upstream_grant_selection (pool_key TEXT NOT NULL, grant_key TEXT NOT NULL, selected_count INTEGER NOT NULL, last_selected_ms INTEGER NOT NULL, PRIMARY KEY (pool_key, grant_key))");
+    this.sql.exec("CREATE TABLE IF NOT EXISTS upstream_grant_pool_cursors (pool_key TEXT PRIMARY KEY, grant_key TEXT NOT NULL)");
     this.sql.exec("CREATE TABLE IF NOT EXISTS oauth_authorization_states (state TEXT PRIMARY KEY, state_json TEXT NOT NULL, expires_at_ms INTEGER NOT NULL)");
   }
 
@@ -258,6 +262,44 @@ export class PolicyBindingIndexObject implements DurableObject {
     return states;
   }
 
+  private selectGrant(input: GrantPoolSelectRequest): { selectedKey: string; selectedCount: number; lastSelectedAt: string } {
+    const poolKey = grantSelectionPoolKey(input.poolKey);
+    if (!Array.isArray(input.candidates) || input.candidates.length < 1 || input.candidates.length > 66) throw new Error("grant selection candidates must be a bounded array");
+    const candidates = [...new Map(input.candidates.map((candidate) => {
+      const key = grantKey(candidate.key);
+      const weight = typeof candidate.weight === "number" && Number.isFinite(candidate.weight) && candidate.weight > 0 && candidate.weight <= 1_000_000 ? candidate.weight : 1;
+      const remainingRatio = typeof candidate.remainingRatio === "number" && Number.isFinite(candidate.remainingRatio) && candidate.remainingRatio >= 0 && candidate.remainingRatio <= 1 ? candidate.remainingRatio : null;
+      return [key, { key, weight, remainingRatio }];
+    })).values()].sort((a, b) => a.key.localeCompare(b.key));
+    const strategy = ["priority", "round_robin", "least_used", "most_remaining", "weighted_random"].includes(input.strategy) ? input.strategy : "most_remaining";
+    const stickyHash = typeof input.stickyHash === "string" && /^[0-9a-f]{64}$/.test(input.stickyHash) ? input.stickyHash : null;
+    let selected = candidates[0];
+    if (stickyHash) selected = [...candidates].sort((a, b) => stickyScore(stickyHash, a) - stickyScore(stickyHash, b) || a.key.localeCompare(b.key))[0];
+    else if (strategy === "round_robin") {
+      const current = rows<{ grant_key: string }>(this.sql.exec("SELECT grant_key FROM upstream_grant_pool_cursors WHERE pool_key = ?", poolKey))[0]?.grant_key;
+      selected = candidates.find((candidate) => candidate.key > (current ?? "")) ?? candidates[0];
+      this.sql.exec("INSERT OR REPLACE INTO upstream_grant_pool_cursors (pool_key, grant_key) VALUES (?, ?)", poolKey, selected.key);
+    } else if (strategy === "least_used") {
+      const counts = new Map(rows<{ grant_key: string; selected_count: number; last_selected_ms: number }>(this.sql.exec("SELECT grant_key, selected_count, last_selected_ms FROM upstream_grant_selection WHERE pool_key = ?", poolKey)).map((row) => [row.grant_key, row]));
+      selected = [...candidates].sort((a, b) => (counts.get(a.key)?.selected_count ?? 0) - (counts.get(b.key)?.selected_count ?? 0) || (counts.get(a.key)?.last_selected_ms ?? 0) - (counts.get(b.key)?.last_selected_ms ?? 0) || a.key.localeCompare(b.key))[0];
+    } else if (strategy === "most_remaining") selected = [...candidates].sort((a, b) => (b.remainingRatio ?? -1) - (a.remainingRatio ?? -1) || a.key.localeCompare(b.key))[0];
+    else if (strategy === "weighted_random") selected = weightedRandom(candidates);
+    const nowMs = Date.now();
+    this.sql.exec("INSERT INTO upstream_grant_selection (pool_key, grant_key, selected_count, last_selected_ms) VALUES (?, ?, 1, ?) ON CONFLICT (pool_key, grant_key) DO UPDATE SET selected_count = selected_count + 1, last_selected_ms = excluded.last_selected_ms", poolKey, selected.key, nowMs);
+    const row = rows<{ selected_count: number }>(this.sql.exec("SELECT selected_count FROM upstream_grant_selection WHERE pool_key = ? AND grant_key = ?", poolKey, selected.key))[0];
+    return { selectedKey: selected.key, selectedCount: row?.selected_count ?? 1, lastSelectedAt: new Date(nowMs).toISOString() };
+  }
+
+  private grantSelectionStats(rawKeys: unknown): Record<string, { selectedCount: number; lastSelectedAt: string | null }> {
+    if (!Array.isArray(rawKeys) || rawKeys.length > 66) throw new Error("grant selection keys must be a bounded array");
+    const stats: Record<string, { selectedCount: number; lastSelectedAt: string | null }> = {};
+    for (const key of [...new Set(rawKeys.map((value) => grantKey(value)))]) {
+      const row = rows<{ selected_count: number; last_selected_ms: number | null }>(this.sql.exec("SELECT COALESCE(SUM(selected_count), 0) AS selected_count, MAX(last_selected_ms) AS last_selected_ms FROM upstream_grant_selection WHERE grant_key = ?", key))[0];
+      stats[key] = { selectedCount: row?.selected_count ?? 0, lastSelectedAt: row?.last_selected_ms ? new Date(row.last_selected_ms).toISOString() : null };
+    }
+    return stats;
+  }
+
   private poolTokenRefs(scope: "policies" | "tenants", scopeId: string, providerId: string): string[] {
     return rows<{ token_ref: string }>(this.sql.exec("SELECT token_ref FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND provider_id = ? ORDER BY token_ref LIMIT 33", scope, scopeId, providerId)).map((row) => row.token_ref);
   }
@@ -283,6 +325,12 @@ interface GrantPoolResolveRequest { policyId: string; tenantId: string; provider
 interface GrantPoolSyncRequest { scope: "policies" | "tenants"; scopeId: string; tokenRef: string; previousProvider: string | null; provider: string | null; enabled: boolean }
 interface GrantRuntimeFeedbackRequest { key: string; state: GrantRuntimeState }
 interface GrantRuntimeStatesRequest { keys: string[] }
+interface GrantPoolSelectRequest {
+  poolKey: string;
+  strategy: string;
+  stickyHash?: string | null;
+  candidates: Array<{ key: string; weight?: number; remainingRatio?: number | null }>;
+}
 
 function grantSegment(value: unknown, field: string): string {
   if (typeof value !== "string" || !value.length || value.length > 256 || value.includes("/") || /[\u0000-\u001f\u007f]/.test(value)) throw new Error(`${field} must be a valid grant key segment`);
@@ -298,24 +346,47 @@ function grantKey(value: unknown): string {
   return value;
 }
 
+function grantSelectionPoolKey(value: unknown): string {
+  if (typeof value !== "string" || !value.length || value.length > 1024 || /[\u0000-\u001f\u007f]/.test(value)) throw new Error("grant selection pool key is invalid");
+  return value;
+}
+
+function stickyScore(hash: string, candidate: { key: string; weight: number }): number {
+  let value = 2166136261;
+  for (const character of `${hash}:${candidate.key}`) value = Math.imul(value ^ character.charCodeAt(0), 16777619) >>> 0;
+  const unit = (value + 1) / 0x1_0000_0000;
+  return -Math.log(unit) / candidate.weight;
+}
+
+function weightedRandom<T extends { weight: number }>(candidates: T[]): T {
+  const total = candidates.reduce((sum, candidate) => sum + candidate.weight, 0);
+  const random = crypto.getRandomValues(new Uint32Array(1))[0] / 0x1_0000_0000 * total;
+  let cursor = 0;
+  for (const candidate of candidates) { cursor += candidate.weight; if (random < cursor) return candidate; }
+  return candidates.at(-1)!;
+}
+
 function normalizeGrantRuntimeState(value: unknown): GrantRuntimeState {
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("grant runtime state is invalid");
   const state = value as Partial<GrantRuntimeState>;
-  if (!state.observedAt || !Number.isFinite(Date.parse(state.observedAt)) || state.source !== "provider_response") throw new Error("grant runtime observation is invalid");
+  if (!state.observedAt || !Number.isFinite(Date.parse(state.observedAt)) || !["provider_response", "provider_probe"].includes(state.source ?? "")) throw new Error("grant runtime observation is invalid");
   if (!state.status || !["available", "limited", "cooldown"].includes(state.status)) throw new Error("grant runtime status is invalid");
   if (!state.lastSignal || !["quota", "rate_limited", "authentication"].includes(state.lastSignal)) throw new Error("grant runtime signal is invalid");
   const grantRevision = state.grantRevision == null ? null : typeof state.grantRevision === "string" && state.grantRevision.length <= 64 && Number.isFinite(Date.parse(state.grantRevision)) ? state.grantRevision : null;
   const cooldownUntil = state.cooldownUntil == null ? null : Number.isFinite(Date.parse(state.cooldownUntil)) ? state.cooldownUntil : null;
-  if (!Array.isArray(state.windows) || state.windows.length > 3) throw new Error("grant runtime windows are invalid");
+  if (!Array.isArray(state.windows) || state.windows.length > 12) throw new Error("grant runtime windows are invalid");
   const windows = state.windows.map((window) => {
-    if (!window || !["requests", "tokens", "generic"].includes(window.kind)) throw new Error("grant runtime window is invalid");
+    if (!window || !["requests", "tokens", "input_tokens", "output_tokens", "credits", "subscription", "generic"].includes(window.kind)) throw new Error("grant runtime window is invalid");
+    const id = typeof window.id === "string" && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(window.id) ? window.id : window.kind;
+    const unit = window.unit == null ? null : typeof window.unit === "string" && window.unit.length <= 32 ? window.unit : null;
+    const quotaWindow = window.window == null ? null : typeof window.window === "string" && window.window.length <= 64 ? window.window : null;
     const metric = (input: unknown) => input == null ? null : typeof input === "number" && Number.isFinite(input) && input >= 0 && input <= Number.MAX_SAFE_INTEGER ? input : NaN;
     const remaining = metric(window.remaining), limit = metric(window.limit);
     if (Number.isNaN(remaining) || Number.isNaN(limit)) throw new Error("grant runtime window metric is invalid");
     const resetAt = window.resetAt == null ? null : Number.isFinite(Date.parse(window.resetAt)) ? window.resetAt : null;
-    return { kind: window.kind, remaining, limit, resetAt };
+    return { id, kind: window.kind, unit, window: quotaWindow, remaining, limit, resetAt };
   });
-  return { status: state.status, observedAt: state.observedAt, source: state.source, cooldownUntil, lastSignal: state.lastSignal, grantRevision, windows };
+  return { status: state.status, observedAt: state.observedAt, source: state.source!, cooldownUntil, lastSignal: state.lastSignal, grantRevision, windows };
 }
 
 export async function authorityCall<T>(env: Env, path: string, body: unknown, objectName = "policy-bindings"): Promise<T> {
@@ -470,7 +541,40 @@ function normalizePolicyRecord(value: Record<string, unknown>): AccessPolicyEntr
     monthlyBudgetMicros: typeof value.monthlyBudgetMicros === "number" ? value.monthlyBudgetMicros : null,
     requestCostMicros: typeof value.requestCostMicros === "number" ? value.requestCostMicros : null,
     retainRequestContent: value.retainRequestContent !== false,
+    grantRouting: normalizeStoredGrantRouting(value.grantRouting),
   };
+}
+
+function normalizeStoredGrantRouting(value: unknown): GrantRoutingPolicy {
+  const record = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
+  const strategy = typeof record.strategy === "string" && ["priority", "round_robin", "least_used", "most_remaining", "weighted_random"].includes(record.strategy)
+    ? record.strategy as GrantRoutingPolicy["strategy"]
+    : "most_remaining";
+  const stickiness = typeof record.stickiness === "string" && ["none", "identity", "session"].includes(record.stickiness)
+    ? record.stickiness as GrantRoutingPolicy["stickiness"]
+    : "none";
+  const staleAfterSeconds = Number.isSafeInteger(record.staleAfterSeconds) && (record.staleAfterSeconds as number) >= 30 && (record.staleAfterSeconds as number) <= 86_400
+    ? record.staleAfterSeconds as number
+    : 300;
+  const eligibleGrants: Record<string, string[]> = {};
+  if (record.eligibleGrants && typeof record.eligibleGrants === "object" && !Array.isArray(record.eligibleGrants)) {
+    for (const [providerId, refs] of Object.entries(record.eligibleGrants as Record<string, unknown>)) {
+      if (!validStoredGrantSegment(providerId) || !Array.isArray(refs)) continue;
+      eligibleGrants[providerId] = [...new Set(refs.filter((ref): ref is string => typeof ref === "string" && validStoredGrantSegment(ref)))].slice(0, 32).sort();
+    }
+  }
+  return {
+    strategy,
+    stickiness,
+    failover: record.failover !== false,
+    staleState: record.staleState === "deny" ? "deny" : "allow",
+    staleAfterSeconds,
+    eligibleGrants,
+  };
+}
+
+function validStoredGrantSegment(value: string): boolean {
+  return value.length > 0 && value.length <= 256 && !value.includes("/") && !/[\u0000-\u001f\u007f]/.test(value);
 }
 
 function normalizeCredentialRecord(value: Record<string, unknown>, legacyPolicyId?: string): ProxyCredentialEntry["credential"] {
