@@ -64,22 +64,26 @@ export function grantCoolingDown(state: GrantRuntimeState | null | undefined, no
 
 function quotaWindowsFromHeaders(headers: Headers, definitions: CompiledQuotaWindow[], nowMs: number): GrantQuotaWindow[] {
   return definitions.flatMap((definition) => {
-    const limit = definition.fixedLimit ?? headerNumber(headers, definition.limitHeaders);
+    const reportedLimit = headerNumber(headers, definition.limitHeaders);
     let remaining = headerNumber(headers, definition.remainingHeaders);
     const used = headerNumber(headers, definition.usedHeaders);
-    if (remaining === null && limit !== null && used !== null) remaining = Math.max(0, limit - used);
     const resetAt = headerReset(headers, definition.resetHeaders, nowMs);
-    return limit === null && remaining === null && resetAt === null ? [] : [{ id: definition.id, kind: definition.kind, unit: definition.unit, window: definition.window, limit, remaining, resetAt }];
+    if (reportedLimit === null && remaining === null && used === null && resetAt === null) return [];
+    const limit = definition.fixedLimit ?? reportedLimit;
+    if (remaining === null && limit !== null && used !== null) remaining = Math.max(0, limit - used);
+    return [{ id: definition.id, kind: definition.kind, unit: definition.unit, window: definition.window, limit, remaining, resetAt }];
   });
 }
 
 function quotaWindowFromPayload(payload: unknown, definition: CompiledQuotaProbeWindow, nowMs: number): GrantQuotaWindow[] {
-  const limit = definition.fixedLimit ?? pointerNumber(payload, definition.limitPointer);
+  const reportedLimit = pointerNumber(payload, definition.limitPointer);
   let remaining = pointerNumber(payload, definition.remainingPointer);
   const used = pointerNumber(payload, definition.usedPointer);
-  if (remaining === null && limit !== null && used !== null) remaining = Math.max(0, limit - used);
   const resetAt = pointerReset(payload, definition.resetPointer, nowMs);
-  return limit === null && remaining === null && resetAt === null ? [] : [{ id: definition.id, kind: definition.kind, unit: definition.unit, window: definition.window, limit, remaining, resetAt }];
+  if (reportedLimit === null && remaining === null && used === null && resetAt === null) return [];
+  const limit = definition.fixedLimit ?? reportedLimit;
+  if (remaining === null && limit !== null && used !== null) remaining = Math.max(0, limit - used);
+  return [{ id: definition.id, kind: definition.kind, unit: definition.unit, window: definition.window, limit, remaining, resetAt }];
 }
 
 function quotaRuntime(windows: GrantQuotaWindow[], source: GrantRuntimeState["source"], nowMs: number): GrantRuntimeState {

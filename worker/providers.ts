@@ -191,8 +191,8 @@ export async function assertProviderAccess(provider: CompiledProvider, auth: Aut
   if (!connection.enabled) throw new HttpError(503, "provider_disabled", `provider ${provider.id} is disabled`);
 }
 
-export async function upstreamAuth(provider: CompiledProvider, endpoint: CompiledEndpoint, auth: AuthorizedIdentity, env: Env, excludedGrantKeys: ReadonlySet<string> = new Set(), stickyHash: string | null = null): Promise<UpstreamAuth> {
-  const resolution = await grantFor(provider, auth, env, excludedGrantKeys, stickyHash);
+export async function upstreamAuth(provider: CompiledProvider, endpoint: CompiledEndpoint, auth: AuthorizedIdentity, env: Env, excludedGrantKeys: ReadonlySet<string> = new Set(), stickyHash: string | null = null, recordSelection = true): Promise<UpstreamAuth> {
+  const resolution = await grantFor(provider, auth, env, excludedGrantKeys, stickyHash, recordSelection);
   const selected = resolution.selected;
   if (!selected && resolution.hasConfiguredGrant) throw new HttpError(503, "upstream_grant_pool_unavailable", `provider ${provider.id} has no available scoped upstream grant`);
   const grant = selected?.grant ?? null;
@@ -316,10 +316,10 @@ export async function listHealth(env: Env): Promise<Map<string, ProviderHealth>>
   return result;
 }
 
-async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedKeys: ReadonlySet<string>, stickyHash: string | null): Promise<{ selected: { key: string; grant: UpstreamGrant } | null; hasConfiguredGrant: boolean }> {
+async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedKeys: ReadonlySet<string>, stickyHash: string | null, recordSelection: boolean): Promise<{ selected: { key: string; grant: UpstreamGrant } | null; hasConfiguredGrant: boolean }> {
   const tokenRef = provider.auth.schemes.find((scheme) => scheme.type === "oauth")?.tokenRef ?? provider.id;
   const tenant = auth.policy.tenantId ?? "default";
-  const resolution = await resolveGrantSelection(provider.id, auth.policyId, tenant, tokenRef, env, excludedKeys, auth.policy.grantRouting, stickyHash);
+  const resolution = await resolveGrantSelection(provider.id, auth.policyId, tenant, tokenRef, env, excludedKeys, auth.policy.grantRouting, stickyHash, recordSelection);
   return { selected: resolution.selected ? { key: resolution.selected.key, grant: await refreshGrant(resolution.selected.key, resolution.selected.grant, provider, env, false) } : null, hasConfiguredGrant: resolution.hasConfiguredGrant };
 }
 

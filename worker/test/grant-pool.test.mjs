@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { selectGrant, selectProviderPolicy, syncGrantPoolIndex, validGrantSegment } from "../grant-selection.ts";
+import { resolveGrantSelection, selectGrant, selectProviderPolicy, syncGrantPoolIndex, validGrantSegment } from "../grant-selection.ts";
 
 test("grant pools select the lowest-priority usable grant deterministically", async () => {
   const env = mockEnv();
@@ -66,6 +66,19 @@ test("policy eligibility and stale-state controls fail closed before selection",
   assert.equal((await selectGrant("openai", "policy_a", "tenant_a", "openai", env, new Set(), routing))?.key, "oauth/policy_a/openai-a");
 });
 
+test("empty eligibility and stale-state deny policies block environment credential fallback", async () => {
+  const env = mockEnv();
+  const eligibleRouting = { strategy: "round_robin", stickiness: "none", failover: true, staleState: "allow", staleAfterSeconds: 300, eligibleGrants: { openai: [] } };
+  const eligible = await resolveGrantSelection("openai", "policy_a", "tenant_a", "openai", env, new Set(), eligibleRouting);
+  assert.equal(eligible.selected, null);
+  assert.equal(eligible.hasConfiguredGrant, true);
+
+  const staleRouting = { ...eligibleRouting, staleState: "deny", eligibleGrants: {} };
+  const stale = await resolveGrantSelection("openai", "policy_a", "tenant_a", "openai", env, new Set(), staleRouting);
+  assert.equal(stale.selected, null);
+  assert.equal(stale.hasConfiguredGrant, true);
+});
+
 test("selection delegates strategy, weight, and privacy-safe stickiness to the authority", async () => {
   const env = mockEnv();
   await putGrant(env, "oauth/policy_a/openai-a", { ...grant("openai", "a", 10), weight: 1 });
@@ -76,6 +89,8 @@ test("selection delegates strategy, weight, and privacy-safe stickiness to the a
   assert.equal(env.selections[0].strategy, "weighted_random");
   assert.equal(env.selections[0].stickyHash, "a".repeat(64));
   assert.deepEqual(env.selections[0].candidates.map(({ weight }) => weight), [1, 7]);
+  await resolveGrantSelection("openai", "policy_a", "tenant_a", "openai", env, new Set(), routing, null, false);
+  assert.equal(env.selections.length, 1);
 });
 
 test("grant key segments reject ambiguous or undiscoverable values", () => {

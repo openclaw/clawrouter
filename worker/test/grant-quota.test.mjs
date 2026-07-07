@@ -79,6 +79,18 @@ test("provider-declared headers preserve distinct input, output, and subscriptio
   ]);
 });
 
+test("fixed limits require a dynamic collector signal", () => {
+  const config = { responseHeaders: [
+    { id: "primary", kind: "subscription", unit: "percent", window: "5h", fixedLimit: 100, limitHeaders: [], remainingHeaders: [], usedHeaders: ["provider-used-percent"], resetHeaders: ["provider-reset"] },
+  ], probes: [] };
+  assert.equal(observeGrantQuota(response(200), config, NOW), null);
+
+  const probe = { grantKinds: ["subscription"], url: "https://provider.example/usage", method: "GET", headers: {}, windows: [
+    { id: "weekly", kind: "subscription", unit: "percent", window: "7d", fixedLimit: 100, limitPointer: null, remainingPointer: null, usedPointer: "/weekly/used", resetPointer: "/weekly/reset" },
+  ] };
+  assert.equal(observeGrantQuotaProbe({}, probe, NOW), null);
+});
+
 test("quota probes normalize provider JSON without exposing provider payloads", () => {
   const probe = { grantKinds: ["subscription"], url: "https://provider.example/usage", method: "GET", headers: {}, windows: [
     { id: "weekly", kind: "subscription", unit: "percent", window: "7d", fixedLimit: 100, limitPointer: null, remainingPointer: null, usedPointer: "/weekly/used", resetPointer: "/weekly/reset" },

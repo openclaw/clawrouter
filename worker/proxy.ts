@@ -381,7 +381,7 @@ async function reserveSelected(request: Request, env: Env, context: ExecutionCon
   const started = Date.now();
   const cost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability);
   try {
-    await prepareSelected(request, env, selection, {}, auth);
+    await prepareSelected(request, env, selection, {}, auth, new Set(), false);
   } catch (error) {
     const failure = selectedFailure(error);
     const status = failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error";
@@ -402,12 +402,12 @@ async function selectedAuth(request: Request, env: Env, mode: AuthMode, selectio
   return preauthenticated ?? (mode === "access" ? accessIdentity(request, env, selection.provider.id) : authenticateProxyKey(request.headers, env));
 }
 
-async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: Record<string, unknown>, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set()): Promise<PreparedUpstream> {
+async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: Record<string, unknown>, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true): Promise<PreparedUpstream> {
   try { await assertProviderAccess(selection.provider, auth, env); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "provider authorization failed"); }
   let upstream;
   const stickyHash = await grantStickyHash(request, auth);
-  try { upstream = await upstreamAuth(selection.provider, selection.endpoint, auth, env, excludedGrantKeys, stickyHash); }
+  try { upstream = await upstreamAuth(selection.provider, selection.endpoint, auth, env, excludedGrantKeys, stickyHash, recordSelection); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_not_configured", "provider is not configured"); }
   try {
     const headers = new Headers(upstream.headers);

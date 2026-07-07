@@ -101,11 +101,12 @@ export async function resolveGrantSelection(
       return { key, grant, runtimeState: grant ? currentGrantRuntime(grant, pool.states?.[key]) : null };
     });
   const configured = candidates.filter((entry): entry is SelectedGrant => !!entry.grant && entry.grant.enabled !== false && (!entry.grant.provider || entry.grant.provider === providerId) && grantUsable(entry.grant));
-  const eligibleRefs = routing.eligibleGrants[providerId];
+  const eligibilityRestricted = Object.prototype.hasOwnProperty.call(routing.eligibleGrants, providerId);
+  const eligibleRefs = routing.eligibleGrants[providerId] ?? [];
   const available = configured.filter((entry) => {
     if (excludedKeys.has(entry.key) || grantCoolingDown(entry.runtimeState, nowMs)) return false;
     const scope = parseGrantScope(entry.key);
-    if (eligibleRefs?.length && (!scope || !eligibleRefs.includes(scope.tokenRef))) return false;
+    if (eligibilityRestricted && (!scope || !eligibleRefs.includes(scope.tokenRef))) return false;
     return routing.staleState !== "deny" || grantRuntimeFresh(entry.runtimeState, routing.staleAfterSeconds * 1_000, nowMs);
   });
   const activePriority = available.length ? Math.min(...available.map((entry) => grantPriority(entry.grant))) : null;
@@ -121,7 +122,9 @@ export async function resolveGrantSelection(
     });
     selected = active.find((entry) => entry.key === choice.selectedKey) ?? null;
   }
-  return { selected, hasConfiguredGrant: configured.length > 0 };
+  // Explicit eligibility and fail-closed freshness policies must never fall back
+  // to a provider-wide environment credential when their pool is unavailable.
+  return { selected, hasConfiguredGrant: configured.length > 0 || eligibilityRestricted || routing.staleState === "deny" };
 }
 
 export async function recordGrantRuntime(env: Env, key: string, state: GrantRuntimeState): Promise<void> {
