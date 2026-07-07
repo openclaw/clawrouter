@@ -1,7 +1,7 @@
 import { type FormEvent, useState } from "react";
-import { currencyInput, errorMessage, knownPolicyProviders, optionalCurrencyMicros, optionalNumber, unique } from "../../domain";
+import { currencyInput, errorMessage, knownPolicyProviders, optionalCurrencyMicros, optionalNumber, parseEligibleGrants, unique } from "../../domain";
 import { defaultCredential, defaultPolicy, demo, rolePresets } from "../../ui-config";
-import { generateSecret, parseEligibleGrants, policyFormFromPolicy, request, sha256Hex } from "../../ui-helpers";
+import { generateSecret, policyFormFromPolicy, request, sha256Hex } from "../../ui-helpers";
 import type { AccessPolicy, CredentialForm, PolicyForm, ProviderRow, ProxyCredential, RouteCatalog, SessionResponse } from "../../ui-types";
 
 interface Dependencies {

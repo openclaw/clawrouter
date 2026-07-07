@@ -352,23 +352,8 @@ export function policyFormFromPolicy(key: AccessPolicy): PolicyForm {
     grantFailover: key.grantRouting.failover,
     grantStaleState: key.grantRouting.staleState,
     grantStaleAfterSeconds: String(key.grantRouting.staleAfterSeconds),
-    eligibleGrants: Object.entries(key.grantRouting.eligibleGrants).sort(([a], [b]) => a.localeCompare(b)).map(([provider, refs]) => `${provider}=${refs.join(",")}`).join("\n"),
+    eligibleGrants: Object.keys(key.grantRouting.eligibleGrants).length ? JSON.stringify(Object.fromEntries(Object.entries(key.grantRouting.eligibleGrants).sort(([a], [b]) => a.localeCompare(b))), null, 2) : "",
   };
-}
-
-export function parseEligibleGrants(value: string): Record<string, string[]> {
-  const result: Record<string, string[]> = {};
-  for (const rawLine of value.split("\n")) {
-    const line = rawLine.trim();
-    if (!line) continue;
-    const separator = line.indexOf("=");
-    if (separator <= 0) throw new Error("eligible grants must use provider=token-ref,token-ref lines");
-    const provider = line.slice(0, separator).trim();
-    const refs = line.slice(separator + 1).split(",").map((item) => item.trim()).filter(Boolean);
-    if (!/^[a-z0-9][a-z0-9-]*$/.test(provider) || refs.some((ref) => ref.includes("/") || /[\u0000-\u001f\u007f]/.test(ref))) throw new Error("eligible grants contain an invalid provider or token reference");
-    result[provider] = [...new Set(refs)].sort();
-  }
-  return result;
 }
 
 export function adminOverviewFromPolicies(keys: AccessPolicy[], credentials: ProxyCredential[], providers: ProviderRow[], routes: RouteCatalog): AdminOverview {

@@ -7,6 +7,7 @@ import {
   knownPolicyProviders,
   optionalCurrencyMicros,
   optionalNumber,
+  parseEligibleGrants,
   playgroundAccessEndpoint,
   playgroundBlocker,
   playgroundPayload,
@@ -20,6 +21,11 @@ import {
   serviceOutcome,
   tenantSummaryFallback,
 } from "../src/domain.ts";
+
+test("eligible grant JSON preserves delimiter-bearing references and empty deny lists", () => {
+  assert.deepEqual(parseEligibleGrants('{"openai":["team,a","team-a","team,a"],"anthropic":[]}'), { openai: ["team,a", "team-a"], anthropic: [] });
+  assert.throws(() => parseEligibleGrants('{"openai":"team-a"}'), /invalid provider or token reference/);
+});
 
 test("catalog providers appear once when route families overlap", () => {
   assert.deepEqual(
