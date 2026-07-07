@@ -1,4 +1,4 @@
-export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selectedCredential, bindings, selectedBinding, upstreamGrants, selectedUpstreamGrant, assignmentRules, selectedAssignmentRule, fusionConfig, fusionReadiness, fusionPolicyId, onSelectFusionPolicy, setFusionConfig, fusionModels, providers, form, setForm, credentialForm, setCredentialForm, bindingForm, setBindingForm, upstreamGrantForm, setUpstreamGrantForm, assignmentRuleForm, setAssignmentRuleForm, issuedKey, error, fusionError, onSave, onIssueCredential, onRevokeCredential, onSaveBinding, onSaveUpstreamGrant, onRevokeUpstreamGrant, onRefreshUpstreamGrant, onAuthorizeUpstreamGrant, onSaveAssignmentRule, onReconcileAssignments, onSaveFusion, onCheckFusion, onNew, onEdit, onEditCredential, onEditBinding, onNewBinding, onEditUpstreamGrant, onNewUpstreamGrant, onEditAssignmentRule, onNewAssignmentRule, onRevoke, onPreset, onToggleProvider, onSetProviderGroup, busy }: {
+export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selectedCredential, bindings, selectedBinding, upstreamGrants, selectedUpstreamGrant, assignmentRules, selectedAssignmentRule, fusionConfig, fusionReadiness, fusionPolicyId, onSelectFusionPolicy, setFusionConfig, fusionModels, providers, form, setForm, credentialForm, setCredentialForm, bindingForm, setBindingForm, upstreamGrantForm, setUpstreamGrantForm, assignmentRuleForm, setAssignmentRuleForm, issuedKey, error, fusionError, onSave, onIssueCredential, onRevokeCredential, onSaveBinding, onSaveUpstreamGrant, onRevokeUpstreamGrant, onRefreshUpstreamGrant, onRefreshUpstreamGrantQuota, onAuthorizeUpstreamGrant, onSaveAssignmentRule, onReconcileAssignments, onSaveFusion, onCheckFusion, onNew, onEdit, onEditCredential, onEditBinding, onNewBinding, onEditUpstreamGrant, onNewUpstreamGrant, onEditAssignmentRule, onNewAssignmentRule, onRevoke, onPreset, onToggleProvider, onSetProviderGroup, busy }: {
   tab: AccessTab;
   setTab: (tab: AccessTab) => void;
   keys: AccessPolicy[];
@@ -38,6 +38,7 @@ export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selec
   onSaveUpstreamGrant: (event: FormEvent) => void;
   onRevokeUpstreamGrant: (grant: UpstreamGrant) => void;
   onRefreshUpstreamGrant: (grant: UpstreamGrant) => void;
+  onRefreshUpstreamGrantQuota: (grant: UpstreamGrant) => void;
   onAuthorizeUpstreamGrant: () => void;
   onSaveAssignmentRule: (event: FormEvent) => void;
   onReconcileAssignments: () => void;
@@ -75,7 +76,7 @@ export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selec
       {tab === "policies" ? <PolicyPanel keys={keys} selected={selected} providers={providers} form={form} setForm={setForm} error={error} onSave={onSave} onNew={onNew} onEdit={onEdit} onRevoke={onRevoke} onPreset={onPreset} onToggleProvider={onToggleProvider} onSetProviderGroup={onSetProviderGroup} busy={busy} /> : null}
       {tab === "credentials" ? <CredentialPanel policies={keys} credentials={credentials} selected={selectedCredential} form={credentialForm} setForm={setCredentialForm} issuedKey={issuedKey} error={error} onIssue={onIssueCredential} onEdit={onEditCredential} onRevoke={onRevokeCredential} busy={busy} /> : null}
       {tab === "bindings" ? <BindingPanel policies={keys} bindings={bindings} selected={selectedBinding} form={bindingForm} setForm={setBindingForm} error={error} onSave={onSaveBinding} onEdit={onEditBinding} onNew={onNewBinding} busy={busy} /> : null}
-      {tab === "upstream" ? <UpstreamGrantPanel policies={keys} providers={providers} grants={upstreamGrants} selected={selectedUpstreamGrant} form={upstreamGrantForm} setForm={setUpstreamGrantForm} error={error} onSave={onSaveUpstreamGrant} onEdit={onEditUpstreamGrant} onNew={onNewUpstreamGrant} onRefresh={onRefreshUpstreamGrant} onAuthorize={onAuthorizeUpstreamGrant} onRevoke={onRevokeUpstreamGrant} busy={busy} /> : null}
+      {tab === "upstream" ? <UpstreamGrantPanel policies={keys} providers={providers} grants={upstreamGrants} selected={selectedUpstreamGrant} form={upstreamGrantForm} setForm={setUpstreamGrantForm} error={error} onSave={onSaveUpstreamGrant} onEdit={onEditUpstreamGrant} onNew={onNewUpstreamGrant} onRefresh={onRefreshUpstreamGrant} onRefreshQuota={onRefreshUpstreamGrantQuota} onAuthorize={onAuthorizeUpstreamGrant} onRevoke={onRevokeUpstreamGrant} busy={busy} /> : null}
       {tab === "assignments" ? <AssignmentRulePanel policies={keys} rules={assignmentRules} selected={selectedAssignmentRule} form={assignmentRuleForm} setForm={setAssignmentRuleForm} error={error} onSave={onSaveAssignmentRule} onEdit={onEditAssignmentRule} onNew={onNewAssignmentRule} onReconcile={onReconcileAssignments} busy={busy} /> : null}
       {tab === "fusion" ? <FusionPanel config={fusionConfig} readiness={fusionReadiness} policies={keys} policyId={fusionPolicyId} onSelectPolicy={onSelectFusionPolicy} setConfig={setFusionConfig} models={fusionModels} error={fusionError} onSave={onSaveFusion} onCheck={onCheckFusion} busy={busy} /> : null}
     </div>
@@ -171,7 +172,7 @@ function shortFusionModel(model: string) {
   return value.length > 18 ? `${value.slice(0, 16)}…` : value;
 }
 
-export function UpstreamGrantPanel({ policies, providers, grants, selected, form, setForm, error, onSave, onEdit, onNew, onRefresh, onAuthorize, onRevoke, busy }: {
+export function UpstreamGrantPanel({ policies, providers, grants, selected, form, setForm, error, onSave, onEdit, onNew, onRefresh, onRefreshQuota, onAuthorize, onRevoke, busy }: {
   policies: AccessPolicy[];
   providers: ProviderRow[];
   grants: UpstreamGrant[];
@@ -183,6 +184,7 @@ export function UpstreamGrantPanel({ policies, providers, grants, selected, form
   onEdit: (grant: UpstreamGrant) => void;
   onNew: () => void;
   onRefresh: (grant: UpstreamGrant) => void;
+  onRefreshQuota: (grant: UpstreamGrant) => void;
   onAuthorize: () => void;
   onRevoke: (grant: UpstreamGrant) => void;
   busy: boolean;
@@ -192,6 +194,7 @@ export function UpstreamGrantPanel({ policies, providers, grants, selected, form
   const refreshable = grants.filter((grant) => grant.refreshConfigured && grant.hasRefreshToken).length;
   const selectedProvider = providers.find((provider) => provider.id === form.provider);
   const authorizationKind = selectedProvider?.auth?.authorization?.grantKind;
+  const quotaProbe = Boolean(selectedProvider?.quota?.probes?.some((probe) => probe.grantKinds?.includes(form.kind)));
   return (
     <div className="entityLayout">
       <section className="mainPane">
@@ -219,6 +222,7 @@ export function UpstreamGrantPanel({ policies, providers, grants, selected, form
             <label className="full"><span>token reference</span><input value={form.tokenRef} readOnly={Boolean(selected)} onChange={(event) => setForm({ ...form, tokenRef: event.target.value })} /></label>
             <label className="full"><span>label</span><input value={form.label} onChange={(event) => setForm({ ...form, label: event.target.value })} /></label>
             <label><span>pool priority</span><input inputMode="numeric" value={form.priority} onChange={(event) => setForm({ ...form, priority: event.target.value })} /></label>
+            <label><span>routing weight</span><input inputMode="decimal" value={form.weight} onChange={(event) => setForm({ ...form, weight: event.target.value })} /></label>
             {form.kind === "api_key" ? <label className="full"><span>{selected?.hasCredential ? "replace API key" : "API key"}</span><input type="password" autoComplete="off" value={form.credential} onChange={(event) => setForm({ ...form, credential: event.target.value })} /></label> : <label className="full"><span>{selected?.hasAccessToken ? "replace access token" : "access token"}</span><input type="password" autoComplete="off" value={form.accessToken} onChange={(event) => setForm({ ...form, accessToken: event.target.value })} /></label>}
             {form.kind === "api_key" ? <label className="full"><span>{selected?.credentialFields.length ? "replace credential bundle JSON" : "credential bundle JSON"}</span><textarea value={form.credentialBundle} onChange={(event) => setForm({ ...form, credentialBundle: event.target.value })} placeholder={'{"accessKeyId":"...","secretAccessKey":"...","sessionToken":"..."}'} /></label> : null}
             {form.kind !== "api_key" ? <label className="full"><span>{selected?.hasRefreshToken ? "replace refresh token" : "refresh token"}</span><input type="password" autoComplete="off" value={form.refreshToken} onChange={(event) => setForm({ ...form, refreshToken: event.target.value })} /></label> : null}
@@ -226,9 +230,9 @@ export function UpstreamGrantPanel({ policies, providers, grants, selected, form
             <label><span>expires at</span><input value={form.expiresAt} onChange={(event) => setForm({ ...form, expiresAt: event.target.value })} placeholder="ISO-8601 or blank" /></label>
             <label><span>state</span><select value={form.enabled ? "enabled" : "disabled"} onChange={(event) => setForm({ ...form, enabled: event.target.value === "enabled" })}><option value="enabled">enabled</option><option value="disabled">disabled</option></select></label>
           </div>
-          <InlineNote>Lower priorities route first. Equal priorities prefer the strongest observed provider quota, then stable grant order. Secret values are write-only.</InlineNote>
-          {selected ? <dl className="facts"><dt>primary secret</dt><dd>{selected.hasCredential || selected.hasAccessToken || selected.credentialFields.length ? "stored" : "missing"}</dd><dt>credential fields</dt><dd>{selected.credentialFields.length ? selected.credentialFields.join(", ") : "none"}</dd><dt>refresh token</dt><dd>{selected.hasRefreshToken ? "stored" : "none"}</dd><dt>refresh config</dt><dd>{selected.refreshConfigured ? "manifest approved" : "none"}</dd><dt>routing state</dt><dd>{grantRoutingState(selected).label}</dd><dt>provider signal</dt><dd>{selected.lastProviderSignal ? `${selected.lastProviderSignal.replace("_", " ")} · ${quotaTimestamp(selected.quotaObservedAt)}` : "not observed"}</dd><dt>cooldown</dt><dd>{selected.cooldownUntil ? `until ${quotaTimestamp(selected.cooldownUntil)}` : "none"}</dd><dt>quota windows</dt><dd>{selected.quotaWindows.length ? selected.quotaWindows.map(quotaWindowLabel).join("; ") : "not reported"}</dd></dl> : null}
-          <div className="inspectorActions">{authorizationKind ? <button type="button" disabled={busy || !form.scopeId || !form.tokenRef || !form.provider} onClick={onAuthorize}><LogIn className="buttonIcon" aria-hidden="true" /><span>{selected ? "Reconnect" : "Connect"} with provider</span></button> : null}<button type="submit" className={authorizationKind ? "buttonSecondary" : undefined} disabled={busy || !form.scopeId || !form.tokenRef || !form.provider}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save grant</span></button>{selected?.refreshConfigured && selected.hasRefreshToken ? <button type="button" className="buttonSecondary" disabled={busy || !selected.enabled} onClick={() => onRefresh(selected)}><RefreshCw className="buttonIcon" aria-hidden="true" /><span>Refresh</span></button> : null}{selected ? <button type="button" className="buttonDanger" disabled={busy || !selected.enabled} onClick={() => onRevoke(selected)}><CircleSlash2 className="buttonIcon" aria-hidden="true" /><span>Revoke</span></button> : null}</div>
+          <InlineNote>Lower priorities are fallback tiers. The policy chooses how grants within the active tier rotate. Weight affects weighted and sticky selection. Secret values are write-only.</InlineNote>
+          {selected ? <dl className="facts"><dt>primary secret</dt><dd>{selected.hasCredential || selected.hasAccessToken || selected.credentialFields.length ? "stored" : "missing"}</dd><dt>credential fields</dt><dd>{selected.credentialFields.length ? selected.credentialFields.join(", ") : "none"}</dd><dt>refresh token</dt><dd>{selected.hasRefreshToken ? "stored" : "none"}</dd><dt>refresh config</dt><dd>{selected.refreshConfigured ? "manifest approved" : "none"}</dd><dt>routing state</dt><dd>{grantRoutingState(selected).label}</dd><dt>selections</dt><dd>{selected.selectedCount}{selected.lastSelectedAt ? ` · last ${quotaTimestamp(selected.lastSelectedAt)}` : ""}</dd><dt>provider signal</dt><dd>{selected.lastProviderSignal ? `${selected.lastProviderSignal.replace("_", " ")} · ${quotaTimestamp(selected.quotaObservedAt)}` : "not observed"}</dd><dt>cooldown</dt><dd>{selected.cooldownUntil ? `until ${quotaTimestamp(selected.cooldownUntil)}` : "none"}</dd><dt>quota windows</dt><dd>{selected.quotaWindows.length ? selected.quotaWindows.map(quotaWindowLabel).join("; ") : "not reported"}</dd></dl> : null}
+          <div className="inspectorActions">{authorizationKind ? <button type="button" disabled={busy || !form.scopeId || !form.tokenRef || !form.provider} onClick={onAuthorize}><LogIn className="buttonIcon" aria-hidden="true" /><span>{selected ? "Reconnect" : "Connect"} with provider</span></button> : null}<button type="submit" className={authorizationKind ? "buttonSecondary" : undefined} disabled={busy || !form.scopeId || !form.tokenRef || !form.provider}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save grant</span></button>{selected?.refreshConfigured && selected.hasRefreshToken ? <button type="button" className="buttonSecondary" disabled={busy || !selected.enabled} onClick={() => onRefresh(selected)}><RefreshCw className="buttonIcon" aria-hidden="true" /><span>Refresh token</span></button> : null}{selected && quotaProbe ? <button type="button" className="buttonSecondary" disabled={busy || !selected.enabled} onClick={() => onRefreshQuota(selected)}><RefreshCw className="buttonIcon" aria-hidden="true" /><span>Refresh quota</span></button> : null}{selected ? <button type="button" className="buttonDanger" disabled={busy || !selected.enabled} onClick={() => onRevoke(selected)}><CircleSlash2 className="buttonIcon" aria-hidden="true" /><span>Revoke</span></button> : null}</div>
         </form>
       </aside>
     </div>
@@ -251,7 +255,7 @@ function quotaTimestamp(value: string | null | undefined): string {
 
 function quotaWindowLabel(window: UpstreamGrant["quotaWindows"][number]): string {
   const remaining = window.remaining == null ? "?" : String(window.remaining), limit = window.limit == null ? "?" : String(window.limit);
-  return `${window.kind} ${remaining}/${limit}${window.resetAt ? ` resets ${quotaTimestamp(window.resetAt)}` : ""}`;
+  return `${window.id}${window.window ? ` (${window.window})` : ""} ${remaining}/${limit}${window.unit ? ` ${window.unit}` : ""}${window.resetAt ? ` resets ${quotaTimestamp(window.resetAt)}` : ""}`;
 }
 
 export function AssignmentRulePanel({ policies, rules, selected, form, setForm, error, onSave, onEdit, onNew, onReconcile, busy }: {
@@ -454,6 +458,16 @@ export function PolicyPanel({ keys, selected, providers, form, setForm, error, o
             <label className="full"><span>request content retention</span><select value={form.retainRequestContent ? "enabled" : "disabled"} onChange={(event) => setForm({ ...form, retainRequestContent: event.target.value === "enabled" })}><option value="enabled">enabled · retain 30 days</option><option value="disabled">disabled</option></select></label>
           </div>
           <InlineNote>Enabled by default. Users see this setting before use. A per-user exemption always overrides the policy.</InlineNote>
+          <div className="editorSectionHeader"><strong>Grant routing</strong><span>Active-tier selection and quota freshness</span></div>
+          <div className="formGrid compact">
+            <label><span>selection</span><select value={form.grantStrategy} onChange={(event) => setForm({ ...form, grantStrategy: event.target.value as PolicyForm["grantStrategy"] })}><option value="priority">priority · stable order</option><option value="round_robin">round robin</option><option value="least_used">least used</option><option value="most_remaining">most remaining</option><option value="weighted_random">weighted random</option></select></label>
+            <label><span>stickiness</span><select value={form.grantStickiness} onChange={(event) => setForm({ ...form, grantStickiness: event.target.value as PolicyForm["grantStickiness"] })}><option value="none">none</option><option value="identity">user / credential</option><option value="session">session header</option></select></label>
+            <label><span>same-provider failover</span><select value={form.grantFailover ? "enabled" : "disabled"} onChange={(event) => setForm({ ...form, grantFailover: event.target.value === "enabled" })}><option value="enabled">enabled</option><option value="disabled">disabled</option></select></label>
+            <label><span>stale quota state</span><select value={form.grantStaleState} onChange={(event) => setForm({ ...form, grantStaleState: event.target.value as PolicyForm["grantStaleState"] })}><option value="allow">fail open · allow stale</option><option value="deny">fail closed · require fresh</option></select></label>
+            <label><span>fresh for (seconds)</span><input inputMode="numeric" min="30" max="86400" value={form.grantStaleAfterSeconds} onChange={(event) => setForm({ ...form, grantStaleAfterSeconds: event.target.value })} /></label>
+            <label className="full"><span>eligible grants · optional provider=token-ref lines</span><textarea value={form.eligibleGrants} onChange={(event) => setForm({ ...form, eligibleGrants: event.target.value })} placeholder={"openai=team-a,team-b\nanthropic=production"} /></label>
+          </div>
+          <InlineNote>Priority always defines fallback tiers; the selection mode applies within the lowest available tier. An empty provider allowlist denies every grant for that provider. Fail-closed stale state requires a fresh response-header or provider-probe observation.</InlineNote>
           <div className="editorSectionHeader serviceAccessHeader"><div><strong>Service access</strong><span>{formSelectionLabel}</span></div>{form.allProviders ? <span className="wildcardScope">Wildcard scope · all current and future services</span> : null}</div>
           <div className="inputWithIcon providerFilter"><Search aria-hidden="true" /><input value={providerQuery} onChange={(event) => setProviderQuery(event.target.value)} placeholder="filter services" /></div>
           <div className="serviceGroups">

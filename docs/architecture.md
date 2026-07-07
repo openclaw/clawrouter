@@ -35,11 +35,16 @@ provider and model drift.
 3. Reserve the conservative budget before provider work.
 4. Retain eligible LLM request content in R2 when policy requires it. Storage
    failure is fail-closed and prevents the upstream call.
-5. Select a non-cooled grant by configured priority, current provider-reported
-   quota ratio, and stable key; then sign and forward the provider request.
-6. On an upstream 401, 403, or 429, record sanitized grant state and try at most
-   one same-provider alternate for an LLM or GET/HEAD route.
-7. Settle budget and enqueue the single final usage event independently. Either failure is
+5. Filter grants by the policy's provider allowlist, explicit grant eligibility,
+   cooldown, stale-state rule, and lowest active priority tier. The access
+   authority atomically applies priority, round-robin, least-used, quota-aware,
+   or weighted selection and records only counters and privacy-safe sticky input.
+6. Sign and forward the provider request, then normalize manifest-declared quota
+   response headers into provider-neutral windows.
+7. On an upstream 401, 403, or 429, record sanitized grant state and, when the
+   policy permits, try at most one same-provider alternate for an LLM or GET/HEAD
+   route.
+8. Settle budget and enqueue the single final usage event independently. Either failure is
    retried without masking the provider response or suppressing the other task.
 
 Usage events are queued into a Durable Object shard named by tenant and policy.

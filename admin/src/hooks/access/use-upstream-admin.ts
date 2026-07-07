@@ -38,11 +38,13 @@ export function useUpstreamAdmin({ allowDemo, gatewayOrigin, demoMode, providers
       if (!scopeId || !tokenRef || !provider) throw new Error("scope, token reference, and provider are required");
       const priority = Number(form.priority);
       if (!Number.isInteger(priority) || priority < 0 || priority > 1_000_000) throw new Error("priority must be an integer from 0 to 1000000");
+      const weight = Number(form.weight);
+      if (!Number.isFinite(weight) || weight <= 0 || weight > 1_000_000) throw new Error("weight must be greater than 0 and at most 1000000");
       const credentialBundle = parseCredentialBundle(form.credentialBundle);
       const primarySecret = form.kind === "api_key" ? form.credential.trim() || Object.keys(credentialBundle).length : form.accessToken.trim();
       if (!selected && !primarySecret) throw new Error("a new upstream grant requires its primary secret");
       const body = {
-        version: 1, enabled: form.enabled, priority, kind: form.kind, provider, label: form.label.trim() || undefined,
+        version: 1, enabled: form.enabled, priority, weight, kind: form.kind, provider, label: form.label.trim() || undefined,
         tokenType: selected?.tokenType ?? "Bearer", expiresAt: form.expiresAt.trim() || undefined, scopes: selected?.scopes ?? [],
         accountId: form.accountId.trim() || undefined, subscription: selected?.subscription ?? undefined,
         ...(form.credential.trim() ? { credential: form.credential.trim() } : {}),
@@ -90,6 +92,20 @@ export function useUpstreamAdmin({ allowDemo, gatewayOrigin, demoMode, providers
     } catch (caught) { handleError(caught); }
   }
 
+  async function refreshQuota(grant: UpstreamGrant) {
+    try {
+      setError("");
+      setStatus("refreshing provider quota");
+      if (!demoMode) {
+        const refreshed = await request<UpstreamGrant>(gatewayOrigin, `/v1/admin/upstream-grants/${grant.scope}/${encodeURIComponent(grant.scopeId)}/${encodeURIComponent(grant.tokenRef)}/quota-refresh`, { method: "POST" });
+        await refresh();
+        setSelectedKey(refreshed.key);
+        setForm(upstreamGrantFormFromGrant(refreshed));
+      }
+      setStatus("refreshed provider quota");
+    } catch (caught) { handleError(caught); }
+  }
+
   async function authorize() {
     try {
       setError("");
@@ -97,10 +113,12 @@ export function useUpstreamAdmin({ allowDemo, gatewayOrigin, demoMode, providers
       if (!scopeId || !tokenRef || !provider) throw new Error("scope, token reference, and provider are required");
       const priority = Number(form.priority);
       if (!Number.isInteger(priority) || priority < 0 || priority > 1_000_000) throw new Error("priority must be an integer from 0 to 1000000");
+      const weight = Number(form.weight);
+      if (!Number.isFinite(weight) || weight <= 0 || weight > 1_000_000) throw new Error("weight must be greater than 0 and at most 1000000");
       if (!providers.find((item) => item.id === provider)?.auth?.authorization) throw new Error("selected provider does not support browser OAuth");
       setStatus("connecting upstream grant");
       if (demoMode) { setStatus("browser OAuth unavailable in local demo"); return; }
-      const result = await request<{ authorizationUrl: string }>(gatewayOrigin, `/v1/admin/upstream-grants/${form.scope}/${encodeURIComponent(scopeId)}/${encodeURIComponent(tokenRef)}/authorize`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider, priority }) });
+      const result = await request<{ authorizationUrl: string }>(gatewayOrigin, `/v1/admin/upstream-grants/${form.scope}/${encodeURIComponent(scopeId)}/${encodeURIComponent(tokenRef)}/authorize`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider, priority, weight }) });
       window.location.assign(result.authorizationUrl);
     } catch (caught) { handleError(caught); }
   }
@@ -109,5 +127,5 @@ export function useUpstreamAdmin({ allowDemo, gatewayOrigin, demoMode, providers
   function startNew() { const provider = providers[0]?.id ?? ""; setSelectedKey(""); setForm({ ...defaultUpstreamGrant, scopeId: selectedPolicyId || policies[0]?.policyId || "default", provider, tokenRef: provider }); }
   function handleError(caught: unknown) { const message = errorMessage(caught); setError(message); setStatus(message); }
 
-  return { upstream: { items: grants, setItems: setGrants, selected, selectedKey, setSelectedKey, form, setForm, save, revoke, refresh: refreshGrant, authorize, edit, startNew }, hydrate };
+  return { upstream: { items: grants, setItems: setGrants, selected, selectedKey, setSelectedKey, form, setForm, save, revoke, refresh: refreshGrant, refreshQuota, authorize, edit, startNew }, hydrate };
 }
