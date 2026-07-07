@@ -136,6 +136,22 @@
         }
       }
     },
+    "quota": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "responseHeaders": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/quotaHeaderWindow" },
+          "maxItems": 12
+        },
+        "probes": {
+          "type": "array",
+          "items": { "$ref": "#/$defs/quotaProbe" },
+          "maxItems": 4
+        }
+      }
+    },
     "tests": {
       "type": "object",
       "additionalProperties": false,
@@ -148,6 +164,69 @@
     }
   },
   "$defs": {
+    "quotaWindowBase": {
+      "type": "object",
+      "required": ["id", "kind"],
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$" },
+        "kind": { "enum": ["requests", "tokens", "input_tokens", "output_tokens", "credits", "subscription", "generic"] },
+        "unit": { "type": "string" },
+        "window": { "type": "string" },
+        "fixedLimit": { "type": "number", "minimum": 0 }
+      }
+    },
+    "quotaHeaderWindow": {
+      "allOf": [
+        { "$ref": "#/$defs/quotaWindowBase" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": true,
+            "kind": true,
+            "unit": true,
+            "window": true,
+            "fixedLimit": true,
+            "limitHeaders": { "type": "array", "items": { "type": "string" } },
+            "remainingHeaders": { "type": "array", "items": { "type": "string" } },
+            "usedHeaders": { "type": "array", "items": { "type": "string" } },
+            "resetHeaders": { "type": "array", "items": { "type": "string" } }
+          }
+        }
+      ]
+    },
+    "quotaProbeWindow": {
+      "allOf": [
+        { "$ref": "#/$defs/quotaWindowBase" },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "id": true,
+            "kind": true,
+            "unit": true,
+            "window": true,
+            "fixedLimit": true,
+            "limitPointer": { "type": "string", "pattern": "^/" },
+            "remainingPointer": { "type": "string", "pattern": "^/" },
+            "usedPointer": { "type": "string", "pattern": "^/" },
+            "resetPointer": { "type": "string", "pattern": "^/" }
+          }
+        }
+      ]
+    },
+    "quotaProbe": {
+      "type": "object",
+      "required": ["grantKinds", "url", "windows"],
+      "additionalProperties": false,
+      "properties": {
+        "grantKinds": { "type": "array", "items": { "enum": ["api_key", "oauth", "subscription"] }, "minItems": 1 },
+        "url": { "type": "string", "pattern": "^https://" },
+        "method": { "enum": ["GET", "POST"] },
+        "headers": { "type": "object", "additionalProperties": { "type": "string" } },
+        "windows": { "type": "array", "items": { "$ref": "#/$defs/quotaProbeWindow" }, "minItems": 1, "maxItems": 12 }
+      }
+    },
     "authAuthorization": {
       "type": "object",
       "required": ["authorizeUrl", "tokenUrl", "scopes"],

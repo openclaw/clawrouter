@@ -56,6 +56,65 @@ adapter:
         to: max_completion_tokens
         paths: [/v1/chat/completions]
         upstreams: [gpt-5.5, gpt-5.4]
+quota:
+  responseHeaders:
+    - id: rpm
+      kind: requests
+      unit: request
+      window: minute
+      limitHeaders: [x-ratelimit-limit-requests]
+      remainingHeaders: [x-ratelimit-remaining-requests]
+      resetHeaders: [x-ratelimit-reset-requests]
+    - id: tpm
+      kind: tokens
+      unit: token
+      window: minute
+      limitHeaders: [x-ratelimit-limit-tokens]
+      remainingHeaders: [x-ratelimit-remaining-tokens]
+      resetHeaders: [x-ratelimit-reset-tokens]
+    - id: subscription-primary
+      kind: subscription
+      unit: percent
+      window: primary
+      fixedLimit: 100
+      usedHeaders: [x-codex-primary-used-percent]
+      resetHeaders: [x-codex-primary-reset-at]
+    - id: subscription-secondary
+      kind: subscription
+      unit: percent
+      window: secondary
+      fixedLimit: 100
+      usedHeaders: [x-codex-secondary-used-percent]
+      resetHeaders: [x-codex-secondary-reset-at]
+    - id: credits
+      kind: credits
+      unit: credit
+      remainingHeaders: [x-codex-credits-balance]
+  probes:
+    - grantKinds: [subscription]
+      url: https://chatgpt.com/backend-api/wham/usage
+      headers:
+        ChatGPT-Account-ID: "${grant.accountId}"
+        User-Agent: codex-cli
+      windows:
+        - id: subscription-primary
+          kind: subscription
+          unit: percent
+          window: primary
+          fixedLimit: 100
+          usedPointer: /rate_limit/primary_window/used_percent
+          resetPointer: /rate_limit/primary_window/reset_at
+        - id: subscription-secondary
+          kind: subscription
+          unit: percent
+          window: secondary
+          fixedLimit: 100
+          usedPointer: /rate_limit/secondary_window/used_percent
+          resetPointer: /rate_limit/secondary_window/reset_at
+        - id: credits
+          kind: credits
+          unit: credit
+          remainingPointer: /credits/balance
 capabilities:
   - id: llm.responses
     endpoint: responses

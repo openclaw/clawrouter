@@ -114,6 +114,7 @@ function compileProvider(manifest, ids) {
     dimensions: manifest.billing?.dimensions ?? [],
     counters: manifest.billing?.counters ?? [],
   };
+  const quota = normalizeQuota(manifest.quota);
   return {
     id: manifest.id,
     display_name: manifest.displayName,
@@ -134,6 +135,42 @@ function compileProvider(manifest, ids) {
     models,
     billing,
     meter: billing.meter,
+    quota,
+  };
+}
+
+function normalizeQuota(value) {
+  const fallback = [
+    { id: "requests", kind: "requests", limitHeaders: ["ratelimit-limit-requests", "x-ratelimit-limit-requests"], remainingHeaders: ["ratelimit-remaining-requests", "x-ratelimit-remaining-requests"], resetHeaders: ["ratelimit-reset-requests", "x-ratelimit-reset-requests"] },
+    { id: "tokens", kind: "tokens", limitHeaders: ["ratelimit-limit-tokens", "x-ratelimit-limit-tokens"], remainingHeaders: ["ratelimit-remaining-tokens", "x-ratelimit-remaining-tokens"], resetHeaders: ["ratelimit-reset-tokens", "x-ratelimit-reset-tokens"] },
+    { id: "generic", kind: "generic", limitHeaders: ["ratelimit-limit", "x-ratelimit-limit"], remainingHeaders: ["ratelimit-remaining", "x-ratelimit-remaining"], resetHeaders: ["ratelimit-reset", "x-ratelimit-reset"] },
+  ];
+  return {
+    responseHeaders: (value?.responseHeaders ?? fallback).map((window) => normalizeQuotaWindow(window, false)),
+    probes: (value?.probes ?? []).map((probe) => ({
+      grantKinds: probe.grantKinds ?? [],
+      url: probe.url,
+      method: probe.method ?? "GET",
+      headers: probe.headers ?? {},
+      windows: (probe.windows ?? []).map((window) => normalizeQuotaWindow(window, true)),
+    })),
+  };
+}
+
+function normalizeQuotaWindow(window, probe) {
+  const shared = { id: window.id, kind: window.kind, unit: window.unit ?? null, window: window.window ?? null, fixedLimit: window.fixedLimit ?? null };
+  return probe ? {
+    ...shared,
+    limitPointer: window.limitPointer ?? null,
+    remainingPointer: window.remainingPointer ?? null,
+    usedPointer: window.usedPointer ?? null,
+    resetPointer: window.resetPointer ?? null,
+  } : {
+    ...shared,
+    limitHeaders: window.limitHeaders ?? [],
+    remainingHeaders: window.remainingHeaders ?? [],
+    usedHeaders: window.usedHeaders ?? [],
+    resetHeaders: window.resetHeaders ?? [],
   };
 }
 
@@ -177,6 +214,39 @@ function validateManifest(manifest) {
     if (!endpoint.path?.startsWith("/")) throw new Error(`provider ${manifest.id} endpoint ${id} path must start with /`);
     for (const placeholder of endpoint.path.matchAll(/\$\{([^}]+)\}/g)) {
       if (!(endpoint.pathParams ?? []).includes(placeholder[1])) throw new Error(`provider ${manifest.id} endpoint ${id} path parameter ${placeholder[1]} is not declared`);
+    }
+  }
+  validateQuota(manifest.id, manifest.quota);
+}
+
+function validateQuota(providerId, quota) {
+  const kinds = new Set(["requests", "tokens", "input_tokens", "output_tokens", "credits", "subscription", "generic"]);
+  const grantKinds = new Set(["api_key", "oauth", "subscription"]);
+  const validateBase = (window, source) => {
+    if (!window || typeof window !== "object" || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(window.id ?? "") || !kinds.has(window.kind)) throw new Error(`provider ${providerId} has an invalid ${source} quota window`);
+    if (window.fixedLimit != null && (!Number.isFinite(window.fixedLimit) || window.fixedLimit < 0)) throw new Error(`provider ${providerId} quota window ${window.id} has an invalid fixed limit`);
+  };
+  const responseHeaders = quota?.responseHeaders ?? [];
+  if (!Array.isArray(responseHeaders) || responseHeaders.length > 12) throw new Error(`provider ${providerId} has too many response quota windows`);
+  for (const window of responseHeaders) {
+    validateBase(window, "response");
+    const headers = ["limitHeaders", "remainingHeaders", "usedHeaders", "resetHeaders"].flatMap((field) => window[field] ?? []);
+    if (!headers.length && window.fixedLimit == null) throw new Error(`provider ${providerId} quota window ${window.id} has no response source`);
+    if (headers.some((header) => typeof header !== "string" || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(header))) throw new Error(`provider ${providerId} quota window ${window.id} has an invalid header`);
+  }
+  const probes = quota?.probes ?? [];
+  if (!Array.isArray(probes) || probes.length > 4) throw new Error(`provider ${providerId} has too many quota probes`);
+  for (const probe of probes) {
+    if (!Array.isArray(probe.grantKinds) || !probe.grantKinds.length || probe.grantKinds.some((kind) => !grantKinds.has(kind))) throw new Error(`provider ${providerId} quota probe has invalid grant kinds`);
+    if (!probe.url?.startsWith("https://")) throw new Error(`provider ${providerId} quota probe URL must use https`);
+    if (probe.method != null && !["GET", "POST"].includes(probe.method)) throw new Error(`provider ${providerId} quota probe method is invalid`);
+    if (!Array.isArray(probe.windows) || !probe.windows.length || probe.windows.length > 12) throw new Error(`provider ${providerId} quota probe has invalid windows`);
+    for (const [name, value] of Object.entries(probe.headers ?? {})) if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name) || typeof value !== "string") throw new Error(`provider ${providerId} quota probe has an invalid header`);
+    for (const window of probe.windows) {
+      validateBase(window, "probe");
+      const pointers = ["limitPointer", "remainingPointer", "usedPointer", "resetPointer"].flatMap((field) => window[field] == null ? [] : [window[field]]);
+      if (!pointers.length && window.fixedLimit == null) throw new Error(`provider ${providerId} quota probe window ${window.id} has no data source`);
+      if (pointers.some((pointer) => typeof pointer !== "string" || !pointer.startsWith("/"))) throw new Error(`provider ${providerId} quota probe window ${window.id} has an invalid JSON pointer`);
     }
   }
 }

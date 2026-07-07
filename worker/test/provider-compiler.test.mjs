@@ -13,6 +13,10 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.equal(compiled.model_index["anthropic/claude-opus-4-8"].provider, "anthropic");
   assert.deepEqual(compiled.providers.find((provider) => provider.id === "aws-bedrock").optional_config_keys, ["AWS_SESSION_TOKEN"]);
   assert.deepEqual(compiled.providers.find((provider) => provider.id === "azure-openai").optional_config_keys, ["AZURE_OPENAI_COMPLETION_TOKEN_DEPLOYMENTS"]);
+  const openai = compiled.providers.find((provider) => provider.id === "openai");
+  assert.deepEqual(openai.quota.responseHeaders.map((window) => window.id), ["rpm", "tpm", "subscription-primary", "subscription-secondary", "credits"]);
+  assert.deepEqual(openai.quota.probes[0].grantKinds, ["subscription"]);
+  assert.equal(openai.quota.probes[0].url, "https://chatgpt.com/backend-api/wham/usage");
   assert.equal(compiled.model_index["local/default"].provider, "local-openai");
   assert.ok(compiled.capability_index["llm.chat"].length >= 10);
 });
