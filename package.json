@@ -26,9 +26,9 @@
     "cf:smoke": "node scripts/smoke-deployed.mjs"
   },
   "devDependencies": {
-    "@cloudflare/workers-types": "^4.20260629.1",
-    "typescript": "^5.9.3",
-    "wrangler": "^4.105.0",
-    "yaml": "^2.8.1"
+    "@cloudflare/workers-types": "^4.20260702.1",
+    "typescript": "^7.0.2",
+    "wrangler": "^4.107.1",
+    "yaml": "^2.9.0"
   }
 }
