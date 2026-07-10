@@ -6,6 +6,7 @@ import {
 import { budgetStatus, BudgetLedgerObject, queue, UsageLedgerObject, usageSnapshot, usageSnapshots } from "./ledgers";
 import { dashboardSecurityHeaders } from "./dashboard-security";
 import { contentRetentionDefault } from "./content-retention.ts";
+import { correlateIngressRequest, withRequestId } from "./correlation.ts";
 import { oauthCallback } from "./oauth";
 import { routeCatalog, snapshot } from "./providers";
 import { authenticateProxyKey, inspectKey, proxyManifest, proxyNative, proxyOpenAi } from "./proxy";
@@ -20,10 +21,18 @@ export { BudgetLedgerObject, UsageLedgerObject };
 
 const handler: ExportedHandler<Env, QueueMessage> = {
   async fetch(request, env, context) {
+    const path = canonicalPath(new URL(request.url).pathname);
+    const correlated = correlateIngressRequest(request);
+    let response: Response;
     try {
-      const response = await route(request, env, context);
-      return corsEnabled(canonicalPath(new URL(request.url).pathname)) ? withCors(response) : response;
-    } catch (error) { return caughtResponse(error); }
+      response = correlated.error
+        ? errorResponse(correlated.error.code, correlated.error.message, correlated.error.status)
+        : await route(correlated.request, env, context);
+    } catch (error) {
+      response = caughtResponse(error, correlated.requestId);
+    }
+    response = withRequestId(response, correlated.requestId);
+    return corsEnabled(path) ? withCors(response) : response;
   },
   queue,
 };

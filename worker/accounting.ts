@@ -1,4 +1,5 @@
 import type { AuthorizedIdentity, BudgetReserveRequest, BudgetSettleRequest, Env, QueueMessage, UsageEvent } from "./types";
+import { logCorrelationError } from "./correlation.ts";
 import { HttpError, randomId } from "./utils.ts";
 
 export interface BudgetReservation {
@@ -43,7 +44,7 @@ export async function finalizeAccounting(env: Env, auth: AuthorizedIdentity, res
     enqueueUsage(env, event),
   ]);
   for (const result of results) {
-    if (result.status === "rejected") console.error("accounting finalization failed", result.reason instanceof Error ? result.reason.message : String(result.reason));
+    if (result.status === "rejected") logCorrelationError("accounting finalization failed", event.request_id);
   }
 }
 

@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
-import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createTcpServer } from "node:net";
 
@@ -94,7 +94,12 @@ const child = spawn("pnpm", ["exec", "wrangler", "dev", "--local", "--ip", "127.
   stdio: ["ignore", "pipe", "pipe"],
 });
 let output = "";
-for (const stream of [child.stdout, child.stderr]) stream.on("data", (chunk) => { output = `${output}${chunk}`.slice(-12_000); });
+const externalLogFile = process.env.CLAWROUTER_E2E_LOG_FILE;
+if (externalLogFile) writeFileSync(externalLogFile, "", { mode: 0o600 });
+for (const stream of [child.stdout, child.stderr]) stream.on("data", (chunk) => {
+  output = `${output}${chunk}`.slice(-12_000);
+  if (externalLogFile) appendFileSync(externalLogFile, chunk, { mode: 0o600 });
+});
 
 try {
   const base = `http://127.0.0.1:${port}`;
@@ -120,6 +125,24 @@ try {
   const preflight = await fetch(`${base}/v1/chat/completions`, { method: "OPTIONS", headers: { origin: "https://client.example", "access-control-request-method": "POST", "access-control-request-headers": "authorization,content-type,x-stainless-retry-count,x-stainless-timeout,x-stainless-runtime" } });
   assert.equal(preflight.status, 204);
   for (const header of ["x-stainless-retry-count", "x-stainless-timeout", "x-stainless-runtime"]) assert.ok(preflight.headers.get("access-control-allow-headers")?.includes(header));
+  assert.match(preflight.headers.get("x-request-id"), /^req_[a-f0-9]{32}$/);
+  assert.ok(preflight.headers.get("access-control-allow-headers").split(",").map((value) => value.trim()).includes("x-request-id"));
+  assert.ok(preflight.headers.get("access-control-allow-headers").split(",").map((value) => value.trim()).includes("traceparent"));
+  assert.ok(preflight.headers.get("access-control-expose-headers").split(",").map((value) => value.trim()).includes("x-request-id"));
+  const suppliedRequestId = await fetch(`${base}/v1/health`, { headers: { "x-request-id": "caller-model-call-1" } });
+  assert.equal(suppliedRequestId.headers.get("x-request-id"), "caller-model-call-1");
+  const generatedRequestIdA = (await fetch(`${base}/v1/health`)).headers.get("x-request-id");
+  const generatedRequestIdB = (await fetch(`${base}/v1/health`)).headers.get("x-request-id");
+  assert.match(generatedRequestIdA, /^req_[a-f0-9]{32}$/);
+  assert.match(generatedRequestIdB, /^req_[a-f0-9]{32}$/);
+  assert.notEqual(generatedRequestIdA, generatedRequestIdB);
+  for (const [label, value] of [["whitespace", "bad id"], ["control", "bad\tid"], ["oversized", "x".repeat(129)]]) {
+    const invalidCorrelation = await fetch(`${base}/v1/health`, { headers: { "x-request-id": value } });
+    assert.equal(invalidCorrelation.status, 400, `${label} request id is rejected`);
+    assert.equal((await invalidCorrelation.json()).error.code, "invalid_request_id");
+    assert.match(invalidCorrelation.headers.get("x-request-id"), /^req_[a-f0-9]{32}$/);
+    assert.notEqual(invalidCorrelation.headers.get("x-request-id"), value);
+  }
   const root = await fetch(base, { redirect: "manual" });
   assert.equal(root.status, 302); assert.equal(root.headers.get("location"), "/dashboard");
   const dashboard = await fetch(`${base}/dashboard/home`);
@@ -484,8 +507,10 @@ try {
     ["manifest_method", `${base}/v1/proxy/replicate/prediction`, { method: 1 }],
     ["native_null", `${base}/v1/native/firecrawl/v2/scrape`, null],
   ]) {
-    const invalidProxyBody = await fetch(url, { method: "POST", headers: proxyHeaders, body: JSON.stringify(body) });
+    const invalidProxyBody = await fetch(url, { method: "POST", headers: { ...proxyHeaders, "x-request-id": `owned-${proxyMutationId}` }, body: JSON.stringify(body) });
     assert.equal(invalidProxyBody.status, 400, `malformed proxy request ${proxyMutationId} is rejected`);
+    assert.equal(invalidProxyBody.headers.get("x-request-id"), `owned-${proxyMutationId}`);
+    assert.ok(invalidProxyBody.headers.get("access-control-expose-headers").split(",").map((value) => value.trim()).includes("x-request-id"));
     assert.equal((await invalidProxyBody.json()).error.code, "invalid_request_body");
   }
   const usageAfterInvalidBodies = await fetch(`${base}/v1/usage`, { headers: { authorization: `Bearer ${proxyKey}` } });
@@ -500,7 +525,7 @@ try {
     const stored = await fetch(`${base}/v1/admin/upstream-grants/policies/rotation/${tokenRef}`, { method: "PUT", headers: adminHeaders, body: JSON.stringify({ provider: "local-openai", kind: "api_key", priority: 10, weight, credential }) });
     assert.equal(stored.status, 200, JSON.stringify(await stored.clone().json()));
   }
-  const rotationRequest = (sessionId) => fetch(`${base}/v1/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${rotationKey}`, "content-type": "application/json", ...(sessionId ? { "session-id": sessionId } : {}) }, body: JSON.stringify({ model: "local/default", messages: [{ role: "user", content: "rotate grant" }] }) });
+  const rotationRequest = (correlationHeaders = {}) => fetch(`${base}/v1/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${rotationKey}`, "content-type": "application/json", ...correlationHeaders }, body: JSON.stringify({ model: "local/default", messages: [{ role: "user", content: "rotate grant" }] }) });
   for (let index = 0; index < 4; index += 1) assert.equal((await rotationRequest()).status, 200);
   assert.deepEqual(rotationCalls, ["Bearer rotate-a", "Bearer rotate-b", "Bearer rotate-a", "Bearer rotate-b"], "round-robin selection is serialized by the authority");
   await waitUntil(async () => {
@@ -515,7 +540,7 @@ try {
   assert.equal(actionNamedGrant.status, 200, "action names remain valid three-segment grant references");
   const updateRotationPolicy = async (grantRouting) => {
     const response = await fetch(`${base}/v1/admin/policies/rotation`, { method: "PUT", headers: adminHeaders, body: JSON.stringify({ enabled: true, providers: ["local-openai"], tenantId: "default", tokenRole: "service", requestCostMicros: 1, retainRequestContent: false, grantRouting }) });
-    assert.equal(response.status, 200, JSON.stringify(await response.clone().json()));
+    assert.equal(response.status, 200, await response.clone().text());
   };
   await updateRotationPolicy({ ...routingDefaults, strategy: "least_used" });
   assert.equal((await rotationRequest()).status, 200);
@@ -523,8 +548,22 @@ try {
   assert.deepEqual(rotationCalls.slice(-2), ["Bearer rotate-a", "Bearer rotate-b"], "least-used selection balances authority counters");
   await updateRotationPolicy({ ...routingDefaults, strategy: "weighted_random", stickiness: "session" });
   const stickyStart = rotationCalls.length;
-  for (let index = 0; index < 3; index += 1) assert.equal((await rotationRequest("session-alpha")).status, 200);
-  assert.equal(new Set(rotationCalls.slice(stickyStart)).size, 1, "session stickiness is deterministic across requests");
+  for (let index = 0; index < 3; index += 1) assert.equal((await rotationRequest({ "x-clawrouter-session-id": "session-alpha" })).status, 200);
+  assert.equal(new Set(rotationCalls.slice(stickyStart)).size, 1, "canonical OpenClaw session stickiness is deterministic across requests");
+  const fallbackStickyStart = rotationCalls.length;
+  for (let index = 0; index < 3; index += 1) assert.equal((await rotationRequest({ "session-id": "codex-session-alpha" })).status, 200);
+  assert.equal(new Set(rotationCalls.slice(fallbackStickyStart)).size, 1, "documented Codex session fallback remains deterministic");
+  const precedenceStart = rotationCalls.length;
+  for (let index = 0; index < 3; index += 1) assert.equal((await rotationRequest({ "x-clawrouter-session-id": "canonical-wins", "session-id": `ignored-fallback-${index}` })).status, 200);
+  assert.equal(new Set(rotationCalls.slice(precedenceStart)).size, 1, "canonical session id takes precedence over changing native fallbacks");
+  for (const [requestId, sessionId] of [["unsafe-session", "bad session"], ["oversized-session", "x".repeat(257)]]) {
+    const callsBeforeInvalidSession = rotationCalls.length;
+    const invalidSession = await rotationRequest({ "x-request-id": requestId, "x-clawrouter-session-id": sessionId });
+    assert.equal(invalidSession.status, 400);
+    assert.equal(invalidSession.headers.get("x-request-id"), requestId);
+    assert.equal((await invalidSession.json()).error.code, "invalid_attribution_id");
+    assert.equal(rotationCalls.length, callsBeforeInvalidSession, "unsafe session metadata is rejected before the upstream call");
+  }
   await updateRotationPolicy({ ...routingDefaults, strategy: "priority", eligibleGrants: { "local-openai": ["rotate-b"] } });
   assert.equal((await rotationRequest()).status, 200);
   assert.equal(rotationCalls.at(-1), "Bearer rotate-b", "policy eligibility restricts the grant pool");
@@ -541,15 +580,21 @@ try {
       authorization: `Bearer ${rotationKey}`,
       "content-type": "application/json",
       "x-request-id": "fakeco-observability-contract",
+      traceparent: "00-4bf92f3577b34da6a3ce929d0e0e4736-00f067aa0ba902b7-01",
       "x-clawrouter-session-id": "session-fakeco",
+      "session-id": "ignored-session-fallback",
       "x-clawrouter-agent-id": "openclaw/gateway",
+      "x-claude-code-agent-id": "ignored-native-agent",
       "x-clawrouter-parent-agent-id": "crabhelm/tenant",
+      "x-claude-code-parent-agent-id": "ignored-native-parent",
       "x-clawrouter-project-id": "fakeco",
       "x-clawrouter-client": "crabhelm",
     },
-    body: JSON.stringify({ model: "local/default", messages: [{ role: "user", content: "private prompt sentinel" }] }),
+    body: JSON.stringify({ model: "local/default", messages: [{ role: "user", content: "private prompt sentinel" }], tools: [{ type: "function", function: { name: "lookup", description: "private tool sentinel" } }] }),
   });
   assert.equal(attributed.status, 200);
+  assert.equal(attributed.headers.get("x-request-id"), "fakeco-observability-contract");
+  assert.ok(attributed.headers.get("access-control-expose-headers").split(",").map((value) => value.trim()).includes("x-request-id"));
   assert.equal(attributed.headers.get("x-clawrouter-content-retention"), "off");
   let attributedEvent;
   await waitUntil(async () => {
@@ -564,6 +609,8 @@ try {
       parent: attributedEvent.parent_agent_id,
       project: attributedEvent.project_id,
       client: attributedEvent.client,
+      trace: attributedEvent.trace_id,
+      span: attributedEvent.span_id,
       retained: attributedEvent.content_retained,
       contentRef: attributedEvent.content_ref,
     },
@@ -573,11 +620,51 @@ try {
       parent: "crabhelm/tenant",
       project: "fakeco",
       client: "crabhelm",
+      trace: "4bf92f3577b34da6a3ce929d0e0e4736",
+      span: "00f067aa0ba902b7",
       retained: false,
       contentRef: null,
     },
   );
-  assert.doesNotMatch(JSON.stringify(attributedEvent), /private prompt sentinel|messages|completion/i);
+  assert.doesNotMatch(JSON.stringify(attributedEvent), /private prompt sentinel|private tool sentinel|messages|completion|rotation123|clawrouter-live/i);
+  const invalidTrace = await fetch(`${base}/v1/chat/completions`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${rotationKey}`,
+      "content-type": "application/json",
+      traceparent: "00-00000000000000000000000000000000-00f067aa0ba902b7-01",
+      "session-id": "codex-fallback-session",
+    },
+    body: JSON.stringify({ model: "local/default", messages: [{ role: "user", content: "invalid trace private sentinel" }] }),
+  });
+  assert.equal(invalidTrace.status, 200);
+  const invalidTraceRequestId = invalidTrace.headers.get("x-request-id");
+  assert.match(invalidTraceRequestId, /^req_[a-f0-9]{32}$/);
+  let invalidTraceEvent;
+  await waitUntil(async () => {
+    const response = await fetch(`${base}/v1/usage`, { headers: { authorization: `Bearer ${rotationKey}` } });
+    invalidTraceEvent = (await response.json()).usage.events.find((event) => event.request_id === invalidTraceRequestId);
+    return Boolean(invalidTraceEvent);
+  }, "invalid trace usage event was not visible");
+  assert.deepEqual(
+    {
+      request: invalidTraceEvent.request_id,
+      trace: invalidTraceEvent.trace_id,
+      span: invalidTraceEvent.span_id,
+      session: invalidTraceEvent.session_id,
+      retained: invalidTraceEvent.content_retained,
+      contentRef: invalidTraceEvent.content_ref,
+    },
+    {
+      request: invalidTraceRequestId,
+      trace: null,
+      span: null,
+      session: "codex-fallback-session",
+      retained: false,
+      contentRef: null,
+    },
+  );
+  assert.doesNotMatch(JSON.stringify(invalidTraceEvent), /invalid trace private sentinel|messages|completion|rotation123|clawrouter-live/i);
   for (const [tokenRef, credential] of [["no-fail-a", "no-fail-primary"], ["no-fail-b", "no-fail-backup"]]) {
     const stored = await fetch(`${base}/v1/admin/upstream-grants/policies/no_failover/${tokenRef}`, { method: "PUT", headers: adminHeaders, body: JSON.stringify({ provider: "local-openai", kind: "api_key", priority: 10, credential }) });
     assert.equal(stored.status, 200);
@@ -610,6 +697,7 @@ try {
   assert.equal(unavailablePool.status, 503);
   assert.equal((await unavailablePool.json()).error.code, "upstream_grant_pool_unavailable");
   assert.equal(upstreamCalls.length, callsBeforeUnavailablePool, "cooled scoped grants never fall through to an unscoped provider credential");
+  assert.doesNotMatch(output, /private prompt sentinel|private tool sentinel|invalid trace private sentinel|secret_1234|rotation123/i, "Worker logs remain metadata-only");
   console.log(`local Worker smoke passed on ${base}`);
   if (process.env.CLAWROUTER_E2E_HOLD_FILE) {
     writeFileSync(process.env.CLAWROUTER_E2E_HOLD_FILE, `${JSON.stringify({ base, adminToken, rotationKey, noFailoverKey })}\n`, { mode: 0o600 });
@@ -632,10 +720,10 @@ try {
 
 async function json(url) { const response = await fetch(url); assert.equal(response.status, 200, `${url} returned ${response.status}`); return response.json(); }
 async function waitUntil(predicate, message) {
-  const deadline = Date.now() + 5_000;
+  const deadline = Date.now() + 10_000;
   while (Date.now() < deadline) {
     if (await predicate()) return;
-    await new Promise((resolve) => setTimeout(resolve, 25));
+    await new Promise((resolve) => setTimeout(resolve, 50));
   }
   throw new Error(message);
 }

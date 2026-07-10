@@ -260,10 +260,12 @@ The Worker resolves `provider` and `endpoint` from the compiled provider
 snapshot, applies manifest path/query/header/auth mapping, forwards the request,
 and emits a usage event to `USAGE_QUEUE`. The same Worker consumes that queue
 into tenant/policy-sharded, bounded `USAGE_LEDGER` reporting Durable Objects and
-replays unsettled budget updates. Audit events retain
-identity, policy, credential, provider, route capability, model, timing,
-outcome, tokens when safely available, and cost for 30 days. Prompt and
-completion bodies are never stored in the usage ledger. LLM request bodies are stored separately for
+replays unsettled budget updates. Audit events retain identity, policy,
+credential, provider, route capability, model, timing, outcome, tokens when
+safely available, cost, the canonical request ID, and validated W3C trace/span
+IDs for 30 days. Every owned response echoes the canonical `X-Request-ID`, and
+CORS exposes it to browser clients. Prompt and completion bodies are never
+stored in the usage ledger. LLM request bodies are stored separately for
 30 days when the access policy enables request-content retention (the default)
 and the credential owner is not exempt; see [Content retention](docs/content-retention.md).
 `/v1/usage` returns the caller policy's

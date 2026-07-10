@@ -1,18 +1,21 @@
+import { logCorrelationError } from "./correlation.ts";
+
 const corsHeaders = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET,POST,PUT,OPTIONS",
   "access-control-allow-headers": [
     "authorization", "content-type", "x-api-key", "anthropic-beta", "anthropic-version",
-    "x-request-id", "session-id", "thread-id", "session_id", "x-clawrouter-session-id",
+    "x-request-id", "traceparent", "session-id", "thread-id", "session_id", "x-clawrouter-session-id",
     "x-clawrouter-agent-id", "x-clawrouter-parent-agent-id", "x-clawrouter-project-id",
-    "x-clawrouter-client", "anthropic-dangerous-direct-browser-access",
+    "x-clawrouter-client", "x-claude-code-session-id", "x-claude-code-agent-id",
+    "x-claude-code-parent-agent-id", "anthropic-dangerous-direct-browser-access",
     "x-stainless-retry-count", "x-stainless-timeout", "x-stainless-lang",
     "x-stainless-package-version", "x-stainless-os", "x-stainless-arch",
     "x-stainless-runtime", "x-stainless-runtime-version", "x-stainless-helper-method",
     "x-stainless-helper",
   ].join(","),
   "access-control-expose-headers": [
-    "x-clawrouter-content-retention", "x-clawrouter-upstream-provider", "x-clawrouter-fusion",
+    "x-request-id", "x-clawrouter-content-retention", "x-clawrouter-upstream-provider", "x-clawrouter-fusion",
     "x-clawrouter-fusion-aggregator", "x-clawrouter-fusion-adviser-count", "x-clawrouter-fusion-failed-count",
     "x-clawrouter-fusion-latency-ms", "x-clawrouter-fusion-advisers",
   ].join(","),
@@ -127,7 +130,6 @@ export function commaSet(value: string | undefined): Set<string> {
 
 export function nowIso(): string { return new Date().toISOString(); }
 export function randomId(prefix: string): string { return `${prefix}_${crypto.randomUUID().replaceAll("-", "")}`; }
-export function clampAudit(value: string | null, max = 256): string | null { return value ? value.slice(0, max) : null; }
 
 const maxJsonBodyBytes = 8 * 1024 * 1024;
 
@@ -161,8 +163,8 @@ export class HttpError extends Error {
   constructor(status: number, code: string, message: string) { super(message); this.status = status; this.code = code; }
 }
 
-export function caughtResponse(error: unknown): Response {
+export function caughtResponse(error: unknown, requestId: string): Response {
   if (error instanceof HttpError) return errorResponse(error.code, error.message, error.status);
-  console.error("unhandled request error", error instanceof Error ? error.message : String(error));
+  logCorrelationError("unhandled request error", requestId);
   return errorResponse("internal_error", "internal server error", 500);
 }

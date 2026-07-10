@@ -161,7 +161,19 @@ model list.
 
 ## Shared attribution headers
 
-Clients and gateway adapters may send:
+Each model call may send `X-Request-ID`. ClawRouter trims and accepts a caller
+value only when it is a safe ASCII identifier no longer than 128 characters;
+otherwise it rejects the value and returns a generated safe ID with the owned
+error response. Missing IDs are generated. Every owned success or error echoes
+the canonical value, and CORS allows and exposes the header. Error logs include
+that bounded ID as their only request-specific metadata.
+
+A valid W3C `traceparent` contributes only its `trace_id` and parent `span_id`
+to usage/status metadata. Invalid, all-zero, uppercase, or oversized contexts
+are ignored. Request IDs and trace IDs remain event fields and are never metric
+labels.
+
+Clients and gateway adapters may separately send:
 
 - `X-ClawRouter-Session-Id`
 - `X-ClawRouter-Agent-Id`
@@ -170,10 +182,18 @@ Clients and gateway adapters may send:
 - `X-ClawRouter-Client`
 
 Explicit ClawRouter identifiers take precedence over client-native identifiers.
+For session attribution, `X-ClawRouter-Session-Id` wins, followed by the
+documented Claude Code `X-Claude-Code-Session-Id` and Codex `session-id`
+fallbacks. The selected value is normalized once and also drives policy session
+stickiness; request IDs never substitute for sessions. Selected attribution
+values must be safe ASCII identifiers no longer than 256 characters or the
+request is rejected before provider routing.
+
 Recent audit events include the resolved session, agent hierarchy, project,
-pricing version, reservation bounds, actual tokens, and settled cost. Prompts
-and completions are never stored by the spend-control path. Optional request-content
-retention is a separate policy-controlled R2 archive; see [Content retention](content-retention.md).
+request/trace lineage, pricing version, reservation bounds, actual tokens, and
+settled cost. Prompts, completions, tool bodies, credentials, and error payloads
+are never stored by the spend-control path. Optional request-content retention
+is a separate policy-controlled R2 archive; see [Content retention](content-retention.md).
 
 ## Current boundary
 

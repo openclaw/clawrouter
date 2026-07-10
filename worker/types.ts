@@ -264,6 +264,8 @@ export interface UsageEvent {
   client: string | null;
   key_id: string;
   request_id: string;
+  trace_id: string | null;
+  span_id: string | null;
   compound_request_id: string | null;
   compound_request_stage: "fusion_adviser" | "fusion_synthesizer" | null;
   compound_request_index: number | null;
