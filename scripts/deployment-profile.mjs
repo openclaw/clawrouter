@@ -76,11 +76,11 @@ export function assertDeploymentMutation(target, env = process.env) {
   }
 }
 
-export function assertPolicyKvNamespace(target, namespace) {
+export function assertPolicyKvNamespace(target, namespace, label = "POLICY_KV") {
   if (target.environment !== "fakeco") return;
   if (namespace?.title !== target.policyKvNamespace) {
     throw new Error(
-      `FakeCo isolation refused: POLICY_KV must reference namespace ${JSON.stringify(target.policyKvNamespace)}, got ${JSON.stringify(namespace?.title ?? null)}`,
+      `FakeCo isolation refused: ${label} must reference namespace ${JSON.stringify(target.policyKvNamespace)}, got ${JSON.stringify(namespace?.title ?? null)}`,
     );
   }
 }
@@ -91,9 +91,62 @@ export async function verifyPolicyKvNamespaceTarget(
   fetchImpl = fetch,
 ) {
   if (target.environment !== "fakeco") return null;
+  const namespaceId = requiredDeployValue(env, "CLAWROUTER_POLICY_KV_ID");
+  return verifyPolicyKvNamespaceId(target, namespaceId, env, fetchImpl, "POLICY_KV");
+}
+
+export async function verifyPolicyKvPreviewNamespaceTarget(
+  target,
+  env = process.env,
+  fetchImpl = fetch,
+) {
+  if (target.environment !== "fakeco") return null;
+  const primaryId = requiredDeployValue(env, "CLAWROUTER_POLICY_KV_ID");
+  const previewId = env.CLAWROUTER_POLICY_KV_PREVIEW_ID?.trim();
+  if (!previewId || previewId === primaryId) return null;
+  return verifyPolicyKvNamespaceId(
+    target,
+    previewId,
+    env,
+    fetchImpl,
+    "POLICY_KV preview",
+  );
+}
+
+export function fakecoAccessServiceTokenIds(target, env = process.env) {
+  const ids = (env.CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS || "")
+    .split(",")
+    .map((value) => value.trim())
+    .filter(Boolean);
+  if (target.environment !== "fakeco") return ids;
+  if (ids.length === 0) {
+    throw new Error(
+      "FakeCo Access requires CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS before any Access mutation",
+    );
+  }
+  if (new Set(ids).size !== ids.length) {
+    throw new Error("CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS must not contain duplicates");
+  }
+  const invalid = ids.find(
+    (id) => !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(id),
+  );
+  if (invalid) {
+    throw new Error(
+      "CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS must contain comma-separated Cloudflare service-token UUIDs",
+    );
+  }
+  return ids;
+}
+
+async function verifyPolicyKvNamespaceId(
+  target,
+  namespaceId,
+  env,
+  fetchImpl,
+  label,
+) {
   const token = requiredDeployValue(env, "CLOUDFLARE_API_TOKEN");
   const accountId = requiredDeployValue(env, "CLOUDFLARE_ACCOUNT_ID");
-  const namespaceId = requiredDeployValue(env, "CLAWROUTER_POLICY_KV_ID");
   let response;
   let body;
   try {
@@ -104,15 +157,15 @@ export async function verifyPolicyKvNamespaceTarget(
     body = await response.json();
   } catch (error) {
     throw new Error(
-      `could not verify FakeCo POLICY_KV namespace: ${error instanceof Error ? error.message : String(error)}`,
+      `could not verify FakeCo ${label} namespace: ${error instanceof Error ? error.message : String(error)}`,
     );
   }
   if (!response.ok || body.success === false) {
     throw new Error(
-      `could not verify FakeCo POLICY_KV namespace: ${body.errors?.[0]?.message ?? `HTTP ${response.status}`}`,
+      `could not verify FakeCo ${label} namespace: ${body.errors?.[0]?.message ?? `HTTP ${response.status}`}`,
     );
   }
-  assertPolicyKvNamespace(target, body.result);
+  assertPolicyKvNamespace(target, body.result, label);
   return body.result;
 }
 

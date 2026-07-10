@@ -1,6 +1,9 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
-import { deploymentTarget } from "./deployment-profile.mjs";
+import {
+  deploymentTarget,
+  verifyPolicyKvPreviewNamespaceTarget,
+} from "./deployment-profile.mjs";
 
 const source = process.argv[2] ?? "wrangler.toml";
 const target = process.argv[3] ?? ".wrangler.generated.toml";
@@ -34,6 +37,9 @@ const workerVars = {
 
 if (strict && !kvId) {
   throw new Error("CLAWROUTER_POLICY_KV_ID is required to render deploy config");
+}
+if (kvId) {
+  await verifyPolicyKvPreviewNamespaceTarget(deployment);
 }
 
 let config = readFileSync(source, "utf8");

@@ -38,11 +38,14 @@ on:
         required: false
         default: ""
         type: string
-      configure_provider_secrets:
-        description: "Upload FakeCo provider transport secrets before deployment"
-        required: false
-        default: false
-        type: boolean
+      provider_credentials:
+        description: "Upload selected provider credentials, or prove they already exist on the locked Worker"
+        required: true
+        default: "upload"
+        type: choice
+        options:
+          - upload
+          - existing
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
@@ -62,7 +65,6 @@ jobs:
       CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLAWROUTER_FAKECO_CLOUDFLARE_ACCOUNT_ID }}
       CLAWROUTER_ADMIN_TOKEN_SHA256: ${{ secrets.CLAWROUTER_FAKECO_ADMIN_TOKEN_SHA256 }}
       CLAWROUTER_POLICY_KV_ID: ${{ secrets.CLAWROUTER_FAKECO_POLICY_KV_ID }}
-      CLAWROUTER_POLICY_KV_PREVIEW_ID: ${{ secrets.CLAWROUTER_FAKECO_POLICY_KV_PREVIEW_ID }}
       CLAWROUTER_ACCESS_TEAM_DOMAIN: ${{ vars.CLAWROUTER_FAKECO_ACCESS_TEAM_DOMAIN }}
       CLAWROUTER_ACCESS_AUD: ${{ vars.CLAWROUTER_FAKECO_ACCESS_AUD }}
       CLAWROUTER_ACCESS_ADMIN_EMAILS: ${{ vars.CLAWROUTER_FAKECO_ACCESS_ADMIN_EMAILS }}
@@ -79,6 +81,8 @@ jobs:
       CLAWROUTER_SMOKE_MODEL_AWS_BEDROCK: ${{ vars.CLAWROUTER_FAKECO_SMOKE_MODEL_AWS_BEDROCK }}
       CLAWROUTER_SMOKE_BODY_AWS_BEDROCK: ${{ vars.CLAWROUTER_FAKECO_SMOKE_BODY_AWS_BEDROCK }}
       CLAWROUTER_SMOKE_MODEL_AZURE_OPENAI: ${{ vars.CLAWROUTER_FAKECO_SMOKE_MODEL_AZURE_OPENAI }}
+      CLAWROUTER_SMOKE_READINESS_TIMEOUT_MS: "180000"
+      CLAWROUTER_PROVIDER_CREDENTIAL_MODE: ${{ inputs.provider_credentials }}
       CLAWROUTER_PREFLIGHT_DEPLOY: "1"
       CLAWROUTER_PREFLIGHT_REQUIRE_ACCESS: "1"
     steps:
@@ -95,6 +99,48 @@ jobs:
       - run: pnpm --dir admin check
       - run: pnpm --dir admin test
       - run: pnpm --dir admin build
+      - name: Validate locked FakeCo inputs and provider uploads before Access mutation
+        if: ${{ inputs.provider_credentials == 'upload' }}
+        env:
+          CLAWROUTER_ADMIN_TOKEN: ${{ secrets.CLAWROUTER_FAKECO_ADMIN_TOKEN }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CLAWROUTER_FAKECO_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CLAWROUTER_FAKECO_ACCESS_CLIENT_SECRET }}
+          ANTHROPIC_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_ANTHROPIC_API_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_AWS_SESSION_TOKEN }}
+          AZURE_OPENAI_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_AZURE_OPENAI_API_KEY }}
+          AZURE_OPENAI_API_VERSION: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_AZURE_OPENAI_API_VERSION }}
+          AZURE_OPENAI_COMPLETION_TOKEN_DEPLOYMENTS: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_AZURE_OPENAI_COMPLETION_TOKEN_DEPLOYMENTS }}
+          AZURE_OPENAI_ENDPOINT: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_AZURE_OPENAI_ENDPOINT }}
+          CLAWROUTER_PROVIDER_CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_CLOUDFLARE_ACCOUNT_ID }}
+          CLAWROUTER_PROVIDER_CLOUDFLARE_AI_GATEWAY_ID: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_CLOUDFLARE_AI_GATEWAY_ID }}
+          CLAWROUTER_PROVIDER_CLOUDFLARE_API_TOKEN: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_CLOUDFLARE_API_TOKEN }}
+          COHERE_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_COHERE_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_DEEPSEEK_API_KEY }}
+          FIRECRAWL_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_FIRECRAWL_API_KEY }}
+          FIREWORKS_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_FIREWORKS_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_GOOGLE_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_GROQ_API_KEY }}
+          HUGGINGFACE_API_TOKEN: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_HUGGINGFACE_API_TOKEN }}
+          MINIMAX_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_MINIMAX_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_MISTRAL_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_OPENAI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_OPENROUTER_API_KEY }}
+          OPENROUTER_SITE_URL: https://openclaw.ai
+          PERPLEXITY_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_PERPLEXITY_API_KEY }}
+          REPLICATE_API_TOKEN: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_REPLICATE_API_TOKEN }}
+          TAVILY_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_TAVILY_API_KEY }}
+          TOGETHER_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_TOGETHER_API_KEY }}
+          XAI_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_XAI_API_KEY }}
+        run: pnpm cf:preflight -- --before-access
+      - name: Validate locked FakeCo inputs and existing provider credentials before Access mutation
+        if: ${{ inputs.provider_credentials == 'existing' }}
+        env:
+          CLAWROUTER_ADMIN_TOKEN: ${{ secrets.CLAWROUTER_FAKECO_ADMIN_TOKEN }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CLAWROUTER_FAKECO_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CLAWROUTER_FAKECO_ACCESS_CLIENT_SECRET }}
+        run: pnpm cf:preflight -- --before-access
       - env:
           CLAWROUTER_ACCESS_ADMIN_EMAILS: ${{ inputs.access_admin_emails || vars.CLAWROUTER_FAKECO_ACCESS_ADMIN_EMAILS }}
           CLAWROUTER_ACCESS_ADMIN_DOMAINS: ${{ inputs.access_admin_domains || vars.CLAWROUTER_FAKECO_ACCESS_ADMIN_DOMAINS }}
@@ -102,7 +148,8 @@ jobs:
       - run: pnpm cf:preflight
       - run: pnpm cf:content:provision
       - run: pnpm cf:config
-      - if: ${{ inputs.configure_provider_secrets }}
+      - run: pnpm exec wrangler deploy --config .wrangler.generated.toml
+      - if: ${{ inputs.provider_credentials == 'upload' }}
         env:
           ANTHROPIC_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_ANTHROPIC_API_KEY }}
           AWS_ACCESS_KEY_ID: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_AWS_ACCESS_KEY_ID }}
@@ -133,7 +180,12 @@ jobs:
           TOGETHER_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_TOGETHER_API_KEY }}
           XAI_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_XAI_API_KEY }}
         run: pnpm cf:secrets
-      - run: pnpm exec wrangler deploy --config .wrangler.generated.toml
+      - name: Install admin secret, prove service access, and register smoke key
+        env:
+          CLAWROUTER_ADMIN_TOKEN: ${{ secrets.CLAWROUTER_FAKECO_ADMIN_TOKEN }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CLAWROUTER_FAKECO_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CLAWROUTER_FAKECO_ACCESS_CLIENT_SECRET }}
+        run: pnpm cf:bootstrap
       - env:
           CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY }}
         run: pnpm cf:smoke

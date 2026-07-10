@@ -11,6 +11,18 @@ import {
   assertPolicyKvNamespace,
   deploymentTarget,
 } from "./deployment-profile.mjs";
+import { validateFakecoBootstrapInputs } from "./bootstrap-fakeco.mjs";
+import {
+  fakecoProviderCredentialPlan,
+  verifyExistingFakecoProviderCredentials,
+} from "./provider-credential-preflight.mjs";
+
+const cliArgs = process.argv.slice(2).filter((arg) => arg !== "--");
+const beforeAccess = cliArgs.includes("--before-access");
+const unknownArgs = cliArgs.filter((arg) => arg !== "--before-access");
+if (unknownArgs.length > 0) {
+  throw new Error(`unknown deploy preflight arguments: ${unknownArgs.join(" ")}`);
+}
 
 const deployment = deploymentTarget();
 if (process.env.CLAWROUTER_PREFLIGHT_DEPLOY === "1") {
@@ -41,6 +53,23 @@ const plan = buildProviderSmokePlan(compileProviderSnapshot());
 if (plan.targetCount !== plan.providerCount) {
   errors.push(`provider smoke plan is incomplete: ${plan.targetCount}/${plan.providerCount}`);
 }
+let providerCredentialPlan = null;
+if (beforeAccess) {
+  try {
+    validateFakecoBootstrapInputs(deployment, process.env, { plan });
+  } catch (error) {
+    errors.push(error.message);
+  }
+  try {
+    providerCredentialPlan = fakecoProviderCredentialPlan(
+      deployment,
+      plan,
+      process.env,
+    );
+  } catch (error) {
+    errors.push(error.message);
+  }
+}
 
 const baseUrl = process.env.CLAWROUTER_BASE_URL || deployment.baseUrl;
 if (baseUrl) {
@@ -50,7 +79,7 @@ if (baseUrl) {
     errors.push("CLAWROUTER_BASE_URL must be a valid absolute URL");
   }
 }
-if (process.env.CLAWROUTER_PREFLIGHT_REQUIRE_ACCESS === "1") {
+if (!beforeAccess && process.env.CLAWROUTER_PREFLIGHT_REQUIRE_ACCESS === "1") {
   for (const name of ["CLAWROUTER_ACCESS_TEAM_DOMAIN", "CLAWROUTER_ACCESS_AUD"]) {
     if (!process.env[name]?.trim()) errors.push(`missing required Access deploy env: ${name}`);
   }
@@ -75,7 +104,23 @@ if (liveProviders.length > 0) {
   }
 }
 
-if (selectedProviders.length > 0 && baseUrl && process.env.CLAWROUTER_SMOKE_KEY) {
+const smokeKeyRegistrationDeferred =
+  deployment.environment === "fakeco" &&
+  process.env.CLAWROUTER_PREFLIGHT_DEPLOY === "1";
+if (
+  smokeKeyRegistrationDeferred &&
+  !beforeAccess &&
+  selectedProviders.length > 0
+) {
+  console.log(
+    "smoke key policy inspection deferred to guarded post-deploy FakeCo bootstrap",
+  );
+} else if (
+  !beforeAccess &&
+  selectedProviders.length > 0 &&
+  baseUrl &&
+  process.env.CLAWROUTER_SMOKE_KEY
+) {
   try {
     await inspectSmokeKeyProviderAccess({
       baseUrl,
@@ -103,7 +148,7 @@ if (errors.length > 0) {
 }
 
 console.log(
-  `clawrouter deploy preflight passed: providers=${plan.providerCount} smokeTargets=${plan.targetCount}`,
+  `clawrouter deploy preflight passed: mode=${beforeAccess ? "before-access-read-only" : "deploy"} providers=${plan.providerCount} smokeTargets=${plan.targetCount}`,
 );
 if (selectedProviders.length > 0) {
   console.log(`live provider smoke enabled: ${selectedProviders.map((p) => p.id).join(",")}`);
@@ -118,8 +163,39 @@ async function checkCloudflarePermissions() {
     return;
   }
 
-  await checkCloudflareWorkerRead({ token, accountId, workerName });
   if (!(await checkCloudflareKvIdentity({ token, accountId, namespaceId }))) return;
+  const previewNamespaceId = process.env.CLAWROUTER_POLICY_KV_PREVIEW_ID?.trim();
+  if (previewNamespaceId && previewNamespaceId !== namespaceId) {
+    if (!(await checkCloudflareKvIdentity({
+      token,
+      accountId,
+      namespaceId: previewNamespaceId,
+      label: "POLICY_KV preview",
+    }))) return;
+  }
+  if (beforeAccess) {
+    if (providerCredentialPlan?.mode === "existing") {
+      try {
+        await verifyExistingFakecoProviderCredentials(
+          deployment,
+          providerCredentialPlan,
+          process.env,
+        );
+        console.log(
+          `provider credential proof: existing locked Worker bindings ready for ${providerCredentialPlan.providerIds.join(",")}`,
+        );
+      } catch (error) {
+        errors.push(error.message);
+      }
+    } else if (providerCredentialPlan?.mode === "upload") {
+      console.log(
+        `provider credential proof: upload inputs ready for ${providerCredentialPlan.providerIds.join(",")}`,
+      );
+    }
+    console.log("cloudflare pre-Access target check: read-only; no KV or Access writes");
+    return;
+  }
+  await checkCloudflareWorkerRead({ token, accountId, workerName });
   if (process.env.CLAWROUTER_PREFLIGHT_SKIP_KV_WRITE === "1") {
     if (process.env.CLAWROUTER_PREFLIGHT_DEPLOY === "1") {
       errors.push(
@@ -132,23 +208,30 @@ async function checkCloudflarePermissions() {
   await checkCloudflareKvWrite({ token, accountId, namespaceId });
 }
 
-async function checkCloudflareKvIdentity({ token, accountId, namespaceId }) {
+async function checkCloudflareKvIdentity({
+  token,
+  accountId,
+  namespaceId,
+  label = "POLICY_KV",
+}) {
   if (deployment.environment !== "fakeco") return true;
   const response = await cloudflareFetch(
     token,
     `/accounts/${accountId}/storage/kv/namespaces/${namespaceId}`,
   );
   if (!response.ok || response.body.success === false) {
-    errors.push(`could not verify FakeCo POLICY_KV namespace: ${firstCloudflareError(response)}`);
+    errors.push(
+      `could not verify FakeCo ${label} namespace: ${firstCloudflareError(response)}`,
+    );
     return false;
   }
   try {
-    assertPolicyKvNamespace(deployment, response.body.result);
+    assertPolicyKvNamespace(deployment, response.body.result, label);
   } catch (error) {
     errors.push(error.message);
     return false;
   }
-  console.log(`cloudflare kv target: ${response.body.result.title}`);
+  console.log(`cloudflare ${label} target: ${response.body.result.title}`);
   return true;
 }
 

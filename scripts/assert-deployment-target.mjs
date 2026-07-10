@@ -1,6 +1,7 @@
 import {
   assertDeploymentMutation,
   deploymentTarget,
+  verifyPolicyKvPreviewNamespaceTarget,
   verifyPolicyKvNamespaceTarget,
 } from "./deployment-profile.mjs";
 
@@ -9,6 +10,9 @@ const deploy = process.argv.includes("--deploy");
 if (deploy || process.argv.includes("--mutation")) assertDeploymentMutation(target);
 const namespace = deploy
   ? await verifyPolicyKvNamespaceTarget(target)
+  : null;
+const previewNamespace = deploy
+  ? await verifyPolicyKvPreviewNamespaceTarget(target)
   : null;
 
 console.log(
@@ -21,5 +25,6 @@ console.log(
     `r2=${target.contentBucketName}`,
     `retentionDefault=${target.contentRetentionDefault}`,
     ...(namespace ? [`kvNamespace=${namespace.title}`] : []),
+    ...(previewNamespace ? [`kvPreviewNamespace=${previewNamespace.title}`] : []),
   ].join(" "),
 );
