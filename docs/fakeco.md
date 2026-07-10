@@ -77,6 +77,16 @@ KV id and refuse to deploy unless its title is the locked FakeCo namespace.
 Access provisioning writes or consumes environment-scoped variables named
 `CLAWROUTER_FAKECO_ACCESS_TEAM_DOMAIN`, `CLAWROUTER_FAKECO_ACCESS_AUD`,
 `CLAWROUTER_FAKECO_ACCESS_DEFAULT_TENANT`, and the corresponding admin lists.
+For Crabhelm admin automation, set
+`CLAWROUTER_FAKECO_ACCESS_SERVICE_TOKEN_IDS` to the comma-separated Cloudflare
+Access service-token resource IDs. The workflow passes those IDs to Access
+provisioning, which creates the locked
+`ClawRouter FakeCo Console Service Tokens` `non_identity` policy covering
+`/v1/admin/*`. Crabhelm keeps the matching client
+ID and secret in `CLAWROUTER_ACCESS_CLIENT_ID` and
+`CLAWROUTER_ACCESS_CLIENT_SECRET`, then sends the
+`cf-access-client-id` and `cf-access-client-secret` headers. Do not put the
+client secret in the GitHub variable.
 Provider credentials use `CLAWROUTER_FAKECO_PROVIDER_<WORKER_BINDING>` names.
 No production secret name is referenced by the FakeCo workflow.
 

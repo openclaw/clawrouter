@@ -166,14 +166,20 @@ test("FakeCo Access dry-run uses its isolated hostname, app, policies, and tenan
         CLAWROUTER_DEPLOY_ENV: "fakeco",
         CLOUDFLARE_ACCOUNT_ID: "fakeco-cloudflare-account",
         CLAWROUTER_ACCESS_ALLOWED_DOMAINS: "example.com",
+        CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS: "crabhelm-primary,crabhelm-rotation",
       }),
     },
   );
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /^environment=fakeco$/m);
   assert.match(result.stdout, /^host=clawrouter-fakeco\.openclaw\.ai$/m);
+  assert.match(result.stdout, /clawrouter-fakeco\.openclaw\.ai\/v1\/admin\/\*/);
   assert.match(result.stdout, /^app=ClawRouter FakeCo Console$/m);
   assert.match(result.stdout, /^policy=ClawRouter FakeCo Console Users decision=allow$/m);
+  assert.match(
+    result.stdout,
+    /^policy=ClawRouter FakeCo Console Service Tokens decision=non_identity$/m,
+  );
   assert.match(result.stdout, /^CLAWROUTER_ACCESS_DEFAULT_TENANT=fakeco$/m);
 });
 
@@ -187,8 +193,13 @@ test("FakeCo deploy workflow is hard-bound to its GitHub Environment and secret 
   assert.match(workflow, /CLAWROUTER_DEPLOY_CONFIRM: fakeco/);
   assert.match(workflow, /secrets\.CLAWROUTER_FAKECO_CLOUDFLARE_API_TOKEN/);
   assert.match(workflow, /secrets\.CLAWROUTER_FAKECO_POLICY_KV_ID/);
+  assert.match(
+    workflow,
+    /^\s+CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS: \$\{\{ vars\.CLAWROUTER_FAKECO_ACCESS_SERVICE_TOKEN_IDS \}\}$/m,
+  );
   assert.match(workflow, /https:\/\/clawrouter-fakeco\.openclaw\.ai/);
   assert.doesNotMatch(workflow, /secrets\.CLOUDFLARE_API_TOKEN/);
+  assert.doesNotMatch(workflow, /vars\.CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS/);
   assert.doesNotMatch(workflow, /https:\/\/clawrouter\.openclaw\.ai/);
   assert.doesNotMatch(workflow, /CLAWROUTER_OMIT_ROUTES/);
   assert.doesNotMatch(workflow, /provision_access/);
