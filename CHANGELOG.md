@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Wire FakeCo Access service-token identifiers into the staging deploy so Crabhelm automation receives the intended non-identity policy.
+- Make FakeCo first deploys fail closed with read-only pre-Access and provider-binding validation, exact preview-KV checks, stdin-only admin/provider/smoke-key bootstrap, authenticated service-token proof, and bounded custom-domain/admin readiness.
+- Add a confirmation-gated FakeCo teardown that deletes only the locked Access app, Worker and associated Durable Object storage, and queues while retaining KV, R2, service-token, GitHub Environment, and zone state.
 - Add a locked Cloudflare FakeCo staging profile and deploy workflow with isolated Worker, route, KV, Durable Objects, queues, R2, Access, environment-scoped credentials, retention-off defaults, and a documented OpenClaw/Crabhelm integration contract.
 - Add SigV4-signed Amazon Bedrock `InvokeModel` and `InvokeModelWithResponseStream` proxying with scoped credentials, model-native request bodies, guarded header forwarding, live-smoke overrides, and Cloudflare deployment guidance.
 - Add policy-configurable priority, round-robin, least-used, quota-aware, and weighted grant routing with optional identity/session stickiness, per-provider eligibility, stale-state gates, failover controls, manifest-declared quota collectors, and on-demand provider probes; thanks @Avg8888 for the proposal in #59.

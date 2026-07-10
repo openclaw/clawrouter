@@ -19,6 +19,8 @@
     "cf:content:provision": "node scripts/provision-content-storage.mjs",
     "cf:access": "node scripts/provision-access.mjs",
     "cf:secrets": "node scripts/put-provider-secrets.mjs",
+    "cf:bootstrap": "node scripts/bootstrap-fakeco.mjs",
+    "cf:teardown": "node scripts/teardown-fakeco.mjs",
     "cf:deploy": "pnpm cf:target -- --deploy && pnpm provider:compile -- --output worker/generated/provider-snapshot.json && pnpm --dir admin build && pnpm cf:content:provision && pnpm cf:config && wrangler deploy --config .wrangler.generated.toml",
     "cf:key:put": "node scripts/key-put.mjs",
     "cf:key:revoke": "node scripts/key-revoke.mjs",

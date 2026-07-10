@@ -4,6 +4,7 @@ import { appendFileSync } from "node:fs";
 import {
   assertDeploymentMutation,
   deploymentTarget,
+  fakecoAccessServiceTokenIds,
   githubScopedName,
   githubScopeArgs,
 } from "./deployment-profile.mjs";
@@ -44,7 +45,7 @@ const allowedDomains =
     : githubOrganizations.length > 0
       ? []
       : adminDomains;
-const serviceTokenIds = csv(process.env.CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS);
+const serviceTokenIds = fakecoAccessServiceTokenIds(deployment, process.env);
 const allowedIdps = csv(process.env.CLAWROUTER_ACCESS_IDP_IDS);
 const configuredGithubIdpId =
   process.env.CLAWROUTER_ACCESS_GITHUB_IDP_ID?.trim() ||

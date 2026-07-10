@@ -1,8 +1,11 @@
-export async function adminRequest(path, { method, body } = {}) {
-  const baseUrl = requiredEnv("CLAWROUTER_BASE_URL").replace(/\/$/, "");
-  const adminToken = requiredEnv("CLAWROUTER_ADMIN_TOKEN");
-  const accessClientId = optionalEnv("CF_ACCESS_CLIENT_ID");
-  const accessClientSecret = optionalEnv("CF_ACCESS_CLIENT_SECRET");
+export async function adminRequest(
+  path,
+  { method, body, env = process.env, fetchImpl = fetch, signal } = {},
+) {
+  const baseUrl = requiredEnv("CLAWROUTER_BASE_URL", env).replace(/\/$/, "");
+  const adminToken = requiredEnv("CLAWROUTER_ADMIN_TOKEN", env);
+  const accessClientId = optionalEnv("CF_ACCESS_CLIENT_ID", env);
+  const accessClientSecret = optionalEnv("CF_ACCESS_CLIENT_SECRET", env);
   if (Boolean(accessClientId) !== Boolean(accessClientSecret)) {
     throw new Error(
       "CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET must be configured together",
@@ -16,11 +19,12 @@ export async function adminRequest(path, { method, body } = {}) {
     headers["CF-Access-Client-Id"] = accessClientId;
     headers["CF-Access-Client-Secret"] = accessClientSecret;
   }
-  const response = await fetch(`${baseUrl}${path}`, {
+  const response = await fetchImpl(`${baseUrl}${path}`, {
     method,
     headers,
     body: body === undefined ? undefined : JSON.stringify(body),
     redirect: "manual",
+    signal,
   });
   const text = await response.text();
   if (response.status >= 300 && response.status < 400) {
@@ -41,14 +45,14 @@ export async function adminRequest(path, { method, body } = {}) {
   return json;
 }
 
-function requiredEnv(name) {
-  const value = optionalEnv(name);
+function requiredEnv(name, env) {
+  const value = optionalEnv(name, env);
   if (!value) {
     throw new Error(`${name} is required for remote key mutations`);
   }
   return value;
 }
 
-function optionalEnv(name) {
-  return process.env[name]?.trim() || "";
+function optionalEnv(name, env) {
+  return env[name]?.trim() || "";
 }

@@ -7,11 +7,19 @@ import {
   summarizePlan,
 } from "./provider-smoke-plan.mjs";
 import { assertAccessGateResponse } from "./smoke-access-gate.mjs";
+import {
+  smokeReadinessTimeoutMs,
+  waitForHealth,
+} from "./smoke-readiness.mjs";
 
 const baseUrl = required(process.env.CLAWROUTER_BASE_URL, "CLAWROUTER_BASE_URL").replace(/\/$/, "");
 const smokeKey = process.env.CLAWROUTER_SMOKE_KEY;
 
-await expectOk(`${baseUrl}/v1/health`, "health");
+await waitForHealth({
+  baseUrl,
+  expectedEnvironment: process.env.CLAWROUTER_DEPLOY_ENV?.trim(),
+  timeoutMs: smokeReadinessTimeoutMs(),
+});
 await expectRedirect(`${baseUrl}/`, "root redirect", "/dashboard");
 await expectRedirectOrAccessGate(`${baseUrl}/dashboard`, "dashboard redirect", "/dashboard/home");
 await expectAccessGate(`${baseUrl}/dashboard/home`, "dashboard access gate");
