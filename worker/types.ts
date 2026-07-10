@@ -76,6 +76,8 @@ export interface Env {
   CLAWROUTER_ACCESS_ADMIN_EMAILS?: string;
   CLAWROUTER_ACCESS_ADMIN_DOMAINS?: string;
   CLAWROUTER_ACCESS_DEFAULT_TENANT?: string;
+  CLAWROUTER_CONTENT_RETENTION_DEFAULT?: string;
+  CLAWROUTER_DEPLOY_ENV?: string;
   [name: string]: unknown;
 }
 

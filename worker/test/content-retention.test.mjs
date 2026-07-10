@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { contentKey, retainRequestContent, retentionRequired } from "../content-retention.ts";
+import { contentKey, contentRetentionDefault, retainRequestContent, retentionRequired } from "../content-retention.ts";
 
 const auth = {
   credentialId: "credential",
@@ -33,4 +33,11 @@ test("policy opt-out, user exemption, and non-LLM traffic bypass retention", asy
   const ref = await retainRequestContent({ CONTENT_ARCHIVE: { put: async () => { writes += 1; } } }, { ...auth, contentRetentionDisabled: true }, selection, "request");
   assert.equal(ref, null);
   assert.equal(writes, 0);
+});
+
+test("deployment retention defaults preserve production and disable FakeCo request capture", () => {
+  assert.equal(contentRetentionDefault({}), true);
+  assert.equal(contentRetentionDefault({ CLAWROUTER_CONTENT_RETENTION_DEFAULT: "false" }), false);
+  assert.equal(contentRetentionDefault({ CLAWROUTER_CONTENT_RETENTION_DEFAULT: "off" }), false);
+  assert.equal(contentRetentionDefault({ CLAWROUTER_CONTENT_RETENTION_DEFAULT: "true" }), true);
 });

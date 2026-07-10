@@ -5,6 +5,7 @@ import {
 } from "./discovery";
 import { budgetStatus, BudgetLedgerObject, queue, UsageLedgerObject, usageSnapshot, usageSnapshots } from "./ledgers";
 import { dashboardSecurityHeaders } from "./dashboard-security";
+import { contentRetentionDefault } from "./content-retention.ts";
 import { oauthCallback } from "./oauth";
 import { routeCatalog, snapshot } from "./providers";
 import { authenticateProxyKey, inspectKey, proxyManifest, proxyNative, proxyOpenAi } from "./proxy";
@@ -39,8 +40,8 @@ async function route(request: Request, env: Env, context: ExecutionContext): Pro
   if (request.method === "GET" && rawPath.startsWith("/dashboard/")) return dashboardShell(request, env);
   if (request.method === "GET" && ["/favicon.ico", "/favicon.svg"].includes(rawPath)) return env.ASSETS.fetch(request);
 
-  if (request.method === "GET" && path === "/v1") return Response.json(serviceIndex());
-  if (request.method === "GET" && path === "/v1/health") return Response.json({ ok: true, service: "clawrouter-edge", runtime: "typescript" });
+  if (request.method === "GET" && path === "/v1") return Response.json(serviceIndex(env));
+  if (request.method === "GET" && path === "/v1/health") return Response.json(healthStatus(env));
   if (request.method === "GET" && path === "/v1/providers") return Response.json(snapshot);
   if (request.method === "GET" && path === "/v1/routes") return Response.json(routeCatalog());
   if (request.method === "GET" && path === "/v1/session") return sessionResponse(request, env);
@@ -95,9 +96,9 @@ async function sessionUsage(request: Request, env: Env): Promise<Response> {
 function sameOrigin(request: Request): boolean { const url = new URL(request.url), origin = request.headers.get("origin"), site = request.headers.get("sec-fetch-site"); return origin === url.origin || (!origin && (!site || ["same-origin", "same-site", "none"].includes(site))); }
 function openAiPath(path: string): boolean { return ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"].includes(path); }
 
-function serviceIndex() {
+function serviceIndex(env: Env) {
   return {
-    ok: true, service: "clawrouter-edge", runtime: "typescript",
+    ...healthStatus(env), contract: "clawrouter.openai-compatible.v1",
     interface: { root: "/", dashboard: "/dashboard", playground: "/dashboard/playground", admin: "/dashboard/access", account: "/dashboard/users" },
     endpoints: {
       health: "/v1/health", providers: "/v1/providers", routes: "/v1/routes", session: "/v1/session", entitlements: "/v1/entitlements",
@@ -107,6 +108,19 @@ function serviceIndex() {
       adminCredentials: "/v1/admin/credentials", adminConnections: "/v1/admin/connections", adminAccessUsers: "/v1/admin/access-users",
       adminAssignmentRules: "/v1/admin/assignment-rules", adminFusion: "/v1/admin/fusion", oauthCallback: "/v1/oauth/callback",
       openaiCompatible: ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"], manifestProxy: "/v1/proxy/{provider}/{endpoint}", nativeProxy: "/v1/native/{provider}/{provider-native-path}",
+    },
+  };
+}
+
+function healthStatus(env: Env) {
+  return {
+    ok: true,
+    service: "clawrouter-edge",
+    runtime: "typescript",
+    environment: env.CLAWROUTER_DEPLOY_ENV?.trim() || "production",
+    observability: {
+      mode: "metadata_only",
+      requestContentRetentionDefault: contentRetentionDefault(env),
     },
   };
 }

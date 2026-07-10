@@ -157,7 +157,7 @@ export interface AssignmentRule {
 }
 
 export type AccessRole = "admin" | "user";
-export interface ContentRetention { enabled: boolean; retentionDays: number; policyEnabled: boolean; userExempt: boolean }
+export interface ContentRetention { enabled: boolean; retentionDays: number; policyEnabled: boolean; userExempt: boolean; defaultEnabled?: boolean }
 export interface SessionResponse {
   authenticated: boolean;
   auth: string;

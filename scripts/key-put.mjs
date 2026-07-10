@@ -4,8 +4,10 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { adminRequest } from "./admin-api.mjs";
+import { deploymentTarget } from "./deployment-profile.mjs";
 
 const args = parseArgs(process.argv.slice(2));
+const deployment = deploymentTarget();
 const kid = required(args.kid, "--kid");
 const secret = readSecret(args);
 const allProviders = args["all-providers"] === true;
@@ -25,7 +27,7 @@ if (!allProviders && providers.length === 0) {
 const binding = args.binding ?? "POLICY_KV";
 const config = args.config ?? ".wrangler.generated.toml";
 const enabled = args.disabled ? false : true;
-const tenantId = args.tenant ?? "default";
+const tenantId = args.tenant ?? deployment.accessDefaultTenant;
 const monthlyBudgetMicros = args["monthly-budget-micros"]
   ? parseNonNegativeInteger(args["monthly-budget-micros"], "--monthly-budget-micros")
   : undefined;
@@ -67,7 +69,14 @@ function putLocalBootstrapRecords(request) {
   const existingCredential =
     readRecord(`credentials/${kid}`, { allowMissing: true }) ?? legacyCredential(existingLegacy);
   const generation = existingPolicy?.generation ?? `policy_${randomUUID()}`;
-  const policy = { ...request, generation };
+  const policy = {
+    ...request,
+    generation,
+    retainRequestContent:
+      typeof existingPolicy?.retainRequestContent === "boolean"
+        ? existingPolicy.retainRequestContent
+        : deployment.contentRetentionDefault,
+  };
   delete policy.allProviders;
   delete policy.secretSha256;
   const credential = {
@@ -247,6 +256,7 @@ function policyFields(policy) {
     tokenRole: policy.tokenRole ?? null,
     monthlyBudgetMicros: policy.monthlyBudgetMicros ?? null,
     requestCostMicros: policy.requestCostMicros ?? null,
+    retainRequestContent: policy.retainRequestContent !== false,
   };
 }
 

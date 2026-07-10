@@ -2,6 +2,7 @@ import type {
   AccessControlUser, AccessPolicyEntry, AccessUserRecord, Env, OAuthState, PolicyBinding,
   GrantRoutingPolicy, GrantRuntimeState, ProviderConnection, ProxyCredentialEntry,
 } from "./types";
+import { contentRetentionDefault } from "./content-retention.ts";
 import { errorResponse, json, normalizeEmail, readJson } from "./utils.ts";
 
 type Principal = { principalType: "user" | "group"; principalId: string };
@@ -404,10 +405,10 @@ export async function listPolicies(env: Env): Promise<AccessPolicyEntry[]> {
   const byId = new Map(authoritative.map((entry) => [entry.policyId, entry]));
   for (const [key, value] of await listKvJson<Record<string, unknown>>(env, "policies/")) {
     const policyId = key.slice("policies/".length);
-    if (!byId.has(policyId)) byId.set(policyId, { policyId, policy: normalizePolicyRecord(value) });
+    if (!byId.has(policyId)) byId.set(policyId, { policyId, policy: normalizePolicyRecord(value, contentRetentionDefault(env)) });
   }
   for (const [policyId, value] of await listGenuineLegacyKeys(env)) {
-    if (!byId.has(policyId)) byId.set(policyId, { policyId, policy: normalizePolicyRecord(value) });
+    if (!byId.has(policyId)) byId.set(policyId, { policyId, policy: normalizePolicyRecord(value, contentRetentionDefault(env)) });
   }
   await authorityCall(env, "/policies/initialize-all", [...byId.values()]);
   return [...byId.values()].sort((a, b) => a.policyId.localeCompare(b.policyId));
@@ -447,7 +448,7 @@ export async function resolvePolicies(env: Env, ids: string[]): Promise<AccessPo
   const seeded: AccessPolicyEntry[] = [];
   for (const policyId of result.missingPolicyIds) {
     const value = await env.POLICY_KV.get<Record<string, unknown>>(`policies/${policyId}`, "json") ?? await genuineLegacyKey(env, policyId);
-    if (value) seeded.push({ policyId, policy: normalizePolicyRecord(value) });
+    if (value) seeded.push({ policyId, policy: normalizePolicyRecord(value, contentRetentionDefault(env)) });
   }
   if (seeded.length) await authorityCall(env, "/policies/initialize", seeded);
   return [...result.policies, ...seeded];
@@ -531,7 +532,10 @@ async function listGenuineLegacyKeys(env: Env): Promise<Array<[string, Record<st
   });
 }
 
-function normalizePolicyRecord(value: Record<string, unknown>): AccessPolicyEntry["policy"] {
+function normalizePolicyRecord(
+  value: Record<string, unknown>,
+  retainRequestContentDefault: boolean,
+): AccessPolicyEntry["policy"] {
   return {
     enabled: value.enabled !== false,
     generation: typeof value.generation === "string" ? value.generation : "legacy",
@@ -540,7 +544,10 @@ function normalizePolicyRecord(value: Record<string, unknown>): AccessPolicyEntr
     tokenRole: typeof value.tokenRole === "string" ? value.tokenRole : null,
     monthlyBudgetMicros: typeof value.monthlyBudgetMicros === "number" ? value.monthlyBudgetMicros : null,
     requestCostMicros: typeof value.requestCostMicros === "number" ? value.requestCostMicros : null,
-    retainRequestContent: value.retainRequestContent !== false,
+    retainRequestContent:
+      typeof value.retainRequestContent === "boolean"
+        ? value.retainRequestContent
+        : retainRequestContentDefault,
     grantRouting: normalizeStoredGrantRouting(value.grantRouting),
   };
 }

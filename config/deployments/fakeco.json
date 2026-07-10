@@ -1,0 +1,17 @@
+{
+  "environment": "fakeco",
+  "githubEnvironment": "fakeco",
+  "githubPrefix": "CLAWROUTER_FAKECO_",
+  "baseUrl": "https://clawrouter-fakeco.openclaw.ai",
+  "routeHostname": "clawrouter-fakeco.openclaw.ai",
+  "workerName": "clawrouter-edge-fakeco",
+  "policyKvNamespace": "clawrouter-policy-fakeco",
+  "queueName": "clawrouter-usage-fakeco",
+  "queueDlqName": "clawrouter-usage-fakeco-dead-letter",
+  "contentBucketName": "clawrouter-content-fakeco",
+  "accessAppName": "ClawRouter FakeCo Console",
+  "accessPolicyName": "ClawRouter FakeCo Console Users",
+  "accessServicePolicyName": "ClawRouter FakeCo Console Service Tokens",
+  "accessDefaultTenant": "fakeco",
+  "contentRetentionDefault": false
+}

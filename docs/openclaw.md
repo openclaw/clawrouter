@@ -50,6 +50,9 @@ For a self-hosted ClawRouter origin, configure the provider base URL:
 The base URL may include `/v1`; the plugin normalizes it to the correct catalog,
 usage, and inference endpoints.
 
+AWS FakeCo gateways use the isolated origin and credential contract documented
+in [FakeCo staging](fakeco.md); they must not reuse production credentials.
+
 ## Discover and select models
 
 ```sh

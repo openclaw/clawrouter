@@ -6,6 +6,14 @@ import {
   liveProviderList,
   selectLiveProviderPlans,
 } from "./provider-smoke-plan.mjs";
+import {
+  assertPolicyKvNamespace,
+  deploymentTarget,
+  githubScopedName,
+  githubScopeArgs,
+} from "./deployment-profile.mjs";
+
+const deployment = deploymentTarget();
 
 const requiredLocalEnv = [
   "CLOUDFLARE_API_TOKEN",
@@ -14,7 +22,7 @@ const requiredLocalEnv = [
   "CLAWROUTER_POLICY_KV_ID",
 ];
 
-const requiredRepoSecrets = [
+const productionRequiredSecrets = [
   "CLOUDFLARE_API_TOKEN",
   "CLOUDFLARE_ACCOUNT_ID",
   "CLAWROUTER_ADMIN_TOKEN_SHA256",
@@ -22,12 +30,12 @@ const requiredRepoSecrets = [
   "CLAWROUTER_SMOKE_KEY",
 ];
 
-const optionalRepoSecrets = [
+const productionOptionalSecrets = [
   "CLAWROUTER_POLICY_KV_PREVIEW_ID",
   "CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY",
 ];
 
-const optionalRepoVars = [
+const productionOptionalVars = [
   "CLAWROUTER_USAGE_QUEUE",
   "CLAWROUTER_USAGE_DLQ",
   "CLAWROUTER_WORKER_NAME",
@@ -37,6 +45,21 @@ const optionalRepoVars = [
   "CLAWROUTER_ACCESS_ADMIN_DOMAINS",
   "CLAWROUTER_ACCESS_DEFAULT_TENANT",
 ];
+const requiredRepoSecrets = deployment.environment === "fakeco"
+  ? productionRequiredSecrets.map((name) => githubScopedName(deployment, name))
+  : productionRequiredSecrets;
+const optionalRepoSecrets = deployment.environment === "fakeco"
+  ? productionOptionalSecrets.map((name) => githubScopedName(deployment, name))
+  : productionOptionalSecrets;
+const optionalRepoVars = deployment.environment === "fakeco"
+  ? [
+      "CLAWROUTER_ACCESS_TEAM_DOMAIN",
+      "CLAWROUTER_ACCESS_AUD",
+      "CLAWROUTER_ACCESS_ADMIN_EMAILS",
+      "CLAWROUTER_ACCESS_ADMIN_DOMAINS",
+      "CLAWROUTER_ACCESS_DEFAULT_TENANT",
+    ].map((name) => githubScopedName(deployment, name))
+  : productionOptionalVars;
 const repo = process.env.CLAWROUTER_GITHUB_REPO ?? "openclaw/clawrouter";
 const githubCli = selectGitHubCli();
 const errors = [];
@@ -91,7 +114,7 @@ function checkLocalEnv() {
     errors.push("CLAWROUTER_ADMIN_TOKEN_SHA256 must be a 64-character hex string");
   }
 
-  const baseUrl = process.env.CLAWROUTER_BASE_URL;
+  const baseUrl = process.env.CLAWROUTER_BASE_URL || deployment.baseUrl;
   if (baseUrl) {
     try {
       new URL(baseUrl);
@@ -107,9 +130,8 @@ function checkLiveProviderReadiness(plan) {
     errors.push("CLAWROUTER_SMOKE_LIVE_PROVIDERS must name at least one golden provider");
     return;
   }
-  if (!process.env.CLAWROUTER_BASE_URL) {
-    errors.push("CLAWROUTER_BASE_URL is required when live provider smoke is enabled");
-  }
+  const baseUrl = process.env.CLAWROUTER_BASE_URL || deployment.baseUrl;
+  if (!baseUrl) errors.push("CLAWROUTER_BASE_URL is required when live provider smoke is enabled");
   if (!process.env.CLAWROUTER_SMOKE_KEY) {
     errors.push("CLAWROUTER_SMOKE_KEY is required when live provider smoke is enabled");
   }
@@ -157,7 +179,7 @@ async function checkCloudflareWorkerPermission() {
   }
   const token = process.env.CLOUDFLARE_API_TOKEN?.trim();
   const accountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
-  const workerName = process.env.CLAWROUTER_WORKER_NAME?.trim() || "clawrouter-edge";
+  const workerName = deployment.workerName;
   if (!token || !accountId) {
     return;
   }
@@ -201,6 +223,7 @@ async function checkCloudflareKvPermission() {
   if (!token || !accountId || !namespaceId) {
     return;
   }
+  if (!(await checkCloudflareKvIdentity(token, accountId, namespaceId))) return;
   const key = `__clawrouter_doctor_${Date.now()}`;
   const path = `/accounts/${accountId}/storage/kv/namespaces/${namespaceId}/values/${encodeURIComponent(key)}`;
   const put = await cloudflareRequest(token, path, {
@@ -226,6 +249,30 @@ async function checkCloudflareKvPermission() {
     return;
   }
   console.log("cloudflare kv token: can write POLICY_KV");
+}
+
+async function checkCloudflareKvIdentity(token, accountId, namespaceId) {
+  if (deployment.environment !== "fakeco") return true;
+  const response = await cloudflareRequest(
+    token,
+    `/accounts/${accountId}/storage/kv/namespaces/${namespaceId}`,
+  );
+  if (response.status === 0) {
+    errors.push("could not verify FakeCo POLICY_KV namespace: Cloudflare API unavailable");
+    return false;
+  }
+  if (!response.ok || response.body.success === false) {
+    errors.push(`could not verify FakeCo POLICY_KV namespace: ${cloudflareError(response)}`);
+    return false;
+  }
+  try {
+    assertPolicyKvNamespace(deployment, response.body.result);
+  } catch (error) {
+    errors.push(error.message);
+    return false;
+  }
+  console.log(`cloudflare kv target: ${response.body.result.title}`);
+  return true;
 }
 
 async function cloudflareRequest(token, path, init = {}) {
@@ -261,7 +308,8 @@ function checkGitHubRepository(repo) {
     return;
   }
 
-  const secretNames = listGitHubNames(["secret", "list", "--repo", repo, "--json", "name"]);
+  const scope = githubScopeArgs(deployment);
+  const secretNames = listGitHubNames(["secret", "list", "--repo", repo, ...scope, "--json", "name"]);
   if (!secretNames) {
     errors.push(`could not inspect GitHub Actions secrets for ${repo}`);
     return;
@@ -276,7 +324,7 @@ function checkGitHubRepository(repo) {
     warnings.push(`optional GitHub Actions secrets not set: ${missingOptionalSecrets.join(",")}`);
   }
 
-  const varNames = listGitHubNames(["variable", "list", "--repo", repo, "--json", "name"]);
+  const varNames = listGitHubNames(["variable", "list", "--repo", repo, ...scope, "--json", "name"]);
   if (!varNames) {
     warnings.push(`could not inspect GitHub Actions variables for ${repo}`);
     return;

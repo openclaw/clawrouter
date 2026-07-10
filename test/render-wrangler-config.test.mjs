@@ -30,6 +30,8 @@ test("rendered config keeps the usage queue and dead-letter queue distinct", () 
       CLAWROUTER_USAGE_QUEUE: "test-usage",
       CLAWROUTER_USAGE_DLQ: "test-usage-dead-letter",
       CLAWROUTER_CONTENT_BUCKET: "test-content",
+      CLAWROUTER_POLICY_KV_ID: "test-kv",
+      CLAWROUTER_POLICY_KV_PREVIEW_ID: "",
       CLAWROUTER_SMOKE_MODEL_AZURE_OPENAI: "azure-openai/prod-chat",
       AWS_REGION: "us-west-2",
     };
@@ -50,6 +52,7 @@ test("rendered config keeps the usage queue and dead-letter queue distinct", () 
     assert.match(config, /^AZURE_OPENAI_DEPLOYMENT = "prod-chat"$/m);
     assert.match(config, /^AWS_REGION = "us-west-2"$/m);
     assert.match(config, /^bucket_name = "test-content"$/m);
+    assert.match(config, /binding = "POLICY_KV"\nid = "test-kv"\npreview_id = "test-kv"/);
   } finally {
     rmSync(dir, { force: true, recursive: true });
   }

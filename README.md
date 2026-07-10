@@ -26,6 +26,11 @@ or authenticating every upstream provider plugin on the OpenClaw host.
 See [Use ClawRouter with OpenClaw](docs/openclaw.md) for credential setup,
 dynamic model discovery, multi-provider smoke tests, and quota verification.
 
+The isolated Cloudflare-native environment for AWS FakeCo clients is defined in
+[FakeCo staging](docs/fakeco.md). It has a locked Worker/hostname/resource
+profile, environment-scoped deploy credentials, a retention-off default, and a
+testable OpenAI-compatible OpenClaw/Crabhelm contract.
+
 ## Provider Registry
 
 Provider support is data-driven. Most integrations are added by creating one file:

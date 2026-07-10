@@ -5,6 +5,10 @@ policy lives in serialized Durable Object authority so access can be revoked
 without a redeploy. Cloudflare KV stores one-time migration seeds, assignment
 rules, OAuth grants, and operational health.
 
+For the isolated non-production profile used by AWS FakeCo clients, follow
+[FakeCo staging](fakeco.md). Its locked resource names and dedicated workflow
+must be used instead of overriding the production deployment ad hoc.
+
 ## Required Bindings
 
 - `POLICY_KV`: one-time migration seeds for access policies, issued credential

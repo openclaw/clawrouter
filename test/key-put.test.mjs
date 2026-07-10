@@ -97,6 +97,7 @@ test("key provisioning activates the policy only after dependent records", () =>
         input: "test-secret\n",
         env: {
           ...process.env,
+          CLAWROUTER_DEPLOY_ENV: "fakeco",
           CLAWROUTER_TEST_LOG: logPath,
           CLAWROUTER_TEST_PAYLOAD_LOG: payloadLogPath,
           PATH: `${dir}:${process.env.PATH}`,
@@ -127,6 +128,8 @@ test("key provisioning activates the policy only after dependent records", () =>
     assert.deepEqual(policyWrites.map(({ value }) => value.enabled), [false, true]);
     assert.deepEqual(legacyWrites.map(({ value }) => value.enabled), [false]);
     assert.match(policy.generation, /^policy_/);
+    assert.equal(policy.tenantId, "fakeco");
+    assert.equal(policy.retainRequestContent, false);
     assert.equal(credential.policyGeneration, policy.generation);
   } finally {
     rmSync(dir, { force: true, recursive: true });
@@ -161,7 +164,7 @@ test("key provisioning preserves an existing policy generation", () => {
       'const args = process.argv.slice(2);',
       'const getIndex = args.indexOf("get");',
       'const putIndex = args.indexOf("put");',
-      'if (getIndex !== -1 && args[getIndex + 1] === "policies/smoke") console.log(JSON.stringify({ enabled: true, generation: "policy_existing", providers: ["openai"], tenantId: "default" }));',
+      'if (getIndex !== -1 && args[getIndex + 1] === "policies/smoke") console.log(JSON.stringify({ enabled: true, generation: "policy_existing", providers: ["openai"], tenantId: "default", retainRequestContent: true }));',
       `if (getIndex !== -1 && args[getIndex + 1] === "keys/smoke") console.log(JSON.stringify({ enabled: true, secretSha256: "${secretSha256}", generation: "legacy", providers: ["openai"], tenantId: "default" }));`,
       'if (getIndex !== -1 && !["policies/smoke", "keys/smoke"].includes(args[getIndex + 1])) console.log("Value not found");',
       'const pathIndex = args.indexOf("--path");',
@@ -188,6 +191,7 @@ test("key provisioning preserves an existing policy generation", () => {
         input: "test-secret\n",
         env: {
           ...process.env,
+          CLAWROUTER_DEPLOY_ENV: "fakeco",
           CLAWROUTER_TEST_PAYLOAD_LOG: payloadLogPath,
           PATH: `${dir}:${process.env.PATH}`,
         },
@@ -201,6 +205,7 @@ test("key provisioning preserves an existing policy generation", () => {
     const policy = payloads.findLast(({ key }) => key === "policies/smoke").value;
     const credential = payloads.findLast(({ key }) => key === "credentials/smoke").value;
     assert.equal(policy.generation, "policy_existing");
+    assert.equal(policy.retainRequestContent, true);
     assert.equal(credential.policyGeneration, "policy_existing");
 
     const unsafe = spawnSync(
@@ -220,6 +225,7 @@ test("key provisioning preserves an existing policy generation", () => {
         input: "new-secret\n",
         env: {
           ...process.env,
+          CLAWROUTER_DEPLOY_ENV: "fakeco",
           CLAWROUTER_TEST_PAYLOAD_LOG: payloadLogPath,
           PATH: `${dir}:${process.env.PATH}`,
         },

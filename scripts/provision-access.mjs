@@ -1,23 +1,30 @@
 import { spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { appendFileSync } from "node:fs";
+import {
+  assertDeploymentMutation,
+  deploymentTarget,
+  githubScopedName,
+  githubScopeArgs,
+} from "./deployment-profile.mjs";
 
 const args = parseArgs(process.argv.slice(2));
+const deployment = deploymentTarget();
 
 const accountId = requiredEnv("CLOUDFLARE_ACCOUNT_ID");
 const token = process.env.CLOUDFLARE_API_TOKEN?.trim();
 const dryRun = Boolean(args["dry-run"]);
+if (!dryRun) assertDeploymentMutation(deployment);
 const host =
   process.env.CLAWROUTER_ACCESS_DOMAIN?.trim() ||
   hostFromBaseUrl(process.env.CLAWROUTER_BASE_URL) ||
-  "clawrouter.openclaw.ai";
+  deployment.routeHostname;
 const appDomains = accessDestinations(host);
-const appName = process.env.CLAWROUTER_ACCESS_APP_NAME?.trim() || "ClawRouter Console";
+const appName = deployment.accessAppName;
 const policyName =
-  process.env.CLAWROUTER_ACCESS_POLICY_NAME?.trim() || "ClawRouter Console Users";
+  deployment.accessPolicyName;
 const servicePolicyName =
-  process.env.CLAWROUTER_ACCESS_SERVICE_POLICY_NAME?.trim() ||
-  "ClawRouter Console Service Tokens";
+  deployment.accessServicePolicyName;
 const sessionDuration =
   process.env.CLAWROUTER_ACCESS_SESSION_DURATION?.trim() || "24h";
 const adminEmails = csv(process.env.CLAWROUTER_ACCESS_ADMIN_EMAILS);
@@ -43,7 +50,7 @@ const configuredGithubIdpId =
   process.env.CLAWROUTER_ACCESS_GITHUB_IDP_ID?.trim() ||
   (allowedIdps.length === 1 ? allowedIdps[0] : "");
 const defaultTenant =
-  process.env.CLAWROUTER_ACCESS_DEFAULT_TENANT?.trim() || "default";
+  deployment.accessDefaultTenant;
 const repo = process.env.CLAWROUTER_GITHUB_REPO?.trim() || "openclaw/clawrouter";
 const setGitHubVars = Boolean(args["set-github-vars"]);
 const writeGitHubEnv = Boolean(args["write-github-env"]);
@@ -204,11 +211,11 @@ if (!aud) {
 }
 
 if (setGitHubVars) {
-  syncGitHubVariable(repo, "CLAWROUTER_ACCESS_TEAM_DOMAIN", teamDomain);
-  syncGitHubVariable(repo, "CLAWROUTER_ACCESS_AUD", aud);
-  syncGitHubVariable(repo, "CLAWROUTER_ACCESS_DEFAULT_TENANT", defaultTenant);
-  syncGitHubVariable(repo, "CLAWROUTER_ACCESS_ADMIN_EMAILS", adminEmails.join(","));
-  syncGitHubVariable(repo, "CLAWROUTER_ACCESS_ADMIN_DOMAINS", adminDomains.join(","));
+  syncGitHubVariable(repo, githubScopedName(deployment, "CLAWROUTER_ACCESS_TEAM_DOMAIN"), teamDomain);
+  syncGitHubVariable(repo, githubScopedName(deployment, "CLAWROUTER_ACCESS_AUD"), aud);
+  syncGitHubVariable(repo, githubScopedName(deployment, "CLAWROUTER_ACCESS_DEFAULT_TENANT"), defaultTenant);
+  syncGitHubVariable(repo, githubScopedName(deployment, "CLAWROUTER_ACCESS_ADMIN_EMAILS"), adminEmails.join(","));
+  syncGitHubVariable(repo, githubScopedName(deployment, "CLAWROUTER_ACCESS_ADMIN_DOMAINS"), adminDomains.join(","));
 }
 
 if (writeGitHubEnv) {
@@ -474,6 +481,7 @@ function parseArgs(argv) {
 
 function printPlan({ app, policies, teamDomain, aud, created, updated }) {
   console.log("Cloudflare Access plan:");
+  console.log(`environment=${deployment.environment}`);
   console.log(`host=${host}`);
   console.log(`destinations=${app.destinations.map((destination) => destination.uri).join(",")}`);
   console.log(`app=${app.name}${app.id ? ` (${app.id})` : ""}`);
@@ -518,9 +526,10 @@ function printPlan({ app, policies, teamDomain, aud, created, updated }) {
 
 function syncGitHubVariable(repoName, name, value) {
   const cli = process.env.CLAWROUTER_GITHUB_CLI || "ghx";
+  const scope = githubScopeArgs(deployment);
   const command = value
-    ? ["variable", "set", name, "--repo", repoName, "--body", value]
-    : ["variable", "delete", name, "--repo", repoName];
+    ? ["variable", "set", name, "--repo", repoName, ...scope, "--body", value]
+    : ["variable", "delete", name, "--repo", repoName, ...scope];
   const result = spawnSync(cli, command, {
     encoding: "utf8",
     stdio: ["ignore", "pipe", "pipe"],

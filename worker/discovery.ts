@@ -1,4 +1,5 @@
 import { publicSession, sessionPolicies, verifiedAccessSession } from "./access";
+import { contentRetentionDefault } from "./content-retention.ts";
 import { loadFusionConfig } from "./fusion-config";
 import { FUSION_MODEL_ID } from "./fusion";
 import { authenticateProxyKey } from "./proxy";
@@ -194,7 +195,7 @@ async function clientEntitlements(request: Request, env: Env): Promise<Entitleme
 
 async function retentionView(session: AccessSession, env: Env) {
   const enabledByPolicy = (await sessionPolicies(session, env)).some((entry) => entry.policy.retainRequestContent !== false);
-  return { enabled: enabledByPolicy && !session.contentRetentionDisabled, retentionDays: 30, policyEnabled: enabledByPolicy, userExempt: session.contentRetentionDisabled };
+  return { enabled: enabledByPolicy && !session.contentRetentionDisabled, retentionDays: 30, policyEnabled: enabledByPolicy, userExempt: session.contentRetentionDisabled, defaultEnabled: contentRetentionDefault(env) };
 }
 
 function executableCapabilities(provider: CompiledProvider, capabilities: string[], endpoints: string[]): string[] {

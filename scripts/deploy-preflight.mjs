@@ -6,6 +6,16 @@ import {
   selectLiveProviderPlans,
   SmokeKeyInspectionUnavailableError,
 } from "./provider-smoke-plan.mjs";
+import {
+  assertDeploymentMutation,
+  assertPolicyKvNamespace,
+  deploymentTarget,
+} from "./deployment-profile.mjs";
+
+const deployment = deploymentTarget();
+if (process.env.CLAWROUTER_PREFLIGHT_DEPLOY === "1") {
+  assertDeploymentMutation(deployment);
+}
 
 const requiredDeployEnv = [
   "CLOUDFLARE_API_TOKEN",
@@ -32,12 +42,17 @@ if (plan.targetCount !== plan.providerCount) {
   errors.push(`provider smoke plan is incomplete: ${plan.targetCount}/${plan.providerCount}`);
 }
 
-const baseUrl = process.env.CLAWROUTER_BASE_URL;
+const baseUrl = process.env.CLAWROUTER_BASE_URL || deployment.baseUrl;
 if (baseUrl) {
   try {
     new URL(baseUrl);
   } catch {
     errors.push("CLAWROUTER_BASE_URL must be a valid absolute URL");
+  }
+}
+if (process.env.CLAWROUTER_PREFLIGHT_REQUIRE_ACCESS === "1") {
+  for (const name of ["CLAWROUTER_ACCESS_TEAM_DOMAIN", "CLAWROUTER_ACCESS_AUD"]) {
+    if (!process.env[name]?.trim()) errors.push(`missing required Access deploy env: ${name}`);
   }
 }
 
@@ -98,12 +113,13 @@ async function checkCloudflarePermissions() {
   const token = process.env.CLOUDFLARE_API_TOKEN?.trim();
   const accountId = process.env.CLOUDFLARE_ACCOUNT_ID?.trim();
   const namespaceId = process.env.CLAWROUTER_POLICY_KV_ID?.trim();
-  const workerName = process.env.CLAWROUTER_WORKER_NAME?.trim() || "clawrouter-edge";
+  const workerName = deployment.workerName;
   if (!token || !accountId || !namespaceId) {
     return;
   }
 
   await checkCloudflareWorkerRead({ token, accountId, workerName });
+  if (!(await checkCloudflareKvIdentity({ token, accountId, namespaceId }))) return;
   if (process.env.CLAWROUTER_PREFLIGHT_SKIP_KV_WRITE === "1") {
     if (process.env.CLAWROUTER_PREFLIGHT_DEPLOY === "1") {
       errors.push(
@@ -114,6 +130,26 @@ async function checkCloudflarePermissions() {
     return;
   }
   await checkCloudflareKvWrite({ token, accountId, namespaceId });
+}
+
+async function checkCloudflareKvIdentity({ token, accountId, namespaceId }) {
+  if (deployment.environment !== "fakeco") return true;
+  const response = await cloudflareFetch(
+    token,
+    `/accounts/${accountId}/storage/kv/namespaces/${namespaceId}`,
+  );
+  if (!response.ok || response.body.success === false) {
+    errors.push(`could not verify FakeCo POLICY_KV namespace: ${firstCloudflareError(response)}`);
+    return false;
+  }
+  try {
+    assertPolicyKvNamespace(deployment, response.body.result);
+  } catch (error) {
+    errors.push(error.message);
+    return false;
+  }
+  console.log(`cloudflare kv target: ${response.body.result.title}`);
+  return true;
 }
 
 async function checkCloudflareWorkerRead({ token, accountId, workerName }) {

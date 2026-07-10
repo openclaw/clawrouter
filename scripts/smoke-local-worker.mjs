@@ -100,7 +100,16 @@ try {
   const base = `http://127.0.0.1:${port}`;
   await waitUntilReady(`${base}/v1/health`);
   const health = await json(`${base}/v1/health`);
-  assert.deepEqual(health, { ok: true, service: "clawrouter-edge", runtime: "typescript" });
+  assert.deepEqual(health, {
+    ok: true,
+    service: "clawrouter-edge",
+    runtime: "typescript",
+    environment: "production",
+    observability: {
+      mode: "metadata_only",
+      requestContentRetentionDefault: true,
+    },
+  });
   const providers = await json(`${base}/v1/providers`);
   assert.equal(providers.providers.length, 21);
   assert.equal(new Set(providers.providers.map((provider) => provider.id)).size, 21);
@@ -525,6 +534,50 @@ try {
   const staleClosed = await rotationRequest();
   assert.equal(staleClosed.status, 503);
   assert.equal((await staleClosed.json()).error.code, "upstream_grant_pool_unavailable", "fail-closed stale state rejects an unobserved grant");
+  await updateRotationPolicy({ ...routingDefaults, strategy: "priority", eligibleGrants: { "local-openai": ["rotate-b"] } });
+  const attributed = await fetch(`${base}/v1/chat/completions`, {
+    method: "POST",
+    headers: {
+      authorization: `Bearer ${rotationKey}`,
+      "content-type": "application/json",
+      "x-request-id": "fakeco-observability-contract",
+      "x-clawrouter-session-id": "session-fakeco",
+      "x-clawrouter-agent-id": "openclaw/gateway",
+      "x-clawrouter-parent-agent-id": "crabhelm/tenant",
+      "x-clawrouter-project-id": "fakeco",
+      "x-clawrouter-client": "crabhelm",
+    },
+    body: JSON.stringify({ model: "local/default", messages: [{ role: "user", content: "private prompt sentinel" }] }),
+  });
+  assert.equal(attributed.status, 200);
+  assert.equal(attributed.headers.get("x-clawrouter-content-retention"), "off");
+  let attributedEvent;
+  await waitUntil(async () => {
+    const response = await fetch(`${base}/v1/usage`, { headers: { authorization: `Bearer ${rotationKey}` } });
+    attributedEvent = (await response.json()).usage.events.find((event) => event.request_id === "fakeco-observability-contract");
+    return Boolean(attributedEvent);
+  }, "attributed usage event was not visible");
+  assert.deepEqual(
+    {
+      session: attributedEvent.session_id,
+      agent: attributedEvent.agent_id,
+      parent: attributedEvent.parent_agent_id,
+      project: attributedEvent.project_id,
+      client: attributedEvent.client,
+      retained: attributedEvent.content_retained,
+      contentRef: attributedEvent.content_ref,
+    },
+    {
+      session: "session-fakeco",
+      agent: "openclaw/gateway",
+      parent: "crabhelm/tenant",
+      project: "fakeco",
+      client: "crabhelm",
+      retained: false,
+      contentRef: null,
+    },
+  );
+  assert.doesNotMatch(JSON.stringify(attributedEvent), /private prompt sentinel|messages|completion/i);
   for (const [tokenRef, credential] of [["no-fail-a", "no-fail-primary"], ["no-fail-b", "no-fail-backup"]]) {
     const stored = await fetch(`${base}/v1/admin/upstream-grants/policies/no_failover/${tokenRef}`, { method: "PUT", headers: adminHeaders, body: JSON.stringify({ provider: "local-openai", kind: "api_key", priority: 10, credential }) });
     assert.equal(stored.status, 200);
