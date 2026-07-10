@@ -4,6 +4,7 @@ import test from "node:test";
 import {
   correlateIngressRequest,
   correlationMetadata,
+  correlationRequestId,
   normalizeRequestId,
   parseTraceparent,
   withRequestId,
@@ -11,9 +12,14 @@ import {
 import { caughtResponse, corsPreflight, errorResponse, withCors } from "../utils.ts";
 
 test("ingress echoes one safe request id across success, owned errors, and CORS", async () => {
-  const correlated = correlateIngressRequest(new Request("https://router.example/v1/health", {
+  const request = new Request("https://router.example/v1/health", {
+    method: "POST",
     headers: { "x-request-id": "caller_123" },
-  }));
+    body: "fixture body",
+  });
+  const correlated = correlateIngressRequest(request);
+  assert.equal(correlated.request, request, "ingress correlation must not clone or tee the request body stream");
+  assert.equal(await correlated.request.text(), "fixture body");
   const supplied = withCors(withRequestId(Response.json({ ok: true }), correlated.requestId));
   assert.equal(supplied.status, 200);
   assert.equal(supplied.headers.get("x-request-id"), "caller_123");
@@ -24,6 +30,7 @@ test("ingress echoes one safe request id across success, owned errors, and CORS"
   assert.match(missingA.requestId, /^req_[a-f0-9]{32}$/);
   assert.match(missingB.requestId, /^req_[a-f0-9]{32}$/);
   assert.notEqual(missingA.requestId, missingB.requestId);
+  assert.equal(correlationRequestId(missingA.request), missingA.requestId);
 
   const ownedError = withRequestId(errorResponse("route_not_found", "route not found", 404), "owned_error");
   assert.equal(ownedError.status, 404);
