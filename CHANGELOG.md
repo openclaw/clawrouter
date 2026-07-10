@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add canonical request, W3C trace, and session correlation across OpenAI-compatible responses, CORS, metadata-only usage/status events, bounded error logs, and session-stable grant selection.
 - Wire FakeCo Access service-token identifiers into the staging deploy so Crabhelm automation receives the intended non-identity policy.
 - Make FakeCo first deploys fail closed with read-only pre-Access and provider-binding validation, exact preview-KV checks, stdin-only admin/provider/smoke-key bootstrap, authenticated service-token proof, and bounded custom-domain/admin readiness.
 - Add a confirmation-gated FakeCo teardown that deletes only the locked Access app, Worker and associated Durable Object storage, and queues while retaining KV, R2, service-token, GitHub Environment, and zone state.

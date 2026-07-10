@@ -232,6 +232,7 @@ Send bounded attribution on inference requests when available:
 
 ```text
 x-request-id
+traceparent
 x-clawrouter-session-id
 x-clawrouter-agent-id
 x-clawrouter-parent-agent-id
@@ -239,9 +240,13 @@ x-clawrouter-project-id
 x-clawrouter-client
 ```
 
-ClawRouter records those values with provider, model, capability, timing,
-status, token counts, and cost. It does not copy request or response bodies into
-usage events. FakeCo also defaults new policies and migrated records without an
+`x-request-id` is the per-model-call correlation ID; it remains separate from
+Client, Agent, Session, and Project attribution. ClawRouter echoes its canonical
+value on every owned response and records it with validated W3C trace/span IDs,
+provider, model, capability, timing, status, token counts, and cost. Explicit
+ClawRouter attribution headers retain precedence over documented client-native
+fallbacks. It does not copy request or response bodies into usage events.
+FakeCo also defaults new policies and migrated records without an
 explicit setting to `retainRequestContent=false`; completions are never
 retained. `x-clawrouter-content-retention: off` confirms the effective setting
 on an inference response. Enabling the separate R2 request archive requires an

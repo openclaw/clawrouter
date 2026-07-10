@@ -2,6 +2,7 @@ import { accessIdentity } from "./access";
 import { finalizeAccounting, reserveBudget, type BudgetReservation, type EstimatedCost } from "./accounting";
 import { resolveCredentials, resolvePolicies, resolveUsers } from "./authority";
 import { retainRequestContent } from "./content-retention";
+import { correlationMetadata } from "./correlation.ts";
 import {
   FUSION_MODEL_ID, buildAggregatorBody, buildFusionReservationProposals, collectFusionProposals,
   fusionMessagesValid,
@@ -16,7 +17,7 @@ import {
 import { actualModelCost, estimateModelCost } from "./pricing";
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledModel, CompiledProvider, CompiledQuotaConfig, Env, UsageEvent } from "./types";
 import {
-  clampAudit, errorResponse, HttpError, parseProxyKey, randomId, readJson, safeEqual, sha256Hex,
+  errorResponse, HttpError, parseProxyKey, randomId, readJson, safeEqual, sha256Hex,
 } from "./utils";
 
 type AuthMode = "proxy_key" | "access";
@@ -135,7 +136,7 @@ async function proxyFusion(
   const config = await loadFusionConfig(env);
   if (!config.enabled) return errorResponse("fusion_disabled", `${FUSION_MODEL_ID} is not enabled`, 404);
   if (!fusionMessagesValid(body.messages)) return errorResponse("fusion_messages_invalid", "fusion messages must be an array of objects with string roles", 400);
-  const requestId = request.headers.get("x-request-id") ?? randomId("req");
+  const requestId = correlationMetadata(request).requestId;
   const compoundRequestId = randomId("fusion");
   const compoundRequestSize = config.adviserModels.length + 1;
   const fusionHeaders = new Headers(request.headers);
@@ -320,12 +321,12 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   const auth = reservedBudget?.auth ?? await selectedAuth(request, env, mode, selection, preauthenticated);
   if (auth instanceof Response) {
     if (compound && auditAuth) {
-      const requestId = request.headers.get("x-request-id") ?? randomId("req");
+      const requestId = correlationMetadata(request).requestId;
       auditFailure(context, env, auditAuth, selection, request, requestId, Date.now(), estimateCost(selection.model, selection.body, auditAuth.policy.requestCostMicros, selection.capability), auth.status, auth.status === 403 ? "denied" : auth.status < 500 ? "client_error" : "provider_error", compound);
     }
     return auth;
   }
-  const requestId = request.headers.get("x-request-id") ?? randomId("req");
+  const requestId = correlationMetadata(request).requestId;
   const started = Date.now();
   const estimatedCost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability);
   const cost = reservedBudget?.cost ?? estimatedCost;
@@ -397,7 +398,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
 async function reserveSelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, preauthenticated: AuthorizedIdentity | null, compound?: CompoundRequestContext): Promise<ReservedProxyBudget | Response> {
   const auth = await selectedAuth(request, env, mode, selection, preauthenticated);
   if (auth instanceof Response) return auth;
-  const requestId = request.headers.get("x-request-id") ?? randomId("req");
+  const requestId = correlationMetadata(request).requestId;
   const started = Date.now();
   const cost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability);
   try {
@@ -456,8 +457,8 @@ async function grantStickyHash(request: Request, auth: AuthorizedIdentity): Prom
   if (routing.stickiness === "none") return null;
   const identity = auth.principalId ?? auth.credentialId ?? auth.policyId;
   if (routing.stickiness === "identity") return sha256Hex(`identity:${identity}`);
-  const rawSession = ["session-id", "x-session-id", "thread-id", "conversation-id"].map((name) => request.headers.get(name)?.trim()).find((value) => value && value.length <= 256 && !/[\u0000-\u001f\u007f]/.test(value));
-  return sha256Hex(`session:${rawSession ?? identity}`);
+  const sessionId = correlationMetadata(request).sessionId;
+  return sha256Hex(`session:${sessionId ?? identity}`);
 }
 
 function selectedFailure(error: unknown): HttpError {
@@ -473,7 +474,7 @@ async function auditSelectionFailure(request: Request, env: Env, context: Execut
   const selected = await selectedAuth(request, env, mode, selection, preauthenticated);
   const auth = selected instanceof Response ? auditAuth : selected;
   if (!auth) return;
-  const requestId = request.headers.get("x-request-id") ?? randomId("req");
+  const requestId = correlationMetadata(request).requestId;
   const status = statusCode === 403 ? "denied" : statusCode < 500 ? "client_error" : "provider_error";
   auditFailure(context, env, auth, selection, request, requestId, Date.now(), estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability), statusCode, status, compound);
 }
@@ -516,13 +517,14 @@ function actualCost(model: CompiledModel | null, tokens: Tokens, fixed: number |
 }
 
 function usageEvent(auth: AuthorizedIdentity, selection: ProxySelection, request: Request, requestId: string, started: number, statusCode: number, tokens: Tokens | null, cost: Cost, reservation: BudgetReservation, contentRef: string | null, status: UsageEvent["status"], actual = 0, compound?: CompoundRequestContext): UsageEvent {
+  const correlation = correlationMetadata(request);
   return {
     id: randomId("usage"), type: "clawrouter.usage.v1", occurred_at_ms: Date.now(), tenant_id: auth.policy.tenantId ?? "default",
     policy_id: auth.policyId, credential_id: auth.credentialId, principal_id: auth.principalId, auth_type: auth.authType,
-    session_id: clampAudit(request.headers.get("x-clawrouter-session-id") ?? request.headers.get("session-id")),
-    agent_id: clampAudit(request.headers.get("x-clawrouter-agent-id")), parent_agent_id: clampAudit(request.headers.get("x-clawrouter-parent-agent-id")),
-    project_id: clampAudit(request.headers.get("x-clawrouter-project-id")), client: clampAudit(request.headers.get("x-clawrouter-client")),
+    session_id: correlation.sessionId, agent_id: correlation.agentId, parent_agent_id: correlation.parentAgentId,
+    project_id: correlation.projectId, client: correlation.client,
     key_id: auth.credentialId ?? auth.policyId, request_id: requestId,
+    trace_id: correlation.traceId, span_id: correlation.spanId,
     compound_request_id: compound?.id ?? null, compound_request_stage: compound?.stage ?? null, compound_request_index: compound?.index ?? null,
     compound_request_size: compound?.size ?? null, compound_request_started_at_ms: compound?.startedAtMs ?? null,
     provider: selection.provider.id, capability: selection.capability,

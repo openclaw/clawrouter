@@ -11,7 +11,7 @@ const auth = {
   contentRetentionDisabled: false,
 };
 const reservation = { reservationId: "reservation", reservedMicros: 100 };
-const event = { id: "usage", type: "clawrouter.usage.v1", tenant_id: "tenant", policy_id: "policy" };
+const event = { id: "usage", type: "clawrouter.usage.v1", tenant_id: "tenant", policy_id: "policy", request_id: "request-safe" };
 
 test("thrown ledger settlement queues a retry", async () => {
   const sent = [];
@@ -28,14 +28,16 @@ test("settlement retry failure does not suppress the usage event", async () => {
   });
   const errors = [];
   const original = console.error;
-  console.error = (...values) => errors.push(values.join(" "));
+  console.error = (...values) => errors.push(JSON.stringify(values));
   try {
     await finalizeAccounting(env, auth, reservation, 42, event);
   } finally {
     console.error = original;
   }
   assert.deepEqual(sent, [event]);
-  assert.match(errors.join("\n"), /queue settlement unavailable/);
+  assert.match(errors.join("\n"), /accounting finalization failed/);
+  assert.match(errors.join("\n"), /request-safe/);
+  assert.doesNotMatch(errors.join("\n"), /queue settlement unavailable/);
 });
 
 function mockEnv(send) {

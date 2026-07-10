@@ -7,6 +7,7 @@ import {
   type AssignmentEvidence,
 } from "./assignments";
 import { contentKey, contentRetentionDefault } from "./content-retention.ts";
+import { correlationRequestId, logCorrelationError } from "./correlation.ts";
 import { currentGrantRuntime, grantPriority, grantRoutingPolicy, grantRuntimeStates, grantSelectionStats, grantUsable, grantWeight, syncGrantPoolIndex, validCredentialBundle, validGrantSegment } from "./grant-selection";
 import { assertFusionModels, loadFusionConfig, storeFusionConfig } from "./fusion-config";
 import { fusionReadiness } from "./fusion-readiness";
@@ -59,7 +60,7 @@ export async function adminApi(request: Request, env: Env, path: string): Promis
     return errorResponse("route_not_found", "admin route not found", 404);
   } catch (error) {
     if (error instanceof HttpError) return errorResponse(error.code, error.message, error.status);
-    console.error("admin request failed", error instanceof Error ? error.message : String(error));
+    logCorrelationError("admin request failed", correlationRequestId(request));
     return errorResponse("admin_error", "admin request failed", 500);
   }
 }
