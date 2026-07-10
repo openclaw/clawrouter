@@ -34,7 +34,7 @@ export function usePolicyAdmin({ allowDemo, gatewayOrigin, session, demoMode, pr
     if (background) return;
     const refreshedPolicy = policies.find((policy) => policy.policyId === selectedPolicyId) ?? policies[0];
     setSelectedPolicyId(refreshedPolicy?.policyId ?? "");
-    setPolicyForm(refreshedPolicy ? policyFormFromPolicy(refreshedPolicy) : { ...defaultPolicy, policyId: "", tenantId: sessionData.tenantId ?? "default", providers: [...defaultPolicy.providers] });
+    setPolicyForm(refreshedPolicy ? policyFormFromPolicy(refreshedPolicy) : newPolicyForm(sessionData));
     const refreshedCredential = nextCredentials.find((credential) => credential.credentialId === selectedCredentialId) ?? nextCredentials[0];
     setSelectedCredentialId(refreshedCredential?.credentialId ?? "");
     setCredentialForm({ credentialId: "", policyId: refreshedPolicy?.policyId ?? policies[0]?.policyId ?? "", principalId: "" });
@@ -149,7 +149,7 @@ export function usePolicyAdmin({ allowDemo, gatewayOrigin, session, demoMode, pr
     setIssuedKey("");
     setError("");
     setSelectedPolicyId("");
-    setPolicyForm({ ...defaultPolicy, policyId: "", tenantId: session.tenantId ?? "default", providers: [...defaultPolicy.providers] });
+    setPolicyForm(newPolicyForm(session));
   }
 
   function applyPreset(role: keyof typeof rolePresets) {
@@ -179,5 +179,16 @@ export function usePolicyAdmin({ allowDemo, gatewayOrigin, session, demoMode, pr
     policies: { items: keys, setItems: setKeys, selected: selectedPolicy, selectedId: selectedPolicyId, setSelectedId: setSelectedPolicyId, form: policyForm, setForm: setPolicyForm, error, setError, save, revoke: revokePolicy, edit, startNew, applyPreset, toggleProvider, setProviderGroup },
     credentials: { items: credentials, setItems: setCredentials, selected: selectedCredential, selectedId: selectedCredentialId, setSelectedId: setSelectedCredentialId, form: credentialForm, setForm: setCredentialForm, issuedKey, setIssuedKey, issue: issueCredential, revoke: revokeCredential },
     hydrate,
+  };
+}
+
+function newPolicyForm(session: SessionResponse): PolicyForm {
+  return {
+    ...defaultPolicy,
+    policyId: "",
+    tenantId: session.tenantId ?? "default",
+    providers: [...defaultPolicy.providers],
+    retainRequestContent:
+      session.contentRetention?.defaultEnabled ?? defaultPolicy.retainRequestContent,
   };
 }

@@ -1,5 +1,9 @@
 import { spawnSync } from "node:child_process";
 import { pathToFileURL } from "node:url";
+import {
+  assertDeploymentMutation,
+  deploymentTarget,
+} from "./deployment-profile.mjs";
 
 export const providerSecretNames = [
   "ANTHROPIC_API_KEY",
@@ -51,6 +55,8 @@ export function configuredProviderSecrets(env = process.env) {
 }
 
 export function putProviderSecrets({ env = process.env, dryRun = false } = {}) {
+  const deployment = deploymentTarget(env);
+  if (!dryRun) assertDeploymentMutation(deployment, env);
   const secrets = configuredProviderSecrets(env);
   const names = Object.keys(secrets);
   if (names.length === 0) {

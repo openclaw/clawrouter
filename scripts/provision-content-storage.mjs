@@ -1,10 +1,16 @@
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import {
+  assertDeploymentMutation,
+  deploymentTarget,
+} from "./deployment-profile.mjs";
 
-const bucket = process.env.CLAWROUTER_CONTENT_BUCKET ?? "clawrouter-content";
+const deployment = deploymentTarget();
+const bucket = deployment.contentBucketName;
 
 if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
+  assertDeploymentMutation(deployment);
   runAllowExists(["r2", "bucket", "create", bucket]);
   runAllowExists([
     "r2",

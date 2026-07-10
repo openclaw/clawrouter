@@ -4,6 +4,10 @@ ClawRouter access policies retain authorized LLM request bodies for 30 days by
 default. This is an access condition for administrator-funded credentials, not
 application logging. Provider completions are not retained.
 
+The locked FakeCo staging profile overrides the environment default to off.
+New or migrated FakeCo policies without an explicit setting therefore remain
+metadata-only; request retention requires an explicit policy opt-in.
+
 ## Contract
 
 - Policy field: `retainRequestContent` (default `true`).

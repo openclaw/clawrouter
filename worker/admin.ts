@@ -6,7 +6,7 @@ import {
   listAssignmentRules, normalizeAssignmentEvidence, reconcileUserAssignments,
   type AssignmentEvidence,
 } from "./assignments";
-import { contentKey } from "./content-retention";
+import { contentKey, contentRetentionDefault } from "./content-retention.ts";
 import { currentGrantRuntime, grantPriority, grantRoutingPolicy, grantRuntimeStates, grantSelectionStats, grantUsable, grantWeight, syncGrantPoolIndex, validCredentialBundle, validGrantSegment } from "./grant-selection";
 import { assertFusionModels, loadFusionConfig, storeFusionConfig } from "./fusion-config";
 import { fusionReadiness } from "./fusion-readiness";
@@ -242,7 +242,7 @@ async function policyMutation(request: Request, env: Env, rest: string): Promise
   else if (request.method === "PUT") {
     const body = mutationObject(await readJson<unknown>(request), "invalid_policy", "policy");
     const existing = (await listPolicies(env)).find((entry) => entry.policyId === id)?.policy;
-    policy = normalizePolicy(body, existing);
+    policy = normalizePolicy(body, existing, contentRetentionDefault(env));
   }
   else throw new HttpError(405, "method_not_allowed", "admin method is not allowed");
   const entry = { policyId: id, policy }; await authorityCall(env, "/policies/put", entry);
@@ -392,7 +392,7 @@ async function legacyKeyMutation(request: Request, env: Env, rest: string): Prom
   const requestedSecret = typeof body.secretSha256 === "string" ? body.secretSha256.toLowerCase() : undefined;
   const existingPolicy = (await listPolicies(env)).find((entry) => entry.policyId === id)?.policy;
   const existingCredential = (await listCredentials(env)).find((entry) => entry.credentialId === id)?.credential;
-  const desiredPolicy = normalizePolicy(body, existingPolicy);
+  const desiredPolicy = normalizePolicy(body, existingPolicy, contentRetentionDefault(env));
   const policyChanged = !!existingPolicy && JSON.stringify(desiredPolicy) !== JSON.stringify(existingPolicy);
   const secretChanged = !!existingCredential && !!requestedSecret && requestedSecret !== existingCredential.secretSha256.toLowerCase();
   if (policyChanged && secretChanged) throw new HttpError(409, "combined_policy_secret_rotation", "legacy key updates cannot change policy scope and secret together");
@@ -403,7 +403,11 @@ async function legacyKeyMutation(request: Request, env: Env, rest: string): Prom
   return credentialMutation(new Request(request.url, { method: "PUT", headers: request.headers, body: JSON.stringify({ secretSha256, policyId: id, enabled: body.enabled }) }), env, id);
 }
 
-function normalizePolicy(value: unknown, existing?: AccessPolicy): AccessPolicy {
+function normalizePolicy(
+  value: unknown,
+  existing: AccessPolicy | undefined,
+  retainRequestContentDefault: boolean,
+): AccessPolicy {
   const body = mutationObject(value, "invalid_policy", "policy");
   if (body.providers !== undefined && (!Array.isArray(body.providers) || body.providers.some((id) => typeof id !== "string"))) throw new HttpError(400, "invalid_policy", "providers must be an array of strings");
   if (body.allProviders !== undefined && typeof body.allProviders !== "boolean") throw new HttpError(400, "invalid_policy", "allProviders must be a boolean");
@@ -416,7 +420,7 @@ function normalizePolicy(value: unknown, existing?: AccessPolicy): AccessPolicy 
   const monthlyBudgetMicros = normalizeBudgetValue(body.monthlyBudgetMicros, "monthlyBudgetMicros");
   const requestCostMicros = normalizeBudgetValue(body.requestCostMicros, "requestCostMicros");
   const grantRouting = normalizeGrantRouting(body.grantRouting, existing?.grantRouting);
-  return { enabled: policyBoolean(body.enabled, "enabled", true), generation: existing?.generation ?? randomId("policy"), providers, tenantId: policyString(body.tenantId, "tenantId", "default"), tokenRole: policyString(body.tokenRole, "tokenRole", "service"), monthlyBudgetMicros, requestCostMicros, retainRequestContent: policyBoolean(body.retainRequestContent, "retainRequestContent", true), grantRouting };
+  return { enabled: policyBoolean(body.enabled, "enabled", true), generation: existing?.generation ?? randomId("policy"), providers, tenantId: policyString(body.tenantId, "tenantId", "default"), tokenRole: policyString(body.tokenRole, "tokenRole", "service"), monthlyBudgetMicros, requestCostMicros, retainRequestContent: policyBoolean(body.retainRequestContent, "retainRequestContent", existing?.retainRequestContent ?? retainRequestContentDefault), grantRouting };
 }
 
 function normalizeGrantRouting(value: unknown, existing?: AccessPolicy["grantRouting"]): AccessPolicy["grantRouting"] {

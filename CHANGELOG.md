@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add a locked Cloudflare FakeCo staging profile and deploy workflow with isolated Worker, route, KV, Durable Objects, queues, R2, Access, environment-scoped credentials, retention-off defaults, and a documented OpenClaw/Crabhelm integration contract.
 - Add SigV4-signed Amazon Bedrock `InvokeModel` and `InvokeModelWithResponseStream` proxying with scoped credentials, model-native request bodies, guarded header forwarding, live-smoke overrides, and Cloudflare deployment guidance.
 - Add policy-configurable priority, round-robin, least-used, quota-aware, and weighted grant routing with optional identity/session stickiness, per-provider eligibility, stale-state gates, failover controls, manifest-declared quota collectors, and on-demand provider probes; thanks @Avg8888 for the proposal in #59.
 - Track provider-reported quota and authentication state per upstream grant, prefer stronger equal-priority grants, expose cooldowns in the console, and retry one safe request against a same-provider alternate after 401, 403, or 429 responses.

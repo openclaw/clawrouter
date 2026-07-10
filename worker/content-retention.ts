@@ -12,6 +12,12 @@ export function retentionRequired(auth: AuthorizedIdentity, capability: string):
   return auth.policy.retainRequestContent !== false && !auth.contentRetentionDisabled && capability.startsWith("llm.");
 }
 
+export function contentRetentionDefault(env: Env): boolean {
+  const value = env.CLAWROUTER_CONTENT_RETENTION_DEFAULT;
+  if (typeof value !== "string" || !value.trim()) return true;
+  return !["0", "false", "off"].includes(value.trim().toLowerCase());
+}
+
 export async function retainRequestContent(env: Env, auth: AuthorizedIdentity, selection: RetainedSelection, requestId: string): Promise<string | null> {
   if (!retentionRequired(auth, selection.capability)) return null;
   const contentRef = randomId("content");

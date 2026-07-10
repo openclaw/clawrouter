@@ -1,0 +1,138 @@
+name: Deploy Cloudflare FakeCo
+
+on:
+  workflow_dispatch:
+    inputs:
+      live_providers:
+        description: "Comma-separated golden provider ids for mandatory live upstream smoke"
+        required: true
+        default: "openai"
+        type: string
+      access_allowed_emails:
+        description: "Comma-separated emails allowed through FakeCo Access"
+        required: false
+        default: ""
+        type: string
+      access_allowed_domains:
+        description: "Comma-separated email domains allowed through FakeCo Access"
+        required: false
+        default: ""
+        type: string
+      access_github_orgs:
+        description: "Comma-separated GitHub organizations or org/team selectors allowed through FakeCo Access"
+        required: false
+        default: "openclaw"
+        type: string
+      access_admin_emails:
+        description: "Comma-separated emails treated as FakeCo ClawRouter admins"
+        required: false
+        default: ""
+        type: string
+      access_admin_domains:
+        description: "Comma-separated domains treated as FakeCo ClawRouter admins"
+        required: false
+        default: ""
+        type: string
+      access_idp_ids:
+        description: "Optional comma-separated Cloudflare Access identity provider ids"
+        required: false
+        default: ""
+        type: string
+      configure_provider_secrets:
+        description: "Upload FakeCo provider transport secrets before deployment"
+        required: false
+        default: false
+        type: boolean
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+permissions:
+  contents: read
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: fakeco
+    env:
+      CLAWROUTER_DEPLOY_ENV: fakeco
+      CLAWROUTER_DEPLOY_CONFIRM: fakeco
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLAWROUTER_FAKECO_CLOUDFLARE_API_TOKEN }}
+      CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLAWROUTER_FAKECO_CLOUDFLARE_ACCOUNT_ID }}
+      CLAWROUTER_ADMIN_TOKEN_SHA256: ${{ secrets.CLAWROUTER_FAKECO_ADMIN_TOKEN_SHA256 }}
+      CLAWROUTER_POLICY_KV_ID: ${{ secrets.CLAWROUTER_FAKECO_POLICY_KV_ID }}
+      CLAWROUTER_POLICY_KV_PREVIEW_ID: ${{ secrets.CLAWROUTER_FAKECO_POLICY_KV_PREVIEW_ID }}
+      CLAWROUTER_ACCESS_TEAM_DOMAIN: ${{ vars.CLAWROUTER_FAKECO_ACCESS_TEAM_DOMAIN }}
+      CLAWROUTER_ACCESS_AUD: ${{ vars.CLAWROUTER_FAKECO_ACCESS_AUD }}
+      CLAWROUTER_ACCESS_ADMIN_EMAILS: ${{ vars.CLAWROUTER_FAKECO_ACCESS_ADMIN_EMAILS }}
+      CLAWROUTER_ACCESS_ADMIN_DOMAINS: ${{ vars.CLAWROUTER_FAKECO_ACCESS_ADMIN_DOMAINS }}
+      CLAWROUTER_ACCESS_ALLOWED_EMAILS: ${{ inputs.access_allowed_emails }}
+      CLAWROUTER_ACCESS_ALLOWED_DOMAINS: ${{ inputs.access_allowed_domains }}
+      CLAWROUTER_ACCESS_GITHUB_ORGS: ${{ inputs.access_github_orgs }}
+      CLAWROUTER_ACCESS_IDP_IDS: ${{ inputs.access_idp_ids }}
+      CLAWROUTER_BASE_URL: https://clawrouter-fakeco.openclaw.ai
+      AWS_REGION: ${{ vars.CLAWROUTER_FAKECO_PROVIDER_AWS_REGION || secrets.CLAWROUTER_FAKECO_PROVIDER_AWS_REGION }}
+      CLAWROUTER_SMOKE_KEY: ${{ secrets.CLAWROUTER_FAKECO_SMOKE_KEY }}
+      CLAWROUTER_SMOKE_LIVE_PROVIDERS: ${{ inputs.live_providers }}
+      CLAWROUTER_SMOKE_MODEL_AWS_BEDROCK: ${{ vars.CLAWROUTER_FAKECO_SMOKE_MODEL_AWS_BEDROCK }}
+      CLAWROUTER_SMOKE_BODY_AWS_BEDROCK: ${{ vars.CLAWROUTER_FAKECO_SMOKE_BODY_AWS_BEDROCK }}
+      CLAWROUTER_SMOKE_MODEL_AZURE_OPENAI: ${{ vars.CLAWROUTER_FAKECO_SMOKE_MODEL_AZURE_OPENAI }}
+      CLAWROUTER_PREFLIGHT_DEPLOY: "1"
+      CLAWROUTER_PREFLIGHT_REQUIRE_ACCESS: "1"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 11.5.1
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm cf:target -- --mutation
+      - run: pnpm worker:check
+      - run: pnpm --dir admin check
+      - run: pnpm --dir admin test
+      - run: pnpm --dir admin build
+      - env:
+          CLAWROUTER_ACCESS_ADMIN_EMAILS: ${{ inputs.access_admin_emails || vars.CLAWROUTER_FAKECO_ACCESS_ADMIN_EMAILS }}
+          CLAWROUTER_ACCESS_ADMIN_DOMAINS: ${{ inputs.access_admin_domains || vars.CLAWROUTER_FAKECO_ACCESS_ADMIN_DOMAINS }}
+        run: pnpm cf:access -- --write-github-env
+      - run: pnpm cf:preflight
+      - run: pnpm cf:content:provision
+      - run: pnpm cf:config
+      - if: ${{ inputs.configure_provider_secrets }}
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_ANTHROPIC_API_KEY }}
+          AWS_ACCESS_KEY_ID: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_AWS_ACCESS_KEY_ID }}
+          AWS_SECRET_ACCESS_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_AWS_SECRET_ACCESS_KEY }}
+          AWS_SESSION_TOKEN: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_AWS_SESSION_TOKEN }}
+          AZURE_OPENAI_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_AZURE_OPENAI_API_KEY }}
+          AZURE_OPENAI_API_VERSION: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_AZURE_OPENAI_API_VERSION }}
+          AZURE_OPENAI_COMPLETION_TOKEN_DEPLOYMENTS: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_AZURE_OPENAI_COMPLETION_TOKEN_DEPLOYMENTS }}
+          AZURE_OPENAI_ENDPOINT: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_AZURE_OPENAI_ENDPOINT }}
+          CLAWROUTER_PROVIDER_CLOUDFLARE_ACCOUNT_ID: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_CLOUDFLARE_ACCOUNT_ID }}
+          CLAWROUTER_PROVIDER_CLOUDFLARE_AI_GATEWAY_ID: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_CLOUDFLARE_AI_GATEWAY_ID }}
+          CLAWROUTER_PROVIDER_CLOUDFLARE_API_TOKEN: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_CLOUDFLARE_API_TOKEN }}
+          COHERE_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_COHERE_API_KEY }}
+          DEEPSEEK_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_DEEPSEEK_API_KEY }}
+          FIRECRAWL_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_FIRECRAWL_API_KEY }}
+          FIREWORKS_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_FIREWORKS_API_KEY }}
+          GOOGLE_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_GOOGLE_API_KEY }}
+          GROQ_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_GROQ_API_KEY }}
+          HUGGINGFACE_API_TOKEN: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_HUGGINGFACE_API_TOKEN }}
+          MINIMAX_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_MINIMAX_API_KEY }}
+          MISTRAL_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_MISTRAL_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_OPENAI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_OPENROUTER_API_KEY }}
+          OPENROUTER_SITE_URL: https://openclaw.ai
+          PERPLEXITY_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_PERPLEXITY_API_KEY }}
+          REPLICATE_API_TOKEN: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_REPLICATE_API_TOKEN }}
+          TAVILY_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_TAVILY_API_KEY }}
+          TOGETHER_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_TOGETHER_API_KEY }}
+          XAI_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_PROVIDER_XAI_API_KEY }}
+        run: pnpm cf:secrets
+      - run: pnpm exec wrangler deploy --config .wrangler.generated.toml
+      - env:
+          CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY }}
+        run: pnpm cf:smoke

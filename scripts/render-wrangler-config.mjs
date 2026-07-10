@@ -1,26 +1,30 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { deploymentTarget } from "./deployment-profile.mjs";
 
 const source = process.argv[2] ?? "wrangler.toml";
 const target = process.argv[3] ?? ".wrangler.generated.toml";
+const deployment = deploymentTarget();
 
-const workerName = process.env.CLAWROUTER_WORKER_NAME ?? "clawrouter-edge";
-const queueName = process.env.CLAWROUTER_USAGE_QUEUE ?? "clawrouter-usage";
-const queueDlqName =
-  process.env.CLAWROUTER_USAGE_DLQ ?? "clawrouter-usage-dead-letter";
-const contentBucketName =
-  process.env.CLAWROUTER_CONTENT_BUCKET ?? "clawrouter-content";
+const workerName = deployment.workerName;
+const queueName = deployment.queueName;
+const queueDlqName = deployment.queueDlqName;
+const contentBucketName = deployment.contentBucketName;
 const kvId = process.env.CLAWROUTER_POLICY_KV_ID;
-const kvPreviewId = process.env.CLAWROUTER_POLICY_KV_PREVIEW_ID ?? kvId;
+const kvPreviewId = process.env.CLAWROUTER_POLICY_KV_PREVIEW_ID?.trim() || kvId;
 const accountId = process.env.CLOUDFLARE_ACCOUNT_ID;
 const strict = process.env.CLAWROUTER_STRICT_CONFIG !== "0";
 const omitRoutes = process.env.CLAWROUTER_OMIT_ROUTES === "1";
 const workerVars = {
+  CLAWROUTER_DEPLOY_ENV: deployment.environment,
+  CLAWROUTER_CONTENT_RETENTION_DEFAULT: String(
+    deployment.contentRetentionDefault,
+  ),
   CLAWROUTER_ACCESS_TEAM_DOMAIN: process.env.CLAWROUTER_ACCESS_TEAM_DOMAIN,
   CLAWROUTER_ACCESS_AUD: process.env.CLAWROUTER_ACCESS_AUD,
   CLAWROUTER_ACCESS_ADMIN_EMAILS: process.env.CLAWROUTER_ACCESS_ADMIN_EMAILS,
   CLAWROUTER_ACCESS_ADMIN_DOMAINS: process.env.CLAWROUTER_ACCESS_ADMIN_DOMAINS,
-  CLAWROUTER_ACCESS_DEFAULT_TENANT: process.env.CLAWROUTER_ACCESS_DEFAULT_TENANT,
+  CLAWROUTER_ACCESS_DEFAULT_TENANT: deployment.accessDefaultTenant,
   AWS_REGION: process.env.AWS_REGION,
   AZURE_OPENAI_DEPLOYMENT: providerModelSuffix(
     process.env.AZURE_OPENAI_DEPLOYMENT ?? process.env.CLAWROUTER_SMOKE_MODEL_AZURE_OPENAI,
@@ -47,6 +51,11 @@ if (omitRoutes) {
   config = removeTomlArrayBlocks(config, "routes");
   config = ensureTopLevelSetting(config, "workers_dev", "false");
   config = ensureTopLevelSetting(config, "preview_urls", "false");
+} else {
+  config = config.replace(
+    /(\[\[routes\]\]\s*\npattern = ")[^"]+("\s*\ncustom_domain = true)/g,
+    `$1${deployment.routeHostname}$2`,
+  );
 }
 
 if (kvId) {
