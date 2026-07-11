@@ -11,11 +11,38 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   const generated = JSON.parse(readFileSync("worker/generated/provider-snapshot.json", "utf8"));
   assert.deepEqual(compiled, generated);
   assert.equal(compiled.providers.length, 21);
-  assert.equal(compiled.model_index["openai/gpt-5.5"].provider, "openai");
+  assert.equal(compiled.model_index["openai/gpt-5.6"].provider, "openai");
   assert.equal(compiled.model_index["anthropic/claude-opus-4-8"].provider, "anthropic");
   assert.deepEqual(compiled.providers.find((provider) => provider.id === "aws-bedrock").optional_config_keys, ["AWS_SESSION_TOKEN"]);
   assert.deepEqual(compiled.providers.find((provider) => provider.id === "azure-openai").optional_config_keys, ["AZURE_OPENAI_COMPLETION_TOKEN_DEPLOYMENTS"]);
   const openai = compiled.providers.find((provider) => provider.id === "openai");
+  const gpt56 = openai.models.find((model) => model.id === "openai/gpt-5.6");
+  assert.equal(gpt56.upstream, "gpt-5.6");
+  assert.deepEqual(gpt56.capabilities, ["llm.responses", "llm.chat"]);
+  assert.deepEqual(gpt56.pricing, {
+    effectiveAt: "2026-07-09",
+    source: "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
+    inputMicrosPerMillion: 5000000,
+    cachedInputMicrosPerMillion: 500000,
+    cacheWriteInputMicrosPerMillion: 6250000,
+    cacheWrite5mInputMicrosPerMillion: null,
+    cacheWrite1hInputMicrosPerMillion: null,
+    outputMicrosPerMillion: 30000000,
+    maxInputTokens: 1050000,
+    maxRequestInputTokens: null,
+    defaultMaxOutputTokens: 128000,
+    inputTokenOverhead: 1024,
+    longContext: {
+      thresholdInputTokens: 272000,
+      inputMicrosPerMillion: 10000000,
+      cachedInputMicrosPerMillion: 1000000,
+      cacheWriteInputMicrosPerMillion: 12500000,
+      cacheWrite5mInputMicrosPerMillion: null,
+      cacheWrite1hInputMicrosPerMillion: null,
+      outputMicrosPerMillion: 45000000,
+    },
+  });
+  assert.ok(openai.adapter.requestTransforms.renameFields[0].upstreams.includes("gpt-5.6"));
   assert.deepEqual(openai.quota.responseHeaders.map((window) => window.id), ["rpm", "tpm", "subscription-primary", "subscription-secondary", "credits"]);
   assert.deepEqual(openai.quota.probes[0].grantKinds, ["subscription"]);
   assert.equal(openai.quota.probes[0].url, "https://chatgpt.com/backend-api/wham/usage");

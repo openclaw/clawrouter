@@ -27,7 +27,7 @@ test("bundled OpenAI smoke target uses the catalog default model", () => {
   const provider = buildProviderSmokePlan(compileProviderSnapshot(), {}).providers.find(
     (entry) => entry.id === "openai",
   );
-  assert.equal(provider.target.body.model, "openai/gpt-5.5");
+  assert.equal(provider.target.body.model, "openai/gpt-5.6");
 });
 
 test("AWS Bedrock smoke uses an executable Nova InvokeModel request", () => {

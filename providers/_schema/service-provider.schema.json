@@ -417,6 +417,7 @@
         "inputMicrosPerMillion": { "type": "integer", "minimum": 0 },
         "outputMicrosPerMillion": { "type": "integer", "minimum": 0 },
         "cachedInputMicrosPerMillion": { "type": "integer", "minimum": 0 },
+        "cacheWriteInputMicrosPerMillion": { "type": "integer", "minimum": 0 },
         "cacheWrite5mInputMicrosPerMillion": { "type": "integer", "minimum": 0 },
         "cacheWrite1hInputMicrosPerMillion": { "type": "integer", "minimum": 0 },
         "maxInputTokens": { "type": "integer", "minimum": 1 },
@@ -439,6 +440,7 @@
         "inputMicrosPerMillion": { "type": "integer", "minimum": 0 },
         "outputMicrosPerMillion": { "type": "integer", "minimum": 0 },
         "cachedInputMicrosPerMillion": { "type": "integer", "minimum": 0 },
+        "cacheWriteInputMicrosPerMillion": { "type": "integer", "minimum": 0 },
         "cacheWrite5mInputMicrosPerMillion": { "type": "integer", "minimum": 0 },
         "cacheWrite1hInputMicrosPerMillion": { "type": "integer", "minimum": 0 }
       }

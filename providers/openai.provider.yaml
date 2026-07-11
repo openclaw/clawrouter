@@ -55,7 +55,7 @@ adapter:
       - from: max_tokens
         to: max_completion_tokens
         paths: [/v1/chat/completions]
-        upstreams: [gpt-5.5, gpt-5.4]
+        upstreams: [gpt-5.6, gpt-5.5, gpt-5.4]
 quota:
   responseHeaders:
     - id: rpm
@@ -146,6 +146,25 @@ endpoints:
     timeoutMs: 120000
 models:
   entries:
+    - id: openai/gpt-5.6
+      upstream: gpt-5.6
+      capabilities: [llm.responses, llm.chat]
+      pricingRef: openai-gpt-5.6-standard-2026-07-09
+      pricing:
+        effectiveAt: "2026-07-09"
+        source: https://developers.openai.com/api/docs/models/gpt-5.6-sol
+        inputMicrosPerMillion: 5000000
+        cachedInputMicrosPerMillion: 500000
+        cacheWriteInputMicrosPerMillion: 6250000
+        outputMicrosPerMillion: 30000000
+        maxInputTokens: 1050000
+        defaultMaxOutputTokens: 128000
+        longContext:
+          thresholdInputTokens: 272000
+          inputMicrosPerMillion: 10000000
+          cachedInputMicrosPerMillion: 1000000
+          cacheWriteInputMicrosPerMillion: 12500000
+          outputMicrosPerMillion: 45000000
     - id: openai/gpt-5.5
       upstream: gpt-5.5
       capabilities: [llm.responses, llm.chat]

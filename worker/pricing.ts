@@ -19,6 +19,7 @@ interface Rates {
   input: number;
   output: number;
   cachedInput: number | null;
+  cacheWriteInput: number | null;
   cacheWrite5mInput: number | null;
   cacheWrite1hInput: number | null;
 }
@@ -47,6 +48,7 @@ export function actualModelCost(pricing: ModelPricing, tokens: PricedTokens): nu
   if (tokens.input == null) return null;
   const rates = effectiveRates(pricing, tokens.input);
   if (tokens.output == null && rates.output > 0) return null;
+  if (rates.cacheWriteInput != null && tokens.cacheWrite == null) return null;
   const cached = Math.min(tokens.input, tokens.cached ?? 0);
   let remaining = Math.max(0, tokens.input - cached);
   const write5m = Math.min(remaining, tokens.cacheWrite5m ?? 0); remaining -= write5m;
@@ -54,12 +56,13 @@ export function actualModelCost(pricing: ModelPricing, tokens: PricedTokens): nu
   const genericWrite = Math.min(remaining, tokens.cacheWrite ?? 0); remaining -= genericWrite;
   const write5mRate = rates.cacheWrite5mInput ?? rates.input;
   const write1hRate = rates.cacheWrite1hInput ?? write5mRate;
+  const genericWriteRate = rates.cacheWriteInput ?? Math.max(write5mRate, write1hRate);
   return weightedTokenCost([
     [remaining, rates.input],
     [cached, rates.cachedInput ?? rates.input],
     [write5m, write5mRate],
     [write1h, write1hRate],
-    [genericWrite, Math.max(write5mRate, write1hRate)],
+    [genericWrite, genericWriteRate],
     [tokens.output ?? 0, rates.output],
   ]);
 }
@@ -77,24 +80,25 @@ function reservationRates(pricing: ModelPricing, inputTokens: number): Rates {
     input: Math.max(base.input, extended.input),
     output: Math.max(base.output, extended.output),
     cachedInput: maxOptional(base.cachedInput, extended.cachedInput),
+    cacheWriteInput: maxOptional(base.cacheWriteInput, extended.cacheWriteInput),
     cacheWrite5mInput: maxOptional(base.cacheWrite5mInput, extended.cacheWrite5mInput),
     cacheWrite1hInput: maxOptional(base.cacheWrite1hInput, extended.cacheWrite1hInput),
   };
 }
 
 function reservationInputRate(body: unknown, rates: Rates): number {
-  let rate = Math.max(rates.input, rates.cachedInput ?? rates.input);
+  let rate = Math.max(rates.input, rates.cachedInput ?? rates.input, rates.cacheWriteInput ?? rates.input);
   if (jsonHasCacheTtl(body, "1h")) return Math.max(rate, rates.cacheWrite1hInput ?? rates.input);
   if (jsonHasKey(body, "cache_control")) rate = Math.max(rate, rates.cacheWrite5mInput ?? rates.input);
   return rate;
 }
 
 function ratesFromPricing(pricing: ModelPricing): Rates {
-  return { input: pricing.inputMicrosPerMillion, output: pricing.outputMicrosPerMillion, cachedInput: pricing.cachedInputMicrosPerMillion, cacheWrite5mInput: pricing.cacheWrite5mInputMicrosPerMillion, cacheWrite1hInput: pricing.cacheWrite1hInputMicrosPerMillion };
+  return { input: pricing.inputMicrosPerMillion, output: pricing.outputMicrosPerMillion, cachedInput: pricing.cachedInputMicrosPerMillion, cacheWriteInput: pricing.cacheWriteInputMicrosPerMillion, cacheWrite5mInput: pricing.cacheWrite5mInputMicrosPerMillion, cacheWrite1hInput: pricing.cacheWrite1hInputMicrosPerMillion };
 }
 
 function ratesFromLong(pricing: LongContextPricing): Rates {
-  return { input: pricing.inputMicrosPerMillion, output: pricing.outputMicrosPerMillion, cachedInput: pricing.cachedInputMicrosPerMillion, cacheWrite5mInput: pricing.cacheWrite5mInputMicrosPerMillion, cacheWrite1hInput: pricing.cacheWrite1hInputMicrosPerMillion };
+  return { input: pricing.inputMicrosPerMillion, output: pricing.outputMicrosPerMillion, cachedInput: pricing.cachedInputMicrosPerMillion, cacheWriteInput: pricing.cacheWriteInputMicrosPerMillion, cacheWrite5mInput: pricing.cacheWrite5mInputMicrosPerMillion, cacheWrite1hInput: pricing.cacheWrite1hInputMicrosPerMillion };
 }
 
 function requestHasUnboundedInput(body: Record<string, unknown>): boolean {

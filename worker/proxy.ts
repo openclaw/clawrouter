@@ -15,6 +15,7 @@ import {
   resolveTemplate, signSigV4, transformRequestBody, upstreamAuth, upstreamPath,
 } from "./providers";
 import { actualModelCost, estimateModelCost } from "./pricing";
+import { extractUsageTokens, type UsageTokens } from "./token-usage";
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledModel, CompiledProvider, CompiledQuotaConfig, Env, UsageEvent } from "./types";
 import {
   errorResponse, HttpError, parseProxyKey, randomId, readJson, safeEqual, sha256Hex,
@@ -488,7 +489,7 @@ async function finalizeResponse(response: Response, env: Env, auth: AuthorizedId
   let tokens: Tokens | null = null;
   try {
     const contentType = response.headers.get("content-type") ?? "";
-    if (contentType.includes("json")) tokens = extractTokens(JSON.parse(await readLimited(response, 2 * 1024 * 1024)));
+    if (contentType.includes("json")) tokens = extractUsageTokens(JSON.parse(await readLimited(response, 2 * 1024 * 1024)));
     else if (contentType.includes("text/event-stream")) tokens = extractSseTokens(await readLimited(response, 2 * 1024 * 1024));
     else await drainResponseBody(response.body);
   } catch { /* usage is best-effort; reservation stays conservative */ }
@@ -498,7 +499,7 @@ async function finalizeResponse(response: Response, env: Env, auth: AuthorizedId
 }
 
 type Cost = EstimatedCost;
-interface Tokens { input: number | null; output: number | null; total: number | null; cached: number | null; cacheWrite: number | null; cacheWrite5m: number | null; cacheWrite1h: number | null }
+type Tokens = UsageTokens;
 
 function estimateCost(model: CompiledModel | null, body: Record<string, unknown>, fixed: number | null | undefined, capability: string): Cost {
   if (capability === "llm.count_tokens") return { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 };
@@ -537,30 +538,13 @@ function usageEvent(auth: AuthorizedIdentity, selection: ProxySelection, request
   };
 }
 
-function extractTokens(value: unknown): Tokens | null {
-  if (!value || typeof value !== "object") return null;
-  const root = value as Record<string, unknown>;
-  const usage = (root.usage ?? root.usageMetadata ?? root.meta) as Record<string, unknown> | undefined;
-  if (!usage || typeof usage !== "object") return null;
-  const input = pickNumber(usage, "input_tokens", "prompt_tokens", "inputTokens", "promptTokenCount");
-  const output = pickNumber(usage, "output_tokens", "completion_tokens", "outputTokens", "candidatesTokenCount");
-  const total = pickNumber(usage, "total_tokens", "totalTokens", "totalTokenCount") ?? (input != null || output != null ? (input ?? 0) + (output ?? 0) : null);
-  const details = (usage.prompt_tokens_details ?? usage.input_tokens_details) as Record<string, unknown> | undefined;
-  const cached = details ? pickNumber(details, "cached_tokens", "cache_read_input_tokens") : pickNumber(usage, "cache_read_input_tokens");
-  const cacheWrite = pickNumber(usage, "cache_creation_input_tokens");
-  const cacheCreation = usage.cache_creation as Record<string, unknown> | undefined;
-  const cacheWrite5m = cacheCreation ? pickNumber(cacheCreation, "ephemeral_5m_input_tokens") : pickNumber(usage, "cache_creation_ephemeral_5m_input_tokens");
-  const cacheWrite1h = cacheCreation ? pickNumber(cacheCreation, "ephemeral_1h_input_tokens") : pickNumber(usage, "cache_creation_ephemeral_1h_input_tokens");
-  return { input, output, total, cached, cacheWrite: cacheWrite5m != null || cacheWrite1h != null ? Math.max(0, (cacheWrite ?? 0) - (cacheWrite5m ?? 0) - (cacheWrite1h ?? 0)) : cacheWrite, cacheWrite5m, cacheWrite1h };
-}
-
 function extractSseTokens(text: string): Tokens | null {
   let found: Tokens | null = null;
   for (const line of text.split("\n")) {
     if (!line.startsWith("data:")) continue;
     const data = line.slice(5).trim();
     if (!data || data === "[DONE]") continue;
-    try { found = extractTokens(JSON.parse(data)) ?? found; } catch { /* ignore partial SSE events */ }
+    try { found = extractUsageTokens(JSON.parse(data)) ?? found; } catch { /* ignore partial SSE events */ }
   }
   return found;
 }
@@ -594,8 +578,6 @@ export async function drainResponseBody(body: ReadableStream<Uint8Array> | null)
   }
 }
 
-function pickNumber(value: Record<string, unknown>, ...keys: string[]): number | null { for (const key of keys) { const number = numeric(value[key]); if (number != null) return number; } return null; }
-function numeric(value: unknown): number | null { return typeof value === "number" && Number.isFinite(value) && value >= 0 ? Math.floor(value) : null; }
 function searchParamsRecord(params: URLSearchParams): Record<string, string> { const result: Record<string, string> = {}; params.forEach((value, key) => { result[key] = value; }); return result; }
 
 function resolvedUpstreamModel(provider: CompiledProvider, model: CompiledModel, env: Env): string {
