@@ -34,7 +34,7 @@
     "wrangler": "^4.107.1",
     "yaml": "^2.9.0"
   },
-  "packageManager": "pnpm@10.34.4",
+  "packageManager": "pnpm@11.5.1",
   "engines": {
     "node": ">=24"
   }
