@@ -91,7 +91,7 @@ test("fusion readiness allows zero-cost calls with an exhausted positive budget"
 });
 
 test("fusion readiness prices the worst-case JSON expansion within the adviser character bound", () => {
-  const pricing = { effectiveAt: "2026-07-01", source: "test", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 0, cachedInputMicrosPerMillion: null, cacheWrite5mInputMicrosPerMillion: null, cacheWrite1hInputMicrosPerMillion: null, maxInputTokens: 100_000, maxRequestInputTokens: null, defaultMaxOutputTokens: 64, inputTokenOverhead: 0, longContext: null };
+  const pricing = { effectiveAt: "2026-07-01", source: "test", inputMicrosPerMillion: 1_000_000, outputMicrosPerMillion: 0, cachedInputMicrosPerMillion: null, cacheWriteInputMicrosPerMillion: null, cacheWrite5mInputMicrosPerMillion: null, cacheWrite1hInputMicrosPerMillion: null, maxInputTokens: 100_000, maxRequestInputTokens: null, defaultMaxOutputTokens: 64, inputTokenOverhead: 0, longContext: null };
   const pricedRoutes = routes.map((route) => route.modelId === "local/qwen3:8b" ? { ...route, model: { ...route.model, pricing } } : route);
   const config = { ...DEFAULT_FUSION_CONFIG, enabled: true, adviserModels: ["local/qwen3:8b"], maxInputChars: 1_000 };
   const entry = { policyId: "unmetered", policy: { enabled: true, generation: "1", providers: [], tenantId: "default", retainRequestContent: false } };
