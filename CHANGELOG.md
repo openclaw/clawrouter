@@ -1,67 +1,50 @@
 # Changelog
 
-## Unreleased
+## 0.1.0 - 2026-07-16
+
+First tagged release: a provider-neutral API gateway and router for OpenClaw services — TypeScript Worker data plane, Durable Object budget and usage ledgers, policy-driven access control with Cloudflare Access/GitHub identity, a management console, and a Docker self-hosting profile.
+
+### Routing and data plane
+
+- Replace the Rust/Wasm data plane and provider compiler with a modular TypeScript Worker while preserving Durable Object storage and public API contracts.
+- Add policy-configurable priority, round-robin, least-used, quota-aware, and weighted grant routing with optional identity/session stickiness, per-provider eligibility, stale-state gates, and failover controls; thanks @Avg8888 for the proposal in #59.
+- Add policy- and tenant-scoped same-provider grant pools with deterministic priority selection, provider-reported quota and auth-state tracking, console cooldowns, and one safe same-provider retry after 401, 403, or 429 responses.
+- Normalize pre-stream upstream failures on OpenAI-compatible streaming routes to real HTTP 4xx/5xx JSON errors while keeping SSE error events after stream commitment.
+- Resolve native path models for pricing and omit unpriced catalog models for budgeted proxy keys without fixed request pricing.
+- Add canonical request, W3C trace, and session correlation across OpenAI-compatible responses, CORS, metadata-only usage/status events, bounded error logs, and session-stable grant selection.
+- Make accounting finalization independently retryable, shard usage ledgers by tenant and policy, and collapse provider-readiness checks into one authority lookup.
+- Merge overlapping model and manifest routes into one catalog entry per provider.
+
+### Access, quotas, and credentials
+
+- Gate the console behind Cloudflare Access with verified GitHub organization membership, and bind organization/team assignment rules automatically from the verified sign-in identity.
+- Add opt-in per-maintainer budget quotas with principal-scoped ledgers, usage status, and admin breakdowns while preserving policy-wide defaults.
+- Add self-service proxy-key creation, rotation, listing, and revocation for signed-in maintainers, constrained to caller-owned credentials and effective policies.
+- Add default-on, policy-controlled 30-day request-content retention with visible user disclosure, per-user exemptions, and admin inspection.
+- Add role-aware user and admin dashboards with service readiness, shared quota pools, and privacy-safe Access-session usage totals.
+
+### Providers and models
+
+- Add SigV4-signed Amazon Bedrock `InvokeModel` and `InvokeModelWithResponseStream` proxying with scoped credentials, model-native request bodies, and guarded header forwarding.
+- Add current flagship model catalogs with dated list pricing — GPT-5.6 and GPT-5.5, Claude Opus 4.8, Gemini 3.5 Flash, GLM-5.2 — and refresh Google, Groq, xAI, Hugging Face, Together, DeepSeek, MiniMax, and Mistral defaults, including the Mistral embedding model.
+- Add an on-demand `clawrouter/fusion` chat model with parallel local or hosted advisers, a policy-native final synthesizer, OpenAI-compatible Ollama/LM Studio routing, per-policy readiness preflight, and grouped usage lineage with aggregate cost and latency.
+
+### Console
+
+- Redesign the console with the Patchboard visual system: copper-on-graphite dark and blueprint-paper light themes, bundled variable fonts, a full-bleed racked frame, a persistent theme toggle, and higher-contrast status, focus, and selection states.
+- Rebuild the Playground as a multi-turn chat with a provider-first model picker, per-turn request/response inspection, model-alias resolution, and route-specific service requests.
+- Add accessible 30-day request and provider analytics to Dashboard and Usage, 30-second auto-refresh that never overwrites unsaved admin edits, and proxied Gravatar thumbnails that expose no email hashes or user network metadata.
+- Add desktop and mobile visual regression, automated WCAG AA checks, visible-keyboard-focus proof, and restrictive browser security headers.
+
+### Deployment and self-hosting
 
 - Add a supported Docker self-hosting profile with local workerd persistence, admin API bootstrap, end-to-end smoke coverage, and no Cloudflare account requirement.
-- Add self-service proxy-key creation, rotation, listing, and revocation for signed-in maintainers, constrained to caller-owned credentials and effective policies.
-- Preserve upstream HTTP errors as JSON 4xx/5xx responses before OpenAI-compatible streaming begins while retaining SSE error events after stream commitment.
-- Add opt-in per-maintainer budget quotas with principal-scoped ledgers, usage status, and admin breakdowns while preserving policy-wide defaults.
-- Resolve native path models for pricing and omit unpriced catalog models for budgeted proxy keys without fixed request pricing.
-- Add OpenAI GPT-5.6 as the default flagship model with current context limits and list pricing.
-- Add canonical request, W3C trace, and session correlation across OpenAI-compatible responses, CORS, metadata-only usage/status events, bounded error logs, and session-stable grant selection.
-- Wire FakeCo Access service-token identifiers into the staging deploy so Crabhelm automation receives the intended non-identity policy.
-- Make FakeCo first deploys fail closed with read-only pre-Access and provider-binding validation, exact preview-KV checks, stdin-only admin/provider/smoke-key bootstrap, authenticated service-token proof, and bounded custom-domain/admin readiness.
-- Add a confirmation-gated FakeCo teardown that deletes only the locked Access app, Worker and associated Durable Object storage, and queues while retaining KV, R2, service-token, GitHub Environment, and zone state.
-- Add a locked Cloudflare FakeCo staging profile and deploy workflow with isolated Worker, route, KV, Durable Objects, queues, R2, Access, environment-scoped credentials, retention-off defaults, and a documented OpenClaw/Crabhelm integration contract.
-- Add SigV4-signed Amazon Bedrock `InvokeModel` and `InvokeModelWithResponseStream` proxying with scoped credentials, model-native request bodies, guarded header forwarding, live-smoke overrides, and Cloudflare deployment guidance.
-- Add policy-configurable priority, round-robin, least-used, quota-aware, and weighted grant routing with optional identity/session stickiness, per-provider eligibility, stale-state gates, failover controls, manifest-declared quota collectors, and on-demand provider probes; thanks @Avg8888 for the proposal in #59.
-- Track provider-reported quota and authentication state per upstream grant, prefer stronger equal-priority grants, expose cooldowns in the console, and retry one safe request against a same-provider alternate after 401, 403, or 429 responses.
-- Add policy- and tenant-scoped same-provider grant pools with bounded indexes, deterministic priority selection, legacy default-grant compatibility, and admin-console controls.
-- Add desktop/mobile dashboard visual regression, automated WCAG AA checks, visible-keyboard-focus proof, and restrictive browser security headers.
-- Add policy-specific Fusion readiness preflight with route, grant, pricing, budget, and eligible-call reservation status before enabling a profile.
-- Group Fusion adviser and synthesizer usage into one expandable request with shared lineage, aggregate cost, end-to-end latency, and preserved billable-call detail.
-- Add an on-demand `clawrouter/fusion` chat model with parallel local or hosted advisers, a policy-native final synthesizer, OpenAI-compatible Ollama/LM Studio routing, bounded fail-open orchestration, and web-console configuration.
-- Add accessible 30-day request and provider analytics to Dashboard and Usage while preserving rolling usage totals across mixed-version deployments.
-- Reject non-object OpenAI, manifest, and native proxy request bodies before routing or budget reservation.
-- Reject malformed admin mutation roots and scalar reconciliation flags before control-plane work.
-- Validate and canonicalize proxy-credential policy, digest, state, and owner fields before activation.
-- Validate and canonicalize provider-connection flags and labels before persistence.
-- Validate and canonicalize access-user identity and policy-grant payloads before persistence.
-- Validate and canonicalize policy-binding principals, flags, and priorities before persistence.
-- Validate policy wildcard, provider, boolean, and metadata shapes before granting access.
-- Validate assignment-rule kinds, collections, booleans, and priorities before persisting them.
-- Reject upstream grants for providers absent from the compiled catalog.
-- Reject empty or malformed upstream credential bundles instead of reporting unusable grants as ready.
-- Honor manifest-declared optional provider bindings in readiness so valid configurations are not reported as incomplete.
-- Preserve stored multi-field upstream credential bundles when editing grant metadata.
-- Accept HTTP bearer authentication schemes case-insensitively for admin API tokens.
-- Validate provider request paths and templates before reserving budget so malformed manifest requests fail without temporarily consuming quota.
-- Automatically bind GitHub organization and team assignment rules from Cloudflare Access's verified same-origin identity on first sign-in, including existing users whose prior reconciliation lacked GitHub evidence.
-- Document first-party OpenClaw setup, plugin and model allowlists, credential-scoped dynamic model discovery, supported transports, multi-provider smoke testing, and quota reporting on a standalone integration page.
-- Join the console into a full-bleed racked frame with a flush header, connected hairlines, and one 16px alignment datum; make action buttons monochrome so copper is reserved for state, selection, and focus; calm right-rail notes, facts, and attention metrics; and replace the provider-usage list with a ranked share readout with per-provider error callouts.
-- Redesign the console with the Patchboard visual system: copper-on-graphite dark and blueprint-paper light themes, bundled Archivo and Spline Sans Mono variable fonts, semantic stylesheet modules replacing the numbered append-only files, and higher-contrast status, focus, and selection states.
-- Make accounting finalization independently retryable, scope readiness to entitled policies, move canonical access state out of KV fallback paths, shard usage by tenant/policy, consolidate admin bootstrap refreshes, and split shared contracts and access controllers into focused modules.
-- Collapse provider-readiness connection checks into one authority lookup so cold catalog requests no longer fan out across provider Durable Objects.
-- Replace the Rust/Wasm data plane and provider compiler with a modular TypeScript Worker while preserving Durable Object storage and public API contracts.
-- Add a persistent Light/Dark console toggle, refine interactive states and page alignment, and simplify the signed-in identity footer.
-- Normalize current OpenAI reasoning-model token limits and omit unsupported Playground temperature values.
-- Add current flagship model catalogs, including GPT-5.5, Claude Opus 4.8, Gemini 3.5 Flash, and GLM-5.2, with a provider-first Playground picker.
-- Show proxied Gravatar thumbnails for signed-in users without exposing email hashes or user network metadata to the browser.
-- Make repeated content-retention provisioning tolerate an existing lifecycle rule.
-- Resolve configured model aliases in OpenAI-compatible Playground requests instead of forwarding manifest placeholders.
-- Rebuild the Playground as a multi-turn chat with a bottom model/service composer and per-turn request/response inspection.
-- Add default-on, policy-controlled 30-day request-content retention with visible user disclosure, per-user exemptions, token ownership, and admin inspection.
-- Collapse healthy gateway status into the header while retaining the full status row for work, warnings, and errors.
-- Automatically refresh dashboard data every 30 seconds and on tab focus without overwriting unsaved admin edits.
-- Merge overlapping model and manifest routes into one catalog entry per provider.
-- Add role-aware user and admin dashboards with service readiness, shared quota pools, traffic diagrams, and privacy-safe Access-session usage totals.
-- Gate the Cloudflare console by verified GitHub organization membership and support secure bulk provider-secret deployment.
-- Add versioned list pricing for Together Qwen 2.5 7B, DeepSeek V4 Flash, and MiniMax M3 budget enforcement.
-- Fix the Anthropic token-count live smoke request so provider verification no longer sends a messages-only field.
-- Allow Access provisioning to use an explicitly allowed GitHub identity provider without identity-provider list permission.
-- Replace stale Google, Groq, xAI, and Hugging Face defaults with live models and dated list pricing where provider-stable rates exist.
-- Generate route-specific Playground service requests so switching providers no longer sends stale bodies or path values.
-- Resolve configured dynamic model aliases for Playground service routes such as Azure OpenAI deployments.
-- Apply provider request transforms to manifest-proxy calls so service routes match model-proxy behavior.
-- Add the Mistral embedding model and list pricing so embedding requests no longer select a chat-only model.
-- Remove stale provider IDs when editing policies so valid access changes are not blocked by obsolete catalog entries.
+- Add a locked Cloudflare FakeCo staging profile and deploy workflow with fail-closed first deploys, environment-scoped credentials, service-token automation identity, and a confirmation-gated teardown that retains KV, R2, and zone state.
+- Document first-party OpenClaw setup, credential-scoped dynamic model discovery, supported transports, multi-provider smoke testing, and quota reporting on a standalone integration page.
+
+### Hardening and fixes
+
+- Validate and canonicalize every admin control-plane payload before persistence: proxy credentials, provider connections, access users, policy grants and bindings, policy shapes, and assignment rules.
+- Reject non-object proxy request bodies, malformed admin mutation roots, ungranted or empty upstream credential bundles, and malformed provider request paths before routing or budget reservation.
+- Honor manifest-declared optional provider bindings in readiness, preserve stored multi-field credential bundles when editing grant metadata, and accept bearer authentication schemes case-insensitively.
+- Fix the Anthropic token-count live smoke, Mistral embedding model selection, stale Playground bodies and path values on provider switches, stale provider IDs blocking policy edits, obsolete OpenAI reasoning-model token limits, and repeated content-retention provisioning.
