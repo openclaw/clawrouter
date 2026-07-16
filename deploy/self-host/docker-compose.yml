@@ -1,0 +1,16 @@
+services:
+  clawrouter:
+    image: clawrouter-self-host:latest
+    build:
+      context: ../..
+      dockerfile: deploy/self-host/Dockerfile
+    ports:
+      - "127.0.0.1:8787:8787"
+    volumes:
+      - clawrouter-data:/data
+    env_file:
+      - .env
+    restart: unless-stopped
+
+volumes:
+  clawrouter-data:

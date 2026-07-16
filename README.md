@@ -31,6 +31,11 @@ The isolated Cloudflare-native environment for AWS FakeCo clients is defined in
 profile, environment-scoped deploy credentials, a retention-off default, and a
 testable OpenAI-compatible OpenClaw/Crabhelm contract.
 
+## Self-hosting
+
+Run the complete Worker without a Cloudflare account using Docker, workerd, and
+filesystem persistence. See [Self-hosting ClawRouter](docs/self-hosting.md).
+
 ## Provider Registry
 
 Provider support is data-driven. Most integrations are added by creating one file:

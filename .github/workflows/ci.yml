@@ -14,6 +14,24 @@ permissions:
   contents: read
 
 jobs:
+  self-host:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and smoke self-host image
+        run: |
+          read -r admin_token < <(openssl rand -hex 32)
+          admin_hash="$(printf '%s' "$admin_token" | sha256sum | awk '{print $1}')"
+          docker build -f deploy/self-host/Dockerfile -t clawrouter-self-host:ci .
+          container_id="$(docker run -d -p 8787:8787 \
+            -e CLAWROUTER_ADMIN_TOKEN_SHA256="$admin_hash" \
+            clawrouter-self-host:ci)"
+          trap 'docker logs "$container_id"; docker rm -fv "$container_id" >/dev/null' EXIT
+          CLAWROUTER_BASE_URL=http://127.0.0.1:8787 \
+            CLAWROUTER_ADMIN_TOKEN="$admin_token" \
+            node scripts/smoke-self-host.mjs
+
   admin:
     runs-on: ubuntu-latest
     steps:
