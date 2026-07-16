@@ -17,7 +17,7 @@ test("thrown ledger settlement queues a retry", async () => {
   const sent = [];
   const env = mockEnv(async (message) => { sent.push(message); });
   await settleBudget(env, auth, reservation, 42);
-  assert.deepEqual(sent, [{ kind: "budget_settlement", tenant_id: "tenant", policy_id: "policy", request: { reservationId: "reservation", actualCostMicros: 42 } }]);
+  assert.deepEqual(sent, [{ kind: "budget_settlement", tenant_id: "tenant", policy_id: "policy", principal_id: null, request: { reservationId: "reservation", actualCostMicros: 42 } }]);
 });
 
 test("settlement retry failure does not suppress the usage event", async () => {

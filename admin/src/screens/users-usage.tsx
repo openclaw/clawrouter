@@ -176,7 +176,7 @@ export function UsageScreen({ keys, credentials, services, overview, tenants, us
 
       <section className="analyticsPanel usageTablePanel budgetTablePanel">
         <div className="tableSectionHeader secondaryTableHeader"><div><strong>Policy budgets</strong><span>{rows.length} configured policies</span></div><span>{usageLoaded ? "live ledger" : "policy fallback"}</span></div>
-        <EntityTable columns={["policy", "tenant", "budget usage", "services", "health"]} columnTemplate="minmax(210px, 1.15fr) minmax(120px, 0.7fr) minmax(250px, 1.45fr) 96px 120px" rows={rows.map((row) => ({ id: usagePolicyId(row), cells: [<EntityName icon={KeyRound} title={usagePolicyId(row)} subtitle={row.tokenRole ?? "custom"} />, row.tenantId, <BudgetUsage row={row} />, effectiveProviderCount(row.providers, services), <UsageHealth row={row} />] }))} />
+        <EntityTable columns={["policy", "tenant", "budget usage", "services", "health"]} columnTemplate="minmax(210px, 1.15fr) minmax(120px, 0.7fr) minmax(250px, 1.45fr) 96px 120px" rows={rows.map((row) => ({ id: usagePolicyId(row), cells: [<EntityName icon={KeyRound} title={usagePolicyId(row)} subtitle={row.tokenRole ?? "custom"} />, row.tenantId, <BudgetUsage row={row} />, effectiveProviderCount(row.providers, services), <UsageHealth row={row} />], detail: row.budget.ledger === "per_principal" ? <BudgetBreakdown row={row} /> : undefined }))} />
       </section>
     </div>
   );
@@ -212,6 +212,8 @@ export function BudgetUsage({ row }: { row: AdminUsageRow }) {
   const percent = blocked ? 100 : limit !== undefined && limit !== null && spent !== undefined && spent !== null ? Math.min(100, Math.max(0, (spent / limit) * 100)) : null;
   const spendLabel = row.budget.ledger === "unavailable"
     ? "Ledger unavailable"
+    : row.budget.ledger === "per_principal"
+      ? "Per maintainer"
     : row.budget.ledger === "invalid_policy"
       ? "Invalid budget policy"
       : spent === undefined || spent === null
@@ -225,6 +227,11 @@ export function BudgetUsage({ row }: { row: AdminUsageRow }) {
   );
 }
 
+function BudgetBreakdown({ row }: { row: AdminUsageRow }) {
+  const breakdown = row.budget.breakdown ?? [];
+  return <div className="budgetBreakdown"><strong>Per maintainer</strong>{breakdown.length ? breakdown.map((item) => <div key={item.principal}><span>{item.principal}</span><span>{item.spentMicros == null ? "Spend unavailable" : `${formatMicros(item.spentMicros)} spent`}</span><span>{item.remainingMicros == null ? "—" : `${formatMicros(item.remainingMicros)} left`}</span></div>) : <span>No bound maintainers</span>}</div>;
+}
+
 export function UsageHealth({ row }: { row: AdminUsageRow }) {
   if (!row.enabled) return <Status label="revoked" tone="revoked" />;
   if (row.budget.ledger === "unavailable") return <Status label="ledger unavailable" tone="revoked" />;
@@ -232,6 +239,7 @@ export function UsageHealth({ row }: { row: AdminUsageRow }) {
   if (row.budget.ledger === "blocked") return <Status label="budget blocked" tone="revoked" />;
   if (row.budget.ledger === "unmetered") return <Status label="unmetered" tone="neutral" />;
   if (row.budget.ledger === "untracked") return <Status label="untracked" tone="neutral" />;
+  if (row.budget.ledger === "per_principal") return <Status label="per maintainer" tone="active" />;
   if (!row.budget.configured) return <Status label="untracked" tone="neutral" />;
   if (row.budget.remainingMicros !== undefined && row.budget.remainingMicros !== null && row.budget.remainingMicros <= 0) return <Status label="budget blocked" tone="revoked" />;
   if (row.budget.spentMicros === undefined || row.budget.spentMicros === null) return <Status label="awaiting usage" tone="neutral" />;

@@ -239,6 +239,7 @@ export function policyUsageFallback(policy: AccessPolicy): AdminUsageRow {
   const limit = policy.monthlyBudgetMicros;
   const blocked = limit === 0;
   const unmetered = limit === undefined || limit === null;
+  const perPrincipal = !unmetered && policy.budgetScope === "principal";
   return {
     policyId: policy.policyId,
     kid: policy.policyId,
@@ -248,12 +249,14 @@ export function policyUsageFallback(policy: AccessPolicy): AdminUsageRow {
     tokenRole: policy.tokenRole,
     monthlyBudgetMicros: policy.monthlyBudgetMicros,
     requestCostMicros: policy.requestCostMicros,
+    budgetScope: policy.budgetScope ?? "policy",
     budget: {
       configured: !unmetered,
-      ledger: blocked ? "blocked" : unmetered ? "unmetered" : "untracked",
+      ledger: unmetered ? "unmetered" : perPrincipal ? "per_principal" : blocked ? "blocked" : "untracked",
       limitMicros: limit,
-      spentMicros: blocked ? 0 : null,
-      remainingMicros: blocked ? 0 : limit,
+      spentMicros: perPrincipal ? null : blocked ? 0 : null,
+      remainingMicros: perPrincipal ? null : blocked ? 0 : limit,
+      breakdown: perPrincipal ? [] : undefined,
     },
   };
 }

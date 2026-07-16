@@ -1,4 +1,5 @@
 import type { AuthorizedIdentity, BudgetReserveRequest, BudgetSettleRequest, Env, QueueMessage, UsageEvent } from "./types";
+import { budgetLedgerAddress, budgetPrincipal } from "./budget-scope.ts";
 import { logCorrelationError } from "./correlation.ts";
 import { HttpError, randomId } from "./utils.ts";
 
@@ -20,17 +21,16 @@ export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capabili
   if (limit === 0) throw new HttpError(402, "budget_exhausted", "proxy key budget is exhausted");
   if (cost.basis === "flat_fallback") throw new HttpError(400, "pricing_required", "budgeted requests require versioned manifest pricing or a fixed policy request price");
   const reservationId = randomId("budget");
-  const tenant = auth.policy.tenantId ?? "default";
-  const policyId = `${tenant}/${auth.policyId}`;
+  const address = budgetLedgerAddress(auth.policyId, auth.policy, budgetPrincipal(auth));
   const request: BudgetReserveRequest = {
-    policyId,
-    windowKey: `${policyId}/${new Date().toISOString().slice(0, 7)}`,
+    policyId: address.policyId,
+    windowKey: address.windowKey,
     limitMicros: limit,
     costMicros: cost.reserveMicros,
     reservationId,
     capability,
   };
-  const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(`${tenant}:${auth.policyId}`));
+  const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(address.objectName));
   const response = await stub.fetch("https://clawrouter.internal/reserve", { method: "POST", body: JSON.stringify(request) });
   if (!response.ok) throw new Error(`budget reserve returned ${response.status}`);
   const result = await response.json<{ allowed: boolean; chargedMicros: number }>();
@@ -50,11 +50,12 @@ export async function finalizeAccounting(env: Env, auth: AuthorizedIdentity, res
 
 export async function settleBudget(env: Env, auth: AuthorizedIdentity, reservation: BudgetReservation, actualCostMicros: number): Promise<void> {
   if (!reservation.reservationId) return;
-  const tenant = auth.policy.tenantId ?? "default";
+  const principal = budgetPrincipal(auth);
+  const address = budgetLedgerAddress(auth.policyId, auth.policy, principal);
   const body: BudgetSettleRequest = { reservationId: reservation.reservationId, actualCostMicros };
-  const job: QueueMessage = { kind: "budget_settlement", tenant_id: tenant, policy_id: auth.policyId, request: body };
+  const job: QueueMessage = { kind: "budget_settlement", tenant_id: address.tenant, policy_id: auth.policyId, principal_id: principal, request: body };
   try {
-    const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(`${tenant}:${auth.policyId}`));
+    const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(address.objectName));
     const response = await stub.fetch("https://clawrouter.internal/settle", { method: "POST", body: JSON.stringify(body) });
     if (response.ok) return;
   } catch {

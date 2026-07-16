@@ -24,6 +24,7 @@ export interface AccessPolicy {
   tokenRole?: string | null;
   monthlyBudgetMicros?: number | null;
   requestCostMicros?: number | null;
+  budgetScope?: "policy" | "principal";
   retainRequestContent: boolean;
   grantRouting: GrantRoutingPolicy;
 }
@@ -226,8 +227,9 @@ export interface AdminTenantSummary {
   requestCostMicros: number;
 }
 
-export interface BudgetStatus { configured: boolean; ledger: string; windowKey?: string | null; limitMicros?: number | null; spentMicros?: number | null; remainingMicros?: number | null }
-export interface AdminUsageRow { policyId?: string; kid: string; tenantId: string; enabled: boolean; providers: string[]; tokenRole?: string | null; monthlyBudgetMicros?: number | null; requestCostMicros?: number | null; budget: BudgetStatus }
+export interface BudgetPrincipalStatus extends BudgetStatus { principal: string }
+export interface BudgetStatus { configured: boolean; ledger: string; windowKey?: string | null; limitMicros?: number | null; spentMicros?: number | null; remainingMicros?: number | null; breakdown?: BudgetPrincipalStatus[] }
+export interface AdminUsageRow { policyId?: string; kid: string; tenantId: string; enabled: boolean; providers: string[]; tokenRole?: string | null; monthlyBudgetMicros?: number | null; requestCostMicros?: number | null; budgetScope?: "policy" | "principal"; budget: BudgetStatus }
 export interface UsageSummary { requestCount: number; successCount: number; errorCount: number; inputTokens: number; outputTokens: number; totalTokens: number; actualCostMicros: number }
 export interface ProviderUsageSummary { provider: string; requestCount: number; successCount: number; errorCount: number; totalTokens: number; actualCostMicros: number }
 export interface UsageDailySummary { dayStartMs: number; requestCount: number; successCount: number; errorCount: number; totalTokens: number; actualCostMicros: number }

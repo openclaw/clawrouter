@@ -544,6 +544,7 @@ function normalizePolicyRecord(
     tokenRole: typeof value.tokenRole === "string" ? value.tokenRole : null,
     monthlyBudgetMicros: typeof value.monthlyBudgetMicros === "number" ? value.monthlyBudgetMicros : null,
     requestCostMicros: typeof value.requestCostMicros === "number" ? value.requestCostMicros : null,
+    budgetScope: value.budgetScope === "principal" ? "principal" : "policy",
     retainRequestContent:
       typeof value.retainRequestContent === "boolean"
         ? value.retainRequestContent

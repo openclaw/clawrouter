@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add opt-in per-maintainer budget quotas with principal-scoped ledgers, usage status, and admin breakdowns while preserving policy-wide defaults.
 - Resolve native path models for pricing and omit unpriced catalog models for budgeted proxy keys without fixed request pricing.
 - Add OpenAI GPT-5.6 as the default flagship model with current context limits and list pricing.
 - Add canonical request, W3C trace, and session correlation across OpenAI-compatible responses, CORS, metadata-only usage/status events, bounded error logs, and session-stable grant selection.

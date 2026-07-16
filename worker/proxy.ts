@@ -312,7 +312,7 @@ export async function inspectKey(headers: Headers, env: Env): Promise<Response> 
     kid: parsed.kid, mode: parsed.mode, syntaxValid: true, verified: true, verification: "verified",
     enabled: result.policy.enabled, providers: result.policy.providers, tenantId: result.policy.tenantId ?? null,
     tokenRole: result.policy.tokenRole ?? null, monthlyBudgetMicros: result.policy.monthlyBudgetMicros ?? null,
-    requestCostMicros: result.policy.requestCostMicros ?? null,
+    requestCostMicros: result.policy.requestCostMicros ?? null, budgetScope: result.policy.budgetScope ?? "policy",
   });
 }
 

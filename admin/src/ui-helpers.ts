@@ -344,6 +344,7 @@ export function policyFormFromPolicy(key: AccessPolicy): PolicyForm {
     enabled: key.enabled,
     monthlyBudgetMicros: currencyInput(key.monthlyBudgetMicros),
     requestCostMicros: key.requestCostMicros?.toString() ?? "",
+    budgetScope: key.budgetScope ?? "policy",
     providers: key.providers,
     allProviders: key.providers.length === 0,
     retainRequestContent: key.retainRequestContent,
