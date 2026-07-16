@@ -10,6 +10,7 @@ import { contentRetentionDefault } from "./content-retention.ts";
 import { correlateIngressRequest, withRequestId } from "./correlation.ts";
 import { oauthCallback } from "./oauth";
 import { routeCatalog, snapshot } from "./providers";
+import { sessionCredentialsApi } from "./session-credentials";
 import { authenticateProxyKey, inspectKey, proxyManifest, proxyNative, proxyOpenAi } from "./proxy";
 import type { Env, QueueMessage } from "./types";
 import {
@@ -58,6 +59,7 @@ async function route(request: Request, env: Env, context: ExecutionContext): Pro
   if (request.method === "GET" && path === "/v1/session/avatar") return avatarResponse(request, env);
   if (request.method === "GET" && path === "/v1/entitlements") return entitlementResponse(request, env);
   if (request.method === "GET" && path === "/v1/session/usage") return sessionUsage(request, env);
+  if (path === "/v1/session/credentials" || path.startsWith("/v1/session/credentials/")) return sessionCredentialsApi(request, env, path);
   if (request.method === "GET" && path === "/v1/me") return meResponse(request, env);
   if (request.method === "GET" && path === "/v1/usage") return userUsage(request, env);
   if (request.method === "GET" && path === "/v1/models") return modelsResponse(request, env);
@@ -112,7 +114,7 @@ function serviceIndex(env: Env) {
     interface: { root: "/", dashboard: "/dashboard", playground: "/dashboard/playground", admin: "/dashboard/access", account: "/dashboard/users" },
     endpoints: {
       health: "/v1/health", providers: "/v1/providers", routes: "/v1/routes", session: "/v1/session", entitlements: "/v1/entitlements",
-      sessionUsage: "/v1/session/usage", me: "/v1/me", usage: "/v1/usage", models: "/v1/models", catalog: "/v1/catalog",
+      sessionUsage: "/v1/session/usage", sessionCredentials: "/v1/session/credentials", me: "/v1/me", usage: "/v1/usage", models: "/v1/models", catalog: "/v1/catalog",
       anthropicMessages: "/v1/messages", anthropicCountTokens: "/v1/messages/count_tokens", keyInspect: "/v1/key/inspect",
       adminBootstrap: "/v1/admin/bootstrap", adminOverview: "/v1/admin/overview", adminUsers: "/v1/admin/users", adminUsage: "/v1/admin/usage", adminPolicies: "/v1/admin/policies",
       adminCredentials: "/v1/admin/credentials", adminConnections: "/v1/admin/connections", adminAccessUsers: "/v1/admin/access-users",

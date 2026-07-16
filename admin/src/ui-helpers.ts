@@ -82,8 +82,8 @@ export function readyCount(services: ServiceItem[]) {
   return services.filter((service) => service.readiness?.executable).length;
 }
 
-export function generateSecret() {
-  const bytes = new Uint8Array(32);
+export function generateSecret(byteLength = 32) {
+  const bytes = new Uint8Array(byteLength);
   crypto.getRandomValues(bytes);
   return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
 }

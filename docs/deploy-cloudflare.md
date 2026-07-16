@@ -416,6 +416,29 @@ the selected `/v1/playground/proxy/<provider>/<endpoint>` route using the same
 manifest request wrapper as `/v1/proxy/*`. Upstream calls still obey stored
 policy provider allowlists, provider readiness, OAuth grants, and budget limits.
 
+## Session credential API
+
+A verified Cloudflare Access session can manage proxy credentials owned by its
+normalized email. These routes do not require the admin role:
+
+```text
+GET /v1/session/credentials
+PUT /v1/session/credentials/<credential-id>
+POST /v1/session/credentials/<credential-id>/revoke
+```
+
+`GET` returns only the caller's credentials as `credentialId`, `policyId`,
+`enabled`, and `active`. `PUT` accepts `policyId` and `secretSha256`; the Worker
+forces `principalId` to the signed-in email, binds the current policy generation,
+and rejects policies outside the session's effective user and group bindings.
+Credential ids use 4-128 alphanumeric or underscore characters. A principal may
+have at most ten enabled credentials, while rotating an existing owned id remains
+allowed. To bound control-plane storage, old disabled self-service records are
+pruned once a principal reaches 100 retained ids. Existing ids owned by another principal cannot be claimed. Mutation
+requests require a same-origin browser request. The console generates 24 random
+secret bytes, sends only their SHA-256 digest, and reveals the complete
+`clawrouter-live-<credential-id>-<secret>` key once.
+
 ## Admin API
 
 Admin requests use either a verified Cloudflare Access admin session or

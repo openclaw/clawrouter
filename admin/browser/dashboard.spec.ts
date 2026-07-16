@@ -31,6 +31,19 @@ test("keyboard focus remains visible", async ({ page }) => {
   expect(outline).not.toBe("none");
 });
 
+test("self-service keys reveal browser-generated material once and can be revoked", async ({ page }) => {
+  await openDemo(page);
+  const card = page.locator(".myKeysPanel");
+  await card.getByRole("button", { name: "Create key" }).evaluate((button: HTMLButtonElement) => { button.click(); button.click(); });
+  await expect(card.getByText("stored nowhere else")).toBeVisible();
+  await expect(card.locator("code")).toHaveText(/^clawrouter-live-key_[0-9a-f]{16}-[0-9a-f]{48}$/);
+  await expect(card.getByRole("button", { name: "Copy" })).toBeVisible();
+  await expect(card.locator(".myKeysList article")).toHaveCount(1);
+  await card.getByRole("button", { name: "Revoke" }).click();
+  await expect(card.getByText(/revoked/)).toBeVisible();
+  await expect(card.locator("code")).toHaveCount(0);
+});
+
 async function openDemo(page: Page) {
   await page.goto("/?demo=1");
   await expect(page.locator(".appShell")).toBeVisible();

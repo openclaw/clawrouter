@@ -5,9 +5,10 @@ import { useCatalog } from "./hooks/use-catalog";
 import { usePlayground } from "./hooks/use-playground";
 import { useSession } from "./hooks/use-session";
 import { useUsage } from "./hooks/use-usage";
+import { useSelfServiceKeys } from "./hooks/use-self-service-keys";
 import { installAutoRefresh } from "./auto-refresh";
 import { demo } from "./ui-config";
-import { localDemoRole, oauthCallbackStatus, request, settled } from "./ui-helpers";
+import { localDemoRole, oauthCallbackStatus, request, settled, usagePolicyId } from "./ui-helpers";
 import { syntheticUsageTimeline } from "./usage-analytics";
 import type {
   AccessUser,
@@ -27,6 +28,7 @@ export function useConsoleController() {
   const session = useSession();
   const catalog = useCatalog(session.allowDemo);
   const usage = useUsage(session.allowDemo);
+  const selfServiceKeys = useSelfServiceKeys(session.gatewayOrigin, session.demoMode, session.setStatus);
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
   const refreshBackgroundRef = useRef(false);
   const catalogLoadedRef = useRef(false);
@@ -118,12 +120,13 @@ export function useConsoleController() {
         : Promise.all([
           request<ProviderResponse>(session.gatewayOrigin, "/v1/providers"),
           request<RouteCatalog>(session.gatewayOrigin, "/v1/routes"),
-        ]).then(([providerData, routeData]) => ({ providerData, routeData }));
+      ]).then(([providerData, routeData]) => ({ providerData, routeData }));
       const [sessionData, { providerData, routeData }] = await Promise.all([
         request<SessionResponse>(session.gatewayOrigin, "/v1/session"),
         staticCatalog,
       ]);
       session.setValue(sessionData);
+      selfServiceKeys.setPrincipal(sessionData.email ?? "");
       catalog.setProviders(providerData.providers);
       catalog.setRoutes(routeData);
       catalogLoadedRef.current = true;
@@ -162,7 +165,12 @@ export function useConsoleController() {
 
   async function loadAdminData(sessionData: SessionResponse, providerData: ProviderResponse, background: boolean, initialWarnings: string[]) {
     let warnings = initialWarnings;
-    const data = await request<AdminBootstrapResponse>(session.gatewayOrigin, "/v1/admin/bootstrap");
+    const keySnapshot = selfServiceKeys.captureHydration();
+    const [data, sessionUsageResult, sessionCredentialsResult] = await Promise.all([
+      request<AdminBootstrapResponse>(session.gatewayOrigin, "/v1/admin/bootstrap"),
+      settled(() => request<{ policies: AdminUsageRow[] }>(session.gatewayOrigin, "/v1/session/usage")),
+      settled(() => request<{ credentials: AdminBootstrapResponse["credentials"] }>(session.gatewayOrigin, "/v1/session/credentials")),
+    ]);
     access.hydrateAdmin({
       policies: data.policies,
       credentials: data.credentials,
@@ -176,6 +184,8 @@ export function useConsoleController() {
     catalog.mergeReadiness(data.providers);
     usage.setAdminOverview(data.overview);
     usage.setTenantSummaries(data.tenants);
+    if (sessionUsageResult.ok && sessionCredentialsResult.ok) selfServiceKeys.hydrate(sessionUsageResult.value.policies.map(usagePolicyId), sessionCredentialsResult.value.credentials, keySnapshot);
+    else warnings = [...warnings, "personal credentials unavailable"];
     const usageResult = background && (session.view === "home" || session.view === "usage")
       ? await settled(() => request<{ policies?: AdminUsageRow[]; keys?: AdminUsageRow[]; usage: UsageSnapshot }>(session.gatewayOrigin, "/v1/admin/usage"))
       : null;
@@ -191,6 +201,7 @@ export function useConsoleController() {
 
   async function loadUserData(sessionData: SessionResponse, initialWarnings: string[]) {
     let warnings = initialWarnings;
+    const keySnapshot = selfServiceKeys.captureHydration();
     const user: AccessUser = {
       email: sessionData.email ?? "access-user",
       role: sessionData.role,
@@ -202,11 +213,16 @@ export function useConsoleController() {
     access.hydrateUser(user);
     usage.setAdminOverview(null);
     usage.setTenantSummaries([]);
-    const result = await settled(() => request<{ policies: AdminUsageRow[]; usage: UsageSnapshot }>(session.gatewayOrigin, "/v1/session/usage"));
+    const [result, credentialResult] = await Promise.all([
+      settled(() => request<{ policies: AdminUsageRow[]; usage: UsageSnapshot }>(session.gatewayOrigin, "/v1/session/usage")),
+      settled(() => request<{ credentials: AdminBootstrapResponse["credentials"] }>(session.gatewayOrigin, "/v1/session/credentials")),
+    ]);
     if (result.ok) {
       usage.setRows(result.value.policies);
       usage.setSnapshot(result.value.usage);
       usage.setLoaded(true);
+      if (credentialResult.ok) selfServiceKeys.hydrate(result.value.policies.map(usagePolicyId), credentialResult.value.credentials, keySnapshot);
+      else warnings = [...warnings, `personal credentials unavailable: ${credentialResult.error}`];
     } else {
       usage.resetLedger();
       warnings = [...warnings, `quota status unavailable: ${result.error}`];
@@ -215,6 +231,7 @@ export function useConsoleController() {
   }
 
   function loadAdminDemo() {
+    selfServiceKeys.setPrincipal(demo.session.email ?? "");
     session.setValue(demo.session);
     catalog.setProviders(demo.providers);
     catalog.setRoutes(demo.routes);
@@ -224,6 +241,7 @@ export function useConsoleController() {
     usage.setTenantSummaries(demo.tenants);
     usage.setRows(demo.usageRows);
     usage.setSnapshot(demo.usage);
+    selfServiceKeys.hydrate(demo.keys.map((policy) => policy.policyId), demo.credentials.filter((credential) => credential.principalId === demo.session.email));
     usage.setLoaded(true);
     session.setDemoMode(true);
     session.setLastUpdatedAt(Date.now());
@@ -232,6 +250,7 @@ export function useConsoleController() {
 
   function loadUserDemo() {
     const user = demo.users.find((candidate) => candidate.email === "research@example.com") ?? demo.users.find((candidate) => candidate.role === "user")!;
+    selfServiceKeys.setPrincipal(user.email);
     const effective = effectiveAccess(user, demo.keys, demo.bindings, demo.services);
     const providerIds = new Set(effective.services.map((service) => service.provider));
     const providerUsage = demo.usage.providers.filter((provider) => providerIds.has(provider.provider));
@@ -267,13 +286,14 @@ export function useConsoleController() {
     usage.setTenantSummaries([]);
     usage.setRows(effective.policies.map(policyUsageFallback));
     usage.setSnapshot({ ...demo.usage, summary, providers: providerUsage, daily: syntheticUsageTimeline(Date.now(), summary), events: [] });
+    selfServiceKeys.hydrate(effective.policies.map((policy) => policy.policyId), demo.credentials.filter((credential) => credential.principalId === user.email));
     usage.setLoaded(true);
     session.setLastUpdatedAt(Date.now());
     session.setStatus("local user demo loaded");
     session.setDemoMode(true);
   }
 
-  return { session, catalog, access, usage, playground, refresh };
+  return { session, catalog, access, usage, selfServiceKeys, playground, refresh };
 }
 
 export type ConsoleController = ReturnType<typeof useConsoleController>;
