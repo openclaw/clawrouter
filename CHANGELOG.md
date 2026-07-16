@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add a supported Docker self-hosting profile with local workerd persistence, admin API bootstrap, end-to-end smoke coverage, and no Cloudflare account requirement.
 - Add self-service proxy-key creation, rotation, listing, and revocation for signed-in maintainers, constrained to caller-owned credentials and effective policies.
 - Preserve upstream HTTP errors as JSON 4xx/5xx responses before OpenAI-compatible streaming begins while retaining SSE error events after stream commitment.
 - Add opt-in per-maintainer budget quotas with principal-scoped ledgers, usage status, and admin breakdowns while preserving policy-wide defaults.

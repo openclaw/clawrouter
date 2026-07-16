@@ -1,0 +1,11 @@
+.git
+.env*
+**/.env*
+.dev.vars*
+**/.dev.vars*
+.wrangler
+.wrangler*.toml
+**/node_modules
+admin/dist
+playwright-report
+test-results
