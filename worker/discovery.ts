@@ -37,8 +37,9 @@ export async function avatarResponse(request: Request, env: Env): Promise<Respon
 }
 
 export async function modelsResponse(request: Request, env: Env): Promise<Response> {
-  const rows = await clientEntitlements(request, env);
-  if (rows instanceof Response) return rows;
+  const entitlements = await clientEntitlements(request, env);
+  if (entitlements instanceof Response) return entitlements;
+  const rows = entitlements.rows;
   const allowed = new Map(rows.filter((row) => row.allowed && row.readiness.executable).map((row) => [row.provider, row.readiness.executableEndpoints]));
   if (request.headers.has("anthropic-version")) {
     const data = snapshot.providers.flatMap((provider) => provider.models.filter((model) => model.capabilities.includes("llm.messages") && executableCapabilities(provider, model.capabilities, allowed.get(provider.id) ?? []).length).map((model) => ({
@@ -63,8 +64,9 @@ export async function modelsResponse(request: Request, env: Env): Promise<Respon
 }
 
 export async function catalogResponse(request: Request, env: Env): Promise<Response> {
-  const rows = await clientEntitlements(request, env);
-  if (rows instanceof Response) return rows;
+  const entitlements = await clientEntitlements(request, env);
+  if (entitlements instanceof Response) return entitlements;
+  const rows = entitlements.rows;
   const providers = rows.filter((row) => row.allowed && row.provider !== "clawrouter").flatMap((row) => {
     const provider = snapshot.providers.find((candidate) => candidate.id === row.provider);
     if (!provider) return [];
@@ -74,10 +76,7 @@ export async function catalogResponse(request: Request, env: Env): Promise<Respo
       openaiCompatible: row.readiness.executable && provider.class === "openai_compatible", nativeBaseUrl: `/v1/native/${provider.id}`,
       policies: row.policies, readiness: row.readiness, connectionTypes: connectionTypes(provider),
       routes: provider.endpoints.filter((endpoint) => endpoint.native_proxy && endpoints.includes(endpoint.id)).map((endpoint) => ({ endpoint: endpoint.id, methods: endpoint.methods, path: endpoint.path, requestFormat: endpoint.request_format, responseFormat: endpoint.response_format, streaming: endpoint.streaming })),
-      models: provider.models.flatMap((model) => {
-        const capabilities = executableCapabilities(provider, model.capabilities, endpoints);
-        return capabilities.length ? [{ id: model.id, upstream: model.upstream, capabilities, pricing_ref: model.pricing_ref, pricing: model.pricing }] : [];
-      }),
+      models: catalogModels(provider, endpoints, entitlements.proxyPolicy),
     }];
   });
   const fusion = rows.find((row) => row.provider === "clawrouter" && row.allowed);
@@ -182,15 +181,30 @@ function routeExecutable(route: NonNullable<ReturnType<typeof modelRoute>>, rows
   return !!endpoint && row?.allowed === true && row.readiness.executableEndpoints.includes(endpoint.id);
 }
 
-async function clientEntitlements(request: Request, env: Env): Promise<EntitlementRow[] | Response> {
+interface ClientEntitlements {
+  rows: EntitlementRow[];
+  proxyPolicy: AccessPolicyEntry["policy"] | null;
+}
+
+async function clientEntitlements(request: Request, env: Env): Promise<ClientEntitlements | Response> {
   const hasKey = ["authorization", "x-api-key", "x-goog-api-key", "api-key"].some((name) => request.headers.get(name)?.includes("clawrouter-") || request.headers.get(name)?.includes("ocpk_"));
   if (hasKey) {
     const auth = await authenticateProxyKey(request.headers, env);
     if (auth instanceof Response) return auth;
-    return entitlementRowsForEntries([{ policyId: auth.policyId, policy: auth.policy }], env);
+    return { rows: await entitlementRowsForEntries([{ policyId: auth.policyId, policy: auth.policy }], env), proxyPolicy: auth.policy };
   }
   const session = await verifiedAccessSession(request, env);
-  return session ? entitlementRows(session, env) : errorResponse("client_auth_required", "a valid ClawRouter proxy key or Cloudflare Access session is required", 401);
+  return session ? { rows: await entitlementRows(session, env), proxyPolicy: null } : errorResponse("client_auth_required", "a valid ClawRouter proxy key or Cloudflare Access session is required", 401);
+}
+
+export function catalogModels(provider: CompiledProvider, endpoints: string[], proxyPolicy: AccessPolicyEntry["policy"] | null) {
+  const requiresPricing = proxyPolicy?.monthlyBudgetMicros != null && proxyPolicy.requestCostMicros == null;
+  return provider.models.flatMap((model) => {
+    // Budgeted proxy keys fail closed at discovery instead of per-request pricing_required.
+    if (requiresPricing && model.pricing == null) return [];
+    const capabilities = executableCapabilities(provider, model.capabilities, endpoints);
+    return capabilities.length ? [{ id: model.id, upstream: model.upstream, capabilities, pricing_ref: model.pricing_ref, pricing: model.pricing }] : [];
+  });
 }
 
 async function retentionView(session: AccessSession, env: Env) {

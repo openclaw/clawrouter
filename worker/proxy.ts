@@ -224,6 +224,10 @@ export function prepareManifestRequest(provider: CompiledProvider, endpoint: Com
   };
 }
 
+export function prepareNativeRequest(provider: CompiledProvider, endpoint: CompiledEndpoint, body: Record<string, unknown>, path: string, env: Env): { model: CompiledModel | null; body: Record<string, unknown>; pathParams: Record<string, string> } {
+  return prepareManifestRequest(provider, endpoint, body, nativeParams(endpoint, path), env);
+}
+
 function directManifestEnvelope(request: Request, endpoint: CompiledEndpoint): { method: string; pathParams: Record<string, string>; query: Record<string, unknown>; body: Record<string, unknown> } {
   const query = new URL(request.url).searchParams;
   const pathParams: Record<string, string> = {};
@@ -269,15 +273,9 @@ export async function proxyNative(request: Request, env: Env, context: Execution
   const method = request.method.toUpperCase();
   if (!endpoint.methods.includes(method)) return errorResponse("method_not_allowed", `endpoint does not allow ${method}`, 405);
   const body = request.method === "GET" || request.method === "HEAD" ? {} : requestObject(await readJson<unknown>(request));
-  const modelId = typeof body.model === "string" ? body.model : null;
-  const globalModel = modelId ? modelRoute(modelId) : null;
-  if (globalModel && globalModel.provider.id !== provider.id) return errorResponse("model_provider_mismatch", `model ${modelId} does not belong to provider ${provider.id}`, 400);
-  const resolvedModel = modelId ? providerModelRoute(provider, modelId) : null;
-  const model = resolvedModel?.model ?? null;
+  const prepared = prepareNativeRequest(provider, endpoint, body, match[2], env);
   const capability = provider.capabilities.find((item) => item.endpoint === endpoint.id)?.id ?? endpoint.id;
-  const upstreamModel = model ? resolvedUpstreamModel(provider, model, env) : null;
-  const transformed = model ? transformRequestBody(provider, endpoint.path, upstreamModel!, { ...body, model: upstreamModel }, env) : body;
-  return proxySelected(request, env, context, "proxy_key", { provider, endpoint, model, capability, body: transformed, pathParams: nativeParams(endpoint, match[2]), method }, searchParamsRecord(new URL(request.url).searchParams), preauthenticated);
+  return proxySelected(request, env, context, "proxy_key", { provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method }, searchParamsRecord(new URL(request.url).searchParams), preauthenticated);
 }
 
 export async function authenticateProxyKey(headers: Headers, env: Env): Promise<AuthorizedIdentity | Response> {
@@ -501,7 +499,7 @@ async function finalizeResponse(response: Response, env: Env, auth: AuthorizedId
 type Cost = EstimatedCost;
 type Tokens = UsageTokens;
 
-function estimateCost(model: CompiledModel | null, body: Record<string, unknown>, fixed: number | null | undefined, capability: string): Cost {
+export function estimateCost(model: CompiledModel | null, body: Record<string, unknown>, fixed: number | null | undefined, capability: string): Cost {
   if (capability === "llm.count_tokens") return { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 };
   if (fixed != null) return { reserveMicros: fixed, basis: "policy_fixed", inputTokens: null, outputTokens: null };
   const pricing = model?.pricing;
