@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.1.0 - 2026-07-16
 
 First tagged release: a provider-neutral API gateway and router for OpenClaw services — TypeScript Worker data plane, Durable Object budget and usage ledgers, policy-driven access control with Cloudflare Access/GitHub identity, a management console, and a Docker self-hosting profile.
