@@ -1,4 +1,5 @@
 import type { BudgetReserveRequest, BudgetSettleRequest, Env, QueueMessage, UsageEvent } from "./types";
+import { budgetLedgerAddress } from "./budget-scope.ts";
 import { emptyUsageSnapshot, mergeUsageSnapshots, usageCutoffs, usageDayMs, usageShardName, type UsageSnapshot } from "./usage-sharding.ts";
 import { errorResponse, json } from "./utils.ts";
 
@@ -160,7 +161,8 @@ export async function queue(batch: MessageBatch<QueueMessage>, env: Env): Promis
       if ("type" in message.body) response = await usageStub(env, message.body.tenant_id, message.body.policy_id).fetch("https://clawrouter.internal/ingest", { method: "POST", body: JSON.stringify(message.body) });
       else {
         const job = message.body;
-        const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(`${job.tenant_id}:${job.policy_id}`));
+        const objectName = `${job.tenant_id}:${job.policy_id}${job.principal_id ? `:${job.principal_id}` : ""}`;
+        const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(objectName));
         response = await stub.fetch("https://clawrouter.internal/settle", { method: "POST", body: JSON.stringify(job.request) });
       }
       if (!response.ok) throw new Error(`ledger queue write returned ${response.status}`);
@@ -195,21 +197,22 @@ async function currentUsageSnapshot(env: Env, tenantId: string, policyId: string
   return response.json<UsageSnapshot>();
 }
 
-export async function budgetStatus(env: Env, policyId: string, policy: { tenantId?: string | null; monthlyBudgetMicros?: number | null }) {
+export async function budgetStatus(env: Env, policyId: string, policy: { tenantId?: string | null; monthlyBudgetMicros?: number | null; budgetScope?: "policy" | "principal" }, principal?: string | null) {
   const limit = policy.monthlyBudgetMicros;
   if (limit == null) return { configured: false, ledger: "unmetered", windowKey: null, limitMicros: null, spentMicros: null, remainingMicros: null };
-  const tenant = policy.tenantId ?? "default", qualifiedId = `${tenant}/${policyId}`, windowKey = `${qualifiedId}/${new Date().toISOString().slice(0, 7)}`;
-  if (limit === 0) return { configured: true, ledger: "blocked", windowKey, limitMicros: 0, spentMicros: 0, remainingMicros: 0 };
+  if (policy.budgetScope === "principal" && !principal) return { configured: true, ledger: "per_principal", windowKey: null, limitMicros: limit, spentMicros: null, remainingMicros: null };
+  const address = budgetLedgerAddress(policyId, policy, principal);
+  if (limit === 0) return { configured: true, ledger: "blocked", windowKey: address.windowKey, limitMicros: 0, spentMicros: 0, remainingMicros: 0 };
   try {
-    const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(`${tenant}:${policyId}`));
+    const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(address.objectName));
     const url = new URL("https://clawrouter.internal/status");
-    url.searchParams.set("policy_id", qualifiedId); url.searchParams.set("window_key", windowKey); url.searchParams.set("limit_micros", String(limit));
+    url.searchParams.set("policy_id", address.policyId); url.searchParams.set("window_key", address.windowKey); url.searchParams.set("limit_micros", String(limit));
     const response = await stub.fetch(url);
     if (!response.ok) throw new Error(`budget status returned ${response.status}`);
     const status = await response.json<{ spentMicros: number; remainingMicros: number }>();
-    return { configured: true, ledger: "durable_object", windowKey, limitMicros: limit, spentMicros: status.spentMicros, remainingMicros: status.remainingMicros };
+    return { configured: true, ledger: "durable_object", windowKey: address.windowKey, limitMicros: limit, spentMicros: status.spentMicros, remainingMicros: status.remainingMicros };
   } catch {
-    return { configured: true, ledger: "unavailable", windowKey, limitMicros: limit, spentMicros: null, remainingMicros: null };
+    return { configured: true, ledger: "unavailable", windowKey: address.windowKey, limitMicros: limit, spentMicros: null, remainingMicros: null };
   }
 }
 

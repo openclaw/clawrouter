@@ -1,5 +1,17 @@
 /* Usage ledger: audit table cells, budget tracks, attention rail. */
 
+.budgetBreakdown {
+  display: grid;
+  gap: 6px;
+  padding: 10px 16px 12px;
+}
+
+.budgetBreakdown > div {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) minmax(120px, 0.6fr) minmax(120px, 0.6fr);
+  gap: 12px;
+}
+
 .usageLayout {
   grid-template-columns: minmax(0, 1fr) minmax(286px, 318px);
 }

@@ -77,6 +77,7 @@ export const defaultPolicy: PolicyForm = {
   enabled: true,
   monthlyBudgetMicros: "100",
   requestCostMicros: "1000",
+  budgetScope: "policy",
   providers: ["openai", "tavily"],
   allProviders: false,
   retainRequestContent: true,

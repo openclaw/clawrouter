@@ -89,6 +89,7 @@ export interface AccessPolicy {
   tokenRole?: string | null;
   monthlyBudgetMicros?: number | null;
   requestCostMicros?: number | null;
+  budgetScope?: "policy" | "principal";
   retainRequestContent: boolean;
   grantRouting: GrantRoutingPolicy;
 }
@@ -293,7 +294,7 @@ export interface UsageEvent {
   status: "success" | "provider_error" | "client_error" | "denied" | "timeout";
 }
 
-export type QueueMessage = UsageEvent | { kind: "budget_settlement"; tenant_id: string; policy_id: string; request: BudgetSettleRequest };
+export type QueueMessage = UsageEvent | { kind: "budget_settlement"; tenant_id: string; policy_id: string; principal_id?: string | null; request: BudgetSettleRequest };
 
 export interface BudgetReserveRequest {
   policyId: string;

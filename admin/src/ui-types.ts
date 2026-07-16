@@ -96,6 +96,7 @@ export interface PolicyForm {
   enabled: boolean;
   monthlyBudgetMicros: string;
   requestCostMicros: string;
+  budgetScope: NonNullable<AccessPolicy["budgetScope"]>;
   providers: string[];
   allProviders: boolean;
   retainRequestContent: boolean;

@@ -58,6 +58,7 @@ export function usePolicyAdmin({ allowDemo, gatewayOrigin, session, demoMode, pr
         tokenRole: policyForm.tokenRole || null,
         monthlyBudgetMicros: optionalCurrencyMicros(policyForm.monthlyBudgetMicros) ?? null,
         requestCostMicros: optionalNumber(policyForm.requestCostMicros) ?? null,
+        budgetScope: policyForm.budgetScope,
         retainRequestContent: policyForm.retainRequestContent,
         grantRouting: {
           strategy: policyForm.grantStrategy,

@@ -138,20 +138,39 @@ function tenantsFrom(policies: AccessPolicyEntry[], credentials: ProxyCredential
 }
 
 async function adminUsage(env: Env): Promise<Response> {
-  const policies = await listPolicies(env);
-  const rows = await Promise.all(policies.map(async (entry) => ({ ...legacyKeyResponse(entry), budget: await budgetStatus(env, entry) })));
+  const [policies, credentials, users, bindings] = await Promise.all([listPolicies(env), listCredentials(env), listUsers(env), listBindings(env)]);
+  const principals = budgetPrincipalsByPolicy(credentials, users, bindings);
+  const rows = await Promise.all(policies.map(async (entry) => ({ ...legacyKeyResponse(entry), budget: await adminBudgetStatus(env, entry, principals.get(entry.policyId) ?? []) })));
   return privateJson({ policies: rows, keys: rows, usage: await usageSnapshots(env, policies.map((entry) => ({ policyId: entry.policyId, tenantId: entry.policy.tenantId ?? "default" }))) });
 }
 
-async function budgetStatus(env: Env, entry: AccessPolicyEntry) {
-  const limit = entry.policy.monthlyBudgetMicros;
-  if (limit == null) return { configured: false, ledger: "unmetered", windowKey: null, limitMicros: null, spentMicros: null, remainingMicros: null };
-  const tenant = entry.policy.tenantId ?? "default", policyId = `${tenant}/${entry.policyId}`, windowKey = `${policyId}/${new Date().toISOString().slice(0, 7)}`;
-  if (limit === 0) return { configured: true, ledger: "blocked", windowKey, limitMicros: 0, spentMicros: 0, remainingMicros: 0 };
-  const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(`${tenant}:${entry.policyId}`));
-  const url = new URL("https://clawrouter.internal/status"); url.searchParams.set("policy_id", policyId); url.searchParams.set("window_key", windowKey); url.searchParams.set("limit_micros", String(limit));
-  const status = await (await stub.fetch(url)).json<{ spentMicros: number; remainingMicros: number }>();
-  return { configured: true, ledger: "durable_object", windowKey, limitMicros: limit, ...status };
+export async function adminBudgetStatus(env: Env, entry: AccessPolicyEntry, principals: string[]) {
+  const status = await policyBudgetStatus(env, entry.policyId, entry.policy);
+  if (status.ledger !== "per_principal") return status;
+  const breakdown = await Promise.all(principals.map(async (principal) => ({ principal, ...await policyBudgetStatus(env, entry.policyId, entry.policy, principal) })));
+  return { ...status, breakdown };
+}
+
+export function budgetPrincipalsByPolicy(credentialEntries: ProxyCredentialEntry[], users: AccessControlUser[], bindings: PolicyBinding[]): Map<string, string[]> {
+  const principals = new Map<string, Set<string>>();
+  const add = (policyId: string, principal: string) => {
+    const values = principals.get(policyId) ?? new Set<string>();
+    values.add(principal);
+    principals.set(policyId, values);
+  };
+  for (const entry of credentialEntries) add(entry.credential.policyId, entry.credential.principalId ?? entry.credentialId);
+  const groupPolicies = new Map<string, Set<string>>();
+  for (const binding of bindings) {
+    if (!binding.enabled) continue;
+    if (binding.principalType === "user") add(binding.policyId, binding.principalId);
+    else {
+      const policyIds = groupPolicies.get(binding.principalId) ?? new Set<string>();
+      policyIds.add(binding.policyId);
+      groupPolicies.set(binding.principalId, policyIds);
+    }
+  }
+  for (const user of users) for (const group of user.record.groups ?? []) for (const policyId of groupPolicies.get(group) ?? []) add(policyId, user.email);
+  return new Map([...principals].map(([policyId, values]) => [policyId, [...values].sort()]));
 }
 
 async function credentialResponses(env: Env) {
@@ -404,7 +423,7 @@ async function legacyKeyMutation(request: Request, env: Env, rest: string): Prom
   return credentialMutation(new Request(request.url, { method: "PUT", headers: request.headers, body: JSON.stringify({ secretSha256, policyId: id, enabled: body.enabled }) }), env, id);
 }
 
-function normalizePolicy(
+export function normalizePolicy(
   value: unknown,
   existing: AccessPolicy | undefined,
   retainRequestContentDefault: boolean,
@@ -420,8 +439,10 @@ function normalizePolicy(
   if (providers.some((id) => !snapshot.providers.some((provider) => provider.id === id))) throw new HttpError(400, "invalid_policy", "policy contains an unknown provider");
   const monthlyBudgetMicros = normalizeBudgetValue(body.monthlyBudgetMicros, "monthlyBudgetMicros");
   const requestCostMicros = normalizeBudgetValue(body.requestCostMicros, "requestCostMicros");
+  const budgetScope = body.budgetScope ?? existing?.budgetScope ?? "policy";
+  if (budgetScope !== "policy" && budgetScope !== "principal") throw new HttpError(400, "invalid_policy", "budgetScope must be policy or principal");
   const grantRouting = normalizeGrantRouting(body.grantRouting, existing?.grantRouting);
-  return { enabled: policyBoolean(body.enabled, "enabled", true), generation: existing?.generation ?? randomId("policy"), providers, tenantId: policyString(body.tenantId, "tenantId", "default"), tokenRole: policyString(body.tokenRole, "tokenRole", "service"), monthlyBudgetMicros, requestCostMicros, retainRequestContent: policyBoolean(body.retainRequestContent, "retainRequestContent", existing?.retainRequestContent ?? retainRequestContentDefault), grantRouting };
+  return { enabled: policyBoolean(body.enabled, "enabled", true), generation: existing?.generation ?? randomId("policy"), providers, tenantId: policyString(body.tenantId, "tenantId", "default"), tokenRole: policyString(body.tokenRole, "tokenRole", "service"), monthlyBudgetMicros, requestCostMicros, budgetScope, retainRequestContent: policyBoolean(body.retainRequestContent, "retainRequestContent", existing?.retainRequestContent ?? retainRequestContentDefault), grantRouting };
 }
 
 function normalizeGrantRouting(value: unknown, existing?: AccessPolicy["grantRouting"]): AccessPolicy["grantRouting"] {
@@ -579,7 +600,7 @@ function normalizeGrant(value: unknown, existing: UpstreamGrant | null): Upstrea
 }
 function revokeGrant(value: UpstreamGrant): UpstreamGrant { const { credential: _, credentials: __, accessToken: ___, refreshToken: ____, ...safe } = value; return { ...safe, enabled: false, credentials: {}, updatedAt: nowIso(), revokedAt: nowIso() }; }
 
-function policyResponse(entry: AccessPolicyEntry) { return { policyId: entry.policyId, enabled: entry.policy.enabled, providers: entry.policy.providers, tenantId: entry.policy.tenantId ?? null, tokenRole: entry.policy.tokenRole ?? null, monthlyBudgetMicros: entry.policy.monthlyBudgetMicros ?? null, requestCostMicros: entry.policy.requestCostMicros ?? null, retainRequestContent: entry.policy.retainRequestContent !== false, grantRouting: grantRoutingPolicy(entry.policy.grantRouting) }; }
+function policyResponse(entry: AccessPolicyEntry) { return { policyId: entry.policyId, enabled: entry.policy.enabled, providers: entry.policy.providers, tenantId: entry.policy.tenantId ?? null, tokenRole: entry.policy.tokenRole ?? null, monthlyBudgetMicros: entry.policy.monthlyBudgetMicros ?? null, requestCostMicros: entry.policy.requestCostMicros ?? null, budgetScope: entry.policy.budgetScope ?? "policy", retainRequestContent: entry.policy.retainRequestContent !== false, grantRouting: grantRoutingPolicy(entry.policy.grantRouting) }; }
 function legacyKeyResponse(entry: AccessPolicyEntry) { return { kid: entry.policyId, ...policyResponse(entry) }; }
 function userResponse(user: AccessControlUser) { return { email: user.email, role: "user" as const, tenantId: user.record.tenantId ?? "default", enabled: user.record.enabled ?? true, groups: user.record.groups ?? [], contentRetentionDisabled: user.record.contentRetentionDisabled ?? false }; }
 function grantResponse(key: string, grant: UpstreamGrant) { const parts = key.split("/"), tenant = parts[1] === "tenants"; return { key, scope: tenant ? "tenants" as const : "policies" as const, scopeId: tenant ? parts[2] : parts[1], tokenRef: tenant ? parts[3] : parts[2], version: grant.version ?? 1, enabled: grant.enabled ?? true, kind: grant.kind ?? "oauth", provider: grant.provider ?? null, label: grant.label ?? null, tokenType: grant.tokenType ?? "Bearer", expiresAt: grant.expiresAt ?? null, scopes: grant.scopes ?? [], accountId: grant.accountId ?? null, subscription: grant.subscription ?? null, createdAt: grant.createdAt ?? null, updatedAt: grant.updatedAt ?? null, revokedAt: grant.revokedAt ?? null, hasCredential: !!grant.credential || Object.keys(grant.credentials ?? {}).length > 0, credentialFields: Object.keys(grant.credentials ?? {}).sort(), hasAccessToken: !!grant.accessToken, hasRefreshToken: !!grant.refreshToken, refreshConfigured: !!grant.refresh, refreshTokenUrl: grant.refresh?.tokenUrl ?? null, clientIdConfig: grant.refresh?.clientIdConfig ?? null, clientSecretConfig: grant.refresh?.clientSecretConfig ?? null, usable: grant.enabled !== false && !!(grant.credential || grant.accessToken || Object.keys(grant.credentials ?? {}).length) }; }

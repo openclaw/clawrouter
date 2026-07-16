@@ -548,7 +548,8 @@ The stored policy and credential shapes are separate:
   "tenantId": "default",
   "tokenRole": "service",
   "monthlyBudgetMicros": 100000000,
-  "requestCostMicros": 1000
+  "requestCostMicros": 1000,
+  "budgetScope": "policy"
 }
 ```
 
@@ -571,6 +572,12 @@ fixed per-request override. When it is omitted, models with versioned manifest
 pricing reserve a conservative token cost and settle against provider-reported
 usage. Any budgeted route without manifest pricing fails closed with
 `pricing_required`; unbudgeted routes retain the one-micro fallback.
+
+`budgetScope` may be `policy` or `principal` and defaults to `policy`, which
+keeps one shared monthly pool for service-token policies. Use `principal` for
+maintainer policies: proxy credentials use their `principalId` (or credential
+id when unowned), while Access sessions use the signed-in email, so each
+maintainer receives an independent monthly window.
 
 When upgrading an existing policy, either add versioned pricing for every
 route it can reach or set `requestCostMicros` before deploying this behavior.
