@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add self-service proxy-key creation, rotation, listing, and revocation for signed-in maintainers, constrained to caller-owned credentials and effective policies.
+- Preserve upstream HTTP errors as JSON 4xx/5xx responses before OpenAI-compatible streaming begins while retaining SSE error events after stream commitment.
 - Add opt-in per-maintainer budget quotas with principal-scoped ledgers, usage status, and admin breakdowns while preserving policy-wide defaults.
 - Resolve native path models for pricing and omit unpriced catalog models for budgeted proxy keys without fixed request pricing.
 - Add OpenAI GPT-5.6 as the default flagship model with current context limits and list pricing.
