@@ -13,7 +13,7 @@ export function UserAvatar({ email }: { email?: string | null }) {
   );
 }
 
-export function DashboardScreen({ session, services, policies, credentials, users, tenants, overview, usageRows, usage, usageLoaded, onOpenCatalog, onOpenPlayground, onOpenUsage, onOpenAccess }: {
+export function DashboardScreen({ session, services, policies, credentials, users, tenants, overview, usageRows, usage, usageLoaded, myCredentials, myPolicyIds, myIssuedKey, myKeyError, myKeysBusy, onIssueMyKey, onRevokeMyKey, onOpenCatalog, onOpenPlayground, onOpenUsage, onOpenAccess }: {
   session: SessionResponse;
   services: ServiceItem[];
   policies: AccessPolicy[];
@@ -24,6 +24,13 @@ export function DashboardScreen({ session, services, policies, credentials, user
   usageRows: AdminUsageRow[];
   usage: UsageSnapshot;
   usageLoaded: boolean;
+  myCredentials: ProxyCredential[];
+  myPolicyIds: string[];
+  myIssuedKey: string;
+  myKeyError: string;
+  myKeysBusy: boolean;
+  onIssueMyKey: (policyId: string, credentialId?: string) => Promise<void>;
+  onRevokeMyKey: (credentialId: string) => Promise<void>;
   onOpenCatalog: () => void;
   onOpenPlayground: () => void;
   onOpenUsage: () => void;
@@ -78,6 +85,7 @@ export function DashboardScreen({ session, services, policies, credentials, user
       </div>
 
       <div className="dashboardGrid">
+        <MyKeysCard credentials={myCredentials} policyIds={myPolicyIds} issuedKey={myIssuedKey} error={myKeyError} busy={myKeysBusy} onIssue={onIssueMyKey} onRevoke={onRevokeMyKey} />
         <section className="dashboardPanel servicePanel">
           <DashboardPanelHeader eyebrow={isAdmin ? "service estate" : "your access"} title={isAdmin ? "Provider readiness" : "Services you can use"} meta={`${isAdmin ? configuredServices.length : usableServices.length} ready`} action="View catalog" onAction={onOpenCatalog} />
           <div className="serviceSpectrum" role="img" aria-label={`${servicePercent}% of ${isAdmin ? "catalog services are configured" : "granted services are usable"}`}>
@@ -136,6 +144,38 @@ export function DashboardScreen({ session, services, policies, credentials, user
         ) : null}
       </div>
     </div>
+  );
+}
+
+export function MyKeysCard({ credentials, policyIds, issuedKey, error, busy, onIssue, onRevoke }: {
+  credentials: ProxyCredential[];
+  policyIds: string[];
+  issuedKey: string;
+  error: string;
+  busy: boolean;
+  onIssue: (policyId: string, credentialId?: string) => Promise<void>;
+  onRevoke: (credentialId: string) => Promise<void>;
+}) {
+  const [policyId, setPolicyId] = useState("");
+  const selectedPolicy = policyIds.includes(policyId) ? policyId : policyIds[0] ?? "";
+  return (
+    <section className="dashboardPanel myKeysPanel">
+      <DashboardPanelHeader eyebrow="personal access" title="My keys" meta={`${credentials.filter((credential) => credential.enabled).length}/${credentials.length} enabled`} />
+      <p className="panelIntro">Create proxy keys bound to your signed-in identity and one of your policies.</p>
+      {error ? <InlineNote>{error}</InlineNote> : null}
+      {issuedKey ? <div className="issuedKey"><div><span>copy now · shown once · stored nowhere else</span><code>{issuedKey}</code></div><button type="button" className="buttonSecondary" onClick={() => void navigator.clipboard?.writeText(issuedKey)}>Copy</button></div> : null}
+      <div className="myKeysCreate">
+        <label><span>policy</span><select value={selectedPolicy} onChange={(event) => setPolicyId(event.target.value)} disabled={!policyIds.length || busy}>{policyIds.map((id) => <option key={id} value={id}>{id}</option>)}</select></label>
+        <button type="button" disabled={!selectedPolicy || busy} onClick={() => void onIssue(selectedPolicy)}><Plus aria-hidden="true" /> Create key</button>
+      </div>
+      <div className="myKeysList">
+        {credentials.map((credential) => <article key={credential.credentialId}>
+          <span><strong>{credential.credentialId}</strong><small>{credential.policyId} · {credential.active ? "active" : credential.enabled ? "stale" : "revoked"}</small></span>
+          <span><button type="button" className="buttonSecondary" disabled={busy || !credential.enabled} onClick={() => void onIssue(credential.policyId, credential.credentialId)}>Rotate</button><button type="button" className="buttonDanger" disabled={busy || !credential.enabled} onClick={() => void onRevoke(credential.credentialId)}>Revoke</button></span>
+        </article>)}
+        {!credentials.length ? <div className="dashboardEmpty"><KeyRound aria-hidden="true" /><strong>No personal keys</strong><p>Create one to use your policy from OpenClaw or another API client.</p></div> : null}
+      </div>
+    </section>
   );
 }
 
@@ -264,7 +304,7 @@ export function GrantChips({ names }: { names: string[] }) {
   );
 }
 import React, { useEffect, useState } from "react";
-import { Activity, ArrowUpRight, BarChart3, Boxes, Bug, CheckCircle2, ChevronRight, CircleSlash2, FlaskConical, Play, Plus, Search, ServerCog, ShieldCheck, SlidersHorizontal, Users } from "lucide-react";
+import { Activity, ArrowUpRight, BarChart3, Boxes, Bug, CheckCircle2, ChevronRight, CircleSlash2, FlaskConical, KeyRound, Play, Plus, Search, ServerCog, ShieldCheck, SlidersHorizontal, Users } from "lucide-react";
 import { grantNamesForService, playgroundBlockedForService, policyCoversProvider, policyUsageFallback, readinessLabel, serviceOutcome } from "../domain";
 import { BrandMark, EntityName, InlineNote, InspectorHeader, OutcomeStatus, PanelTitle, ReadinessStatus, Status, kindIcon, kindLabel } from "../components";
 import { ProviderUsageChart, TrafficAreaChart } from "../analytics-charts";

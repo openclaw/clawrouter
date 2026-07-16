@@ -7,6 +7,7 @@ import { errorResponse, json, normalizeEmail, readJson } from "./utils.ts";
 
 type Principal = { principalType: "user" | "group"; principalId: string };
 type Seed = { principal: Principal; bindings: PolicyBinding[] };
+type CredentialPutRequest = ProxyCredentialEntry & { guard?: { principalId: string; maxEnabled: number; maxTotal: number; requireExisting: boolean } };
 
 export class PolicyBindingIndexObject implements DurableObject {
   private state: DurableObjectState;
@@ -42,7 +43,7 @@ export class PolicyBindingIndexObject implements DurableObject {
       if (path === "/credentials/resolve") return json(this.resolveCredentials((await readJson<{ credentialIds: string[] }>(request)).credentialIds));
       if (path === "/credentials/initialize") { this.initializeCredentials(await readJson<ProxyCredentialEntry[]>(request)); return new Response("initialized"); }
       if (path === "/credentials/initialize-all") { this.initializeCredentials(await readJson<ProxyCredentialEntry[]>(request)); this.putMeta("credentials_global_initialized"); return new Response("initialized"); }
-      if (path === "/credentials/put") { this.putCredential(await readJson<ProxyCredentialEntry>(request)); return new Response("updated"); }
+      if (path === "/credentials/put") return json(this.putCredentialGuarded(await readJson<CredentialPutRequest>(request)));
       if (path === "/credentials/list") return json({ initialized: this.hasMeta("credentials_global_initialized"), credentials: this.listCredentials() });
       if (path === "/connections/resolve") return json(this.resolveConnections((await readJson<{ providerIds: string[] }>(request)).providerIds));
       if (path === "/connections/initialize") { this.initializeConnections(await readJson<ProviderConnection[]>(request)); return new Response("initialized"); }
@@ -193,6 +194,26 @@ export class PolicyBindingIndexObject implements DurableObject {
   private putCredential(entry: ProxyCredentialEntry): void {
     this.sql.exec("INSERT OR REPLACE INTO proxy_credentials (credential_id, credential_json) VALUES (?, ?)", entry.credentialId, JSON.stringify(entry.credential));
   }
+  private putCredentialGuarded(entry: CredentialPutRequest): { outcome: "updated" | "owned_elsewhere" | "limit_reached" | "missing" } {
+    const existing = this.getCredential(entry.credentialId);
+    const guard = entry.guard;
+    if (guard) {
+      if (guard.requireExisting && !existing) return { outcome: "missing" };
+      if (existing && existing.credential.principalId !== guard.principalId) return { outcome: "owned_elsewhere" };
+      const owned = this.listCredentials().filter((candidate) => candidate.credentialId !== entry.credentialId && candidate.credential.principalId === guard.principalId);
+      const enabled = owned.filter((candidate) => candidate.credential.enabled).length;
+      if (entry.credential.enabled && enabled >= guard.maxEnabled) return { outcome: "limit_reached" };
+      if (!existing && owned.length >= guard.maxTotal) {
+        const pruneCount = owned.length - guard.maxTotal + 1;
+        const revoked = owned.filter((candidate) => !candidate.credential.enabled).sort((left, right) => left.credentialId.localeCompare(right.credentialId));
+        if (revoked.length < pruneCount) return { outcome: "limit_reached" };
+        for (const candidate of revoked.slice(0, pruneCount)) this.deleteCredential(candidate.credentialId);
+      }
+    }
+    this.putCredential(entry);
+    return { outcome: "updated" };
+  }
+  private deleteCredential(id: string): void { this.sql.exec("DELETE FROM proxy_credentials WHERE credential_id = ?", id); }
   private initializeCredentials(entries: ProxyCredentialEntry[]): void { for (const entry of entries) if (!this.getCredential(entry.credentialId)) this.putCredential(entry); }
   private getCredential(id: string): ProxyCredentialEntry | null {
     const row = rows<{ credential_json: string }>(this.sql.exec("SELECT credential_json FROM proxy_credentials WHERE credential_id = ?", id))[0];

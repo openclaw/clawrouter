@@ -377,6 +377,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
         // Keep the first provider response when no alternate grant is ready or its request fails.
       }
     }
+    response = await normalizePreStreamError(response, selection.body.stream === true);
   } catch (error) {
     clearTimeout(timeout);
     context.waitUntil(finalizeAccounting(env, auth, reservation, 0, usageEvent(auth, selection, request, requestId, started, 502, null, cost, reservation, content, error instanceof DOMException && error.name === "AbortError" ? "timeout" : "provider_error", 0, compound)));
@@ -392,6 +393,163 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   if (grantFailover) outputHeaders.set("x-clawrouter-grant-failover", "1");
   outputHeaders.set("x-clawrouter-content-retention", auth.policy.retainRequestContent !== false && !auth.contentRetentionDisabled ? "on; retention-days=30" : "off");
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers: outputHeaders });
+}
+
+export async function normalizePreStreamError(response: Response, streamingRequested: boolean): Promise<Response> {
+  if (!streamingRequested) return response;
+  const eventStream = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream") === true;
+  if (response.status >= 400) {
+    if (eventStream && response.body) return normalizeFirstSseEvent(response, response.status);
+    const body = await readLimited(response, 64 * 1024).catch(() => "");
+    return mappedUpstreamError(response, upstreamError(body), response.status);
+  }
+  if (!response.ok || !eventStream || !response.body) return response;
+  return normalizeFirstSseEvent(response, null);
+}
+
+const FIRST_SSE_EVENT_LIMIT = 8 * 1024;
+
+async function normalizeFirstSseEvent(response: Response, errorStatus: number | null): Promise<Response> {
+  const reader = response.body!.getReader();
+  const chunks: Uint8Array[] = [];
+  const sniffed = new Uint8Array(FIRST_SSE_EVENT_LIMIT);
+  let sniffedLength = 0;
+  let eventStart = 0;
+  while (true) {
+    const { done, value } = await reader.read();
+    if (value?.byteLength) {
+      chunks.push(value);
+      const copyLength = Math.min(value.byteLength, FIRST_SSE_EVENT_LIMIT - sniffedLength);
+      if (copyLength > 0) {
+        sniffed.set(value.subarray(0, copyLength), sniffedLength);
+        sniffedLength += copyLength;
+      }
+    }
+    while (eventStart < sniffedLength) {
+      const boundary = sseEventBoundary(sniffed, eventStart, sniffedLength);
+      if (!boundary) break;
+      const event = classifySseEvent(sniffed.subarray(eventStart, boundary.start));
+      eventStart = boundary.end;
+      if (event.kind === "empty") continue;
+      if (errorStatus !== null || event.kind === "error") {
+        await reader.cancel().catch(() => undefined);
+        const upstream = event.upstream;
+        const status = errorStatus ?? (typeof upstream.code === "number" && Number.isInteger(upstream.code) && upstream.code >= 400 && upstream.code <= 599 ? upstream.code : 502);
+        return mappedUpstreamError(response, upstream, status);
+      }
+      return replayResponse(response, reader, chunks, done);
+    }
+    if (done || sniffedLength === FIRST_SSE_EVENT_LIMIT) {
+      if (errorStatus === null) return replayResponse(response, reader, chunks, done);
+      if (!done) await reader.cancel().catch(() => undefined);
+      return mappedUpstreamError(response, {}, errorStatus);
+    }
+  }
+}
+
+function replayResponse(response: Response, reader: ReadableStreamDefaultReader<Uint8Array>, chunks: Uint8Array[], readerDone: boolean): Response {
+  let chunkIndex = 0;
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      if (chunkIndex < chunks.length) {
+        controller.enqueue(chunks[chunkIndex++]);
+        return;
+      }
+      if (readerDone) {
+        controller.close();
+        return;
+      }
+      try {
+        const { done, value } = await reader.read();
+        if (done) controller.close();
+        else controller.enqueue(value);
+      } catch (error) { controller.error(error); }
+    },
+    cancel(reason) { return reader.cancel(reason); },
+  });
+  return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
+}
+
+function sseEventBoundary(bytes: Uint8Array, start: number, length: number): { start: number; end: number } | null {
+  let lineStart = start;
+  for (let index = start; index < length; index += 1) {
+    if (bytes[index] !== 10 && bytes[index] !== 13) continue;
+    const next = bytes[index] === 13 && index + 1 < length && bytes[index + 1] === 10 ? index + 2 : index + 1;
+    if (index === lineStart) return { start: lineStart, end: next };
+    lineStart = next;
+    index = next - 1;
+  }
+  return null;
+}
+
+function classifySseEvent(bytes: Uint8Array): { kind: "empty" } | { kind: "healthy" | "error"; upstream: ReturnType<typeof upstreamError> } {
+  let eventType = "";
+  const dataLines: string[] = [];
+  for (const line of new TextDecoder().decode(bytes).split(/\r\n|\r|\n/)) {
+    if (!line || line.startsWith(":")) continue;
+    const colon = line.indexOf(":");
+    const field = colon < 0 ? line : line.slice(0, colon);
+    let value = colon < 0 ? "" : line.slice(colon + 1);
+    if (value.startsWith(" ")) value = value.slice(1);
+    if (field === "event") eventType = value;
+    else if (field === "data") dataLines.push(value);
+  }
+  const data = dataLines.join("\n");
+  if (dataLines.length === 0) return { kind: "empty" };
+  const upstream = upstreamError(data);
+  return eventType === "error" || hasTopLevelError(data) ? { kind: "error", upstream } : { kind: "healthy", upstream };
+}
+
+function hasTopLevelError(data: string): boolean {
+  try {
+    const value: unknown = JSON.parse(data);
+    return !!value && typeof value === "object" && !Array.isArray(value) && Object.prototype.hasOwnProperty.call(value, "error");
+  } catch { return false; }
+}
+
+function mappedUpstreamError(response: Response, upstream: ReturnType<typeof upstreamError>, status: number): Response {
+  const headers = new Headers(response.headers);
+  headers.delete("content-length");
+  headers.set("content-type", "application/json; charset=utf-8");
+  return Response.json({ error: {
+    message: upstream.message ?? (response.ok ? "upstream request failed" : response.statusText || "upstream request failed"),
+    type: upstream.type ?? "upstream_error",
+    code: upstream.code ?? status,
+  } }, { status, statusText: status === response.status ? response.statusText : "", headers });
+}
+
+function upstreamError(body: string): { message?: string; type?: string; code?: string | number } {
+  let value: unknown;
+  try {
+    const eventData = firstSseData(body);
+    value = JSON.parse(eventData || body);
+  } catch { return {}; }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return {};
+  const error = "error" in value && value.error && typeof value.error === "object" && !Array.isArray(value.error) ? value.error as Record<string, unknown> : value as Record<string, unknown>;
+  return {
+    message: typeof error.message === "string" ? error.message : undefined,
+    type: typeof error.type === "string" ? error.type : undefined,
+    code: typeof error.code === "string" || typeof error.code === "number" ? error.code : undefined,
+  };
+}
+
+function firstSseData(body: string): string | null {
+  const dataLines: string[] = [];
+  for (const line of body.split(/\r\n|\r|\n/)) {
+    if (!line) {
+      if (dataLines.some((value) => value !== "")) break;
+      dataLines.length = 0;
+      continue;
+    }
+    if (line.startsWith(":")) continue;
+    const colon = line.indexOf(":");
+    const field = colon < 0 ? line : line.slice(0, colon);
+    if (field !== "data") continue;
+    let value = colon < 0 ? "" : line.slice(colon + 1);
+    if (value.startsWith(" ")) value = value.slice(1);
+    dataLines.push(value);
+  }
+  return dataLines.length > 0 ? dataLines.join("\n") : null;
 }
 
 async function reserveSelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, preauthenticated: AuthorizedIdentity | null, compound?: CompoundRequestContext): Promise<ReservedProxyBudget | Response> {

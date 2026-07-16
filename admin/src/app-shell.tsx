@@ -1,7 +1,7 @@
 export function AppShell() {
   const [theme, setTheme] = React.useState(initialTheme);
   React.useEffect(() => { applyTheme(theme); }, [theme]);
-  const { session: shell, catalog, access, usage, playground: playgroundDomain } = useConsole();
+  const { session: shell, catalog, access, usage, selfServiceKeys, playground: playgroundDomain } = useConsole();
   const { view, value: session, status, lastUpdatedAt, demoMode, statusPresentation, busy, statusTone, navigateTo } = shell;
   const { providers, providerReadiness, accessByProvider, services, models, serviceRoutes, query, setQuery, kind, setKind, kinds, filteredServices, selectedService, setSelectedServiceId } = catalog;
   const { policies, credentials: credentialState, connections: connectionState, bindings: bindingState, upstream, assignments, fusion, users: userState, tab } = access;
@@ -93,6 +93,13 @@ export function AppShell() {
             usageRows={usageRows}
             usage={usageSnapshot}
             usageLoaded={usageLoaded}
+            myCredentials={selfServiceKeys.items}
+            myPolicyIds={selfServiceKeys.policyIds}
+            myIssuedKey={selfServiceKeys.issuedKey}
+            myKeyError={selfServiceKeys.error}
+            myKeysBusy={busy || selfServiceKeys.busy}
+            onIssueMyKey={selfServiceKeys.issue}
+            onRevokeMyKey={selfServiceKeys.revoke}
             onOpenCatalog={() => navigateTo("catalog")}
             onOpenPlayground={() => navigateTo("playground")}
             onOpenUsage={() => navigateTo("usage")}
