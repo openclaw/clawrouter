@@ -19,6 +19,13 @@ test("non-2xx usage and settlement writes retry instead of being acknowledged", 
   }
 });
 
+test("principal-scoped settlement retries target the reserved principal ledger", async () => {
+  const calls = [], message = queueMessage({ kind: "budget_settlement", tenant_id: "tenant", policy_id: "policy", principal_id: "maintainer@example.com", request: { reservationId: "r1", actualCostMicros: 2 } });
+  await queue({ messages: [message] }, mockEnv(calls, new Response("accepted")));
+  assert.deepEqual(calls.map((call) => call.name), ["tenant:policy:maintainer@example.com"]);
+  assert.equal(message.ackCount, 1);
+});
+
 function usageEvent() { return { id: "usage", type: "clawrouter.usage.v1", tenant_id: "tenant", policy_id: "policy" }; }
 function queueMessage(body) {
   return { body, ackCount: 0, retryCount: 0, ack() { this.ackCount += 1; }, retry() { this.retryCount += 1; } };
