@@ -8,7 +8,7 @@ import { useUsage } from "./hooks/use-usage";
 import { useSelfServiceKeys } from "./hooks/use-self-service-keys";
 import { installAutoRefresh } from "./auto-refresh";
 import { demo } from "./ui-config";
-import { localDemoRole, oauthCallbackStatus, request, settled, usagePolicyId } from "./ui-helpers";
+import { localDemoRole, localLoginAvailable, oauthCallbackStatus, request, settled, usagePolicyId } from "./ui-helpers";
 import { syntheticUsageTimeline } from "./usage-analytics";
 import type {
   AccessUser,
@@ -126,6 +126,7 @@ export function useConsoleController() {
         staticCatalog,
       ]);
       session.setValue(sessionData);
+      session.setLoginRequired(false);
       selfServiceKeys.setPrincipal(sessionData.email ?? "");
       catalog.setProviders(providerData.providers);
       catalog.setRoutes(routeData);
@@ -154,6 +155,11 @@ export function useConsoleController() {
       if (!background) session.setStatus(warnings.length ? warnings.join("; ") : oauthCallbackStatus() ?? "connected");
     } catch (caught) {
       const message = errorMessage(caught);
+      if (message.includes("access_session_required") && await localLoginAvailable(session.gatewayOrigin)) {
+        session.setLoginRequired(true);
+        if (!background) session.setStatus("sign-in required");
+        return;
+      }
       if (session.allowDemo) {
         loadAdminDemo();
         return;
