@@ -38,6 +38,30 @@ For a custom manifest or another intentional Worker variable, add its name to
 the comma-separated `CLAWROUTER_SELF_HOST_VARS` value. Never add the raw
 `CLAWROUTER_ADMIN_TOKEN`; the Worker receives only its digest.
 
+## Console sign-in
+
+Local console sign-in is opt-in. Add `CLAWROUTER_LOCAL_AUTH=enabled` to
+`deploy/self-host/.env`, recreate the container, then open
+`http://localhost:8787/dashboard` and paste the raw admin token into the
+sign-in form; the browser receives a 12-hour session cookie. Without the
+flag the console stays API-only. Scripts can obtain the same cookie
+directly:
+
+```sh
+curl --fail -c cookies.txt http://localhost:8787/v1/session/login \
+  -H 'content-type: application/json' \
+  --data "{\"token\": \"$CLAWROUTER_ADMIN_TOKEN\"}"
+curl --fail -b cookies.txt http://localhost:8787/v1/session
+```
+
+The session authenticates the dashboard, the playground, and the
+`/v1/session/*` endpoints (including self-service maintainer keys) as an
+administrator identified by `CLAWROUTER_LOCAL_ADMIN_EMAIL` (default
+`admin@local`). `POST /v1/session/logout` revokes the session. Sign-in
+attempts are rate limited. Local sign-in is refused whenever Cloudflare
+Access variables are configured, so it cannot be enabled on a managed
+deployment.
+
 ## Create a proxy key
 
 The normal key helper uses the running Worker's admin bearer-token API. It does
@@ -88,6 +112,12 @@ credentials, grants, budgets, settled usage records, and retained content.
 Pending, delayed, or retrying local queue messages are memory-only and are lost
 on a crash or restart; drain request traffic before planned maintenance.
 
+Upgrading past 0.1.0 does not change the console posture: local sign-in is
+opt-in, so the dashboard keeps failing closed until the operator sets
+`CLAWROUTER_LOCAL_AUTH=enabled`. With the flag set, the dashboard shell and
+`/v1/session/login` become reachable; the login still requires the admin
+token, and every API behind the shell stays session-gated.
+
 To upgrade a source checkout, back up `/data`, pull the new source, review the
 release notes, then pull fresh base layers, rebuild, and restart:
 
@@ -98,10 +128,11 @@ docker compose -f deploy/self-host/docker-compose.yml up -d
 
 ## Version 1 limitations
 
-Cloudflare Access is absent. Console sign-in, browser OAuth, and GitHub
-maintainer auto-provisioning are unavailable. Manage the service through the
-admin bearer-token API and repository scripts; clients use normal proxy keys.
-The dashboard and Access-session endpoints remain fail-closed without an Access
-identity. This profile is one local workerd process and does not provide
-Cloudflare's distributed availability, durable queue delivery, or managed
-backups.
+Cloudflare Access is absent. GitHub maintainer auto-provisioning is
+unavailable, browser OAuth connect flows are untested in this profile, and
+local console sign-in currently supports a single admin-token identity
+rather than per-user passwords.
+Manage the service through the console session or the admin bearer-token API
+and repository scripts; clients use normal proxy keys. This profile is one
+local workerd process and does not provide Cloudflare's distributed
+availability, durable queue delivery, or managed backups.
