@@ -42,9 +42,27 @@ export function selfHostVariableNames(providerSnapshot, env) {
     names.add(trimmed);
   }
   names.delete("CLAWROUTER_ADMIN_TOKEN_SHA256");
+  names.delete("CLAWROUTER_LOCAL_AUTH");
+  names.delete("CLAWROUTER_LOCAL_ADMIN_EMAIL");
   return [...names]
     .filter((name) => env[name] !== undefined && env[name] !== "")
     .sort();
+}
+
+export function localAuthMode(env) {
+  const value = (env.CLAWROUTER_LOCAL_AUTH ?? "disabled").trim().toLowerCase();
+  if (!["enabled", "disabled"].includes(value)) {
+    throw new Error('CLAWROUTER_LOCAL_AUTH must be "enabled" or "disabled"');
+  }
+  return value;
+}
+
+export function localAdminEmail(env) {
+  const value = env.CLAWROUTER_LOCAL_ADMIN_EMAIL?.trim();
+  if (value && !(value.length <= 320 && /^[^\s@]+@[^\s@]+$/.test(value))) {
+    throw new Error("CLAWROUTER_LOCAL_ADMIN_EMAIL must be a valid email address");
+  }
+  return value || null;
 }
 
 function main() {
@@ -54,6 +72,15 @@ function main() {
   }
   if (!/^[a-f0-9]{64}$/i.test(adminTokenSha256)) {
     fail("CLAWROUTER_ADMIN_TOKEN_SHA256 must be a 64-character hexadecimal SHA-256 digest");
+  }
+
+  let localAuth;
+  let adminEmail;
+  try {
+    localAuth = localAuthMode(process.env);
+    adminEmail = localAdminEmail(process.env);
+  } catch (error) {
+    fail(error.message);
   }
 
   const sourceConfig = readFileSync(join(root, "wrangler.toml"), "utf8");
@@ -76,7 +103,12 @@ function main() {
     configPath,
     "--var",
     `CLAWROUTER_ADMIN_TOKEN_SHA256:${adminTokenSha256}`,
+    "--var",
+    `CLAWROUTER_LOCAL_AUTH:${localAuth}`,
   ];
+  if (adminEmail) {
+    args.push("--var", `CLAWROUTER_LOCAL_ADMIN_EMAIL:${adminEmail}`);
+  }
   // Wrangler redacts secret-shaped bindings; --var makes Docker env explicit to local workerd.
   for (const name of variableNames) {
     args.push("--var", `${name}:${process.env[name]}`);

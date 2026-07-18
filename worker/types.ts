@@ -76,6 +76,8 @@ export interface Env {
   CLAWROUTER_ACCESS_ADMIN_EMAILS?: string;
   CLAWROUTER_ACCESS_ADMIN_DOMAINS?: string;
   CLAWROUTER_ACCESS_DEFAULT_TENANT?: string;
+  CLAWROUTER_LOCAL_AUTH?: string;
+  CLAWROUTER_LOCAL_ADMIN_EMAIL?: string;
   CLAWROUTER_CONTENT_RETENTION_DEFAULT?: string;
   CLAWROUTER_DEPLOY_ENV?: string;
   [name: string]: unknown;
@@ -148,7 +150,7 @@ export interface AccessControlUser { email: string; record: AccessUserRecord }
 
 export interface AccessSession {
   authenticated: true;
-  auth: "cloudflare_access";
+  auth: "cloudflare_access" | "local" | "admin_token";
   role: "admin" | "user";
   email: string;
   subject: string | null;
