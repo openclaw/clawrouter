@@ -295,6 +295,10 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
   );
 }
 
+function formatSpendMicros(value: number | null | undefined) {
+  return value === 0 ? "$0.00" : formatMicros(value);
+}
+
 function ProviderBudgetEditor({ connection, onSave }: { connection: ProviderConnection; onSave: (providerId: string, monthlyBudgetMicros: number | null) => void }) {
   const [value, setValue] = useState(currencyInput(connection.monthlyBudgetMicros));
   const [error, setError] = useState("");
@@ -307,7 +311,7 @@ function ProviderBudgetEditor({ connection, onSave }: { connection: ProviderConn
     }}>
       <label><span>monthly provider budget ($)</span><input inputMode="decimal" value={value} onChange={(event) => setValue(event.target.value)} placeholder="unlimited" /></label>
       <button type="submit" className="buttonSecondary">Save budget</button>
-      {connection.monthlyBudgetMicros != null ? <small>Month to date {formatMicros(connection.spentMicros)} · {formatMicros(connection.remainingMicros)} remaining</small> : <small>Unlimited across all policies and principals</small>}
+      {connection.monthlyBudgetMicros != null ? <small>Month to date {formatSpendMicros(connection.spentMicros)} · {formatSpendMicros(connection.remainingMicros)} remaining</small> : <small>Unlimited across all policies and principals</small>}
       {error ? <small className="providerBudgetError">{error}</small> : null}
     </form>
   );
