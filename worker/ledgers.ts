@@ -1,5 +1,5 @@
 import type { BudgetReserveRequest, BudgetSettleRequest, Env, QueueMessage, UsageEvent } from "./types";
-import { budgetLedgerAddress } from "./budget-scope.ts";
+import { budgetLedgerAddress, providerBudgetLedgerAddress } from "./budget-scope.ts";
 import { emptyUsageSnapshot, mergeUsageSnapshots, usageCutoffs, usageDayMs, usageShardName, type UsageSnapshot } from "./usage-sharding.ts";
 import { errorResponse, json } from "./utils.ts";
 
@@ -161,7 +161,7 @@ export async function queue(batch: MessageBatch<QueueMessage>, env: Env): Promis
       if ("type" in message.body) response = await usageStub(env, message.body.tenant_id, message.body.policy_id).fetch("https://clawrouter.internal/ingest", { method: "POST", body: JSON.stringify(message.body) });
       else {
         const job = message.body;
-        const objectName = `${job.tenant_id}:${job.policy_id}${job.principal_id ? `:${job.principal_id}` : ""}`;
+        const objectName = job.ledger?.objectName ?? `${job.tenant_id}:${job.policy_id}${job.principal_id ? `:${job.principal_id}` : ""}`;
         const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(objectName));
         response = await stub.fetch("https://clawrouter.internal/settle", { method: "POST", body: JSON.stringify(job.request) });
       }
@@ -213,6 +213,22 @@ export async function budgetStatus(env: Env, policyId: string, policy: { tenantI
     return { configured: true, ledger: "durable_object", windowKey: address.windowKey, limitMicros: limit, spentMicros: status.spentMicros, remainingMicros: status.remainingMicros };
   } catch {
     return { configured: true, ledger: "unavailable", windowKey: address.windowKey, limitMicros: limit, spentMicros: null, remainingMicros: null };
+  }
+}
+
+export async function providerBudgetStatus(env: Env, providerId: string, limitMicros: number) {
+  const address = providerBudgetLedgerAddress(providerId);
+  try {
+    const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(address.objectName));
+    const url = new URL("https://clawrouter.internal/status");
+    url.searchParams.set("policy_id", address.policyId);
+    url.searchParams.set("window_key", address.windowKey);
+    url.searchParams.set("limit_micros", String(limitMicros));
+    const response = await stub.fetch(url);
+    if (!response.ok) throw new Error(`provider budget status returned ${response.status}`);
+    return response.json<{ spentMicros: number; remainingMicros: number }>();
+  } catch {
+    return { spentMicros: null, remainingMicros: null };
   }
 }
 

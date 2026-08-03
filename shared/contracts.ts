@@ -50,7 +50,14 @@ export interface ProxyCredential {
   principalId?: string | null;
 }
 
-export interface ProviderConnection { providerId: string; enabled: boolean; label?: string | null }
+export interface ProviderConnection {
+  providerId: string;
+  enabled: boolean;
+  label?: string | null;
+  monthlyBudgetMicros?: number | null;
+  spentMicros?: number | null;
+  remainingMicros?: number | null;
+}
 
 export interface FusionConfig {
   version: 1;

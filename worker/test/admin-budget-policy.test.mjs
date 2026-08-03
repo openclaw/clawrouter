@@ -8,7 +8,7 @@ registerHooks({ resolve(specifier, context, nextResolve) {
   return nextResolve(specifier, context);
 } });
 
-const { adminBudgetStatus, budgetPrincipalsByPolicy, normalizePolicy } = await import("../admin.ts");
+const { adminBudgetStatus, budgetPrincipalsByPolicy, normalizeConnection, normalizePolicy } = await import("../admin.ts");
 
 test("policy normalization validates budgetScope and preserves generation", () => {
   const existing = policy({ generation: "policy_existing" });
@@ -16,6 +16,15 @@ test("policy normalization validates budgetScope and preserves generation", () =
   assert.equal(updated.budgetScope, "principal");
   assert.equal(updated.generation, "policy_existing");
   assert.throws(() => normalizePolicy({ providers: ["openai"], budgetScope: "tenant" }, existing, true), (error) => error?.code === "invalid_policy" && error?.status === 400);
+});
+
+test("provider connection normalization validates monthlyBudgetMicros", () => {
+  assert.deepEqual(normalizeConnection({ enabled: true, monthlyBudgetMicros: 50_000_000 }, "openai"), { providerId: "openai", enabled: true, label: null, monthlyBudgetMicros: 50_000_000 });
+  assert.equal(normalizeConnection({ enabled: false, monthlyBudgetMicros: null }, "openai").monthlyBudgetMicros, null);
+  assert.equal(normalizeConnection({ enabled: false }, "openai", { providerId: "openai", enabled: true, monthlyBudgetMicros: 50_000_000 }).monthlyBudgetMicros, 50_000_000);
+  for (const monthlyBudgetMicros of [-1, 1.5, "50000000"]) {
+    assert.throws(() => normalizeConnection({ monthlyBudgetMicros }, "openai"), (error) => error?.code === "invalid_provider_connection" && error?.status === 400);
+  }
 });
 
 test("admin budget rows use the finite principals derived from loaded authority data", async () => {

@@ -185,10 +185,11 @@ function readinessFor(provider: CompiledProvider, env: Env, grants: GrantRecord[
   };
 }
 
-export async function assertProviderAccess(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env): Promise<void> {
+export async function assertProviderAccess(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, resolvedConnection?: ProviderConnection): Promise<ProviderConnection> {
   if (auth.policy.providers.length && !auth.policy.providers.includes(provider.id)) throw new HttpError(403, "provider_not_allowed", `policy does not allow provider ${provider.id}`);
-  const connection = await connectionFor(env, provider.id);
+  const connection = resolvedConnection ?? await connectionFor(env, provider.id);
   if (!connection.enabled) throw new HttpError(503, "provider_disabled", `provider ${provider.id} is disabled`);
+  return connection;
 }
 
 export async function upstreamAuth(provider: CompiledProvider, endpoint: CompiledEndpoint, auth: AuthorizedIdentity, env: Env, excludedGrantKeys: ReadonlySet<string> = new Set(), stickyHash: string | null = null, recordSelection = true): Promise<UpstreamAuth> {

@@ -61,7 +61,14 @@ export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selec
 }) {
   const resourceTabsRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    resourceTabsRef.current?.querySelector('[role="tab"][aria-selected="true"]')?.scrollIntoView({ block: "nearest", inline: "nearest" });
+    // Reveal the active tab by scrolling only the tablist horizontally;
+    // scrollIntoView also scrolls ancestors and yanked the page down on mount.
+    const tabs = resourceTabsRef.current;
+    const active = tabs?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
+    if (!tabs || !active) return;
+    const left = active.offsetLeft, right = left + active.offsetWidth;
+    if (left < tabs.scrollLeft) tabs.scrollLeft = left;
+    else if (right > tabs.scrollLeft + tabs.clientWidth) tabs.scrollLeft = right - tabs.clientWidth;
   }, [tab]);
   return (
     <div className="accessWorkspace">

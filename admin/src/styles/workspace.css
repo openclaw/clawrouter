@@ -234,6 +234,25 @@
   font-size: 11px;
 }
 
+.providerBudgetEditor {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: end;
+  gap: 7px;
+  padding: 10px;
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--surface-raised);
+}
+
+.providerBudgetEditor small {
+  grid-column: 1 / -1;
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.providerBudgetEditor .providerBudgetError { color: var(--bad); }
+
 .miniList {
   display: grid;
   gap: 5px;

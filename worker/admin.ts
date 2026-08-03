@@ -1,6 +1,6 @@
 import { authorizeAdmin } from "./access";
 import {
-  authorityCall, listBindings, listConnections, listCredentials, listPolicies, listUsers,
+  authorityCall, listBindings, listConnections, listCredentials, listPolicies, listUsers, resolveConnection,
 } from "./authority";
 import {
   listAssignmentRules, normalizeAssignmentEvidence, reconcileUserAssignments,
@@ -13,7 +13,7 @@ import { currentGrantRuntime, grantPriority, grantRoutingPolicy, grantRuntimeSta
 import { assertFusionModels, loadFusionConfig, storeFusionConfig } from "./fusion-config";
 import { fusionReadiness } from "./fusion-readiness";
 import { normalizeFusionConfig } from "./fusion";
-import { budgetStatus as policyBudgetStatus, usageSnapshots } from "./ledgers";
+import { budgetStatus as policyBudgetStatus, providerBudgetStatus, usageSnapshots } from "./ledgers";
 import { startOAuth } from "./oauth";
 import { endpointForPath, listGrantRecords, listHealth, modelRoute, providerReadiness, providerReadinessForPolicies, providerReadinessFromState, refreshStoredGrant, refreshStoredGrantQuota, snapshot } from "./providers";
 import type { AdminBootstrapResponse } from "../shared/contracts";
@@ -178,12 +178,21 @@ async function credentialResponses(env: Env) {
 
 async function connections(env: Env): Promise<ProviderConnection[]> {
   const stored = await listConnections(env, snapshot.providers.map((provider) => provider.id));
-  return connectionsFrom(stored);
+  return connectionResponses(env, connectionsFrom(stored));
 }
 
 function connectionsFrom(stored: ProviderConnection[]): ProviderConnection[] {
   const byId = new Map(stored.map((connection) => [connection.providerId, connection]));
   return snapshot.providers.map((provider) => byId.get(provider.id) ?? { providerId: provider.id, enabled: true, label: null });
+}
+
+async function connectionResponses(env: Env, connections: ProviderConnection[]): Promise<ProviderConnection[]> {
+  return Promise.all(connections.map(async (connection) => {
+    const limit = connection.monthlyBudgetMicros;
+    if (limit == null) return connection;
+    const status = await providerBudgetStatus(env, connection.providerId, limit);
+    return { ...connection, spentMicros: status.spentMicros, remainingMicros: status.remainingMicros };
+  }));
 }
 
 async function adminBootstrap(env: Env): Promise<AdminBootstrapResponse> {
@@ -199,10 +208,11 @@ async function adminBootstrap(env: Env): Promise<AdminBootstrapResponse> {
     loadFusionConfig(env),
   ]);
   const connectionRows = connectionsFrom(storedConnections);
+  const connectionResponseRows = await connectionResponses(env, connectionRows);
   return {
     policies: policies.map(policyResponse),
     credentials: credentialResponsesFrom(policies, credentials),
-    connections: connectionRows,
+    connections: connectionResponseRows,
     users: users.map(userResponse),
     bindings,
     providers: providerReadinessFromState(env, grants, connectionRows, health),
@@ -276,7 +286,7 @@ async function credentialMutation(request: Request, env: Env, rest: string): Pro
 
 async function putConnection(request: Request, env: Env, encodedId: string): Promise<Response> {
   const id = decodeURIComponent(encodedId), provider = snapshot.providers.find((item) => item.id === id); if (!provider) throw new HttpError(404, "unknown_provider", "provider does not exist");
-  const connection = normalizeConnection(await readJson<unknown>(request), id);
+  const connection = normalizeConnection(await readJson<unknown>(request), id, await resolveConnection(env, id));
   await authorityCall(env, "/connections/put", connection); return privateJson(connection);
 }
 
@@ -512,13 +522,15 @@ function normalizeBinding(value: unknown): PolicyBinding {
   return { policyId, principalType, principalId, enabled, priority: priority as number };
 }
 
-function normalizeConnection(value: unknown, providerId: string): ProviderConnection {
+export function normalizeConnection(value: unknown, providerId: string, existing?: ProviderConnection | null): ProviderConnection {
   const body = mutationObject(value, "invalid_provider_connection", "provider connection");
   const enabled = body.enabled === undefined ? true : body.enabled;
   if (typeof enabled !== "boolean") throw new HttpError(400, "invalid_provider_connection", "enabled must be a boolean");
   if (body.label !== undefined && body.label !== null && typeof body.label !== "string") throw new HttpError(400, "invalid_provider_connection", "label must be a string or null");
   const label = typeof body.label === "string" ? body.label.trim() || null : null;
-  return { providerId, enabled, label };
+  const monthlyBudgetMicros = body.monthlyBudgetMicros === undefined ? existing?.monthlyBudgetMicros ?? null : body.monthlyBudgetMicros;
+  if (monthlyBudgetMicros !== null && (!Number.isSafeInteger(monthlyBudgetMicros) || (monthlyBudgetMicros as number) < 0)) throw new HttpError(400, "invalid_provider_connection", "monthlyBudgetMicros must be a non-negative safe integer or null");
+  return { providerId, enabled, label, monthlyBudgetMicros: monthlyBudgetMicros as number | null };
 }
 
 function normalizeUserMutation(value: unknown, existing: AccessControlUser["record"], includePolicyIds = false): { record: AccessControlUser["record"]; policyIds: string[] } {

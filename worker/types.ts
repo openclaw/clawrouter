@@ -121,6 +121,9 @@ export interface ProviderConnection {
   providerId: string;
   enabled: boolean;
   label?: string | null;
+  monthlyBudgetMicros?: number | null;
+  spentMicros?: number | null;
+  remainingMicros?: number | null;
 }
 
 export interface ProviderHealth {
@@ -294,7 +297,7 @@ export interface UsageEvent {
   status: "success" | "provider_error" | "client_error" | "denied" | "timeout";
 }
 
-export type QueueMessage = UsageEvent | { kind: "budget_settlement"; tenant_id: string; policy_id: string; principal_id?: string | null; request: BudgetSettleRequest };
+export type QueueMessage = UsageEvent | { kind: "budget_settlement"; tenant_id: string; policy_id: string; principal_id?: string | null; ledger?: { objectName: string }; request: BudgetSettleRequest };
 
 export interface BudgetReserveRequest {
   policyId: string;

@@ -449,10 +449,10 @@ try {
   }
   const canonicalConnection = await fetch(connectionUrl, { method: "PUT", headers: userHeaders, body: JSON.stringify({ providerId: "missing", enabled: false, label: " Ops ", ignored: true }) });
   assert.equal(canonicalConnection.status, 200);
-  assert.deepEqual(await canonicalConnection.json(), { providerId: "openai", enabled: false, label: "Ops" });
+  assert.deepEqual(await canonicalConnection.json(), { providerId: "openai", enabled: false, label: "Ops", monthlyBudgetMicros: null });
   const connectionsAfterMutation = await fetch(`${base}/v1/admin/connections`, { headers: userHeaders });
   assert.equal(connectionsAfterMutation.status, 200);
-  assert.deepEqual((await connectionsAfterMutation.json()).connections.find((connection) => connection.providerId === "openai"), { providerId: "openai", enabled: false, label: "Ops" });
+  assert.deepEqual((await connectionsAfterMutation.json()).connections.find((connection) => connection.providerId === "openai"), { providerId: "openai", enabled: false, label: "Ops", monthlyBudgetMicros: null });
   const invalidCredentialUrl = `${base}/v1/admin/credentials/invalid_shape`;
   const credentialDigest = sha256("credential-shape");
   for (const [credentialMutationId, body] of [
@@ -697,6 +697,21 @@ try {
   assert.equal(unavailablePool.status, 503);
   assert.equal((await unavailablePool.json()).error.code, "upstream_grant_pool_unavailable");
   assert.equal(upstreamCalls.length, callsBeforeUnavailablePool, "cooled scoped grants never fall through to an unscoped provider credential");
+  const budgetedConnectionUrl = `${base}/v1/admin/connections/local-openai`;
+  const budgetedConnection = await fetch(budgetedConnectionUrl, { method: "PUT", headers: adminHeaders, body: JSON.stringify({ monthlyBudgetMicros: 1 }) });
+  assert.equal(budgetedConnection.status, 200);
+  assert.deepEqual(await budgetedConnection.json(), { providerId: "local-openai", enabled: true, label: null, monthlyBudgetMicros: 1 });
+  assert.equal((await rotationRequest()).status, 200, "a request within the provider budget succeeds");
+  const providerBudgetExhausted = await rotationRequest();
+  assert.equal(providerBudgetExhausted.status, 402);
+  assert.equal((await providerBudgetExhausted.json()).error.code, "provider_budget_exhausted");
+  const connectionsAfterProviderSpend = await fetch(`${base}/v1/admin/connections`, { headers: adminHeaders });
+  assert.equal(connectionsAfterProviderSpend.status, 200);
+  assert.deepEqual((await connectionsAfterProviderSpend.json()).connections.find((connection) => connection.providerId === "local-openai"), { providerId: "local-openai", enabled: true, label: null, monthlyBudgetMicros: 1, spentMicros: 1, remainingMicros: 0 });
+  const unmeteredConnection = await fetch(budgetedConnectionUrl, { method: "PUT", headers: adminHeaders, body: JSON.stringify({ monthlyBudgetMicros: null }) });
+  assert.equal(unmeteredConnection.status, 200);
+  assert.deepEqual(await unmeteredConnection.json(), { providerId: "local-openai", enabled: true, label: null, monthlyBudgetMicros: null });
+  assert.equal((await rotationRequest()).status, 200, "clearing the provider budget restores requests");
   assert.doesNotMatch(output, /private prompt sentinel|private tool sentinel|invalid trace private sentinel|secret_1234|rotation123/i, "Worker logs remain metadata-only");
   console.log(`local Worker smoke passed on ${base}`);
   if (process.env.CLAWROUTER_E2E_HOLD_FILE) {
