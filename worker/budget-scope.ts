@@ -21,3 +21,13 @@ export function budgetLedgerAddress(policyId: string, policy: Pick<AccessPolicy,
     windowKey: `${tenant}/${policyId}${path}/${new Date().toISOString().slice(0, 7)}`,
   };
 }
+
+export function providerBudgetLedgerAddress(providerId: string) {
+  const month = new Date().toISOString().slice(0, 7);
+  return {
+    tenant: "default",
+    objectName: `provider:${providerId}`,
+    policyId: `provider/${providerId}`,
+    windowKey: `provider/${providerId}/${month}`,
+  };
+}

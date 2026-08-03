@@ -10,7 +10,10 @@ const auth = {
   policy: { enabled: true, generation: "v1", providers: [], tenantId: "tenant", retainRequestContent: true },
   contentRetentionDisabled: false,
 };
-const reservation = { reservationId: "reservation", reservedMicros: 100 };
+const reservation = {
+  reservations: [{ reservationId: "reservation", objectName: "tenant:policy", tenant: "tenant", policyId: "tenant/policy", principalId: null, ledger: "policy" }],
+  reservedMicros: 100,
+};
 const event = { id: "usage", type: "clawrouter.usage.v1", tenant_id: "tenant", policy_id: "policy", request_id: "request-safe" };
 
 test("thrown ledger settlement queues a retry", async () => {
