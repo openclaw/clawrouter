@@ -537,3 +537,55 @@
     margin-left: 0;
   }
 }
+
+/* Local sign-in screen (self-host profile). */
+
+.loginShell {
+  display: grid;
+  min-height: 100vh;
+  place-items: center;
+  background: var(--canvas);
+  padding: 24px;
+}
+
+.loginCard {
+  display: grid;
+  gap: 14px;
+  width: min(360px, 100%);
+  border: 1px solid var(--line);
+  border-radius: var(--radius);
+  background: var(--panel);
+  padding: 0 22px 22px;
+}
+
+.loginCard .brandBlock {
+  margin: 0 -22px;
+  padding: 0 22px;
+}
+
+.loginCard h1 {
+  margin: 6px 0 0;
+  color: var(--ink);
+  font-size: 19px;
+  letter-spacing: -0.01em;
+}
+
+.loginCard p {
+  margin: 0;
+  color: var(--muted);
+  font-size: 13px;
+  line-height: 1.45;
+}
+
+.loginCard label {
+  display: grid;
+  gap: 5px;
+}
+
+.loginCard label span {
+  color: var(--muted);
+  font-family: var(--font-mono);
+  font-size: 10px;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
