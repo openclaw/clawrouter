@@ -37,6 +37,7 @@ export function compileProviderSnapshot(manifests) {
         provider: provider.id,
         upstream: model.upstream,
         capabilities: model.capabilities,
+        ...(model.supportedReasoningEfforts ? { supportedReasoningEfforts: model.supportedReasoningEfforts } : {}),
         pricing_ref: model.pricing_ref,
         pricing: model.pricing,
       };
@@ -106,6 +107,7 @@ function compileProvider(manifest, ids) {
     id: model.id,
     upstream: model.upstream,
     capabilities: model.capabilities ?? [],
+    ...(model.supportedReasoningEfforts ? { supportedReasoningEfforts: model.supportedReasoningEfforts } : {}),
     pricing_ref: model.pricingRef ?? null,
     pricing: model.pricing ? normalizePricing(model.pricing) : null,
   }));
@@ -211,6 +213,14 @@ function validateManifest(manifest) {
   for (const key of manifest.service?.optionalConfigKeys ?? []) if (!configKeys.has(key)) throw new Error(`provider ${manifest.id} optional config key ${key} is not declared in configKeys`);
   for (const capability of manifest.capabilities) {
     if (!manifest.endpoints[capability.endpoint]) throw new Error(`provider ${manifest.id} capability ${capability.id} references missing endpoint ${capability.endpoint}`);
+  }
+  const reasoningEfforts = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
+  for (const model of manifest.models?.entries ?? []) {
+    const efforts = model.supportedReasoningEfforts;
+    if (efforts === undefined) continue;
+    if (!Array.isArray(efforts) || efforts.length === 0 || efforts.length > reasoningEfforts.size) throw new Error(`provider ${manifest.id} model ${model.id} supportedReasoningEfforts must contain 1-${reasoningEfforts.size} entries`);
+    if (efforts.some((effort) => !reasoningEfforts.has(effort))) throw new Error(`provider ${manifest.id} model ${model.id} supportedReasoningEfforts contains an unsupported effort`);
+    if (new Set(efforts).size !== efforts.length) throw new Error(`provider ${manifest.id} model ${model.id} supportedReasoningEfforts must contain unique entries`);
   }
   for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
     if (!endpoint.path?.startsWith("/")) throw new Error(`provider ${manifest.id} endpoint ${id} path must start with /`);

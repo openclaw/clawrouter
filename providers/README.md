@@ -83,6 +83,9 @@ billing:
   per million tokens. Change `pricingRef` whenever rates or effective dates
   change. Declare `longContext` when a model changes rates above an input-token
   threshold; omit `pricing` when a model cannot be priced safely.
+- `models.entries[].supportedReasoningEfforts` advertises the model's exact
+  provider-native OpenAI-compatible wire efforts. Values are unique and limited
+  to `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
 
 ## Edge Support Rules
 

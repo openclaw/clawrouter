@@ -2,7 +2,7 @@ export interface ProviderSnapshot {
   version: string;
   providers: CompiledProvider[];
   capability_index: Record<string, Array<{ provider: string; endpoint: string; methods: string[] }>>;
-  model_index: Record<string, { provider: string; upstream: string; capabilities: string[]; pricing_ref: string | null; pricing: ModelPricing | null }>;
+  model_index: Record<string, { provider: string; upstream: string; capabilities: string[]; supportedReasoningEfforts?: ProviderReasoningEffort[]; pricing_ref: string | null; pricing: ModelPricing | null }>;
 }
 
 export interface CompiledProvider {
@@ -59,7 +59,8 @@ export interface AuthorizationConfig { authorizeUrl: string; tokenUrl: string; c
 export interface RefreshConfig { tokenUrl: string; clientId: string | null; clientIdConfig: string | null; clientSecretConfig: string | null; extraParams: Record<string, string> }
 export interface LongContextPricing { thresholdInputTokens: number; inputMicrosPerMillion: number; outputMicrosPerMillion: number; cachedInputMicrosPerMillion: number | null; cacheWriteInputMicrosPerMillion: number | null; cacheWrite5mInputMicrosPerMillion: number | null; cacheWrite1hInputMicrosPerMillion: number | null }
 export interface ModelPricing { effectiveAt: string; source: string; inputMicrosPerMillion: number; outputMicrosPerMillion: number; cachedInputMicrosPerMillion: number | null; cacheWriteInputMicrosPerMillion: number | null; cacheWrite5mInputMicrosPerMillion: number | null; cacheWrite1hInputMicrosPerMillion: number | null; maxInputTokens: number; maxRequestInputTokens: number | null; defaultMaxOutputTokens: number; inputTokenOverhead: number; longContext: LongContextPricing | null }
-export interface CompiledModel { id: string; upstream: string; capabilities: string[]; pricing_ref: string | null; pricing: ModelPricing | null }
+export type ProviderReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
+export interface CompiledModel { id: string; upstream: string; capabilities: string[]; supportedReasoningEfforts?: ProviderReasoningEffort[]; pricing_ref: string | null; pricing: ModelPricing | null }
 export interface CompiledEndpoint { id: string; method: string; methods: string[]; path: string; native_proxy: boolean; auth: string | null; headers: Record<string, string>; request_headers: string[]; response_headers: string[]; query: Record<string, string>; path_params: string[]; path_param_styles: Record<string, string>; request_format: string; response_format: string; streaming: string | null; timeout_ms: number | null }
 
 export interface Env {

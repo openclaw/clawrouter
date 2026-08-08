@@ -19,6 +19,9 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   const gpt56 = openai.models.find((model) => model.id === "openai/gpt-5.6");
   assert.equal(gpt56.upstream, "gpt-5.6");
   assert.deepEqual(gpt56.capabilities, ["llm.responses", "llm.chat"]);
+  assert.deepEqual(gpt56.supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh", "max"]);
+  assert.deepEqual(compiled.model_index["openai/gpt-5.6"].supportedReasoningEfforts, gpt56.supportedReasoningEfforts);
+  assert.equal("supportedReasoningEfforts" in openai.models.find((model) => model.id === "openai/gpt-5.5"), false);
   assert.deepEqual(gpt56.pricing, {
     effectiveAt: "2026-07-09",
     source: "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
@@ -48,6 +51,17 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.equal(openai.quota.probes[0].url, "https://chatgpt.com/backend-api/wham/usage");
   assert.equal(compiled.model_index["local/default"].provider, "local-openai");
   assert.ok(compiled.capability_index["llm.chat"].length >= 10);
+});
+
+test("provider schema bounds reasoning efforts to canonical wire values", () => {
+  const schema = JSON.parse(readFileSync("providers/_schema/service-provider.schema.json", "utf8"));
+  assert.deepEqual(schema.$defs.model.properties.supportedReasoningEfforts, {
+    type: "array",
+    items: { enum: ["none", "minimal", "low", "medium", "high", "xhigh", "max"] },
+    minItems: 1,
+    maxItems: 7,
+    uniqueItems: true,
+  });
 });
 
 test("compiled providers have unique ids, models, capabilities, and executable endpoint references", () => {
@@ -81,6 +95,25 @@ test("quota header sources must retain their declared array shape", () => {
     const invalid = readFileSync("providers/openai.provider.yaml", "utf8").replace("limitHeaders: [x-ratelimit-limit-requests]", "limitHeaders: x-ratelimit-limit-requests");
     writeFileSync(manifest, invalid);
     assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), /limitHeaders must be an array/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("reasoning effort metadata rejects empty, duplicate, and unsupported values", () => {
+  const directory = mkdtempSync(join(tmpdir(), "clawrouter-provider-"));
+  const manifest = join(directory, "openai.provider.yaml");
+  const source = readFileSync("providers/openai.provider.yaml", "utf8");
+  const cases = [
+    ["[]", /must contain 1-7 entries/],
+    ["[none, low, low]", /must contain unique entries/],
+    ["[none, ultra]", /contains an unsupported effort/],
+  ];
+  try {
+    for (const [value, expected] of cases) {
+      writeFileSync(manifest, source.replace("[none, low, medium, high, xhigh, max]", value));
+      assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), expected);
+    }
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
