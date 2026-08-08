@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Advertise model-specific provider-native reasoning efforts through the credential-scoped client catalog.
 - Add tenant-global monthly provider budgets with preflight enforcement, dual-ledger settlement, retry-safe accounting, and console spend controls.
 - Fix console pages loading scrolled past the header; view changes now reset scroll and the Access tab strip scrolls only itself.
 
