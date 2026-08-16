@@ -44,7 +44,7 @@ test("dashboard JSON request aborts a hung worker with a default timeout and kee
   assert.equal(seen[1].signal.aborted, true);
 });
 
-test("playground request applies the same hung-fetch timeout", async (context) => {
+test("playground request uses the 600s endpoint budget instead of the 30s dashboard timeout", async (context) => {
   const timeouts = [];
   const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
   context.mock.method(AbortSignal, "timeout", (ms) => {
@@ -60,5 +60,18 @@ test("playground request applies the same hung-fetch timeout", async (context) =
   const result = await playgroundRequest("https://console.example/", "/v1/chat/completions");
   assert.equal(result.status, 200);
   assert.ok(init.signal instanceof AbortSignal);
-  assert.deepEqual(timeouts, [30_000]);
+  assert.deepEqual(timeouts, [600_000]);
+});
+
+test("playground request honors an explicit endpoint timeout", async (context) => {
+  const timeouts = [];
+  const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+  context.mock.method(AbortSignal, "timeout", (ms) => {
+    timeouts.push(ms);
+    return nativeTimeout(ms);
+  });
+  context.mock.method(globalThis, "fetch", async () => new Response("ok", { status: 200, headers: { "content-type": "text/plain" } }));
+
+  await playgroundRequest("https://console.example/", "/v1/proxy/openai/chat", {}, 180_000);
+  assert.deepEqual(timeouts, [180_000]);
 });

@@ -1,4 +1,4 @@
-import { fetchTimeoutSignal } from "../../shared/fetch-timeout";
+import { fetchTimeoutSignal, PLAYGROUND_FETCH_TIMEOUT_MS } from "../../shared/fetch-timeout";
 import type { PlaygroundHttpResponse } from "./ui-types";
 
 export async function request<T>(baseUrl: string, path: string, init: RequestInit = {}): Promise<T> {
@@ -9,9 +9,19 @@ export async function request<T>(baseUrl: string, path: string, init: RequestIni
   return response.json() as Promise<T>;
 }
 
-export async function playgroundRequest(baseUrl: string, path: string, init: RequestInit = {}): Promise<PlaygroundHttpResponse> {
+export async function playgroundRequest(
+  baseUrl: string,
+  path: string,
+  init: RequestInit = {},
+  timeoutMs = PLAYGROUND_FETCH_TIMEOUT_MS,
+): Promise<PlaygroundHttpResponse> {
   const headers = new Headers(init.headers);
-  const response = await fetch(`${baseUrl.replace(/\/$/, "")}${path}`, { ...init, credentials: "same-origin", headers, signal: fetchTimeoutSignal(init.signal) });
+  const response = await fetch(`${baseUrl.replace(/\/$/, "")}${path}`, {
+    ...init,
+    credentials: "same-origin",
+    headers,
+    signal: fetchTimeoutSignal(init.signal, timeoutMs),
+  });
   const contentType = response.headers.get("content-type") ?? "";
   const retention = response.headers.get("x-clawrouter-content-retention") ?? "unknown";
   const body = await response.arrayBuffer();
