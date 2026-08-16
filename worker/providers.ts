@@ -1,3 +1,4 @@
+import { fetchTimeoutSignal } from "../shared/fetch-timeout.ts";
 import snapshotJson from "./generated/provider-snapshot.json" with { type: "json" };
 import { listConnections, resolveConnection } from "./authority.ts";
 import { observeGrantQuota, observeGrantQuotaProbe } from "./grant-quota.ts";
@@ -386,7 +387,9 @@ async function refreshGrant(key: string, grant: UpstreamGrant, provider: Compile
     form.set("client_secret", secret);
   }
   for (const [name, value] of Object.entries(config.extraParams ?? {})) form.set(name, value);
-  const response = await fetch(config.tokenUrl, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" }, body: form });
+  let response: Response;
+  try { response = await fetch(config.tokenUrl, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" }, body: form, signal: fetchTimeoutSignal() }); }
+  catch { throw new HttpError(502, "grant_refresh_failed", `provider ${provider.id} rejected the refresh request`); }
   const payload: Record<string, unknown> = await response.json<Record<string, unknown>>().catch(() => ({}));
   if (!response.ok || typeof payload.access_token !== "string") throw new HttpError(502, "grant_refresh_failed", `provider ${provider.id} rejected the refresh request`);
   const now = new Date().toISOString();

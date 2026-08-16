@@ -24,6 +24,7 @@ test("fetchTimeoutSignal aborts a TCP accept that never sends an HTTP response",
       (error) => error instanceof DOMException && (error.name === "TimeoutError" || error.name === "AbortError"),
     );
   } finally {
+    server.closeAllConnections();
     server.close();
   }
 });
