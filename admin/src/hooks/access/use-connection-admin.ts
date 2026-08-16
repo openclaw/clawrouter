@@ -20,7 +20,7 @@ export function useConnectionAdmin({ allowDemo, gatewayOrigin, demoMode, setStat
     try {
       setStatus(`${enabled ? "enabling" : "disabling"} ${providerId}`);
       const current = connections.find((connection) => connection.providerId === providerId);
-      const next: ProviderConnection = { providerId, enabled, label: current?.label ?? null };
+      const next: ProviderConnection = { providerId, enabled, label: current?.label ?? null, monthlyBudgetMicros: current?.monthlyBudgetMicros ?? null };
       if (demoMode) {
         setConnections((items) => [next, ...items.filter((item) => item.providerId !== providerId)]);
         setProviderReadiness((items) => {
@@ -37,5 +37,22 @@ export function useConnectionAdmin({ allowDemo, gatewayOrigin, demoMode, setStat
     }
   }
 
-  return { connections: { items: connections, setItems: setConnections, setEnabled }, hydrate: setConnections };
+  async function setBudget(providerId: string, monthlyBudgetMicros: number | null) {
+    try {
+      setStatus(`updating ${providerId} budget`);
+      const current = connections.find((connection) => connection.providerId === providerId);
+      const next: ProviderConnection = { providerId, enabled: current?.enabled ?? true, label: current?.label ?? null, monthlyBudgetMicros };
+      if (demoMode) {
+        setConnections((items) => [{ ...next, spentMicros: 0, remainingMicros: monthlyBudgetMicros }, ...items.filter((item) => item.providerId !== providerId)]);
+      } else {
+        await request<ProviderConnection>(gatewayOrigin, `/v1/admin/connections/${encodeURIComponent(providerId)}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(next) });
+        await refresh();
+      }
+      setStatus(`updated ${providerId} budget`);
+    } catch (caught) {
+      setStatus(errorMessage(caught));
+    }
+  }
+
+  return { connections: { items: connections, setItems: setConnections, setEnabled, setBudget }, hydrate: setConnections };
 }

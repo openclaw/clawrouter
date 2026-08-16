@@ -23,6 +23,7 @@ export function useSession() {
     const nextUrl = `${nextPath}${window.location.search}${window.location.hash}`;
     if (replace) window.history.replaceState(null, "", nextUrl);
     else window.history.pushState(null, "", nextUrl);
+    window.scrollTo(0, 0);
   }
 
   function enforceRoleView() {

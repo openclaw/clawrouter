@@ -187,7 +187,7 @@ export function DashboardStat({ label, value, note }: { label: string; value: st
   return <div><span>{label}</span><strong>{value}</strong><small>{note}</small></div>;
 }
 
-export function CatalogScreen({ services, allServices, selected, policies, connections, query, setQuery, kind, setKind, kinds, canAdminister, onSelect, onSetConnection, onPlay, onAdd }: {
+export function CatalogScreen({ services, allServices, selected, policies, connections, query, setQuery, kind, setKind, kinds, canAdminister, onSelect, onSetConnection, onSetProviderBudget, onPlay, onAdd }: {
   services: ServiceItem[];
   allServices: ServiceItem[];
   selected?: ServiceItem;
@@ -201,6 +201,7 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
   canAdminister: boolean;
   onSelect: (service: ServiceItem) => void;
   onSetConnection: (providerId: string, enabled: boolean) => void;
+  onSetProviderBudget: (providerId: string, monthlyBudgetMicros: number | null) => void;
   onPlay: (service: ServiceItem) => void;
   onAdd: (service: ServiceItem) => void;
 }) {
@@ -273,6 +274,7 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
               <dt>missing</dt><dd>{selected.readiness?.missingConfig.length ? selected.readiness.missingConfig.join(", ") : "none"}</dd>
               <dt>oauth grants</dt><dd>{selected.readiness?.oauthGrantRequired ? selected.readiness.oauthGrantCount : "n/a"}</dd>
             </dl>
+            {canAdminister ? <ProviderBudgetEditor connection={connection ?? { providerId: selected.provider, enabled: connectionEnabled !== false }} onSave={onSetProviderBudget} /> : null}
             {selected.readiness?.reasons.length ? <InlineNote>{selected.readiness.reasons.join("; ")}</InlineNote> : null}
             <div className="sectionTitle">Policies including this service</div>
             <div className="miniList">
@@ -293,6 +295,28 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
   );
 }
 
+function formatSpendMicros(value: number | null | undefined) {
+  return value === 0 ? "$0.00" : formatMicros(value);
+}
+
+function ProviderBudgetEditor({ connection, onSave }: { connection: ProviderConnection; onSave: (providerId: string, monthlyBudgetMicros: number | null) => void }) {
+  const [value, setValue] = useState(currencyInput(connection.monthlyBudgetMicros));
+  const [error, setError] = useState("");
+  useEffect(() => { setValue(currencyInput(connection.monthlyBudgetMicros)); setError(""); }, [connection.providerId, connection.monthlyBudgetMicros]);
+  return (
+    <form className="providerBudgetEditor" onSubmit={(event) => {
+      event.preventDefault();
+      try { onSave(connection.providerId, optionalCurrencyMicros(value) ?? null); setError(""); }
+      catch (caught) { setError(caught instanceof Error ? caught.message : "invalid monthly budget"); }
+    }}>
+      <label><span>monthly provider budget ($)</span><input inputMode="decimal" value={value} onChange={(event) => setValue(event.target.value)} placeholder="unlimited" /></label>
+      <button type="submit" className="buttonSecondary">Save budget</button>
+      {connection.monthlyBudgetMicros != null ? <small>Month to date {formatSpendMicros(connection.spentMicros)} · {formatSpendMicros(connection.remainingMicros)} remaining</small> : <small>Unlimited across all policies and principals</small>}
+      {error ? <small className="providerBudgetError">{error}</small> : null}
+    </form>
+  );
+}
+
 export function GrantChips({ names }: { names: string[] }) {
   if (!names.length) return <span className="emptyGrant">no policy</span>;
   const first = names[0];
@@ -305,7 +329,7 @@ export function GrantChips({ names }: { names: string[] }) {
 }
 import React, { useEffect, useState } from "react";
 import { Activity, ArrowUpRight, BarChart3, Boxes, Bug, CheckCircle2, ChevronRight, CircleSlash2, FlaskConical, KeyRound, Play, Plus, Search, ServerCog, ShieldCheck, SlidersHorizontal, Users } from "lucide-react";
-import { grantNamesForService, playgroundBlockedForService, policyCoversProvider, policyUsageFallback, readinessLabel, serviceOutcome } from "../domain";
+import { currencyInput, grantNamesForService, optionalCurrencyMicros, playgroundBlockedForService, policyCoversProvider, policyUsageFallback, readinessLabel, serviceOutcome } from "../domain";
 import { BrandMark, EntityName, InlineNote, InspectorHeader, OutcomeStatus, PanelTitle, ReadinessStatus, Status, kindIcon, kindLabel } from "../components";
 import { ProviderUsageChart, TrafficAreaChart } from "../analytics-charts";
 import { budgetPercent, effectiveProviderCount, formatBudget, formatCount, formatDuration, formatMicros, formatRelativeTime, matchesServiceQuery, providerBrandIcon, readyCount, usagePolicyId } from "../ui-helpers";

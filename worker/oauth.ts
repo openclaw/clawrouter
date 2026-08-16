@@ -1,3 +1,4 @@
+import { fetchTimeoutSignal } from "../shared/fetch-timeout.ts";
 import { authorizeAdmin, verifiedAccessSession } from "./access";
 import { authorityCall } from "./authority";
 import { syncGrantPoolIndex } from "./grant-selection";
@@ -44,7 +45,12 @@ export async function oauthCallback(request: Request, env: Env): Promise<Respons
     const secret = envString(env, config.clientSecretConfig); if (!secret) return errorResponse("oauth_not_configured", "provider OAuth client secret is not configured", 503); form.set("client_secret", secret);
   }
   for (const [key, value] of Object.entries(config.extraTokenParams)) form.set(key, value);
-  const tokenResponse = await fetch(config.tokenUrl, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" }, body: form });
+  let tokenResponse: Response;
+  try {
+    tokenResponse = await fetch(config.tokenUrl, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" }, body: form, signal: fetchTimeoutSignal(request.signal) });
+  } catch {
+    return callbackPage(false, "Provider token exchange failed.");
+  }
   const payload: Record<string, unknown> = await tokenResponse.json<Record<string, unknown>>().catch(() => ({}));
   if (!tokenResponse.ok || typeof payload.access_token !== "string") return callbackPage(false, "Provider token exchange failed.");
   const existing = await env.POLICY_KV.get<UpstreamGrant>(state.grantKey, "json");

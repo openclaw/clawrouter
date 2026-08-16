@@ -65,6 +65,16 @@ pricing:
     outputMicrosPerMillion: 22500000
 ```
 
+## Per-provider budgets
+
+Provider connections can set a monthly budget that applies tenant-wide to all
+traffic routed to that provider, independent of policy and principal budgets.
+The UTC calendar-month ledger uses the same conservative reservation and actual
+cost settlement flow as policy budgets. Both limits must admit a request; an
+exhausted provider limit returns HTTP 402 with `provider_budget_exhausted`.
+Leaving the provider budget blank keeps the provider unmetered and adds no
+provider-ledger call to the request path.
+
 Rates are integer micro-US-dollars per million tokens. Update `pricingRef` and
 `effectiveAt` together when a provider changes price. Subscription traffic uses
 the equivalent public API list price for governance; it is not an invoice for

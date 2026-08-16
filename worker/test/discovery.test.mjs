@@ -22,6 +22,18 @@ const { catalogModels } = await import("../discovery.ts");
 const fireworks = providerById("fireworks");
 assert.ok(fireworks);
 const endpoints = fireworks.endpoints.map((endpoint) => endpoint.id);
+const openai = providerById("openai");
+assert.ok(openai);
+const openaiEndpoints = openai.endpoints.map((endpoint) => endpoint.id);
+
+test("catalog models preserve declared reasoning efforts without adding sibling metadata", () => {
+  const models = catalogModels(openai, openaiEndpoints, null);
+  const gpt56 = models.find((model) => model.id === "openai/gpt-5.6");
+  const gpt55 = models.find((model) => model.id === "openai/gpt-5.5");
+
+  assert.deepEqual(gpt56.supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh", "max"]);
+  assert.equal("supportedReasoningEfforts" in gpt55, false);
+});
 
 test("budgeted proxy-key catalogs omit unpriced models without fixed request pricing", () => {
   const models = catalogModels(fireworks, endpoints, {

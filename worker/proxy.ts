@@ -1,5 +1,5 @@
 import { accessIdentity } from "./access";
-import { finalizeAccounting, reserveBudget, type BudgetReservation, type EstimatedCost } from "./accounting";
+import { emptyReservation, finalizeAccounting, reserveBudget, type BudgetReservation, type EstimatedCost } from "./accounting";
 import { resolveCredentials, resolvePolicies, resolveUsers } from "./authority";
 import { retainRequestContent } from "./content-retention";
 import { correlationMetadata } from "./correlation.ts";
@@ -16,7 +16,7 @@ import {
 } from "./providers";
 import { actualModelCost, estimateModelCost } from "./pricing";
 import { extractUsageTokens, type UsageTokens } from "./token-usage";
-import type { AuthorizedIdentity, CompiledEndpoint, CompiledModel, CompiledProvider, CompiledQuotaConfig, Env, UsageEvent } from "./types";
+import type { AuthorizedIdentity, CompiledEndpoint, CompiledModel, CompiledProvider, CompiledQuotaConfig, Env, ProviderConnection, UsageEvent } from "./types";
 import {
   errorResponse, HttpError, parseProxyKey, randomId, readJson, safeEqual, sha256Hex,
 } from "./utils";
@@ -45,6 +45,7 @@ interface PreparedUpstream {
   requestBody: string | undefined;
   grantKey: string | null;
   grantRevision: string | null;
+  connection: ProviderConnection;
 }
 
 interface ReservedProxyBudget {
@@ -54,6 +55,7 @@ interface ReservedProxyBudget {
   providerId: string;
   modelId: string | null;
   capability: string;
+  connection: ProviderConnection;
 }
 
 interface CompoundRequestContext {
@@ -334,7 +336,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     return errorResponse("fusion_reservation_invalid", "fusion synthesizer reservation does not cover the final request", 500);
   }
   let prepared: PreparedUpstream;
-  try { prepared = await prepareSelected(request, env, selection, queryInput, auth); }
+  try { prepared = await prepareSelected(request, env, selection, queryInput, auth, new Set(), true, reservedBudget?.connection); }
   catch (error) {
     const failure = selectedFailure(error);
     const status = failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error";
@@ -344,7 +346,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   }
   let reservation = reservedBudget?.reservation;
   if (!reservation) {
-    try { reservation = await reserveBudget(env, auth, selection.capability, cost); }
+    try { reservation = await reserveBudget(env, auth, selection.capability, cost, prepared.connection); }
     catch (error) {
       const failure = error instanceof HttpError ? error : new HttpError(503, "budget_store_unavailable", "budget ledger is unavailable");
       auditFailure(context, env, auth, selection, request, requestId, started, cost, failure.status, failure.status === 402 ? "denied" : failure.status < 500 ? "client_error" : "provider_error", compound);
@@ -367,7 +369,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response);
     if (shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
       try {
-        const retry = await prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]));
+        const retry = await prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]), true, prepared.connection);
         const retryResponse = await fetch(retry.url, { method: selection.method, headers: retry.headers, body: retry.requestBody, signal: AbortSignal.any([request.signal, controller.signal]) });
         captureGrantRuntime(context, env, retry.grantKey, retry.grantRevision, selection.provider.quota, retryResponse);
         void response.body?.cancel().catch(() => undefined);
@@ -558,8 +560,9 @@ async function reserveSelected(request: Request, env: Env, context: ExecutionCon
   const requestId = correlationMetadata(request).requestId;
   const started = Date.now();
   const cost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability);
+  let prepared: PreparedUpstream;
   try {
-    await prepareSelected(request, env, selection, {}, auth, new Set(), false);
+    prepared = await prepareSelected(request, env, selection, {}, auth, new Set(), false);
   } catch (error) {
     const failure = selectedFailure(error);
     const status = failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error";
@@ -567,8 +570,8 @@ async function reserveSelected(request: Request, env: Env, context: ExecutionCon
     return errorResponse(failure.code, failure.message, failure.status);
   }
   try {
-    const reservation = await reserveBudget(env, auth, selection.capability, cost);
-    return { auth, reservation, cost, providerId: selection.provider.id, modelId: selection.model?.id ?? null, capability: selection.capability };
+    const reservation = await reserveBudget(env, auth, selection.capability, cost, prepared.connection);
+    return { auth, reservation, cost, providerId: selection.provider.id, modelId: selection.model?.id ?? null, capability: selection.capability, connection: prepared.connection };
   } catch (error) {
     const failure = error instanceof HttpError ? error : new HttpError(503, "budget_store_unavailable", "budget ledger is unavailable");
     auditFailure(context, env, auth, selection, request, requestId, started, cost, failure.status, failure.status === 402 ? "denied" : failure.status < 500 ? "client_error" : "provider_error", compound);
@@ -580,8 +583,9 @@ async function selectedAuth(request: Request, env: Env, mode: AuthMode, selectio
   return preauthenticated ?? (mode === "access" ? accessIdentity(request, env, selection.provider.id) : authenticateProxyKey(request.headers, env));
 }
 
-async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: Record<string, unknown>, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true): Promise<PreparedUpstream> {
-  try { await assertProviderAccess(selection.provider, auth, env); }
+async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: Record<string, unknown>, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection): Promise<PreparedUpstream> {
+  let connection: ProviderConnection;
+  try { connection = await assertProviderAccess(selection.provider, auth, env, resolvedConnection); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "provider authorization failed"); }
   let upstream;
   const stickyHash = await grantStickyHash(request, auth);
@@ -597,7 +601,7 @@ async function prepareSelected(request: Request, env: Env, selection: ProxySelec
     for (const [name, value] of Object.entries(queryInput)) if (value != null) url.searchParams.set(name, String(value));
     const requestBody = ["GET", "HEAD"].includes(selection.method) ? undefined : JSON.stringify(selection.body);
     await signSigV4(selection.provider, url, selection.method, requestBody, headers, env, upstream.grant);
-    return { headers, url, requestBody, grantKey: upstream.grantKey, grantRevision: upstream.grantRevision };
+    return { headers, url, requestBody, grantKey: upstream.grantKey, grantRevision: upstream.grantRevision, connection };
   } catch (error) {
     throw error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
   }
@@ -623,7 +627,7 @@ function selectedFailure(error: unknown): HttpError {
 }
 
 function auditFailure(context: ExecutionContext, env: Env, auth: AuthorizedIdentity, selection: ProxySelection, request: Request, requestId: string, started: number, cost: Cost, statusCode: number, status: UsageEvent["status"], compound?: CompoundRequestContext): void {
-  const reservation = { reservationId: null, reservedMicros: 0 };
+  const reservation = emptyReservation();
   context.waitUntil(finalizeAccounting(env, auth, reservation, 0, usageEvent(auth, selection, request, requestId, started, statusCode, null, cost, reservation, null, status, 0, compound)));
 }
 

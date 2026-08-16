@@ -149,6 +149,7 @@ models:
     - id: openai/gpt-5.6
       upstream: gpt-5.6
       capabilities: [llm.responses, llm.chat]
+      supportedReasoningEfforts: [none, low, medium, high, xhigh, max]
       pricingRef: openai-gpt-5.6-standard-2026-07-09
       pricing:
         effectiveAt: "2026-07-09"
