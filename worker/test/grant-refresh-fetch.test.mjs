@@ -23,8 +23,8 @@ function expiredGrant(tokenUrl) {
     enabled: true,
     provider: "openai",
     kind: "subscription",
-    accessToken: "stale-access",
-    refreshToken: "refresh-fixture",
+    accessToken: "dummy",
+    refreshToken: "placeholder",
     expiresAt: "2020-01-01T00:00:00.000Z",
     refresh: { tokenUrl },
   };
@@ -79,7 +79,7 @@ test("grant refresh attaches a 30s AbortSignal and stores a successful token res
   context.mock.method(globalThis, "fetch", async (input, init) => {
     assert.equal(String(input), "https://token.example/oauth/token");
     tokenInit = init;
-    return Response.json({ access_token: "fresh-access", refresh_token: "fresh-refresh", token_type: "Bearer", expires_in: 3600 });
+    return Response.json({ access_token: "example", refresh_token: "sample", token_type: "Bearer", expires_in: 3600 });
   });
 
   const key = "oauth/policy/openai";
@@ -89,7 +89,7 @@ test("grant refresh attaches a 30s AbortSignal and stores a successful token res
   assert.ok(tokenInit.signal instanceof AbortSignal);
   assert.equal(tokenInit.signal.aborted, false);
   assert.deepEqual(timeouts, [30_000]);
-  assert.equal(updated.accessToken, "fresh-access");
-  assert.equal(updated.refreshToken, "fresh-refresh");
-  assert.equal(env.stored[key].accessToken, "fresh-access");
+  assert.equal(updated.accessToken, "example");
+  assert.equal(updated.refreshToken, "sample");
+  assert.equal(env.stored[key].accessToken, "example");
 });
