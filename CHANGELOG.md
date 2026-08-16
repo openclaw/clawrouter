@@ -1,5 +1,7 @@
 # Changelog
 
+## Unreleased
+
 ## 0.2.0 - 2026-08-16
 
 - Add opt-in self-hosted console sessions with trusted TLS reverse-proxy origin checks and race-free sign-in throttling; thanks @b3nw for the contribution in #106.
