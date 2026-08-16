@@ -42,9 +42,43 @@ export function selfHostVariableNames(providerSnapshot, env) {
     names.add(trimmed);
   }
   names.delete("CLAWROUTER_ADMIN_TOKEN_SHA256");
+  names.delete("CLAWROUTER_LOCAL_AUTH");
+  names.delete("CLAWROUTER_LOCAL_ADMIN_EMAIL");
+  names.delete("CLAWROUTER_PUBLIC_ORIGIN");
   return [...names]
     .filter((name) => env[name] !== undefined && env[name] !== "")
     .sort();
+}
+
+export function localAuthMode(env) {
+  const value = (env.CLAWROUTER_LOCAL_AUTH ?? "disabled").trim().toLowerCase();
+  if (!["enabled", "disabled"].includes(value)) {
+    throw new Error('CLAWROUTER_LOCAL_AUTH must be "enabled" or "disabled"');
+  }
+  return value;
+}
+
+export function localAdminEmail(env) {
+  const value = env.CLAWROUTER_LOCAL_ADMIN_EMAIL?.trim();
+  if (value && !(value.length <= 320 && /^[^\s@]+@[^\s@]+$/.test(value))) {
+    throw new Error("CLAWROUTER_LOCAL_ADMIN_EMAIL must be a valid email address");
+  }
+  return value || null;
+}
+
+export function publicOrigin(env) {
+  const value = env.CLAWROUTER_PUBLIC_ORIGIN?.trim();
+  if (!value) return null;
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("CLAWROUTER_PUBLIC_ORIGIN must be an absolute HTTP(S) origin");
+  }
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
+    throw new Error("CLAWROUTER_PUBLIC_ORIGIN must be an absolute HTTP(S) origin without a path, query, fragment, or credentials");
+  }
+  return url.origin;
 }
 
 function main() {
@@ -54,6 +88,17 @@ function main() {
   }
   if (!/^[a-f0-9]{64}$/i.test(adminTokenSha256)) {
     fail("CLAWROUTER_ADMIN_TOKEN_SHA256 must be a 64-character hexadecimal SHA-256 digest");
+  }
+
+  let localAuth;
+  let adminEmail;
+  let externalOrigin;
+  try {
+    localAuth = localAuthMode(process.env);
+    adminEmail = localAdminEmail(process.env);
+    externalOrigin = publicOrigin(process.env);
+  } catch (error) {
+    fail(error.message);
   }
 
   const sourceConfig = readFileSync(join(root, "wrangler.toml"), "utf8");
@@ -76,7 +121,15 @@ function main() {
     configPath,
     "--var",
     `CLAWROUTER_ADMIN_TOKEN_SHA256:${adminTokenSha256}`,
+    "--var",
+    `CLAWROUTER_LOCAL_AUTH:${localAuth}`,
   ];
+  if (adminEmail) {
+    args.push("--var", `CLAWROUTER_LOCAL_ADMIN_EMAIL:${adminEmail}`);
+  }
+  if (externalOrigin) {
+    args.push("--var", `CLAWROUTER_PUBLIC_ORIGIN:${externalOrigin}`);
+  }
   // Wrangler redacts secret-shaped bindings; --var makes Docker env explicit to local workerd.
   for (const name of variableNames) {
     args.push("--var", `${name}:${process.env[name]}`);

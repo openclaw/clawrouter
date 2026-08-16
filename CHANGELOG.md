@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add opt-in self-hosted console sessions with trusted TLS reverse-proxy origin checks and race-free sign-in throttling; thanks @b3nw for the contribution in #106.
 - Add tenant-global monthly provider budgets with preflight enforcement, dual-ledger settlement, retry-safe accounting, and console spend controls.
 - Fix console pages loading scrolled past the header; view changes now reset scroll and the Access tab strip scrolls only itself.
 

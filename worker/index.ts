@@ -8,8 +8,10 @@ import { budgetPrincipal } from "./budget-scope.ts";
 import { dashboardSecurityHeaders } from "./dashboard-security";
 import { contentRetentionDefault } from "./content-retention.ts";
 import { correlateIngressRequest, withRequestId } from "./correlation.ts";
+import { localAuthEnabled, localLogin, localLogout } from "./local-auth";
 import { oauthCallback } from "./oauth";
 import { routeCatalog, snapshot } from "./providers";
+import { sameOrigin } from "./request-origin";
 import { sessionCredentialsApi } from "./session-credentials";
 import { authenticateProxyKey, inspectKey, proxyManifest, proxyNative, proxyOpenAi } from "./proxy";
 import type { Env, QueueMessage } from "./types";
@@ -56,6 +58,8 @@ async function route(request: Request, env: Env, context: ExecutionContext): Pro
   if (request.method === "GET" && path === "/v1/providers") return Response.json(snapshot);
   if (request.method === "GET" && path === "/v1/routes") return Response.json(routeCatalog());
   if (request.method === "GET" && path === "/v1/session") return sessionResponse(request, env);
+  if (request.method === "POST" && path === "/v1/session/login") return localLogin(request, env);
+  if (request.method === "POST" && path === "/v1/session/logout") return localLogout(request, env);
   if (request.method === "GET" && path === "/v1/session/avatar") return avatarResponse(request, env);
   if (request.method === "GET" && path === "/v1/entitlements") return entitlementResponse(request, env);
   if (request.method === "GET" && path === "/v1/session/usage") return sessionUsage(request, env);
@@ -69,7 +73,7 @@ async function route(request: Request, env: Env, context: ExecutionContext): Pro
   if (request.method === "GET" && path === "/v1/key/inspect") return inspectKey(request.headers, env);
 
   if (request.method === "POST" && path.startsWith("/v1/playground/")) {
-    if (!sameOrigin(request)) return errorResponse("access_csrf_required", "same-origin playground request required", 403);
+    if (!sameOrigin(request, env)) return errorResponse("access_csrf_required", "same-origin playground request required", 403);
     const suffix = path.slice("/v1/playground".length);
     if (openAiPath(suffix)) return proxyOpenAi(request, env, context, suffix, "access");
     if (suffix.startsWith("/proxy/")) return proxyManifest(request, env, context, `/v1${suffix}`, "access");
@@ -82,8 +86,11 @@ async function route(request: Request, env: Env, context: ExecutionContext): Pro
 }
 
 async function dashboardShell(request: Request, env: Env): Promise<Response> {
-  const session = await verifiedAccessSession(request, env);
-  if (!session) return errorResponse("access_session_required", "a verified Cloudflare Access session is required", 401);
+  // Local-auth mode serves the shell unauthenticated so the SPA can present sign-in; every API behind it stays session-gated.
+  if (!localAuthEnabled(env)) {
+    const session = await verifiedAccessSession(request, env);
+    if (!session) return errorResponse("access_session_required", "a verified Cloudflare Access session is required", 401);
+  }
   const url = new URL(request.url); url.pathname = "/";
   const response = await env.ASSETS.fetch(new Request(url, request));
   const headers = dashboardSecurityHeaders(response.headers);
@@ -105,11 +112,10 @@ async function sessionUsage(request: Request, env: Env): Promise<Response> {
   return privateJson({ session: publicSession(session), policies: policyRows, usage });
 }
 
-function sameOrigin(request: Request): boolean { const url = new URL(request.url), origin = request.headers.get("origin"), site = request.headers.get("sec-fetch-site"); return origin === url.origin || (!origin && (!site || ["same-origin", "same-site", "none"].includes(site))); }
 function openAiPath(path: string): boolean { return ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"].includes(path); }
 
 function serviceIndex(env: Env) {
-  return {
+  const index = {
     ...healthStatus(env), contract: "clawrouter.openai-compatible.v1",
     interface: { root: "/", dashboard: "/dashboard", playground: "/dashboard/playground", admin: "/dashboard/access", account: "/dashboard/users" },
     endpoints: {
@@ -122,6 +128,8 @@ function serviceIndex(env: Env) {
       openaiCompatible: ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"], manifestProxy: "/v1/proxy/{provider}/{endpoint}", nativeProxy: "/v1/native/{provider}/{provider-native-path}",
     },
   };
+  if (localAuthEnabled(env)) Object.assign(index.endpoints, { sessionLogin: "/v1/session/login", sessionLogout: "/v1/session/logout" });
+  return index;
 }
 
 function healthStatus(env: Env) {

@@ -12,6 +12,7 @@ export function useSession() {
   const [status, setStatus] = useState(allowDemo ? "local demo data loaded" : "loading");
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(allowDemo ? Date.now() : null);
   const [demoMode, setDemoMode] = useState(allowDemo);
+  const [loginRequired, setLoginRequired] = useState(false);
   const statusPresentation = useMemo(() => consoleStatusPresentation(status, demoMode), [demoMode, status]);
   const busy = statusPresentation.tone === "pending";
 
@@ -46,6 +47,8 @@ export function useSession() {
     setLastUpdatedAt,
     demoMode,
     setDemoMode,
+    loginRequired,
+    setLoginRequired,
     statusPresentation,
     statusTone: statusPresentation.tone,
     busy,

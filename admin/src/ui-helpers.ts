@@ -1,3 +1,5 @@
+import { request as dashboardRequest } from "./dashboard-fetch";
+
 export function oauthCallbackStatus() {
   const params = new URLSearchParams(window.location.search);
   const outcome = params.get("oauth");
@@ -23,6 +25,28 @@ export async function settled<T>(loader: () => Promise<T>): Promise<{ ok: true; 
   } catch (error) {
     return { ok: false, error: errorMessage(error) };
   }
+}
+
+export async function localLoginAvailable(baseUrl: string): Promise<boolean> {
+  try {
+    const index = await dashboardRequest<{ endpoints?: { sessionLogin?: unknown } }>(baseUrl, "/v1");
+    return typeof index.endpoints?.sessionLogin === "string";
+  } catch {
+    return false;
+  }
+}
+
+export async function localLogin(baseUrl: string, token: string): Promise<string | null> {
+  const response = await fetch(`${baseUrl.replace(/\/$/, "")}/v1/session/login`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token }),
+  });
+  if (response.ok) return null;
+  if (response.status === 401) return "invalid admin token";
+  if (response.status === 429) return "too many sign-in attempts; wait a minute and retry";
+  return `sign-in failed with status ${response.status}`;
 }
 
 export { isTextualResponse, playgroundRequest, request } from "./dashboard-fetch";

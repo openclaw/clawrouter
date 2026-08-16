@@ -2,6 +2,8 @@ import { authorityCall, resolveBindings, resolvePolicies, resolveUsers } from ".
 import { assignmentEvidenceFromAccessIdentity } from "./assignment-evaluator";
 import { listAssignmentRules, reconcileUserAssignments } from "./assignments";
 import { selectProviderPolicy } from "./grant-selection";
+import { localSession } from "./local-auth";
+import { sameOrigin } from "./request-origin";
 import type { AccessControlUser, AccessPolicyEntry, AccessSession, AuthorizedIdentity, Env } from "./types";
 import { commaSet, errorResponse, normalizeEmail, parseBearer, safeEqual, sha256Hex } from "./utils";
 
@@ -18,6 +20,10 @@ interface AccessJwtPayload {
 interface Jwk { kid?: string; kty?: string; n?: string; e?: string; alg?: string; use?: string }
 
 export async function verifiedAccessSession(request: Request, env: Env): Promise<AccessSession | null> {
+  return (await cloudflareAccessSession(request, env)) ?? localSession(request, env);
+}
+
+async function cloudflareAccessSession(request: Request, env: Env): Promise<AccessSession | null> {
   const headers = request.headers;
   const assertion = headers.get("cf-access-jwt-assertion");
   if (!assertion || !env.CLAWROUTER_ACCESS_TEAM_DOMAIN || !env.CLAWROUTER_ACCESS_AUD) return null;
@@ -83,7 +89,7 @@ export async function authorizeAdmin(request: Request, env: Env): Promise<Access
   const session = await verifiedAccessSession(request, env);
   if (session) {
     if (session.role !== "admin") return errorResponse("access_admin_required", "administrator access is required", 403);
-    if (!["GET", "HEAD"].includes(request.method) && !sameOrigin(request)) return errorResponse("access_csrf_required", "same-origin browser request required", 403);
+    if (!["GET", "HEAD"].includes(request.method) && !sameOrigin(request, env)) return errorResponse("access_csrf_required", "same-origin browser request required", 403);
     return session;
   }
   const token = parseBearer(request.headers);
@@ -91,7 +97,7 @@ export async function authorizeAdmin(request: Request, env: Env): Promise<Access
   if (!token || !expected || !safeEqual(await sha256Hex(token), expected)) return errorResponse("admin_unauthorized", "administrator authentication required", 401);
   return {
     authenticated: true,
-    auth: "cloudflare_access",
+    auth: "admin_token",
     role: "admin",
     email: "token-admin",
     subject: null,
@@ -99,13 +105,6 @@ export async function authorizeAdmin(request: Request, env: Env): Promise<Access
     groups: [],
     contentRetentionDisabled: true,
   };
-}
-
-export function sameOrigin(request: Request): boolean {
-  const url = new URL(request.url);
-  const origin = request.headers.get("origin");
-  const fetchSite = request.headers.get("sec-fetch-site");
-  return origin === url.origin || (!origin && (!fetchSite || fetchSite === "same-origin" || fetchSite === "none"));
 }
 
 export function publicSession(session: AccessSession): Omit<AccessSession, "contentRetentionDisabled"> {

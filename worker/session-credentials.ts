@@ -1,6 +1,7 @@
-import { sameOrigin, sessionPolicies, verifiedAccessSession } from "./access";
+import { sessionPolicies, verifiedAccessSession } from "./access";
 import { authorityCall, listCredentials, listPolicies } from "./authority";
 import { credentialResponsesFrom, normalizeCredential, selfServiceCredentialId } from "./credentials";
+import { sameOrigin } from "./request-origin";
 import type { AccessSession, Env, ProxyCredentialEntry } from "./types";
 import { errorResponse, HttpError, privateJson, readJson } from "./utils";
 
@@ -12,7 +13,7 @@ type GuardedCredentialPutResult = { outcome: "updated" | "owned_elsewhere" | "li
 export async function sessionCredentialsApi(request: Request, env: Env, path: string): Promise<Response> {
   const session = await verifiedAccessSession(request, env);
   if (!session) return errorResponse("access_session_required", "a verified Cloudflare Access session is required", 401);
-  if (!["GET", "HEAD"].includes(request.method) && !sameOrigin(request)) return errorResponse("access_csrf_required", "same-origin browser request required", 403);
+  if (!["GET", "HEAD"].includes(request.method) && !sameOrigin(request, env)) return errorResponse("access_csrf_required", "same-origin browser request required", 403);
   return sessionCredentialsRequest(request, env, path, session);
 }
 

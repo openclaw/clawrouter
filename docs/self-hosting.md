@@ -24,7 +24,9 @@ docker compose -f deploy/self-host/docker-compose.yml up --build -d
 
 Compose publishes port 8787 on host loopback only. Keep bearer tokens on a
 trusted host. For remote access, put an authenticated HTTPS reverse proxy in
-front of `127.0.0.1:8787`; do not publish the plaintext port directly.
+front of `127.0.0.1:8787`; do not publish the plaintext port directly. The
+reverse proxy must overwrite `X-Forwarded-Proto` and `X-Forwarded-Host` rather
+than accepting client-supplied values.
 
 Provider bindings declared by the compiled provider snapshot are passed to the
 Worker when they are present in `deploy/self-host/.env`. For example:
@@ -37,6 +39,57 @@ ANTHROPIC_API_KEY=...
 For a custom manifest or another intentional Worker variable, add its name to
 the comma-separated `CLAWROUTER_SELF_HOST_VARS` value. Never add the raw
 `CLAWROUTER_ADMIN_TOKEN`; the Worker receives only its digest.
+
+## Console sign-in
+
+Local console sign-in is opt-in. Add `CLAWROUTER_LOCAL_AUTH=enabled` to
+`deploy/self-host/.env`, recreate the container, then open
+`http://localhost:8787/dashboard` and paste the raw admin token into the
+sign-in form; the browser receives a 12-hour session cookie. Without the
+flag the console stays API-only. Scripts can obtain the same cookie
+directly:
+
+```sh
+curl --fail -c cookies.txt http://localhost:8787/v1/session/login \
+  -H 'content-type: application/json' \
+  --data "{\"token\": \"$CLAWROUTER_ADMIN_TOKEN\"}"
+curl --fail -b cookies.txt http://localhost:8787/v1/session
+```
+
+For an HTTPS reverse proxy, also set the exact browser-facing origin (including
+any non-default port) and recreate the container:
+
+```dotenv
+CLAWROUTER_LOCAL_AUTH=enabled
+CLAWROUTER_PUBLIC_ORIGIN=https://console.example.com
+```
+
+The Worker accepts that origin only when the proxy-provided protocol and host
+reconstruct the same configured value. Unset means strict direct-origin checks,
+and arbitrary forwarded headers are never trusted. For example, a Caddy site
+can overwrite both headers explicitly:
+
+```caddyfile
+console.example.com {
+  reverse_proxy 127.0.0.1:8787 {
+    header_up X-Forwarded-Proto {scheme}
+    header_up X-Forwarded-Host {host}
+  }
+}
+```
+
+Keep port 8787 loopback-only so clients cannot bypass that trusted proxy. A
+successful proxied sign-in receives a `Secure`, `HttpOnly`, `SameSite=Lax`
+session cookie. Invalid `CLAWROUTER_PUBLIC_ORIGIN` values stop the container at
+startup rather than weakening the origin check.
+
+The session authenticates the dashboard, the playground, and the
+`/v1/session/*` endpoints (including self-service maintainer keys) as an
+administrator identified by `CLAWROUTER_LOCAL_ADMIN_EMAIL` (default
+`admin@local`). `POST /v1/session/logout` revokes the session. Sign-in
+attempts are rate limited. Local sign-in is refused whenever Cloudflare
+Access variables are configured, so it cannot be enabled on a managed
+deployment.
 
 ## Create a proxy key
 
@@ -88,6 +141,12 @@ credentials, grants, budgets, settled usage records, and retained content.
 Pending, delayed, or retrying local queue messages are memory-only and are lost
 on a crash or restart; drain request traffic before planned maintenance.
 
+Upgrading past 0.1.0 does not change the console posture: local sign-in is
+opt-in, so the dashboard keeps failing closed until the operator sets
+`CLAWROUTER_LOCAL_AUTH=enabled`. With the flag set, the dashboard shell and
+`/v1/session/login` become reachable; the login still requires the admin
+token, and every API behind the shell stays session-gated.
+
 To upgrade a source checkout, back up `/data`, pull the new source, review the
 release notes, then pull fresh base layers, rebuild, and restart:
 
@@ -98,10 +157,11 @@ docker compose -f deploy/self-host/docker-compose.yml up -d
 
 ## Version 1 limitations
 
-Cloudflare Access is absent. Console sign-in, browser OAuth, and GitHub
-maintainer auto-provisioning are unavailable. Manage the service through the
-admin bearer-token API and repository scripts; clients use normal proxy keys.
-The dashboard and Access-session endpoints remain fail-closed without an Access
-identity. This profile is one local workerd process and does not provide
-Cloudflare's distributed availability, durable queue delivery, or managed
-backups.
+Cloudflare Access is absent. GitHub maintainer auto-provisioning is
+unavailable, browser OAuth connect flows are untested in this profile, and
+local console sign-in currently supports a single admin-token identity
+rather than per-user passwords.
+Manage the service through the console session or the admin bearer-token API
+and repository scripts; clients use normal proxy keys. This profile is one
+local workerd process and does not provide Cloudflare's distributed
+availability, durable queue delivery, or managed backups.
