@@ -1,9 +1,9 @@
-import { fetchTimeoutSignal, PLAYGROUND_FETCH_TIMEOUT_MS } from "../../shared/fetch-timeout";
+import { DASHBOARD_FETCH_TIMEOUT_MS, fetchTimeoutSignal, PLAYGROUND_FETCH_TIMEOUT_MS } from "../../shared/fetch-timeout";
 import type { PlaygroundHttpResponse } from "./ui-types";
 
 export async function request<T>(baseUrl: string, path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
-  const response = await fetch(`${baseUrl.replace(/\/$/, "")}${path}`, { ...init, credentials: "same-origin", headers, signal: fetchTimeoutSignal(init.signal) });
+  const response = await fetch(`${baseUrl.replace(/\/$/, "")}${path}`, { ...init, credentials: "same-origin", headers, signal: fetchTimeoutSignal(init.signal, DASHBOARD_FETCH_TIMEOUT_MS) });
   if (!response.ok) throw new Error((await response.text()) || `${path} failed with ${response.status}`);
   if (!(response.headers.get("content-type") ?? "").includes("application/json")) throw new Error(`${path} returned a non-JSON response from ${baseUrl}`);
   return response.json() as Promise<T>;
