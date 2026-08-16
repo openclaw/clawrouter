@@ -3,6 +3,7 @@ import { assignmentEvidenceFromAccessIdentity } from "./assignment-evaluator";
 import { listAssignmentRules, reconcileUserAssignments } from "./assignments";
 import { selectProviderPolicy } from "./grant-selection";
 import { localSession } from "./local-auth";
+import { sameOrigin } from "./request-origin";
 import type { AccessControlUser, AccessPolicyEntry, AccessSession, AuthorizedIdentity, Env } from "./types";
 import { commaSet, errorResponse, normalizeEmail, parseBearer, safeEqual, sha256Hex } from "./utils";
 
@@ -88,7 +89,7 @@ export async function authorizeAdmin(request: Request, env: Env): Promise<Access
   const session = await verifiedAccessSession(request, env);
   if (session) {
     if (session.role !== "admin") return errorResponse("access_admin_required", "administrator access is required", 403);
-    if (!["GET", "HEAD"].includes(request.method) && !sameOrigin(request)) return errorResponse("access_csrf_required", "same-origin browser request required", 403);
+    if (!["GET", "HEAD"].includes(request.method) && !sameOrigin(request, env)) return errorResponse("access_csrf_required", "same-origin browser request required", 403);
     return session;
   }
   const token = parseBearer(request.headers);
@@ -104,13 +105,6 @@ export async function authorizeAdmin(request: Request, env: Env): Promise<Access
     groups: [],
     contentRetentionDisabled: true,
   };
-}
-
-export function sameOrigin(request: Request): boolean {
-  const url = new URL(request.url);
-  const origin = request.headers.get("origin");
-  const fetchSite = request.headers.get("sec-fetch-site");
-  return origin === url.origin || (!origin && (!fetchSite || fetchSite === "same-origin" || fetchSite === "none"));
 }
 
 export function publicSession(session: AccessSession): Omit<AccessSession, "contentRetentionDisabled"> {

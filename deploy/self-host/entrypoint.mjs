@@ -44,6 +44,7 @@ export function selfHostVariableNames(providerSnapshot, env) {
   names.delete("CLAWROUTER_ADMIN_TOKEN_SHA256");
   names.delete("CLAWROUTER_LOCAL_AUTH");
   names.delete("CLAWROUTER_LOCAL_ADMIN_EMAIL");
+  names.delete("CLAWROUTER_PUBLIC_ORIGIN");
   return [...names]
     .filter((name) => env[name] !== undefined && env[name] !== "")
     .sort();
@@ -65,6 +66,21 @@ export function localAdminEmail(env) {
   return value || null;
 }
 
+export function publicOrigin(env) {
+  const value = env.CLAWROUTER_PUBLIC_ORIGIN?.trim();
+  if (!value) return null;
+  let url;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error("CLAWROUTER_PUBLIC_ORIGIN must be an absolute HTTP(S) origin");
+  }
+  if (!["http:", "https:"].includes(url.protocol) || url.username || url.password || url.pathname !== "/" || url.search || url.hash) {
+    throw new Error("CLAWROUTER_PUBLIC_ORIGIN must be an absolute HTTP(S) origin without a path, query, fragment, or credentials");
+  }
+  return url.origin;
+}
+
 function main() {
   const adminTokenSha256 = process.env.CLAWROUTER_ADMIN_TOKEN_SHA256?.trim();
   if (!adminTokenSha256) {
@@ -76,9 +92,11 @@ function main() {
 
   let localAuth;
   let adminEmail;
+  let externalOrigin;
   try {
     localAuth = localAuthMode(process.env);
     adminEmail = localAdminEmail(process.env);
+    externalOrigin = publicOrigin(process.env);
   } catch (error) {
     fail(error.message);
   }
@@ -108,6 +126,9 @@ function main() {
   ];
   if (adminEmail) {
     args.push("--var", `CLAWROUTER_LOCAL_ADMIN_EMAIL:${adminEmail}`);
+  }
+  if (externalOrigin) {
+    args.push("--var", `CLAWROUTER_PUBLIC_ORIGIN:${externalOrigin}`);
   }
   // Wrangler redacts secret-shaped bindings; --var makes Docker env explicit to local workerd.
   for (const name of variableNames) {

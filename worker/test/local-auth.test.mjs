@@ -90,6 +90,16 @@ test("local login rejects cross-origin requests and wrong tokens", async () => {
   assert.equal(env.kv.size, 0);
 });
 
+test("local login rejects a malicious origin even when a trusted public origin is configured", async () => {
+  const env = fixture({ CLAWROUTER_PUBLIC_ORIGIN: "https://console.example.com" });
+  const request = loginRequest(adminKeyMaterial, { ip: "198.51.100.13", from: "https://evil.example" });
+  request.headers.set("x-forwarded-proto", "https");
+  request.headers.set("x-forwarded-host", "console.example.com");
+  const response = await localLogin(request, env);
+  assert.equal(response.status, 403);
+  assert.equal((await response.json()).error.code, "access_csrf_required");
+});
+
 test("local login mints a session cookie that authenticates as an admin", async () => {
   const env = fixture();
   const response = await localLogin(loginRequest(adminKeyMaterial, { ip: "198.51.100.5" }), env);
@@ -122,13 +132,36 @@ test("local login marks the cookie Secure on https origins and honors the config
   assert.equal((await response.json()).session.email, "ops@example.com");
 });
 
-test("local login marks the cookie Secure behind a TLS-terminating proxy", async () => {
+test("client-supplied forwarded headers do not mark a bare workerd cookie Secure", async () => {
   const env = fixture();
-  const request = loginRequest(adminKeyMaterial, { ip: "198.51.100.12" });
+  const request = loginRequest(adminKeyMaterial, { ip: "198.51.100.14" });
   request.headers.set("x-forwarded-proto", "https");
+  request.headers.set("x-forwarded-host", "console.example.com");
+  const response = await localLogin(request, env);
+  assert.equal(response.status, 200);
+  assert.doesNotMatch(response.headers.get("set-cookie"), /; Secure/);
+});
+
+test("local login and logout work behind a declared TLS-terminating proxy", async () => {
+  const publicOrigin = "https://console.example.com";
+  const env = fixture({ CLAWROUTER_PUBLIC_ORIGIN: publicOrigin });
+  const request = loginRequest(adminKeyMaterial, { ip: "198.51.100.12", from: publicOrigin });
+  request.headers.set("x-forwarded-proto", "https");
+  request.headers.set("x-forwarded-host", "console.example.com");
   const response = await localLogin(request, env);
   assert.equal(response.status, 200);
   assert.match(response.headers.get("set-cookie"), /; Secure$/);
+
+  const cookie = cookieFrom(response);
+  assert.ok(await localSession(new Request(`${origin}/v1/session`, { headers: { cookie } }), env));
+  const logoutRequest = new Request(`${origin}/v1/session/logout`, {
+    method: "POST",
+    headers: { cookie, origin: publicOrigin, "x-forwarded-host": "console.example.com", "x-forwarded-proto": "https" },
+  });
+  const logout = await localLogout(logoutRequest, env);
+  assert.equal(logout.status, 200);
+  assert.match(logout.headers.get("set-cookie"), /; Secure$/);
+  assert.equal(await localSession(new Request(`${origin}/v1/session`, { headers: { cookie } }), env), null);
 });
 
 test("local sessions respect disabled, deleted, or demoted user records and expiry", async () => {
@@ -188,15 +221,19 @@ test("session cookies are ignored outside local-auth mode", async () => {
   assert.equal(await verifiedAccessSession(new Request(`${origin}/v1/session`, { headers: { cookie } }), unset), null);
 });
 
-test("spoofed per-request client addresses cannot bypass the global sign-in cap", async () => {
-  const env = fixture();
-  let throttled = null;
-  for (let attempt = 0; attempt < 60 && !throttled; attempt += 1) {
-    const response = await localLogin(loginRequest("wrong", { ip: `192.0.2.${attempt + 1}` }), env);
-    if (response.status === 429) throttled = response;
-    else assert.equal(response.status, 401);
+test("concurrent spoofed-client attempts cannot exceed the global sign-in cap", async () => {
+  const realNow = Date.now;
+  Date.now = () => realNow() + 120_000;
+  try {
+    const env = fixture();
+    const responses = await Promise.all(Array.from({ length: 100 }, (_, attempt) =>
+      localLogin(loginRequest("wrong", { ip: `192.0.2.${attempt + 1}` }), env)));
+    const statuses = responses.map((response) => response.status);
+    assert.equal(statuses.filter((status) => status === 401).length, 50);
+    assert.equal(statuses.filter((status) => status === 429).length, 50);
+    const fresh = await localLogin(loginRequest(adminKeyMaterial, { ip: "192.0.2.200" }), env);
+    assert.equal(fresh.status, 429);
+  } finally {
+    Date.now = realNow;
   }
-  assert.ok(throttled, "expected the global cap to throttle spoofed clients");
-  const fresh = await localLogin(loginRequest(adminKeyMaterial, { ip: "192.0.2.200" }), env);
-  assert.equal(fresh.status, 429);
 });

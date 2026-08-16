@@ -24,7 +24,9 @@ docker compose -f deploy/self-host/docker-compose.yml up --build -d
 
 Compose publishes port 8787 on host loopback only. Keep bearer tokens on a
 trusted host. For remote access, put an authenticated HTTPS reverse proxy in
-front of `127.0.0.1:8787`; do not publish the plaintext port directly.
+front of `127.0.0.1:8787`; do not publish the plaintext port directly. The
+reverse proxy must overwrite `X-Forwarded-Proto` and `X-Forwarded-Host` rather
+than accepting client-supplied values.
 
 Provider bindings declared by the compiled provider snapshot are passed to the
 Worker when they are present in `deploy/self-host/.env`. For example:
@@ -53,6 +55,33 @@ curl --fail -c cookies.txt http://localhost:8787/v1/session/login \
   --data "{\"token\": \"$CLAWROUTER_ADMIN_TOKEN\"}"
 curl --fail -b cookies.txt http://localhost:8787/v1/session
 ```
+
+For an HTTPS reverse proxy, also set the exact browser-facing origin (including
+any non-default port) and recreate the container:
+
+```dotenv
+CLAWROUTER_LOCAL_AUTH=enabled
+CLAWROUTER_PUBLIC_ORIGIN=https://console.example.com
+```
+
+The Worker accepts that origin only when the proxy-provided protocol and host
+reconstruct the same configured value. Unset means strict direct-origin checks,
+and arbitrary forwarded headers are never trusted. For example, a Caddy site
+can overwrite both headers explicitly:
+
+```caddyfile
+console.example.com {
+  reverse_proxy 127.0.0.1:8787 {
+    header_up X-Forwarded-Proto {scheme}
+    header_up X-Forwarded-Host {host}
+  }
+}
+```
+
+Keep port 8787 loopback-only so clients cannot bypass that trusted proxy. A
+successful proxied sign-in receives a `Secure`, `HttpOnly`, `SameSite=Lax`
+session cookie. Invalid `CLAWROUTER_PUBLIC_ORIGIN` values stop the container at
+startup rather than weakening the origin check.
 
 The session authenticates the dashboard, the playground, and the
 `/v1/session/*` endpoints (including self-service maintainer keys) as an

@@ -3,6 +3,7 @@ import test from "node:test";
 import {
   localAdminEmail,
   localAuthMode,
+  publicOrigin,
   renderSelfHostConfig,
   selfHostVariableNames,
 } from "../deploy/self-host/entrypoint.mjs";
@@ -60,8 +61,9 @@ test("self-host vars exclude local-auth bindings owned by the entrypoint", () =>
   const names = selfHostVariableNames({ providers: [] }, {
     CLAWROUTER_LOCAL_AUTH: "enabled",
     CLAWROUTER_LOCAL_ADMIN_EMAIL: "ops@example.com",
+    CLAWROUTER_PUBLIC_ORIGIN: "https://console.example.com",
     CUSTOM_BINDING: "custom",
-    CLAWROUTER_SELF_HOST_VARS: "CUSTOM_BINDING,CLAWROUTER_LOCAL_AUTH,CLAWROUTER_LOCAL_ADMIN_EMAIL",
+    CLAWROUTER_SELF_HOST_VARS: "CUSTOM_BINDING,CLAWROUTER_LOCAL_AUTH,CLAWROUTER_LOCAL_ADMIN_EMAIL,CLAWROUTER_PUBLIC_ORIGIN",
   });
   assert.deepEqual(names, ["CUSTOM_BINDING"]);
 });
@@ -77,4 +79,12 @@ test("local admin email is validated at startup instead of first sign-in", () =>
   assert.equal(localAdminEmail({ CLAWROUTER_LOCAL_ADMIN_EMAIL: " ops@example.com " }), "ops@example.com");
   assert.throws(() => localAdminEmail({ CLAWROUTER_LOCAL_ADMIN_EMAIL: "admin local" }), /valid email address/);
   assert.throws(() => localAdminEmail({ CLAWROUTER_LOCAL_ADMIN_EMAIL: "admin@" }), /valid email address/);
+});
+
+test("public origin is canonicalized and invalid values fail closed at startup", () => {
+  assert.equal(publicOrigin({}), null);
+  assert.equal(publicOrigin({ CLAWROUTER_PUBLIC_ORIGIN: " https://Console.Example.com:443/ " }), "https://console.example.com");
+  for (const value of ["console.example.com", "ftp://console.example.com", "https://user@example.com", "https://console.example.com/path", "https://console.example.com?query=1", "https://console.example.com/#fragment"]) {
+    assert.throws(() => publicOrigin({ CLAWROUTER_PUBLIC_ORIGIN: value }), /absolute HTTP\(S\) origin/);
+  }
 });

@@ -11,6 +11,7 @@ import { correlateIngressRequest, withRequestId } from "./correlation.ts";
 import { localAuthEnabled, localLogin, localLogout } from "./local-auth";
 import { oauthCallback } from "./oauth";
 import { routeCatalog, snapshot } from "./providers";
+import { sameOrigin } from "./request-origin";
 import { sessionCredentialsApi } from "./session-credentials";
 import { authenticateProxyKey, inspectKey, proxyManifest, proxyNative, proxyOpenAi } from "./proxy";
 import type { Env, QueueMessage } from "./types";
@@ -72,7 +73,7 @@ async function route(request: Request, env: Env, context: ExecutionContext): Pro
   if (request.method === "GET" && path === "/v1/key/inspect") return inspectKey(request.headers, env);
 
   if (request.method === "POST" && path.startsWith("/v1/playground/")) {
-    if (!sameOrigin(request)) return errorResponse("access_csrf_required", "same-origin playground request required", 403);
+    if (!sameOrigin(request, env)) return errorResponse("access_csrf_required", "same-origin playground request required", 403);
     const suffix = path.slice("/v1/playground".length);
     if (openAiPath(suffix)) return proxyOpenAi(request, env, context, suffix, "access");
     if (suffix.startsWith("/proxy/")) return proxyManifest(request, env, context, `/v1${suffix}`, "access");
@@ -111,7 +112,6 @@ async function sessionUsage(request: Request, env: Env): Promise<Response> {
   return privateJson({ session: publicSession(session), policies: policyRows, usage });
 }
 
-function sameOrigin(request: Request): boolean { const url = new URL(request.url), origin = request.headers.get("origin"), site = request.headers.get("sec-fetch-site"); return origin === url.origin || (!origin && (!site || ["same-origin", "same-site", "none"].includes(site))); }
 function openAiPath(path: string): boolean { return ["/v1/chat/completions", "/v1/responses", "/v1/embeddings"].includes(path); }
 
 function serviceIndex(env: Env) {
