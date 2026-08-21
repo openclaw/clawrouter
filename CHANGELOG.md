@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Prevent control-plane runtime details from reaching client errors while preserving explicit validation failures.
+- Validate deployed Access redirects from parsed URL origins and paths.
 
 ## 0.2.0 - 2026-08-16
 
