@@ -6,7 +6,7 @@ import {
   selectLiveProviderPlans,
   summarizePlan,
 } from "./provider-smoke-plan.mjs";
-import { assertAccessGateResponse } from "./smoke-access-gate.mjs";
+import { assertAccessGateResponse, isAccessRedirect } from "./smoke-access-gate.mjs";
 import {
   smokeReadinessTimeoutMs,
   waitForHealth,
@@ -125,7 +125,7 @@ async function expectRedirectOrAccessGate(url, name, location) {
   if (response.status >= 300 && response.status < 400 && actual === location) {
     return;
   }
-  if (response.status >= 300 && response.status < 400 && looksLikeAccessRedirect(actual, url)) {
+  if (response.status >= 300 && response.status < 400 && isAccessRedirect(actual, url)) {
     return;
   }
   if (response.status >= 300 && response.status < 400) {
@@ -154,7 +154,7 @@ async function expectClientAuthGate(url, name, init = {}) {
     redirect: "manual",
   });
   const location = response.headers.get("location") ?? "";
-  if (response.status >= 300 && response.status < 400 && looksLikeAccessRedirect(location, url)) {
+  if (response.status >= 300 && response.status < 400 && isAccessRedirect(location, url)) {
     return;
   }
   const contentType = response.headers.get("content-type") ?? "";
@@ -169,17 +169,6 @@ async function expectClientAuthGate(url, name, init = {}) {
     }
   }
   throw new Error(`${name} returned ${response.status}, expected a ClawRouter or Cloudflare Access auth challenge`);
-}
-
-function looksLikeAccessRedirect(location, requestUrl) {
-  if (location.includes("cloudflareaccess.com") || location.includes("/cdn-cgi/access/")) {
-    return true;
-  }
-  try {
-    return new URL(location, requestUrl).origin !== new URL(requestUrl).origin;
-  } catch {
-    return false;
-  }
 }
 
 function expectRouteCatalog(catalog, name) {

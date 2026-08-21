@@ -19,3 +19,17 @@ export function assertAccessGateResponse(response, contentType, body, name) {
   }
   throw new Error(`${name} returned ${response.status}, expected Cloudflare Access challenge`);
 }
+
+export function isAccessRedirect(location, requestUrl) {
+  try {
+    const redirect = new URL(location, requestUrl);
+    const request = new URL(requestUrl);
+    return (
+      redirect.origin !== request.origin ||
+      (redirect.origin === request.origin &&
+        redirect.pathname.startsWith("/cdn-cgi/access/"))
+    );
+  } catch {
+    return false;
+  }
+}
