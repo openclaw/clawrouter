@@ -3,7 +3,7 @@ import type {
   GrantRoutingPolicy, GrantRuntimeState, ProviderConnection, ProxyCredentialEntry,
 } from "./types";
 import { contentRetentionDefault } from "./content-retention.ts";
-import { errorResponse, json, normalizeEmail, readJson } from "./utils.ts";
+import { errorResponse, HttpError, json, normalizeEmail, readJson } from "./utils.ts";
 
 type Principal = { principalType: "user" | "group"; principalId: string };
 type Seed = { principal: Principal; bindings: PolicyBinding[] };
@@ -59,7 +59,8 @@ export class PolicyBindingIndexObject implements DurableObject {
       if (path === "/oauth-states/consume") return json({ state: this.consumeOAuthState(await readJson<{ state: string; actorEmail: string }>(request)) });
       return errorResponse("route_not_found", "route not found", 404);
     } catch (error) {
-      return errorResponse("authority_error", error instanceof Error ? error.message : String(error), 400);
+      if (error instanceof HttpError) return errorResponse(error.code, error.message, error.status);
+      return errorResponse("authority_error", "authority request failed", 500);
     }
   }
 
@@ -173,7 +174,7 @@ export class PolicyBindingIndexObject implements DurableObject {
   }
 
   private putPolicy(entry: AccessPolicyEntry): void {
-    if (!entry.policyId) throw new Error("policyId is required");
+    if (!entry.policyId) invalidAuthorityRequest("policyId is required");
     this.sql.exec("INSERT OR REPLACE INTO access_policies (policy_id, policy_json) VALUES (?, ?)", entry.policyId, JSON.stringify(entry.policy));
   }
 
@@ -256,12 +257,12 @@ export class PolicyBindingIndexObject implements DurableObject {
 
   private syncGrantPool(input: GrantPoolSyncRequest): void {
     const scope = input.scope === "policies" || input.scope === "tenants" ? input.scope : null;
-    if (!scope) throw new Error("grant pool scope is invalid");
+    if (!scope) invalidAuthorityRequest("grant pool scope is invalid");
     const scopeId = grantSegment(input.scopeId, "scopeId"), tokenRef = grantSegment(input.tokenRef, "tokenRef");
     const previousProvider = input.previousProvider == null ? null : grantSegment(input.previousProvider, "previousProvider");
     const provider = input.provider == null ? null : grantSegment(input.provider, "provider");
     const adding = input.enabled === true && provider !== null;
-    if (adding && !this.hasPoolMember(scope, scopeId, provider, tokenRef) && this.poolTokenRefs(scope, scopeId, provider).length >= 32) throw new Error("grant pool cannot contain more than 32 members per scope and provider");
+    if (adding && !this.hasPoolMember(scope, scopeId, provider, tokenRef) && this.poolTokenRefs(scope, scopeId, provider).length >= 32) invalidAuthorityRequest("grant pool cannot contain more than 32 members per scope and provider");
     if (previousProvider && (previousProvider !== provider || !adding)) this.sql.exec("DELETE FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND provider_id = ? AND token_ref = ?", scope, scopeId, previousProvider, tokenRef);
     if (adding) this.sql.exec("INSERT OR IGNORE INTO upstream_grant_pool_members (scope, scope_id, provider_id, token_ref) VALUES (?, ?, ?, ?)", scope, scopeId, provider, tokenRef);
     if (!adding) this.sql.exec("DELETE FROM upstream_grant_runtime WHERE grant_key = ?", scope === "tenants" ? `oauth/tenants/${scopeId}/${tokenRef}` : `oauth/${scopeId}/${tokenRef}`);
@@ -275,7 +276,7 @@ export class PolicyBindingIndexObject implements DurableObject {
   }
 
   private grantRuntimeStates(rawKeys: unknown): Record<string, GrantRuntimeState> {
-    if (!Array.isArray(rawKeys) || rawKeys.length > 66) throw new Error("grant runtime keys must be a bounded array");
+    if (!Array.isArray(rawKeys) || rawKeys.length > 66) invalidAuthorityRequest("grant runtime keys must be a bounded array");
     const states: Record<string, GrantRuntimeState> = {};
     for (const key of [...new Set(rawKeys.map((value) => grantKey(value)))]) {
       const row = rows<{ state_json: string }>(this.sql.exec("SELECT state_json FROM upstream_grant_runtime WHERE grant_key = ?", key))[0];
@@ -286,7 +287,7 @@ export class PolicyBindingIndexObject implements DurableObject {
 
   private selectGrant(input: GrantPoolSelectRequest): { selectedKey: string; selectedCount: number; lastSelectedAt: string } {
     const poolKey = grantSelectionPoolKey(input.poolKey);
-    if (!Array.isArray(input.candidates) || input.candidates.length < 1 || input.candidates.length > 66) throw new Error("grant selection candidates must be a bounded array");
+    if (!Array.isArray(input.candidates) || input.candidates.length < 1 || input.candidates.length > 66) invalidAuthorityRequest("grant selection candidates must be a bounded array");
     const candidates = [...new Map(input.candidates.map((candidate) => {
       const key = grantKey(candidate.key);
       const weight = typeof candidate.weight === "number" && Number.isFinite(candidate.weight) && candidate.weight > 0 && candidate.weight <= 1_000_000 ? candidate.weight : 1;
@@ -313,7 +314,7 @@ export class PolicyBindingIndexObject implements DurableObject {
   }
 
   private grantSelectionStats(rawKeys: unknown): Record<string, { selectedCount: number; lastSelectedAt: string | null }> {
-    if (!Array.isArray(rawKeys) || rawKeys.length > 66) throw new Error("grant selection keys must be a bounded array");
+    if (!Array.isArray(rawKeys) || rawKeys.length > 66) invalidAuthorityRequest("grant selection keys must be a bounded array");
     const stats: Record<string, { selectedCount: number; lastSelectedAt: string | null }> = {};
     for (const key of [...new Set(rawKeys.map((value) => grantKey(value)))]) {
       const row = rows<{ selected_count: number; last_selected_ms: number | null }>(this.sql.exec("SELECT COALESCE(SUM(selected_count), 0) AS selected_count, MAX(last_selected_ms) AS last_selected_ms FROM upstream_grant_selection WHERE grant_key = ?", key))[0];
@@ -355,7 +356,7 @@ interface GrantPoolSelectRequest {
 }
 
 function grantSegment(value: unknown, field: string): string {
-  if (typeof value !== "string" || !value.length || value.length > 256 || value.includes("/") || /[\u0000-\u001f\u007f]/.test(value)) throw new Error(`${field} must be a valid grant key segment`);
+  if (typeof value !== "string" || !value.length || value.length > 256 || value.includes("/") || /[\u0000-\u001f\u007f]/.test(value)) invalidAuthorityRequest(`${field} must be a valid grant key segment`);
   return value;
 }
 
@@ -364,12 +365,12 @@ function grantPoolScopeId(value: unknown): string | null {
 }
 
 function grantKey(value: unknown): string {
-  if (typeof value !== "string" || !value.startsWith("oauth/") || value.length > 1024 || /[\u0000-\u001f\u007f]/.test(value)) throw new Error("grant key is invalid");
+  if (typeof value !== "string" || !value.startsWith("oauth/") || value.length > 1024 || /[\u0000-\u001f\u007f]/.test(value)) invalidAuthorityRequest("grant key is invalid");
   return value;
 }
 
 function grantSelectionPoolKey(value: unknown): string {
-  if (typeof value !== "string" || !value.length || value.length > 1024 || /[\u0000-\u001f\u007f]/.test(value)) throw new Error("grant selection pool key is invalid");
+  if (typeof value !== "string" || !value.length || value.length > 1024 || /[\u0000-\u001f\u007f]/.test(value)) invalidAuthorityRequest("grant selection pool key is invalid");
   return value;
 }
 
@@ -389,22 +390,22 @@ function weightedRandom<T extends { weight: number }>(candidates: T[]): T {
 }
 
 function normalizeGrantRuntimeState(value: unknown): GrantRuntimeState {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new Error("grant runtime state is invalid");
+  if (!value || typeof value !== "object" || Array.isArray(value)) invalidAuthorityRequest("grant runtime state is invalid");
   const state = value as Partial<GrantRuntimeState>;
-  if (!state.observedAt || !Number.isFinite(Date.parse(state.observedAt)) || !["provider_response", "provider_probe"].includes(state.source ?? "")) throw new Error("grant runtime observation is invalid");
-  if (!state.status || !["available", "limited", "cooldown"].includes(state.status)) throw new Error("grant runtime status is invalid");
-  if (!state.lastSignal || !["quota", "rate_limited", "authentication"].includes(state.lastSignal)) throw new Error("grant runtime signal is invalid");
+  if (!state.observedAt || !Number.isFinite(Date.parse(state.observedAt)) || !["provider_response", "provider_probe"].includes(state.source ?? "")) invalidAuthorityRequest("grant runtime observation is invalid");
+  if (!state.status || !["available", "limited", "cooldown"].includes(state.status)) invalidAuthorityRequest("grant runtime status is invalid");
+  if (!state.lastSignal || !["quota", "rate_limited", "authentication"].includes(state.lastSignal)) invalidAuthorityRequest("grant runtime signal is invalid");
   const grantRevision = state.grantRevision == null ? null : typeof state.grantRevision === "string" && state.grantRevision.length <= 64 && Number.isFinite(Date.parse(state.grantRevision)) ? state.grantRevision : null;
   const cooldownUntil = state.cooldownUntil == null ? null : Number.isFinite(Date.parse(state.cooldownUntil)) ? state.cooldownUntil : null;
-  if (!Array.isArray(state.windows) || state.windows.length > 12) throw new Error("grant runtime windows are invalid");
+  if (!Array.isArray(state.windows) || state.windows.length > 12) invalidAuthorityRequest("grant runtime windows are invalid");
   const windows = state.windows.map((window) => {
-    if (!window || !["requests", "tokens", "input_tokens", "output_tokens", "credits", "subscription", "generic"].includes(window.kind)) throw new Error("grant runtime window is invalid");
+    if (!window || !["requests", "tokens", "input_tokens", "output_tokens", "credits", "subscription", "generic"].includes(window.kind)) invalidAuthorityRequest("grant runtime window is invalid");
     const id = typeof window.id === "string" && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(window.id) ? window.id : window.kind;
     const unit = window.unit == null ? null : typeof window.unit === "string" && window.unit.length <= 32 ? window.unit : null;
     const quotaWindow = window.window == null ? null : typeof window.window === "string" && window.window.length <= 64 ? window.window : null;
     const metric = (input: unknown) => input == null ? null : typeof input === "number" && Number.isFinite(input) && input >= 0 && input <= Number.MAX_SAFE_INTEGER ? input : NaN;
     const remaining = metric(window.remaining), limit = metric(window.limit);
-    if (Number.isNaN(remaining) || Number.isNaN(limit)) throw new Error("grant runtime window metric is invalid");
+    if (Number.isNaN(remaining) || Number.isNaN(limit)) invalidAuthorityRequest("grant runtime window metric is invalid");
     const resetAt = window.resetAt == null ? null : Number.isFinite(Date.parse(window.resetAt)) ? window.resetAt : null;
     return { id, kind: window.kind, unit, window: quotaWindow, remaining, limit, resetAt };
   });
@@ -623,19 +624,23 @@ function normalizePrincipal(value: Principal): Principal {
   const principalType = value.principalType;
   let principalId = value.principalId.trim().toLowerCase();
   if (principalType === "user") principalId = normalizeEmail(principalId) ?? "";
-  if (!principalId || !["user", "group"].includes(principalType)) throw new Error("invalid policy binding principal");
+  if (!principalId || !["user", "group"].includes(principalType)) invalidAuthorityRequest("invalid policy binding principal");
   return { principalType, principalId };
 }
 function normalizeBinding(value: PolicyBinding): PolicyBinding {
   const principal = normalizePrincipal(value);
-  if (!value.policyId?.trim()) throw new Error("policyId is required");
+  if (!value.policyId?.trim()) invalidAuthorityRequest("policyId is required");
   return { ...principal, policyId: value.policyId.trim(), enabled: value.enabled ?? true, priority: value.priority ?? 100 };
 }
 function normalizeUser(value: AccessControlUser): AccessControlUser {
   const email = normalizeEmail(value.email);
-  if (!email) throw new Error("invalid access user email");
+  if (!email) invalidAuthorityRequest("invalid access user email");
   return { email, record: { role: value.record.role ?? "user", tenantId: value.record.tenantId ?? "default", enabled: value.record.enabled ?? true, groups: [...new Set(value.record.groups ?? [])].map((item) => item.trim().toLowerCase()).filter(Boolean).sort(), contentRetentionDisabled: value.record.contentRetentionDisabled ?? false, assignmentState: value.record.assignmentState } };
 }
 function sortBindings(values: PolicyBinding[]): PolicyBinding[] {
   return values.map(normalizeBinding).sort((a, b) => a.priority - b.priority || a.principalType.localeCompare(b.principalType) || a.principalId.localeCompare(b.principalId) || a.policyId.localeCompare(b.policyId));
+}
+
+function invalidAuthorityRequest(message: string): never {
+  throw new HttpError(400, "authority_error", message);
 }
