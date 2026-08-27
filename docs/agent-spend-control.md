@@ -24,12 +24,22 @@ reference. Chat Completions output bounds are multiplied by `n`.
 Input reservation uses the declared cache-write rate when the request contains
 cache controls. After the response completes, ClawRouter settles reported input,
 cached-input, cache-write, and output tokens at the manifest rates and releases
-the unused reservation. Streaming SSE responses are inspected inline; bodies
-retain backpressure and are not persisted. Missing usage, malformed terminal
+the unused reservation. Streaming SSE responses are inspected from a bounded
+response clone without persisting bodies. Missing usage, malformed terminal
 events, oversized JSON responses, and interrupted streams remain charged at
 the reservation.
-Settlement requires a provider terminal marker (`response.completed`,
+Anthropic and OpenAI streaming settlement requires a provider terminal marker (`response.completed`,
 `message_stop`, or `[DONE]`), not merely a clean transport EOF.
+
+Usage events record total input tokens, including cache reads and writes.
+[Anthropic reports these as disjoint counters](https://platform.claude.com/docs/en/build-with-claude/prompt-caching),
+so ClawRouter adds them before pricing and selecting a long-context tier.
+OpenAI's input total already includes its cache-detail counters and is not
+increased. Cache writes are reported once in `cache_write_input_tokens`; known
+five-minute and one-hour writes use their respective rates, and writes without
+a duration use the highest declared cache-write rate. Anthropic streaming
+updates replace cumulative counters while preserving omitted or null counters
+from earlier events; an incomplete stream retains its reservation.
 
 `requestCostMicros` on a policy is an explicit fixed-cost override. Routes
 without pricing use the legacy one-micro fallback only when no monthly budget

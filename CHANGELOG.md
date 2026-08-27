@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Correct Anthropic cache-token costs and budget settlement, preserve cumulative streaming usage, and retain reservations for incomplete Anthropic and OpenAI streams.
 - Prevent control-plane runtime details from reaching client errors while preserving explicit validation failures.
 - Validate deployed Access redirects from parsed URL origins and paths.
 - Refresh the bundled autoreview skill from its canonical source and clarify synthetic detector fixtures.
