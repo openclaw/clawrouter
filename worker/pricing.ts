@@ -53,7 +53,7 @@ export function actualModelCost(pricing: ModelPricing, tokens: PricedTokens): nu
   let remaining = Math.max(0, tokens.input - cached);
   const write5m = Math.min(remaining, tokens.cacheWrite5m ?? 0); remaining -= write5m;
   const write1h = Math.min(remaining, tokens.cacheWrite1h ?? 0); remaining -= write1h;
-  const genericWrite = Math.min(remaining, tokens.cacheWrite ?? 0); remaining -= genericWrite;
+  const genericWrite = Math.min(remaining, Math.max(0, (tokens.cacheWrite ?? 0) - write5m - write1h)); remaining -= genericWrite;
   const write5mRate = rates.cacheWrite5mInput ?? rates.input;
   const write1hRate = rates.cacheWrite1hInput ?? write5mRate;
   const genericWriteRate = rates.cacheWriteInput ?? Math.max(write5mRate, write1hRate);

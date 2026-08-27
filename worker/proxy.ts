@@ -15,7 +15,7 @@ import {
   resolveTemplate, signSigV4, transformRequestBody, upstreamAuth, upstreamPath,
 } from "./providers";
 import { actualModelCost, estimateModelCost } from "./pricing";
-import { extractUsageTokens, type UsageTokens } from "./token-usage";
+import { extractSseUsageTokens, extractUsageTokens, type UsageTokens } from "./token-usage";
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledModel, CompiledProvider, CompiledQuotaConfig, Env, ProviderConnection, UsageEvent } from "./types";
 import {
   errorResponse, HttpError, parseProxyKey, randomId, readJson, safeEqual, sha256Hex,
@@ -650,7 +650,7 @@ async function finalizeResponse(response: Response, env: Env, auth: AuthorizedId
   try {
     const contentType = response.headers.get("content-type") ?? "";
     if (contentType.includes("json")) tokens = extractUsageTokens(JSON.parse(await readLimited(response, 2 * 1024 * 1024)));
-    else if (contentType.includes("text/event-stream")) tokens = extractSseTokens(await readLimited(response, 2 * 1024 * 1024));
+    else if (contentType.includes("text/event-stream")) tokens = extractSseUsageTokens(await readLimited(response, 2 * 1024 * 1024));
     else await drainResponseBody(response.body);
   } catch { /* usage is best-effort; reservation stays conservative */ }
   const measured = tokens ? actualCost(selection.model, tokens, auth.policy.requestCostMicros) : null;
@@ -696,17 +696,6 @@ function usageEvent(auth: AuthorizedIdentity, selection: ProxySelection, request
     pricing_effective_at: selection.model?.pricing?.effectiveAt ?? null, cost_basis: cost.basis, status_code: statusCode,
     duration_ms: Date.now() - started, content_retained: !!contentRef, content_ref: contentRef, status,
   };
-}
-
-function extractSseTokens(text: string): Tokens | null {
-  let found: Tokens | null = null;
-  for (const line of text.split("\n")) {
-    if (!line.startsWith("data:")) continue;
-    const data = line.slice(5).trim();
-    if (!data || data === "[DONE]") continue;
-    try { found = extractUsageTokens(JSON.parse(data)) ?? found; } catch { /* ignore partial SSE events */ }
-  }
-  return found;
 }
 
 async function readLimited(response: Response, limit: number): Promise<string> {
