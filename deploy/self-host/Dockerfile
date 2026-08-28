@@ -4,7 +4,7 @@ FROM node:24-slim AS build
 
 WORKDIR /app
 
-RUN corepack enable && corepack prepare pnpm@11.5.1 --activate
+RUN corepack enable && corepack prepare pnpm@11.24.0 --activate
 
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY admin/package.json admin/package.json
