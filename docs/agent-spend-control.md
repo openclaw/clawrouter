@@ -116,8 +116,12 @@ retain the same pricing when called through native or manifest proxy routes.
 Background Responses are rejected under listed pricing because their initial
 response has no terminal usage; configure a fixed per-request policy price
 until ClawRouter supports polling and deferred settlement.
-The bundled Anthropic catalog includes Claude Opus 5 and Sonnet 5 with a 1M
+The bundled Anthropic catalog includes Claude Opus 5, Sonnet 5, and Fable 5 with a 1M
 context window and 128K output limit, alongside the existing model routes.
+Fable 5 always uses adaptive thinking and requires
+[30-day upstream data retention](https://platform.claude.com/docs/en/models/fable-5/introducing-claude-fable-5-and-claude-mythos-5).
+Disabling ClawRouter request-content retention does not disable Anthropic's
+retention; approve that requirement before selecting Fable 5.
 Embedding manifests distinguish the per-input token limit from the aggregate
 request limit, so batched inputs reserve against the provider's full request
 allowance.

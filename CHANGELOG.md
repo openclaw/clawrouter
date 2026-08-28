@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add Claude Fable 5 with current input, output, and cache pricing; document its mandatory upstream retention without changing the Anthropic default model.
 - Add Claude Opus 5 and Sonnet 5 with current cache pricing, and release token-priced reservations for Anthropic refusals before any output while preserving reported usage.
 - Correct Anthropic cache-token costs and budget settlement, preserve cumulative streaming usage, and retain reservations for incomplete Anthropic and OpenAI streams.
 - Add an opt-in private Responses alias facade with verified owner or isolated opaque-workload authentication and broker-only OAuth, explicit reasoning capabilities and disclosure of unenforced subscription output limits, bounded native Lite protocol and typed model containment, and no shared catalog, grant, retention, or billing integration; full client and isolation proof remain deployment prerequisites.
