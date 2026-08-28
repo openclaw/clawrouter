@@ -45,6 +45,8 @@ Clients authenticate with one policy-scoped `clawrouter-` credential. The select
 
 Models use provider-qualified IDs such as `openai/gpt-4.1-mini`. `GET /v1/catalog` reports only the providers, models, and transports the caller can execute. See the [API reference](docs/api-reference.md) for the complete route inventory and authentication boundaries.
 
+The opt-in [private alias facade](docs/private-codex.md) is a separate, Responses-only contract for an isolated owner-only runtime, not a model in the shared catalog or per-user protection for a shared Gateway. It requires separately provisioned secret-store bindings and has no generic billing or retention.
+
 ## Provider catalog
 
 Provider support starts with one manifest:

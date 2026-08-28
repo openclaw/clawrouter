@@ -10,6 +10,8 @@ Browser session, playground, and OAuth routes require a verified Cloudflare Acce
 
 The Docker self-hosting profile has no Cloudflare Access identity. Its admin API uses the bearer token, and clients use normal proxy credentials.
 
+The optional `/private/v1/{models,catalog,responses}` facade has its own pinned owner or isolated-workload authentication and never accepts generic proxy/admin credentials. See the [private alias contract](private-codex.md) for exact paths, configuration, protocol limits, and isolation requirements. It is absent from public discovery.
+
 ## Discovery and client routes
 
 | Method | Path | Purpose |
