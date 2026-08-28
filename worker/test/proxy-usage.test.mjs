@@ -81,6 +81,24 @@ test("Anthropic long-context pricing uses the full input, including the cache", 
 
 const sse = (...events) => events.map((event) => `data: ${typeof event === "string" ? event : JSON.stringify(event)}\n\n`).join("");
 
+test("Anthropic early refusals retain observed usage without billing it", () => {
+  const message = { type: "message", role: "assistant", content: [], stop_reason: "refusal", usage: { input_tokens: 412, output_tokens: 0 } };
+  const start = { type: "message_start", message: { ...message, stop_reason: null } };
+  const delta = { type: "message_delta", delta: { stop_reason: "refusal" }, usage: { output_tokens: 0 } };
+  const stop = { type: "message_stop" };
+  for (const tokens of [extractUsageTokens(message), extractSseUsageTokens(sse(start, delta, stop))]) {
+    assert.equal(tokens.input, 412);
+    assert.equal(tokens.total, 412);
+    assert.equal(actualModelCost(cachePricing, tokens), 0);
+  }
+  assert.equal(extractSseUsageTokens(sse(start, delta)), null);
+  for (const tokens of [
+    extractUsageTokens({ ...message, stop_reason: "end_turn" }),
+    extractUsageTokens({ ...message, content: [{ type: "text", text: "Partial output" }], usage: { input_tokens: 412, output_tokens: 2 } }),
+    extractSseUsageTokens(sse(start, { type: "content_block_start", index: 0, content_block: { type: "text", text: "Partial output" } }, { ...delta, usage: { output_tokens: 2 } }, stop)),
+  ]) assert.ok(actualModelCost(cachePricing, tokens) >= 412);
+});
+
 test("Anthropic cumulative deltas update cache buckets without summing snapshots", () => {
   const stream = sse(
     { type: "message_start", message: { usage: { input_tokens: 0, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, cache_creation: { ephemeral_5m_input_tokens: 0, ephemeral_1h_input_tokens: 0 }, output_tokens: 1 } } },

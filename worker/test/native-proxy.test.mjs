@@ -42,23 +42,25 @@ test("Google native path models use manifest pricing under a budgeted policy", (
   assert.ok(cost.reserveMicros > 1);
 });
 
-test("Anthropic native body models remain rewritten in the body", () => {
+test("current Anthropic native models retain routing and budget pricing", () => {
   const anthropic = providerById("anthropic");
   assert.ok(anthropic);
   const messages = anthropic.endpoints.find((endpoint) => endpoint.id === "messages");
   assert.ok(messages);
 
-  const prepared = prepareNativeRequest(
-    anthropic,
-    messages,
-    { model: "anthropic/claude-sonnet-4-6", max_tokens: 16, messages: [{ role: "user", content: "hello" }] },
-    "/v1/messages",
-    {},
-  );
-
-  assert.equal(prepared.model?.id, "anthropic/claude-sonnet-4-6");
-  assert.equal(prepared.body.model, "claude-sonnet-4-6");
-  assert.deepEqual(prepared.pathParams, {});
+  for (const model of ["claude-opus-5", "claude-sonnet-5", "claude-sonnet-4-6"]) {
+    const prepared = prepareNativeRequest(
+      anthropic,
+      messages,
+      { model: `anthropic/${model}`, max_tokens: 16, messages: [{ role: "user", content: "hello" }] },
+      "/v1/messages",
+      {},
+    );
+    assert.equal(prepared.model?.id, `anthropic/${model}`);
+    assert.equal(prepared.body.model, model);
+    assert.deepEqual(prepared.pathParams, {});
+    assert.equal(estimateCost(prepared.model, prepared.body, null, "llm.messages").basis, "manifest_pricing");
+  }
 });
 
 test("native path models reject provider mismatches", () => {

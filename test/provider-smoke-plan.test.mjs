@@ -103,13 +103,14 @@ test("Firecrawl uses keyless mode without a configured API key", () => {
 });
 
 test("Anthropic count_tokens smoke omits messages-only max_tokens", () => {
-  const provider = buildProviderSmokePlan(compileProviderSnapshot(), {}).providers.find(
+  const snapshot = compileProviderSnapshot();
+  const provider = buildProviderSmokePlan(snapshot, {}).providers.find(
     (entry) => entry.id === "anthropic",
   );
   assert.equal(provider.target.kind, "manifest_proxy");
   assert.equal(provider.target.endpoint, "count_tokens");
   assert.equal(provider.target.envelope.body.max_tokens, undefined);
-  assert.equal(provider.target.envelope.body.model, "claude-opus-4-8");
+  assert.equal(provider.target.envelope.body.model, snapshot.providers.find((entry) => entry.id === "anthropic").models[0].upstream);
 });
 
 test("newly budgeted provider defaults compile with dated pricing", () => {

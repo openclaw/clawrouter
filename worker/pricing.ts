@@ -7,6 +7,7 @@ export interface CostEstimate {
 }
 
 export interface PricedTokens {
+  billable?: false;
   input: number | null;
   output: number | null;
   cached: number | null;
@@ -45,6 +46,7 @@ export function estimateModelCost(pricing: ModelPricing, body: Record<string, un
 }
 
 export function actualModelCost(pricing: ModelPricing, tokens: PricedTokens): number | null {
+  if (tokens.billable === false) return 0;
   if (tokens.input == null) return null;
   const rates = effectiveRates(pricing, tokens.input);
   if (tokens.output == null && rates.output > 0) return null;
