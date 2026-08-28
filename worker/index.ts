@@ -10,6 +10,7 @@ import { contentRetentionDefault } from "./content-retention.ts";
 import { correlateIngressRequest, withRequestId } from "./correlation.ts";
 import { localAuthEnabled, localLogin, localLogout } from "./local-auth";
 import { oauthCallback } from "./oauth";
+import { privateCodex, privatePath } from "./private-codex";
 import { routeCatalog, snapshot } from "./providers";
 import { sameOrigin } from "./request-origin";
 import { sessionCredentialsApi } from "./session-credentials";
@@ -25,6 +26,8 @@ export { BudgetLedgerObject, UsageLedgerObject };
 
 const handler: ExportedHandler<Env, QueueMessage> = {
   async fetch(request, env, context) {
+    // Private responses must not pass through public correlation, logging, or CORS.
+    if (privatePath(new URL(request.url).pathname)) return privateCodex(request, env);
     const path = canonicalPath(new URL(request.url).pathname);
     const correlated = correlateIngressRequest(request);
     let response: Response;

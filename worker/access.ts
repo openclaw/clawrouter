@@ -133,7 +133,7 @@ async function verifiedGithubEvidence(request: Request, email: string) {
   }
 }
 
-async function verifyAccessJwt(token: string, teamDomain: string, expectedAud: string): Promise<AccessJwtPayload | null> {
+export async function verifyAccessJwt(token: string, teamDomain: string, expectedAud: string, signal?: AbortSignal): Promise<AccessJwtPayload | null> {
   teamDomain = teamDomain.trim().replace(/^https?:\/\//i, "").split(/[/?#]/)[0].toLowerCase();
   const parts = token.split(".");
   if (parts.length !== 3) return null;
@@ -143,7 +143,7 @@ async function verifyAccessJwt(token: string, teamDomain: string, expectedAud: s
     payload = JSON.parse(decodeBase64Url(parts[1]));
   } catch { return null; }
   if (header.alg !== "RS256" || !header.kid || !validPayload(payload, teamDomain, expectedAud)) return null;
-  const response = await fetch(`https://${teamDomain}/cdn-cgi/access/certs`, { cf: { cacheTtl: 300, cacheEverything: true } });
+  const response = await fetch(`https://${teamDomain}/cdn-cgi/access/certs`, { cf: { cacheTtl: 300, cacheEverything: true }, signal });
   if (!response.ok) return null;
   const key = (await response.json<{ keys: Jwk[] }>()).keys.find((candidate) => candidate.kid === header.kid && candidate.kty === "RSA");
   if (!key) return null;
