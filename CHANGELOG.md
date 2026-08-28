@@ -2,14 +2,13 @@
 
 ## Unreleased
 
-- Refresh Worker and admin dependencies, pnpm, and GitHub Actions while preserving the dependency release-age policy.
-
 - Add Claude Opus 5 and Sonnet 5 with current cache pricing, and release token-priced reservations for Anthropic refusals before any output while preserving reported usage.
 - Correct Anthropic cache-token costs and budget settlement, preserve cumulative streaming usage, and retain reservations for incomplete Anthropic and OpenAI streams.
 - Add an opt-in private Responses alias facade with verified owner or isolated opaque-workload authentication and broker-only OAuth, explicit reasoning capabilities and disclosure of unenforced subscription output limits, bounded native Lite protocol and typed model containment, and no shared catalog, grant, retention, or billing integration; full client and isolation proof remain deployment prerequisites.
 - Prevent control-plane runtime details from reaching client errors while preserving explicit validation failures.
 - Validate deployed Access redirects from parsed URL origins and paths.
 - Refresh the bundled autoreview skill from its canonical source and clarify synthetic detector fixtures.
+- Refresh Worker and admin dependencies, pnpm, and GitHub Actions while preserving the dependency release-age policy.
 
 ## 0.2.0 - 2026-08-16
 
