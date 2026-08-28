@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Add Claude Opus 5 and Sonnet 5 with current cache pricing, and release token-priced reservations for Anthropic refusals before any output while preserving reported usage.
 - Correct Anthropic cache-token costs and budget settlement, preserve cumulative streaming usage, and retain reservations for incomplete Anthropic and OpenAI streams.
 - Prevent control-plane runtime details from reaching client errors while preserving explicit validation failures.
 - Validate deployed Access redirects from parsed URL origins and paths.

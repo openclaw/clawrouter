@@ -68,10 +68,14 @@ const messageStart = { type: "message_start", message: { type: "message", usage:
 const messageDelta = { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 20 } };
 const messageStop = { type: "message_stop" };
 const sse = (...events) => events.map((event) => `data: ${typeof event === "string" ? event : JSON.stringify(event)}\n\n`).join("");
+const earlyRefusal = { type: "message", content: [], stop_reason: "refusal", usage: { ...messageUsage, output_tokens: 0 } };
 
-for (const [name, body, contentType, measured] of [
+for (const [name, body, contentType, measured, measuredCost = 4_710, outputTokens = 20] of [
   ["JSON", JSON.stringify({ type: "message", usage: messageUsage }), "application/json", true],
   ["SSE", sse(messageStart, { type: "message_delta", usage: { output_tokens: 5 } }, messageDelta, messageStop), "text/event-stream", true],
+  ["JSON early refusal", JSON.stringify(earlyRefusal), "application/json", true, 0, 0],
+  ["SSE early refusal", sse({ type: "message_start", message: { ...earlyRefusal, stop_reason: null } }, { type: "message_delta", delta: { stop_reason: "refusal" }, usage: { output_tokens: 0 } }, messageStop), "text/event-stream", true, 0, 0],
+  ["SSE mid-output refusal", sse(messageStart, { type: "content_block_start", index: 0, content_block: { type: "text", text: "Partial output" } }, { ...messageDelta, delta: { stop_reason: "refusal" } }, messageStop), "text/event-stream", true],
   ["SSE without message_stop", sse(messageStart, messageDelta), "text/event-stream", false],
   ["SSE without final usage", sse(messageStart, messageStop), "text/event-stream", false],
   ["SSE with malformed final usage", sse(messageStart, "{broken", messageStop), "text/event-stream", false],
@@ -96,20 +100,21 @@ for (const [name, body, contentType, measured] of [
     await Promise.all(pending);
     const [event] = events;
     assert.equal(events.length, 1);
-    const expectedCost = measured ? 4_710 : event.reserved_cost_micros;
+    const expectedCost = measured ? measuredCost : event.reserved_cost_micros;
     assert.ok(event.reserved_cost_micros > 4_710);
     assert.equal(event.actual_cost_micros, expectedCost);
     if (measured) {
-      assert.deepEqual([event.input_tokens, event.output_tokens, event.total_tokens, event.cached_input_tokens, event.cache_write_input_tokens], [4_010, 20, 4_030, 1_000, 3_000]);
+      assert.deepEqual([event.input_tokens, event.output_tokens, event.total_tokens, event.cached_input_tokens, event.cache_write_input_tokens], [4_010, outputTokens, 4_010 + outputTokens, 1_000, 3_000]);
     }
     const usageResponse = await handler.fetch(new Request("https://clawrouter.example/v1/usage", { headers: { authorization: `Bearer ${proxyKey()}` } }), env, {});
     assert.equal((await usageResponse.json()).budget.spentMicros, expectedCost);
     assert.equal((await providerBudgetStatus(env, "anthropic", limit)).spentMicros, expectedCost);
-    const denied = await handler.fetch(request, env, context);
-    assert.equal(denied.status, 402);
-    assert.equal((await denied.json()).error.code, "budget_exhausted");
+    const next = await handler.fetch(request, env, context);
+    assert.equal(next.status, expectedCost === 0 ? 200 : 402);
+    if (expectedCost !== 0) assert.equal((await next.json()).error.code, "budget_exhausted");
+    else await next.text();
     await Promise.all(pending);
-    assert.equal(upstream.mock.callCount(), 1);
+    assert.equal(upstream.mock.callCount(), expectedCost === 0 ? 2 : 1);
   });
 }
 

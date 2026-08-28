@@ -6,10 +6,12 @@ export interface UsageTokens {
   cacheWrite: number | null; // Total writes, including the duration-specific buckets below.
   cacheWrite5m: number | null;
   cacheWrite1h: number | null;
+  billable?: false;
 }
 
 export function extractUsageTokens(value: unknown): UsageTokens | null {
-  const usage = usageRecord(record(value));
+  const root = record(value);
+  const usage = usageRecord(root);
   if (!usage) return null;
   const reportedInput = pickNumber(usage, "input_tokens", "prompt_tokens", "inputTokens", "promptTokenCount");
   const output = pickNumber(usage, "output_tokens", "completion_tokens", "outputTokens", "candidatesTokenCount");
@@ -24,11 +26,16 @@ export function extractUsageTokens(value: unknown): UsageTokens | null {
   // are already included. Pricing and usage ledgers both consume inclusive input.
   const input = reportedInput == null ? null : reportedInput + (details ? 0 : (cached ?? 0) + (cacheWrite ?? 0));
   const total = pickNumber(usage, "total_tokens", "totalTokens", "totalTokenCount") ?? (input != null || output != null ? (input ?? 0) + (output ?? 0) : null);
-  return { input, output, total, cached, cacheWrite, cacheWrite5m, cacheWrite1h };
+  // Anthropic reports usage for classifier refusals before any output, but does
+  // not bill it. Keep observed counts separate from the settlement decision.
+  const unbilled = root?.type === "message" && root.stop_reason === "refusal"
+    && Array.isArray(root.content) && root.content.length === 0 && output === 0;
+  return { input, output, total, cached, cacheWrite, cacheWrite5m, cacheWrite1h, ...(unbilled ? { billable: false as const } : {}) };
 }
 
 export function extractSseUsageTokens(text: string): UsageTokens | null {
   let found: UsageTokens | null = null;
+  let message: Record<string, unknown> | null = null;
   let messageUsage: Record<string, unknown> | null = null;
   let messageDeltaSeen = false;
   let terminal: "message" | "response" | "chat" | null = null;
@@ -47,10 +54,12 @@ export function extractSseUsageTokens(text: string): UsageTokens | null {
     if (root.object === "chat.completion.chunk") terminal = "chat";
     if (root.type === "message_start") {
       terminal = "message";
+      message = record(root.message);
       messageUsage = usageRecord(root);
       messageDeltaSeen = false;
     } else if (root.type === "message_delta") {
       if (!messageUsage) return null;
+      if (message) Object.assign(message, record(root.delta));
       const delta = usageRecord(root);
       messageDeltaSeen = delta != null && pickNumber(delta, "output_tokens") != null;
       if (delta) {
@@ -61,8 +70,10 @@ export function extractSseUsageTokens(text: string): UsageTokens | null {
         if (creation) updates.cache_creation = { ...record(messageUsage.cache_creation), ...creation };
         Object.assign(messageUsage, updates);
       }
+    } else if (root.type === "content_block_start" || root.type === "content_block_delta") {
+      if (message) message.content = undefined; // Output began; a later refusal remains billable.
     } else if (root.type === "message_stop") {
-      return messageUsage && messageDeltaSeen ? extractUsageTokens({ usage: messageUsage }) : null;
+      return messageUsage && messageDeltaSeen ? extractUsageTokens({ ...message, usage: messageUsage }) : null;
     } else {
       found = extractUsageTokens(root) ?? found;
     }

@@ -41,6 +41,12 @@ a duration use the highest declared cache-write rate. Anthropic streaming
 updates replace cumulative counters while preserving omitted or null counters
 from earlier events; an incomplete stream retains its reservation.
 
+[Anthropic classifier refusals before any output](https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback)
+report token usage but are not billed. ClawRouter preserves those counts in
+usage events and settles token-priced requests at zero after the complete
+response. Refusals after output begins remain billable. Explicit fixed policy
+prices still apply independently of upstream token billing.
+
 `requestCostMicros` on a policy is an explicit fixed-cost override. Routes
 without pricing use the legacy one-micro fallback only when no monthly budget
 is configured. Every budgeted call fails closed until its route has versioned
@@ -110,8 +116,8 @@ retain the same pricing when called through native or manifest proxy routes.
 Background Responses are rejected under listed pricing because their initial
 response has no terminal usage; configure a fixed per-request policy price
 until ClawRouter supports polling and deferred settlement.
-The Anthropic Sonnet 4.5 route declares its current 200K context limit;
-requests beyond it fail before an oversized reservation can be sent upstream.
+The bundled Anthropic catalog includes Claude Opus 5 and Sonnet 5 with a 1M
+context window and 128K output limit, alongside the existing model routes.
 Embedding manifests distinguish the per-input token limit from the aggregate
 request limit, so batched inputs reserve against the provider's full request
 allowance.
