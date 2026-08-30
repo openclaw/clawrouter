@@ -12,7 +12,7 @@ registerHooks({
   },
 });
 
-const { playgroundRequest, request } = await import("../src/dashboard-fetch.ts");
+const { localLogin, playgroundRequest, request } = await import("../src/dashboard-fetch.ts");
 
 test("dashboard JSON request leaves headroom for a typed 30s Worker timeout and keeps a caller signal", async (context) => {
   const timeouts = [];
@@ -61,6 +61,29 @@ test("playground request uses the 600s endpoint budget instead of the bounded da
   assert.equal(result.status, 200);
   assert.ok(init.signal instanceof AbortSignal);
   assert.deepEqual(timeouts, [600_000]);
+});
+
+test("local console login attaches the dashboard AbortSignal", async (context) => {
+  const timeouts = [];
+  const nativeTimeout = AbortSignal.timeout.bind(AbortSignal);
+  context.mock.method(AbortSignal, "timeout", (ms) => {
+    timeouts.push(ms);
+    return nativeTimeout(ms);
+  });
+  let loginInit;
+  context.mock.method(globalThis, "fetch", async (input, init) => {
+    assert.equal(String(input), "https://console.example/v1/session/login");
+    loginInit = init;
+    return Response.json({ ok: true });
+  });
+
+  assert.equal(await localLogin("https://console.example", "admin-token"), null);
+  assert.equal(loginInit.method, "POST");
+  assert.equal(loginInit.credentials, "same-origin");
+  assert.equal(loginInit.body, JSON.stringify({ token: "admin-token" }));
+  assert.ok(loginInit.signal instanceof AbortSignal);
+  assert.equal(loginInit.signal.aborted, false);
+  assert.deepEqual(timeouts, [60_000]);
 });
 
 test("playground request honors an explicit endpoint timeout", async (context) => {
