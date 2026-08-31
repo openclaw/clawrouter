@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Bound stalled session avatar, Cloudflare Access, and local-console sign-in requests with the existing fetch timeouts; thanks @SebTardif for #121.
+
 ## 0.2.1 - 2026-08-28
 
 ### Highlights
