@@ -1,3 +1,4 @@
+import { fetchTimeoutSignal } from "../shared/fetch-timeout.ts";
 import { authorityCall, resolveBindings, resolvePolicies, resolveUsers } from "./authority";
 import { assignmentEvidenceFromAccessIdentity } from "./assignment-evaluator";
 import { listAssignmentRules, reconcileUserAssignments } from "./assignments";
@@ -27,7 +28,7 @@ async function cloudflareAccessSession(request: Request, env: Env): Promise<Acce
   const headers = request.headers;
   const assertion = headers.get("cf-access-jwt-assertion");
   if (!assertion || !env.CLAWROUTER_ACCESS_TEAM_DOMAIN || !env.CLAWROUTER_ACCESS_AUD) return null;
-  const payload = await verifyAccessJwt(assertion, env.CLAWROUTER_ACCESS_TEAM_DOMAIN, env.CLAWROUTER_ACCESS_AUD);
+  const payload = await verifyAccessJwt(assertion, env.CLAWROUTER_ACCESS_TEAM_DOMAIN, env.CLAWROUTER_ACCESS_AUD, fetchTimeoutSignal(request.signal));
   const email = payload?.email ? normalizeEmail(payload.email) : null;
   if (!payload || !email) return null;
   const role = adminRole(email, env) ? "admin" : "user";
@@ -123,7 +124,7 @@ async function verifiedGithubEvidence(request: Request, email: string) {
   if (!cookie) return undefined;
   const url = new URL("/cdn-cgi/access/get-identity", request.url);
   try {
-    const response = await fetch(url, { headers: { accept: "application/json", cookie }, redirect: "manual" });
+    const response = await fetch(url, { headers: { accept: "application/json", cookie }, redirect: "manual", signal: fetchTimeoutSignal(request.signal) });
     if (!response.ok) return undefined;
     const body = await response.text();
     if (body.length > 64 * 1024) return undefined;

@@ -1,3 +1,4 @@
+import { fetchTimeoutSignal } from "../shared/fetch-timeout.ts";
 import { publicSession, sessionPolicies, verifiedAccessSession } from "./access";
 import { contentRetentionDefault } from "./content-retention.ts";
 import { loadFusionConfig } from "./fusion-config";
@@ -27,7 +28,7 @@ export async function avatarResponse(request: Request, env: Env): Promise<Respon
   const session = await verifiedAccessSession(request, env);
   if (!session) return errorResponse("access_session_required", "avatar access requires a verified Cloudflare Access session", 401);
   const hash = await sha256Hex(session.email.trim().toLowerCase());
-  const upstream = await fetch(`https://www.gravatar.com/avatar/${hash}?s=60&d=identicon&r=g`);
+  const upstream = await fetch(`https://www.gravatar.com/avatar/${hash}?s=60&d=identicon&r=g`, { signal: fetchTimeoutSignal(request.signal) });
   if (!upstream.ok) return new Response(null, { status: 404, headers: { "cache-control": "private, no-store" } });
   const type = upstream.headers.get("content-type")?.split(";")[0] ?? "";
   if (!["image/gif", "image/jpeg", "image/png", "image/webp"].includes(type)) return new Response(null, { status: 502 });

@@ -36,20 +36,7 @@ export async function localLoginAvailable(baseUrl: string): Promise<boolean> {
   }
 }
 
-export async function localLogin(baseUrl: string, token: string): Promise<string | null> {
-  const response = await fetch(`${baseUrl.replace(/\/$/, "")}/v1/session/login`, {
-    method: "POST",
-    credentials: "same-origin",
-    headers: { "content-type": "application/json" },
-    body: JSON.stringify({ token }),
-  });
-  if (response.ok) return null;
-  if (response.status === 401) return "invalid admin token";
-  if (response.status === 429) return "too many sign-in attempts; wait a minute and retry";
-  return `sign-in failed with status ${response.status}`;
-}
-
-export { isTextualResponse, playgroundRequest, request } from "./dashboard-fetch";
+export { isTextualResponse, localLogin, playgroundRequest, request } from "./dashboard-fetch";
 
 export function createPlaygroundTurn(input: Omit<PlaygroundTurn, "id" | "response" | "rawResponse"> & { raw: string }): PlaygroundTurn {
   return {

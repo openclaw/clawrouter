@@ -1,6 +1,20 @@
 import { DASHBOARD_FETCH_TIMEOUT_MS, fetchTimeoutSignal, PLAYGROUND_FETCH_TIMEOUT_MS } from "../../shared/fetch-timeout";
 import type { PlaygroundHttpResponse } from "./ui-types";
 
+export async function localLogin(baseUrl: string, token: string): Promise<string | null> {
+  const response = await fetch(`${baseUrl.replace(/\/$/, "")}/v1/session/login`, {
+    method: "POST",
+    credentials: "same-origin",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify({ token }),
+    signal: fetchTimeoutSignal(undefined, DASHBOARD_FETCH_TIMEOUT_MS),
+  });
+  if (response.ok) return null;
+  if (response.status === 401) return "invalid admin token";
+  if (response.status === 429) return "too many sign-in attempts; wait a minute and retry";
+  return `sign-in failed with status ${response.status}`;
+}
+
 export async function request<T>(baseUrl: string, path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   const response = await fetch(`${baseUrl.replace(/\/$/, "")}${path}`, { ...init, credentials: "same-origin", headers, signal: fetchTimeoutSignal(init.signal, DASHBOARD_FETCH_TIMEOUT_MS) });
