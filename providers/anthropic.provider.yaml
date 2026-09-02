@@ -43,6 +43,7 @@ auth:
           exhaustedIntervalSeconds: 600
           urgentRemainingPercent: 20
         keepWarm:
+          defaultEnabled: true
           intervalSeconds: 17700
           endpoint: messages
           body:

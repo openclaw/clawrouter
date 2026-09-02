@@ -336,7 +336,7 @@ function normalizeGrantTransport(value) {
     requestTransforms: { prependSystem: value.requestTransforms?.prependSystem ?? [] },
     maintenance: {
       quotaPoll: value.maintenance?.quotaPoll ?? null,
-      keepWarm: value.maintenance?.keepWarm ?? null,
+      keepWarm: value.maintenance?.keepWarm ? { ...value.maintenance.keepWarm, defaultEnabled: value.maintenance.keepWarm.defaultEnabled === true } : null,
     },
   };
 }

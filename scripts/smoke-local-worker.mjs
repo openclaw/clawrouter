@@ -556,9 +556,13 @@ try {
   assert.equal(revokedSubmittedGrant.status, 200);
   const claudePolicy = await fetch(`${base}/v1/admin/policies/claude_pool`, { method: "PUT", headers: adminHeaders, body: JSON.stringify({ enabled: true, providers: ["anthropic"], tenantId: "default", tokenRole: "service", requestCostMicros: 1, retainRequestContent: false, grantRouting: { ...routingDefaults, strategy: "threshold", switchAtUsedPercent: 90, hysteresisPercent: 10 } }) });
   assert.equal(claudePolicy.status, 200, await claudePolicy.clone().text());
-  const claudeTicketResponse = await fetch(`${base}/v1/admin/pool-submission-tickets`, { method: "POST", headers: adminHeaders, body: JSON.stringify({ scope: "policies", scopeId: "claude_pool", tokenRef: "claude-maintainer-a", provider: "anthropic", kind: "subscription", contributor: "local-e2e@example.com", keepWarm: true }) });
+  const claudeTicketResponse = await fetch(`${base}/v1/admin/pool-submission-tickets`, { method: "POST", headers: adminHeaders, body: JSON.stringify({ scope: "policies", scopeId: "claude_pool", tokenRef: "claude-maintainer-a", provider: "anthropic", kind: "subscription", contributor: "local-e2e@example.com" }) });
   assert.equal(claudeTicketResponse.status, 201, await claudeTicketResponse.clone().text());
   const claudeTicket = await claudeTicketResponse.json();
+  assert.equal(claudeTicket.ticket.keepWarm, true, "Claude subscription tickets default keep-warm on");
+  const coldClaudeTicketResponse = await fetch(`${base}/v1/admin/pool-submission-tickets`, { method: "POST", headers: adminHeaders, body: JSON.stringify({ scope: "policies", scopeId: "claude_pool", tokenRef: "claude-maintainer-cold", provider: "anthropic", kind: "subscription", keepWarm: false }) });
+  assert.equal(coldClaudeTicketResponse.status, 201, await coldClaudeTicketResponse.clone().text());
+  assert.equal((await coldClaudeTicketResponse.json()).ticket.keepWarm, false, "administrators can explicitly opt a Claude subscription out");
   const claudeSubmission = await fetch(new URL(claudeTicket.submissionUrl, base), { method: "POST", headers: { authorization: `Bearer ${claudeTicket.ticketToken}`, "content-type": "application/json" }, body: JSON.stringify({ accessToken: "claude-access-secret-sentinel", refreshToken: "claude-refresh-secret-sentinel", expiresAt: new Date(Date.now() + 60 * 60_000).toISOString() }) });
   assert.equal(claudeSubmission.status, 201, await claudeSubmission.clone().text());
   const claudeGrantList = await fetch(`${base}/v1/admin/upstream-grants`, { headers: adminHeaders });
@@ -573,6 +577,11 @@ try {
   assert.equal(JSON.stringify(claudeGrant).includes("claude-refresh-secret-sentinel"), false);
   const revokedClaudeGrant = await fetch(`${base}/v1/admin/upstream-grants/policies/claude_pool/claude-maintainer-a/revoke`, { method: "POST", headers: adminHeaders });
   assert.equal(revokedClaudeGrant.status, 200);
+  const directClaudeGrant = await fetch(`${base}/v1/admin/upstream-grants/policies/claude_pool/claude-direct`, { method: "PUT", headers: adminHeaders, body: JSON.stringify({ provider: "anthropic", kind: "subscription", accessToken: "claude-direct-secret-sentinel" }) });
+  assert.equal(directClaudeGrant.status, 200, await directClaudeGrant.clone().text());
+  assert.equal((await directClaudeGrant.json()).maintenance.keepWarm, true, "direct Claude subscription grants default keep-warm on");
+  const revokedDirectClaudeGrant = await fetch(`${base}/v1/admin/upstream-grants/policies/claude_pool/claude-direct/revoke`, { method: "POST", headers: adminHeaders });
+  assert.equal(revokedDirectClaudeGrant.status, 200);
   await waitUntil(async () => {
     const grants = await fetch(`${base}/v1/admin/upstream-grants`, { headers: adminHeaders });
     const rows = (await grants.json()).grants.filter((item) => item.scopeId === "rotation" && item.enabled);

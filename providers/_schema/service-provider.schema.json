@@ -367,6 +367,7 @@
           "additionalProperties": false,
           "required": ["intervalSeconds", "endpoint", "body"],
           "properties": {
+            "defaultEnabled": { "type": "boolean", "default": false },
             "intervalSeconds": { "type": "integer", "minimum": 3600, "maximum": 86400 },
             "endpoint": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$" },
             "body": { "type": "object" }

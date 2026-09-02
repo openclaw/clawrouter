@@ -87,7 +87,8 @@ async function issuePoolSubmissionTicket(request: Request, env: Env): Promise<Re
   if (!Number.isSafeInteger(ttlSeconds) || (ttlSeconds as number) < 60 || (ttlSeconds as number) > 86_400) throw new HttpError(400, "invalid_pool_submission_ticket", "ttlSeconds must be an integer from 60 to 86400");
   const label = body.label == null ? null : typeof body.label === "string" && body.label.length <= 256 ? body.label : invalidTicketField("label must be a string of at most 256 characters");
   const contributor = body.contributor == null ? null : typeof body.contributor === "string" && body.contributor.length <= 320 ? body.contributor : invalidTicketField("contributor must be a string of at most 320 characters");
-  const keepWarm = body.keepWarm ?? false;
+  const keepWarmConfig = kind === "subscription" ? provider.auth.grantTransports.subscription?.maintenance.keepWarm : null;
+  const keepWarm = body.keepWarm ?? keepWarmConfig?.defaultEnabled ?? false;
   if (typeof keepWarm !== "boolean") throw new HttpError(400, "invalid_pool_submission_ticket", "keepWarm must be a boolean");
   if (keepWarm && (kind !== "subscription" || !provider.auth.grantTransports.subscription?.maintenance.keepWarm)) throw new HttpError(400, "invalid_pool_submission_ticket", "provider does not declare keep-warm maintenance for this subscription");
   const now = Date.now(), id = randomId("pst"), ticketToken = randomId("pst_secret");
@@ -640,14 +641,15 @@ function normalizeGrant(value: unknown, existing: UpstreamGrant | null): Upstrea
   if (!grant.provider) throw new HttpError(400, "invalid_upstream_grant", "provider is required");
   const provider = snapshot.providers.find((candidate) => candidate.id === grant.provider);
   if (!provider) throw new HttpError(400, "unknown_provider", "upstream grant provider is not registered");
-  grant.maintenance = normalizeGrantMaintenance(body.maintenance, existing?.maintenance);
+  const defaultKeepWarm = !existing && grant.kind === "subscription" && provider.auth.grantTransports.subscription?.maintenance.keepWarm?.defaultEnabled === true;
+  grant.maintenance = normalizeGrantMaintenance(body.maintenance, existing?.maintenance, defaultKeepWarm);
   if (grant.maintenance?.keepWarm && (grant.kind !== "subscription" || !provider.auth.grantTransports.subscription?.maintenance.keepWarm)) throw new HttpError(400, "invalid_upstream_grant", "provider does not declare keep-warm maintenance for this subscription");
   if (!validCredentialBundle(grant.credentials) || [grant.credential, grant.accessToken, grant.refreshToken].some((secret) => secret != null && (typeof secret !== "string" || !secret.trim().length))) throw new HttpError(400, "invalid_upstream_grant", "grant credentials must use non-empty string values");
   if (!grantUsable(grant)) throw new HttpError(400, "invalid_upstream_grant", "grant credential is required");
   return grant;
 }
-function normalizeGrantMaintenance(value: unknown, existing: UpstreamGrant["maintenance"]): UpstreamGrant["maintenance"] {
-  if (value === undefined) return existing ?? { keepWarm: false };
+function normalizeGrantMaintenance(value: unknown, existing: UpstreamGrant["maintenance"], defaultKeepWarm: boolean): UpstreamGrant["maintenance"] {
+  if (value === undefined) return existing ?? { keepWarm: defaultKeepWarm };
   if (!value || typeof value !== "object" || Array.isArray(value)) throw new HttpError(400, "invalid_upstream_grant", "grant maintenance must be an object");
   const body = value as Record<string, unknown>;
   if (Object.keys(body).some((key) => key !== "keepWarm") || body.keepWarm !== undefined && typeof body.keepWarm !== "boolean") throw new HttpError(400, "invalid_upstream_grant", "grant maintenance only accepts boolean keepWarm");

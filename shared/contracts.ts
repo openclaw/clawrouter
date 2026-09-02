@@ -5,7 +5,10 @@ export interface ProviderRow {
   service_kind: string;
   meter?: string | null;
   capabilities: Array<{ id: string }>;
-  auth?: { authorization?: { grantKind?: "oauth" | "subscription" } | null };
+  auth?: {
+    authorization?: { grantKind?: "oauth" | "subscription" } | null;
+    grantTransports?: Partial<Record<"api_key" | "oauth" | "subscription", { maintenance?: { keepWarm?: { defaultEnabled?: boolean } | null } }>>;
+  };
   quota?: { probes?: Array<{ grantKinds?: Array<"api_key" | "oauth" | "subscription"> }> };
 }
 

@@ -799,9 +799,10 @@ pnpm pool:contribute -- \
   --expires-at 2026-09-03T02:00:00Z
 ```
 
-Quota polling is automatic for these grants. Keep-warm inference is separate
-and off by default because it consumes subscription capacity. Enable it for an
-exact grant in the console or add `--keep-warm` when issuing that grant's ticket.
+Quota polling is automatic for these grants. Claude keep-warm inference is
+separate and enabled by default for new subscription grants. Disable it for an
+exact grant in the console or add `--no-keep-warm` when issuing that grant's
+ticket.
 The manifest-owned job runs every 4 hours 55 minutes, skips grants in cooldown
 or at 10% remaining capacity, sends one fixed one-token Claude request with no
 user content, and discards the response. Neither contributors nor submitted
@@ -824,7 +825,6 @@ pnpm pool:ticket -- \
   --provider openai \
   --kind subscription \
   --contributor maintainer@example.com \
-  --keep-warm \
   --admin-token-env CLAWROUTER_ADMIN_TOKEN
 ```
 
@@ -832,7 +832,10 @@ The command creates the ticket file with mode `0600` and refuses to overwrite
 an existing path. Transfer it to the named contributor over an approved secret
 channel. The ticket defaults to 15 minutes and is bound to the scope, provider,
 grant kind, priority, and weight chosen by the administrator.
-`--keep-warm` is optional and remains disabled when omitted.
+The provider manifest supplies the default. Claude tickets enable keep-warm when
+neither flag is present. Use `--no-keep-warm` to disable it for one grant;
+`--keep-warm` remains available as an explicit override for providers whose
+manifest default is off.
 
 The contributor keeps provider credentials in their own 1Password vault and
 passes only secret references on the command line:

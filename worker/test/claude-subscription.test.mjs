@@ -12,6 +12,7 @@ test("Claude subscription transport uses OAuth identity without changing API-key
   assert.ok(anthropic);
   const subscription = { provider: "anthropic", kind: "subscription", accessToken: "claude-oauth-fixture" };
   const transport = transportForGrant(anthropic, subscription);
+  assert.equal(transport.maintenance.keepWarm.defaultEnabled, true);
   const oauthHeaders = new Headers({ "anthropic-beta": "interleaved-thinking-2025-05-14" });
   applyProviderCredential(anthropic, subscription, {}, oauthHeaders, new URLSearchParams());
   applyTransportHeaders(oauthHeaders, transport, subscription);

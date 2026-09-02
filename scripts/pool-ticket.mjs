@@ -16,7 +16,11 @@ setOptional(payload, "contributor", optionalValue(args, "contributor"));
 setOptional(payload, "priority", optionalNumber(args, "priority"));
 setOptional(payload, "weight", optionalNumber(args, "weight"));
 setOptional(payload, "ttlSeconds", optionalNumber(args, "ttl-seconds"));
+if (args["keep-warm"] !== undefined && args["keep-warm"] !== true) throw new Error("--keep-warm does not accept a value");
+if (args["no-keep-warm"] !== undefined && args["no-keep-warm"] !== true) throw new Error("--no-keep-warm does not accept a value");
+if (args["keep-warm"] === true && args["no-keep-warm"] === true) throw new Error("use only one of --keep-warm or --no-keep-warm");
 if (args["keep-warm"] === true) payload.keepWarm = true;
+else if (args["no-keep-warm"] === true) payload.keepWarm = false;
 
 const response = await fetch(`${baseUrl}/v1/admin/pool-submission-tickets`, {
   method: "POST",

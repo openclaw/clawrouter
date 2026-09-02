@@ -60,7 +60,7 @@ export interface CompiledGrantTransport {
   requestTransforms: { prependSystem: Array<{ type: "text"; text: string }> };
   maintenance: {
     quotaPoll: { normalIntervalSeconds: number; urgentIntervalSeconds: number; exhaustedIntervalSeconds: number; urgentRemainingPercent: number } | null;
-    keepWarm: { intervalSeconds: number; endpoint: string; body: Record<string, unknown> } | null;
+    keepWarm: { defaultEnabled: boolean; intervalSeconds: number; endpoint: string; body: Record<string, unknown> } | null;
   };
 }
 

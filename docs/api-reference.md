@@ -121,8 +121,10 @@ scope, token reference, provider, grant kind, priority, and weight. Accepted
 body fields are `credential`, `credentials`, `accessToken`, `refreshToken`,
 `tokenType`, `expiresAt`, `scopes`, `accountId`, and bounded `subscription`
 metadata. Contributor-defined refresh endpoints and OAuth client settings are
-not accepted. The administrator may set `keepWarm` on the ticket; contributors
-cannot enable or alter maintenance behavior in their submission.
+not accepted. Keep-warm follows the provider manifest default; Claude subscription
+tickets default to enabled. The administrator may set `keepWarm: false` on the
+ticket to opt out. Contributors cannot alter maintenance behavior in their
+submission.
 
 The route consumes the ticket once, but an identical retry can recover an
 interrupted submission and returns the same receipt after completion. The
