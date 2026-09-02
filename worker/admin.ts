@@ -1,6 +1,7 @@
 import { authorizeAdmin } from "./access";
 import {
   authorityCall, listBindings, listConnections, listCredentials, listPolicies, listUsers, resolveConnection,
+  type PoolSubmissionTicket, type PoolSubmissionTicketView,
 } from "./authority";
 import {
   listAssignmentRules, normalizeAssignmentEvidence, reconcileUserAssignments,
@@ -12,6 +13,7 @@ import { correlationRequestId, logCorrelationError } from "./correlation.ts";
 import { currentGrantRuntime, grantPriority, grantRoutingPolicy, grantRuntimeStates, grantSelectionStats, grantUsable, grantWeight, syncGrantPoolIndex, validCredentialBundle, validGrantSegment } from "./grant-selection";
 import { assertFusionModels, loadFusionConfig, storeFusionConfig } from "./fusion-config";
 import { fusionReadiness } from "./fusion-readiness";
+import { putGrantCredentials, revokeGrantCredentials } from "./grant-credentials.ts";
 import { normalizeFusionConfig } from "./fusion";
 import { budgetStatus as policyBudgetStatus, providerBudgetStatus, usageSnapshots } from "./ledgers";
 import { startOAuth } from "./oauth";
@@ -21,7 +23,7 @@ import type {
   AccessControlUser, AccessPolicy, AccessPolicyEntry, AssignmentRule, Env, PolicyBinding,
   GrantRuntimeState, ProviderConnection, ProxyCredential, ProxyCredentialEntry, UpstreamGrant,
 } from "./types";
-import { cleanId, errorResponse, HttpError, normalizeEmail, nowIso, privateJson, randomId, readJson } from "./utils";
+import { cleanId, errorResponse, HttpError, normalizeEmail, nowIso, privateJson, randomId, readJson, sha256Hex } from "./utils";
 
 export async function adminApi(request: Request, env: Env, path: string): Promise<Response> {
   const authorization = await authorizeAdmin(request, env);
@@ -43,6 +45,7 @@ export async function adminApi(request: Request, env: Env, path: string): Promis
     if (request.method === "GET" && path === "/v1/admin/assignment-rules") return privateJson({ rules: await assignmentRules(env) });
     if (request.method === "GET" && path === "/v1/admin/fusion") return privateJson(await loadFusionConfig(env));
 
+    if (path === "/v1/admin/pool-submission-tickets" && request.method === "POST") return issuePoolSubmissionTicket(request, env);
     if (path === "/v1/admin/policy-bindings" && request.method === "PUT") return putBinding(request, env);
     if (path === "/v1/admin/assignment-rules/reconcile" && request.method === "POST") return reconcileAssignments(request, env);
     if (path === "/v1/admin/fusion/preview" && request.method === "POST") return previewFusion(request, env);
@@ -62,6 +65,51 @@ export async function adminApi(request: Request, env: Env, path: string): Promis
     logCorrelationError("admin request failed", correlationRequestId(request));
     return errorResponse("admin_error", "admin request failed", 500);
   }
+}
+
+async function issuePoolSubmissionTicket(request: Request, env: Env): Promise<Response> {
+  const body = mutationObject(await readJson<unknown>(request), "invalid_pool_submission_ticket", "pool submission ticket");
+  if (body.scope !== "policies" && body.scope !== "tenants") throw new HttpError(400, "invalid_pool_submission_ticket", "scope must be policies or tenants");
+  if (typeof body.scopeId !== "string" || !validGrantSegment(body.scopeId) || body.scope === "policies" && body.scopeId === "tenants") throw new HttpError(400, "invalid_pool_submission_ticket", "scopeId must be a valid single key segment");
+  if (typeof body.tokenRef !== "string" || !validGrantSegment(body.tokenRef)) throw new HttpError(400, "invalid_pool_submission_ticket", "tokenRef must be a valid single key segment");
+  if (typeof body.provider !== "string") throw new HttpError(400, "invalid_pool_submission_ticket", "provider is required");
+  const provider = snapshot.providers.find((candidate) => candidate.id === body.provider);
+  if (!provider) throw new HttpError(400, "unknown_provider", "submission ticket provider is not registered");
+  const kind = body.kind ?? "subscription";
+  if (!(["api_key", "oauth", "subscription"] as unknown[]).includes(kind)) throw new HttpError(400, "invalid_pool_submission_ticket", "kind must be api_key, oauth, or subscription");
+  if (kind === "subscription" && !provider.auth.grantTransports.subscription) throw new HttpError(400, "invalid_pool_submission_ticket", "provider does not declare a subscription transport");
+  if (body.scope === "policies" && !(await listPolicies(env)).some((entry) => entry.policyId === body.scopeId)) throw new HttpError(404, "unknown_policy", "submission ticket policy does not exist");
+  const priority = body.priority ?? 100;
+  if (!Number.isSafeInteger(priority) || (priority as number) < 0 || (priority as number) > 1_000_000) throw new HttpError(400, "invalid_pool_submission_ticket", "priority must be an integer from 0 to 1000000");
+  const weight = body.weight ?? 1;
+  if (typeof weight !== "number" || !Number.isFinite(weight) || weight <= 0 || weight > 1_000_000) throw new HttpError(400, "invalid_pool_submission_ticket", "weight must be greater than 0 and at most 1000000");
+  const ttlSeconds = body.ttlSeconds ?? 900;
+  if (!Number.isSafeInteger(ttlSeconds) || (ttlSeconds as number) < 60 || (ttlSeconds as number) > 86_400) throw new HttpError(400, "invalid_pool_submission_ticket", "ttlSeconds must be an integer from 60 to 86400");
+  const label = body.label == null ? null : typeof body.label === "string" && body.label.length <= 256 ? body.label : invalidTicketField("label must be a string of at most 256 characters");
+  const contributor = body.contributor == null ? null : typeof body.contributor === "string" && body.contributor.length <= 320 ? body.contributor : invalidTicketField("contributor must be a string of at most 320 characters");
+  const now = Date.now(), id = randomId("pst"), ticketToken = randomId("pst_secret");
+  const ticket: PoolSubmissionTicket = {
+    id,
+    secretSha256: await sha256Hex(ticketToken),
+    scope: body.scope,
+    scopeId: body.scopeId,
+    tokenRef: body.tokenRef,
+    provider: provider.id,
+    kind: kind as PoolSubmissionTicket["kind"],
+    label,
+    priority: priority as number,
+    weight,
+    contributor,
+    createdAtMs: now,
+    expiresAtMs: now + (ttlSeconds as number) * 1_000,
+    state: "ready",
+  };
+  const stored = await authorityCall<PoolSubmissionTicketView>(env, "/submission-tickets/put", ticket);
+  return privateJson({ ticket: stored, ticketToken, submissionUrl: `/v1/pool-submissions/${encodeURIComponent(id)}/consume` }, 201);
+}
+
+function invalidTicketField(message: string): never {
+  throw new HttpError(400, "invalid_pool_submission_ticket", message);
 }
 
 async function previewFusion(request: Request, env: Env): Promise<Response> {
@@ -315,7 +363,9 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string): 
   let existing: UpstreamGrant | null;
   if (action === "revoke" && request.method === "POST") {
     existing = await env.POLICY_KV.get<UpstreamGrant>(key, "json");
-    if (!existing) throw new HttpError(404, "unknown_upstream_grant", "upstream grant is not registered"); grant = revokeGrant(existing);
+    if (!existing) throw new HttpError(404, "unknown_upstream_grant", "upstream grant is not registered");
+    await revokeGrantCredentials(env, key);
+    grant = revokeGrant(existing);
   }
   else if (!action && request.method === "PUT") {
     const body = mutationObject(await readJson<unknown>(request), "invalid_upstream_grant", "upstream grant");
@@ -324,7 +374,10 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string): 
   }
   else throw new HttpError(405, "method_not_allowed", "admin method is not allowed");
   await syncGrantPoolIndex(env, key, existing, grant);
-  try { await env.POLICY_KV.put(key, JSON.stringify(grant)); }
+  try {
+    if (action !== "revoke") grant = await putGrantCredentials(env, key, grant, true);
+    await env.POLICY_KV.put(key, JSON.stringify(grant));
+  }
   catch (error) { await syncGrantPoolIndex(env, key, grant, existing).catch(() => undefined); throw error; }
   return privateJson(await upstreamGrantResponse(env, key, grant));
 }
@@ -498,11 +551,11 @@ async function upstreamGrantResponse(env: Env, key: string, grant: UpstreamGrant
 
 function validatedGrantResponse(key: string, grant: UpstreamGrant, runtime?: GrantRuntimeState, stats?: { selectedCount: number; lastSelectedAt: string | null }) {
   runtime = currentGrantRuntime(grant, runtime) ?? undefined;
-  const credentialFields = grant.credentials && validCredentialBundle(grant.credentials) ? Object.keys(grant.credentials).sort() : [];
-  const accessFlag = typeof grant.accessToken === "string" && grant.accessToken.trim().length > 0, refreshFlag = typeof grant.refreshToken === "string" && grant.refreshToken.trim().length > 0;
+  const credentialFields = grant.credentialFields ?? (grant.credentials && validCredentialBundle(grant.credentials) ? Object.keys(grant.credentials).sort() : []);
+  const accessFlag = grant.hasAccessToken ?? (typeof grant.accessToken === "string" && grant.accessToken.trim().length > 0), refreshFlag = grant.hasRefreshToken ?? (typeof grant.refreshToken === "string" && grant.refreshToken.trim().length > 0);
   const coolingDown = !!runtime?.cooldownUntil && Date.parse(runtime.cooldownUntil) > Date.now();
   const quotaStatus: "unknown" | "available" | "limited" | "cooldown" = coolingDown ? "cooldown" : runtime?.status === "cooldown" ? "unknown" : runtime?.status ?? "unknown";
-  return { ...grantResponse(key, grant), priority: grantPriority(grant), weight: grantWeight(grant), hasCredential: (typeof grant.credential === "string" && grant.credential.trim().length > 0) || credentialFields.length > 0, credentialFields, ["hasAccess" + "Token"]: accessFlag, ["hasRefresh" + "Token"]: refreshFlag, usable: grant.enabled !== false && grantUsable(grant), selectedCount: stats?.selectedCount ?? 0, lastSelectedAt: stats?.lastSelectedAt ?? null, quotaStatus, quotaObservedAt: runtime?.observedAt ?? null, cooldownUntil: coolingDown ? runtime?.cooldownUntil ?? null : null, quotaSource: runtime?.source ?? null, lastProviderSignal: runtime?.lastSignal ?? null, quotaWindows: runtime?.windows ?? [] };
+  return { ...grantResponse(key, grant), priority: grantPriority(grant), weight: grantWeight(grant), hasCredential: grant.hasCredential ?? ((typeof grant.credential === "string" && grant.credential.trim().length > 0) || credentialFields.length > 0), credentialFields, ["hasAccess" + "Token"]: accessFlag, ["hasRefresh" + "Token"]: refreshFlag, usable: grant.enabled !== false && grantUsable(grant), selectedCount: stats?.selectedCount ?? 0, lastSelectedAt: stats?.lastSelectedAt ?? null, quotaStatus, quotaObservedAt: runtime?.observedAt ?? null, cooldownUntil: coolingDown ? runtime?.cooldownUntil ?? null : null, quotaSource: runtime?.source ?? null, lastProviderSignal: runtime?.lastSignal ?? null, quotaWindows: runtime?.windows ?? [] };
 }
 
 function normalizeBinding(value: unknown): PolicyBinding {
@@ -581,12 +634,12 @@ function normalizeGrant(value: unknown, existing: UpstreamGrant | null): Upstrea
   if (!grantUsable(grant)) throw new HttpError(400, "invalid_upstream_grant", "grant credential is required");
   return grant;
 }
-function revokeGrant(value: UpstreamGrant): UpstreamGrant { const { credential: _, credentials: __, accessToken: ___, refreshToken: ____, ...safe } = value; return { ...safe, enabled: false, credentials: {}, updatedAt: nowIso(), revokedAt: nowIso() }; }
+function revokeGrant(value: UpstreamGrant): UpstreamGrant { const { credential: _, credentials: __, accessToken: ___, refreshToken: ____, ...safe } = value; return { ...safe, enabled: false, credentials: {}, hasCredential: false, credentialFields: [], hasAccessToken: false, hasRefreshToken: false, updatedAt: nowIso(), revokedAt: nowIso() }; }
 
 function policyResponse(entry: AccessPolicyEntry) { return { policyId: entry.policyId, enabled: entry.policy.enabled, providers: entry.policy.providers, tenantId: entry.policy.tenantId ?? null, tokenRole: entry.policy.tokenRole ?? null, monthlyBudgetMicros: entry.policy.monthlyBudgetMicros ?? null, requestCostMicros: entry.policy.requestCostMicros ?? null, budgetScope: entry.policy.budgetScope ?? "policy", retainRequestContent: entry.policy.retainRequestContent !== false, grantRouting: grantRoutingPolicy(entry.policy.grantRouting) }; }
 function legacyKeyResponse(entry: AccessPolicyEntry) { return { kid: entry.policyId, ...policyResponse(entry) }; }
 function userResponse(user: AccessControlUser) { return { email: user.email, role: "user" as const, tenantId: user.record.tenantId ?? "default", enabled: user.record.enabled ?? true, groups: user.record.groups ?? [], contentRetentionDisabled: user.record.contentRetentionDisabled ?? false }; }
-function grantResponse(key: string, grant: UpstreamGrant) { const parts = key.split("/"), tenant = parts[1] === "tenants"; return { key, scope: tenant ? "tenants" as const : "policies" as const, scopeId: tenant ? parts[2] : parts[1], tokenRef: tenant ? parts[3] : parts[2], version: grant.version ?? 1, enabled: grant.enabled ?? true, kind: grant.kind ?? "oauth", provider: grant.provider ?? null, label: grant.label ?? null, tokenType: grant.tokenType ?? "Bearer", expiresAt: grant.expiresAt ?? null, scopes: grant.scopes ?? [], accountId: grant.accountId ?? null, subscription: grant.subscription ?? null, createdAt: grant.createdAt ?? null, updatedAt: grant.updatedAt ?? null, revokedAt: grant.revokedAt ?? null, hasCredential: !!grant.credential || Object.keys(grant.credentials ?? {}).length > 0, credentialFields: Object.keys(grant.credentials ?? {}).sort(), hasAccessToken: !!grant.accessToken, hasRefreshToken: !!grant.refreshToken, refreshConfigured: !!grant.refresh, refreshTokenUrl: grant.refresh?.tokenUrl ?? null, clientIdConfig: grant.refresh?.clientIdConfig ?? null, clientSecretConfig: grant.refresh?.clientSecretConfig ?? null, usable: grant.enabled !== false && !!(grant.credential || grant.accessToken || Object.keys(grant.credentials ?? {}).length) }; }
+function grantResponse(key: string, grant: UpstreamGrant) { const parts = key.split("/"), tenant = parts[1] === "tenants"; return { key, scope: tenant ? "tenants" as const : "policies" as const, scopeId: tenant ? parts[2] : parts[1], tokenRef: tenant ? parts[3] : parts[2], version: grant.version ?? 1, enabled: grant.enabled ?? true, kind: grant.kind ?? "oauth", provider: grant.provider ?? null, label: grant.label ?? null, tokenType: grant.tokenType ?? "Bearer", expiresAt: grant.expiresAt ?? null, scopes: grant.scopes ?? [], accountId: grant.accountId ?? null, subscription: grant.subscription ?? null, createdAt: grant.createdAt ?? null, updatedAt: grant.updatedAt ?? null, revokedAt: grant.revokedAt ?? null, hasCredential: grant.hasCredential ?? (!!grant.credential || Object.keys(grant.credentials ?? {}).length > 0), credentialFields: grant.credentialFields ?? Object.keys(grant.credentials ?? {}).sort(), hasAccessToken: grant.hasAccessToken ?? !!grant.accessToken, hasRefreshToken: grant.hasRefreshToken ?? !!grant.refreshToken, credentialStatus: grant.credentialStatus ?? (grantUsable(grant) ? "active" as const : undefined), refreshConfigured: !!grant.refresh, refreshTokenUrl: grant.refresh?.tokenUrl ?? null, clientIdConfig: grant.refresh?.clientIdConfig ?? null, clientSecretConfig: grant.refresh?.clientSecretConfig ?? null, usable: grant.enabled !== false && grantUsable(grant) }; }
 function assignmentResponse(ruleId: string, rule: AssignmentRule) { return { ruleId, ...rule, generatedGroup: `assignment.${ruleId}` }; }
 function normalizeGroups(values: string[]) { return [...new Set(values.map((value) => value.trim().toLowerCase()).filter(Boolean))].sort(); }
 function sum(values: Array<number | null | undefined>) { return values.reduce<number>((total, value) => total + (value ?? 0), 0); }

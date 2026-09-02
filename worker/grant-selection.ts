@@ -44,6 +44,9 @@ export interface GrantSelectionResult {
 }
 
 export function grantUsable(grant: UpstreamGrant): boolean {
+  if (grant.credentialStore === "durable_object") {
+    return grant.credentialStatus !== "reauth_required" && !!(grant.hasCredential || grant.hasAccessToken);
+  }
   const scalarCredentials = [grant.credential, grant.accessToken, grant.refreshToken];
   if (scalarCredentials.some((value) => value != null && (typeof value !== "string" || value.trim().length === 0)) || !validCredentialBundle(grant.credentials)) return false;
   const bundled = grant.credentials ? Object.values(grant.credentials) : [];

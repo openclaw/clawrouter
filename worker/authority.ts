@@ -3,7 +3,7 @@ import type {
   GrantRoutingPolicy, GrantRuntimeState, ProviderConnection, ProxyCredentialEntry,
 } from "./types";
 import { contentRetentionDefault } from "./content-retention.ts";
-import { errorResponse, HttpError, json, normalizeEmail, readJson } from "./utils.ts";
+import { errorResponse, HttpError, json, normalizeEmail, readJson, safeEqual } from "./utils.ts";
 
 type Principal = { principalType: "user" | "group"; principalId: string };
 type Seed = { principal: Principal; bindings: PolicyBinding[] };
@@ -55,6 +55,10 @@ export class PolicyBindingIndexObject implements DurableObject {
       if (path === "/grant-pools/states") return json({ states: this.grantRuntimeStates((await readJson<GrantRuntimeStatesRequest>(request)).keys) });
       if (path === "/grant-pools/select") return json(this.selectGrant(await readJson<GrantPoolSelectRequest>(request)));
       if (path === "/grant-pools/stats") return json({ stats: this.grantSelectionStats((await readJson<GrantRuntimeStatesRequest>(request)).keys) });
+      if (path === "/submission-tickets/put") return json(this.putSubmissionTicket(await readJson<PoolSubmissionTicket>(request)));
+      if (path === "/submission-tickets/claim") return json(this.claimSubmissionTicket(await readJson<SubmissionTicketClaimRequest>(request)));
+      if (path === "/submission-tickets/complete") return json(this.completeSubmissionTicket(await readJson<SubmissionTicketCompletionRequest>(request)));
+      if (path === "/submission-tickets/release") { this.releaseSubmissionTicket(await readJson<SubmissionTicketCompletionRequest>(request)); return new Response("released"); }
       if (path === "/oauth-states/put") { this.putOAuthState(await readJson<OAuthState>(request)); return new Response("updated"); }
       if (path === "/oauth-states/consume") return json({ state: this.consumeOAuthState(await readJson<{ state: string; actorEmail: string }>(request)) });
       return errorResponse("route_not_found", "route not found", 404);
@@ -76,6 +80,7 @@ export class PolicyBindingIndexObject implements DurableObject {
     this.sql.exec("CREATE TABLE IF NOT EXISTS upstream_grant_runtime (grant_key TEXT PRIMARY KEY, state_json TEXT NOT NULL)");
     this.sql.exec("CREATE TABLE IF NOT EXISTS upstream_grant_selection (pool_key TEXT NOT NULL, grant_key TEXT NOT NULL, selected_count INTEGER NOT NULL, last_selected_ms INTEGER NOT NULL, PRIMARY KEY (pool_key, grant_key))");
     this.sql.exec("CREATE TABLE IF NOT EXISTS upstream_grant_pool_cursors (pool_key TEXT PRIMARY KEY, grant_key TEXT NOT NULL)");
+    this.sql.exec("CREATE TABLE IF NOT EXISTS pool_submission_tickets (ticket_id TEXT PRIMARY KEY, ticket_json TEXT NOT NULL, expires_at_ms INTEGER NOT NULL)");
     this.sql.exec("CREATE TABLE IF NOT EXISTS oauth_authorization_states (state TEXT PRIMARY KEY, state_json TEXT NOT NULL, expires_at_ms INTEGER NOT NULL)");
   }
 
@@ -323,6 +328,59 @@ export class PolicyBindingIndexObject implements DurableObject {
     return stats;
   }
 
+  private putSubmissionTicket(raw: PoolSubmissionTicket): PoolSubmissionTicketView {
+    const ticket = normalizeSubmissionTicket(raw);
+    this.sql.exec("DELETE FROM pool_submission_tickets WHERE expires_at_ms < ?", Date.now());
+    if (this.getSubmissionTicket(ticket.id)) invalidAuthorityRequest("submission ticket already exists");
+    this.sql.exec("INSERT INTO pool_submission_tickets (ticket_id, ticket_json, expires_at_ms) VALUES (?, ?, ?)", ticket.id, JSON.stringify(ticket), ticket.expiresAtMs);
+    return submissionTicketView(ticket);
+  }
+
+  private claimSubmissionTicket(input: SubmissionTicketClaimRequest): SubmissionTicketClaimResult {
+    const id = submissionTicketId(input.id), ticket = this.getSubmissionTicket(id);
+    if (!ticket || !sha256Digest(input.secretSha256) || !safeEqual(ticket.secretSha256, input.secretSha256)) return { outcome: "denied" };
+    if (ticket.expiresAtMs <= Date.now()) return { outcome: "expired" };
+    const submissionSha256 = sha256Digest(input.submissionSha256);
+    if (!submissionSha256) invalidAuthorityRequest("submission digest is invalid");
+    if (ticket.state === "consumed") {
+      return ticket.submissionSha256 === submissionSha256
+        ? { outcome: "already_consumed", ticket: submissionTicketView(ticket), receipt: ticket.receipt ?? null }
+        : { outcome: "denied" };
+    }
+    if (ticket.state === "claimed") {
+      return ticket.submissionSha256 === submissionSha256 && ticket.claimId
+        ? { outcome: "claimed", ticket: submissionTicketView(ticket), claimId: ticket.claimId }
+        : { outcome: "denied" };
+    }
+    const claimed: PoolSubmissionTicket = { ...ticket, state: "claimed", submissionSha256, claimId: crypto.randomUUID(), claimedAtMs: Date.now() };
+    this.storeSubmissionTicket(claimed);
+    return { outcome: "claimed", ticket: submissionTicketView(claimed), claimId: claimed.claimId! };
+  }
+
+  private completeSubmissionTicket(input: SubmissionTicketCompletionRequest): SubmissionTicketClaimResult {
+    const id = submissionTicketId(input.id), ticket = this.getSubmissionTicket(id);
+    if (!ticket || ticket.state !== "claimed" || !ticket.claimId || ticket.claimId !== input.claimId) return { outcome: "denied" };
+    const receipt = normalizeSubmissionReceipt(input.receipt);
+    const consumed: PoolSubmissionTicket = { ...ticket, state: "consumed", receipt, claimId: null, claimedAtMs: null };
+    this.storeSubmissionTicket(consumed);
+    return { outcome: "already_consumed", ticket: submissionTicketView(consumed), receipt };
+  }
+
+  private releaseSubmissionTicket(input: SubmissionTicketCompletionRequest): void {
+    const id = submissionTicketId(input.id), ticket = this.getSubmissionTicket(id);
+    if (!ticket || ticket.state !== "claimed" || !ticket.claimId || ticket.claimId !== input.claimId) return;
+    this.storeSubmissionTicket({ ...ticket, state: "ready", submissionSha256: null, claimId: null, claimedAtMs: null });
+  }
+
+  private getSubmissionTicket(id: string): PoolSubmissionTicket | null {
+    const row = rows<{ ticket_json: string }>(this.sql.exec("SELECT ticket_json FROM pool_submission_tickets WHERE ticket_id = ?", id))[0];
+    return row ? JSON.parse(row.ticket_json) : null;
+  }
+
+  private storeSubmissionTicket(ticket: PoolSubmissionTicket): void {
+    this.sql.exec("INSERT OR REPLACE INTO pool_submission_tickets (ticket_id, ticket_json, expires_at_ms) VALUES (?, ?, ?)", ticket.id, JSON.stringify(ticket), ticket.expiresAtMs);
+  }
+
   private poolTokenRefs(scope: "policies" | "tenants", scopeId: string, providerId: string): string[] {
     return rows<{ token_ref: string }>(this.sql.exec("SELECT token_ref FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND provider_id = ? ORDER BY token_ref LIMIT 33", scope, scopeId, providerId)).map((row) => row.token_ref);
   }
@@ -355,6 +413,37 @@ interface GrantPoolSelectRequest {
   candidates: Array<{ key: string; weight?: number; remainingRatio?: number | null }>;
 }
 
+export interface PoolSubmissionTicket {
+  id: string;
+  secretSha256: string;
+  scope: "policies" | "tenants";
+  scopeId: string;
+  tokenRef: string;
+  provider: string;
+  kind: "api_key" | "oauth" | "subscription";
+  label?: string | null;
+  priority: number;
+  weight: number;
+  contributor?: string | null;
+  createdAtMs: number;
+  expiresAtMs: number;
+  state: "ready" | "claimed" | "consumed";
+  submissionSha256?: string | null;
+  claimId?: string | null;
+  claimedAtMs?: number | null;
+  receipt?: SubmissionReceipt | null;
+}
+
+export type PoolSubmissionTicketView = Omit<PoolSubmissionTicket, "secretSha256" | "submissionSha256" | "claimId">;
+export interface SubmissionReceipt { grantKey: string; submittedAt: string }
+interface SubmissionTicketClaimRequest { id: string; secretSha256: string; submissionSha256: string }
+interface SubmissionTicketCompletionRequest { id: string; claimId: string; receipt?: SubmissionReceipt }
+export type SubmissionTicketClaimResult =
+  | { outcome: "denied" }
+  | { outcome: "expired" }
+  | { outcome: "claimed"; ticket: PoolSubmissionTicketView; claimId: string }
+  | { outcome: "already_consumed"; ticket: PoolSubmissionTicketView; receipt: SubmissionReceipt | null };
+
 function grantSegment(value: unknown, field: string): string {
   if (typeof value !== "string" || !value.length || value.length > 256 || value.includes("/") || /[\u0000-\u001f\u007f]/.test(value)) invalidAuthorityRequest(`${field} must be a valid grant key segment`);
   return value;
@@ -372,6 +461,56 @@ function grantKey(value: unknown): string {
 function grantSelectionPoolKey(value: unknown): string {
   if (typeof value !== "string" || !value.length || value.length > 1024 || /[\u0000-\u001f\u007f]/.test(value)) invalidAuthorityRequest("grant selection pool key is invalid");
   return value;
+}
+
+function normalizeSubmissionTicket(raw: PoolSubmissionTicket): PoolSubmissionTicket {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) invalidAuthorityRequest("submission ticket is invalid");
+  const id = submissionTicketId(raw.id);
+  const secretSha256 = sha256Digest(raw.secretSha256);
+  if (!secretSha256) invalidAuthorityRequest("submission ticket secret digest is invalid");
+  if (raw.scope !== "policies" && raw.scope !== "tenants") invalidAuthorityRequest("submission ticket scope is invalid");
+  const scopeId = grantSegment(raw.scopeId, "scopeId"), tokenRef = grantSegment(raw.tokenRef, "tokenRef"), provider = grantSegment(raw.provider, "provider");
+  if (raw.scope === "policies" && scopeId === "tenants") invalidAuthorityRequest("submission ticket policy scope is invalid");
+  if (!(["api_key", "oauth", "subscription"] as unknown[]).includes(raw.kind)) invalidAuthorityRequest("submission ticket grant kind is invalid");
+  const priority = boundedInteger(raw.priority, "submission ticket priority", 0, 1_000_000);
+  const weight = typeof raw.weight === "number" && Number.isFinite(raw.weight) && raw.weight > 0 && raw.weight <= 1_000_000 ? raw.weight : NaN;
+  if (Number.isNaN(weight)) invalidAuthorityRequest("submission ticket weight is invalid");
+  const now = Date.now();
+  if (!Number.isSafeInteger(raw.createdAtMs) || !Number.isSafeInteger(raw.expiresAtMs) || raw.createdAtMs > now + 60_000 || raw.expiresAtMs <= now || raw.expiresAtMs > now + 24 * 60 * 60_000) invalidAuthorityRequest("submission ticket lifetime is invalid");
+  const label = raw.label == null ? null : typeof raw.label === "string" && raw.label.length <= 256 ? raw.label : invalidAuthorityValue("submission ticket label is invalid");
+  const contributor = raw.contributor == null ? null : typeof raw.contributor === "string" && raw.contributor.length <= 320 ? raw.contributor : invalidAuthorityValue("submission ticket contributor is invalid");
+  return { id, secretSha256, scope: raw.scope, scopeId, tokenRef, provider, kind: raw.kind, label, priority, weight, contributor, createdAtMs: raw.createdAtMs, expiresAtMs: raw.expiresAtMs, state: "ready", submissionSha256: null, claimId: null, claimedAtMs: null, receipt: null };
+}
+
+function submissionTicketView(ticket: PoolSubmissionTicket): PoolSubmissionTicketView {
+  const { secretSha256: _secret, submissionSha256: _submission, claimId: _claim, ...safe } = ticket;
+  return safe;
+}
+
+function submissionTicketId(value: unknown): string {
+  if (typeof value !== "string" || !/^pst_[A-Za-z0-9_-]{16,128}$/.test(value)) invalidAuthorityRequest("submission ticket id is invalid");
+  return value;
+}
+
+function sha256Digest(value: unknown): string | null {
+  return typeof value === "string" && /^[0-9a-f]{64}$/.test(value) ? value : null;
+}
+
+function normalizeSubmissionReceipt(value: unknown): SubmissionReceipt {
+  if (!value || typeof value !== "object" || Array.isArray(value)) invalidAuthorityRequest("submission receipt is invalid");
+  const receipt = value as Partial<SubmissionReceipt>;
+  const normalizedGrantKey = grantKey(receipt.grantKey);
+  if (typeof receipt.submittedAt !== "string" || !Number.isFinite(Date.parse(receipt.submittedAt))) invalidAuthorityRequest("submission receipt timestamp is invalid");
+  return { grantKey: normalizedGrantKey, submittedAt: new Date(receipt.submittedAt).toISOString() };
+}
+
+function boundedInteger(value: unknown, field: string, minimum: number, maximum: number): number {
+  if (!Number.isSafeInteger(value) || (value as number) < minimum || (value as number) > maximum) invalidAuthorityRequest(`${field} is invalid`);
+  return value as number;
+}
+
+function invalidAuthorityValue(message: string): never {
+  invalidAuthorityRequest(message);
 }
 
 function stickyScore(hash: string, candidate: { key: string; weight: number }): number {

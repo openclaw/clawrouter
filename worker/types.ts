@@ -71,6 +71,7 @@ export interface Env {
   BUDGET_LEDGER: DurableObjectNamespace;
   USAGE_LEDGER: DurableObjectNamespace;
   ACCESS_CONTROL: DurableObjectNamespace;
+  GRANT_CREDENTIALS: DurableObjectNamespace;
   USAGE_QUEUE: Queue<QueueMessage>;
   CONTENT_ARCHIVE: R2Bucket;
   ASSETS: Fetcher;
@@ -204,6 +205,13 @@ export interface UpstreamGrant {
   scopes?: string[];
   accountId?: string | null;
   subscription?: { plan?: string | null; subject?: string | null } | null;
+  credentialStore?: "durable_object";
+  credentialGeneration?: number;
+  credentialStatus?: "active" | "reauth_required";
+  hasCredential?: boolean;
+  credentialFields?: string[];
+  hasAccessToken?: boolean;
+  hasRefreshToken?: boolean;
   refresh?: {
     tokenUrl: string;
     clientId?: string | null;

@@ -12,7 +12,10 @@ membership, and sanitized grant runtime state. Existing KV data is imported
 once per resource family and recorded with a Durable Object migration marker.
 After that marker, missing records remain missing; request paths never resurrect
 stale KV state. Assignment rules, scoped upstream-grant secrets, and provider
-health remain in KV because they have separate lifecycle and consistency needs.
+health remain outside that global authority because they have separate lifecycle
+and consistency needs. `GRANT_CREDENTIALS` is the canonical raw-secret owner,
+sharded one Durable Object per grant. KV holds its redacted routing projection;
+a legacy secret-bearing KV grant is imported and scrubbed on first use.
 
 Authentication is read-only after an existing user receives versioned
 `assignmentState`. Rule changes reconcile users from the admin mutation path;
@@ -39,12 +42,15 @@ provider and model drift.
    cooldown, stale-state rule, and lowest active priority tier. The access
    authority atomically applies priority, round-robin, least-used, quota-aware,
    or weighted selection and records only counters and privacy-safe sticky input.
-6. Sign and forward the provider request, then normalize manifest-declared quota
+6. Materialize the selected credential from its per-grant owner. Expiring OAuth
+   tokens refresh through that same serialized owner, which commits each rotated
+   access/refresh pair and generation together.
+7. Sign and forward the provider request, then normalize manifest-declared quota
    response headers into provider-neutral windows.
-7. On an upstream 401, 403, or 429, record sanitized grant state and, when the
+8. On an upstream 401, 403, or 429, record sanitized grant state and, when the
    policy permits, try at most one same-provider alternate for an LLM or GET/HEAD
    route.
-8. Settle budget and enqueue the single final usage event independently. Either failure is
+9. Settle budget and enqueue the single final usage event independently. Either failure is
    retried without masking the provider response or suppressing the other task.
 
 Usage events are queued into a Durable Object shard named by tenant and policy.

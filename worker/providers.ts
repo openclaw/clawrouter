@@ -4,6 +4,7 @@ import { listConnections, resolveConnection } from "./authority.ts";
 import { observeGrantQuota, observeGrantQuotaProbe } from "./grant-quota.ts";
 import { grantRevision, grantUsable as canonicalGrantUsable, recordGrantRuntime, resolveGrantSelection } from "./grant-selection.ts";
 import { grantsVisibleToPolicies, type GrantRecord } from "./grant-scope.ts";
+import { materializeGrantCredentials } from "./grant-credentials.ts";
 import type {
   AccessPolicyEntry, AuthorizedIdentity, CompiledEndpoint, CompiledModel, CompiledProvider, Env,
   ProviderConnection, ProviderHealth, ProviderSnapshot, UpstreamGrant,
@@ -370,40 +371,7 @@ export async function refreshStoredGrantQuota(env: Env, key: string): Promise<vo
 }
 
 async function refreshGrant(key: string, grant: UpstreamGrant, provider: CompiledProvider, env: Env, force: boolean): Promise<UpstreamGrant> {
-  const expires = grant.expiresAt ? Date.parse(grant.expiresAt) : NaN;
-  if (!force && (!Number.isFinite(expires) || expires > Date.now() + 5 * 60_000)) return grant;
-  if (!grant.refreshToken) {
-    if (force) throw new HttpError(400, "grant_refresh_unavailable", "upstream grant has no refresh token");
-    return grant;
-  }
-  const config = grant.refresh ?? provider.auth.refresh;
-  if (!config?.tokenUrl) throw new HttpError(400, "grant_refresh_unavailable", "upstream grant has no approved refresh configuration");
-  const clientId = config.clientId ?? (config.clientIdConfig ? envValue(env, config.clientIdConfig) : null);
-  const form = new URLSearchParams({ grant_type: "refresh_token", refresh_token: grant.refreshToken });
-  if (clientId) form.set("client_id", clientId);
-  if (config.clientSecretConfig) {
-    const secret = envValue(env, config.clientSecretConfig);
-    if (!secret) throw new HttpError(503, "provider_not_configured", `missing refresh client secret ${config.clientSecretConfig}`);
-    form.set("client_secret", secret);
-  }
-  for (const [name, value] of Object.entries(config.extraParams ?? {})) form.set(name, value);
-  let response: Response;
-  try { response = await fetch(config.tokenUrl, { method: "POST", headers: { "content-type": "application/x-www-form-urlencoded", accept: "application/json" }, body: form, signal: fetchTimeoutSignal() }); }
-  catch { throw new HttpError(502, "grant_refresh_failed", `provider ${provider.id} rejected the refresh request`); }
-  const payload: Record<string, unknown> = await response.json<Record<string, unknown>>().catch(() => ({}));
-  if (!response.ok || typeof payload.access_token !== "string") throw new HttpError(502, "grant_refresh_failed", `provider ${provider.id} rejected the refresh request`);
-  const now = new Date().toISOString();
-  const updated: UpstreamGrant = {
-    ...grant,
-    accessToken: payload.access_token as string,
-    refreshToken: typeof payload.refresh_token === "string" ? payload.refresh_token : grant.refreshToken,
-    tokenType: typeof payload.token_type === "string" ? payload.token_type : grant.tokenType,
-    scopes: typeof payload.scope === "string" ? payload.scope.split(/\s+/).filter(Boolean) : grant.scopes,
-    expiresAt: typeof payload.expires_in === "number" ? new Date(Date.now() + payload.expires_in * 1_000).toISOString() : grant.expiresAt,
-    updatedAt: now,
-  };
-  await env.POLICY_KV.put(key, JSON.stringify(updated));
-  return updated;
+  return materializeGrantCredentials(env, key, grant, provider.id, provider.auth.refresh, force);
 }
 
 function grantUsable(grant: UpstreamGrant): boolean {
@@ -414,7 +382,7 @@ function grantSatisfiesConfig(key: string, grants: GrantRecord[]): boolean {
   if (secretConfigKey(key)) return grants.length > 0;
   const fields: Record<string, string> = { AWS_ACCESS_KEY_ID: "accessKeyId", AWS_SECRET_ACCESS_KEY: "secretAccessKey", AWS_SESSION_TOKEN: "sessionToken" };
   const field = fields[key];
-  return !!field && grants.some(({ grant }) => !!grant.credentials?.[field]);
+  return !!field && grants.some(({ grant }) => !!grant.credentials?.[field] || grant.credentialFields?.includes(field));
 }
 
 function secretFor(provider: CompiledProvider, scheme: CompiledProvider["auth"]["schemes"][number], grant: UpstreamGrant | null, env: Env): string | null {

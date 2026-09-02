@@ -4,12 +4,14 @@ import {
   avatarResponse, catalogResponse, entitlementResponse, meResponse, modelsResponse, sessionResponse,
 } from "./discovery";
 import { budgetStatus, BudgetLedgerObject, queue, UsageLedgerObject, usageSnapshot, usageSnapshots } from "./ledgers";
+import { GrantCredentialObject } from "./grant-credentials";
 import { budgetPrincipal } from "./budget-scope.ts";
 import { dashboardSecurityHeaders } from "./dashboard-security";
 import { contentRetentionDefault } from "./content-retention.ts";
 import { correlateIngressRequest, withRequestId } from "./correlation.ts";
 import { localAuthEnabled, localLogin, localLogout } from "./local-auth";
 import { oauthCallback } from "./oauth";
+import { poolSubmissionApi } from "./pool-submissions.ts";
 import { privateCodex, privatePath } from "./private-codex";
 import { routeCatalog, snapshot } from "./providers";
 import { sameOrigin } from "./request-origin";
@@ -22,7 +24,7 @@ import {
 } from "./utils";
 
 export { PolicyBindingIndexObject } from "./authority";
-export { BudgetLedgerObject, UsageLedgerObject };
+export { BudgetLedgerObject, GrantCredentialObject, UsageLedgerObject };
 
 const handler: ExportedHandler<Env, QueueMessage> = {
   async fetch(request, env, context) {
@@ -72,6 +74,7 @@ async function route(request: Request, env: Env, context: ExecutionContext): Pro
   if (request.method === "GET" && path === "/v1/models") return modelsResponse(request, env);
   if (request.method === "GET" && path === "/v1/catalog") return catalogResponse(request, env);
   if (request.method === "GET" && path === "/v1/oauth/callback") return oauthCallback(request, env);
+  if (path.startsWith("/v1/pool-submissions/")) return poolSubmissionApi(request, env, path);
   if (path.startsWith("/v1/admin/")) return adminApi(request, env, path);
   if (request.method === "GET" && path === "/v1/key/inspect") return inspectKey(request.headers, env);
 

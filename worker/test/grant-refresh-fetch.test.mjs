@@ -2,19 +2,20 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
 import { refreshStoredGrant } from "../providers.ts";
+import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
 
 function grantEnv(key, grant, stored = {}) {
-  return {
+  return attachGrantCredentialNamespace({
     stored,
     POLICY_KV: {
       async get(requested) {
-        return requested === key ? structuredClone(grant) : null;
+        return requested === key ? structuredClone(stored[requested] ?? grant) : null;
       },
       async put(requested, value) {
         stored[requested] = JSON.parse(value);
       },
     },
-  };
+  });
 }
 
 function expiredGrant(tokenUrl) {
@@ -91,5 +92,7 @@ test("grant refresh attaches a 30s AbortSignal and stores a successful token res
   assert.deepEqual(timeouts, [30_000]);
   assert.equal(updated.accessToken, "example");
   assert.equal(updated.refreshToken, "sample");
-  assert.equal(env.stored[key].accessToken, "example");
+  assert.equal(env.stored[key].accessToken, undefined);
+  assert.equal(env.stored[key].hasAccessToken, true);
+  assert.equal(env.GRANT_CREDENTIALS.objects.get(key).values.get("credential").accessToken, "example");
 });

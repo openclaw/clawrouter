@@ -27,6 +27,8 @@
     "cf:key:revoke": "node scripts/key-revoke.mjs",
     "cf:oauth:put": "node scripts/oauth-put.mjs",
     "cf:oauth:revoke": "node scripts/oauth-revoke.mjs",
+    "pool:ticket": "node scripts/pool-ticket.mjs",
+    "pool:contribute": "node scripts/pool-contribute.mjs",
     "cf:smoke": "node scripts/smoke-deployed.mjs"
   },
   "devDependencies": {

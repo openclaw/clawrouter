@@ -128,6 +128,7 @@ export interface UpstreamGrant {
   credentialFields: string[];
   hasAccessToken: boolean;
   hasRefreshToken: boolean;
+  credentialStatus?: "active" | "reauth_required";
   refreshConfigured: boolean;
   usable: boolean;
   selectedCount: number;

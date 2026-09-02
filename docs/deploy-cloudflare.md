@@ -2,8 +2,9 @@
 
 ClawRouter’s edge runtime is a TypeScript Worker. Revocation-critical runtime
 policy lives in serialized Durable Object authority so access can be revoked
-without a redeploy. Cloudflare KV stores one-time migration seeds, assignment
-rules, OAuth grants, and operational health.
+without a redeploy. Per-grant Durable Objects own upstream credential material
+and serialize OAuth rotation. Cloudflare KV stores one-time migration seeds,
+assignment rules, redacted grant metadata, and operational health.
 
 For the isolated non-production profile used by AWS FakeCo clients, follow
 [FakeCo staging](fakeco.md). Its locked resource names and dedicated workflow
@@ -23,6 +24,9 @@ must be used instead of overriding the production deployment ad hoc.
 - `ACCESS_CONTROL`: SQLite-backed Durable Object authority for policies,
   credential hashes, user state, provider kill switches, serialized user/group
   policy-binding mutations, and session entitlement lookup.
+- `GRANT_CREDENTIALS`: one Durable Object per upstream grant. It owns raw API
+  keys and OAuth tokens, serializes refresh, and commits rotating access and
+  refresh tokens as one generation.
 - `USAGE_LEDGER`: tenant/policy-sharded SQLite-backed Durable Object request
   audit and reporting ledgers. They retain bounded metadata for 30 days and never store prompt or
   completion bodies. Request content retention uses the separate `CONTENT_ARCHIVE`
@@ -609,9 +613,13 @@ client-selected model IDs.
 
 ## Upstream Grants
 
-The compatibility `cf:oauth:*` helpers manage version 1 upstream grants in
-`POLICY_KV`. Despite their legacy names, the helpers support `api_key`, `oauth`,
-and `subscription` grants. Register an OAuth grant for one access policy:
+The compatibility `cf:oauth:*` helpers write version 1 upstream grants to
+`POLICY_KV`. The Worker imports a legacy grant into `GRANT_CREDENTIALS` on
+first use and then scrubs its KV secret fields. Prefer the admin API, console,
+or contributor-ticket flow for new grants so raw credentials go directly to
+their durable owner. Despite their legacy names, the helpers support
+`api_key`, `oauth`, and `subscription` grants. Register an OAuth grant for one
+access policy:
 
 ```sh
 printf '%s' "$PROVIDER_ACCESS_TOKEN" | pnpm cf:oauth:put -- \
@@ -759,6 +767,63 @@ The bundled OpenAI manifest maps `subscription` grants to the ChatGPT Codex
 transport, injects the required account metadata, and refreshes through the
 manifest-declared OpenAI OAuth endpoint. OpenAI API-key grants continue to use
 the normal OpenAI Platform transport.
+
+### Contributor intake
+
+An administrator can authorize one credential contribution without sharing an
+admin token or accepting a normal ClawRouter key. Create a short-lived ticket
+for one exact pool slot and save its one-time secret to a new protected file:
+
+```sh
+export CLAWROUTER_ADMIN_TOKEN=...
+pnpm pool:ticket -- \
+  --url https://clawrouter.openclaw.ai \
+  --out ./maintainer-openai.ticket.json \
+  --scope policies \
+  --scope-id svc_models \
+  --token-ref openai-maintainer-a \
+  --provider openai \
+  --kind subscription \
+  --contributor maintainer@example.com \
+  --admin-token-env CLAWROUTER_ADMIN_TOKEN
+```
+
+The command creates the ticket file with mode `0600` and refuses to overwrite
+an existing path. Transfer it to the named contributor over an approved secret
+channel. The ticket defaults to 15 minutes and is bound to the scope, provider,
+grant kind, priority, and weight chosen by the administrator.
+
+The contributor keeps provider credentials in their own 1Password vault and
+passes only secret references on the command line:
+
+```sh
+pnpm pool:contribute -- \
+  --ticket-file ./maintainer-openai.ticket.json \
+  --access-token-ref 'op://Private/ClawRouter OpenAI/access_token' \
+  --refresh-token-ref 'op://Private/ClawRouter OpenAI/refresh_token' \
+  --account-id ACCOUNT_ID \
+  --expires-at 2026-09-02T22:00:00Z
+```
+
+`pool:contribute` invokes `op read` directly and holds its output only in
+memory. For controlled testing it also accepts matching `--*-env` or
+`--*-file` sources. Literal `--access-token`, `--refresh-token`, `--credential`,
+and `--credentials-json` arguments are rejected because process arguments are
+observable. Ticket files must remain mode `0600` on Unix-like systems.
+
+The ticket secret is stored only as a SHA-256 digest. Claiming it is atomic and
+bound to a canonical hash of the submitted payload. An interrupted identical
+retry is safe; a different replay, expired ticket, normal proxy credential, or
+attempt to inject a refresh URL is rejected. Provider refresh configuration
+always comes from the trusted manifest. After acceptance, delete the local
+ticket file through the contributor's normal secure-file workflow.
+
+For unattended 1Password intake, do not place contributors in one shared
+writable vault: 1Password item write permission also requires item read
+permission. Use a separate intake vault and service-account scope for each
+contributor, or keep the user-initiated push above. ClawRouter remains the
+canonical owner after import; do not copy rotated refresh tokens back into
+1Password.
 
 ### Browser OAuth
 

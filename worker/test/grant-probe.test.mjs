@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { refreshStoredGrantQuota } from "../providers.ts";
+import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
 
 test("subscription quota probes authenticate, bound, and persist provider-neutral state", async (context) => {
   const key = "oauth/policy/openai-subscription";
@@ -29,8 +30,8 @@ test("subscription quota probes authenticate, bound, and persist provider-neutra
       ignored_private_field: "not persisted",
     });
   });
-  const env = {
-    POLICY_KV: { async get(requested) { return requested === key ? structuredClone(grant) : null; } },
+  const env = attachGrantCredentialNamespace({
+    POLICY_KV: { async get(requested) { return requested === key ? structuredClone(grant) : null; }, async put() {} },
     ACCESS_CONTROL: {
       idFromName(name) { return name; },
       get() {
@@ -41,7 +42,7 @@ test("subscription quota probes authenticate, bound, and persist provider-neutra
         } };
       },
     },
-  };
+  });
 
   await refreshStoredGrantQuota(env, key);
 
@@ -61,9 +62,9 @@ test("subscription quota probes authenticate, bound, and persist provider-neutra
 test("quota probes fail before fetch when required grant metadata is absent", async (context) => {
   let fetched = false;
   context.mock.method(globalThis, "fetch", async () => { fetched = true; return Response.json({}); });
-  const env = {
-    POLICY_KV: { async get() { return { provider: "openai", kind: "subscription", accessToken: "test", updatedAt: "2026-07-07T10:00:00.000Z" }; } },
-  };
+  const env = attachGrantCredentialNamespace({
+    POLICY_KV: { async get() { return { provider: "openai", kind: "subscription", accessToken: "test", updatedAt: "2026-07-07T10:00:00.000Z" }; }, async put() {} },
+  });
   await assert.rejects(() => refreshStoredGrantQuota(env, "oauth/policy/openai"), (error) => error?.code === "grant_quota_probe_unavailable");
   assert.equal(fetched, false);
 });
