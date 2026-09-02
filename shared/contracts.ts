@@ -29,7 +29,7 @@ export interface AccessPolicy {
   grantRouting: GrantRoutingPolicy;
 }
 
-export type GrantSelectionStrategy = "priority" | "round_robin" | "least_used" | "most_remaining" | "weighted_random";
+export type GrantSelectionStrategy = "priority" | "round_robin" | "least_used" | "most_remaining" | "threshold" | "weighted_random";
 export type GrantStickiness = "none" | "identity" | "session";
 export interface GrantRoutingPolicy {
   strategy: GrantSelectionStrategy;
@@ -37,6 +37,8 @@ export interface GrantRoutingPolicy {
   failover: boolean;
   staleState: "allow" | "deny";
   staleAfterSeconds: number;
+  switchAtUsedPercent: number;
+  hysteresisPercent: number;
   eligibleGrants: Record<string, string[]>;
 }
 
@@ -121,6 +123,7 @@ export interface UpstreamGrant {
   scopes: string[];
   accountId?: string | null;
   subscription?: { plan?: string | null; subject?: string | null } | null;
+  maintenance?: { keepWarm?: boolean } | null;
   createdAt?: string | null;
   updatedAt?: string | null;
   revokedAt?: string | null;

@@ -5,8 +5,9 @@ import { observeGrantQuota, observeGrantQuotaProbe } from "./grant-quota.ts";
 import { grantRevision, grantUsable as canonicalGrantUsable, recordGrantRuntime, resolveGrantSelection } from "./grant-selection.ts";
 import { grantsVisibleToPolicies, type GrantRecord } from "./grant-scope.ts";
 import { materializeGrantCredentials } from "./grant-credentials.ts";
+import { applyProviderCredential, applyTransportHeaders, requiredGrantTemplate, transportForGrant } from "./provider-auth.ts";
 import type {
-  AccessPolicyEntry, AuthorizedIdentity, CompiledEndpoint, CompiledModel, CompiledProvider, Env,
+  AccessPolicyEntry, AuthorizedIdentity, CompiledEndpoint, CompiledGrantTransport, CompiledModel, CompiledProvider, Env,
   ProviderConnection, ProviderHealth, ProviderSnapshot, UpstreamGrant,
 } from "./types.ts";
 import { HttpError } from "./utils.ts";
@@ -46,6 +47,7 @@ export interface UpstreamAuth {
   headers: Headers;
   query: URLSearchParams;
   transportPaths: Record<string, string>;
+  transport: CompiledGrantTransport | null;
 }
 
 export function providerById(id: string): CompiledProvider | undefined {
@@ -201,17 +203,11 @@ export async function upstreamAuth(provider: CompiledProvider, endpoint: Compile
   const grant = selected?.grant ?? null;
   const headers = new Headers();
   const query = new URLSearchParams();
-  const scheme = provider.auth.schemes.find((candidate) => candidate.type !== "oauth") ?? provider.auth.schemes[0];
-  const secret = secretFor(provider, scheme, grant, env);
-  if (scheme.type === "bearer" && secret) headers.set(scheme.header, scheme.format.replace("${secret}", secret));
-  else if (scheme.type === "api_key" && secret) headers.set(scheme.header, secret);
-  else if (scheme.type === "query_api_key" && secret) query.set(scheme.param, secret);
-  else if (scheme.type === "sig_v4") { /* signed after the final URL and request body are known */ }
-  else if (!secret && !(scheme.type === "bearer" && scheme.required === false)) throw new HttpError(503, "provider_not_configured", `provider ${provider.id} has no usable upstream credential`);
+  applyProviderCredential(provider, grant, env, headers, query);
   for (const [name, value] of Object.entries(provider.adapter.injectHeaders)) headers.set(name, resolveTemplate(provider, value, env));
   for (const [name, value] of Object.entries(provider.adapter.injectQuery)) query.set(name, resolveTemplate(provider, value, env));
-  const transport = grant?.kind ? provider.auth.grantTransports[grant.kind as keyof typeof provider.auth.grantTransports] : undefined;
-  if (transport && grant) for (const [name, value] of Object.entries(transport.headers)) headers.set(name, grantTemplate(value, grant));
+  const transport = transportForGrant(provider, grant);
+  applyTransportHeaders(headers, transport, grant);
   return {
     grant,
     grantKey: selected?.key ?? null,
@@ -220,6 +216,7 @@ export async function upstreamAuth(provider: CompiledProvider, endpoint: Compile
     headers,
     query,
     transportPaths: transport?.endpointPaths ?? {},
+    transport,
   };
 }
 
@@ -349,13 +346,8 @@ export async function refreshStoredGrantQuota(env: Env, key: string): Promise<vo
   if (!probe) throw new HttpError(400, "grant_quota_probe_unavailable", `provider ${provider.id} has no quota probe for this grant kind`);
   const headers = new Headers({ accept: "application/json" });
   const url = new URL(probe.url);
-  const scheme = provider.auth.schemes.find((candidate) => candidate.type !== "oauth") ?? provider.auth.schemes[0];
-  const secret = secretFor(provider, scheme, grant, env);
-  if (scheme.type === "bearer" && secret) headers.set(scheme.header, scheme.format.replace("${secret}", secret));
-  else if (scheme.type === "api_key" && secret) headers.set(scheme.header, secret);
-  else if (scheme.type === "query_api_key" && secret) url.searchParams.set(scheme.param, secret);
-  else throw new HttpError(400, "grant_quota_probe_unavailable", "grant quota probe cannot authenticate this grant");
-  for (const [name, value] of Object.entries(probe.headers)) headers.set(name, requiredGrantTemplate(value, grant));
+  applyProviderCredential(provider, grant, env, headers, url.searchParams);
+  for (const [name, value] of Object.entries(probe.headers)) headers.set(name, requiredGrantTemplate(value, grant, "grant_quota_probe_unavailable"));
   let response: Response;
   try { response = await fetch(url, { method: probe.method, headers, signal: AbortSignal.timeout(10_000) }); }
   catch { throw new HttpError(502, "grant_quota_probe_failed", `provider ${provider.id} quota probe failed`); }
@@ -385,17 +377,6 @@ function grantSatisfiesConfig(key: string, grants: GrantRecord[]): boolean {
   return !!field && grants.some(({ grant }) => !!grant.credentials?.[field] || grant.credentialFields?.includes(field));
 }
 
-function secretFor(provider: CompiledProvider, scheme: CompiledProvider["auth"]["schemes"][number], grant: UpstreamGrant | null, env: Env): string | null {
-  if (grant) return grant.credential ?? grant.accessToken ?? firstCredential(grant.credentials) ?? null;
-  const kind = "secretKind" in scheme ? scheme.secretKind : "";
-  const candidates = provider.config_keys.filter((key) => kind === "api_token" ? key.endsWith("_TOKEN") || key.endsWith("_API_TOKEN") : key.endsWith("_API_KEY") || key.endsWith("_API_TOKEN"));
-  return candidates.map((key) => envValue(env, key)).find(Boolean) ?? null;
-}
-
-function firstCredential(values: Record<string, string> | undefined): string | null {
-  return values ? Object.values(values).find(Boolean) ?? null : null;
-}
-
 async function connectionFor(env: Env, providerId: string): Promise<ProviderConnection> {
   return await resolveConnection(env, providerId) ?? { providerId, enabled: true };
 }
@@ -423,18 +404,6 @@ function awsEncode(value: string): string { return encodeURIComponent(value).rep
 function configuredList(provider: CompiledProvider, name: string, env: Env): string[] {
   const key = templateCandidates(provider, name).find((candidate) => envValue(env, candidate));
   return key ? envValue(env, key)!.split(",").map((item) => item.trim()).filter(Boolean) : [];
-}
-
-function grantTemplate(value: string, grant: UpstreamGrant): string {
-  return value.replace(/\$\{grant\.([^}]+)\}/g, (_, name: string) => String(grant[name as keyof UpstreamGrant] ?? ""));
-}
-
-function requiredGrantTemplate(value: string, grant: UpstreamGrant): string {
-  return value.replace(/\$\{grant\.([^}]+)\}/g, (_, name: string) => {
-    const resolved = grant[name as keyof UpstreamGrant];
-    if (typeof resolved !== "string" || !resolved.trim()) throw new HttpError(400, "grant_quota_probe_unavailable", `grant quota probe requires ${name}`);
-    return resolved;
-  });
 }
 
 async function boundedJson(response: Response, limit: number): Promise<unknown> {

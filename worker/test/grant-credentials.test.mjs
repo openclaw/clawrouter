@@ -101,6 +101,40 @@ test("OAuth updates preserve an existing refresh token when the provider omits o
   assert.equal(updated.hasRefreshToken, true);
 });
 
+test("provider refresh metadata can require a JSON token request", async (context) => {
+  const key = "oauth/policy/anthropic";
+  const values = new Map([[key, legacyGrant({ provider: "anthropic", expiresAt: "2020-01-01T00:00:00.000Z" })]]);
+  const env = credentialEnv(values);
+  context.mock.method(globalThis, "fetch", async (_url, init) => {
+    assert.equal(new Headers(init.headers).get("content-type"), "application/json");
+    assert.deepEqual(JSON.parse(init.body), { grant_type: "refresh_token", refresh_token: "refresh-old", client_id: "claude-client" });
+    return Response.json({ access_token: "access-new", refresh_token: "refresh-new", expires_in: 3600 });
+  });
+  const refreshed = await materializeGrantCredentials(env, key, values.get(key), "anthropic", {
+    tokenUrl: "https://platform.claude.com/v1/oauth/token",
+    clientId: "claude-client",
+    clientIdConfig: null,
+    clientSecretConfig: null,
+    requestFormat: "json",
+    extraParams: {},
+  }, true);
+  assert.equal(refreshed.accessToken, "access-new");
+  assert.equal(refreshed.refreshToken, "refresh-new");
+});
+
+test("transient refresh failures schedule one retry window instead of hammering the provider", async (context) => {
+  const key = "oauth/policy/refresh-backoff";
+  const values = new Map([[key, legacyGrant({ expiresAt: "2020-01-01T00:00:00.000Z" })]]);
+  const env = credentialEnv(values);
+  let calls = 0;
+  context.mock.method(globalThis, "fetch", async () => { calls += 1; throw new Error("offline"); });
+  await assert.rejects(() => materializeGrantCredentials(env, key, values.get(key), "openai", refreshConfig(), false), (error) => error?.code === "grant_refresh_failed");
+  assert.equal(values.get(key).accessToken, undefined, "failed legacy refresh still scrubs the migrated KV secret");
+  await assert.rejects(() => materializeGrantCredentials(env, key, values.get(key), "openai", refreshConfig(), false), (error) => error?.code === "grant_refresh_failed");
+  assert.equal(calls, 1);
+  assert.ok(env.GRANT_CREDENTIALS.objects.get(key).alarm() > Date.now());
+});
+
 function credentialEnv(values) {
   return attachGrantCredentialNamespace({
     POLICY_KV: {

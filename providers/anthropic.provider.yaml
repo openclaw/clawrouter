@@ -13,6 +13,44 @@ auth:
     - type: api_key
       header: x-api-key
       secretKind: api_key
+  refresh:
+    tokenUrl: https://platform.claude.com/v1/oauth/token
+    clientId: 9d1c250a-e61b-44d9-88ed-5944d1962f5e
+    requestFormat: json
+  grantTransports:
+    subscription:
+      auth:
+        type: bearer
+        header: Authorization
+        format: "Bearer ${secret}"
+      headers:
+        accept: application/json
+        anthropic-dangerous-direct-browser-access: "true"
+        user-agent: claude-cli/2.1.75
+        x-app: cli
+      appendHeaders:
+        anthropic-beta: claude-code-20250219,oauth-2025-04-20
+      requestTransforms:
+        prependSystem:
+          - type: text
+            text: "x-anthropic-billing-header: cc_version=2.1.75; cc_entrypoint=sdk-cli;"
+          - type: text
+            text: "You are Claude Code, Anthropic's official CLI for Claude."
+      maintenance:
+        quotaPoll:
+          normalIntervalSeconds: 240
+          urgentIntervalSeconds: 60
+          exhaustedIntervalSeconds: 600
+          urgentRemainingPercent: 20
+        keepWarm:
+          intervalSeconds: 17700
+          endpoint: messages
+          body:
+            model: claude-sonnet-5
+            max_tokens: 1
+            messages:
+              - role: user
+                content: "."
 baseUrls:
   default: https://api.anthropic.com
 routing:
@@ -56,6 +94,42 @@ quota:
       limitHeaders: [anthropic-ratelimit-output-tokens-limit]
       remainingHeaders: [anthropic-ratelimit-output-tokens-remaining]
       resetHeaders: [anthropic-ratelimit-output-tokens-reset]
+  probes:
+    - grantKinds: [subscription]
+      url: https://api.anthropic.com/api/oauth/usage
+      headers:
+        User-Agent: openclaw
+        anthropic-version: "2023-06-01"
+        anthropic-beta: oauth-2025-04-20
+      windows:
+        - id: subscription-five-hour
+          kind: subscription
+          unit: percent
+          window: five_hour
+          fixedLimit: 100
+          usedPointer: /five_hour/utilization
+          resetPointer: /five_hour/resets_at
+        - id: subscription-seven-day
+          kind: subscription
+          unit: percent
+          window: seven_day
+          fixedLimit: 100
+          usedPointer: /seven_day/utilization
+          resetPointer: /seven_day/resets_at
+        - id: subscription-seven-day-sonnet
+          kind: subscription
+          unit: percent
+          window: seven_day_sonnet
+          fixedLimit: 100
+          usedPointer: /seven_day_sonnet/utilization
+          resetPointer: /seven_day_sonnet/resets_at
+        - id: subscription-seven-day-opus
+          kind: subscription
+          unit: percent
+          window: seven_day_opus
+          fixedLimit: 100
+          usedPointer: /seven_day_opus/utilization
+          resetPointer: /seven_day_opus/resets_at
 capabilities:
   - id: llm.messages
     endpoint: messages

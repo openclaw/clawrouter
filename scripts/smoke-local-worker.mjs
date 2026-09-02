@@ -28,7 +28,7 @@ putLocalKv("credentials/failover", { enabled: true, secretSha256: sha256(failove
 
 const rotationSecret = "rotation123";
 const rotationKey = `clawrouter-live-rotation-${rotationSecret}`;
-const routingDefaults = { strategy: "round_robin", stickiness: "none", failover: true, staleState: "allow", staleAfterSeconds: 300, eligibleGrants: {} };
+const routingDefaults = { strategy: "round_robin", stickiness: "none", failover: true, staleState: "allow", staleAfterSeconds: 300, switchAtUsedPercent: 90, hysteresisPercent: 10, eligibleGrants: {} };
 putLocalKv("policies/rotation", { enabled: true, generation, providers: ["local-openai"], tenantId: "default", tokenRole: "service", requestCostMicros: 1, retainRequestContent: false, grantRouting: routingDefaults });
 putLocalKv("credentials/rotation", { enabled: true, secretSha256: sha256(rotationSecret), policyId: "rotation", policyGeneration: generation });
 
@@ -554,6 +554,25 @@ try {
   assert.equal(rotationCalls.at(-1), "Bearer ticket-secret-sentinel", "a contributed credential is routable through its bound pool slot");
   const revokedSubmittedGrant = await fetch(`${base}/v1/admin/upstream-grants/policies/rotation/rotate-ticket/revoke`, { method: "POST", headers: adminHeaders });
   assert.equal(revokedSubmittedGrant.status, 200);
+  const claudePolicy = await fetch(`${base}/v1/admin/policies/claude_pool`, { method: "PUT", headers: adminHeaders, body: JSON.stringify({ enabled: true, providers: ["anthropic"], tenantId: "default", tokenRole: "service", requestCostMicros: 1, retainRequestContent: false, grantRouting: { ...routingDefaults, strategy: "threshold", switchAtUsedPercent: 90, hysteresisPercent: 10 } }) });
+  assert.equal(claudePolicy.status, 200, await claudePolicy.clone().text());
+  const claudeTicketResponse = await fetch(`${base}/v1/admin/pool-submission-tickets`, { method: "POST", headers: adminHeaders, body: JSON.stringify({ scope: "policies", scopeId: "claude_pool", tokenRef: "claude-maintainer-a", provider: "anthropic", kind: "subscription", contributor: "local-e2e@example.com", keepWarm: true }) });
+  assert.equal(claudeTicketResponse.status, 201, await claudeTicketResponse.clone().text());
+  const claudeTicket = await claudeTicketResponse.json();
+  const claudeSubmission = await fetch(new URL(claudeTicket.submissionUrl, base), { method: "POST", headers: { authorization: `Bearer ${claudeTicket.ticketToken}`, "content-type": "application/json" }, body: JSON.stringify({ accessToken: "claude-access-secret-sentinel", refreshToken: "claude-refresh-secret-sentinel", expiresAt: new Date(Date.now() + 60 * 60_000).toISOString() }) });
+  assert.equal(claudeSubmission.status, 201, await claudeSubmission.clone().text());
+  const claudeGrantList = await fetch(`${base}/v1/admin/upstream-grants`, { headers: adminHeaders });
+  const claudeGrant = (await claudeGrantList.json()).grants.find((item) => item.tokenRef === "claude-maintainer-a");
+  assert.equal(claudeGrant.provider, "anthropic");
+  assert.equal(claudeGrant.kind, "subscription");
+  assert.equal(claudeGrant.hasAccessToken, true);
+  assert.equal(claudeGrant.hasRefreshToken, true);
+  assert.equal(claudeGrant.maintenance.keepWarm, true);
+  assert.equal(claudeGrant.refreshConfigured, true);
+  assert.equal(JSON.stringify(claudeGrant).includes("claude-access-secret-sentinel"), false);
+  assert.equal(JSON.stringify(claudeGrant).includes("claude-refresh-secret-sentinel"), false);
+  const revokedClaudeGrant = await fetch(`${base}/v1/admin/upstream-grants/policies/claude_pool/claude-maintainer-a/revoke`, { method: "POST", headers: adminHeaders });
+  assert.equal(revokedClaudeGrant.status, 200);
   await waitUntil(async () => {
     const grants = await fetch(`${base}/v1/admin/upstream-grants`, { headers: adminHeaders });
     const rows = (await grants.json()).grants.filter((item) => item.scopeId === "rotation" && item.enabled);

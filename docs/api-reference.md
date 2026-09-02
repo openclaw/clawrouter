@@ -121,7 +121,8 @@ scope, token reference, provider, grant kind, priority, and weight. Accepted
 body fields are `credential`, `credentials`, `accessToken`, `refreshToken`,
 `tokenType`, `expiresAt`, `scopes`, `accountId`, and bounded `subscription`
 metadata. Contributor-defined refresh endpoints and OAuth client settings are
-not accepted.
+not accepted. The administrator may set `keepWarm` on the ticket; contributors
+cannot enable or alter maintenance behavior in their submission.
 
 The route consumes the ticket once, but an identical retry can recover an
 interrupted submission and returns the same receipt after completion. The
@@ -131,7 +132,7 @@ only routing metadata and credential-presence flags.
 
 ## Routing and authorization behavior
 
-Before forwarding a request, the Worker authenticates the credential, resolves its policy, checks the provider connection and scoped grant readiness, and reserves a conservative budget. Policies can select grants by priority, round robin, least used, reported remaining quota, or weighted random choice, with optional identity or session stickiness.
+Before forwarding a request, the Worker authenticates the credential, resolves its policy, checks the provider connection and scoped grant readiness, and reserves a conservative budget. Policies can select grants by priority, round robin, least used, reported remaining quota, consume-until-threshold, or weighted random choice. Threshold routing owns pool affinity; other modes may use identity or session stickiness.
 
 Provider grants can be scoped to a policy or tenant. When several token references are eligible, ClawRouter applies the policy strategy within the active priority tier. An upstream 401, 403, or 429 records sanitized grant state and can trigger one same-provider alternate when policy allows failover.
 

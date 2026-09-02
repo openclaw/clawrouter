@@ -87,6 +87,9 @@ async function issuePoolSubmissionTicket(request: Request, env: Env): Promise<Re
   if (!Number.isSafeInteger(ttlSeconds) || (ttlSeconds as number) < 60 || (ttlSeconds as number) > 86_400) throw new HttpError(400, "invalid_pool_submission_ticket", "ttlSeconds must be an integer from 60 to 86400");
   const label = body.label == null ? null : typeof body.label === "string" && body.label.length <= 256 ? body.label : invalidTicketField("label must be a string of at most 256 characters");
   const contributor = body.contributor == null ? null : typeof body.contributor === "string" && body.contributor.length <= 320 ? body.contributor : invalidTicketField("contributor must be a string of at most 320 characters");
+  const keepWarm = body.keepWarm ?? false;
+  if (typeof keepWarm !== "boolean") throw new HttpError(400, "invalid_pool_submission_ticket", "keepWarm must be a boolean");
+  if (keepWarm && (kind !== "subscription" || !provider.auth.grantTransports.subscription?.maintenance.keepWarm)) throw new HttpError(400, "invalid_pool_submission_ticket", "provider does not declare keep-warm maintenance for this subscription");
   const now = Date.now(), id = randomId("pst"), ticketToken = randomId("pst_secret");
   const ticket: PoolSubmissionTicket = {
     id,
@@ -100,6 +103,7 @@ async function issuePoolSubmissionTicket(request: Request, env: Env): Promise<Re
     priority: priority as number,
     weight,
     contributor,
+    keepWarm,
     createdAtMs: now,
     expiresAtMs: now + (ttlSeconds as number) * 1_000,
     state: "ready",
@@ -503,14 +507,19 @@ function normalizeGrantRouting(value: unknown, existing?: AccessPolicy["grantRou
   if (value === undefined) return grantRoutingPolicy(existing);
   const body = mutationObject(value, "invalid_policy", "grantRouting");
   const strategy = body.strategy ?? "most_remaining";
-  if (typeof strategy !== "string" || !["priority", "round_robin", "least_used", "most_remaining", "weighted_random"].includes(strategy)) throw new HttpError(400, "invalid_policy", "grantRouting strategy is invalid");
+  if (typeof strategy !== "string" || !["priority", "round_robin", "least_used", "most_remaining", "threshold", "weighted_random"].includes(strategy)) throw new HttpError(400, "invalid_policy", "grantRouting strategy is invalid");
   const stickiness = body.stickiness ?? "none";
   if (typeof stickiness !== "string" || !["none", "identity", "session"].includes(stickiness)) throw new HttpError(400, "invalid_policy", "grantRouting stickiness is invalid");
+  if (strategy === "threshold" && stickiness !== "none") throw new HttpError(400, "invalid_policy", "threshold grant routing owns pool affinity and requires stickiness none");
   const failover = policyBoolean(body.failover, "grantRouting.failover", true);
   const staleState = body.staleState ?? "allow";
   if (staleState !== "allow" && staleState !== "deny") throw new HttpError(400, "invalid_policy", "grantRouting staleState must be allow or deny");
   const staleAfterSeconds = body.staleAfterSeconds ?? 300;
   if (!Number.isSafeInteger(staleAfterSeconds) || (staleAfterSeconds as number) < 30 || (staleAfterSeconds as number) > 86_400) throw new HttpError(400, "invalid_policy", "grantRouting staleAfterSeconds must be an integer from 30 to 86400");
+  const switchAtUsedPercent = body.switchAtUsedPercent ?? 90;
+  if (typeof switchAtUsedPercent !== "number" || !Number.isFinite(switchAtUsedPercent) || switchAtUsedPercent < 0 || switchAtUsedPercent > 100) throw new HttpError(400, "invalid_policy", "grantRouting switchAtUsedPercent must be from 0 to 100");
+  const hysteresisPercent = body.hysteresisPercent ?? 10;
+  if (typeof hysteresisPercent !== "number" || !Number.isFinite(hysteresisPercent) || hysteresisPercent < 0 || hysteresisPercent > 100) throw new HttpError(400, "invalid_policy", "grantRouting hysteresisPercent must be from 0 to 100");
   const eligible = body.eligibleGrants ?? {};
   if (!eligible || typeof eligible !== "object" || Array.isArray(eligible)) throw new HttpError(400, "invalid_policy", "grantRouting eligibleGrants must map providers to token references");
   const eligibleGrants: Record<string, string[]> = {};
@@ -518,7 +527,7 @@ function normalizeGrantRouting(value: unknown, existing?: AccessPolicy["grantRou
     if (!snapshot.providers.some((provider) => provider.id === providerId) || !Array.isArray(rawRefs) || rawRefs.length > 32 || rawRefs.some((ref) => typeof ref !== "string" || !validGrantSegment(ref))) throw new HttpError(400, "invalid_policy", "grantRouting eligibleGrants contains an invalid provider or token reference");
     eligibleGrants[providerId] = [...new Set(rawRefs as string[])].sort();
   }
-  return { strategy: strategy as AccessPolicy["grantRouting"]["strategy"], stickiness: stickiness as AccessPolicy["grantRouting"]["stickiness"], failover, staleState, staleAfterSeconds: staleAfterSeconds as number, eligibleGrants };
+  return { strategy: strategy as AccessPolicy["grantRouting"]["strategy"], stickiness: stickiness as AccessPolicy["grantRouting"]["stickiness"], failover, staleState, staleAfterSeconds: staleAfterSeconds as number, switchAtUsedPercent, hysteresisPercent, eligibleGrants };
 }
 
 function policyBoolean(value: unknown, field: string, fallback: boolean): boolean {
@@ -629,17 +638,31 @@ function normalizeGrant(value: unknown, existing: UpstreamGrant | null): Upstrea
   if (typeof weight !== "number" || !Number.isFinite(weight) || weight <= 0 || weight > 1_000_000) throw new HttpError(400, "invalid_upstream_grant", "grant weight must be a number greater than 0 and at most 1000000");
   const now = nowIso(), grant = { ...existing, ...body, version: 1, enabled: body.enabled ?? true, priority, weight, kind: body.kind ?? "oauth", tokenType: body.tokenType ?? "Bearer", scopes: body.scopes ?? [], credentials: body.credentials ?? existing?.credentials ?? {}, createdAt: existing?.createdAt ?? now, updatedAt: now, revokedAt: null } as UpstreamGrant;
   if (!grant.provider) throw new HttpError(400, "invalid_upstream_grant", "provider is required");
-  if (!snapshot.providers.some((provider) => provider.id === grant.provider)) throw new HttpError(400, "unknown_provider", "upstream grant provider is not registered");
+  const provider = snapshot.providers.find((candidate) => candidate.id === grant.provider);
+  if (!provider) throw new HttpError(400, "unknown_provider", "upstream grant provider is not registered");
+  grant.maintenance = normalizeGrantMaintenance(body.maintenance, existing?.maintenance);
+  if (grant.maintenance?.keepWarm && (grant.kind !== "subscription" || !provider.auth.grantTransports.subscription?.maintenance.keepWarm)) throw new HttpError(400, "invalid_upstream_grant", "provider does not declare keep-warm maintenance for this subscription");
   if (!validCredentialBundle(grant.credentials) || [grant.credential, grant.accessToken, grant.refreshToken].some((secret) => secret != null && (typeof secret !== "string" || !secret.trim().length))) throw new HttpError(400, "invalid_upstream_grant", "grant credentials must use non-empty string values");
   if (!grantUsable(grant)) throw new HttpError(400, "invalid_upstream_grant", "grant credential is required");
   return grant;
+}
+function normalizeGrantMaintenance(value: unknown, existing: UpstreamGrant["maintenance"]): UpstreamGrant["maintenance"] {
+  if (value === undefined) return existing ?? { keepWarm: false };
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new HttpError(400, "invalid_upstream_grant", "grant maintenance must be an object");
+  const body = value as Record<string, unknown>;
+  if (Object.keys(body).some((key) => key !== "keepWarm") || body.keepWarm !== undefined && typeof body.keepWarm !== "boolean") throw new HttpError(400, "invalid_upstream_grant", "grant maintenance only accepts boolean keepWarm");
+  return { keepWarm: body.keepWarm === true };
 }
 function revokeGrant(value: UpstreamGrant): UpstreamGrant { const { credential: _, credentials: __, accessToken: ___, refreshToken: ____, ...safe } = value; return { ...safe, enabled: false, credentials: {}, hasCredential: false, credentialFields: [], hasAccessToken: false, hasRefreshToken: false, updatedAt: nowIso(), revokedAt: nowIso() }; }
 
 function policyResponse(entry: AccessPolicyEntry) { return { policyId: entry.policyId, enabled: entry.policy.enabled, providers: entry.policy.providers, tenantId: entry.policy.tenantId ?? null, tokenRole: entry.policy.tokenRole ?? null, monthlyBudgetMicros: entry.policy.monthlyBudgetMicros ?? null, requestCostMicros: entry.policy.requestCostMicros ?? null, budgetScope: entry.policy.budgetScope ?? "policy", retainRequestContent: entry.policy.retainRequestContent !== false, grantRouting: grantRoutingPolicy(entry.policy.grantRouting) }; }
 function legacyKeyResponse(entry: AccessPolicyEntry) { return { kid: entry.policyId, ...policyResponse(entry) }; }
 function userResponse(user: AccessControlUser) { return { email: user.email, role: "user" as const, tenantId: user.record.tenantId ?? "default", enabled: user.record.enabled ?? true, groups: user.record.groups ?? [], contentRetentionDisabled: user.record.contentRetentionDisabled ?? false }; }
-function grantResponse(key: string, grant: UpstreamGrant) { const parts = key.split("/"), tenant = parts[1] === "tenants"; return { key, scope: tenant ? "tenants" as const : "policies" as const, scopeId: tenant ? parts[2] : parts[1], tokenRef: tenant ? parts[3] : parts[2], version: grant.version ?? 1, enabled: grant.enabled ?? true, kind: grant.kind ?? "oauth", provider: grant.provider ?? null, label: grant.label ?? null, tokenType: grant.tokenType ?? "Bearer", expiresAt: grant.expiresAt ?? null, scopes: grant.scopes ?? [], accountId: grant.accountId ?? null, subscription: grant.subscription ?? null, createdAt: grant.createdAt ?? null, updatedAt: grant.updatedAt ?? null, revokedAt: grant.revokedAt ?? null, hasCredential: grant.hasCredential ?? (!!grant.credential || Object.keys(grant.credentials ?? {}).length > 0), credentialFields: grant.credentialFields ?? Object.keys(grant.credentials ?? {}).sort(), hasAccessToken: grant.hasAccessToken ?? !!grant.accessToken, hasRefreshToken: grant.hasRefreshToken ?? !!grant.refreshToken, credentialStatus: grant.credentialStatus ?? (grantUsable(grant) ? "active" as const : undefined), refreshConfigured: !!grant.refresh, refreshTokenUrl: grant.refresh?.tokenUrl ?? null, clientIdConfig: grant.refresh?.clientIdConfig ?? null, clientSecretConfig: grant.refresh?.clientSecretConfig ?? null, usable: grant.enabled !== false && grantUsable(grant) }; }
+function grantResponse(key: string, grant: UpstreamGrant) {
+  const parts = key.split("/"), tenant = parts[1] === "tenants";
+  const refresh = grant.refresh ?? snapshot.providers.find((provider) => provider.id === grant.provider)?.auth.refresh;
+  return { key, scope: tenant ? "tenants" as const : "policies" as const, scopeId: tenant ? parts[2] : parts[1], tokenRef: tenant ? parts[3] : parts[2], version: grant.version ?? 1, enabled: grant.enabled ?? true, kind: grant.kind ?? "oauth", provider: grant.provider ?? null, label: grant.label ?? null, tokenType: grant.tokenType ?? "Bearer", expiresAt: grant.expiresAt ?? null, scopes: grant.scopes ?? [], accountId: grant.accountId ?? null, subscription: grant.subscription ?? null, maintenance: grant.maintenance ?? { keepWarm: false }, createdAt: grant.createdAt ?? null, updatedAt: grant.updatedAt ?? null, revokedAt: grant.revokedAt ?? null, hasCredential: grant.hasCredential ?? (!!grant.credential || Object.keys(grant.credentials ?? {}).length > 0), credentialFields: grant.credentialFields ?? Object.keys(grant.credentials ?? {}).sort(), hasAccessToken: grant.hasAccessToken ?? !!grant.accessToken, hasRefreshToken: grant.hasRefreshToken ?? !!grant.refreshToken, credentialStatus: grant.credentialStatus ?? (grantUsable(grant) ? "active" as const : undefined), refreshConfigured: !!refresh, refreshTokenUrl: refresh?.tokenUrl ?? null, clientIdConfig: refresh?.clientIdConfig ?? null, clientSecretConfig: refresh?.clientSecretConfig ?? null, usable: grant.enabled !== false && grantUsable(grant) };
+}
 function assignmentResponse(ruleId: string, rule: AssignmentRule) { return { ruleId, ...rule, generatedGroup: `assignment.${ruleId}` }; }
 function normalizeGroups(values: string[]) { return [...new Set(values.map((value) => value.trim().toLowerCase()).filter(Boolean))].sort(); }
 function sum(values: Array<number | null | undefined>) { return values.reduce<number>((total, value) => total + (value ?? 0), 0); }

@@ -66,6 +66,8 @@ export function usePolicyAdmin({ allowDemo, gatewayOrigin, session, demoMode, pr
           failover: policyForm.grantFailover,
           staleState: policyForm.grantStaleState,
           staleAfterSeconds: optionalNumber(policyForm.grantStaleAfterSeconds) ?? 300,
+          switchAtUsedPercent: optionalNumber(policyForm.grantSwitchAtUsedPercent) ?? 90,
+          hysteresisPercent: optionalNumber(policyForm.grantHysteresisPercent) ?? 10,
           eligibleGrants: parseEligibleGrants(policyForm.eligibleGrants),
         },
       };

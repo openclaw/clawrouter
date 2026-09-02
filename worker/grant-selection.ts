@@ -10,6 +10,8 @@ export const DEFAULT_GRANT_ROUTING: GrantRoutingPolicy = {
   failover: true,
   staleState: "allow",
   staleAfterSeconds: 300,
+  switchAtUsedPercent: 90,
+  hysteresisPercent: 10,
   eligibleGrants: {},
 };
 
@@ -22,12 +24,15 @@ export function grantRoutingPolicy(value: GrantRoutingPolicy | null | undefined)
       eligibleGrants[providerId] = [...new Set(refs.filter((ref): ref is string => typeof ref === "string" && validGrantSegment(ref)))].slice(0, 32).sort();
     }
   }
+  const strategy = ["priority", "round_robin", "least_used", "most_remaining", "threshold", "weighted_random"].includes(value.strategy) ? value.strategy : DEFAULT_GRANT_ROUTING.strategy;
   return {
-    strategy: ["priority", "round_robin", "least_used", "most_remaining", "weighted_random"].includes(value.strategy) ? value.strategy : DEFAULT_GRANT_ROUTING.strategy,
-    stickiness: ["none", "identity", "session"].includes(value.stickiness) ? value.stickiness : DEFAULT_GRANT_ROUTING.stickiness,
+    strategy,
+    stickiness: strategy === "threshold" ? "none" : ["none", "identity", "session"].includes(value.stickiness) ? value.stickiness : DEFAULT_GRANT_ROUTING.stickiness,
     failover: value.failover !== false,
     staleState: value.staleState === "deny" ? "deny" : "allow",
     staleAfterSeconds: Number.isSafeInteger(value.staleAfterSeconds) && value.staleAfterSeconds >= 30 && value.staleAfterSeconds <= 86_400 ? value.staleAfterSeconds : DEFAULT_GRANT_ROUTING.staleAfterSeconds,
+    switchAtUsedPercent: finitePercent(value.switchAtUsedPercent, DEFAULT_GRANT_ROUTING.switchAtUsedPercent),
+    hysteresisPercent: finitePercent(value.hysteresisPercent, DEFAULT_GRANT_ROUTING.hysteresisPercent),
     eligibleGrants,
   };
 }
@@ -121,6 +126,8 @@ export async function resolveGrantSelection(
       poolKey: `${encodeURIComponent(providerId)}/${encodeURIComponent(policyId)}/${encodeURIComponent(tenantId)}`,
       strategy: routing.strategy,
       stickyHash,
+      switchAtUsedPercent: routing.switchAtUsedPercent,
+      hysteresisPercent: routing.hysteresisPercent,
       candidates: active.map((entry) => ({ key: entry.key, weight: grantWeight(entry.grant), remainingRatio: grantQuotaRatio(entry.runtimeState, nowMs, routing.staleAfterSeconds * 1_000) })),
     });
     selected = active.find((entry) => entry.key === choice.selectedKey) ?? null;
@@ -128,6 +135,10 @@ export async function resolveGrantSelection(
   // Explicit eligibility and fail-closed freshness policies must never fall back
   // to a provider-wide environment credential when their pool is unavailable.
   return { selected, hasConfiguredGrant: configured.length > 0 || eligibilityRestricted || routing.staleState === "deny" };
+}
+
+function finitePercent(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100 ? value : fallback;
 }
 
 export async function recordGrantRuntime(env: Env, key: string, state: GrantRuntimeState): Promise<void> {

@@ -268,6 +268,7 @@
         "clientId": { "type": "string" },
         "clientIdConfig": { "type": "string" },
         "clientSecretConfig": { "type": "string" },
+        "requestFormat": { "enum": ["form", "json"] },
         "extraParams": {
           "type": "object",
           "additionalProperties": { "type": "string" }
@@ -279,6 +280,7 @@
       "additionalProperties": false,
       "properties": {
         "baseUrl": { "type": "string", "pattern": "^https://" },
+        "auth": { "$ref": "#/$defs/grantTransportAuth" },
         "endpointPaths": {
           "type": "object",
           "additionalProperties": { "type": "string", "pattern": "^/" }
@@ -286,6 +288,89 @@
         "headers": {
           "type": "object",
           "additionalProperties": { "type": "string" }
+        },
+        "appendHeaders": {
+          "type": "object",
+          "additionalProperties": { "type": "string" }
+        },
+        "requestTransforms": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "prependSystem": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": ["type", "text"],
+                "properties": {
+                  "type": { "const": "text" },
+                  "text": { "type": "string", "minLength": 1, "maxLength": 4096 }
+                }
+              },
+              "maxItems": 8
+            }
+          }
+        },
+        "maintenance": { "$ref": "#/$defs/grantTransportMaintenance" }
+      }
+    },
+    "grantTransportAuth": {
+      "oneOf": [
+        {
+          "type": "object",
+          "required": ["type", "header", "format"],
+          "additionalProperties": false,
+          "properties": {
+            "type": { "const": "bearer" },
+            "header": { "type": "string" },
+            "format": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["type", "header"],
+          "additionalProperties": false,
+          "properties": {
+            "type": { "const": "api_key" },
+            "header": { "type": "string" }
+          }
+        },
+        {
+          "type": "object",
+          "required": ["type", "param"],
+          "additionalProperties": false,
+          "properties": {
+            "type": { "const": "query_api_key" },
+            "param": { "type": "string" }
+          }
+        }
+      ]
+    },
+    "grantTransportMaintenance": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "quotaPoll": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["normalIntervalSeconds", "urgentIntervalSeconds", "exhaustedIntervalSeconds", "urgentRemainingPercent"],
+          "properties": {
+            "normalIntervalSeconds": { "type": "integer", "minimum": 60, "maximum": 86400 },
+            "urgentIntervalSeconds": { "type": "integer", "minimum": 60, "maximum": 86400 },
+            "exhaustedIntervalSeconds": { "type": "integer", "minimum": 60, "maximum": 86400 },
+            "urgentRemainingPercent": { "type": "number", "minimum": 0, "maximum": 100 }
+          }
+        },
+        "keepWarm": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": ["intervalSeconds", "endpoint", "body"],
+          "properties": {
+            "intervalSeconds": { "type": "integer", "minimum": 3600, "maximum": 86400 },
+            "endpoint": { "type": "string", "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$" },
+            "body": { "type": "object" }
+          }
         }
       }
     },

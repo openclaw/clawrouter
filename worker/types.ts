@@ -7,7 +7,7 @@ export interface ProviderSnapshot {
 
 export interface CompiledProvider {
   id: string; display_name: string; status: string; class: string; service_platform: string; service_kind: string;
-  config_keys: string[]; optional_config_keys: string[]; auth: { schemes: AuthScheme[]; authorization: AuthorizationConfig | null; refresh: RefreshConfig | null; grantTransports: Record<string, { baseUrl?: string | null; endpointPaths: Record<string, string>; headers: Record<string, string> }> };
+  config_keys: string[]; optional_config_keys: string[]; auth: { schemes: AuthScheme[]; authorization: AuthorizationConfig | null; refresh: RefreshConfig | null; grantTransports: Record<string, CompiledGrantTransport> };
   auth_schemes: string[]; base_urls: Record<string, string>; routing: { nativePrefixes: string[]; modelPrefixes: string[]; baseUrlParam: string | null; serviceParam: string | null };
   native_prefixes: string[]; adapter: { request: string | null; response: string | null; stream: string | null; error: string | null; passthroughHeaders: string[]; injectHeaders: Record<string, string>; injectQuery: Record<string, string>; requestTransforms: { renameFields: Array<{ from: string; to: string; paths: string[]; upstreams: string[]; upstreamConfig: string | null }> } };
   capabilities: Array<{ id: string; endpoint: string; methods: string[] }>;
@@ -47,6 +47,23 @@ export interface CompiledQuotaProbe {
 }
 export interface CompiledQuotaConfig { responseHeaders: CompiledQuotaWindow[]; probes: CompiledQuotaProbe[] }
 
+export type GrantTransportAuth =
+  | { type: "bearer"; header: string; format: string }
+  | { type: "api_key"; header: string }
+  | { type: "query_api_key"; param: string };
+export interface CompiledGrantTransport {
+  baseUrl: string | null;
+  auth: GrantTransportAuth | null;
+  endpointPaths: Record<string, string>;
+  headers: Record<string, string>;
+  appendHeaders: Record<string, string>;
+  requestTransforms: { prependSystem: Array<{ type: "text"; text: string }> };
+  maintenance: {
+    quotaPoll: { normalIntervalSeconds: number; urgentIntervalSeconds: number; exhaustedIntervalSeconds: number; urgentRemainingPercent: number } | null;
+    keepWarm: { intervalSeconds: number; endpoint: string; body: Record<string, unknown> } | null;
+  };
+}
+
 export type AuthScheme =
   | { type: "bearer"; header: string; format: string; secretKind: string; required: boolean }
   | { type: "api_key"; header: string; secretKind: string }
@@ -56,7 +73,7 @@ export type AuthScheme =
   | { type: "cloudflare_binding" };
 
 export interface AuthorizationConfig { authorizeUrl: string; tokenUrl: string; clientId: string | null; clientIdConfig: string | null; clientSecretConfig: string | null; scopes: string[]; grantKind: string; extraAuthorizeParams: Record<string, string>; extraTokenParams: Record<string, string>; accountIdJsonPointer: string | null; subscriptionPlanJsonPointer: string | null }
-export interface RefreshConfig { tokenUrl: string; clientId: string | null; clientIdConfig: string | null; clientSecretConfig: string | null; extraParams: Record<string, string> }
+export interface RefreshConfig { tokenUrl: string; clientId: string | null; clientIdConfig: string | null; clientSecretConfig: string | null; requestFormat: "form" | "json"; extraParams: Record<string, string> }
 export interface LongContextPricing { thresholdInputTokens: number; inputMicrosPerMillion: number; outputMicrosPerMillion: number; cachedInputMicrosPerMillion: number | null; cacheWriteInputMicrosPerMillion: number | null; cacheWrite5mInputMicrosPerMillion: number | null; cacheWrite1hInputMicrosPerMillion: number | null }
 export interface ModelPricing { effectiveAt: string; source: string; inputMicrosPerMillion: number; outputMicrosPerMillion: number; cachedInputMicrosPerMillion: number | null; cacheWriteInputMicrosPerMillion: number | null; cacheWrite5mInputMicrosPerMillion: number | null; cacheWrite1hInputMicrosPerMillion: number | null; maxInputTokens: number; maxRequestInputTokens: number | null; defaultMaxOutputTokens: number; inputTokenOverhead: number; longContext: LongContextPricing | null }
 export type ProviderReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
@@ -102,7 +119,7 @@ export interface AccessPolicy {
   grantRouting: GrantRoutingPolicy;
 }
 
-export type GrantSelectionStrategy = "priority" | "round_robin" | "least_used" | "most_remaining" | "weighted_random";
+export type GrantSelectionStrategy = "priority" | "round_robin" | "least_used" | "most_remaining" | "threshold" | "weighted_random";
 export type GrantStickiness = "none" | "identity" | "session";
 export interface GrantRoutingPolicy {
   strategy: GrantSelectionStrategy;
@@ -110,6 +127,8 @@ export interface GrantRoutingPolicy {
   failover: boolean;
   staleState: "allow" | "deny";
   staleAfterSeconds: number;
+  switchAtUsedPercent: number;
+  hysteresisPercent: number;
   eligibleGrants: Record<string, string[]>;
 }
 
@@ -205,6 +224,7 @@ export interface UpstreamGrant {
   scopes?: string[];
   accountId?: string | null;
   subscription?: { plan?: string | null; subject?: string | null } | null;
+  maintenance?: { keepWarm?: boolean } | null;
   credentialStore?: "durable_object";
   credentialGeneration?: number;
   credentialStatus?: "active" | "reauth_required";
@@ -217,6 +237,7 @@ export interface UpstreamGrant {
     clientId?: string | null;
     clientIdConfig?: string | null;
     clientSecretConfig?: string | null;
+    requestFormat?: "form" | "json";
     extraParams?: Record<string, string>;
   } | null;
   createdAt?: string | null;

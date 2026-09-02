@@ -47,6 +47,7 @@ export function useUpstreamAdmin({ allowDemo, gatewayOrigin, demoMode, providers
         version: 1, enabled: form.enabled, priority, weight, kind: form.kind, provider, label: form.label.trim() || undefined,
         tokenType: selected?.tokenType ?? "Bearer", expiresAt: form.expiresAt.trim() || undefined, scopes: selected?.scopes ?? [],
         accountId: form.accountId.trim() || undefined, subscription: selected?.subscription ?? undefined,
+        maintenance: { keepWarm: form.kind === "subscription" && form.keepWarm },
         ...(form.credential.trim() ? { credential: form.credential.trim() } : {}),
         ...(Object.keys(credentialBundle).length ? { credentials: credentialBundle } : {}),
         ...(form.accessToken.trim() ? { accessToken: form.accessToken.trim() } : {}),

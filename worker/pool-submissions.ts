@@ -92,6 +92,7 @@ function normalizeSubmission(ticket: PoolSubmissionTicketView, value: unknown): 
     scopes,
     accountId,
     subscription,
+    maintenance: { keepWarm: ticket.keepWarm },
     createdAt: now,
     updatedAt: now,
     revokedAt: null,

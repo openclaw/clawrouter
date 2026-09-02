@@ -674,14 +674,21 @@ for five minutes, and no explicit grant restriction:
   "failover": true,
   "staleState": "allow",
   "staleAfterSeconds": 300,
+  "switchAtUsedPercent": 90,
+  "hysteresisPercent": 10,
   "eligibleGrants": {
     "openai": ["openai-primary", "openai-backup"]
   }
 }
 ```
 
-`strategy` may be `priority`, `round_robin`, `least_used`, `most_remaining`, or
-`weighted_random`. `stickiness` may be `none`, `identity`, or `session`;
+`strategy` may be `priority`, `round_robin`, `least_used`, `most_remaining`,
+`threshold`, or `weighted_random`. `threshold` keeps the pool's current grant
+until its most constrained fresh quota window reaches `switchAtUsedPercent`,
+then selects the healthiest candidate below that cutoff only when it improves
+remaining capacity by at least `hysteresisPercent`. It requires
+`stickiness: "none"`; the pool cursor supplies affinity. `stickiness` may otherwise be
+`none`, `identity`, or `session`;
 identity and session values are hashed before selection and are not persisted as
 raw identifiers. `eligibleGrants` is a per-provider token-reference allowlist;
 an explicit empty list denies every grant for that provider and never falls back
@@ -697,9 +704,12 @@ stores only bounded numeric windows, reset times, and sanitized status metadata
 in the access authority; response bodies and credential values are never
 included. Active cooldowns are skipped, and expired windows stop influencing
 selection automatically. A manifest can also declare a bounded quota probe for
-providers that expose per-grant usage outside normal responses. Probes run only
-after an administrator selects **Refresh quota** in the grant console; they have
-a ten-second timeout and never run in the request hot path.
+providers that expose per-grant usage outside normal responses. An administrator
+can run an immediate probe with **Refresh quota**. Subscription transports may
+also declare adaptive per-grant polling: the credential Durable Object schedules
+those probes independently of proxy traffic, polls more often near exhaustion,
+and backs off after failures. Probes have a ten-second timeout and never run in
+the request hot path.
 
 For an upstream 401, 403, or 429, ClawRouter records a five-minute
 authentication cooldown or the provider's bounded rate-limit reset and can try
@@ -768,6 +778,35 @@ transport, injects the required account metadata, and refreshes through the
 manifest-declared OpenAI OAuth endpoint. OpenAI API-key grants continue to use
 the normal OpenAI Platform transport.
 
+The bundled Anthropic manifest supports Claude Pro/Max OAuth subscriptions
+submitted as access and refresh tokens. It uses Bearer authentication, merges
+the Claude Code OAuth beta identifiers with caller-required beta features,
+prepends Anthropic's required Claude Code billing system blocks, refreshes with
+Anthropic's JSON token contract, and polls the OAuth usage endpoint for the
+five-hour, seven-day, Sonnet, and Opus windows. Anthropic API-key grants remain
+on `x-api-key` and do not receive subscription-only request transforms.
+
+Anthropic's OAuth client uses a loopback callback, so the Worker does not
+advertise browser OAuth for Claude. Import tokens through the protected
+contributor flow or the write-only upstream-grant form. A typical
+1Password-backed submission is:
+
+```sh
+pnpm pool:contribute -- \
+  --ticket-file ./maintainer-claude.ticket.json \
+  --access-token-ref 'op://Private/ClawRouter Claude/access_token' \
+  --refresh-token-ref 'op://Private/ClawRouter Claude/refresh_token' \
+  --expires-at 2026-09-03T02:00:00Z
+```
+
+Quota polling is automatic for these grants. Keep-warm inference is separate
+and off by default because it consumes subscription capacity. Enable it for an
+exact grant in the console or add `--keep-warm` when issuing that grant's ticket.
+The manifest-owned job runs every 4 hours 55 minutes, skips grants in cooldown
+or at 10% remaining capacity, sends one fixed one-token Claude request with no
+user content, and discards the response. Neither contributors nor submitted
+payloads can alter its endpoint, model, headers, prompt, or interval.
+
 ### Contributor intake
 
 An administrator can authorize one credential contribution without sharing an
@@ -785,6 +824,7 @@ pnpm pool:ticket -- \
   --provider openai \
   --kind subscription \
   --contributor maintainer@example.com \
+  --keep-warm \
   --admin-token-env CLAWROUTER_ADMIN_TOKEN
 ```
 
@@ -792,6 +832,7 @@ The command creates the ticket file with mode `0600` and refuses to overwrite
 an existing path. Transfer it to the named contributor over an approved secret
 channel. The ticket defaults to 15 minutes and is bound to the scope, provider,
 grant kind, priority, and weight chosen by the administrator.
+`--keep-warm` is optional and remains disabled when omitted.
 
 The contributor keeps provider credentials in their own 1Password vault and
 passes only secret references on the command line:

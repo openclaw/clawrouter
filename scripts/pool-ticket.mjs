@@ -16,6 +16,7 @@ setOptional(payload, "contributor", optionalValue(args, "contributor"));
 setOptional(payload, "priority", optionalNumber(args, "priority"));
 setOptional(payload, "weight", optionalNumber(args, "weight"));
 setOptional(payload, "ttlSeconds", optionalNumber(args, "ttl-seconds"));
+if (args["keep-warm"] === true) payload.keepWarm = true;
 
 const response = await fetch(`${baseUrl}/v1/admin/pool-submission-tickets`, {
   method: "POST",

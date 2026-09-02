@@ -299,7 +299,7 @@ export class PolicyBindingIndexObject implements DurableObject {
       const remainingRatio = typeof candidate.remainingRatio === "number" && Number.isFinite(candidate.remainingRatio) && candidate.remainingRatio >= 0 && candidate.remainingRatio <= 1 ? candidate.remainingRatio : null;
       return [key, { key, weight, remainingRatio }];
     })).values()].sort((a, b) => a.key.localeCompare(b.key));
-    const strategy = ["priority", "round_robin", "least_used", "most_remaining", "weighted_random"].includes(input.strategy) ? input.strategy : "most_remaining";
+    const strategy = ["priority", "round_robin", "least_used", "most_remaining", "threshold", "weighted_random"].includes(input.strategy) ? input.strategy : "most_remaining";
     const stickyHash = typeof input.stickyHash === "string" && /^[0-9a-f]{64}$/.test(input.stickyHash) ? input.stickyHash : null;
     let selected = candidates[0];
     if (stickyHash) selected = [...candidates].sort((a, b) => stickyScore(stickyHash, a) - stickyScore(stickyHash, b) || a.key.localeCompare(b.key))[0];
@@ -311,6 +311,12 @@ export class PolicyBindingIndexObject implements DurableObject {
       const counts = new Map(rows<{ grant_key: string; selected_count: number; last_selected_ms: number }>(this.sql.exec("SELECT grant_key, selected_count, last_selected_ms FROM upstream_grant_selection WHERE pool_key = ?", poolKey)).map((row) => [row.grant_key, row]));
       selected = [...candidates].sort((a, b) => (counts.get(a.key)?.selected_count ?? 0) - (counts.get(b.key)?.selected_count ?? 0) || (counts.get(a.key)?.last_selected_ms ?? 0) - (counts.get(b.key)?.last_selected_ms ?? 0) || a.key.localeCompare(b.key))[0];
     } else if (strategy === "most_remaining") selected = [...candidates].sort((a, b) => (b.remainingRatio ?? -1) - (a.remainingRatio ?? -1) || a.key.localeCompare(b.key))[0];
+    else if (strategy === "threshold") {
+      const currentKey = rows<{ grant_key: string }>(this.sql.exec("SELECT grant_key FROM upstream_grant_pool_cursors WHERE pool_key = ?", poolKey))[0]?.grant_key;
+      const selectedKey = selectThresholdGrantKey(candidates, currentKey ?? null, boundedPercent(input.switchAtUsedPercent, 90), boundedPercent(input.hysteresisPercent, 10));
+      selected = candidates.find((candidate) => candidate.key === selectedKey) ?? candidates[0];
+      this.sql.exec("INSERT OR REPLACE INTO upstream_grant_pool_cursors (pool_key, grant_key) VALUES (?, ?)", poolKey, selected.key);
+    }
     else if (strategy === "weighted_random") selected = weightedRandom(candidates);
     const nowMs = Date.now();
     this.sql.exec("INSERT INTO upstream_grant_selection (pool_key, grant_key, selected_count, last_selected_ms) VALUES (?, ?, 1, ?) ON CONFLICT (pool_key, grant_key) DO UPDATE SET selected_count = selected_count + 1, last_selected_ms = excluded.last_selected_ms", poolKey, selected.key, nowMs);
@@ -410,6 +416,8 @@ interface GrantPoolSelectRequest {
   poolKey: string;
   strategy: string;
   stickyHash?: string | null;
+  switchAtUsedPercent?: number;
+  hysteresisPercent?: number;
   candidates: Array<{ key: string; weight?: number; remainingRatio?: number | null }>;
 }
 
@@ -425,6 +433,7 @@ export interface PoolSubmissionTicket {
   priority: number;
   weight: number;
   contributor?: string | null;
+  keepWarm: boolean;
   createdAtMs: number;
   expiresAtMs: number;
   state: "ready" | "claimed" | "consumed";
@@ -479,7 +488,8 @@ function normalizeSubmissionTicket(raw: PoolSubmissionTicket): PoolSubmissionTic
   if (!Number.isSafeInteger(raw.createdAtMs) || !Number.isSafeInteger(raw.expiresAtMs) || raw.createdAtMs > now + 60_000 || raw.expiresAtMs <= now || raw.expiresAtMs > now + 24 * 60 * 60_000) invalidAuthorityRequest("submission ticket lifetime is invalid");
   const label = raw.label == null ? null : typeof raw.label === "string" && raw.label.length <= 256 ? raw.label : invalidAuthorityValue("submission ticket label is invalid");
   const contributor = raw.contributor == null ? null : typeof raw.contributor === "string" && raw.contributor.length <= 320 ? raw.contributor : invalidAuthorityValue("submission ticket contributor is invalid");
-  return { id, secretSha256, scope: raw.scope, scopeId, tokenRef, provider, kind: raw.kind, label, priority, weight, contributor, createdAtMs: raw.createdAtMs, expiresAtMs: raw.expiresAtMs, state: "ready", submissionSha256: null, claimId: null, claimedAtMs: null, receipt: null };
+  const keepWarm = raw.keepWarm === true;
+  return { id, secretSha256, scope: raw.scope, scopeId, tokenRef, provider, kind: raw.kind, label, priority, weight, contributor, keepWarm, createdAtMs: raw.createdAtMs, expiresAtMs: raw.expiresAtMs, state: "ready", submissionSha256: null, claimId: null, claimedAtMs: null, receipt: null };
 }
 
 function submissionTicketView(ticket: PoolSubmissionTicket): PoolSubmissionTicketView {
@@ -716,15 +726,17 @@ function normalizePolicyRecord(
 
 function normalizeStoredGrantRouting(value: unknown): GrantRoutingPolicy {
   const record = value && typeof value === "object" && !Array.isArray(value) ? value as Record<string, unknown> : {};
-  const strategy = typeof record.strategy === "string" && ["priority", "round_robin", "least_used", "most_remaining", "weighted_random"].includes(record.strategy)
+  const strategy = typeof record.strategy === "string" && ["priority", "round_robin", "least_used", "most_remaining", "threshold", "weighted_random"].includes(record.strategy)
     ? record.strategy as GrantRoutingPolicy["strategy"]
     : "most_remaining";
-  const stickiness = typeof record.stickiness === "string" && ["none", "identity", "session"].includes(record.stickiness)
+  const stickiness = strategy !== "threshold" && typeof record.stickiness === "string" && ["none", "identity", "session"].includes(record.stickiness)
     ? record.stickiness as GrantRoutingPolicy["stickiness"]
     : "none";
   const staleAfterSeconds = Number.isSafeInteger(record.staleAfterSeconds) && (record.staleAfterSeconds as number) >= 30 && (record.staleAfterSeconds as number) <= 86_400
     ? record.staleAfterSeconds as number
     : 300;
+  const switchAtUsedPercent = boundedPercent(record.switchAtUsedPercent, 90);
+  const hysteresisPercent = boundedPercent(record.hysteresisPercent, 10);
   const eligibleGrants: Record<string, string[]> = {};
   if (record.eligibleGrants && typeof record.eligibleGrants === "object" && !Array.isArray(record.eligibleGrants)) {
     for (const [providerId, refs] of Object.entries(record.eligibleGrants as Record<string, unknown>)) {
@@ -738,8 +750,32 @@ function normalizeStoredGrantRouting(value: unknown): GrantRoutingPolicy {
     failover: record.failover !== false,
     staleState: record.staleState === "deny" ? "deny" : "allow",
     staleAfterSeconds,
+    switchAtUsedPercent,
+    hysteresisPercent,
     eligibleGrants,
   };
+}
+
+function boundedPercent(value: unknown, fallback: number): number {
+  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100 ? value : fallback;
+}
+
+export function selectThresholdGrantKey(
+  candidates: Array<{ key: string; remainingRatio: number | null }>,
+  currentKey: string | null,
+  switchAtUsedPercent = 90,
+  hysteresisPercent = 10,
+): string {
+  if (!candidates.length) throw new Error("threshold selection requires at least one candidate");
+  const healthiest = [...candidates].sort((a, b) => (b.remainingRatio ?? -1) - (a.remainingRatio ?? -1) || a.key.localeCompare(b.key))[0];
+  const current = candidates.find((candidate) => candidate.key === currentKey);
+  if (!current || current.remainingRatio === null) return current?.key ?? healthiest.key;
+  const cutoffRemaining = 1 - boundedPercent(switchAtUsedPercent, 90) / 100;
+  if (current.remainingRatio > cutoffRemaining + 1e-9) return current.key;
+  const hysteresis = boundedPercent(hysteresisPercent, 10) / 100;
+  return [...candidates]
+    .filter((candidate) => candidate.key !== current.key && candidate.remainingRatio !== null && candidate.remainingRatio > cutoffRemaining + 1e-9 && candidate.remainingRatio + 1e-9 >= current.remainingRatio! + hysteresis)
+    .sort((a, b) => b.remainingRatio! - a.remainingRatio! || a.key.localeCompare(b.key))[0]?.key ?? current.key;
 }
 
 function validStoredGrantSegment(value: string): boolean {
