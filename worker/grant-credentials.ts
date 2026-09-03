@@ -15,6 +15,7 @@ const snapshot = snapshotJson as unknown as ProviderSnapshot;
 interface CredentialRecord {
   version: 1;
   generation: number;
+  enabled?: boolean;
   status: "active" | "reauth_required";
   credential?: string | null;
   credentials?: Record<string, string>;
@@ -155,13 +156,14 @@ export class GrantCredentialObject implements DurableObject {
       migrated = true;
     }
     if (!record) throw new HttpError(404, "grant_credential_missing", "upstream grant credential is not registered");
-    if (record.status === "reauth_required") throw new ReauthorizationRequired("upstream grant requires reauthorization", credentialProjection(record));
     const adopted = ownerMetadata(record, input.grant, input.key);
     const metadataChanged = maintenanceMetadataChanged(record, adopted);
     if (metadataChanged) {
       record = adopted;
       await this.state.storage.put("credential", record);
     }
+    assertCredentialEnabled(record);
+    if (record.status === "reauth_required") throw new ReauthorizationRequired("upstream grant requires reauthorization", credentialProjection(record));
 
     const expected = input.expectedGeneration;
     const mayForce = input.force && (expected != null ? expected === record.generation : migrated || !input.legacy);
@@ -194,6 +196,7 @@ export class GrantCredentialObject implements DurableObject {
   }
 
   private async refresh(record: CredentialRecord, providerId: string, providerRefresh: RefreshConfig | null): Promise<CredentialRecord> {
+    assertCredentialEnabled(record);
     const config = record.refresh ?? providerRefresh;
     if (!config?.tokenUrl) throw new HttpError(400, "grant_refresh_unavailable", "upstream grant has no approved refresh configuration");
     const clientId = config.clientId ?? (config.clientIdConfig ? envValue(this.env, config.clientIdConfig) : null);
@@ -255,7 +258,12 @@ export class GrantCredentialObject implements DurableObject {
 
   private async maintain(): Promise<void> {
     let record = await this.state.storage.get<CredentialRecord>("credential");
-    if (!record?.grantKey || !record.providerId || !record.kind || record.status === "reauth_required") return;
+    if (!record) return;
+    record = await this.resolveEnabled(record);
+    if (!record.enabled || !record.grantKey || !record.providerId || !record.kind || record.status === "reauth_required") {
+      await this.state.storage.deleteAlarm();
+      return;
+    }
     const provider = snapshot.providers.find((candidate) => candidate.id === record!.providerId);
     const transport = provider ? transportForGrant(provider, materializedGrant({ provider: record.providerId, kind: record.kind }, record)) : null;
     if (!provider || !transport) return;
@@ -310,11 +318,19 @@ export class GrantCredentialObject implements DurableObject {
       timestamp(record.nextQuotaProbeAt),
       record.maintenance?.keepWarm ? timestamp(record.nextKeepWarmAt) : NaN,
     ].filter(Number.isFinite);
-    if (!next.length || record.status === "reauth_required") {
+    if (!record.enabled || !next.length || record.status === "reauth_required") {
       await this.state.storage.deleteAlarm();
       return;
     }
     await this.state.storage.setAlarm(Math.max(Date.now() + MIN_ALARM_DELAY_MS, Math.min(...next)));
+  }
+
+  private async resolveEnabled(record: CredentialRecord): Promise<CredentialRecord> {
+    if (record.enabled !== undefined) return record;
+    const metadata = record.grantKey ? await this.env.POLICY_KV.get<UpstreamGrant>(record.grantKey, "json") : null;
+    const migrated = { ...record, enabled: metadata?.enabled !== false && metadata !== null };
+    await this.state.storage.put("credential", migrated);
+    return migrated;
   }
 }
 
@@ -328,6 +344,7 @@ function ownerMetadata(record: CredentialRecord, grant: UpstreamGrant, key: stri
   const keepWarm = grant.maintenance?.keepWarm ?? record.maintenance?.keepWarm ?? false;
   return {
     ...record,
+    enabled: grant.enabled ?? record.enabled ?? true,
     grantKey: key,
     providerId,
     kind,
@@ -344,7 +361,8 @@ function ownerMetadata(record: CredentialRecord, grant: UpstreamGrant, key: stri
 }
 
 function maintenanceMetadataChanged(left: CredentialRecord, right: CredentialRecord): boolean {
-  return left.grantKey !== right.grantKey
+  return left.enabled !== right.enabled
+    || left.grantKey !== right.grantKey
     || left.providerId !== right.providerId
     || left.kind !== right.kind
     || left.maintenance?.keepWarm !== right.maintenance?.keepWarm
@@ -355,6 +373,7 @@ function maintenanceMetadataChanged(left: CredentialRecord, right: CredentialRec
 }
 
 async function probeQuota(env: Env, provider: CompiledProvider, transport: CompiledGrantTransport, record: CredentialRecord): Promise<GrantRuntimeState> {
+  assertCredentialEnabled(record);
   const grant = materializedGrant({ provider: provider.id, kind: record.kind, maintenance: record.maintenance }, record);
   const probe = quotaProbeForGrant(provider, grant);
   if (!probe) throw new HttpError(400, "grant_quota_probe_unavailable", `provider ${provider.id} has no quota probe for this grant kind`);
@@ -380,6 +399,7 @@ async function probeQuota(env: Env, provider: CompiledProvider, transport: Compi
 }
 
 async function keepWarm(env: Env, provider: CompiledProvider, transport: CompiledGrantTransport, record: CredentialRecord): Promise<void> {
+  assertCredentialEnabled(record);
   const config = transport.maintenance.keepWarm;
   if (!config || !record.grantKey) return;
   const states = await authorityCall<{ states: Record<string, GrantRuntimeState> }>(env, "/grant-pools/states", { keys: [record.grantKey] });
@@ -438,6 +458,10 @@ function due(value: string | null | undefined, now: number): boolean {
   return Number.isFinite(parsed) && parsed <= now;
 }
 
+function assertCredentialEnabled(record: CredentialRecord): void {
+  if (record.enabled !== true) throw new HttpError(409, "grant_disabled", "upstream grant is disabled");
+}
+
 export async function putGrantCredentials(env: Env, key: string, grant: UpstreamGrant, preserveUnspecifiedSecrets = false): Promise<UpstreamGrant> {
   const response = await ownerCall<{ projection: CredentialProjection }>(env, key, "/put", { key, grant, preserveUnspecifiedSecrets });
   return secretlessGrant(grant, response.projection);
@@ -494,6 +518,7 @@ function credentialRecord(grant: UpstreamGrant, generation: number): CredentialR
   return {
     version: 1,
     generation,
+    enabled: grant.enabled ?? true,
     status: "active",
     credential: optionalSecret(grant.credential, "credential"),
     credentials,
@@ -515,6 +540,7 @@ function updatedCredentialRecord(current: CredentialRecord | undefined, grant: U
   const updated: CredentialRecord = {
     ...current,
     generation: current.generation + 1,
+    enabled: grant.enabled ?? current.enabled ?? true,
     status: "active",
     credential: grant.credential === undefined ? current.credential : optionalSecret(grant.credential, "credential"),
     credentials: grant.credentials && Object.keys(grant.credentials).length ? normalizedCredentials(grant.credentials) : current.credentials,

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { putGrantCredentials } from "../grant-credentials.ts";
+import { materializeGrantCredentials, putGrantCredentials } from "../grant-credentials.ts";
 import { observeGrantQuotaProbe } from "../grant-quota.ts";
 import { applyProviderCredential, applyTransportHeaders, quotaProbeForGrant, transformTransportBody, transportForGrant } from "../provider-auth.ts";
 import { snapshot } from "../providers.ts";
@@ -131,4 +131,83 @@ test("Claude credential alarms poll quota and keep warm only when explicitly ena
   });
   await warmOwner.object.alarm();
   assert.equal(warmOwner.values.get("credential").nextQuotaProbeAt, null, "legacy scheduled probes are cleared for setup tokens");
+});
+
+test("disabled Claude grants cancel maintenance and reject credential materialization", async (context) => {
+  const values = new Map();
+  const env = attachGrantCredentialNamespace({
+    POLICY_KV: {
+      async get(key) { return structuredClone(values.get(key) ?? null); },
+      async put(key, value) { values.set(key, JSON.parse(value)); },
+    },
+    ACCESS_CONTROL: {
+      idFromName(name) { return name; },
+      get() {
+        return { async fetch(url) {
+          if (new URL(url).pathname === "/grant-pools/states") return Response.json({ states: {} });
+          return new Response("updated");
+        } };
+      },
+    },
+  });
+  let providerCalls = 0;
+  context.mock.method(globalThis, "fetch", async () => {
+    providerCalls += 1;
+    return Response.json({ access_token: "unexpected", expires_in: 3600 });
+  });
+
+  const key = "oauth/policy/claude-disabled";
+  await putGrantCredentials(env, key, {
+    provider: "anthropic",
+    kind: "subscription",
+    enabled: true,
+    accessToken: "claude-disabled-fixture",
+    refreshToken: "claude-disabled-refresh",
+    expiresAt: new Date(Date.now() + 60 * 60_000).toISOString(),
+    maintenance: { keepWarm: true },
+    updatedAt: "2026-09-02T17:00:00.000Z",
+  });
+  const owner = env.GRANT_CREDENTIALS.objects.get(key);
+  const dueRecord = owner.values.get("credential");
+  dueRecord.nextRefreshAttemptAt = "2020-01-01T00:00:00.000Z";
+  dueRecord.nextQuotaProbeAt = "2020-01-01T00:00:00.000Z";
+  dueRecord.nextKeepWarmAt = "2020-01-01T00:00:00.000Z";
+  owner.values.set("credential", dueRecord);
+
+  const disabled = await putGrantCredentials(env, key, {
+    provider: "anthropic",
+    kind: "subscription",
+    enabled: false,
+    maintenance: { keepWarm: true },
+    updatedAt: "2026-09-02T18:00:00.000Z",
+  }, true);
+  assert.equal(owner.values.get("credential").enabled, false);
+  assert.equal(owner.alarm(), null, "disable cancels the existing maintenance alarm");
+  await owner.object.alarm();
+  await assert.rejects(
+    () => materializeGrantCredentials(env, key, disabled, "anthropic", anthropic.auth.refresh, true),
+    (error) => error?.code === "grant_disabled" && error?.status === 409,
+  );
+  assert.equal(providerCalls, 0, "disabled grants cannot refresh, probe quota, or keep warm");
+
+  const legacyKey = "oauth/policy/claude-disabled-legacy";
+  await putGrantCredentials(env, legacyKey, {
+    provider: "anthropic",
+    kind: "subscription",
+    enabled: true,
+    accessToken: "claude-legacy-fixture",
+    maintenance: { keepWarm: true },
+    updatedAt: "2026-09-02T17:00:00.000Z",
+  });
+  const legacyOwner = env.GRANT_CREDENTIALS.objects.get(legacyKey);
+  const legacyRecord = legacyOwner.values.get("credential");
+  delete legacyRecord.enabled;
+  legacyRecord.nextKeepWarmAt = "2020-01-01T00:00:00.000Z";
+  legacyOwner.values.set("credential", legacyRecord);
+  values.set(legacyKey, { provider: "anthropic", kind: "subscription", enabled: false });
+  await legacyOwner.state.storage.setAlarm(Date.now());
+  await legacyOwner.object.alarm();
+  assert.equal(legacyOwner.values.get("credential").enabled, false, "legacy owners resolve disablement from grant metadata");
+  assert.equal(legacyOwner.alarm(), null);
+  assert.equal(providerCalls, 0);
 });
