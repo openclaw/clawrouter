@@ -2,7 +2,7 @@
 
 ## 0.2.3 - Unreleased
 
-- Add Claude Fable 5.1 with current input, output, and cache pricing.
+- Add Claude Fable 5.1 with current input, output, and cache pricing, and update the Claude subscription transport identity to the minimum compatible client version.
 
 ## 0.2.2 - 2026-08-31
 
