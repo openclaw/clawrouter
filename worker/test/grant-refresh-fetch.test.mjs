@@ -2,19 +2,20 @@ import assert from "node:assert/strict";
 import { createServer } from "node:http";
 import test from "node:test";
 import { refreshStoredGrant } from "../providers.ts";
+import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
 
 function grantEnv(key, grant, stored = {}) {
-  return {
+  return attachGrantCredentialNamespace({
     stored,
     POLICY_KV: {
       async get(requested) {
-        return requested === key ? structuredClone(grant) : null;
+        return requested === key ? structuredClone(stored[requested] ?? grant) : null;
       },
       async put(requested, value) {
         stored[requested] = JSON.parse(value);
       },
     },
-  };
+  });
 }
 
 function expiredGrant(tokenUrl) {
@@ -51,7 +52,10 @@ test("grant refresh aborts a hung tokenUrl and maps it to grant_refresh_failed",
   try {
     await assert.rejects(() => refreshStoredGrant(env, key), isRefreshFailed);
     assert.deepEqual(timeouts, [30_000]);
-    assert.equal(env.stored[key], undefined);
+    assert.equal(env.stored[key].accessToken, undefined);
+    assert.equal(env.stored[key].refreshToken, undefined);
+    assert.equal(env.stored[key].credentialStore, "durable_object");
+    assert.equal(env.GRANT_CREDENTIALS.objects.get(key).values.get("credential").accessToken, "dummy");
   } finally {
     server.closeAllConnections();
     server.close();
@@ -65,7 +69,10 @@ test("grant refresh timeout uses the existing grant_refresh_failed path", async 
   const key = "oauth/policy/openai";
   const env = grantEnv(key, expiredGrant("https://token.example/oauth/token"));
   await assert.rejects(() => refreshStoredGrant(env, key), isRefreshFailed);
-  assert.equal(env.stored[key], undefined);
+  assert.equal(env.stored[key].accessToken, undefined);
+  assert.equal(env.stored[key].refreshToken, undefined);
+  assert.equal(env.stored[key].credentialStore, "durable_object");
+  assert.equal(env.GRANT_CREDENTIALS.objects.get(key).values.get("credential").accessToken, "dummy");
 });
 
 test("grant refresh attaches a 30s AbortSignal and stores a successful token response", async (context) => {
@@ -91,5 +98,7 @@ test("grant refresh attaches a 30s AbortSignal and stores a successful token res
   assert.deepEqual(timeouts, [30_000]);
   assert.equal(updated.accessToken, "example");
   assert.equal(updated.refreshToken, "sample");
-  assert.equal(env.stored[key].accessToken, "example");
+  assert.equal(env.stored[key].accessToken, undefined);
+  assert.equal(env.stored[key].hasAccessToken, true);
+  assert.equal(env.GRANT_CREDENTIALS.objects.get(key).values.get("credential").accessToken, "example");
 });

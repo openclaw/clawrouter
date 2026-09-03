@@ -88,6 +88,7 @@ export function upstreamGrantFormFromGrant(grant: UpstreamGrant): UpstreamGrantF
     refreshToken: "",
     accountId: grant.accountId ?? "",
     expiresAt: grant.expiresAt ?? "",
+    keepWarm: grant.maintenance?.keepWarm === true,
   };
 }
 
@@ -132,6 +133,7 @@ export function demoGrantFromForm(form: UpstreamGrantForm, existing?: UpstreamGr
     scopes: existing?.scopes ?? [],
     accountId: form.accountId.trim() || null,
     subscription: existing?.subscription ?? null,
+    maintenance: { keepWarm: form.keepWarm },
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
     revokedAt: form.enabled ? null : now,
@@ -331,6 +333,8 @@ export function policyFormFromPolicy(key: AccessPolicy): PolicyForm {
     grantFailover: key.grantRouting.failover,
     grantStaleState: key.grantRouting.staleState,
     grantStaleAfterSeconds: String(key.grantRouting.staleAfterSeconds),
+    grantSwitchAtUsedPercent: String(key.grantRouting.switchAtUsedPercent ?? 90),
+    grantHysteresisPercent: String(key.grantRouting.hysteresisPercent ?? 10),
     eligibleGrants: Object.keys(key.grantRouting.eligibleGrants).length ? JSON.stringify(Object.fromEntries(Object.entries(key.grantRouting.eligibleGrants).sort(([a], [b]) => a.localeCompare(b))), null, 2) : "",
   };
 }

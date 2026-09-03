@@ -2,8 +2,9 @@
 
 ClawRouter’s edge runtime is a TypeScript Worker. Revocation-critical runtime
 policy lives in serialized Durable Object authority so access can be revoked
-without a redeploy. Cloudflare KV stores one-time migration seeds, assignment
-rules, OAuth grants, and operational health.
+without a redeploy. Per-grant Durable Objects own upstream credential material
+and serialize OAuth rotation. Cloudflare KV stores one-time migration seeds,
+assignment rules, redacted grant metadata, and operational health.
 
 For the isolated non-production profile used by AWS FakeCo clients, follow
 [FakeCo staging](fakeco.md). Its locked resource names and dedicated workflow
@@ -23,6 +24,9 @@ must be used instead of overriding the production deployment ad hoc.
 - `ACCESS_CONTROL`: SQLite-backed Durable Object authority for policies,
   credential hashes, user state, provider kill switches, serialized user/group
   policy-binding mutations, and session entitlement lookup.
+- `GRANT_CREDENTIALS`: one Durable Object per upstream grant. It owns raw API
+  keys and OAuth tokens, serializes refresh, and commits rotating access and
+  refresh tokens as one generation.
 - `USAGE_LEDGER`: tenant/policy-sharded SQLite-backed Durable Object request
   audit and reporting ledgers. They retain bounded metadata for 30 days and never store prompt or
   completion bodies. Request content retention uses the separate `CONTENT_ARCHIVE`
@@ -609,9 +613,13 @@ client-selected model IDs.
 
 ## Upstream Grants
 
-The compatibility `cf:oauth:*` helpers manage version 1 upstream grants in
-`POLICY_KV`. Despite their legacy names, the helpers support `api_key`, `oauth`,
-and `subscription` grants. Register an OAuth grant for one access policy:
+The compatibility `cf:oauth:*` helpers write version 1 upstream grants to
+`POLICY_KV`. The Worker imports a legacy grant into `GRANT_CREDENTIALS` on
+first use and then scrubs its KV secret fields. Prefer the admin API, console,
+or contributor-ticket flow for new grants so raw credentials go directly to
+their durable owner. Despite their legacy names, the helpers support
+`api_key`, `oauth`, and `subscription` grants. Register an OAuth grant for one
+access policy:
 
 ```sh
 printf '%s' "$PROVIDER_ACCESS_TOKEN" | pnpm cf:oauth:put -- \
@@ -666,14 +674,21 @@ for five minutes, and no explicit grant restriction:
   "failover": true,
   "staleState": "allow",
   "staleAfterSeconds": 300,
+  "switchAtUsedPercent": 90,
+  "hysteresisPercent": 10,
   "eligibleGrants": {
     "openai": ["openai-primary", "openai-backup"]
   }
 }
 ```
 
-`strategy` may be `priority`, `round_robin`, `least_used`, `most_remaining`, or
-`weighted_random`. `stickiness` may be `none`, `identity`, or `session`;
+`strategy` may be `priority`, `round_robin`, `least_used`, `most_remaining`,
+`threshold`, or `weighted_random`. `threshold` keeps the pool's current grant
+until its most constrained fresh quota window reaches `switchAtUsedPercent`,
+then selects the healthiest candidate below that cutoff only when it improves
+remaining capacity by at least `hysteresisPercent`. It requires
+`stickiness: "none"`; the pool cursor supplies affinity. `stickiness` may otherwise be
+`none`, `identity`, or `session`;
 identity and session values are hashed before selection and are not persisted as
 raw identifiers. `eligibleGrants` is a per-provider token-reference allowlist;
 an explicit empty list denies every grant for that provider and never falls back
@@ -689,9 +704,12 @@ stores only bounded numeric windows, reset times, and sanitized status metadata
 in the access authority; response bodies and credential values are never
 included. Active cooldowns are skipped, and expired windows stop influencing
 selection automatically. A manifest can also declare a bounded quota probe for
-providers that expose per-grant usage outside normal responses. Probes run only
-after an administrator selects **Refresh quota** in the grant console; they have
-a ten-second timeout and never run in the request hot path.
+providers that expose per-grant usage outside normal responses. An administrator
+can run an immediate probe with **Refresh quota**. Subscription transports may
+also declare adaptive per-grant polling: the credential Durable Object schedules
+those probes independently of proxy traffic, polls more often near exhaustion,
+and backs off after failures. Probes have a ten-second timeout and never run in
+the request hot path.
 
 For an upstream 401, 403, or 429, ClawRouter records a five-minute
 authentication cooldown or the provider's bounded rate-limit reset and can try
@@ -759,6 +777,117 @@ The bundled OpenAI manifest maps `subscription` grants to the ChatGPT Codex
 transport, injects the required account metadata, and refreshes through the
 manifest-declared OpenAI OAuth endpoint. OpenAI API-key grants continue to use
 the normal OpenAI Platform transport.
+
+The bundled Anthropic manifest supports Claude subscription OAuth credentials,
+including one-year inference-only tokens generated by `claude setup-token` and
+refreshable access/refresh pairs. It uses Bearer authentication, merges
+the Claude Code OAuth beta identifiers with caller-required beta features,
+prepends Anthropic's required Claude Code billing system blocks, and refreshes
+refreshable grants with Anthropic's JSON token contract. Refreshable grants poll
+the OAuth usage endpoint for the five-hour, seven-day, Sonnet, and Opus windows.
+Inference-only setup tokens collect five-hour and seven-day utilization from
+successful inference and keep-warm response headers instead. Anthropic API-key grants remain
+on `x-api-key` and do not receive subscription-only request transforms.
+
+Anthropic's OAuth client uses a loopback callback, so the Worker does not
+advertise browser OAuth for Claude. Import tokens through the protected
+contributor flow or the write-only upstream-grant form. A typical
+1Password-backed submission is:
+
+```sh
+pnpm pool:contribute -- \
+  --ticket-file ./maintainer-claude.ticket.json \
+  --access-token-ref 'op://Private/ClawRouter Claude/access_token' \
+  --refresh-token-ref 'op://Private/ClawRouter Claude/refresh_token' \
+  --expires-at 2026-09-03T02:00:00Z
+```
+
+For an access-only setup token, omit the refresh token:
+
+```sh
+claude setup-token
+# Store the printed value in 1Password, then submit its reference:
+pnpm pool:contribute -- \
+  --ticket-file ./maintainer-claude.ticket.json \
+  --access-token-ref 'op://Private/ClawRouter Claude/setup_token' \
+  --expires-at 2027-09-03T02:00:00Z
+```
+
+The setup-token command does not save its output. Never place the token in shell
+history, process arguments, chat, or source control. Anthropic documents setup
+tokens for inference-only CI and scripts. Shared subscription routing requires
+separate authorization from Anthropic; do not treat an individual setup token as
+a transferable team credential.
+
+Quota collection is automatic for these grants. Claude keep-warm inference is
+separate and enabled by default for new subscription grants. Disable it for an
+exact grant in the console or add `--no-keep-warm` when issuing that grant's
+ticket.
+The manifest-owned job runs every 4 hours 55 minutes, skips grants in cooldown
+or at 10% remaining capacity, sends one fixed one-token Claude request with no
+user content, and discards the response. Neither contributors nor submitted
+payloads can alter its endpoint, model, headers, prompt, or interval.
+
+### Contributor intake
+
+An administrator can authorize one credential contribution without sharing an
+admin token or accepting a normal ClawRouter key. Create a short-lived ticket
+for one exact pool slot and save its one-time secret to a new protected file:
+
+```sh
+export CLAWROUTER_ADMIN_TOKEN=...
+pnpm pool:ticket -- \
+  --url https://clawrouter.openclaw.ai \
+  --out ./maintainer-openai.ticket.json \
+  --scope policies \
+  --scope-id svc_models \
+  --token-ref openai-maintainer-a \
+  --provider openai \
+  --kind subscription \
+  --contributor maintainer@example.com \
+  --admin-token-env CLAWROUTER_ADMIN_TOKEN
+```
+
+The command creates the ticket file with mode `0600` and refuses to overwrite
+an existing path. Transfer it to the named contributor over an approved secret
+channel. The ticket defaults to 15 minutes and is bound to the scope, provider,
+grant kind, priority, and weight chosen by the administrator.
+The provider manifest supplies the default. Claude tickets enable keep-warm when
+neither flag is present. Use `--no-keep-warm` to disable it for one grant;
+`--keep-warm` remains available as an explicit override for providers whose
+manifest default is off.
+
+The contributor keeps provider credentials in their own 1Password vault and
+passes only secret references on the command line:
+
+```sh
+pnpm pool:contribute -- \
+  --ticket-file ./maintainer-openai.ticket.json \
+  --access-token-ref 'op://Private/ClawRouter OpenAI/access_token' \
+  --refresh-token-ref 'op://Private/ClawRouter OpenAI/refresh_token' \
+  --account-id ACCOUNT_ID \
+  --expires-at 2026-09-02T22:00:00Z
+```
+
+`pool:contribute` invokes `op read` directly and holds its output only in
+memory. For controlled testing it also accepts matching `--*-env` or
+`--*-file` sources. Literal `--access-token`, `--refresh-token`, `--credential`,
+and `--credentials-json` arguments are rejected because process arguments are
+observable. Ticket files must remain mode `0600` on Unix-like systems.
+
+The ticket secret is stored only as a SHA-256 digest. Claiming it is atomic and
+bound to a canonical hash of the submitted payload. An interrupted identical
+retry is safe; a different replay, expired ticket, normal proxy credential, or
+attempt to inject a refresh URL is rejected. Provider refresh configuration
+always comes from the trusted manifest. After acceptance, delete the local
+ticket file through the contributor's normal secure-file workflow.
+
+For unattended 1Password intake, do not place contributors in one shared
+writable vault: 1Password item write permission also requires item read
+permission. Use a separate intake vault and service-account scope for each
+contributor, or keep the user-initiated push above. ClawRouter remains the
+canonical owner after import; do not copy rotated refresh tokens back into
+1Password.
 
 ### Browser OAuth
 

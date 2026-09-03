@@ -9,8 +9,11 @@ interface CatalogSnapshot {
     service_kind: string;
     meter?: string | null;
     capabilities: Array<{ id: string; endpoint: string }>;
-    auth: { authorization?: { grantKind?: "oauth" | "subscription" } | null };
-    quota?: { probes?: Array<{ grantKinds?: Array<"api_key" | "oauth" | "subscription"> }> };
+    auth: {
+      authorization?: { grantKind?: "oauth" | "subscription" } | null;
+      grantTransports?: Partial<Record<"api_key" | "oauth" | "subscription", { maintenance?: { keepWarm?: { defaultEnabled?: boolean } | null } }>>;
+    };
+    quota?: { probes?: Array<{ grantKinds?: Array<"api_key" | "oauth" | "subscription">; requiresRefreshToken?: boolean }> };
     routing: { modelPrefixes?: string[] };
     models: Array<{ id: string; capabilities: string[] }>;
     endpoints: Array<{ id: string; methods: string[]; path_params: string[]; request_format?: string | null; response_format?: string | null; streaming?: string | null }>;
@@ -27,7 +30,10 @@ export function demoCatalog(): { providers: ProviderRow[]; routes: RouteCatalog 
     service_kind: provider.service_kind,
     meter: provider.meter,
     capabilities: provider.capabilities.map((capability) => ({ id: capability.id })),
-    auth: provider.auth.authorization ? { authorization: { grantKind: provider.auth.authorization.grantKind } } : undefined,
+    auth: {
+      authorization: provider.auth.authorization ? { grantKind: provider.auth.authorization.grantKind } : null,
+      grantTransports: provider.auth.grantTransports,
+    },
     quota: provider.quota,
   }));
   const routes: RouteCatalog = {

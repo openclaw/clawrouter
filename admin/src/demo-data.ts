@@ -107,7 +107,7 @@ export function demoUsageEvent(id: string, occurredAt: number, principal: string
 
 export function demoData() {
   const { providers, routes } = demoCatalog();
-  const grantRouting = { strategy: "most_remaining" as const, stickiness: "none" as const, failover: true, staleState: "allow" as const, staleAfterSeconds: 300, eligibleGrants: {} };
+  const grantRouting = { strategy: "most_remaining" as const, stickiness: "none" as const, failover: true, staleState: "allow" as const, staleAfterSeconds: 300, switchAtUsedPercent: 90, hysteresisPercent: 10, eligibleGrants: {} };
   const keys: AccessPolicy[] = [
     { policyId: "maintainer_models", enabled: true, providers: ["anthropic", "aws-bedrock", "azure-openai", "cloudflare-ai-gateway", "cohere", "deepseek", "fireworks", "google-gemini", "groq", "huggingface", "minimax", "mistral", "openai", "openrouter", "perplexity", "together", "xai"], tenantId: "openclaw", tokenRole: "maintainer", monthlyBudgetMicros: 250000000, requestCostMicros: 1000, budgetScope: "principal", retainRequestContent: true, grantRouting },
     { policyId: "openclaw_tools", enabled: true, providers: ["firecrawl", "replicate", "tavily"], tenantId: "openclaw", tokenRole: "tooling", monthlyBudgetMicros: 75000000, requestCostMicros: 500, retainRequestContent: true, grantRouting },

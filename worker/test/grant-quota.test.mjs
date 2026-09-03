@@ -79,6 +79,22 @@ test("provider-declared headers preserve distinct input, output, and subscriptio
   ]);
 });
 
+test("provider-declared metric scaling normalizes fractional utilization", () => {
+  const config = { responseHeaders: [
+    { id: "subscription-five-hour", kind: "subscription", unit: "percent", window: "five_hour", fixedLimit: 100, metricScale: 100, limitHeaders: [], remainingHeaders: [], usedHeaders: ["provider-utilization"], resetHeaders: ["provider-reset"] },
+  ], probes: [] };
+  const state = observeGrantQuota(response(200, { "provider-utilization": "0.91", "provider-reset": "1783342800" }), config, NOW);
+  assert.deepEqual(state?.windows, [{
+    id: "subscription-five-hour",
+    kind: "subscription",
+    unit: "percent",
+    window: "five_hour",
+    remaining: 9,
+    limit: 100,
+    resetAt: "2026-07-06T13:00:00.000Z",
+  }]);
+});
+
 test("fixed limits require a dynamic collector signal", () => {
   const config = { responseHeaders: [
     { id: "primary", kind: "subscription", unit: "percent", window: "5h", fixedLimit: 100, limitHeaders: [], remainingHeaders: [], usedHeaders: ["provider-used-percent"], resetHeaders: ["provider-reset"] },

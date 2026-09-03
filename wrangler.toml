@@ -38,6 +38,10 @@ class_name = "UsageLedgerObject"
 name = "ACCESS_CONTROL"
 class_name = "PolicyBindingIndexObject"
 
+[[durable_objects.bindings]]
+name = "GRANT_CREDENTIALS"
+class_name = "GrantCredentialObject"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["BudgetLedgerObject"]
@@ -49,6 +53,10 @@ new_sqlite_classes = ["UsageLedgerObject"]
 [[migrations]]
 tag = "v3"
 new_sqlite_classes = ["PolicyBindingIndexObject"]
+
+[[migrations]]
+tag = "v4"
+new_sqlite_classes = ["GrantCredentialObject"]
 
 [[routes]]
 pattern = "clawrouter.openclaw.ai"

@@ -6,7 +6,7 @@ ClawRouter serves discovery, proxy, session, and administration APIs from one Wo
 
 Proxy credentials use `Authorization: Bearer <clawrouter-key>`. Authentication resolves the issued credential and its policy from the serialized `ACCESS_CONTROL` Durable Object authority before any provider secret is used.
 
-Browser session, playground, and OAuth routes require a verified Cloudflare Access session. Admin routes accept that verified session for configured admins or `Authorization: Bearer <admin-token>` against `CLAWROUTER_ADMIN_TOKEN_SHA256`. Admin status does not grant provider access, and provider access does not grant admin status.
+Browser session, playground, and OAuth routes require a verified Cloudflare Access session. Admin routes accept that verified session for configured admins or `Authorization: Bearer <admin-token>` against `CLAWROUTER_ADMIN_TOKEN_SHA256`. Admin status does not grant provider access, and provider access does not grant admin status. A pool-submission route accepts only its one-time scoped ticket; neither proxy nor admin credentials are interpreted there.
 
 The Docker self-hosting profile has no Cloudflare Access identity. Its admin API uses the bearer token, and clients use normal proxy credentials.
 
@@ -105,6 +105,7 @@ The Worker redirects `/` to `/dashboard`, and `/dashboard` to `/dashboard/home`.
 | `POST` | `/v1/admin/upstream-grants/<policies\|tenants>/<scope-id>/<token-ref>/refresh` | Refresh an OAuth grant |
 | `POST` | `/v1/admin/upstream-grants/<policies\|tenants>/<scope-id>/<token-ref>/quota-refresh` | Refresh provider-reported grant quota state |
 | `POST` | `/v1/admin/upstream-grants/<policies\|tenants>/<scope-id>/<token-ref>/authorize` | Begin a browser OAuth authorization |
+| `POST` | `/v1/admin/pool-submission-tickets` | Issue a short-lived, one-time credential contribution ticket for one pool slot |
 | `PUT` | `/v1/admin/assignment-rules/<rule-id>` | Create or update an identity assignment rule |
 | `POST` | `/v1/admin/assignment-rules/reconcile` | Reconcile materialized users against assignment rules |
 | `PUT` | `/v1/admin/fusion` | Update Fusion routing configuration |
@@ -112,9 +113,28 @@ The Worker redirects `/` to `/dashboard`, and `/dashboard` to `/dashboard/home`.
 
 The legacy `GET|PUT /v1/admin/keys...`, `POST /v1/admin/keys/<kid>/revoke`, and `GET /v1/admin/users` routes remain compatibility aliases. New control-plane clients use policies, credentials, and tenants directly. Legacy top-level console and `/api/*` aliases redirect or normalize to their `/dashboard/*` and `/v1/*` equivalents.
 
+## Pool contribution
+
+`POST /v1/pool-submissions/<ticket-id>/consume` accepts a ticket bearer secret
+and one credential bundle. The ticket, not the request body, supplies the pool
+scope, token reference, provider, grant kind, priority, and weight. Accepted
+body fields are `credential`, `credentials`, `accessToken`, `refreshToken`,
+`tokenType`, `expiresAt`, `scopes`, `accountId`, and bounded `subscription`
+metadata. Contributor-defined refresh endpoints and OAuth client settings are
+not accepted. Keep-warm follows the provider manifest default; Claude subscription
+tickets default to enabled. The administrator may set `keepWarm: false` on the
+ticket to opt out. Contributors cannot alter maintenance behavior in their
+submission.
+
+The route consumes the ticket once, but an identical retry can recover an
+interrupted submission and returns the same receipt after completion. The
+response exposes only the grant key and submission timestamp. Raw credential
+material is stored in the grant's Durable Object; the KV grant record contains
+only routing metadata and credential-presence flags.
+
 ## Routing and authorization behavior
 
-Before forwarding a request, the Worker authenticates the credential, resolves its policy, checks the provider connection and scoped grant readiness, and reserves a conservative budget. Policies can select grants by priority, round robin, least used, reported remaining quota, or weighted random choice, with optional identity or session stickiness.
+Before forwarding a request, the Worker authenticates the credential, resolves its policy, checks the provider connection and scoped grant readiness, and reserves a conservative budget. Policies can select grants by priority, round robin, least used, reported remaining quota, consume-until-threshold, or weighted random choice. Threshold routing owns pool affinity; other modes may use identity or session stickiness.
 
 Provider grants can be scoped to a policy or tenant. When several token references are eligible, ClawRouter applies the policy strategy within the active priority tier. An upstream 401, 403, or 429 records sanitized grant state and can trigger one same-provider alternate when policy allows failover.
 

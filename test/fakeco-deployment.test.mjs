@@ -196,7 +196,7 @@ test("FakeCo Wrangler render isolates Worker, KV, queues, R2, route, DO namespac
     assert.match(config, /^CLAWROUTER_CONTENT_RETENTION_DEFAULT = "false"$/m);
     assert.match(config, /^CLAWROUTER_ACCESS_DEFAULT_TENANT = "fakeco"$/m);
     assert.match(config, /^CLAWROUTER_ACCESS_AUD = "fakeco-access-audience"$/m);
-    assert.equal(config.match(/^\[\[durable_objects\.bindings\]\]$/gm)?.length, 3);
+    assert.equal(config.match(/^\[\[durable_objects\.bindings\]\]$/gm)?.length, 4);
     assert.doesNotMatch(config, /^name = "clawrouter-edge"$/m);
     assert.doesNotMatch(config, /^pattern = "clawrouter\.openclaw\.ai"$/m);
   } finally {

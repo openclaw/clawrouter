@@ -14,6 +14,7 @@ import {
   assertProviderAccess, capabilityForPath, copyRequestHeaders, endpointForPath, modelRoute, providerById,
   resolveTemplate, signSigV4, transformRequestBody, upstreamAuth, upstreamPath,
 } from "./providers";
+import { applyTransportHeaders, transformTransportBody } from "./provider-auth.ts";
 import { actualModelCost, estimateModelCost } from "./pricing";
 import { extractSseUsageTokens, extractUsageTokens, type UsageTokens } from "./token-usage";
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledModel, CompiledProvider, CompiledQuotaConfig, Env, ProviderConnection, UsageEvent } from "./types";
@@ -594,12 +595,13 @@ async function prepareSelected(request: Request, env: Env, selection: ProxySelec
   try {
     const headers = new Headers(upstream.headers);
     copyRequestHeaders(request.headers, selection.provider, selection.endpoint, headers, env);
+    applyTransportHeaders(headers, upstream.transport, upstream.grant);
     const path = upstreamPath(selection.provider, selection.endpoint, selection.pathParams, env, upstream);
     const url = new URL(`${upstream.baseUrl.replace(/\/$/, "")}${path}`);
     upstream.query.forEach((value, name) => url.searchParams.set(name, value));
     for (const [name, value] of Object.entries(selection.endpoint.query)) url.searchParams.set(name, resolveTemplate(selection.provider, value, env));
     for (const [name, value] of Object.entries(queryInput)) if (value != null) url.searchParams.set(name, String(value));
-    const requestBody = ["GET", "HEAD"].includes(selection.method) ? undefined : JSON.stringify(selection.body);
+    const requestBody = ["GET", "HEAD"].includes(selection.method) ? undefined : JSON.stringify(transformTransportBody(upstream.transport, selection.body));
     await signSigV4(selection.provider, url, selection.method, requestBody, headers, env, upstream.grant);
     return { headers, url, requestBody, grantKey: upstream.grantKey, grantRevision: upstream.grantRevision, connection };
   } catch (error) {

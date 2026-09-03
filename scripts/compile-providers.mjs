@@ -77,7 +77,7 @@ function compileProvider(manifest, ids) {
     schemes: (manifest.auth.schemes ?? []).map(normalizeAuthScheme),
     authorization: normalizeAuthorization(manifest.auth.authorization),
     refresh: normalizeRefresh(manifest.auth.refresh),
-    grantTransports: manifest.auth.grantTransports ?? {},
+    grantTransports: Object.fromEntries(Object.entries(manifest.auth.grantTransports ?? {}).map(([kind, transport]) => [kind, normalizeGrantTransport(transport)])),
   };
   const routing = {
     nativePrefixes: manifest.routing?.nativePrefixes ?? [],
@@ -151,6 +151,7 @@ function normalizeQuota(value) {
     responseHeaders: (value?.responseHeaders ?? fallback).map((window) => normalizeQuotaWindow(window, false)),
     probes: (value?.probes ?? []).map((probe) => ({
       grantKinds: probe.grantKinds ?? [],
+      requiresRefreshToken: probe.requiresRefreshToken === true,
       url: probe.url,
       method: probe.method ?? "GET",
       headers: probe.headers ?? {},
@@ -160,7 +161,7 @@ function normalizeQuota(value) {
 }
 
 function normalizeQuotaWindow(window, probe) {
-  const shared = { id: window.id, kind: window.kind, unit: window.unit ?? null, window: window.window ?? null, fixedLimit: window.fixedLimit ?? null };
+  const shared = { id: window.id, kind: window.kind, unit: window.unit ?? null, window: window.window ?? null, fixedLimit: window.fixedLimit ?? null, metricScale: window.metricScale ?? 1 };
   return probe ? {
     ...shared,
     limitPointer: window.limitPointer ?? null,
@@ -228,6 +229,19 @@ function validateManifest(manifest) {
       if (!(endpoint.pathParams ?? []).includes(placeholder[1])) throw new Error(`provider ${manifest.id} endpoint ${id} path parameter ${placeholder[1]} is not declared`);
     }
   }
+  const headerName = /^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/;
+  for (const [kind, transport] of Object.entries(manifest.auth.grantTransports ?? {})) {
+    if (!new Set(["api_key", "oauth", "subscription"]).has(kind)) throw new Error(`provider ${manifest.id} grant transport ${kind} has an invalid grant kind`);
+    for (const name of [...Object.keys(transport.headers ?? {}), ...Object.keys(transport.appendHeaders ?? {})]) if (!headerName.test(name)) throw new Error(`provider ${manifest.id} grant transport ${kind} has an invalid header`);
+    const warm = transport.maintenance?.keepWarm;
+    if (warm) {
+      const endpoint = manifest.endpoints[warm.endpoint];
+      if (!endpoint) throw new Error(`provider ${manifest.id} grant transport ${kind} keep-warm references missing endpoint ${warm.endpoint}`);
+      if ((endpoint.method ?? "POST").toUpperCase() !== "POST" || (endpoint.pathParams ?? []).length) throw new Error(`provider ${manifest.id} grant transport ${kind} keep-warm requires a POST endpoint without path parameters`);
+      if (JSON.stringify(warm.body).length > 16 * 1024) throw new Error(`provider ${manifest.id} grant transport ${kind} keep-warm body is too large`);
+    }
+    if (transport.maintenance?.quotaPoll && !(manifest.quota?.probes ?? []).some((probe) => probe.grantKinds?.includes(kind))) throw new Error(`provider ${manifest.id} grant transport ${kind} quota polling requires a matching quota probe`);
+  }
   validateQuota(manifest.id, manifest.quota);
 }
 
@@ -238,6 +252,7 @@ function validateQuota(providerId, quota) {
   const validateBase = (window, source) => {
     if (!window || typeof window !== "object" || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(window.id ?? "") || !kinds.has(window.kind)) throw new Error(`provider ${providerId} has an invalid ${source} quota window`);
     if (window.fixedLimit != null && (!Number.isFinite(window.fixedLimit) || window.fixedLimit < 0)) throw new Error(`provider ${providerId} quota window ${window.id} has an invalid fixed limit`);
+    if (window.metricScale != null && (!Number.isFinite(window.metricScale) || window.metricScale <= 0 || window.metricScale > 1_000_000)) throw new Error(`provider ${providerId} quota window ${window.id} has an invalid metric scale`);
   };
   const responseHeaders = quota?.responseHeaders ?? [];
   if (!Array.isArray(responseHeaders) || responseHeaders.length > 12) throw new Error(`provider ${providerId} has too many response quota windows`);
@@ -253,6 +268,7 @@ function validateQuota(providerId, quota) {
   if (!Array.isArray(probes) || probes.length > 4) throw new Error(`provider ${providerId} has too many quota probes`);
   for (const probe of probes) {
     if (!Array.isArray(probe.grantKinds) || !probe.grantKinds.length || probe.grantKinds.some((kind) => !grantKinds.has(kind))) throw new Error(`provider ${providerId} quota probe has invalid grant kinds`);
+    if (probe.requiresRefreshToken != null && typeof probe.requiresRefreshToken !== "boolean") throw new Error(`provider ${providerId} quota probe requiresRefreshToken must be boolean`);
     if (!probe.url?.startsWith("https://")) throw new Error(`provider ${providerId} quota probe URL must use https`);
     if (probe.method != null && !["GET", "POST"].includes(probe.method)) throw new Error(`provider ${providerId} quota probe method is invalid`);
     if (!Array.isArray(probe.windows) || !probe.windows.length || probe.windows.length > 12) throw new Error(`provider ${providerId} quota probe has invalid windows`);
@@ -308,7 +324,23 @@ function normalizeRefresh(value) {
     clientId: value.clientId ?? null,
     clientIdConfig: value.clientIdConfig ?? null,
     clientSecretConfig: value.clientSecretConfig ?? null,
+    requestFormat: value.requestFormat ?? "form",
     extraParams: value.extraParams ?? {},
+  };
+}
+
+function normalizeGrantTransport(value) {
+  return {
+    baseUrl: value.baseUrl ?? null,
+    auth: value.auth ?? null,
+    endpointPaths: value.endpointPaths ?? {},
+    headers: value.headers ?? {},
+    appendHeaders: value.appendHeaders ?? {},
+    requestTransforms: { prependSystem: value.requestTransforms?.prependSystem ?? [] },
+    maintenance: {
+      quotaPoll: value.maintenance?.quotaPoll ?? null,
+      keepWarm: value.maintenance?.keepWarm ? { ...value.maintenance.keepWarm, defaultEnabled: value.maintenance.keepWarm.defaultEnabled === true } : null,
+    },
   };
 }
 

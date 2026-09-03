@@ -70,6 +70,9 @@ billing:
 - `auth.authorization` declares a provider-approved browser OAuth flow,
   including its trusted endpoints, client configuration, scopes, grant kind,
   and optional account metadata mappings.
+- `auth.grantTransports` can replace authentication, append required headers,
+  prepend trusted system blocks, and declare alarm-driven quota or keep-warm
+  maintenance for one grant kind. Contributors cannot override these values.
 - `adapter` declares the request/response family. Use `custom_adapter` only after
   the declarative format cannot express the provider.
 - `billing.meter` and `billing.counters` produce OpenMeter/Lago/Meteroid style
@@ -125,6 +128,8 @@ or from request path params:
 - Browser OAuth is available only when the manifest declares
   `auth.authorization`, and the provider OAuth client must allow ClawRouter's
   `/v1/oauth/callback` URI.
+- Refresh requests default to form encoding. Set `auth.refresh.requestFormat`
+  to `json` only when the provider's token endpoint requires a JSON body.
 
 ## Smoke Coverage
 

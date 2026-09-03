@@ -1,6 +1,7 @@
 import { fetchTimeoutSignal } from "../shared/fetch-timeout.ts";
 import { authorizeAdmin, verifiedAccessSession } from "./access";
 import { authorityCall } from "./authority";
+import { putGrantCredentials } from "./grant-credentials.ts";
 import { syncGrantPoolIndex } from "./grant-selection";
 import { providerById } from "./providers";
 import type { Env, OAuthState, UpstreamGrant } from "./types";
@@ -56,7 +57,7 @@ export async function oauthCallback(request: Request, env: Env): Promise<Respons
   const existing = await env.POLICY_KV.get<UpstreamGrant>(state.grantKey, "json");
   const idPayload = typeof payload.id_token === "string" ? decodeJwtPayload(payload.id_token) : {};
   const now = nowIso(), expires = typeof payload.expires_in === "number" ? new Date(Date.now() + payload.expires_in * 1000).toISOString() : null;
-  const grant: UpstreamGrant = {
+  let grant: UpstreamGrant = {
     ...existing, version: 1, enabled: true, kind: config.grantKind as UpstreamGrant["kind"], provider: provider.id,
     label: existing?.label ?? `${provider.display_name} OAuth`, accessToken: payload.access_token as string,
     refreshToken: typeof payload.refresh_token === "string" ? payload.refresh_token : existing?.refreshToken,
@@ -69,7 +70,10 @@ export async function oauthCallback(request: Request, env: Env): Promise<Respons
   grant.priority = Number.isInteger(state.priority) ? state.priority : existing?.priority ?? 100;
   grant.weight = typeof state.weight === "number" && Number.isFinite(state.weight) && state.weight > 0 ? state.weight : existing?.weight ?? 1;
   await syncGrantPoolIndex(env, state.grantKey, existing, grant);
-  try { await env.POLICY_KV.put(state.grantKey, JSON.stringify(grant)); }
+  try {
+    grant = await putGrantCredentials(env, state.grantKey, grant, true);
+    await env.POLICY_KV.put(state.grantKey, JSON.stringify(grant));
+  }
   catch (error) { await syncGrantPoolIndex(env, state.grantKey, grant, existing).catch(() => undefined); throw error; }
   return callbackPage(true, `${provider.display_name} connection saved.`);
 }
