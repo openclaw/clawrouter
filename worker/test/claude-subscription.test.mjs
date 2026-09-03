@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { putGrantCredentials } from "../grant-credentials.ts";
 import { observeGrantQuotaProbe } from "../grant-quota.ts";
-import { applyProviderCredential, applyTransportHeaders, transformTransportBody, transportForGrant } from "../provider-auth.ts";
+import { applyProviderCredential, applyTransportHeaders, quotaProbeForGrant, transformTransportBody, transportForGrant } from "../provider-auth.ts";
 import { snapshot } from "../providers.ts";
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
 
@@ -13,6 +13,8 @@ test("Claude subscription transport uses OAuth identity without changing API-key
   const subscription = { provider: "anthropic", kind: "subscription", accessToken: "claude-oauth-fixture" };
   const transport = transportForGrant(anthropic, subscription);
   assert.equal(transport.maintenance.keepWarm.defaultEnabled, true);
+  assert.ok(quotaProbeForGrant(anthropic, { provider: "anthropic", kind: "subscription", accessToken: "refreshable", refreshToken: "refresh" }));
+  assert.equal(quotaProbeForGrant(anthropic, subscription), null, "inference-only setup tokens do not select the refresh-token usage probe");
   const oauthHeaders = new Headers({ "anthropic-beta": "interleaved-thinking-2025-05-14" });
   applyProviderCredential(anthropic, subscription, {}, oauthHeaders, new URLSearchParams());
   applyTransportHeaders(oauthHeaders, transport, subscription);
@@ -112,6 +114,7 @@ test("Claude credential alarms poll quota and keep warm only when explicitly ena
   });
   const warmOwner = env.GRANT_CREDENTIALS.objects.get(enabledKey);
   const warmRecord = warmOwner.values.get("credential");
+  assert.equal(warmRecord.nextQuotaProbeAt, null, "access-only setup tokens do not schedule the refresh-token usage probe");
   warmRecord.nextQuotaProbeAt = new Date(Date.now() + 60 * 60_000).toISOString();
   warmRecord.nextKeepWarmAt = "2020-01-01T00:00:00.000Z";
   warmOwner.values.set("credential", warmRecord);
@@ -127,4 +130,5 @@ test("Claude credential alarms poll quota and keep warm only when explicitly ena
     return Response.json({ content: [] });
   });
   await warmOwner.object.alarm();
+  assert.equal(warmOwner.values.get("credential").nextQuotaProbeAt, null, "legacy scheduled probes are cleared for setup tokens");
 });

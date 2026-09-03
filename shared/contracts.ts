@@ -9,7 +9,7 @@ export interface ProviderRow {
     authorization?: { grantKind?: "oauth" | "subscription" } | null;
     grantTransports?: Partial<Record<"api_key" | "oauth" | "subscription", { maintenance?: { keepWarm?: { defaultEnabled?: boolean } | null } }>>;
   };
-  quota?: { probes?: Array<{ grantKinds?: Array<"api_key" | "oauth" | "subscription"> }> };
+  quota?: { probes?: Array<{ grantKinds?: Array<"api_key" | "oauth" | "subscription">; requiresRefreshToken?: boolean }> };
 }
 
 export interface ProviderResponse { providers: ProviderRow[] }

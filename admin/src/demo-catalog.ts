@@ -13,7 +13,7 @@ interface CatalogSnapshot {
       authorization?: { grantKind?: "oauth" | "subscription" } | null;
       grantTransports?: Partial<Record<"api_key" | "oauth" | "subscription", { maintenance?: { keepWarm?: { defaultEnabled?: boolean } | null } }>>;
     };
-    quota?: { probes?: Array<{ grantKinds?: Array<"api_key" | "oauth" | "subscription"> }> };
+    quota?: { probes?: Array<{ grantKinds?: Array<"api_key" | "oauth" | "subscription">; requiresRefreshToken?: boolean }> };
     routing: { modelPrefixes?: string[] };
     models: Array<{ id: string; capabilities: string[] }>;
     endpoints: Array<{ id: string; methods: string[]; path_params: string[]; request_format?: string | null; response_format?: string | null; streaming?: string | null }>;

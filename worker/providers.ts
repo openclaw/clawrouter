@@ -5,7 +5,7 @@ import { observeGrantQuota, observeGrantQuotaProbe } from "./grant-quota.ts";
 import { grantRevision, grantUsable as canonicalGrantUsable, recordGrantRuntime, resolveGrantSelection } from "./grant-selection.ts";
 import { grantsVisibleToPolicies, type GrantRecord } from "./grant-scope.ts";
 import { materializeGrantCredentials } from "./grant-credentials.ts";
-import { applyProviderCredential, applyTransportHeaders, requiredGrantTemplate, transportForGrant } from "./provider-auth.ts";
+import { applyProviderCredential, applyTransportHeaders, quotaProbeForGrant, requiredGrantTemplate, transportForGrant } from "./provider-auth.ts";
 import type {
   AccessPolicyEntry, AuthorizedIdentity, CompiledEndpoint, CompiledGrantTransport, CompiledModel, CompiledProvider, Env,
   ProviderConnection, ProviderHealth, ProviderSnapshot, UpstreamGrant,
@@ -342,7 +342,7 @@ export async function refreshStoredGrantQuota(env: Env, key: string): Promise<vo
   const provider = providerById(grant.provider);
   if (!provider) throw new HttpError(400, "unknown_provider", "upstream grant provider is not registered");
   grant = await refreshGrant(key, grant, provider, env, false);
-  const probe = provider.quota.probes.find((candidate) => candidate.grantKinds.includes(grant.kind!));
+  const probe = quotaProbeForGrant(provider, grant);
   if (!probe) throw new HttpError(400, "grant_quota_probe_unavailable", `provider ${provider.id} has no quota probe for this grant kind`);
   const headers = new Headers({ accept: "application/json" });
   const url = new URL(probe.url);

@@ -1,4 +1,4 @@
-import type { AuthScheme, CompiledGrantTransport, CompiledProvider, Env, GrantTransportAuth, UpstreamGrant } from "./types.ts";
+import type { AuthScheme, CompiledGrantTransport, CompiledProvider, CompiledQuotaProbe, Env, GrantTransportAuth, UpstreamGrant } from "./types.ts";
 import { HttpError } from "./utils.ts";
 
 type ExecutableAuth = Exclude<AuthScheme, { type: "oauth" | "sig_v4" | "cloudflare_binding" }> | GrantTransportAuth;
@@ -6,6 +6,11 @@ type ExecutableAuth = Exclude<AuthScheme, { type: "oauth" | "sig_v4" | "cloudfla
 export function transportForGrant(provider: CompiledProvider, grant: UpstreamGrant | null): CompiledGrantTransport | null {
   if (!grant?.kind) return null;
   return provider.auth.grantTransports[grant.kind] ?? null;
+}
+
+export function quotaProbeForGrant(provider: CompiledProvider, grant: UpstreamGrant | null): CompiledQuotaProbe | null {
+  if (!grant?.kind) return null;
+  return provider.quota.probes.find((probe) => probe.grantKinds.includes(grant.kind!) && (!probe.requiresRefreshToken || !!grant.refreshToken)) ?? null;
 }
 
 export function applyProviderCredential(

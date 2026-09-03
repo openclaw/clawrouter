@@ -151,6 +151,7 @@ function normalizeQuota(value) {
     responseHeaders: (value?.responseHeaders ?? fallback).map((window) => normalizeQuotaWindow(window, false)),
     probes: (value?.probes ?? []).map((probe) => ({
       grantKinds: probe.grantKinds ?? [],
+      requiresRefreshToken: probe.requiresRefreshToken === true,
       url: probe.url,
       method: probe.method ?? "GET",
       headers: probe.headers ?? {},
@@ -160,7 +161,7 @@ function normalizeQuota(value) {
 }
 
 function normalizeQuotaWindow(window, probe) {
-  const shared = { id: window.id, kind: window.kind, unit: window.unit ?? null, window: window.window ?? null, fixedLimit: window.fixedLimit ?? null };
+  const shared = { id: window.id, kind: window.kind, unit: window.unit ?? null, window: window.window ?? null, fixedLimit: window.fixedLimit ?? null, metricScale: window.metricScale ?? 1 };
   return probe ? {
     ...shared,
     limitPointer: window.limitPointer ?? null,
@@ -251,6 +252,7 @@ function validateQuota(providerId, quota) {
   const validateBase = (window, source) => {
     if (!window || typeof window !== "object" || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(window.id ?? "") || !kinds.has(window.kind)) throw new Error(`provider ${providerId} has an invalid ${source} quota window`);
     if (window.fixedLimit != null && (!Number.isFinite(window.fixedLimit) || window.fixedLimit < 0)) throw new Error(`provider ${providerId} quota window ${window.id} has an invalid fixed limit`);
+    if (window.metricScale != null && (!Number.isFinite(window.metricScale) || window.metricScale <= 0 || window.metricScale > 1_000_000)) throw new Error(`provider ${providerId} quota window ${window.id} has an invalid metric scale`);
   };
   const responseHeaders = quota?.responseHeaders ?? [];
   if (!Array.isArray(responseHeaders) || responseHeaders.length > 12) throw new Error(`provider ${providerId} has too many response quota windows`);
@@ -266,6 +268,7 @@ function validateQuota(providerId, quota) {
   if (!Array.isArray(probes) || probes.length > 4) throw new Error(`provider ${providerId} has too many quota probes`);
   for (const probe of probes) {
     if (!Array.isArray(probe.grantKinds) || !probe.grantKinds.length || probe.grantKinds.some((kind) => !grantKinds.has(kind))) throw new Error(`provider ${providerId} quota probe has invalid grant kinds`);
+    if (probe.requiresRefreshToken != null && typeof probe.requiresRefreshToken !== "boolean") throw new Error(`provider ${providerId} quota probe requiresRefreshToken must be boolean`);
     if (!probe.url?.startsWith("https://")) throw new Error(`provider ${providerId} quota probe URL must use https`);
     if (probe.method != null && !["GET", "POST"].includes(probe.method)) throw new Error(`provider ${providerId} quota probe method is invalid`);
     if (!Array.isArray(probe.windows) || !probe.windows.length || probe.windows.length > 12) throw new Error(`provider ${providerId} quota probe has invalid windows`);

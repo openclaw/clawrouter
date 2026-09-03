@@ -26,6 +26,7 @@ export interface CompiledQuotaWindow {
   usedHeaders: string[];
   resetHeaders: string[];
   fixedLimit: number | null;
+  metricScale: number;
 }
 export interface CompiledQuotaProbeWindow {
   id: string;
@@ -37,9 +38,11 @@ export interface CompiledQuotaProbeWindow {
   usedPointer: string | null;
   resetPointer: string | null;
   fixedLimit: number | null;
+  metricScale: number;
 }
 export interface CompiledQuotaProbe {
   grantKinds: Array<NonNullable<UpstreamGrant["kind"]>>;
+  requiresRefreshToken: boolean;
   url: string;
   method: "GET" | "POST";
   headers: Record<string, string>;

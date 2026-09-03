@@ -95,8 +95,25 @@ quota:
       limitHeaders: [anthropic-ratelimit-output-tokens-limit]
       remainingHeaders: [anthropic-ratelimit-output-tokens-remaining]
       resetHeaders: [anthropic-ratelimit-output-tokens-reset]
+    - id: subscription-five-hour
+      kind: subscription
+      unit: percent
+      window: five_hour
+      fixedLimit: 100
+      metricScale: 100
+      usedHeaders: [anthropic-ratelimit-unified-5h-utilization]
+      resetHeaders: [anthropic-ratelimit-unified-5h-reset]
+    - id: subscription-seven-day
+      kind: subscription
+      unit: percent
+      window: seven_day
+      fixedLimit: 100
+      metricScale: 100
+      usedHeaders: [anthropic-ratelimit-unified-7d-utilization]
+      resetHeaders: [anthropic-ratelimit-unified-7d-reset]
   probes:
     - grantKinds: [subscription]
+      requiresRefreshToken: true
       url: https://api.anthropic.com/api/oauth/usage
       headers:
         User-Agent: openclaw

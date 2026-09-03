@@ -64,9 +64,9 @@ export function grantCoolingDown(state: GrantRuntimeState | null | undefined, no
 
 function quotaWindowsFromHeaders(headers: Headers, definitions: CompiledQuotaWindow[], nowMs: number): GrantQuotaWindow[] {
   return definitions.flatMap((definition) => {
-    const reportedLimit = headerNumber(headers, definition.limitHeaders);
-    let remaining = headerNumber(headers, definition.remainingHeaders);
-    const used = headerNumber(headers, definition.usedHeaders);
+    const reportedLimit = scaledMetric(headerNumber(headers, definition.limitHeaders), definition.metricScale);
+    let remaining = scaledMetric(headerNumber(headers, definition.remainingHeaders), definition.metricScale);
+    const used = scaledMetric(headerNumber(headers, definition.usedHeaders), definition.metricScale);
     const resetAt = headerReset(headers, definition.resetHeaders, nowMs);
     if (reportedLimit === null && remaining === null && used === null && resetAt === null) return [];
     const limit = definition.fixedLimit ?? reportedLimit;
@@ -76,9 +76,9 @@ function quotaWindowsFromHeaders(headers: Headers, definitions: CompiledQuotaWin
 }
 
 function quotaWindowFromPayload(payload: unknown, definition: CompiledQuotaProbeWindow, nowMs: number): GrantQuotaWindow[] {
-  const reportedLimit = pointerNumber(payload, definition.limitPointer);
-  let remaining = pointerNumber(payload, definition.remainingPointer);
-  const used = pointerNumber(payload, definition.usedPointer);
+  const reportedLimit = scaledMetric(pointerNumber(payload, definition.limitPointer), definition.metricScale);
+  let remaining = scaledMetric(pointerNumber(payload, definition.remainingPointer), definition.metricScale);
+  const used = scaledMetric(pointerNumber(payload, definition.usedPointer), definition.metricScale);
   const resetAt = pointerReset(payload, definition.resetPointer, nowMs);
   if (reportedLimit === null && remaining === null && used === null && resetAt === null) return [];
   const limit = definition.fixedLimit ?? reportedLimit;
@@ -102,7 +102,11 @@ function quotaRuntime(windows: GrantQuotaWindow[], source: GrantRuntimeState["so
 }
 
 function headerWindow(id: string, kind: CompiledQuotaWindow["kind"], limitHeaders: string[], remainingHeaders: string[], resetHeaders: string[]): CompiledQuotaWindow {
-  return { id, kind, unit: null, window: null, fixedLimit: null, limitHeaders, remainingHeaders, usedHeaders: [], resetHeaders };
+  return { id, kind, unit: null, window: null, fixedLimit: null, metricScale: 1, limitHeaders, remainingHeaders, usedHeaders: [], resetHeaders };
+}
+
+function scaledMetric(value: number | null, scale = 1): number | null {
+  return value === null ? null : metric(value * scale);
 }
 
 function headerNumber(headers: Headers, names: readonly string[]): number | null {

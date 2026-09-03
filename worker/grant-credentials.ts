@@ -1,7 +1,7 @@
 import snapshotJson from "./generated/provider-snapshot.json" with { type: "json" };
 import { authorityCall } from "./authority.ts";
 import { grantCoolingDown, grantQuotaRatio, observeGrantQuota, observeGrantQuotaProbe } from "./grant-quota.ts";
-import { applyProviderCredential, applyTransportHeaders, requiredGrantTemplate, transformTransportBody, transportForGrant } from "./provider-auth.ts";
+import { applyProviderCredential, applyTransportHeaders, quotaProbeForGrant, requiredGrantTemplate, transformTransportBody, transportForGrant } from "./provider-auth.ts";
 import type { CompiledGrantTransport, CompiledProvider, Env, GrantRuntimeState, ProviderSnapshot, RefreshConfig, UpstreamGrant } from "./types";
 import { errorResponse, HttpError, json, readJson } from "./utils.ts";
 
@@ -260,6 +260,8 @@ export class GrantCredentialObject implements DurableObject {
     const transport = provider ? transportForGrant(provider, materializedGrant({ provider: record.providerId, kind: record.kind }, record)) : null;
     if (!provider || !transport) return;
     const now = Date.now();
+    const quotaProbe = quotaProbeForGrant(provider, materializedGrant({ provider: provider.id, kind: record.kind }, record));
+    if (!quotaProbe) record.nextQuotaProbeAt = null;
     const refreshAt = record.nextRefreshAttemptAt ? Date.parse(record.nextRefreshAttemptAt) : record.expiresAt ? Date.parse(record.expiresAt) - REFRESH_MARGIN_MS : NaN;
     if (record.refreshToken && Number.isFinite(refreshAt) && refreshAt <= now) {
       try { record = { ...await this.refresh(record, provider.id, provider.auth.refresh), nextRefreshAttemptAt: null }; }
@@ -276,7 +278,7 @@ export class GrantCredentialObject implements DurableObject {
         return;
       }
     }
-    if (due(record.nextQuotaProbeAt, now) && transport.maintenance.quotaPoll) {
+    if (due(record.nextQuotaProbeAt, now) && transport.maintenance.quotaPoll && quotaProbe) {
       try {
         const state = await probeQuota(this.env, provider, transport, record);
         record.quotaFailureCount = 0;
@@ -322,6 +324,7 @@ function ownerMetadata(record: CredentialRecord, grant: UpstreamGrant, key: stri
   const kind = grant.kind ?? record.kind;
   const provider = providerId ? snapshot.providers.find((candidate) => candidate.id === providerId) : undefined;
   const transport = provider && kind ? provider.auth.grantTransports[kind] : null;
+  const quotaProbe = provider && kind ? quotaProbeForGrant(provider, materializedGrant({ provider: provider.id, kind }, record)) : null;
   const keepWarm = grant.maintenance?.keepWarm ?? record.maintenance?.keepWarm ?? false;
   return {
     ...record,
@@ -329,7 +332,7 @@ function ownerMetadata(record: CredentialRecord, grant: UpstreamGrant, key: stri
     providerId,
     kind,
     maintenance: { keepWarm },
-    nextQuotaProbeAt: transport?.maintenance.quotaPoll
+    nextQuotaProbeAt: transport?.maintenance.quotaPoll && quotaProbe
       ? record.nextQuotaProbeAt ?? new Date(now + transport.maintenance.quotaPoll.normalIntervalSeconds * 1_000).toISOString()
       : null,
     nextKeepWarmAt: keepWarm && transport?.maintenance.keepWarm
@@ -353,7 +356,7 @@ function maintenanceMetadataChanged(left: CredentialRecord, right: CredentialRec
 
 async function probeQuota(env: Env, provider: CompiledProvider, transport: CompiledGrantTransport, record: CredentialRecord): Promise<GrantRuntimeState> {
   const grant = materializedGrant({ provider: provider.id, kind: record.kind, maintenance: record.maintenance }, record);
-  const probe = provider.quota.probes.find((candidate) => candidate.grantKinds.includes(record.kind!));
+  const probe = quotaProbeForGrant(provider, grant);
   if (!probe) throw new HttpError(400, "grant_quota_probe_unavailable", `provider ${provider.id} has no quota probe for this grant kind`);
   const headers = new Headers({ accept: "application/json" });
   const url = new URL(probe.url);

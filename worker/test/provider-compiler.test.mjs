@@ -49,6 +49,12 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.deepEqual(openai.quota.responseHeaders.map((window) => window.id), ["rpm", "tpm", "subscription-primary", "subscription-secondary", "credits"]);
   assert.deepEqual(openai.quota.probes[0].grantKinds, ["subscription"]);
   assert.equal(openai.quota.probes[0].url, "https://chatgpt.com/backend-api/wham/usage");
+  const anthropic = compiled.providers.find((provider) => provider.id === "anthropic");
+  assert.deepEqual(anthropic.quota.responseHeaders.filter((window) => window.kind === "subscription").map((window) => [window.id, window.metricScale]), [
+    ["subscription-five-hour", 100],
+    ["subscription-seven-day", 100],
+  ]);
+  assert.equal(anthropic.quota.probes[0].requiresRefreshToken, true);
   assert.equal(compiled.model_index["local/default"].provider, "local-openai");
   assert.ok(compiled.capability_index["llm.chat"].length >= 10);
 });
@@ -95,6 +101,20 @@ test("quota header sources must retain their declared array shape", () => {
     const invalid = readFileSync("providers/openai.provider.yaml", "utf8").replace("limitHeaders: [x-ratelimit-limit-requests]", "limitHeaders: x-ratelimit-limit-requests");
     writeFileSync(manifest, invalid);
     assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), /limitHeaders must be an array/);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+test("quota metric scales and probe requirements reject invalid manifest values", () => {
+  const directory = mkdtempSync(join(tmpdir(), "clawrouter-provider-"));
+  const manifest = join(directory, "anthropic.provider.yaml");
+  const source = readFileSync("providers/anthropic.provider.yaml", "utf8");
+  try {
+    writeFileSync(manifest, source.replace("metricScale: 100", "metricScale: 0"));
+    assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), /invalid metric scale/);
+    writeFileSync(manifest, source.replace("requiresRefreshToken: true", "requiresRefreshToken: refresh"));
+    assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), /requiresRefreshToken must be boolean/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
