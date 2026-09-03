@@ -2,6 +2,8 @@
 
 ## 0.2.3 - Unreleased
 
+- Add Claude Fable 5.1 with current input, output, and cache pricing.
+
 ## 0.2.2 - 2026-08-31
 
 - Bound stalled session avatar, Cloudflare Access, and local-console sign-in requests with the existing fetch timeouts; thanks @SebTardif for #121.

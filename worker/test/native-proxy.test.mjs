@@ -48,7 +48,7 @@ test("current Anthropic native models retain routing and budget pricing", () => 
   const messages = anthropic.endpoints.find((endpoint) => endpoint.id === "messages");
   assert.ok(messages);
 
-  for (const model of ["claude-opus-5", "claude-sonnet-5", "claude-fable-5", "claude-sonnet-4-6"]) {
+  for (const model of ["claude-opus-5", "claude-sonnet-5", "claude-fable-5-1", "claude-fable-5", "claude-sonnet-4-6"]) {
     const prepared = prepareNativeRequest(
       anthropic,
       messages,
