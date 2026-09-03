@@ -22,10 +22,11 @@ test("Claude subscription transport uses OAuth identity without changing API-key
   assert.equal(oauthHeaders.has("x-api-key"), false);
   assert.equal(oauthHeaders.get("anthropic-beta"), "interleaved-thinking-2025-05-14,claude-code-20250219,oauth-2025-04-20");
   assert.equal(oauthHeaders.get("x-app"), "cli");
+  assert.equal(oauthHeaders.get("user-agent"), "claude-cli/2.1.251");
 
   const body = transformTransportBody(transport, { model: "claude-sonnet-5", messages: [{ role: "user", content: "fixture" }], system: "operator system" });
   assert.deepEqual(body.system.map((block) => block.text), [
-    "x-anthropic-billing-header: cc_version=2.1.75; cc_entrypoint=sdk-cli;",
+    "x-anthropic-billing-header: cc_version=2.1.251; cc_entrypoint=sdk-cli;",
     "You are Claude Code, Anthropic's official CLI for Claude.",
     "operator system",
   ]);
@@ -126,7 +127,7 @@ test("Claude credential alarms poll quota and keep warm only when explicitly ena
     assert.match(headers.get("anthropic-beta"), /oauth-2025-04-20/);
     const body = JSON.parse(init.body);
     assert.deepEqual(body.messages, [{ role: "user", content: "." }]);
-    assert.equal(body.system[0].text, "x-anthropic-billing-header: cc_version=2.1.75; cc_entrypoint=sdk-cli;");
+    assert.equal(body.system[0].text, "x-anthropic-billing-header: cc_version=2.1.251; cc_entrypoint=sdk-cli;");
     return Response.json({ content: [] });
   });
   await warmOwner.object.alarm();

@@ -26,14 +26,14 @@ auth:
       headers:
         accept: application/json
         anthropic-dangerous-direct-browser-access: "true"
-        user-agent: claude-cli/2.1.75
+        user-agent: claude-cli/2.1.251
         x-app: cli
       appendHeaders:
         anthropic-beta: claude-code-20250219,oauth-2025-04-20
       requestTransforms:
         prependSystem:
           - type: text
-            text: "x-anthropic-billing-header: cc_version=2.1.75; cc_entrypoint=sdk-cli;"
+            text: "x-anthropic-billing-header: cc_version=2.1.251; cc_entrypoint=sdk-cli;"
           - type: text
             text: "You are Claude Code, Anthropic's official CLI for Claude."
       maintenance:
