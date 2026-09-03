@@ -50,6 +50,9 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.deepEqual(openai.quota.probes[0].grantKinds, ["subscription"]);
   assert.equal(openai.quota.probes[0].url, "https://chatgpt.com/backend-api/wham/usage");
   const anthropic = compiled.providers.find((provider) => provider.id === "anthropic");
+  const fable51 = anthropic.models.find((model) => model.id === "anthropic/claude-fable-5-1");
+  assert.equal(fable51.upstream, "claude-fable-5-1");
+  assert.equal(fable51.pricing.cachedInputMicrosPerMillion, 250000);
   assert.deepEqual(anthropic.quota.responseHeaders.filter((window) => window.kind === "subscription").map((window) => [window.id, window.metricScale]), [
     ["subscription-five-hour", 100],
     ["subscription-seven-day", 100],

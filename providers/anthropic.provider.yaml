@@ -199,6 +199,20 @@ models:
         outputMicrosPerMillion: 10000000
         maxInputTokens: 1000000
         defaultMaxOutputTokens: 128000
+    - id: anthropic/claude-fable-5-1
+      upstream: claude-fable-5-1
+      capabilities: [llm.messages, llm.count_tokens]
+      pricingRef: anthropic-claude-fable-5-1-standard-2026-09-01
+      pricing:
+        effectiveAt: "2026-09-01"
+        source: https://platform.claude.com/docs/en/about-claude/pricing
+        inputMicrosPerMillion: 10000000
+        cachedInputMicrosPerMillion: 250000
+        cacheWrite5mInputMicrosPerMillion: 12500000
+        cacheWrite1hInputMicrosPerMillion: 20000000
+        outputMicrosPerMillion: 50000000
+        maxInputTokens: 1000000
+        defaultMaxOutputTokens: 128000
     - id: anthropic/claude-fable-5
       upstream: claude-fable-5
       capabilities: [llm.messages, llm.count_tokens]
