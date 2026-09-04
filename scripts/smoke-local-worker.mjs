@@ -14,6 +14,7 @@ const proxyKey = `clawrouter-live-migrate-${proxySecret}`;
 const legacySecret = "legacy_secret_1234";
 const legacyKey = `clawrouter-live-legacy-${legacySecret}`;
 const generation = "migration_e2e";
+const seedRecords = [];
 writeFileSync(config, `${readFileSync("wrangler.toml", "utf8").trim()}\n\n[[kv_namespaces]]\nbinding = "POLICY_KV"\nid = "local-e2e"\n`);
 mkdirSync(persistence, { recursive: true });
 putLocalKv("policies/migrate", { enabled: true, generation, providers: ["firecrawl", "replicate"], tenantId: "default", tokenRole: "service", monthlyBudgetMicros: 10_000, requestCostMicros: 100, retainRequestContent: true });
@@ -47,6 +48,7 @@ const fusionKey = `clawrouter-live-fusionlocal-${fusionSecret}`;
 putLocalKv("policies/fusion_local", { enabled: true, generation, providers: ["local-openai", "openai"], tenantId: "default", tokenRole: "service", monthlyBudgetMicros: 1, retainRequestContent: false });
 putLocalKv("policies/fusion_ready", { enabled: true, generation, providers: ["local-openai", "openai"], tenantId: "default", tokenRole: "service", monthlyBudgetMicros: 100, requestCostMicros: 1, retainRequestContent: false });
 putLocalKv("credentials/fusionlocal", { enabled: true, secretSha256: sha256(fusionSecret), policyId: "fusion_local", policyGeneration: generation });
+seedLocalKv();
 const upstreamPort = await availablePort();
 const upstreamCalls = [];
 const failoverCalls = [];
@@ -807,4 +809,15 @@ async function waitUntilReady(url) {
 }
 function availablePort() { return new Promise((resolve, reject) => { const server = createTcpServer(); server.once("error", reject); server.listen(0, "127.0.0.1", () => { const address = server.address(); server.close(() => resolve(address.port)); }); }); }
 function sha256(value) { return createHash("sha256").update(value).digest("hex"); }
-function putLocalKv(key, value) { execFileSync("pnpm", ["exec", "wrangler", "kv", "key", "put", key, JSON.stringify(value), "--binding", "POLICY_KV", "--local", "--persist-to", persistence, "--config", config], { cwd: process.cwd(), env: { ...process.env, WRANGLER_SEND_METRICS: "false" }, stdio: "ignore" }); }
+function putLocalKv(key, value) { seedRecords.push({ key, value: JSON.stringify(value) }); }
+function seedLocalKv() {
+  const file = `${persistence}/seed.json`;
+  try {
+    writeFileSync(file, JSON.stringify(seedRecords));
+    execFileSync("pnpm", ["exec", "wrangler", "kv", "bulk", "put", file, "--binding", "POLICY_KV", "--local", "--persist-to", persistence, "--config", config], { cwd: process.cwd(), env: { ...process.env, WRANGLER_SEND_METRICS: "false" }, stdio: "ignore" });
+  } catch (error) {
+    rmSync(config, { force: true });
+    rmSync(persistence, { recursive: true, force: true });
+    throw error;
+  } finally { rmSync(file, { force: true }); }
+}
