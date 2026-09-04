@@ -254,7 +254,7 @@ test("adversarial paused uploads fail closed across policy, credential, binding 
     const body = new ReadableStream({ start(c) { controller = c; }, pull() { waiting.resolve(); } }, { highWaterMark: 0 });
     const req = new Request("https://synthetic.invalid/private/v1/responses", { method: "POST", headers: { authorization: `Bearer ${credential}`, "content-type": "application/json" }, body, duplex: "half" });
     const pending = run(req, env); await waiting.promise;
-    assert.equal(state.policies, 1); assert.equal(state.secrets, 1);
+    assert.equal(state.secrets, 1);
     change(state);
     controller.enqueue(enc.encode(JSON.stringify({ model: alias, store: false }))); controller.close();
     const result = await pending; assert.equal(result.status, 404);

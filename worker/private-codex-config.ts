@@ -122,10 +122,9 @@ export async function privateAuthorized(request: Request, policy: PrivatePolicy)
 }
 
 export async function privateAuthorizationCurrent(authorization: PrivateAuthorization, policy: PrivatePolicy, env: Env): Promise<boolean> {
-  if (policy.auth.mode === "access") {
-    const current = await privatePolicy(env);
-    if (!current || JSON.stringify(current) !== JSON.stringify(policy)) return false;
-  }
+  // Workload revocation must also win while an upstream binding read is pending.
+  const current = await privatePolicy(env);
+  if (!current || JSON.stringify(current) !== JSON.stringify(policy)) return false;
   return authorization.current();
 }
 
