@@ -1,13 +1,12 @@
 import type { BudgetReserveRequest, BudgetSettleRequest, Env, QueueMessage, UsageEvent } from "./types";
 import { budgetLedgerAddress, providerBudgetLedgerAddress } from "./budget-scope.ts";
-import { emptyUsageSnapshot, mergeUsageSnapshots, usageCutoffs, usageDayMs, usageShardName, type UsageSnapshot } from "./usage-sharding.ts";
+import { mergeUsageSnapshots, usageCutoffs, usageDayMs, usageShardName, type UsageSnapshot } from "./usage-sharding.ts";
 import { errorResponse, json } from "./utils.ts";
 
 const reservationLeaseMs = 15 * 60 * 1_000;
 const chargeRetentionMs = 45 * 86_400_000;
 const usageWindowDays = 30;
 const usageRetentionMs = usageWindowDays * usageDayMs;
-const legacyUsageReadUntilMs = Date.parse("2026-07-23T00:00:00.000Z");
 
 export class BudgetLedgerObject implements DurableObject {
   private sql: SqlStorage;
@@ -176,16 +175,9 @@ export async function usageSnapshot(env: Env, tenantId: string, policyId: string
 }
 
 export async function usageSnapshots(env: Env, policies: Array<{ policyId: string; tenantId: string }>, limit = 100): Promise<UsageSnapshot> {
-  if (!policies.length) return emptyUsageSnapshot();
-  const current = await Promise.all(policies.map((policy) => currentUsageSnapshot(env, policy.tenantId, policy.policyId, limit)));
-  if (Date.now() >= legacyUsageReadUntilMs) return mergeUsageSnapshots(current, limit);
-  const url = new URL("https://clawrouter.internal/snapshot");
-  for (const policyId of [...new Set(policies.map((policy) => policy.policyId))]) url.searchParams.append("policy_id", policyId);
-  url.searchParams.set("limit", String(limit));
-  const legacyResponse = await legacyUsageStub(env).fetch(url);
-  if (!legacyResponse.ok) return mergeUsageSnapshots(current, limit);
-  const legacy = await legacyResponse.json<UsageSnapshot>();
-  return mergeUsageSnapshots([legacy, ...current], limit);
+  const shards = new Map(policies.map(policy => [usageShardName(policy.tenantId, policy.policyId), policy]));
+  const snapshots = await Promise.all([...shards.values()].map(policy => currentUsageSnapshot(env, policy.tenantId, policy.policyId, limit)));
+  return mergeUsageSnapshots(snapshots, limit);
 }
 
 async function currentUsageSnapshot(env: Env, tenantId: string, policyId: string, limit: number): Promise<UsageSnapshot> {
@@ -233,7 +225,6 @@ export async function providerBudgetStatus(env: Env, providerId: string, limitMi
 }
 
 export function usageStub(env: Env, tenantId: string, policyId: string): DurableObjectStub { return env.USAGE_LEDGER.get(env.USAGE_LEDGER.idFromName(usageShardName(tenantId, policyId))); }
-function legacyUsageStub(env: Env): DurableObjectStub { return env.USAGE_LEDGER.get(env.USAGE_LEDGER.idFromName("global")); }
 
 function numberParam(url: URL, name: string): number | null { const value = Number(url.searchParams.get(name)); return Number.isSafeInteger(value) && value >= 0 ? value : null; }
 function rows<T>(cursor: Iterable<T>): T[] { return [...cursor]; }
