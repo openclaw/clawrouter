@@ -10,7 +10,7 @@ registerHooks({
   },
 });
 
-const { normalizePreStreamError } = await import("../proxy.ts");
+const { normalizePreStreamError } = await import("../proxy-response.ts");
 const encoder = new TextEncoder();
 
 function chunkedSse(chunks, headers = {}) {

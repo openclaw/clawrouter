@@ -58,7 +58,8 @@ function usageEnv(objectNames, { provider = "openai", limit = 100, fixedCost = 1
 
 function proxyKey() { return ["clawrouter", "live", `maintainer_key-${keyMaterial}`].join("-"); }
 
-test("binary proxy accounting preserves backpressure and settles on completion, error, or cancellation", async (t) => {
+for (const contentType of ["application/vnd.amazon.eventstream", "application/json", "text/event-stream"]) {
+test(`${contentType} accounting preserves backpressure and settles on completion, error, or cancellation`, async (t) => {
   for (const outcome of ["complete", "error", "cancel"]) {
     const env = usageEnv([], { provider: "local-openai", limit: null, retainContent: false });
     env.LOCAL_OPENAI_BASE_URL = "https://upstream.example.invalid";
@@ -73,7 +74,7 @@ test("binary proxy accounting preserves backpressure and settles on completion, 
       },
       cancel() { canceled = true; },
     }, { highWaterMark: 0 });
-    t.mock.method(globalThis, "fetch", async () => new Response(source, { headers: { "content-type": "application/vnd.amazon.eventstream" } }));
+    t.mock.method(globalThis, "fetch", async () => new Response(source, { headers: { "content-type": contentType } }));
     const pending = [];
     const response = await handler.fetch(new Request("https://clawrouter.example/v1/chat/completions", {
       method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
@@ -82,7 +83,7 @@ test("binary proxy accounting preserves backpressure and settles on completion, 
     try {
       assert.equal(response.status, 200);
       await new Promise(resolve => setImmediate(resolve));
-      assert.equal(pulls, 0, "accounting must not drain a stalled client's binary stream");
+      assert.equal(pulls, 0, "accounting must not drain a stalled client's stream");
       assert.equal(events.length, 0);
       if (outcome === "cancel") await response.body.cancel();
       else if (outcome === "error") await assert.rejects(response.arrayBuffer(), /synthetic upstream failure/);
@@ -95,6 +96,7 @@ test("binary proxy accounting preserves backpressure and settles on completion, 
     }
   }
 });
+}
 
 async function sha256(value) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
