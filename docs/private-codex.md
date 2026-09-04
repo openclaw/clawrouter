@@ -4,14 +4,14 @@ This opt-in, bounded Responses facade is for a **separately isolated, owner-only
 OpenClaw Gateway or Codex runtime**. It is not per-user security for a shared
 Gateway. Production Team must not receive these bindings or credentials. Shared
 agents must have no access to the private ingress credential, process, workspace,
-session namespace, or upstream subscription. Use a separate deployment and
+session namespace, or upstream credentials. Use a separate deployment and
 administrative trust boundary; a deployment operator can change its code or
 bindings and is necessarily trusted. Include owner-authenticated browser profiles
 and remote-node/tool capabilities in that boundary: shared agents must not be able
 to drive a browser carrying the owner's session or administer the private cell.
 
 Nothing in this implementation provisions that isolation. Local synthetic tests
-do not prove live subscription entitlement, client compatibility, owner-only
+do not prove live upstream entitlement, client compatibility, owner-only
 ingress, or OS/process isolation. In particular, `/responses` support does not
 establish native Codex integration.
 
@@ -159,7 +159,8 @@ proxy or account-selection endpoint. Caller `ChatGPT-Account-ID` and custom
 account headers are rejected in both modes. Only the broker constructs the
 upstream account header from its fixed authenticated binding.
 
-`PRIVATE_CODEX_UPSTREAM` has these required fields and one optional fallback:
+`PRIVATE_CODEX_UPSTREAM` explicitly selects one credential and transport. The
+original subscription shape remains supported when `transport` is absent:
 
 | Field | Contract |
 | --- | --- |
@@ -170,21 +171,32 @@ upstream account header from its fixed authenticated binding.
 | `accessToken` | Separately held subscription access token; 16–8192 ASCII letters/digits/`.`/`_`/`~`/`-` |
 | `expiresAt` | Integer Unix **milliseconds**, at least 30 seconds in the future |
 
+For OpenAI API access, the document has exactly `version: 1`,
+`transport: "openai-api"`, `target`, and `apiKey`, plus an optional
+`fallbackTarget`. Target syntax is unchanged. The API key is 16–8192 ASCII
+letters/digits/`.`/`_`/`~`/`-`; subscription account, token, and expiry fields
+are rejected in this mode. The destination is fixed to
+`https://api.openai.com/v1/responses`, with no subscription account header.
+The API transport preserves `max_output_tokens` and genuine native client,
+Lite, review, and safety facts. Verify API entitlement and native compatibility
+before provisioning it. API usage is billed normally by the provider; this
+private facade does not write the shared usage ledger.
+
 The alias ID is 3–64 lowercase ASCII letters/digits/hyphens, beginning with a
 letter. Its display name is 1–80 printable ASCII characters. Use the safe values
-shown above. Neither may contain the target, account ID, or upstream token.
+shown above. Neither may contain the target, account ID, or upstream credential.
 Both binding documents are limited to 16 KiB of text. Missing, disabled, malformed,
 expired, inaccessible, or mid-request changed configuration fails closed.
 
 The upstream binding is read **only after authentication**, including on private
-discovery. The adapter sends exactly that account and token to the fixed
-subscription Responses URL already declared by the OpenAI provider manifest.
+discovery. The adapter sends exactly the configured credential to the selected
+transport's fixed Responses URL. Subscription mode also sends its fixed account.
 No caller can change the provider, account, origin, or configured targets. There
-are no redirects, alternate accounts, API-key fallbacks, generic grant lookups,
+are no redirects, alternate accounts, cross-transport fallbacks, generic grant lookups,
 Fusion paths, or arbitrary-model/native routing inside this facade.
 
 When `fallbackTarget` is configured, the broker may make one additional call on
-the same fixed subscription after an explicit HTTP availability failure:
+the same fixed transport and credential after an explicit HTTP availability failure:
 `404 model_not_found`, `429 rate_limit_exceeded`, or a 502/503/504 carrying
 `server_error`, `service_unavailable`, `overloaded_error`, or `timeout`. Unknown
 errors, authentication, safety, entitlement and exhausted-quota denials are
@@ -194,7 +206,7 @@ on the target that issued their state and cannot fail over again.
 
 With fallback configured, typed response IDs and turn-state headers carry an
 opaque broker route envelope. An authenticated encrypted slot binds them to the
-current policy, target mapping, account, and upstream credential. It contains no
+current policy, target mapping, transport, account, and upstream credential. It contains no
 model name. The broker restores the original upstream values on the next call;
 it does not manufacture upstream signatures or attestations. Unwrapped legacy
 state remains primary-only, conflicting origins and tampering fail closed, and
@@ -211,7 +223,7 @@ target. Provisioning must verify entitlement and compatible native capabilities
 for both targets. The fallback does not invent compatibility or bypass upstream
 requirements.
 
-Automatic OAuth refresh is intentionally absent. The existing shared refresh
+For subscription mode, automatic OAuth refresh is intentionally absent. The existing shared refresh
 helper writes shared grant state and does not provide this boundary's required
 revocation/rotation transaction. The parent must provide an owner-only lifecycle
 that atomically replaces this private token/account/expiry document, or accept
@@ -224,7 +236,8 @@ already transmitted requests/streams.
 Broker token rotation does not require changing the independent client workload
 credential or exposing the new token to clients. Changes during a request's
 upload still fail closed. Binding expiry must reflect the real token lifetime;
-provider expiry/revocation denials remain denials.
+provider expiry/revocation denials remain denials. API keys have no locally
+invented expiry; their provider revocation and authorization denials are terminal.
 
 ## Endpoints and client contract
 

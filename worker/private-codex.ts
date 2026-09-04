@@ -1,11 +1,12 @@
 import { boundedJson } from "./private-codex-io";
-import { privateAuthorizationCurrent, privateAuthorized, privatePolicy, privateUpstream, record, type PrivatePolicy, type PrivateUpstream } from "./private-codex-config";
+import { privateAuthorizationCurrent, privateAuthorized, privateCredential, privatePolicy, privateSensitive, privateUpstream, privateUpstreamActive, record, type PrivatePolicy, type PrivateUpstream } from "./private-codex-config";
 import { containResponse, privateError, privateJson } from "./private-codex-output";
 import { forwardPrivateHeaders, inspectPrivateOpaque, validPrivateHeaders, validPrivateProtocolBody } from "./private-codex-protocol";
 import { privateContinuations } from "./private-codex-continuation";
 import type { Env } from "./types";
 
 const upstreamUrl = "https://chatgpt.com/backend-api/codex/responses";
+const apiUrl = "https://api.openai.com/v1/responses";
 const requestFields = new Set([
   "model", "input", "instructions", "stream", "store", "tools", "tool_choice", "parallel_tool_calls", "reasoning", "text",
   "include", "max_output_tokens", "temperature", "top_p", "truncation", "metadata", "previous_response_id",
@@ -39,7 +40,7 @@ export async function privateCodex(request: Request, env: Env): Promise<Response
 
     // Target/account/credential resolution happens only inside this authenticated boundary.
     const upstream = await privateUpstream(env, policy);
-    if (!upstream || !await privateAuthorizationCurrent(authorization, policy, env) || upstream.expiresAt <= Date.now() + 30_000) return privateError(404);
+    if (!upstream || !await privateAuthorizationCurrent(authorization, policy, env) || !privateUpstreamActive(upstream)) return privateError(404);
     const { id, name } = policy.alias;
     if (discovery) {
       if (request.body) return privateError(400);
@@ -64,14 +65,14 @@ export async function privateCodex(request: Request, env: Env): Promise<Response
     try {
       if (continuations) routed = await continuations.request(body, request.headers);
       const affinity = routed.headers.get("x-codex-turn-state");
-      if (affinity !== null) inspectPrivateOpaque(affinity, id, [upstream.target, upstream.accessToken, upstream.accountId, ...(upstream.fallbackTarget ? [upstream.fallbackTarget] : [])]);
+      if (affinity !== null) inspectPrivateOpaque(affinity, id, privateSensitive(upstream));
     } catch { return privateError(400); }
 
     // Re-read both bindings after a potentially slow upload; never cache authorization.
     if (!await upstreamCurrent(request, env, policy, upstream)) return privateError(404);
-    const ignoredMaxOutputTokens = body.max_output_tokens !== undefined;
+    const ignoredMaxOutputTokens = upstream.transport !== "openai-api" && body.max_output_tokens !== undefined;
     // A fixed disclosure must not echo a runtime identity, including on transport failure.
-    if (ignoredMaxOutputTokens && [upstream.target, upstream.accountId, upstream.accessToken, ...(upstream.fallbackTarget ? [upstream.fallbackTarget] : [])].some((secret) => "x-clawrouter-ignored-parameters: max_output_tokens".includes(secret))) return new Response(null, { status: 502 });
+    if (ignoredMaxOutputTokens && privateSensitive(upstream).some((secret) => "x-clawrouter-ignored-parameters: max_output_tokens".includes(secret))) return new Response(null, { status: 502 });
     // Do not manufacture originator, client metadata, review, or attestation evidence.
     const abort = new AbortController();
     const signal = AbortSignal.any([request.signal, abort.signal, AbortSignal.timeout(600_000)]);
@@ -84,10 +85,12 @@ export async function privateCodex(request: Request, env: Env): Promise<Response
       for (let attempt = 0; attempt < 2; attempt++) {
         const headers = new Headers({ "content-type": "application/json", accept: body.stream === true ? "text/event-stream" : "application/json", "accept-encoding": "identity" });
         forwardPrivateHeaders(routed.headers, headers, id, selected.target);
-        headers.set("authorization", `Bearer ${selected.accessToken}`);
-        headers.set("chatgpt-account-id", selected.accountId);
-        const response = await fetch(upstreamUrl, {
-          method: "POST", headers, body: JSON.stringify(privateSubscriptionBody(routed.body, selected.target)), redirect: "manual", signal,
+        headers.set("authorization", `Bearer ${privateCredential(selected)}`);
+        const api = selected.transport === "openai-api";
+        if (selected.transport !== "openai-api") headers.set("chatgpt-account-id", selected.accountId);
+        const outgoing = api ? { ...routed.body, model: selected.target } : privateSubscriptionBody(routed.body, selected.target);
+        const response = await fetch(api ? apiUrl : upstreamUrl, {
+          method: "POST", headers, body: JSON.stringify(outgoing), redirect: "manual", signal,
         });
         if (attempt === 0 && fallback && await availabilityFailure(response, signal)) {
           if (!await upstreamCurrent(request, env, policy, upstream) || signal.aborted) {
@@ -118,7 +121,7 @@ async function upstreamCurrent(request: Request, env: Env, policy: PrivatePolicy
   if (!refreshed || !await privateAuthorizationCurrent(refreshed, current, env)) return false;
   const fresh = await privateUpstream(env, current);
   return !!fresh && JSON.stringify(fresh) === JSON.stringify(upstream)
-    && await privateAuthorizationCurrent(refreshed, current, env) && fresh.expiresAt > Date.now() + 30_000;
+    && await privateAuthorizationCurrent(refreshed, current, env) && privateUpstreamActive(fresh);
 }
 
 async function availabilityFailure(response: Response, signal: AbortSignal): Promise<boolean> {

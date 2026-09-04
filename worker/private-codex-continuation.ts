@@ -1,4 +1,4 @@
-import type { PrivatePolicy, PrivateUpstream } from "./private-codex-config";
+import { privateCredential, type PrivatePolicy, type PrivateUpstream } from "./private-codex-config";
 
 const prefix = "cr1.";
 const encoder = new TextEncoder();
@@ -9,8 +9,9 @@ export interface PrivateContinuationProjection { wrap(value: unknown): Promise<s
 // Bind original upstream state to its route without revealing the target. This
 // envelope never replaces upstream verification of its own restored state.
 export async function privateContinuations(policy: PrivatePolicy, upstream: PrivateUpstream) {
-  const key = await crypto.subtle.importKey("raw", await crypto.subtle.digest("SHA-256", encoder.encode("clawrouter:continuation:v1\0" + upstream.accessToken)), "AES-GCM", false, ["encrypt", "decrypt"]);
-  const additionalData = encoder.encode(JSON.stringify([policy, upstream.target, upstream.fallbackTarget, upstream.accountId]));
+  const key = await crypto.subtle.importKey("raw", await crypto.subtle.digest("SHA-256", encoder.encode("clawrouter:continuation:v1\0" + privateCredential(upstream))), "AES-GCM", false, ["encrypt", "decrypt"]);
+  const identity = upstream.transport === "openai-api" ? [upstream.transport] : upstream.accountId;
+  const additionalData = encoder.encode(JSON.stringify([policy, upstream.target, upstream.fallbackTarget, identity]));
 
   async function unwrap(value: string): Promise<{ slot: number; value: string }> {
     if (!value.startsWith(prefix)) return { slot: 0, value };
