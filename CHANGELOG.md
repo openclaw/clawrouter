@@ -3,6 +3,7 @@
 ## 0.2.3 - Unreleased
 
 - Add Claude Fable 5.1 with current input, output, and cache pricing, and update the Claude subscription transport identity to the minimum compatible client version.
+- Add content-free server-side predicates and exact consumed-byte counts for authenticated private Codex requests rejected locally with HTTP 400.
 
 ## 0.2.2 - 2026-08-31
 

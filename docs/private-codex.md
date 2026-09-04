@@ -17,10 +17,17 @@ establish native Codex integration.
 
 For a dedicated private Worker, use `worker/private-entry.ts` as its entrypoint
 and bind only the two private secret-store objects below. This entrypoint exposes
-no shared admin, public catalog, usage, or proxy routes. Disable Worker request
-logging and observability for that deployment, and verify the actual deployed
-origin with the native client before enabling a consumer. A local emulator does
-not establish upstream acceptance of the deployed transport.
+no shared admin, public catalog, usage, or proxy routes. Disable automatic Worker
+request logs and tracing for that deployment. The facade emits one constrained
+server-side event for authenticated requests it rejects locally with HTTP 400:
+`{ predicate, request_bytes }`. Predicates are fixed validator names and
+`request_bytes` is the exact body byte count consumed, or `null` when rejection
+precedes body reading. The event never uses `Content-Length` and contains no
+request identifier, header, body, model, alias, URL, credential, exception, or
+rejected field value. Hidden-route 404s, upstream failures and successful calls
+emit no such event. Verify the actual deployed origin with the native client
+before enabling a consumer. A local emulator does not establish upstream
+acceptance of the deployed transport.
 
 ## Runtime configuration
 

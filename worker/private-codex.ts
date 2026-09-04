@@ -1,7 +1,7 @@
-import { boundedJson } from "./private-codex-io";
+import { boundedJson, boundedRequestJson, PrivateBodyError } from "./private-codex-io";
 import { containsPrivate, privateAuthorizationCurrent, privateAuthorized, privateCredential, privatePolicy, privateSensitive, privateUpstream, privateUpstreamActive, record, type PrivatePolicy, type PrivateUpstream } from "./private-codex-config";
 import { containResponse, privateError, privateJson } from "./private-codex-output";
-import { forwardPrivateHeaders, inspectPrivateOpaque, validPrivateHeaders, validPrivateProtocolBody } from "./private-codex-protocol";
+import { forwardPrivateHeaders, inspectPrivateOpaque, privateHeadersRejection, privateProtocolBodyRejection, PrivateProtocolError } from "./private-codex-protocol";
 import { privateContinuations } from "./private-codex-continuation";
 import type { Env } from "./types";
 
@@ -26,6 +26,11 @@ export function privateSubscriptionBody(body: Record<string, unknown>, target: s
   return outgoing;
 }
 
+function reject(predicate: string, requestBytes: number | null): Response {
+  try { console.info({ predicate, request_bytes: requestBytes }); } catch {}
+  return privateError(400);
+}
+
 export async function privateCodex(request: Request, env: Env): Promise<Response> {
   try {
     const url = new URL(request.url);
@@ -36,14 +41,15 @@ export async function privateCodex(request: Request, env: Env): Promise<Response
     if (!policy) return privateError(404);
     const authorization = await privateAuthorized(request, policy);
     if (!authorization || !await privateAuthorizationCurrent(authorization, policy, env)) return privateError(404);
-    if (!validPrivateHeaders(request.headers, policy.alias.id)) return privateError(400);
+    const initialHeaderRejection = privateHeadersRejection(request.headers, policy.alias.id);
+    if (initialHeaderRejection) return reject(initialHeaderRejection, null);
 
     // Target/account/credential resolution happens only inside this authenticated boundary.
     const upstream = await privateUpstream(env, policy);
     if (!upstream || !await privateAuthorizationCurrent(authorization, policy, env) || !privateUpstreamActive(upstream)) return privateError(404);
     const { id, name } = policy.alias;
     if (discovery) {
-      if (request.body) return privateError(400);
+      if (request.body) return reject("request.discovery_body", null);
       const reasoning = policy.alias.supportedReasoningEfforts ? { supportedReasoningEfforts: policy.alias.supportedReasoningEfforts } : {};
       if (url.pathname.endsWith("/models")) return privateJson({ object: "list", data: [{ id, object: "model", owned_by: "private", display_name: name, capabilities: ["llm.responses"], ...reasoning }] });
       return privateJson({ version: "clawrouter.client-catalog.v1", providers: [{
@@ -52,21 +58,39 @@ export async function privateCodex(request: Request, env: Env): Promise<Response
         models: [{ id, displayName: name, upstream: id, capabilities: ["llm.responses"], pricing_ref: null, pricing: null, ...reasoning }],
       }] });
     }
-    if (!/^application\/json(?:;\s*charset=utf-8)?$/i.test(request.headers.get("content-type") ?? "")) return privateError(400);
+    if (!/^application\/json(?:;\s*charset=utf-8)?$/i.test(request.headers.get("content-type") ?? "")) return reject("request.content_type", null);
     let body: unknown;
-    try { body = await boundedJson(request.body, 1024 * 1024, AbortSignal.any([request.signal, AbortSignal.timeout(30_000)])); } catch { return privateError(400); }
-    if (!record(body) || body.model !== id || Object.keys(body).some((key) => !requestFields.has(key))
-      || body.store !== false || body.background === true || (body.background !== undefined && body.background !== false)
-      || (body.stream !== undefined && typeof body.stream !== "boolean") || !validPrivateProtocolBody(body)
-      || (body.max_output_tokens !== undefined && (typeof body.max_output_tokens !== "number" || !Number.isSafeInteger(body.max_output_tokens) || body.max_output_tokens <= 0))
-      || !validPrivateHeaders(request.headers, id, body)) return privateError(400);
+    let requestBytes: number;
+    try {
+      const parsed = await boundedRequestJson(request.body, 1024 * 1024, AbortSignal.any([request.signal, AbortSignal.timeout(30_000)]));
+      body = parsed.value;
+      requestBytes = parsed.bytes;
+    } catch (error) {
+      if (error instanceof PrivateBodyError) return reject(error.predicate, error.bytes);
+      throw error;
+    }
+    if (!record(body)) return reject("request.body_object", requestBytes);
+    if (body.model !== id) return reject("request.model_alias", requestBytes);
+    if (Object.keys(body).some((key) => !requestFields.has(key))) return reject("request.field_allowlist", requestBytes);
+    if (body.store !== false) return reject("request.store_false", requestBytes);
+    if (body.background === true || (body.background !== undefined && body.background !== false)) return reject("request.background_false", requestBytes);
+    if (body.stream !== undefined && typeof body.stream !== "boolean") return reject("request.stream_boolean", requestBytes);
+    const protocolRejection = privateProtocolBodyRejection(body);
+    if (protocolRejection) return reject(protocolRejection, requestBytes);
+    if (body.max_output_tokens !== undefined && (typeof body.max_output_tokens !== "number" || !Number.isSafeInteger(body.max_output_tokens) || body.max_output_tokens <= 0)) {
+      return reject("request.max_output_tokens", requestBytes);
+    }
+    const bodyHeaderRejection = privateHeadersRejection(request.headers, id, body);
+    if (bodyHeaderRejection) return reject(bodyHeaderRejection, requestBytes);
     const continuations = upstream.fallbackTarget ? await privateContinuations(policy, upstream) : undefined;
     let routed = { body, headers: request.headers, slot: 0, continuing: !!body.previous_response_id || request.headers.has("x-codex-turn-state") };
     try {
       if (continuations) routed = await continuations.request(body, request.headers);
       const affinity = routed.headers.get("x-codex-turn-state");
       if (affinity !== null) inspectPrivateOpaque(affinity, id, privateSensitive(upstream));
-    } catch { return privateError(400); }
+    } catch (error) {
+      return reject(error instanceof PrivateProtocolError ? error.predicate : "protocol.continuation", requestBytes);
+    }
 
     // Re-read both bindings after a potentially slow upload; never cache authorization.
     if (!await upstreamCurrent(request, env, policy, upstream)) return privateError(404);
