@@ -11,7 +11,12 @@ bindings, provider connections, OAuth authorization state, upstream-grant pool
 membership, and sanitized grant runtime state. Existing KV data is imported
 once per resource family and recorded with a Durable Object migration marker.
 After that marker, missing records remain missing; request paths never resurrect
-stale KV state. Assignment rules, scoped upstream-grant secrets, and provider
+stale KV state. The authority checks the marker when accepting an import, so
+an already-running KV read cannot seed records after migration closes. Migration
+callers return a fresh canonical read, never their local seed copy; concurrent
+canonical updates take precedence. The authority also owns import precedence
+and result ordering instead of duplicating those decisions in client-side maps.
+Assignment rules, scoped upstream-grant secrets, and provider
 health remain outside that global authority because they have separate lifecycle
 and consistency needs. `GRANT_CREDENTIALS` is the canonical raw-secret owner,
 sharded one Durable Object per grant. KV holds its redacted routing projection;

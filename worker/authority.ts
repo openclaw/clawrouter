@@ -85,6 +85,7 @@ export class PolicyBindingIndexObject implements DurableObject {
   }
 
   private initializeBindings(seeds: Seed[]): void {
+    if (this.hasMeta("bindings_global_initialized")) return;
     for (const seed of seeds) {
       const principal = normalizePrincipal(seed.principal);
       const key = principalKey(principal);
@@ -143,6 +144,7 @@ export class PolicyBindingIndexObject implements DurableObject {
   }
 
   private initializeUsers(users: AccessControlUser[]): void {
+    if (this.hasMeta("users_global_initialized")) return;
     for (const user of users) if (!this.getUser(user.email)) this.putUser(user);
   }
 
@@ -183,7 +185,10 @@ export class PolicyBindingIndexObject implements DurableObject {
     this.sql.exec("INSERT OR REPLACE INTO access_policies (policy_id, policy_json) VALUES (?, ?)", entry.policyId, JSON.stringify(entry.policy));
   }
 
-  private initializePolicies(entries: AccessPolicyEntry[]): void { for (const entry of entries) if (!this.getPolicy(entry.policyId)) this.putPolicy(entry); }
+  private initializePolicies(entries: AccessPolicyEntry[]): void {
+    if (this.hasMeta("policies_global_initialized")) return;
+    for (const entry of entries) if (!this.getPolicy(entry.policyId)) this.putPolicy(entry);
+  }
   private getPolicy(id: string): AccessPolicyEntry | null {
     const row = rows<{ policy_json: string }>(this.sql.exec("SELECT policy_json FROM access_policies WHERE policy_id = ?", id))[0];
     return row ? { policyId: id, policy: JSON.parse(row.policy_json) } : null;
@@ -220,7 +225,10 @@ export class PolicyBindingIndexObject implements DurableObject {
     return { outcome: "updated" };
   }
   private deleteCredential(id: string): void { this.sql.exec("DELETE FROM proxy_credentials WHERE credential_id = ?", id); }
-  private initializeCredentials(entries: ProxyCredentialEntry[]): void { for (const entry of entries) if (!this.getCredential(entry.credentialId)) this.putCredential(entry); }
+  private initializeCredentials(entries: ProxyCredentialEntry[]): void {
+    if (this.hasMeta("credentials_global_initialized")) return;
+    for (const entry of entries) if (!this.getCredential(entry.credentialId)) this.putCredential(entry);
+  }
   private getCredential(id: string): ProxyCredentialEntry | null {
     const row = rows<{ credential_json: string }>(this.sql.exec("SELECT credential_json FROM proxy_credentials WHERE credential_id = ?", id))[0];
     return row ? { credentialId: id, credential: JSON.parse(row.credential_json) } : null;
@@ -237,7 +245,10 @@ export class PolicyBindingIndexObject implements DurableObject {
   private putConnection(connection: ProviderConnection): void {
     this.sql.exec("INSERT OR REPLACE INTO provider_connections (provider_id, connection_json) VALUES (?, ?)", connection.providerId, JSON.stringify(connection));
   }
-  private initializeConnections(items: ProviderConnection[]): void { for (const item of items) if (!this.getConnection(item.providerId)) this.putConnection(item); }
+  private initializeConnections(items: ProviderConnection[]): void {
+    if (this.hasMeta("connections_global_initialized")) return;
+    for (const item of items) if (!this.getConnection(item.providerId)) this.putConnection(item);
+  }
   private getConnection(id: string): ProviderConnection | null {
     const row = rows<{ connection_json: string }>(this.sql.exec("SELECT connection_json FROM provider_connections WHERE provider_id = ?", id))[0];
     return row ? JSON.parse(row.connection_json) : null;
@@ -571,33 +582,25 @@ export async function authorityCall<T>(env: Env, path: string, body: unknown, ob
 
 export async function listPolicies(env: Env): Promise<AccessPolicyEntry[]> {
   const result = await authorityCall<{ initialized: boolean; policies: AccessPolicyEntry[] }>(env, "/policies/list", {});
-  const authoritative = result.policies;
-  if (result.initialized) return authoritative;
-  const byId = new Map(authoritative.map((entry) => [entry.policyId, entry]));
-  for (const [key, value] of await listKvJson<Record<string, unknown>>(env, "policies/")) {
-    const policyId = key.slice("policies/".length);
-    if (!byId.has(policyId)) byId.set(policyId, { policyId, policy: normalizePolicyRecord(value, contentRetentionDefault(env)) });
-  }
-  for (const [policyId, value] of await listGenuineLegacyKeys(env)) {
-    if (!byId.has(policyId)) byId.set(policyId, { policyId, policy: normalizePolicyRecord(value, contentRetentionDefault(env)) });
-  }
-  await authorityCall(env, "/policies/initialize-all", [...byId.values()]);
-  return [...byId.values()].sort((a, b) => a.policyId.localeCompare(b.policyId));
+  if (result.initialized) return result.policies;
+  const policies = await listKvJson<Record<string, unknown>>(env, "policies/");
+  const legacy = await listGenuineLegacyKeys(env);
+  await authorityCall(env, "/policies/initialize-all", [
+    ...policies.map(([key, value]) => ({ policyId: key.slice("policies/".length), policy: normalizePolicyRecord(value, contentRetentionDefault(env)) })),
+    ...legacy.map(([policyId, value]) => ({ policyId, policy: normalizePolicyRecord(value, contentRetentionDefault(env)) })),
+  ]);
+  return (await authorityCall<{ policies: AccessPolicyEntry[] }>(env, "/policies/list", {})).policies;
 }
 export async function listCredentials(env: Env): Promise<ProxyCredentialEntry[]> {
   const result = await authorityCall<{ initialized: boolean; credentials: ProxyCredentialEntry[] }>(env, "/credentials/list", {});
-  const authoritative = result.credentials;
-  if (result.initialized) return authoritative;
-  const byId = new Map(authoritative.map((entry) => [entry.credentialId, entry]));
-  for (const [key, value] of await listKvJson<Record<string, unknown>>(env, "credentials/")) {
-    const credentialId = key.slice("credentials/".length);
-    if (!byId.has(credentialId)) byId.set(credentialId, { credentialId, credential: normalizeCredentialRecord(value) });
-  }
-  for (const [credentialId, value] of await listGenuineLegacyKeys(env)) {
-    if (!byId.has(credentialId)) byId.set(credentialId, { credentialId, credential: normalizeCredentialRecord(value, credentialId) });
-  }
-  await authorityCall(env, "/credentials/initialize-all", [...byId.values()]);
-  return [...byId.values()].sort((a, b) => a.credentialId.localeCompare(b.credentialId));
+  if (result.initialized) return result.credentials;
+  const credentials = await listKvJson<Record<string, unknown>>(env, "credentials/");
+  const legacy = await listGenuineLegacyKeys(env);
+  await authorityCall(env, "/credentials/initialize-all", [
+    ...credentials.map(([key, value]) => ({ credentialId: key.slice("credentials/".length), credential: normalizeCredentialRecord(value) })),
+    ...legacy.map(([credentialId, value]) => ({ credentialId, credential: normalizeCredentialRecord(value, credentialId) })),
+  ]);
+  return (await authorityCall<{ credentials: ProxyCredentialEntry[] }>(env, "/credentials/list", {})).credentials;
 }
 export async function listUsers(env: Env): Promise<AccessControlUser[]> {
   const result = await authorityCall<{ initialized: boolean; users: AccessControlUser[] }>(env, "/users/list", {});
@@ -615,36 +618,36 @@ export async function listBindings(env: Env): Promise<PolicyBinding[]> {
 }
 export async function resolvePolicies(env: Env, ids: string[]): Promise<AccessPolicyEntry[]> {
   const result = await authorityCall<{ initialized: boolean; policies: AccessPolicyEntry[]; missingPolicyIds: string[] }>(env, "/policies/resolve", { policyIds: ids });
-  if (result.initialized) return result.policies;
+  if (result.initialized || !result.missingPolicyIds.length) return result.policies;
   const seeded: AccessPolicyEntry[] = [];
   for (const policyId of result.missingPolicyIds) {
     const value = await env.POLICY_KV.get<Record<string, unknown>>(`policies/${policyId}`, "json") ?? await genuineLegacyKey(env, policyId);
     if (value) seeded.push({ policyId, policy: normalizePolicyRecord(value, contentRetentionDefault(env)) });
   }
   if (seeded.length) await authorityCall(env, "/policies/initialize", seeded);
-  return [...result.policies, ...seeded];
+  return (await authorityCall<typeof result>(env, "/policies/resolve", { policyIds: ids })).policies;
 }
 export async function resolveCredentials(env: Env, ids: string[]): Promise<ProxyCredentialEntry[]> {
   const result = await authorityCall<{ initialized: boolean; credentials: ProxyCredentialEntry[]; missingCredentialIds: string[] }>(env, "/credentials/resolve", { credentialIds: ids });
-  if (result.initialized) return result.credentials;
+  if (result.initialized || !result.missingCredentialIds.length) return result.credentials;
   const seeded: ProxyCredentialEntry[] = [];
   for (const credentialId of result.missingCredentialIds) {
     const value = await env.POLICY_KV.get<Record<string, unknown>>(`credentials/${credentialId}`, "json") ?? await genuineLegacyKey(env, credentialId);
     if (value) seeded.push({ credentialId, credential: normalizeCredentialRecord(value, credentialId) });
   }
   if (seeded.length) await authorityCall(env, "/credentials/initialize", seeded);
-  return [...result.credentials, ...seeded];
+  return (await authorityCall<typeof result>(env, "/credentials/resolve", { credentialIds: ids })).credentials;
 }
 export async function resolveUsers(env: Env, emails: string[]): Promise<AccessControlUser[]> {
   const result = await authorityCall<{ initialized: boolean; users: AccessControlUser[]; missingEmails: string[] }>(env, "/users/resolve", { emails });
-  if (result.initialized) return result.users;
+  if (result.initialized || !result.missingEmails.length) return result.users;
   const seeded: AccessControlUser[] = [];
   for (const email of result.missingEmails) {
     const record = await env.POLICY_KV.get<AccessUserRecord>(`access/users/${email}`, "json");
     if (record) seeded.push({ email, record });
   }
   if (seeded.length) await authorityCall(env, "/users/initialize", seeded);
-  return [...result.users, ...seeded];
+  return (await authorityCall<typeof result>(env, "/users/resolve", { emails })).users;
 }
 export async function resolveBindings(env: Env, principals: Principal[]): Promise<PolicyBinding[]> {
   const result = await authorityCall<{ initialized: boolean; bindings: PolicyBinding[]; missingPrincipals: Principal[] }>(env, "/resolve", { principals });
@@ -655,15 +658,15 @@ export async function resolveBindings(env: Env, principals: Principal[]): Promis
     seeds.push({ principal, bindings: (await listKvJson<PolicyBinding>(env, prefix)).map(([, binding]) => binding) });
   }
   await authorityCall(env, "/initialize", seeds);
-  return sortBindings([...result.bindings, ...seeds.flatMap((seed) => seed.bindings)]);
+  return (await authorityCall<typeof result>(env, "/resolve", { principals })).bindings;
 }
 export async function resolveConnections(env: Env, providerIds: string[]): Promise<ProviderConnection[]> {
   const ids = [...new Set(providerIds)];
   const result = await authorityCall<{ initialized: boolean; connections: ProviderConnection[]; missingProviderIds: string[] }>(env, "/connections/resolve", { providerIds: ids });
-  if (result.initialized) return result.connections;
+  if (result.initialized || !result.missingProviderIds.length) return result.connections;
   const seeded = (await Promise.all(result.missingProviderIds.map((id) => env.POLICY_KV.get<ProviderConnection>(`connections/${id}`, "json")))).filter(Boolean) as ProviderConnection[];
   if (seeded.length) await authorityCall(env, "/connections/initialize", seeded);
-  return [...result.connections, ...seeded];
+  return (await authorityCall<typeof result>(env, "/connections/resolve", { providerIds: ids })).connections;
 }
 
 export async function listConnections(env: Env, providerIds: string[]): Promise<ProviderConnection[]> {
@@ -671,9 +674,8 @@ export async function listConnections(env: Env, providerIds: string[]): Promise<
   const result = await authorityCall<{ initialized: boolean; connections: ProviderConnection[]; missingProviderIds: string[] }>(env, "/connections/resolve", { providerIds: ids });
   if (result.initialized) return result.connections;
   const seeded = (await Promise.all(result.missingProviderIds.map((id) => env.POLICY_KV.get<ProviderConnection>(`connections/${id}`, "json")))).filter(Boolean) as ProviderConnection[];
-  const connections = [...result.connections, ...seeded];
-  await authorityCall(env, "/connections/initialize-all", connections);
-  return connections;
+  await authorityCall(env, "/connections/initialize-all", seeded);
+  return (await authorityCall<typeof result>(env, "/connections/resolve", { providerIds: ids })).connections;
 }
 
 export async function resolveConnection(env: Env, providerId: string): Promise<ProviderConnection | null> {
