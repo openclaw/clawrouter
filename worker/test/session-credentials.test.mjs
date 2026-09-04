@@ -11,7 +11,7 @@ registerHooks({
 });
 
 const { budgetPrincipal } = await import("../budget-scope.ts");
-const { authenticateProxyKey } = await import("../proxy.ts");
+const { authenticateProxyKey } = await import("../proxy-auth.ts");
 const { sessionCredentialsRequest } = await import("../session-credentials.ts");
 
 const session = { authenticated: true, auth: "cloudflare_access", role: "user", email: "owner@example.com", subject: "owner", tenantId: "default", groups: ["maintainers"], contentRetentionDisabled: false };

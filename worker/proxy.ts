@@ -1,6 +1,11 @@
+import { createProxyAccounting, estimateCost, type CompoundRequestContext } from "./proxy-accounting";
+import { authenticateProxyKey } from "./proxy-auth";
+import {
+  concreteOpenAiSelection, directManifestEnvelope, isSelectionFailure, manifestEnvelope, nativeMatch,
+  prepareManifestRequest, prepareNativeRequest, requestObject, searchParamsRecord, type ProxySelection,
+} from "./proxy-selection";
 import { accessIdentity } from "./access";
-import { emptyReservation, finalizeAccounting, reserveBudget, type BudgetReservation, type EstimatedCost } from "./accounting";
-import { resolveCredentials, resolvePolicies, resolveUsers } from "./authority";
+import { reserveBudget, type BudgetReservation, type EstimatedCost } from "./accounting";
 import { retainRequestContent } from "./content-retention";
 import { correlationMetadata } from "./correlation.ts";
 import {
@@ -11,35 +16,17 @@ import { loadFusionConfig } from "./fusion-config";
 import { observeGrantQuota, shouldFailoverGrant } from "./grant-quota";
 import { grantRoutingPolicy, recordGrantRuntime } from "./grant-selection";
 import {
-  assertProviderAccess, capabilityForPath, copyRequestHeaders, endpointForPath, modelRoute, providerById,
-  resolveTemplate, signSigV4, transformRequestBody, upstreamAuth, upstreamPath,
+  assertProviderAccess, copyRequestHeaders, providerById,
+  resolveTemplate, signSigV4, upstreamAuth, upstreamPath,
 } from "./providers";
 import { applyTransportHeaders, transformTransportBody } from "./provider-auth.ts";
-import { actualModelCost, estimateModelCost } from "./pricing";
-import type { UsageTokens } from "./token-usage";
 import { normalizePreStreamError, observeUsage } from "./proxy-response";
-import type { AuthorizedIdentity, CompiledEndpoint, CompiledModel, CompiledProvider, CompiledQuotaConfig, Env, ProviderConnection, UsageEvent } from "./types";
+import type { AuthorizedIdentity, CompiledQuotaConfig, Env, ProviderConnection } from "./types";
 import {
-  errorResponse, HttpError, parseProxyKey, randomId, readJson, safeEqual, sha256Hex,
+  errorResponse, HttpError, randomId, readJson, sha256Hex,
 } from "./utils";
 
 type AuthMode = "proxy_key" | "access";
-
-interface ProxySelection {
-  provider: CompiledProvider;
-  endpoint: CompiledEndpoint;
-  model: CompiledModel | null;
-  capability: string;
-  body: Record<string, unknown>;
-  pathParams: Record<string, string>;
-  method: string;
-  timeoutMs?: number;
-}
-
-interface ProxySelectionFailure {
-  response: Response;
-  auditSelection: ProxySelection | null;
-}
 
 interface PreparedUpstream {
   headers: Headers;
@@ -58,14 +45,6 @@ interface ReservedProxyBudget {
   modelId: string | null;
   capability: string;
   connection: ProviderConnection;
-}
-
-interface CompoundRequestContext {
-  id: string;
-  stage: "fusion_adviser" | "fusion_synthesizer";
-  index: number | null;
-  size: number;
-  startedAtMs: number;
 }
 
 export async function proxyOpenAi(request: Request, env: Env, context: ExecutionContext, path: string, mode: AuthMode): Promise<Response> {
@@ -100,33 +79,6 @@ async function proxyConcreteOpenAi(
     return result.response;
   }
   return proxySelected(request, env, context, mode, result, {}, preauthenticated, reservedBudget, compound, auditAuth);
-}
-
-function concreteOpenAiSelection(path: string, body: Record<string, unknown>, env: Env, timeoutMs?: number): ProxySelection | ProxySelectionFailure {
-  const modelId = typeof body.model === "string" ? body.model : "";
-  const route = modelRoute(modelId);
-  if (!route) return selectionFailure(errorResponse("model_not_found", `model ${modelId} is not registered`, 404));
-  const capability = capabilityForPath(path);
-  const endpoint = endpointForPath(route.provider, path);
-  if (!capability || !endpoint || !route.model.capabilities.includes(capability)) return selectionFailure(errorResponse("model_capability_unsupported", `model ${modelId} does not support ${path}`, 400));
-  try {
-    const upstreamModel = resolvedUpstreamModel(route.provider, route.model, env);
-    const transformed = transformRequestBody(route.provider, path, upstreamModel, { ...body, model: upstreamModel }, env);
-    return { provider: route.provider, endpoint, model: route.model, capability, body: transformed, pathParams: { model: upstreamModel, deployment: upstreamModel }, method: "POST", timeoutMs };
-  } catch (error) {
-    const failure = error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
-    return selectionFailure(errorResponse(failure.code, failure.message, failure.status), {
-      provider: route.provider, endpoint, model: route.model, capability, body, pathParams: { model: modelId, deployment: modelId }, method: "POST", timeoutMs,
-    });
-  }
-}
-
-function selectionFailure(response: Response, auditSelection: ProxySelection | null = null): ProxySelectionFailure {
-  return { response, auditSelection };
-}
-
-function isSelectionFailure(value: ProxySelection | ProxySelectionFailure): value is ProxySelectionFailure {
-  return "response" in value;
 }
 
 async function proxyFusion(
@@ -196,73 +148,7 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
   if (!endpoint.methods.includes(method)) return errorResponse("method_not_allowed", `endpoint does not allow ${method}`, 405);
   const prepared = prepareManifestRequest(provider, endpoint, envelope.body ?? {}, envelope.pathParams ?? {}, env);
   const capability = provider.capabilities.find((item) => item.endpoint === endpoint.id)?.id ?? endpoint.id;
-  const response = await proxySelected(request, env, context, mode, { provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method }, envelope.query, preauthenticated);
-  return response;
-}
-
-export function prepareManifestRequest(provider: CompiledProvider, endpoint: CompiledEndpoint, body: Record<string, unknown>, inputPathParams: Record<string, string>, env: Env): { model: CompiledModel | null; body: Record<string, unknown>; pathParams: Record<string, string> } {
-  const modelId = typeof body.model === "string" ? body.model : null;
-  const bodyRoute = modelId ? providerModelRoute(provider, modelId) : null;
-  const globalBodyRoute = modelId ? modelRoute(modelId) : null;
-  if (globalBodyRoute && globalBodyRoute.provider.id !== provider.id) throw new HttpError(400, "model_provider_mismatch", `model ${modelId} does not belong to provider ${provider.id}`);
-
-  const pathModelId = inputPathParams.model ?? inputPathParams.deployment ?? null;
-  const pathRoute = pathModelId ? providerModelRoute(provider, pathModelId) : null;
-  const globalPathRoute = pathModelId ? modelRoute(pathModelId) : null;
-  if (globalPathRoute && globalPathRoute.provider.id !== provider.id) throw new HttpError(400, "model_provider_mismatch", `model ${pathModelId} does not belong to provider ${provider.id}`);
-
-  const bodyUpstream = bodyRoute ? resolvedUpstreamModel(provider, bodyRoute.model, env) : null;
-  const pathUpstream = pathRoute ? resolvedUpstreamModel(provider, pathRoute.model, env) : pathModelId;
-  if (bodyUpstream && pathUpstream && bodyUpstream !== pathUpstream) throw new HttpError(400, "model_path_mismatch", "body model and path model must resolve to the same upstream model");
-
-  const model = bodyRoute?.model ?? pathRoute?.model ?? (!modelId && !pathModelId ? provider.models[0] ?? null : null);
-  const upstreamModel = bodyUpstream ?? pathUpstream ?? (model && !model.upstream.includes("${") ? model.upstream : null);
-  const pathParams = normalizeModelPathParams(provider, endpoint, inputPathParams, bodyRoute, env);
-  const transformedInput = { ...body };
-  if (endpoint.path_params.some((name) => name === "model" || name === "deployment")) delete transformedInput.model;
-  else if (modelId && upstreamModel) transformedInput.model = upstreamModel;
-  return {
-    model,
-    body: model && upstreamModel ? transformRequestBody(provider, endpoint.path, upstreamModel, transformedInput, env) : transformedInput,
-    pathParams,
-  };
-}
-
-export function prepareNativeRequest(provider: CompiledProvider, endpoint: CompiledEndpoint, body: Record<string, unknown>, path: string, env: Env): { model: CompiledModel | null; body: Record<string, unknown>; pathParams: Record<string, string> } {
-  return prepareManifestRequest(provider, endpoint, body, nativeParams(endpoint, path), env);
-}
-
-function directManifestEnvelope(request: Request, endpoint: CompiledEndpoint): { method: string; pathParams: Record<string, string>; query: Record<string, unknown>; body: Record<string, unknown> } {
-  const query = new URL(request.url).searchParams;
-  const pathParams: Record<string, string> = {};
-  for (const name of endpoint.path_params) {
-    const value = query.get(name);
-    if (value != null) pathParams[name] = value;
-    query.delete(name);
-  }
-  return { method: request.method, pathParams, query: searchParamsRecord(query), body: {} };
-}
-
-function manifestEnvelope(value: unknown): { method?: string; pathParams: Record<string, string>; query: Record<string, unknown>; body: Record<string, unknown> } {
-  const envelope = requestObject(value, "manifest request");
-  if (envelope.method !== undefined && typeof envelope.method !== "string") throw new HttpError(400, "invalid_request_body", "manifest method must be a string");
-  const pathParams = optionalObject(envelope.pathParams, "manifest pathParams");
-  if (Object.values(pathParams).some((item) => typeof item !== "string")) throw new HttpError(400, "invalid_request_body", "manifest pathParams values must be strings");
-  return {
-    method: envelope.method as string | undefined,
-    pathParams: pathParams as Record<string, string>,
-    query: optionalObject(envelope.query, "manifest query"),
-    body: optionalObject(envelope.body, "manifest body"),
-  };
-}
-
-function optionalObject(value: unknown, label: string): Record<string, unknown> {
-  return value === undefined ? {} : requestObject(value, label);
-}
-
-function requestObject(value: unknown, label = "request body"): Record<string, unknown> {
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new HttpError(400, "invalid_request_body", `${label} must be a JSON object`);
-  return value as Record<string, unknown>;
+  return proxySelected(request, env, context, mode, { provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method }, envelope.query, preauthenticated);
 }
 
 export async function proxyNative(request: Request, env: Env, context: ExecutionContext, path: string): Promise<Response> {
@@ -282,59 +168,20 @@ export async function proxyNative(request: Request, env: Env, context: Execution
   return proxySelected(request, env, context, "proxy_key", { provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method }, searchParamsRecord(new URL(request.url).searchParams), preauthenticated);
 }
 
-export async function authenticateProxyKey(headers: Headers, env: Env): Promise<AuthorizedIdentity | Response> {
-  const candidates = [headers.get("authorization")?.replace(/^Bearer\s+/i, ""), headers.get("x-api-key"), headers.get("x-goog-api-key"), headers.get("api-key")].filter(Boolean) as string[];
-  const parsed = candidates.map(parseProxyKey).find(Boolean);
-  if (!parsed) return errorResponse("invalid_proxy_key", "a valid ClawRouter proxy key is required", 401);
-  const credentialEntry = (await resolveCredentials(env, [parsed.kid]))[0];
-  if (!credentialEntry) return errorResponse("unknown_proxy_key", "proxy key is not registered", 401);
-  if (!safeEqual(await sha256Hex(parsed.secret), credentialEntry.credential.secretSha256.toLowerCase())) return errorResponse("invalid_proxy_key", "proxy key secret is invalid", 401);
-  const policyEntry = (await resolvePolicies(env, [credentialEntry.credential.policyId]))[0];
-  if (!policyEntry) return errorResponse("credential_policy_missing", "proxy credential references an unknown access policy", 403);
-  if (!credentialEntry.credential.enabled) return errorResponse("proxy_key_revoked", "proxy key is revoked", 403);
-  if (!policyEntry.policy.enabled) return errorResponse("policy_revoked", "access policy is revoked", 403);
-  if (credentialEntry.credential.policyGeneration !== policyEntry.policy.generation) return errorResponse("credential_policy_stale", "proxy credential is not bound to the current access policy generation", 403);
-  let exempt = false;
-  if (credentialEntry.credential.principalId) exempt = (await resolveUsers(env, [credentialEntry.credential.principalId]))[0]?.record.contentRetentionDisabled ?? false;
-  return {
-    credentialId: parsed.kid,
-    principalId: credentialEntry.credential.principalId ?? null,
-    authType: "proxy_key",
-    policyId: credentialEntry.credential.policyId,
-    policy: policyEntry.policy,
-    contentRetentionDisabled: exempt,
-  };
-}
-
-export async function inspectKey(headers: Headers, env: Env): Promise<Response> {
-  const candidates = [headers.get("authorization")?.replace(/^Bearer\s+/i, ""), headers.get("x-api-key"), headers.get("x-goog-api-key"), headers.get("api-key")].filter(Boolean) as string[];
-  const parsed = candidates.map(parseProxyKey).find(Boolean);
-  if (!parsed) return errorResponse("invalid_proxy_key", "a valid ClawRouter proxy key is required", 401);
-  const result = await authenticateProxyKey(headers, env);
-  if (result instanceof Response) return result;
-  return Response.json({
-    kid: parsed.kid, mode: parsed.mode, syntaxValid: true, verified: true, verification: "verified",
-    enabled: result.policy.enabled, providers: result.policy.providers, tenantId: result.policy.tenantId ?? null,
-    tokenRole: result.policy.tokenRole ?? null, monthlyBudgetMicros: result.policy.monthlyBudgetMicros ?? null,
-    requestCostMicros: result.policy.requestCostMicros ?? null, budgetScope: result.policy.budgetScope ?? "policy",
-  });
-}
-
 async function proxySelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, queryInput: Record<string, unknown> = {}, preauthenticated: AuthorizedIdentity | null = null, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, auditAuth?: AuthorizedIdentity): Promise<Response> {
   const auth = reservedBudget?.auth ?? await selectedAuth(request, env, mode, selection, preauthenticated);
   if (auth instanceof Response) {
     if (compound && auditAuth) {
-      const requestId = correlationMetadata(request).requestId;
-      auditFailure(context, env, auditAuth, selection, request, requestId, Date.now(), estimateCost(selection.model, selection.body, auditAuth.policy.requestCostMicros, selection.capability), auth.status, auth.status === 403 ? "denied" : auth.status < 500 ? "client_error" : "provider_error", compound);
+      createProxyAccounting({ context, env, auth: auditAuth, selection, request, compound })
+        .fail(auth.status, auth.status === 403 ? "denied" : auth.status < 500 ? "client_error" : "provider_error");
     }
     return auth;
   }
-  const requestId = correlationMetadata(request).requestId;
-  const started = Date.now();
   const estimatedCost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability);
-  const cost = reservedBudget?.cost ?? estimatedCost;
+  const accounting = createProxyAccounting({ context, env, auth, selection, request, cost: reservedBudget?.cost ?? estimatedCost, compound });
+  const { cost, requestId } = accounting;
   if (reservedBudget && (reservedBudget.providerId !== selection.provider.id || reservedBudget.modelId !== selection.model?.id || reservedBudget.capability !== selection.capability || estimatedCost.reserveMicros > reservedBudget.cost.reserveMicros)) {
-    context.waitUntil(finalizeAccounting(env, auth, reservedBudget.reservation, 0, usageEvent(auth, selection, request, requestId, started, 500, null, cost, reservedBudget.reservation, null, "provider_error", 0, compound)));
+    accounting.fail(500, "provider_error", reservedBudget.reservation);
     return errorResponse("fusion_reservation_invalid", "fusion synthesizer reservation does not cover the final request", 500);
   }
   let prepared: PreparedUpstream;
@@ -342,8 +189,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   catch (error) {
     const failure = selectedFailure(error);
     const status = failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error";
-    if (reservedBudget) context.waitUntil(finalizeAccounting(env, auth, reservedBudget.reservation, 0, usageEvent(auth, selection, request, requestId, started, failure.status, null, cost, reservedBudget.reservation, null, status, 0, compound)));
-    else auditFailure(context, env, auth, selection, request, requestId, started, cost, failure.status, status, compound);
+    accounting.fail(failure.status, status, reservedBudget?.reservation);
     return errorResponse(failure.code, failure.message, failure.status);
   }
   let reservation = reservedBudget?.reservation;
@@ -351,14 +197,14 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     try { reservation = await reserveBudget(env, auth, selection.capability, cost, prepared.connection); }
     catch (error) {
       const failure = error instanceof HttpError ? error : new HttpError(503, "budget_store_unavailable", "budget ledger is unavailable");
-      auditFailure(context, env, auth, selection, request, requestId, started, cost, failure.status, failure.status === 402 ? "denied" : failure.status < 500 ? "client_error" : "provider_error", compound);
+      accounting.fail(failure.status, failure.status === 402 ? "denied" : failure.status < 500 ? "client_error" : "provider_error");
       return errorResponse(failure.code, failure.message, failure.status);
     }
   }
   let content: string | null;
   try { content = await retainRequestContent(env, auth, selection, requestId); }
   catch {
-    context.waitUntil(finalizeAccounting(env, auth, reservation, 0, usageEvent(auth, selection, request, requestId, started, 503, null, cost, reservation, null, "provider_error", 0, compound)));
+    accounting.fail(503, "provider_error", reservation);
     return errorResponse("content_retention_unavailable", "required request-content retention is temporarily unavailable", 503);
   }
   const controller = new AbortController();
@@ -384,12 +230,12 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     response = await normalizePreStreamError(response, selection.body.stream === true);
   } catch (error) {
     clearTimeout(timeout);
-    context.waitUntil(finalizeAccounting(env, auth, reservation, 0, usageEvent(auth, selection, request, requestId, started, 502, null, cost, reservation, content, error instanceof DOMException && error.name === "AbortError" ? "timeout" : "provider_error", 0, compound)));
+    accounting.fail(502, error instanceof DOMException && error.name === "AbortError" ? "timeout" : "provider_error", reservation, content);
     return errorResponse("provider_unavailable", `upstream request to provider ${selection.provider.id} failed`, 502, undefined);
   }
   clearTimeout(timeout);
   const observed = observeUsage(response);
-  context.waitUntil(observed.tokens.then(tokens => finalizeResponse(response, tokens, env, auth, selection, request, requestId, started, cost, reservation, content, compound)));
+  context.waitUntil(observed.tokens.then(tokens => accounting.complete(response, tokens, reservation, content)));
   response = observed.response;
   const outputHeaders = new Headers(response.headers);
   for (const name of ["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "set-cookie", "trailer", "transfer-encoding", "upgrade"]) outputHeaders.delete(name);
@@ -403,16 +249,15 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
 async function reserveSelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, preauthenticated: AuthorizedIdentity | null, compound?: CompoundRequestContext): Promise<ReservedProxyBudget | Response> {
   const auth = await selectedAuth(request, env, mode, selection, preauthenticated);
   if (auth instanceof Response) return auth;
-  const requestId = correlationMetadata(request).requestId;
-  const started = Date.now();
-  const cost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability);
+  const accounting = createProxyAccounting({ context, env, auth, selection, request, compound });
+  const { cost } = accounting;
   let prepared: PreparedUpstream;
   try {
     prepared = await prepareSelected(request, env, selection, {}, auth, new Set(), false);
   } catch (error) {
     const failure = selectedFailure(error);
     const status = failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error";
-    auditFailure(context, env, auth, selection, request, requestId, started, cost, failure.status, status, compound);
+    accounting.fail(failure.status, status);
     return errorResponse(failure.code, failure.message, failure.status);
   }
   try {
@@ -420,7 +265,7 @@ async function reserveSelected(request: Request, env: Env, context: ExecutionCon
     return { auth, reservation, cost, providerId: selection.provider.id, modelId: selection.model?.id ?? null, capability: selection.capability, connection: prepared.connection };
   } catch (error) {
     const failure = error instanceof HttpError ? error : new HttpError(503, "budget_store_unavailable", "budget ledger is unavailable");
-    auditFailure(context, env, auth, selection, request, requestId, started, cost, failure.status, failure.status === 402 ? "denied" : failure.status < 500 ? "client_error" : "provider_error", compound);
+    accounting.fail(failure.status, failure.status === 402 ? "denied" : failure.status < 500 ? "client_error" : "provider_error");
     return errorResponse(failure.code, failure.message, failure.status);
   }
 }
@@ -473,116 +318,15 @@ function selectedFailure(error: unknown): HttpError {
   return error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "provider request preflight failed");
 }
 
-function auditFailure(context: ExecutionContext, env: Env, auth: AuthorizedIdentity, selection: ProxySelection, request: Request, requestId: string, started: number, cost: Cost, statusCode: number, status: UsageEvent["status"], compound?: CompoundRequestContext): void {
-  const reservation = emptyReservation();
-  context.waitUntil(finalizeAccounting(env, auth, reservation, 0, usageEvent(auth, selection, request, requestId, started, statusCode, null, cost, reservation, null, status, 0, compound)));
-}
-
 async function auditSelectionFailure(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, preauthenticated: AuthorizedIdentity | null, statusCode: number, compound: CompoundRequestContext, auditAuth?: AuthorizedIdentity): Promise<void> {
   const selected = await selectedAuth(request, env, mode, selection, preauthenticated);
   const auth = selected instanceof Response ? auditAuth : selected;
   if (!auth) return;
-  const requestId = correlationMetadata(request).requestId;
   const status = statusCode === 403 ? "denied" : statusCode < 500 ? "client_error" : "provider_error";
-  auditFailure(context, env, auth, selection, request, requestId, Date.now(), estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability), statusCode, status, compound);
+  createProxyAccounting({ context, env, auth, selection, request, compound }).fail(statusCode, status);
 }
 
 async function preauthenticate(request: Request, env: Env, mode: AuthMode, providerId?: string): Promise<AuthorizedIdentity | Response | null> {
   if (mode === "proxy_key") return authenticateProxyKey(request.headers, env);
   return providerId ? accessIdentity(request, env, providerId) : null;
-}
-
-async function finalizeResponse(response: Response, tokens: Tokens | null, env: Env, auth: AuthorizedIdentity, selection: ProxySelection, request: Request, requestId: string, started: number, estimated: Cost, reservation: BudgetReservation, content: string | null, compound?: CompoundRequestContext): Promise<void> {
-  const measured = tokens ? actualCost(selection.model, tokens, auth.policy.requestCostMicros) : null;
-  const actual = response.ok && measured != null ? measured : response.ok ? estimated.reserveMicros : 0;
-  await finalizeAccounting(env, auth, reservation, actual, usageEvent(auth, selection, request, requestId, started, response.status, tokens, estimated, reservation, content, response.ok ? "success" : response.status < 500 ? "client_error" : "provider_error", actual, compound));
-}
-
-type Cost = EstimatedCost;
-type Tokens = UsageTokens;
-
-export function estimateCost(model: CompiledModel | null, body: Record<string, unknown>, fixed: number | null | undefined, capability: string): Cost {
-  if (capability === "llm.count_tokens") return { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 };
-  if (fixed != null) return { reserveMicros: fixed, basis: "policy_fixed", inputTokens: null, outputTokens: null };
-  const pricing = model?.pricing;
-  if (!pricing) return { reserveMicros: 1, basis: "flat_fallback", inputTokens: null, outputTokens: null };
-  const estimate = estimateModelCost(pricing, body);
-  return { reserveMicros: estimate.reserveMicros, basis: "manifest_pricing", inputTokens: estimate.inputTokens, outputTokens: estimate.outputTokens };
-}
-
-function actualCost(model: CompiledModel | null, tokens: Tokens, fixed: number | null | undefined): number | null {
-  if (fixed != null) return fixed;
-  const pricing = model?.pricing;
-  if (!pricing) return 1;
-  return actualModelCost(pricing, tokens);
-}
-
-function usageEvent(auth: AuthorizedIdentity, selection: ProxySelection, request: Request, requestId: string, started: number, statusCode: number, tokens: Tokens | null, cost: Cost, reservation: BudgetReservation, contentRef: string | null, status: UsageEvent["status"], actual = 0, compound?: CompoundRequestContext): UsageEvent {
-  const correlation = correlationMetadata(request);
-  return {
-    id: randomId("usage"), type: "clawrouter.usage.v1", occurred_at_ms: Date.now(), tenant_id: auth.policy.tenantId ?? "default",
-    policy_id: auth.policyId, credential_id: auth.credentialId, principal_id: auth.principalId, auth_type: auth.authType,
-    session_id: correlation.sessionId, agent_id: correlation.agentId, parent_agent_id: correlation.parentAgentId,
-    project_id: correlation.projectId, client: correlation.client,
-    key_id: auth.credentialId ?? auth.policyId, request_id: requestId,
-    trace_id: correlation.traceId, span_id: correlation.spanId,
-    compound_request_id: compound?.id ?? null, compound_request_stage: compound?.stage ?? null, compound_request_index: compound?.index ?? null,
-    compound_request_size: compound?.size ?? null, compound_request_started_at_ms: compound?.startedAtMs ?? null,
-    provider: selection.provider.id, capability: selection.capability,
-    model: selection.model?.id ?? null, input_tokens: tokens?.input ?? null, output_tokens: tokens?.output ?? null,
-    total_tokens: tokens?.total ?? null, cached_input_tokens: tokens?.cached ?? null, cache_write_input_tokens: tokens?.cacheWrite ?? null,
-    reserved_cost_micros: reservation.reservedMicros, actual_cost_micros: actual, reserved_input_tokens: cost.inputTokens,
-    reserved_output_tokens: cost.outputTokens, pricing_ref: selection.model?.pricing_ref ?? null,
-    pricing_effective_at: selection.model?.pricing?.effectiveAt ?? null, cost_basis: cost.basis, status_code: statusCode,
-    duration_ms: Date.now() - started, content_retained: !!contentRef, content_ref: contentRef, status,
-  };
-}
-
-function searchParamsRecord(params: URLSearchParams): Record<string, string> { const result: Record<string, string> = {}; params.forEach((value, key) => { result[key] = value; }); return result; }
-
-function resolvedUpstreamModel(provider: CompiledProvider, model: CompiledModel, env: Env): string {
-  return model.upstream.includes("${") ? resolveTemplate(provider, model.upstream, env) : model.upstream;
-}
-
-function normalizeModelPathParams(provider: CompiledProvider, endpoint: CompiledEndpoint, input: Record<string, string>, bodyModel: ReturnType<typeof modelRoute>, env: Env): Record<string, string> {
-  const output = { ...input };
-  for (const name of endpoint.path_params.filter((param) => param === "model" || param === "deployment")) {
-    const publicId = output[name];
-    const globalRoute = publicId ? modelRoute(publicId) : bodyModel;
-    if (globalRoute && globalRoute.provider.id !== provider.id) throw new HttpError(400, "model_provider_mismatch", `model ${publicId} does not belong to provider ${provider.id}`);
-    const route = publicId ? providerModelRoute(provider, publicId) : bodyModel;
-    if (route) output[name] = resolvedUpstreamModel(provider, route.model, env);
-  }
-  return output;
-}
-
-function providerModelRoute(provider: CompiledProvider, value: string): { provider: CompiledProvider; model: CompiledModel } | null {
-  const global = modelRoute(value);
-  if (global?.provider.id === provider.id) return global;
-  const model = provider.models.find((candidate) => candidate.id === value || candidate.upstream === value);
-  if (model) return { provider, model };
-  const template = provider.models.find((candidate) => candidate.upstream.includes("${")) ?? provider.models[0];
-  if (!template || !value) return null;
-  const inheritsTemplatePricing = provider.id === "local-openai";
-  return {
-    provider,
-    model: {
-      ...template,
-      id: value,
-      upstream: value,
-      pricing_ref: inheritsTemplatePricing ? template.pricing_ref : null,
-      pricing: inheritsTemplatePricing ? template.pricing : null,
-    },
-  };
-}
-
-function nativeMatch(endpoint: CompiledEndpoint, path: string): boolean {
-  const pattern = endpoint.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\\$\\\{[^}]+\\\}/g, "[^/]+");
-  return new RegExp(`^${pattern}$`).test(path);
-}
-function nativeParams(endpoint: CompiledEndpoint, path: string): Record<string, string> {
-  const names = [...endpoint.path.matchAll(/\$\{([^}]+)\}/g)].map((match) => match[1]);
-  const pattern = endpoint.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\\$\\\{[^}]+\\\}/g, "([^/]+)");
-  const match = path.match(new RegExp(`^${pattern}$`));
-  return Object.fromEntries(names.map((name, index) => [name, decodeURIComponent(match?.[index + 1] ?? "")]));
 }

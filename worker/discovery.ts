@@ -3,7 +3,7 @@ import { publicSession, sessionPolicies, verifiedAccessSession } from "./access"
 import { contentRetentionDefault } from "./content-retention.ts";
 import { loadFusionConfig } from "./fusion-config";
 import { FUSION_MODEL_ID } from "./fusion";
-import { authenticateProxyKey } from "./proxy";
+import { authenticateProxyKey } from "./proxy-auth";
 import { endpointForPath, modelRoute, providerReadinessForPolicies, snapshot, type Readiness } from "./providers";
 import type { AccessPolicyEntry, AccessSession, AuthorizedIdentity, CompiledProvider, Env } from "./types";
 import { errorResponse, privateJson, sha256Hex } from "./utils";
