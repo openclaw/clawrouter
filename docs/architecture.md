@@ -54,9 +54,10 @@ provider and model drift.
    retried without masking the provider response or suppressing the other task.
 
 Usage events are queued into a Durable Object shard named by tenant and policy.
-Session/admin reads aggregate only their relevant shards. A bounded legacy read
-bridge includes the former global ledger through 2026-07-23; it performs one
-filtered global read per aggregate and can then be removed.
+Session/admin reads aggregate each relevant tenant/policy shard once, even when
+the input policy list repeats a scope. The former global ledger's migration
+window ended on 2026-07-23; it is no longer queried. Stored data and Durable
+Object bindings are unchanged.
 
 ## Failure boundaries
 
