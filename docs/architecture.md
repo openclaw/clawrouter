@@ -27,6 +27,10 @@ Authentication is read-only after an existing user receives versioned
 verified GitHub evidence remains an explicit admin operation. Legacy KV
 assignment retention state is imported once before the first canonical
 reconciliation so unknown external membership does not revoke existing access.
+Reconciliation evaluates and writes the current user inside `ACCESS_CONTROL`;
+callers supply rules and evidence, never a replacement user snapshot. Automatic
+login creation inserts only missing users. Both operations preserve intervening
+administrator changes to enabled state, tenant, manual groups, and retention.
 
 The browser loads immutable providers/routes once. Admin refreshes use
 `GET /v1/admin/bootstrap` for one coherent authority/readiness snapshot. Usage is

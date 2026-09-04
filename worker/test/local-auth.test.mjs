@@ -44,6 +44,10 @@ function fixture(overrides = {}) {
             return Response.json({ initialized: true, users: found, missingEmails: body.emails.filter((email) => !users.has(email)) });
           }
           if (path === "/users/put") { users.set(body.email, body.record); return new Response("updated"); }
+          if (path === "/users/create") {
+            if (!users.has(body.email)) users.set(body.email, body.record);
+            return Response.json({ email: body.email, record: users.get(body.email) });
+          }
           return Response.json({ error: { code: "route_not_found" } }, { status: 404 });
         },
       }),
@@ -219,6 +223,22 @@ test("session cookies are ignored outside local-auth mode", async () => {
   assert.equal(await localSession(new Request(`${origin}/v1/session`, { headers: { cookie } }), managed), null);
   const unset = { ...env, CLAWROUTER_LOCAL_AUTH: undefined };
   assert.equal(await verifiedAccessSession(new Request(`${origin}/v1/session`, { headers: { cookie } }), unset), null);
+});
+
+test("first local login cannot overwrite a user disabled after its initial lookup", async () => {
+  const env = fixture({ CLAWROUTER_LOCAL_ADMIN_EMAIL: "bootstrap@example.com" });
+  const disabled = { role: "user", tenantId: "managed", enabled: false, groups: ["manual"], contentRetentionDisabled: true };
+  const stub = env.ACCESS_CONTROL.get();
+  env.ACCESS_CONTROL.get = () => ({ async fetch(url, init) {
+    const response = await stub.fetch(url, init);
+    if (new URL(url).pathname === "/users/resolve") env.users.set("bootstrap@example.com", disabled);
+    return response;
+  } });
+  const response = await localLogin(loginRequest(adminKeyMaterial, { ip: "198.51.100.240" }), env);
+  assert.equal(response.status, 401);
+  assert.equal(response.headers.get("set-cookie"), null);
+  assert.deepEqual(env.users.get("bootstrap@example.com"), disabled);
+  assert.equal(env.kv.size, 0);
 });
 
 test("concurrent spoofed-client attempts cannot exceed the global sign-in cap", async () => {

@@ -1,16 +1,13 @@
-import { authorityCall } from "./authority";
+import { authorityCall } from "./authority.ts";
 import {
   assignmentGroup,
-  evaluateUserAssignments,
-  normalizeAssignmentEvidence,
-  withLegacyAssignmentState,
   type AssignmentEvidence,
   type AssignmentRuleEntry,
-} from "./assignment-evaluator";
+} from "./assignment-evaluator.ts";
 import type { AccessControlUser, AssignmentRule, AssignmentState, Env } from "./types";
 
-export { assignmentRulesRevision, normalizeAssignmentEvidence } from "./assignment-evaluator";
-export type { AssignmentEvidence, AssignmentRuleEntry } from "./assignment-evaluator";
+export { assignmentRulesRevision, normalizeAssignmentEvidence } from "./assignment-evaluator.ts";
+export type { AssignmentEvidence, AssignmentRuleEntry } from "./assignment-evaluator.ts";
 
 export async function listAssignmentRules(env: Env): Promise<AssignmentRuleEntry[]> {
   const entries: AssignmentRuleEntry[] = [];
@@ -32,9 +29,5 @@ export async function reconcileUserAssignments(user: AccessControlUser, rules: A
   const legacy = user.record.assignmentState
     ? null
     : await env.POLICY_KV.get<Partial<AssignmentState>>(`access/assignment-state/${user.email.trim().toLowerCase()}`, "json");
-  const candidate = withLegacyAssignmentState(user, legacy);
-  const evaluated = evaluateUserAssignments(candidate, rules, evidence, force);
-  if (!evaluated.changed) return { user, matchedRuleIds: evaluated.matchedRuleIds, retainedRuleIds: evaluated.retainedRuleIds };
-  await authorityCall(env, "/users/put", evaluated.user);
-  return { user: evaluated.user, matchedRuleIds: evaluated.matchedRuleIds, retainedRuleIds: evaluated.retainedRuleIds };
+  return authorityCall(env, "/users/reconcile-assignments", { email: user.email, rules, legacy, evidence, force });
 }

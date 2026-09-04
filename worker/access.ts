@@ -34,8 +34,7 @@ async function cloudflareAccessSession(request: Request, env: Env): Promise<Acce
   const role = adminRole(email, env) ? "admin" : "user";
   let user = (await resolveUsers(env, [email]))[0];
   if (!user) {
-    user = { email, record: { role: "user", tenantId: env.CLAWROUTER_ACCESS_DEFAULT_TENANT ?? "default", enabled: true, groups: [], contentRetentionDisabled: false } };
-    await authorityCall(env, "/users/put", user);
+    user = await authorityCall<AccessControlUser>(env, "/users/create", { email, record: { role: "user", tenantId: env.CLAWROUTER_ACCESS_DEFAULT_TENANT ?? "default", enabled: true, groups: [], contentRetentionDisabled: false } });
   }
   const rules = await listAssignmentRules(env);
   const hasGithubRules = rules.some((rule) => rule.enabled && ["github_org", "github_team"].includes(rule.kind));

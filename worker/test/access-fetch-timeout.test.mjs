@@ -14,6 +14,7 @@ registerHooks({
 });
 
 const { verifiedAccessSession } = await import("../access.ts");
+const { evaluateUserAssignments, withLegacyAssignmentState } = await import("../assignment-evaluator.ts");
 
 const teamDomain = "team.cloudflareaccess.com";
 const audience = "aud-1";
@@ -73,6 +74,16 @@ function accessEnv(kv = new Map(), users = new Map()) {
           if (path === "/users/put") {
             users.set(body.email, body.record);
             return new Response("updated");
+          }
+          if (path === "/users/create") {
+            if (!users.has(body.email)) users.set(body.email, body.record);
+            return Response.json({ email: body.email, record: users.get(body.email) });
+          }
+          if (path === "/users/reconcile-assignments") {
+            const user = { email: body.email, record: users.get(body.email) };
+            const result = evaluateUserAssignments(withLegacyAssignmentState(user, body.legacy), body.rules, body.evidence, body.force);
+            if (result.changed) users.set(body.email, result.user.record);
+            return Response.json(result);
           }
           return Response.json({ error: { code: "route_not_found" } }, { status: 404 });
         },
@@ -174,4 +185,26 @@ test("GitHub identity fetch attaches a 30s AbortSignal and fails open on timeout
   assert.equal(session?.email, email);
   assert.ok(identityInit.signal instanceof AbortSignal);
   assert.deepEqual(timeouts, [30_000, 30_000]);
+});
+
+test("first Access login cannot overwrite a user disabled after its initial lookup", async context => {
+  const keys = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
+  const kid = "bootstrap-race-key";
+  const jwk = { ...await crypto.subtle.exportKey("jwk", keys.publicKey), kid, kty: "RSA" };
+  const assertion = await signedJwt(keys.privateKey, kid);
+  context.mock.method(globalThis, "fetch", async () => Response.json({ keys: [jwk] }));
+  const users = new Map();
+  const disabled = { role: "user", tenantId: "managed", enabled: false, groups: ["manual"], contentRetentionDisabled: true };
+  const env = accessEnv(new Map(), users);
+  const stub = env.ACCESS_CONTROL.get();
+  env.ACCESS_CONTROL.get = () => ({ async fetch(url, init) {
+    const response = await stub.fetch(url, init);
+    if (new URL(url).pathname === "/users/resolve") users.set(email, disabled);
+    return response;
+  } });
+  assert.equal(await verifiedAccessSession(sessionRequest(assertion), env), null);
+  assert.equal(users.get(email).enabled, false);
+  assert.equal(users.get(email).tenantId, "managed");
+  assert.deepEqual(users.get(email).groups, ["manual"]);
+  assert.equal(users.get(email).contentRetentionDisabled, true);
 });
