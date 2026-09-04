@@ -32,6 +32,13 @@ provider and model drift.
 
 ## Data plane
 
+`proxy.ts` coordinates authentication, preflight, forwarding, and failover.
+`proxy-auth.ts` owns proxy credential verification and key inspection, so
+discovery does not depend on request execution. `proxy-selection.ts` owns
+OpenAI, manifest, and native request translation. `proxy-accounting.ts` captures
+one request's identity, correlation, pricing, and timing, then builds its final
+usage event and delegates independent settlement and delivery to `accounting.ts`.
+
 1. Authenticate the Access session or proxy credential against canonical state.
 2. Resolve the selected policy and provider-scoped readiness. Tenant grants are
    visible only to policies in that tenant; policy grants are exact-scope.

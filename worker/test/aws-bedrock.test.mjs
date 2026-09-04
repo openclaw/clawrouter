@@ -23,7 +23,7 @@ registerHooks({
     return nextResolve(specifier, context);
   },
 });
-const { prepareManifestRequest } = await import("../proxy.ts");
+const { prepareManifestRequest } = await import("../proxy-selection.ts");
 
 const provider = providerById("aws-bedrock");
 assert.ok(provider);

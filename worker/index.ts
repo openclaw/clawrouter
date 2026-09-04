@@ -16,7 +16,8 @@ import { privateCodex, privatePath } from "./private-codex";
 import { routeCatalog, snapshot } from "./providers";
 import { sameOrigin } from "./request-origin";
 import { sessionCredentialsApi } from "./session-credentials";
-import { authenticateProxyKey, inspectKey, proxyManifest, proxyNative, proxyOpenAi } from "./proxy";
+import { authenticateProxyKey, inspectKey } from "./proxy-auth";
+import { proxyManifest, proxyNative, proxyOpenAi } from "./proxy";
 import type { Env, QueueMessage } from "./types";
 import {
   canonicalPath, caughtResponse, corsEnabled, corsPreflight, errorResponse, legacyRedirect,

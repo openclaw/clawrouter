@@ -17,7 +17,8 @@ registerHooks({
     return nextResolve(specifier, context);
   },
 });
-const { estimateCost, prepareNativeRequest } = await import("../proxy.ts");
+const { prepareNativeRequest } = await import("../proxy-selection.ts");
+const { estimateCost } = await import("../proxy-accounting.ts");
 
 const google = providerById("google-gemini");
 assert.ok(google);

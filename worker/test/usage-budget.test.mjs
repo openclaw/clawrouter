@@ -16,6 +16,35 @@ const { BudgetLedgerObject, providerBudgetStatus } = await import("../ledgers.ts
 const keyMaterial = "abcdefgh";
 const keyDigest = await sha256(keyMaterial);
 
+for (const failure of ["retention", "provider"]) {
+  test(`${failure} failure releases both budgets and preserves request attribution in one audit event`, async (t) => {
+    const env = usageEnv([], { provider: "local-openai", retainContent: failure === "retention" });
+    env.LOCAL_OPENAI_BASE_URL = "https://upstream.example.invalid";
+    env.BUDGET_LEDGER = sqlBudgetNamespace(t);
+    env.CONTENT_ARCHIVE = { put: async () => { throw new Error("synthetic retention failure"); } };
+    const events = [], pending = [];
+    env.USAGE_QUEUE = { send: async event => { events.push(event); } };
+    const upstream = t.mock.method(globalThis, "fetch", async () => { throw new Error("synthetic transport failure"); });
+    const response = await handler.fetch(new Request("https://clawrouter.example/v1/chat/completions", {
+      method: "POST",
+      headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json", "x-request-id": "synthetic-request", "x-clawrouter-session-id": "synthetic-session" },
+      body: JSON.stringify({ model: "local/default", messages: [{ role: "user", content: "synthetic input" }] }),
+    }), env, { waitUntil: promise => pending.push(promise) });
+    assert.equal(response.status, failure === "retention" ? 503 : 502);
+    await Promise.all(pending);
+    assert.equal(upstream.mock.callCount(), failure === "retention" ? 0 : 1);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].request_id, "synthetic-request");
+    assert.equal(events[0].session_id, "synthetic-session");
+    assert.equal(events[0].status, "provider_error");
+    assert.equal(events[0].reserved_cost_micros, 1);
+    assert.equal(events[0].actual_cost_micros, 0);
+    const usage = await handler.fetch(new Request("https://clawrouter.example/v1/usage", { headers: { authorization: `Bearer ${proxyKey()}` } }), env, {});
+    assert.equal((await usage.json()).budget.spentMicros, 0);
+    assert.equal((await providerBudgetStatus(env, "local-openai", 100)).spentMicros, 0);
+  });
+}
+
 test("GET /v1/usage preserves the budget response contract while selecting the caller principal", async () => {
   const objectNames = [];
   const env = usageEnv(objectNames);
