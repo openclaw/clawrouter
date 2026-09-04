@@ -15,6 +15,13 @@ do not prove live subscription entitlement, client compatibility, owner-only
 ingress, or OS/process isolation. In particular, `/responses` support does not
 establish native Codex integration.
 
+For a dedicated private Worker, use `worker/private-entry.ts` as its entrypoint
+and bind only the two private secret-store objects below. This entrypoint exposes
+no shared admin, public catalog, usage, or proxy routes. Disable Worker request
+logging and observability for that deployment, and verify the actual deployed
+origin with the native client before enabling a consumer. A local emulator does
+not establish upstream acceptance of the deployed transport.
+
 ## Runtime configuration
 
 Two separate, owner-controlled secret-store object bindings are required. Each
