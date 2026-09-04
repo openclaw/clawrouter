@@ -1,5 +1,6 @@
 import { record, type PrivateUpstream } from "./private-codex-config";
 import { privateResponseHeaders } from "./private-codex-protocol";
+import type { PrivateContinuationProjection } from "./private-codex-continuation";
 
 // Inspect data without assigning protocol meaning to its keys or rewriting ciphertext/tool JSON.
 export function inspectPrivateContent(value: unknown, sensitive: readonly string[], depth = 0, budget = { nodes: 0 }): void {
@@ -30,11 +31,13 @@ export class PrivateResponseProjection {
   private reported: string | undefined;
   private sealed = false;
   private rejected = false;
+  private readonly continuation: PrivateContinuationProjection | undefined;
 
-  constructor(alias: string, upstream: PrivateUpstream) {
+  constructor(alias: string, upstream: PrivateUpstream, continuation?: PrivateContinuationProjection) {
     this.alias = alias;
+    this.continuation = continuation;
     this.target = upstream.target;
-    this.sensitive = [upstream.target, upstream.accessToken, upstream.accountId];
+    this.sensitive = [upstream.target, upstream.accessToken, upstream.accountId, ...(upstream.fallbackTarget ? [upstream.fallbackTarget] : [])];
   }
 
   get sensitiveValues(): readonly string[] { return this.sensitive; }
@@ -44,44 +47,53 @@ export class PrivateResponseProjection {
 
   inspect(value: unknown): void { inspectPrivateContent(value, this.sensitive); }
 
-  headers(entries: Iterable<[string, unknown]>): Record<string, unknown> {
+  async headers(entries: Iterable<[string, unknown]>): Promise<Record<string, unknown>> {
     const projected = privateResponseHeaders(entries, this.alias, this.target, this.sensitive);
     this.inspect(projected);
+    if (this.continuation && projected["x-codex-turn-state"] !== undefined) projected["x-codex-turn-state"] = await this.continuation.wrap(projected["x-codex-turn-state"]);
     return projected;
   }
 
-  response(value: Record<string, unknown>): Record<string, unknown> {
+  async response(value: Record<string, unknown>): Promise<Record<string, unknown>> {
     if (this.rejected) throw new Error("private reporting identity rejected");
-    const projected = this.responseEnvelope(value);
+    const projected = await this.responseEnvelope(value);
     this.inspect(projected);
     return projected;
   }
 
-  event(value: Record<string, unknown>): Record<string, unknown> {
+  async event(value: Record<string, unknown>): Promise<Record<string, unknown>> {
     if (this.rejected) throw new Error("private reporting identity rejected");
     const projected = { ...value };
     // Register before inspecting any sibling, irrespective of JSON property order.
     if (value.response != null) {
       if (!record(value.response)) throw new Error("private response envelope invalid");
-      projected.response = this.responseEnvelope(value.response);
+      projected.response = await this.responseEnvelope(value.response);
     }
-    if (value.headers !== undefined) projected.headers = this.headerEnvelope(value.headers);
+    if (value.headers !== undefined) projected.headers = await this.headerEnvelope(value.headers);
     if (value.safety_buffering !== undefined) projected.safety_buffering = this.safety(value.safety_buffering);
     if (value.type === "response.metadata" && record(value.metadata) && value.metadata.type === "safety_buffering") {
       projected.metadata = this.safety(value.metadata);
     }
     this.inspect(projected);
+    if (this.continuation && value.response_id !== undefined) projected.response_id = await this.continuation.wrap(value.response_id);
     return projected;
   }
 
-  private responseEnvelope(value: Record<string, unknown>): Record<string, unknown> {
+  private async responseEnvelope(value: Record<string, unknown>): Promise<Record<string, unknown>> {
     const projected = { ...value };
     if (value.model !== undefined) {
       this.learn(value.model);
       projected.model = this.alias;
     }
     if (value.error != null) throw new Error("private upstream error");
-    if (value.headers !== undefined) projected.headers = this.headerEnvelope(value.headers);
+    if (value.headers !== undefined) projected.headers = await this.headerEnvelope(value.headers);
+    if (this.continuation) {
+      for (const key of ["id", "previous_response_id"]) {
+        if (value[key] == null) continue;
+        this.inspect(value[key]);
+        projected[key] = await this.continuation.wrap(value[key]);
+      }
+    }
     return projected;
   }
 
@@ -98,7 +110,7 @@ export class PrivateResponseProjection {
     this.reported = value;
   }
 
-  private headerEnvelope(value: unknown): Record<string, unknown> {
+  private async headerEnvelope(value: unknown): Promise<Record<string, unknown>> {
     if (!record(value)) throw new Error("private protocol headers invalid");
     return this.headers(Object.entries(value));
   }
