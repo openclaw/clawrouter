@@ -675,6 +675,24 @@ test("no private failures or request metadata enter application logs", async (co
   assert.deepEqual(logs, []);
 });
 
+test("workload revocation during the final upstream binding read prevents egress", async () => {
+  for (const revoke of [
+    (state) => { state.policy.enabled = false; },
+    (state) => { state.policy.auth.credentialSha256 = "0".repeat(64); },
+  ]) {
+    const { env, state } = await environment();
+    env.PRIVATE_CODEX_UPSTREAM.get = async () => {
+      if (++state.secretReads === 2) revoke(state);
+      return JSON.stringify(state.upstream);
+    };
+    await withFetch(() => assert.fail("Revoked workload must not reach upstream"), async () => {
+      const result = await run(request(), env);
+      assert.equal(result.status, 404);
+      assert.equal(state.secretReads, 2);
+    });
+  }
+});
+
 test("holdback disambiguates overlapping prefixes and safely ends incomplete Responses", async () => {
   const { env, state } = await environment();
   state.upstream.target = "SYNTHETIC_ABABABAC";
