@@ -58,6 +58,44 @@ function usageEnv(objectNames, { provider = "openai", limit = 100, fixedCost = 1
 
 function proxyKey() { return ["clawrouter", "live", `maintainer_key-${keyMaterial}`].join("-"); }
 
+test("binary proxy accounting preserves backpressure and settles on completion, error, or cancellation", async (t) => {
+  for (const outcome of ["complete", "error", "cancel"]) {
+    const env = usageEnv([], { provider: "local-openai", limit: null, retainContent: false });
+    env.LOCAL_OPENAI_BASE_URL = "https://upstream.example.invalid";
+    const events = []; env.USAGE_QUEUE = { send: async event => { events.push(event); } };
+    let pulls = 0, canceled = false;
+    const bytes = Uint8Array.from({ length: 32 }, (_, i) => i);
+    const source = new ReadableStream({
+      pull(controller) {
+        if (outcome === "error" && pulls === 1) controller.error(new Error("synthetic upstream failure"));
+        else if (pulls < bytes.length) controller.enqueue(bytes.slice(pulls, ++pulls));
+        else controller.close();
+      },
+      cancel() { canceled = true; },
+    }, { highWaterMark: 0 });
+    t.mock.method(globalThis, "fetch", async () => new Response(source, { headers: { "content-type": "application/vnd.amazon.eventstream" } }));
+    const pending = [];
+    const response = await handler.fetch(new Request("https://clawrouter.example/v1/chat/completions", {
+      method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
+      body: JSON.stringify({ model: "local/default", messages: [{ role: "user", content: "synthetic input" }] }),
+    }), env, { waitUntil: promise => pending.push(promise) });
+    try {
+      assert.equal(response.status, 200);
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(pulls, 0, "accounting must not drain a stalled client's binary stream");
+      assert.equal(events.length, 0);
+      if (outcome === "cancel") await response.body.cancel();
+      else if (outcome === "error") await assert.rejects(response.arrayBuffer(), /synthetic upstream failure/);
+      else assert.deepEqual(new Uint8Array(await response.arrayBuffer()), bytes);
+      await Promise.all(pending);
+      assert.equal(canceled, outcome === "cancel"); assert.equal(events.length, 1); assert.equal(events[0].actual_cost_micros, 1);
+    } finally {
+      if (!response.body.locked) await response.body.cancel().catch(() => {});
+      t.mock.restoreAll();
+    }
+  }
+});
+
 async function sha256(value) {
   const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
   return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");

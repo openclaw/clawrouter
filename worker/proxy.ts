@@ -387,8 +387,18 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     return errorResponse("provider_unavailable", `upstream request to provider ${selection.provider.id} failed`, 502, undefined);
   }
   clearTimeout(timeout);
-  const clone = response.clone();
-  context.waitUntil(finalizeResponse(clone, env, auth, selection, request, requestId, started, cost, reservation, content, compound));
+  const contentType = response.headers.get("content-type") ?? "";
+  if (contentType.includes("json") || contentType.includes("text/event-stream")) {
+    context.waitUntil(finalizeResponse(response.clone(), env, auth, selection, request, requestId, started, cost, reservation, content, compound));
+  } else {
+    // Draining a tee for accounting buffers the entire binary transfer behind a
+    // slow client. Observe its completion without creating a second consumer.
+    const upstreamResponse = response;
+    let completed!: () => void;
+    const completion = new Promise<void>(resolve => { completed = resolve; });
+    response = observeResponseBody(response, completed);
+    context.waitUntil(completion.then(() => finalizeResponse(upstreamResponse, env, auth, selection, request, requestId, started, cost, reservation, content, compound)));
+  }
   const outputHeaders = new Headers(response.headers);
   for (const name of ["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "set-cookie", "trailer", "transfer-encoding", "upgrade"]) outputHeaders.delete(name);
   outputHeaders.set("x-clawrouter-upstream-provider", selection.provider.id);
@@ -653,7 +663,6 @@ async function finalizeResponse(response: Response, env: Env, auth: AuthorizedId
     const contentType = response.headers.get("content-type") ?? "";
     if (contentType.includes("json")) tokens = extractUsageTokens(JSON.parse(await readLimited(response, 2 * 1024 * 1024)));
     else if (contentType.includes("text/event-stream")) tokens = extractSseUsageTokens(await readLimited(response, 2 * 1024 * 1024));
-    else await drainResponseBody(response.body);
   } catch { /* usage is best-effort; reservation stays conservative */ }
   const measured = tokens ? actualCost(selection.model, tokens, auth.policy.requestCostMicros) : null;
   const actual = response.ok && measured != null ? measured : response.ok ? estimated.reserveMicros : 0;
@@ -716,17 +725,22 @@ async function readLimited(response: Response, limit: number): Promise<string> {
   } finally { if (size > limit) await reader.cancel(); }
 }
 
-export async function drainResponseBody(body: ReadableStream<Uint8Array> | null): Promise<void> {
-  if (!body) return;
-  const reader = body.getReader();
-  try {
-    while (!(await reader.read()).done) { /* discard without buffering the cloned stream */ }
-  } catch (error) {
-    await reader.cancel().catch(() => undefined);
-    throw error;
-  } finally {
-    reader.releaseLock();
-  }
+function observeResponseBody(response: Response, complete: () => void): Response {
+  if (!response.body) { complete(); return response; }
+  const reader = response.body.getReader();
+  let finished = false;
+  const finish = () => { if (!finished) { finished = true; reader.releaseLock(); complete(); } };
+  const body = new ReadableStream<Uint8Array>({
+    async pull(controller) {
+      try {
+        const next = await reader.read();
+        if (next.done) { finish(); controller.close(); }
+        else controller.enqueue(next.value);
+      } catch (error) { finish(); controller.error(error); }
+    },
+    async cancel(reason) { try { await reader.cancel(reason); } finally { finish(); } },
+  }, { highWaterMark: 0 });
+  return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
 }
 
 function searchParamsRecord(params: URLSearchParams): Record<string, string> { const result: Record<string, string> = {}; params.forEach((value, key) => { result[key] = value; }); return result; }

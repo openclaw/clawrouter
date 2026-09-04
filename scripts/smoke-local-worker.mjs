@@ -59,6 +59,11 @@ const upstreamServer = createHttpServer(async (request, response) => {
   const body = JSON.parse(raw);
   upstreamCalls.push(body);
   const authorization = request.headers.authorization ?? "";
+  if (body.messages?.[0]?.content === "synthetic binary response") {
+    response.writeHead(200, { "content-type": "application/octet-stream" });
+    response.end(Buffer.from(Array.from({ length: 65536 }, (_, index) => index % 256)));
+    return;
+  }
   if (body.model === "default" && authorization === "Bearer rate-limited") {
     failoverCalls.push(authorization);
     response.writeHead(429, { "content-type": "application/json", "retry-after": "120", "x-ratelimit-limit-requests": "100", "x-ratelimit-remaining-requests": "0", "x-ratelimit-reset-requests": "120" });
@@ -767,6 +772,13 @@ try {
   assert.deepEqual(await unmeteredConnection.json(), { providerId: "local-openai", enabled: true, label: null, monthlyBudgetMicros: null });
   assert.equal((await rotationRequest()).status, 200, "clearing the provider budget restores requests");
   assert.doesNotMatch(output, /private prompt sentinel|private tool sentinel|invalid trace private sentinel|secret_1234|rotation123/i, "Worker logs remain metadata-only");
+  const binary = await fetch(`${base}/v1/chat/completions`, {
+    method: "POST", headers: { authorization: `Bearer ${rotationKey}`, "content-type": "application/json" },
+    body: JSON.stringify({ model: "local/default", messages: [{ role: "user", content: "synthetic binary response" }] }),
+  });
+  assert.equal(binary.status, 200);
+  assert.equal(binary.headers.get("content-type"), "application/octet-stream");
+  assert.deepEqual(new Uint8Array(await binary.arrayBuffer()), Uint8Array.from({ length: 65536 }, (_, index) => index % 256));
   console.log(`local Worker smoke passed on ${base}`);
   if (process.env.CLAWROUTER_E2E_HOLD_FILE) {
     writeFileSync(process.env.CLAWROUTER_E2E_HOLD_FILE, `${JSON.stringify({ base, adminToken, rotationKey, noFailoverKey })}\n`, { mode: 0o600 });

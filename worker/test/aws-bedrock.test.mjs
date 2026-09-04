@@ -23,7 +23,7 @@ registerHooks({
     return nextResolve(specifier, context);
   },
 });
-const { drainResponseBody, prepareManifestRequest } = await import("../proxy.ts");
+const { prepareManifestRequest } = await import("../proxy.ts");
 
 const provider = providerById("aws-bedrock");
 assert.ok(provider);
@@ -220,22 +220,4 @@ test("AWS Bedrock SigV4 does not fill an incomplete selected grant from global s
       error?.code === "provider_not_configured" &&
       /selected AWS grant must contain accessKeyId and secretAccessKey/.test(error.message),
   );
-});
-
-test("binary Bedrock response clones are drained without buffering", async () => {
-  let pulls = 0;
-  const body = new ReadableStream(
-    {
-      pull(controller) {
-        pulls += 1;
-        if (pulls <= 2) controller.enqueue(Uint8Array.of(pulls));
-        else controller.close();
-      },
-    },
-    { highWaterMark: 0 },
-  );
-
-  await drainResponseBody(body);
-  assert.equal(pulls, 3);
-  await drainResponseBody(null);
 });
