@@ -1,4 +1,4 @@
-import { privateSensitive, record, type PrivateUpstream } from "./private-codex-config";
+import { containsPrivate, privateSensitive, record, type PrivateUpstream } from "./private-codex-config";
 import { privateResponseHeaders } from "./private-codex-protocol";
 import type { PrivateContinuationProjection } from "./private-codex-continuation";
 
@@ -6,7 +6,7 @@ import type { PrivateContinuationProjection } from "./private-codex-continuation
 export function inspectPrivateContent(value: unknown, sensitive: readonly string[], depth = 0, budget = { nodes: 0 }): void {
   if (++budget.nodes > 50_000 || depth > 48) throw new Error("private structure limit");
   if (typeof value === "string") {
-    if (sensitive.some((secret) => value.includes(secret))) throw new Error("private content rejected");
+    if (containsPrivate(value, sensitive)) throw new Error("private content rejected");
     if (/^\s*[\[{]/.test(value)) {
       let nested: unknown;
       try { nested = JSON.parse(value); } catch { return; }

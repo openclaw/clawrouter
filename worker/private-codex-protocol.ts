@@ -1,4 +1,4 @@
-import { record } from "./private-codex-config";
+import { containsPrivate, record } from "./private-codex-config";
 
 // Wire contracts: codex core/client.rs, core/responses_metadata.rs and codex-api.
 const forwardedHeaders = new Set([
@@ -85,7 +85,7 @@ export function forwardPrivateHeaders(incoming: Headers, outgoing: Headers, alia
 export function inspectPrivateOpaque(value: unknown, alias: string, secrets: readonly string[], depth = 0, budget = { nodes: 0 }): void {
   if (++budget.nodes > 10_000 || depth > 12) throw new Error("private opaque limit");
   if (typeof value === "string") {
-    if (secrets.some((secret) => value.includes(secret))) throw new Error("private opaque identity");
+    if (containsPrivate(value, secrets)) throw new Error("private opaque identity");
     if (value.length > 8192) throw new Error("private opaque size");
     for (const match of value.matchAll(/(?:^|[;,&\s])(?:model|retry_model|faster_model)=([^;,&\s]+)/g)) {
       if (match[1] !== alias) throw new Error("private opaque selector");
@@ -102,7 +102,7 @@ export function inspectPrivateOpaque(value: unknown, alias: string, secrets: rea
         if (!/^[A-Za-z0-9+/_-]{8,}={0,2}$/.test(part)) continue;
         let decoded: string;
         try { decoded = atob(part.replaceAll("-", "+").replaceAll("_", "/")); } catch { continue; }
-        if (secrets.some((secret) => decoded.includes(secret))) throw new Error("private opaque encoded identity");
+        if (containsPrivate(decoded, secrets)) throw new Error("private opaque encoded identity");
         if (/^[\x20-\x7e\r\n\t]+$/.test(decoded) && decoded !== value) inspectPrivateOpaque(decoded, alias, secrets, depth + 1, budget);
       }
     }

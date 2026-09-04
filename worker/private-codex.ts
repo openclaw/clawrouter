@@ -1,5 +1,5 @@
 import { boundedJson } from "./private-codex-io";
-import { privateAuthorizationCurrent, privateAuthorized, privateCredential, privatePolicy, privateSensitive, privateUpstream, privateUpstreamActive, record, type PrivatePolicy, type PrivateUpstream } from "./private-codex-config";
+import { containsPrivate, privateAuthorizationCurrent, privateAuthorized, privateCredential, privatePolicy, privateSensitive, privateUpstream, privateUpstreamActive, record, type PrivatePolicy, type PrivateUpstream } from "./private-codex-config";
 import { containResponse, privateError, privateJson } from "./private-codex-output";
 import { forwardPrivateHeaders, inspectPrivateOpaque, validPrivateHeaders, validPrivateProtocolBody } from "./private-codex-protocol";
 import { privateContinuations } from "./private-codex-continuation";
@@ -72,7 +72,7 @@ export async function privateCodex(request: Request, env: Env): Promise<Response
     if (!await upstreamCurrent(request, env, policy, upstream)) return privateError(404);
     const ignoredMaxOutputTokens = upstream.transport !== "openai-api" && body.max_output_tokens !== undefined;
     // A fixed disclosure must not echo a runtime identity, including on transport failure.
-    if (ignoredMaxOutputTokens && privateSensitive(upstream).some((secret) => "x-clawrouter-ignored-parameters: max_output_tokens".includes(secret))) return new Response(null, { status: 502 });
+    if (ignoredMaxOutputTokens && containsPrivate("x-clawrouter-ignored-parameters: max_output_tokens", privateSensitive(upstream))) return new Response(null, { status: 502 });
     // Do not manufacture originator, client metadata, review, or attestation evidence.
     const abort = new AbortController();
     const signal = AbortSignal.any([request.signal, abort.signal, AbortSignal.timeout(600_000)]);
