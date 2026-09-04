@@ -17,6 +17,29 @@ const booleanHeaders = new Set(["x-openai-internal-codex-responses-lite", "x-ope
 const selectorKeys = new Set(["model", "retry_model", "faster_model", "auto_review_model_override"]);
 const encoder = new TextEncoder();
 
+export type PrivateProtocolPredicate =
+  | "headers.content_encoding" | "headers.transfer_encoding" | "headers.value_limit"
+  | "headers.total_limit" | "headers.routing_hint" | "headers.routing_tier"
+  | "headers.selector" | "headers.namespace" | "headers.boolean"
+  | "headers.turn_metadata" | "headers.characters"
+  | "protocol.metadata_object" | "protocol.metadata_count" | "protocol.metadata_key"
+  | "protocol.metadata_value_type" | "protocol.metadata_value_limit" | "protocol.turn_metadata"
+  | "protocol.stream_options_object" | "protocol.stream_options_keys"
+  | "protocol.stream_options_delivery" | "protocol.stream_options_stream"
+  | "protocol.access_programs_object" | "protocol.access_programs_keys"
+  | "protocol.access_programs_type" | "protocol.access_programs_value"
+  | "protocol.opaque_limit" | "protocol.opaque_identity" | "protocol.opaque_size"
+  | "protocol.opaque_selector" | "protocol.opaque_json" | "protocol.opaque_encoding";
+
+export class PrivateProtocolError extends Error {
+  readonly predicate: PrivateProtocolPredicate;
+
+  constructor(predicate: PrivateProtocolPredicate) {
+    super("private protocol rejected");
+    this.predicate = predicate;
+  }
+}
+
 function boundedMetadata(value: unknown, depth = 0, budget = { nodes: 0 }): void {
   if (++budget.nodes > 10_000 || depth > 32) throw new Error("private metadata limit");
   if (Array.isArray(value)) for (const item of value) boundedMetadata(item, depth + 1, budget);
@@ -27,22 +50,35 @@ function metadataObject(value: string): boolean {
   try { const parsed: unknown = JSON.parse(value); boundedMetadata(parsed); return record(parsed); } catch { return false; }
 }
 
-export function validPrivateProtocolBody(body: Record<string, unknown>): boolean {
+export function privateProtocolBodyRejection(body: Record<string, unknown>): PrivateProtocolPredicate | null {
   const metadata = body.client_metadata;
   if (metadata != null) {
-    if (!record(metadata) || Object.keys(metadata).length > 32) return false;
+    if (!record(metadata)) return "protocol.metadata_object";
+    if (Object.keys(metadata).length > 32) return "protocol.metadata_count";
     for (const [key, value] of Object.entries(metadata)) {
-      if (!metadataKeys.has(key) || typeof value !== "string" || value.length > (key === "x-codex-turn-metadata" ? 256 * 1024 : 8192)) return false;
-      if (key === "x-codex-turn-metadata" && !metadataObject(value)) return false;
+      if (!metadataKeys.has(key)) return "protocol.metadata_key";
+      if (typeof value !== "string") return "protocol.metadata_value_type";
+      if (value.length > (key === "x-codex-turn-metadata" ? 256 * 1024 : 8192)) return "protocol.metadata_value_limit";
+      if (key === "x-codex-turn-metadata" && !metadataObject(value)) return "protocol.turn_metadata";
     }
   }
   const options = body.stream_options;
-  if (options != null && (!record(options) || Object.keys(options).length !== 1 || options.reasoning_summary_delivery !== "sequential_cutoff" || body.stream !== true)) return false;
+  if (options != null) {
+    if (!record(options)) return "protocol.stream_options_object";
+    if (Object.keys(options).length !== 1) return "protocol.stream_options_keys";
+    if (options.reasoning_summary_delivery !== "sequential_cutoff") return "protocol.stream_options_delivery";
+    if (body.stream !== true) return "protocol.stream_options_stream";
+  }
   // This is an upstream access selection, not permission granted by the facade.
   // Preserve the supplied wire token; never manufacture entitlement or a program fallback.
   const programs = body.access_programs;
-  if (programs != null && (!record(programs) || Object.keys(programs).length !== 1 || typeof programs.cyber !== "string" || !/^[a-z][a-z0-9_]{0,63}$/.test(programs.cyber))) return false;
-  return true;
+  if (programs != null) {
+    if (!record(programs)) return "protocol.access_programs_object";
+    if (Object.keys(programs).length !== 1) return "protocol.access_programs_keys";
+    if (typeof programs.cyber !== "string") return "protocol.access_programs_type";
+    if (!/^[a-z][a-z0-9_]{0,63}$/.test(programs.cyber)) return "protocol.access_programs_value";
+  }
+  return null;
 }
 
 function parseRoutingHint(value: string, alias: string): { tier?: string } | null {
@@ -50,24 +86,27 @@ function parseRoutingHint(value: string, alias: string): { tier?: string } | nul
   return match && match[1] === alias ? { tier: match[2] } : null;
 }
 
-export function validPrivateHeaders(headers: Headers, alias: string, body?: Record<string, unknown>): boolean {
-  if (headers.has("content-encoding") || headers.has("transfer-encoding")) return false;
+export function privateHeadersRejection(headers: Headers, alias: string, body?: Record<string, unknown>): PrivateProtocolPredicate | null {
+  if (headers.has("content-encoding")) return "headers.content_encoding";
+  if (headers.has("transfer-encoding")) return "headers.transfer_encoding";
   let bytes = 0;
   for (const [key, value] of headers) {
     bytes += encoder.encode(key + value).byteLength;
-    if (value.length > 8192 || bytes > 64 * 1024) return false;
+    if (value.length > 8192) return "headers.value_limit";
+    if (bytes > 64 * 1024) return "headers.total_limit";
     if (key === routingHint) {
       const hint = parseRoutingHint(value, alias);
-      if (!hint || body && hint.tier !== (body.service_tier ?? undefined)) return false;
+      if (!hint) return "headers.routing_hint";
+      if (body && hint.tier !== (body.service_tier ?? undefined)) return "headers.routing_tier";
       continue;
     }
-    if (/(?:model|provider|base[-_]?url|upstream|account|organization|project)/i.test(key)) return false;
-    if ((key.startsWith("x-codex-") || key.startsWith("x-openai-internal-") || /(?:approval|review|attestation|safety|routing)/i.test(key)) && !forwardedHeaders.has(key)) return false;
-    if (booleanHeaders.has(key) && value !== "true" && value !== "false") return false;
-    if (key === "x-codex-turn-metadata" && !metadataObject(value)) return false;
-    if (forwardedHeaders.has(key) && !/^[\x20-\x7e]+$/.test(value)) return false;
+    if (/(?:model|provider|base[-_]?url|upstream|account|organization|project)/i.test(key)) return "headers.selector";
+    if ((key.startsWith("x-codex-") || key.startsWith("x-openai-internal-") || /(?:approval|review|attestation|safety|routing)/i.test(key)) && !forwardedHeaders.has(key)) return "headers.namespace";
+    if (booleanHeaders.has(key) && value !== "true" && value !== "false") return "headers.boolean";
+    if (key === "x-codex-turn-metadata" && !metadataObject(value)) return "headers.turn_metadata";
+    if (forwardedHeaders.has(key) && !/^[\x20-\x7e]+$/.test(value)) return "headers.characters";
   }
-  return true;
+  return null;
 }
 
 export function forwardPrivateHeaders(incoming: Headers, outgoing: Headers, alias: string, target: string): void {
@@ -83,33 +122,34 @@ export function forwardPrivateHeaders(incoming: Headers, outgoing: Headers, alia
 // Opaque affinity is never rewritten. Inspect literal, JSON, percent and base64/JWT
 // representations before returning it; this is not cryptographic attestation verification.
 export function inspectPrivateOpaque(value: unknown, alias: string, secrets: readonly string[], depth = 0, budget = { nodes: 0 }): void {
-  if (++budget.nodes > 10_000 || depth > 12) throw new Error("private opaque limit");
+  if (++budget.nodes > 10_000 || depth > 12) throw new PrivateProtocolError("protocol.opaque_limit");
   if (typeof value === "string") {
-    if (containsPrivate(value, secrets)) throw new Error("private opaque identity");
-    if (value.length > 8192) throw new Error("private opaque size");
+    if (containsPrivate(value, secrets)) throw new PrivateProtocolError("protocol.opaque_identity");
+    if (value.length > 8192) throw new PrivateProtocolError("protocol.opaque_size");
     for (const match of value.matchAll(/(?:^|[;,&\s])(?:model|retry_model|faster_model)=([^;,&\s]+)/g)) {
-      if (match[1] !== alias) throw new Error("private opaque selector");
+      if (match[1] !== alias) throw new PrivateProtocolError("protocol.opaque_selector");
     }
     if (/^\s*[\[{]/.test(value)) {
       let decoded: unknown;
-      try { decoded = JSON.parse(value); } catch { throw new Error("private opaque JSON"); }
+      try { decoded = JSON.parse(value); } catch { throw new PrivateProtocolError("protocol.opaque_json"); }
       inspectPrivateOpaque(decoded, alias, secrets, depth + 1, budget);
     } else if (/%[0-9a-f]{2}/i.test(value)) {
-      const decoded = decodeURIComponent(value);
+      let decoded: string;
+      try { decoded = decodeURIComponent(value); } catch { throw new PrivateProtocolError("protocol.opaque_encoding"); }
       if (decoded !== value) inspectPrivateOpaque(decoded, alias, secrets, depth + 1, budget);
     } else {
       for (const part of value.split(".")) {
         if (!/^[A-Za-z0-9+/_-]{8,}={0,2}$/.test(part)) continue;
         let decoded: string;
         try { decoded = atob(part.replaceAll("-", "+").replaceAll("_", "/")); } catch { continue; }
-        if (containsPrivate(decoded, secrets)) throw new Error("private opaque encoded identity");
+        if (containsPrivate(decoded, secrets)) throw new PrivateProtocolError("protocol.opaque_identity");
         if (/^[\x20-\x7e\r\n\t]+$/.test(decoded) && decoded !== value) inspectPrivateOpaque(decoded, alias, secrets, depth + 1, budget);
       }
     }
   } else if (Array.isArray(value)) for (const item of value) inspectPrivateOpaque(item, alias, secrets, depth + 1, budget);
   else if (record(value)) for (const [key, item] of Object.entries(value)) {
     inspectPrivateOpaque(key, alias, secrets, depth + 1, budget);
-    if (selectorKeys.has(key) && item != null && item !== alias) throw new Error("private opaque selector");
+    if (selectorKeys.has(key) && item != null && item !== alias) throw new PrivateProtocolError("protocol.opaque_selector");
     inspectPrivateOpaque(item, alias, secrets, depth + 1, budget);
   }
 }
