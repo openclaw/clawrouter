@@ -53,6 +53,13 @@ provider and model drift.
 9. Settle budget and enqueue the single final usage event independently. Either failure is
    retried without masking the provider response or suppressing the other task.
 
+`proxy-response.ts` owns shared response normalization and usage inspection. One
+observer follows client consumption for JSON, SSE, and binary responses, without
+cloning or draining ahead of the client. It inspects at most 2 MiB for usage;
+oversized, canceled, or broken bodies retain the conservative reservation.
+Settlement starts when delivery completes, fails, or is canceled. Private alias
+inference keeps its separate containment and continuation protocol.
+
 Usage events are queued into a Durable Object shard named by tenant and policy.
 Session/admin reads aggregate each relevant tenant/policy shard once, even when
 the input policy list repeats a scope. The former global ledger's migration
