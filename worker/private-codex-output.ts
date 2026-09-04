@@ -1,6 +1,7 @@
 import { boundedJson, cancel, read } from "./private-codex-io";
 import { record, type PrivateUpstream } from "./private-codex-config";
 import { PrivateResponseProjection } from "./private-codex-response";
+import type { PrivateContinuationProjection } from "./private-codex-continuation";
 
 const encoder = new TextEncoder();
 const frameLimit = 256 * 1024;
@@ -35,7 +36,7 @@ export function privateError(status: number, ignoredMaxOutputTokens = false): Re
   return privateJson({ error }, status, ignoredMaxOutputTokens);
 }
 
-export async function containResponse(response: Response, alias: string, upstream: PrivateUpstream, streaming: boolean, signal: AbortSignal, abort: () => void, ignoredMaxOutputTokens = false): Promise<Response> {
+export async function containResponse(response: Response, alias: string, upstream: PrivateUpstream, streaming: boolean, signal: AbortSignal, abort: () => void, ignoredMaxOutputTokens = false, continuation?: PrivateContinuationProjection): Promise<Response> {
   const discard = () => { void response.body?.cancel().catch(() => {}); abort(); };
   if (!response.ok) {
     discard();
@@ -45,10 +46,10 @@ export async function containResponse(response: Response, alias: string, upstrea
   const encoding = response.headers.get("content-encoding");
   const contentType = response.headers.get("content-type") ?? "";
   if ((encoding && encoding !== "identity") || response.status !== 200) { discard(); return privateError(502, ignoredMaxOutputTokens); }
-  const projection = new PrivateResponseProjection(alias, upstream);
-  const outputHeaders = () => {
+  const projection = new PrivateResponseProjection(alias, upstream, continuation);
+  const outputHeaders = async () => {
     const result = new Headers(headers(streaming ? "text/event-stream; charset=utf-8" : "application/json; charset=utf-8", ignoredMaxOutputTokens));
-    for (const [key, value] of Object.entries(projection.headers(response.headers))) result.set(key, value as string);
+    for (const [key, value] of Object.entries(await projection.headers(response.headers))) result.set(key, value as string);
     projection.inspect([...result]);
     return result;
   };
@@ -57,7 +58,7 @@ export async function containResponse(response: Response, alias: string, upstrea
     try { projection.inspect(errorBody); projection.inspect([...result.headers]); return result; }
     catch { return new Response(null, { status: 502 }); }
   };
-  try { outputHeaders(); } catch { discard(); return failure(); }
+  try { await outputHeaders(); } catch { discard(); return failure(); }
   if (streaming) {
     // Native subscription SSE can omit Content-Type; the frame parser still validates every byte.
     if ((contentType && !/^text\/event-stream(?:;\s*charset=utf-8)?$/i.test(contentType)) || !response.body) { discard(); return privateError(502, ignoredMaxOutputTokens); }
@@ -66,7 +67,7 @@ export async function containResponse(response: Response, alias: string, upstrea
       // Learn the initial reporting identity before releasing opaque HTTP affinity headers.
       // Priming uses the same bounded parser/queue and cancellation as subsequent reads.
       let first: ReadableStreamReadResult<Uint8Array> | undefined = await reader.read();
-      const projectedHeaders = outputHeaders();
+      const projectedHeaders = await outputHeaders();
       projection.seal();
       const body = new ReadableStream<Uint8Array>({
         async pull(controller) {
@@ -83,8 +84,8 @@ export async function containResponse(response: Response, alias: string, upstrea
   try {
     const value = await boundedJson(response.body, 4 * 1024 * 1024, signal);
     if (!record(value) || value.object !== "response" || !["completed", "incomplete"].includes(String(value.status))) throw new Error("private response invalid");
-    const projected = projection.response(value);
-    return new Response(JSON.stringify(projected), { headers: outputHeaders() });
+    const projected = await projection.response(value);
+    return new Response(JSON.stringify(projected), { headers: await outputHeaders() });
   } catch { return failure(); } finally { abort(); }
 }
 
@@ -229,7 +230,7 @@ function containStream(body: ReadableStream<Uint8Array>, projection: PrivateResp
     state.arguments = ""; state.done = true; state.holdFrom = Infinity; state.matches.fill(0);
   }
 
-  function eventFrame(frame: string, controller: ReadableStreamDefaultController<Uint8Array>): boolean {
+  async function eventFrame(frame: string, controller: ReadableStreamDefaultController<Uint8Array>): Promise<boolean> {
     if (encoder.encode(frame).byteLength > frameLimit || frame.includes("\r") && !frame.includes("\r\n")) throw new Error("private SSE frame");
     let eventName = "", data: string[] = [];
     for (const line of frame.split(/\r?\n/)) {
@@ -252,7 +253,7 @@ function containStream(body: ReadableStream<Uint8Array>, projection: PrivateResp
     if (!record(event) || typeof event.type !== "string" || !eventTypes.has(event.type) || eventName && eventName !== event.type) throw new Error("private SSE event type");
     if (["codex.rate_limits", "responsesapi.websocket_timing"].includes(event.type)) {
       // Codex consumes common model/safety envelopes before dispatching by event type.
-      const protocol = projection.event({ type: event.type, response: event.response, headers: event.headers, safety_buffering: event.safety_buffering });
+      const protocol = await projection.event({ type: event.type, response: event.response, headers: event.headers, safety_buffering: event.safety_buffering });
       if (event.response != null || event.safety_buffering !== undefined || record(protocol.headers) && Object.keys(protocol.headers).length) throw new Error("private observation protocol unsupported");
       return false;
     }
@@ -261,10 +262,10 @@ function containStream(body: ReadableStream<Uint8Array>, projection: PrivateResp
       if (error && typeof error.code === "string" && denialCodes.has(error.code)) {
         failure = `event: response.failed\ndata: ${JSON.stringify({ type: "response.failed", response: { status: "failed", error: { code: error.code, message: errorBody.error.message } } })}\n\n`;
       }
-      projection.event(event);
+      await projection.event(event);
       throw new Error("private upstream failed");
     }
-    const safe = projection.event(event);
+    const safe = await projection.event(event);
     if (tables.length !== secrets.length) {
       // Learning is sealed before any delta state or output exists; no prefix is discarded.
       tables = secrets.map(prefixTable);
@@ -294,7 +295,7 @@ function containStream(body: ReadableStream<Uint8Array>, projection: PrivateResp
           if (separator) {
             const frame = buffer.slice(0, separator.index);
             buffer = buffer.slice(separator.index + separator[0].length);
-            if (eventFrame(frame, controller)) {
+            if (await eventFrame(frame, controller)) {
               if (ended) { cancel(reader); abort(); controller.close(); }
               return;
             }

@@ -152,12 +152,13 @@ proxy or account-selection endpoint. Caller `ChatGPT-Account-ID` and custom
 account headers are rejected in both modes. Only the broker constructs the
 upstream account header from its fixed authenticated binding.
 
-`PRIVATE_CODEX_UPSTREAM` has exactly these fields:
+`PRIVATE_CODEX_UPSTREAM` has these required fields and one optional fallback:
 
 | Field | Contract |
 | --- | --- |
 | `version` | Number `1` |
 | `target` | Runtime-only upstream binding; 8–128 ASCII letters/digits/`.`/`_`/`-`, beginning with a letter/digit |
+| `fallbackTarget` | Optional, distinct target with the same syntax; at most one alternative, never exposed in discovery |
 | `accountId` | Exact subscription account; 8–128 ASCII letters/digits/`_`/`-` |
 | `accessToken` | Separately held subscription access token; 16–8192 ASCII letters/digits/`.`/`_`/`~`/`-` |
 | `expiresAt` | Integer Unix **milliseconds**, at least 30 seconds in the future |
@@ -171,9 +172,37 @@ expired, inaccessible, or mid-request changed configuration fails closed.
 The upstream binding is read **only after authentication**, including on private
 discovery. The adapter sends exactly that account and token to the fixed
 subscription Responses URL already declared by the OpenAI provider manifest.
-No caller can change the provider, account, origin, or target. There are no
-redirects, retries, alternate accounts, API-key fallbacks, generic grant lookups,
+No caller can change the provider, account, origin, or configured targets. There
+are no redirects, alternate accounts, API-key fallbacks, generic grant lookups,
 Fusion paths, or arbitrary-model/native routing inside this facade.
+
+When `fallbackTarget` is configured, the broker may make one additional call on
+the same fixed subscription after an explicit HTTP availability failure:
+`404 model_not_found`, `429 rate_limit_exceeded`, or a 502/503/504 carrying
+`server_error`, `service_unavailable`, `overloaded_error`, or `timeout`. Unknown
+errors, authentication, safety, entitlement and exhausted-quota denials are
+terminal. Transport exceptions and any response stream that has begun are
+terminal too. Requests with `previous_response_id` or `x-codex-turn-state` stay
+on the target that issued their state and cannot fail over again.
+
+With fallback configured, typed response IDs and turn-state headers carry an
+opaque broker route envelope. An authenticated encrypted slot binds them to the
+current policy, target mapping, account, and upstream credential. It contains no
+model name. The broker restores the original upstream values on the next call;
+it does not manufacture upstream signatures or attestations. Unwrapped legacy
+state remains primary-only, conflicting origins and tampering fail closed, and
+credential or routing rotation invalidates wrapped state. Clients must restart
+from full input after such a rotation. Without fallback, the existing opaque
+values remain unchanged.
+
+Before the second call, the broker revalidates the caller and both complete
+bindings. Revocation or rotation stops the request. Both attempts share the
+existing deadline, preserve the request's genuine client and safety facts, and
+return only the same alias. Both configured identities remain sensitive on
+either attempt; model headers and safety selectors must match the selected
+target. Provisioning must verify entitlement and compatible native capabilities
+for both targets. The fallback does not invent compatibility or bypass upstream
+requirements.
 
 Automatic OAuth refresh is intentionally absent. The existing shared refresh
 helper writes shared grant state and does not provide this boundary's required
@@ -295,8 +324,9 @@ rate_limits.rs,safety_buffering.rs}`. Additional protocol requires source review
 
 Queries, encoded route spellings, trailing slashes, alternate methods,
 compression, non-UTF-8 content, the legacy unary `/responses/compact` endpoint,
-websocket, upload, usage, and every other endpoint are unsupported. Upstream redirects and errors do not trigger another
-provider call. At ingress, enforce rejection of raw dot segments/backslashes
+websocket, upload, usage, and every other endpoint are unsupported. Upstream
+redirects and errors outside the bounded availability fallback do not trigger
+another provider call. At ingress, enforce rejection of raw dot segments/backslashes
 before URL normalization: the Worker cannot recover path spellings already
 normalized by the HTTP runtime. Normalized routes never select an alternative
 private endpoint/provider/target.

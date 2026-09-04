@@ -1,7 +1,8 @@
 import { boundedJson } from "./private-codex-io";
-import { privateAuthorizationCurrent, privateAuthorized, privatePolicy, privateUpstream, record } from "./private-codex-config";
+import { privateAuthorizationCurrent, privateAuthorized, privatePolicy, privateUpstream, record, type PrivatePolicy, type PrivateUpstream } from "./private-codex-config";
 import { containResponse, privateError, privateJson } from "./private-codex-output";
 import { forwardPrivateHeaders, inspectPrivateOpaque, validPrivateHeaders, validPrivateProtocolBody } from "./private-codex-protocol";
+import { privateContinuations } from "./private-codex-continuation";
 import type { Env } from "./types";
 
 const upstreamUrl = "https://chatgpt.com/backend-api/codex/responses";
@@ -58,34 +59,48 @@ export async function privateCodex(request: Request, env: Env): Promise<Response
       || (body.stream !== undefined && typeof body.stream !== "boolean") || !validPrivateProtocolBody(body)
       || (body.max_output_tokens !== undefined && (typeof body.max_output_tokens !== "number" || !Number.isSafeInteger(body.max_output_tokens) || body.max_output_tokens <= 0))
       || !validPrivateHeaders(request.headers, id, body)) return privateError(400);
+    const continuations = upstream.fallbackTarget ? await privateContinuations(policy, upstream) : undefined;
+    let routed = { body, headers: request.headers, slot: 0, continuing: !!body.previous_response_id || request.headers.has("x-codex-turn-state") };
     try {
-      const affinity = request.headers.get("x-codex-turn-state");
-      if (affinity !== null) inspectPrivateOpaque(affinity, id, [upstream.target, upstream.accessToken, upstream.accountId]);
+      if (continuations) routed = await continuations.request(body, request.headers);
+      const affinity = routed.headers.get("x-codex-turn-state");
+      if (affinity !== null) inspectPrivateOpaque(affinity, id, [upstream.target, upstream.accessToken, upstream.accountId, ...(upstream.fallbackTarget ? [upstream.fallbackTarget] : [])]);
     } catch { return privateError(400); }
 
-    // Re-read both bindings after a potentially slow upload; no authorization/secret cache or retry.
-    const current = await privatePolicy(env);
-    if (!current || JSON.stringify(current) !== JSON.stringify(policy)) return privateError(404);
-    const refreshed = await privateAuthorized(request, current);
-    if (!refreshed || !await privateAuthorizationCurrent(refreshed, current, env)) return privateError(404);
-    const freshUpstream = await privateUpstream(env, current);
-    if (!freshUpstream || JSON.stringify(freshUpstream) !== JSON.stringify(upstream)
-      || !await privateAuthorizationCurrent(refreshed, current, env) || freshUpstream.expiresAt <= Date.now() + 30_000) return privateError(404);
+    // Re-read both bindings after a potentially slow upload; never cache authorization.
+    if (!await upstreamCurrent(request, env, policy, upstream)) return privateError(404);
     const ignoredMaxOutputTokens = body.max_output_tokens !== undefined;
     // A fixed disclosure must not echo a runtime identity, including on transport failure.
-    if (ignoredMaxOutputTokens && [upstream.target, upstream.accountId, upstream.accessToken].some((secret) => "x-clawrouter-ignored-parameters: max_output_tokens".includes(secret))) return new Response(null, { status: 502 });
-    const headers = new Headers({ "content-type": "application/json", accept: body.stream === true ? "text/event-stream" : "application/json", "accept-encoding": "identity" });
-    forwardPrivateHeaders(request.headers, headers, id, upstream.target);
-    headers.set("authorization", `Bearer ${upstream.accessToken}`);
-    headers.set("chatgpt-account-id", upstream.accountId);
+    if (ignoredMaxOutputTokens && [upstream.target, upstream.accountId, upstream.accessToken, ...(upstream.fallbackTarget ? [upstream.fallbackTarget] : [])].some((secret) => "x-clawrouter-ignored-parameters: max_output_tokens".includes(secret))) return new Response(null, { status: 502 });
     // Do not manufacture originator, client metadata, review, or attestation evidence.
     const abort = new AbortController();
     const signal = AbortSignal.any([request.signal, abort.signal, AbortSignal.timeout(600_000)]);
     try {
-      const response = await fetch(upstreamUrl, {
-        method: "POST", headers, body: JSON.stringify(privateSubscriptionBody(body, upstream.target)), redirect: "manual", signal,
-      });
-      return await containResponse(response, id, upstream, body.stream === true, signal, () => abort.abort(), ignoredMaxOutputTokens);
+      const alternate = upstream.fallbackTarget
+        ? { ...upstream, target: upstream.fallbackTarget, fallbackTarget: upstream.target } : null;
+      // A continuation stays with the target that issued its opaque state.
+      const fallback = !routed.continuing ? alternate : null;
+      let selected = routed.slot === 1 && alternate ? alternate : upstream;
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const headers = new Headers({ "content-type": "application/json", accept: body.stream === true ? "text/event-stream" : "application/json", "accept-encoding": "identity" });
+        forwardPrivateHeaders(routed.headers, headers, id, selected.target);
+        headers.set("authorization", `Bearer ${selected.accessToken}`);
+        headers.set("chatgpt-account-id", selected.accountId);
+        const response = await fetch(upstreamUrl, {
+          method: "POST", headers, body: JSON.stringify(privateSubscriptionBody(routed.body, selected.target)), redirect: "manual", signal,
+        });
+        if (attempt === 0 && fallback && await availabilityFailure(response, signal)) {
+          if (!await upstreamCurrent(request, env, policy, upstream) || signal.aborted) {
+            abort.abort();
+            return privateError(404);
+          }
+          selected = fallback;
+          continue;
+        }
+        const continuation = await continuations?.projection(selected === upstream ? 0 : 1);
+        return await containResponse(response, id, selected, body.stream === true, signal, () => abort.abort(), ignoredMaxOutputTokens, continuation);
+      }
+      throw new Error("private attempts exhausted");
     } catch {
       abort.abort();
       return privateError(502, ignoredMaxOutputTokens);
@@ -94,4 +109,28 @@ export async function privateCodex(request: Request, env: Env): Promise<Response
     // Never pass private exceptions through the public logger or error formatter.
     return privateError(404);
   }
+}
+
+async function upstreamCurrent(request: Request, env: Env, policy: PrivatePolicy, upstream: PrivateUpstream): Promise<boolean> {
+  const current = await privatePolicy(env);
+  if (!current || JSON.stringify(current) !== JSON.stringify(policy)) return false;
+  const refreshed = await privateAuthorized(request, current);
+  if (!refreshed || !await privateAuthorizationCurrent(refreshed, current, env)) return false;
+  const fresh = await privateUpstream(env, current);
+  return !!fresh && JSON.stringify(fresh) === JSON.stringify(upstream)
+    && await privateAuthorizationCurrent(refreshed, current, env) && fresh.expiresAt > Date.now() + 30_000;
+}
+
+async function availabilityFailure(response: Response, signal: AbortSignal): Promise<boolean> {
+  if (![404, 429, 502, 503, 504].includes(response.status)) return false;
+  // Only explicit availability failures authorize another model. Never retry an
+  // auth, safety, entitlement, or quota denial, or a stream that has begun.
+  try {
+    const value = await boundedJson(response.body, 64 * 1024, signal);
+    if (!record(value) || !record(value.error)) return false;
+    const code = value.error.code ?? value.error.type;
+    if (response.status === 404) return code === "model_not_found";
+    if (response.status === 429) return code === "rate_limit_exceeded";
+    return ["server_error", "service_unavailable", "overloaded_error", "timeout"].includes(String(code));
+  } catch { return false; }
 }

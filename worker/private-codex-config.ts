@@ -16,6 +16,7 @@ const reasoningEfforts: readonly ProviderReasoningEffort[] = ["none", "minimal",
 export interface PrivateUpstream {
   version: 1;
   target: string;
+  fallbackTarget?: string;
   accountId: string;
   accessToken: string;
   expiresAt: number;
@@ -130,11 +131,17 @@ export async function privateAuthorizationCurrent(authorization: PrivateAuthoriz
 
 export async function privateUpstream(env: Env, policy: PrivatePolicy): Promise<PrivateUpstream | null> {
   const value = await bindingJson(env.PRIVATE_CODEX_UPSTREAM);
-  if (!record(value) || !exactKeys(value, ["version", "target", "accountId", "accessToken", "expiresAt"]) || value.version !== 1
+  if (!record(value)) return null;
+  const keys = ["version", "target", "accountId", "accessToken", "expiresAt"];
+  if (Object.hasOwn(value, "fallbackTarget")) keys.push("fallbackTarget");
+  if (!exactKeys(value, keys) || value.version !== 1
     || typeof value.target !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{7,127}$/.test(value.target)
     || typeof value.accountId !== "string" || !/^[A-Za-z0-9_-]{8,128}$/.test(value.accountId)
     || typeof value.accessToken !== "string" || !/^[A-Za-z0-9._~-]{16,8192}$/.test(value.accessToken)
     || typeof value.expiresAt !== "number" || !Number.isSafeInteger(value.expiresAt) || value.expiresAt <= Date.now() + 30_000) return null;
-  if ([value.target, value.accountId, value.accessToken].some((secret) => policy.alias.id.includes(secret) || policy.alias.name.includes(secret))) return null;
+  if (Object.hasOwn(value, "fallbackTarget") && (typeof value.fallbackTarget !== "string"
+    || !/^[A-Za-z0-9][A-Za-z0-9._-]{7,127}$/.test(value.fallbackTarget) || value.fallbackTarget === value.target)) return null;
+  const sensitive = [value.target, value.accountId, value.accessToken, ...(typeof value.fallbackTarget === "string" ? [value.fallbackTarget] : [])];
+  if (sensitive.some((secret) => policy.alias.id.includes(secret) || policy.alias.name.includes(secret))) return null;
   return value as unknown as PrivateUpstream;
 }
