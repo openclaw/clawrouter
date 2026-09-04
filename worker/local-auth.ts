@@ -55,8 +55,7 @@ export async function localLogin(request: Request, env: Env): Promise<Response> 
     if (!email) return errorResponse("local_auth_misconfigured", "CLAWROUTER_LOCAL_ADMIN_EMAIL must be a valid email address", 500);
     let user = (await resolveUsers(env, [email]))[0];
     if (!user) {
-      user = { email, record: { role: "admin", tenantId: env.CLAWROUTER_ACCESS_DEFAULT_TENANT ?? "default", enabled: true, groups: [], contentRetentionDisabled: false } };
-      await authorityCall(env, "/users/put", user);
+      user = await authorityCall<AccessControlUser>(env, "/users/create", { email, record: { role: "admin", tenantId: env.CLAWROUTER_ACCESS_DEFAULT_TENANT ?? "default", enabled: true, groups: [], contentRetentionDisabled: false } });
     }
     if (user.record.enabled === false) {
       rejected = true;

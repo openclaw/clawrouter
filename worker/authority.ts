@@ -1,7 +1,8 @@
 import type {
   AccessControlUser, AccessPolicyEntry, AccessUserRecord, Env, OAuthState, PolicyBinding,
-  GrantRoutingPolicy, GrantRuntimeState, ProviderConnection, ProxyCredentialEntry,
+  AssignmentState, GrantRoutingPolicy, GrantRuntimeState, ProviderConnection, ProxyCredentialEntry,
 } from "./types";
+import { evaluateUserAssignments, withLegacyAssignmentState, type AssignmentEvidence, type AssignmentRuleEntry } from "./assignment-evaluator.ts";
 import { contentRetentionDefault } from "./content-retention.ts";
 import { errorResponse, HttpError, json, normalizeEmail, readJson, safeEqual } from "./utils.ts";
 
@@ -32,6 +33,8 @@ export class PolicyBindingIndexObject implements DurableObject {
       if (path === "/users/initialize") { this.initializeUsers(await readJson<AccessControlUser[]>(request)); return new Response("initialized"); }
       if (path === "/users/initialize-all") { this.initializeUsers(await readJson<AccessControlUser[]>(request)); this.putMeta("users_global_initialized"); return new Response("initialized"); }
       if (path === "/users/put") { this.putUser(await readJson<AccessControlUser>(request)); return new Response("updated"); }
+      if (path === "/users/create") return json(this.createUser(await readJson<AccessControlUser>(request)));
+      if (path === "/users/reconcile-assignments") return json(this.reconcileUserAssignments(await readJson<AssignmentReconcileRequest>(request)));
       if (path === "/users/put-bindings") return json(this.putUserBindings(await readJson<UserBindingsRequest>(request)));
       if (path === "/users/list") return json({ initialized: this.hasMeta("users_global_initialized"), users: this.listUsers() });
       if (path === "/policies/resolve") return json(this.resolvePolicies((await readJson<{ policyIds: string[] }>(request)).policyIds));
@@ -148,6 +151,13 @@ export class PolicyBindingIndexObject implements DurableObject {
     for (const user of users) if (!this.getUser(user.email)) this.putUser(user);
   }
 
+  private createUser(defaults: AccessControlUser): AccessControlUser {
+    const existing = this.getUser(defaults.email);
+    if (existing) return existing;
+    this.putUser(defaults);
+    return this.getUser(defaults.email)!;
+  }
+
   private getUser(email: string): AccessControlUser | null {
     const normalized = normalizeEmail(email);
     if (!normalized) return null;
@@ -166,6 +176,15 @@ export class PolicyBindingIndexObject implements DurableObject {
 
   private listUsers(): AccessControlUser[] {
     return rows<{ email: string; user_json: string }>(this.sql.exec("SELECT email, user_json FROM access_users ORDER BY email")).map((row) => ({ email: row.email, record: JSON.parse(row.user_json) }));
+  }
+
+  private reconcileUserAssignments(request: AssignmentReconcileRequest) {
+    const user = this.getUser(request.email);
+    if (!user) throw new HttpError(404, "unknown_user", "access user not found");
+    const candidate = withLegacyAssignmentState(user, request.legacy);
+    const result = evaluateUserAssignments(candidate, request.rules, request.evidence, request.force);
+    if (result.changed) this.putUser(result.user);
+    return result;
   }
 
   private putUserBindings(request: UserBindingsRequest): { bindings: PolicyBinding[] } {
@@ -418,6 +437,7 @@ export class PolicyBindingIndexObject implements DurableObject {
   }
 }
 
+interface AssignmentReconcileRequest { email: string; rules: AssignmentRuleEntry[]; legacy: Partial<AssignmentState> | null; evidence?: AssignmentEvidence; force: boolean }
 interface UserBindingsRequest { user: AccessControlUser; policyIds: string[]; seed: Seed }
 interface GrantPoolResolveRequest { policyId: string; tenantId: string; providerId: string; defaultKeys?: string[] }
 interface GrantPoolSyncRequest { scope: "policies" | "tenants"; scopeId: string; tokenRef: string; previousProvider: string | null; provider: string | null; enabled: boolean }
