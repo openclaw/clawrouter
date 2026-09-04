@@ -1,4 +1,4 @@
-import { record, type PrivateUpstream } from "./private-codex-config";
+import { privateSensitive, record, type PrivateUpstream } from "./private-codex-config";
 import { privateResponseHeaders } from "./private-codex-protocol";
 import type { PrivateContinuationProjection } from "./private-codex-continuation";
 
@@ -37,7 +37,7 @@ export class PrivateResponseProjection {
     this.alias = alias;
     this.continuation = continuation;
     this.target = upstream.target;
-    this.sensitive = [upstream.target, upstream.accessToken, upstream.accountId, ...(upstream.fallbackTarget ? [upstream.fallbackTarget] : [])];
+    this.sensitive = privateSensitive(upstream);
   }
 
   get sensitiveValues(): readonly string[] { return this.sensitive; }

@@ -13,13 +13,32 @@ export interface PrivatePolicy {
 
 const reasoningEfforts: readonly ProviderReasoningEffort[] = ["none", "minimal", "low", "medium", "high", "xhigh", "max"];
 
-export interface PrivateUpstream {
+interface PrivateRoute {
   version: 1;
   target: string;
   fallbackTarget?: string;
+}
+
+export type PrivateUpstream = PrivateRoute & ({
+  transport?: undefined;
   accountId: string;
   accessToken: string;
   expiresAt: number;
+} | {
+  transport: "openai-api";
+  apiKey: string;
+});
+
+export function privateCredential(upstream: PrivateUpstream): string {
+  return upstream.transport === "openai-api" ? upstream.apiKey : upstream.accessToken;
+}
+
+export function privateSensitive(upstream: PrivateUpstream): string[] {
+  return [upstream.target, privateCredential(upstream), ...(upstream.transport === "openai-api" ? [] : [upstream.accountId]), ...(upstream.fallbackTarget ? [upstream.fallbackTarget] : [])];
+}
+
+export function privateUpstreamActive(upstream: PrivateUpstream): boolean {
+  return upstream.transport === "openai-api" || upstream.expiresAt > Date.now() + 30_000;
 }
 
 export function record(value: unknown): value is Record<string, unknown> {
@@ -132,16 +151,20 @@ export async function privateAuthorizationCurrent(authorization: PrivateAuthoriz
 export async function privateUpstream(env: Env, policy: PrivatePolicy): Promise<PrivateUpstream | null> {
   const value = await bindingJson(env.PRIVATE_CODEX_UPSTREAM);
   if (!record(value)) return null;
-  const keys = ["version", "target", "accountId", "accessToken", "expiresAt"];
+  const api = value.transport === "openai-api";
+  const keys = api ? ["version", "target", "transport", "apiKey"] : ["version", "target", "accountId", "accessToken", "expiresAt"];
   if (Object.hasOwn(value, "fallbackTarget")) keys.push("fallbackTarget");
   if (!exactKeys(value, keys) || value.version !== 1
-    || typeof value.target !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{7,127}$/.test(value.target)
-    || typeof value.accountId !== "string" || !/^[A-Za-z0-9_-]{8,128}$/.test(value.accountId)
+    || typeof value.target !== "string" || !/^[A-Za-z0-9][A-Za-z0-9._-]{7,127}$/.test(value.target)) return null;
+  if (api) {
+    if (typeof value.apiKey !== "string" || !/^[A-Za-z0-9._~-]{16,8192}$/.test(value.apiKey)) return null;
+  } else if (typeof value.accountId !== "string" || !/^[A-Za-z0-9_-]{8,128}$/.test(value.accountId)
     || typeof value.accessToken !== "string" || !/^[A-Za-z0-9._~-]{16,8192}$/.test(value.accessToken)
     || typeof value.expiresAt !== "number" || !Number.isSafeInteger(value.expiresAt) || value.expiresAt <= Date.now() + 30_000) return null;
   if (Object.hasOwn(value, "fallbackTarget") && (typeof value.fallbackTarget !== "string"
     || !/^[A-Za-z0-9][A-Za-z0-9._-]{7,127}$/.test(value.fallbackTarget) || value.fallbackTarget === value.target)) return null;
-  const sensitive = [value.target, value.accountId, value.accessToken, ...(typeof value.fallbackTarget === "string" ? [value.fallbackTarget] : [])];
+  const upstream = value as unknown as PrivateUpstream;
+  const sensitive = privateSensitive(upstream);
   if (sensitive.some((secret) => policy.alias.id.includes(secret) || policy.alias.name.includes(secret))) return null;
-  return value as unknown as PrivateUpstream;
+  return upstream;
 }
