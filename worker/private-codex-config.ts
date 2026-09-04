@@ -37,6 +37,16 @@ export function privateSensitive(upstream: PrivateUpstream): string[] {
   return [upstream.target, privateCredential(upstream), ...(upstream.transport === "openai-api" ? [] : [upstream.accountId]), ...(upstream.fallbackTarget ? [upstream.fallbackTarget] : [])];
 }
 
+// ASCII folding preserves string lengths, including stream holdback offsets.
+export function privateFold(value: string): string {
+  return value.replace(/[A-Z]/g, (letter) => letter.toLowerCase());
+}
+
+export function containsPrivate(value: string, sensitive: readonly string[]): boolean {
+  const folded = privateFold(value);
+  return sensitive.some((secret) => folded.includes(privateFold(secret)));
+}
+
 export function privateUpstreamActive(upstream: PrivateUpstream): boolean {
   return upstream.transport === "openai-api" || upstream.expiresAt > Date.now() + 30_000;
 }
@@ -165,6 +175,6 @@ export async function privateUpstream(env: Env, policy: PrivatePolicy): Promise<
     || !/^[A-Za-z0-9][A-Za-z0-9._-]{7,127}$/.test(value.fallbackTarget) || value.fallbackTarget === value.target)) return null;
   const upstream = value as unknown as PrivateUpstream;
   const sensitive = privateSensitive(upstream);
-  if (sensitive.some((secret) => policy.alias.id.includes(secret) || policy.alias.name.includes(secret))) return null;
+  if (containsPrivate(policy.alias.id, sensitive) || containsPrivate(policy.alias.name, sensitive)) return null;
   return upstream;
 }

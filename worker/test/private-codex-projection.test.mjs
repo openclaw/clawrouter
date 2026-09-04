@@ -27,6 +27,35 @@ function sse(events, headers = {}, chunkSize = 17) {
 }
 const contain = (response, stream = false) => containResponse(response, alias, upstream, stream, new AbortController().signal, () => {});
 const parseEvents = (text) => [...text.matchAll(/^data: (.+)$/gm)].filter((match) => match[1] !== "[DONE]").map((match) => JSON.parse(match[1]));
+
+test("private identities are contained irrespective of ASCII capitalization", async () => {
+  for (const identity of [target, reported, upstream.accessToken, upstream.accountId]) {
+    const text = identity.toLowerCase();
+    const result = await contain(Response.json(responseBody({ model: reported, output: [{ text }] })));
+    assert.equal(result.status, 502); assert.equal((await result.text()).includes(text), false);
+  }
+});
+
+test("case-folded identities remain held across logical deltas without changing safe text", async () => {
+  for (const identity of [target, reported]) {
+    const text = identity.toLowerCase(), first = text.slice(0, 12), last = text.slice(12);
+    const result = await contain(sse([created({ model: reported }), delta(first), delta(last), completed({ model: reported })], {}, 1), true);
+    const wire = await result.text();
+    assert.match(wire, /private_upstream_error/); assert.equal(wire.includes(first), false); assert.equal(wire.includes(last), false);
+  }
+  const text = "İ Mixed CASE stays intact.";
+  const result = await contain(sse([created(), delta(text), completed()]), true);
+  assert.equal(parseEvents(await result.text())[1].delta, text);
+});
+
+test("case-folded private identities cannot escape through encoded opaque headers", async () => {
+  const text = reported.toLowerCase();
+  for (const value of [text, encodeURIComponent(JSON.stringify({ affinity: text })), Buffer.from(JSON.stringify({ affinity: text })).toString("base64url")]) {
+    const result = await contain(Response.json(responseBody({ model: reported }), { headers: { "x-codex-turn-state": value } }));
+    assert.equal(result.status, 502); assert.equal(result.headers.get("x-codex-turn-state"), null);
+  }
+});
+
 function assertPrivate(text, extras = [reported]) {
   for (const value of [target, upstream.accountId, upstream.accessToken, ...extras]) assert.equal(text.includes(value), false);
 }

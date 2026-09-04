@@ -1,5 +1,5 @@
 import { boundedJson, cancel, read } from "./private-codex-io";
-import { record, type PrivateUpstream } from "./private-codex-config";
+import { privateFold, record, type PrivateUpstream } from "./private-codex-config";
 import { PrivateResponseProjection } from "./private-codex-response";
 import type { PrivateContinuationProjection } from "./private-codex-continuation";
 
@@ -114,7 +114,7 @@ function matchDelta(text: string, pattern: string, table: number[], length: numb
 function containStream(body: ReadableStream<Uint8Array>, projection: PrivateResponseProjection, signal: AbortSignal, abort: () => void): ReadableStream<Uint8Array> {
   const reader = body.getReader(), decoder = new TextDecoder("utf-8", { fatal: true });
   const secrets = projection.sensitiveValues;
-  let tables = secrets.map(prefixTable);
+  let patterns = secrets.map(privateFold), tables = patterns.map(prefixTable);
   const states = new Map<string, DeltaState>(), items = new Map<number, string>(), itemIndexes = new Map<string, number>();
   const identityModes = new Map<string, "identified" | "anonymous">();
   const calls = new Map<string, string>(), callOwners = new Map<string, string>(), customItems = new Map<string, string>();
@@ -190,13 +190,13 @@ function containStream(body: ReadableStream<Uint8Array>, projection: PrivateResp
       state.holdFrom = Infinity;
     } else {
       if (typeof event.delta !== "string") throw new Error("private delta invalid");
-      const text = event.delta;
+      const text = privateFold(event.delta);
       if (family === "response.output_text") {
-        outputText.matches = secrets.map((secret, index) => matchDelta(text, secret, tables[index], outputText.matches[index]));
+        outputText.matches = patterns.map((secret, index) => matchDelta(text, secret, tables[index], outputText.matches[index]));
         const suffix = Math.max(...outputText.matches);
         outputText.holdFrom = suffix ? suffix > text.length ? outputText.holdFrom : sequence : Infinity;
       }
-      state.matches = secrets.map((secret, index) => matchDelta(text, secret, tables[index], state.matches[index]));
+      state.matches = patterns.map((secret, index) => matchDelta(text, secret, tables[index], state.matches[index]));
       const suffix = Math.max(...state.matches);
       state.holdFrom = suffix ? suffix > event.delta.length ? state.holdFrom : sequence : Infinity;
       if (state.tool) {
@@ -268,7 +268,8 @@ function containStream(body: ReadableStream<Uint8Array>, projection: PrivateResp
     const safe = await projection.event(event);
     if (tables.length !== secrets.length) {
       // Learning is sealed before any delta state or output exists; no prefix is discarded.
-      tables = secrets.map(prefixTable);
+      patterns = secrets.map(privateFold);
+      tables = patterns.map(prefixTable);
       outputText.matches = secrets.map(() => 0);
     }
     const serialized = `${eventName ? `event: ${eventName}\n` : ""}data: ${JSON.stringify(safe)}\n\n`;
