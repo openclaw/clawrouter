@@ -29,7 +29,7 @@ test("provider denial returns provider_budget_exhausted and releases the policy 
 test("successful accounting settles policy and provider ledgers to actual cost", async () => {
   const env = budgetEnv();
   const reservation = await reserveBudget(env, auth, "llm.chat", cost, { providerId: "openai", enabled: true, monthlyBudgetMicros: 100 });
-  await settleBudget(env, auth, reservation, 25);
+  await settleBudget(env, reservation, 25);
   const settlements = env.calls.filter((call) => call.path === "/settle");
   assert.deepEqual(settlements.map(({ name, body }) => [name, body.actualCostMicros]).sort(), [["provider:openai", 25], ["tenant:policy", 25]]);
   assert.equal(reservation.reservedMicros, 60);

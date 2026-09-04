@@ -336,7 +336,11 @@ export interface UsageEvent {
   status: "success" | "provider_error" | "client_error" | "denied" | "timeout";
 }
 
-export type QueueMessage = UsageEvent | { kind: "budget_settlement"; tenant_id: string; policy_id: string; principal_id?: string | null; ledger?: { objectName: string }; request: BudgetSettleRequest };
+export type QueueMessage = UsageEvent | ({ kind: "budget_settlement"; request: BudgetSettleRequest } & (
+  { ledger: { objectName: string } }
+  // Queued jobs from earlier deployments still carry their original scope.
+  | { tenant_id: string; policy_id: string; principal_id?: string | null }
+));
 
 export interface BudgetReserveRequest {
   policyId: string;

@@ -30,7 +30,7 @@ test("reserve and settle use the same principal ledger without orphaning the res
   const env = budgetEnv();
   const identity = auth("owner@example.com", "owner_key");
   const reservation = await reserveBudget(env, identity, "llm.chat", cost);
-  await settleBudget(env, identity, reservation, 25);
+  await settleBudget(env, reservation, 25);
   await assert.doesNotReject(() => reserveBudget(env, identity, "llm.chat", { ...cost, reserveMicros: 75 }));
   assert.equal(env.objectNames[0], "tenant:maintainer_access:owner@example.com");
   assert.equal(env.objectNames[1], env.objectNames[0]);

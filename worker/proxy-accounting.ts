@@ -48,7 +48,7 @@ export function createProxyAccounting(options: AccountingContext) {
       pricing_effective_at: selection.model?.pricing?.effectiveAt ?? null, cost_basis: cost.basis, status_code: statusCode,
       duration_ms: Date.now() - started, content_retained: !!contentRef, content_ref: contentRef, status,
     };
-    return finalizeAccounting(env, auth, reservation, actual, event);
+    return finalizeAccounting(env, reservation, actual, event);
   }
   return {
     cost,

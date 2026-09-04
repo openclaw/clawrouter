@@ -160,7 +160,7 @@ export async function queue(batch: MessageBatch<QueueMessage>, env: Env): Promis
       if ("type" in message.body) response = await usageStub(env, message.body.tenant_id, message.body.policy_id).fetch("https://clawrouter.internal/ingest", { method: "POST", body: JSON.stringify(message.body) });
       else {
         const job = message.body;
-        const objectName = job.ledger?.objectName ?? `${job.tenant_id}:${job.policy_id}${job.principal_id ? `:${job.principal_id}` : ""}`;
+        const objectName = "ledger" in job ? job.ledger.objectName : `${job.tenant_id}:${job.policy_id}${job.principal_id ? `:${job.principal_id}` : ""}`;
         const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(objectName));
         response = await stub.fetch("https://clawrouter.internal/settle", { method: "POST", body: JSON.stringify(job.request) });
       }

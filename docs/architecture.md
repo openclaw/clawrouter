@@ -79,6 +79,10 @@ Object bindings are unchanged.
 - Required request retention fails closed before upstream traffic.
 - Provider failures release a reservation to zero and emit audit metadata.
 - Settlement and usage delivery retry independently through `USAGE_QUEUE`.
+- Each reservation keeps only its reservation ID and exact ledger address.
+  Immediate settlement and queued retries use that same address; neither
+  reconstructs it from authentication or policy state. The queue consumer still
+  accepts scope-addressed jobs left by earlier deployments.
 - Non-2xx Durable Object queue writes are retried and eventually reach the
   configured dead-letter queue.
 - Raw requests live only in the retention archive; usage ledgers contain metadata
