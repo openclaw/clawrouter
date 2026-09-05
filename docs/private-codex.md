@@ -482,7 +482,11 @@ be passed through into an apparently successful stream that ignores it.
 Native SSE may omit Content-Type; a supplied Content-Type must still identify
 UTF-8 SSE and every frame is validated. No unbounded buffering is used.
 
-Limits: 1 MiB request, 4 MiB JSON response, 256 KiB SSE frame, 1 MiB holdback or
+Request JSON accepts up to 8 MiB of UTF-8 bytes, sharing the public JSON intake
+limit so full-history requests are not restricted to 1 MiB. The limit includes
+all fields and JSON overhead; it does not establish a model's token capacity.
+
+Output limits: 4 MiB JSON response, 256 KiB SSE frame, 1 MiB holdback or
 individual network chunk, 1024 held events, 128 logical streams/items, 64 MiB
 total SSE bytes, 48 JSON nesting levels, and 50,000 inspected nodes. Request
 upload has a 30-second deadline; each Access verification plus identity lookup

@@ -548,11 +548,8 @@ test("SSE late errors, malformed/unsupported frames, mismatched identities and i
   });
 });
 
-test("bounded request/JSON/SSE and unsupported content cancel upstream without exposure", async () => {
+test("bounded JSON/SSE and unsupported content cancel upstream without exposure", async () => {
   const { env } = await environment();
-  await withFetch(() => assert.fail("Oversized request reached upstream"), async () => {
-    assert.equal((await run(request(undefined, { body: { model: alias, store: false, input: "x".repeat(1024 * 1024) } }), env)).status, 400);
-  });
   for (const make of [
     () => new Response("{", { headers: { "content-type": "application/json" } }),
     () => new Response(new Uint8Array([0xff]), { headers: { "content-type": "application/json" } }),
