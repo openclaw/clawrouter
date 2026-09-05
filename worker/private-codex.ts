@@ -4,6 +4,7 @@ import { containResponse, privateError, privateJson } from "./private-codex-outp
 import { forwardPrivateHeaders, inspectPrivateOpaque, privateHeadersRejection, privateProtocolBodyRejection, PrivateProtocolError } from "./private-codex-protocol";
 import { privateContinuations } from "./private-codex-continuation";
 import type { Env } from "./types";
+import { maxJsonBodyBytes } from "./utils";
 
 const upstreamUrl = "https://chatgpt.com/backend-api/codex/responses";
 const apiUrl = "https://api.openai.com/v1/responses";
@@ -62,7 +63,7 @@ export async function privateCodex(request: Request, env: Env): Promise<Response
     let body: unknown;
     let requestBytes: number;
     try {
-      const parsed = await boundedRequestJson(request.body, 1024 * 1024, AbortSignal.any([request.signal, AbortSignal.timeout(30_000)]));
+      const parsed = await boundedRequestJson(request.body, maxJsonBodyBytes, AbortSignal.any([request.signal, AbortSignal.timeout(30_000)]));
       body = parsed.value;
       requestBytes = parsed.bytes;
     } catch (error) {

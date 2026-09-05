@@ -131,7 +131,7 @@ export function commaSet(value: string | undefined): Set<string> {
 export function nowIso(): string { return new Date().toISOString(); }
 export function randomId(prefix: string): string { return `${prefix}_${crypto.randomUUID().replaceAll("-", "")}`; }
 
-const maxJsonBodyBytes = 8 * 1024 * 1024;
+export const maxJsonBodyBytes = 8 * 1024 * 1024;
 
 export async function readJson<T>(request: Request): Promise<T> {
   const declared = Number(request.headers.get("content-length"));

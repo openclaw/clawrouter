@@ -7,6 +7,7 @@ registerHooks({ resolve(specifier, context, next) {
   return next(specifier.startsWith(".") && context.parentURL && !extname(new URL(specifier, context.parentURL).pathname) ? `${specifier}.ts` : specifier, context);
 } });
 const { default: worker } = await import("../index.ts");
+const { default: privateWorker } = await import("../private-entry.ts");
 const { containResponse } = await import("../private-codex-output.ts");
 const { privateResponseHeaders } = await import("../private-codex-protocol.ts");
 const { sha256Hex } = await import("../utils.ts");
@@ -192,20 +193,40 @@ test("adversarial frame, response-header and total-stream limits hold at their a
   }
 });
 
-test("adversarial request bytes and response structure limits accept the boundary but not the next unit", async (context) => {
-  const { env } = await fixture(); let calls = 0;
-  context.mock.method(globalThis, "fetch", () => {
-    calls++; return Response.json({ object: "response", id: "synthetic-response", status: "completed", model: target });
-  });
+test("private requests preserve input through 8 MiB and cancel the next byte before egress", async (context) => {
   const empty = JSON.stringify({ model: alias, store: false, input: "" });
-  for (const extra of [0, 1]) {
-    const body = JSON.stringify({ model: alias, store: false, input: "x".repeat(1024 * 1024 - enc.encode(empty).length + extra) });
-    assert.equal(enc.encode(body).length, 1024 * 1024 + extra);
-    const req = new Request("https://synthetic.invalid/private/v1/responses", { method: "POST", headers: { authorization: `Bearer ${credential}`, "content-type": "application/json" }, body });
-    const response = await run(req, env);
-    assert.equal(response.status, extra ? 400 : 200); contained(await response.text());
+  const limit = 8 * 1024 * 1024;
+  const logs = [];
+  context.mock.method(console, "info", (event) => logs.push(event));
+  for (const [entry, transport] of [[worker, "subscription"], [privateWorker, "openai-api"]]) {
+    const { env, state } = await fixture();
+    if (transport === "openai-api") state.upstream = { version: 1, transport, target, apiKey: accessToken };
+    for (const size of [1024 * 1024 + 1, limit - 1, limit, limit + 1]) {
+      const inputBytes = size - enc.encode(empty).length;
+      const input = "🦞".repeat(Math.floor(inputBytes / 4)) + "x".repeat(inputBytes % 4);
+      const bytes = enc.encode(JSON.stringify({ model: alias, store: false, input }));
+      assert.equal(bytes.length, size);
+      let calls = 0;
+      context.mock.method(globalThis, "fetch", (url, options) => {
+        calls++;
+        assert.equal(url, transport === "openai-api" ? "https://api.openai.com/v1/responses" : "https://chatgpt.com/backend-api/codex/responses");
+        const outgoing = JSON.parse(options.body);
+        assert.equal(outgoing.model, target); assert.ok(outgoing.input === input);
+        return Response.json({ object: "response", id: "synthetic-response", status: "completed", model: target });
+      });
+      // Split multibyte characters across chunks; a false length must not bypass the byte cap.
+      const { body, observed } = source(bytes, [65535]);
+      const headers = { authorization: `Bearer ${credential}`, "content-type": "application/json", ...(size > limit ? { "content-length": "1" } : {}) };
+      const response = await entry.fetch(new Request("https://synthetic.invalid/private/v1/responses", { method: "POST", headers, body, duplex: "half" }), env);
+      assert.equal(response.status, size > limit ? 400 : 200); contained(await response.text());
+      assert.equal(calls, size > limit ? 0 : 1);
+      assert.deepEqual(logs.splice(0), size > limit ? [{ predicate: "body.limit", request_bytes: size }] : []);
+      if (size > limit) assert.equal(observed.canceled, true);
+    }
   }
-  assert.equal(calls, 1);
+});
+
+test("adversarial response structure limits accept the boundary but not the next unit", async () => {
   const metadataCases = [];
   for (const depth of [47, 48]) {
     let value = "safe";
