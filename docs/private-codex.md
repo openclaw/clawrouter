@@ -221,6 +221,10 @@ credential or routing rotation invalidates wrapped state. Clients must restart
 from full input after such a rotation. Without fallback, the existing opaque
 values remain unchanged.
 
+Typed JSON and SSE turn-state headers preserve their original casing and scalar
+or singleton-array shape. Each accepted form carries the same continuation
+envelope, so subsequent turns remain on the issuing target.
+
 Before the second call, the broker revalidates the caller and both complete
 bindings. Revocation or rotation stops the request. Both attempts share the
 existing deadline, preserve the request's genuine client and safety facts, and

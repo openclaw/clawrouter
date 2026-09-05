@@ -134,6 +134,43 @@ test("private continuation tampering, rotation, and conflicting origins fail bef
   assert.equal(calls, 1);
 });
 
+test("typed affinity header casing and singleton arrays preserve fallback continuation", async (context) => {
+  for (const envelope of ["json", "sse-top", "sse-response"]) for (const key of ["x-codex-turn-state", "X-Codex-Turn-State"]) for (const array of [false, true]) {
+    const { run } = await fixture(); const calls = [];
+    const upstreamAffinity = "synthetic-typed-affinity";
+    context.mock.method(globalThis, "fetch", async (_, options) => {
+      const body = JSON.parse(options.body);
+      calls.push({ model: body.model, affinity: options.headers.get("x-codex-turn-state"), previous: body.previous_response_id });
+      if (calls.length === 1) return failed(503, "server_error");
+      const headers = { [key]: array ? [upstreamAffinity] : upstreamAffinity };
+      const response = { id: "synthetic-typed-response", object: "response", model: fallbackTarget, status: "completed", output: [] };
+      if (envelope === "json") return Response.json({ ...response, headers });
+      const event = envelope === "sse-top"
+        ? { type: "response.completed", response, headers }
+        : { type: "response.completed", response: { ...response, headers } };
+      return new Response(`data: ${JSON.stringify(event)}\n\n`, { headers: { "content-type": "text/event-stream" } });
+    });
+    const first = await run({ stream: envelope !== "json" });
+    assert.equal(first.status, 200);
+    const raw = await first.text(); contained(raw);
+    const projected = JSON.parse(envelope === "json" ? raw : raw.trim().slice("data: ".length));
+    assert.notEqual(projected.type, "error");
+    const response = envelope === "json" ? projected : projected.response;
+    const headers = envelope === "sse-top" ? projected.headers : response.headers;
+    assert.equal(Array.isArray(headers[key]), array);
+    const affinity = array ? headers[key][0] : headers[key];
+    assert.match(affinity, /^cr1\./);
+    for (const body of [{}, { previous_response_id: response.id }]) {
+      const next = await run({ stream: envelope !== "json", ...body }, { "x-codex-turn-state": affinity });
+      assert.equal(next.status, 200); contained(await next.text());
+    }
+    assert.deepEqual(calls.map(call => call.model), [target, fallbackTarget, fallbackTarget, fallbackTarget]);
+    assert.equal(calls[2].affinity, upstreamAffinity);
+    assert.equal(calls[3].previous, "synthetic-typed-response");
+    context.mock.restoreAll();
+  }
+});
+
 test("streaming fallback wraps typed response state consistently without touching tool identities", async (context) => {
   const { run } = await fixture(); const calls = [];
   context.mock.method(globalThis, "fetch", async (_, options) => {
