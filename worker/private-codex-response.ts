@@ -50,7 +50,11 @@ export class PrivateResponseProjection {
   async headers(entries: Iterable<[string, unknown]>): Promise<Record<string, unknown>> {
     const projected = privateResponseHeaders(entries, this.alias, this.target, this.sensitive);
     this.inspect(projected);
-    if (this.continuation && projected["x-codex-turn-state"] !== undefined) projected["x-codex-turn-state"] = await this.continuation.wrap(projected["x-codex-turn-state"]);
+    if (this.continuation) for (const [key, value] of Object.entries(projected)) {
+      if (key.toLowerCase() !== "x-codex-turn-state") continue;
+      const wrapped = await this.continuation.wrap(Array.isArray(value) ? value[0] : value);
+      projected[key] = Array.isArray(value) ? [wrapped] : wrapped;
+    }
     return projected;
   }
 

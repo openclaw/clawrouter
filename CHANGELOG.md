@@ -2,6 +2,8 @@
 
 ## 0.2.3 - Unreleased
 
+- Preserve fallback continuation for mixed-case and singleton-array turn-state headers in private JSON and SSE responses.
+
 - Add Claude Fable 5.1 with current input, output, and cache pricing, and update the Claude subscription transport identity to the minimum compatible client version.
 - Add content-free server-side predicates and exact consumed-byte counts for authenticated private Codex requests rejected locally with HTTP 400.
 
