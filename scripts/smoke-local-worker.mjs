@@ -179,6 +179,25 @@ try {
   assert.equal(bootstrapBody.fusion.modelId, "clawrouter/fusion");
   assert.equal(bootstrapBody.fusion.enabled, false);
   const adminHeaders = { authorization: `Bearer ${adminToken}`, "content-type": "application/json" };
+  for (const [method, path] of [
+    ["POST", "/v1/proxy/%ZZ/search"],
+    ["POST", "/v1/proxy/tavily/%ZZ"],
+    ["POST", "/v1/native/%ZZ/v1/chat/completions"],
+    ["POST", "/v1/native/google-gemini/v1beta/models/%E0%A4:streamGenerateContent"],
+    ["POST", "/v1/pool-submissions/pst_%FF/consume"],
+    ["PUT", "/v1/admin/policies/%ZZ"],
+    ["PUT", "/v1/admin/access-users/%ZZ"],
+    ["PUT", "/v1/admin/upstream-grants/policies/default/%ZZ"],
+  ]) {
+    const invalidPath = await fetch(`${base}${path}`, {
+      method, body: "{}",
+      headers: { "content-type": "application/json", "x-request-id": "malformed-path-e2e", authorization: `Bearer ${path.startsWith("/v1/admin/") ? adminToken : proxyKey}` },
+    });
+    assert.equal(invalidPath.status, 400, path);
+    assert.equal((await invalidPath.json()).error.code, "invalid_path_encoding");
+    assert.equal(invalidPath.headers.get("x-request-id"), "malformed-path-e2e");
+  }
+  assert.equal(upstreamCalls.length, 0, "malformed routes do not reach the provider");
   for (const body of [null, []]) {
     const invalidFusion = await fetch(`${base}/v1/admin/fusion`, { method: "PUT", headers: adminHeaders, body: JSON.stringify(body) });
     assert.equal(invalidFusion.status, 400);
@@ -797,7 +816,7 @@ try {
     });
   }
 } catch (error) {
-  throw new Error(`${error instanceof Error ? error.message : String(error)}\nwrangler output:\n${output}`);
+  throw new Error(`${error instanceof Error ? error.message : String(error)}\nwrangler output:\n${output}`, { cause: error });
 } finally {
   child.kill("SIGTERM");
   await Promise.race([new Promise((resolve) => child.once("exit", resolve)), new Promise((resolve) => setTimeout(resolve, 5_000))]);

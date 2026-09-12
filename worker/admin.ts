@@ -23,7 +23,7 @@ import type {
   AccessControlUser, AccessPolicy, AccessPolicyEntry, AssignmentRule, Env, PolicyBinding,
   GrantRuntimeState, ProviderConnection, ProxyCredential, ProxyCredentialEntry, UpstreamGrant,
 } from "./types";
-import { cleanId, errorResponse, HttpError, normalizeEmail, nowIso, privateJson, randomId, readJson, sha256Hex } from "./utils";
+import { decodePathSegment, cleanId, errorResponse, HttpError, normalizeEmail, nowIso, privateJson, randomId, readJson, sha256Hex } from "./utils";
 
 export async function adminApi(request: Request, env: Env, path: string): Promise<Response> {
   const authorization = await authorizeAdmin(request, env);
@@ -287,7 +287,7 @@ async function putBinding(request: Request, env: Env): Promise<Response> {
 }
 
 async function putUser(request: Request, env: Env, encodedEmail: string): Promise<Response> {
-  const email = normalizeEmail(decodeURIComponent(encodedEmail)); if (!email) throw new HttpError(400, "invalid_access_user", "invalid access user email");
+  const email = normalizeEmail(decodePathSegment(encodedEmail)); if (!email) throw new HttpError(400, "invalid_access_user", "invalid access user email");
   const existing = (await listUsers(env)).find((item) => item.email === email)?.record ?? {};
   const user: AccessControlUser = { email, record: normalizeUserMutation(await readJson<unknown>(request), existing).record };
   await authorityCall(env, "/users/put", user);
@@ -295,7 +295,7 @@ async function putUser(request: Request, env: Env, encodedEmail: string): Promis
 }
 
 async function putUserGrants(request: Request, env: Env, encodedEmail: string): Promise<Response> {
-  const email = normalizeEmail(decodeURIComponent(encodedEmail)); if (!email) throw new HttpError(400, "invalid_access_user", "invalid access user email");
+  const email = normalizeEmail(decodePathSegment(encodedEmail)); if (!email) throw new HttpError(400, "invalid_access_user", "invalid access user email");
   const existing = (await listUsers(env)).find((item) => item.email === email)?.record ?? {};
   const { record, policyIds: ids } = normalizeUserMutation(await readJson<unknown>(request), existing, true);
   const known = new Set((await listPolicies(env)).map((entry) => entry.policyId)); if (ids.some((id) => !known.has(id))) throw new HttpError(404, "unknown_policy", "one or more policies do not exist");
@@ -306,7 +306,7 @@ async function putUserGrants(request: Request, env: Env, encodedEmail: string): 
 }
 
 async function policyMutation(request: Request, env: Env, rest: string): Promise<Response> {
-  const revoke = rest.endsWith("/revoke"), id = cleanId(decodeURIComponent(revoke ? rest.slice(0, -7) : rest));
+  const revoke = rest.endsWith("/revoke"), id = cleanId(decodePathSegment(revoke ? rest.slice(0, -7) : rest));
   if (!id) throw new HttpError(400, "invalid_policy", "invalid policy id");
   let policy: AccessPolicy;
   if (revoke && request.method === "POST") {
@@ -324,7 +324,7 @@ async function policyMutation(request: Request, env: Env, rest: string): Promise
 }
 
 async function credentialMutation(request: Request, env: Env, rest: string): Promise<Response> {
-  const revoke = rest.endsWith("/revoke"), id = cleanId(decodeURIComponent(revoke ? rest.slice(0, -7) : rest)); if (!id) throw new HttpError(400, "invalid_credential", "invalid credential id");
+  const revoke = rest.endsWith("/revoke"), id = cleanId(decodePathSegment(revoke ? rest.slice(0, -7) : rest)); if (!id) throw new HttpError(400, "invalid_credential", "invalid credential id");
   const existing = (await listCredentials(env)).find((entry) => entry.credentialId === id)?.credential;
   let credential: ProxyCredential;
   if (revoke && request.method === "POST") { if (!existing) throw new HttpError(404, "unknown_credential", "credential not found"); credential = { ...existing, enabled: false }; }
@@ -338,13 +338,13 @@ async function credentialMutation(request: Request, env: Env, rest: string): Pro
 }
 
 async function putConnection(request: Request, env: Env, encodedId: string): Promise<Response> {
-  const id = decodeURIComponent(encodedId), provider = snapshot.providers.find((item) => item.id === id); if (!provider) throw new HttpError(404, "unknown_provider", "provider does not exist");
+  const id = decodePathSegment(encodedId), provider = snapshot.providers.find((item) => item.id === id); if (!provider) throw new HttpError(404, "unknown_provider", "provider does not exist");
   const connection = normalizeConnection(await readJson<unknown>(request), id, await resolveConnection(env, id));
   await authorityCall(env, "/connections/put", connection); return privateJson(connection);
 }
 
 async function upstreamGrantMutation(request: Request, env: Env, rest: string): Promise<Response> {
-  const parts = rest.split("/").map(decodeURIComponent), action = parts.length === 4 && ["revoke", "refresh", "quota-refresh", "authorize"].includes(parts.at(-1) ?? "") ? parts.pop() : null;
+  const parts = rest.split("/").map(decodePathSegment), action = parts.length === 4 && ["revoke", "refresh", "quota-refresh", "authorize"].includes(parts.at(-1) ?? "") ? parts.pop() : null;
   if (parts.length !== 3 || !["policies", "tenants"].includes(parts[0])) throw new HttpError(400, "invalid_upstream_grant_route", "invalid upstream grant route");
   const [scope, scopeId, tokenRef] = parts, key = scope === "policies" ? `oauth/${scopeId}/${tokenRef}` : `oauth/tenants/${scopeId}/${tokenRef}`;
   if (!validGrantSegment(scopeId) || !validGrantSegment(tokenRef) || scope === "policies" && scopeId === "tenants") throw new HttpError(400, "invalid_upstream_grant_route", "scope id and token reference must be valid single key segments");
@@ -392,7 +392,7 @@ async function assignmentRules(env: Env) {
 }
 
 async function putAssignmentRule(request: Request, env: Env, encodedId: string): Promise<Response> {
-  const id = cleanId(decodeURIComponent(encodedId)); if (!id) throw new HttpError(400, "invalid_assignment_rule", "invalid assignment rule id");
+  const id = cleanId(decodePathSegment(encodedId)); if (!id) throw new HttpError(400, "invalid_assignment_rule", "invalid assignment rule id");
   const key = `access/assignment-rules/${id}`;
   const body = mutationObject(await readJson<unknown>(request), "invalid_assignment_rule", "assignment rule"), existing = await env.POLICY_KV.get<AssignmentRule>(key, "json"), now = nowIso();
   const rule = normalizeAssignmentRule(body, existing, now);

@@ -1,6 +1,6 @@
 import type { CompiledEndpoint, CompiledModel, CompiledProvider, Env } from "./types";
 import { capabilityForPath, endpointForPath, modelRoute, resolveTemplate, transformRequestBody } from "./providers";
-import { errorResponse, HttpError } from "./utils";
+import { decodePathSegment, errorResponse, HttpError } from "./utils";
 
 export interface ProxySelection {
   provider: CompiledProvider;
@@ -156,5 +156,5 @@ function nativeParams(endpoint: CompiledEndpoint, path: string): Record<string, 
   const names = [...endpoint.path.matchAll(/\$\{([^}]+)\}/g)].map((match) => match[1]);
   const pattern = endpoint.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\\$\\\{[^}]+\\\}/g, "([^/]+)");
   const match = path.match(new RegExp(`^${pattern}$`));
-  return Object.fromEntries(names.map((name, index) => [name, decodeURIComponent(match?.[index + 1] ?? "")]));
+  return Object.fromEntries(names.map((name, index) => [name, decodePathSegment(match?.[index + 1] ?? "")]));
 }

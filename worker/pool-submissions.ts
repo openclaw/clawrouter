@@ -2,7 +2,7 @@ import { authorityCall, type PoolSubmissionTicketView, type SubmissionReceipt, t
 import { putGrantCredentials } from "./grant-credentials.ts";
 import { syncGrantPoolIndex, validCredentialBundle, validGrantSegment } from "./grant-selection.ts";
 import type { Env, UpstreamGrant } from "./types.ts";
-import { caughtResponse, errorResponse, HttpError, parseBearer, privateJson, readJson, sha256Hex } from "./utils.ts";
+import { decodePathSegment, caughtResponse, errorResponse, HttpError, parseBearer, privateJson, readJson, sha256Hex } from "./utils.ts";
 
 const ALLOWED_FIELDS = new Set(["credential", "credentials", "accessToken", "refreshToken", "tokenType", "expiresAt", "scopes", "accountId", "subscription"]);
 
@@ -10,7 +10,7 @@ export async function poolSubmissionApi(request: Request, env: Env, path: string
   const match = path.match(/^\/v1\/pool-submissions\/([^/]+)\/consume$/);
   if (!match) return errorResponse("route_not_found", "pool submission route not found", 404);
   if (request.method !== "POST") return errorResponse("method_not_allowed", "pool submission method is not allowed", 405);
-  const ticketId = decodeURIComponent(match[1]);
+  const ticketId = decodePathSegment(match[1]);
   if (!validGrantSegment(ticketId) || !ticketId.startsWith("pst_")) return errorResponse("invalid_pool_submission_ticket", "submission ticket is invalid", 400);
   const ticketToken = parseBearer(request.headers);
   if (!ticketToken) return errorResponse("pool_submission_unauthorized", "a submission ticket bearer token is required", 401);
