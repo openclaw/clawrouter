@@ -1,3 +1,22 @@
+import { BarChart3, Boxes, FlaskConical, KeyRound, LayoutDashboard, Users } from "lucide-react";
+import { playgroundServicePreset } from "./domain";
+import { demoData } from "./demo-data";
+import type {
+  AccessForm,
+  AccessTab,
+  AssignmentRuleForm,
+  BindingForm,
+  CredentialForm,
+  FusionConfig,
+  IconComponent,
+  PolicyForm,
+  RouteCatalog,
+  SessionResponse,
+  Theme,
+  UpstreamGrantForm,
+  UsageSnapshot,
+  View,
+} from "./ui-types";
 
 const themeStorageKey = "clawrouter-theme";
 
@@ -132,7 +151,3 @@ export const navItems: Array<{ id: View; label: string; icon: IconComponent; sec
   { id: "usage", label: "Usage", icon: BarChart3, section: "admin" },
 ];
 export const adminViews = new Set<View>(["policies", "users", "usage"]);
-import { BarChart3, Boxes, FlaskConical, KeyRound, LayoutDashboard, Users } from "lucide-react";
-import { playgroundServicePreset } from "./domain";
-import { demoData } from "./demo-data";
-import type { AccessForm, AccessTab, AssignmentRuleForm, BindingForm, CredentialForm, FusionConfig, IconComponent, PlaygroundHttpResponse, PolicyForm, RouteCatalog, SessionResponse, Theme, UpstreamGrantForm, UsageSnapshot, View } from "./ui-types";

@@ -11,11 +11,9 @@ type Seed = { principal: Principal; bindings: PolicyBinding[] };
 type CredentialPutRequest = ProxyCredentialEntry & { guard?: { principalId: string; maxEnabled: number; maxTotal: number; requireExisting: boolean } };
 
 export class PolicyBindingIndexObject implements DurableObject {
-  private state: DurableObjectState;
   private sql: SqlStorage;
 
   constructor(state: DurableObjectState) {
-    this.state = state;
     this.sql = state.storage.sql;
     this.ensureSchema();
   }

@@ -111,7 +111,7 @@ async function proxyFusion(
     id: compoundRequestId, stage: "fusion_synthesizer", index: null, size: 1, startedAtMs: compoundStartedAtMs,
   });
   if (aggregatorBudget instanceof Response) return aggregatorBudget;
-  const result = await collectFusionProposals(config, body, async (model, adviserBody, timeoutMs, index, signal) => {
+  const result = await collectFusionProposals(config, body, async (_model, adviserBody, timeoutMs, index, signal) => {
     const headers = new Headers(fusionRequest.headers);
     headers.set("x-request-id", randomId(`fusion-adviser-${index + 1}`));
     const adviserRequest = new Request(fusionRequest.url, { method: "POST", headers, signal: AbortSignal.any([fusionRequest.signal, signal]) });
@@ -280,7 +280,7 @@ async function prepareSelected(request: Request, env: Env, selection: ProxySelec
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "provider authorization failed"); }
   let upstream;
   const stickyHash = await grantStickyHash(request, auth);
-  try { upstream = await upstreamAuth(selection.provider, selection.endpoint, auth, env, excludedGrantKeys, stickyHash, recordSelection); }
+  try { upstream = await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_not_configured", "provider is not configured"); }
   try {
     const headers = new Headers(upstream.headers);

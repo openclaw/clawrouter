@@ -1,3 +1,28 @@
+import React, { type FormEvent, useEffect, useRef, useState } from "react";
+import { CircleSlash2, KeyRound, LogIn, Plus, RefreshCw, Search, ServerCog, ShieldCheck, Users } from "lucide-react";
+import { bindingKey, type CatalogModel } from "../domain";
+import { EntityName, InlineError, InlineNote, InspectorHeader, Status, kindLabel } from "../components";
+import { rolePresets } from "../ui-config";
+import { credentialOutcome, formatMicros, groupedProviders } from "../ui-helpers";
+import { EntityTable, Metric } from "./users-usage";
+import type {
+  AccessPolicy,
+  AccessTab,
+  AssignmentRule,
+  AssignmentRuleForm,
+  BindingForm,
+  CredentialForm,
+  FusionConfig,
+  FusionReadiness,
+  OutcomeTone,
+  PolicyBinding,
+  PolicyForm,
+  ProviderRow,
+  ProxyCredential,
+  UpstreamGrant,
+  UpstreamGrantForm,
+} from "../ui-types";
+
 export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selectedCredential, bindings, selectedBinding, upstreamGrants, selectedUpstreamGrant, assignmentRules, selectedAssignmentRule, fusionConfig, fusionReadiness, fusionPolicyId, onSelectFusionPolicy, setFusionConfig, fusionModels, providers, form, setForm, credentialForm, setCredentialForm, bindingForm, setBindingForm, upstreamGrantForm, setUpstreamGrantForm, assignmentRuleForm, setAssignmentRuleForm, issuedKey, error, fusionError, onSave, onIssueCredential, onRevokeCredential, onSaveBinding, onSaveUpstreamGrant, onRevokeUpstreamGrant, onRefreshUpstreamGrant, onRefreshUpstreamGrantQuota, onAuthorizeUpstreamGrant, onSaveAssignmentRule, onReconcileAssignments, onSaveFusion, onCheckFusion, onNew, onEdit, onEditCredential, onEditBinding, onNewBinding, onEditUpstreamGrant, onNewUpstreamGrant, onEditAssignmentRule, onNewAssignmentRule, onRevoke, onPreset, onToggleProvider, onSetProviderGroup, busy }: {
   tab: AccessTab;
   setTab: (tab: AccessTab) => void;
@@ -506,11 +531,3 @@ export function PolicyPanel({ keys, selected, providers, form, setForm, error, o
     </div>
   );
 }
-import React, { type FormEvent, useEffect, useRef, useState } from "react";
-import { CircleSlash2, KeyRound, LogIn, Plus, RefreshCw, Search, ServerCog, ShieldCheck, Users } from "lucide-react";
-import { bindingKey, type CatalogModel } from "../domain";
-import { EntityName, InlineError, InlineNote, InspectorHeader, Status, kindLabel } from "../components";
-import { rolePresets } from "../ui-config";
-import { credentialOutcome, formatMicros, groupedProviders } from "../ui-helpers";
-import { EntityTable, Metric } from "./users-usage";
-import type { AccessForm,AccessPolicy,AccessRole,AccessTab,AccessUser,AdminOverview,AdminTenantSummary,AdminUsageRow,AssignmentRule,AssignmentRuleForm,BindingForm,BrandIcon,BudgetStatus,ContentRetention,CredentialForm,EntitlementsResponse,FusionConfig,FusionReadiness,IconComponent,OutcomeTone,PlaygroundForm,PlaygroundHttpResponse,PlaygroundTurn,PolicyBinding,PolicyForm,ProviderAccess,ProviderConnection,ProviderReadiness,ProviderResponse,ProviderRow,ProviderUsageSummary,ProxyCredential,RefreshOptions,RetainedRequestContent,RouteCatalog,ServiceItem,ServiceOutcome,SessionResponse,UpstreamGrant,UpstreamGrantForm,UsageAuditEvent,UsageSnapshot,UsageSummary,View } from "../ui-types";

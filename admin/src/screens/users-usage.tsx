@@ -1,3 +1,36 @@
+import React, { type FormEvent, useEffect, useRef, useState } from "react";
+import { Activity, CalendarDays, KeyRound, Plus, Search, ServerCog, ShieldCheck, Users } from "lucide-react";
+import { bindingKey, effectiveAccess, errorMessage, policyUsageFallback, tenantSummaryFallback } from "../domain";
+import { EntityName, InlineError, InlineNote, InspectorHeader, Status, kindLabel } from "../components";
+import { ProviderUsageChart, TrafficAreaChart } from "../analytics-charts";
+import { usageEventGroups, type UsageEventGroup } from "../usage-analytics";
+import {
+  effectiveProviderCount,
+  formatBudget,
+  formatCount,
+  formatDuration,
+  formatMicros,
+  formatTimestamp,
+  readyCount,
+  request,
+  usageEventTone,
+  usagePolicyId,
+} from "../ui-helpers";
+import type {
+  AccessForm,
+  AccessPolicy,
+  AccessUser,
+  AdminOverview,
+  AdminTenantSummary,
+  AdminUsageRow,
+  PolicyBinding,
+  ProxyCredential,
+  RetainedRequestContent,
+  ServiceItem,
+  UsageAuditEvent,
+  UsageSnapshot,
+} from "../ui-types";
+
 export function UsersScreen({ users, selected, policies, bindings, services, form, setForm, error, onOpenPolicy, onSelect, onNew, onSave, busy }: {
   users: AccessUser[];
   selected?: AccessUser;
@@ -263,11 +296,3 @@ export function EntityTable({ columns, columnTemplate, rows }: { columns: string
     </div>
   );
 }
-import React, { type FormEvent, useEffect, useRef, useState } from "react";
-import { Activity, CalendarDays, KeyRound, Plus, Search, ServerCog, ShieldCheck, Users } from "lucide-react";
-import { bindingKey, effectiveAccess, errorMessage, policyUsageFallback, tenantSummaryFallback } from "../domain";
-import { EntityName, InlineError, InlineNote, InspectorHeader, PanelTitle, Status, kindLabel } from "../components";
-import { ProviderUsageChart, TrafficAreaChart } from "../analytics-charts";
-import { usageEventGroups, type UsageEventGroup } from "../usage-analytics";
-import { budgetPercent, effectiveProviderCount, formatBudget, formatCount, formatDuration, formatMicros, formatTimestamp, providerBrandIcon, readyCount, request, usageEventTone, usagePolicyId } from "../ui-helpers";
-import type { AccessForm,AccessPolicy,AccessRole,AccessTab,AccessUser,AdminOverview,AdminTenantSummary,AdminUsageRow,AssignmentRule,AssignmentRuleForm,BindingForm,BrandIcon,BudgetStatus,ContentRetention,CredentialForm,EntitlementsResponse,IconComponent,OutcomeTone,PlaygroundForm,PlaygroundHttpResponse,PlaygroundTurn,PolicyBinding,PolicyForm,ProviderAccess,ProviderConnection,ProviderReadiness,ProviderResponse,ProviderRow,ProviderUsageSummary,ProxyCredential,RefreshOptions,RetainedRequestContent,RouteCatalog,ServiceItem,ServiceOutcome,SessionResponse,UpstreamGrant,UpstreamGrantForm,UsageAuditEvent,UsageSnapshot,UsageSummary,View } from "../ui-types";

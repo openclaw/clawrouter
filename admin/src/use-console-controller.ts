@@ -19,7 +19,6 @@ import type {
   RefreshOptions,
   RouteCatalog,
   SessionResponse,
-  UpstreamGrant,
   UsageSnapshot,
   UsageSummary,
 } from "./ui-types";

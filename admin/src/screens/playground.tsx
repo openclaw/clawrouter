@@ -1,3 +1,25 @@
+import { type FormEvent, useEffect, useRef } from "react";
+import { ArrowUp, Bot, Bug, MessageSquare, Plus, ServerCog, SlidersHorizontal } from "lucide-react";
+import {
+  playgroundAccessEndpoint,
+  playgroundBlocker,
+  playgroundServicePreset,
+  playgroundSupportsTemperature,
+  preferredPlaygroundEndpoint,
+  readinessLabel,
+  routeKey,
+} from "../domain";
+import { InlineError, InlineNote, PanelTitle } from "../components";
+import {
+  type CatalogModel,
+  playgroundRequestPreview,
+  providerName,
+  serviceModelFromForm,
+  serviceModelOptions,
+  shortModelName,
+} from "../ui-helpers";
+import type { PlaygroundForm, PlaygroundTurn, ProviderAccess, ProviderReadiness, RouteCatalog } from "../ui-types";
+
 export function PlaygroundScreen({ form, setForm, models, selected, serviceRoutes, selectedServiceRoute, accessByProvider, readinessByProvider, requestMode, setRequestMode, turns, selectedTurnId, setSelectedTurnId, error, onRun, onNewConversation, busy }: {
   form: PlaygroundForm;
   setForm: (form: PlaygroundForm) => void;
@@ -203,9 +225,3 @@ export function PlaygroundScreen({ form, setForm, models, selected, serviceRoute
     </form>
   );
 }
-import React, { type FormEvent, useEffect, useRef } from "react";
-import { ArrowUp, Bot, Bug, CheckCircle2, MessageSquare, Plus, ServerCog, SlidersHorizontal } from "lucide-react";
-import { playgroundAccessEndpoint, playgroundBlocker, playgroundPayload, playgroundServicePreset, playgroundSupportsTemperature, preferredPlaygroundEndpoint, readinessLabel, routeKey } from "../domain";
-import { BrandMark, InlineError, InlineNote, PanelTitle, Status } from "../components";
-import { type CatalogModel, formatDuration, playgroundRequestPreview, providerBrandIcon, providerName, serviceModelFromForm, serviceModelOptions, shortModelName } from "../ui-helpers";
-import type { AccessForm,AccessPolicy,AccessRole,AccessTab,AccessUser,AdminOverview,AdminTenantSummary,AdminUsageRow,AssignmentRule,AssignmentRuleForm,BindingForm,BrandIcon,BudgetStatus,ContentRetention,CredentialForm,EntitlementsResponse,IconComponent,OutcomeTone,PlaygroundForm,PlaygroundHttpResponse,PlaygroundTurn,PolicyBinding,PolicyForm,ProviderAccess,ProviderConnection,ProviderReadiness,ProviderResponse,ProviderRow,ProviderUsageSummary,ProxyCredential,RefreshOptions,RetainedRequestContent,RouteCatalog,ServiceItem,ServiceOutcome,SessionResponse,UpstreamGrant,UpstreamGrantForm,UsageAuditEvent,UsageSnapshot,UsageSummary,View } from "../ui-types";

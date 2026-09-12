@@ -1,8 +1,6 @@
 import type { AuthScheme, CompiledGrantTransport, CompiledProvider, CompiledQuotaProbe, Env, GrantTransportAuth, UpstreamGrant } from "./types.ts";
 import { HttpError } from "./utils.ts";
 
-type ExecutableAuth = Exclude<AuthScheme, { type: "oauth" | "sig_v4" | "cloudflare_binding" }> | GrantTransportAuth;
-
 export function transportForGrant(provider: CompiledProvider, grant: UpstreamGrant | null): CompiledGrantTransport | null {
   if (!grant?.kind) return null;
   return provider.auth.grantTransports[grant.kind] ?? null;
