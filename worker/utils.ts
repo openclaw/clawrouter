@@ -119,6 +119,11 @@ export function cleanId(value: string): string | null {
   return /^[A-Za-z0-9_]{1,128}$/.test(normalized) ? normalized : null;
 }
 
+export function decodePathSegment(value: string): string {
+  try { return decodeURIComponent(value); }
+  catch { throw new HttpError(400, "invalid_path_encoding", "path segment must use valid percent-encoded UTF-8"); }
+}
+
 export function normalizeEmail(value: string): string | null {
   const email = value.trim().toLowerCase();
   return email.length <= 320 && /^[^\s@]+@[^\s@]+$/.test(email) ? email : null;

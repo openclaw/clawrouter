@@ -27,6 +27,11 @@ The optional `/private/v1/{models,catalog,responses}` facade has its own pinned 
 
 `GET /v1/catalog` is the client integration contract. Each provider row reports whether the unified OpenAI-compatible route is executable, its native proxy base URL, and the request and response formats for executable native routes.
 
+Proxy (including native), admin, and pool-submission route identifiers are
+decoded once. Invalid percent escapes or invalid percent-encoded UTF-8 return
+HTTP 400 with `invalid_path_encoding`, after applicable authentication checks.
+Semantic identifier and path validation still applies after decoding.
+
 ## Proxy routes
 
 | Method | Path | Contract |

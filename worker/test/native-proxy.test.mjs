@@ -12,6 +12,17 @@ assert.ok(google);
 const streamGenerate = google.endpoints.find((endpoint) => endpoint.id === "stream_generate_content");
 assert.ok(streamGenerate);
 
+test("native model parameters reject malformed percent-encoded UTF-8 as client errors", () => {
+  for (const model of ["%", "%2", "%ZZ", "%E0%A4", "%ED%A0%80"]) {
+    assert.throws(
+      () => prepareNativeRequest(google, streamGenerate, {}, `/v1beta/models/${model}:streamGenerateContent`, {}),
+      (error) => error?.status === 400 && error?.code === "invalid_path_encoding",
+    );
+  }
+  const valid = prepareNativeRequest(google, streamGenerate, {}, "/v1beta/models/percent%252Fmodel:streamGenerateContent", {});
+  assert.equal(valid.pathParams.model, "percent%2Fmodel", "valid path parameters are decoded exactly once");
+});
+
 test("Google native path models use manifest pricing under a budgeted policy", () => {
   const prepared = prepareNativeRequest(
     google,

@@ -23,6 +23,7 @@ import { applyTransportHeaders, transformTransportBody } from "./provider-auth.t
 import { normalizePreStreamError, observeUsage } from "./proxy-response";
 import type { AuthorizedIdentity, CompiledQuotaConfig, Env, ProviderConnection } from "./types";
 import {
+  decodePathSegment,
   errorResponse, HttpError, randomId, readJson, sha256Hex,
 } from "./utils";
 
@@ -136,8 +137,8 @@ async function proxyFusion(
 export async function proxyManifest(request: Request, env: Env, context: ExecutionContext, path: string, mode: AuthMode): Promise<Response> {
   const match = path.match(/^\/v1\/(?:playground\/)?proxy\/([^/]+)\/([^/]+)$/);
   if (!match) return errorResponse("route_not_found", "manifest proxy route not found", 404);
-  const provider = providerById(decodeURIComponent(match[1]));
-  const endpoint = provider?.endpoints.find((candidate) => candidate.id === decodeURIComponent(match[2]));
+  const provider = providerById(decodePathSegment(match[1]));
+  const endpoint = provider?.endpoints.find((candidate) => candidate.id === decodePathSegment(match[2]));
   if (!provider || !endpoint) return errorResponse("route_not_found", "manifest proxy route not found", 404);
   const preauthenticated = await preauthenticate(request, env, mode, provider.id);
   if (preauthenticated instanceof Response) return preauthenticated;
@@ -154,7 +155,7 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
 export async function proxyNative(request: Request, env: Env, context: ExecutionContext, path: string): Promise<Response> {
   const match = path.match(/^\/v1\/native\/([^/]+)(\/.*)$/);
   if (!match) return errorResponse("route_not_found", "native proxy route not found", 404);
-  const provider = providerById(decodeURIComponent(match[1]));
+  const provider = providerById(decodePathSegment(match[1]));
   if (!provider) return errorResponse("provider_not_found", "provider not found", 404);
   const preauthenticated = await authenticateProxyKey(request.headers, env);
   if (preauthenticated instanceof Response) return preauthenticated;
