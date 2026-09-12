@@ -1,15 +1,8 @@
+import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
-import { extname } from "node:path";
-import { registerHooks } from "node:module";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 
-registerHooks({
-  resolve(specifier, context, nextResolve) {
-    if (specifier.startsWith(".") && context.parentURL && !extname(new URL(specifier, context.parentURL).pathname)) return nextResolve(`${specifier}.ts`, context);
-    return nextResolve(specifier, context);
-  },
-});
 
 const { default: handler } = await import("../index.ts");
 const { BudgetLedgerObject, providerBudgetStatus } = await import("../ledgers.ts");

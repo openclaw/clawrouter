@@ -1,11 +1,7 @@
+import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
-import { extname } from "node:path";
-import { registerHooks } from "node:module";
 import test from "node:test";
 
-registerHooks({ resolve(specifier, context, next) {
-  return next(specifier.startsWith(".") && context.parentURL && !extname(new URL(specifier, context.parentURL).pathname) ? `${specifier}.ts` : specifier, context);
-} });
 const { default: worker } = await import("../index.ts");
 const { privatePolicy } = await import("../private-codex-config.ts");
 const issuer = "https://synthetic-owner.cloudflareaccess.com";

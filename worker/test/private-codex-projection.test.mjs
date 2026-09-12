@@ -1,11 +1,7 @@
+import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
-import { extname } from "node:path";
-import { registerHooks } from "node:module";
 import test from "node:test";
 
-registerHooks({ resolve(specifier, context, next) {
-  return next(specifier.startsWith(".") && context.parentURL && !extname(new URL(specifier, context.parentURL).pathname) ? `${specifier}.ts` : specifier, context);
-} });
 const { containResponse } = await import("../private-codex-output.ts");
 const alias = "codex-latest";
 const target = "SYNTHETIC_SELECTED_TARGET_8T";
