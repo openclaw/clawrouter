@@ -109,7 +109,7 @@ jobs:
           node-version: 24
       - uses: pnpm/action-setup@v6
         with:
-          version: 11.24.0
+          version: 11.26.0
       - run: pnpm install --frozen-lockfile
       - run: pnpm cf:preflight
       - run: pnpm worker:check

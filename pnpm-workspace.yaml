@@ -1,5 +1,8 @@
 packages:
   - admin
+overrides:
+  # Miniflare still pins a Sharp release with vulnerable libheif codecs.
+  'miniflare>sharp': 0.35.4
 allowBuilds:
   esbuild: true
   sharp: true

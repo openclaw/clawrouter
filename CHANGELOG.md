@@ -1,11 +1,23 @@
 # Changelog
 
-## 0.2.3 - Unreleased
+## 0.3.0 - Unreleased
 
-- Preserve fallback continuation for mixed-case and singleton-array turn-state headers in private JSON and SSE responses.
+### Highlights
 
-- Add Claude Fable 5.1 with current input, output, and cache pricing, and update the Claude subscription transport identity to the minimum compatible client version.
-- Add content-free server-side predicates and exact consumed-byte counts for authenticated private Codex requests rejected locally with HTTP 400.
+Claude subscription pools add protected credential intake and quota-aware routing. The private Responses facade gains an isolated Worker entrypoint, explicit API transport, and bounded fallback that preserves conversation continuity.
+
+### Changes
+
+- Add Claude subscription pools with protected contributor tickets, durable credential ownership, quota-aware routing, configurable keep-warm requests, and access-only setup-token support; shared subscription pooling still requires separate Anthropic authorization; thanks @fuller-stack-dev for #122.
+- Add Claude Fable 5.1 with current input, output, and cache pricing, and update the Claude subscription transport identity to the minimum compatible client version; thanks @fuller-stack-dev for #123 and #124.
+- Add an isolated private Worker entrypoint and explicitly configured OpenAI API transport alongside the existing private subscription transport; deployment isolation, upstream entitlement, and native-client compatibility remain provisioning requirements.
+- Add opt-in, single-attempt private fallback for explicit availability failures while pinning continuation state to its original target, including mixed-case and singleton-array turn-state headers in JSON and SSE responses.
+- Increase the private request-body limit from 1 MiB to the shared 8 MiB JSON limit while keeping request validation bounded.
+- Recheck private workload revocation after uploads and binding reads, and prevent case-variant upstream identities from leaking through private responses.
+- Preserve administrative user changes during automatic assignment reconciliation, and keep canonical authority records authoritative during legacy migration races.
+- Preserve binary proxy response backpressure and consolidate response inspection, delivery, usage aggregation, and reservation-owned settlement without changing public contracts.
+- Add content-free server-side predicates and exact consumed-byte counts for authenticated private requests rejected locally with HTTP 400.
+- Refresh Worker and admin dependencies and pnpm, including patched local Worker image codecs, while preserving Node.js 24 support and the 48-hour dependency release-age policy.
 
 ## 0.2.2 - 2026-08-31
 
