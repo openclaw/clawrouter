@@ -24,8 +24,8 @@ reference. Chat Completions output bounds are multiplied by `n`.
 Input reservation uses the declared cache-write rate when the request contains
 cache controls. After the response completes, ClawRouter settles reported input,
 cached-input, cache-write, and output tokens at the manifest rates and releases
-the unused reservation. Streaming SSE responses are inspected from a bounded
-response clone without persisting bodies. Missing usage, malformed terminal
+the unused reservation. Streaming SSE responses are inspected as the client consumes them, with a
+bounded usage buffer and no response clone or body persistence. Missing usage, malformed terminal
 events, oversized JSON responses, and interrupted streams remain charged at
 the reservation.
 Anthropic and OpenAI streaming settlement requires a provider terminal marker (`response.completed`,

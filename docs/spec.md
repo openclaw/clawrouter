@@ -1,12 +1,11 @@
 # ClawRouter Spec
 
-The living design source is currently maintained at:
+This overview summarizes the provider and runtime contracts. See
+[Architecture](architecture.md) for state ownership and request flow,
+[API reference](api-reference.md) for routes, and
+[Service providers](../providers/README.md) for manifest authoring.
 
-```text
-docs/spec.md
-```
-
-The implementation in this repository follows that RFC:
+The implementation consists of:
 
 - modular TypeScript edge data plane
 - TypeScript admin frontend
@@ -45,7 +44,8 @@ The provider catalog is broader than the live executable edge path. Cataloged
 providers are available to admin, policy, OAuth mapping, and billing metadata.
 The Worker executes an endpoint when deployment templates are backed by declared
 `service.configKeys`, endpoint path placeholders are backed by request
-`pathParams`, and auth can be resolved from Worker secrets/config or `POLICY_KV`.
+`pathParams`, and auth can be resolved from Worker secrets/config or scoped grant credentials.
 
-Bearer, header API key, query API key, Cloudflare binding auth, KV-backed OAuth
-grants, and AWS SigV4 signing are supported in the edge path today.
+Bearer, header API key, query API key, Cloudflare binding auth, OAuth grants,
+and AWS SigV4 signing are supported. Per-grant Durable Objects own credential
+material; KV retains redacted metadata and one-time legacy migration input.

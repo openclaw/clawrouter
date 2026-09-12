@@ -960,14 +960,3 @@ paths, empty segments, `.`, `..`, query strings, and fragments are rejected.
 
 The live Worker rejects manifest endpoints that still need unresolved deployment
 templates that are not declared in `service.configKeys`.
-
-## Smoke
-
-Validate a deployed Worker:
-
-```sh
-export CLAWROUTER_BASE_URL=https://<worker>.<subdomain>.workers.dev
-export CLAWROUTER_SMOKE_KEY=clawrouter-live-svc_docs-...
-export CLAWROUTER_SMOKE_LIVE_PROVIDERS=openai
-pnpm cf:smoke
-```
