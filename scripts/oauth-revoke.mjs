@@ -2,6 +2,7 @@ import { spawnSync } from "node:child_process";
 import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { parseArgs } from "./cli-args.mjs";
 
 const args = parseArgs(process.argv.slice(2));
 const kid = args.kid;
@@ -129,24 +130,6 @@ function stripSecrets(value) {
       .filter(([name]) => !secretFields.has(name))
       .map(([name, item]) => [name, stripSecrets(item)]),
   );
-}
-
-function parseArgs(values) {
-  const out = {};
-  for (let i = 0; i < values.length; i += 1) {
-    const value = values[i];
-    if (!value.startsWith("--")) {
-      continue;
-    }
-    const name = value.slice(2);
-    if (values[i + 1] && !values[i + 1].startsWith("--")) {
-      out[name] = values[i + 1];
-      i += 1;
-    } else {
-      out[name] = true;
-    }
-  }
-  return out;
 }
 
 function required(value, name) {

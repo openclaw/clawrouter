@@ -1,5 +1,6 @@
 import { execFileSync } from "node:child_process";
 import { readFileSync, statSync } from "node:fs";
+import { parseArgs } from "./cli-args.mjs";
 
 const args = parseArgs(process.argv.slice(2));
 const ticketFile = requiredOption(args, "ticket-file");
@@ -29,18 +30,6 @@ const response = await fetch(ticket.submissionUrl, {
 const body = await boundedJson(response);
 if (!response.ok) throw new Error(`pool contribution failed (${response.status}): ${safeError(body)}`);
 console.log(JSON.stringify({ outcome: body.outcome, receipt: body.receipt ?? null }));
-
-function parseArgs(values) {
-  const result = {};
-  for (let index = 0; index < values.length; index += 1) {
-    const value = values[index];
-    if (!value.startsWith("--")) continue;
-    const name = value.slice(2);
-    if (values[index + 1] && !values[index + 1].startsWith("--")) result[name] = values[++index];
-    else result[name] = true;
-  }
-  return result;
-}
 
 function readSecret(values, name) {
   if (values[name] !== undefined) throw new Error(`--${name} would expose the secret in process argv; use --${name}-ref, --${name}-env, or --${name}-file`);
