@@ -288,7 +288,7 @@ export class GrantCredentialObject implements DurableObject {
     }
     if (due(record.nextQuotaProbeAt, now) && transport.maintenance.quotaPoll && quotaProbe) {
       try {
-        const state = await probeQuota(this.env, provider, transport, record);
+        const state = await probeQuota(this.env, provider, record);
         record.quotaFailureCount = 0;
         record.nextQuotaProbeAt = new Date(now + quotaInterval(transport, state)).toISOString();
       } catch {
@@ -372,7 +372,7 @@ function maintenanceMetadataChanged(left: CredentialRecord, right: CredentialRec
     || left.quotaFailureCount !== right.quotaFailureCount;
 }
 
-async function probeQuota(env: Env, provider: CompiledProvider, transport: CompiledGrantTransport, record: CredentialRecord): Promise<GrantRuntimeState> {
+async function probeQuota(env: Env, provider: CompiledProvider, record: CredentialRecord): Promise<GrantRuntimeState> {
   assertCredentialEnabled(record);
   const grant = materializedGrant({ provider: provider.id, kind: record.kind, maintenance: record.maintenance }, record);
   const probe = quotaProbeForGrant(provider, grant);

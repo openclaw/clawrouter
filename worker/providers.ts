@@ -1,4 +1,3 @@
-import { fetchTimeoutSignal } from "../shared/fetch-timeout.ts";
 import snapshotJson from "./generated/provider-snapshot.json" with { type: "json" };
 import { listConnections, resolveConnection } from "./authority.ts";
 import { observeGrantQuota, observeGrantQuotaProbe } from "./grant-quota.ts";
@@ -140,11 +139,6 @@ async function readinessInputs(env: Env) {
   return { grants, health, connections };
 }
 
-export async function readinessForIdentity(env: Env, auth: AuthorizedIdentity): Promise<Readiness[]> {
-  const all = await providerReadinessForPolicies(env, [{ policyId: auth.policyId, policy: auth.policy }]);
-  return all.filter((row) => auth.policy.providers.length === 0 || auth.policy.providers.includes(row.id));
-}
-
 function readinessFor(provider: CompiledProvider, env: Env, grants: GrantRecord[], connection: ProviderConnection, health?: ProviderHealth): Readiness {
   const configuredOptional = new Set((envValue(env, "CLAWROUTER_OPTIONAL_CONFIG_KEYS") ?? "").split(",").map((key) => key.trim()).filter(Boolean));
   const optionalConfig = provider.config_keys.filter((key) => provider.optional_config_keys.includes(key) || configuredOptional.has(key) || (provider.auth.schemes.every((scheme) => scheme.type === "bearer" && scheme.required === false) && secretConfigKey(key)));
@@ -196,7 +190,7 @@ export async function assertProviderAccess(provider: CompiledProvider, auth: Aut
   return connection;
 }
 
-export async function upstreamAuth(provider: CompiledProvider, endpoint: CompiledEndpoint, auth: AuthorizedIdentity, env: Env, excludedGrantKeys: ReadonlySet<string> = new Set(), stickyHash: string | null = null, recordSelection = true): Promise<UpstreamAuth> {
+export async function upstreamAuth(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedGrantKeys: ReadonlySet<string> = new Set(), stickyHash: string | null = null, recordSelection = true): Promise<UpstreamAuth> {
   const resolution = await grantFor(provider, auth, env, excludedGrantKeys, stickyHash, recordSelection);
   const selected = resolution.selected;
   if (!selected && resolution.hasConfiguredGrant) throw new HttpError(503, "upstream_grant_pool_unavailable", `provider ${provider.id} has no available scoped upstream grant`);

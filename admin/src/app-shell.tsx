@@ -1,3 +1,15 @@
+import React from "react";
+import { Route } from "lucide-react";
+import { accessFormFromUser, playgroundServicePreset } from "./domain";
+import { ThemeToggle, viewIcon, viewSubtitle, viewTitle } from "./components";
+import { DashboardScreen, CatalogScreen, UserAvatar } from "./screens/dashboard-catalog";
+import { PlaygroundScreen } from "./screens/playground";
+import { PoliciesScreen } from "./screens/access";
+import { UsageScreen, UsersScreen } from "./screens/users-usage";
+import { applyTheme, initialTheme, navItems } from "./ui-config";
+import { formatTimestamp } from "./ui-helpers";
+import { useConsole } from "./console-controller-context";
+
 export function AppShell() {
   const [theme, setTheme] = React.useState(initialTheme);
   React.useEffect(() => { applyTheme(theme); }, [theme]);
@@ -261,14 +273,3 @@ export function AppShell() {
     </main>
   );
 }
-import React from "react";
-import { Route } from "lucide-react";
-import { accessFormFromUser, playgroundServicePreset } from "./domain";
-import { BrandMark,EntityName,InlineError,InlineNote,InspectorHeader,OutcomeStatus,PanelTitle,ReadinessStatus,Status,ThemeToggle,viewIcon,viewSubtitle,viewTitle } from "./components";
-import { DashboardScreen, CatalogScreen, UserAvatar } from "./screens/dashboard-catalog";
-import { PlaygroundScreen } from "./screens/playground";
-import { PoliciesScreen } from "./screens/access";
-import { UsageScreen, UsersScreen } from "./screens/users-usage";
-import { applyTheme, initialTheme, navItems } from "./ui-config";
-import { formatTimestamp } from "./ui-helpers";
-import { useConsole } from "./console-controller-context";

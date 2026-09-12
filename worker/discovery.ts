@@ -5,7 +5,7 @@ import { loadFusionConfig } from "./fusion-config";
 import { FUSION_MODEL_ID } from "./fusion";
 import { authenticateProxyKey } from "./proxy-auth";
 import { endpointForPath, modelRoute, providerReadinessForPolicies, snapshot, type Readiness } from "./providers";
-import type { AccessPolicyEntry, AccessSession, AuthorizedIdentity, CompiledProvider, Env } from "./types";
+import type { AccessPolicyEntry, AccessSession, CompiledProvider, Env } from "./types";
 import { errorResponse, privateJson, sha256Hex } from "./utils";
 
 export async function sessionResponse(request: Request, env: Env): Promise<Response> {

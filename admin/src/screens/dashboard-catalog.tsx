@@ -1,3 +1,63 @@
+import React, { useEffect, useState } from "react";
+import {
+  Activity,
+  ArrowUpRight,
+  ChevronRight,
+  CircleSlash2,
+  KeyRound,
+  Play,
+  Plus,
+  Search,
+  ServerCog,
+  ShieldCheck,
+} from "lucide-react";
+import {
+  currencyInput,
+  grantNamesForService,
+  optionalCurrencyMicros,
+  playgroundBlockedForService,
+  policyCoversProvider,
+  policyUsageFallback,
+  readinessLabel,
+  serviceOutcome,
+} from "../domain";
+import {
+  BrandMark,
+  EntityName,
+  InlineNote,
+  InspectorHeader,
+  OutcomeStatus,
+  ReadinessStatus,
+  Status,
+  kindIcon,
+  kindLabel,
+} from "../components";
+import { ProviderUsageChart, TrafficAreaChart } from "../analytics-charts";
+import {
+  budgetPercent,
+  effectiveProviderCount,
+  formatBudget,
+  formatCount,
+  formatDuration,
+  formatMicros,
+  formatRelativeTime,
+  matchesServiceQuery,
+  usagePolicyId,
+} from "../ui-helpers";
+import { EntityTable } from "./users-usage";
+import type {
+  AccessPolicy,
+  AccessUser,
+  AdminOverview,
+  AdminTenantSummary,
+  AdminUsageRow,
+  ProviderConnection,
+  ProxyCredential,
+  ServiceItem,
+  SessionResponse,
+  UsageSnapshot,
+} from "../ui-types";
+
 export function UserAvatar({ email }: { email?: string | null }) {
   const [loaded, setLoaded] = useState(false);
 
@@ -231,7 +291,6 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
           columnTemplate="minmax(220px, 1.45fr) 124px 126px minmax(130px, 0.8fr) 116px"
           rows={services.map((service) => {
             const policiesForService = servicePolicies(service);
-            const outcome = serviceOutcome(service);
             return {
               id: service.id,
               active: selected?.id === service.id,
@@ -327,11 +386,3 @@ export function GrantChips({ names }: { names: string[] }) {
     </span>
   );
 }
-import React, { useEffect, useState } from "react";
-import { Activity, ArrowUpRight, BarChart3, Boxes, Bug, CheckCircle2, ChevronRight, CircleSlash2, FlaskConical, KeyRound, Play, Plus, Search, ServerCog, ShieldCheck, SlidersHorizontal, Users } from "lucide-react";
-import { currencyInput, grantNamesForService, optionalCurrencyMicros, playgroundBlockedForService, policyCoversProvider, policyUsageFallback, readinessLabel, serviceOutcome } from "../domain";
-import { BrandMark, EntityName, InlineNote, InspectorHeader, OutcomeStatus, PanelTitle, ReadinessStatus, Status, kindIcon, kindLabel } from "../components";
-import { ProviderUsageChart, TrafficAreaChart } from "../analytics-charts";
-import { budgetPercent, effectiveProviderCount, formatBudget, formatCount, formatDuration, formatMicros, formatRelativeTime, matchesServiceQuery, providerBrandIcon, readyCount, usagePolicyId } from "../ui-helpers";
-import { EntityTable } from "./users-usage";
-import type { AccessForm,AccessPolicy,AccessRole,AccessTab,AccessUser,AdminOverview,AdminTenantSummary,AdminUsageRow,AssignmentRule,AssignmentRuleForm,BindingForm,BrandIcon,BudgetStatus,ContentRetention,CredentialForm,EntitlementsResponse,IconComponent,OutcomeTone,PlaygroundForm,PlaygroundHttpResponse,PlaygroundTurn,PolicyBinding,PolicyForm,ProviderAccess,ProviderConnection,ProviderReadiness,ProviderResponse,ProviderRow,ProviderUsageSummary,ProxyCredential,RefreshOptions,RetainedRequestContent,RouteCatalog,ServiceItem,ServiceOutcome,SessionResponse,UpstreamGrant,UpstreamGrantForm,UsageAuditEvent,UsageSnapshot,UsageSummary,View } from "../ui-types";
