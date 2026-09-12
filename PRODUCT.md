@@ -1,9 +1,5 @@
 # Product
 
-## Register
-
-product
-
 ## Users
 
 ClawRouter is for maintainers, operators, and engineers managing an OpenRouter-like access surface for OpenClaw services. Maintainers need to log in, see what they can access, inspect provider and tool coverage, and run playground traffic through the same policy path users hit. Admins need to bind Cloudflare Access users and groups to scoped policies, manage provider connections, issue proxy credentials, revoke access, and audit requests and budgets by tenant. The catalog is service-first: an LLM provider is one service with models inside its detail/playground context, not one row per model.
