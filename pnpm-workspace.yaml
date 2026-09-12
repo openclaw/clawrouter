@@ -1,5 +1,8 @@
 packages:
   - admin
+overrides:
+  # Axe's auto-installed peer must match the screenshot runner's Page types.
+  playwright-core: 1.62.1
 allowBuilds:
   esbuild: true
   sharp: true
