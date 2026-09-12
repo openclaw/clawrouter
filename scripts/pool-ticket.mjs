@@ -1,4 +1,5 @@
 import { closeSync, openSync, readFileSync, writeFileSync } from "node:fs";
+import { parseArgs } from "./cli-args.mjs";
 
 const args = parseArgs(process.argv.slice(2));
 const baseUrl = requiredOption(args, "url").replace(/\/$/, "");
@@ -35,18 +36,6 @@ const descriptor = JSON.stringify({ version: 1, ticket: body.ticket, ticketToken
 const handle = openSync(output, "wx", 0o600);
 try { writeFileSync(handle, descriptor); } finally { closeSync(handle); }
 console.log(`wrote protected submission ticket ${body.ticket.id} to ${output}; secret was not printed`);
-
-function parseArgs(values) {
-  const result = {};
-  for (let index = 0; index < values.length; index += 1) {
-    const value = values[index];
-    if (!value.startsWith("--")) continue;
-    const name = value.slice(2);
-    if (values[index + 1] && !values[index + 1].startsWith("--")) result[name] = values[++index];
-    else result[name] = true;
-  }
-  return result;
-}
 
 function readSecret(values, name) {
   if (values[name] !== undefined) throw new Error(`--${name} would expose the secret in process argv; use --${name}-env or --${name}-stdin`);

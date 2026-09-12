@@ -1,8 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { readFileSync, rmSync } from "node:fs";
 import { join } from "node:path";
+import { legacyCredential, readLocalKeyRecord, writeKeyJson } from "./local-key-kv.mjs";
+import { parseArgs } from "./cli-args.mjs";
 import { adminRequest } from "./admin-api.mjs";
 import { deploymentTarget } from "./deployment-profile.mjs";
 
@@ -64,10 +65,10 @@ if (!args.local) {
 }
 
 function putLocalBootstrapRecords(request) {
-  const existingPolicy = readRecord(`policies/${kid}`, { allowMissing: true });
-  const existingLegacy = readRecord(`keys/${kid}`, { allowMissing: true });
+  const existingPolicy = readLocalKeyRecord(`policies/${kid}`, { binding, config, allowMissing: true });
+  const existingLegacy = readLocalKeyRecord(`keys/${kid}`, { binding, config, allowMissing: true });
   const existingCredential =
-    readRecord(`credentials/${kid}`, { allowMissing: true }) ?? legacyCredential(existingLegacy);
+    readLocalKeyRecord(`credentials/${kid}`, { binding, config, allowMissing: true }) ?? legacyCredential(existingLegacy, kid);
   const generation = existingPolicy?.generation ?? `policy_${randomUUID()}`;
   const policy = {
     ...request,
@@ -100,11 +101,11 @@ function putLocalBootstrapRecords(request) {
   const tombstoneLegacy = { ...legacy, enabled: false };
   const tombstonePolicy = { ...policy, enabled: false };
   const records = [
-    [`credentials/${kid}`, writeJson(tombstoneCredential, "credential-tombstone.json")],
-    [`keys/${kid}`, writeJson(tombstoneLegacy, "legacy-key-tombstone.json")],
-    [`policies/${kid}`, writeJson(tombstonePolicy, "policy-tombstone.json")],
-    [`credentials/${kid}`, writeJson(credential, "credential.json")],
-    [`policies/${kid}`, writeJson(policy, "policy.json")],
+    [`credentials/${kid}`, writeKeyJson(tombstoneCredential, "credential-tombstone.json")],
+    [`keys/${kid}`, writeKeyJson(tombstoneLegacy, "legacy-key-tombstone.json")],
+    [`policies/${kid}`, writeKeyJson(tombstonePolicy, "policy-tombstone.json")],
+    [`credentials/${kid}`, writeKeyJson(credential, "credential.json")],
+    [`policies/${kid}`, writeKeyJson(policy, "policy.json")],
   ];
 
   try {
@@ -122,7 +123,8 @@ function putLocalBootstrapRecords(request) {
         binding,
         "--config",
         config,
-        ...kvTargetArgs(args),
+        "--preview",
+        "false",
       ]);
     }
   } finally {
@@ -131,24 +133,6 @@ function putLocalBootstrapRecords(request) {
       rmSync(join(path, ".."), { force: true, recursive: true });
     }
   }
-}
-
-function parseArgs(values) {
-  const out = {};
-  for (let i = 0; i < values.length; i += 1) {
-    const value = values[i];
-    if (!value.startsWith("--")) {
-      continue;
-    }
-    const name = value.slice(2);
-    if (values[i + 1] && !values[i + 1].startsWith("--")) {
-      out[name] = values[i + 1];
-      i += 1;
-    } else {
-      out[name] = true;
-    }
-  }
-  return out;
 }
 
 function required(value, name) {
@@ -194,56 +178,6 @@ function run(command, args) {
   }
 }
 
-function readRecord(key, { allowMissing = false } = {}) {
-  const result = spawnSync(
-    "pnpm",
-    [
-      "exec",
-      "wrangler",
-      "kv",
-      "key",
-      "get",
-      key,
-      "--binding",
-      binding,
-      "--config",
-      config,
-      ...kvTargetArgs(args),
-    ],
-    { encoding: "utf8" },
-  );
-  if (result.status !== 0) {
-    const message = `${result.stderr ?? ""}\n${result.stdout ?? ""}`.trim();
-    if (allowMissing && /\b(not found|does not exist|missing)\b/i.test(message)) {
-      return null;
-    }
-    throw new Error(message || `failed to read ${key}`);
-  }
-  const output = result.stdout.trim();
-  if (allowMissing && isMissingRecordOutput(output)) {
-    return null;
-  }
-  if (!output) {
-    if (allowMissing) return null;
-    throw new Error(`empty response while reading ${key}`);
-  }
-  return JSON.parse(output);
-}
-
-function isMissingRecordOutput(value) {
-  return /^(?:value\s+)?not found$/i.test(value.trim());
-}
-
-function legacyCredential(legacy) {
-  if (!legacy?.secretSha256) return null;
-  return {
-    enabled: legacy.enabled !== false,
-    secretSha256: legacy.secretSha256,
-    policyId: kid,
-    policyGeneration: legacy.generation ?? "legacy",
-  };
-}
-
 function policyChanged(existing, next) {
   return JSON.stringify(policyFields(existing)) !== JSON.stringify(policyFields(next));
 }
@@ -258,18 +192,4 @@ function policyFields(policy) {
     requestCostMicros: policy.requestCostMicros ?? null,
     retainRequestContent: policy.retainRequestContent !== false,
   };
-}
-
-function writeJson(value, name) {
-  const dir = mkdtempSync(join(tmpdir(), "clawrouter-key-"));
-  const path = join(dir, name);
-  writeFileSync(path, JSON.stringify(value), { encoding: "utf8", mode: 0o600 });
-  return path;
-}
-
-function kvTargetArgs(args) {
-  if (args.local) {
-    return ["--preview", "false"];
-  }
-  return ["--remote", "--preview", "false"];
 }

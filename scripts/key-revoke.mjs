@@ -1,7 +1,8 @@
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
+import { rmSync } from "node:fs";
 import { join } from "node:path";
+import { legacyCredential, readLocalKeyRecord, writeKeyJson } from "./local-key-kv.mjs";
+import { parseArgs } from "./cli-args.mjs";
 import { adminRequest } from "./admin-api.mjs";
 
 const args = parseArgs(process.argv.slice(2));
@@ -20,17 +21,17 @@ if (!args.local) {
 }
 
 function revokeLocalBootstrapRecord() {
-  const legacy = readRecord(`keys/${kid}`, { allowMissing: true });
+  const legacy = readLocalKeyRecord(`keys/${kid}`, { binding, config, allowMissing: true });
   const credential =
-    readRecord(`credentials/${kid}`, { allowMissing: true }) ?? legacyCredential(legacy);
+    readLocalKeyRecord(`credentials/${kid}`, { binding, config, allowMissing: true }) ?? legacyCredential(legacy, kid);
   if (!credential) {
     throw new Error(`proxy credential ${kid} was not found`);
   }
   credential.enabled = false;
   if (legacy) legacy.enabled = false;
   const records = [
-    [`credentials/${kid}`, writeJson(credential, "credential.json")],
-    ...(legacy ? [[`keys/${kid}`, writeJson(legacy, "legacy-key.json")]] : []),
+    [`credentials/${kid}`, writeKeyJson(credential, "credential.json")],
+    ...(legacy ? [[`keys/${kid}`, writeKeyJson(legacy, "legacy-key.json")]] : []),
   ];
 
   try {
@@ -48,7 +49,8 @@ function revokeLocalBootstrapRecord() {
         binding,
         "--config",
         config,
-        ...kvTargetArgs(args),
+        "--preview",
+        "false",
       ]);
     }
   } finally {
@@ -57,24 +59,6 @@ function revokeLocalBootstrapRecord() {
       rmSync(join(path, ".."), { force: true, recursive: true });
     }
   }
-}
-
-function parseArgs(values) {
-  const out = {};
-  for (let i = 0; i < values.length; i += 1) {
-    const value = values[i];
-    if (!value.startsWith("--")) {
-      continue;
-    }
-    const name = value.slice(2);
-    if (values[i + 1] && !values[i + 1].startsWith("--")) {
-      out[name] = values[i + 1];
-      i += 1;
-    } else {
-      out[name] = true;
-    }
-  }
-  return out;
 }
 
 function required(value, name) {
@@ -90,64 +74,4 @@ function run(command, args) {
     throw new Error(result.stderr || `${command} failed`);
   }
   return result;
-}
-
-function readRecord(key, { allowMissing = false } = {}) {
-  const result = spawnSync("pnpm", [
-    "exec",
-    "wrangler",
-    "kv",
-    "key",
-    "get",
-    key,
-    "--binding",
-    binding,
-    "--config",
-    config,
-    ...kvTargetArgs(args),
-  ], { encoding: "utf8" });
-  if (result.status !== 0) {
-    const message = `${result.stderr ?? ""}\n${result.stdout ?? ""}`.trim();
-    if (allowMissing && /\b(not found|does not exist|missing)\b/i.test(message)) {
-      return null;
-    }
-    throw new Error(message || `failed to read ${key}`);
-  }
-  const output = result.stdout.trim();
-  if (allowMissing && isMissingRecordOutput(output)) {
-    return null;
-  }
-  if (!output) {
-    if (allowMissing) return null;
-    throw new Error(`empty response while reading ${key}`);
-  }
-  return JSON.parse(output);
-}
-
-function isMissingRecordOutput(value) {
-  return /^(?:value\s+)?not found$/i.test(value.trim());
-}
-
-function legacyCredential(legacy) {
-  if (!legacy?.secretSha256) return null;
-  return {
-    enabled: legacy.enabled !== false,
-    secretSha256: legacy.secretSha256,
-    policyId: kid,
-    policyGeneration: legacy.generation ?? "legacy",
-  };
-}
-
-function writeJson(value, name) {
-  const dir = mkdtempSync(join(tmpdir(), "clawrouter-key-"));
-  const path = join(dir, name);
-  writeFileSync(path, JSON.stringify(value), { encoding: "utf8", mode: 0o600 });
-  return path;
-}
-
-function kvTargetArgs(args) {
-  if (args.local) {
-    return ["--preview", "false"];
-  }
-  return ["--remote", "--preview", "false"];
 }
