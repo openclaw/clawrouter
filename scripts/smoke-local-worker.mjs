@@ -1,11 +1,15 @@
 import assert from "node:assert/strict";
 import packageMetadata from "../package.json" with { type: "json" };
+import wranglerMetadata from "wrangler/package.json" with { type: "json" };
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createTcpServer } from "node:net";
+import { fileURLToPath } from "node:url";
 
+// Signal Wrangler directly; a package-manager launcher may leave its child alive.
+const wrangler = fileURLToPath(new URL(wranglerMetadata.bin.wrangler, import.meta.resolve("wrangler/package.json")));
 const port = await availablePort();
 const config = `.wrangler.local-e2e-${process.pid}.toml`;
 const persistence = `.wrangler/e2e-${process.pid}`;
@@ -96,7 +100,7 @@ const upstreamServer = createHttpServer(async (request, response) => {
 });
 await new Promise((resolve, reject) => upstreamServer.listen(upstreamPort, "127.0.0.1", resolve).once("error", reject));
 
-const child = spawn("pnpm", ["exec", "wrangler", "dev", "--local", "--ip", "127.0.0.1", "--port", String(port), "--persist-to", persistence, "--config", config, "--var", `CLAWROUTER_ADMIN_TOKEN_SHA256:${sha256(adminToken)}`, "--var", `LOCAL_OPENAI_BASE_URL:http://127.0.0.1:${upstreamPort}`, "--var", "OPENAI_API_KEY:fixture", "--var", "AWS_REGION:us-east-1", "--var", "AWS_SESSION_TOKEN:", "--log-level", "info"], {
+const child = spawn(process.execPath, [wrangler, "dev", "--local", "--ip", "127.0.0.1", "--port", String(port), "--persist-to", persistence, "--config", config, "--var", `CLAWROUTER_ADMIN_TOKEN_SHA256:${sha256(adminToken)}`, "--var", `LOCAL_OPENAI_BASE_URL:http://127.0.0.1:${upstreamPort}`, "--var", "OPENAI_API_KEY:fixture", "--var", "AWS_REGION:us-east-1", "--var", "AWS_SESSION_TOKEN:", "--log-level", "info"], {
   cwd: process.cwd(),
   env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
   stdio: ["ignore", "pipe", "pipe"],
