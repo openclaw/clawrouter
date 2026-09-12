@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import packageMetadata from "../package.json" with { type: "json" };
 import { execFileSync, spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
@@ -115,6 +116,7 @@ try {
   assert.deepEqual(health, {
     ok: true,
     service: "clawrouter-edge",
+    version: packageMetadata.version,
     runtime: "typescript",
     environment: "production",
     observability: {

@@ -1,3 +1,5 @@
+import assert from "node:assert/strict";
+import packageMetadata from "../package.json" with { type: "json" };
 import {
   buildProviderSmokePlan,
   inspectSmokeKeyProviderAccess,
@@ -19,7 +21,9 @@ await waitForHealth({
   baseUrl,
   expectedEnvironment: process.env.CLAWROUTER_DEPLOY_ENV?.trim(),
   timeoutMs: smokeReadinessTimeoutMs(),
+  probeImpl: (health) => assert.equal(health.version, packageMetadata.version, "serving release version"),
 });
+console.log(`deployed version verified: ${packageMetadata.version}`);
 await expectRedirect(`${baseUrl}/`, "root redirect", "/dashboard");
 await expectRedirectOrAccessGate(`${baseUrl}/dashboard`, "dashboard redirect", "/dashboard/home");
 await expectAccessGate(`${baseUrl}/dashboard/home`, "dashboard access gate");

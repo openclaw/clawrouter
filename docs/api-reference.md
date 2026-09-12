@@ -16,7 +16,7 @@ The optional `/private/v1/{models,catalog,responses}` facade has its own pinned 
 
 | Method | Path | Purpose |
 | --- | --- | --- |
-| `GET` | `/v1/health` | Service health and observability mode |
+| `GET` | `/v1/health` | Service health, application version, and observability mode |
 | `GET` | `/v1/providers` | Compiled provider snapshot |
 | `GET` | `/v1/routes` | Compiled OpenAI-compatible, manifest, and native route catalog |
 | `GET` | `/v1/models` | OpenAI-style model list scoped to the proxy credential |

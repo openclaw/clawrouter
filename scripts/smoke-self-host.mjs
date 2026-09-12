@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import packageMetadata from "../package.json" with { type: "json" };
 import { createHash, randomBytes } from "node:crypto";
 import { setTimeout as delay } from "node:timers/promises";
 import { adminRequest } from "./admin-api.mjs";
@@ -15,6 +16,7 @@ let created = false;
 try {
   const health = await waitForHealth();
   assert.equal(health.ok, true, "health response must report ok");
+  assert.equal(health.version, packageMetadata.version, "health must report the built release version");
 
   await adminRequest(`/v1/admin/keys/${credentialId}`, {
     method: "PUT",

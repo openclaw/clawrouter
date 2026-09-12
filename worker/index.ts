@@ -1,3 +1,4 @@
+import packageMetadata from "../package.json" with { type: "json" };
 import { publicSession, sessionPolicies, verifiedAccessSession } from "./access";
 import { adminApi } from "./admin";
 import {
@@ -143,6 +144,7 @@ function healthStatus(env: Env) {
   return {
     ok: true,
     service: "clawrouter-edge",
+    version: packageMetadata.version,
     runtime: "typescript",
     environment: env.CLAWROUTER_DEPLOY_ENV?.trim() || "production",
     observability: {

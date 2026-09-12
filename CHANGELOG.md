@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.3.0 - Unreleased
+## 0.3.0 - 2026-09-11
 
 ### Highlights
 
@@ -17,6 +17,7 @@ Claude subscription pools add protected credential intake and quota-aware routin
 - Preserve administrative user changes during automatic assignment reconciliation, and keep canonical authority records authoritative during legacy migration races.
 - Preserve binary proxy response backpressure and consolidate response inspection, delivery, usage aggregation, and reservation-owned settlement without changing public contracts.
 - Add content-free server-side predicates and exact consumed-byte counts for authenticated private requests rejected locally with HTTP 400.
+- Report the application version in health and service discovery responses so deployments can verify the serving release.
 - Refresh Worker and admin dependencies and pnpm, including patched local Worker image codecs, while preserving Node.js 24 support and the 48-hour dependency release-age policy.
 
 ## 0.2.2 - 2026-08-31
