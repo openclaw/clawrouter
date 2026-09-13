@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Update Workers types, Wrangler, and Lucide while preserving Node.js 24 and the 48-hour dependency release-age policy.
 - Reject malformed percent-encoded proxy, native, admin, and pool-submission route identifiers with HTTP 400 instead of HTTP 500, without performing the requested mutation or upstream call.
 - Refresh Worker/admin tooling, pin CI actions to reviewed releases, and remove stale install exceptions while preserving Node.js 24 and the 48-hour dependency release-age policy.
 
