@@ -49,6 +49,10 @@ The opt-in [private alias facade](docs/private-codex.md) is a separate, Response
 
 ## Provider catalog
 
+For OpenAI, use a Platform API key. Subscription browser Connect is unavailable
+in the bundled provider; see [OpenAI setup and subscription limits](docs/openai-subscriptions.md)
+for the supported path and the private facade's separate requirements.
+
 Provider support starts with one manifest:
 
 ```text
