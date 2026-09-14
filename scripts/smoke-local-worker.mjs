@@ -132,6 +132,9 @@ try {
   assert.equal(providers.providers.length, 21);
   assert.equal(new Set(providers.providers.map((provider) => provider.id)).size, 21);
   assert.ok(providers.providers.some((provider) => provider.id === "local-openai"));
+  const openaiProvider = providers.providers.find((provider) => provider.id === "openai");
+  assert.equal(openaiProvider.auth.authorization, null, "OpenAI must not advertise unsupported browser Connect");
+  assert.equal(openaiProvider.base_urls.default, "https://api.openai.com");
   const routes = await json(`${base}/v1/routes`);
   assert.ok(routes.openaiCompatible.some((route) => route.provider === "openai"));
   assert.ok(routes.manifestProxy.some((route) => route.provider === "anthropic" && route.endpoint === "count_tokens"));

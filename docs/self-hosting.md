@@ -157,6 +157,11 @@ docker compose -f deploy/self-host/docker-compose.yml up -d
 
 ## Version 1 limitations
 
+OpenAI subscription browser Connect is unavailable in the bundled provider,
+including on custom-domain Cloudflare deployments. Use a Platform API key for
+ClawRouter or sign in to Codex directly for subscription access; the private
+facade is not a turnkey workaround. See [OpenAI setup and subscription limits](openai-subscriptions.md).
+
 Cloudflare Access is absent. GitHub maintainer auto-provisioning is
 unavailable, browser OAuth connect flows are untested in this profile, and
 local console sign-in currently supports a single admin-token identity

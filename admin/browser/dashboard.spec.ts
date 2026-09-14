@@ -18,7 +18,8 @@ test("Fusion preflight is WCAG AA clean and visually stable", async ({ page }) =
   await page.getByRole("tab", { name: /Fusion/ }).click();
   await page.getByRole("button", { name: "Check readiness" }).click();
   await expect(page.getByRole("region", { name: "Fusion readiness" })).toBeVisible();
-  await expect(page).toHaveScreenshot("fusion-readiness.png", { animations: "disabled", fullPage: true });
+  // macOS text rasterization can vary by a handful of pixels with the pinned browser.
+  await expect(page).toHaveScreenshot("fusion-readiness.png", { animations: "disabled", fullPage: true, maxDiffPixels: process.platform === "darwin" ? 10 : 0 });
   await expectA11yClean(page);
 });
 
@@ -29,6 +30,23 @@ test("keyboard focus remains visible", async ({ page }) => {
   await expect(focused).toBeVisible();
   const outline = await focused.evaluate((element) => getComputedStyle(element).outlineStyle);
   expect(outline).not.toBe("none");
+});
+
+test("OpenAI grants explain the API-key path without offering unsupported browser Connect", async ({ page }) => {
+  await page.goto("/dashboard/access?demo=1&resource=upstream");
+  await page.getByRole("button", { name: "New grant", exact: true }).click();
+  await page.getByRole("combobox", { name: "provider", exact: true }).selectOption("openai");
+  await expect(page.getByRole("button", { name: "Connect with provider" })).toHaveCount(0);
+  await expect(page.getByText("OpenAI subscription Connect is unavailable in the bundled provider.")).toBeVisible();
+  await expect(page.getByRole("link", { name: "OpenAI setup and subscription limits" })).toHaveAttribute("href", "https://github.com/openclaw/clawrouter/blob/main/docs/openai-subscriptions.md");
+  await expect(page.getByRole("combobox", { name: "kind", exact: true })).toHaveValue("api_key");
+  await expect(page.getByLabel("API key", { exact: true })).toBeVisible();
+  await expect(page.getByRole("button", { name: "Save grant" })).toBeEnabled();
+  await page.getByRole("combobox", { name: "kind", exact: true }).selectOption("subscription");
+  await expect(page.getByRole("button", { name: "Connect with provider" })).toHaveCount(0);
+  await expect(page.getByText("OpenAI subscription Connect is unavailable in the bundled provider.")).toBeVisible();
+  await page.getByRole("combobox", { name: "provider", exact: true }).selectOption("anthropic");
+  await expect(page.getByText("OpenAI subscription Connect is unavailable in the bundled provider.")).toHaveCount(0);
 });
 
 test("self-service keys reveal browser-generated material once and can be revoked", async ({ page }) => {

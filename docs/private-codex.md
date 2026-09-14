@@ -1,5 +1,8 @@
 # Private alias inference facade
 
+For normal OpenAI setup, use a Platform API key. This facade does not resolve
+unsupported subscription onboarding; see [OpenAI setup and subscription limits](openai-subscriptions.md).
+
 This opt-in, bounded Responses facade is for a **separately isolated, owner-only
 OpenClaw Gateway or Codex runtime**. It is not per-user security for a shared
 Gateway. Production Team must not receive these bindings or credentials. Shared
