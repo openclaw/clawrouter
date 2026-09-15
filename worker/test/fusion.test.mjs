@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { observeUsage } from "../proxy-response.ts";
 import {
   FUSION_MODEL_ID,
   buildAdviserBody,
@@ -116,6 +117,44 @@ test("fusion reservation proposals cover worst-case JSON encoding", () => {
     assert.ok(actualBytes <= reservedBytes, `${actualBytes} exceeds ${reservedBytes}`);
   }
 });
+
+for (const cancellation of ["complete", "reject", "stall"]) {
+  test(`fusion cancels HTTP-error adviser bodies and completes accounting when cancellation can ${cancellation}`, async () => {
+    const config = normalizeFusionConfig({ adviserModels: ["local/unavailable"] });
+    let canceled = false, accounted = false;
+    const observed = observeUsage(new Response(new ReadableStream({
+      cancel() {
+        canceled = true;
+        if (cancellation === "reject") return Promise.reject(new Error("synthetic cancel failure"));
+        if (cancellation === "stall") return new Promise(() => {});
+      },
+    }), { status: 503, headers: { "content-type": "application/json" } }));
+    observed.tokens.then(() => { accounted = true; });
+    const result = await collectFusionProposals(config, { messages: [] }, async () => observed.response);
+    assert.deepEqual(result.failedModels, ["local/unavailable"]);
+    assert.equal(canceled, true, "a skipped response must release its upstream body");
+    assert.equal(accounted, true, "cancellation must complete usage observation without waiting on upstream cleanup");
+  });
+}
+
+for (const status of [200, 503]) {
+  test(`fusion cancels an adviser response arriving after its deadline (HTTP ${status})`, async (t) => {
+    t.mock.timers.enable({ apis: ["setTimeout", "Date"] });
+    const config = normalizeFusionConfig({ adviserModels: ["local/late"], adviserTimeoutMs: 1_000 });
+    const deferred = Promise.withResolvers();
+    const pending = collectFusionProposals(config, { messages: [] }, () => deferred.promise);
+    t.mock.timers.tick(1_000);
+    const result = await pending;
+    assert.deepEqual(result.failedModels, ["local/late"]);
+    let canceled = false, accounted = false;
+    const observed = observeUsage(new Response(new ReadableStream({ cancel() { canceled = true; } }), { status }));
+    observed.tokens.then(() => { accounted = true; });
+    deferred.resolve(observed.response);
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(canceled, true, "a late response has no consumer and must be canceled");
+    assert.equal(accounted, true);
+  });
+}
 
 function encodedBytes(value) {
   return new TextEncoder().encode(JSON.stringify(value)).byteLength;

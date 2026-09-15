@@ -101,7 +101,12 @@ export async function collectFusionProposals(config: FusionConfig, original: Rec
     const timeout = setTimeout(() => controller.abort(new Error("fusion adviser deadline exceeded")), config.adviserTimeoutMs);
     let bodyComplete = false;
     try {
-      const response = await beforeDeadline(invoke(model, buildAdviserBody(original, model, config, index), config.adviserTimeoutMs, index, controller.signal), deadline);
+      const invocation = invoke(model, buildAdviserBody(original, model, config, index), config.adviserTimeoutMs, index, controller.signal).then(response => {
+        // Discarded responses still own upstream resources and delivery-based accounting.
+        if (controller.signal.aborted || !response.ok) void response.body?.cancel().catch(() => undefined);
+        return response;
+      });
+      const response = await beforeDeadline(invocation, deadline);
       if (!response.ok) return { model, failed: true as const };
       const maxResponseBytes = ADVISER_RESPONSE_OVERHEAD_BYTES + config.maxProposalChars * 6;
       const content = completionText(await readJsonBeforeDeadline(response, maxResponseBytes, deadline)).trim();

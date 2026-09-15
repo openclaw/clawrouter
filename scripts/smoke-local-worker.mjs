@@ -53,6 +53,8 @@ const fusionKey = `clawrouter-live-fusionlocal-${fusionSecret}`;
 putLocalKv("policies/fusion_local", { enabled: true, generation, providers: ["local-openai", "openai"], tenantId: "default", tokenRole: "service", monthlyBudgetMicros: 1, retainRequestContent: false });
 putLocalKv("policies/fusion_ready", { enabled: true, generation, providers: ["local-openai", "openai"], tenantId: "default", tokenRole: "service", monthlyBudgetMicros: 100, requestCostMicros: 1, retainRequestContent: false });
 putLocalKv("credentials/fusionlocal", { enabled: true, secretSha256: sha256(fusionSecret), policyId: "fusion_local", policyGeneration: generation });
+const fusionReadyKey = `clawrouter-live-fusionready-${fusionSecret}`;
+putLocalKv("credentials/fusionready", { enabled: true, secretSha256: sha256(fusionSecret), policyId: "fusion_ready", policyGeneration: generation });
 seedLocalKv();
 const upstreamPort = await availablePort();
 const upstreamCalls = [];
@@ -90,6 +92,11 @@ const upstreamServer = createHttpServer(async (request, response) => {
     response.on("close", () => { stalledUpstreamClosed = true; });
     response.writeHead(200, { "content-type": "application/json" });
     response.write('{"choices":[{"message":{"content":"partial');
+    return;
+  }
+  if (body.model === "unavailable") {
+    response.writeHead(503, { "content-type": "application/json" });
+    response.end(JSON.stringify({ error: { message: "synthetic adviser unavailable" } }));
     return;
   }
   const content = body.model === "adviser"
@@ -318,6 +325,25 @@ try {
     assert.ok(events.every((event) => event.compound_request_size === 2));
     assert.equal(new Set(events.map((event) => event.compound_request_started_at_ms)).size, 1);
   }
+  const unavailableFusionConfig = { ...localFusionConfig, adviserModels: ["local/unavailable"] };
+  assert.equal((await fetch(`${base}/v1/admin/fusion`, { method: "PUT", headers: adminHeaders, body: JSON.stringify(unavailableFusionConfig) })).status, 200);
+  const unavailableFusionResponse = await fetch(`${base}/v1/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${fusionReadyKey}`, "content-type": "application/json", "x-request-id": "fusion-e2e-http-error" }, body: JSON.stringify({ model: "clawrouter/fusion", messages: [{ role: "user", content: "solve despite adviser HTTP failure" }] }) });
+  assert.equal(unavailableFusionResponse.status, 200);
+  await unavailableFusionResponse.text();
+  assert.equal(unavailableFusionResponse.headers.get("x-clawrouter-fusion-failed-count"), "1");
+  let unavailableUsage;
+  await waitUntil(async () => {
+    const response = await fetch(`${base}/v1/usage`, { headers: { authorization: `Bearer ${fusionReadyKey}` } });
+    assert.equal(response.status, 200);
+    unavailableUsage = await response.json();
+    return unavailableUsage.usage.events.length === 2 && unavailableUsage.budget.spentMicros === 1;
+  }, "HTTP-error adviser accounting was not delivered");
+  const unavailableAdviser = unavailableUsage.usage.events.find(event => event.compound_request_stage === "fusion_adviser");
+  assert.equal(unavailableAdviser.status_code, 503);
+  assert.equal(unavailableAdviser.reserved_cost_micros, 1);
+  assert.equal(unavailableAdviser.actual_cost_micros, 0);
+  assert.equal(unavailableUsage.budget.spentMicros, 1, "only the successful synthesizer is charged; the failed adviser reservation is released");
+  assert.equal(new Set(unavailableUsage.usage.events.map(event => event.compound_request_id)).size, 1);
   const legacyInvalidGrant = bootstrapBody.grants.find((entry) => entry.tokenRef === "legacy_invalid");
   assert.equal(legacyInvalidGrant.hasCredential, false, "stored empty credential bundles are not reported as configured");
   assert.deepEqual(legacyInvalidGrant.credentialFields, []);
