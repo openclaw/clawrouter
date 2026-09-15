@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Cancel discarded Fusion adviser responses, including late arrivals after a deadline, so failed calls release budget reservations and deliver their usage events without delaying the synthesizer.
+
 - Remove unsupported OpenAI subscription browser Connect and explain Platform API-key setup, direct Codex login, and the private facade's limits; thanks @imrane for the report in #141.
 
 - Update Workers types, Wrangler, and Lucide while preserving Node.js 24 and the 48-hour dependency release-age policy.
