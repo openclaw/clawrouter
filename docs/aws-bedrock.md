@@ -18,6 +18,11 @@ retention, and audit controls. ClawRouter supplies AWS Signature Version 4 and
 passes the Bedrock model ID, inference-profile ID, or supported resource ARN
 plus request JSON to Bedrock.
 
+Query parameters participate in the signature using AWS's
+[canonical request rules](https://docs.aws.amazon.com/IAM/latest/UserGuide/reference_sigv-create-signed-request.html):
+names and values are URI-encoded before sorting by byte order, including
+mixed-case names and repeated values.
+
 This is a raw native integration. The caller must supply the JSON schema for
 the selected model. ClawRouter does not call `Converse` or `ConverseStream`,
 translate OpenAI or Anthropic messages, or normalize the model-specific JSON

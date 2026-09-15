@@ -1,5 +1,6 @@
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
+import { createHash, createHmac } from "node:crypto";
 import test from "node:test";
 
 import {
@@ -208,3 +209,36 @@ test("AWS Bedrock SigV4 does not fill an incomplete selected grant from global s
       /selected AWS grant must contain accessKeyId and secretAccessKey/.test(error.message),
   );
 });
+
+for (const [name, query, canonicalQuery] of [
+  ["mixed-case names", "z=last&A=upper&a=lower&Z=first", "A=upper&Z=first&a=lower&z=last"],
+  ["encoded names", "é=unicode&a=ascii&sp ace=x+y", "%C3%A9=unicode&a=ascii&sp%20ace=x%20y"],
+  ["duplicate values", "item=z&item=Z&item=é&item=!&empty=", "empty=&item=%21&item=%C3%A9&item=Z&item=z"],
+  ["name prefixes", "a0=long&a=short&a-=dash", "a=short&a-=dash&a0=long"],
+]) {
+  test(`AWS Bedrock SigV4 canonicalizes ${name} by encoded byte order`, async () => {
+    const headers = new Headers({ "content-type": "application/json" });
+    await signSigV4(provider, new URL(`https://bedrock-runtime.us-east-1.amazonaws.com/model/example/invoke?${query}`), "POST", "{}", headers, {
+      AWS_ACCESS_KEY_ID: "AKIDEXAMPLE", AWS_SECRET_ACCESS_KEY: "synthetic-signing-key", AWS_REGION: "us-east-1",
+    }, null, new Date("2015-08-30T12:36:00Z"));
+    assert.equal(headers.get("authorization"), referenceAuthorization(canonicalQuery));
+  });
+}
+
+// Explicit canonical query fixtures follow AWS's encode-before-sort contract.
+// Node crypto independently signs those bytes instead of duplicating the Worker canonicalizer.
+function referenceAuthorization(canonicalQuery) {
+  const hash = value => createHash("sha256").update(value).digest("hex");
+  const hmac = (key, value) => createHmac("sha256", key).update(value).digest();
+  const names = "content-type;host;x-amz-content-sha256;x-amz-date";
+  const canonicalRequest = [
+    "POST", "/model/example/invoke", canonicalQuery,
+    `content-type:application/json\nhost:bedrock-runtime.us-east-1.amazonaws.com\nx-amz-content-sha256:${hash("{}")}\nx-amz-date:20150830T123600Z\n`,
+    names, hash("{}"),
+  ].join("\n");
+  const scope = "20150830/us-east-1/bedrock/aws4_request";
+  let key = Buffer.from("AWS4synthetic-signing-key");
+  for (const part of scope.split("/")) key = hmac(key, part);
+  const signature = hmac(key, `AWS4-HMAC-SHA256\n20150830T123600Z\n${scope}\n${hash(canonicalRequest)}`).toString("hex");
+  return `AWS4-HMAC-SHA256 Credential=AKIDEXAMPLE/${scope}, SignedHeaders=${names}, Signature=${signature}`;
+}
