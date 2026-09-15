@@ -278,8 +278,8 @@ export async function signSigV4(provider: CompiledProvider, url: URL, method: st
   const signedHeaderNames = headerNames.filter((name) => name === "host" || name === "content-type" || name.startsWith("x-amz-") || name.startsWith("x-amzn-")).sort();
   const canonicalHeaders = signedHeaderNames.map((name) => `${name}:${headers.get(name)!.trim().replace(/\s+/g, " ")}\n`).join("");
   const signedHeaders = signedHeaderNames.join(";");
-  const queryEntries: Array<[string, string]> = []; url.searchParams.forEach((value, key) => queryEntries.push([key, value]));
-  const query = queryEntries.sort(([a, av], [b, bv]) => a.localeCompare(b) || av.localeCompare(bv)).map(([key, value]) => `${awsEncode(key)}=${awsEncode(value)}`).join("&");
+  const queryEntries: Array<[string, string]> = []; url.searchParams.forEach((value, key) => queryEntries.push([awsEncode(key), awsEncode(value)]));
+  const query = queryEntries.sort(([a, av], [b, bv]) => compareAscii(a, b) || compareAscii(av, bv)).map(([key, value]) => `${key}=${value}`).join("&");
   const uri = url.pathname.split("/").map(awsEncode).join("/") || "/";
   const canonicalRequest = `${method}\n${uri}\n${query}\n${canonicalHeaders}\n${signedHeaders}\n${payloadHash}`;
   const scope = `${dateStamp}/${region}/${scheme.service}/aws4_request`;
@@ -394,6 +394,7 @@ async function sha256(value: string): Promise<string> { return hex(new Uint8Arra
 async function hmac(key: Uint8Array, value: string): Promise<Uint8Array> { const cryptoKey = await crypto.subtle.importKey("raw", key.buffer as ArrayBuffer, { name: "HMAC", hash: "SHA-256" }, false, ["sign"]); return new Uint8Array(await crypto.subtle.sign("HMAC", cryptoKey, new TextEncoder().encode(value))); }
 function hex(value: Uint8Array): string { return [...value].map((byte) => byte.toString(16).padStart(2, "0")).join(""); }
 function awsEncode(value: string): string { return encodeURIComponent(value).replace(/[!'()*]/g, (character) => `%${character.charCodeAt(0).toString(16).toUpperCase()}`); }
+function compareAscii(left: string, right: string): number { return left < right ? -1 : left > right ? 1 : 0; }
 
 function configuredList(provider: CompiledProvider, name: string, env: Env): string[] {
   const key = templateCandidates(provider, name).find((candidate) => envValue(env, candidate));
