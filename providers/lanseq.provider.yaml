@@ -1,0 +1,63 @@
+schema: clawrouter.service-provider.v1
+id: lanseq
+displayName: Lanseq
+status: stable
+class: openai_compatible
+
+service:
+  platform: lanseq
+  kind: model_provider
+  upstreamService: lanseq
+  configKeys: [LANSEQ_API_KEY]
+
+auth:
+  schemes:
+    - type: bearer
+      header: Authorization
+      format: "Bearer ${secret}"
+      secretKind: api_key
+
+baseUrls:
+  default: https://api.lanseq.cloud
+
+routing:
+  nativePrefixes: [clawrouter-lanseq, lanseq]
+  modelPrefixes: [lanseq/]
+
+adapter:
+  request: openai
+  response: openai
+  stream: openai_sse
+  error: openai_error
+
+capabilities:
+  - id: llm.chat
+    endpoint: chat_completions
+    methods: [POST]
+
+endpoints:
+  chat_completions:
+    path: /v1/chat/completions
+    requestFormat: openai.chat_completions
+    responseFormat: openai.chat_completions
+    streaming: sse
+    timeoutMs: 600000
+
+models:
+  entries:
+    - id: lanseq/qwen3.8-27b-int4
+      upstream: qwen3.8-27b-int4
+      capabilities: [llm.chat]
+      pricingRef: lanseq-qwen3.8-27b-int4-standard-2026-09-18
+      pricing:
+        effectiveAt: "2026-09-18"
+        source: https://api.lanseq.cloud/docs
+        inputMicrosPerMillion: 250000
+        cachedInputMicrosPerMillion: 45000
+        outputMicrosPerMillion: 1990000
+        maxInputTokens: 70000
+        defaultMaxOutputTokens: 8192
+
+billing:
+  meter: clawrouter.tokens
+  dimensions: [provider, model, key, service, subject]
