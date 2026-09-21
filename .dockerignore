@@ -9,3 +9,12 @@
 admin/dist
 playwright-report
 test-results
+
+# Repository-only inputs are not needed by the self-host image.
+.agents
+.github
+docs
+test
+worker/test
+admin/test
+admin/browser
