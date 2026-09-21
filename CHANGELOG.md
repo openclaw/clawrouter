@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Exclude repository documentation, review tooling, and tests from the self-host Docker image and build context.
+
 - Correct Bedrock SigV4 query signing for mixed-case and percent-encoded parameters by sorting encoded names and values in byte order.
 
 - Cancel discarded Fusion adviser responses, including late arrivals after a deadline, so failed calls release budget reservations and deliver their usage events without delaying the synthesizer.
