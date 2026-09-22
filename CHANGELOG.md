@@ -2,21 +2,20 @@
 
 ## Unreleased
 
+## 0.4.0 - 2026-09-22
+
+**Highlights:** Lanseq joins the provider catalog, with more reliable Fusion accounting, safer route parsing, and corrected Bedrock request signing.
+
+### Changes
+
 - Add Lanseq's Qwen3.8-27B INT4 model with OpenAI-compatible chat, SSE streaming, and dated token pricing; thanks @CHYYX for #153.
-
-- Contain rejected Fusion adviser invocations and body reads when their deadline has already elapsed, avoiding unhandled promise rejections while the synthesizer continues.
-
-- Exclude repository documentation, review tooling, and tests from the self-host Docker image and build context.
-
-- Correct Bedrock SigV4 query signing for mixed-case and percent-encoded parameters by sorting encoded names and values in byte order.
-
 - Cancel discarded Fusion adviser responses, including late arrivals after a deadline, so failed calls release budget reservations and deliver their usage events without delaying the synthesizer.
-
-- Remove unsupported OpenAI subscription browser Connect and explain Platform API-key setup, direct Codex login, and the private facade's limits; thanks @imrane for the report in #141.
-
-- Update Workers types, Wrangler, and Lucide while preserving Node.js 24 and the 48-hour dependency release-age policy.
+- Contain rejected Fusion adviser invocations and body reads when their deadline has already elapsed, avoiding unhandled promise rejections while the synthesizer continues.
 - Reject malformed percent-encoded proxy, native, admin, and pool-submission route identifiers with HTTP 400 instead of HTTP 500, without performing the requested mutation or upstream call.
-- Refresh Worker/admin tooling, pin CI actions to reviewed releases, and remove stale install exceptions while preserving Node.js 24 and the 48-hour dependency release-age policy.
+- Correct Bedrock SigV4 query signing for mixed-case and percent-encoded parameters by sorting encoded names and values in byte order.
+- Remove unsupported OpenAI subscription browser Connect and explain Platform API-key setup, direct Codex login, and the private facade's limits; thanks @imrane for the report in #141.
+- Exclude repository documentation, review tooling, and tests from the self-host Docker image and build context.
+- Refresh Worker/admin dependencies and pnpm, pin CI actions to reviewed releases, and remove stale install exceptions while preserving Node.js 24 and the 48-hour dependency release-age policy.
 
 ## 0.3.0 - 2026-09-11
 
