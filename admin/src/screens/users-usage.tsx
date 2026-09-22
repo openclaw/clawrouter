@@ -133,7 +133,7 @@ export function UsageScreen({ keys, credentials, services, overview, tenants, us
         <Metric label="requests" value={formatCount(usage.summary.requestCount)} meta={`${formatCount(usage.summary.totalTokens)} tokens`} />
         <Metric label="success rate" value={successRate === null ? "—" : `${successRate}%`} meta={successRate === null ? "No requests in this period" : `${formatCount(usage.summary.successCount)} successful`} />
         <Metric label="errors" value={formatCount(usage.summary.errorCount)} meta="upstream and policy outcomes" />
-        <Metric label="accounted spend" value={usageCostLabel(formatMicros(usage.summary.actualCostMicros), usage.summary.requestCount, usage.summary.unpricedRequestCount)} meta={`${usage.providers.length} active providers · excludes unavailable prices`} />
+        <Metric label={usage.summary.unpricedRequestCount ? "accounted spend" : "actual spend"} value={usageCostLabel(formatMicros(usage.summary.actualCostMicros), usage.summary.requestCount, usage.summary.unpricedRequestCount)} meta={`${usage.providers.length} active providers${usage.summary.unpricedRequestCount ? " · excludes unavailable prices" : ""}`} />
       </section>
 
       <section className="analyticsPanel usageTrafficPanel">

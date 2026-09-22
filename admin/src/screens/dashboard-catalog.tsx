@@ -131,7 +131,7 @@ export function DashboardScreen({ session, services, policies, credentials, user
         <DashboardStat label="requests" value={formatCount(usage.summary.requestCount)} note={`${formatCount(usage.summary.totalTokens)} tokens in 30 days`} />
         <DashboardStat label="success rate" value={successRate === null ? "—" : `${successRate}%`} note={successRate === null ? "No requests in this period" : `${formatCount(usage.summary.successCount)} successful`} />
         <DashboardStat label={isAdmin ? "active policies" : "quota pools"} value={String(isAdmin ? overview?.policiesActive ?? activePolicies : rows.length)} note={isAdmin ? `${overview?.tenantsTotal ?? tenants.length} tenants` : usageLoaded ? "live policy ledgers" : "status unavailable"} />
-        <DashboardStat label="accounted spend" value={usageCostLabel(formatMicros(usage.summary.actualCostMicros), usage.summary.requestCount, usage.summary.unpricedRequestCount)} note={isAdmin ? `${usage.providers.length} active providers` : "across your policy pools"} />
+        <DashboardStat label={usage.summary.unpricedRequestCount ? "accounted spend" : "actual spend"} value={usageCostLabel(formatMicros(usage.summary.actualCostMicros), usage.summary.requestCount, usage.summary.unpricedRequestCount)} note={isAdmin ? `${usage.providers.length} active providers` : "across your policy pools"} />
       </section>
 
       <div className="dashboardAnalyticsGrid">
