@@ -40,7 +40,7 @@ function summarizeUsageEvents(key: string, events: UsageAuditEvent[]): UsageEven
     occurredAtMs,
     durationMs: events.some((event) => event.duration_ms != null) ? occurredAtMs - startedAt : null,
     actualCostMicros: events.reduce((total, event) => total + event.actual_cost_micros, 0),
-    unpricedRequestCount: events.filter((event) => event.cost_basis === "unpriced_service_tier").length,
+    unpricedRequestCount: events.filter((event) => event.cost_basis === "unpriced_usage").length,
     successCount: events.filter((event) => event.status === "success").length,
     expectedCallCount: Math.max(...events.map((event) => event.compound_request_size ?? events.length)),
     complete: !primary.compound_request_id || events.length >= Math.max(...events.map((event) => event.compound_request_size ?? events.length)),

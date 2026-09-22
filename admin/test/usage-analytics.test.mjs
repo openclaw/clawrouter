@@ -80,15 +80,17 @@ test("truncated Fusion groups are explicitly partial", () => {
 test("unavailable prices remain distinct from known zero and mixed accounted totals", () => {
   const base = { type: "clawrouter.usage.v1", tenant_id: "tenant", provider: "openai", occurred_at_ms: 1_000, actual_cost_micros: 0, reserved_cost_micros: 0, status: "success" };
   const [unknown, knownZero, mixed] = usageEventGroups([
-    { ...base, id: "unknown", cost_basis: "unpriced_service_tier" },
+    { ...base, id: "unknown", cost_basis: "unpriced_usage" },
     { ...base, id: "zero", cost_basis: "manifest_pricing" },
-    { ...base, id: "mixed-unknown", compound_request_id: "mixed", cost_basis: "unpriced_service_tier" },
+    { ...base, id: "mixed-unknown", compound_request_id: "mixed", cost_basis: "unpriced_usage" },
     { ...base, id: "mixed-known", compound_request_id: "mixed", actual_cost_micros: 5, cost_basis: "manifest_pricing" },
   ]);
   assert.equal(usageCostLabel("$0", unknown.events.length, unknown.unpricedRequestCount), "Price unavailable");
   assert.equal(usageCostLabel("$0", knownZero.events.length, knownZero.unpricedRequestCount), "$0");
   assert.equal(usageCostLabel("$5", mixed.events.length, mixed.unpricedRequestCount), "$5 accounted; 1 unpriced");
   assert.equal(mixed.actualCostMicros, 5);
+  const [historicalDenial] = usageEventGroups([{ ...base, id: "old-denial", status: "client_error", status_code: 400, cost_basis: "unpriced_service_tier" }]);
+  assert.equal(usageCostLabel("$0", 1, historicalDenial.unpricedRequestCount), "$0");
   const dayStartMs = Math.floor(Date.now() / usageDayMs) * usageDayMs;
   const daily = { dayStartMs, requestCount: 2, successCount: 2, errorCount: 0, totalTokens: 2, actualCostMicros: 5, unpricedRequestCount: 1 };
   assert.equal(usageTimeline({ summary, events: [], providers: [], daily: [daily, daily] }, 1)[0].unpricedRequestCount, 2);

@@ -260,13 +260,15 @@ test("either enforced budget rejects unsupported tiers while fixed policy tariff
 
 for (const existingUnmetered of [false, true]) {
   test(`${existingUnmetered ? "existing stored" : "fresh"} unmetered policies forward unknown tiers and distinguish unavailable prices`, async (t) => {
-    for (const [servedTier, status, expected, basis] of [["future", 200, 0, "unpriced_service_tier"], [undefined, 200, 0, "unpriced_service_tier"], ["priority", 200, 1_080, "manifest_pricing"], ["default", 200, 540, "manifest_pricing"], ["future", 400, 0, "none"], ["transport_failure", 502, 0, "none"]]) {
+    for (const [servedTier, status, expected, basis] of [["future", 200, 0, "unpriced_usage"], [undefined, 200, 0, "unpriced_usage"], ["priority", 200, 1_080, "manifest_pricing"], ["default", 200, 540, "manifest_pricing"], ["future", 400, 0, "none"], ["transport_failure", 502, 0, "unpriced_usage"], ["timeout", 502, 0, "unpriced_usage"], ["retention_failure", 503, 0, "none"]]) {
       const events = [], pending = [], ledgerCalls = [];
-      const env = usageEnv(ledgerCalls, { limit: null, providerLimit: null, fixedCost: null, retainContent: false, existingUnmetered });
+      const env = usageEnv(ledgerCalls, { limit: null, providerLimit: null, fixedCost: null, retainContent: servedTier === "retention_failure", existingUnmetered });
       env.OPENAI_API_KEY = "fixture-openai-key";
       env.USAGE_QUEUE = { send: async event => events.push(event) };
+      env.CONTENT_ARCHIVE = { put: async () => { throw new Error("synthetic retention failure"); } };
       const upstream = t.mock.method(globalThis, "fetch", async (_url, init) => {
         assert.equal(JSON.parse(init.body).service_tier, "future");
+        if (servedTier === "timeout") throw new DOMException("synthetic timeout", "AbortError");
         if (servedTier === "transport_failure") throw new Error("synthetic transport failure");
         return Response.json({ service_tier: servedTier, usage: astraUsage }, { status });
       });
@@ -276,7 +278,7 @@ for (const existingUnmetered of [false, true]) {
       }), env, { waitUntil: promise => pending.push(promise) });
       assert.equal(response.status, status);
       await response.text(); await Promise.all(pending);
-      assert.equal(upstream.mock.callCount(), 1);
+      assert.equal(upstream.mock.callCount(), servedTier === "retention_failure" ? 0 : 1);
       assert.equal(events.length, 1);
       assert.equal(events[0].actual_cost_micros, expected);
       assert.equal(events[0].reserved_cost_micros, 0);

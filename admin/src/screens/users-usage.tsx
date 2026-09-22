@@ -222,7 +222,7 @@ function CompoundRequestCalls({ group, onInspect }: { group: UsageEventGroup; on
       <div className="compoundRequestCalls">
         {group.events.map((event) => <div key={event.id}>
           <span><strong>{compoundStage(event)}</strong><small>{event.provider} · {event.model ?? event.capability ?? "request"}</small></span>
-          <span><small>{event.duration_ms != null ? formatDuration(event.duration_ms) : "—"} · {usageCostLabel(formatMicros(event.actual_cost_micros), 1, event.cost_basis === "unpriced_service_tier" ? 1 : 0)}</small>{event.content_retained ? <button type="button" className="tableAction" onClick={() => void onInspect(event)}>View</button> : null}</span>
+          <span><small>{event.duration_ms != null ? formatDuration(event.duration_ms) : "—"} · {usageCostLabel(formatMicros(event.actual_cost_micros), 1, event.cost_basis === "unpriced_usage" ? 1 : 0)}</small>{event.content_retained ? <button type="button" className="tableAction" onClick={() => void onInspect(event)}>View</button> : null}</span>
         </div>)}
       </div>
       {!group.complete ? <p className="compoundRequestWarning">This recent-event window contains {group.events.length} of {group.expectedCallCount} calls. Totals exclude older calls outside the window.</p> : null}

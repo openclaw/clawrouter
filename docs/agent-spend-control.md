@@ -126,12 +126,13 @@ context ranges, and incomplete token usage retain the reservation and record
 Usage events include `requested_service_tier` and `served_service_tier`.
 For unmetered requests with an undeclared requested tier, a known served tier and
 complete usage still produce a measured price. Otherwise, the event records
-`cost_basis: unpriced_service_tier` and zero accounted micros. This means the price
+`cost_basis: unpriced_usage` and zero accounted micros. This means the price
 is unavailable, not that the request was free. Summary, provider, and daily usage
 include `unpricedRequestCount`; spend totals exclude these unavailable prices.
 The console marks them as unavailable or reports the known subtotal with the
-unpriced count. Rejected requests and transport failures with known zero cost do
-not increment this count. No policy migration or new setting is required.
+unpriced count. Pre-dispatch denials and nonbillable responses do not increment this count.
+Dispatched requests whose transport fails still have unavailable upstream cost.
+Historical admission denials marked `unpriced_service_tier` remain known zero. No policy migration or new setting is required.
 The bundled OpenAI route is pinned to the global `api.openai.com` endpoint.
 Regional data-residency endpoints are not exposed; a regional deployment needs
 a separate versioned price with OpenAI's 10% uplift or a fixed policy price.

@@ -46,14 +46,15 @@ test("unpriced SQL totals survive the recent-event limit and duplicate delivery 
   const now = Date.now();
   const base = { type: "clawrouter.usage.v1", tenant_id: "tenant", policy_id: "policy", provider: "openai", status: "success", status_code: 200, input_tokens: 1, output_tokens: 1, total_tokens: 2, actual_cost_micros: 0 };
   const ingest = event => ledger.fetch(new Request("https://ledger/ingest", { method: "POST", body: JSON.stringify(event) }));
-  const unknown = { ...base, id: "old-unpriced", occurred_at_ms: now - 2 * 86_400_000, cost_basis: "unpriced_service_tier" };
+  const unknown = { ...base, id: "old-unpriced", occurred_at_ms: now - 2 * 86_400_000, cost_basis: "unpriced_usage" };
   await ingest(unknown); await ingest(unknown);
+  await ingest({ ...unknown, id: "historical-denial", cost_basis: "unpriced_service_tier", status: "client_error", status_code: 400 });
   await ingest({ ...unknown, id: "other-policy", policy_id: "other" });
   for (let index = 0; index < 101; index++) await ingest({ ...base, id: `priced-${index}`, occurred_at_ms: now - index, actual_cost_micros: index ? 5 : 0, cost_basis: index ? "manifest_pricing" : "none" });
   const snapshot = await (await ledger.fetch(new Request("https://ledger/snapshot?policy_id=policy&limit=100"))).json();
   assert.equal(snapshot.events.length, 100);
   assert.equal(snapshot.events.some(event => event.id === unknown.id), false);
-  assert.equal(snapshot.summary.requestCount, 102);
+  assert.equal(snapshot.summary.requestCount, 103);
   assert.equal(snapshot.summary.actualCostMicros, 500);
   assert.equal(snapshot.summary.unpricedRequestCount, 1);
   assert.equal(snapshot.providers[0].unpricedRequestCount, 1);
