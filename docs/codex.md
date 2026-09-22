@@ -34,8 +34,11 @@ after changes to the authorized router catalog or the producer's bundled models.
 
 ## Configure the client
 
-Merge these settings into the user's Codex configuration. Keep existing sandbox,
-approval, workspace, and tool settings. Set `model_catalog_json` to the absolute
+Merge these settings into the shared user configuration, `$CODEX_HOME/config.toml`
+(default `~/.codex/config.toml`). CLI and Desktop instances using the same directory
+share this base; profiles can override it. Project configuration cannot select a
+different provider. Keep existing
+sandbox, approval, workspace, and tool settings. Set `model_catalog_json` to the absolute
 path of the exported file on that machine, or a relative path beside the
 configuration file. TOML does not expand shell variables in that path.
 
@@ -68,7 +71,9 @@ still apply. Direct API clients can send `service_tier: "default"` explicitly.
 The upstream may serve a different tier; usage records contain both requested
 and served values. Admission reserves a conservative priced envelope, and complete
 terminal usage settles at the actual served tier. Missing tier or cache counters
-retain the estimate. The monthly allowance is ClawRouter list-price accounting,
+retain the estimate. With both budgets disabled, undeclared request tiers can
+forward; unknown final prices are marked unavailable rather than reported as free.
+The monthly allowance is ClawRouter list-price accounting,
 not a guarantee about the provider invoice. See [spend control](agent-spend-control.md).
 
 For the macOS app, load the downloaded key file from the interactive shell that
@@ -80,15 +85,18 @@ if [ -r "$HOME/.config/clawrouter/client-key.txt" ]; then
 fi
 ```
 
-Fully quit and restart the app, then start a new thread. A Terminal export alone
+After regenerating the catalog or changing providers, fully quit and restart the
+app, then start a new thread. A Terminal export alone
 does not change an already-running GUI process. `launchctl setenv` is an optional
 session-only alternative that must be reapplied after login or reboot. Never put
 an admin, upstream provider, or ChatGPT token in `CLAWROUTER_API_KEY`.
 
 ## Desktop account features and voice
 
-The desktop frontend has account-dependent controls. A custom-key-only provider
-does not establish a ChatGPT account for those controls. An optional hybrid
+CLI and engine priority forwarding is separate from the Desktop Fast control.
+The installed Desktop clears Fast in custom-key-only mode. Desktop Fast requires
+a genuine ChatGPT login, a catalog model advertising priority, and permission
+from any managed `fast_mode` requirements. An optional hybrid
 configuration sets `requires_openai_auth = true` while retaining the explicit
 router `base_url` and `env_key`, and uses a genuine ChatGPT login in the app.
 The router key still authenticates inference; a missing router key fails rather
@@ -96,35 +104,16 @@ than sending the ChatGPT token to ClawRouter.
 
 The installed 0.153.0 app engine and 0.155.0 CLI are covered by isolated native
 fixtures for account state, catalog loading, Lite payloads, priority forwarding,
-and bearer ownership. Those fixtures do not prove the graphical Fast control,
-microphone permission, or a particular account's entitlement. Desktop dictation
+and bearer ownership. Graphical validation was blocked by the Computer Use native
+pipe, so those fixtures do not prove the graphical Fast control, microphone
+permission, or a particular account's entitlement. Desktop dictation
 continues to use the app's OpenAI service and genuine ChatGPT account. ClawRouter
 does not proxy dictation, speech, or the Realtime API through Responses WebSockets.
 
 ## WebSocket contract
 
-Send authenticated upgrades to `/v1/responses` or
-`/v1/native/openai/v1/responses`. Unified upgrades select their model on the first
-`response.create`, so an HTTP 101 alone does not prove model access or upstream
-readiness. Every create rechecks credential, policy, provider, grant, retention,
-and budget before dispatch. The connection pins its provider route and grant
-revision; changing either requires a new connection.
-
-The bridge forwards native response IDs, errors, metadata, tool results,
-`previous_response_id`, and `stream_options`. Prewarm `generate: false` requests
-receive normal admission and accounting. It never replays requests or switches
-grants after dispatch. A terminal response with usable usage settles once;
-disconnects and deadlines without final usage retain the reservation.
-
-Limits per connection are 16 active responses, 32 named lanes plus the default
-lane, 48 buffered creates, 4 MiB per incoming frame, 8 MiB total buffered create
-bytes, and 16 MiB cumulative downstream output. The output limit bounds a slow
-reader because Workers' WebSocket API has no supported drain/queue metric.
-Connections last at most 60 minutes; each response uses its endpoint deadline,
-capped at 600 seconds. Clients must reconnect after a limit or deadline closes
-the connection. Binary frames, steering events, and background execution are
-rejected visibly. This contract runs on the Worker deployment; other hosts must
-qualify native upgrade forwarding before advertising it.
+See the [Responses WebSocket contract](api-reference.md#websocket-contract) for
+per-create authorization, accounting, continuation, and connection limits.
 
 ## Other Responses providers
 

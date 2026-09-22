@@ -56,15 +56,20 @@ export function createProxyAccounting(options: AccountingContext) {
   function settle(statusCode: number, status: UsageEvent["status"], billable: boolean, tokens: UsageTokens | null, reservation: BudgetReservation, contentRef: string | null) {
     const measured = tokens ? actualCost(model, tokens, auth.policy.requestCostMicros) : null;
     const actual = billable ? measured ?? cost.reserveMicros : 0;
-    const basis = billable && measured == null && cost.basis === "manifest_pricing" ? "manifest_reservation" : cost.basis;
+    // Zero accounted micros with an unpriced basis means unavailable, not free.
+    // A known served tier can supply a price even for an undeclared request tier.
+    const basis = cost.basis === "unpriced_service_tier"
+      ? !billable ? "none" : measured == null ? "unpriced_usage" : "manifest_pricing"
+      : billable && measured == null && cost.basis === "manifest_pricing" ? "manifest_reservation" : cost.basis;
     return finish(statusCode, status, reservation, actual, tokens, contentRef, basis);
   }
   return {
     settle,
     cost,
     requestId,
-    fail(statusCode: number, status: UsageEvent["status"], reservation?: BudgetReservation, contentRef: string | null = null) {
-      context.waitUntil(finish(statusCode, status, reservation, 0, null, contentRef));
+    fail(statusCode: number, status: UsageEvent["status"], reservation?: BudgetReservation, contentRef: string | null = null, dispatched = false) {
+      const basis = cost.basis === "unpriced_service_tier" ? dispatched ? "unpriced_usage" : "none" : cost.basis;
+      context.waitUntil(finish(statusCode, status, reservation, 0, null, contentRef, basis));
     },
     complete(response: Response, tokens: UsageTokens | null, reservation: BudgetReservation, contentRef: string | null) {
       return settle(response.status, response.ok ? "success" : response.status < 500 ? "client_error" : "provider_error", response.ok, tokens, reservation, contentRef);

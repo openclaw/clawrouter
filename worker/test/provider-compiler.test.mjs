@@ -16,6 +16,8 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.deepEqual(compiled.providers.find((provider) => provider.id === "aws-bedrock").optional_config_keys, ["AWS_SESSION_TOKEN"]);
   assert.deepEqual(compiled.providers.find((provider) => provider.id === "azure-openai").optional_config_keys, ["AZURE_OPENAI_COMPLETION_TOKEN_DEPLOYMENTS", "AZURE_OPENAI_API_VERSION", "AZURE_OPENAI_DEPLOYMENT"]);
   const openai = compiled.providers.find((provider) => provider.id === "openai");
+  assert.equal(openai.endpoints.find((endpoint) => endpoint.id === "responses").websocket, "openai.responses");
+  assert.equal(compiled.providers.find((provider) => provider.id === "azure-openai").endpoints.find((endpoint) => endpoint.id === "responses").websocket, undefined);
   const astra = openai.models.find((model) => model.id === "openai/gpt-6-astra");
   assert.equal(astra.upstream, "gpt-6-astra");
   assert.deepEqual(astra.capabilities, ["llm.responses", "llm.chat"]);
@@ -26,7 +28,6 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.equal(gpt56.upstream, "gpt-5.6");
   assert.equal(gpt56.codexModel, "gpt-5.6-sol");
   assert.equal(compiled.model_index[gpt56.id].codexModel, gpt56.codexModel);
-  assert.equal(openai.endpoints.find((endpoint) => endpoint.id === "responses").websocket, "openai.responses");
   for (const name of ["sol", "terra", "luna"]) {
     const model = compiled.model_index[`openai/gpt-5.6-${name}`];
     assert.equal(model.upstream, `gpt-5.6-${name}`);
@@ -179,6 +180,43 @@ test("service tier compilation rejects ambiguous, incomplete, and drifting rate 
       assert.ok(source.includes(from));
       writeFileSync(manifest, source.replace(from, to));
       assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), expected);
+    }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
+});
+
+test("grant transport endpoint restrictions require unique own endpoint names", () => {
+  const directory = mkdtempSync(join(tmpdir(), "clawrouter-provider-"));
+  const manifest = join(directory, "openai.provider.yaml");
+  const source = readFileSync("providers/openai.provider.yaml", "utf8");
+  const anchor = "allowedEndpoints: [responses]";
+  assert.ok(source.includes(anchor));
+  try {
+    for (const value of ["responses", "[]", "[responses, responses]", "[missing_endpoint]", "[null]", "[1]", "[[responses]]", "[toString]", "[constructor]"]) {
+      writeFileSync(manifest, source.replace(anchor, `allowedEndpoints: ${value}`));
+      assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), /allowedEndpoints must reference unique existing endpoints/);
+    }
+    writeFileSync(manifest, source);
+    const compiled = JSON.parse(execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8" }));
+    assert.deepEqual(compiled.providers[0].auth.grantTransports.subscription.allowedEndpoints, ["responses"]);
+    writeFileSync(manifest, source.replace(`      ${anchor}\n`, ""));
+    const unrestricted = JSON.parse(execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8" }));
+    assert.equal("allowedEndpoints" in unrestricted.providers[0].auth.grantTransports.subscription, false);
+  } finally {
+    rmSync(directory, { recursive: true, force: true });
+  }
+});
+
+
+test("Codex model aliases require an explicit nonempty native slug", () => {
+  const directory = mkdtempSync(join(tmpdir(), "clawrouter-provider-"));
+  const manifest = join(directory, "openai.provider.yaml");
+  const source = readFileSync("providers/openai.provider.yaml", "utf8");
+  const anchor = "codexModel: gpt-5.6-sol";
+  assert.ok(source.includes(anchor));
+  try {
+    for (const value of ['""', '" "', "null", "42", "[gpt-5.6-sol]"]) {
+      writeFileSync(manifest, source.replace(anchor, `codexModel: ${value}`));
+      assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), /codexModel must be a nonempty exact native slug/);
     }
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });

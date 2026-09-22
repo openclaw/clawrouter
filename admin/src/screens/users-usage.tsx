@@ -3,7 +3,7 @@ import { Activity, CalendarDays, KeyRound, Plus, Search, ServerCog, ShieldCheck,
 import { bindingKey, effectiveAccess, errorMessage, policyUsageFallback, tenantSummaryFallback } from "../domain";
 import { EntityName, InlineError, InlineNote, InspectorHeader, Status, kindLabel } from "../components";
 import { ProviderUsageChart, TrafficAreaChart } from "../analytics-charts";
-import { usageEventGroups, type UsageEventGroup } from "../usage-analytics";
+import { usageCostLabel, usageEventGroups, type UsageEventGroup } from "../usage-analytics";
 import {
   effectiveProviderCount,
   formatBudget,
@@ -133,7 +133,7 @@ export function UsageScreen({ keys, credentials, services, overview, tenants, us
         <Metric label="requests" value={formatCount(usage.summary.requestCount)} meta={`${formatCount(usage.summary.totalTokens)} tokens`} />
         <Metric label="success rate" value={successRate === null ? "—" : `${successRate}%`} meta={successRate === null ? "No requests in this period" : `${formatCount(usage.summary.successCount)} successful`} />
         <Metric label="errors" value={formatCount(usage.summary.errorCount)} meta="upstream and policy outcomes" />
-        <Metric label="actual spend" value={formatMicros(usage.summary.actualCostMicros)} meta={`${usage.providers.length} active providers`} />
+        <Metric label={usage.summary.unpricedRequestCount ? "accounted spend" : "actual spend"} value={usageCostLabel(formatMicros(usage.summary.actualCostMicros), usage.summary.requestCount, usage.summary.unpricedRequestCount)} meta={`${usage.providers.length} active providers${usage.summary.unpricedRequestCount ? " · excludes unavailable prices" : ""}`} />
       </section>
 
       <section className="analyticsPanel usageTrafficPanel">
@@ -146,7 +146,7 @@ export function UsageScreen({ keys, credentials, services, overview, tenants, us
 
       <div className="usageInsightsGrid">
         <section className="analyticsPanel usageProviderPanel">
-          <header className="analyticsPanelHeader"><div><span>Provider mix</span><h2>Traffic distribution</h2><p>Request volume, success, tokens, and actual spend.</p></div><small>{usage.providers.length} active</small></header>
+          <header className="analyticsPanelHeader"><div><span>Provider mix</span><h2>Traffic distribution</h2><p>Request volume, success, tokens, and accounted spend.</p></div><small>{usage.providers.length} active</small></header>
           <ProviderUsageChart providers={usage.providers} services={services} />
         </section>
 
@@ -198,7 +198,7 @@ export function UsageScreen({ keys, credentials, services, overview, tenants, us
                 group.compound
                   ? <span title={group.durationMs != null ? `End-to-end latency ${formatDuration(group.durationMs)}` : undefined}>{group.events.filter((item) => item.content_retained).length} stored</span>
                   : event.content_retained ? <button type="button" className="tableAction" onClick={() => void inspectContent(event)}>View</button> : <span title={event.duration_ms ? `Latency ${formatDuration(event.duration_ms)}` : undefined}>not stored</span>,
-                `${group.complete ? "" : "≥"}${formatMicros(group.actualCostMicros)}`,
+                `${group.complete || group.unpricedRequestCount === group.events.length ? "" : "≥"}${usageCostLabel(formatMicros(group.actualCostMicros), group.events.length, group.unpricedRequestCount)}`,
               ],
               detail: group.compound && expandedRequestId === group.id ? <CompoundRequestCalls group={group} onInspect={inspectContent} /> : undefined,
             };
@@ -218,11 +218,11 @@ export function UsageScreen({ keys, credentials, services, overview, tenants, us
 function CompoundRequestCalls({ group, onInspect }: { group: UsageEventGroup; onInspect: (event: UsageAuditEvent) => Promise<void> }) {
   return (
     <div className="compoundRequest" aria-label="Fusion billable calls">
-      <div className="compoundRequestHeader"><strong>{group.complete ? "Billable call detail" : "Partial billable call detail"}</strong><span>{group.durationMs != null ? `${group.complete ? "End-to-end" : "Visible span"} ${formatDuration(group.durationMs)}` : "Latency unavailable"} · {group.complete ? formatMicros(group.actualCostMicros) : `at least ${formatMicros(group.actualCostMicros)}`}</span></div>
+      <div className="compoundRequestHeader"><strong>{group.complete ? "Billable call detail" : "Partial billable call detail"}</strong><span>{group.durationMs != null ? `${group.complete ? "End-to-end" : "Visible span"} ${formatDuration(group.durationMs)}` : "Latency unavailable"} · {group.complete || group.unpricedRequestCount === group.events.length ? usageCostLabel(formatMicros(group.actualCostMicros), group.events.length, group.unpricedRequestCount) : `at least ${usageCostLabel(formatMicros(group.actualCostMicros), group.events.length, group.unpricedRequestCount)}`}</span></div>
       <div className="compoundRequestCalls">
         {group.events.map((event) => <div key={event.id}>
           <span><strong>{compoundStage(event)}</strong><small>{event.provider} · {event.model ?? event.capability ?? "request"}</small></span>
-          <span><small>{event.duration_ms != null ? formatDuration(event.duration_ms) : "—"} · {formatMicros(event.actual_cost_micros)}</small>{event.content_retained ? <button type="button" className="tableAction" onClick={() => void onInspect(event)}>View</button> : null}</span>
+          <span><small>{event.duration_ms != null ? formatDuration(event.duration_ms) : "—"} · {usageCostLabel(formatMicros(event.actual_cost_micros), 1, event.cost_basis === "unpriced_usage" ? 1 : 0)}</small>{event.content_retained ? <button type="button" className="tableAction" onClick={() => void onInspect(event)}>View</button> : null}</span>
         </div>)}
       </div>
       {!group.complete ? <p className="compoundRequestWarning">This recent-event window contains {group.events.length} of {group.expectedCallCount} calls. Totals exclude older calls outside the window.</p> : null}

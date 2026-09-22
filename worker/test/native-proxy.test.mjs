@@ -2,7 +2,8 @@ import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { providerById } from "../providers.ts";
+import { providerById, providerReadinessFromState } from "../providers.ts";
+import { correlateIngressRequest } from "../correlation.ts";
 
 const { prepareNativeRequest, prepareManifestRequest } = await import("../proxy-selection.ts");
 const { estimateCost } = await import("../proxy-accounting.ts");
@@ -88,3 +89,123 @@ test("native path models reject body and path mismatches", () => {
     (error) => error?.code === "model_path_mismatch",
   );
 });
+
+test("native Azure Responses keeps v1 URL, API-key auth, explicit deployment, and JSON or SSE bodies", async (t) => {
+  const fixture = await nativeFixture("azure-openai");
+  Object.assign(fixture.env, { AZURE_OPENAI_ENDPOINT: "https://fixture.openai.azure.com/", AZURE_OPENAI_API_KEY: "fixture-azure-key" });
+  const sent = [];
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    sent.push({ url: new URL(url), ...init });
+    return JSON.parse(init.body).stream
+      ? new Response('data: {"type":"response.completed","response":{"usage":{"input_tokens":1,"output_tokens":1,"total_tokens":2}}}\n\n', { headers: { "content-type": "text/event-stream" } })
+      : Response.json({ usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } });
+  });
+  for (const legacyConfig of [false, true]) {
+    if (legacyConfig) Object.assign(fixture.env, { AZURE_OPENAI_API_VERSION: "2024-10-21", AZURE_OPENAI_DEPLOYMENT: "different-default" });
+    for (const stream of [false, true]) {
+      const body = { model: "fixture-deployment", input: "fixture", max_output_tokens: 16, stream };
+      const response = await fixture.call("/openai/v1/responses", body);
+      assert.equal(response.status, 200);
+      const output = await response.text();
+      assert.match(output, stream ? /response.completed/ : /usage/);
+      await fixture.drain();
+      const request = sent.at(-1);
+      assert.equal(request.method, "POST");
+      assert.equal(request.url.href, "https://fixture.openai.azure.com/openai/v1/responses");
+      assert.equal(request.headers.get("api-key"), "fixture-azure-key");
+      assert.equal(request.headers.has("authorization"), false);
+      assert.equal(request.headers.get("content-type"), "application/json");
+      assert.deepEqual(JSON.parse(request.body), body);
+    }
+  }
+  for (const [suffix, body] of [
+    ["chat/completions", { model: "fixture-deployment", messages: [{ role: "user", content: "fixture" }] }],
+    ["embeddings", { model: "fixture-deployment", input: "fixture" }],
+  ]) {
+    const response = await fixture.call(`/openai/deployments/fixture-deployment/${suffix}`, body);
+    assert.equal(response.status, 200);
+    await response.text(); await fixture.drain();
+    const request = sent.at(-1), { model: _, ...expectedBody } = body;
+    assert.equal(request.url.href, `https://fixture.openai.azure.com/openai/deployments/fixture-deployment/${suffix}?api-version=2024-10-21`);
+    assert.equal(request.headers.get("api-key"), "fixture-azure-key");
+    assert.deepEqual(JSON.parse(request.body), expectedBody);
+  }
+  delete fixture.env.AZURE_OPENAI_API_VERSION;
+  const before = sent.length;
+  const unavailable = await fixture.call("/openai/deployments/fixture-deployment/chat/completions", { messages: [] });
+  assert.equal(unavailable.status, 503);
+  assert.equal((await unavailable.json()).error.code, "provider_not_configured");
+  await fixture.drain();
+  assert.equal(sent.length, before);
+});
+
+test("Azure readiness checks endpoint-specific configuration without requiring a default deployment", () => {
+  const env = { AZURE_OPENAI_ENDPOINT: "https://fixture.openai.azure.com/", AZURE_OPENAI_API_KEY: "fixture-azure-key" };
+  const endpoints = () => providerReadinessFromState(env, [], [], new Map()).find(({ id }) => id === "azure-openai").executableEndpoints;
+  assert.deepEqual(endpoints(), ["responses"]);
+  env.AZURE_OPENAI_API_VERSION = "2024-10-21";
+  assert.deepEqual(endpoints(), ["chat_completions", "embeddings", "responses"]);
+  delete env.AZURE_OPENAI_API_KEY;
+  assert.deepEqual(endpoints(), []);
+  env.AZURE_OPENAI_API_KEY = "fixture-azure-key";
+  delete env.AZURE_OPENAI_ENDPOINT;
+  assert.deepEqual(endpoints(), []);
+});
+
+test("native OpenRouter Responses preserves provider namespaces and rejects unpriced budgeted calls", async (t) => {
+  const fixture = await nativeFixture("openrouter");
+  Object.assign(fixture.env, { OPENROUTER_API_KEY: "fixture-openrouter-key", OPENROUTER_SITE_URL: "https://client.example" });
+  const sent = [];
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    sent.push({ url: new URL(url), ...init });
+    return Response.json({ usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } });
+  });
+  const body = { model: "openai/gpt-6-astra", input: "fixture", max_output_tokens: 16 };
+  const response = await fixture.call("/v1/responses", body);
+  assert.equal(response.status, 200);
+  await response.text(); await fixture.drain();
+  assert.equal(sent[0].url.href, "https://openrouter.ai/api/v1/responses");
+  assert.equal(sent[0].headers.get("authorization"), "Bearer fixture-openrouter-key");
+  assert.equal(sent[0].headers.get("http-referer"), "https://client.example");
+  assert.equal(sent[0].headers.get("x-title"), "ClawRouter");
+  assert.deepEqual(JSON.parse(sent[0].body), body);
+  for (const owner of [fixture.policy, fixture.connection]) {
+    owner.monthlyBudgetMicros = 1000;
+    const denied = await fixture.call("/v1/responses", body);
+    assert.equal(denied.status, 400);
+    assert.equal((await denied.json()).error.code, "pricing_required");
+    await fixture.drain();
+    owner.monthlyBudgetMicros = null;
+  }
+  assert.equal(sent.length, 1);
+});
+
+async function nativeFixture(providerId) {
+  const { proxyNative } = await import("../proxy.ts");
+  const { sha256Hex } = await import("../utils.ts");
+  const secret = "fixture-native-secret", pending = [];
+  const policy = { enabled: true, generation: "g1", providers: [providerId], tenantId: "default", monthlyBudgetMicros: null, requestCostMicros: null, retainRequestContent: false };
+  const credential = { enabled: true, secretSha256: await sha256Hex(secret), policyId: "fixture", policyGeneration: "g1" };
+  const connection = { providerId, enabled: true, monthlyBudgetMicros: null };
+  const env = {
+    POLICY_KV: { get: async (key) => Array.isArray(key) ? new Map(key.map((item) => [item, null])) : null },
+    USAGE_QUEUE: { send: async () => {} },
+    ACCESS_CONTROL: { idFromName: (name) => name, get: () => ({ fetch: async (url) => {
+      const path = new URL(url).pathname;
+      if (path === "/credentials/resolve") return Response.json({ initialized: true, credentials: [{ credentialId: "fixture", credential }], missingCredentialIds: [] });
+      if (path === "/policies/resolve") return Response.json({ initialized: true, policies: [{ policyId: "fixture", policy }], missingPolicyIds: [] });
+      if (path === "/connections/resolve") return Response.json({ initialized: true, connections: [connection], missingProviderIds: [] });
+      if (path === "/grant-pools/resolve") return Response.json({ keys: [], states: {} });
+      throw new Error(`unexpected authority call ${path}`);
+    } }) },
+  };
+  return {
+    env, policy, connection,
+    call(path, body) {
+      const nativePath = `/v1/native/${providerId}${path}`;
+      const request = correlateIngressRequest(new Request(`https://router.example${nativePath}`, { method: "POST", headers: { authorization: `Bearer clawrouter-live-fixture-${secret}`, "content-type": "application/json" }, body: JSON.stringify(body) })).request;
+      return proxyNative(request, env, { waitUntil: (promise) => pending.push(promise) }, nativePath);
+    },
+    async drain() { while (pending.length) await Promise.all(pending.splice(0)); },
+  };
+}

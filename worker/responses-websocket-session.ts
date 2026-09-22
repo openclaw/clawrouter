@@ -168,6 +168,7 @@ export class ResponsesWebSocketSession {
     } catch (error) {
       const failure = error as { status?: number; code?: string; message?: string };
       this.error(failure.code ?? "provider_unavailable", failure.code ? failure.message ?? "Request could not be dispatched." : "Responses upstream could not accept this request; open a new connection.", failure.status ?? 502, op.lane);
+      if (failure.code === "accounting_unavailable") this.close("disconnect");
       await this.finish(op, op.sent ? "disconnect" : "not_sent", null);
       if (establishing || !failure.code) this.close("disconnect");
     } finally {

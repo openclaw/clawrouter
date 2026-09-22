@@ -139,3 +139,32 @@ test("zero policy and provider budgets preserve canonical free token counting", 
     assert.ok(models.every((model) => model.capabilities.length === 1 && model.capabilities[0] === "llm.count_tokens"));
   }
 });
+
+test("Azure discovery keeps explicit native routes while hiding an unresolved default model", async (t) => {
+  const secret = "fixture-azure-discovery";
+  const credential = { enabled: true, secretSha256: await sha256Hex(secret), policyId: "fixture", policyGeneration: "g1" };
+  const policy = { enabled: true, generation: "g1", providers: ["azure-openai"], monthlyBudgetMicros: null, requestCostMicros: null };
+  const env = {
+    AZURE_OPENAI_API_KEY: "fixture-key", AZURE_OPENAI_ENDPOINT: "https://fixture.openai.azure.com", AZURE_OPENAI_API_VERSION: "2024-10-21",
+    POLICY_KV: { async get(key) { return Array.isArray(key) ? new Map(key.map((item) => [item, null])) : null; }, async list() { return { keys: [], list_complete: true }; } },
+    ACCESS_CONTROL: { idFromName: (name) => name, get: () => ({ fetch: async (url) => {
+      const path = new URL(url).pathname;
+      if (path === "/credentials/resolve") return Response.json({ initialized: true, credentials: [{ credentialId: "fixture", credential }], missingCredentialIds: [] });
+      if (path === "/policies/resolve") return Response.json({ initialized: true, policies: [{ policyId: "fixture", policy }], missingPolicyIds: [] });
+      if (path === "/connections/resolve") return Response.json({ initialized: true, connections: [{ providerId: "azure-openai", enabled: true, monthlyBudgetMicros: null }], missingProviderIds: [] });
+      if (path === "/grant-pools/resolve") return Response.json({ keys: [], states: {} });
+      throw new Error(`discovery unexpectedly mutated authority: ${path}`);
+    } }) },
+  };
+  t.mock.method(globalThis, "fetch", () => { throw new Error("discovery must not call upstream"); });
+  const request = () => new Request("https://router.example/v1/catalog", { headers: { authorization: `Bearer clawrouter-live-fixture-${secret}` } });
+  for (const configured of [false, true]) {
+    if (configured) env.AZURE_OPENAI_DEPLOYMENT = "fixture-deployment";
+    const catalog = await (await catalogResponse(request(), env)).json();
+    const view = catalog.providers.find(({ id }) => id === "azure-openai");
+    const models = await (await modelsResponse(request(), env)).json();
+    assert.deepEqual(view.routes.map(({ endpoint }) => endpoint), ["chat_completions", "embeddings", "responses"]);
+    assert.deepEqual(view.models.map(({ id }) => id), configured ? ["azure-openai/deployment"] : []);
+    assert.deepEqual(models.data.map(({ id }) => id), view.models.map(({ id }) => id));
+  }
+});

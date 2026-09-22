@@ -232,7 +232,8 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     response = await normalizePreStreamError(response, selection.body.stream === true);
   } catch (error) {
     clearTimeout(timeout);
-    accounting.fail(502, error instanceof DOMException && error.name === "AbortError" ? "timeout" : "provider_error", reservation, content);
+    // A failed dispatched request can have upstream cost even without a response.
+    accounting.fail(502, error instanceof DOMException && error.name === "AbortError" ? "timeout" : "provider_error", reservation, content, true);
     return errorResponse("provider_unavailable", `upstream request to provider ${selection.provider.id} failed`, 502, undefined);
   }
   clearTimeout(timeout);

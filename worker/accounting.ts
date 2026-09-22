@@ -22,12 +22,14 @@ export interface EstimatedCost {
 
 export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capability: string, cost: EstimatedCost, connection?: ProviderConnection): Promise<BudgetReservation> {
   if (capability === "llm.count_tokens") return emptyReservation();
-  if (cost.basis === "unpriced_service_tier") throw new HttpError(400, "pricing_required", "requested service tier has no versioned manifest price; select a declared tier or configure a fixed policy request price");
   const policyLimit = auth.policy.monthlyBudgetMicros;
   const providerLimit = connection?.monthlyBudgetMicros;
+  // Unmetered callers retain upstream tier selection; only an enforced budget
+  // needs a provable reservation price before dispatch.
   if (policyLimit == null && providerLimit == null) return emptyReservation();
   if (policyLimit === 0) throw new HttpError(402, "budget_exhausted", "proxy key budget is exhausted");
   if (providerLimit === 0) throw new HttpError(402, "provider_budget_exhausted", `provider ${connection?.providerId ?? "unknown"} monthly budget is exhausted`);
+  if (cost.basis === "unpriced_service_tier") throw new HttpError(400, "pricing_required", "requested service tier has no versioned manifest price; select a declared tier or configure a fixed policy request price");
   if (cost.basis === "flat_fallback") throw new HttpError(400, "pricing_required", "budgeted requests require versioned manifest pricing or a fixed policy request price");
   const reservation: BudgetReservation = { reservations: [], reservedMicros: cost.reserveMicros };
   if (policyLimit != null) {
@@ -40,7 +42,8 @@ export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capabili
     try {
       reservation.reservations.push(await reserveLedger(env, address, providerLimit, cost, capability, "provider_budget_exhausted", `provider ${connection.providerId} monthly budget is exhausted`));
     } catch (error) {
-      await settleBudget(env, reservation, 0).catch(() => undefined);
+      try { await settleBudget(env, reservation, 0); }
+      catch { throw new HttpError(503, "accounting_unavailable", "Budget reservation rollback could not finish; retry after accounting recovers."); }
       throw error;
     }
   }
@@ -73,7 +76,7 @@ async function reserveLedger(
   return { reservationId, objectName: address.objectName };
 }
 
-export async function finalizeAccounting(env: Env, reservation: BudgetReservation, actualCostMicros: number, event: UsageEvent): Promise<void> {
+export async function finalizeAccounting(env: Env, reservation: BudgetReservation, actualCostMicros: number, event: UsageEvent): Promise<boolean> {
   const results = await Promise.allSettled([
     settleBudget(env, reservation, actualCostMicros),
     env.USAGE_QUEUE.send(event),
@@ -81,6 +84,9 @@ export async function finalizeAccounting(env: Env, reservation: BudgetReservatio
   for (const result of results) {
     if (result.status === "rejected") logCorrelationError("accounting finalization failed", event.request_id);
   }
+  // HTTP has already delivered its response; persistent sessions must stop
+  // accepting work if either durable settlement recovery or usage delivery fails.
+  return results.every((result) => result.status === "fulfilled");
 }
 
 export async function settleBudget(env: Env, reservation: BudgetReservation, actualCostMicros: number): Promise<void> {

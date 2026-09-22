@@ -27,6 +27,8 @@ The optional `/private/v1/{models,catalog,responses}` facade has its own pinned 
 
 `GET /v1/catalog` is the client integration contract. Each provider row reports whether the unified OpenAI-compatible route is executable, its native proxy base URL, and the request and response formats for executable native routes.
 
+`/v1/models` and `/v1/catalog` use the same executable model projection. It applies the selected policy, provider budget, grant eligibility and cooldown, and endpoint requirements without selecting or refreshing credentials. A configured but unavailable grant pool never falls back to an environment credential. Token counting retains its zero-cost exemption; Fusion discovery still uses its separate readiness projection.
+
 Proxy (including native), admin, and pool-submission route identifiers are
 decoded once. Invalid percent escapes or invalid percent-encoded UTF-8 return
 HTTP 400 with `invalid_path_encoding`, after applicable authentication checks.
@@ -38,7 +40,7 @@ Semantic identifier and path validation still applies after decoding.
 | --- | --- | --- |
 | `POST` | `/v1/chat/completions` | OpenAI-compatible chat routing |
 | `POST` | `/v1/responses` | OpenAI Responses routing |
-| `GET` upgrade | `/v1/responses`, qualified native Responses paths | Authenticated, bounded Responses WebSocket sessions; see [Codex and WebSockets](codex.md) |
+| `GET` upgrade | `/v1/responses`, qualified native Responses paths | Authenticated, bounded [Responses WebSocket sessions](#websocket-contract) |
 | `POST` | `/v1/embeddings` | OpenAI-compatible embeddings routing |
 | `POST` | `/v1/messages` | Anthropic Messages routing |
 | `POST` | `/v1/messages/count_tokens` | Anthropic token counting |
@@ -46,6 +48,17 @@ Semantic identifier and path validation still applies after decoding.
 | manifest-defined | `/v1/native/<provider>/<provider-native-path>` | Provider-native request and response formats |
 
 OpenAI-compatible requests select a provider-qualified model in the request body, for example `openai/gpt-4.1-mini`. Native and manifest routes resolve the provider and endpoint from the compiled snapshot instead of accepting arbitrary upstream URLs.
+
+Native routes preserve the selected provider's upstream model namespace. For example, `openai/gpt-6-astra` in an OpenRouter request remains an OpenRouter model identifier. Unknown models remain unpriced: either a policy or provider budget requires a declared model price or an explicit fixed request tariff before dispatch.
+
+Native Responses JSON and SSE routes include:
+
+| Provider | ClawRouter path | Upstream contract |
+| --- | --- | --- |
+| Azure OpenAI | `/v1/native/azure-openai/openai/v1/responses` | Deployment name in `model`; endpoint and API key required; no inherited dated `api-version` |
+| OpenRouter | `/v1/native/openrouter/v1/responses` | OpenRouter model identifier in `model`; bearer credential and configured `OPENROUTER_SITE_URL` attribution |
+
+Azure's legacy deployment chat and embeddings routes still require `AZURE_OPENAI_API_VERSION`. The default `azure-openai/deployment` model is listed only when `AZURE_OPENAI_DEPLOYMENT` is configured; explicit native deployment routes remain available without that default. The placeholder Azure deployment and OpenRouter `auto` catalog entries do not attest a particular model's Responses support or price. See the upstream [Azure Responses contract](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/responses) and [OpenRouter Responses contract](https://openrouter.ai/docs/api/api-reference/responses/create-responses); operators must verify model access with their own provider account.
 
 A manifest proxy request for Tavily looks like this:
 
@@ -57,6 +70,35 @@ curl "$CLAWROUTER_BASE_URL/v1/proxy/tavily/search" \
 ```
 
 `clawrouter/fusion` is an optional virtual model on `/v1/chat/completions`. It fans a bounded text-only prompt out to configured adviser models and asks one configured synthesizer for the final response. Every subrequest uses normal policy, budget, readiness, retention, and usage-accounting paths. See [Fusion routing](fusion-router.md).
+
+## WebSocket contract
+
+Send authenticated upgrades to `/v1/responses` or
+`/v1/native/openai/v1/responses`. Unified upgrades select their model on the first
+`response.create`, so an HTTP 101 alone does not prove model access or upstream
+readiness. Every create rechecks credential, policy, provider, grant, retention,
+and budget before dispatch. The connection pins its provider route and grant
+revision; changing either requires a new connection.
+
+The bridge forwards native response IDs, errors, metadata, tool results,
+`previous_response_id`, and `stream_options`. Prewarm `generate: false` requests
+receive normal admission and accounting. It never replays requests or switches
+grants after dispatch. A terminal response with usable usage settles once;
+disconnects and deadlines without final usage retain the reservation. If budget
+settlement and its durable recovery both fail, or usage publication fails, the
+socket reports `accounting_unavailable` and closes before accepting more work.
+
+Limits per connection are 16 active responses, 32 named lanes plus the default
+lane, 48 buffered creates, 4 MiB per incoming frame, 8 MiB total buffered create
+bytes, and 16 MiB cumulative downstream output. The output limit bounds a slow
+reader because Workers' WebSocket API has no supported drain/queue metric.
+Connections last at most 60 minutes; each response uses its endpoint deadline,
+capped at 600 seconds. Clients must reconnect after a limit or deadline closes
+the connection. Binary frames, steering events, and background execution are
+rejected visibly. This contract runs on the Worker deployment; other hosts must
+qualify native upgrade forwarding before advertising it.
+
+See the upstream [Responses WebSocket contract](https://developers.openai.com/api/docs/guides/websocket-mode). An authenticated catalog route advertises `websocket: "openai.responses"` only when its endpoint and grant transport are eligible.
 
 ## Access session routes
 

@@ -12,6 +12,38 @@ test("dashboard is WCAG AA clean and visually stable", async ({ page }) => {
   await expectA11yClean(page);
 });
 
+test("dashboard distinguishes unavailable prices from mixed and fully priced spend", async ({ page }) => {
+  const summary = { requestCount: 2, successCount: 2, errorCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, actualCostMicros: 0, unpricedRequestCount: 2 };
+  const provider = { ...summary, provider: "openai" };
+  const responses: Record<string, unknown> = {
+    "/v1/providers": { providers: [] },
+    "/v1/routes": { openaiCompatible: [], manifestProxy: [] },
+    "/v1/session": { authenticated: true, auth: "access", role: "user", email: "user@example.com", entitlements: { providers: [] } },
+    "/v1/session/credentials": { credentials: [] },
+    "/v1/session/usage": { policies: [], usage: { ledger: "ready", summary, providers: [provider], daily: [], events: [] } },
+  };
+  await page.route("**/v1/**", async (route) => {
+    const body = responses[new URL(route.request().url()).pathname];
+    await route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
+  });
+  const spend = page.locator(".dashboardStats > div").filter({ has: page.getByText(/^(actual|accounted) spend$/) });
+  for (const [unpriced, cost, label, value] of [
+    [2, 0, "accounted spend", "Price unavailable"],
+    [1, 1_000_000, "accounted spend", "$1.00 accounted; 1 unpriced"],
+    [0, 1_000_000, "actual spend", "$1.00"],
+    [0, 0, "actual spend", "none"],
+  ] as const) {
+    summary.unpricedRequestCount = unpriced;
+    summary.actualCostMicros = cost;
+    Object.assign(provider, summary);
+    await page.goto("/");
+    await expect(spend.locator("span")).toHaveText(label);
+    await expect(spend.locator("strong")).toHaveText(value);
+    await expect(page.locator(".providerChartValue small")).toHaveText(value);
+    await expect(page.locator(".providerChartLegendMeta")).toHaveText(unpriced ? "Requests · accounted spend" : "Requests · spend");
+  }
+});
+
 test("Fusion preflight is WCAG AA clean and visually stable", async ({ page }) => {
   await openDemo(page);
   await page.getByRole("button", { name: "Access", exact: true }).click();

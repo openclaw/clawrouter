@@ -112,16 +112,27 @@ promotional prices, published through at least November 21, 2026.
 ClawRouter forwards `service_tier` unchanged. Absent or `auto` can inherit the
 provider project's default, so admission reserves the highest applicable known
 rates. Explicit tiers reserve their card and Standard downgrade rates. Unknown
-requested tiers fail with `pricing_required` under token pricing; explicit fixed
-policy tariffs remain available. A short-only card stays in the reservation
+requested tiers fail with `pricing_required` when either the policy or provider
+has a monthly budget. When both limits are disabled, existing and new policies
+continue forwarding the requested tier unchanged. Explicit fixed policy tariffs
+remain available. A short-only card stays in the reservation
 envelope when actual input may fit below its published limit.
 
-Settlement uses the actual served tier from JSON, completed Responses SSE, or
+Settlement uses the actual served tier from JSON, terminal Responses SSE, or
 Chat Completions chunks followed by `[DONE]`. A priority request served as
 `default` is charged Standard rates. Missing or unknown served tiers, unpublished
 context ranges, and incomplete token usage retain the reservation and record
 `cost_basis: manifest_reservation`; measured costs record `manifest_pricing`.
 Usage events include `requested_service_tier` and `served_service_tier`.
+For unmetered requests with an undeclared requested tier, a known served tier and
+complete usage still produce a measured price. Otherwise, the event records
+`cost_basis: unpriced_usage` and zero accounted micros. This means the price
+is unavailable, not that the request was free. Summary, provider, and daily usage
+include `unpricedRequestCount`; spend totals exclude these unavailable prices.
+The console marks them as unavailable or reports the known subtotal with the
+unpriced count. Pre-dispatch denials and nonbillable responses do not increment this count.
+Dispatched requests whose transport fails still have unavailable upstream cost.
+Historical admission denials marked `unpriced_service_tier` remain known zero. No policy migration or new setting is required.
 The bundled OpenAI route is pinned to the global `api.openai.com` endpoint.
 Regional data-residency endpoints are not exposed; a regional deployment needs
 a separate versioned price with OpenAI's 10% uplift or a fixed policy price.
@@ -165,8 +176,6 @@ Codex hosted web search has separate provider-side pricing, so this token-priced
 setup disables it. Codex also needs model metadata that advertises a service tier
 before it sends that tier; setting `service_tier` alone is not a compatibility
 proof. This configuration does not advertise WebSocket support.
-For official model metadata, Fast, and qualified WebSocket setup, follow the
-[Codex integration guide](codex.md).
 
 Then export the issued ClawRouter credential:
 

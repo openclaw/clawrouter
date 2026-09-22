@@ -261,7 +261,7 @@ function validateManifest(manifest) {
   for (const [kind, transport] of Object.entries(manifest.auth.grantTransports ?? {})) {
     if (!new Set(["api_key", "oauth", "subscription"]).has(kind)) throw new Error(`provider ${manifest.id} grant transport ${kind} has an invalid grant kind`);
     for (const name of [...Object.keys(transport.headers ?? {}), ...Object.keys(transport.appendHeaders ?? {})]) if (!headerName.test(name)) throw new Error(`provider ${manifest.id} grant transport ${kind} has an invalid header`);
-    if (transport.allowedEndpoints !== undefined && (!Array.isArray(transport.allowedEndpoints) || !transport.allowedEndpoints.length || new Set(transport.allowedEndpoints).size !== transport.allowedEndpoints.length || transport.allowedEndpoints.some((id) => !manifest.endpoints[id]))) throw new Error(`provider ${manifest.id} grant transport ${kind} allowedEndpoints must reference unique existing endpoints`);
+    if (transport.allowedEndpoints !== undefined && (!Array.isArray(transport.allowedEndpoints) || !transport.allowedEndpoints.length || new Set(transport.allowedEndpoints).size !== transport.allowedEndpoints.length || transport.allowedEndpoints.some((id) => typeof id !== "string" || !Object.hasOwn(manifest.endpoints, id)))) throw new Error(`provider ${manifest.id} grant transport ${kind} allowedEndpoints must reference unique existing endpoints`);
     const warm = transport.maintenance?.keepWarm;
     if (warm) {
       const endpoint = manifest.endpoints[warm.endpoint];

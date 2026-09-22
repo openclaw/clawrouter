@@ -39,7 +39,7 @@ export function estimateModelCost(pricing: ModelPricing, body: Record<string, un
   const choices = Math.max(1, nonNegativeInteger(body.n) ?? 1);
   const outputTokens = saturatingMultiply(requestedOutput.length ? Math.max(...requestedOutput) : pricing.defaultMaxOutputTokens, choices);
   const rates = resolveRates(pricing, inputTokens, body.service_tier, true);
-  if (!rates) return { reserveMicros: 1, inputTokens, outputTokens, pricingAvailable: false };
+  if (!rates) return { reserveMicros: 0, inputTokens, outputTokens, pricingAvailable: false };
   const inputRate = reservationInputRate(body, rates);
   return {
     reserveMicros: saturatingAdd(tokenCost(inputTokens, inputRate), tokenCost(outputTokens, rates.output)),
