@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { resolveGrantSelection, selectGrant, selectProviderPolicy, syncGrantPoolIndex, validGrantSegment } from "../grant-selection.ts";
+import { providerById } from "../providers.ts";
 
 test("grant pools select the lowest-priority usable grant deterministically", async () => {
   const env = mockEnv();
@@ -98,6 +99,33 @@ test("grant key segments reject ambiguous or undiscoverable values", () => {
   assert.equal(validGrantSegment("nested/grant"), false);
   assert.equal(validGrantSegment("x".repeat(257)), false);
   assert.equal(validGrantSegment("line\nbreak"), false);
+});
+
+test("endpoint and transport eligibility precede priority selection and never reopen environment credentials", async () => {
+  const env = mockEnv();
+  const provider = providerById("openai");
+  const requirement = (id) => ({ provider, endpoint: provider.endpoints.find((endpoint) => endpoint.id === id) });
+  await putGrant(env, "oauth/policy_a/subscription", { ...grant("openai", "subscription", 10), kind: "subscription" });
+  await putGrant(env, "oauth/policy_a/api", grant("openai", "api", 100));
+  for (const [endpoint, expected] of [["responses", "subscription"], ["chat_completions", "api"], ["embeddings", "api"]]) {
+    const result = await resolveGrantSelection("openai", "policy_a", "tenant_a", "openai", env, new Set(), undefined, null, true, requirement(endpoint));
+    assert.equal(result.selected.key, `oauth/policy_a/${expected}`);
+    assert.deepEqual(env.selections.at(-1).candidates.map(({ key }) => key), [`oauth/policy_a/${expected}`]);
+  }
+  env.values.delete("oauth/policy_a/api");
+  const unavailable = await resolveGrantSelection("openai", "policy_a", "tenant_a", "openai", env, new Set(), undefined, null, false, requirement("chat_completions"));
+  assert.equal(unavailable.selected, null);
+  assert.equal(unavailable.hasConfiguredGrant, true);
+});
+
+test("Access policy choice respects endpoint support", async () => {
+  const env = mockEnv();
+  const provider = providerById("openai");
+  await putGrant(env, "oauth/policy_a/subscription", { ...grant("openai", "subscription"), kind: "subscription" });
+  await putGrant(env, "oauth/policy_b/api", grant("openai", "api"));
+  const requirement = { provider, endpoint: provider.endpoints.find((endpoint) => endpoint.id === "chat_completions") };
+  assert.equal((await selectProviderPolicy([policy("policy_a"), policy("policy_b")], "openai", "tenant_a", env, requirement)).policyId, "policy_b");
+
 });
 
 function grant(provider, label, priority = 100) {

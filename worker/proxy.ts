@@ -140,7 +140,7 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
   const provider = providerById(decodePathSegment(match[1]));
   const endpoint = provider?.endpoints.find((candidate) => candidate.id === decodePathSegment(match[2]));
   if (!provider || !endpoint) return errorResponse("route_not_found", "manifest proxy route not found", 404);
-  const preauthenticated = await preauthenticate(request, env, mode, provider.id);
+  const preauthenticated = await preauthenticate(request, env, mode, provider.id, { provider, endpoint });
   if (preauthenticated instanceof Response) return preauthenticated;
   const envelope = request.method === "GET" || request.method === "HEAD"
     ? directManifestEnvelope(request, endpoint)
@@ -273,7 +273,7 @@ async function reserveSelected(request: Request, env: Env, context: ExecutionCon
 }
 
 async function selectedAuth(request: Request, env: Env, mode: AuthMode, selection: ProxySelection, preauthenticated: AuthorizedIdentity | null): Promise<AuthorizedIdentity | Response> {
-  return preauthenticated ?? (mode === "access" ? accessIdentity(request, env, selection.provider.id) : authenticateProxyKey(request.headers, env));
+  return preauthenticated ?? (mode === "access" ? accessIdentity(request, env, selection.provider.id, { provider: selection.provider, endpoint: selection.endpoint }) : authenticateProxyKey(request.headers, env));
 }
 
 async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: Record<string, unknown>, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection): Promise<PreparedUpstream> {
@@ -282,7 +282,7 @@ async function prepareSelected(request: Request, env: Env, selection: ProxySelec
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "provider authorization failed"); }
   let upstream;
   const stickyHash = await grantStickyHash(request, auth);
-  try { upstream = await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection); }
+  try { upstream = await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, { provider: selection.provider, endpoint: selection.endpoint }); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_not_configured", "provider is not configured"); }
   try {
     const headers = new Headers(upstream.headers);
@@ -328,7 +328,7 @@ async function auditSelectionFailure(request: Request, env: Env, context: Execut
   createProxyAccounting({ context, env, auth, selection, request, compound }).fail(statusCode, status);
 }
 
-async function preauthenticate(request: Request, env: Env, mode: AuthMode, providerId?: string): Promise<AuthorizedIdentity | Response | null> {
+async function preauthenticate(request: Request, env: Env, mode: AuthMode, providerId?: string, requirement?: import("./provider-auth").GrantRequirement): Promise<AuthorizedIdentity | Response | null> {
   if (mode === "proxy_key") return authenticateProxyKey(request.headers, env);
-  return providerId ? accessIdentity(request, env, providerId) : null;
+  return providerId ? accessIdentity(request, env, providerId, requirement) : null;
 }

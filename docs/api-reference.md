@@ -27,6 +27,8 @@ The optional `/private/v1/{models,catalog,responses}` facade has its own pinned 
 
 `GET /v1/catalog` is the client integration contract. Each provider row reports whether the unified OpenAI-compatible route is executable, its native proxy base URL, and the request and response formats for executable native routes.
 
+`/v1/models` and `/v1/catalog` use the same executable model projection. It applies the selected policy, provider budget, grant eligibility and cooldown, and endpoint requirements without selecting or refreshing credentials. A configured but unavailable grant pool never falls back to an environment credential. Token counting retains its zero-cost exemption; Fusion discovery still uses its separate readiness projection.
+
 Proxy (including native), admin, and pool-submission route identifiers are
 decoded once. Invalid percent escapes or invalid percent-encoded UTF-8 return
 HTTP 400 with `invalid_path_encoding`, after applicable authentication checks.
@@ -45,6 +47,17 @@ Semantic identifier and path validation still applies after decoding.
 | manifest-defined | `/v1/native/<provider>/<provider-native-path>` | Provider-native request and response formats |
 
 OpenAI-compatible requests select a provider-qualified model in the request body, for example `openai/gpt-4.1-mini`. Native and manifest routes resolve the provider and endpoint from the compiled snapshot instead of accepting arbitrary upstream URLs.
+
+Native routes preserve the selected provider's upstream model namespace. For example, `openai/gpt-6-astra` in an OpenRouter request remains an OpenRouter model identifier. Unknown models remain unpriced: either a policy or provider budget requires a declared model price or an explicit fixed request tariff before dispatch.
+
+Native Responses JSON and SSE routes include:
+
+| Provider | ClawRouter path | Upstream contract |
+| --- | --- | --- |
+| Azure OpenAI | `/v1/native/azure-openai/openai/v1/responses` | Deployment name in `model`; endpoint and API key required; no inherited dated `api-version` |
+| OpenRouter | `/v1/native/openrouter/v1/responses` | OpenRouter model identifier in `model`; bearer credential and configured `OPENROUTER_SITE_URL` attribution |
+
+Azure's legacy deployment chat and embeddings routes still require `AZURE_OPENAI_API_VERSION`. The placeholder Azure deployment and OpenRouter `auto` catalog entries do not attest a particular model's Responses support or price. See the upstream [Azure Responses contract](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/responses) and [OpenRouter Responses contract](https://openrouter.ai/docs/api/api-reference/responses/create-responses); operators must verify model access with their own provider account.
 
 A manifest proxy request for Tavily looks like this:
 

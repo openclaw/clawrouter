@@ -15,7 +15,7 @@ service:
       AZURE_OPENAI_COMPLETION_TOKEN_DEPLOYMENTS,
       AZURE_OPENAI_DEPLOYMENT,
     ]
-  optionalConfigKeys: [AZURE_OPENAI_COMPLETION_TOKEN_DEPLOYMENTS]
+  optionalConfigKeys: [AZURE_OPENAI_COMPLETION_TOKEN_DEPLOYMENTS, AZURE_OPENAI_API_VERSION, AZURE_OPENAI_DEPLOYMENT]
 auth:
   schemes:
     - type: api_key
@@ -32,8 +32,6 @@ adapter:
   response: openai
   stream: openai_sse
   error: openai_error
-  injectQuery:
-    api-version: ${api_version}
   requestTransforms:
     renameFields:
       - from: max_tokens
@@ -41,6 +39,9 @@ adapter:
         paths: [/v1/chat/completions]
         upstreamConfig: completion_token_deployments
 capabilities:
+  - id: llm.responses
+    endpoint: responses
+    methods: [POST]
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
@@ -48,9 +49,17 @@ capabilities:
     endpoint: embeddings
     methods: [POST]
 endpoints:
+  responses:
+    path: /openai/v1/responses
+    requestFormat: openai.responses
+    responseFormat: openai.responses
+    streaming: sse
+    timeoutMs: 600000
   chat_completions:
     path: /openai/deployments/${deployment}/chat/completions
     pathParams: [deployment]
+    query:
+      api-version: ${api_version}
     requestFormat: openai.chat_completions
     responseFormat: openai.chat_completions
     streaming: sse
@@ -58,6 +67,8 @@ endpoints:
   embeddings:
     path: /openai/deployments/${deployment}/embeddings
     pathParams: [deployment]
+    query:
+      api-version: ${api_version}
     requestFormat: openai.embeddings
     responseFormat: openai.embeddings
     timeoutMs: 120000

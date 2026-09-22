@@ -73,6 +73,9 @@ billing:
 - `auth.grantTransports` can replace authentication, append required headers,
   prepend trusted system blocks, and declare alarm-driven quota or keep-warm
   maintenance for one grant kind. Contributors cannot override these values.
+  `allowedEndpoints` optionally restricts that transport to named endpoints;
+  `endpointPaths` alone only overrides paths. Compatibility is checked before
+  grant priority and selection, without reopening environment credentials.
 - `adapter` declares the request/response family. Use `custom_adapter` only after
   the declarative format cannot express the provider.
 - `billing.meter` and `billing.counters` produce OpenMeter/Lago/Meteroid style

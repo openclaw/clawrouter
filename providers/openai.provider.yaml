@@ -22,6 +22,7 @@ auth:
   grantTransports:
     subscription:
       baseUrl: https://chatgpt.com/backend-api/codex
+      allowedEndpoints: [responses]
       endpointPaths:
         responses: /responses
       headers:
