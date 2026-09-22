@@ -82,7 +82,7 @@ export async function catalogResponse(request: Request, env: Env): Promise<Respo
       id: provider.id, displayName: provider.display_name, allowed: true, executable,
       openaiCompatible: executable && provider.class === "openai_compatible", nativeBaseUrl: `/v1/native/${provider.id}`,
       policies: row.policies, readiness: { ...row.readiness, executable, executableEndpoints: endpoints }, connectionTypes: connectionTypes(provider),
-      routes: provider.endpoints.filter((endpoint) => endpoint.native_proxy && endpoints.includes(endpoint.id)).map((endpoint) => ({ endpoint: endpoint.id, methods: endpoint.methods, path: endpoint.path, requestFormat: endpoint.request_format, responseFormat: endpoint.response_format, streaming: endpoint.streaming })),
+      routes: provider.endpoints.filter((endpoint) => endpoint.native_proxy && endpoints.includes(endpoint.id)).map((endpoint) => ({ endpoint: endpoint.id, methods: endpoint.methods, path: endpoint.path, requestFormat: endpoint.request_format, responseFormat: endpoint.response_format, streaming: endpoint.streaming, ...(view.websockets.includes(endpoint.id) ? { websocket: endpoint.websocket } : {}) })),
       models: view.models,
     }];
   });
@@ -229,15 +229,21 @@ async function clientInventory(entitlements: ClientEntitlements, env: Env) {
     const entries = entitlements.entries.filter((entry) => entry.policy.enabled && (!entry.policy.providers.length || entry.policy.providers.includes(provider.id)));
     const pools = await Promise.all(entries.map(async (entry) => ({ entry, ...await resolveGrantCandidates(provider.id, entry.policyId, entry.policy.tenantId ?? entitlements.tenantId, provider.auth.schemes.find((scheme) => scheme.type === "oauth")?.tokenRef ?? provider.id, env, new Set(), entry.policy.grantRouting) })));
     const readiness = entitlements.rows.find((row) => row.provider === provider.id)!;
-    const endpointPolicies = new Map<string, AccessPolicyEntry["policy"]>();
+    const endpointPolicies = new Map<string, AccessPolicyEntry["policy"]>(), websockets: string[] = [];
     for (const endpoint of provider.endpoints) {
       if (!readiness.readiness.executableEndpoints.includes(endpoint.id)) continue;
-      const requirement = { provider, endpoint };
-      const selected = pools.find((pool) => pool.available.some(({ grant }) => grantSupports(requirement, grant))) ?? pools[0];
-      if (!selected) continue;
-      const grantAllowed = selected.available.some(({ grant }) => grantSupports(requirement, grant));
-      const environmentAllowed = !selected.hasConfiguredGrant && (environment.get(provider.id) ?? []).includes(endpoint.id) && grantSupports(requirement, null);
-      if (grantAllowed || environmentAllowed) endpointPolicies.set(endpoint.id, selected.entry.policy);
+      for (const mode of ["http", "websocket"] as const) {
+        const requirement = { provider, endpoint, mode };
+        // Match selectProviderPolicy independently per transport: an HTTP-only
+        // subscription in the first policy must not mask another policy's WS grant.
+        const selected = pools.find((pool) => pool.available.some(({ grant }) => grantSupports(requirement, grant))) ?? pools[0];
+        if (!selected) continue;
+        const grantAllowed = selected.available.some(({ grant }) => grantSupports(requirement, grant));
+        const environmentAllowed = !selected.hasConfiguredGrant && (environment.get(provider.id) ?? []).includes(endpoint.id) && grantSupports(requirement, null);
+        if (!grantAllowed && !environmentAllowed) continue;
+        if (mode === "http") endpointPolicies.set(endpoint.id, selected.entry.policy);
+        else websockets.push(endpoint.id);
+      }
     }
     const endpoints = [...endpointPolicies.keys()];
     const models = catalogModels(provider, endpoints, null, connections.find((connection) => connection.providerId === provider.id)?.monthlyBudgetMicros ?? null, endpointPolicies).filter((model) => {
@@ -245,7 +251,7 @@ async function clientInventory(entitlements: ClientEntitlements, env: Env) {
       try { resolveTemplate(provider, model.upstream, env); return true; }
       catch (error) { if (error instanceof HttpError && error.code === "provider_not_configured") return false; throw error; }
     });
-    return [provider.id, { endpoints, models }] as const;
+    return [provider.id, { endpoints, websockets, models }] as const;
   }));
   return new Map(views);
 }

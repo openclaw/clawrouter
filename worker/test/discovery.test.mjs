@@ -88,33 +88,35 @@ test("models and catalog share read-only grant eligibility, transport support, a
   };
   t.mock.method(globalThis, "fetch", () => { throw new Error("discovery must not refresh credentials or probe upstream"); });
   const request = () => new Request("https://router.example/v1/catalog", { headers: { authorization: `Bearer clawrouter-live-fixture-${secret}` } });
-  async function compare(expectedCapabilities) {
+  async function compare(expectedCapabilities, websocket) {
     const catalog = await (await catalogResponse(request(), env)).json();
     const view = catalog.providers.find((provider) => provider.id === "openai");
     const models = await (await modelsResponse(request(), env)).json();
     assert.deepEqual(models.data.map(({ id, capabilities }) => ({ id, capabilities })), view.models.map(({ id, capabilities }) => ({ id, capabilities })));
     assert.deepEqual(view.models.find((model) => model.id === "openai/gpt-6-astra")?.capabilities ?? [], expectedCapabilities);
+    assert.equal(view.routes.some((route) => route.websocket === "openai.responses"), websocket);
     assert.ok(!paths.includes("/grant-pools/select"));
     return view;
   }
-  await compare(["llm.responses", "llm.chat"]);
+  await compare(["llm.responses", "llm.chat"], true);
   const key = "oauth/fixture/subscription";
   grants.set(key, { provider: "openai", kind: "subscription", enabled: true, accessToken: "fixture-subscription", accountId: "fixture-account" });
-  await compare(["llm.responses"]);
+  await compare(["llm.responses"], false);
   grants.set("oauth/fixture/api", { provider: "openai", kind: "api_key", enabled: true, credential: "fixture-api" });
-  await compare(["llm.responses", "llm.chat"]);
+  await compare(["llm.responses", "llm.chat"], true);
   policy.grantRouting = { eligibleGrants: { openai: ["subscription"] } };
-  await compare(["llm.responses"]);
+  await compare(["llm.responses"], false);
   policy.grantRouting.eligibleGrants.openai = [];
-  await compare([]);
+  await compare([], false);
   policy.grantRouting.eligibleGrants.openai = ["subscription"];
   states[key] = { grantRevision: null, status: "cooldown", cooldownUntil: new Date(Date.now() + 60000).toISOString(), windows: [] };
-  await compare([]);
+  await compare([], false);
   delete states[key];
   policy.grantRouting = { staleState: "deny" };
-  await compare([]);
+  await compare([], false);
 
-  // Endpoint selection can choose a different policy for Chat and Responses.
+  // A session's first policy may own HTTP subscription auth while its second
+  // policy owns the API grant used by the independently selected WS transport.
   delete policy.grantRouting;
   grants.delete("oauth/fixture/api");
   policies.push({ policyId: "api", policy: { ...policy } });
@@ -124,6 +126,7 @@ test("models and catalog share read-only grant eligibility, transport support, a
   env.CLAWROUTER_LOCAL_AUTH = "enabled";
   const catalog = await (await catalogResponse(new Request("https://router.example/v1/catalog", { headers: { cookie: `clawrouter_session=${session}` } }), env)).json();
   const view = catalog.providers.find(({ id }) => id === "openai");
+  assert.equal(view.routes.find(({ endpoint }) => endpoint === "responses").websocket, "openai.responses");
   assert.deepEqual(view.models.find(({ id }) => id === "openai/gpt-6-astra").capabilities, ["llm.responses", "llm.chat"]);
   assert.ok(!paths.includes("/grant-pools/select"));
 });

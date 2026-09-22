@@ -476,6 +476,7 @@
         "requestFormat": { "type": "string" },
         "responseFormat": { "type": "string" },
         "streaming": { "type": "string" },
+        "websocket": { "enum": ["openai.responses"] },
         "timeoutMs": { "type": "integer", "minimum": 1 }
       }
     },

@@ -119,10 +119,11 @@ capabilities:
 endpoints:
   responses:
     path: /v1/responses
-    requestHeaders: [session-id, thread-id, session_id, x-client-request-id]
+    requestHeaders: [session-id, thread-id, session_id, x-client-request-id, OpenAI-Beta, x-openai-internal-codex-responses-lite, x-codex-beta-features, x-codex-turn-state]
     requestFormat: openai.responses
     responseFormat: openai.responses
     streaming: sse
+    websocket: openai.responses
     timeoutMs: 600000
   chat_completions:
     path: /v1/chat/completions
