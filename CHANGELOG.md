@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add GPT-6 Astra to the OpenAI catalog with its reasoning efforts, standard token and cache-write pricing, long-context rates, and Chat Completions token-limit mapping.
+
 - Remove unsupported OpenAI subscription browser Connect and explain Platform API-key setup, direct Codex login, and the private facade's limits; thanks @imrane for the report in #141.
 
 - Update Workers types, Wrangler, and Lucide while preserving Node.js 24 and the 48-hour dependency release-age policy.

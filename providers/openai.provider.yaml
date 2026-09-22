@@ -45,7 +45,7 @@ adapter:
       - from: max_tokens
         to: max_completion_tokens
         paths: [/v1/chat/completions]
-        upstreams: [gpt-5.6, gpt-5.5, gpt-5.4]
+        upstreams: [gpt-6-astra, gpt-5.6, gpt-5.5, gpt-5.4]
 quota:
   responseHeaders:
     - id: rpm
@@ -136,6 +136,26 @@ endpoints:
     timeoutMs: 120000
 models:
   entries:
+    - id: openai/gpt-6-astra
+      upstream: gpt-6-astra
+      capabilities: [llm.responses, llm.chat]
+      supportedReasoningEfforts: [low, medium, high, xhigh, max]
+      pricingRef: openai-gpt-6-astra-standard-2026-09-22
+      pricing:
+        effectiveAt: "2026-09-22"
+        source: https://developers.openai.com/api/docs/pricing
+        inputMicrosPerMillion: 10000000
+        cachedInputMicrosPerMillion: 1000000
+        cacheWriteInputMicrosPerMillion: 12500000
+        outputMicrosPerMillion: 50000000
+        maxInputTokens: 922000
+        defaultMaxOutputTokens: 128000
+        longContext:
+          thresholdInputTokens: 272000
+          inputMicrosPerMillion: 20000000
+          cachedInputMicrosPerMillion: 2000000
+          cacheWriteInputMicrosPerMillion: 25000000
+          outputMicrosPerMillion: 75000000
     - id: openai/gpt-5.6
       upstream: gpt-5.6
       capabilities: [llm.responses, llm.chat]

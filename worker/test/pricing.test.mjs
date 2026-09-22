@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 import { actualModelCost, estimateModelCost } from "../pricing.ts";
 
@@ -37,4 +38,18 @@ test("generic cache-write pricing reserves and settles reported writes", () => {
   assert.ok(actual != null && actual <= estimate.reserveMicros);
   assert.equal(actual, Math.ceil(((estimate.inputTokens - 30) * 5_000_000 + 10 * 500_000 + 20 * 6_250_000) / 1_000_000));
   assert.equal(actualModelCost(cachePricing, { input: estimate.inputTokens, output: 0, cached: 10, cacheWrite: null, cacheWrite5m: null, cacheWrite1h: null }), null);
+});
+
+test("bundled Astra standard pricing applies cache writes and the full-request long-context boundary", () => {
+  const snapshot = JSON.parse(readFileSync(new URL("../generated/provider-snapshot.json", import.meta.url), "utf8"));
+  const astra = snapshot.model_index["openai/gpt-6-astra"].pricing;
+  const tokens = { input: 272_000, output: 1_000, cached: 100_000, cacheWrite: 100_000, cacheWrite5m: null, cacheWrite1h: null };
+  assert.equal(actualModelCost(astra, tokens), 2_120_000);
+  assert.equal(actualModelCost(astra, { ...tokens, input: 272_001 }), 4_215_020);
+  assert.equal(actualModelCost(astra, { ...tokens, cacheWrite: null }), null);
+  assert.deepEqual(estimateModelCost(astra, { previous_response_id: "resp_example" }), {
+    inputTokens: 922_000,
+    outputTokens: 128_000,
+    reserveMicros: 32_650_000,
+  });
 });
