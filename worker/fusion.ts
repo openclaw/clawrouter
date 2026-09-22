@@ -154,7 +154,11 @@ async function readJsonBeforeDeadline(response: Response, maxBytes: number, dead
 
 async function beforeDeadline<T>(operation: Promise<T>, deadline: number): Promise<T> {
   const remaining = deadline - Date.now();
-  if (remaining <= 0) throw new Error("fusion adviser deadline exceeded");
+  if (remaining <= 0) {
+    // The caller already started this operation; observe its rejection even when discarding it.
+    void operation.catch(() => undefined);
+    throw new Error("fusion adviser deadline exceeded");
+  }
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<never>((_resolve, reject) => {
     timeout = setTimeout(() => reject(new Error("fusion adviser deadline exceeded")), remaining);

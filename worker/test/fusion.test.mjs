@@ -103,6 +103,18 @@ test("fusion fails open when adviser bodies stall or exceed their byte bound", a
   assert.deepEqual(oversized.failedModels, ["local/oversized"]);
 });
 
+test("fusion consumes adviser rejections when the deadline has already elapsed", async (t) => {
+  t.mock.timers.enable({ apis: ["Date"], now: 0 });
+  const config = normalizeFusionConfig({ adviserModels: ["local/expired"], adviserTimeoutMs: 1_000 });
+  const result = await collectFusionProposals(config, { messages: [] }, () => {
+    t.mock.timers.setTime(1_000);
+    return Promise.reject(new Error("synthetic expired adviser rejection"));
+  });
+  assert.deepEqual(result.proposals, []);
+  assert.deepEqual(result.failedModels, ["local/expired"]);
+  await new Promise(resolve => setImmediate(resolve));
+});
+
 test("fusion reservation proposals cover worst-case JSON encoding", () => {
   const config = normalizeFusionConfig({ adviserModels: ["local/adviser"], maxProposalChars: 256 });
   const original = { messages: [{ role: "user", content: "solve" }] };

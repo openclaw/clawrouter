@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Contain rejected Fusion adviser invocations and body reads when their deadline has already elapsed, avoiding unhandled promise rejections while the synthesizer continues.
+
 - Exclude repository documentation, review tooling, and tests from the self-host Docker image and build context.
 
 - Correct Bedrock SigV4 query signing for mixed-case and percent-encoded parameters by sorting encoded names and values in byte order.

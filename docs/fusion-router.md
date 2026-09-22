@@ -86,6 +86,8 @@ tokens before its failure becomes visible. Discarded HTTP-error responses and re
 adviser deadline are canceled so their upstream resources are released and
 accounting completes. HTTP errors release the adviser reservation; incomplete
 successful responses keep the conservative reservation.
+Adviser failures remain contained even when an invocation or body read rejects
+after its deadline has already elapsed.
 
 Usage events retain their individual request ids and also carry a shared
 `compound_request_id`, stage, and adviser index. The Usage console groups those calls into one expandable Fusion request
