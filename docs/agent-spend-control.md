@@ -21,8 +21,8 @@ response, and stored-item inputs reserve the model's full declared input window
 because their billable token count cannot be inferred from the small serialized
 reference. Chat Completions output bounds are multiplied by `n`.
 
-Input reservation uses the declared cache-write rate when the request contains
-cache controls. After the response completes, ClawRouter settles reported input,
+Input reservation includes the declared generic cache-write rate; duration-specific
+cache controls also select their declared write rates. After the response completes, ClawRouter settles reported input,
 cached-input, cache-write, and output tokens at the manifest rates and releases
 the unused reservation. Streaming SSE responses are inspected as the client consumes them, with a
 bounded usage buffer and no response clone or body persistence. Missing usage, malformed terminal
@@ -53,14 +53,12 @@ is configured. Every budgeted call fails closed until its route has versioned
 manifest pricing or a fixed policy price. A zero-cost route, such as Anthropic
 token counting, skips reservation.
 
-Server-executed tools can add per-call charges that token pricing cannot cover.
-Listed-price requests containing those tools fail closed; configure an explicit
-`requestCostMicros` override until the manifest declares versioned tool rates.
+Server-executed tools can add fees and repeated model work that token pricing
+does not cover. The proxy forwards these requests; its accounting allowance is
+not an upstream invoice cap. Disable hosted tools for token-only accounting.
 Client-executed function, custom, namespace, local-shell, and apply-patch tools
-remain token-priced. Anthropic web fetch has no separate tool fee, but its
-server-side loop has no default fetch limit and can accumulate more tokens than
-a single model-window reservation. It therefore also requires a fixed request
-price for hard-budget enforcement.
+use the model's token rates. A fixed `requestCostMicros` is an operator-defined
+tariff, not a measurement of provider tool charges.
 
 Pricing lives beside the model in `providers/*.provider.yaml`:
 
@@ -103,19 +101,47 @@ Dynamic catalogs such as OpenRouter and generic Hugging Face model routes stay
 unpriced: monthly-budget policies fail closed unless an operator supplies a
 fixed `requestCostMicros` override.
 
-Long-context tiers are selected conservatively from the preflight input bound
-and exactly from reported input usage during settlement. For OpenAI list-priced
-routes, ClawRouter pins absent or `auto` service tiers to `default`; premium or
-contract-specific service tiers are rejected until their prices are declared.
+Long-context rates are selected conservatively from the preflight input bound
+and exactly from reported input usage during settlement. OpenAI models declare
+individual Standard (`default`), Fast (`priority`, alias `fast`), and supported
+Flex rate cards in `pricing.serviceTiers`. Rates come from the
+[dated OpenAI pricing table](https://developers.openai.com/api/docs/pricing);
+Fast is not a universal multiplier. GPT-5.6 uses the Sol alias and its current
+promotional prices, published through at least November 21, 2026.
+
+ClawRouter forwards `service_tier` unchanged. Absent or `auto` can inherit the
+provider project's default, so admission reserves the highest applicable known
+rates. Explicit tiers reserve their card and Standard downgrade rates. Unknown
+requested tiers fail with `pricing_required` when either the policy or provider
+has a monthly budget. When both limits are disabled, existing and new policies
+continue forwarding the requested tier unchanged. Explicit fixed policy tariffs
+remain available. A short-only card stays in the reservation
+envelope when actual input may fit below its published limit.
+
+Settlement uses the actual served tier from JSON, terminal Responses SSE, or
+Chat Completions chunks followed by `[DONE]`. A priority request served as
+`default` is charged Standard rates. Missing or unknown served tiers, unpublished
+context ranges, and incomplete token usage retain the reservation and record
+`cost_basis: manifest_reservation`; measured costs record `manifest_pricing`.
+Usage events include `requested_service_tier` and `served_service_tier`.
+For unmetered requests with an undeclared requested tier, a known served tier and
+complete usage still produce a measured price. Otherwise, the event records
+`cost_basis: unpriced_usage` and zero accounted micros. This means the price
+is unavailable, not that the request was free. Summary, provider, and daily usage
+include `unpricedRequestCount`; spend totals exclude these unavailable prices.
+The console marks them as unavailable or reports the known subtotal with the
+unpriced count. Pre-dispatch denials and nonbillable responses do not increment this count.
+Dispatched requests whose transport fails still have unavailable upstream cost.
+Historical admission denials marked `unpriced_service_tier` remain known zero. No policy migration or new setting is required.
 The bundled OpenAI route is pinned to the global `api.openai.com` endpoint.
 Regional data-residency endpoints are not exposed; a regional deployment needs
 a separate versioned price with OpenAI's 10% uplift or a fixed policy price.
-List-priced Chat Completions streams force `stream_options.include_usage=true`
+Request `stream_options.include_usage=true` for Chat Completions streams
 so successful terminal events can release unused reservation. Known model IDs
 retain the same pricing when called through native or manifest proxy routes.
-Background Responses are rejected under listed pricing because their initial
-response has no terminal usage; configure a fixed per-request policy price
-until ClawRouter supports polling and deferred settlement.
+Background Responses do not provide final usage in their initial response;
+ClawRouter does not poll them for deferred settlement. Their reservation remains
+charged when complete billable usage is unavailable.
 The bundled Anthropic catalog includes Claude Opus 5, Sonnet 5, and Fable 5 with a 1M
 context window and 128K output limit, alongside the existing model routes.
 Fable 5 always uses adaptive thinking and requires
@@ -146,9 +172,10 @@ wire_api = "responses"
 env_key = "CLAWROUTER_API_KEY"
 ```
 
-Codex hosted web search has separate provider-side pricing, so the list-priced
-setup disables it. Use a fixed `requestCostMicros` policy before enabling cached
-or live hosted search.
+Codex hosted web search has separate provider-side pricing, so this token-priced
+setup disables it. Codex also needs model metadata that advertises a service tier
+before it sends that tier; setting `service_tier` alone is not a compatibility
+proof. This configuration does not advertise WebSocket support.
 
 Then export the issued ClawRouter credential:
 
@@ -227,8 +254,10 @@ is a separate policy-controlled R2 archive; see [Content retention](content-rete
 
 ## Current boundary
 
-The first enforcement slice covers token-priced model calls. Provider tool-call
-fees and unknown dynamic models require either manifest pricing or a policy
-`requestCostMicros` override. Durable Objects remain the authoritative ledger;
+The enforcement slice covers token-priced model calls. Provider tool-call
+fees are not included; unknown dynamic models require manifest pricing or a policy
+`requestCostMicros` override. Reservations have a 15-minute lease; streams that
+outlast it need a separate reservation-renewal follow-up before this can be
+described as a hard invoice cap. Durable Objects remain the authoritative ledger;
 the protocol and pricing types live in provider-neutral TypeScript so another durable
 backend can implement the same reserve/settle contract.

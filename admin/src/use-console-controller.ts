@@ -266,6 +266,7 @@ export function useConsoleController() {
       errorCount: current.errorCount + provider.errorCount,
       totalTokens: current.totalTokens + provider.totalTokens,
       actualCostMicros: current.actualCostMicros + provider.actualCostMicros,
+      unpricedRequestCount: (current.unpricedRequestCount ?? 0) + (provider.unpricedRequestCount ?? 0),
     }), { requestCount: 0, successCount: 0, errorCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, actualCostMicros: 0 });
     const contentRetention = {
       enabled: !user.contentRetentionDisabled && effective.policies.some((policy) => policy.retainRequestContent),

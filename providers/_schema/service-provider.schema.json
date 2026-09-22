@@ -521,6 +521,29 @@
         "maxRequestInputTokens": { "type": "integer", "minimum": 1 },
         "defaultMaxOutputTokens": { "type": "integer", "minimum": 0 },
         "inputTokenOverhead": { "type": "integer", "minimum": 0 },
+        "longContext": { "$ref": "#/$defs/longContextPricing" },
+        "serviceTiers": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "items": { "$ref": "#/$defs/serviceTierPricing" }
+        }
+      }
+    },
+    "serviceTierPricing": {
+      "type": "object",
+      "required": ["id", "inputMicrosPerMillion", "outputMicrosPerMillion"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" },
+        "aliases": { "type": "array", "maxItems": 8, "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" } },
+        "inputMicrosPerMillion": { "type": "integer", "minimum": 0 },
+        "outputMicrosPerMillion": { "type": "integer", "minimum": 0 },
+        "cachedInputMicrosPerMillion": { "type": "integer", "minimum": 0 },
+        "cacheWriteInputMicrosPerMillion": { "type": "integer", "minimum": 0 },
+        "cacheWrite5mInputMicrosPerMillion": { "type": "integer", "minimum": 0 },
+        "cacheWrite1hInputMicrosPerMillion": { "type": "integer", "minimum": 0 },
+        "maxInputTokens": { "type": "integer", "minimum": 1 },
         "longContext": { "$ref": "#/$defs/longContextPricing" }
       }
     },

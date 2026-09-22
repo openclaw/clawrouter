@@ -24,9 +24,12 @@ export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capabili
   if (capability === "llm.count_tokens") return emptyReservation();
   const policyLimit = auth.policy.monthlyBudgetMicros;
   const providerLimit = connection?.monthlyBudgetMicros;
+  // Unmetered callers retain upstream tier selection; only an enforced budget
+  // needs a provable reservation price before dispatch.
   if (policyLimit == null && providerLimit == null) return emptyReservation();
   if (policyLimit === 0) throw new HttpError(402, "budget_exhausted", "proxy key budget is exhausted");
   if (providerLimit === 0) throw new HttpError(402, "provider_budget_exhausted", `provider ${connection?.providerId ?? "unknown"} monthly budget is exhausted`);
+  if (cost.basis === "unpriced_service_tier") throw new HttpError(400, "pricing_required", "requested service tier has no versioned manifest price; select a declared tier or configure a fixed policy request price");
   if (cost.basis === "flat_fallback") throw new HttpError(400, "pricing_required", "budgeted requests require versioned manifest pricing or a fixed policy request price");
   const reservation: BudgetReservation = { reservations: [], reservedMicros: cost.reserveMicros };
   if (policyLimit != null) {

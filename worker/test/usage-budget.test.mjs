@@ -57,8 +57,10 @@ test("GET /v1/usage preserves the budget response contract while selecting the c
   assert.equal(objectNames[0], "tenant:maintainer_access:owner@example.com");
 });
 
-function usageEnv(objectNames, { provider = "openai", limit = 100, fixedCost = 1, retainContent = true } = {}) {
+function usageEnv(objectNames, { provider = "openai", limit = 100, providerLimit = limit, fixedCost = 1, retainContent = true, existingUnmetered = false } = {}) {
   const policy = { enabled: true, generation: "policy_v1", providers: [provider], tenantId: "tenant", monthlyBudgetMicros: limit, requestCostMicros: fixedCost, budgetScope: "principal", retainRequestContent: retainContent };
+  // Existing stored policies can omit the optional limits; new policies use null.
+  if (existingUnmetered) { delete policy.monthlyBudgetMicros; delete policy.requestCostMicros; }
   const credential = { enabled: true, ["sec" + "retSha256"]: keyDigest, policyId: "maintainer_access", policyGeneration: "policy_v1", principalId: "owner@example.com" };
   const access = {
     idFromName: (name) => name,
@@ -67,7 +69,7 @@ function usageEnv(objectNames, { provider = "openai", limit = 100, fixedCost = 1
       if (path === "/credentials/resolve") return Response.json({ initialized: true, credentials: [{ credentialId: "maintainer_key", credential }], missingCredentialIds: [] });
       if (path === "/policies/resolve") return Response.json({ initialized: true, policies: [{ policyId: "maintainer_access", policy }], missingPolicyIds: [] });
       if (path === "/users/resolve") return Response.json({ initialized: true, users: [], missingEmails: [] });
-      if (path === "/connections/resolve") return Response.json({ initialized: true, connections: [{ providerId: provider, enabled: true, monthlyBudgetMicros: limit }], missingProviderIds: [] });
+      if (path === "/connections/resolve") return Response.json({ initialized: true, connections: [{ providerId: provider, enabled: true, monthlyBudgetMicros: providerLimit }], missingProviderIds: [] });
       if (path === "/grant-pools/resolve") return Response.json({ keys: [], states: {} });
       throw new Error(`unexpected authority path ${path}`);
     } }),
@@ -149,12 +151,15 @@ for (const [name, body, contentType, measured, measuredCost = 4_710, outputToken
     env.BUDGET_LEDGER = sqlBudgetNamespace(t);
     const events = [];
     env.USAGE_QUEUE = { send: async (event) => { events.push(event); } };
-    const upstream = t.mock.method(globalThis, "fetch", async () => new Response(body, { headers: { "content-type": contentType } }));
+    const upstream = t.mock.method(globalThis, "fetch", async (_url, init) => {
+      assert.equal(JSON.parse(init.body).service_tier, "standard_only");
+      return new Response(body, { headers: { "content-type": contentType } });
+    });
     const pending = [];
     const context = { waitUntil: (promise) => { pending.push(promise); } };
     const request = new Request("https://clawrouter.example/v1/messages", {
       method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
-      body: JSON.stringify({ model: "anthropic/claude-haiku-4-5", max_tokens: 20, stream: contentType === "text/event-stream", messages: [{ role: "user", content: [{ type: "text", text: "a".repeat(4_000), cache_control: { type: "ephemeral", ttl: "1h" } }] }] }),
+      body: JSON.stringify({ model: "anthropic/claude-haiku-4-5", service_tier: "standard_only", max_tokens: 20, stream: contentType === "text/event-stream", messages: [{ role: "user", content: [{ type: "text", text: "a".repeat(4_000), cache_control: { type: "ephemeral", ttl: "1h" } }] }] }),
     });
     const response = await handler.fetch(request.clone(), env, context);
     assert.equal(response.status, 200);
@@ -177,6 +182,111 @@ for (const [name, body, contentType, measured, measuredCost = 4_710, outputToken
     else await next.text();
     await Promise.all(pending);
     assert.equal(upstream.mock.callCount(), expectedCost === 0 ? 2 : 1);
+  });
+}
+
+const astraUsage = { input_tokens: 14, output_tokens: 8, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } };
+for (const [name, route, requestedTier, payload, contentType, expected, servedTier] of [
+  ["JSON priority", "/v1/responses", "priority", { service_tier: "priority", usage: astraUsage }, "application/json", 1_080, "priority"],
+  ["native fast alias", "/v1/native/openai/v1/responses", "fast", { service_tier: "fast", usage: astraUsage }, "application/json", 1_080, "fast"],
+  ["JSON Flex", "/v1/responses", "flex", { service_tier: "flex", usage: astraUsage }, "application/json", 270, "flex"],
+  ["omitted inherits Fast", "/v1/responses", undefined, { service_tier: "priority", usage: astraUsage }, "application/json", 1_080, "priority"],
+  ["auto inherits Fast", "/v1/responses", "auto", { service_tier: "priority", usage: astraUsage }, "application/json", 1_080, "priority"],
+  ["Responses SSE downgrade", "/v1/responses", "priority", sse({ type: "response.created", response: { service_tier: "priority" } }, { type: "response.completed", response: { service_tier: "default", usage: astraUsage } }), "text/event-stream", 540, "default"],
+  ["Responses SSE max-output incomplete", "/v1/responses", "priority", sse({ type: "response.incomplete", response: { status: "incomplete", incomplete_details: { reason: "max_output_tokens" }, service_tier: "priority", usage: astraUsage } }), "text/event-stream", 1_080, "priority"],
+  ["Responses SSE failed with usage", "/v1/responses", "priority", sse({ type: "response.failed", response: { status: "failed", service_tier: "priority", usage: astraUsage } }), "text/event-stream", 1_080, "priority"],
+  ["Chat SSE usage-only terminal", "/v1/chat/completions", "priority", sse({ object: "chat.completion.chunk", service_tier: "priority" }, { object: "chat.completion.chunk", usage: astraUsage }, "[DONE]"), "text/event-stream", 1_080, "priority"],
+  ["unknown served tier", "/v1/responses", "priority", { service_tier: "future", usage: astraUsage }, "application/json", null, "future"],
+  ["missing served tier", "/v1/responses", "priority", { usage: astraUsage }, "application/json", null, null],
+  ["incomplete cache counters", "/v1/responses", "priority", { service_tier: "priority", usage: { input_tokens: 14, output_tokens: 8 } }, "application/json", null, "priority"],
+  ["incomplete Responses stream", "/v1/responses", "priority", sse({ type: "response.created", response: { service_tier: "priority", usage: astraUsage } }), "text/event-stream", null, null],
+]) {
+  test(`Astra ${name} settles both real SQL ledgers and records its price basis`, async (t) => {
+    const limit = 1_000_000, events = [], pending = [];
+    const env = usageEnv([], { limit, fixedCost: null, retainContent: false });
+    env.OPENAI_API_KEY = "fixture-openai-key";
+    env.BUDGET_LEDGER = sqlBudgetNamespace(t);
+    env.USAGE_QUEUE = { send: async (event) => { events.push(event); } };
+    const upstreamBody = typeof payload === "string" ? payload : JSON.stringify(payload);
+    t.mock.method(globalThis, "fetch", async (_url, init) => {
+      assert.equal(JSON.parse(init.body).service_tier, requestedTier);
+      return new Response(upstreamBody, { headers: { "content-type": contentType } });
+    });
+    const response = await handler.fetch(new Request(`https://clawrouter.example${route}`, {
+      method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
+      body: JSON.stringify({ model: "openai/gpt-6-astra", input: "fixture", messages: [{ role: "user", content: "fixture" }], max_output_tokens: 32, service_tier: requestedTier, stream: contentType === "text/event-stream" }),
+    }), env, { waitUntil: promise => pending.push(promise) });
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), upstreamBody);
+    await Promise.all(pending);
+    assert.equal(events.length, 1);
+    const [event] = events;
+    const charged = expected ?? event.reserved_cost_micros;
+    assert.ok(event.reserved_cost_micros > 1_080);
+    assert.equal(event.actual_cost_micros, charged);
+    assert.equal(event.requested_service_tier, requestedTier ?? null);
+    assert.equal(event.served_service_tier, servedTier);
+    assert.equal(event.cost_basis, expected == null ? "manifest_reservation" : "manifest_pricing");
+    assert.equal(event.content_retained, false);
+    const usage = await handler.fetch(new Request("https://clawrouter.example/v1/usage", { headers: { authorization: `Bearer ${proxyKey()}` } }), env, {});
+    assert.equal((await usage.json()).budget.spentMicros, charged);
+    assert.equal((await providerBudgetStatus(env, "openai", limit)).spentMicros, charged);
+  });
+}
+
+test("either enforced budget rejects unsupported tiers while fixed policy tariffs remain explicit", async (t) => {
+  for (const [limit, providerLimit, fixedCost] of [[1_000_000, null, null], [null, 1_000_000, null], [1_000_000, 1_000_000, null], [1_000_000, 1_000_000, 7]]) {
+    const events = [], pending = [];
+    const env = usageEnv([], { limit, providerLimit, fixedCost, retainContent: false });
+    env.OPENAI_API_KEY = "fixture-openai-key";
+    env.BUDGET_LEDGER = sqlBudgetNamespace(t);
+    env.USAGE_QUEUE = { send: async event => { events.push(event); } };
+    const upstream = t.mock.method(globalThis, "fetch", async () => Response.json({ service_tier: "future", usage: astraUsage }));
+    const response = await handler.fetch(new Request("https://clawrouter.example/v1/responses", {
+      method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
+      body: JSON.stringify({ model: "openai/gpt-6-astra", input: "fixture", max_output_tokens: 32, service_tier: "future" }),
+    }), env, { waitUntil: promise => pending.push(promise) });
+    assert.equal(response.status, fixedCost == null ? 400 : 200);
+    const body = await response.json();
+    if (fixedCost == null) assert.equal(body.error.code, "pricing_required");
+    await Promise.all(pending);
+    assert.equal(upstream.mock.callCount(), fixedCost == null ? 0 : 1);
+    assert.equal(events[0].actual_cost_micros, fixedCost ?? 0);
+    assert.equal(events[0].cost_basis, fixedCost == null ? "none" : "policy_fixed");
+    assert.equal((await providerBudgetStatus(env, "openai", 1_000_000)).spentMicros, fixedCost ?? 0);
+    upstream.mock.restore();
+  }
+});
+
+for (const existingUnmetered of [false, true]) {
+  test(`${existingUnmetered ? "existing stored" : "fresh"} unmetered policies forward unknown tiers and distinguish unavailable prices`, async (t) => {
+    for (const [servedTier, status, expected, basis] of [["future", 200, 0, "unpriced_usage"], [undefined, 200, 0, "unpriced_usage"], ["priority", 200, 1_080, "manifest_pricing"], ["default", 200, 540, "manifest_pricing"], ["future", 400, 0, "none"], ["transport_failure", 502, 0, "unpriced_usage"], ["timeout", 502, 0, "unpriced_usage"], ["retention_failure", 503, 0, "none"]]) {
+      const events = [], pending = [], ledgerCalls = [];
+      const env = usageEnv(ledgerCalls, { limit: null, providerLimit: null, fixedCost: null, retainContent: servedTier === "retention_failure", existingUnmetered });
+      env.OPENAI_API_KEY = "fixture-openai-key";
+      env.USAGE_QUEUE = { send: async event => events.push(event) };
+      env.CONTENT_ARCHIVE = { put: async () => { throw new Error("synthetic retention failure"); } };
+      const upstream = t.mock.method(globalThis, "fetch", async (_url, init) => {
+        assert.equal(JSON.parse(init.body).service_tier, "future");
+        if (servedTier === "timeout") throw new DOMException("synthetic timeout", "AbortError");
+        if (servedTier === "transport_failure") throw new Error("synthetic transport failure");
+        return Response.json({ service_tier: servedTier, usage: astraUsage }, { status });
+      });
+      const response = await handler.fetch(new Request("https://clawrouter.example/v1/responses", {
+        method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
+        body: JSON.stringify({ model: "openai/gpt-6-astra", input: "fixture", max_output_tokens: 32, service_tier: "future" }),
+      }), env, { waitUntil: promise => pending.push(promise) });
+      assert.equal(response.status, status);
+      await response.text(); await Promise.all(pending);
+      assert.equal(upstream.mock.callCount(), servedTier === "retention_failure" ? 0 : 1);
+      assert.equal(events.length, 1);
+      assert.equal(events[0].actual_cost_micros, expected);
+      assert.equal(events[0].reserved_cost_micros, 0);
+      assert.equal(events[0].cost_basis, basis);
+      assert.equal(events[0].requested_service_tier, "future");
+      assert.deepEqual(ledgerCalls, []);
+      upstream.mock.restore();
+    }
   });
 }
 

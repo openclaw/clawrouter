@@ -86,6 +86,14 @@ billing:
   per million tokens. Change `pricingRef` whenever rates or effective dates
   change. Declare `longContext` when a model changes rates above an input-token
   threshold; omit `pricing` when a model cannot be priced safely.
+- `pricing.serviceTiers` declares complete rate cards with unique wire `id`s,
+  optional `aliases`, optional `longContext`, and an optional `maxInputTokens`
+  price-applicability limit. Include a `default` card identical to the root
+  pricing; the compiler rejects drift. Omitted/auto requests reserve all known
+  possible rates, while settlement requires the served tier. Unpublished tiers
+  or contexts never silently use Standard rates.
+  Models without this contract retain their provider's existing pricing behavior;
+  the Worker does not reinterpret another provider's tier parameter as OpenAI's.
 - `models.entries[].supportedReasoningEfforts` advertises the model's exact
   provider-native OpenAI-compatible wire efforts. Values are unique and limited
   to `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.

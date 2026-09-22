@@ -2,7 +2,7 @@ import { emptyReservation, finalizeAccounting, type BudgetReservation, type Esti
 import { correlationMetadata } from "./correlation";
 import { actualModelCost, estimateModelCost } from "./pricing";
 import type { ProxySelection } from "./proxy-selection";
-import type { UsageTokens } from "./token-usage";
+import { extractServiceTier, type UsageTokens } from "./token-usage";
 import type { AuthorizedIdentity, CompiledModel, Env, UsageEvent } from "./types";
 import { randomId } from "./utils";
 
@@ -30,7 +30,7 @@ export function createProxyAccounting(options: AccountingContext) {
   const correlation = correlationMetadata(request);
   const requestId = correlation.requestId;
   const started = Date.now();
-  function finish(statusCode: number, status: UsageEvent["status"], reservation = emptyReservation(), actual = 0, tokens: UsageTokens | null = null, contentRef: string | null = null) {
+  function finish(statusCode: number, status: UsageEvent["status"], reservation = emptyReservation(), actual = 0, tokens: UsageTokens | null = null, contentRef: string | null = null, basis = cost.basis) {
     const event: UsageEvent = {
       id: randomId("usage"), type: "clawrouter.usage.v1", occurred_at_ms: Date.now(), tenant_id: auth.policy.tenantId ?? "default",
       policy_id: auth.policyId, credential_id: auth.credentialId, principal_id: auth.principalId, auth_type: auth.authType,
@@ -45,7 +45,8 @@ export function createProxyAccounting(options: AccountingContext) {
       total_tokens: tokens?.total ?? null, cached_input_tokens: tokens?.cached ?? null, cache_write_input_tokens: tokens?.cacheWrite ?? null,
       reserved_cost_micros: reservation.reservedMicros, actual_cost_micros: actual, reserved_input_tokens: cost.inputTokens,
       reserved_output_tokens: cost.outputTokens, pricing_ref: selection.model?.pricing_ref ?? null,
-      pricing_effective_at: selection.model?.pricing?.effectiveAt ?? null, cost_basis: cost.basis, status_code: statusCode,
+      pricing_effective_at: selection.model?.pricing?.effectiveAt ?? null, cost_basis: basis, status_code: statusCode,
+      requested_service_tier: extractServiceTier(selection.body) ?? null, served_service_tier: tokens?.serviceTier ?? null,
       duration_ms: Date.now() - started, content_retained: !!contentRef, content_ref: contentRef, status,
     };
     return finalizeAccounting(env, reservation, actual, event);
@@ -53,13 +54,19 @@ export function createProxyAccounting(options: AccountingContext) {
   return {
     cost,
     requestId,
-    fail(statusCode: number, status: UsageEvent["status"], reservation?: BudgetReservation, contentRef: string | null = null) {
-      context.waitUntil(finish(statusCode, status, reservation, 0, null, contentRef));
+    fail(statusCode: number, status: UsageEvent["status"], reservation?: BudgetReservation, contentRef: string | null = null, dispatched = false) {
+      const basis = cost.basis === "unpriced_service_tier" ? dispatched ? "unpriced_usage" : "none" : cost.basis;
+      context.waitUntil(finish(statusCode, status, reservation, 0, null, contentRef, basis));
     },
     complete(response: Response, tokens: UsageTokens | null, reservation: BudgetReservation, contentRef: string | null) {
       const measured = tokens ? actualCost(selection.model, tokens, auth.policy.requestCostMicros) : null;
       const actual = response.ok ? measured ?? cost.reserveMicros : 0;
-      return finish(response.status, response.ok ? "success" : response.status < 500 ? "client_error" : "provider_error", reservation, actual, tokens, contentRef);
+      // Zero accounted micros with an unpriced basis means unavailable, not free.
+      // A known served tier can supply a price even for an undeclared request tier.
+      const basis = cost.basis === "unpriced_service_tier"
+        ? !response.ok ? "none" : measured == null ? "unpriced_usage" : "manifest_pricing"
+        : response.ok && measured == null && cost.basis === "manifest_pricing" ? "manifest_reservation" : cost.basis;
+      return finish(response.status, response.ok ? "success" : response.status < 500 ? "client_error" : "provider_error", reservation, actual, tokens, contentRef, basis);
     },
   };
 }
@@ -70,7 +77,7 @@ export function estimateCost(model: CompiledModel | null, body: Record<string, u
   const pricing = model?.pricing;
   if (!pricing) return { reserveMicros: 1, basis: "flat_fallback", inputTokens: null, outputTokens: null };
   const estimate = estimateModelCost(pricing, body);
-  return { reserveMicros: estimate.reserveMicros, basis: "manifest_pricing", inputTokens: estimate.inputTokens, outputTokens: estimate.outputTokens };
+  return { reserveMicros: estimate.reserveMicros, basis: estimate.pricingAvailable === false ? "unpriced_service_tier" : "manifest_pricing", inputTokens: estimate.inputTokens, outputTokens: estimate.outputTokens };
 }
 
 function actualCost(model: CompiledModel | null, tokens: UsageTokens, fixed: number | null | undefined): number | null {
