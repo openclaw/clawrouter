@@ -58,6 +58,7 @@ export interface CompiledGrantTransport {
   baseUrl: string | null;
   auth: GrantTransportAuth | null;
   endpointPaths: Record<string, string>;
+  allowedEndpoints?: string[];
   headers: Record<string, string>;
   appendHeaders: Record<string, string>;
   requestTransforms: { prependSystem: Array<{ type: "text"; text: string }> };

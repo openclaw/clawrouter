@@ -1,9 +1,17 @@
-import type { AuthScheme, CompiledGrantTransport, CompiledProvider, CompiledQuotaProbe, Env, GrantTransportAuth, UpstreamGrant } from "./types.ts";
+import type { AuthScheme, CompiledEndpoint, CompiledGrantTransport, CompiledProvider, CompiledQuotaProbe, Env, GrantTransportAuth, UpstreamGrant } from "./types.ts";
 import { HttpError } from "./utils.ts";
 
 export function transportForGrant(provider: CompiledProvider, grant: UpstreamGrant | null): CompiledGrantTransport | null {
   if (!grant?.kind) return null;
   return provider.auth.grantTransports[grant.kind] ?? null;
+}
+
+export interface GrantRequirement { provider: CompiledProvider; endpoint: CompiledEndpoint }
+
+export function grantSupports(requirement: GrantRequirement, grant: UpstreamGrant | null): boolean {
+  const transport = transportForGrant(requirement.provider, grant);
+  if (transport?.allowedEndpoints && !transport.allowedEndpoints.includes(requirement.endpoint.id)) return false;
+  return true;
 }
 
 export function quotaProbeForGrant(provider: CompiledProvider, grant: UpstreamGrant | null): CompiledQuotaProbe | null {

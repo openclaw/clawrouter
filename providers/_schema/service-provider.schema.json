@@ -285,6 +285,7 @@
       "properties": {
         "baseUrl": { "type": "string", "pattern": "^https://" },
         "auth": { "$ref": "#/$defs/grantTransportAuth" },
+        "allowedEndpoints": { "type": "array", "minItems": 1, "uniqueItems": true, "items": { "type": "string" } },
         "endpointPaths": {
           "type": "object",
           "additionalProperties": { "type": "string", "pattern": "^/" }
