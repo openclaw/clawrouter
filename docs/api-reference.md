@@ -57,7 +57,7 @@ Native Responses JSON and SSE routes include:
 | Azure OpenAI | `/v1/native/azure-openai/openai/v1/responses` | Deployment name in `model`; endpoint and API key required; no inherited dated `api-version` |
 | OpenRouter | `/v1/native/openrouter/v1/responses` | OpenRouter model identifier in `model`; bearer credential and configured `OPENROUTER_SITE_URL` attribution |
 
-Azure's legacy deployment chat and embeddings routes still require `AZURE_OPENAI_API_VERSION`. The placeholder Azure deployment and OpenRouter `auto` catalog entries do not attest a particular model's Responses support or price. See the upstream [Azure Responses contract](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/responses) and [OpenRouter Responses contract](https://openrouter.ai/docs/api/api-reference/responses/create-responses); operators must verify model access with their own provider account.
+Azure's legacy deployment chat and embeddings routes still require `AZURE_OPENAI_API_VERSION`. The default `azure-openai/deployment` model is listed only when `AZURE_OPENAI_DEPLOYMENT` is configured; explicit native deployment routes remain available without that default. The placeholder Azure deployment and OpenRouter `auto` catalog entries do not attest a particular model's Responses support or price. See the upstream [Azure Responses contract](https://learn.microsoft.com/en-us/azure/foundry/openai/how-to/responses) and [OpenRouter Responses contract](https://openrouter.ai/docs/api/api-reference/responses/create-responses); operators must verify model access with their own provider account.
 
 A manifest proxy request for Tavily looks like this:
 

@@ -7,9 +7,9 @@ import { contentRetentionDefault } from "./content-retention.ts";
 import { loadFusionConfig } from "./fusion-config";
 import { FUSION_MODEL_ID } from "./fusion";
 import { authenticateProxyKey } from "./proxy-auth";
-import { endpointForPath, modelRoute, providerReadinessForPolicies, providerReadinessFromState, snapshot, type Readiness } from "./providers";
+import { endpointForPath, modelRoute, providerReadinessForPolicies, providerReadinessFromState, resolveTemplate, snapshot, type Readiness } from "./providers";
 import type { AccessPolicyEntry, AccessSession, CompiledProvider, Env } from "./types";
-import { errorResponse, privateJson, sha256Hex } from "./utils";
+import { errorResponse, HttpError, privateJson, sha256Hex } from "./utils";
 
 export async function sessionResponse(request: Request, env: Env): Promise<Response> {
   const session = await verifiedAccessSession(request, env);
@@ -240,7 +240,12 @@ async function clientInventory(entitlements: ClientEntitlements, env: Env) {
       if (grantAllowed || environmentAllowed) endpointPolicies.set(endpoint.id, selected.entry.policy);
     }
     const endpoints = [...endpointPolicies.keys()];
-    return [provider.id, { endpoints, models: catalogModels(provider, endpoints, null, connections.find((connection) => connection.providerId === provider.id)?.monthlyBudgetMicros ?? null, endpointPolicies) }] as const;
+    const models = catalogModels(provider, endpoints, null, connections.find((connection) => connection.providerId === provider.id)?.monthlyBudgetMicros ?? null, endpointPolicies).filter((model) => {
+      // Native callers can supply path parameters even when a catalog model's default is absent.
+      try { resolveTemplate(provider, model.upstream, env); return true; }
+      catch (error) { if (error instanceof HttpError && error.code === "provider_not_configured") return false; throw error; }
+    });
+    return [provider.id, { endpoints, models }] as const;
   }));
   return new Map(views);
 }
