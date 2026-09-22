@@ -1,10 +1,10 @@
 import snapshotJson from "./generated/provider-snapshot.json" with { type: "json" };
 import { listConnections, resolveConnection } from "./authority.ts";
 import { observeGrantQuota, observeGrantQuotaProbe } from "./grant-quota.ts";
-import { grantRevision, grantUsable as canonicalGrantUsable, recordGrantRuntime, resolveGrantSelection } from "./grant-selection.ts";
+import { grantRevision, grantUsable as canonicalGrantUsable, recordGrantRuntime, resolveGrantSelection, type PinnedGrant } from "./grant-selection.ts";
 import { grantsVisibleToPolicies, type GrantRecord } from "./grant-scope.ts";
 import { materializeGrantCredentials } from "./grant-credentials.ts";
-import { applyProviderCredential, applyTransportHeaders, quotaProbeForGrant, requiredGrantTemplate, transportForGrant } from "./provider-auth.ts";
+import { applyProviderCredential, applyTransportHeaders, quotaProbeForGrant, requiredGrantTemplate, transportForGrant, type GrantRequirement } from "./provider-auth.ts";
 import type {
   AccessPolicyEntry, AuthorizedIdentity, CompiledEndpoint, CompiledGrantTransport, CompiledModel, CompiledProvider, Env,
   ProviderConnection, ProviderHealth, ProviderSnapshot, UpstreamGrant,
@@ -190,11 +190,12 @@ export async function assertProviderAccess(provider: CompiledProvider, auth: Aut
   return connection;
 }
 
-export async function upstreamAuth(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedGrantKeys: ReadonlySet<string> = new Set(), stickyHash: string | null = null, recordSelection = true): Promise<UpstreamAuth> {
-  const resolution = await grantFor(provider, auth, env, excludedGrantKeys, stickyHash, recordSelection);
+export async function upstreamAuth(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedGrantKeys: ReadonlySet<string> = new Set(), stickyHash: string | null = null, recordSelection = true, pinned?: PinnedGrant, requirement?: GrantRequirement): Promise<UpstreamAuth> {
+  const resolution = await grantFor(provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, requirement);
   const selected = resolution.selected;
   if (!selected && resolution.hasConfiguredGrant) throw new HttpError(503, "upstream_grant_pool_unavailable", `provider ${provider.id} has no available scoped upstream grant`);
   const grant = selected?.grant ?? null;
+  if (pinned && ((selected?.key ?? null) !== pinned.key || (grant ? grantRevision(grant) : null) !== pinned.revision)) throw new HttpError(409, "upstream_grant_changed", "upstream authorization changed; open a new connection");
   const headers = new Headers();
   const query = new URLSearchParams();
   applyProviderCredential(provider, grant, env, headers, query);
@@ -315,10 +316,10 @@ export async function listHealth(env: Env): Promise<Map<string, ProviderHealth>>
   return result;
 }
 
-async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedKeys: ReadonlySet<string>, stickyHash: string | null, recordSelection: boolean): Promise<{ selected: { key: string; grant: UpstreamGrant } | null; hasConfiguredGrant: boolean }> {
+async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedKeys: ReadonlySet<string>, stickyHash: string | null, recordSelection: boolean, pinned?: PinnedGrant, requirement?: GrantRequirement): Promise<{ selected: { key: string; grant: UpstreamGrant } | null; hasConfiguredGrant: boolean }> {
   const tokenRef = provider.auth.schemes.find((scheme) => scheme.type === "oauth")?.tokenRef ?? provider.id;
   const tenant = auth.policy.tenantId ?? "default";
-  const resolution = await resolveGrantSelection(provider.id, auth.policyId, tenant, tokenRef, env, excludedKeys, auth.policy.grantRouting, stickyHash, recordSelection);
+  const resolution = await resolveGrantSelection(provider.id, auth.policyId, tenant, tokenRef, env, excludedKeys, auth.policy.grantRouting, stickyHash, recordSelection, pinned?.key, requirement);
   return { selected: resolution.selected ? { key: resolution.selected.key, grant: await refreshGrant(resolution.selected.key, resolution.selected.grant, provider, env, false) } : null, hasConfiguredGrant: resolution.hasConfiguredGrant };
 }
 
@@ -376,7 +377,7 @@ async function connectionFor(env: Env, providerId: string): Promise<ProviderConn
 }
 
 function endpointTemplatesConfigured(provider: CompiledProvider, endpoint: CompiledEndpoint, env: Env): boolean {
-  const values = [provider.base_urls.default, endpoint.path, ...Object.values(provider.adapter.injectHeaders), ...Object.values(provider.adapter.injectQuery)];
+  const values = [provider.base_urls.default, endpoint.path, ...Object.values(provider.adapter.injectHeaders), ...Object.values(provider.adapter.injectQuery), ...Object.values(endpoint.query), ...Object.values(endpoint.headers)];
   return values.every((value) => [...value.matchAll(/\$\{([^}]+)\}/g)].every((match) => templateCandidates(provider, match[1]).some((key) => envValue(env, key)) || endpoint.path_params.includes(match[1])));
 }
 

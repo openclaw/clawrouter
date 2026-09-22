@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Bridge qualified native Responses WebSockets with per-create authorization, pinned grants, bounded queues, retention, and shared budget settlement.
+- Export official Codex model descriptors from the authorized catalog; add priced Sol, Terra, and Luna routes and document desktop account and voice boundaries.
+- Add Azure OpenAI and OpenRouter native HTTP/SSE Responses routes. Share discovery and runtime grant-transport eligibility, honor provider budgets, and preserve native upstream model namespaces.
 - Account for OpenAI Standard, Fast/priority, and supported Flex tiers using dated per-model prices, conservative admission, and actual served-tier settlement. Preserve estimates when usage or tier pricing is incomplete, and refresh the GPT-5.6 Sol alias prices.
 - Add GPT-6 Astra to the OpenAI catalog with its reasoning efforts, standard token and cache-write pricing, long-context rates, and Chat Completions token-limit mapping.
 

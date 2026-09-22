@@ -73,6 +73,9 @@ billing:
 - `auth.grantTransports` can replace authentication, append required headers,
   prepend trusted system blocks, and declare alarm-driven quota or keep-warm
   maintenance for one grant kind. Contributors cannot override these values.
+  `allowedEndpoints` optionally restricts that transport to named endpoints;
+  `endpointPaths` alone only overrides paths. Compatibility is checked before
+  grant priority and selection, without reopening environment credentials.
 - `adapter` declares the request/response family. Use `custom_adapter` only after
   the declarative format cannot express the provider.
 - `billing.meter` and `billing.counters` produce OpenMeter/Lago/Meteroid style
@@ -97,6 +100,12 @@ billing:
 - `models.entries[].supportedReasoningEfforts` advertises the model's exact
   provider-native OpenAI-compatible wire efforts. Values are unique and limited
   to `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
+- `models.entries[].codexModel` names an explicitly sourced native Codex model
+  descriptor for a documented upstream alias. The export helper preserves that
+  descriptor's prompts and context contract; it does not generate metadata.
+- `endpoints.*.websocket: openai.responses` explicitly qualifies a native
+  POST Responses/SSE endpoint for the Worker WebSocket bridge. Other endpoints
+  and alternate grant transports do not gain WebSocket support implicitly.
 
 ## Edge Support Rules
 

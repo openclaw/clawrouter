@@ -4,7 +4,7 @@ import test from "node:test";
 
 import { providerById } from "../providers.ts";
 
-const { prepareNativeRequest } = await import("../proxy-selection.ts");
+const { prepareNativeRequest, prepareManifestRequest } = await import("../proxy-selection.ts");
 const { estimateCost } = await import("../proxy-accounting.ts");
 
 const google = providerById("google-gemini");
@@ -62,17 +62,18 @@ test("current Anthropic native models retain routing and budget pricing", () => 
   }
 });
 
-test("native path models reject provider mismatches", () => {
-  assert.throws(
-    () => prepareNativeRequest(
-      google,
-      streamGenerate,
-      {},
-      "/v1beta/models/anthropic%2Fclaude-sonnet-4-6:streamGenerateContent",
-      {},
-    ),
-    (error) => error?.code === "model_provider_mismatch",
-  );
+test("native namespaces preserve upstream identifiers while manifest envelopes reject cross-provider routes", () => {
+  const upstream = "anthropic/claude-sonnet-4-6";
+  const native = prepareNativeRequest(google, streamGenerate, {}, `/v1beta/models/${encodeURIComponent(upstream)}:streamGenerateContent`, {});
+  assert.equal(native.pathParams.model, upstream);
+  assert.equal(native.model.pricing, null);
+  assert.throws(() => prepareManifestRequest(google, streamGenerate, {}, { model: upstream }, {}), (error) => error.code === "model_provider_mismatch");
+  const openrouter = providerById("openrouter");
+  const responses = openrouter.endpoints.find((endpoint) => endpoint.id === "responses");
+  const routed = prepareNativeRequest(openrouter, responses, { model: "openai/gpt-6-astra", input: "fixture" }, responses.path, {});
+  assert.equal(routed.body.model, "openai/gpt-6-astra");
+  assert.equal(routed.model.pricing, null);
+  assert.equal(estimateCost(routed.model, routed.body, null, "llm.responses").basis, "flat_fallback");
 });
 
 test("native path models reject body and path mismatches", () => {

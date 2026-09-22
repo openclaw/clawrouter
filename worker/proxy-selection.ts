@@ -45,16 +45,16 @@ export function isSelectionFailure(value: ProxySelection | ProxySelectionFailure
   return "response" in value;
 }
 
-export function prepareManifestRequest(provider: CompiledProvider, endpoint: CompiledEndpoint, body: Record<string, unknown>, inputPathParams: Record<string, string>, env: Env): { model: CompiledModel | null; body: Record<string, unknown>; pathParams: Record<string, string> } {
+export function prepareManifestRequest(provider: CompiledProvider, endpoint: CompiledEndpoint, body: Record<string, unknown>, inputPathParams: Record<string, string>, env: Env, native = false): { model: CompiledModel | null; body: Record<string, unknown>; pathParams: Record<string, string> } {
   const modelId = typeof body.model === "string" ? body.model : null;
   const bodyRoute = modelId ? providerModelRoute(provider, modelId) : null;
   const globalBodyRoute = modelId ? modelRoute(modelId) : null;
-  if (globalBodyRoute && globalBodyRoute.provider.id !== provider.id) throw new HttpError(400, "model_provider_mismatch", `model ${modelId} does not belong to provider ${provider.id}`);
+  if (!native && globalBodyRoute && globalBodyRoute.provider.id !== provider.id) throw new HttpError(400, "model_provider_mismatch", `model ${modelId} does not belong to provider ${provider.id}`);
 
   const pathModelId = inputPathParams.model ?? inputPathParams.deployment ?? null;
   const pathRoute = pathModelId ? providerModelRoute(provider, pathModelId) : null;
   const globalPathRoute = pathModelId ? modelRoute(pathModelId) : null;
-  if (globalPathRoute && globalPathRoute.provider.id !== provider.id) throw new HttpError(400, "model_provider_mismatch", `model ${pathModelId} does not belong to provider ${provider.id}`);
+  if (!native && globalPathRoute && globalPathRoute.provider.id !== provider.id) throw new HttpError(400, "model_provider_mismatch", `model ${pathModelId} does not belong to provider ${provider.id}`);
 
   const bodyUpstream = bodyRoute ? resolvedUpstreamModel(provider, bodyRoute.model, env) : null;
   const pathUpstream = pathRoute ? resolvedUpstreamModel(provider, pathRoute.model, env) : pathModelId;
@@ -62,7 +62,7 @@ export function prepareManifestRequest(provider: CompiledProvider, endpoint: Com
 
   const model = bodyRoute?.model ?? pathRoute?.model ?? (!modelId && !pathModelId ? provider.models[0] ?? null : null);
   const upstreamModel = bodyUpstream ?? pathUpstream ?? (model && !model.upstream.includes("${") ? model.upstream : null);
-  const pathParams = normalizeModelPathParams(provider, endpoint, inputPathParams, bodyRoute, env);
+  const pathParams = normalizeModelPathParams(provider, endpoint, inputPathParams, bodyRoute, env, native);
   const transformedInput = { ...body };
   if (endpoint.path_params.some((name) => name === "model" || name === "deployment")) delete transformedInput.model;
   else if (modelId && upstreamModel) transformedInput.model = upstreamModel;
@@ -74,7 +74,7 @@ export function prepareManifestRequest(provider: CompiledProvider, endpoint: Com
 }
 
 export function prepareNativeRequest(provider: CompiledProvider, endpoint: CompiledEndpoint, body: Record<string, unknown>, path: string, env: Env): { model: CompiledModel | null; body: Record<string, unknown>; pathParams: Record<string, string> } {
-  return prepareManifestRequest(provider, endpoint, body, nativeParams(endpoint, path), env);
+  return prepareManifestRequest(provider, endpoint, body, nativeParams(endpoint, path), env, true);
 }
 
 export function directManifestEnvelope(request: Request, endpoint: CompiledEndpoint): { method: string; pathParams: Record<string, string>; query: Record<string, unknown>; body: Record<string, unknown> } {
@@ -116,12 +116,12 @@ function resolvedUpstreamModel(provider: CompiledProvider, model: CompiledModel,
   return model.upstream.includes("${") ? resolveTemplate(provider, model.upstream, env) : model.upstream;
 }
 
-function normalizeModelPathParams(provider: CompiledProvider, endpoint: CompiledEndpoint, input: Record<string, string>, bodyModel: ReturnType<typeof modelRoute>, env: Env): Record<string, string> {
+function normalizeModelPathParams(provider: CompiledProvider, endpoint: CompiledEndpoint, input: Record<string, string>, bodyModel: ReturnType<typeof modelRoute>, env: Env, native: boolean): Record<string, string> {
   const output = { ...input };
   for (const name of endpoint.path_params.filter((param) => param === "model" || param === "deployment")) {
     const publicId = output[name];
     const globalRoute = publicId ? modelRoute(publicId) : bodyModel;
-    if (globalRoute && globalRoute.provider.id !== provider.id) throw new HttpError(400, "model_provider_mismatch", `model ${publicId} does not belong to provider ${provider.id}`);
+    if (!native && globalRoute && globalRoute.provider.id !== provider.id) throw new HttpError(400, "model_provider_mismatch", `model ${publicId} does not belong to provider ${provider.id}`);
     const route = publicId ? providerModelRoute(provider, publicId) : bodyModel;
     if (route) output[name] = resolvedUpstreamModel(provider, route.model, env);
   }

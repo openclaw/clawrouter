@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { resolveGrantSelection, selectGrant, selectProviderPolicy, syncGrantPoolIndex, validGrantSegment } from "../grant-selection.ts";
+import { providerById, upstreamAuth } from "../providers.ts";
 
 test("grant pools select the lowest-priority usable grant deterministically", async () => {
   const env = mockEnv();
@@ -98,6 +99,41 @@ test("grant key segments reject ambiguous or undiscoverable values", () => {
   assert.equal(validGrantSegment("nested/grant"), false);
   assert.equal(validGrantSegment("x".repeat(257)), false);
   assert.equal(validGrantSegment("line\nbreak"), false);
+});
+
+test("endpoint and transport eligibility precede priority selection and never reopen environment credentials", async () => {
+  const env = mockEnv();
+  const provider = providerById("openai");
+  const requirement = (id, mode = "http") => ({ provider, endpoint: provider.endpoints.find((endpoint) => endpoint.id === id), mode });
+  await putGrant(env, "oauth/policy_a/subscription", { ...grant("openai", "subscription", 10), kind: "subscription" });
+  await putGrant(env, "oauth/policy_a/api", grant("openai", "api", 100));
+  for (const [endpoint, mode, expected] of [["responses", "http", "subscription"], ["chat_completions", "http", "api"], ["embeddings", "http", "api"], ["responses", "websocket", "api"]]) {
+    const result = await resolveGrantSelection("openai", "policy_a", "tenant_a", "openai", env, new Set(), undefined, null, true, undefined, requirement(endpoint, mode));
+    assert.equal(result.selected.key, `oauth/policy_a/${expected}`);
+    assert.deepEqual(env.selections.at(-1).candidates.map(({ key }) => key), [`oauth/policy_a/${expected}`]);
+  }
+  env.values.delete("oauth/policy_a/api");
+  const unavailable = await resolveGrantSelection("openai", "policy_a", "tenant_a", "openai", env, new Set(), undefined, null, false, undefined, requirement("responses", "websocket"));
+  assert.equal(unavailable.selected, null);
+  assert.equal(unavailable.hasConfiguredGrant, true);
+  const pinned = await resolveGrantSelection("openai", "policy_a", "tenant_a", "openai", env, new Set(), undefined, null, false, "oauth/policy_a/api", requirement("responses", "websocket"));
+  assert.equal(pinned.selected, null);
+  assert.equal(pinned.hasConfiguredGrant, true);
+});
+
+test("Access policy choice respects endpoint support and pinned grant revisions cannot rotate", async () => {
+  const env = mockEnv();
+  const provider = providerById("openai");
+  await putGrant(env, "oauth/policy_a/subscription", { ...grant("openai", "subscription"), kind: "subscription" });
+  await putGrant(env, "oauth/policy_b/api", grant("openai", "api"));
+  const requirement = { provider, endpoint: provider.endpoints.find((endpoint) => endpoint.id === "chat_completions"), mode: "http" };
+  assert.equal((await selectProviderPolicy([policy("policy_a"), policy("policy_b")], "openai", "tenant_a", env, requirement)).policyId, "policy_b");
+  const auth = { policyId: "policy_b", policy: policy("policy_b").policy };
+  env.GRANT_CREDENTIALS = { idFromName: (name) => name, get: () => ({ fetch: async (_url, init) => {
+    const { grant } = JSON.parse(init.body);
+    return Response.json({ grant, projection: { credentialGeneration: grant.credentialGeneration }, changed: false, migrated: false });
+  } }) };
+  await assert.rejects(upstreamAuth(provider, auth, env, new Set(), null, false, { key: "oauth/policy_b/api", revision: "old" }, requirement), (error) => error.code === "upstream_grant_changed");
 });
 
 function grant(provider, label, priority = 100) {

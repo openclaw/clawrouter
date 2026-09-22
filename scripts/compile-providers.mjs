@@ -39,6 +39,7 @@ export function compileProviderSnapshot(manifests) {
         provider: provider.id,
         upstream: model.upstream,
         capabilities: model.capabilities,
+        ...(model.codexModel ? { codexModel: model.codexModel } : {}),
         ...(model.supportedReasoningEfforts ? { supportedReasoningEfforts: model.supportedReasoningEfforts } : {}),
         pricing_ref: model.pricing_ref,
         pricing: model.pricing,
@@ -73,6 +74,7 @@ function compileProvider(manifest, ids) {
     request_format: endpoint.requestFormat,
     response_format: endpoint.responseFormat,
     streaming: endpoint.streaming ?? null,
+    ...(endpoint.websocket ? { websocket: endpoint.websocket } : {}),
     timeout_ms: endpoint.timeoutMs ?? null,
   }));
   const auth = {
@@ -109,6 +111,7 @@ function compileProvider(manifest, ids) {
     id: model.id,
     upstream: model.upstream,
     capabilities: model.capabilities ?? [],
+    ...(model.codexModel ? { codexModel: model.codexModel } : {}),
     ...(model.supportedReasoningEfforts ? { supportedReasoningEfforts: model.supportedReasoningEfforts } : {}),
     pricing_ref: model.pricingRef ?? null,
     pricing: model.pricing ? normalizePricing(model.pricing) : null,
@@ -239,6 +242,7 @@ function validateManifest(manifest) {
   }
   const reasoningEfforts = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
   for (const model of manifest.models?.entries ?? []) {
+    if (model.codexModel !== undefined && (typeof model.codexModel !== "string" || !model.codexModel.trim())) throw new Error(`model ${model.id} codexModel must be a nonempty exact native slug`);
     validateServiceTiers(model.pricing, model.id);
     const efforts = model.supportedReasoningEfforts;
     if (efforts === undefined) continue;
@@ -247,6 +251,7 @@ function validateManifest(manifest) {
     if (new Set(efforts).size !== efforts.length) throw new Error(`provider ${manifest.id} model ${model.id} supportedReasoningEfforts must contain unique entries`);
   }
   for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
+    if (endpoint.websocket !== undefined && (endpoint.websocket !== "openai.responses" || endpoint.requestFormat !== "openai.responses" || endpoint.responseFormat !== "openai.responses" || endpoint.streaming !== "sse" || (endpoint.method ?? "POST") !== "POST" || endpoint.nativeProxy === false)) throw new Error(`provider ${manifest.id} endpoint ${id} websocket requires a native POST Responses SSE endpoint`);
     if (!endpoint.path?.startsWith("/")) throw new Error(`provider ${manifest.id} endpoint ${id} path must start with /`);
     for (const placeholder of endpoint.path.matchAll(/\$\{([^}]+)\}/g)) {
       if (!(endpoint.pathParams ?? []).includes(placeholder[1])) throw new Error(`provider ${manifest.id} endpoint ${id} path parameter ${placeholder[1]} is not declared`);
@@ -256,6 +261,7 @@ function validateManifest(manifest) {
   for (const [kind, transport] of Object.entries(manifest.auth.grantTransports ?? {})) {
     if (!new Set(["api_key", "oauth", "subscription"]).has(kind)) throw new Error(`provider ${manifest.id} grant transport ${kind} has an invalid grant kind`);
     for (const name of [...Object.keys(transport.headers ?? {}), ...Object.keys(transport.appendHeaders ?? {})]) if (!headerName.test(name)) throw new Error(`provider ${manifest.id} grant transport ${kind} has an invalid header`);
+    if (transport.allowedEndpoints !== undefined && (!Array.isArray(transport.allowedEndpoints) || !transport.allowedEndpoints.length || new Set(transport.allowedEndpoints).size !== transport.allowedEndpoints.length || transport.allowedEndpoints.some((id) => !manifest.endpoints[id]))) throw new Error(`provider ${manifest.id} grant transport ${kind} allowedEndpoints must reference unique existing endpoints`);
     const warm = transport.maintenance?.keepWarm;
     if (warm) {
       const endpoint = manifest.endpoints[warm.endpoint];
@@ -357,6 +363,7 @@ function normalizeGrantTransport(value) {
     baseUrl: value.baseUrl ?? null,
     auth: value.auth ?? null,
     endpointPaths: value.endpointPaths ?? {},
+    ...(value.allowedEndpoints ? { allowedEndpoints: value.allowedEndpoints } : {}),
     headers: value.headers ?? {},
     appendHeaders: value.appendHeaders ?? {},
     requestTransforms: { prependSystem: value.requestTransforms?.prependSystem ?? [] },

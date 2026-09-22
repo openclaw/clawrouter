@@ -131,7 +131,7 @@ test("OpenAI streams keep inclusive cache usage and require their terminal event
   const usage = { input_tokens: 4_000, input_tokens_details: { cached_tokens: 1_000, cache_write_tokens: 2_000 }, output_tokens: 20 };
   const chunk = { object: "chat.completion.chunk", usage };
   const completed = { type: "response.completed", response: { usage } };
-  for (const stream of [sse(chunk, "[DONE]"), sse(completed)]) {
+  for (const stream of [sse(chunk, "[DONE]"), sse(completed), sse({ ...completed, type: "response.incomplete" }), sse({ ...completed, type: "response.failed" })]) {
     const tokens = extractSseUsageTokens(stream);
     assert.equal(tokens.input, 4_000);
     assert.equal(actualModelCost(cachePricing, tokens), 5_200);
@@ -140,7 +140,9 @@ test("OpenAI streams keep inclusive cache usage and require their terminal event
     sse(chunk),
     sse(chunk, "[DONE]").trimEnd(),
     sse({ type: "response.in_progress", response: { usage } }),
-    sse({ type: "response.failed", response: { usage } }),
+    sse({ type: "response.failed", response: { usage: null } }),
+    sse({ type: "response.incomplete", response: {} }),
+    sse({ type: "response.incomplete", response: { usage } }).trimEnd(),
     sse(chunk, { error: { message: "fixture stream error" } }, "[DONE]"),
   ]) assert.equal(extractSseUsageTokens(stream), null);
 });

@@ -38,6 +38,7 @@ Semantic identifier and path validation still applies after decoding.
 | --- | --- | --- |
 | `POST` | `/v1/chat/completions` | OpenAI-compatible chat routing |
 | `POST` | `/v1/responses` | OpenAI Responses routing |
+| `GET` upgrade | `/v1/responses`, qualified native Responses paths | Authenticated, bounded Responses WebSocket sessions; see [Codex and WebSockets](codex.md) |
 | `POST` | `/v1/embeddings` | OpenAI-compatible embeddings routing |
 | `POST` | `/v1/messages` | Anthropic Messages routing |
 | `POST` | `/v1/messages/count_tokens` | Anthropic token counting |

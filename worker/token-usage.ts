@@ -51,8 +51,9 @@ export function extractSseUsageTokens(text: string): UsageTokens | null {
     let root: Record<string, unknown> | null;
     try { root = record(JSON.parse(data)); } catch { return null; }
     if (!root) return null;
-    if (root.error || root.type === "error" || root.type === "response.failed" || root.type === "response.incomplete") return null;
-    if (root.type === "response.completed") return extractUsageTokens(root);
+    if (root.error || root.type === "error") return null;
+    // Incomplete/failed Responses can still contain authoritative billed usage.
+    if (["response.completed", "response.incomplete", "response.failed"].includes(String(root.type))) return extractUsageTokens(root);
     if (typeof root.type === "string" && root.type.startsWith("response.")) terminal = "response";
     if (root.object === "chat.completion.chunk") {
       terminal = "chat";

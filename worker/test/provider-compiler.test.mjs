@@ -15,7 +15,7 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.equal(compiled.model_index["openai/gpt-5.6"].provider, "openai");
   assert.equal(compiled.model_index["anthropic/claude-opus-4-8"].provider, "anthropic");
   assert.deepEqual(compiled.providers.find((provider) => provider.id === "aws-bedrock").optional_config_keys, ["AWS_SESSION_TOKEN"]);
-  assert.deepEqual(compiled.providers.find((provider) => provider.id === "azure-openai").optional_config_keys, ["AZURE_OPENAI_COMPLETION_TOKEN_DEPLOYMENTS"]);
+  assert.deepEqual(compiled.providers.find((provider) => provider.id === "azure-openai").optional_config_keys, ["AZURE_OPENAI_COMPLETION_TOKEN_DEPLOYMENTS", "AZURE_OPENAI_API_VERSION", "AZURE_OPENAI_DEPLOYMENT"]);
   const openai = compiled.providers.find((provider) => provider.id === "openai");
   const astra = openai.models.find((model) => model.id === "openai/gpt-6-astra");
   assert.equal(astra.upstream, "gpt-6-astra");
@@ -25,6 +25,16 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.ok(openai.adapter.requestTransforms.renameFields[0].upstreams.includes(astra.upstream));
   const gpt56 = openai.models.find((model) => model.id === "openai/gpt-5.6");
   assert.equal(gpt56.upstream, "gpt-5.6");
+  assert.equal(gpt56.codexModel, "gpt-5.6-sol");
+  assert.equal(compiled.model_index[gpt56.id].codexModel, gpt56.codexModel);
+  assert.equal(openai.endpoints.find((endpoint) => endpoint.id === "responses").websocket, "openai.responses");
+  for (const name of ["sol", "terra", "luna"]) {
+    const model = compiled.model_index[`openai/gpt-5.6-${name}`];
+    assert.equal(model.upstream, `gpt-5.6-${name}`);
+    assert.equal(model.pricing.maxInputTokens, 922000);
+    assert.ok(openai.adapter.requestTransforms.renameFields[0].upstreams.includes(model.upstream));
+    assert.deepEqual(model.supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh", "max"]);
+  }
   assert.deepEqual(gpt56.capabilities, ["llm.responses", "llm.chat"]);
   assert.deepEqual(gpt56.supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh", "max"]);
   assert.deepEqual(compiled.model_index["openai/gpt-5.6"].supportedReasoningEfforts, gpt56.supportedReasoningEfforts);

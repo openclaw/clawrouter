@@ -28,10 +28,19 @@ adapter:
     HTTP-Referer: ${site_url}
     X-Title: ClawRouter
 capabilities:
+  - id: llm.responses
+    endpoint: responses
+    methods: [POST]
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
 endpoints:
+  responses:
+    path: /v1/responses
+    requestFormat: openai.responses
+    responseFormat: openai.responses
+    streaming: sse
+    timeoutMs: 600000
   chat_completions:
     path: /v1/chat/completions
     requestFormat: openai.chat_completions

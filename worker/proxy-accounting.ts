@@ -27,6 +27,8 @@ interface AccountingContext {
 export function createProxyAccounting(options: AccountingContext) {
   const { env, context, auth, selection, request, compound } = options;
   const cost = options.cost ?? estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability);
+  const providerId = selection.provider.id, model = selection.model, capability = selection.capability;
+  const requestedTier = extractServiceTier(selection.body) ?? null;
   const correlation = correlationMetadata(request);
   const requestId = correlation.requestId;
   const started = Date.now();
@@ -40,28 +42,32 @@ export function createProxyAccounting(options: AccountingContext) {
       trace_id: correlation.traceId, span_id: correlation.spanId,
       compound_request_id: compound?.id ?? null, compound_request_stage: compound?.stage ?? null, compound_request_index: compound?.index ?? null,
       compound_request_size: compound?.size ?? null, compound_request_started_at_ms: compound?.startedAtMs ?? null,
-      provider: selection.provider.id, capability: selection.capability,
-      model: selection.model?.id ?? null, input_tokens: tokens?.input ?? null, output_tokens: tokens?.output ?? null,
+      provider: providerId, capability,
+      model: model?.id ?? null, input_tokens: tokens?.input ?? null, output_tokens: tokens?.output ?? null,
       total_tokens: tokens?.total ?? null, cached_input_tokens: tokens?.cached ?? null, cache_write_input_tokens: tokens?.cacheWrite ?? null,
       reserved_cost_micros: reservation.reservedMicros, actual_cost_micros: actual, reserved_input_tokens: cost.inputTokens,
-      reserved_output_tokens: cost.outputTokens, pricing_ref: selection.model?.pricing_ref ?? null,
-      pricing_effective_at: selection.model?.pricing?.effectiveAt ?? null, cost_basis: basis, status_code: statusCode,
-      requested_service_tier: extractServiceTier(selection.body) ?? null, served_service_tier: tokens?.serviceTier ?? null,
+      reserved_output_tokens: cost.outputTokens, pricing_ref: model?.pricing_ref ?? null,
+      pricing_effective_at: model?.pricing?.effectiveAt ?? null, cost_basis: basis, status_code: statusCode,
+      requested_service_tier: requestedTier, served_service_tier: tokens?.serviceTier ?? null,
       duration_ms: Date.now() - started, content_retained: !!contentRef, content_ref: contentRef, status,
     };
     return finalizeAccounting(env, reservation, actual, event);
   }
+  function settle(statusCode: number, status: UsageEvent["status"], billable: boolean, tokens: UsageTokens | null, reservation: BudgetReservation, contentRef: string | null) {
+    const measured = tokens ? actualCost(model, tokens, auth.policy.requestCostMicros) : null;
+    const actual = billable ? measured ?? cost.reserveMicros : 0;
+    const basis = billable && measured == null && cost.basis === "manifest_pricing" ? "manifest_reservation" : cost.basis;
+    return finish(statusCode, status, reservation, actual, tokens, contentRef, basis);
+  }
   return {
+    settle,
     cost,
     requestId,
     fail(statusCode: number, status: UsageEvent["status"], reservation?: BudgetReservation, contentRef: string | null = null) {
       context.waitUntil(finish(statusCode, status, reservation, 0, null, contentRef));
     },
     complete(response: Response, tokens: UsageTokens | null, reservation: BudgetReservation, contentRef: string | null) {
-      const measured = tokens ? actualCost(selection.model, tokens, auth.policy.requestCostMicros) : null;
-      const actual = response.ok ? measured ?? cost.reserveMicros : 0;
-      const basis = response.ok && measured == null && cost.basis === "manifest_pricing" ? "manifest_reservation" : cost.basis;
-      return finish(response.status, response.ok ? "success" : response.status < 500 ? "client_error" : "provider_error", reservation, actual, tokens, contentRef, basis);
+      return settle(response.status, response.ok ? "success" : response.status < 500 ? "client_error" : "provider_error", response.ok, tokens, reservation, contentRef);
     },
   };
 }

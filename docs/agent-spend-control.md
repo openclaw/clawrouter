@@ -165,6 +165,8 @@ Codex hosted web search has separate provider-side pricing, so this token-priced
 setup disables it. Codex also needs model metadata that advertises a service tier
 before it sends that tier; setting `service_tier` alone is not a compatibility
 proof. This configuration does not advertise WebSocket support.
+For official model metadata, Fast, and qualified WebSocket setup, follow the
+[Codex integration guide](codex.md).
 
 Then export the issued ClawRouter credential:
 
