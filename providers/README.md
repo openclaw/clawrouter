@@ -143,3 +143,10 @@ The smoke planner compiles `providers/*.provider.yaml`, derives one executable
 smoke target per provider, and fails if any provider lacks a route plan. It does
 not call upstream APIs; deployed live calls are opt-in through
 `CLAWROUTER_SMOKE_LIVE_PROVIDERS`.
+
+## Lanseq
+
+The bundled Lanseq manifest exposes `lanseq/qwen3.8-27b-int4` through
+OpenAI-compatible Chat Completions, including SSE streaming. Configure
+`LANSEQ_API_KEY` or a scoped API-key grant before enabling it for a policy.
+The dated prices and token limits come from [Lanseq's public documentation](https://api.lanseq.cloud/docs).
