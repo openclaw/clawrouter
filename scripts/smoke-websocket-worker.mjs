@@ -158,21 +158,15 @@ try {
   laneSocket.addEventListener("message", ({ data }) => laneEvents.push(JSON.parse(data)));
   const laneCreate = (lane, input, extra = {}) => laneSocket.send(JSON.stringify({ type: "response.create", model: "openai/gpt-6-astra", service_tier: "priority", max_output_tokens: 32, stream_id: lane, input, ...extra }));
   const stateFrames = async () => (await (await upstream.fetch("https://fixture.example/state")).json()).frames;
-  const laneCount = async () => (await stateFrames()).filter(({ input }) => typeof input === "string" && input.startsWith("lane_")).length;
-  laneCreate("a", "lane_a1"); laneCreate("b", "lane_b");
-  await until(() => laneEvents.filter(({ type }) => type === "response.created").length === 2);
-  const firstId = laneEvents.find(({ stream_id }) => stream_id === "a").response.id;
+  const firstId = "lane_a1_response";
+  laneCreate("a", "lane_a1");
   laneCreate("a", "lane_a2", { previous_response_id: firstId });
-  const releaseLane = (name) => upstream.fetch(`https://fixture.example/complete?name=${name}`, { method: "POST" });
-  assert.equal((await releaseLane("lane_b")).status, 200);
-  await until(() => laneEvents.some(({ type, stream_id }) => type === "response.completed" && stream_id === "b"));
-  assert.equal(await laneCount(), 2);
-  assert.equal((await releaseLane("lane_a1")).status, 200);
-  await until(async () => await laneCount() === 3);
-  assert.equal((await stateFrames()).find(({ input }) => input === "lane_a2").previous_response_id, firstId);
-  assert.equal((await releaseLane("lane_a2")).status, 200);
+  laneCreate("b", "lane_b");
   await until(() => laneEvents.filter(({ type }) => type === "response.completed").length === 3);
   assert.deepEqual(laneEvents.filter(({ type }) => type === "response.completed").map(({ stream_id }) => stream_id), ["b", "a", "a"]);
+  const laneFrames = (await stateFrames()).filter(({ input }) => typeof input === "string" && input.startsWith("lane_"));
+  assert.deepEqual(laneFrames.map(({ input }) => input), ["lane_a1", "lane_b", "lane_a2"]);
+  assert.equal(laneFrames[2].previous_response_id, firstId);
   await until(async () => {
     const receipts = (await (await dispatch("/v1/usage")).json()).usage.events.filter(({ session_id }) => session_id === "named-lanes");
     return receipts.length === 3 && receipts.every(({ actual_cost_micros }) => actual_cost_micros === 1_080);
@@ -234,21 +228,23 @@ async function until(predicate) {
 }
 
 function upstreamFixture() { return `
-const frames = [], held = new Map(); let headerMatch = false;
+const frames = []; let headerMatch = false;
 export default { async fetch(request) {
   if (new URL(request.url).pathname === '/state') return Response.json({ frames, headerMatch });
-  if (new URL(request.url).pathname === '/complete') { const name = new URL(request.url).searchParams.get('name'); const release = held.get(name); if (!release) return new Response('missing lane', { status: 404 }); held.delete(name); release(); return new Response('completed'); }
   if (request.url !== 'https://api.openai.com/v1/responses' || request.headers.get('upgrade') !== 'websocket') return new Response('unexpected upstream route', { status: 400 });
   headerMatch = request.headers.get('authorization') === 'Bearer fixture-upstream-key' && request.headers.get('session-id') === 'fixture-session' && request.headers.get('x-openai-internal-codex-responses-lite') === 'true';
   const pair = new WebSocketPair(); pair[1].accept();
+  const held = new Map();
   pair[1].addEventListener('message', ({ data }) => {
     const frame = JSON.parse(data); frames.push(frame);
-    const id = 'response_' + frames.length;
+    const id = typeof frame.input === 'string' && frame.input.startsWith('lane_') ? frame.input + '_response' : 'response_' + frames.length;
     const output = frames.length === 2 ? [{ type: 'function_call', id: 'fc_fixture', call_id: 'call_fixture', name: 'fixture_tool', arguments: '{}' }] : frames.length === 3 ? [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'fixture complete' }] }] : [];
     const usage = { input_tokens: frame.generate === false ? 3 : 14, output_tokens: frame.generate === false ? 0 : 8, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } };
     if (typeof frame.input === 'string' && frame.input.startsWith('lane_')) {
       pair[1].send(JSON.stringify({ type: 'response.created', stream_id: frame.stream_id, response: { id, status: 'in_progress' } }));
-      held.set(frame.input, () => pair[1].send(JSON.stringify({ type: 'response.completed', stream_id: frame.stream_id, response: { id, status: 'completed', output, usage, service_tier: 'priority' } })));
+      const complete = () => pair[1].send(JSON.stringify({ type: 'response.completed', stream_id: frame.stream_id, response: { id, status: 'completed', output, usage, service_tier: 'priority' } }));
+      if (frame.input === 'lane_a1') held.set(frame.input, complete);
+      else { complete(); if (frame.input === 'lane_b') { held.get('lane_a1')(); held.delete('lane_a1'); } }
       return;
     }
     if (frame.input === 'error_before_start') { pair[1].send(JSON.stringify({ type: 'error', status: 429, error: { code: 'rate_limit_exceeded', message: 'fixture' } })); return; }
