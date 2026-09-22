@@ -14,12 +14,13 @@ test("dashboard is WCAG AA clean and visually stable", async ({ page }) => {
 
 test("dashboard distinguishes unavailable prices from mixed and fully priced spend", async ({ page }) => {
   const summary = { requestCount: 2, successCount: 2, errorCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, actualCostMicros: 0, unpricedRequestCount: 2 };
+  const provider = { ...summary, provider: "openai" };
   const responses: Record<string, unknown> = {
     "/v1/providers": { providers: [] },
     "/v1/routes": { openaiCompatible: [], manifestProxy: [] },
     "/v1/session": { authenticated: true, auth: "access", role: "user", email: "user@example.com", entitlements: { providers: [] } },
     "/v1/session/credentials": { credentials: [] },
-    "/v1/session/usage": { policies: [], usage: { ledger: "ready", summary, providers: [], daily: [], events: [] } },
+    "/v1/session/usage": { policies: [], usage: { ledger: "ready", summary, providers: [provider], daily: [], events: [] } },
   };
   await page.route("**/v1/**", async (route) => {
     const body = responses[new URL(route.request().url()).pathname];
@@ -34,9 +35,12 @@ test("dashboard distinguishes unavailable prices from mixed and fully priced spe
   ] as const) {
     summary.unpricedRequestCount = unpriced;
     summary.actualCostMicros = cost;
+    Object.assign(provider, summary);
     await page.goto("/");
     await expect(spend.locator("span")).toHaveText(label);
     await expect(spend.locator("strong")).toHaveText(value);
+    await expect(page.locator(".providerChartValue small")).toHaveText(value);
+    await expect(page.locator(".providerChartLegendMeta")).toHaveText(unpriced ? "Requests · accounted spend" : "Requests · spend");
   }
 });
 

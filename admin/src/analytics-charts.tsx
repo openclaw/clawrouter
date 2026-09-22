@@ -98,7 +98,7 @@ export function ProviderUsageChart({ providers, services, limit = 6 }: { provide
           </div>
         );
       })}
-      {visible.length ? <div className="providerChartLegend" aria-hidden="true"><span><i className="success" />Successful</span><span><i className="errors" />Errors</span><span className="providerChartLegendMeta">Requests · accounted spend</span></div> : null}
+      {visible.length ? <div className="providerChartLegend" aria-hidden="true"><span><i className="success" />Successful</span><span><i className="errors" />Errors</span><span className="providerChartLegendMeta">Requests · {visible.some((provider) => provider.unpricedRequestCount) ? "accounted spend" : "spend"}</span></div> : null}
       {!visible.length ? <div className="chartListEmpty"><ServerCog aria-hidden="true" /><strong>No provider activity</strong><span>Provider distribution will appear after the first routed request.</span></div> : null}
     </div>
   );
@@ -106,7 +106,7 @@ export function ProviderUsageChart({ providers, services, limit = 6 }: { provide
 
 function ChartTooltip({ point, xPercent }: { point: UsageDailySummary; xPercent: number }) {
   const style = xPercent > 0.72 ? { right: `${(1 - xPercent) * 100}%` } : { left: `${xPercent * 100}%` };
-  return <div className="chartTooltip" style={style} role="status" aria-live="polite"><strong>{formatChartDay(point.dayStartMs, true)}</strong><span>{formatCount(point.requestCount)} requests</span><span>{formatCount(point.totalTokens)} tokens</span><span>{usageCostLabel(formatMicros(point.actualCostMicros), point.requestCount, point.unpricedRequestCount)}</span>{point.errorCount ? <em className="error">{point.errorCount} errors</em> : <em className="success">All successful</em>}</div>;
+  return <div className="chartTooltip" style={style} role="status" aria-live="polite"><strong>{formatChartDay(point.dayStartMs, true)}</strong><span>{formatCount(point.requestCount)} requests</span><span>{formatCount(point.totalTokens)} tokens</span><span>{usageCostLabel(formatMicros(point.actualCostMicros), point.requestCount, point.unpricedRequestCount)}{point.unpricedRequestCount ? "" : " spend"}</span>{point.errorCount ? <em className="error">{point.errorCount} errors</em> : <em className="success">All successful</em>}</div>;
 }
 
 function smoothPath(points: Array<{ x: number; y: number }>) {
