@@ -22,8 +22,8 @@ test("usage snapshots aggregate counters, daily buckets, and deduplicate ordered
   assert.equal(merged.summary.totalTokens, 30);
   assert.equal(merged.providers[0].requestCount, 3);
   assert.deepEqual(merged.daily, [
-    { dayStartMs: 86_400_000, requestCount: 3, successCount: 0, errorCount: 0, totalTokens: 30, actualCostMicros: 0 },
-    { dayStartMs: 172_800_000, requestCount: 1, successCount: 0, errorCount: 0, totalTokens: 5, actualCostMicros: 0 },
+    { dayStartMs: 86_400_000, requestCount: 3, successCount: 0, errorCount: 0, totalTokens: 30, actualCostMicros: 0, unpricedRequestCount: 0 },
+    { dayStartMs: 172_800_000, requestCount: 1, successCount: 0, errorCount: 0, totalTokens: 5, actualCostMicros: 0, unpricedRequestCount: 0 },
   ]);
   assert.deepEqual(merged.events.map((event) => event.id), ["b", "a"]);
 });
@@ -33,5 +33,16 @@ test("usage snapshots with mixed daily support preserve unavailable rollout sema
   const legacy = { ledger: "legacy", summary: { requestCount: 2 }, providers: [], events: [] };
   assert.equal(mergeUsageSnapshots([current, legacy]).daily, undefined);
   assert.equal(mergeUsageSnapshots([legacy]).daily, undefined);
-  assert.deepEqual(mergeUsageSnapshots([current]).daily, [{ dayStartMs: 86_400_000, requestCount: 1, successCount: 0, errorCount: 0, totalTokens: 0, actualCostMicros: 0 }]);
+  assert.deepEqual(mergeUsageSnapshots([current]).daily, [{ dayStartMs: 86_400_000, requestCount: 1, successCount: 0, errorCount: 0, totalTokens: 0, actualCostMicros: 0, unpricedRequestCount: 0 }]);
+});
+
+test("unpriced counts merge across shards without inferring them from sampled events", () => {
+  const current = { ledger: "shard", summary: { requestCount: 3, unpricedRequestCount: 2 }, providers: [{ provider: "openai", requestCount: 3, unpricedRequestCount: 2 }], daily: [{ dayStartMs: 86_400_000, requestCount: 3, unpricedRequestCount: 2 }], events: [] };
+  const older = { ledger: "shard", summary: { requestCount: 1, actualCostMicros: 5 }, providers: [{ provider: "openai", requestCount: 1, actualCostMicros: 5 }], daily: [{ dayStartMs: 86_400_000, requestCount: 1, actualCostMicros: 5 }], events: [] };
+  const merged = mergeUsageSnapshots([current, older]);
+  assert.equal(merged.summary.unpricedRequestCount, 2);
+  assert.equal(merged.summary.actualCostMicros, 5);
+  assert.equal(merged.providers[0].unpricedRequestCount, 2);
+  assert.equal(merged.daily[0].unpricedRequestCount, 2);
+  assert.deepEqual(merged.events, []);
 });

@@ -1,12 +1,14 @@
-import type { LongContextPricing, ModelPricing } from "./types";
+import type { ModelPricing, ServiceTierPricing, TokenRates } from "./types";
 
 export interface CostEstimate {
   reserveMicros: number;
   inputTokens: number;
   outputTokens: number;
+  pricingAvailable?: false;
 }
 
 export interface PricedTokens {
+  serviceTier?: string;
   billable?: false;
   input: number | null;
   output: number | null;
@@ -36,7 +38,8 @@ export function estimateModelCost(pricing: ModelPricing, body: Record<string, un
     .filter((value): value is number => value != null);
   const choices = Math.max(1, nonNegativeInteger(body.n) ?? 1);
   const outputTokens = saturatingMultiply(requestedOutput.length ? Math.max(...requestedOutput) : pricing.defaultMaxOutputTokens, choices);
-  const rates = reservationRates(pricing, inputTokens);
+  const rates = resolveRates(pricing, inputTokens, body.service_tier, true);
+  if (!rates) return { reserveMicros: 0, inputTokens, outputTokens, pricingAvailable: false };
   const inputRate = reservationInputRate(body, rates);
   return {
     reserveMicros: saturatingAdd(tokenCost(inputTokens, inputRate), tokenCost(outputTokens, rates.output)),
@@ -48,7 +51,8 @@ export function estimateModelCost(pricing: ModelPricing, body: Record<string, un
 export function actualModelCost(pricing: ModelPricing, tokens: PricedTokens): number | null {
   if (tokens.billable === false) return 0;
   if (tokens.input == null) return null;
-  const rates = effectiveRates(pricing, tokens.input);
+  const rates = resolveRates(pricing, tokens.input, tokens.serviceTier, false);
+  if (!rates) return null;
   if (tokens.output == null && rates.output > 0) return null;
   if (rates.cacheWriteInput != null && tokens.cacheWrite == null) return null;
   const cached = Math.min(tokens.input, tokens.cached ?? 0);
@@ -69,15 +73,29 @@ export function actualModelCost(pricing: ModelPricing, tokens: PricedTokens): nu
   ]);
 }
 
-function effectiveRates(pricing: ModelPricing, inputTokens: number): Rates {
-  const long = pricing.longContext;
-  return long && inputTokens > long.thresholdInputTokens ? ratesFromLong(long) : ratesFromPricing(pricing);
+// Requested tiers choose admission bounds; only the served tier can choose a
+// settlement price. Omitted/auto requests can inherit an upstream paid default.
+function resolveRates(pricing: ModelPricing, inputTokens: number, tier: unknown, reserve: boolean): Rates | null {
+  const tiers = pricing.serviceTiers;
+  if (!tiers?.length) return contextRates(pricing, inputTokens, reserve);
+  const selected = tiers.find((card) => card.id === tier || card.aliases.includes(tier as string));
+  if (!reserve) return selected && (selected.maxInputTokens == null || inputTokens <= selected.maxInputTokens)
+    ? contextRates(selected, inputTokens, false) : null;
+  if (tier != null && tier !== "auto" && !selected) return null;
+  const candidates = selected ? tiers.filter((card) => card === selected || card.id === "default") : tiers;
+  // A byte upper bound may cross a tier's published context limit while actual
+  // tokens do not. Its short rates must remain in the admission envelope.
+  return candidates.map((card) => contextRates(card, Math.min(inputTokens, card.maxInputTokens ?? inputTokens), true)).reduce(maxRates);
 }
 
-function reservationRates(pricing: ModelPricing, inputTokens: number): Rates {
+function contextRates(pricing: Pick<ModelPricing, keyof TokenRates | "longContext"> | ServiceTierPricing, inputTokens: number, reserve: boolean): Rates {
   const base = ratesFromPricing(pricing), long = pricing.longContext;
   if (!long || inputTokens <= long.thresholdInputTokens) return base;
-  const extended = ratesFromLong(long);
+  const extended = ratesFromPricing(long);
+  return reserve ? maxRates(base, extended) : extended;
+}
+
+function maxRates(base: Rates, extended: Rates): Rates {
   return {
     input: Math.max(base.input, extended.input),
     output: Math.max(base.output, extended.output),
@@ -95,11 +113,7 @@ function reservationInputRate(body: unknown, rates: Rates): number {
   return rate;
 }
 
-function ratesFromPricing(pricing: ModelPricing): Rates {
-  return { input: pricing.inputMicrosPerMillion, output: pricing.outputMicrosPerMillion, cachedInput: pricing.cachedInputMicrosPerMillion, cacheWriteInput: pricing.cacheWriteInputMicrosPerMillion, cacheWrite5mInput: pricing.cacheWrite5mInputMicrosPerMillion, cacheWrite1hInput: pricing.cacheWrite1hInputMicrosPerMillion };
-}
-
-function ratesFromLong(pricing: LongContextPricing): Rates {
+function ratesFromPricing(pricing: TokenRates): Rates {
   return { input: pricing.inputMicrosPerMillion, output: pricing.outputMicrosPerMillion, cachedInput: pricing.cachedInputMicrosPerMillion, cacheWriteInput: pricing.cacheWriteInputMicrosPerMillion, cacheWrite5mInput: pricing.cacheWrite5mInputMicrosPerMillion, cacheWrite1hInput: pricing.cacheWrite1hInputMicrosPerMillion };
 }
 

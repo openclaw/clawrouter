@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { niceChartMaximum, syntheticUsageTimeline, usageDayMs, usageEventGroups, usageTimeline } from "../src/usage-analytics.ts";
+import { niceChartMaximum, providerChartRows, syntheticUsageTimeline, usageCostLabel, usageDayMs, usageEventGroups, usageTimeline } from "../src/usage-analytics.ts";
 
 const summary = { requestCount: 10, successCount: 9, errorCount: 1, inputTokens: 80, outputTokens: 20, totalTokens: 100, actualCostMicros: 500 };
 
@@ -75,4 +75,28 @@ test("truncated Fusion groups are explicitly partial", () => {
   assert.equal(group.complete, false);
   assert.equal(group.expectedCallCount, 4);
   assert.equal(group.actualCostMicros, 20);
+});
+
+test("unavailable prices remain distinct from known zero and mixed accounted totals", () => {
+  const base = { type: "clawrouter.usage.v1", tenant_id: "tenant", provider: "openai", occurred_at_ms: 1_000, actual_cost_micros: 0, reserved_cost_micros: 0, status: "success" };
+  const [unknown, knownZero, mixed] = usageEventGroups([
+    { ...base, id: "unknown", cost_basis: "unpriced_service_tier" },
+    { ...base, id: "zero", cost_basis: "manifest_pricing" },
+    { ...base, id: "mixed-unknown", compound_request_id: "mixed", cost_basis: "unpriced_service_tier" },
+    { ...base, id: "mixed-known", compound_request_id: "mixed", actual_cost_micros: 5, cost_basis: "manifest_pricing" },
+  ]);
+  assert.equal(usageCostLabel("$0", unknown.events.length, unknown.unpricedRequestCount), "Price unavailable");
+  assert.equal(usageCostLabel("$0", knownZero.events.length, knownZero.unpricedRequestCount), "$0");
+  assert.equal(usageCostLabel("$5", mixed.events.length, mixed.unpricedRequestCount), "$5 accounted; 1 unpriced");
+  assert.equal(mixed.actualCostMicros, 5);
+  const dayStartMs = Math.floor(Date.now() / usageDayMs) * usageDayMs;
+  const daily = { dayStartMs, requestCount: 2, successCount: 2, errorCount: 0, totalTokens: 2, actualCostMicros: 5, unpricedRequestCount: 1 };
+  assert.equal(usageTimeline({ summary, events: [], providers: [], daily: [daily, daily] }, 1)[0].unpricedRequestCount, 2);
+  const providers = ["a", "b", "c"].map(provider => ({ ...daily, provider }));
+  const other = providerChartRows(providers, 2)[1];
+  assert.equal(other.provider, "other-providers");
+  assert.equal(other.unpricedRequestCount, 2);
+  assert.equal(other.actualCostMicros, 10);
+  const synthetic = syntheticUsageTimeline(Date.now(), { ...summary, unpricedRequestCount: 3 });
+  assert.equal(synthetic.reduce((total, day) => total + day.unpricedRequestCount, 0), 3);
 });

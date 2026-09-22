@@ -22,7 +22,7 @@ export function usageShardName(tenantId: string, policyId: string): string {
 export function emptyUsageSnapshot(ledger = "durable_object_sharded"): UsageSnapshot {
   return {
     ledger,
-    summary: { requestCount: 0, successCount: 0, errorCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, actualCostMicros: 0 },
+    summary: { requestCount: 0, successCount: 0, errorCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, actualCostMicros: 0, unpricedRequestCount: 0 },
     providers: [],
     daily: [],
     events: [],
@@ -39,14 +39,14 @@ export function mergeUsageSnapshots(values: UsageSnapshot[], limit = 100): Usage
     for (const [key, amount] of Object.entries(value.summary)) merged.summary[key] = (merged.summary[key] ?? 0) + amount;
     for (const row of value.providers) {
       const id = String(row.provider);
-      const target = providers.get(id) ?? { provider: id, requestCount: 0, successCount: 0, errorCount: 0, totalTokens: 0, actualCostMicros: 0 };
+      const target = providers.get(id) ?? { provider: id, requestCount: 0, successCount: 0, errorCount: 0, totalTokens: 0, actualCostMicros: 0, unpricedRequestCount: 0 };
       for (const [key, amount] of Object.entries(row)) if (key !== "provider") target[key] = Number(target[key] ?? 0) + Number(amount);
       providers.set(id, target);
     }
     for (const row of value.daily ?? []) {
       const dayStartMs = Number(row.dayStartMs);
       if (!Number.isFinite(dayStartMs)) continue;
-      const target = daily.get(dayStartMs) ?? { dayStartMs, requestCount: 0, successCount: 0, errorCount: 0, totalTokens: 0, actualCostMicros: 0 };
+      const target = daily.get(dayStartMs) ?? { dayStartMs, requestCount: 0, successCount: 0, errorCount: 0, totalTokens: 0, actualCostMicros: 0, unpricedRequestCount: 0 };
       for (const [key, amount] of Object.entries(row)) if (key !== "dayStartMs") target[key] = Number(target[key] ?? 0) + Number(amount);
       daily.set(dayStartMs, target);
     }

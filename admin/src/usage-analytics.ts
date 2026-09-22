@@ -1,4 +1,4 @@
-import type { UsageAuditEvent, UsageDailySummary, UsageSnapshot, UsageSummary } from "./ui-types";
+import type { ProviderUsageSummary, UsageAuditEvent, UsageDailySummary, UsageSnapshot, UsageSummary } from "./ui-types";
 
 export const usageDayMs = 86_400_000;
 
@@ -10,6 +10,7 @@ export interface UsageEventGroup {
   occurredAtMs: number;
   durationMs: number | null;
   actualCostMicros: number;
+  unpricedRequestCount: number;
   successCount: number;
   expectedCallCount: number;
   complete: boolean;
@@ -39,6 +40,7 @@ function summarizeUsageEvents(key: string, events: UsageAuditEvent[]): UsageEven
     occurredAtMs,
     durationMs: events.some((event) => event.duration_ms != null) ? occurredAtMs - startedAt : null,
     actualCostMicros: events.reduce((total, event) => total + event.actual_cost_micros, 0),
+    unpricedRequestCount: events.filter((event) => event.cost_basis === "unpriced_service_tier").length,
     successCount: events.filter((event) => event.status === "success").length,
     expectedCallCount: Math.max(...events.map((event) => event.compound_request_size ?? events.length)),
     complete: !primary.compound_request_id || events.length >= Math.max(...events.map((event) => event.compound_request_size ?? events.length)),
@@ -62,6 +64,7 @@ export function usageTimeline(snapshot: UsageSnapshot, days = 30, now = Date.now
       errorCount: current.errorCount + point.errorCount,
       totalTokens: current.totalTokens + point.totalTokens,
       actualCostMicros: current.actualCostMicros + point.actualCostMicros,
+      unpricedRequestCount: (current.unpricedRequestCount ?? 0) + (point.unpricedRequestCount ?? 0),
     });
   }
 
@@ -88,6 +91,7 @@ export function syntheticUsageTimeline(now: number, summary: UsageSummary): Usag
   const errorSeries = distributeTotal(summary.errorCount, weights.map((weight, index) => weight * (index % 7 === 2 ? 2 : 1)));
   const tokenSeries = distributeTotal(summary.totalTokens, weights.map((weight, index) => weight * (index % 5 === 0 ? 1.18 : 1)));
   const costSeries = distributeTotal(summary.actualCostMicros, weights.map((weight, index) => weight * (index % 6 === 4 ? 1.25 : 1)));
+  const unpricedSeries = distributeTotal(summary.unpricedRequestCount ?? 0, weights);
   return weights.map((_, index) => ({
     dayStartMs: today - (weights.length - index - 1) * usageDayMs,
     requestCount: requestSeries[index],
@@ -95,6 +99,7 @@ export function syntheticUsageTimeline(now: number, summary: UsageSummary): Usag
     errorCount: errorSeries[index],
     totalTokens: tokenSeries[index],
     actualCostMicros: costSeries[index],
+    unpricedRequestCount: unpricedSeries[index],
   }));
 }
 
@@ -110,5 +115,25 @@ function distributeTotal(total: number, weights: number[]) {
 }
 
 function emptyUsageDay(dayStartMs: number): UsageDailySummary {
-  return { dayStartMs, requestCount: 0, successCount: 0, errorCount: 0, totalTokens: 0, actualCostMicros: 0 };
+  return { dayStartMs, requestCount: 0, successCount: 0, errorCount: 0, totalTokens: 0, actualCostMicros: 0, unpricedRequestCount: 0 };
+}
+
+export function usageCostLabel(formattedCost: string, requestCount: number, unpricedRequestCount = 0): string {
+  if (!unpricedRequestCount) return formattedCost;
+  return unpricedRequestCount === requestCount ? "Price unavailable" : `${formattedCost} accounted; ${unpricedRequestCount} unpriced`;
+}
+
+export function providerChartRows(providers: ProviderUsageSummary[], limit: number): ProviderUsageSummary[] {
+  if (providers.length <= limit) return providers;
+  const visibleCount = Math.max(1, limit - 1);
+  const remainder = providers.slice(visibleCount).reduce<ProviderUsageSummary>((total, provider) => ({
+    provider: "other-providers",
+    requestCount: total.requestCount + provider.requestCount,
+    successCount: total.successCount + provider.successCount,
+    errorCount: total.errorCount + provider.errorCount,
+    totalTokens: total.totalTokens + provider.totalTokens,
+    actualCostMicros: total.actualCostMicros + provider.actualCostMicros,
+    unpricedRequestCount: (total.unpricedRequestCount ?? 0) + (provider.unpricedRequestCount ?? 0),
+  }), { provider: "other-providers", requestCount: 0, successCount: 0, errorCount: 0, totalTokens: 0, actualCostMicros: 0, unpricedRequestCount: 0 });
+  return [...providers.slice(0, visibleCount), remainder];
 }

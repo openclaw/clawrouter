@@ -244,9 +244,9 @@ export interface AdminTenantSummary {
 export interface BudgetPrincipalStatus extends BudgetStatus { principal: string }
 export interface BudgetStatus { configured: boolean; ledger: string; windowKey?: string | null; limitMicros?: number | null; spentMicros?: number | null; remainingMicros?: number | null; breakdown?: BudgetPrincipalStatus[] }
 export interface AdminUsageRow { policyId?: string; kid: string; tenantId: string; enabled: boolean; providers: string[]; tokenRole?: string | null; monthlyBudgetMicros?: number | null; requestCostMicros?: number | null; budgetScope?: "policy" | "principal"; budget: BudgetStatus }
-export interface UsageSummary { requestCount: number; successCount: number; errorCount: number; inputTokens: number; outputTokens: number; totalTokens: number; actualCostMicros: number }
-export interface ProviderUsageSummary { provider: string; requestCount: number; successCount: number; errorCount: number; totalTokens: number; actualCostMicros: number }
-export interface UsageDailySummary { dayStartMs: number; requestCount: number; successCount: number; errorCount: number; totalTokens: number; actualCostMicros: number }
+export interface UsageSummary { requestCount: number; successCount: number; errorCount: number; inputTokens: number; outputTokens: number; totalTokens: number; actualCostMicros: number; unpricedRequestCount?: number }
+export interface ProviderUsageSummary { provider: string; requestCount: number; successCount: number; errorCount: number; totalTokens: number; actualCostMicros: number; unpricedRequestCount?: number }
+export interface UsageDailySummary { dayStartMs: number; requestCount: number; successCount: number; errorCount: number; totalTokens: number; actualCostMicros: number; unpricedRequestCount?: number }
 export interface UsageAuditEvent {
   id: string;
   type: string;
@@ -283,6 +283,8 @@ export interface UsageAuditEvent {
   pricing_ref?: string | null;
   pricing_effective_at?: string | null;
   cost_basis?: string | null;
+  requested_service_tier?: string | null;
+  served_service_tier?: string | null;
   status_code?: number | null;
   duration_ms?: number | null;
   status: string;
