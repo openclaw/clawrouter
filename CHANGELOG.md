@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add GPT-6 Astra to the OpenAI catalog with its reasoning efforts, standard token and cache-write pricing, long-context rates, and Chat Completions token-limit mapping.
+
 ## 0.4.0 - 2026-09-22
 
 **Highlights:** Lanseq joins the provider catalog, with more reliable Fusion accounting, safer route parsing, and corrected Bedrock request signing.

@@ -17,6 +17,12 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.deepEqual(compiled.providers.find((provider) => provider.id === "aws-bedrock").optional_config_keys, ["AWS_SESSION_TOKEN"]);
   assert.deepEqual(compiled.providers.find((provider) => provider.id === "azure-openai").optional_config_keys, ["AZURE_OPENAI_COMPLETION_TOKEN_DEPLOYMENTS"]);
   const openai = compiled.providers.find((provider) => provider.id === "openai");
+  const astra = openai.models.find((model) => model.id === "openai/gpt-6-astra");
+  assert.equal(astra.upstream, "gpt-6-astra");
+  assert.deepEqual(astra.capabilities, ["llm.responses", "llm.chat"]);
+  assert.deepEqual(astra.supportedReasoningEfforts, ["low", "medium", "high", "xhigh", "max"]);
+  assert.deepEqual(compiled.model_index[astra.id], { provider: "openai", ...Object.fromEntries(Object.entries(astra).filter(([key]) => key !== "id")) });
+  assert.ok(openai.adapter.requestTransforms.renameFields[0].upstreams.includes(astra.upstream));
   const gpt56 = openai.models.find((model) => model.id === "openai/gpt-5.6");
   assert.equal(gpt56.upstream, "gpt-5.6");
   assert.deepEqual(gpt56.capabilities, ["llm.responses", "llm.chat"]);
