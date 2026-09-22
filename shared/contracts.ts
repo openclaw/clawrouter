@@ -283,6 +283,8 @@ export interface UsageAuditEvent {
   pricing_ref?: string | null;
   pricing_effective_at?: string | null;
   cost_basis?: string | null;
+  requested_service_tier?: string | null;
+  served_service_tier?: string | null;
   status_code?: number | null;
   duration_ms?: number | null;
   status: string;

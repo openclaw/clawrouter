@@ -5,6 +5,8 @@ import test from "node:test";
 import { providerById } from "../providers.ts";
 
 const { catalogModels } = await import("../discovery.ts");
+const { catalogResponse, modelsResponse } = await import("../discovery.ts");
+const { sha256Hex } = await import("../utils.ts");
 
 const fireworks = providerById("fireworks");
 assert.ok(fireworks);
@@ -45,5 +47,95 @@ test("unpriced catalog models remain for unmetered, fixed-price, and Access scop
   for (const policy of policies) {
     const models = catalogModels(fireworks, endpoints, policy);
     assert.ok(models.some((model) => model.id === "fireworks/gpt-oss-120b"));
+  }
+});
+
+test("provider budgets and the selected endpoint policy govern the same model projection", () => {
+  const unmetered = { monthlyBudgetMicros: null, requestCostMicros: null };
+  assert.ok(!catalogModels(fireworks, endpoints, unmetered, 100).some((model) => model.id === "fireworks/gpt-oss-120b"));
+  assert.ok(catalogModels(fireworks, endpoints, { ...unmetered, requestCostMicros: 1 }, 100).some((model) => model.id === "fireworks/gpt-oss-120b"));
+  const endpointPolicies = new Map([["chat_completions", { monthlyBudgetMicros: 100, requestCostMicros: null }]]);
+  assert.ok(!catalogModels(fireworks, endpoints, unmetered, null, endpointPolicies).some((model) => model.id === "fireworks/gpt-oss-120b"));
+});
+
+test("models and catalog share read-only grant eligibility, transport support, and provider budget filtering", async (t) => {
+  const secret = "fixture-discovery-secret";
+  const credential = { enabled: true, secretSha256: await sha256Hex(secret), policyId: "fixture", policyGeneration: "g1" };
+  const policy = { enabled: true, generation: "g1", providers: ["openai"], tenantId: "default", monthlyBudgetMicros: null, requestCostMicros: null, retainRequestContent: false };
+  const policies = [{ policyId: "fixture", policy }];
+  const connection = { providerId: "openai", enabled: true, monthlyBudgetMicros: null };
+  const grants = new Map(), states = {};
+  const paths = [];
+  const env = {
+    OPENAI_API_KEY: "fixture-environment-key",
+    POLICY_KV: {
+      async get(key) { return Array.isArray(key) ? new Map(key.map((item) => [item, grants.get(item) ?? null])) : grants.get(key) ?? null; },
+      async list({ prefix }) { return { keys: [...grants.keys()].filter((key) => key.startsWith(prefix)).map((name) => ({ name })), list_complete: true }; },
+    },
+    ACCESS_CONTROL: { idFromName: (name) => name, get: () => ({ fetch: async (url, init) => {
+      const path = new URL(url).pathname; paths.push(path);
+      if (path === "/credentials/resolve") return Response.json({ initialized: true, credentials: [{ credentialId: "fixture", credential }], missingCredentialIds: [] });
+      if (path === "/policies/resolve") return Response.json({ initialized: true, policies, missingPolicyIds: [] });
+      if (path === "/users/resolve") return Response.json({ initialized: true, users: [{ email: "fixture@example.com", record: { enabled: true, role: "user", tenantId: "default", groups: [] } }], missingEmails: [] });
+      if (path === "/resolve") return Response.json({ initialized: true, bindings: policies.map(({ policyId }, priority) => ({ policyId, priority, enabled: true, principalType: "user", principalId: "fixture@example.com" })), missingPrincipals: [] });
+      if (path === "/connections/resolve") return Response.json({ initialized: true, connections: [connection], missingProviderIds: [] });
+      if (path === "/grant-pools/resolve") {
+        const { policyId } = JSON.parse(init.body);
+        return Response.json({ keys: [...grants.keys()].filter((key) => key.startsWith(`oauth/${policyId}/`)), states });
+      }
+      throw new Error(`discovery unexpectedly mutated authority: ${path}`);
+    } }) },
+  };
+  t.mock.method(globalThis, "fetch", () => { throw new Error("discovery must not refresh credentials or probe upstream"); });
+  const request = () => new Request("https://router.example/v1/catalog", { headers: { authorization: `Bearer clawrouter-live-fixture-${secret}` } });
+  async function compare(expectedCapabilities, websocket) {
+    const catalog = await (await catalogResponse(request(), env)).json();
+    const view = catalog.providers.find((provider) => provider.id === "openai");
+    const models = await (await modelsResponse(request(), env)).json();
+    assert.deepEqual(models.data.map(({ id, capabilities }) => ({ id, capabilities })), view.models.map(({ id, capabilities }) => ({ id, capabilities })));
+    assert.deepEqual(view.models.find((model) => model.id === "openai/gpt-6-astra")?.capabilities ?? [], expectedCapabilities);
+    assert.equal(view.routes.some((route) => route.websocket === "openai.responses"), websocket);
+    assert.ok(!paths.includes("/grant-pools/select"));
+    return view;
+  }
+  await compare(["llm.responses", "llm.chat"], true);
+  const key = "oauth/fixture/subscription";
+  grants.set(key, { provider: "openai", kind: "subscription", enabled: true, accessToken: "fixture-subscription", accountId: "fixture-account" });
+  await compare(["llm.responses"], false);
+  grants.set("oauth/fixture/api", { provider: "openai", kind: "api_key", enabled: true, credential: "fixture-api" });
+  await compare(["llm.responses", "llm.chat"], true);
+  policy.grantRouting = { eligibleGrants: { openai: ["subscription"] } };
+  await compare(["llm.responses"], false);
+  policy.grantRouting.eligibleGrants.openai = [];
+  await compare([], false);
+  policy.grantRouting.eligibleGrants.openai = ["subscription"];
+  states[key] = { grantRevision: null, status: "cooldown", cooldownUntil: new Date(Date.now() + 60000).toISOString(), windows: [] };
+  await compare([], false);
+  delete states[key];
+  policy.grantRouting = { staleState: "deny" };
+  await compare([], false);
+
+  // A session's first policy may own HTTP subscription auth while its second
+  // policy owns the API grant used by the independently selected WS transport.
+  delete policy.grantRouting;
+  grants.delete("oauth/fixture/api");
+  policies.push({ policyId: "api", policy: { ...policy } });
+  grants.set("oauth/api/openai", { provider: "openai", kind: "api_key", enabled: true, credential: "fixture-api" });
+  const session = "a".repeat(64);
+  grants.set(`local/sessions/${await sha256Hex(session)}`, { email: "fixture@example.com", role: "user", expiresAtMs: Date.now() + 60000 });
+  env.CLAWROUTER_LOCAL_AUTH = "enabled";
+  const catalog = await (await catalogResponse(new Request("https://router.example/v1/catalog", { headers: { cookie: `clawrouter_session=${session}` } }), env)).json();
+  const view = catalog.providers.find(({ id }) => id === "openai");
+  assert.equal(view.routes.find(({ endpoint }) => endpoint === "responses").websocket, "openai.responses");
+  assert.deepEqual(view.models.find(({ id }) => id === "openai/gpt-6-astra").capabilities, ["llm.responses", "llm.chat"]);
+  assert.ok(!paths.includes("/grant-pools/select"));
+});
+
+test("zero policy and provider budgets preserve canonical free token counting", () => {
+  const provider = providerById("anthropic");
+  for (const [policyLimit, providerLimit] of [[0, null], [null, 0]]) {
+    const models = catalogModels(provider, provider.endpoints.map(({ id }) => id), { monthlyBudgetMicros: policyLimit, requestCostMicros: null }, providerLimit);
+    assert.ok(models.length > 0);
+    assert.ok(models.every((model) => model.capabilities.length === 1 && model.capabilities[0] === "llm.count_tokens"));
   }
 });

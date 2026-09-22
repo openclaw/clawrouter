@@ -14,7 +14,7 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.equal(compiled.model_index["openai/gpt-5.6"].provider, "openai");
   assert.equal(compiled.model_index["anthropic/claude-opus-4-8"].provider, "anthropic");
   assert.deepEqual(compiled.providers.find((provider) => provider.id === "aws-bedrock").optional_config_keys, ["AWS_SESSION_TOKEN"]);
-  assert.deepEqual(compiled.providers.find((provider) => provider.id === "azure-openai").optional_config_keys, ["AZURE_OPENAI_COMPLETION_TOKEN_DEPLOYMENTS"]);
+  assert.deepEqual(compiled.providers.find((provider) => provider.id === "azure-openai").optional_config_keys, ["AZURE_OPENAI_COMPLETION_TOKEN_DEPLOYMENTS", "AZURE_OPENAI_API_VERSION", "AZURE_OPENAI_DEPLOYMENT"]);
   const openai = compiled.providers.find((provider) => provider.id === "openai");
   const astra = openai.models.find((model) => model.id === "openai/gpt-6-astra");
   assert.equal(astra.upstream, "gpt-6-astra");
@@ -24,33 +24,47 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.ok(openai.adapter.requestTransforms.renameFields[0].upstreams.includes(astra.upstream));
   const gpt56 = openai.models.find((model) => model.id === "openai/gpt-5.6");
   assert.equal(gpt56.upstream, "gpt-5.6");
+  assert.equal(gpt56.codexModel, "gpt-5.6-sol");
+  assert.equal(compiled.model_index[gpt56.id].codexModel, gpt56.codexModel);
+  assert.equal(openai.endpoints.find((endpoint) => endpoint.id === "responses").websocket, "openai.responses");
+  for (const name of ["sol", "terra", "luna"]) {
+    const model = compiled.model_index[`openai/gpt-5.6-${name}`];
+    assert.equal(model.upstream, `gpt-5.6-${name}`);
+    assert.equal(model.pricing.maxInputTokens, 922000);
+    assert.ok(openai.adapter.requestTransforms.renameFields[0].upstreams.includes(model.upstream));
+    assert.deepEqual(model.supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh", "max"]);
+  }
   assert.deepEqual(gpt56.capabilities, ["llm.responses", "llm.chat"]);
   assert.deepEqual(gpt56.supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh", "max"]);
   assert.deepEqual(compiled.model_index["openai/gpt-5.6"].supportedReasoningEfforts, gpt56.supportedReasoningEfforts);
   assert.equal("supportedReasoningEfforts" in openai.models.find((model) => model.id === "openai/gpt-5.5"), false);
-  assert.deepEqual(gpt56.pricing, {
-    effectiveAt: "2026-07-09",
-    source: "https://developers.openai.com/api/docs/models/gpt-5.6-sol",
-    inputMicrosPerMillion: 5000000,
-    cachedInputMicrosPerMillion: 500000,
-    cacheWriteInputMicrosPerMillion: 6250000,
+  const { serviceTiers, ...standard } = gpt56.pricing;
+  assert.deepEqual(standard, {
+    effectiveAt: "2026-09-22",
+    source: "https://developers.openai.com/api/docs/pricing",
+    inputMicrosPerMillion: 4000000,
+    cachedInputMicrosPerMillion: 400000,
+    cacheWriteInputMicrosPerMillion: 5000000,
     cacheWrite5mInputMicrosPerMillion: null,
     cacheWrite1hInputMicrosPerMillion: null,
-    outputMicrosPerMillion: 30000000,
-    maxInputTokens: 1050000,
+    outputMicrosPerMillion: 20000000,
+    maxInputTokens: 922000,
     maxRequestInputTokens: null,
     defaultMaxOutputTokens: 128000,
     inputTokenOverhead: 1024,
     longContext: {
       thresholdInputTokens: 272000,
-      inputMicrosPerMillion: 10000000,
-      cachedInputMicrosPerMillion: 1000000,
-      cacheWriteInputMicrosPerMillion: 12500000,
+      inputMicrosPerMillion: 8000000,
+      cachedInputMicrosPerMillion: 800000,
+      cacheWriteInputMicrosPerMillion: 10000000,
       cacheWrite5mInputMicrosPerMillion: null,
       cacheWrite1hInputMicrosPerMillion: null,
-      outputMicrosPerMillion: 45000000,
+      outputMicrosPerMillion: 30000000,
     },
   });
+  assert.deepEqual(serviceTiers.map(({ id, aliases }) => [id, aliases]), [["default", []], ["priority", ["fast"]], ["flex", []]]);
+  assert.equal(serviceTiers[1].inputMicrosPerMillion, 8_000_000);
+  assert.equal(serviceTiers[1].longContext.outputMicrosPerMillion, 60_000_000);
   assert.ok(openai.adapter.requestTransforms.renameFields[0].upstreams.includes("gpt-5.6"));
   assert.deepEqual(openai.quota.responseHeaders.map((window) => window.id), ["rpm", "tpm", "subscription-primary", "subscription-secondary", "credits"]);
   assert.deepEqual(openai.quota.probes[0].grantKinds, ["subscription"]);
@@ -146,4 +160,25 @@ test("reasoning effort metadata rejects empty, duplicate, and unsupported values
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+test("service tier compilation rejects ambiguous, incomplete, and drifting rate cards", () => {
+  const directory = mkdtempSync(join(tmpdir(), "clawrouter-provider-"));
+  const manifest = join(directory, "openai.provider.yaml");
+  const source = readFileSync("providers/openai.provider.yaml", "utf8");
+  const cases = [
+    ["aliases: [fast]", "aliases: [default]", /ids and aliases must be unique/],
+    ["aliases: [fast]", "aliases: [auto]", /ids and aliases must be unique/],
+    ["- id: default\n            inputMicrosPerMillion: 4000000", "- id: default\n            inputMicrosPerMillion: 5000000", /default card must match/],
+    ["- id: default", "- id: missing", /default card must match/],
+    ["inputMicrosPerMillion: 8000000\n            cachedInputMicrosPerMillion", "inputMicrosPerMillion: -1\n            cachedInputMicrosPerMillion", /nonnegative integer rates/],
+    ["maxInputTokens: 272000", "maxInputTokens: 0", /invalid input limit/],
+  ];
+  try {
+    for (const [from, to, expected] of cases) {
+      assert.ok(source.includes(from));
+      writeFileSync(manifest, source.replace(from, to));
+      assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), expected);
+    }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });

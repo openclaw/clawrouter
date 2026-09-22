@@ -111,7 +111,7 @@ export function parseTraceparent(value: string | null): { traceId: string; spanI
 }
 
 export function withRequestId(response: Response, requestId: string): Response {
-  const copy = new Response(response.body, response);
+  const copy = new Response(response.body, { status: response.status, statusText: response.statusText, headers: response.headers, ...(response.webSocket ? { webSocket: response.webSocket } : {}) });
   copy.headers.set("x-request-id", requestId);
   return copy;
 }

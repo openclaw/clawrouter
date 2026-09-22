@@ -81,6 +81,20 @@ test("Anthropic long-context pricing uses the full input, including the cache", 
 
 const sse = (...events) => events.map((event) => `data: ${typeof event === "string" ? event : JSON.stringify(event)}\n\n`).join("");
 
+test("served tiers come from terminal Responses and persist across Chat usage-only chunks", () => {
+  const usage = { input_tokens: 12, output_tokens: 3 };
+  assert.equal(extractUsageTokens({ service_tier: "priority", usage }).serviceTier, "priority");
+  const created = { type: "response.created", response: { service_tier: "priority" } };
+  const completed = { type: "response.completed", response: { service_tier: "default", usage } };
+  assert.equal(extractSseUsageTokens(sse(created, completed)).serviceTier, "default");
+  assert.equal(extractSseUsageTokens(sse(created, { ...completed, response: { usage } })).serviceTier, undefined);
+  const chunk = { object: "chat.completion.chunk", service_tier: "priority" };
+  assert.equal(extractSseUsageTokens(sse(chunk, { object: chunk.object, usage }, "[DONE]")).serviceTier, "priority");
+  assert.equal(extractSseUsageTokens(sse(chunk, { object: chunk.object, service_tier: "default", usage }, "[DONE]")).serviceTier, "default");
+  assert.equal(extractSseUsageTokens(sse(chunk, { object: chunk.object, usage })), null);
+  assert.equal(extractUsageTokens({ service_tier: "x".repeat(65), usage }).serviceTier, undefined);
+});
+
 test("Anthropic early refusals retain observed usage without billing it", () => {
   const message = { type: "message", role: "assistant", content: [], stop_reason: "refusal", usage: { input_tokens: 412, output_tokens: 0 } };
   const start = { type: "message_start", message: { ...message, stop_reason: null } };
@@ -117,7 +131,7 @@ test("OpenAI streams keep inclusive cache usage and require their terminal event
   const usage = { input_tokens: 4_000, input_tokens_details: { cached_tokens: 1_000, cache_write_tokens: 2_000 }, output_tokens: 20 };
   const chunk = { object: "chat.completion.chunk", usage };
   const completed = { type: "response.completed", response: { usage } };
-  for (const stream of [sse(chunk, "[DONE]"), sse(completed)]) {
+  for (const stream of [sse(chunk, "[DONE]"), sse(completed), sse({ ...completed, type: "response.incomplete" }), sse({ ...completed, type: "response.failed" })]) {
     const tokens = extractSseUsageTokens(stream);
     assert.equal(tokens.input, 4_000);
     assert.equal(actualModelCost(cachePricing, tokens), 5_200);
@@ -126,7 +140,9 @@ test("OpenAI streams keep inclusive cache usage and require their terminal event
     sse(chunk),
     sse(chunk, "[DONE]").trimEnd(),
     sse({ type: "response.in_progress", response: { usage } }),
-    sse({ type: "response.failed", response: { usage } }),
+    sse({ type: "response.failed", response: { usage: null } }),
+    sse({ type: "response.incomplete", response: {} }),
+    sse({ type: "response.incomplete", response: { usage } }).trimEnd(),
     sse(chunk, { error: { message: "fixture stream error" } }, "[DONE]"),
   ]) assert.equal(extractSseUsageTokens(stream), null);
 });

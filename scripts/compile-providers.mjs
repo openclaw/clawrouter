@@ -2,6 +2,8 @@ import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { parse } from "yaml";
 
+const optionalRateFields = ["cachedInputMicrosPerMillion", "cacheWriteInputMicrosPerMillion", "cacheWrite5mInputMicrosPerMillion", "cacheWrite1hInputMicrosPerMillion"];
+
 const rawArgs = process.argv.slice(2).filter((arg) => arg !== "--");
 const outputIndex = rawArgs.indexOf("--output");
 const output = outputIndex >= 0 ? rawArgs[outputIndex + 1] : null;
@@ -37,6 +39,7 @@ export function compileProviderSnapshot(manifests) {
         provider: provider.id,
         upstream: model.upstream,
         capabilities: model.capabilities,
+        ...(model.codexModel ? { codexModel: model.codexModel } : {}),
         ...(model.supportedReasoningEfforts ? { supportedReasoningEfforts: model.supportedReasoningEfforts } : {}),
         pricing_ref: model.pricing_ref,
         pricing: model.pricing,
@@ -71,6 +74,7 @@ function compileProvider(manifest, ids) {
     request_format: endpoint.requestFormat,
     response_format: endpoint.responseFormat,
     streaming: endpoint.streaming ?? null,
+    ...(endpoint.websocket ? { websocket: endpoint.websocket } : {}),
     timeout_ms: endpoint.timeoutMs ?? null,
   }));
   const auth = {
@@ -107,6 +111,7 @@ function compileProvider(manifest, ids) {
     id: model.id,
     upstream: model.upstream,
     capabilities: model.capabilities ?? [],
+    ...(model.codexModel ? { codexModel: model.codexModel } : {}),
     ...(model.supportedReasoningEfforts ? { supportedReasoningEfforts: model.supportedReasoningEfforts } : {}),
     pricing_ref: model.pricingRef ?? null,
     pricing: model.pricing ? normalizePricing(model.pricing) : null,
@@ -181,26 +186,46 @@ function normalizePricing(pricing) {
   return {
     effectiveAt: pricing.effectiveAt,
     source: pricing.source,
-    inputMicrosPerMillion: pricing.inputMicrosPerMillion,
-    outputMicrosPerMillion: pricing.outputMicrosPerMillion,
-    cachedInputMicrosPerMillion: pricing.cachedInputMicrosPerMillion ?? null,
-    cacheWriteInputMicrosPerMillion: pricing.cacheWriteInputMicrosPerMillion ?? null,
-    cacheWrite5mInputMicrosPerMillion: pricing.cacheWrite5mInputMicrosPerMillion ?? null,
-    cacheWrite1hInputMicrosPerMillion: pricing.cacheWrite1hInputMicrosPerMillion ?? null,
+    ...normalizeRates(pricing),
     maxInputTokens: pricing.maxInputTokens,
     maxRequestInputTokens: pricing.maxRequestInputTokens ?? null,
     defaultMaxOutputTokens: pricing.defaultMaxOutputTokens,
     inputTokenOverhead: pricing.inputTokenOverhead ?? 1024,
-    longContext: pricing.longContext ? {
-      thresholdInputTokens: pricing.longContext.thresholdInputTokens,
-      inputMicrosPerMillion: pricing.longContext.inputMicrosPerMillion,
-      outputMicrosPerMillion: pricing.longContext.outputMicrosPerMillion,
-      cachedInputMicrosPerMillion: pricing.longContext.cachedInputMicrosPerMillion ?? null,
-      cacheWriteInputMicrosPerMillion: pricing.longContext.cacheWriteInputMicrosPerMillion ?? null,
-      cacheWrite5mInputMicrosPerMillion: pricing.longContext.cacheWrite5mInputMicrosPerMillion ?? null,
-      cacheWrite1hInputMicrosPerMillion: pricing.longContext.cacheWrite1hInputMicrosPerMillion ?? null,
-    } : null,
+    longContext: normalizeLongContext(pricing.longContext),
+    ...(pricing.serviceTiers ? { serviceTiers: pricing.serviceTiers.map((tier) => ({ id: tier.id, aliases: tier.aliases ?? [], ...normalizeRates(tier), maxInputTokens: tier.maxInputTokens ?? null, longContext: normalizeLongContext(tier.longContext) })) } : {}),
   };
+}
+
+function normalizeRates(value) {
+  return { inputMicrosPerMillion: value.inputMicrosPerMillion, outputMicrosPerMillion: value.outputMicrosPerMillion, ...Object.fromEntries(optionalRateFields.map((field) => [field, value[field] ?? null])) };
+}
+
+function normalizeLongContext(value) {
+  return value ? { thresholdInputTokens: value.thresholdInputTokens, ...normalizeRates(value) } : null;
+}
+
+function validateServiceTiers(pricing, modelId) {
+  if (pricing?.serviceTiers === undefined) return;
+  const tiers = pricing.serviceTiers;
+  const fail = (message) => { throw new Error(`model ${modelId} serviceTiers ${message}`); };
+  if (!Array.isArray(tiers) || tiers.length === 0 || tiers.length > 8) fail("must contain 1-8 entries");
+  const ids = new Set();
+  for (const tier of tiers) {
+    if (!tier || typeof tier !== "object" || (tier.aliases !== undefined && (!Array.isArray(tier.aliases) || tier.aliases.length > 8))) fail("has an invalid card");
+    for (const id of [tier.id, ...(tier.aliases ?? [])]) {
+      if (typeof id !== "string" || !/^[a-z][a-z0-9_-]{0,63}$/.test(id) || id === "auto" || ids.has(id)) fail("ids and aliases must be unique bounded wire values other than auto");
+      ids.add(id);
+    }
+    if (tier.maxInputTokens != null && (!Number.isSafeInteger(tier.maxInputTokens) || tier.maxInputTokens < 1 || tier.maxInputTokens > pricing.maxInputTokens)) fail("has an invalid input limit");
+    for (const card of [tier, ...(tier.longContext ? [tier.longContext] : [])]) {
+      for (const field of ["inputMicrosPerMillion", "outputMicrosPerMillion", ...optionalRateFields.filter((field) => card[field] != null)]) {
+        if (!Number.isSafeInteger(card[field]) || card[field] < 0) fail("requires complete nonnegative integer rates");
+      }
+    }
+    if (tier.longContext && (!Number.isSafeInteger(tier.longContext.thresholdInputTokens) || tier.longContext.thresholdInputTokens < 1 || tier.longContext.thresholdInputTokens >= (tier.maxInputTokens ?? pricing.maxInputTokens))) fail("has an invalid long-context threshold");
+  }
+  const standard = tiers.find((tier) => tier.id === "default");
+  if (!standard || standard.maxInputTokens != null || JSON.stringify(normalizeRates(standard)) !== JSON.stringify(normalizeRates(pricing)) || JSON.stringify(normalizeLongContext(standard.longContext)) !== JSON.stringify(normalizeLongContext(pricing.longContext))) fail("default card must match the canonical model rates and context");
 }
 
 function validateManifest(manifest) {
@@ -217,6 +242,8 @@ function validateManifest(manifest) {
   }
   const reasoningEfforts = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
   for (const model of manifest.models?.entries ?? []) {
+    if (model.codexModel !== undefined && (typeof model.codexModel !== "string" || !model.codexModel.trim())) throw new Error(`model ${model.id} codexModel must be a nonempty exact native slug`);
+    validateServiceTiers(model.pricing, model.id);
     const efforts = model.supportedReasoningEfforts;
     if (efforts === undefined) continue;
     if (!Array.isArray(efforts) || efforts.length === 0 || efforts.length > reasoningEfforts.size) throw new Error(`provider ${manifest.id} model ${model.id} supportedReasoningEfforts must contain 1-${reasoningEfforts.size} entries`);
@@ -224,6 +251,7 @@ function validateManifest(manifest) {
     if (new Set(efforts).size !== efforts.length) throw new Error(`provider ${manifest.id} model ${model.id} supportedReasoningEfforts must contain unique entries`);
   }
   for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
+    if (endpoint.websocket !== undefined && (endpoint.websocket !== "openai.responses" || endpoint.requestFormat !== "openai.responses" || endpoint.responseFormat !== "openai.responses" || endpoint.streaming !== "sse" || (endpoint.method ?? "POST") !== "POST" || endpoint.nativeProxy === false)) throw new Error(`provider ${manifest.id} endpoint ${id} websocket requires a native POST Responses SSE endpoint`);
     if (!endpoint.path?.startsWith("/")) throw new Error(`provider ${manifest.id} endpoint ${id} path must start with /`);
     for (const placeholder of endpoint.path.matchAll(/\$\{([^}]+)\}/g)) {
       if (!(endpoint.pathParams ?? []).includes(placeholder[1])) throw new Error(`provider ${manifest.id} endpoint ${id} path parameter ${placeholder[1]} is not declared`);
@@ -233,6 +261,7 @@ function validateManifest(manifest) {
   for (const [kind, transport] of Object.entries(manifest.auth.grantTransports ?? {})) {
     if (!new Set(["api_key", "oauth", "subscription"]).has(kind)) throw new Error(`provider ${manifest.id} grant transport ${kind} has an invalid grant kind`);
     for (const name of [...Object.keys(transport.headers ?? {}), ...Object.keys(transport.appendHeaders ?? {})]) if (!headerName.test(name)) throw new Error(`provider ${manifest.id} grant transport ${kind} has an invalid header`);
+    if (transport.allowedEndpoints !== undefined && (!Array.isArray(transport.allowedEndpoints) || !transport.allowedEndpoints.length || new Set(transport.allowedEndpoints).size !== transport.allowedEndpoints.length || transport.allowedEndpoints.some((id) => !manifest.endpoints[id]))) throw new Error(`provider ${manifest.id} grant transport ${kind} allowedEndpoints must reference unique existing endpoints`);
     const warm = transport.maintenance?.keepWarm;
     if (warm) {
       const endpoint = manifest.endpoints[warm.endpoint];
@@ -334,6 +363,7 @@ function normalizeGrantTransport(value) {
     baseUrl: value.baseUrl ?? null,
     auth: value.auth ?? null,
     endpointPaths: value.endpointPaths ?? {},
+    ...(value.allowedEndpoints ? { allowedEndpoints: value.allowedEndpoints } : {}),
     headers: value.headers ?? {},
     appendHeaders: value.appendHeaders ?? {},
     requestTransforms: { prependSystem: value.requestTransforms?.prependSystem ?? [] },

@@ -43,13 +43,53 @@ test("generic cache-write pricing reserves and settles reported writes", () => {
 test("bundled Astra standard pricing applies cache writes and the full-request long-context boundary", () => {
   const snapshot = JSON.parse(readFileSync(new URL("../generated/provider-snapshot.json", import.meta.url), "utf8"));
   const astra = snapshot.model_index["openai/gpt-6-astra"].pricing;
-  const tokens = { input: 272_000, output: 1_000, cached: 100_000, cacheWrite: 100_000, cacheWrite5m: null, cacheWrite1h: null };
+  const tokens = { serviceTier: "default", input: 272_000, output: 1_000, cached: 100_000, cacheWrite: 100_000, cacheWrite5m: null, cacheWrite1h: null };
   assert.equal(actualModelCost(astra, tokens), 2_120_000);
   assert.equal(actualModelCost(astra, { ...tokens, input: 272_001 }), 4_215_020);
   assert.equal(actualModelCost(astra, { ...tokens, cacheWrite: null }), null);
-  assert.deepEqual(estimateModelCost(astra, { previous_response_id: "resp_example" }), {
+  assert.deepEqual(estimateModelCost(astra, { previous_response_id: "resp_example", service_tier: "default" }), {
     inputTokens: 922_000,
     outputTokens: 128_000,
     reserveMicros: 32_650_000,
   });
+});
+
+const catalog = JSON.parse(readFileSync(new URL("../generated/provider-snapshot.json", import.meta.url), "utf8")).model_index;
+const counts = { input: 272_000, output: 1_000, cached: 100_000, cacheWrite: 100_000, cacheWrite5m: null, cacheWrite1h: null };
+
+test("Astra uses actual served tier, aliases, and exact long-context prices", () => {
+  const astra = catalog["openai/gpt-6-astra"].pricing;
+  for (const [serviceTier, short, long] of [["default", 2_120_000, 4_215_020], ["priority", 4_240_000, 8_430_040], ["fast", 4_240_000, 8_430_040], ["flex", 1_060_000, 2_107_510]]) {
+    assert.equal(actualModelCost(astra, { ...counts, serviceTier }), short);
+    assert.equal(actualModelCost(astra, { ...counts, serviceTier, input: 272_001 }), long);
+  }
+  for (const serviceTier of [undefined, "auto", "unknown"]) assert.equal(actualModelCost(astra, { ...counts, serviceTier }), null);
+});
+
+test("auto and omitted tiers reserve all supported rates without changing the request", () => {
+  const astra = catalog["openai/gpt-6-astra"].pricing;
+  for (const service_tier of [undefined, "auto", "priority", "fast"]) {
+    const body = { previous_response_id: "opaque", service_tier };
+    const before = structuredClone(body);
+    assert.equal(estimateModelCost(astra, body).reserveMicros, 65_300_000);
+    assert.deepEqual(body, before);
+  }
+  assert.equal(estimateModelCost(astra, { service_tier: "scale" }).pricingAvailable, false);
+  assert.equal(estimateModelCost(pricing, { service_tier: "standard_only" }).pricingAvailable, undefined);
+});
+
+test("model-specific prices and short-only cards do not inherit an Astra multiplier", () => {
+  const shortTokens = { input: 100_000, output: 1_000, cached: 0, cacheWrite: 0, cacheWrite5m: null, cacheWrite1h: null, serviceTier: "priority" };
+  assert.equal(actualModelCost(catalog["openai/gpt-5.5"].pricing, shortTokens), 1_325_000);
+  assert.equal(actualModelCost(catalog["openai/gpt-4.1-mini"].pricing, shortTokens), 72_800);
+  assert.equal(actualModelCost(catalog["openai/gpt-5.6"].pricing, { ...shortTokens, serviceTier: "default" }), 420_000);
+  assert.equal(actualModelCost(catalog["openai/gpt-5.4"].pricing, { ...shortTokens, input: 100_000, cached: 100_000, output: 0, serviceTier: "flex" }), 13_000);
+  for (const id of ["openai/gpt-5.4", "openai/gpt-5.5"]) {
+    const model = catalog[id].pricing;
+    assert.equal(actualModelCost(model, { ...shortTokens, input: 272_001 }), null);
+    const estimate = estimateModelCost(model, { previous_response_id: "opaque" });
+    assert.ok(estimate.reserveMicros >= actualModelCost(model, { ...shortTokens, input: 272_000 }));
+    assert.ok(estimate.reserveMicros >= actualModelCost(model, { ...shortTokens, input: model.maxInputTokens, serviceTier: "default" }));
+  }
+  assert.equal(estimateModelCost(catalog["openai/gpt-4.1-mini"].pricing, { service_tier: "flex" }).pricingAvailable, false);
 });
