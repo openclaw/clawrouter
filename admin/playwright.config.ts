@@ -10,6 +10,7 @@ export default defineConfig({
   use: {
     baseURL: "http://127.0.0.1:4317",
     colorScheme: "light",
+    timezoneId: "UTC",
     reducedMotion: "reduce",
     trace: "retain-on-failure",
   },

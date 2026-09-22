@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add Lanseq's Qwen3.8-27B INT4 model with OpenAI-compatible chat, SSE streaming, and dated token pricing; thanks @CHYYX for #153.
+
 - Contain rejected Fusion adviser invocations and body reads when their deadline has already elapsed, avoiding unhandled promise rejections while the synthesizer continues.
 
 - Exclude repository documentation, review tooling, and tests from the self-host Docker image and build context.

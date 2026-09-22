@@ -10,7 +10,8 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   const compiled = JSON.parse(execFileSync(process.execPath, ["scripts/compile-providers.mjs", ...files], { encoding: "utf8" }));
   const generated = JSON.parse(readFileSync("worker/generated/provider-snapshot.json", "utf8"));
   assert.deepEqual(compiled, generated);
-  assert.equal(compiled.providers.length, 21);
+  assert.equal(compiled.providers.length, 22);
+  assert.equal(compiled.model_index["lanseq/qwen3.8-27b-int4"].provider, "lanseq");
   assert.equal(compiled.model_index["openai/gpt-5.6"].provider, "openai");
   assert.equal(compiled.model_index["anthropic/claude-opus-4-8"].provider, "anthropic");
   assert.deepEqual(compiled.providers.find((provider) => provider.id === "aws-bedrock").optional_config_keys, ["AWS_SESSION_TOKEN"]);
