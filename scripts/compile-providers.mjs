@@ -39,6 +39,7 @@ export function compileProviderSnapshot(manifests) {
         provider: provider.id,
         upstream: model.upstream,
         capabilities: model.capabilities,
+        ...(model.codexModel ? { codexModel: model.codexModel } : {}),
         ...(model.supportedReasoningEfforts ? { supportedReasoningEfforts: model.supportedReasoningEfforts } : {}),
         pricing_ref: model.pricing_ref,
         pricing: model.pricing,
@@ -110,6 +111,7 @@ function compileProvider(manifest, ids) {
     id: model.id,
     upstream: model.upstream,
     capabilities: model.capabilities ?? [],
+    ...(model.codexModel ? { codexModel: model.codexModel } : {}),
     ...(model.supportedReasoningEfforts ? { supportedReasoningEfforts: model.supportedReasoningEfforts } : {}),
     pricing_ref: model.pricingRef ?? null,
     pricing: model.pricing ? normalizePricing(model.pricing) : null,
@@ -240,6 +242,7 @@ function validateManifest(manifest) {
   }
   const reasoningEfforts = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
   for (const model of manifest.models?.entries ?? []) {
+    if (model.codexModel !== undefined && (typeof model.codexModel !== "string" || !model.codexModel.trim())) throw new Error(`model ${model.id} codexModel must be a nonempty exact native slug`);
     validateServiceTiers(model.pricing, model.id);
     const efforts = model.supportedReasoningEfforts;
     if (efforts === undefined) continue;

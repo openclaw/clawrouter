@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Export authorized native Codex model catalogs while preserving official agent metadata, add sourced Sol/Terra/Luna routes and tier prices, and document API-key and desktop hybrid setup.
+
 - Bridge qualified native Responses WebSockets with per-create authorization, pinned grants, bounded queues, retention, and shared budget settlement.
 
 - Add Azure OpenAI and OpenRouter native HTTP/SSE Responses routes. Share discovery and runtime grant endpoint eligibility, honor provider budgets, and preserve native upstream model namespaces.

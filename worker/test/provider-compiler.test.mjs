@@ -27,6 +27,15 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.ok(openai.adapter.requestTransforms.renameFields[0].upstreams.includes(astra.upstream));
   const gpt56 = openai.models.find((model) => model.id === "openai/gpt-5.6");
   assert.equal(gpt56.upstream, "gpt-5.6");
+  assert.equal(gpt56.codexModel, "gpt-5.6-sol");
+  assert.equal(compiled.model_index[gpt56.id].codexModel, gpt56.codexModel);
+  for (const name of ["sol", "terra", "luna"]) {
+    const model = compiled.model_index[`openai/gpt-5.6-${name}`];
+    assert.equal(model.upstream, `gpt-5.6-${name}`);
+    assert.equal(model.pricing.maxInputTokens, 922000);
+    assert.ok(openai.adapter.requestTransforms.renameFields[0].upstreams.includes(model.upstream));
+    assert.deepEqual(model.supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh", "max"]);
+  }
   assert.deepEqual(gpt56.capabilities, ["llm.responses", "llm.chat"]);
   assert.deepEqual(gpt56.supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh", "max"]);
   assert.deepEqual(compiled.model_index["openai/gpt-5.6"].supportedReasoningEfforts, gpt56.supportedReasoningEfforts);
@@ -196,4 +205,19 @@ test("grant transport endpoint restrictions require unique own endpoint names", 
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
+});
+
+
+test("Codex model aliases require an explicit nonempty native slug", () => {
+  const directory = mkdtempSync(join(tmpdir(), "clawrouter-provider-"));
+  const manifest = join(directory, "openai.provider.yaml");
+  const source = readFileSync("providers/openai.provider.yaml", "utf8");
+  const anchor = "codexModel: gpt-5.6-sol";
+  assert.ok(source.includes(anchor));
+  try {
+    for (const value of ['""', '" "', "null", "42", "[gpt-5.6-sol]"]) {
+      writeFileSync(manifest, source.replace(anchor, `codexModel: ${value}`));
+      assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), /codexModel must be a nonempty exact native slug/);
+    }
+  } finally { rmSync(directory, { recursive: true, force: true }); }
 });

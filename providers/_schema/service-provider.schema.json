@@ -487,6 +487,7 @@
       "properties": {
         "id": { "type": "string" },
         "upstream": { "type": "string" },
+        "codexModel": { "type": "string", "minLength": 1 },
         "capabilities": { "type": "array", "items": { "type": "string" } },
         "supportedReasoningEfforts": {
           "type": "array",
