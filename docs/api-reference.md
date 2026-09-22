@@ -40,6 +40,7 @@ Semantic identifier and path validation still applies after decoding.
 | --- | --- | --- |
 | `POST` | `/v1/chat/completions` | OpenAI-compatible chat routing |
 | `POST` | `/v1/responses` | OpenAI Responses routing |
+| `GET` upgrade | `/v1/responses`, qualified native Responses paths | Authenticated, bounded [Responses WebSocket sessions](#websocket-contract) |
 | `POST` | `/v1/embeddings` | OpenAI-compatible embeddings routing |
 | `POST` | `/v1/messages` | Anthropic Messages routing |
 | `POST` | `/v1/messages/count_tokens` | Anthropic token counting |
@@ -69,6 +70,35 @@ curl "$CLAWROUTER_BASE_URL/v1/proxy/tavily/search" \
 ```
 
 `clawrouter/fusion` is an optional virtual model on `/v1/chat/completions`. It fans a bounded text-only prompt out to configured adviser models and asks one configured synthesizer for the final response. Every subrequest uses normal policy, budget, readiness, retention, and usage-accounting paths. See [Fusion routing](fusion-router.md).
+
+## WebSocket contract
+
+Send authenticated upgrades to `/v1/responses` or
+`/v1/native/openai/v1/responses`. Unified upgrades select their model on the first
+`response.create`, so an HTTP 101 alone does not prove model access or upstream
+readiness. Every create rechecks credential, policy, provider, grant, retention,
+and budget before dispatch. The connection pins its provider route and grant
+revision; changing either requires a new connection.
+
+The bridge forwards native response IDs, errors, metadata, tool results,
+`previous_response_id`, and `stream_options`. Prewarm `generate: false` requests
+receive normal admission and accounting. It never replays requests or switches
+grants after dispatch. A terminal response with usable usage settles once;
+disconnects and deadlines without final usage retain the reservation. If budget
+settlement and its durable recovery both fail, or usage publication fails, the
+socket reports `accounting_unavailable` and closes before accepting more work.
+
+Limits per connection are 16 active responses, 32 named lanes plus the default
+lane, 48 buffered creates, 4 MiB per incoming frame, 8 MiB total buffered create
+bytes, and 16 MiB cumulative downstream output. The output limit bounds a slow
+reader because Workers' WebSocket API has no supported drain/queue metric.
+Connections last at most 60 minutes; each response uses its endpoint deadline,
+capped at 600 seconds. Clients must reconnect after a limit or deadline closes
+the connection. Binary frames, steering events, and background execution are
+rejected visibly. This contract runs on the Worker deployment; other hosts must
+qualify native upgrade forwarding before advertising it.
+
+See the upstream [Responses WebSocket contract](https://developers.openai.com/api/docs/guides/websocket-mode). An authenticated catalog route advertises `websocket: "openai.responses"` only when its endpoint and grant transport are eligible.
 
 ## Access session routes
 

@@ -84,7 +84,7 @@ export interface ServiceTierPricing extends TokenRates { id: string; aliases: st
 export interface ModelPricing extends TokenRates { effectiveAt: string; source: string; maxInputTokens: number; maxRequestInputTokens: number | null; defaultMaxOutputTokens: number; inputTokenOverhead: number; longContext: LongContextPricing | null; serviceTiers?: ServiceTierPricing[] }
 export type ProviderReasoningEffort = "none" | "minimal" | "low" | "medium" | "high" | "xhigh" | "max";
 export interface CompiledModel { id: string; upstream: string; capabilities: string[]; supportedReasoningEfforts?: ProviderReasoningEffort[]; pricing_ref: string | null; pricing: ModelPricing | null }
-export interface CompiledEndpoint { id: string; method: string; methods: string[]; path: string; native_proxy: boolean; auth: string | null; headers: Record<string, string>; request_headers: string[]; response_headers: string[]; query: Record<string, string>; path_params: string[]; path_param_styles: Record<string, string>; request_format: string; response_format: string; streaming: string | null; timeout_ms: number | null }
+export interface CompiledEndpoint { id: string; method: string; methods: string[]; path: string; native_proxy: boolean; auth: string | null; headers: Record<string, string>; request_headers: string[]; response_headers: string[]; query: Record<string, string>; path_params: string[]; path_param_styles: Record<string, string>; request_format: string; response_format: string; streaming: string | null; websocket?: "openai.responses"; timeout_ms: number | null }
 
 export interface Env {
   // Object bindings, never generic provider environment strings or grant-pool entries.

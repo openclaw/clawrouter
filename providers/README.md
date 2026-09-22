@@ -101,6 +101,10 @@ billing:
   provider-native OpenAI-compatible wire efforts. Values are unique and limited
   to `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
 
+- `endpoints.*.websocket: openai.responses` explicitly qualifies a native
+  POST Responses/SSE endpoint for the Worker WebSocket bridge. Other endpoints
+  and alternate grant transports do not gain WebSocket support implicitly.
+
 ## Edge Support Rules
 
 Every valid manifest is listed in `GET /v1/providers` and compiled into the

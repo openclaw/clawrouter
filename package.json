@@ -7,7 +7,7 @@
     "check": "pnpm worker:check && pnpm --dir admin check && pnpm --dir admin test && pnpm test:scripts",
     "build": "pnpm provider:compile -- --output worker/generated/provider-snapshot.json && pnpm --dir admin build && pnpm worker:check",
     "worker:check": "tsc -p worker/tsconfig.json --noEmit && node --test worker/test/*.test.mjs",
-    "worker:e2e": "node scripts/smoke-local-worker.mjs",
+    "worker:e2e": "node scripts/smoke-local-worker.mjs && node scripts/smoke-websocket-worker.mjs",
     "test:scripts": "node --test test/*.test.mjs",
     "provider:compile": "node scripts/compile-providers.mjs providers/*.provider.yaml",
     "provider:icons": "node scripts/sync-provider-icons.mjs",

@@ -34,7 +34,7 @@ export function errorResponse(code: string, message: string, status: number, det
 }
 
 export function withCors(response: Response): Response {
-  const copy = new Response(response.body, response);
+  const copy = new Response(response.body, { status: response.status, statusText: response.statusText, headers: response.headers, ...(response.webSocket ? { webSocket: response.webSocket } : {}) });
   for (const [key, value] of Object.entries(corsHeaders)) copy.headers.set(key, value);
   return copy;
 }

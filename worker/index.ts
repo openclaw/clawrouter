@@ -19,6 +19,7 @@ import { sameOrigin } from "./request-origin";
 import { sessionCredentialsApi } from "./session-credentials";
 import { authenticateProxyKey, inspectKey } from "./proxy-auth";
 import { proxyManifest, proxyNative, proxyOpenAi } from "./proxy";
+import { proxyResponsesWebSocket } from "./responses-websocket";
 import type { Env, QueueMessage } from "./types";
 import {
   canonicalPath, caughtResponse, corsEnabled, corsPreflight, errorResponse, legacyRedirect,
@@ -86,6 +87,7 @@ async function route(request: Request, env: Env, context: ExecutionContext): Pro
     if (openAiPath(suffix)) return proxyOpenAi(request, env, context, suffix, "access");
     if (suffix.startsWith("/proxy/")) return proxyManifest(request, env, context, `/v1${suffix}`, "access");
   }
+  if (request.method === "GET" && request.headers.get("upgrade")?.toLowerCase() === "websocket" && (path === "/v1/responses" || path.startsWith("/v1/native/"))) return proxyResponsesWebSocket(request, env, context, path);
   if (request.method === "POST" && openAiPath(path)) return proxyOpenAi(request, env, context, path, "proxy_key");
   if (request.method === "POST" && ["/v1/messages", "/v1/messages/count_tokens"].includes(path)) return proxyNative(request, env, context, `/v1/native/anthropic${path}`);
   if (path.startsWith("/v1/proxy/")) return proxyManifest(request, env, context, path, "proxy_key");

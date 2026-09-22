@@ -73,6 +73,7 @@ function compileProvider(manifest, ids) {
     request_format: endpoint.requestFormat,
     response_format: endpoint.responseFormat,
     streaming: endpoint.streaming ?? null,
+    ...(endpoint.websocket ? { websocket: endpoint.websocket } : {}),
     timeout_ms: endpoint.timeoutMs ?? null,
   }));
   const auth = {
@@ -247,6 +248,7 @@ function validateManifest(manifest) {
     if (new Set(efforts).size !== efforts.length) throw new Error(`provider ${manifest.id} model ${model.id} supportedReasoningEfforts must contain unique entries`);
   }
   for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
+    if (endpoint.websocket !== undefined && (endpoint.websocket !== "openai.responses" || endpoint.requestFormat !== "openai.responses" || endpoint.responseFormat !== "openai.responses" || endpoint.streaming !== "sse" || (endpoint.method ?? "POST") !== "POST" || endpoint.nativeProxy === false)) throw new Error(`provider ${manifest.id} endpoint ${id} websocket requires a native POST Responses SSE endpoint`);
     if (!endpoint.path?.startsWith("/")) throw new Error(`provider ${manifest.id} endpoint ${id} path must start with /`);
     for (const placeholder of endpoint.path.matchAll(/\$\{([^}]+)\}/g)) {
       if (!(endpoint.pathParams ?? []).includes(placeholder[1])) throw new Error(`provider ${manifest.id} endpoint ${id} path parameter ${placeholder[1]} is not declared`);

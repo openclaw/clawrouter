@@ -42,7 +42,8 @@ export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capabili
     try {
       reservation.reservations.push(await reserveLedger(env, address, providerLimit, cost, capability, "provider_budget_exhausted", `provider ${connection.providerId} monthly budget is exhausted`));
     } catch (error) {
-      await settleBudget(env, reservation, 0).catch(() => undefined);
+      try { await settleBudget(env, reservation, 0); }
+      catch { throw new HttpError(503, "accounting_unavailable", "Budget reservation rollback could not finish; retry after accounting recovers."); }
       throw error;
     }
   }
@@ -75,7 +76,7 @@ async function reserveLedger(
   return { reservationId, objectName: address.objectName };
 }
 
-export async function finalizeAccounting(env: Env, reservation: BudgetReservation, actualCostMicros: number, event: UsageEvent): Promise<void> {
+export async function finalizeAccounting(env: Env, reservation: BudgetReservation, actualCostMicros: number, event: UsageEvent): Promise<boolean> {
   const results = await Promise.allSettled([
     settleBudget(env, reservation, actualCostMicros),
     env.USAGE_QUEUE.send(event),
@@ -83,6 +84,9 @@ export async function finalizeAccounting(env: Env, reservation: BudgetReservatio
   for (const result of results) {
     if (result.status === "rejected") logCorrelationError("accounting finalization failed", event.request_id);
   }
+  // HTTP has already delivered its response; persistent sessions must stop
+  // accepting work if either durable settlement recovery or usage delivery fails.
+  return results.every((result) => result.status === "fulfilled");
 }
 
 export async function settleBudget(env: Env, reservation: BudgetReservation, actualCostMicros: number): Promise<void> {
