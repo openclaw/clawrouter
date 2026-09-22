@@ -218,7 +218,7 @@ export function catalogModels(provider: CompiledProvider, endpoints: string[], p
       const requiresPricing = (policy?.monthlyBudgetMicros != null || providerBudget != null) && policy?.requestCostMicros == null;
       return !requiresPricing || model.pricing != null;
     });
-    return capabilities.length ? [{ id: model.id, upstream: model.upstream, capabilities, ...(model.supportedReasoningEfforts ? { supportedReasoningEfforts: model.supportedReasoningEfforts } : {}), pricing_ref: model.pricing_ref, pricing: model.pricing }] : [];
+    return capabilities.length ? [{ id: model.id, upstream: model.upstream, ...(model.codexModel ? { codexModel: model.codexModel } : {}), capabilities, ...(model.supportedReasoningEfforts ? { supportedReasoningEfforts: model.supportedReasoningEfforts } : {}), pricing_ref: model.pricing_ref, pricing: model.pricing }] : [];
   });
 }
 

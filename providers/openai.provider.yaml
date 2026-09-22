@@ -46,7 +46,7 @@ adapter:
       - from: max_tokens
         to: max_completion_tokens
         paths: [/v1/chat/completions]
-        upstreams: [gpt-6-astra, gpt-5.6, gpt-5.5, gpt-5.4]
+        upstreams: [gpt-6-astra, gpt-5.6, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5, gpt-5.4]
 quota:
   responseHeaders:
     - id: rpm
@@ -140,6 +140,8 @@ models:
   entries:
     - id: openai/gpt-5.6
       upstream: gpt-5.6
+      # The public API documents gpt-5.6 as the Sol alias.
+      codexModel: gpt-5.6-sol
       capabilities: [llm.responses, llm.chat]
       supportedReasoningEfforts: [none, low, medium, high, xhigh, max]
       pricingRef: openai-gpt-5.6-tiers-2026-09-22
@@ -248,6 +250,171 @@ models:
               cachedInputMicrosPerMillion: 1000000
               cacheWriteInputMicrosPerMillion: 12500000
               outputMicrosPerMillion: 37500000
+    - id: openai/gpt-5.6-sol
+      upstream: gpt-5.6-sol
+      capabilities: [llm.responses, llm.chat]
+      supportedReasoningEfforts: [none, low, medium, high, xhigh, max]
+      pricingRef: openai-gpt-5.6-sol-tiers-2026-09-22
+      pricing:
+        effectiveAt: "2026-09-22"
+        source: https://developers.openai.com/api/docs/pricing
+        inputMicrosPerMillion: 4000000
+        cachedInputMicrosPerMillion: 400000
+        cacheWriteInputMicrosPerMillion: 5000000
+        outputMicrosPerMillion: 20000000
+        maxInputTokens: 922000
+        defaultMaxOutputTokens: 128000
+        longContext:
+          thresholdInputTokens: 272000
+          inputMicrosPerMillion: 8000000
+          cachedInputMicrosPerMillion: 800000
+          cacheWriteInputMicrosPerMillion: 10000000
+          outputMicrosPerMillion: 30000000
+        serviceTiers:
+          - id: default
+            inputMicrosPerMillion: 4000000
+            cachedInputMicrosPerMillion: 400000
+            cacheWriteInputMicrosPerMillion: 5000000
+            outputMicrosPerMillion: 20000000
+            longContext:
+              thresholdInputTokens: 272000
+              inputMicrosPerMillion: 8000000
+              cachedInputMicrosPerMillion: 800000
+              cacheWriteInputMicrosPerMillion: 10000000
+              outputMicrosPerMillion: 30000000
+          - id: priority
+            aliases: [fast]
+            inputMicrosPerMillion: 8000000
+            cachedInputMicrosPerMillion: 800000
+            cacheWriteInputMicrosPerMillion: 10000000
+            outputMicrosPerMillion: 40000000
+            longContext:
+              thresholdInputTokens: 272000
+              inputMicrosPerMillion: 16000000
+              cachedInputMicrosPerMillion: 1600000
+              cacheWriteInputMicrosPerMillion: 20000000
+              outputMicrosPerMillion: 60000000
+          - id: flex
+            inputMicrosPerMillion: 2000000
+            cachedInputMicrosPerMillion: 200000
+            cacheWriteInputMicrosPerMillion: 2500000
+            outputMicrosPerMillion: 10000000
+            longContext:
+              thresholdInputTokens: 272000
+              inputMicrosPerMillion: 4000000
+              cachedInputMicrosPerMillion: 400000
+              cacheWriteInputMicrosPerMillion: 5000000
+              outputMicrosPerMillion: 15000000
+    - id: openai/gpt-5.6-terra
+      upstream: gpt-5.6-terra
+      capabilities: [llm.responses, llm.chat]
+      supportedReasoningEfforts: [none, low, medium, high, xhigh, max]
+      pricingRef: openai-gpt-5.6-terra-tiers-2026-09-22
+      pricing:
+        effectiveAt: "2026-09-22"
+        source: https://developers.openai.com/api/docs/pricing
+        inputMicrosPerMillion: 2000000
+        cachedInputMicrosPerMillion: 200000
+        cacheWriteInputMicrosPerMillion: 2500000
+        outputMicrosPerMillion: 12000000
+        maxInputTokens: 922000
+        defaultMaxOutputTokens: 128000
+        longContext:
+          thresholdInputTokens: 272000
+          inputMicrosPerMillion: 4000000
+          cachedInputMicrosPerMillion: 400000
+          cacheWriteInputMicrosPerMillion: 5000000
+          outputMicrosPerMillion: 18000000
+        serviceTiers:
+          - id: default
+            inputMicrosPerMillion: 2000000
+            cachedInputMicrosPerMillion: 200000
+            cacheWriteInputMicrosPerMillion: 2500000
+            outputMicrosPerMillion: 12000000
+            longContext:
+              thresholdInputTokens: 272000
+              inputMicrosPerMillion: 4000000
+              cachedInputMicrosPerMillion: 400000
+              cacheWriteInputMicrosPerMillion: 5000000
+              outputMicrosPerMillion: 18000000
+          - id: priority
+            aliases: [fast]
+            inputMicrosPerMillion: 4000000
+            cachedInputMicrosPerMillion: 400000
+            cacheWriteInputMicrosPerMillion: 5000000
+            outputMicrosPerMillion: 24000000
+            longContext:
+              thresholdInputTokens: 272000
+              inputMicrosPerMillion: 8000000
+              cachedInputMicrosPerMillion: 800000
+              cacheWriteInputMicrosPerMillion: 10000000
+              outputMicrosPerMillion: 36000000
+          - id: flex
+            inputMicrosPerMillion: 1000000
+            cachedInputMicrosPerMillion: 100000
+            cacheWriteInputMicrosPerMillion: 1250000
+            outputMicrosPerMillion: 6000000
+            longContext:
+              thresholdInputTokens: 272000
+              inputMicrosPerMillion: 2000000
+              cachedInputMicrosPerMillion: 200000
+              cacheWriteInputMicrosPerMillion: 2500000
+              outputMicrosPerMillion: 9000000
+    - id: openai/gpt-5.6-luna
+      upstream: gpt-5.6-luna
+      capabilities: [llm.responses, llm.chat]
+      supportedReasoningEfforts: [none, low, medium, high, xhigh, max]
+      pricingRef: openai-gpt-5.6-luna-tiers-2026-09-22
+      pricing:
+        effectiveAt: "2026-09-22"
+        source: https://developers.openai.com/api/docs/pricing
+        inputMicrosPerMillion: 200000
+        cachedInputMicrosPerMillion: 20000
+        cacheWriteInputMicrosPerMillion: 250000
+        outputMicrosPerMillion: 1200000
+        maxInputTokens: 922000
+        defaultMaxOutputTokens: 128000
+        longContext:
+          thresholdInputTokens: 272000
+          inputMicrosPerMillion: 400000
+          cachedInputMicrosPerMillion: 40000
+          cacheWriteInputMicrosPerMillion: 500000
+          outputMicrosPerMillion: 1800000
+        serviceTiers:
+          - id: default
+            inputMicrosPerMillion: 200000
+            cachedInputMicrosPerMillion: 20000
+            cacheWriteInputMicrosPerMillion: 250000
+            outputMicrosPerMillion: 1200000
+            longContext:
+              thresholdInputTokens: 272000
+              inputMicrosPerMillion: 400000
+              cachedInputMicrosPerMillion: 40000
+              cacheWriteInputMicrosPerMillion: 500000
+              outputMicrosPerMillion: 1800000
+          - id: priority
+            aliases: [fast]
+            inputMicrosPerMillion: 400000
+            cachedInputMicrosPerMillion: 40000
+            cacheWriteInputMicrosPerMillion: 500000
+            outputMicrosPerMillion: 2400000
+            longContext:
+              thresholdInputTokens: 272000
+              inputMicrosPerMillion: 800000
+              cachedInputMicrosPerMillion: 80000
+              cacheWriteInputMicrosPerMillion: 1000000
+              outputMicrosPerMillion: 3600000
+          - id: flex
+            inputMicrosPerMillion: 100000
+            cachedInputMicrosPerMillion: 10000
+            cacheWriteInputMicrosPerMillion: 125000
+            outputMicrosPerMillion: 600000
+            longContext:
+              thresholdInputTokens: 272000
+              inputMicrosPerMillion: 200000
+              cachedInputMicrosPerMillion: 20000
+              cacheWriteInputMicrosPerMillion: 250000
+              outputMicrosPerMillion: 900000
     - id: openai/gpt-5.5
       upstream: gpt-5.5
       capabilities: [llm.responses, llm.chat]

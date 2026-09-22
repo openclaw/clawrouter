@@ -100,7 +100,9 @@ billing:
 - `models.entries[].supportedReasoningEfforts` advertises the model's exact
   provider-native OpenAI-compatible wire efforts. Values are unique and limited
   to `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
-
+- `models.entries[].codexModel` names an explicitly sourced native Codex model
+  descriptor for a documented upstream alias. The export helper preserves that
+  descriptor's prompts and context contract; it does not generate metadata.
 - `endpoints.*.websocket: openai.responses` explicitly qualifies a native
   POST Responses/SSE endpoint for the Worker WebSocket bridge. Other endpoints
   and alternate grant transports do not gain WebSocket support implicitly.
