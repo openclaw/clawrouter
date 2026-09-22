@@ -131,5 +131,6 @@ function readinessCall(stage: FusionReadinessCall["stage"], index: number | null
 function reservationEstimate(model: CompiledModel, body: Record<string, unknown>, fixed: number | null | undefined): Pick<FusionReadinessCall, "estimatedReservationMicros" | "estimateBasis"> {
   if (fixed != null) return { estimatedReservationMicros: fixed, estimateBasis: "policy_fixed" };
   if (!model.pricing) return { estimatedReservationMicros: 1, estimateBasis: "flat_fallback" };
-  return { estimatedReservationMicros: estimateModelCost(model.pricing, body).reserveMicros, estimateBasis: "manifest_pricing" };
+  const estimate = estimateModelCost(model.pricing, body);
+  return { estimatedReservationMicros: estimate.reserveMicros, estimateBasis: estimate.pricingAvailable === false ? "flat_fallback" : "manifest_pricing" };
 }

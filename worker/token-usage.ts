@@ -1,4 +1,5 @@
 export interface UsageTokens {
+  serviceTier?: string;
   input: number | null;
   output: number | null;
   total: number | null;
@@ -30,7 +31,8 @@ export function extractUsageTokens(value: unknown): UsageTokens | null {
   // not bill it. Keep observed counts separate from the settlement decision.
   const unbilled = root?.type === "message" && root.stop_reason === "refusal"
     && Array.isArray(root.content) && root.content.length === 0 && output === 0;
-  return { input, output, total, cached, cacheWrite, cacheWrite5m, cacheWrite1h, ...(unbilled ? { billable: false as const } : {}) };
+  const serviceTier = extractServiceTier(record(root?.response) ?? root);
+  return { input, output, total, cached, cacheWrite, cacheWrite5m, cacheWrite1h, ...(serviceTier ? { serviceTier } : {}), ...(unbilled ? { billable: false as const } : {}) };
 }
 
 export function extractSseUsageTokens(text: string): UsageTokens | null {
@@ -39,19 +41,25 @@ export function extractSseUsageTokens(text: string): UsageTokens | null {
   let messageUsage: Record<string, unknown> | null = null;
   let messageDeltaSeen = false;
   let terminal: "message" | "response" | "chat" | null = null;
+  let chatTier: string | undefined;
   const events = text.replace(/\r\n|\r/g, "\n").split("\n\n");
   events.pop(); // An unterminated SSE frame is not a complete usage report.
   for (const event of events) {
     const data = event.split("\n").filter((line) => line.startsWith("data:")).map((line) => line.slice(5).trim()).join("\n");
     if (!data) continue;
-    if (data === "[DONE]") return terminal === "message" || terminal === "response" ? null : found;
+    if (data === "[DONE]") return terminal === "message" || terminal === "response" ? null : found && chatTier ? { ...found, serviceTier: chatTier } : found;
     let root: Record<string, unknown> | null;
     try { root = record(JSON.parse(data)); } catch { return null; }
     if (!root) return null;
     if (root.error || root.type === "error" || root.type === "response.failed" || root.type === "response.incomplete") return null;
     if (root.type === "response.completed") return extractUsageTokens(root);
     if (typeof root.type === "string" && root.type.startsWith("response.")) terminal = "response";
-    if (root.object === "chat.completion.chunk") terminal = "chat";
+    if (root.object === "chat.completion.chunk") {
+      terminal = "chat";
+      // Chat's final usage-only chunk can omit the served tier emitted earlier.
+      // Responses created/in-progress events are not authoritative for billing.
+      chatTier = extractServiceTier(root) ?? chatTier;
+    }
     if (root.type === "message_start") {
       terminal = "message";
       message = record(root.message);
@@ -79,6 +87,11 @@ export function extractSseUsageTokens(text: string): UsageTokens | null {
     }
   }
   return terminal ? null : found;
+}
+
+export function extractServiceTier(root: Record<string, unknown> | null): string | undefined {
+  const tier = root?.service_tier;
+  return typeof tier === "string" && /^[a-z][a-z0-9_-]{0,63}$/.test(tier) ? tier : undefined;
 }
 
 function usageRecord(root: Record<string, unknown> | null): Record<string, unknown> | null {

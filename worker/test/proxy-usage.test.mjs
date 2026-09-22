@@ -81,6 +81,20 @@ test("Anthropic long-context pricing uses the full input, including the cache", 
 
 const sse = (...events) => events.map((event) => `data: ${typeof event === "string" ? event : JSON.stringify(event)}\n\n`).join("");
 
+test("served tiers come from terminal Responses and persist across Chat usage-only chunks", () => {
+  const usage = { input_tokens: 12, output_tokens: 3 };
+  assert.equal(extractUsageTokens({ service_tier: "priority", usage }).serviceTier, "priority");
+  const created = { type: "response.created", response: { service_tier: "priority" } };
+  const completed = { type: "response.completed", response: { service_tier: "default", usage } };
+  assert.equal(extractSseUsageTokens(sse(created, completed)).serviceTier, "default");
+  assert.equal(extractSseUsageTokens(sse(created, { ...completed, response: { usage } })).serviceTier, undefined);
+  const chunk = { object: "chat.completion.chunk", service_tier: "priority" };
+  assert.equal(extractSseUsageTokens(sse(chunk, { object: chunk.object, usage }, "[DONE]")).serviceTier, "priority");
+  assert.equal(extractSseUsageTokens(sse(chunk, { object: chunk.object, service_tier: "default", usage }, "[DONE]")).serviceTier, "default");
+  assert.equal(extractSseUsageTokens(sse(chunk, { object: chunk.object, usage })), null);
+  assert.equal(extractUsageTokens({ service_tier: "x".repeat(65), usage }).serviceTier, undefined);
+});
+
 test("Anthropic early refusals retain observed usage without billing it", () => {
   const message = { type: "message", role: "assistant", content: [], stop_reason: "refusal", usage: { input_tokens: 412, output_tokens: 0 } };
   const start = { type: "message_start", message: { ...message, stop_reason: null } };

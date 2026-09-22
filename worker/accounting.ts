@@ -22,6 +22,7 @@ export interface EstimatedCost {
 
 export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capability: string, cost: EstimatedCost, connection?: ProviderConnection): Promise<BudgetReservation> {
   if (capability === "llm.count_tokens") return emptyReservation();
+  if (cost.basis === "unpriced_service_tier") throw new HttpError(400, "pricing_required", "requested service tier has no versioned manifest price; select a declared tier or configure a fixed policy request price");
   const policyLimit = auth.policy.monthlyBudgetMicros;
   const providerLimit = connection?.monthlyBudgetMicros;
   if (policyLimit == null && providerLimit == null) return emptyReservation();
