@@ -19,7 +19,7 @@ function fixture(t, options = {}) {
       const index = admitted.length;
       admitted.push({ body, lane, requestId, pin, signal });
       if (options.admit) await options.admit(index, body);
-      return { pin: "fixture-route:grant-1", payload: JSON.stringify({ type: "response.create", ...body, ...(lane ? { stream_id: lane } : {}) }), timeoutMs: 600_000, connect: options.connect ?? (async () => upstream), settle: async (outcome, terminal) => { settled.push({ index, outcome, terminal }); } };
+      return { pin: "fixture-route:grant-1", payload: JSON.stringify({ type: "response.create", ...body, ...(lane ? { stream_id: lane } : {}) }), timeoutMs: 600_000, connect: options.connect ?? (async () => upstream), settle: async (outcome, terminal) => { settled.push({ index, outcome, terminal }); await options.settle?.(); } };
     },
   });
   t.after(async () => { session.close(); await Promise.all(pending); });
@@ -138,6 +138,35 @@ test("a delayed terminal cannot bind or settle a subsequent same-lane operation"
   await tick();
   assert.deepEqual(f.settled.map((item) => item.terminal.response.id), ["first", "second"]);
 });
+
+test("close during a deferred connect closes the late socket without sending or settling twice", async (t) => {
+  let release;
+  const gate = new Promise((resolve) => { release = resolve; });
+  const f = fixture(t, { connect: () => gate });
+  f.client.receive(create());
+  await tick();
+  f.client.close();
+  release(f.upstream);
+  await tick();
+  assert.equal(f.upstream.closed, true);
+  assert.equal(f.upstream.sent.length, 0);
+  assert.deepEqual(f.settled.map((item) => item.outcome), ["not_sent"]);
+});
+
+for (const phase of ["admission", "terminal"]) {
+  test(`failed ${phase} accounting closes the session before queued work is admitted`, async (t) => {
+    const failure = () => { throw Object.assign(new Error("accounting failed"), { status: 503, code: "accounting_unavailable" }); };
+    const f = fixture(t, phase === "admission" ? { admit: failure } : { settle: failure });
+    f.client.receive(create()); f.client.receive(create()); f.client.receive(create("other"));
+    await tick();
+    if (phase === "terminal") { respond(f); await tick(); }
+    assert.equal(f.client.closed, true);
+    assert.ok(f.client.sent.some((value) => JSON.parse(value).error?.code === "accounting_unavailable"));
+    assert.equal(f.admitted.length, phase === "admission" ? 1 : 2);
+    assert.equal(f.upstream.sent.length, phase === "admission" ? 0 : 2);
+    assert.equal(f.settled.length, phase === "admission" ? 0 : 2);
+  });
+}
 
 test("coded handshake failure closes the poisoned connection and releases only admitted work", async (t) => {
   const f = fixture(t, { connect: async () => { throw Object.assign(new Error("upstream rejected upgrade"), { code: "upgrade_rejected", status: 403 }); } });

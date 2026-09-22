@@ -84,7 +84,9 @@ The bridge forwards native response IDs, errors, metadata, tool results,
 `previous_response_id`, and `stream_options`. Prewarm `generate: false` requests
 receive normal admission and accounting. It never replays requests or switches
 grants after dispatch. A terminal response with usable usage settles once;
-disconnects and deadlines without final usage retain the reservation.
+disconnects and deadlines without final usage retain the reservation. If budget
+settlement and its durable recovery both fail, or usage publication fails, the
+socket reports `accounting_unavailable` and closes before accepting more work.
 
 Limits per connection are 16 active responses, 32 named lanes plus the default
 lane, 48 buffered creates, 4 MiB per incoming frame, 8 MiB total buffered create

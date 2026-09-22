@@ -65,7 +65,7 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
         };
       } catch (error) {
         const failure = error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "Responses request preflight failed");
-        await accounting.settle(failure.status, failure.status === 402 || failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error", false, null, reservation, content);
+        await requireAccounting(accounting.settle(failure.status, failure.status === 402 || failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error", false, null, reservation, content));
         throw failure;
       }
     },
@@ -103,8 +103,12 @@ function settlement(accounting: ReturnType<typeof createProxyAccounting>, reserv
     // A request-scoped error before a response is rejected work. Once upstream
     // execution starts, missing usage must retain the estimate, including on close.
     const billable = outcome !== "not_sent" && (outcome !== "error" || executionStarted || tokens !== null);
-    return accounting.settle(statusCode, status, billable, tokens, reservation, content);
+    return requireAccounting(accounting.settle(statusCode, status, billable, tokens, reservation, content));
   };
+}
+
+async function requireAccounting(result: Promise<boolean>): Promise<void> {
+  if (!await result) throw new HttpError(503, "accounting_unavailable", "Response accounting could not finish; open a new connection.");
 }
 
 async function responseError(response: Response): Promise<HttpError> {

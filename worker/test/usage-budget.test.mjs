@@ -82,6 +82,22 @@ function usageEnv(objectNames, { provider = "openai", limit = 100, providerLimit
 
 function proxyKey() { return ["clawrouter", "live", `maintainer_key-${keyMaterial}`].join("-"); }
 
+test("HTTP still delivers the upstream response when accounting publication fails", async (t) => {
+  const env = usageEnv([], { provider: "local-openai", limit: null, retainContent: false });
+  env.LOCAL_OPENAI_BASE_URL = "https://upstream.example.invalid";
+  env.USAGE_QUEUE = { send: async () => { throw new Error("fixture queue outage"); } };
+  t.mock.method(console, "error", () => {});
+  t.mock.method(globalThis, "fetch", async () => Response.json({ fixture: "complete" }));
+  const pending = [];
+  const response = await handler.fetch(new Request("https://clawrouter.example/v1/chat/completions", {
+    method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
+    body: JSON.stringify({ model: "local/default", messages: [{ role: "user", content: "fixture" }] }),
+  }), env, { waitUntil: (promise) => pending.push(promise) });
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), { fixture: "complete" });
+  await Promise.all(pending);
+});
+
 for (const contentType of ["application/vnd.amazon.eventstream", "application/json", "text/event-stream"]) {
 test(`${contentType} accounting preserves backpressure and settles on completion, error, or cancellation`, async (t) => {
   for (const outcome of ["complete", "error", "cancel"]) {

@@ -75,7 +75,7 @@ async function reserveLedger(
   return { reservationId, objectName: address.objectName };
 }
 
-export async function finalizeAccounting(env: Env, reservation: BudgetReservation, actualCostMicros: number, event: UsageEvent): Promise<void> {
+export async function finalizeAccounting(env: Env, reservation: BudgetReservation, actualCostMicros: number, event: UsageEvent): Promise<boolean> {
   const results = await Promise.allSettled([
     settleBudget(env, reservation, actualCostMicros),
     env.USAGE_QUEUE.send(event),
@@ -83,6 +83,9 @@ export async function finalizeAccounting(env: Env, reservation: BudgetReservatio
   for (const result of results) {
     if (result.status === "rejected") logCorrelationError("accounting finalization failed", event.request_id);
   }
+  // HTTP has already delivered its response; persistent sessions must stop
+  // accepting work if either durable settlement recovery or usage delivery fails.
+  return results.every((result) => result.status === "fulfilled");
 }
 
 export async function settleBudget(env: Env, reservation: BudgetReservation, actualCostMicros: number): Promise<void> {

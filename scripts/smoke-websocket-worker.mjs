@@ -16,7 +16,7 @@ const credential = { enabled: true, secretSha256: createHash("sha256").update(se
 let mf;
 const sockets = [];
 try {
-  const bundle = await build({ entryPoints: ["worker/index.ts"], write: false, bundle: true, format: "esm", platform: "browser", target: "es2022", logLevel: "silent" });
+  const bundle = await build({ stdin: { contents: accountingFixture(), resolveDir: process.cwd(), sourcefile: "websocket-fixture.ts", loader: "ts" }, write: false, bundle: true, format: "esm", platform: "browser", target: "es2022", logLevel: "silent" });
   mf = new Miniflare(convertV4MiniflareOptions({ resourceTmpPath: temporary, workers: [{
     name: "router", modules: true, script: bundle.outputFiles[0].text, compatibilityDate: "2026-06-05",
     bindings: { OPENAI_API_KEY: "fixture-upstream-key" },
@@ -143,6 +143,58 @@ try {
   }
   await authorityObject.fetch("https://authority/policies/put", { method: "POST", body: JSON.stringify({ policyId: "fixture", policy }) });
   await authorityObject.fetch("https://authority/connections/put", { method: "POST", body: JSON.stringify({ providerId: "openai", enabled: true, monthlyBudgetMicros: policy.monthlyBudgetMicros }) });
+  // Hold named lanes in the real upstream Worker to prove out-of-order completion and FIFO.
+  const openedLanes = await dispatch("/v1/responses", { headers: { upgrade: "websocket", "x-clawrouter-session-id": "named-lanes" } });
+  const laneSocket = openedLanes.webSocket; laneSocket.accept(); sockets.push(laneSocket);
+  const laneEvents = [];
+  laneSocket.addEventListener("message", ({ data }) => laneEvents.push(JSON.parse(data)));
+  const laneCreate = (lane, input, extra = {}) => laneSocket.send(JSON.stringify({ type: "response.create", model: "openai/gpt-6-astra", service_tier: "priority", max_output_tokens: 32, stream_id: lane, input, ...extra }));
+  const stateFrames = async () => (await (await upstream.fetch("https://fixture.example/state")).json()).frames;
+  const laneCount = async () => (await stateFrames()).filter(({ input }) => typeof input === "string" && input.startsWith("lane_")).length;
+  laneCreate("a", "lane_a1"); laneCreate("b", "lane_b");
+  await until(() => laneEvents.filter(({ type }) => type === "response.created").length === 2);
+  const firstId = laneEvents.find(({ stream_id }) => stream_id === "a").response.id;
+  laneCreate("a", "lane_a2", { previous_response_id: firstId });
+  const releaseLane = (name) => upstream.fetch(`https://fixture.example/complete?name=${name}`, { method: "POST" });
+  assert.equal((await releaseLane("lane_b")).status, 200);
+  await until(() => laneEvents.some(({ type, stream_id }) => type === "response.completed" && stream_id === "b"));
+  assert.equal(await laneCount(), 2);
+  assert.equal((await releaseLane("lane_a1")).status, 200);
+  await until(async () => await laneCount() === 3);
+  assert.equal((await stateFrames()).find(({ input }) => input === "lane_a2").previous_response_id, firstId);
+  assert.equal((await releaseLane("lane_a2")).status, 200);
+  await until(() => laneEvents.filter(({ type }) => type === "response.completed").length === 3);
+  assert.deepEqual(laneEvents.filter(({ type }) => type === "response.completed").map(({ stream_id }) => stream_id), ["b", "a", "a"]);
+  await until(async () => {
+    const receipts = (await (await dispatch("/v1/usage")).json()).usage.events.filter(({ session_id }) => session_id === "named-lanes");
+    return receipts.length === 3 && receipts.every(({ actual_cost_micros }) => actual_cost_micros === 1_080);
+  });
+  laneSocket.close(1000, "named lanes complete");
+
+  // Faults belong to the fixture wrapper, never a production configuration surface.
+  for (const phase of ["terminal", "preflight"]) {
+    await authorityObject.fetch("https://authority/policies/put", { method: "POST", body: JSON.stringify({ policyId: "fixture", policy: { ...policy, retainRequestContent: phase === "preflight" } }) });
+    for (const fault of ["recovered", "settlement", "usage"]) {
+      const before = (await stateFrames()).length;
+      const opened = await dispatch("/v1/responses", { headers: { upgrade: "websocket", "x-fixture-accounting-fault": fault } });
+      const current = opened.webSocket; current.accept(); sockets.push(current);
+      const events = []; let closed = false;
+      current.addEventListener("message", ({ data }) => events.push(JSON.parse(data)));
+      current.addEventListener("close", () => { closed = true; });
+      for (let index = 0; index < 2; index++) current.send(JSON.stringify({ type: "response.create", model: "openai/gpt-6-astra", input: "accounting fixture", max_output_tokens: 16, service_tier: "priority" }));
+      if (fault === "recovered") {
+        await until(() => events.filter(({ type }) => type === "response.completed" || type === "error").length === 2);
+        assert.equal(closed, false);
+        assert.ok(!events.some(({ error }) => error?.code === "accounting_unavailable"));
+      } else {
+        await until(() => closed);
+        assert.ok(events.some(({ error }) => error?.code === "accounting_unavailable"));
+      }
+      assert.equal((await stateFrames()).length - before, phase === "preflight" ? 0 : fault === "recovered" ? 2 : 1);
+      current.close(1000, "accounting fixture complete");
+    }
+  }
+  await authorityObject.fetch("https://authority/policies/put", { method: "POST", body: JSON.stringify({ policyId: "fixture", policy }) });
   // Mutate only fixture authority: queued/next creates must see revocation.
   const revoke = await authorityObject.fetch("https://authority/credentials/put", { method: "POST", body: JSON.stringify({ credentialId: "fixture", credential: { ...credential, enabled: false } }) });
   assert.equal(revoke.status, 200);
@@ -169,9 +221,10 @@ async function until(predicate) {
 }
 
 function upstreamFixture() { return `
-const frames = []; let headerMatch = false;
+const frames = [], held = new Map(); let headerMatch = false;
 export default { async fetch(request) {
   if (new URL(request.url).pathname === '/state') return Response.json({ frames, headerMatch });
+  if (new URL(request.url).pathname === '/complete') { const name = new URL(request.url).searchParams.get('name'); const release = held.get(name); if (!release) return new Response('missing lane', { status: 404 }); held.delete(name); release(); return new Response('completed'); }
   if (request.url !== 'https://api.openai.com/v1/responses' || request.headers.get('upgrade') !== 'websocket') return new Response('unexpected upstream route', { status: 400 });
   headerMatch = request.headers.get('authorization') === 'Bearer fixture-upstream-key' && request.headers.get('session-id') === 'fixture-session' && request.headers.get('x-openai-internal-codex-responses-lite') === 'true';
   const pair = new WebSocketPair(); pair[1].accept();
@@ -180,6 +233,11 @@ export default { async fetch(request) {
     const id = 'response_' + frames.length;
     const output = frames.length === 2 ? [{ type: 'function_call', id: 'fc_fixture', call_id: 'call_fixture', name: 'fixture_tool', arguments: '{}' }] : frames.length === 3 ? [{ type: 'message', role: 'assistant', content: [{ type: 'output_text', text: 'fixture complete' }] }] : [];
     const usage = { input_tokens: frame.generate === false ? 3 : 14, output_tokens: frame.generate === false ? 0 : 8, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } };
+    if (typeof frame.input === 'string' && frame.input.startsWith('lane_')) {
+      pair[1].send(JSON.stringify({ type: 'response.created', stream_id: frame.stream_id, response: { id, status: 'in_progress' } }));
+      held.set(frame.input, () => pair[1].send(JSON.stringify({ type: 'response.completed', stream_id: frame.stream_id, response: { id, status: 'completed', output, usage, service_tier: 'priority' } })));
+      return;
+    }
     if (frame.input === 'error_before_start') { pair[1].send(JSON.stringify({ type: 'error', status: 429, error: { code: 'rate_limit_exceeded', message: 'fixture' } })); return; }
     pair[1].send(JSON.stringify({ type: 'response.created', response: { id, status: 'in_progress' } }));
     if (frame.input === 'disconnect') { pair[1].close(1011, 'fixture disconnect'); return; }
@@ -193,3 +251,25 @@ export default { async fetch(request) {
 } };
 `;
 }
+
+function accountingFixture() { return `
+import handler from "./worker/index.ts";
+export * from "./worker/index.ts";
+export default { ...handler, fetch(request, env, context) {
+  const fault = request.headers.get("x-fixture-accounting-fault");
+  if (fault) {
+    const ledger = env.BUDGET_LEDGER, queue = env.USAGE_QUEUE;
+    env = { ...env,
+      BUDGET_LEDGER: { idFromName: (name) => ledger.idFromName(name), get: (id) => {
+        const stub = ledger.get(id);
+        return { fetch: (url, init) => new URL(url).pathname === "/settle" ? Promise.resolve(new Response("fixture ledger outage", { status: 503 })) : stub.fetch(url, init) };
+      } },
+      USAGE_QUEUE: { send(message) {
+        if ((fault === "settlement" && message.kind === "budget_settlement") || (fault === "usage" && message.type === "clawrouter.usage.v1")) return Promise.reject(new Error("fixture queue outage"));
+        return queue.send(message);
+      } },
+    };
+  }
+  return handler.fetch(request, env, context);
+} };
+`; }

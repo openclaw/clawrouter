@@ -39,7 +39,7 @@ test("settlement retry failure does not suppress the usage event", async () => {
   const original = console.error;
   console.error = (...values) => errors.push(JSON.stringify(values));
   try {
-    await finalizeAccounting(env, reservation, 42, event);
+    assert.equal(await finalizeAccounting(env, reservation, 42, event), false);
   } finally {
     console.error = original;
   }
@@ -47,6 +47,20 @@ test("settlement retry failure does not suppress the usage event", async () => {
   assert.match(errors.join("\n"), /accounting finalization failed/);
   assert.match(errors.join("\n"), /request-safe/);
   assert.doesNotMatch(errors.join("\n"), /queue settlement unavailable/);
+});
+
+test("finalization reports durable recovery success and independent usage publication failure", async (t) => {
+  t.mock.method(console, "error", () => {});
+  for (const usageFails of [false, true]) {
+    const sent = [];
+    const env = mockEnv(async (message) => {
+      if (usageFails && message.type === "clawrouter.usage.v1") throw new Error("usage unavailable");
+      sent.push(message);
+    });
+    assert.equal(await finalizeAccounting(env, reservation, 42, event), !usageFails);
+    assert.ok(sent.some((message) => message.kind === "budget_settlement"));
+    assert.equal(sent.includes(event), !usageFails);
+  }
 });
 
 function mockEnv(send) {
