@@ -143,6 +143,14 @@ try {
   }
   await authorityObject.fetch("https://authority/policies/put", { method: "POST", body: JSON.stringify({ policyId: "fixture", policy }) });
   await authorityObject.fetch("https://authority/connections/put", { method: "POST", body: JSON.stringify({ providerId: "openai", enabled: true, monthlyBudgetMicros: policy.monthlyBudgetMicros }) });
+  const ledgerFacts = async () => Promise.all([["default:fixture", "default/fixture"], ["provider:openai", "provider/openai"]].map(async ([name, policyId]) => {
+    const stub = budgets.get(budgets.idFromName(name));
+    const status = await (await stub.fetch(`https://budget/status?policy_id=${policyId}&window_key=${policyId}/${month}&limit_micros=100000000`)).json();
+    const unsettled = await (await stub.fetch("https://budget/fixture-unsettled")).json();
+    return { spent: status.spentMicros, unsettled: unsettled.count };
+  }));
+  const beforeLanes = await ledgerFacts();
+  assert.ok(beforeLanes.every(({ unsettled }) => unsettled === 0));
   // Hold named lanes in the real upstream Worker to prove out-of-order completion and FIFO.
   const openedLanes = await dispatch("/v1/responses", { headers: { upgrade: "websocket", "x-clawrouter-session-id": "named-lanes" } });
   const laneSocket = openedLanes.webSocket; laneSocket.accept(); sockets.push(laneSocket);
@@ -169,14 +177,15 @@ try {
     const receipts = (await (await dispatch("/v1/usage")).json()).usage.events.filter(({ session_id }) => session_id === "named-lanes");
     return receipts.length === 3 && receipts.every(({ actual_cost_micros }) => actual_cost_micros === 1_080);
   });
+  assert.deepEqual(await ledgerFacts(), beforeLanes.map(({ spent }) => ({ spent: spent + 3 * 1_080, unsettled: 0 })));
   laneSocket.close(1000, "named lanes complete");
 
   // Faults belong to the fixture wrapper, never a production configuration surface.
-  for (const phase of ["terminal", "preflight"]) {
+  for (const phase of ["terminal", "preflight", "rollback"]) {
     await authorityObject.fetch("https://authority/policies/put", { method: "POST", body: JSON.stringify({ policyId: "fixture", policy: { ...policy, retainRequestContent: phase === "preflight" } }) });
     for (const fault of ["recovered", "settlement", "usage"]) {
       const before = (await stateFrames()).length;
-      const opened = await dispatch("/v1/responses", { headers: { upgrade: "websocket", "x-fixture-accounting-fault": fault } });
+      const opened = await dispatch("/v1/responses", { headers: { upgrade: "websocket", "x-fixture-accounting-fault": fault, "x-fixture-accounting-phase": phase } });
       const current = opened.webSocket; current.accept(); sockets.push(current);
       const events = []; let closed = false;
       current.addEventListener("message", ({ data }) => events.push(JSON.parse(data)));
@@ -190,7 +199,11 @@ try {
         await until(() => closed);
         assert.ok(events.some(({ error }) => error?.code === "accounting_unavailable"));
       }
-      assert.equal((await stateFrames()).length - before, phase === "preflight" ? 0 : fault === "recovered" ? 2 : 1);
+      assert.equal((await stateFrames()).length - before, phase !== "terminal" ? 0 : fault === "recovered" ? 2 : 1);
+      if (phase === "rollback") {
+        const trace = await (await dispatch("/fixture-accounting")).json();
+        assert.deepEqual(trace.slice(0, 4).map(({ kind }) => kind), ["policy_reserved", "provider_denied", "rollback_attempted", "rollback_queued"]);
+      }
       current.close(1000, "accounting fixture complete");
     }
   }
@@ -253,18 +266,39 @@ export default { async fetch(request) {
 }
 
 function accountingFixture() { return `
-import handler from "./worker/index.ts";
+import handler, { BudgetLedgerObject as RealBudgetLedger } from "./worker/index.ts";
 export * from "./worker/index.ts";
+export class BudgetLedgerObject extends RealBudgetLedger {
+  constructor(state) { super(state); this.fixtureSql = state.storage.sql; }
+  async fetch(request) {
+    if (new URL(request.url).pathname === "/fixture-unsettled") return Response.json([...this.fixtureSql.exec("SELECT COUNT(*) AS count FROM budget_reservations WHERE settled = 0")][0]);
+    return super.fetch(request);
+  }
+}
+let trace = [];
 export default { ...handler, fetch(request, env, context) {
+  if (new URL(request.url).pathname === "/fixture-accounting") return Response.json(trace);
   const fault = request.headers.get("x-fixture-accounting-fault");
   if (fault) {
     const ledger = env.BUDGET_LEDGER, queue = env.USAGE_QUEUE;
+    const rollback = request.headers.get("x-fixture-accounting-phase") === "rollback";
+    trace = [];
     env = { ...env,
       BUDGET_LEDGER: { idFromName: (name) => ledger.idFromName(name), get: (id) => {
         const stub = ledger.get(id);
-        return { fetch: (url, init) => new URL(url).pathname === "/settle" ? Promise.resolve(new Response("fixture ledger outage", { status: 503 })) : stub.fetch(url, init) };
+        return { async fetch(url, init) {
+          if (new URL(url).pathname === "/settle") { trace.push({ kind: "rollback_attempted" }); return new Response("fixture ledger outage", { status: 503 }); }
+          if (rollback && new URL(url).pathname === "/reserve") {
+            if (JSON.parse(init.body).policyId === "provider/openai") { trace.push({ kind: "provider_denied" }); return Response.json({ allowed: false, chargedMicros: 0 }); }
+            const result = await stub.fetch(url, init);
+            if ((await result.clone().json()).allowed) trace.push({ kind: "policy_reserved" });
+            return result;
+          }
+          return stub.fetch(url, init);
+        } };
       } },
       USAGE_QUEUE: { send(message) {
+        if (message.kind === "budget_settlement") trace.push({ kind: "rollback_queued" });
         if ((fault === "settlement" && message.kind === "budget_settlement") || (fault === "usage" && message.type === "clawrouter.usage.v1")) return Promise.reject(new Error("fixture queue outage"));
         return queue.send(message);
       } },

@@ -42,7 +42,8 @@ export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capabili
     try {
       reservation.reservations.push(await reserveLedger(env, address, providerLimit, cost, capability, "provider_budget_exhausted", `provider ${connection.providerId} monthly budget is exhausted`));
     } catch (error) {
-      await settleBudget(env, reservation, 0).catch(() => undefined);
+      try { await settleBudget(env, reservation, 0); }
+      catch { throw new HttpError(503, "accounting_unavailable", "Budget reservation rollback could not finish; retry after accounting recovers."); }
       throw error;
     }
   }

@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { finalizeAccounting, settleBudget } from "../accounting.ts";
+import { finalizeAccounting, reserveBudget, settleBudget } from "../accounting.ts";
 import { queue } from "../ledgers.ts";
 
 const reservation = {
@@ -60,6 +60,21 @@ test("finalization reports durable recovery success and independent usage public
     assert.equal(await finalizeAccounting(env, reservation, 42, event), !usageFails);
     assert.ok(sent.some((message) => message.kind === "budget_settlement"));
     assert.equal(sent.includes(event), !usageFails);
+  }
+});
+
+test("provider admission denial preserves queued rollback but surfaces exhausted rollback", async () => {
+  for (const recovered of [true, false]) {
+    const queued = [];
+    const env = mockEnv(async (message) => { if (!recovered) throw new Error("fixture queue outage"); queued.push(message); });
+    env.BUDGET_LEDGER.get = (name) => ({ fetch: async (url) => {
+      if (new URL(url).pathname === "/reserve") return Response.json({ allowed: !name.startsWith("provider:"), chargedMicros: 1 });
+      return new Response("fixture ledger outage", { status: 503 });
+    } });
+    const auth = { policyId: "fixture", policy: { monthlyBudgetMicros: 100, tenantId: "default", budgetScope: "policy" } };
+    await assert.rejects(reserveBudget(env, auth, "llm.responses", { reserveMicros: 1, basis: "manifest_pricing" }, { providerId: "openai", monthlyBudgetMicros: 100 }), (error) => error.code === (recovered ? "provider_budget_exhausted" : "accounting_unavailable"));
+    assert.equal(queued.length, recovered ? 1 : 0);
+    if (recovered) assert.equal(queued[0].request.actualCostMicros, 0);
   }
 });
 
