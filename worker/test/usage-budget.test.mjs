@@ -788,16 +788,17 @@ test("Sonar mandatory fees and Gemini hosted work never settle at token-only pri
     env.BUDGET_LEDGER = sqlBudgetNamespace(t);
     env.USAGE_QUEUE = { send: async event => events.push(event) };
     const denied = fixedCost == null && (limit != null || providerLimit != null);
-    const result = google ? { candidates: [{ finishReason: "STOP" }], usageMetadata: { promptTokenCount: 27, toolUsePromptTokenCount: 10_309, candidatesTokenCount: 45, thoughtsTokenCount: 31, totalTokenCount: 10_412 } }
+    const result = google ? { candidates: [{ finishReason: "STOP" }], usageMetadata: { promptTokenCount: 27, toolUsePromptTokenCount: 10_309, candidatesTokenCount: 45, thoughtsTokenCount: 31, totalTokenCount: 10_412, serviceTier: "standard" } }
       : { choices: [{ finish_reason: "stop" }], usage: { prompt_tokens: 26, completion_tokens: 832, total_tokens: 858, cost: { total_cost: 0.019 } } };
     const wire = stream ? google ? sse(result) : sse(result, "[DONE]") : JSON.stringify(result);
     const upstream = t.mock.method(globalThis, "fetch", async (_url, init) => {
       for (const [key, value] of Object.entries(gapBody)) assert.deepEqual(JSON.parse(init.body)[key], value);
-      return new Response(wire, { headers: { "content-type": stream ? "text/event-stream" : "application/json" } });
+      if (google) assert.equal(JSON.parse(init.body).serviceTier, "priority");
+      return new Response(wire, { headers: { "content-type": stream ? "text/event-stream" : "application/json", ...(google ? { "x-gemini-service-tier": "standard" } : {}) } });
     });
     const endpoint = google ? stream ? "stream_generate_content" : "generate_content" : "chat_completions";
     const route = manifest ? `/v1/proxy/${provider}/${endpoint}` : google ? `/v1/native/google-gemini/v1beta/models/${model}:${stream ? "streamGenerateContent?alt=sse" : "generateContent"}` : "/v1/chat/completions";
-    const body = google ? { contents: [{ parts: [{ text: "fixture" }] }], generationConfig: { maxOutputTokens: 100 }, ...gapBody }
+    const body = google ? { contents: [{ parts: [{ text: "fixture" }] }], generationConfig: { maxOutputTokens: 100 }, serviceTier: "priority", ...gapBody }
       : { model: manifest ? model : `${provider}/${model}`, messages: [{ role: "user", content: "fixture" }], max_tokens: 1_000, stream };
     const response = await handler.fetch(new Request(`https://clawrouter.example${route}`, {
       method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
@@ -812,6 +813,11 @@ test("Sonar mandatory fees and Gemini hosted work never settle at token-only pri
     assert.equal(events[0].cost_basis, denied ? "none" : fixedCost == null ? "unpriced_usage" : "policy_fixed");
     assert.equal(events[0].actual_cost_micros, denied ? 0 : fixedCost ?? 0);
     if (!denied) assert.deepEqual([events[0].input_tokens, events[0].output_tokens, events[0].total_tokens], counts);
+    // A consistent Priority downgrade still cannot price hosted fees/work.
+    if (google) {
+      assert.equal(events[0].requested_service_tier, "priority");
+      assert.equal(events[0].served_service_tier, denied ? null : "standard");
+    }
     const usage = await handler.fetch(new Request("https://clawrouter.example/v1/usage", { headers: { authorization: `Bearer ${proxyKey()}` } }), env, {});
     assert.equal((await usage.json()).budget.spentMicros, limit == null ? null : denied ? 0 : fixedCost ?? 0);
     assert.equal((await providerBudgetStatus(env, provider, 100_000)).spentMicros, denied ? 0 : fixedCost ?? 0);
@@ -971,6 +977,59 @@ test("Gemini tier qualification preserves fixed tariffs and unmetered forwarding
     assert.equal(events.length, 1);
     assert.equal(events[0].actual_cost_micros, expected === "measured" ? 10_185 : expected === "fixed" ? fixedCost : 0);
     if (expected !== "denied") assert.equal(events[0].cost_basis, expected === "measured" ? "manifest_pricing" : expected === "fixed" ? "policy_fixed" : "unpriced_usage");
+    upstream.mock.restore();
+  }
+});
+
+test("Gemini tier reservations preserve known rejection, cancellation, and missing-response accounting", async (t) => {
+  for (const manifest of [false, true]) for (const stream of [false, true]) for (const [serviceTier, inputRate, outputRate] of [
+    ["standard", 1_500_000, 9_000_000], ["flex", 750_000, 4_500_000], ["priority", 2_700_000, 16_200_000],
+  ]) for (const outcome of ["rejected", "canceled", "missing_response"]) {
+    const limit = 50_000, events = [], pending = [];
+    const env = usageEnv([], { provider: "google-gemini", limit, fixedCost: null, retainContent: false });
+    env.GOOGLE_API_KEY = "fixture-google-key";
+    env.BUDGET_LEDGER = sqlBudgetNamespace(t);
+    env.USAGE_QUEUE = { send: async event => events.push(event) };
+    const body = { contents: [{ parts: [{ text: "fixture" }] }], generationConfig: { maxOutputTokens: 100 }, serviceTier };
+    const reservation = Math.ceil((new TextEncoder().encode(JSON.stringify(body)).byteLength + 1_024) * inputRate / 1_000_000) + Math.ceil(100 * outputRate / 1_000_000);
+    let pulls = 0, canceled = false;
+    const upstream = t.mock.method(globalThis, "fetch", async () => {
+      if (outcome === "missing_response") throw new Error("fixture connection lost after dispatch");
+      if (outcome === "rejected") return Response.json({ error: { message: "fixture capacity rejection" } }, { status: 429, headers: { "x-gemini-service-tier": "standard" } });
+      return new Response(new ReadableStream({
+        pull(controller) {
+          if (pulls++ === 0) controller.enqueue(new TextEncoder().encode(stream ? sse({ candidates: [{ content: { parts: [{ text: "fixture" }] } }] }) : '{"candidates":['));
+        },
+        cancel() { canceled = true; },
+      }, { highWaterMark: 0 }), { headers: { "content-type": stream ? "text/event-stream" : "application/json", "x-gemini-service-tier": "standard" } });
+    });
+    const route = manifest ? `/v1/proxy/google-gemini/${stream ? "stream_generate_content" : "generate_content"}`
+      : `/v1/native/google-gemini/v1beta/models/gemini-3.5-flash:${stream ? "streamGenerateContent?alt=sse" : "generateContent"}`;
+    const response = await handler.fetch(new Request(`https://clawrouter.example${route}`, {
+      method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
+      body: JSON.stringify(manifest ? { body, pathParams: { model: "gemini-3.5-flash" }, query: stream ? { alt: "sse" } : {} } : body),
+    }), env, { waitUntil: promise => pending.push(promise) });
+    assert.equal(response.status, outcome === "rejected" ? 429 : outcome === "missing_response" ? 502 : 200);
+    if (outcome === "canceled") {
+      const reader = response.body.getReader();
+      assert.equal((await reader.read()).done, false);
+      await reader.cancel();
+      assert.equal(canceled, true);
+    } else await response.text();
+    await Promise.all(pending);
+    assert.equal(upstream.mock.callCount(), 1);
+    assert.equal(events.length, 1);
+    const [event] = events, cost = outcome === "rejected" ? 0 : reservation;
+    assert.equal(event.status_code, response.status);
+    assert.equal(event.status, outcome === "missing_response" ? "provider_error" : "client_error");
+    assert.equal(event.requested_service_tier, serviceTier);
+    assert.equal(event.reserved_cost_micros, reservation);
+    assert.equal(event.actual_cost_micros, cost);
+    assert.equal(event.cost_basis, outcome === "rejected" ? "none" : "manifest_reservation");
+    assert.equal(event.input_tokens, null, "a tier header cannot invent missing or partially delivered usage");
+    const usage = await handler.fetch(new Request("https://clawrouter.example/v1/usage", { headers: { authorization: `Bearer ${proxyKey()}` } }), env, {});
+    assert.equal((await usage.json()).budget.spentMicros, cost);
+    assert.equal((await providerBudgetStatus(env, "google-gemini", limit)).spentMicros, cost);
     upstream.mock.restore();
   }
 });
