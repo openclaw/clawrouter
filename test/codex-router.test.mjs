@@ -208,6 +208,180 @@ for (const transport of ["http", "websocket"]) {
   });
 }
 
+for (const recovery of ["HTTP fallback", "WebSocket reconnect"]) test(`native Codex metadata survives ${recovery} on its original pooled account`, { skip: !binary, timeout: 90_000 }, async t => {
+  const forceHttp = recovery === "HTTP fallback";
+  const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
+  const home = await mkdtemp(join(tmpdir(), "clawrouter-native-fallback-"));
+  let mf, client;
+  try {
+    mf = await startWorkerdFixture(home, routerFixture(), fallbackUpstreamFixture());
+    const kv = await mf.getKVNamespace("POLICY_KV", "router"), origin = await mf.ready;
+    const policy = { enabled: true, generation: "g1", providers: ["openai"], tenantId: "default", monthlyBudgetMicros: limit, retainRequestContent: false, grantRouting: { strategy: "round_robin", stickiness: "none", failover: true } };
+    await kv.put("policies/fixture", JSON.stringify(policy));
+    await kv.put("credentials/fixture", JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update(secret).digest("hex"), policyId: "fixture", policyGeneration: "g1" }));
+    await kv.put("connections/openai", JSON.stringify({ providerId: "openai", enabled: true, monthlyBudgetMicros: limit }));
+    const grants = await mf.getDurableObjectNamespace("GRANT_CREDENTIALS", "router");
+    const grantCall = async (name, action, credential = `fixture-account-${name}`) => {
+      const grantKey = `oauth/fixture/account-${name}`;
+      const response = await grants.get(grants.idFromName(grantKey)).fetch(`https://credential/${action}`, { method: "POST", body: JSON.stringify({ key: grantKey, grant: { provider: "openai", kind: "api_key", enabled: true, credential }, preserveUnspecifiedSecrets: false }) });
+      assert.equal(response.status, 200, await response.clone().text());
+    };
+    await grantCall("a", "put"); await grantCall("b", "put");
+    const dispatch = (path, init = {}) => fetch(new URL(path, origin), { ...init, headers: { authorization: `Bearer ${key}`, ...init.headers }, signal: AbortSignal.timeout(10_000) });
+    const catalog = await (await dispatch("/v1/catalog")).json();
+    const env = { PATH: process.env.PATH, HOME: home, CODEX_HOME: home, RUST_LOG: "warn", CLAWROUTER_API_KEY: key };
+    const bundled = JSON.parse(execFileSync(producer, ["debug", "models", "--bundled"], { env, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: 20_000, stdio: ["ignore", "pipe", "pipe"] }));
+    const exported = buildCodexCatalog(catalog, bundled, "openai");
+    await writeFile(join(home, "models.json"), JSON.stringify(exported.catalog));
+    await writeFile(join(home, "config.toml"), `model = "${model}"
+model_provider = "fixture"
+model_catalog_json = ${JSON.stringify(join(home, "models.json"))}
+service_tier = "priority"
+web_search = "disabled"
+approval_policy = "never"
+sandbox_mode = "read-only"
+cli_auth_credentials_store = "file"
+[model_providers.fixture]
+name = "Fixture"
+base_url = "${new URL(exported.nativeBasePath, origin)}"
+env_key = "CLAWROUTER_API_KEY"
+wire_api = "responses"
+requires_openai_auth = false
+supports_websockets = true
+${forceHttp ? "request_max_retries = 0\nstream_max_retries = 0\nstream_idle_timeout_ms = 10000\n" : ""}
+`);
+    client = nativeCodexClient(t, binary, home, env);
+    await client.rpc("initialize", { clientInfo: { name: "clawrouter_fallback_fixture", version: "1.0.0" }, capabilities: { experimentalApi: true } });
+    client.child.stdin.write('{"method":"initialized"}\n');
+    const thread = await client.rpc("thread/start", { model, modelProvider: "fixture", cwd: home, ephemeral: true, approvalPolicy: "never", sandbox: "read-only" });
+    const turn = await client.rpc("turn/start", { threadId: thread.thread.id, input: [{ type: "text", text: "Return fixture complete." }], serviceTier: "priority" });
+    const upstream = await mf.getWorker("upstream");
+    const state = () => upstream.fetch("https://fixture.example/state").then(response => response.json());
+    await until(() => client.notifications.some(({ method, params }) => method === "item/agentMessage/delta" && params.turnId === turn.turn.id));
+    const started = (await state()).requests.find(({ held }) => held);
+    assert.equal(started.account, "a");
+    const post = (body, headers = {}) => dispatch("/v1/responses", { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify({ model: "openai/gpt-6-astra", input: "fixture", max_output_tokens: 32, service_tier: "priority", ...body }) });
+    assert.equal((await upstream.fetch("https://fixture.example/disconnect", { method: "POST" })).status, 200);
+    let completed;
+    await until(() => {
+      assert.deepEqual(client.errors, []);
+      completed = client.notifications.find(({ method, params }) => method === "turn/completed" && params.turn.id === turn.turn.id);
+      return !!completed;
+    });
+    assert.equal(completed.params.turn.status, "completed", completed.params.turn.error?.message);
+    const recovered = await state();
+    assert.equal(recovered.disconnected, true); assert.equal(recovered.expired, false, "the watchdog must not stand in for the controlled disconnect");
+    const retries = recovered.requests.filter(({ held, body }) => !held && body.generate !== false);
+    assert.equal(retries.length, 1, "one native retry, no router replay");
+    assert.equal(retries[0].transport, forceHttp ? "http" : "websocket");
+    assert.equal(retries[0].account, "a");
+    assert.equal(recovered.connections, forceHttp ? 1 : 2);
+    if (forceHttp) {
+      assert.equal(retries[0].turn, "fixture-turn-from-websocket");
+      assert.match(JSON.stringify(client.notifications) + client.stderr(), /Falling back from WebSockets to HTTPS/);
+    } else {
+      assert.equal(retries[0].turn, null, "Codex does not send turn state in the upgrade header");
+      assert.equal(retries[0].body.previous_response_id, undefined, "reconnect clears the prior response selector");
+      assert.equal(retries[0].body.client_metadata["x-codex-turn-state"], "fixture-turn-from-websocket");
+      assert.match(JSON.stringify(retries[0].body.input), /Return fixture complete/);
+      assert.doesNotMatch(JSON.stringify(client.notifications) + client.stderr(), /Falling back from WebSockets to HTTPS/);
+    }
+    // Pinned creates leave the round-robin cursor at A. Do not consume the next
+    // ordinary selection before retry: without its identity, retry would use B.
+    const ordinary = await post({ generate: false }); assert.equal(ordinary.status, 200); await ordinary.text();
+    const after = await state();
+    assert.equal(after.requests.at(-1).account, "b");
+    assert.ok(after.requests.every(({ account }) => account === "a" || account === "b"));
+    let usage;
+    await until(async () => { usage = await (await dispatch("/v1/usage")).json(); return usage.usage.events.length === after.requests.length; });
+    const failed = usage.usage.events.filter(({ status }) => status !== "success");
+    assert.equal(failed.length, 1); assert.equal(failed[0].status, "provider_error");
+    assert.equal(failed[0].cost_basis, "manifest_reservation");
+    assert.ok(failed[0].actual_cost_micros > 0); assert.equal(failed[0].actual_cost_micros, failed[0].reserved_cost_micros);
+    const successes = usage.usage.events.filter(({ status }) => status === "success");
+    assert.equal(successes.length, after.requests.length - 1);
+    assert.ok(successes.every((receipt) => receipt.cost_basis === "manifest_pricing" && receipt.requested_service_tier === "priority" && receipt.served_service_tier === "priority" && receipt.cached_input_tokens === 0 && receipt.cache_write_input_tokens === 0));
+    let expected = after.requests.reduce((sum, request) => sum + (request.held ? failed[0].actual_cost_micros : request.body.generate === false ? 60 : 1080), 0);
+    assert.equal(usage.budget.spentMicros, expected); assert.equal(usage.usage.summary.actualCostMicros, expected);
+    assert.equal(new Set(usage.usage.events.map(({ request_id }) => request_id)).size, after.requests.length);
+    const budgets = await mf.getDurableObjectNamespace("BUDGET_LEDGER", "router"), month = new Date().toISOString().slice(0, 7);
+    const assertLedgers = async () => {
+      const totals = [];
+      for (const [name, policyId] of [["default:fixture", "default/fixture"], ["provider:openai", "provider/openai"]]) {
+        const stub = budgets.get(budgets.idFromName(name));
+        let status, rows;
+        await until(async () => {
+          status = await (await stub.fetch(`https://budget/status?policy_id=${policyId}&window_key=${policyId}/${month}&limit_micros=${limit}`)).json();
+          rows = await (await stub.fetch("https://budget/fixture-unsettled")).json();
+          return status.spentMicros === expected && rows.count === 0;
+        });
+        totals.push(rows.total);
+      }
+      return totals;
+    };
+    await assertLedgers();
+    for (const action of ["replace", "revoke"]) {
+      await grantCall("a", action === "replace" ? "put" : "revoke", "fixture-replaced-account-a");
+      for (const [body, headers] of [[{}, { "x-codex-turn-state": "fixture-turn-from-websocket" }], [{ previous_response_id: started.responseId }, {}]]) {
+        const rejected = await post(body, headers);
+        assert.equal(rejected.status, 409); assert.equal((await rejected.json()).error.code, "continuation_restart_required");
+      }
+      assert.equal((await state()).requests.length, after.requests.length);
+      await assertLedgers();
+    }
+    // A live socket keeps its upstream route, not the authorization scope of
+    // its first create. Rebinding the same key must isolate subsequent IDs.
+    const opened = await mf.dispatchFetch("https://router.example/v1/responses", { headers: { authorization: `Bearer ${key}`, upgrade: "websocket" } });
+    assert.equal(opened.status, 101);
+    const socket = opened.webSocket; socket.accept();
+    t.after(() => { try { socket.close(); } catch {} });
+    const messages = [];
+    socket.addEventListener("message", ({ data }) => messages.push(JSON.parse(data)));
+    const warmup = body => socket.send(JSON.stringify({ type: "response.create", model: "openai/gpt-6-astra", service_tier: "priority", generate: false, input: "fixture scope", ...body }));
+    warmup({});
+    await until(() => messages.some(({ type }) => type === "response.completed"));
+    const oldId = messages.find(({ type }) => type === "response.completed").response.id;
+    const oldTurn = messages.find(({ type }) => type === "response.metadata").headers["x-codex-turn-state"][0];
+    expected += 60;
+    const beforeRejected = await assertLedgers(), beforeRejectedEgress = (await state()).requests.length;
+    const conflicting = await mf.dispatchFetch("https://router.example/v1/responses", { headers: { authorization: `Bearer ${key}`, upgrade: "websocket", "x-codex-turn-state": oldTurn } });
+    assert.equal(conflicting.status, 101);
+    const conflictingSocket = conflicting.webSocket; conflictingSocket.accept();
+    const conflicts = [];
+    conflictingSocket.addEventListener("message", ({ data }) => conflicts.push(JSON.parse(data)));
+    conflictingSocket.send(JSON.stringify({ type: "response.create", model: "openai/gpt-6-astra", input: "full input", client_metadata: { "x-codex-turn-state": "different-turn" } }));
+    await until(() => conflicts.some(({ type }) => type === "error"));
+    assert.equal(conflicts[0].error.code, "continuation_restart_required");
+    conflictingSocket.close();
+    assert.equal((await state()).requests.length, beforeRejectedEgress);
+    assert.deepEqual(await assertLedgers(), beforeRejected, "conflicting carriers never reserve either ledger");
+    const authority = await mf.getDurableObjectNamespace("ACCESS_CONTROL", "router");
+    const rebound = await authority.get(authority.idFromName("policy-bindings")).fetch("https://authority/credentials/mutate", { method: "POST", body: JSON.stringify({ operation: "put", credentialId: "fixture", scope: "admin", actor: { auth: "admin_token", role: "admin", email: "token-admin" }, credential: { enabled: true, secretSha256: createHash("sha256").update(secret).digest("hex"), policyId: "fixture", principalId: "other@example.com" } }) });
+    assert.equal(rebound.status, 200); assert.equal((await rebound.json()).outcome, "updated");
+    const beforeRebound = (await state()).requests.length;
+    for (const body of [{ previous_response_id: oldId }, { client_metadata: { "x-codex-turn-state": oldTurn } }]) {
+      const errors = messages.filter(({ type }) => type === "error").length;
+      warmup(body);
+      await until(() => messages.filter(({ type }) => type === "error").length > errors);
+      assert.equal(messages.at(-1).error.code, "continuation_restart_required");
+      assert.equal((await state()).requests.length, beforeRebound);
+      assert.deepEqual(await assertLedgers(), beforeRejected, "rebound-scope continuations never reserve either ledger");
+    }
+    warmup({});
+    await until(() => messages.filter(({ type }) => type === "response.completed").length === 2);
+    const newId = messages.filter(({ type }) => type === "response.completed")[1].response.id;
+    const continued = await post({ previous_response_id: newId });
+    assert.equal(continued.status, 200); await continued.text();
+    const rejectedOld = await post({ previous_response_id: oldId });
+    assert.equal(rejectedOld.status, 409); await rejectedOld.text();
+    expected += 1140;
+    await assertLedgers();
+    socket.close();
+  } finally {
+    await client?.close(); await mf?.dispose(); await rm(home, { recursive: true, force: true });
+  }
+});
+
 for (const scenario of ["request_retry", "stream_retry", "interrupt"]) {
   test(`native Codex through workerd: HTTP defaults, ${scenario}`, { skip: !binary, timeout: 90_000 }, async t => {
     const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
@@ -290,7 +464,7 @@ for (const scenario of ["request_retry", "stream_retry", "interrupt"]) {
         const ledger = budgets.get(budgets.idFromName(name)), month = new Date().toISOString().slice(0, 7);
         const status = await (await ledger.fetch(`https://budget/status?policy_id=${policyId}&window_key=${policyId}/${month}&limit_micros=${limit}`)).json();
         assert.equal(status.spentMicros, expected);
-        assert.deepEqual(await (await ledger.fetch("https://budget/fixture-unsettled")).json(), { count: 0 });
+        assert.deepEqual(await (await ledger.fetch("https://budget/fixture-unsettled")).json(), { total: 2, count: 0 });
       }
       assert.equal(/fallback model metadata|model metadata.*not found/i.test(client.stderr() + JSON.stringify(client.notifications)), false);
     } finally {
@@ -396,7 +570,7 @@ export * from "./worker/index.ts";
 export class BudgetLedgerObject extends RealBudgetLedger {
   constructor(state) { super(state); this.fixtureSql = state.storage.sql; }
   async fetch(request) {
-    if (new URL(request.url).pathname === "/fixture-unsettled") return Response.json([...this.fixtureSql.exec("SELECT COUNT(*) AS count FROM budget_reservations WHERE settled = 0")][0]);
+    if (new URL(request.url).pathname === "/fixture-unsettled") return Response.json([...this.fixtureSql.exec("SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN settled = 0 THEN 1 ELSE 0 END), 0) AS count FROM budget_reservations")][0]);
     return super.fetch(request);
   }
 }
@@ -420,6 +594,63 @@ export default { ...handler, async fetch(request, env, context) {
   const response = await handler.fetch(request, env, context);
   if (entry) { entry.status = response.status; entry.requestId = response.headers.get("x-request-id"); }
   return response;
+} };
+`; }
+
+function fallbackUpstreamFixture() { return `
+const requests = []; let connections = 0, disconnectRequested = false, disconnected = false, expired = false;
+function respond(body, request, transport) {
+  const responseId = 'fallback_response_' + (requests.length + 1);
+  const warmup = body.generate === false, held = transport === 'websocket' && !warmup && !requests.some(request => request.held);
+  const authorization = request.headers.get('authorization');
+  const account = authorization === 'Bearer fixture-account-a' ? 'a' : authorization === 'Bearer fixture-account-b' ? 'b' : 'unexpected';
+  requests.push({ body, responseId, transport, account, held, turn: request.headers.get('x-codex-turn-state') });
+  const item = { id: 'fallback_message', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'fixture complete', annotations: [] }] };
+  const result = { id: responseId, object: 'response', status: 'completed', model: body.model, output: warmup ? [] : [item], service_tier: 'priority', usage: { input_tokens: warmup ? 3 : 14, output_tokens: warmup ? 0 : 8, total_tokens: warmup ? 3 : 22, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } };
+  const events = [];
+  if (held || body.input === 'fixture scope') events.push({ type: 'response.metadata', response_id: responseId, headers: { 'x-codex-turn-state': [held ? 'fixture-turn-from-websocket' : 'turn_' + responseId] } });
+  events.push({ type: 'response.created', response: { ...result, status: 'in_progress', output: [], usage: null } });
+  if (held) events.push(
+    { type: 'response.output_item.added', output_index: 0, item: { ...item, status: 'in_progress', content: [] } },
+    { type: 'response.content_part.added', item_id: item.id, output_index: 0, content_index: 0, part: { type: 'output_text', text: '', annotations: [] } },
+    { type: 'response.output_text.delta', response_id: responseId, item_id: item.id, output_index: 0, content_index: 0, delta: 'fixture ' }
+  );
+  else events.push(...result.output.map((item, output_index) => ({ type: 'response.output_item.done', output_index, item })), { type: 'response.completed', response: result });
+  return { events, held };
+}
+export default { async fetch(request) {
+  const path = new URL(request.url).pathname;
+  if (path === '/state') return Response.json({ requests, connections, disconnected, expired });
+  if (path === '/disconnect' && request.method === 'POST') { disconnectRequested = true; return new Response('disconnect requested'); }
+  if (request.url !== 'https://api.openai.com/v1/responses') return new Response('unexpected upstream route', { status: 400 });
+  if (request.headers.get('upgrade') === 'websocket') {
+    connections++;
+    const pair = new WebSocketPair(); pair[1].accept();
+    let timer;
+    const close = () => { clearTimeout(timer); pair[1].close(); };
+    pair[1].addEventListener('close', close); pair[1].addEventListener('error', close);
+    pair[1].addEventListener('message', ({ data }) => {
+      const body = JSON.parse(data);
+      const { events, held } = respond(body, request, 'websocket');
+      for (const event of events) pair[1].send(JSON.stringify(event));
+      if (held) {
+        // The control request shares only a flag. Socket I/O and its timer
+        // stay in this message's Worker context until close or watchdog expiry.
+        const deadline = Date.now() + 30_000;
+        const poll = () => {
+          if (disconnectRequested || Date.now() >= deadline) {
+            disconnected = disconnectRequested; expired = !disconnectRequested;
+            pair[1].close(1011, 'fixture disconnect');
+          } else timer = setTimeout(poll, 10);
+        };
+        timer = setTimeout(poll, 10);
+      }
+    });
+    return new Response(null, { status: 101, headers: { 'x-codex-turn-state': 'fixture-turn-only-in-upgrade' }, webSocket: pair[0] });
+  }
+  if (request.method !== 'POST') return new Response('unexpected upstream method', { status: 405 });
+  const { events } = respond(await request.json(), request, 'http');
+  return new Response(events.map(event => 'event: ' + event.type + '\\ndata: ' + JSON.stringify(event) + '\\n\\n').join(''), { headers: { 'content-type': 'text/event-stream' } });
 } };
 `; }
 

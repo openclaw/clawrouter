@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createResponseIdentityInspector } from "../response-identities.ts";
+import { createResponseIdentityInspector, responseEventIdentities } from "../response-identities.ts";
 
 const encoder = new TextEncoder();
 function inspect(text, sse, widths = [text.length * 4 + 1]) {
@@ -61,4 +61,15 @@ test("deep skipped output and long unrelated keys do not become identities", () 
 test("incomplete SSE does not publish an identity and scalar limits fail visibly", () => {
   assert.deepEqual(inspect('data: {"type":"response.created","response":{"id":"resp_partial"}}\n', true, [1]), []);
   assert.throws(() => inspect(JSON.stringify({ id: "x".repeat(257) }), false), /continuation identity/);
+});
+
+test("parsed WebSocket identity follows the HTTP metadata and response field contract", () => {
+  for (const event of [
+    { type: "response.metadata", response_id: "early", headers: { "X-CoDeX-TuRn-StAtE": [["turn", "ignored"]] } },
+    { type: "response.created", response: { id: "created", output: [{ id: "ignored" }] } },
+    { type: "response.completed", response: { id: "completed" } },
+    { type: "tool.output", response: { id: "ignored" }, headers: { "x-codex-turn-state": "ignored" } },
+    { type: "response.metadata", headers: { "x-codex-turn-state": [null, "ignored"] } },
+  ]) assert.deepEqual(responseEventIdentities(event), inspect(`data: ${JSON.stringify(event)}\n\n`, true));
+  assert.throws(() => responseEventIdentities({ type: "response.metadata", headers: { "x-codex-turn-state": "x".repeat(8193) } }), /continuation identity/);
 });

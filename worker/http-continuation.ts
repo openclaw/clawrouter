@@ -28,9 +28,15 @@ export class HttpContinuation {
       ? { key: owner.grantKey, lineage: owner.lineage } : { key: null, revision: null };
   }
 
-  static async resolve(request: Request, selection: ProxySelection, auth: AuthorizedIdentity, env: Env): Promise<HttpContinuation | undefined> {
+  static async resolve(request: Request, selection: ProxySelection, auth: AuthorizedIdentity, env: Env, transport: "http" | "websocket" = "http"): Promise<HttpContinuation | undefined> {
     if (selection.capability !== "llm.responses" || Array.isArray(selection.body)) return undefined;
-    const identities = [responseIdentity("response", selection.body.previous_response_id), responseIdentity("turn", request.headers.get("x-codex-turn-state"))].filter((value): value is ResponseIdentity => !!value);
+    const metadata = transport === "websocket" ? selection.body.client_metadata : null;
+    const headerTurn = responseIdentity("turn", request.headers.get("x-codex-turn-state"));
+    // Codex reconnects with full input and only this metadata token. Conflicting
+    // carriers must never discard an owner check or consume another pool account.
+    const metadataTurn = responseIdentity("turn", metadata && typeof metadata === "object" && !Array.isArray(metadata) ? (metadata as Record<string, unknown>)["x-codex-turn-state"] : null);
+    if (headerTurn && metadataTurn && headerTurn.value !== metadataTurn.value) throw continuationRestart();
+    const identities = [responseIdentity("response", selection.body.previous_response_id), headerTurn ?? metadataTurn].filter((value): value is ResponseIdentity => !!value);
     const scope = `http-continuations:${await sha256Hex(JSON.stringify([auth.authType, auth.policy.tenantId ?? "default", auth.policyId, auth.credentialId, auth.principalId]))}`;
     let owner: ContinuationOwner | null = null;
     if (identities.length) {
@@ -50,6 +56,11 @@ export class HttpContinuation {
   async headers(response: Response): Promise<void> {
     const identity = responseIdentity("turn", response.headers.get("x-codex-turn-state"));
     if (identity) this.remember(identity);
+    await this.flush();
+  }
+
+  async publish(identities: readonly ResponseIdentity[]): Promise<void> {
+    for (const identity of identities) this.remember(identity);
     await this.flush();
   }
 

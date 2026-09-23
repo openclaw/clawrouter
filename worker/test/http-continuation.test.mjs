@@ -3,10 +3,13 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { setImmediate } from "node:timers/promises";
 const { default: handler } = await import("../index.ts");
+const { authenticateProxyKey } = await import("../proxy-auth.ts");
+const { concreteOpenAiSelection } = await import("../proxy-selection.ts");
 import { materializeGrantCredentials, putGrantCredentials, revokeGrantCredentials } from "../grant-credentials.ts";
 import { sha256Hex } from "../utils.ts";
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
 import { continuationAuthority } from "./continuation-authority.mjs";
+import { HttpContinuation } from "../http-continuation.ts";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 
 const grantKeys = ["oauth/fixture/account-a", "oauth/fixture/account-b"];
@@ -84,6 +87,35 @@ test("same-turn HTTP retries never fail over when the pinned upstream returns un
   }
   assert.equal(f.sent.length, 3);
   assert.ok(f.sent.every(request => request.headers.get("chatgpt-account-id") === "synthetic-account-0"));
+});
+
+test("WebSocket metadata-only reconnect resolves its owner and all supplied identities must agree", async t => {
+  const f = await fixture(t);
+  f.response = (_request, index) => Response.json({ id: `resp_${index}` }, { headers: { "x-codex-turn-state": `turn_${index}` } });
+  await f.consume(await f.request()); await f.consume(await f.request());
+  const headers = { authorization: "Bearer clawrouter-live-fixture-fixture-secret" };
+  async function resolve(body, extraHeaders = {}, transport = "websocket") {
+    const request = new Request("https://router.example/v1/responses", { method: "POST", headers: { ...headers, ...extraHeaders } });
+    const auth = await authenticateProxyKey(request.headers, f.env);
+    const selection = concreteOpenAiSelection("/v1/responses", { model: "openai/gpt-6-astra", input: "full input", ...body }, f.env);
+    return HttpContinuation.resolve(request, selection, auth, f.env, transport);
+  }
+  const metadata = { client_metadata: { "x-codex-turn-state": "turn_1" } };
+  assert.equal((await resolve(metadata)).pinned?.key, grantKeys[0]);
+  assert.equal((await resolve(metadata, {}, "http")).requested, false, "HTTP client_metadata is not a continuation carrier");
+  assert.equal((await resolve({ ...metadata, previous_response_id: "resp_1" }, { "x-codex-turn-state": "turn_1" })).pinned?.key, grantKeys[0]);
+  const restart = error => error.status === 409 && error.code === "continuation_restart_required";
+  await assert.rejects(resolve({ ...metadata, previous_response_id: "resp_2" }), restart);
+  await assert.rejects(resolve({ client_metadata: { "x-codex-turn-state": "unknown" } }), restart);
+  let lookups = 0;
+  f.env.ACCESS_CONTROL.beforeFetch = async name => { if (name.startsWith("http-continuations:")) lookups++; };
+  await assert.rejects(resolve(metadata, { "x-codex-turn-state": "turn_2" }), restart);
+  for (const value of [123, [], {}, "x".repeat(8193)]) await assert.rejects(resolve({ client_metadata: { "x-codex-turn-state": value } }), restart);
+  assert.equal(lookups, 0, "conflicting or unsupported turn carriers fail before the store lookup");
+  for (const value of [null, ""]) assert.equal((await resolve({ client_metadata: { "x-codex-turn-state": value } })).requested, false);
+  await f.mutateCredential({ operation: "put", credentialId: "fixture", credential: { ...f.credential, principalId: "other@example.com" } });
+  await assert.rejects(resolve(metadata), restart);
+  assert.equal(f.sent.length, 2, "resolution never dispatches upstream");
 });
 
 test("the successful stateless failover grant owns the response it actually produced", async t => {
