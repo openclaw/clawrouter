@@ -20,7 +20,7 @@ export function useCredentialOperations(initial: Scope, setStatus: (status: stri
   const scopeRef = useRef({ ...initial, key: scopeKey(initial), epoch: 0 });
   const presentationRef = useRef({ surface: null as Surface | null, epoch: 0 });
   const mutationRef = useRef(0);
-  const pendingRef = useRef<object | null>(null);
+  const pendingRef = useRef<(Intent & { scope: number }) | null>(null);
   const [busy, setBusy] = useState(false);
   const [rows, setRows] = useState(emptyRows);
   const [feedback, setFeedback] = useState<Feedback>(emptyFeedback);
@@ -51,7 +51,7 @@ export function useCredentialOperations(initial: Scope, setStatus: (status: stri
 
   function captureHydration() { return mutationRef.current; }
   function hydrate(surface: Surface, credentials: ProxyCredential[], snapshot: number, policies: string[] = []) {
-    if (pendingRef.current || snapshot !== mutationRef.current) return;
+    if (pendingRef.current?.scope === scopeRef.current.epoch || snapshot !== mutationRef.current) return;
     if (surface === "admin" && scopeRef.current.session.role !== "admin") return;
     setRows((current) => ({ ...current, [surface]: credentials, ...(surface === "personal" ? { policyIds: [...new Set(policies)].sort() } : {}) }));
   }
@@ -66,7 +66,7 @@ export function useCredentialOperations(initial: Scope, setStatus: (status: stri
     if (pendingRef.current) return null;
     const scope = scopeRef.current;
     if (scope.key === "signed-out" || !scope.session.authenticated || (intent.surface === "admin" && scope.session.role !== "admin")) return null;
-    const operation = {};
+    const operation = { ...intent, scope: scope.epoch };
     pendingRef.current = operation;
     mutationRef.current += 1;
     setBusy(true);
@@ -93,19 +93,19 @@ export function useCredentialOperations(initial: Scope, setStatus: (status: stri
       const credential = scope.demo
         ? { credentialId: intent.credentialId, policyId: intent.policyId, principalId: intent.surface === "admin" ? intent.principalId ?? null : scope.session.email, enabled: intent.operation !== "revoke", active: intent.operation !== "revoke" }
         : await request<ProxyCredential>(scope.origin, path, { method: "POST", ...(body ? { headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}) });
-      if (!credential || credential.credentialId !== intent.credentialId || credential.policyId !== intent.policyId || typeof credential.enabled !== "boolean") throw new Error("invalid credential response");
+      if (!credential || credential.credentialId !== intent.credentialId || typeof credential.policyId !== "string" || (intent.operation === "create" && credential.policyId !== intent.policyId) || typeof credential.enabled !== "boolean") throw new Error("invalid credential response");
       if (!ownsScope()) return null;
       const update = (items: ProxyCredential[]) => [...items.filter((item) => item.credentialId !== credential.credentialId), credential].sort((a, b) => a.credentialId.localeCompare(b.credentialId));
       setRows((current) => ({
         ...current,
         admin: scope.session.role === "admin" ? update(current.admin) : [],
-        personal: intent.surface === "personal" || current.personal.some((item) => item.credentialId === credential.credentialId) || (Boolean(scope.session.email) && credential.principalId?.trim().toLowerCase() === scope.session.email?.trim().toLowerCase()) ? update(current.personal) : current.personal,
+        personal: intent.surface === "personal" || (Boolean(scope.session.email) && credential.principalId?.trim().toLowerCase() === scope.session.email?.trim().toLowerCase()) ? update(current.personal) : current.personal.filter((item) => item.credentialId !== credential.credentialId),
       }));
       const verb = intent.operation === "create" ? "Created" : intent.operation === "rotate" ? "Rotated" : "Revoked";
-      const reveal = secret && ownsPresentation() ? { key: `clawrouter-live-${intent.credentialId}-${secret}`, credentialId: intent.credentialId, policyId: intent.policyId, operation: intent.operation as "create" | "rotate", scope: scope.epoch, presentation } : null;
+      const reveal = secret && ownsPresentation() ? { key: `clawrouter-live-${intent.credentialId}-${secret}`, credentialId: intent.credentialId, policyId: credential.policyId, operation: intent.operation as "create" | "rotate", scope: scope.epoch, presentation } : null;
       const notice = `${verb} ${intent.credentialId}.${secret && !reveal ? " The one-time secret was dismissed. Rotate the active key to obtain a new secret." : ""}`;
       setFeedback({ surface: intent.surface, error: "", notice, reveal });
-      setStatus(`${verb.toLowerCase()} credential`);
+      setStatus(`${intent.operation === "create" ? "issued" : verb.toLowerCase()} credential`);
       return { credential, presented: ownsPresentation() };
     } catch (caught) {
       if (!ownsScope()) return null;
@@ -119,7 +119,8 @@ export function useCredentialOperations(initial: Scope, setStatus: (status: stri
     } finally {
       if (pendingRef.current === operation) {
         pendingRef.current = null;
-        mutationRef.current += 1;
+        // An old identity may still own admission, but cannot stale the new identity's reads.
+        if (ownsScope()) mutationRef.current += 1;
         setBusy(false);
       }
       // Metadata freshness is independent of the canonical mutation outcome.
@@ -130,7 +131,8 @@ export function useCredentialOperations(initial: Scope, setStatus: (status: stri
   function forSurface(surface: Surface) {
     const owned = feedback.surface === surface;
     const reveal = owned && feedback.reveal?.scope === scopeRef.current.epoch && feedback.reveal.presentation === presentationRef.current.epoch && presentationRef.current.surface === surface ? feedback.reveal : null;
-    return { items: rows[surface], busy, error: owned ? feedback.error : "", notice: owned ? feedback.notice : "", reveal, dismiss: invalidatePresentation, refresh };
+    const pendingReveal = busy && pendingRef.current?.surface === surface && pendingRef.current.scope === scopeRef.current.epoch && pendingRef.current.operation !== "revoke";
+    return { items: rows[surface], busy, pendingReveal, error: owned ? feedback.error : "", notice: owned ? feedback.notice : "", reveal, dismiss: invalidatePresentation, refresh };
   }
 
   return { rows, scopeEpoch, busy, setScope, observePresentation, invalidatePresentation, captureHydration, hydrate, mutate, forSurface, reject };

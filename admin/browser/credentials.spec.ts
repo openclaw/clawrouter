@@ -33,6 +33,38 @@ test("a collision retains the create draft and a confirmed rejection can be retr
   expect(state.writes.map((write) => [write.method, write.path])).toEqual([["POST", "/v1/admin/credentials"], ["POST", "/v1/admin/credentials"]]);
 });
 
+test("personal creation sends a create-only request without selecting an owner", async ({ page }) => {
+  const state = await fixture(page);
+  await page.goto("/");
+  await connected(page);
+  await page.locator(".myKeysPanel").getByRole("button", { name: "Create key", exact: true }).click();
+  await expect(page.locator(".issuedKey code")).toHaveText(/^clawrouter-live-key_[0-9a-f]{16}-[0-9a-f]{48}$/);
+  expect(state.writes).toHaveLength(1);
+  expect(state.writes[0].path).toBe("/v1/session/credentials");
+  expect(Object.keys(state.writes[0].body).sort()).toEqual(["credentialId", "policyId", "secretSha256"]);
+});
+
+for (const operation of ["rotate", "revoke"] as const) {
+  test(`admin ${operation} consumes the latest policy and evicts a reassigned personal key`, async ({ page }) => {
+    const state = await fixture(page);
+    await openAdmin(page);
+    await page.getByRole("button", { name: /owned_key.*proxy credential/ }).click();
+    state.credentials[0].policyId = "another_policy";
+    state.credentials[0].principalId = "other@example.com";
+    state.failBootstrap = true;
+    await page.getByRole("button", { name: operation === "rotate" ? "Rotate credential" : "Revoke credential", exact: true }).click();
+    await expect(page.locator(".facts")).toContainText("another_policy");
+    await expect(page.locator(".inspector")).not.toContainText("could not be confirmed");
+    if (operation === "rotate") {
+      await expect(page.locator(".issuedKey")).toContainText("owned_key · another_policy");
+      await expect(page.locator(".issuedKey code")).toHaveText(/^clawrouter-live-owned_key-[0-9a-f]{48}$/);
+      expect(Object.keys(state.writes[0].body)).toEqual(["secretSha256"]);
+    }
+    await page.getByRole("button", { name: "Dashboard", exact: true }).click();
+    await expect(page.locator(".myKeysList article")).toHaveCount(0);
+  });
+}
+
 test("personal and admin screens share admission, rotate only the hash, and synchronize revocation", async ({ page }) => {
   const state = await fixture(page);
   await page.goto("/");
@@ -151,13 +183,51 @@ test("an accepted identity change fences a pending mutation and clears old admin
   await expect(page.getByRole("button", { name: /owned_key.*proxy credential/ })).toHaveCount(0);
 });
 
+for (const completion of ["before", "after"] as const) {
+  test(`new-identity hydration survives an old operation completing ${completion} it`, async ({ page }) => {
+    const state = await fixture(page);
+    await openAdmin(page);
+    await draft(page, "previous_key");
+    const sessionRead = deferred();
+    state.holdSession = sessionRead.promise;
+    await focusRefresh(page);
+    await expect.poll(() => state.sessionReads).toBe(2);
+    const mutation = deferred();
+    state.holdMutation = mutation.promise;
+    await page.getByRole("button", { name: "Issue credential", exact: true }).click();
+    await expect.poll(() => state.writes.length).toBe(1);
+    state.email = "second@example.com";
+    state.role = "user";
+    state.credentials.push({ credentialId: "second_key", policyId: "team_policy", principalId: state.email, enabled: true, active: true });
+    const reads = deferred();
+    state.holdKeys = reads.promise;
+    sessionRead.release();
+    await expect(page.locator(".tenantSwitch strong")).toHaveText(state.email);
+    await expect.poll(() => state.keyReads).toBe(3);
+    await page.getByRole("button", { name: "Dashboard", exact: true }).click();
+    if (completion === "before") {
+      const response = page.waitForResponse("**/v1/admin/credentials");
+      mutation.release();
+      await response;
+      await expect(page.locator(".myKeysPanel")).not.toContainText("A credential change is still finishing");
+    }
+    reads.release();
+    await expect(page.locator(".myKeysList")).toContainText("second_key");
+    if (completion === "after") mutation.release();
+    await expect(page.locator(".myKeysPanel").getByRole("button", { name: "Create key", exact: true })).toBeEnabled();
+    await expect(page.locator(".myKeysList")).not.toContainText("owned_key");
+    await expect(page.locator(".issuedKey code")).toHaveCount(0);
+  });
+}
+
 test("confirmed auth loss clears a reveal before the login availability probe finishes", async ({ page }) => {
   const state = await fixture(page);
   await openAdmin(page);
+  const previousRefresh = await page.locator(".connectionMeta time").getAttribute("datetime");
   await draft(page, "revealed_key");
   await page.getByRole("button", { name: "Issue credential", exact: true }).click();
   await expect(page.locator(".issuedKey code")).toBeVisible();
-  await expect.poll(() => state.sessionReads).toBe(2);
+  await expect(page.locator(".connectionMeta time")).not.toHaveAttribute("datetime", previousRefresh!);
   const login = deferred();
   state.holdLogin = login.promise;
   state.authLost = true;
@@ -217,6 +287,7 @@ test("clipboard failure is visible, Dismiss works by keyboard, and refresh canno
   await page.getByRole("button", { name: "Issue credential", exact: true }).click();
   await page.getByRole("button", { name: "Copy", exact: true }).click();
   await expect(page.locator(".issuedKey")).toContainText("Copy failed");
+  expect((await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
   const dismiss = page.getByRole("button", { name: "Dismiss", exact: true });
   await dismiss.focus();
   await page.keyboard.press("Enter");
@@ -254,7 +325,7 @@ async function fixture(page: Page) {
   const state = {
     credentials: [{ credentialId: "owned_key", policyId: policy.policyId, principalId: "admin@example.com", enabled: true, active: true }] as ProxyCredential[],
     writes: [] as { path: string; method: string; body: Record<string, string> }[],
-    reject: "", failBootstrap: false, loseResponse: false, held: true, authLost: false, email: "admin@example.com", keyReads: 0, sessionReads: 0, loginReads: 0,
+    reject: "", failBootstrap: false, loseResponse: false, held: true, authLost: false, email: "admin@example.com", role: "admin", keyReads: 0, sessionReads: 0, loginReads: 0,
     holdMutation: null as Promise<void> | null, holdKeys: null as Promise<void> | null, holdSession: null as Promise<void> | null, holdLogin: null as Promise<void> | null,
   };
   const usage = { ledger: "ready", providers: [], daily: [], events: [], summary: { requestCount: 0, successCount: 0, errorCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, actualCostMicros: 0 } };
@@ -288,11 +359,11 @@ async function fixture(page: Page) {
       "/v1": { endpoints: {} },
       "/v1/providers": { providers: [] },
       "/v1/routes": { openaiCompatible: [], manifestProxy: [] },
-      "/v1/session": { authenticated: true, auth: "access", role: "admin", email: state.email, tenantId: "default", entitlements: { providers: [] } },
+      "/v1/session": { authenticated: true, auth: "access", role: state.role, email: state.email, tenantId: "default", entitlements: { providers: [] } },
       "/v1/session/usage": { policies: policies.map((item) => ({ ...item, budget: { configured: false, ledger: "ready" } })), usage },
       "/v1/session/credentials": { credentials: state.credentials.filter((item) => item.principalId === state.email) },
       "/v1/admin/usage": { policies: [], usage },
-      "/v1/admin/bootstrap": { policies: [policy], credentials: state.credentials, connections: [], users: [], bindings: [], grants: [], rules: [], providers: [], tenants: [], overview: null, fusion: { version: 1, modelId: "clawrouter/fusion", enabled: false, adviserModels: [], aggregatorModel: "", adviserTimeoutMs: 10000, maxOutputTokens: 100, maxInputChars: 1000, maxProposalChars: 1000, temperature: 0.7 } },
+      "/v1/admin/bootstrap": { policies: [policy, { ...policy, policyId: "another_policy" }], credentials: state.credentials, connections: [], users: [], bindings: [], grants: [], rules: [], providers: [], tenants: [], overview: null, fusion: { version: 1, modelId: "clawrouter/fusion", enabled: false, adviserModels: [], aggregatorModel: "", adviserTimeoutMs: 10000, maxOutputTokens: 100, maxInputChars: 1000, maxProposalChars: 1000, temperature: 0.7 } },
     };
     const snapshot = structuredClone(responses[path]);
     if (path === "/v1/admin/bootstrap" || path === "/v1/session/credentials") {
