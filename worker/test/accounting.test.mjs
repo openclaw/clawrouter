@@ -19,7 +19,7 @@ test("thrown ledger settlement queues a retry", async () => {
       destinations.push(name);
       assert.deepEqual(JSON.parse(init.body), { reservationId: "reservation", actualCostMicros: 42 });
       if (!available) throw new Error("synthetic outage");
-      return new Response("settled");
+      return Response.json({ settled: true });
     } });
     await settleBudget(env, { ...reservation, reservations: [{ reservationId: "reservation", objectName }] }, 42);
     assert.deepEqual(sent, [{ kind: "budget_settlement", ledger: { objectName }, request: { reservationId: "reservation", actualCostMicros: 42 } }]);
@@ -71,7 +71,7 @@ test("rejected usage publication recovers the exact event in its policy shard an
   const body = { ...event, occurred_at_ms: Date.now(), provider: "openai", model: "openai/gpt-6-astra", capability: "llm.responses", status: "success", status_code: 200, input_tokens: 3, output_tokens: 2, total_tokens: 5, actual_cost_micros: 42, cost_basis: "manifest_pricing", requested_service_tier: "priority", served_service_tier: "fast", session_id: "fixture-session", credential_id: "fixture-credential", principal_id: "fixture-principal", content_retained: false, content_ref: null };
   const accepted = [], calls = [];
   const env = mockEnv(async message => { accepted.push(structuredClone(message)); throw new Error("ambiguous queue acceptance"); });
-  env.BUDGET_LEDGER.get = () => ({ fetch: async () => new Response("settled") });
+  env.BUDGET_LEDGER.get = () => ({ fetch: async () => Response.json({ settled: true }) });
   env.USAGE_LEDGER = { idFromName: name => name, get: name => ({ fetch: async (url, init) => { calls.push({ name, url, init }); return ledger.fetch(new Request(url, init)); } }) };
   assert.equal(await finalizeAccounting(env, reservation, 42, body), true);
   assert.deepEqual(accepted, [body]);
@@ -96,7 +96,7 @@ test("usage recovery cannot conceal failed budget settlement or exhausted public
   for (const settlementFails of [false, true]) for (const direct of ["success", "throw", "non-2xx"]) {
     let writes = 0, settlements = 0;
     const env = mockEnv(async () => { throw new Error("queue unavailable"); });
-    env.BUDGET_LEDGER.get = () => ({ fetch: async () => { settlements++; if (settlementFails) throw new Error("settlement unavailable"); return new Response("settled"); } });
+    env.BUDGET_LEDGER.get = () => ({ fetch: async () => { settlements++; if (settlementFails) throw new Error("settlement unavailable"); return Response.json({ settled: true }); } });
     env.USAGE_LEDGER.get = () => ({ fetch: async () => { writes++; if (direct === "throw") throw new Error("ingest unavailable"); return new Response("fixture", { status: direct === "success" ? 200 : 503 }); } });
     assert.equal(await finalizeAccounting(env, reservation, 42, event), !settlementFails && direct === "success");
     assert.equal(writes, 1);
@@ -108,6 +108,19 @@ test("accepted queue publication does not also write directly", async () => {
   const env = mockEnv(async message => assert.equal(message, event));
   env.USAGE_LEDGER.get = () => assert.fail("accepted publication must stay queue-only");
   assert.equal(await finalizeAccounting(env, { reservations: [], reservedMicros: 0 }, 42, event), true);
+});
+
+test("HTTP success without a settlement receipt remains retryable", async () => {
+  for (const body of [{ settled: false }, {}, "invalid JSON"]) {
+    const sent = [], env = mockEnv(async message => sent.push(message));
+    env.BUDGET_LEDGER.get = () => ({ fetch: async () => typeof body === "string" ? new Response(body) : Response.json(body) });
+    await settleBudget(env, reservation, 42);
+    assert.equal(sent.length, 1);
+    assert.equal(sent[0].kind, "budget_settlement");
+    let retried = false;
+    await queue({ messages: [{ body: sent[0], ack() { assert.fail("unconfirmed settlement cannot be acknowledged"); }, retry() { retried = true; } }] }, env);
+    assert.equal(retried, true);
+  }
 });
 
 test("provider admission denial preserves queued rollback but surfaces exhausted rollback", async () => {

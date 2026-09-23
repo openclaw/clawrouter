@@ -30,7 +30,7 @@ test("thrown usage writes retain queue retry ownership", async () => {
 
 test("principal-scoped settlement retries target the reserved principal ledger", async () => {
   const calls = [], message = queueMessage({ kind: "budget_settlement", tenant_id: "tenant", policy_id: "policy", principal_id: "maintainer@example.com", request: { reservationId: "r1", actualCostMicros: 2 } });
-  await queue({ messages: [message] }, mockEnv(calls, new Response("accepted")));
+  await queue({ messages: [message] }, mockEnv(calls, Response.json({ settled: true })));
   assert.deepEqual(calls.map((call) => call.name), ["tenant:policy:maintainer@example.com"]);
   assert.equal(message.ackCount, 1);
 });
@@ -39,7 +39,7 @@ test("provider settlement retries use their explicit ledger while legacy message
   const calls = [];
   const provider = queueMessage({ kind: "budget_settlement", tenant_id: "default", policy_id: "provider/openai", ledger: { objectName: "provider:openai" }, request: { reservationId: "provider-r1", actualCostMicros: 4 } });
   const legacy = queueMessage({ kind: "budget_settlement", tenant_id: "tenant", policy_id: "policy", request: { reservationId: "policy-r1", actualCostMicros: 4 } });
-  await queue({ messages: [provider, legacy] }, mockEnv(calls, new Response("accepted")));
+  await queue({ messages: [provider, legacy] }, mockEnv(calls, Response.json({ settled: true })));
   assert.deepEqual(calls.map((call) => call.name), ["provider:openai", "tenant:policy"]);
   assert.equal(provider.ackCount, 1);
   assert.equal(legacy.ackCount, 1);

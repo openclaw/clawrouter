@@ -57,6 +57,31 @@ test("GET /v1/usage preserves the budget response contract while selecting the c
   assert.equal(objectNames[0], "tenant:maintainer_access:owner@example.com");
 });
 
+test("failed dispatch confirmation never reaches upstream and releases both real budgets", async (t) => {
+  for (const failedOwner of ["tenant:maintainer_access:owner@example.com", "provider:openai"]) {
+    const env = usageEnv([], { limit: 1_000_000, fixedCost: null, retainContent: false });
+    env.OPENAI_API_KEY = "fixture-openai-key";
+    const ledger = sqlBudgetNamespace(t), events = [], pending = [];
+    env.BUDGET_LEDGER = { ...ledger, get: name => ({ fetch: (url, init) => name === failedOwner && new URL(url).pathname === "/dispatch" ? Response.json({ dispatched: false }) : ledger.get(name).fetch(url, init) }) };
+    env.USAGE_QUEUE = { send: async event => events.push(event) };
+    const upstream = t.mock.method(globalThis, "fetch", async () => { throw new Error("dispatch must not reach upstream"); });
+    const response = await handler.fetch(new Request("https://clawrouter.example/v1/responses", {
+      method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
+      body: JSON.stringify({ model: "openai/gpt-6-astra", input: "fixture", max_output_tokens: 32, service_tier: "priority" }),
+    }), env, { waitUntil: promise => pending.push(promise) });
+    assert.equal(response.status, 503);
+    assert.equal((await response.json()).error.code, "accounting_unavailable");
+    await Promise.all(pending);
+    assert.equal(upstream.mock.callCount(), 0);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].actual_cost_micros, 0);
+    const usage = await handler.fetch(new Request("https://clawrouter.example/v1/usage", { headers: { authorization: `Bearer ${proxyKey()}` } }), env, {});
+    assert.equal((await usage.json()).budget.spentMicros, 0);
+    assert.equal((await providerBudgetStatus(env, "openai", 1_000_000)).spentMicros, 0);
+    upstream.mock.restore();
+  }
+});
+
 function usageEnv(objectNames, { provider = "openai", limit = 100, providerLimit = limit, fixedCost = 1, retainContent = true, existingUnmetered = false } = {}) {
   const policy = { enabled: true, generation: "policy_v1", providers: [provider], tenantId: "tenant", monthlyBudgetMicros: limit, requestCostMicros: fixedCost, budgetScope: "principal", retainRequestContent: retainContent };
   // Existing stored policies can omit the optional limits; new policies use null.
@@ -203,6 +228,47 @@ for (const [name, body, contentType, measured, measuredCost = 4_710, outputToken
 }
 
 const astraUsage = { input_tokens: 14, output_tokens: 8, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } };
+test("live HTTP and native streams keep both reservations past 15 minutes until completion", async (t) => {
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  for (const route of ["/v1/responses", "/v1/native/openai/v1/responses"]) {
+    const env = usageEnv([], { limit: 1_000_000, fixedCost: null, retainContent: false });
+    env.OPENAI_API_KEY = "fixture-openai-key";
+    env.BUDGET_LEDGER = sqlBudgetNamespace(t);
+    const events = [], pending = [];
+    env.USAGE_QUEUE = { send: async event => events.push(event) };
+    let source;
+    const first = sse({ type: "response.created" });
+    const last = sse({ type: "response.completed", response: { service_tier: "priority", usage: astraUsage } });
+    const upstream = t.mock.method(globalThis, "fetch", async () => new Response(new ReadableStream({ start(controller) {
+      source = controller; controller.enqueue(new TextEncoder().encode(first));
+    } }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } }));
+    const response = await handler.fetch(new Request(`https://clawrouter.example${route}`, {
+      method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
+      body: JSON.stringify({ model: "openai/gpt-6-astra", input: "fixture", max_output_tokens: 32, service_tier: "priority", stream: true }),
+    }), env, { waitUntil: promise => pending.push(promise) });
+    assert.equal(response.status, 200);
+    const reader = response.body.getReader();
+    assert.equal(new TextDecoder().decode((await reader.read()).value), first);
+    const policySpent = async () => (await (await handler.fetch(new Request("https://clawrouter.example/v1/usage", { headers: { authorization: `Bearer ${proxyKey()}` } }), env, {})).json()).budget.spentMicros;
+    const reserved = await policySpent();
+    assert.ok(reserved > 1_080);
+    now += 20 * 60_000;
+    assert.equal(await policySpent(), reserved);
+    assert.equal((await providerBudgetStatus(env, "openai", 1_000_000)).spentMicros, reserved);
+    assert.deepEqual(events, []);
+    source.enqueue(new TextEncoder().encode(last)); source.close();
+    assert.equal(new TextDecoder().decode((await reader.read()).value), last);
+    assert.equal((await reader.read()).done, true);
+    await Promise.all(pending);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].actual_cost_micros, 1_080);
+    assert.equal(await policySpent(), 1_080);
+    assert.equal((await providerBudgetStatus(env, "openai", 1_000_000)).spentMicros, 1_080);
+    upstream.mock.restore();
+  }
+});
+
 for (const [name, route, requestedTier, payload, contentType, expected, servedTier, outcome = "success"] of [
   ["JSON priority", "/v1/responses", "priority", { service_tier: "priority", usage: astraUsage }, "application/json", 1_080, "priority"],
   ["native fast alias", "/v1/native/openai/v1/responses", "fast", { service_tier: "fast", usage: astraUsage }, "application/json", 1_080, "fast"],

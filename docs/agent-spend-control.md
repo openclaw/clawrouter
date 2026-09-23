@@ -282,8 +282,23 @@ is a separate policy-controlled R2 archive; see [Content retention](content-rete
 
 The enforcement slice covers token-priced model calls and rejects unpriced hosted
 search under measured budgets. Provider tool-call fees are not metered; unknown dynamic models require manifest pricing or a policy
-`requestCostMicros` override. Reservations have a 15-minute lease; streams that
-outlast it need a separate reservation-renewal follow-up before this can be
-described as a hard invoice cap. Durable Objects remain the authoritative ledger;
+`requestCostMicros` override. This is not a hard provider invoice cap.
+
+Reservations have a 15-minute admission lease. Before upstream dispatch, both
+policy and provider ledgers must record that the request may incur charges.
+Expired reservations that never reached this transition settle to zero. Dispatched
+work retains its conservative charge across lease expiry, including long HTTP
+streams and delayed settlement recovery. Complete usage can replace that estimate
+once; identical settlement retries are idempotent and conflicting final charges
+are rejected. Missing or unconfirmed settlement receipts remain retryable.
+
+Receipts expire 45 days after reservation creation, beyond the current UTC month
+and the documented four-day dead-letter recovery window. Delayed work must settle
+within that retention period. Existing reservations preserve their ledger address,
+month, and charge; migration treats their unknown dispatch state conservatively.
+Older binaries retain conservative expiry receipts but do not clean that new state
+until the upgraded code runs again. No operator migration or budget reset is needed.
+
+Durable Objects remain the authoritative ledger;
 the protocol and pricing types live in provider-neutral TypeScript so another durable
 backend can implement the same reserve/settle contract.

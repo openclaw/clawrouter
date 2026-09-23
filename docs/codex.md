@@ -150,8 +150,9 @@ synthesizer and advisers; unavailable advisers remain optional.
 Hosted search is rejected before dispatch under measured policy or provider
 budgets unless a fixed policy tariff is configured. Full hosted-tool fee metering
 remains separate. Keep this setup's hosted web search disabled: token rates do not
-cover its tool fees or repeated search input. The existing 15-minute reservation lease
-also remains a boundary for long-running HTTP streams.
+cover its tool fees or repeated search input. Dispatched requests retain their
+budget charge across the 15-minute admission lease; late settlement uses the
+original ledger receipt within its 45-day retention period.
 
 Sources: [Codex custom providers](https://developers.openai.com/codex/config-reference),
 [Responses WebSockets](https://developers.openai.com/api/docs/guides/websocket-mode),
