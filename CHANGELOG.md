@@ -43,6 +43,7 @@
 - Add GPT-6 Astra to the OpenAI catalog with its reasoning efforts, standard token and cache-write pricing, long-context rates, and Chat Completions token-limit mapping.
 
 - Select smoke-test models from the chosen endpoint's declared capabilities, preserving native model names and configured Azure deployments instead of stale or synthetic defaults.
+- Accept declared Cloudflare AI Gateway universal array bodies through manifest and native routes, preserve upstream fallback order and request content, and omit per-entry transport credentials from retained content while enforcing existing budgets.
 
 ## 0.4.0 - 2026-09-22
 

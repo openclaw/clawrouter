@@ -4,7 +4,7 @@ import { actualModelCost, estimateModelCost, requestHasHostedSearch } from "./pr
 import type { ProxySelection } from "./proxy-selection";
 import type { ObservedUsage } from "./proxy-response";
 import { extractServiceTier, type UsageTokens } from "./token-usage";
-import type { AuthorizedIdentity, CompiledModel, Env, UsageEvent } from "./types";
+import type { AuthorizedIdentity, CompiledModel, Env, ProxyRequestBody, UsageEvent } from "./types";
 import { randomId } from "./utils";
 
 export interface CompoundRequestContext {
@@ -30,7 +30,7 @@ export function createProxyAccounting(options: AccountingContext) {
   const cost = options.cost ?? estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability, selection.endpoint.request_format);
   const unpricedSearch = cost.basis === "unpriced_hosted_search";
   const providerId = selection.provider.id, model = selection.model, capability = selection.capability;
-  const requestedTier = extractServiceTier(selection.body) ?? null;
+  const requestedTier = extractServiceTier(Array.isArray(selection.body) ? null : selection.body) ?? null;
   const correlation = correlationMetadata(request);
   const requestId = correlation.requestId;
   const started = Date.now();
@@ -84,9 +84,10 @@ export function createProxyAccounting(options: AccountingContext) {
   };
 }
 
-export function estimateCost(model: CompiledModel | null, body: Record<string, unknown>, fixed: number | null | undefined, capability: string, requestFormat?: string): EstimatedCost {
+export function estimateCost(model: CompiledModel | null, body: ProxyRequestBody, fixed: number | null | undefined, capability: string, requestFormat?: string): EstimatedCost {
   if (capability === "llm.count_tokens") return { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 };
   if (fixed != null) return { reserveMicros: fixed, basis: "policy_fixed", inputTokens: null, outputTokens: null };
+  if (Array.isArray(body)) return { reserveMicros: 1, basis: "flat_fallback", inputTokens: null, outputTokens: null };
   if (requestHasHostedSearch(body, capability)) return { reserveMicros: 0, basis: "unpriced_hosted_search", inputTokens: null, outputTokens: null };
   const pricing = model?.pricing;
   if (!pricing) return { reserveMicros: 1, basis: "flat_fallback", inputTokens: null, outputTokens: null };

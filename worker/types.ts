@@ -1,3 +1,5 @@
+export type ProxyRequestBody = Record<string, unknown> | Record<string, unknown>[];
+
 export interface ProviderSnapshot {
   version: string;
   providers: CompiledProvider[];

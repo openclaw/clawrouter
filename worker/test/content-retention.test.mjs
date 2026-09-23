@@ -10,7 +10,7 @@ const auth = {
   policy: { enabled: true, generation: "v1", providers: [], tenantId: "tenant/name", retainRequestContent: true },
   contentRetentionDisabled: false,
 };
-const selection = { provider: { id: "openai" }, model: { id: "openai/model" }, capability: "llm.chat", body: { messages: [{ role: "user", content: "hello" }] } };
+const selection = { provider: { id: "openai" }, endpoint: { request_format: "openai.chat" }, model: { id: "openai/model" }, capability: "llm.chat", body: { messages: [{ role: "user", content: "hello" }] } };
 
 test("retention is default-on for LLM requests and stores a bounded record", async () => {
   const writes = [];

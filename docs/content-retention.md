@@ -23,6 +23,10 @@ metadata-only; request retention requires an explicit policy opt-in.
 - R2 encrypts objects at rest. The `request-content-v1-30-days` lifecycle rule
   deletes objects under the dedicated `v1/` archive prefix after 30 days without
   affecting unrelated bucket content. Usage metadata remains separate.
+- Cloudflare AI Gateway universal requests retain their ordered provider queries
+  and configuration, but omit each entry's entire `headers` map and `authorization` field.
+  These fields can contain upstream credentials. The forwarded request is
+  unchanged; the retention header still reports `on` when query content is stored.
 
 ## Disclosure
 

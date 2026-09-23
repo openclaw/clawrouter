@@ -204,6 +204,14 @@ Cloudflare AI Gateway needs the gateway coordinates plus the API token used for
 gateway authentication. The manifest binds account and gateway IDs from Worker
 config, not caller-supplied path parameters.
 
+The existing universal route accepts Cloudflare's ordered array of provider
+requests through `/v1/proxy/cloudflare-ai-gateway/universal` (in `body`) or
+`/v1/native/cloudflare-ai-gateway/` (as the request body). Cloudflare
+[continues to support this deprecated endpoint](https://developers.cloudflare.com/ai-gateway/usage/universal/)
+for existing integrations. An enforced budget requires a fixed policy request
+price because the fallback array has no single model price. Request retention
+omits per-entry credential headers; see [the retention contract](content-retention.md).
+
 ```sh
 pnpm exec wrangler secret put CLOUDFLARE_ACCOUNT_ID --config .wrangler.generated.toml
 pnpm exec wrangler secret put CLOUDFLARE_AI_GATEWAY_ID --config .wrangler.generated.toml

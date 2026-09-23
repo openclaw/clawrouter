@@ -1,4 +1,4 @@
-import type { AuthScheme, CompiledEndpoint, CompiledGrantTransport, CompiledProvider, CompiledQuotaProbe, Env, GrantTransportAuth, UpstreamGrant } from "./types.ts";
+import type { AuthScheme, CompiledEndpoint, CompiledGrantTransport, CompiledProvider, CompiledQuotaProbe, Env, GrantTransportAuth, ProxyRequestBody, UpstreamGrant } from "./types.ts";
 import { HttpError } from "./utils.ts";
 
 export function transportForGrant(provider: CompiledProvider, grant: UpstreamGrant | null): CompiledGrantTransport | null {
@@ -51,9 +51,10 @@ export function applyTransportHeaders(headers: Headers, transport: CompiledGrant
   }
 }
 
-export function transformTransportBody(transport: CompiledGrantTransport | null, body: Record<string, unknown>): Record<string, unknown> {
+export function transformTransportBody(transport: CompiledGrantTransport | null, body: ProxyRequestBody): ProxyRequestBody {
   const prepend = transport?.requestTransforms.prependSystem ?? [];
   if (!prepend.length) return body;
+  if (Array.isArray(body)) throw new HttpError(400, "provider_request_invalid", "system instruction transforms require a JSON object body");
   const existing = Array.isArray(body.system)
     ? body.system
     : typeof body.system === "string" && body.system ? [{ type: "text", text: body.system }] : [];
