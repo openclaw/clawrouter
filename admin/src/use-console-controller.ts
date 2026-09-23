@@ -130,6 +130,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
   }
 
   async function refreshData({ background = false }: RefreshOptions) {
+    const publishStatus = background ? null : session.captureStatusPublisher();
     if (!background) {
       session.setRefreshing(true);
       access.setLoaded(false);
@@ -181,7 +182,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
       if (!scope.isCurrent()) return;
       session.setRefreshError(result.warnings.join("; "));
       if (result.complete) session.setLastUpdatedAt(Date.now());
-      if (!background) session.setStatus(oauthCallbackStatus() ?? "connected");
+      publishStatus?.(oauthCallbackStatus() ?? "connected");
     } catch (caught) {
       if (!scope.isCurrent()) return;
       const message = errorMessage(caught);

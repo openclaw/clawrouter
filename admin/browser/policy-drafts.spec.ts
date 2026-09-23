@@ -1,5 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
-import type { AccessPolicy, AdminBootstrapResponse, PolicyBinding } from "../src/ui-types";
+import type { AccessPolicy, AdminBootstrapResponse, PolicyBinding, UsageSnapshot } from "../src/ui-types";
 
 for (const initialOutcome of ["success", "failure then retry"] as const) {
   test(`initial policy loading preserves an early New draft through ${initialOutcome} without overwriting an existing ID`, async ({ page }) => {
@@ -134,14 +134,70 @@ test("sibling saves, failures and refreshes preserve the policy draft and its ow
   state.failBootstrap = false;
   state.policies[0] = { ...state.policies[0], tenantId: "latest-server" };
   state.groups = ["refreshed-group"];
+  expect(state.usageReads).toBe(0);
   await page.getByRole("button", { name: "Retry refresh", exact: true }).click();
   await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
+  expect(state.usageReads).toBe(1);
+  await expect(page.getByRole("button", { name: "Retry refresh", exact: true })).toHaveCount(0);
   await expect(tenant(page)).toHaveValue("policy-draft");
   await page.getByRole("button", { name: "Discard changes", exact: true }).focus();
   await page.keyboard.press("Enter");
   await expect(tenant(page)).toHaveValue("latest-server");
   await expect(page.getByText("Unsaved policy changes.", { exact: true })).toHaveCount(0);
 });
+
+for (const order of ["write fails first", "refresh finishes first"] as const) {
+  test(`an older Retry preserves a later policy failure and draft when ${order}`, async ({ page }) => {
+    const state = await fixture(page);
+    await open(page);
+    state.failBootstrap = true;
+    await focus(page, state);
+    await expect(page.locator(".statusBar")).toContainText("reporting unavailable");
+    state.failBootstrap = false;
+    state.holdBootstrap = true;
+    await page.clock.setFixedTime(new Date("2026-09-01T00:02:00.000Z"));
+    await page.getByRole("button", { name: "Retry refresh", exact: true }).click();
+    await expect.poll(() => state.reads.length).toBe(1);
+    await tenant(page).fill("submitted-a");
+    await save(page).focus();
+    await page.keyboard.press("Enter");
+    await expect.poll(() => state.writes.length).toBe(1);
+    await tenant(page).fill("later-draft");
+    const rejectWrite = () => state.writes[0].fulfill({ status: 503, json: { error: { message: "policy unavailable" } } });
+    if (order === "write fails first") {
+      await rejectWrite();
+      await expect(save(page)).toBeEnabled();
+    }
+    state.holdBootstrap = false;
+    await state.reads[0].route.fulfill({ json: state.reads[0].body });
+    await expect(page.locator(".connectionMeta time")).toHaveAttribute("datetime", "2026-09-01T00:02:00.000Z");
+    await expect(page.getByRole("button", { name: "Retry refresh", exact: true })).toHaveCount(0);
+    expect(state.usageReads).toBe(1);
+    if (order === "refresh finishes first") {
+      await expect(page.locator(".statusBar")).toContainText("saving policy");
+      await rejectWrite();
+    }
+    await expect(page.locator(".connectionMeta strong")).toHaveText("Needs attention");
+    await expect(page.locator(".statusBar")).toContainText("policy save failed (policy_a):");
+    await expect(page.locator(".statusBar")).toContainText("policy unavailable");
+    await expect(page.locator(".statusBar")).not.toContainText("reporting unavailable");
+    await expect(page.locator(".inspector .inlineError")).toHaveCount(0);
+    await expect(tenant(page)).toHaveValue("later-draft");
+    await expect(save(page)).toBeEnabled();
+    expect(state.writes).toHaveLength(1);
+  });
+}
+
+for (const outcome of ["connected", "failed"] as const) {
+  test(`an unchanged foreground refresh preserves the ${outcome} OAuth callback`, async ({ page }) => {
+    await fixture(page);
+    await page.goto(`/dashboard/access?oauth=${outcome}&provider=test-provider`);
+    await expect(page.locator(".connectionMeta time")).toHaveAttribute("datetime", "2026-09-01T00:00:00.000Z");
+    await expect(page.locator(".connectionMeta strong")).toHaveText(outcome === "connected" ? "Connected" : "Needs attention");
+    if (outcome === "failed") await expect(page.locator(".statusBar")).toContainText("test-provider OAuth failed");
+    else await expect(page.locator(".statusBar")).toHaveCount(0);
+  });
+}
 
 test("a selected policy deleted by refresh stays visible as missing until explicit New", async ({ page }) => {
   const state = await fixture(page);
@@ -332,8 +388,9 @@ async function fixture(page: Page) {
     grantRouting: { strategy: "priority", stickiness: "none", failover: true, staleState: "allow", staleAfterSeconds: 300, switchAtUsedPercent: 90, hysteresisPercent: 10, eligibleGrants: {} },
   }));
   const providers = [{ id: "test-provider", display_name: "Test provider", class: "test", service_kind: "model_provider", capabilities: [] }];
+  const usage: UsageSnapshot = { ledger: "ready", summary: { requestCount: 0, successCount: 0, errorCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, actualCostMicros: 0 }, providers: [], daily: [], events: [] };
   const state = {
-    policies, groups: [] as string[], failBinding: false, failBootstrap: false, holdBootstrap: false, refreshes: 0,
+    policies, groups: [] as string[], failBinding: false, failBootstrap: false, holdBootstrap: false, refreshes: 0, usageReads: 0,
     bindings: [{ policyId: "policy_b", principalType: "group", principalId: "maintainers", enabled: true, priority: 100 }] as PolicyBinding[],
     writes: [] as Route[], reads: [] as { route: Route; body: AdminBootstrapResponse }[],
     async commit(index: number, overrides: Partial<AccessPolicy> = {}) {
@@ -346,6 +403,7 @@ async function fixture(page: Page) {
   };
   await page.route("**/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
+    if (path === "/v1/admin/usage") state.usageReads += 1;
     if (path.startsWith("/v1/admin/policies/") && (route.request().method() === "PUT" || (route.request().method() === "POST" && path.endsWith("/revoke")))) { state.writes.push(route); return; }
     if (route.request().method() === "PUT" && path === "/v1/admin/policy-bindings") {
       if (state.failBinding) { await route.fulfill({ status: 503, json: { error: { message: "binding unavailable" } } }); return; }
@@ -367,6 +425,7 @@ async function fixture(page: Page) {
       "/v1/providers": { providers }, "/v1/routes": { openaiCompatible: [], manifestProxy: [] },
       "/v1/session": { authenticated: true, auth: "cloudflare_access", role: "admin", email: "admin@example.com", tenantId: "default", groups: state.groups, entitlements: { providers: [] } },
       "/v1/session/usage": { policies: [] }, "/v1/session/credentials": { credentials: [] }, "/v1/admin/bootstrap": bootstrap,
+      "/v1/admin/usage": { policies: state.policies.map((policy) => ({ ...policy, budget: { configured: false, ledger: "ready" } })), usage },
     };
     await route.fulfill({ status: responses[path] ? 200 : 404, json: responses[path] ?? {} });
   });

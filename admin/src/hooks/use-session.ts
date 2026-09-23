@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { type Dispatch, type SetStateAction, useCallback, useMemo, useRef, useState } from "react";
 import { consoleStatusPresentation } from "../status-display";
 import { adminViews, emptySession, initialViewFromPath, viewPaths } from "../ui-config";
 import { isLocalDemoAllowed } from "../ui-helpers";
@@ -10,7 +10,13 @@ export function useSession() {
   const allowDemo = isLocalDemoAllowed();
   const [view, setView] = useState<View>(initialViewFromPath);
   const [value, setValue] = useState<SessionResponse>(emptySession);
-  const [status, setStatus] = useState("connecting");
+  const [status, setStatusValue] = useState("connecting");
+  const statusRevision = useRef(0);
+  const setStatus = useCallback<Dispatch<SetStateAction<string>>>((next) => {
+    // Admission, including same-text writes, retires older refresh publications before React renders.
+    statusRevision.current += 1;
+    setStatusValue(next);
+  }, []);
   const [refreshing, setRefreshing] = useState(true);
   const [refreshError, setRefreshError] = useState("");
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(null);
@@ -23,6 +29,14 @@ export function useSession() {
   function captureScope(): CapturedSessionScope {
     const scope = scopeRef.current;
     return { ...scope, isCurrent: () => scopeRef.current.epoch === scope.epoch };
+  }
+
+  function captureStatusPublisher(): Dispatch<SetStateAction<string>> {
+    const revision = statusRevision.current;
+    const scope = captureScope();
+    return (next) => {
+      if (scope.isCurrent() && statusRevision.current === revision) setStatus(next);
+    };
   }
 
   function accept(next: SessionResponse, demo: boolean): boolean {
@@ -85,6 +99,7 @@ export function useSession() {
     scopeEpoch,
     status,
     setStatus,
+    captureStatusPublisher,
     refreshing,
     setRefreshing,
     refreshError,
