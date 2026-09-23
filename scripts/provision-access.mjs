@@ -270,20 +270,49 @@ async function githubIdentityProviderId() {
 }
 
 async function findAccessApplication(targetName, targetHost, targetDomains) {
-  const apps = asArray(await request("GET", `/accounts/${accountId}/access/apps?per_page=100`));
-  return (
-    apps.find((app) => app.name === targetName) ||
-    apps.find((app) => destinationUris(app).some((uri) => targetDomains.includes(uri))) ||
-    apps.find((app) => targetDomains.includes(app.domain)) ||
-    apps.find((app) => app.domain === targetHost) ||
-    null
+  const apps = await listAccessResources(`/accounts/${accountId}/access/apps`);
+  // Display names can be reused across deployments. Only a unique secured
+  // destination identifies the application whose audience and policies we own.
+  const matches = apps.filter((app) =>
+    [app.domain, ...destinationUris(app)].some(
+      (uri) => uri === targetHost || targetDomains.includes(uri),
+    ),
   );
+  if (matches.length > 1) {
+    throw new Error(
+      `multiple Access applications match ${targetHost}; resolve overlapping destinations in Cloudflare before rerunning`,
+    );
+  }
+  if (matches.length === 1) {
+    const app = matches[0];
+    if (app.type !== "self_hosted") {
+      throw new Error(
+        `matching Access application ${app.id} is not self_hosted; verify CLAWROUTER_ACCESS_DOMAIN before rerunning`,
+      );
+    }
+    return app;
+  }
+  if (apps.some((app) => app.name === targetName)) {
+    throw new Error(
+      `Access application name ${JSON.stringify(targetName)} already belongs to another destination; verify CLAWROUTER_ACCESS_DOMAIN or choose a distinct CLAWROUTER_ACCESS_APP_NAME before rerunning`,
+    );
+  }
+  return null;
 }
 
 async function listAccessPolicies(appId) {
-  return asArray(
-    await request("GET", `/accounts/${accountId}/access/apps/${appId}/policies?per_page=100`),
-  );
+  return listAccessResources(`/accounts/${accountId}/access/apps/${appId}/policies`);
+}
+
+async function listAccessResources(path) {
+  const resources = [];
+  // Cloudflare's page-based Access lists end at an empty page. Read every page
+  // before selecting an app or checking unmanaged policies, then allow writes.
+  for (let page = 1; ; page += 1) {
+    const entries = asArray(await request("GET", `${path}?per_page=100&page=${page}`));
+    if (entries.length === 0) return resources;
+    resources.push(...entries);
+  }
 }
 
 function guardExtraPolicies(policies, managedPolicies) {
@@ -416,10 +445,10 @@ function accessDestinations(targetHost) {
 }
 
 function destinationUris(app) {
-  const destinations = asArray(app?.destinations)
-    .map((destination) => destination?.uri)
-    .filter(Boolean);
-  return destinations.length > 0 ? destinations : asArray(app?.self_hosted_domains);
+  // Cloudflare ignores the legacy list whenever destinations is provided.
+  return Array.isArray(app?.destinations)
+    ? app.destinations.map((destination) => destination?.uri).filter(Boolean)
+    : asArray(app?.self_hosted_domains);
 }
 
 function defaultAccessPaths() {
