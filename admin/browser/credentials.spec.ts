@@ -108,7 +108,49 @@ test("a dismissed sent result updates rows without replacing the next draft or r
   await expect(page.getByRole("button", { name: /first_key.*proxy credential/ })).toBeVisible();
 });
 
-for (const invalidate of ["dismiss", "leave-return"] as const) {
+for (const phase of ["hashing", "dispatched", "revealed"] as const) {
+  test(`resource focus preserves a ${phase} one-time credential until tab activation`, async ({ page }) => {
+    const state = await fixture(page);
+    if (phase === "hashing") await delayHash(page);
+    const pending = deferred();
+    if (phase === "dispatched") state.holdMutation = pending.promise;
+    await openAdmin(page);
+    await draft(page, "focused_key");
+    await page.getByRole("button", { name: "Issue credential", exact: true }).click();
+    if (phase === "hashing") await expect.poll(() => page.evaluate(() => Boolean((window as HashWindow).releaseHash))).toBe(true);
+    else await expect.poll(() => state.writes.length).toBe(1);
+    const secret = page.locator(".issuedKey code");
+    if (phase === "revealed") await expect(secret).toBeVisible();
+    const priorSecret = phase === "revealed" ? await secret.textContent() : null;
+    const credentials = page.getByRole("tab", { name: /^Credentials/ });
+    await credentials.focus();
+    for (const key of ["ArrowRight", "End", "ArrowLeft", "Home"]) await page.keyboard.press(key);
+    await expect(page.getByRole("tab", { name: /^Policies/ })).toBeFocused();
+    await expect(credentials).toHaveAttribute("aria-selected", "true");
+    await page.keyboard.press("Tab");
+    await expect(page.getByRole("tabpanel", { name: /^Credentials/ })).toBeFocused();
+    if (phase === "hashing") {
+      expect(state.writes).toHaveLength(0);
+      await page.evaluate(() => (window as HashWindow).releaseHash!());
+    } else if (phase === "dispatched") pending.release();
+    await expect(secret).toHaveText(/^clawrouter-live-focused_key-[0-9a-f]{48}$/);
+    if (priorSecret) await expect(secret).toHaveText(priorSecret);
+    expect(state.writes).toHaveLength(1);
+    await page.keyboard.press("Shift+Tab");
+    await expect(credentials).toBeFocused();
+    await page.keyboard.press("Home");
+    await page.keyboard.press("Space");
+    await expect(page.getByRole("tab", { name: /^Policies/ })).toHaveAttribute("aria-selected", "true");
+    await expect(secret).toHaveCount(0);
+    await page.keyboard.press("ArrowRight");
+    await page.keyboard.press("Enter");
+    await expect(credentials).toHaveAttribute("aria-selected", "true");
+    await expect(secret).toHaveCount(0);
+    expect(state.writes).toHaveLength(1);
+  });
+}
+
+for (const invalidate of ["dismiss", "leave-return", "resource-tabs"] as const) {
   test(`${invalidate} while hashing prevents dispatch, even after returning to the same panel`, async ({ page }) => {
     const state = await fixture(page);
     await delayHash(page);
@@ -117,7 +159,13 @@ for (const invalidate of ["dismiss", "leave-return"] as const) {
     await page.getByRole("button", { name: "Issue credential", exact: true }).click();
     await expect.poll(() => page.evaluate(() => Boolean((window as HashWindow).releaseHash))).toBe(true);
     if (invalidate === "dismiss") await page.getByRole("button", { name: "Dismiss pending secret" }).click();
-    else {
+    else if (invalidate === "resource-tabs") {
+      await page.getByRole("tab", { name: /^Credentials/ }).focus();
+      await page.keyboard.press("Home");
+      await page.keyboard.press("Enter");
+      await page.keyboard.press("ArrowRight");
+      await page.keyboard.press("Space");
+    } else {
       await page.getByRole("button", { name: "Catalog", exact: true }).click();
       await page.getByRole("button", { name: "Access", exact: true }).click();
     }
@@ -142,6 +190,27 @@ test("leave and return after dispatch cannot resurrect the one-time result", asy
   pending.release();
   await expect(page.locator(".inspector")).toContainText("Created sent_key.");
   await expect(page.locator(".issuedKey code")).toHaveCount(0);
+});
+
+test("resource activation after dispatch keeps the row but dismisses its one-time result", async ({ page }) => {
+  const state = await fixture(page);
+  await openAdmin(page);
+  await draft(page, "sent_tab_key");
+  const pending = deferred();
+  state.holdMutation = pending.promise;
+  await page.getByRole("button", { name: "Issue credential", exact: true }).click();
+  await expect.poll(() => state.writes.length).toBe(1);
+  await page.getByRole("tab", { name: /^Credentials/ }).focus();
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Enter");
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("Space");
+  pending.release();
+  await expect(page.locator(".inspector")).toContainText("Created sent_tab_key.");
+  await expect(page.locator(".inspector")).toContainText("one-time secret was dismissed");
+  await expect(page.getByRole("button", { name: /sent_tab_key.*proxy credential/ })).toBeVisible();
+  await expect(page.locator(".issuedKey code")).toHaveCount(0);
+  expect(state.writes).toHaveLength(1);
 });
 
 test("pre-mutation admin and personal snapshots cannot restore a revoked row", async ({ page }) => {

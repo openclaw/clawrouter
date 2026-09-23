@@ -37,6 +37,10 @@ for (const draft of ["selected policy", "New policy"] as const) {
       await expect(page).toHaveURL(/\/dashboard\/access$/);
       await expect(page.getByRole("tab", { name: /^Policies/ })).toHaveAttribute("aria-selected", "true");
       await expect(page.getByRole("tab", { name: new RegExp(`^${resource}`) })).toHaveAttribute("aria-selected", "false");
+      await page.getByRole("tabpanel", { name: /^Policies/ }).focus();
+      await page.keyboard.press("Shift+Tab");
+      await expect(page.getByRole("tab", { name: /^Policies/ })).toBeFocused();
+      await expect(page.getByRole("tablist").locator('[tabindex="0"]')).toHaveCount(1);
       await expect(policyId(page)).toHaveValue(draft === "New policy" ? "catalog_new" : "policy_b");
       await expect(tenant(page)).toHaveValue("catalog-draft");
       await expect(page.getByRole("combobox", { name: "status", exact: true })).toHaveValue("disabled");
@@ -61,6 +65,66 @@ for (const draft of ["selected policy", "New policy"] as const) {
     expect(state.policies[1]).toMatchObject({ policyId: "policy_b", tenantId: "default", providers: ["other-provider"] });
   });
 }
+
+for (const draft of ["selected", "New"] as const) {
+  test(`manual resource tabs preserve the ${draft} policy draft without a save or discard`, async ({ page }) => {
+    const state = await fixture(page);
+    let dialogs = 0;
+    page.on("dialog", async (dialog) => { dialogs += 1; await dialog.dismiss(); });
+    await open(page);
+    if (draft === "New") {
+      await page.getByRole("button", { name: "New policy", exact: true }).click();
+      await policyId(page).fill("keyboard_new");
+    } else await row(page, "policy_b").click();
+    await tenant(page).fill("keyboard-draft");
+    await page.getByRole("textbox", { name: "monthly budget ($)", exact: true }).fill("37");
+    await page.getByRole("tab", { name: /^Policies/ }).focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(page.getByRole("tabpanel", { name: /^Policies/ })).toBeVisible();
+    await page.keyboard.press("Space");
+    await expect(page.getByRole("tabpanel", { name: /^Credentials/ })).toBeVisible();
+    await expect(tenant(page)).toHaveCount(0);
+    await page.keyboard.press("Home");
+    await page.keyboard.press("Enter");
+    await expect(policyId(page)).toHaveValue(draft === "New" ? "keyboard_new" : "policy_b");
+    await expect(tenant(page)).toHaveValue("keyboard-draft");
+    await expect(page.getByRole("textbox", { name: "monthly budget ($)", exact: true })).toHaveValue("37");
+    await expect(page.getByText("Unsaved policy changes.", { exact: true })).toBeVisible();
+    if (draft === "New") await expect(page.locator(".tableRow.selected")).toHaveCount(0);
+    else await expect(row(page, "policy_b")).toHaveClass(/selected/);
+    expect(state.writes).toHaveLength(0);
+    expect(dialogs).toBe(0);
+  });
+}
+
+test("a held policy save retains later edits across keyboard resource activation", async ({ page }) => {
+  const state = await fixture(page);
+  let dialogs = 0;
+  page.on("dialog", async (dialog) => { dialogs += 1; await dialog.dismiss(); });
+  await open(page);
+  await row(page, "policy_b").click();
+  await tenant(page).fill("submitted-b");
+  await save(page).click();
+  await expect.poll(() => state.writes.length).toBe(1);
+  await tenant(page).fill("later-b");
+  await page.getByRole("tab", { name: /^Policies/ }).focus();
+  await page.keyboard.press("End");
+  await page.keyboard.press("Enter");
+  await expect(page.getByRole("tabpanel", { name: /^Fusion/ })).toBeVisible();
+  state.failBootstrap = true;
+  await state.commit(0, { tenantId: "canonical-b" });
+  await expect(page.locator(".statusBar")).toContainText("reporting unavailable");
+  await page.keyboard.press("Home");
+  await page.keyboard.press("Space");
+  await expect(row(page, "policy_b").locator('[data-label="tenant"]')).toHaveText("canonical-b");
+  await expect(policyId(page)).toHaveValue("policy_b");
+  await expect(tenant(page)).toHaveValue("later-b");
+  await expect(page.getByText("Unsaved policy changes.", { exact: true })).toBeVisible();
+  await expect(save(page)).toBeEnabled();
+  expect(state.writes).toHaveLength(1);
+  expect(state.writes[0].request().postDataJSON()).toMatchObject({ policyId: "policy_b", tenantId: "submitted-b" });
+  expect(dialogs).toBe(0);
+});
 
 for (const initialOutcome of ["success", "failure then retry"] as const) {
   test(`initial policy loading preserves an early New draft through ${initialOutcome} without overwriting an existing ID`, async ({ page }) => {
