@@ -131,6 +131,11 @@ billing:
   empty tools or `tool_choice: none` do not mean enabled tool calling and remain
   unqualified when their wire acceptance is undocumented. Recommendations and
   ignored parameters must not be published as prohibitions.
+  Groq GPT-OSS 120B declares its Chat effort values and rejects logprob field
+  presence. Fireworks GPT-OSS 120B and GLM 5.2 declare their Chat effort values
+  and defaults; accepted effort aliases stay unchanged for upstream handling.
+  These entries add no sampling, tool, or pricing assumptions. Non-string efforts
+  remain unqualified, and other providers' models inherit none of these facts.
 - `models.entries[].codexModel` names an explicitly sourced native Codex model
   descriptor for a documented upstream alias. The export helper preserves that
   descriptor's prompts and context contract; it does not generate metadata.

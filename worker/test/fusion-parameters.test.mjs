@@ -139,13 +139,92 @@ test("compiled OpenAI parameter facts govern the actual Fusion handler", async (
   }
 });
 
+const hostedModels = [
+  ["groq", "gpt-oss-120b", "openai/gpt-oss-120b", ["low", "medium", "high"]],
+  ["fireworks", "gpt-oss-120b", "accounts/fireworks/models/gpt-oss-120b", ["low", "medium", "high"]],
+  ["fireworks", "glm-5.2", "accounts/fireworks/models/glm-5p2", ["none", "low", "medium", "high", "xhigh", "max"]],
+];
+
+test("compiled hosted synthesizer conflicts stop before reservation and adviser fanout", async (t) => {
+  let upstream = 0;
+  t.mock.method(globalThis, "fetch", async () => { upstream++; throw new Error("must not dispatch"); });
+  for (const [provider, id] of hostedModels) {
+    const modelId = `${provider}/${id}`, f = await fixture(modelId, ["openai/gpt-4.1-mini"]);
+    const conflicts = [
+      ...["minimal", "ultra", "adaptive", ...(id === "gpt-oss-120b" ? ["none", "xhigh", "max"] : [])].map((reasoning_effort) => ({ reasoning_effort })),
+      ...(provider === "groq" ? [{ logprobs: true }, { logprobs: false }, { logprobs: null }, { top_logprobs: 0 }, { top_logprobs: null }] : []),
+    ];
+    for (const body of conflicts) {
+      const response = await f.call(body);
+      assert.equal(response.status, 400, `${modelId}:${JSON.stringify(body)}`);
+      assert.equal((await response.json()).error.code, "model_parameter_unsupported");
+      await f.drain();
+    }
+    assert.deepEqual(f.ledgerCalls, [], modelId);
+    assert.equal(f.events.length, conflicts.length, modelId);
+    assert.ok(f.events.every((event) => event.compound_request_stage === "fusion_synthesizer" && event.actual_cost_micros === 0));
+  }
+  assert.equal(upstream, 0);
+});
+
+test("compiled hosted contracts preserve accepted aliases and unqualified values at dispatch", async (t) => {
+  const sent = [];
+  t.mock.method(globalThis, "fetch", async (_url, init) => {
+    sent.push(JSON.parse(init.body));
+    return Response.json({ choices: [{ message: { content: "fixture answer" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+  });
+  for (const [provider, id, upstream, efforts] of hostedModels) {
+    // The fixture's explicit fixed-zero tariff admits the unpriced Fireworks
+    // GPT-OSS entry without inventing a model price or proving upstream acceptance.
+    const f = await fixture(`${provider}/${id}`, ["openai/gpt-4.1-mini"]);
+    for (const body of [{}, ...efforts.map((reasoning_effort) => ({ reasoning_effort })), ...[null, false, 2048].map((reasoning_effort) => ({ reasoning_effort, temperature: 0.7, top_p: 0.9, tools: [] }))]) {
+      const before = sent.length, response = await f.call(body);
+      assert.equal(response.status, 200, `${provider}/${id}:${JSON.stringify(body)}`);
+      await response.text(); await f.drain();
+      assert.equal(sent.length, before + 2);
+      assert.equal(sent.at(-1).model, upstream);
+      assert.equal(Object.hasOwn(sent.at(-1), "reasoning_effort"), Object.hasOwn(body, "reasoning_effort"));
+      for (const [field, value] of Object.entries(body)) assert.deepEqual(sent.at(-1)[field], value);
+    }
+    const adviser = await fixture("openai/gpt-4.1-mini", [`${provider}/${id}`]);
+    const response = await adviser.call({});
+    assert.equal(response.status, 200);
+    await response.text(); await adviser.drain();
+    assert.equal(sent.at(-2).model, upstream);
+    assert.equal(sent.at(-2).temperature, undefined);
+    assert.equal(sent.at(-2).reasoning_effort, undefined);
+  }
+});
+
+test("hosted parameter facts leave public, native, manifest and opaque passthrough unchanged", async (t) => {
+  const sent = [], f = await fixture("openai/gpt-4.1-mini", ["local/fixture"]);
+  t.mock.method(globalThis, "fetch", async (_url, init) => {
+    sent.push(JSON.parse(init.body));
+    return Response.json({ choices: [], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+  });
+  for (const [provider, id, upstream] of [...hostedModels, ["groq", "fixture-opaque", "fixture-opaque"], ["fireworks", "fixture-opaque", "fixture-opaque"]]) {
+    const fields = { messages: [], reasoning_effort: "ultra", temperature: 0.7, logprobs: false, top_logprobs: 0, tools: [] };
+    const publicBody = { ...fields, model: `${provider}/${id}` };
+    for (const [path, body] of [
+      ["/v1/chat/completions", publicBody],
+      [`/v1/native/${provider}/v1/chat/completions`, { ...fields, model: upstream }],
+      [`/v1/proxy/${provider}/chat_completions`, { body: publicBody }],
+    ]) {
+      const response = await f.callRaw(path, body);
+      assert.equal(response.status, 200, `${provider}/${id}:${path}`);
+      await response.text(); await f.drain();
+      assert.deepEqual(sent.at(-1), { ...fields, model: upstream });
+    }
+  }
+});
+
 async function fixture(aggregatorModel, adviserModels) {
   const pending = [], events = [], ledgerCalls = [], secret = "fixture-fusion-secret";
   const config = normalizeFusionConfig({ enabled: true, aggregatorModel, adviserModels, maxProposalChars: 256 });
   const policy = { enabled: true, generation: "g1", providers: [], tenantId: "default", monthlyBudgetMicros: 1_000_000, requestCostMicros: 0, retainRequestContent: false };
   const credential = { enabled: true, secretSha256: await sha256Hex(secret), policyId: "fixture", policyGeneration: "g1" };
   const env = {
-    OPENAI_API_KEY: "fixture-upstream-key", LOCAL_OPENAI_BASE_URL: "https://local-provider.example",
+    OPENAI_API_KEY: "fixture-upstream-key", GROQ_API_KEY: "fixture-groq-key", FIREWORKS_API_KEY: "fixture-fireworks-key", LOCAL_OPENAI_BASE_URL: "https://local-provider.example",
     POLICY_KV: { get: async (key) => key === "config/fusion" ? config : Array.isArray(key) ? new Map(key.map((item) => [item, null])) : null },
     USAGE_QUEUE: { send: async (event) => { events.push(event); } },
     BUDGET_LEDGER: { idFromName: (name) => name, get: () => ({ fetch: async (url) => {
