@@ -45,6 +45,7 @@
 
 - Preserve dispatched budget charges through reservation expiry and delayed recovery, release abandoned pre-dispatch work to zero, and require confirmed idempotent settlement receipts before acknowledging retries.
 - Retain qualified estimates or fixed tariffs when dispatched HTTP requests fail before response headers, while keeping pre-dispatch failures at zero and preserving error and cancellation outcomes.
+- Cancel discarded grant-rejection bodies before HTTP failover, and retain one conservative budget charge when an alternate request fails without response headers. Preserve the original rejection when no alternate can be selected.
 - Isolate policy, principal, and provider budget charges when their identifiers share a ledger address, preserving existing balances and ambiguous legacy debt without resetting budgets or orphaning settlement receipts.
 - Use the shared Access-aware admin transport for pool-ticket issuance, preserving protected ticket output while bounding admin responses and keeping raw response bodies out of error messages.
 - Acknowledge completed key and grant mutations without reading unused success payloads, preserving successful CLI outcomes for large accepted grant metadata while keeping ticket and error reads bounded.
