@@ -7,7 +7,7 @@ class Socket extends EventTarget {
   closed = false;
   send(value) { if (this.closed) throw new Error("closed"); this.sent.push(value); }
   receive(value) { const event = new Event("message"); event.data = typeof value === "object" && !(value instanceof Uint8Array) ? JSON.stringify(value) : value; this.dispatchEvent(event); }
-  close() { if (this.closed) return; this.closed = true; this.dispatchEvent(new Event("close")); }
+  close(code) { if (this.closed) return; this.closed = true; this.closeCode = code; this.dispatchEvent(new Event("close")); }
 }
 const tick = () => new Promise((resolve) => setImmediate(resolve));
 function fixture(t, options = {}) {
@@ -350,6 +350,8 @@ test("an upstream global error keeps its cause without bypassing the output cap"
   assert.ok(f.client.sent.reduce((sum, value) => sum + Buffer.byteLength(value), 0) < 700);
   assert.equal(JSON.parse(f.client.sent.at(-1)).error.code, "websocket_connection_limit_reached");
   assert.deepEqual(f.settled.map(({ outcome }) => outcome), ["upstream_disconnect"]);
+  assert.equal(f.client.closeCode, 1009);
+  assert.equal(f.upstream.closeCode, 1009);
 });
 
 test("a rejected handshake keeps its error when error delivery closes the client", async (t) => {

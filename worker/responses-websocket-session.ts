@@ -289,7 +289,7 @@ export class ResponsesWebSocketSession {
     }
     // Cause ownership precedes abort, error delivery and reciprocal close events.
     if (notice) {
-      if (typeof notice === "string" && this.outputBytes + encoder.encode(notice).byteLength > this.limits.outputBytes) notice = OUTPUT_LIMIT_ERROR;
+      if (typeof notice === "string" && this.outputBytes + encoder.encode(notice).byteLength > this.limits.outputBytes) { notice = OUTPUT_LIMIT_ERROR; code = 1009; }
       try { this.client.send(typeof notice === "string" ? notice : JSON.stringify(this.errorFrame(notice))); } catch { /* Peer already closed. */ }
     }
     try { this.upstream?.close(code, "session closed"); } catch { /* Socket already closed. */ }
