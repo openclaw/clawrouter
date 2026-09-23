@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
 import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
@@ -556,6 +557,22 @@ for (const shape of ["table", "inline"]) test(`native Desktop root lifecycle pre
   };
   await manageCodex(["connect", "--router-url", origin, "--provider", "fixture", "--model", "gpt-6-astra", ...common], env);
   await run(true);
+  if (shape === "table" && process.env.CLAWROUTER_DESKTOP_FIXTURE_OUTPUT) {
+    // This portable synthetic output lets the installed macOS app consume
+    // exactly the tested writer output without installing task dependencies.
+    const output = process.env.CLAWROUTER_DESKTOP_FIXTURE_OUTPUT;
+    const config = await readFile(f.profile, "utf8"), filename = (await f.read()).model_catalog_json;
+    const models = await readFile(join(f.home, filename), "utf8");
+    const digest = (value) => createHash("sha256").update(value).digest("hex");
+    assert.ok(Buffer.byteLength(config + models + bundle.stdout) < 32 * 1024 * 1024);
+    assert.ok(!config.includes(f.directory) && !config.includes(secret));
+    await mkdir(output, { recursive: true, mode: 0o700 });
+    for (const [name, bytes] of Object.entries({ "config.toml": config, [filename]: models, "original.json": bundle.stdout,
+      "fixture.json": JSON.stringify({ version: 1, origin, catalog: filename, sourceRevision: process.env.GITHUB_SHA,
+        configSha256: digest(config), catalogSha256: digest(models), originalSha256: digest(bundle.stdout) }) })) {
+      await writeFile(join(output, name), bytes, { flag: "wx", mode: 0o600 });
+    }
+  }
   for (const model of f.state.catalog.providers[0].models) model.pricing.serviceTiers = [];
   await manageCodex(["update", ...common], env);
   await run(true);
