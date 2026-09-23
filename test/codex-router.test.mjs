@@ -81,15 +81,18 @@ stream_idle_timeout_ms = 10000
         });
         return completed.params.turn;
       }
-      assert.equal((await turn("Call fixture_echo once with message fixture.")).status, "completed");
-      assert.equal((await turn("Return fixture complete for the second turn.")).status, "completed");
+      for (const input of ["Call fixture_echo once with message fixture.", "Return fixture complete for the second turn."]) {
+        const completed = await turn(input);
+        assert.equal(completed.status, "completed", completed.error?.message?.replaceAll(key, "[fixture credential]"));
+      }
       assert.equal(toolCalls.length, 1);
       const upstream = await mf.getWorker("upstream");
       const state = () => upstream.fetch("https://fixture.example/state").then((response) => response.json());
       const before = await state();
       const generated = before.requests.filter(({ body }) => body.generate !== false);
       assert.equal(generated.length, 3, "one tool call, its continuation, and a second user turn");
-      assert.ok(before.requests.every(({ transport: actual, authorized, lite, body }) => actual === transport && authorized && lite && body.model === model && body.service_tier === "priority"));
+      assert.ok(before.requests.every(({ transport: actual, authorized, lite, body }) => actual === transport && authorized && body.model === model && body.service_tier === "priority" &&
+        (transport === "http" ? lite : body.client_metadata?.ws_request_header_x_openai_internal_codex_responses_lite === "true")));
       assert.ok(generated[1].body.input.some((item) => item.type === "function_call_output" && item.call_id === "fixture_call" && JSON.stringify(item.output).includes("fixture tool result")));
       if (transport === "websocket") {
         assert.equal(before.connections, 1, "both turns reuse the native WebSocket");
