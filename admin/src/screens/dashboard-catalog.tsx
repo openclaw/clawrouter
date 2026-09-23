@@ -26,6 +26,7 @@ import {
   EntityName,
   InlineNote,
   InspectorHeader,
+  MiniListItem,
   OutcomeStatus,
   ReadinessStatus,
   Status,
@@ -251,7 +252,7 @@ export function DashboardStat({ label, value, note }: { label: string; value: st
   return <div><span>{label}</span><strong>{value}</strong><small>{note}</small></div>;
 }
 
-export function CatalogScreen({ services, allServices, selected, policies, connections, pendingProviderIds, query, setQuery, kind, setKind, kinds, canAdminister, onSelect, onSetConnection, onSetProviderBudget, onPlay, onAdd }: {
+export function CatalogScreen({ services, allServices, selected, policies, connections, pendingProviderIds, query, setQuery, kind, setKind, kinds, canAdminister, onOpenPolicy, onSelect, onSetConnection, onSetProviderBudget, onPlay, onAdd }: {
   services: ServiceItem[];
   allServices: ServiceItem[];
   selected?: ServiceItem;
@@ -264,6 +265,7 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
   setKind: (value: string) => void;
   kinds: string[];
   canAdminister: boolean;
+  onOpenPolicy: (policy: AccessPolicy) => void;
   onSelect: (service: ServiceItem) => void;
   onSetConnection: (providerId: string, enabled: boolean) => void;
   onSetProviderBudget: (providerId: string, monthlyBudgetMicros: number | null) => void;
@@ -343,7 +345,10 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
             {selected.readiness?.reasons.length ? <InlineNote>{selected.readiness.reasons.join("; ")}</InlineNote> : null}
             <div className="sectionTitle">Policies including this service</div>
             <div className="miniList">
-              {grantNamesForService(selected, selectedPolicies).length ? grantNamesForService(selected, selectedPolicies).map((policyId) => <button key={policyId} type="button">{policyId}<span>{selectedPolicies.find((policy) => policy.policyId === policyId)?.tenantId ?? "identity policy"}</span></button>) : <p>No active policy includes this service yet.</p>}
+              {grantNamesForService(selected, selectedPolicies).length ? grantNamesForService(selected, selectedPolicies).map((policyId) => {
+                const policy = policies.find((item) => item.policyId === policyId);
+                return <MiniListItem key={policyId} onClick={canAdminister && policy ? () => onOpenPolicy(policy) : undefined}>{policyId}<span>{policy?.tenantId ?? "identity policy"}</span></MiniListItem>;
+              }) : <p>No active policy includes this service yet.</p>}
             </div>
             <div className="inspectorActions">
               <button type="button" disabled={Boolean(playBlocker)} onClick={() => onPlay(selected)} title={playBlocker ?? undefined}><Play className="buttonIcon" aria-hidden="true" /><span>Try in playground</span></button>

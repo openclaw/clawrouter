@@ -1,7 +1,7 @@
 import React, { type FormEvent, useEffect, useRef, useState } from "react";
 import { Activity, CalendarDays, KeyRound, Plus, Search, ServerCog, ShieldCheck, Users } from "lucide-react";
 import { bindingKey, effectiveAccess, errorMessage, policyUsageFallback, tenantSummaryFallback } from "../domain";
-import { EntityName, InlineError, InlineNote, InspectorHeader, Status, kindLabel } from "../components";
+import { EntityName, InlineError, InlineNote, InspectorHeader, MiniListItem, Status, kindLabel } from "../components";
 import { ProviderUsageChart, TrafficAreaChart } from "../analytics-charts";
 import { useConsole } from "../console-controller-context";
 import { usageEventGroups, type UsageEventGroup } from "../usage-analytics";
@@ -82,10 +82,10 @@ export function UsersScreen({ users, selected, policies, bindings, services, for
           <div className="sectionTitle">Effective policies</div>
           <div className="miniList">{selectedBindings.length ? selectedBindings.map((binding) => {
             const policy = policies.find((item) => item.policyId === binding.policyId);
-            return <button type="button" key={bindingKey(binding)} onClick={() => policy && onOpenPolicy(policy)}>{binding.policyId}<span>{binding.principalType === "user" ? "direct" : `via ${binding.principalId}`} · priority {binding.priority}</span></button>;
+            return <MiniListItem key={bindingKey(binding)} onClick={policy ? () => onOpenPolicy(policy) : undefined}>{binding.policyId}<span>{binding.principalType === "user" ? "direct" : `via ${binding.principalId}`} · priority {binding.priority}</span></MiniListItem>;
           }) : <p>No user or group policies assigned.</p>}</div>
           <div className="sectionTitle">Effective access</div>
-          <div className="miniList">{selectedServices.length ? selectedServices.slice(0, 8).map(({ service, label }) => <button type="button" key={service.id}>{service.name}<span>{label} · {kindLabel(service.kind)}</span></button>) : <p>No services available for this user.</p>}</div>
+          <div className="miniList">{selectedServices.length ? selectedServices.slice(0, 8).map(({ service, label }) => <MiniListItem key={service.id}>{service.name}<span>{label} · {kindLabel(service.kind)}</span></MiniListItem>) : <p>No services available for this user.</p>}</div>
           <div className="inspectorActions"><button type="submit" disabled={busy}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save user</span></button></div>
         </form>
       </aside>

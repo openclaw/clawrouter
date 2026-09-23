@@ -150,9 +150,11 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
   }
 
   function edit(key: AccessPolicy) {
-    if (key.policyId === currentDraft.current.selection || !confirmDiscard()) return;
+    if (key.policyId === currentDraft.current.selection) return true;
+    if (!confirmDiscard()) return false;
     resetDraft(key.policyId, policyFormFromPolicy(key));
     setError("");
+    return true;
   }
 
   function startNew() {

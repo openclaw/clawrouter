@@ -79,6 +79,10 @@ Filters that change one result list use labeled groups of native buttons with
 `aria-pressed` for the active choice. Reserve tab semantics for controls that
 switch between associated panels.
 
+Inspector list rows are buttons only when they have an available action. Policy
+links open a loaded policy for administrators after any dirty-draft discard is
+accepted; informational access summaries and unavailable references stay static.
+
 `pnpm --dir admin test:browser` builds the console and runs desktop/mobile
 screenshot, accessibility, keyboard-focus, and self-service credential checks.
 The committed screenshot baselines are for CI's Linux Chromium environment;
