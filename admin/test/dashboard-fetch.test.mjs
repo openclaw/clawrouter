@@ -12,7 +12,14 @@ registerHooks({
   },
 });
 
-const { localLogin, playgroundRequest, request } = await import("../src/dashboard-fetch.ts");
+const { DashboardRequestError, localLogin, playgroundRequest, request } = await import("../src/dashboard-fetch.ts");
+
+test("JSON requests distinguish confirmed HTTP rejection from an uncertain transport outcome", async (context) => {
+  context.mock.method(globalThis, "fetch", async () => new Response("credential_exists", { status: 409 }));
+  await assert.rejects(request("https://console.example", "/v1/session/credentials"), (error) => error instanceof DashboardRequestError && error.status === 409 && error.message === "credential_exists");
+  context.mock.method(globalThis, "fetch", async () => { throw new TypeError("network failed"); });
+  await assert.rejects(request("https://console.example", "/v1/session/credentials"), (error) => !(error instanceof DashboardRequestError));
+});
 
 test("dashboard JSON request leaves headroom for a typed 30s Worker timeout and keeps a caller signal", async (context) => {
   const timeouts = [];

@@ -10,6 +10,7 @@ test("healthy status is compact while actionable states retain the status bar", 
   });
   assert.equal(consoleStatusPresentation("saved policy", false).showBar, false);
   assert.equal(consoleStatusPresentation("issued credential", false).showBar, false);
+  assert.equal(consoleStatusPresentation("rotated credential", false).showBar, false);
   assert.equal(consoleStatusPresentation("enabled openai", false).showBar, false);
   assert.equal(consoleStatusPresentation("disabled openai", false).showBar, false);
   assert.equal(consoleStatusPresentation("local demo data loaded", true).label, "Demo");
@@ -19,7 +20,7 @@ test("healthy status is compact while actionable states retain the status bar", 
     label: "Working",
     showBar: true,
   });
-  for (const status of ["issuing credential", "reconciling assignments", "refreshing upstream grant"]) {
+  for (const status of ["issuing credential", "rotating credential", "reconciling assignments", "refreshing upstream grant"]) {
     assert.equal(consoleStatusPresentation(status, false).tone, "pending", status);
   }
 

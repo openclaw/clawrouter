@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { resolveGrantSelection, selectGrant, selectProviderPolicy, syncGrantPoolIndex, validGrantSegment } from "../grant-selection.ts";
+import { resolveGrantSelection, selectGrant, selectProviderPolicy, validGrantSegment } from "../grant-selection.ts";
+import { putGrantCredentials, revokeGrantCredentials } from "../grant-credentials.ts";
+import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
 import { providerById, upstreamAuth } from "../providers.ts";
 
 test("grant pools select the lowest-priority usable grant deterministically", async () => {
@@ -30,9 +32,7 @@ test("revoked grants leave the pool and policy selection sees indexed grants", a
   const entries = [policy("policy_a"), policy("policy_b")];
   assert.equal((await selectProviderPolicy(entries, "openai", "tenant_a", env)).policyId, "policy_b");
 
-  const revoked = { ...pooled, enabled: false };
-  env.values.set("oauth/policy_b/openai-backup", revoked);
-  await syncGrantPoolIndex(env, "oauth/policy_b/openai-backup", pooled, revoked);
+  await revokeGrantCredentials(env, "oauth/policy_b/openai-backup");
   assert.equal(await selectGrant("openai", "policy_b", "tenant_a", "openai", env), null);
 });
 
@@ -149,22 +149,22 @@ function runtime(status, remaining, cooldownUntil = null) {
 }
 
 async function putGrant(env, key, value) {
-  const previous = env.values.get(key) ?? null;
-  env.values.set(key, value);
-  await syncGrantPoolIndex(env, key, previous, value);
+  await putGrantCredentials(env, key, value);
 }
 
 function mockEnv(initial = {}) {
   const values = new Map(Object.entries(initial));
-  const pools = new Map();
   const runtime = new Map();
+  const setRuntime = runtime.set.bind(runtime);
+  runtime.set = (key, state) => setRuntime(key, { ...state, grantRevision: state.grantRevision ?? values.get(key)?.updatedAt ?? null });
   const selections = [];
-  return {
+  const env = {
     values, runtime, selections,
     POLICY_KV: {
-      async get(key) {
+      async get(key, type) {
         if (Array.isArray(key)) return new Map(key.map((item) => [item, structuredClone(values.get(item) ?? null)]));
-        return structuredClone(values.get(key) ?? null);
+        const value = values.get(key) ?? null;
+        return type === "text" && value !== null ? JSON.stringify(value) : structuredClone(value);
       },
       async put(key, value) { values.set(key, JSON.parse(value)); },
     },
@@ -174,22 +174,8 @@ function mockEnv(initial = {}) {
         return { async fetch(url, init) {
           const path = new URL(url).pathname, body = JSON.parse(init.body);
           if (path === "/grant-pools/resolve") {
-            const policy = poolKey("policies", body.policyId, body.providerId), tenant = poolKey("tenants", body.tenantId, body.providerId);
-            const keys = [...new Set([
-              ...(body.defaultKeys ?? []),
-              ...[...(pools.get(policy) ?? [])].sort().map((ref) => `oauth/${body.policyId}/${ref}`),
-              ...[...(pools.get(tenant) ?? [])].sort().map((ref) => `oauth/tenants/${body.tenantId}/${ref}`),
-            ])];
+            const { keys } = await env.grantAuthority.call("resolve", body);
             return Response.json({ keys, states: Object.fromEntries(keys.flatMap((key) => runtime.has(key) ? [[key, runtime.get(key)]] : [])) });
-          }
-          if (path === "/grant-pools/sync") {
-            if (body.previousProvider && (body.previousProvider !== body.provider || !body.enabled)) pools.get(poolKey(body.scope, body.scopeId, body.previousProvider))?.delete(body.tokenRef);
-            if (body.enabled && body.provider) {
-              const key = poolKey(body.scope, body.scopeId, body.provider), refs = pools.get(key) ?? new Set();
-              if (!refs.has(body.tokenRef) && refs.size >= 32) return Response.json({ error: "pool full" }, { status: 400 });
-              refs.add(body.tokenRef); pools.set(key, refs);
-            }
-            return new Response("updated");
           }
           if (path === "/grant-pools/feedback") { runtime.set(body.key, body.state); return new Response("updated"); }
           if (path === "/grant-pools/states") return Response.json({ states: Object.fromEntries(body.keys.flatMap((key) => runtime.has(key) ? [[key, runtime.get(key)]] : [])) });
@@ -204,6 +190,5 @@ function mockEnv(initial = {}) {
       },
     },
   };
+  return attachGrantCredentialNamespace(env);
 }
-
-function poolKey(scope, scopeId, provider) { return `${scope}/${scopeId}/${provider}`; }
