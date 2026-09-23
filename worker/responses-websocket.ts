@@ -5,9 +5,9 @@ import { createProxyAccounting } from "./proxy-accounting";
 import { concreteOpenAiSelection, isSelectionFailure, nativeMatch, prepareNativeRequest, searchParamsRecord, type ProxySelection } from "./proxy-selection";
 import { captureGrantRuntime, prepareSelected } from "./proxy";
 import { assertProviderAccess, providerById } from "./providers";
-import { ResponsesWebSocketSession, type AdmittedResponse } from "./responses-websocket-session";
+import { ResponsesOperationAborted, ResponsesWebSocketSession, type AdmittedResponse, type ResponsesCloseCause } from "./responses-websocket-session";
 import { extractUsageTokens } from "./token-usage";
-import type { CompiledQuotaConfig, Env } from "./types";
+import type { CompiledQuotaConfig, Env, UsageEvent } from "./types";
 import { decodePathSegment, errorResponse, HttpError } from "./utils";
 
 export async function proxyResponsesWebSocket(request: Request, env: Env, context: ExecutionContext, path: string): Promise<Response> {
@@ -50,7 +50,7 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
       try {
         const upstream = await prepareSelected(operationRequest, env, selection, searchParamsRecord(new URL(request.url).searchParams), auth, new Set(), true, undefined, pinned, "websocket");
         if (!upstream.websocket) throw new HttpError(400, "websocket_transport_unsupported", "selected upstream grant transport is not qualified for Responses WebSockets");
-        if (signal.aborted) throw new HttpError(499, "request_cancelled", "WebSocket request was cancelled before dispatch");
+        signal.throwIfAborted();
         reservation = await reserveBudget(env, auth, selection.capability, accounting.cost, upstream.connection);
         try { content = await retainRequestContent(env, auth, selection, requestId); }
         catch { throw new HttpError(503, "content_retention_unavailable", "required request-content retention is temporarily unavailable"); }
@@ -66,7 +66,13 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
         };
       } catch (error) {
         const failure = error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "Responses request preflight failed");
-        await requireAccounting(accounting.settle(failure.status, failure.status === 402 || failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error", false, null, reservation, content));
+        const aborted = signal.aborted && signal.reason instanceof ResponsesOperationAborted ? signal.reason : null;
+        const outcome = aborted ? closeStatus(aborted.cause) : {
+          statusCode: failure.status,
+          status: failure.status === 402 || failure.status === 403 ? "denied" as const : failure.status < 500 ? "client_error" as const : "provider_error" as const,
+        };
+        await requireAccounting(accounting.settle(outcome.statusCode, outcome.status, false, null, reservation, content));
+        if (aborted) throw aborted;
         throw failure;
       }
     },
@@ -90,8 +96,10 @@ function upstreamConnection(url: URL, inputHeaders: Headers, signal: AbortSignal
 }
 
 function settlement(accounting: ReturnType<typeof createProxyAccounting>, reservation: BudgetReservation, content: string | null, observe: (response: Pick<Response, "status" | "headers">) => void): AdmittedResponse["settle"] {
-  return (outcome, terminal, executionStarted) => {
-    if (terminal?.type === "error" && typeof terminal.status === "number" && [401, 403, 429].includes(terminal.status)) {
+  return (outcome, terminal, sent, executionStarted) => {
+    // The upgrade response already owns its HTTP quota observation. Only sent
+    // creates can report a later WebSocket error with new quota evidence.
+    if (sent && terminal?.type === "error" && typeof terminal.status === "number" && [401, 403, 429].includes(terminal.status)) {
       const headers = new Headers();
       if (terminal.headers && typeof terminal.headers === "object" && !Array.isArray(terminal.headers)) {
         for (const [name, value] of Object.entries(terminal.headers)) if (typeof value === "string") { try { headers.set(name, value); } catch { /* Invalid optional quota headers do not hide the native error. */ } }
@@ -99,13 +107,21 @@ function settlement(accounting: ReturnType<typeof createProxyAccounting>, reserv
       observe({ status: terminal.status, headers });
     }
     const tokens = terminal ? extractUsageTokens(terminal) : null;
-    const status = outcome === "completed" || outcome === "incomplete" ? "success" : outcome === "timeout" ? "timeout" : outcome === "not_sent" ? "client_error" : "provider_error";
-    const statusCode = outcome === "completed" || outcome === "incomplete" ? 200 : outcome === "timeout" ? 504 : outcome === "not_sent" ? 499 : typeof terminal?.status === "number" ? terminal.status : 502;
+    const { status, statusCode } = outcome === "completed" || outcome === "incomplete" ? { status: "success" as const, statusCode: 200 }
+      : outcome === "failed" || outcome === "error" ? { status: "provider_error" as const, statusCode: typeof terminal?.status === "number" ? terminal.status : 502 }
+      : closeStatus(outcome);
     // A request-scoped error before a response is rejected work. Once upstream
     // execution starts, missing usage must retain the estimate, including on close.
-    const billable = outcome !== "not_sent" && (outcome !== "error" || executionStarted || tokens !== null);
+    const billable = sent && (outcome !== "error" || executionStarted || tokens !== null);
     return requireAccounting(accounting.settle(statusCode, status, billable, tokens, reservation, content));
   };
+}
+
+function closeStatus(cause: ResponsesCloseCause): { status: UsageEvent["status"]; statusCode: UsageEvent["status_code"] } {
+  if (cause === "client_disconnect") return { status: "client_error", statusCode: null };
+  if (cause === "timeout") return { status: "timeout", statusCode: 504 };
+  if (cause === "client_protocol_error" || cause === "router_limit") return { status: "client_error", statusCode: 400 };
+  return { status: "provider_error", statusCode: cause === "router_error" ? 503 : 502 };
 }
 
 async function requireAccounting(result: Promise<boolean>): Promise<void> {
