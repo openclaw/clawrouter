@@ -90,6 +90,37 @@ curl "$CLAWROUTER_BASE_URL/v1/proxy/tavily/search" \
 
 `clawrouter/fusion` is an optional virtual model on `/v1/chat/completions`. It fans a bounded text-only prompt out to configured adviser models and asks one configured synthesizer for the final response. Every subrequest uses normal policy, budget, readiness, retention, and usage-accounting paths. See [Fusion routing](fusion-router.md).
 
+## HTTP continuation contract
+
+Responses HTTP/SSE routes preserve upstream `previous_response_id` and
+`x-codex-turn-state` bytes. The router binds returned identities to the caller's
+authorization scope, provider route, and credential owner before publishing them.
+Every continuation still checks current authorization, grant eligibility, and
+budgets. It cannot fail over to another account. Ordinary stateless requests keep
+their configured pool routing and failover behavior.
+
+Owner-controlled token refresh preserves the binding. Replacing credentials or
+account identity, revoking a grant, changing the route, or losing the original
+owner requires a restart. HTTP 409 `continuation_restart_required` means resend
+full input without either continuation field. Unknown or expired identities are
+rejected before upstream dispatch, including environment/API-key routes. This
+also applies after upgrading: state created before this binding contract must be
+restarted with full input. Stateless requests and known environment/API-key
+continuations remain supported.
+
+Bindings expire 30 days after first publication, independently of upstream state
+retention. Each authorization scope admits up to one million hashed identities;
+it never evicts a live binding to admit another. Binding-store failure or capacity
+exhaustion returns `continuation_unavailable` before headers, or terminates an
+already-started stream. The upstream call can still incur charges. Response IDs
+are limited to 256 UTF-8 bytes and turn state to 8 KiB. Output/frame size is not
+limited by identity observation, and raw identities and model output are not
+stored in this index.
+
+This contract covers `previous_response_id` and Codex turn state. Responses
+`conversation` selectors remain an unpinned, separate contract gap; do not rely on
+pooled account affinity for them. WebSockets use the connection contract below.
+
 ## WebSocket contract
 
 Send authenticated upgrades to `/v1/responses` or

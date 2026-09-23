@@ -203,7 +203,7 @@ export async function upstreamAuth(provider: CompiledProvider, auth: AuthorizedI
   const selected = resolution.selected;
   if (!selected && resolution.hasConfiguredGrant) throw new HttpError(503, "upstream_grant_pool_unavailable", `provider ${provider.id} has no available scoped upstream grant`);
   const grant = selected?.grant ?? null;
-  if (pinned && ((selected?.key ?? null) !== pinned.key || (grant ? grantRevision(grant) : null) !== pinned.revision)) throw new HttpError(409, "upstream_grant_changed", "upstream authorization changed; open a new connection");
+  if (pinned && ((selected?.key ?? null) !== pinned.key || ("lineage" in pinned ? grant?.credentialLineage !== pinned.lineage : (grant ? grantRevision(grant) : null) !== pinned.revision))) throw new HttpError(409, "upstream_grant_changed", "upstream authorization changed; open a new connection");
   const headers = new Headers();
   const query = new URLSearchParams();
   applyProviderCredential(provider, grant, env, headers, query);

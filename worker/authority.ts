@@ -5,6 +5,7 @@ import type {
 import { evaluateUserAssignments, withLegacyAssignmentState, type AssignmentEvidence, type AssignmentRuleEntry } from "./assignment-evaluator.ts";
 import { contentRetentionDefault } from "./content-retention.ts";
 import { normalizeConnectionMutation, type ProviderConnectionMutation } from "./provider-connections.ts";
+import { HttpContinuationStore } from "./continuation-store.ts";
 import { errorResponse, HttpError, json, normalizeEmail, readJson, safeEqual } from "./utils.ts";
 
 type Principal = { principalType: "user" | "group"; principalId: string };
@@ -26,8 +27,11 @@ const selfServiceCredentialRetentionLimit = 100;
 
 export class PolicyBindingIndexObject implements DurableObject {
   private sql: SqlStorage;
+  private storage: DurableObjectStorage;
+  private continuations?: HttpContinuationStore;
 
   constructor(state: DurableObjectState) {
+    this.storage = state.storage;
     this.sql = state.storage.sql;
     this.ensureSchema();
   }
@@ -36,6 +40,7 @@ export class PolicyBindingIndexObject implements DurableObject {
     const path = new URL(request.url).pathname;
     if (request.method !== "POST") return errorResponse("route_not_found", "route not found", 404);
     try {
+      if (path === "/http-continuations") return await (this.continuations ??= new HttpContinuationStore(this.storage)).fetch(request);
       if (path === "/resolve") return json({ initialized: this.hasMeta("bindings_global_initialized"), ...this.resolveBindings((await readJson<{ principals: Principal[] }>(request)).principals) });
       if (path === "/initialize") { this.initializeBindings(await readJson<Seed[]>(request)); return new Response("initialized"); }
       if (path === "/initialize-all") { this.initializeAllBindings(await readJson<PolicyBinding[]>(request)); return new Response("initialized"); }
@@ -82,6 +87,8 @@ export class PolicyBindingIndexObject implements DurableObject {
       return errorResponse("authority_error", "authority request failed", 500);
     }
   }
+
+  alarm(): Promise<void> { return (this.continuations ??= new HttpContinuationStore(this.storage)).alarm(); }
 
   private ensureSchema(): void {
     this.sql.exec("CREATE TABLE IF NOT EXISTS policy_binding_principals (principal_key TEXT PRIMARY KEY)");
@@ -641,9 +648,9 @@ function normalizeGrantRuntimeState(value: unknown): GrantRuntimeState {
   return { status: state.status, observedAt: state.observedAt, source: state.source!, cooldownUntil, lastSignal: state.lastSignal, grantRevision, windows };
 }
 
-export async function authorityCall<T>(env: Env, path: string, body: unknown, objectName = "policy-bindings"): Promise<T> {
+export async function authorityCall<T>(env: Env, path: string, body: unknown, objectName = "policy-bindings", signal?: AbortSignal): Promise<T> {
   const stub = env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName(objectName));
-  const response = await stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: JSON.stringify(body) });
+  const response = await stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: JSON.stringify(body), signal });
   const text = await response.text();
   if (!response.ok) throw new Error(`authority ${path} failed (${response.status}): ${text}`);
   return text && response.headers.get("content-type")?.includes("application/json") ? JSON.parse(text) as T : text as T;

@@ -18,6 +18,7 @@ const snapshot = snapshotJson as unknown as ProviderSnapshot;
 interface CredentialRecord {
   version: 1;
   generation: number;
+  lineage?: string;
   enabled?: boolean;
   status: "active" | "reauth_required";
   credential?: string | null;
@@ -48,6 +49,7 @@ interface CredentialRecord {
 export interface CredentialProjection {
   credentialStore: "durable_object";
   credentialGeneration: number;
+  credentialLineage?: string;
   credentialStatus: "active" | "reauth_required";
   hasCredential: boolean;
   credentialFields: string[];
@@ -355,17 +357,22 @@ export class GrantCredentialObject implements DurableObject {
 
   private async loadRecord(key: string, stored?: CredentialRecord): Promise<CredentialRecord | undefined> {
     let record = stored ?? await this.state.storage.get<CredentialRecord>("credential");
-    if (!record || record.metadata && record.enabled !== undefined) return record;
-    const metadata = key ? await legacyGrantMetadata(this.env, key) : null;
-    const previous = metadataGrant(record);
-    record = { ...record, grantKey: key || record.grantKey, metadata: metadata ?? {}, enabled: record.enabled ?? (metadata !== null && metadata.enabled !== false) };
-    // Pre-owner CLI commands revoked only KV. Import negative lifecycle facts
-    // once, before any provider I/O; later KV reads never regain authority.
-    if (metadata?.revokedAt) record = revokedRecord(key, { ...metadataGrant(record), revokedAt: metadata.revokedAt }, record.generation);
-    else if (metadata?.enabled === false) record = { ...record, enabled: false, generation: record.generation + (record.enabled === false ? 0 : 1) };
-    // Keep the migration marker absent until index removal succeeds. A failed
-    // sync or owner write retries from the durable KV denial before dispatch.
-    if (metadata?.revokedAt || metadata?.enabled === false) await syncGrantPoolIndex(this.env, key, previous, metadataGrant(record));
+    if (!record || record.metadata && record.enabled !== undefined && record.lineage) return record;
+    if (!record.metadata || record.enabled === undefined) {
+      const metadata = key ? await legacyGrantMetadata(this.env, key) : null;
+      const previous = metadataGrant(record);
+      record = { ...record, grantKey: key || record.grantKey, metadata: metadata ?? {}, enabled: record.enabled ?? (metadata !== null && metadata.enabled !== false) };
+      // Pre-owner CLI commands revoked only KV. Import negative lifecycle facts
+      // once, before any provider I/O; later KV reads never regain authority.
+      if (metadata?.revokedAt) record = revokedRecord(key, { ...metadataGrant(record), revokedAt: metadata.revokedAt }, record.generation);
+      else if (metadata?.enabled === false) record = { ...record, enabled: false, generation: record.generation + (record.enabled === false ? 0 : 1) };
+      // Keep the migration marker absent until index removal succeeds. A failed
+      // sync or owner write retries from the durable KV denial before dispatch.
+      if (metadata?.revokedAt || metadata?.enabled === false) await syncGrantPoolIndex(this.env, key, previous, metadataGrant(record));
+    }
+    // Existing owner records acquire a lineage once; caller/KV lineage values
+    // never establish identity. Refresh preserves this owner-issued value.
+    record = { ...record, lineage: record.lineage ?? crypto.randomUUID() };
     await this.state.storage.put("credential", record);
     if (!record.enabled) await this.state.storage.deleteAlarm();
     return record;
@@ -417,7 +424,7 @@ function revokedRecord(key: string, metadata: UpstreamGrant | null, generation =
   metadata = stripLegacySecrets(metadata) as UpstreamGrant | null;
   const revokedAt = metadata?.revokedAt ?? new Date().toISOString();
   return {
-    version: 1, generation: generation + 1, enabled: false, status: "active",
+    version: 1, generation: generation + 1, lineage: crypto.randomUUID(), enabled: false, status: "active",
     grantKey: key, providerId: metadata?.provider, kind: metadata?.kind,
     tokenType: metadata?.tokenType, expiresAt: metadata?.expiresAt, scopes: metadata?.scopes,
     accountId: metadata?.accountId, subscription: metadata?.subscription, refresh: metadata?.refresh,
@@ -550,6 +557,7 @@ function credentialRecord(grant: UpstreamGrant, generation: number): CredentialR
   return {
     version: 1,
     generation,
+    lineage: crypto.randomUUID(),
     enabled: grant.enabled ?? true,
     status: "active",
     credential: optionalSecret(grant.credential, "credential"),
@@ -587,6 +595,14 @@ function updatedCredentialRecord(current: CredentialRecord | undefined, grant: U
     updatedAt: grant.updatedAt ?? new Date().toISOString(),
   };
   if (![updated.credential, updated.accessToken, ...Object.values(updated.credentials ?? {})].some((value) => typeof value === "string" && value.length > 0)) throw new HttpError(400, "invalid_upstream_grant", "upstream grant requires a primary credential");
+  // Explicit credential/account replacement is not a refresh, even when the
+  // operator keeps the same account label. Refresh-token replacement also can
+  // change the next upstream account, so it invalidates continuation ownership.
+  if (["credential", "accessToken", "refreshToken", "accountId"].some(key => updated[key as keyof CredentialRecord] !== current[key as keyof CredentialRecord])
+    || JSON.stringify(Object.entries(updated.credentials ?? {}).sort()) !== JSON.stringify(Object.entries(current.credentials ?? {}).sort())
+    || updated.subscription?.subject !== current.subscription?.subject
+    || JSON.stringify(updated.refresh) !== JSON.stringify(current.refresh)
+    || grant.provider !== undefined && grant.provider !== current.providerId || grant.kind !== undefined && grant.kind !== current.kind) updated.lineage = crypto.randomUUID();
   return updated;
 }
 
@@ -594,6 +610,7 @@ function credentialProjection(record: CredentialRecord): CredentialProjection {
   return {
     credentialStore: "durable_object",
     credentialGeneration: record.generation,
+    credentialLineage: record.lineage,
     credentialStatus: record.status,
     hasCredential: !!record.credential || Object.keys(record.credentials ?? {}).length > 0,
     credentialFields: Object.keys(record.credentials ?? {}).sort(),
@@ -626,6 +643,7 @@ function materializedGrant(metadata: UpstreamGrant, record: CredentialRecord): U
     createdAt: record.createdAt,
     updatedAt: record.updatedAt,
     credentialGeneration: record.generation,
+    credentialLineage: record.lineage,
     credentialStatus: record.status,
   };
 }
