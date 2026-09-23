@@ -68,7 +68,6 @@ test("Claude credential alarms poll quota and keep warm only when explicitly ena
       get() {
         return { async fetch(url, init) {
           const path = new URL(url).pathname, body = JSON.parse(init.body);
-          if (path === "/grant-pools/sync") return new Response("updated");
           if (path === "/grant-pools/states") return Response.json({ states: {} });
           if (path === "/grant-pools/feedback") { feedback.push(body); return new Response("updated"); }
           return new Response("not found", { status: 404 });
@@ -204,6 +203,7 @@ test("disabled Claude grants cancel maintenance and reject credential materializ
   const legacyOwner = env.GRANT_CREDENTIALS.objects.get(legacyKey);
   const legacyRecord = legacyOwner.values.get("credential");
   delete legacyRecord.enabled;
+  env.grantAuthority.sql.exec("DELETE FROM upstream_grant_pool_versions WHERE grant_key = ?", legacyKey);
   legacyRecord.nextKeepWarmAt = "2020-01-01T00:00:00.000Z";
   legacyOwner.values.set("credential", legacyRecord);
   values.set(legacyKey, { provider: "anthropic", kind: "subscription", enabled: false });
