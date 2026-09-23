@@ -136,6 +136,48 @@ charge if delivery later stops; dispatched work without final usage retains its
 estimate. This does not guarantee that every transport reports an idle client
 disconnect.
 
+### HTTP cancellation diagnostics
+
+Cancellation accounting starts when the runtime reports an ingress abort or
+response-body cancellation. A client-local abort alone does not guarantee a
+prompt server notification or a receipt within ten seconds for an indefinitely
+idle HTTP response.
+
+`pnpm test:scripts` includes the seven affirmative deadline and cancellation
+cases: progressing JSON/SSE delivery, initial-response deadlines, active-delivery
+cancellation, and cancellation observed after independently delayed JSON output.
+Each cancellation case requires upstream shutdown, one receipt, and settlement
+in both real budget ledgers. The strict idle-disconnect reproduction is explicit:
+
+```sh
+pnpm diagnostic:http-idle-disconnect
+```
+
+That command replays the original eight-case sequence, including the final
+whitespace-only response. It retains every strict assertion and exits nonzero
+when the limitation reproduces. Its nested entry point is outside the default
+`test/*.test.mjs` script-test glob; no result is suppressed or treated as a pass.
+
+At commit `750a4093c9685829e9423f124c56022e7a2ce838`, the
+[hosted diagnostic run](https://github.com/openclaw/clawrouter/actions/runs/35856640488/job/107166567427)
+used Node 24.21.0, Miniflare 5.20260918.0-alpha and workerd 1.20260918.1.
+The delayed-output case received HTTP 200/gzip headers and zero decoded body
+bytes before the client aborted at 1.048 seconds. Independent payload output
+started at 2.044 seconds; ingress abort followed at 2.452 seconds, before EOF.
+It recorded one `200`/`client_error` receipt with unknown tokens and a fixed
+charge of 7 micros in both ledgers. The unchanged whitespace-only case recorded no
+ingress abort or receipt, and both reservations remained unsettled during the
+observation window. That limitation remains unresolved.
+
+The pinned [KJ disconnect contract](https://github.com/capnproto/capnproto/blob/0501d343/c++/src/kj/async-io.h#L205-L214)
+allows detection to remain pending without a write; its
+[HTTP implementation discusses the half-close tradeoff](https://github.com/capnproto/capnproto/blob/0501d343/c++/src/kj/compat/http.c++#L8278-L8287).
+Node 24.21.0 [Fetch abort](https://github.com/nodejs/node/blob/v24.21.0/deps/undici/src/lib/web/fetch/index.js#L104-L126)
+reaches [HTTP/1 socket destruction](https://github.com/nodejs/node/blob/v24.21.0/deps/undici/src/lib/dispatcher/client-h1.js#L1198-L1206),
+whose [ordinary-close path is distinct from reset](https://github.com/nodejs/node/blob/v24.21.0/lib/net.js#L1097-L1130).
+The fixture does not establish physical FIN/RST behavior, compression causality,
+or deployed HTTP/2 behavior. No idle or total-delivery timeout is added.
+
 ## WebSocket contract
 
 Send authenticated upgrades to `/v1/responses` or

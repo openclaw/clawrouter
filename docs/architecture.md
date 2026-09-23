@@ -133,9 +133,11 @@ or bytes. Authoritative terminal usage remains billable even after delivery fail
 or is canceled; otherwise accounting retains the conservative reservation.
 Settlement starts when delivery completes, fails, or is canceled. The canonical
 Worker config enables `enable_request_signal`, preserved by Cloudflare and
-self-host config rendering. Ingress abort settles the same observer once even
-when workerd drops its response pump without invoking the stream's `cancel`
-callback. The operation distinguishes caller cancellation from an internal
+self-host config rendering. A runtime-reported ingress abort settles the same
+observer once even when workerd drops its response pump without invoking the
+stream's `cancel` callback. A client-local abort does not guarantee prompt runtime notification
+during idle delivery; the [strict diagnostic and observed limitation](api-reference.md#http-cancellation-diagnostics)
+remain explicit. The operation distinguishes caller cancellation from an internal
 Fusion adviser deadline. Endpoint timers retire after response normalization;
 caller cancellation remains active through delivery. The observer detaches its
 abort listener on completion and cancels its owned upstream reader.
