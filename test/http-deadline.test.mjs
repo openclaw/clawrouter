@@ -33,44 +33,63 @@ test("workerd HTTP endpoint deadline retires before delivery with caller and bot
       const rows = await (await stub.fetch("https://budget/fixture-reservations")).json();
       return { spent: status.spentMicros, rows };
     }));
-    for (const scenario of ["json", "sse", "headers", "first-event", "cancel-json", "cancel-sse"]) {
+    // The original whitespace cancellation remains an unresolved diagnostic.
+    // Run independent delivered-body cases first; never turn its failure into a skip.
+    for (const scenario of ["json", "sse", "headers", "first-event", "cancel-json-active", "cancel-sse", "cancel-json"]) {
       let cleanupError;
-      await t.test(scenario, async () => {
+      await t.test(scenario === "cancel-json" ? "cancel-json (unresolved whitespace cancellation)" : scenario, async () => {
         const caller = new AbortController(), watchStop = new AbortController();
         const requestId = `deadline-${scenario}`, cancellation = new Error("fixture caller after endpoint deadline retirement");
         const streaming = scenario.includes("sse") || scenario === "first-event";
         const canceled = scenario.startsWith("cancel-");
+        const requireDeliveredBytes = canceled && scenario !== "cancel-json";
         const timedOut = scenario === "headers" || scenario === "first-event";
         const beforeUsage = await read("/v1/usage"), beforeLedgers = await ledgerFacts();
         const previousReceipts = new Set(beforeUsage.usage.events.map(event => event.request_id));
         const previousReservations = beforeLedgers.map(({ rows }) => new Set(rows.map(row => row.reservation_id)));
         const addedRows = (ledgers, index) => ledgers[index].rows.filter(row => !previousReservations[index].has(row.reservation_id));
         const safety = AbortSignal.timeout(15_000);
-        let usage, state, ledgers;
-        const diagnostics = () => JSON.stringify({ requestId, state, receipts: usage?.usage.events.filter(event => event.request_id === requestId), reservations: ledgers?.map((_, index) => addedRows(ledgers, index)) });
+        const client = { startedAt: null, headersAt: null, status: null, contentEncoding: null, firstBodyAt: null, lastBodyAt: null, bodyBytes: 0, completedAt: null, failedAt: null, errorName: null, abortRequestedAt: null, bytesAtAbort: null };
+        let usage, state, ingress, ledgers;
+        const diagnostics = () => JSON.stringify({ requestId, client, ingress, state, receipts: usage?.usage.events.filter(event => event.request_id === requestId), reservations: ledgers?.map((_, index) => addedRows(ledgers, index)) });
         const facts = async () => {
           usage = await read("/v1/usage"); state = (await read("/fixture-state"))[scenario];
+          ingress = (await read("/fixture-ingress"))[requestId];
           ledgers = await ledgerFacts();
           return usage.usage.events.some(event => event.request_id === requestId) && ledgers.every((_, index) => addedRows(ledgers, index).length > 0 && addedRows(ledgers, index).every(row => row.settled === 1)) && (state?.complete || state?.aborted || state?.canceled);
         };
-        // Compression may coalesce every JSON write. Observe upstream progress and
-        // own cancellation before awaiting either response headers or body bytes.
+        // Observe both sides without assuming that transport preserves write chunks.
+        // The original whitespace case deliberately retains its upstream-only trigger.
         const watcher = canceled ? (async () => {
           await until(async () => {
             const progress = (await read("/fixture-state", watchStop.signal))[scenario];
-            return progress?.progressCount > 2 && progress.lastProgressAt - progress.startedAt > endpointMs * 2;
-          }, watchStop.signal, () => `upstream progress for ${requestId}`);
+            return progress?.progressCount > 2 && progress.lastProgressAt - progress.startedAt > endpointMs * 2 && (!requireDeliveredBytes || client.bodyBytes > 0);
+          }, watchStop.signal, diagnostics);
           watchStop.signal.throwIfAborted();
+          client.abortRequestedAt = Date.now(); client.bytesAtAbort = client.bodyBytes;
           caller.abort(cancellation);
         })() : Promise.resolve();
         const request = (async () => {
-          const response = await fetch(new URL("/v1/responses", origin), {
-            method: "POST", headers: { ...headers, "x-request-id": requestId }, signal: AbortSignal.any([caller.signal, safety]),
-            body: JSON.stringify({ model: "openai/gpt-6-astra", input: scenario, stream: streaming }),
-          });
-          assert.equal(response.status, timedOut ? 502 : 200);
-          assert.equal(response.headers.get("x-request-id"), requestId);
-          return response.text();
+          client.startedAt = Date.now();
+          try {
+            const response = await fetch(new URL("/v1/responses", origin), {
+              method: "POST", headers: { ...headers, "x-request-id": requestId }, signal: AbortSignal.any([caller.signal, safety]),
+              body: JSON.stringify({ model: "openai/gpt-6-astra", input: scenario, stream: streaming }),
+            });
+            client.headersAt = Date.now(); client.status = response.status; client.contentEncoding = response.headers.get("content-encoding");
+            assert.equal(response.status, timedOut ? 502 : 200);
+            assert.equal(response.headers.get("x-request-id"), requestId);
+            const reader = response.body.getReader(), decoder = new TextDecoder();
+            let text = "";
+            try {
+              while (true) {
+                const part = await reader.read();
+                if (part.done) { client.completedAt = Date.now(); return text + decoder.decode(); }
+                if (part.value.byteLength) { client.firstBodyAt ??= Date.now(); client.lastBodyAt = Date.now(); client.bodyBytes += part.value.byteLength; }
+                text += decoder.decode(part.value, { stream: true });
+              }
+            } finally { reader.releaseLock(); }
+          } catch (error) { client.failedAt = Date.now(); client.errorName = error.name; throw error; }
         })();
         try {
           if (canceled) await Promise.all([watcher, assert.rejects(request, error => {
@@ -99,6 +118,10 @@ test("workerd HTTP endpoint deadline retires before delivery with caller and bot
             assert.ok(state.progressCount > 2, "upstream must make progress across the declared deadline");
             assert.ok(state.lastProgressAt - state.startedAt > endpointMs * 2);
           }
+          if (requireDeliveredBytes) {
+            assert.ok(client.bytesAtAbort > 0, "the active-delivery case must observe body bytes before cancellation");
+            assert.ok(client.firstBodyAt <= client.abortRequestedAt);
+          }
           for (const [index, { spent, rows }] of ledgers.entries()) {
             assert.equal(spent, beforeLedgers[index].spent + 7); assert.equal(rows.length, beforeLedgers[index].rows.length + 1);
             const added = addedRows(ledgers, index);
@@ -112,6 +135,7 @@ test("workerd HTTP endpoint deadline retires before delivery with caller and bot
           // baseline, even when a case assertion fails.
           try { await until(facts, undefined, diagnostics); }
           catch (error) { cleanupError = error; throw error; }
+          finally { t.diagnostic(diagnostics()); }
         }
       });
       if (cleanupError) throw cleanupError;
@@ -145,9 +169,19 @@ export class BudgetLedgerObject extends RealBudgetLedger {
     return super.fetch(request);
   }
 }
+const ingress = {};
 export default { ...handler, async fetch(request, env, context) {
-  if (new URL(request.url).pathname === "/fixture-state") return fetch("https://upstream.fixture/state");
-  return handler.fetch(request, env, context);
+  const path = new URL(request.url).pathname;
+  if (path === "/fixture-state") return fetch("https://upstream.fixture/state");
+  if (path === "/fixture-ingress") return Response.json(ingress);
+  if (path !== "/v1/responses") return handler.fetch(request, env, context);
+  const entry = ingress[request.headers.get("x-request-id")] = { receivedAt: Date.now(), abortedAt: request.signal.aborted ? Date.now() : null, returnedAt: null, status: null, failedAt: null };
+  request.signal.addEventListener("abort", () => { entry.abortedAt = Date.now(); }, { once: true });
+  try {
+    const response = await handler.fetch(request, env, context);
+    entry.returnedAt = Date.now(); entry.status = response.status;
+    return response;
+  } catch (error) { entry.failedAt = Date.now(); throw error; }
 } };
 `; }
 
@@ -169,6 +203,16 @@ export default { async fetch(request) {
     return Response.json({ unexpected: "headers arrived after deadline" });
   }
   const result = { object: "response", status: "completed", output: [], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } };
+  let activeJson = null;
+  if (scenario === "cancel-json-active") {
+    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
+    let seed = 1, text = "";
+    for (let index = 0; index < 64 * 1024; index++) {
+      seed ^= seed << 13; seed ^= seed >>> 17; seed ^= seed << 5;
+      text += alphabet[(seed >>> 0) % alphabet.length];
+    }
+    activeJson = JSON.stringify({ ...result, output: [{ type: "message", content: [{ type: "output_text", text }] }] });
+  }
   let chunks = 0;
   return new Response(new ReadableStream({
     start(value) { controller = value; },
@@ -177,6 +221,12 @@ export default { async fetch(request) {
       if (chunks > 0) await wait(50);
       if (stopped) return;
       entry.lastProgressAt = Date.now(); entry.progressCount++;
+      if (activeJson !== null) {
+        const offset = chunks++ * 2048;
+        value.enqueue(encoder.encode(activeJson.slice(offset, offset + 2048)));
+        if (offset + 2048 >= activeJson.length) { entry.complete = true; finish(); value.close(); }
+        return;
+      }
       if (chunks++ === 30 && !scenario.startsWith("cancel-")) {
         value.enqueue(encoder.encode(body.stream ? 'data: ' + JSON.stringify({ type: "response.completed", response: result }) + '\\n\\n' : JSON.stringify(result)));
         entry.complete = true; finish(); value.close(); return;
