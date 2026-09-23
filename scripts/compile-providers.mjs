@@ -78,6 +78,7 @@ function compileProvider(manifest, ids) {
     request_format: endpoint.requestFormat,
     response_format: endpoint.responseFormat,
     streaming: endpoint.streaming ?? null,
+    ...(endpoint.outputTokenLimit ? { outputTokenLimit: endpoint.outputTokenLimit } : {}),
     ...(endpoint.modelPassthrough ? { modelPassthrough: {
       pricing_ref: endpoint.modelPassthrough.pricingRef ?? null,
       pricing: endpoint.modelPassthrough.pricingRef ? normalizePricing(manifest.models.entries.find((model) => model.pricingRef === endpoint.modelPassthrough.pricingRef).pricing) : null,
@@ -256,6 +257,7 @@ function validateManifest(manifest) {
     validatePricing(model.pricing, model.id);
   }
   for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
+    if (endpoint.outputTokenLimit && endpoint.outputTokenLimit.minimum > endpoint.outputTokenLimit.maximum) throw new Error(`provider ${manifest.id} endpoint ${id} outputTokenLimit minimum exceeds maximum`);
     if (endpoint.modelPassthrough) {
       const capabilities = manifest.capabilities.filter((capability) => capability.endpoint === id).map((capability) => capability.id);
       if (!capabilities.length) throw new Error(`provider ${manifest.id} endpoint ${id} modelPassthrough requires a declared capability`);

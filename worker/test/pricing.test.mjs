@@ -25,7 +25,7 @@ test("opaque inputs and provider-added tools reserve the full input window", () 
 });
 
 test("native Gemini bounds use the selected wire format, ProtoJSON aliases, and the combined output ceiling", () => {
-  const format = "google.generate_content";
+  const format = { request_format: "google.generate_content" };
   for (const [config, expected] of [
     [{ maxOutputTokens: 16 }, 16],
     [{ max_output_tokens: "1.6e1", candidate_count: "2" }, 32],
@@ -42,7 +42,7 @@ test("native Gemini bounds use the selected wire format, ProtoJSON aliases, and 
     assert.equal(estimate.outputTokens, expected);
     assert.equal(estimate.inputTokens, new TextEncoder().encode(JSON.stringify(body)).byteLength + pricing.inputTokenOverhead);
     assert.deepEqual(body, before);
-    assert.equal(estimateModelCost(pricing, body, "openai.responses").outputTokens, 9);
+    assert.equal(estimateModelCost(pricing, body, { request_format: "openai.responses" }).outputTokens, 9);
   }
   for (const [body, expected] of [
     [{ generationConfig: { maxOutputTokens: 16 }, generation_config: { max_output_tokens: 32 } }, 32],
@@ -64,10 +64,10 @@ test("native Gemini remote cache and typed media inputs reserve the full input b
     { systemInstruction: { parts: [{ inlineData: media }] } },
     { system_instruction: { parts: [{ file_data: { file_uri: "https://example.com/file" } }] } },
     { contents: [{ parts: [{ functionResponse: { name: "fixture", response: {}, parts: [{ inlineData: media }] } }] }] },
-  ]) assert.equal(estimateModelCost(pricing, body, "google.generate_content").inputTokens, pricing.maxInputTokens);
+  ]) assert.equal(estimateModelCost(pricing, body, { request_format: "google.generate_content" }).inputTokens, pricing.maxInputTokens);
   const body = { contents: [{ parts: [{ functionResponse: { name: "fixture", response: { fileData: "user-defined JSON", parts: [{ inlineData: media }] } } }] }] };
-  assert.ok(estimateModelCost(pricing, body, "google.generate_content").inputTokens < pricing.maxInputTokens);
-  assert.ok(estimateModelCost(pricing, { cachedContent: "cachedContents/fixture" }, "openai.responses").inputTokens < pricing.maxInputTokens);
+  assert.ok(estimateModelCost(pricing, body, { request_format: "google.generate_content" }).inputTokens < pricing.maxInputTokens);
+  assert.ok(estimateModelCost(pricing, { cachedContent: "cachedContents/fixture" }, { request_format: "openai.responses" }).inputTokens < pricing.maxInputTokens);
 });
 
 test("pricing completeness follows selected wire declarations without reading client function JSON", () => {
@@ -143,7 +143,7 @@ test("Anthropic execution fee waivers do not qualify cumulative server-loop usag
       const body = { tools: [tool, { type: fetch, name: "web_fetch" }] };
       assert.equal(requestPricingGap(pricing, body, "anthropic.messages"), "hosted_tool_usage");
       assert.equal(requestPricingGap(pricing, { tools: body.tools.toReversed() }, "anthropic.messages"), "hosted_tool_usage");
-      assert.equal(estimateModelCost(pricing, body, "anthropic.messages").inputTokens, pricing.maxInputTokens);
+      assert.equal(estimateModelCost(pricing, body, { request_format: "anthropic.messages" }).inputTokens, pricing.maxInputTokens);
     }
     assert.equal(requestPricingGap(pricing, { tools: [tool, { type: "web_search_20260209", name: "web_search" }] }, "anthropic.messages"), "hosted_tool_fee");
     for (const format of ["openai.responses", "google.generate_content"]) assert.equal(requestPricingGap(pricing, { tools: [tool] }, format), null);

@@ -81,6 +81,41 @@ test("Anthropic long-context pricing uses the full input, including the cache", 
 
 const sse = (...events) => events.map((event) => `data: ${typeof event === "string" ? event : JSON.stringify(event)}\n\n`).join("");
 
+test("Chat top-level cache hits are inclusive and agree with nested details in JSON and terminal SSE", () => {
+  for (const details of [undefined, {}, { cached_tokens: 800 }]) {
+    const usage = { prompt_tokens: 1_000, completion_tokens: 20, prompt_cache_hit_tokens: 800, prompt_cache_miss_tokens: 200, prompt_tokens_details: details };
+    const chunk = { object: "chat.completion.chunk", usage };
+    for (const tokens of [extractUsageTokens({ usage }), extractSseUsageTokens(sse(chunk, "[DONE]"))]) {
+      assert.equal(tokens.input, 1_000);
+      assert.equal(tokens.total, 1_020);
+      assert.equal(tokens.cached, 800);
+      assert.equal(actualModelCost(cachePricing, tokens), 380);
+    }
+  }
+  assert.equal(extractUsageTokens({ usage: { prompt_tokens: 1_000, prompt_cache_hit_tokens: 0, prompt_cache_miss_tokens: 1_000 } }).cached, 0);
+  assert.equal(extractUsageTokens({ usage: { prompt_cache_hit_tokens: 800, completion_tokens: 20 } }).input, null);
+});
+
+test("invalid or conflicting cache evidence never discounts Chat input or preserves an earlier SSE discount", () => {
+  const valid = { prompt_tokens: 1_000, completion_tokens: 20, prompt_cache_hit_tokens: 800, prompt_cache_miss_tokens: 200 };
+  for (const invalid of [
+    { prompt_tokens_details: { cached_tokens: 900 } },
+    { prompt_tokens_details: { cached_tokens: null } },
+    { prompt_tokens_details: { cached_tokens: -1 } },
+    { prompt_cache_hit_tokens: 1_001 }, { prompt_cache_hit_tokens: -1 },
+    { prompt_cache_hit_tokens: 800.5 }, { prompt_cache_hit_tokens: "800" },
+    { prompt_cache_hit_tokens: Number.MAX_SAFE_INTEGER + 1 },
+    { prompt_cache_miss_tokens: 201 }, { prompt_cache_miss_tokens: null },
+  ]) {
+    const usage = { ...valid, ...invalid };
+    for (const tokens of [extractUsageTokens({ usage }), extractSseUsageTokens(sse({ object: "chat.completion.chunk", usage: valid }, { object: "chat.completion.chunk", usage }, "[DONE]"))]) {
+      assert.equal(tokens.input, 1_000);
+      assert.equal(tokens.cached, null);
+      assert.equal(actualModelCost(cachePricing, tokens), 1_100);
+    }
+  }
+});
+
 test("served tiers come from terminal Responses and persist across Chat usage-only chunks", () => {
   const usage = { input_tokens: 12, output_tokens: 3 };
   assert.equal(extractUsageTokens({ service_tier: "priority", usage }).serviceTier, "priority");

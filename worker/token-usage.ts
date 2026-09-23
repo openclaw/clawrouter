@@ -20,15 +20,17 @@ export function extractUsageTokens(value: unknown): UsageTokens | null {
   const reportedInput = pickNumber(usage, "input_tokens", "prompt_tokens", "inputTokens");
   const output = pickNumber(usage, "output_tokens", "completion_tokens", "outputTokens");
   const details = record(usage.prompt_tokens_details ?? usage.input_tokens_details);
-  const cached = details ? pickNumber(details, "cached_tokens", "cache_read_input_tokens") : pickNumber(usage, "cache_read_input_tokens");
+  const inclusivePrompt = "prompt_tokens" in usage;
+  const cached = inclusivePrompt ? promptCachedTokens(usage, details, reportedInput)
+    : details ? pickNumber(details, "cached_tokens", "cache_read_input_tokens") : pickNumber(usage, "cache_read_input_tokens");
   const cacheCreation = record(usage.cache_creation);
   const cacheWrite5m = cacheCreation ? pickNumber(cacheCreation, "ephemeral_5m_input_tokens") : pickNumber(usage, "cache_creation_ephemeral_5m_input_tokens");
   const cacheWrite1h = cacheCreation ? pickNumber(cacheCreation, "ephemeral_1h_input_tokens") : pickNumber(usage, "cache_creation_ephemeral_1h_input_tokens");
   const cacheWrite = (details ? pickNumber(details, "cache_write_tokens") : null) ?? pickNumber(usage, "cache_creation_input_tokens")
     ?? (cacheWrite5m != null || cacheWrite1h != null ? (cacheWrite5m ?? 0) + (cacheWrite1h ?? 0) : null);
-  // Anthropic's top-level cache buckets exclude ordinary input; OpenAI's details
-  // are already included. Pricing and usage ledgers both consume inclusive input.
-  const input = reportedInput == null ? null : reportedInput + (details ? 0 : (cached ?? 0) + (cacheWrite ?? 0));
+  // Anthropic's top-level buckets exclude ordinary input. Chat prompt totals
+  // already include cache hits, whether reported in details or top-level fields.
+  const input = reportedInput == null ? null : reportedInput + (details || inclusivePrompt ? 0 : (cached ?? 0) + (cacheWrite ?? 0));
   const total = pickNumber(usage, "total_tokens", "totalTokens") ?? (input != null || output != null ? (input ?? 0) + (output ?? 0) : null);
   // Anthropic reports usage for classifier refusals before any output, but does
   // not bill it. Keep observed counts separate from the settlement decision.
@@ -36,6 +38,18 @@ export function extractUsageTokens(value: unknown): UsageTokens | null {
     && Array.isArray(root.content) && root.content.length === 0 && output === 0;
   const serviceTier = extractServiceTier(record(root?.response) ?? root);
   return { input, output, total, cached, cacheWrite, cacheWrite5m, cacheWrite1h, ...(serviceTier ? { serviceTier } : {}), ...(unbilled ? { billable: false as const } : {}) };
+}
+
+function promptCachedTokens(usage: Record<string, unknown>, details: Record<string, unknown> | null, input: number | null): number | null {
+  const hits = [details?.cached_tokens, details?.cache_read_input_tokens, usage.prompt_cache_hit_tokens].filter(value => value !== undefined);
+  const prompt = usage.prompt_tokens, miss = usage.prompt_cache_miss_tokens;
+  // Conflicting or invalid cache evidence cannot establish a discount. Keep the
+  // observed inclusive input and let pricing charge it at the full input rate.
+  if (input == null || !Number.isSafeInteger(prompt) || prompt !== input || !hits.length) return null;
+  if (hits.some(hit => typeof hit !== "number" || !Number.isSafeInteger(hit) || hit < 0 || hit > input || hit !== hits[0])) return null;
+  const hit = hits[0] as number;
+  if (miss !== undefined && (typeof miss !== "number" || !Number.isSafeInteger(miss) || miss < 0 || miss !== input - hit)) return null;
+  return hit;
 }
 
 function googleUsageTokens(value: unknown): UsageTokens | null {

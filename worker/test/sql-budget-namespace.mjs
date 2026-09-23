@@ -15,8 +15,13 @@ export function sqlBudgetNamespace(t) {
           statement.run(...bindings);
           return [];
         } };
-        const ledger = new BudgetLedgerObject({ storage: { sql, getAlarm: async () => 1 } });
-        objects.set(name, { fetch: (url, init) => ledger.fetch(new Request(url, init)), reservations: () => db.prepare("SELECT * FROM budget_reservations").all() });
+        const state = { storage: { sql, getAlarm: async () => 1 } };
+        let ledger = new BudgetLedgerObject(state);
+        objects.set(name, {
+          fetch: (url, init) => ledger.fetch(new Request(url, init)),
+          reservations: () => db.prepare("SELECT * FROM budget_reservations").all(),
+          restart() { ledger = new BudgetLedgerObject(state); },
+        });
       }
       return objects.get(name);
     },

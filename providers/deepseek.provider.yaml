@@ -35,6 +35,7 @@ endpoints:
     requestFormat: openai.chat_completions
     responseFormat: openai.chat_completions
     streaming: sse
+    outputTokenLimit: { field: max_tokens, minimum: 1, maximum: 393216 }
     timeoutMs: 600000
 models:
   entries:
@@ -48,8 +49,8 @@ models:
         inputMicrosPerMillion: 435000
         cachedInputMicrosPerMillion: 3625
         outputMicrosPerMillion: 870000
-        maxInputTokens: 1000000
-        defaultMaxOutputTokens: 384000
+        maxInputTokens: 1048576
+        defaultMaxOutputTokens: 393216
     - id: deepseek/deepseek-v4-flash
       upstream: deepseek-v4-flash
       capabilities: [llm.chat]
@@ -60,8 +61,8 @@ models:
         inputMicrosPerMillion: 140000
         cachedInputMicrosPerMillion: 2800
         outputMicrosPerMillion: 280000
-        maxInputTokens: 1000000
-        defaultMaxOutputTokens: 384000
+        maxInputTokens: 1048576
+        defaultMaxOutputTokens: 393216
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

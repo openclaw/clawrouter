@@ -144,3 +144,12 @@ test("fusion readiness prices the worst-case JSON expansion within the adviser c
 
   assert.equal(readiness.calls[0].estimatedReservationMicros, worstCase.reserveMicros);
 });
+
+test("fusion readiness carries endpoint-owned limits into adviser and synthesizer reservations", () => {
+  const pricing = { inputMicrosPerMillion: 0, outputMicrosPerMillion: 1_000_000, cachedInputMicrosPerMillion: null, cacheWriteInputMicrosPerMillion: null, cacheWrite5mInputMicrosPerMillion: null, cacheWrite1hInputMicrosPerMillion: null, maxInputTokens: 1_048_576, maxRequestInputTokens: null, defaultMaxOutputTokens: 1, inputTokenOverhead: 0, longContext: null };
+  const route = { ...routes[0], endpoint: { ...routes[0].endpoint, outputTokenLimit: { field: "max_tokens", minimum: 1, maximum: 393_216 } }, model: { ...routes[0].model, pricing } };
+  const config = { ...DEFAULT_FUSION_CONFIG, enabled: true, adviserModels: [route.modelId], aggregatorModel: route.modelId };
+  const entry = { policyId: "fixture", policy: { enabled: true, providers: [] } };
+  const readiness = fusionReadiness(config, entry, [{ ...baseReadiness, id: route.providerId }], [route], { configured: false, ledger: "unmetered", remainingMicros: null });
+  assert.deepEqual(readiness.calls.map(call => call.estimatedReservationMicros), [config.maxOutputTokens, 393_216]);
+});

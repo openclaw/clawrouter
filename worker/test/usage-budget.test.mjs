@@ -724,14 +724,14 @@ test("incomplete pricing preserves fixed tariffs, free counting, and known nonbi
   const { modelRoute } = await import("../providers.ts");
   const { correlateIngressRequest } = await import("../correlation.ts");
   const route = modelRoute("openai/gpt-6-astra"), body = { tools: [{ type: "web_search" }] };
-  assert.equal(estimateCost(route.model, body, 7, "llm.responses", "openai.responses").basis, "policy_fixed");
-  assert.equal(estimateCost(route.model, body, 0, "llm.responses", "openai.responses").basis, "policy_fixed");
-  assert.equal(estimateCost(route.model, body, null, "llm.count_tokens", "openai.responses").basis, "none");
+  assert.equal(estimateCost(route.model, body, 7, "llm.responses", { request_format: "openai.responses" }).basis, "policy_fixed");
+  assert.equal(estimateCost(route.model, body, 0, "llm.responses", { request_format: "openai.responses" }).basis, "policy_fixed");
+  assert.equal(estimateCost(route.model, body, null, "llm.count_tokens", { request_format: "openai.responses" }).basis, "none");
   for (const [format, request] of [["openai.responses", { multi_agent: { enabled: true } }], ["anthropic.messages", { compaction: { type: "summarize" } }], ["anthropic.messages", { context_management: { edits: [{ type: "compact_20260112" }] } }], ["google.generate_content", { tools: [{ mcpServers: [{}] }] }]]) {
-    assert.equal(estimateCost(route.model, request, 0, "llm.chat", format).basis, "policy_fixed");
-    assert.equal(estimateCost(route.model, request, 7, "llm.count_tokens", format).basis, "none");
+    assert.equal(estimateCost(route.model, request, 0, "llm.chat", { request_format: format }).basis, "policy_fixed");
+    assert.equal(estimateCost(route.model, request, 7, "llm.count_tokens", { request_format: format }).basis, "none");
   }
-  assert.equal(estimateCost(route.model, { tools: [{ type: "tool_search", execution: "client" }] }, null, "llm.responses", "openai.responses").basis, "manifest_pricing");
+  assert.equal(estimateCost(route.model, { tools: [{ type: "tool_search", execution: "client" }] }, null, "llm.responses", { request_format: "openai.responses" }).basis, "manifest_pricing");
   for (const [billable, tokens, dispatched, expected] of [[true, { billable: false }, null, "none"], [false, null, null, "none"], [true, null, null, "unpriced_usage"], [null, null, false, "none"], [null, null, true, "unpriced_usage"]]) {
     const events = [], pending = [];
     const owner = createProxyAccounting({ env: { USAGE_QUEUE: { send: async event => events.push(event) } }, context: { waitUntil: promise => pending.push(promise) }, auth: { policyId: "fixture", policy: {} }, selection: { ...route, endpoint: route.provider.endpoints.find(endpoint => endpoint.id === "responses"), body, capability: "llm.responses" }, request: correlateIngressRequest(new Request("https://router.example/v1/responses")).request });
@@ -882,6 +882,69 @@ test("either budget rejects Gemini remote input before dispatch", async (t) => {
     assert.equal((await response.json()).error.code, limit == null ? "provider_budget_exhausted" : "budget_exhausted");
     await Promise.all(pending);
     assert.equal(upstream.mock.callCount(), 0);
+    upstream.mock.restore();
+  }
+});
+
+test("DeepSeek unified, native and manifest calls preserve wire limits and settle inclusive JSON/SSE cache usage in both budgets", async (t) => {
+  for (const route of ["/v1/chat/completions", "/v1/native/deepseek/chat/completions", "/v1/proxy/deepseek/chat_completions"]) for (const stream of [false, true]) {
+    const events = [], pending = [], limit = 1_000;
+    const env = usageEnv([], { provider: "deepseek", limit, fixedCost: null, retainContent: false });
+    env.DEEPSEEK_API_KEY = "fixture-deepseek-key";
+    env.BUDGET_LEDGER = sqlBudgetNamespace(t);
+    env.USAGE_QUEUE = { send: async event => events.push(event) };
+    const native = route.includes("/native/");
+    const body = { model: native ? "deepseek-v4-flash" : "deepseek/deepseek-v4-flash", messages: [{ role: "user", content: "fixture" }], max_tokens: 32, max_output_tokens: 1, stream };
+    const final = { object: stream ? "chat.completion.chunk" : "chat.completion", usage: { prompt_tokens: 1_000, completion_tokens: 20, prompt_cache_hit_tokens: 800, prompt_cache_miss_tokens: 200, prompt_tokens_details: {} } };
+    const wire = stream ? `${sse(final)}data: [DONE]\n\n` : JSON.stringify(final);
+    const upstream = t.mock.method(globalThis, "fetch", async (url, init) => {
+      assert.equal(new URL(url).pathname, "/chat/completions");
+      assert.deepEqual(JSON.parse(init.body), { ...body, model: "deepseek-v4-flash" });
+      return new Response(wire, { headers: { "content-type": stream ? "text/event-stream" : "application/json" } });
+    });
+    const response = await handler.fetch(new Request(`https://clawrouter.example${route}`, {
+      method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
+      body: JSON.stringify(route.includes("/proxy/") ? { body } : body),
+    }), env, { waitUntil: promise => pending.push(promise) });
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), wire);
+    await Promise.all(pending);
+    assert.equal(upstream.mock.callCount(), 1);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].reserved_output_tokens, 32);
+    assert.deepEqual([events[0].input_tokens, events[0].output_tokens, events[0].cached_input_tokens], [1_000, 20, 800]);
+    assert.equal(events[0].actual_cost_micros, 36);
+    assert.equal(events[0].cost_basis, "manifest_pricing");
+    const usage = await handler.fetch(new Request("https://clawrouter.example/v1/usage", { headers: { authorization: `Bearer ${proxyKey()}` } }), env, {});
+    assert.equal((await usage.json()).budget.spentMicros, 36);
+    assert.equal((await providerBudgetStatus(env, "deepseek", limit)).spentMicros, 36);
+    upstream.mock.restore();
+  }
+});
+
+test("DeepSeek invalid limits reserve the full bound before either budget, while fixed zero preserves raw passthrough", async (t) => {
+  for (const [limit, providerLimit] of [[1_000, null], [null, 1_000]]) for (const fixedCost of [null, 0]) for (const max_tokens of [undefined, null, 0, -1, "32", 393_217]) {
+    const events = [], pending = [];
+    const env = usageEnv([], { provider: "deepseek", limit, providerLimit, fixedCost, retainContent: false });
+    env.DEEPSEEK_API_KEY = "fixture-deepseek-key";
+    env.BUDGET_LEDGER = sqlBudgetNamespace(t);
+    env.USAGE_QUEUE = { send: async event => events.push(event) };
+    const body = { model: "deepseek-v4-flash", messages: [], ...(max_tokens === undefined ? {} : { max_tokens }), max_output_tokens: 1 };
+    const upstream = t.mock.method(globalThis, "fetch", async (_url, init) => {
+      assert.deepEqual(JSON.parse(init.body), body);
+      return Response.json({ usage: { prompt_tokens: 10, completion_tokens: 1 } });
+    });
+    const response = await handler.fetch(new Request("https://clawrouter.example/v1/native/deepseek/chat/completions", {
+      method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" }, body: JSON.stringify(body),
+    }), env, { waitUntil: promise => pending.push(promise) });
+    assert.equal(response.status, fixedCost === 0 ? 200 : 402);
+    if (fixedCost == null) assert.equal((await response.json()).error.code, limit == null ? "provider_budget_exhausted" : "budget_exhausted");
+    else await response.text();
+    await Promise.all(pending);
+    assert.equal(upstream.mock.callCount(), fixedCost === 0 ? 1 : 0);
+    assert.equal(events[0].actual_cost_micros, 0);
+    if (fixedCost === 0) assert.equal(events[0].cost_basis, "policy_fixed");
+    else assert.equal(events[0].reserved_output_tokens, 393_216);
     upstream.mock.restore();
   }
 });

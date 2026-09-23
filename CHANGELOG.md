@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reserve DeepSeek's full declared output bound unless a valid native `max_tokens` lowers it, including Fusion readiness. Existing measured requests can newly return HTTP 402 under unchanged budgets; lower the native cap within the remaining balance. Preserve prior spend and outstanding reservations, and normalize inclusive Chat cache hits without double-counting input or discounting conflicting counters.
+
 - Price Gemini native Standard, Flex, and Priority tiers using their published cards, preserve Flex's lower reservation, and settle Priority downgrades from consistent returned tier evidence.
 
 - Keep retained-request inspection on the latest selection, cancel replaced or closed reads, and prevent late replies from reopening or overwriting the panel.
@@ -31,6 +33,7 @@
 
 - Correct Together GLM-5.2 input reservations to its published 1,048,575-token ceiling, preserving token rates and measured settlement while rejecting underfunded large requests before dispatch.
 - Verify durable usage visibility after each successful deployment smoke request with the same caller key and a bounded read-only poll. Preserve provider health and report ingestion visibility failures without repeating paid requests.
+- Allow the Cloudflare deploy workflow to select an OpenAI smoke model, including Astra, while an empty selection preserves the existing catalog default and single-request smoke.
 
 - Restrict personal usage audit events to the authenticated principal, or unattributed events for the authenticated service key, while preserving shared policy totals and administrator audit access.
 - Distinguish accounted cost estimates, fixed tariffs, unavailable prices, and budget reservations throughout the console; show zero amounts, budget scopes, and UTC monthly limits explicitly.
