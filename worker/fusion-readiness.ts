@@ -52,8 +52,8 @@ export function fusionCatalogReadiness(config: FusionConfig, resolve: (body: Rec
     const compoundCovered = eligible.every(({ availability }) => availability.status === "exact-covered") && calls.every((call) => {
       const policyCost = calls.filter((other) => samePolicyLedger(call, other)).reduce((total, other) => total + (other.auth.policy.requestCostMicros ?? 0), 0);
       const providerCost = calls.filter((other) => call.providerId === other.providerId).reduce((total, other) => total + (other.auth.policy.requestCostMicros ?? 0), 0);
-      return (call.auth.policy.monthlyBudgetMicros == null || (call.observation?.policyRemaining ?? -1) >= policyCost)
-        && (call.connection.monthlyBudgetMicros == null || (call.observation?.providerRemaining ?? -1) >= providerCost);
+      return (policyCost === 0 || call.auth.policy.monthlyBudgetMicros == null || (call.observation?.policyRemaining ?? -1) >= policyCost)
+        && (providerCost === 0 || call.connection.monthlyBudgetMicros == null || (call.observation?.providerRemaining ?? -1) >= providerCost);
     });
     if (!compoundCovered) availability = { status: "request-dependent" };
   }
