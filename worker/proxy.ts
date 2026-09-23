@@ -330,7 +330,7 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
     const requestBody = ["GET", "HEAD"].includes(selection.method) ? undefined : JSON.stringify(transformTransportBody(upstream.transport, selection.body));
     await signSigV4(selection.provider, url, selection.method, requestBody, headers, env, upstream.grant);
     let continuation: ContinuationOwner | undefined;
-    if (selection.capability === "llm.responses" && transport === "http") {
+    if (selection.capability === "llm.responses") {
       if (upstream.grantKey && !upstream.grant?.credentialLineage) throw new HttpError(503, "continuation_unavailable", "upstream credential ownership is unavailable");
       const routeUrl = new URL(url);
       const scheme = providerCredentialScheme(selection.provider, upstream.grant);
@@ -340,7 +340,9 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
       continuation = {
         providerId: selection.provider.id, endpointId: selection.endpoint.id, grantKey: upstream.grantKey,
         lineage: upstream.grant?.credentialLineage ?? null,
-        routeSha256: await sha256Hex(JSON.stringify([selection.method, routeUrl.href, identity, passthrough])),
+        // A WebSocket GET is only the handshake; both transports execute the
+        // same logical Responses POST and must share continuation ownership.
+        routeSha256: await sha256Hex(JSON.stringify(["POST", routeUrl.href, identity, passthrough])),
         policyGeneration: auth.policy.generation,
       };
     }

@@ -29,7 +29,7 @@ alarm cleanup. `GRANT_CREDENTIALS` issues lineage and preserves it during its ow
 refresh; explicit credential/account replacement invalidates it. The existing
 response reader registers identity evidence before publication, retaining
 backpressure, cancellation, and billable usage if storage fails. See the
-[HTTP continuation contract](api-reference.md#http-continuation-contract).
+[Responses continuation contract](api-reference.md#responses-continuation-contract).
 
 Authentication is read-only after an existing user receives versioned
 `assignmentState`. Rule changes reconcile users from the admin mutation path;

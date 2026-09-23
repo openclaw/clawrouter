@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve Codex turn state and response ownership across WebSocket-to-HTTP fallback. Register metadata before forwarding, retain per-create authorization, and bound pending publication without changing cancellation accounting.
+
 - Keep policy selection separate from existing binding edits, while new bindings still default to the selected policy.
 
 - Preserve the initiating cause when Responses WebSockets close. Client disconnects record `client_error` without an invented HTTP status; unsent requests release reservations, while sent requests without final usage retain their estimate.

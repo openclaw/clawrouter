@@ -1,5 +1,6 @@
 import { emptyReservation, markBudgetDispatched, reserveBudget, type BudgetReservation } from "./accounting";
 import { retainRequestContent } from "./content-retention";
+import { HttpContinuation } from "./http-continuation";
 import { authenticateProxyKey } from "./proxy-auth";
 import { createProxyAccounting } from "./proxy-accounting";
 import { concreteOpenAiSelection, isSelectionFailure, nativeMatch, prepareNativeRequest, searchParamsRecord, type ProxySelection } from "./proxy-selection";
@@ -48,7 +49,9 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
       const accounting = createProxyAccounting({ env, context, auth, selection, request: operationRequest });
       let reservation = emptyReservation(), content: string | null = null;
       try {
-        const upstream = await prepareSelected(operationRequest, env, selection, searchParamsRecord(new URL(request.url).searchParams), auth, new Set(), true, undefined, pinned, "websocket");
+        const continuation = await HttpContinuation.resolve(operationRequest, selection, auth, env);
+        const upstream = await prepareSelected(operationRequest, env, selection, searchParamsRecord(new URL(request.url).searchParams), auth, new Set(), true, undefined, continuation?.pinned ?? pinned, "websocket");
+        if (upstream.continuation) continuation?.bind(upstream.continuation);
         if (!upstream.websocket) throw new HttpError(400, "websocket_transport_unsupported", "selected upstream grant transport is not qualified for Responses WebSockets");
         signal.throwIfAborted();
         reservation = await reserveBudget(env, auth, selection.capability, accounting.cost, upstream.connection);
@@ -58,10 +61,11 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
         pinned ??= { providerId: selection.provider.id, endpointId: selection.endpoint.id, key: upstream.grantKey, revision: upstream.grantRevision };
         const observe = grantObserver(context, env, upstream.grantKey, upstream.grantRevision, selection.provider.quota);
         return {
-          pin: JSON.stringify([pinned.providerId, pinned.endpointId, pinned.key, pinned.revision, upstream.url.href]),
+          pin: JSON.stringify([selection.provider.id, selection.endpoint.id, upstream.grantKey, upstream.grantRevision, upstream.continuation?.routeSha256]),
           payload: JSON.stringify({ type: "response.create", ...selection.body, ...(lane ? { stream_id: lane } : {}) }),
           timeoutMs: selection.endpoint.timeout_ms ?? 120_000,
           connect: upstreamConnection(upstream.url, upstream.headers, signal, observe),
+          publish: identities => continuation?.publish(identities) ?? Promise.resolve(),
           settle: settlement(accounting, reservation, content, observe),
         };
       } catch (error) {

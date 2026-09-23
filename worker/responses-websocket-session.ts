@@ -1,3 +1,5 @@
+import { responseEventIdentities, type ResponseIdentity } from "./response-identities.ts";
+
 type Frame = Record<string, unknown>;
 export type ResponsesCloseCause = "client_disconnect" | "upstream_disconnect" | "client_protocol_error" | "upstream_protocol_error" | "router_limit" | "router_error" | "timeout";
 type Outcome = "completed" | "incomplete" | "failed" | "error" | ResponsesCloseCause;
@@ -23,6 +25,7 @@ export interface AdmittedResponse {
   payload: string;
   timeoutMs: number;
   connect(): Promise<ResponsesSocket>;
+  publish(identities: readonly ResponseIdentity[]): Promise<void>;
   settle(outcome: Outcome, terminal: Frame | null, sent: boolean, executionStarted: boolean): Promise<void>;
 }
 
@@ -47,6 +50,8 @@ interface Operation {
   timer: ReturnType<typeof setTimeout>;
   admitted?: AdmittedResponse;
   responseId?: string;
+  executionStarted: boolean;
+  publication: Promise<void>;
   sent: boolean;
   ending?: Ending;
   settling?: Promise<void>;
@@ -67,6 +72,9 @@ export class ResponsesWebSocketSession {
   private upstream: ResponsesSocket | null = null;
   private connecting: Promise<ResponsesSocket> | null = null;
   private admissions: Promise<void> = Promise.resolve();
+  private publication: Promise<void> = Promise.resolve();
+  private publishingBytes = 0;
+  private publishingCount = 0;
   private ending: ResponsesCloseCause | null = null;
   private connectionTimer: ReturnType<typeof setTimeout>;
 
@@ -130,7 +138,7 @@ export class ResponsesWebSocketSession {
       if (this.active.size >= this.limits.active) break;
       if (this.active.has(lane) || !queue.length) continue;
       const queued = queue.shift()!;
-      const op: Operation = { ...queued, lane, requestId: `ws_${crypto.randomUUID()}`, started: Date.now(), controller: new AbortController(), timer: setTimeout(() => this.timeout(op), this.limits.responseMs), sent: false };
+      const op: Operation = { ...queued, lane, requestId: `ws_${crypto.randomUUID()}`, started: Date.now(), controller: new AbortController(), timer: setTimeout(() => this.timeout(op), this.limits.responseMs), sent: false, executionStarted: false, publication: Promise.resolve() };
       this.active.set(lane, op);
       // Serialize admission so large parsed bodies and the first route selection
       // have one owner. Already-dispatched responses still run concurrently.
@@ -205,21 +213,52 @@ export class ResponsesWebSocketSession {
     const responseId = typeof response?.id === "string" ? response.id : typeof event.response_id === "string" ? event.response_id : undefined;
     const outcome = terminalTypes.get(String(event.type));
     if (responseId && outcome && this.terminalIds.get(lane) === responseId) return;
+    // Terminal ownership is synchronous even while publication is pending.
+    // Later frames cannot rewrite identity or turn rejected work into execution.
+    if (op?.ending) return;
+    let identities: ResponseIdentity[];
+    try { identities = responseEventIdentities(event); }
+    catch { this.close("upstream_protocol_error", 1011); return; }
+    if (identities.length && !op?.sent) { this.close("upstream_protocol_error", 1011); return; }
     if (op?.sent && responseId) {
       // A late terminal from the previous turn must never bind the next turn.
-      // Response ownership is established by the upstream start event only.
+      // Metadata can identify the response before execution actually starts.
       const starts = event.type === "response.created" || event.type === "response.in_progress";
-      if (!op.responseId && !starts) { this.close("upstream_protocol_error", 1011); return; }
+      if (!op.responseId && !starts && event.type !== "response.metadata") { this.close("upstream_protocol_error", 1011); return; }
       if (op.responseId && op.responseId !== responseId) { this.close("upstream_protocol_error", 1011); return; }
       op.responseId = responseId;
+      if (starts) op.executionStarted = true;
     }
     if (outcome && outcome !== "error" && (!responseId || !op?.responseId)) { this.close("upstream_protocol_error", 1011); return; }
     if (op?.sent && outcome) {
       if (responseId) this.terminalIds.set(lane, responseId);
-      this.options.waitUntil(this.finish(op, outcome, event));
+      this.claim(op, outcome, event);
     }
     if (event.type === "error" && !lane && !op?.sent) { this.close("upstream_disconnect", 1000, data); return; }
-    this.forward(data);
+    this.publish(data, op?.sent ? op : undefined, identities);
+    if (op?.ending) this.options.waitUntil(this.finish(op, op.ending.outcome, op.ending.terminal));
+  }
+
+  private publish(data: string, op: Operation | undefined, identities: ResponseIdentity[]): void {
+    const bytes = encoder.encode(data).byteLength;
+    if (this.publishingCount >= this.limits.buffered || this.publishingBytes + bytes > this.limits.bufferedBytes || !this.reserveOutput(bytes)) {
+      this.close("router_limit", 1009, OUTPUT_LIMIT_ERROR);
+      return;
+    }
+    this.publishingCount++;
+    this.publishingBytes += bytes;
+    // Capture the admitted operation now, never look it up after the await.
+    // One bounded FIFO keeps metadata and every following wire frame ordered.
+    const published = this.publication.then(async () => {
+      if (this.ending) return;
+      if (op && identities.length) await op.admitted!.publish(identities);
+      if (!this.ending) this.send(data);
+    }).catch(() => {
+      this.close("router_error", 1011, { code: "continuation_unavailable", message: "Continuation ownership could not be recorded; restart with full input.", status: 503, lane: op?.lane });
+    }).finally(() => { this.publishingCount--; this.publishingBytes -= bytes; });
+    this.publication = published;
+    if (op) op.publication = published;
+    this.options.waitUntil(published);
   }
 
   private timeout(op: Operation): void {
@@ -232,11 +271,10 @@ export class ResponsesWebSocketSession {
 
   private finish(op: Operation, outcome: Outcome, terminal: Frame | null): Promise<void> {
     if (op.settling) return op.settling;
-    clearTimeout(op.timer);
-    op.ending ??= { outcome, terminal };
+    this.claim(op, outcome, terminal);
     if (!op.admitted) return Promise.resolve();
-    const ending = op.ending;
-    op.settling = Promise.resolve().then(() => op.admitted!.settle(ending.outcome, ending.terminal, op.sent, op.responseId !== undefined)).catch(() => {
+    const ending = op.ending!;
+    op.settling = op.publication.then(() => op.admitted!.settle(ending.outcome, ending.terminal, op.sent, op.executionStarted)).catch(() => {
       this.close("router_error", 1000, { code: "accounting_unavailable", message: "Response accounting could not finish; open a new connection.", status: 503, lane: op.lane });
     }).finally(() => {
       this.releaseFrame(op);
@@ -244,6 +282,12 @@ export class ResponsesWebSocketSession {
       this.schedule();
     });
     return op.settling;
+  }
+
+  private claim(op: Operation, outcome: Outcome, terminal: Frame | null): void {
+    if (op.ending) return;
+    clearTimeout(op.timer);
+    op.ending = { outcome, terminal };
   }
 
   private releaseFrame(op: Operation): void {
@@ -264,13 +308,21 @@ export class ResponsesWebSocketSession {
 
   private forward(message: string): void {
     if (this.ending) return;
-    this.outputBytes += encoder.encode(message).byteLength;
+    if (this.reserveOutput(encoder.encode(message).byteLength)) this.send(message);
+  }
+
+  private reserveOutput(bytes: number): boolean {
+    this.outputBytes += bytes;
     // Workers WebSocket.send has no drain promise or supported bufferedAmount.
     // A cumulative cap bounds even a peer that never reads; reconnect, never replay here.
     if (this.outputBytes > this.limits.outputBytes) {
       this.close("router_limit", 1009, OUTPUT_LIMIT_ERROR);
-      return;
+      return false;
     }
+    return true;
+  }
+
+  private send(message: string): void {
     try { this.client.send(message); } catch { this.close("client_disconnect"); }
   }
 

@@ -90,9 +90,9 @@ curl "$CLAWROUTER_BASE_URL/v1/proxy/tavily/search" \
 
 `clawrouter/fusion` is an optional virtual model on `/v1/chat/completions`. It fans a bounded text-only prompt out to configured adviser models and asks one configured synthesizer for the final response. Every subrequest uses normal policy, budget, readiness, retention, and usage-accounting paths. See [Fusion routing](fusion-router.md).
 
-## HTTP continuation contract
+## Responses continuation contract
 
-Responses HTTP/SSE routes preserve upstream `previous_response_id` and
+Responses HTTP/SSE and WebSocket routes preserve upstream `previous_response_id` and
 `x-codex-turn-state` bytes. The router binds returned identities to the caller's
 authorization scope, provider route, and credential owner before publishing them.
 Every continuation still checks current authorization, grant eligibility, and
@@ -114,12 +114,12 @@ it never evicts a live binding to admit another. Binding-store failure or capaci
 exhaustion returns `continuation_unavailable` before headers, or terminates an
 already-started stream. The upstream call can still incur charges. Response IDs
 are limited to 256 UTF-8 bytes and turn state to 8 KiB. Output/frame size is not
-limited by identity observation, and raw identities and model output are not
+limited by HTTP identity observation, and raw identities and model output are not
 stored in this index.
 
 This contract covers `previous_response_id` and Codex turn state. Responses
 `conversation` selectors remain an unpinned, separate contract gap; do not rely on
-pooled account affinity for them. WebSockets use the connection contract below.
+pooled account affinity for them. WebSockets also use the connection contract below.
 
 ## WebSocket contract
 
@@ -129,6 +129,15 @@ Send authenticated upgrades to `/v1/responses` or
 readiness. Every create rechecks credential, policy, provider, grant, retention,
 and budget before dispatch. The connection pins its provider route and grant
 revision; changing either requires a new connection.
+
+Response IDs and `response.metadata` turn state are bound to each create's fresh
+authorization scope and actual upstream owner before forwarding. Codex can then
+fall back to HTTP with the same turn state and account. An upgrade header alone
+does not create a synthetic metadata event. Metadata may precede
+`response.created`; it identifies the response without proving execution started.
+Pending publication preserves frame order and blocks the next same-lane create
+until publication and settlement finish. Closing the connection suppresses late
+publication acknowledgments and queued output.
 
 The bridge forwards native response IDs, errors, metadata, tool results,
 `previous_response_id`, and `stream_options`. Prewarm `generate: false` requests
@@ -146,7 +155,8 @@ socket reports `accounting_unavailable` and closes before accepting more work.
 
 Limits per connection are 16 active responses, 32 named lanes plus the default
 lane, 48 buffered creates, 4 MiB per incoming frame, 8 MiB total buffered create
-bytes, and 16 MiB cumulative downstream output. The output limit bounds a slow
+bytes, at most 48 output frames/8 MiB awaiting publication, and 16 MiB cumulative
+downstream output. The output limit bounds a slow
 reader because Workers' WebSocket API has no supported drain/queue metric.
 Connections last at most 60 minutes; each response uses its endpoint deadline,
 capped at 600 seconds. Clients must reconnect after a limit or deadline closes

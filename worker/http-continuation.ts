@@ -53,6 +53,11 @@ export class HttpContinuation {
     await this.flush();
   }
 
+  async publish(identities: readonly ResponseIdentity[]): Promise<void> {
+    for (const identity of identities) this.remember(identity);
+    await this.flush();
+  }
+
   inspect(response: Response) {
     const type = response.headers.get("content-type")?.toLowerCase() ?? "";
     if (!type.includes("json") && !type.includes("text/event-stream")) return undefined;

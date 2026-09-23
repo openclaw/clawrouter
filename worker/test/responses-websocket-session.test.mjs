@@ -19,7 +19,7 @@ function fixture(t, options = {}) {
       const index = admitted.length;
       admitted.push({ body, lane, requestId, pin, signal });
       if (options.admit) await options.admit(index, body, signal);
-      return { pin: "fixture-route:grant-1", payload: JSON.stringify({ type: "response.create", ...body, ...(lane ? { stream_id: lane } : {}) }), timeoutMs: 600_000, connect: options.connect ?? (async () => upstream), settle: async (outcome, terminal, sent, executionStarted) => { settled.push({ index, outcome, terminal, sent, executionStarted }); await options.settle?.(); } };
+      return { pin: "fixture-route:grant-1", payload: JSON.stringify({ type: "response.create", ...body, ...(lane ? { stream_id: lane } : {}) }), timeoutMs: 600_000, connect: options.connect ?? (async () => upstream), publish: async identities => { await options.publish?.(index, identities); }, settle: async (outcome, terminal, sent, executionStarted) => { settled.push({ index, outcome, terminal, sent, executionStarted }); await options.settle?.(); } };
     },
   });
   t.after(async () => { session.close(); await Promise.all(pending); });
@@ -102,6 +102,7 @@ test("upstream errors and metadata remain exact and completed reservations settl
   const failure = { type: "error", status: 400, stream_id: "lane", error: { code: "previous_response_not_found", message: "fixture" }, headers: { "retry-after": "1" } };
   f.upstream.receive(failure);
   f.upstream.receive(failure);
+  await tick();
   f.upstream.close();
   await tick();
   assert.equal(f.client.sent[0], JSON.stringify(metadata));
@@ -227,7 +228,7 @@ for (const first of ["client", "upstream"]) {
     });
     f[first].close();
     await tick();
-    assert.deepEqual(f.settled.map(({ outcome, sent, executionStarted }) => ({ outcome, sent, executionStarted })), [
+    assert.deepEqual(f.settled.toSorted((a, b) => a.index - b.index).map(({ outcome, sent, executionStarted }) => ({ outcome, sent, executionStarted })), [
       { outcome: `${first}_disconnect`, sent: true, executionStarted: true },
       { outcome: `${first}_disconnect`, sent: true, executionStarted: false },
     ]);
@@ -372,3 +373,78 @@ for (const peer of ["client", "upstream"]) {
     assert.deepEqual(f.settled.map(({ outcome }) => outcome), [`${peer}_protocol_error`]);
   });
 }
+
+test("metadata before created is published before every wire frame and the next same-lane create", async t => {
+  const gate = Promise.withResolvers(), published = [];
+  const f = fixture(t, { publish: async (index, identities) => { published.push({ index, identities }); if (identities.some(({ kind }) => kind === "turn")) await gate.promise; } });
+  f.client.receive(create()); f.client.receive(create());
+  await tick();
+  const metadata = { type: "response.metadata", response_id: "first", headers: { "X-CoDeX-TuRn-StAtE": ["turn-first"] } };
+  f.upstream.receive(metadata);
+  respond(f, undefined, "first");
+  f.upstream.receive(complete(undefined, "first"));
+  await tick();
+  assert.equal(f.client.sent.length, 0); assert.equal(f.settled.length, 0); assert.equal(f.admitted.length, 1);
+  gate.resolve(); await tick();
+  assert.deepEqual(f.client.sent.map(JSON.parse).map(({ type }) => type), ["response.metadata", "response.created", "response.completed"]);
+  assert.equal(f.client.sent[0], JSON.stringify(metadata));
+  assert.deepEqual(published[0], { index: 0, identities: [{ kind: "response", value: "first" }, { kind: "turn", value: "turn-first" }] });
+  assert.ok(published.every(({ index }) => index === 0));
+  assert.equal(f.settled[0].executionStarted, true); assert.equal(f.admitted.length, 2);
+});
+
+test("a claimed rejection freezes metadata identity without inventing execution during blocked publication", async t => {
+  const gate = Promise.withResolvers();
+  const f = fixture(t, { publish: () => gate.promise });
+  f.client.receive(create()); await tick();
+  f.upstream.receive({ type: "response.metadata", response_id: "rejected", headers: { "x-codex-turn-state": "turn-rejected" } });
+  f.upstream.receive({ type: "error", status: 429, error: { code: "busy" } });
+  f.upstream.receive({ type: "response.created", response: { id: "late" } });
+  await tick();
+  gate.resolve(); await tick();
+  assert.deepEqual(f.settled.map(({ outcome, executionStarted }) => ({ outcome, executionStarted })), [{ outcome: "error", executionStarted: false }]);
+  assert.deepEqual(f.client.sent.map(JSON.parse).map(({ type }) => type), ["response.metadata", "error"]);
+  assert.equal(f.client.closed, false);
+});
+
+for (const close of ["client", "upstream", "publication"]) test(`${close} stops pending publication without forwarding late ACKs or admitting another scope`, async t => {
+  const gate = Promise.withResolvers(), calls = [];
+  const f = fixture(t, { publish: async (index, identities) => { calls.push({ index, identities }); await gate.promise; } });
+  f.client.receive(create()); f.client.receive(create()); await tick();
+  f.upstream.receive({ type: "response.metadata", headers: { "x-codex-turn-state": "held" } });
+  f.upstream.receive({ type: "response.created", response: { id: "held" } });
+  await tick();
+  if (close === "publication") gate.reject(new Error("fixture authority failure"));
+  else { f[close].close(); gate.resolve(); }
+  await tick();
+  assert.equal(calls.length, 1); assert.equal(f.admitted.length, 1);
+  assert.ok(f.client.sent.every(value => JSON.parse(value).type === "error"));
+  assert.deepEqual(f.settled.map(({ outcome, executionStarted }) => ({ outcome, executionStarted })), [{ outcome: close === "publication" ? "router_error" : `${close}_disconnect`, executionStarted: true }]);
+});
+
+test("publication FIFO captures each lane owner and waits for settlement before reusing a lane", async t => {
+  const publication = Promise.withResolvers(), settlement = Promise.withResolvers(), calls = [];
+  const f = fixture(t, { publish: async (index, identities) => { calls.push(index); if (index === 0) await publication.promise; }, settle: () => settlement.promise });
+  f.client.receive(create("a")); f.client.receive(create("a")); f.client.receive(create("b")); await tick();
+  respond(f, "a", "first"); respond(f, "b", "parallel");
+  await tick(); assert.deepEqual(calls, [0]);
+  publication.resolve(); await tick();
+  assert.deepEqual(calls, [0, 0, 1, 1]); assert.equal(f.admitted.length, 2);
+  settlement.resolve(); await tick(); assert.equal(f.admitted.length, 3);
+});
+
+test("pending output count and bytes are bounded even while one identity write is held", async t => {
+  for (const limits of [{ buffered: 3 }, { bufferedBytes: 250 }]) {
+    const gate = Promise.withResolvers();
+    const f = fixture(t, { limits, publish: () => gate.promise });
+    f.client.receive(create()); await tick();
+    f.upstream.receive({ type: "response.metadata", headers: { "x-codex-turn-state": "held" } });
+    await tick();
+    for (let index = 0; index < 8; index++) f.upstream.receive({ type: "response.output_text.delta", delta: "x".repeat(60) });
+    assert.equal(f.client.closed, true); assert.equal(f.upstream.closed, true);
+    gate.resolve(); await tick();
+    assert.deepEqual(f.settled.map(({ outcome }) => outcome), ["router_limit"]);
+    assert.equal(f.client.sent.length, 1);
+    assert.equal(JSON.parse(f.client.sent[0]).error.code, "websocket_connection_limit_reached");
+  }
+});

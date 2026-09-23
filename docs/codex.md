@@ -135,14 +135,14 @@ are not qualified for this bridge. HTTP/SSE remains available with the flag set
 to false. The provider-native base also supports bare internal Sol, Terra, and
 Luna requests; a unified, namespaced-only catalog does not cover those lookups.
 
-HTTP/SSE binds returned response IDs and Codex turn state to their original
+HTTP/SSE and WebSockets bind returned response IDs and Codex turn state to their original
 credential owner. A 409 `continuation_restart_required` requires a fresh request
 with full input and no continuation fields; another account cannot resume that
 state. Unknown or expired identities, including state created before this router
 upgrade, are rejected before upstream dispatch. Owner-controlled refresh keeps
 the binding, while explicit credential replacement requires a restart. Stateless
 requests and known environment/API-key continuations remain supported. See
-[HTTP continuation limits](api-reference.md#http-continuation-contract).
+[Responses continuation limits](api-reference.md#responses-continuation-contract).
 
 `priority` requests Fast routing. In Codex 0.153.0 and 0.155.0, `default` disables
 the Fast override but is omitted from the wire; upstream project defaults can
