@@ -137,6 +137,21 @@ exhausted provider limit returns HTTP 402 with `provider_budget_exhausted`.
 Leaving the provider budget blank keeps the provider unmetered and adds no
 provider-ledger call to the request path.
 
+Policy, principal, and provider budgets have distinct logical scopes, even when
+their identifiers share a storage address. For example, tenant `provider` with
+policy `openai` does not consume the OpenAI provider budget twice. Admission and
+budget status use the same scope recorded on each reservation receipt.
+
+Upgrades keep existing storage addresses, monthly balances, and settlement
+receipts. Older charges lack a scope tag and cannot be reliably separated, so
+they remain shared conservative debt for their original monthly window. Late
+settlement updates that original receipt; it never moves debt into a new month.
+No operator migration or budget reset is needed. During mixed-version deployment,
+older callers conservatively count all charges in the shared window. Rolling back
+to the durable-settlement implementation also retains every charge, but restores
+that shared-budget behavior until re-upgrade. Rollback to versions predating
+durable settlement is not covered by this compatibility guarantee.
+
 Rates are integer micro-US-dollars per million tokens. Update `pricingRef` and
 `effectiveAt` together when a provider changes price. Subscription traffic uses
 the equivalent public API list price for governance; it is not an invoice for

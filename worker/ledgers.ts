@@ -26,7 +26,7 @@ export class BudgetLedgerObject implements DurableObject {
     if (request.method === "GET" && url.pathname === "/status") {
       const policyId = url.searchParams.get("policy_id"), windowKey = url.searchParams.get("window_key"), limit = numberParam(url, "limit_micros");
       if (!policyId || !windowKey || limit == null) return errorResponse("invalid_budget_request", "policy_id, window_key, and limit_micros are required", 400);
-      const spent = this.effectiveSpent(windowKey);
+      const spent = this.effectiveSpent(windowKey, url.searchParams.get("scope_key"));
       return json({ policyId, windowKey, limitMicros: limit, spentMicros: spent, remainingMicros: Math.max(0, limit - spent) });
     }
     if (request.method === "POST" && url.pathname === "/reserve") return this.reserve(await request.json<BudgetReserveRequest>());
@@ -41,15 +41,15 @@ export class BudgetLedgerObject implements DurableObject {
   }
 
   private reserve(request: BudgetReserveRequest): Response {
-    const existing = first<{ window_key: string; policy_id: string; reserved_micros: number }>(this.sql.exec("SELECT window_key, policy_id, reserved_micros FROM budget_reservations WHERE reservation_id = ?", request.reservationId));
+    const existing = first<{ window_key: string; policy_id: string; reserved_micros: number; budget_scope_key: string | null }>(this.sql.exec("SELECT window_key, policy_id, reserved_micros, budget_scope_key FROM budget_reservations WHERE reservation_id = ?", request.reservationId));
     if (existing) {
-      const spent = this.effectiveSpent(existing.window_key);
+      const spent = this.effectiveSpent(existing.window_key, existing.budget_scope_key);
       return json({ allowed: true, policyId: existing.policy_id, windowKey: existing.window_key, chargedMicros: existing.reserved_micros, spentMicros: spent, remainingMicros: Math.max(0, request.limitMicros - spent) });
     }
-    const spent = this.effectiveSpent(request.windowKey);
+    const spent = this.effectiveSpent(request.windowKey, request.scopeKey);
     const remaining = Math.max(0, request.limitMicros - spent);
     if (request.costMicros > remaining) return json({ allowed: false, policyId: request.policyId, windowKey: request.windowKey, chargedMicros: 0, spentMicros: spent, remainingMicros: remaining });
-    this.sql.exec("INSERT INTO budget_reservations (reservation_id, window_key, policy_id, reserved_micros, created_at_ms, settled, dispatch_started) VALUES (?, ?, ?, ?, ?, 0, 0)", request.reservationId, request.windowKey, request.policyId, request.costMicros, Date.now());
+    this.sql.exec("INSERT INTO budget_reservations (reservation_id, window_key, policy_id, reserved_micros, created_at_ms, settled, dispatch_started, budget_scope_key) VALUES (?, ?, ?, ?, ?, 0, 0, ?)", request.reservationId, request.windowKey, request.policyId, request.costMicros, Date.now(), request.scopeKey ?? null);
     void this.scheduleAlarm();
     const next = spent + request.costMicros;
     return json({ allowed: true, policyId: request.policyId, windowKey: request.windowKey, chargedMicros: request.costMicros, spentMicros: next, remainingMicros: Math.max(0, request.limitMicros - next) });
@@ -65,19 +65,21 @@ export class BudgetLedgerObject implements DurableObject {
   }
 
   private settle(request: BudgetSettleRequest): Response {
-    const reservation = first<{ window_key: string; reserved_micros: number; settled: number; dispatch_started: number }>(this.sql.exec("SELECT window_key, reserved_micros, settled, dispatch_started FROM budget_reservations WHERE reservation_id = ?", request.reservationId));
+    const reservation = first<{ window_key: string; reserved_micros: number; settled: number; dispatch_started: number; budget_scope_key: string | null }>(this.sql.exec("SELECT window_key, reserved_micros, settled, dispatch_started, budget_scope_key FROM budget_reservations WHERE reservation_id = ?", request.reservationId));
     if (!reservation) return errorResponse("budget_reservation_missing", "budget settlement has no retained reservation receipt", 404);
     if (!Number.isSafeInteger(request.actualCostMicros) || request.actualCostMicros < 0) return errorResponse("invalid_budget_settlement", "actual cost must be a non-negative safe integer", 400);
     if ((reservation.settled === 1 && reservation.reserved_micros !== request.actualCostMicros) || (!reservation.dispatch_started && request.actualCostMicros !== 0)) return errorResponse("budget_settlement_conflict", "budget settlement conflicts with its retained receipt", 409);
-    const current = this.effectiveSpent(reservation.window_key);
+    const current = this.effectiveSpent(reservation.window_key, reservation.budget_scope_key);
     const next = Math.max(0, current - reservation.reserved_micros) + request.actualCostMicros;
     this.sql.exec("UPDATE budget_reservations SET reserved_micros = ?, settled = 1 WHERE reservation_id = ?", request.actualCostMicros, request.reservationId);
     return json({ settled: true, chargedMicros: request.actualCostMicros, spentMicros: next });
   }
 
-  private effectiveSpent(windowKey: string): number {
+  private effectiveSpent(windowKey: string, scopeKey: string | null = null): number {
     const window = first<{ spent_micros: number }>(this.sql.exec("SELECT spent_micros FROM budget_windows WHERE window_key = ?", windowKey))?.spent_micros ?? 0;
-    const reservations = first<{ spent_micros: number }>(this.sql.exec("SELECT COALESCE(SUM(reserved_micros), 0) AS spent_micros FROM budget_reservations WHERE window_key = ?", windowKey))?.spent_micros ?? 0;
+    // Untyped receipts remain shared legacy debt; their original scope is unknown.
+    // Older callers omit scope and must still count every charge in the window.
+    const reservations = first<{ spent_micros: number }>(this.sql.exec("SELECT COALESCE(SUM(reserved_micros), 0) AS spent_micros FROM budget_reservations WHERE window_key = ? AND (? IS NULL OR budget_scope_key IS NULL OR budget_scope_key = ?)", windowKey, scopeKey, scopeKey))?.spent_micros ?? 0;
     return Math.max(0, window) + Math.max(0, reservations);
   }
 
@@ -100,7 +102,7 @@ export class BudgetLedgerObject implements DurableObject {
 
   private ensureSchema(): void {
     this.sql.exec("CREATE TABLE IF NOT EXISTS budget_windows (window_key TEXT PRIMARY KEY, policy_id TEXT NOT NULL, spent_micros INTEGER NOT NULL)");
-    this.sql.exec("CREATE TABLE IF NOT EXISTS budget_reservations (reservation_id TEXT PRIMARY KEY, window_key TEXT NOT NULL, policy_id TEXT NOT NULL, reserved_micros INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, settled INTEGER NOT NULL, dispatch_started INTEGER NOT NULL DEFAULT 1)");
+    this.sql.exec("CREATE TABLE IF NOT EXISTS budget_reservations (reservation_id TEXT PRIMARY KEY, window_key TEXT NOT NULL, policy_id TEXT NOT NULL, reserved_micros INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, settled INTEGER NOT NULL, dispatch_started INTEGER NOT NULL DEFAULT 1, budget_scope_key TEXT)");
     let columns = new Set(rows<{ name: string }>(this.sql.exec("PRAGMA table_info(budget_reservations)")).map((row) => row.name));
     if (!columns.has("created_at_ms")) {
       for (const reservation of rows<{ window_key: string; policy_id: string; reserved_micros: number }>(this.sql.exec("SELECT window_key, policy_id, reserved_micros FROM budget_reservations"))) {
@@ -115,6 +117,7 @@ export class BudgetLedgerObject implements DurableObject {
     // Existing and older-version reservations lack dispatch evidence. Preserve
     // their bound rather than refunding potentially completed provider work.
     if (!columns.has("dispatch_started")) this.sql.exec("ALTER TABLE budget_reservations ADD COLUMN dispatch_started INTEGER NOT NULL DEFAULT 1");
+    if (!columns.has("budget_scope_key")) this.sql.exec("ALTER TABLE budget_reservations ADD COLUMN budget_scope_key TEXT");
     this.sql.exec("CREATE INDEX IF NOT EXISTS budget_reservations_created_at ON budget_reservations (created_at_ms)");
     this.sql.exec("CREATE INDEX IF NOT EXISTS budget_reservations_pending ON budget_reservations (settled, created_at_ms)");
   }
@@ -250,6 +253,7 @@ export async function budgetStatus(env: Env, policyId: string, policy: { tenantI
     const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(address.objectName));
     const url = new URL("https://clawrouter.internal/status");
     url.searchParams.set("policy_id", address.policyId); url.searchParams.set("window_key", address.windowKey); url.searchParams.set("limit_micros", String(limit));
+    url.searchParams.set("scope_key", address.scopeKey);
     const response = await stub.fetch(url);
     if (!response.ok) throw new Error(`budget status returned ${response.status}`);
     const status = await response.json<{ spentMicros: number; remainingMicros: number }>();
@@ -266,6 +270,7 @@ export async function providerBudgetStatus(env: Env, providerId: string, limitMi
     const url = new URL("https://clawrouter.internal/status");
     url.searchParams.set("policy_id", address.policyId);
     url.searchParams.set("window_key", address.windowKey);
+    url.searchParams.set("scope_key", address.scopeKey);
     url.searchParams.set("limit_micros", String(limitMicros));
     const response = await stub.fetch(url);
     if (!response.ok) throw new Error(`provider budget status returned ${response.status}`);

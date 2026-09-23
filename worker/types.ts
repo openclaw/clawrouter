@@ -350,6 +350,7 @@ export type QueueMessage = UsageEvent | ({ kind: "budget_settlement"; request: B
 export interface BudgetReserveRequest {
   policyId: string;
   windowKey: string;
+  scopeKey?: string | null;
   limitMicros: number;
   costMicros: number;
   reservationId: string;
