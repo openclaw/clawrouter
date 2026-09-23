@@ -230,8 +230,10 @@ function smokeTarget(provider, env) {
   if (!endpoint || !supportsManifestProxy(provider, endpoint)) {
     return null;
   }
+  // Router envelopes use catalog identity. The Worker resolves native names,
+  // which can themselves start with another provider's routing prefix.
   const model = manifestSmokeModelOverride(provider, endpoint, env)
-    ?? modelsForEndpoint(provider, endpoint).find((model) => !model.upstream.includes("${"))?.upstream;
+    ?? modelsForEndpoint(provider, endpoint).find((model) => !model.upstream.includes("${"))?.id;
   if (["openai.chat_completions", "openai.responses", "openai.embeddings", "anthropic.messages", "cohere.chat", "cohere.embed", "google.generate_content", "aws_bedrock.invoke"].includes(endpoint.request_format) && !model) return null;
   const pathParams = Object.fromEntries(
     endpoint.path_params.map((param) => [param, samplePathParam(provider, param, model, env)]),
@@ -614,7 +616,7 @@ function manifestSmokeModelOverride(provider, endpoint, env) {
     if (!modelsForEndpoint(provider, endpoint).includes(catalog)) {
       throw new Error(`smoke model override for ${provider.id} must support ${endpoint.id}`);
     }
-    if (!catalog.upstream.includes("${")) return catalog.upstream;
+    return catalog.id;
   }
   const prefix = (provider.routing.modelPrefixes ?? []).find((candidate) => value.startsWith(candidate));
   return prefix ? value.slice(prefix.length) : value;

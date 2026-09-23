@@ -34,7 +34,7 @@ test("bundled target selection is stable and unresolved prediction coverage stay
   assert.match(summarizePlan(plan), /replicate.*unresolved=.*existing prediction ID/);
 });
 
-for (const [source, messagesOnly, manifestOnly, formatOnly, method] of [
+for (const [source, messagesOnly, manifestOnly, formatOnly, method, override] of [
   ["anthropic", false, false], ["anthropic", true, false], ["cohere", false, false],
   ["google-gemini", false, false], ["tavily", false, false], ["firecrawl", false, false],
   ["openai", false, false], ["openai", false, true],
@@ -42,8 +42,10 @@ for (const [source, messagesOnly, manifestOnly, formatOnly, method] of [
   ["cohere", false, false, "cohere.embed"], ["tavily", false, false, "tavily.extract"],
   ["firecrawl", false, false, "fixture.status", "GET"], ["firecrawl", false, false, "fixture.status", "HEAD"],
   ["firecrawl", false, false, "fixture.graphql", "POST"],
+  ["groq", false, true], ["groq", false, true, null, null, "catalog"], ["groq", false, true, null, null, "native"],
+  ["groq", false, true, null, null, "default-path"], ["groq", false, true, null, null, "catalog-path"], ["groq", false, true, null, null, "native-path"],
 ]) {
-  test(`renamed ${source}${messagesOnly ? " Messages" : ""}${manifestOnly ? " manifest" : ""}${formatOnly ? ` ${formatOnly}` : ""}${method ? ` ${method}` : ""} smoke reaches the real Worker with its native format`, async (t) => {
+  test(`renamed ${source}${messagesOnly ? " Messages" : ""}${manifestOnly ? " manifest" : ""}${formatOnly ? ` ${formatOnly}` : ""}${method ? ` ${method}` : ""}${override ? ` ${override}` : ""} smoke reaches the real Worker with its native format`, async (t) => {
     const provider = renamed(source), original = { ...snapshot };
     if (messagesOnly) {
       const count = provider.capabilities.find(capability => capability.id === "llm.count_tokens").endpoint;
@@ -58,17 +60,31 @@ for (const [source, messagesOnly, manifestOnly, formatOnly, method] of [
       provider.capabilities = provider.capabilities.filter(capability => provider.endpoints.some(endpoint => endpoint.id === capability.endpoint));
     }
     if (manifestOnly) provider.class = "rest_json";
+    if (override?.endsWith("-path")) Object.assign(provider.endpoints[0], { path: "/v1/models/${model}/chat/completions", path_params: ["model"], path_param_styles: { model: "opaque_segment" } });
+    const planEnv = {}, envKey = `CLAWROUTER_SMOKE_MODEL_${provider.id.replaceAll("-", "_").toUpperCase()}`;
+    if (override?.startsWith("catalog")) planEnv[envKey] = provider.models[1].id;
+    if (override?.startsWith("native")) planEnv[envKey] = provider.models[1].upstream;
     const env = await smokeEnvironment(provider), pending = [], upstream = [], recorded = [];
-    const plan = buildProviderSmokePlan({ providers: [provider] }, {}), target = plan.providers[0].target;
+    const providers = [...original.providers, provider];
+    const plan = buildProviderSmokePlan({ providers }, planEnv), target = plan.providers.find(item => item.id === provider.id).target;
     assert.equal(target.unresolved, undefined);
     const endpoint = provider.endpoints.find(endpoint => endpoint.id === (target.endpoint ?? provider.capabilities.find(capability => capability.id === "llm.chat").endpoint));
     const expectedModel = provider.models.find(model => model.capabilities.some(capability => provider.capabilities.some(item => item.endpoint === endpoint.id && item.id === capability)));
+    if (source === "groq") {
+      assert.equal(expectedModel.upstream, "openai/gpt-oss-120b");
+      assert.equal(target.envelope.body.model, expectedModel.id);
+      if (endpoint.path_params.includes("model")) assert.equal(target.envelope.pathParams.model, expectedModel.id);
+    }
     t.mock.method(globalThis, "fetch", async (url, init) => {
-      if (new URL(url).origin === "https://smoke-router.example") return handler.fetch(new Request(url, init), env, { waitUntil: promise => pending.push(promise) });
+      if (new URL(url).origin === "https://smoke-router.example") {
+        const response = await handler.fetch(new Request(url, init), env, { waitUntil: promise => pending.push(promise) });
+        if (!response.ok) t.diagnostic(await response.clone().text());
+        return response;
+      }
       const native = new URL(url), headers = new Headers(init.headers), body = init.body === undefined ? undefined : JSON.parse(init.body);
       assert.equal(native.origin, "https://format-upstream.example");
       assert.equal(init.method, method ?? "POST");
-      assert.equal(native.pathname, endpoint.path.replace(/\$\{([^}]+)\}/g, (_, name) => encodeURIComponent(target.envelope.pathParams[name])));
+      assert.equal(native.pathname, endpoint.path.replace(/\$\{([^}]+)\}/g, (_, name) => encodeURIComponent(["model", "deployment"].includes(name) ? expectedModel.upstream : target.envelope.pathParams[name])));
       for (const scheme of provider.auth.schemes) {
         if (scheme.type === "bearer") assert.equal(headers.get(scheme.header), "Bearer fixture-upstream-key");
         if (scheme.type === "api_key") assert.equal(headers.get(scheme.header), "fixture-upstream-key");
@@ -85,7 +101,7 @@ for (const [source, messagesOnly, manifestOnly, formatOnly, method] of [
         assert.deepEqual(body.messages, [{ role: "user", content: "reply with ok" }]);
         assert.equal(body.max_tokens, messagesOnly ? 16 : undefined);
       } else if (["cohere.chat", "openai.chat_completions"].includes(endpoint.request_format)) {
-        assert.equal(body.model, expectedModel.upstream);
+        assert.equal(body.model, endpoint.path_params.includes("model") ? undefined : expectedModel.upstream);
         assert.deepEqual(body.messages, [{ role: "user", content: "reply with ok" }]);
       } else if (endpoint.request_format === "google.generate_content") {
         assert.deepEqual(body, { contents: [{ parts: [{ text: "reply with ok" }] }] });
@@ -105,8 +121,8 @@ for (const [source, messagesOnly, manifestOnly, formatOnly, method] of [
     });
     try {
       Object.assign(snapshot, {
-        providers: [provider], capability_index: {},
-        model_index: Object.fromEntries(provider.models.map(model => [model.id, { provider: provider.id, ...model }])),
+        providers,
+        model_index: { ...original.model_index, ...Object.fromEntries(provider.models.map(model => [model.id, { provider: provider.id, ...model }])) },
       });
       const results = await runLiveProviderSmokes({ baseUrl: "https://smoke-router.example", smokeKey: env.fixtureKey, plan, liveProviders: [provider.id], onResult: result => recorded.push(result) });
       await Promise.all(pending);
@@ -123,7 +139,7 @@ test("native operator model overrides retain the renamed provider's own identity
   const envKey = `CLAWROUTER_SMOKE_MODEL_${provider.id.replaceAll("-", "_").toUpperCase()}`;
   for (const value of [model.id, model.upstream]) {
     const plan = buildProviderSmokePlan({ providers: [provider] }, { [envKey]: value, CLAWROUTER_SMOKE_MODEL_COHERE: "wrong-provider-model" });
-    assert.equal(plan.providers[0].target.envelope.body.model, model.upstream);
+    assert.equal(plan.providers[0].target.envelope.body.model, model.id);
   }
 });
 

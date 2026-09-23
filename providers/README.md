@@ -239,6 +239,11 @@ Anthropic token counting omits the output limit required by Messages generation.
 Templates also cover OpenAI Responses and embeddings, Cohere embeddings, and
 Tavily Extract when those operations are selected. Model requests use an
 endpoint-compatible catalog model or the operator's explicit model override.
+For known defaults and overrides, router envelopes carry the catalog model ID;
+the Worker resolves the provider-native name for the upstream body and path.
+This preserves the 22 bundled route choices and native upstream identities,
+while intentionally changing model spelling in Anthropic, Cohere, Google, and
+Bedrock envelopes. Unknown explicit overrides keep their existing semantics.
 Request contracts: [OpenAI Responses](https://developers.openai.com/api/reference/resources/responses/methods/create),
 [OpenAI embeddings](https://developers.openai.com/api/reference/resources/embeddings/methods/create),
 [Cohere Embed](https://docs.cohere.com/reference/embed), and
