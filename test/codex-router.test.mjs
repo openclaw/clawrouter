@@ -315,7 +315,7 @@ function respond(body, request, transport, connection = null) {
   const held = !!holdNext && !warmup, active = holdNext === 'active';
   if (held) holdNext = null;
   requests.push({ body, responseId, transport, connection, held, authorized: request.headers.get('authorization') === 'Bearer fixture-upstream-key', lite: request.headers.get('x-openai-internal-codex-responses-lite') === 'true' });
-  const output = warmup ? [] : generated++ === 0
+  const output = warmup ? [] : generated++ === 0 && !held
     ? [{ id: 'fixture_fc', type: 'function_call', call_id: 'fixture_call', name: 'fixture_echo', arguments: '{"message":"fixture"}' }]
     : [{ id: 'fixture_message_' + generated, type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'fixture complete', annotations: [] }] }];
   const result = { id: responseId, object: 'response', status: 'completed', model: body.model, output, service_tier: 'priority', usage: { input_tokens: warmup ? 3 : 14, output_tokens: warmup ? 0 : 8, total_tokens: warmup ? 3 : 22, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } };
