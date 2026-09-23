@@ -1,3 +1,4 @@
+import { createResponsesUsageInspector } from "./responses-usage.ts";
 import { createSseUsageInspector, extractUsageTokens, responseOutcome, usageInspectionLimit, type UsageInspection } from "./token-usage.ts";
 import { HttpOperation } from "./http-operation.ts";
 
@@ -5,14 +6,16 @@ export interface ObservedUsage extends UsageInspection { delivery: "complete" | 
 export interface ResponseBodyInspection { push(bytes: Uint8Array): Promise<void>; end(): Promise<void> }
 
 // Accounting observes the delivered stream; a tee would drain upstream ahead of
-// the client and buffer arbitrary output. JSON and individual SSE frames are
-// bounded; a long stream can still report authoritative late terminal facts.
-export function observeUsage(response: Response, operation = new HttpOperation(), bodyInspection?: ResponseBodyInspection): { response: Response; result: Promise<ObservedUsage> } {
+// the client and buffer arbitrary output. Responses retain only bounded scalar
+// metadata; other formats keep their existing bounded JSON/frame inspection.
+export function observeUsage(response: Response, operation = new HttpOperation(), bodyInspection?: ResponseBodyInspection, responseFormat?: string): { response: Response; result: Promise<ObservedUsage> } {
   const signal = operation.signal;
   if (!response.body) { operation.stop("complete"); return { response, result: Promise.resolve({ tokens: null, outcome: null, delivery: "complete" }) }; }
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-  const sse = contentType.includes("text/event-stream") ? createSseUsageInspector() : null;
-  let inspect = !sse && contentType.includes("json");
+  const eventStream = contentType.includes("text/event-stream"), json = contentType.includes("json");
+  const responses = responseFormat === "openai.responses" && (eventStream || json) ? createResponsesUsageInspector(eventStream) : null;
+  const sse = !responses && eventStream ? createSseUsageInspector() : null;
+  let inspect = !responses && !sse && json;
   const decoder = new TextDecoder();
   const reader = response.body.getReader();
   let text = "", bytes = 0, finished = false;
@@ -25,7 +28,7 @@ export function observeUsage(response: Response, operation = new HttpOperation()
     if (delivery === "canceled") operation.cancel(reason);
     else operation.stop(delivery === "complete" ? "complete" : "upstream", reason);
     delivery = operation.delivery ?? delivery;
-    let inspection: UsageInspection = sse?.result(delivery === "complete") ?? { tokens: null, outcome: null };
+    let inspection: UsageInspection = responses?.result(delivery === "complete") ?? sse?.result(delivery === "complete") ?? { tokens: null, outcome: null };
     if (delivery === "complete" && inspect) {
       try {
         text += decoder.decode();
@@ -33,7 +36,7 @@ export function observeUsage(response: Response, operation = new HttpOperation()
         inspection = { tokens: extractUsageTokens(value), outcome: responseOutcome(value) };
       } catch { inspection.outcome = "provider_error"; }
     }
-    text = "";
+    responses?.stop(); text = "";
     resolve({ ...inspection, delivery });
     // Claim completion before cancellation can resolve/reject a pending read.
     // The result owns accounting even if the transport's cancellation rejects.
@@ -53,7 +56,12 @@ export function observeUsage(response: Response, operation = new HttpOperation()
       try {
         const next = await reader.read();
         if (finished) return; // A pending read can resolve after consumer cancellation.
-        if (next.done) { if (bodyInspection) await operation.wait(bodyInspection.end(), "publication"); if (finished) return; finish("complete"); controller.close(); return; }
+        if (next.done) {
+          if (bodyInspection) await operation.wait(bodyInspection.end(), "publication"); if (finished) return;
+          await responses?.end(); if (finished) return;
+          finish("complete"); controller.close(); return;
+        }
+        if (responses) { await responses.push(next.value); if (finished) return; }
         sse?.push(next.value);
         if (inspect) {
           bytes += next.value.byteLength;

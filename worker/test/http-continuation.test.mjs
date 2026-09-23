@@ -428,6 +428,48 @@ test("caller abort during registration cancels the single owned reader and does 
   assert.equal(f.events.length, 1);
 });
 
+for (const phase of ["json", "sse_before_terminal", "sse_after_terminal"]) test(`Responses ${phase} cancellation during projection preserves one receipt and stops identity publication`, async t => {
+  const f = await fixture(t, false, { limit: 1_000_000, fixedCost: null }), caller = new AbortController();
+  const usage = { input_tokens: 14, output_tokens: 8, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } };
+  const completed = { object: "response", status: "completed", service_tier: "priority", usage };
+  const frame = value => `data: ${JSON.stringify(value)}\n\n`;
+  const prefix = phase === "json" ? [] : [frame({ type: "response.created" })];
+  if (phase === "sse_after_terminal") prefix.push(frame({ type: "response.completed", response: completed }));
+  const large = { output: "x".repeat(32_000), id: "resp_never_published", ...completed };
+  const interrupted = phase === "json" ? JSON.stringify(large) : frame({ type: "response.completed", response: large });
+  const chunks = [...prefix, interrupted];
+  let decoded = 0, cancels = 0, registrations = 0;
+  const decode = TextDecoder.prototype.decode;
+  t.mock.method(TextDecoder.prototype, "decode", function (bytes, options) {
+    if (bytes?.byteLength === 4096 && ++decoded === 2) queueMicrotask(() => caller.abort(new Error("fixture caller during projection")));
+    return decode.call(this, bytes, options);
+  });
+  f.env.ACCESS_CONTROL.beforeFetch = async (name, request) => {
+    if (name.startsWith("http-continuations:") && (await request.clone().json()).action === "register") registrations++;
+  };
+  const upstream = new Response(new ReadableStream({
+    pull(controller) { if (chunks.length) controller.enqueue(new TextEncoder().encode(chunks.shift())); },
+    cancel() { cancels++; },
+  }, { highWaterMark: 0 }), { headers: { "content-type": phase === "json" ? "application/json" : "text/event-stream" } });
+  f.response = () => upstream;
+  const response = await f.request({ stream: true, service_tier: "priority", max_output_tokens: 32 }, {}, "/v1/responses", caller.signal);
+  assert.equal(response.status, 200);
+  const reader = response.body.getReader();
+  for (const chunk of prefix) assert.equal(new TextDecoder().decode((await reader.read()).value), chunk);
+  await assert.rejects(reader.read(), /fixture caller during projection/);
+  await setImmediate(); await f.drain();
+  assert.equal(decoded, 2); assert.equal(cancels, 1); assert.equal(upstream.body.locked, false);
+  assert.equal(registrations, 0); assert.equal(f.bindings().length, 0);
+  assert.equal(f.sent.length, 1); assert.equal(f.events.length, 1);
+  const [event] = f.events, measured = phase === "sse_after_terminal";
+  assert.equal(event.status, "client_error"); assert.equal(event.status_code, 200);
+  assert.equal(event.total_tokens, measured ? 22 : null);
+  assert.ok(event.reserved_cost_micros > 1_080);
+  assert.equal(event.actual_cost_micros, measured ? 1_080 : event.reserved_cost_micros);
+  assert.equal(event.cost_basis, measured ? "manifest_pricing" : "manifest_reservation");
+  await assertBudgets(f, [event.actual_cost_micros]);
+});
+
 async function endpointDeadline(t) {
   const { modelRoute } = await import("../providers.ts");
   const timeout = modelRoute("openai/gpt-6-astra").provider.endpoints.find(endpoint => endpoint.id === "responses").timeout_ms;

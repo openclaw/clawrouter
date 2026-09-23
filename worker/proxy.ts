@@ -299,7 +299,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       return errorResponse(failure.code, failure.message, failure.status);
     }
   }
-  const observed = observeUsage(response, operation, response.ok ? continuation?.inspect(response) : undefined);
+  const observed = observeUsage(response, operation, response.ok ? continuation?.inspect(response) : undefined, selection.endpoint.response_format);
   context.waitUntil(observed.result.then(result => accounting.complete(observed.response, result, reservation, content, operation.status)));
   response = observed.response;
   const outputHeaders = new Headers(response.headers);
