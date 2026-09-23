@@ -17,6 +17,7 @@ import { hasPrimaryCredential, putGrantCredentials, revokeGrantCredentials, type
 import { normalizeFusionConfig } from "./fusion";
 import { budgetStatus as policyBudgetStatus, providerBudgetStatus, usageSnapshots } from "./ledgers";
 import { startOAuth } from "./oauth";
+import { normalizeConnectionMutation } from "./provider-connections.ts";
 import { endpointForPath, listGrantRecords, listHealth, modelRoute, providerReadiness, providerReadinessForPolicies, providerReadinessFromState, refreshStoredGrant, refreshStoredGrantQuota, snapshot } from "./providers";
 import type { AdminBootstrapResponse } from "../shared/contracts";
 import type {
@@ -55,7 +56,7 @@ export async function adminApi(request: Request, env: Env, path: string): Promis
     if (path.startsWith("/v1/admin/access-users/") && request.method === "PUT") return putUser(request, env, path.slice("/v1/admin/access-users/".length));
     if (path.startsWith("/v1/admin/policies/")) return policyMutation(request, env, path.slice("/v1/admin/policies/".length));
     if (path === "/v1/admin/credentials" || path.startsWith("/v1/admin/credentials/")) return await credentialMutationResponse(request, env, path === "/v1/admin/credentials" ? null : path.slice("/v1/admin/credentials/".length), authorization, "admin");
-    if (path.startsWith("/v1/admin/connections/") && request.method === "PUT") return putConnection(request, env, path.slice("/v1/admin/connections/".length));
+    if (path.startsWith("/v1/admin/connections/") && ["PUT", "PATCH"].includes(request.method)) return putConnection(request, env, path.slice("/v1/admin/connections/".length));
     if (path.startsWith("/v1/admin/upstream-grants/")) return upstreamGrantMutation(request, env, path.slice("/v1/admin/upstream-grants/".length));
     if (path === "/v1/admin/keys" && request.method === "GET") return privateJson({ keys: (await listPolicies(env)).map(legacyKeyResponse) });
     if (path.startsWith("/v1/admin/keys/")) return await legacyKeyMutation(request, env, path.slice("/v1/admin/keys/".length), authorization);
@@ -326,8 +327,10 @@ async function policyMutation(request: Request, env: Env, rest: string): Promise
 
 async function putConnection(request: Request, env: Env, encodedId: string): Promise<Response> {
   const id = decodePathSegment(encodedId), provider = snapshot.providers.find((item) => item.id === id); if (!provider) throw new HttpError(404, "unknown_provider", "provider does not exist");
-  const connection = normalizeConnection(await readJson<unknown>(request), id, await resolveConnection(env, id));
-  await authorityCall(env, "/connections/put", connection); return privateJson(connection);
+  const mutation = normalizeConnectionMutation(await readJson<unknown>(request), id, request.method === "PUT");
+  // Finish guarded legacy initialization; the authority resolves omitted fields at commit time.
+  await resolveConnection(env, id);
+  return privateJson(await authorityCall<ProviderConnection>(env, "/connections/put", mutation));
 }
 
 async function upstreamGrantMutation(request: Request, env: Env, rest: string): Promise<Response> {
@@ -573,17 +576,6 @@ function normalizeBinding(value: unknown): PolicyBinding {
   const priority = binding.priority === undefined ? 100 : binding.priority;
   if (!Number.isSafeInteger(priority) || (priority as number) < 0) throw new HttpError(400, "invalid_policy_binding", "priority must be a non-negative safe integer");
   return { policyId, principalType, principalId, enabled, priority: priority as number };
-}
-
-export function normalizeConnection(value: unknown, providerId: string, existing?: ProviderConnection | null): ProviderConnection {
-  const body = mutationObject(value, "invalid_provider_connection", "provider connection");
-  const enabled = body.enabled === undefined ? true : body.enabled;
-  if (typeof enabled !== "boolean") throw new HttpError(400, "invalid_provider_connection", "enabled must be a boolean");
-  if (body.label !== undefined && body.label !== null && typeof body.label !== "string") throw new HttpError(400, "invalid_provider_connection", "label must be a string or null");
-  const label = typeof body.label === "string" ? body.label.trim() || null : null;
-  const monthlyBudgetMicros = body.monthlyBudgetMicros === undefined ? existing?.monthlyBudgetMicros ?? null : body.monthlyBudgetMicros;
-  if (monthlyBudgetMicros !== null && (!Number.isSafeInteger(monthlyBudgetMicros) || (monthlyBudgetMicros as number) < 0)) throw new HttpError(400, "invalid_provider_connection", "monthlyBudgetMicros must be a non-negative safe integer or null");
-  return { providerId, enabled, label, monthlyBudgetMicros: monthlyBudgetMicros as number | null };
 }
 
 function normalizeUserMutation(value: unknown, existing: AccessControlUser["record"], includePolicyIds = false): { record: AccessControlUser["record"]; policyIds: string[] } {

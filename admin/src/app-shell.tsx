@@ -23,7 +23,7 @@ export function AppShell() {
   const { policies, credentials: credentialState, connections: connectionState, bindings: bindingState, upstream, assignments, fusion, users: userState, tab } = access;
   const { items: keys, selected: selectedPolicy, form: policyForm, setForm: setPolicyForm, error: policyError, save: savePolicy, revoke, edit: editPolicy, startNew: startNewPolicy, applyPreset, toggleProvider: togglePolicyProvider, setProviderGroup: setPolicyProviderGroup } = policies;
   const { items: credentials, selected: selectedCredential, form: credentialForm, setForm: setCredentialForm, issuedKey, issue: issueCredential, revoke: revokeCredential, setSelectedId: setSelectedCredentialId, setIssuedKey } = credentialState;
-  const { items: connections, setEnabled: setProviderConnection, setBudget: setProviderBudget } = connectionState;
+  const { items: connections, pendingProviderIds, setEnabled: setProviderConnection, setBudget: setProviderBudget } = connectionState;
   const { items: bindings, selected: selectedBinding, form: bindingForm, setForm: setBindingForm, save: saveBinding, edit: editBinding, startNew: startNewBinding } = bindingState;
   const { items: upstreamGrants, selected: selectedUpstreamGrant, form: upstreamGrantForm, setForm: setUpstreamGrantForm, save: saveUpstreamGrant, revoke: revokeUpstreamGrant, refresh: refreshUpstreamGrant, refreshQuota: refreshUpstreamGrantQuota, authorize: authorizeUpstreamGrant, edit: editUpstreamGrant, startNew: startNewUpstreamGrant } = upstream;
   const { items: assignmentRules, selected: selectedAssignmentRule, form: assignmentRuleForm, setForm: setAssignmentRuleForm, save: saveAssignmentRule, reconcile: reconcileAssignments, edit: editAssignmentRule, startNew: startNewAssignmentRule } = assignments;
@@ -133,6 +133,7 @@ export function AppShell() {
             selected={selectedService}
             policies={keys}
             connections={connections}
+            pendingProviderIds={pendingProviderIds}
             query={query}
             setQuery={setQuery}
             kind={kind}

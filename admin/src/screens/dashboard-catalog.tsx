@@ -252,12 +252,13 @@ export function DashboardStat({ label, value, note }: { label: string; value: st
   return <div><span>{label}</span><strong>{value}</strong><small>{note}</small></div>;
 }
 
-export function CatalogScreen({ services, allServices, selected, policies, connections, query, setQuery, kind, setKind, kinds, canAdminister, onSelect, onSetConnection, onSetProviderBudget, onPlay, onAdd }: {
+export function CatalogScreen({ services, allServices, selected, policies, connections, pendingProviderIds, query, setQuery, kind, setKind, kinds, canAdminister, onSelect, onSetConnection, onSetProviderBudget, onPlay, onAdd }: {
   services: ServiceItem[];
   allServices: ServiceItem[];
   selected?: ServiceItem;
   policies: AccessPolicy[];
   connections: ProviderConnection[];
+  pendingProviderIds: ReadonlySet<string>;
   query: string;
   setQuery: (value: string) => void;
   kind: string;
@@ -319,6 +320,7 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
               const playBlocker = playgroundBlockedForService(selected);
               const connection = connectionByProvider.get(selected.provider);
               const connectionEnabled = connection?.enabled ?? selected.readiness?.connectionEnabled;
+              const connectionPending = pendingProviderIds.has(selected.provider);
               return (
                 <>
             <InspectorHeader brandIcon={selected.brandIcon} icon={kindIcon(selected.kind)} title={selected.name} subtitle={`${kindLabel(selected.kind)} · ${selected.category}`} />
@@ -338,7 +340,7 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
               <dt>missing</dt><dd>{selected.readiness?.missingConfig.length ? selected.readiness.missingConfig.join(", ") : "none"}</dd>
               <dt>oauth grants</dt><dd>{selected.readiness?.oauthGrantRequired ? selected.readiness.oauthGrantCount : "n/a"}</dd>
             </dl>
-            {canAdminister ? <ProviderBudgetEditor connection={connection ?? { providerId: selected.provider, enabled: connectionEnabled !== false }} onSave={onSetProviderBudget} /> : null}
+            {canAdminister ? <ProviderBudgetEditor connection={connection ?? { providerId: selected.provider, enabled: connectionEnabled !== false }} pending={connectionPending} onSave={onSetProviderBudget} /> : null}
             {selected.readiness?.reasons.length ? <InlineNote>{selected.readiness.reasons.join("; ")}</InlineNote> : null}
             <div className="sectionTitle">Policies including this service</div>
             <div className="miniList">
@@ -346,7 +348,7 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
             </div>
             <div className="inspectorActions">
               <button type="button" disabled={Boolean(playBlocker)} onClick={() => onPlay(selected)} title={playBlocker ?? undefined}><Play className="buttonIcon" aria-hidden="true" /><span>Try in playground</span></button>
-              {canAdminister ? <button type="button" className={connectionEnabled === false ? "buttonSecondary" : "buttonDanger"} onClick={() => onSetConnection(selected.provider, connectionEnabled === false)}><ServerCog className="buttonIcon" aria-hidden="true" /><span>{connectionEnabled === false ? "Enable connection" : "Disable connection"}</span></button> : null}
+              {canAdminister ? <button type="button" disabled={connectionPending} aria-busy={connectionPending} className={connectionEnabled === false ? "buttonSecondary" : "buttonDanger"} onClick={() => onSetConnection(selected.provider, connectionEnabled === false)}><ServerCog className="buttonIcon" aria-hidden="true" /><span>{connectionEnabled === false ? "Enable connection" : "Disable connection"}</span></button> : null}
               {canAdminister ? <button type="button" className="buttonSecondary" onClick={() => onAdd(selected)}><Plus className="buttonIcon" aria-hidden="true" /><span>Add to selected policy</span></button> : null}
             </div>
                 </>
@@ -363,18 +365,19 @@ function formatSpendMicros(value: number | null | undefined) {
   return value === 0 ? "$0.00" : formatMicros(value);
 }
 
-function ProviderBudgetEditor({ connection, onSave }: { connection: ProviderConnection; onSave: (providerId: string, monthlyBudgetMicros: number | null) => void }) {
+function ProviderBudgetEditor({ connection, pending, onSave }: { connection: ProviderConnection; pending: boolean; onSave: (providerId: string, monthlyBudgetMicros: number | null) => void }) {
   const [value, setValue] = useState(currencyInput(connection.monthlyBudgetMicros));
   const [error, setError] = useState("");
   useEffect(() => { setValue(currencyInput(connection.monthlyBudgetMicros)); setError(""); }, [connection.providerId, connection.monthlyBudgetMicros]);
   return (
     <form className="providerBudgetEditor" onSubmit={(event) => {
       event.preventDefault();
+      if (pending) return;
       try { onSave(connection.providerId, optionalCurrencyMicros(value) ?? null); setError(""); }
       catch (caught) { setError(caught instanceof Error ? caught.message : "invalid monthly budget"); }
     }}>
-      <label><span>monthly provider budget ($)</span><input inputMode="decimal" value={value} onChange={(event) => setValue(event.target.value)} placeholder="unlimited" /></label>
-      <button type="submit" className="buttonSecondary">Save budget</button>
+      <label><span>monthly provider budget ($)</span><input disabled={pending} inputMode="decimal" value={value} onChange={(event) => setValue(event.target.value)} placeholder="unlimited" /></label>
+      <button type="submit" className="buttonSecondary" disabled={pending} aria-busy={pending}>{pending ? "Saving connection…" : "Save budget"}</button>
       {connection.monthlyBudgetMicros != null ? <small>Month to date {formatSpendMicros(connection.spentMicros)} · {formatSpendMicros(connection.remainingMicros)} remaining</small> : <small>Unlimited across all policies and principals</small>}
       {error ? <small className="providerBudgetError">{error}</small> : null}
     </form>

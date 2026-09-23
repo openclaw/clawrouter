@@ -4,6 +4,7 @@ import type {
 } from "./types";
 import { evaluateUserAssignments, withLegacyAssignmentState, type AssignmentEvidence, type AssignmentRuleEntry } from "./assignment-evaluator.ts";
 import { contentRetentionDefault } from "./content-retention.ts";
+import { normalizeConnectionMutation, type ProviderConnectionMutation } from "./provider-connections.ts";
 import { errorResponse, HttpError, json, normalizeEmail, readJson, safeEqual } from "./utils.ts";
 
 type Principal = { principalType: "user" | "group"; principalId: string };
@@ -62,7 +63,7 @@ export class PolicyBindingIndexObject implements DurableObject {
       if (path === "/connections/resolve") return json(this.resolveConnections((await readJson<{ providerIds: string[] }>(request)).providerIds));
       if (path === "/connections/initialize") { this.initializeConnections(await readJson<ProviderConnection[]>(request)); return new Response("initialized"); }
       if (path === "/connections/initialize-all") { this.initializeConnections(await readJson<ProviderConnection[]>(request)); this.putMeta("connections_global_initialized"); return new Response("initialized"); }
-      if (path === "/connections/put") { this.putConnection(await readJson<ProviderConnection>(request)); return new Response("updated"); }
+      if (path === "/connections/put") return json(this.putConnection(await readJson<ProviderConnectionMutation>(request)));
       if (path === "/grant-pools/resolve") return json(this.resolveGrantPool(await readJson<GrantPoolResolveRequest>(request)));
       if (path === "/grant-pools/sync") { this.syncGrantPool(await readJson<GrantPoolSyncRequest>(request)); return new Response("updated"); }
       if (path === "/grant-pools/feedback") { this.putGrantRuntime(await readJson<GrantRuntimeFeedbackRequest>(request)); return new Response("updated"); }
@@ -304,8 +305,13 @@ export class PolicyBindingIndexObject implements DurableObject {
     return rows<{ credential_id: string; credential_json: string }>(this.sql.exec("SELECT credential_id, credential_json FROM proxy_credentials ORDER BY credential_id")).map((row) => ({ credentialId: row.credential_id, credential: JSON.parse(row.credential_json) }));
   }
 
-  private putConnection(connection: ProviderConnection): void {
+  private putConnection(input: ProviderConnectionMutation): ProviderConnection {
+    const mutation = normalizeConnectionMutation(input, input.providerId);
+    // Read and merge without yielding so a budget edit cannot restore a stale kill switch.
+    const current = this.getConnection(mutation.providerId);
+    const connection: ProviderConnection = { enabled: current?.enabled ?? true, label: current?.label ?? null, monthlyBudgetMicros: current?.monthlyBudgetMicros ?? null, ...mutation };
     this.sql.exec("INSERT OR REPLACE INTO provider_connections (provider_id, connection_json) VALUES (?, ?)", connection.providerId, JSON.stringify(connection));
+    return connection;
   }
   private initializeConnections(items: ProviderConnection[]): void {
     if (this.hasMeta("connections_global_initialized")) return;
