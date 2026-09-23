@@ -1,3 +1,4 @@
+import { resolveTemplate } from "./provider-templates.ts";
 import { createProxyAccounting, estimateCost, type CompoundRequestContext } from "./proxy-accounting";
 import { authenticateProxyKey } from "./proxy-auth";
 import {
@@ -17,7 +18,7 @@ import { observeGrantQuota, shouldFailoverGrant } from "./grant-quota";
 import { grantRoutingPolicy, recordGrantRuntime, type PinnedGrant } from "./grant-selection";
 import {
   assertProviderAccess, copyRequestHeaders, providerById,
-  resolveTemplate, signSigV4, upstreamAuth, upstreamPath,
+  signSigV4, upstreamAuth, upstreamPath,
 } from "./providers";
 import { applyTransportHeaders, transformTransportBody } from "./provider-auth.ts";
 import { normalizePreStreamError, observeUsage } from "./proxy-response";

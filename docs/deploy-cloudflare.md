@@ -36,8 +36,11 @@ must be used instead of overriding the production deployment ad hoc.
   every deploy. Run `pnpm cf:content:provision` directly when provisioning only.
 - provider secrets such as `OPENAI_API_KEY`, `OPENROUTER_API_KEY`,
   `MINIMAX_API_KEY`, and `TAVILY_API_KEY`.
-- provider config vars declared by manifests, such as `OPENROUTER_SITE_URL`,
+- provider config vars required by the selected routes, such as
   `AZURE_OPENAI_ENDPOINT`, `AZURE_OPENAI_API_VERSION`, and `AWS_REGION`.
+
+`OPENROUTER_SITE_URL` is optional attribution. OpenRouter requests require an
+API key; set the site URL only when you want the `HTTP-Referer` attribution header.
 
 `FIRECRAWL_API_KEY` is optional: Firecrawl's scrape route is usable without it
 at the provider's free rate limit. Configure it when higher Firecrawl limits

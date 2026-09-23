@@ -4,6 +4,7 @@ import { grantCoolingDown, grantQuotaRatio, observeGrantQuota, observeGrantQuota
 import { applyProviderCredential, applyTransportHeaders, quotaProbeForGrant, requiredGrantTemplate, transformTransportBody, transportForGrant } from "./provider-auth.ts";
 import type { CompiledGrantTransport, CompiledProvider, Env, GrantRuntimeState, ProviderSnapshot, RefreshConfig, UpstreamGrant } from "./types";
 import { errorResponse, HttpError, json, readJson } from "./utils.ts";
+import { applyTemplateHeaders, resolveTemplate } from "./provider-templates.ts";
 
 const REFRESH_MARGIN_MS = 5 * 60_000;
 const MAX_SECRET_BYTES = 64 * 1024;
@@ -411,11 +412,11 @@ async function keepWarm(env: Env, provider: CompiledProvider, transport: Compile
   const headers = new Headers({ "content-type": "application/json" });
   const query = new URLSearchParams();
   applyProviderCredential(provider, grant, env, headers, query);
-  for (const [name, value] of Object.entries(provider.adapter.injectHeaders)) headers.set(name, resolveProviderTemplate(provider, value, env));
-  for (const [name, value] of Object.entries(endpoint.headers)) headers.set(name, resolveProviderTemplate(provider, value, env));
+  applyTemplateHeaders(provider, provider.adapter.injectHeaders, env, headers);
+  applyTemplateHeaders(provider, endpoint.headers, env, headers);
   applyTransportHeaders(headers, transport, grant);
   const path = transport.endpointPaths[endpoint.id] ?? endpoint.path;
-  const url = new URL(`${(transport.baseUrl ?? resolveProviderTemplate(provider, provider.base_urls.default, env)).replace(/\/$/, "")}${resolveProviderTemplate(provider, path, env)}`);
+  const url = new URL(`${(transport.baseUrl ?? resolveTemplate(provider, provider.base_urls.default, env)).replace(/\/$/, "")}${resolveTemplate(provider, path, env)}`);
   query.forEach((value, name) => url.searchParams.set(name, value));
   const body = transformTransportBody(transport, structuredClone(config.body));
   let response: Response;
@@ -437,16 +438,6 @@ function quotaInterval(transport: CompiledGrantTransport, state: GrantRuntimeSta
   if (state.status === "cooldown") return config.exhaustedIntervalSeconds * 1_000;
   const ratio = grantQuotaRatio(state, Date.now(), Number.MAX_SAFE_INTEGER);
   return (ratio !== null && ratio * 100 <= config.urgentRemainingPercent ? config.urgentIntervalSeconds : config.normalIntervalSeconds) * 1_000;
-}
-
-function resolveProviderTemplate(provider: CompiledProvider, value: string, env: Env): string {
-  return value.replace(/\$\{([^}]+)\}/g, (_, name: string) => {
-    const normalized = name.replace(/[^A-Za-z0-9]/g, "_").toUpperCase();
-    const key = provider.config_keys.find((candidate) => candidate === normalized || candidate.endsWith(`_${normalized}`));
-    const resolved = key ? envValue(env, key) : null;
-    if (!resolved) throw new HttpError(503, "provider_not_configured", `missing Cloudflare config value ${name} for provider ${provider.id}`);
-    return resolved;
-  });
 }
 
 function timestamp(value: string | null | undefined): number {

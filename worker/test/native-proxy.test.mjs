@@ -154,21 +154,29 @@ test("Azure readiness checks endpoint-specific configuration without requiring a
 
 test("native OpenRouter Responses preserves provider namespaces and rejects unpriced budgeted calls", async (t) => {
   const fixture = await nativeFixture("openrouter");
-  Object.assign(fixture.env, { OPENROUTER_API_KEY: "fixture-openrouter-key", OPENROUTER_SITE_URL: "https://client.example" });
+  fixture.env.OPENROUTER_API_KEY = "fixture-openrouter-key";
   const sent = [];
   t.mock.method(globalThis, "fetch", async (url, init) => {
     sent.push({ url: new URL(url), ...init });
     return Response.json({ usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } });
   });
   const body = { model: "openai/gpt-6-astra", input: "fixture", max_output_tokens: 16 };
-  const response = await fixture.call("/v1/responses", body);
-  assert.equal(response.status, 200);
-  await response.text(); await fixture.drain();
-  assert.equal(sent[0].url.href, "https://openrouter.ai/api/v1/responses");
-  assert.equal(sent[0].headers.get("authorization"), "Bearer fixture-openrouter-key");
-  assert.equal(sent[0].headers.get("http-referer"), "https://client.example");
-  assert.equal(sent[0].headers.get("x-title"), "ClawRouter");
-  assert.deepEqual(JSON.parse(sent[0].body), body);
+  for (const siteUrl of [undefined, " ", "https://client.example"]) {
+    fixture.env.OPENROUTER_SITE_URL = siteUrl;
+    const readiness = providerReadinessFromState(fixture.env, [], [], new Map()).find(({ id }) => id === "openrouter");
+    assert.deepEqual(readiness.requiredConfig, ["OPENROUTER_API_KEY"]);
+    assert.deepEqual(readiness.optionalConfig, ["OPENROUTER_SITE_URL"]);
+    assert.deepEqual(readiness.executableEndpoints, ["chat_completions", "responses"]);
+    const response = await fixture.call("/v1/responses", body);
+    assert.equal(response.status, 200);
+    await response.text(); await fixture.drain();
+    const request = sent.at(-1);
+    assert.equal(request.url.href, "https://openrouter.ai/api/v1/responses");
+    assert.equal(request.headers.get("authorization"), "Bearer fixture-openrouter-key");
+    assert.equal(request.headers.get("http-referer"), siteUrl?.trim() || null);
+    assert.equal(request.headers.get("x-title"), "ClawRouter");
+    assert.deepEqual(JSON.parse(request.body), body);
+  }
   for (const owner of [fixture.policy, fixture.connection]) {
     owner.monthlyBudgetMicros = 1000;
     const denied = await fixture.call("/v1/responses", body);
@@ -177,7 +185,14 @@ test("native OpenRouter Responses preserves provider namespaces and rejects unpr
     await fixture.drain();
     owner.monthlyBudgetMicros = null;
   }
-  assert.equal(sent.length, 1);
+  assert.equal(sent.length, 3);
+  delete fixture.env.OPENROUTER_API_KEY;
+  assert.deepEqual(providerReadinessFromState(fixture.env, [], [], new Map()).find(({ id }) => id === "openrouter").executableEndpoints, []);
+  const missingKey = await fixture.call("/v1/responses", body);
+  assert.equal(missingKey.status, 503);
+  assert.equal((await missingKey.json()).error.code, "provider_not_configured");
+  await fixture.drain();
+  assert.equal(sent.length, 3);
 });
 
 async function nativeFixture(providerId) {

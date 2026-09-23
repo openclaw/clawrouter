@@ -8,6 +8,7 @@
 
 - Validate every provider manifest against its canonical JSON Schema before compilation, including ordinary pricing cards, safe integer rates, calendar dates, and unknown fields; retain semantic route and pricing checks.
 - Prevent duplicate playground requests, cancel pending requests when starting a new chat, and preserve new drafts when earlier replies arrive.
+- Allow OpenRouter API-key-only setup without a site URL; omit unset optional attribution headers consistently in readiness, requests, and grant maintenance while keeping required templates strict.
 
 - Match Cloudflare Access applications by exact destination instead of display name, reject ambiguous or name-only collisions before writes, and inspect all application and policy pages during provisioning.
 

@@ -1,5 +1,6 @@
+import { resolveTemplate } from "./provider-templates.ts";
 import type { CompiledEndpoint, CompiledModel, CompiledProvider, Env } from "./types";
-import { capabilityForPath, endpointForPath, modelRoute, resolveTemplate, transformRequestBody } from "./providers";
+import { capabilityForPath, endpointForPath, modelRoute, transformRequestBody } from "./providers";
 import { decodePathSegment, errorResponse, HttpError } from "./utils";
 
 export interface ProxySelection {
