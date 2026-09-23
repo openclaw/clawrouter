@@ -117,7 +117,7 @@ test("newly budgeted provider defaults compile with dated pricing", () => {
   const snapshot = compileProviderSnapshot();
   const expectations = {
     deepseek: ["2026-06-22", 435000, 870000],
-    "google-gemini": ["2026-06-22", 1500000, 9000000],
+    "google-gemini": ["2026-09-23", 1500000, 9000000],
     groq: ["2026-06-22", 150000, 600000],
     minimax: ["2026-06-22", 300000, 1200000],
     together: ["2026-09-23", 1400000, 4400000],
