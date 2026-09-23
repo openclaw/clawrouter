@@ -18,7 +18,7 @@ test("dashboard distinguishes unavailable prices from mixed and fully priced spe
   const responses: Record<string, unknown> = {
     "/v1/providers": { providers: [] },
     "/v1/routes": { openaiCompatible: [], manifestProxy: [] },
-    "/v1/session": { authenticated: true, auth: "access", role: "user", email: "user@example.com", entitlements: { providers: [] } },
+    "/v1/session": { authenticated: true, auth: "cloudflare_access", role: "user", email: "user@example.com", entitlements: { providers: [] } },
     "/v1/session/credentials": { credentials: [] },
     "/v1/session/usage": { policies: [], usage: { ledger: "ready", summary, providers: [provider], daily: [], events: [] } },
   };

@@ -6,13 +6,13 @@ import { DashboardScreen, CatalogScreen, UserAvatar } from "./screens/dashboard-
 import { PlaygroundScreen } from "./screens/playground";
 import { PoliciesScreen } from "./screens/access";
 import { UsageScreen, UsersScreen } from "./screens/users-usage";
-import { applyTheme, initialTheme, navItems } from "./ui-config";
+import { applyTheme, navItems, readTheme } from "./ui-config";
 import { formatTimestamp } from "./ui-helpers";
 import { useConsole } from "./console-controller-context";
 import { consoleStatusPresentation } from "./status-display";
 
 export function AppShell() {
-  const [theme, setTheme] = React.useState(initialTheme);
+  const [theme, setTheme] = React.useState(readTheme);
   React.useEffect(() => { applyTheme(theme); }, [theme]);
   const { session: shell, catalog, access, usage, selfServiceKeys, credentialOwner, playground: playgroundDomain, refresh } = useConsole();
   const { view, value: session, status, lastUpdatedAt, demoMode, busy, navigateTo } = shell;

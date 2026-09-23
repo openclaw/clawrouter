@@ -3,6 +3,7 @@ import { Activity, CalendarDays, KeyRound, Plus, Search, ServerCog, ShieldCheck,
 import { bindingKey, effectiveAccess, errorMessage, policyUsageFallback, tenantSummaryFallback } from "../domain";
 import { EntityName, InlineError, InlineNote, InspectorHeader, Status, kindLabel } from "../components";
 import { ProviderUsageChart, TrafficAreaChart } from "../analytics-charts";
+import { useConsole } from "../console-controller-context";
 import { usageCostLabel, usageEventGroups, type UsageEventGroup } from "../usage-analytics";
 import {
   effectiveProviderCount,
@@ -12,7 +13,6 @@ import {
   formatMicros,
   formatTimestamp,
   readyCount,
-  request,
   usageEventTone,
   usagePolicyId,
 } from "../ui-helpers";
@@ -95,6 +95,7 @@ export function UsersScreen({ users, selected, policies, bindings, services, for
 }
 
 export function UsageScreen({ keys, credentials, services, overview, tenants, usageRows, usage, usageLoaded, usageStale, usageError, usageUpdatedAt }: { keys: AccessPolicy[]; credentials: ProxyCredential[]; services: ServiceItem[]; overview: AdminOverview | null; tenants: AdminTenantSummary[]; usageRows: AdminUsageRow[]; usage: UsageSnapshot; usageLoaded: boolean; usageStale: boolean; usageError: string; usageUpdatedAt: number | null }) {
+  const { request } = useConsole();
   const [retainedContent, setRetainedContent] = useState<RetainedRequestContent | null>(null);
   const [contentError, setContentError] = useState("");
   const [contentLoading, setContentLoading] = useState(false);

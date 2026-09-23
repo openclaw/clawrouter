@@ -49,6 +49,14 @@ can still be revoked. Copy a new secret before dismissing it or leaving the pane
 the console cannot retrieve it later. If a request outcome is uncertain, refresh
 the key list before choosing another action. Creation drafts survive refreshes.
 
+Protected console data belongs to one verified browser session. Confirmed sign-in
+loss clears editors, one-time secrets, Playground history and retained request
+content. Sign in locally or reload through managed Access, then verify the session
+before showing protected data again. Reauthentication starts a fresh draft lifetime;
+ordinary reporting failures retain the current identity and show refresh errors.
+Already-sent key operations keep admission until they settle and are never replayed
+by sign-in recovery.
+
 ## Accessibility and validation
 
 Preserve visible keyboard focus, labeled controls, reduced motion, and WCAG AA
@@ -61,3 +69,5 @@ screenshot, accessibility, keyboard-focus, and self-service credential checks.
 The committed screenshot baselines are for CI's Linux Chromium environment;
 review intended visual changes before updating them. Demo mode uses synthetic
 identities, usage, and the generated provider catalog for safe captures.
+Select it explicitly with `?demo=1`, or use `?demo=user` on loopback for a user
+session. A network or sign-in failure never switches the console into demo mode.

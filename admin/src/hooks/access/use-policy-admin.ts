@@ -1,10 +1,12 @@
 import { type FormEvent, useState } from "react";
 import { currencyInput, errorMessage, knownPolicyProviders, optionalCurrencyMicros, optionalNumber, parseEligibleGrants, unique } from "../../domain";
 import { defaultPolicy, demo, rolePresets } from "../../ui-config";
-import { policyFormFromPolicy, request } from "../../ui-helpers";
+import { policyFormFromPolicy } from "../../ui-helpers";
+import type { ConsoleRequest } from "../../dashboard-fetch";
 import type { AccessPolicy, PolicyForm, ProviderRow, ProxyCredential, RouteCatalog, SessionResponse } from "../../ui-types";
 
 interface Dependencies {
+  request: ConsoleRequest;
   allowDemo: boolean;
   gatewayOrigin: string;
   session: SessionResponse;
@@ -17,7 +19,7 @@ interface Dependencies {
   syncDemoAdmin: (policies: AccessPolicy[], credentials: ProxyCredential[], providers: ProviderRow[], routes: RouteCatalog, syncRows?: boolean) => void;
 }
 
-export function usePolicyAdmin({ allowDemo, gatewayOrigin, session, demoMode, providers, credentials, routes, setStatus, refresh, syncDemoAdmin }: Dependencies) {
+export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, demoMode, providers, credentials, routes, setStatus, refresh, syncDemoAdmin }: Dependencies) {
   const [keys, setKeys] = useState<AccessPolicy[]>(allowDemo ? demo.keys : []);
   const [policyForm, setPolicyForm] = useState<PolicyForm>(allowDemo && demo.keys[0] ? policyFormFromPolicy(demo.keys[0]) : defaultPolicy);
   const [selectedPolicyId, setSelectedPolicyId] = useState(allowDemo ? demo.keys[0]?.policyId ?? "" : "");

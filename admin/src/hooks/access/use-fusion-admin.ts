@@ -1,10 +1,11 @@
 import { type FormEvent, type SetStateAction, useRef, useState } from "react";
 import { errorMessage } from "../../domain";
 import { defaultFusion, demo } from "../../ui-config";
-import { request } from "../../ui-helpers";
+import type { ConsoleRequest } from "../../dashboard-fetch";
 import type { AccessPolicy, FusionConfig, FusionReadiness } from "../../ui-types";
 
 interface Dependencies {
+  request: ConsoleRequest;
   allowDemo: boolean;
   gatewayOrigin: string;
   demoMode: boolean;
@@ -14,7 +15,7 @@ interface Dependencies {
   refresh: () => Promise<void>;
 }
 
-export function useFusionAdmin({ allowDemo, gatewayOrigin, demoMode, policies, selectedPolicyId, setStatus, refresh }: Dependencies) {
+export function useFusionAdmin({ request, allowDemo, gatewayOrigin, demoMode, policies, selectedPolicyId, setStatus, refresh }: Dependencies) {
   const [config, setConfig] = useState<FusionConfig>(allowDemo ? demo.fusion : defaultFusion);
   const [policyId, setPolicyId] = useState(selectedPolicyId);
   const [readiness, setReadiness] = useState<FusionReadiness | null>(null);

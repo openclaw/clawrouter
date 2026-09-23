@@ -1,10 +1,11 @@
 import { useEffect, useRef, useState } from "react";
 import { policyUsageFallback, tenantSummaryFallback } from "../domain";
 import { demo, emptyUsageSnapshot } from "../ui-config";
-import { adminOverviewFromPolicies, request, settled } from "../ui-helpers";
+import { adminOverviewFromPolicies, settled } from "../ui-helpers";
+import type { ConsoleRequest } from "../dashboard-fetch";
 import type { AccessPolicy, AdminOverview, AdminTenantSummary, AdminUsageRow, ProviderRow, ProxyCredential, RouteCatalog, UsageSnapshot } from "../ui-types";
 
-export function useUsage(allowDemo: boolean) {
+export function useUsage(allowDemo: boolean, request: ConsoleRequest) {
   const [adminOverview, setAdminOverview] = useState<AdminOverview | null>(allowDemo ? demo.overview : null);
   const [tenantSummaries, setTenantSummaries] = useState<AdminTenantSummary[]>(allowDemo ? demo.tenants : []);
   const [ledger, setLedger] = useState({
@@ -16,25 +17,10 @@ export function useUsage(allowDemo: boolean) {
     error: "",
     revision: 0, // Empty-to-empty resets must still wake lazy readers.
   });
-  const principalRef = useRef("");
   const generationRef = useRef(0);
   const pendingRef = useRef<Promise<boolean> | null>(null);
 
   useEffect(() => () => { generationRef.current += 1; pendingRef.current = null; }, []);
-
-  function reset() {
-    setAdminOverview(null);
-    setTenantSummaries([]);
-    generationRef.current += 1;
-    pendingRef.current = null;
-    setLedger({ rows: [], snapshot: emptyUsageSnapshot, loaded: false, stale: false, updatedAt: null, error: "", revision: generationRef.current });
-  }
-
-  function setPrincipal(principal: string) {
-    if (principalRef.current === principal) return;
-    principalRef.current = principal;
-    reset();
-  }
 
   function hydrate(rows: AdminUsageRow[], snapshot: UsageSnapshot) {
     setLedger({ rows, snapshot, loaded: true, stale: false, updatedAt: Date.now(), error: "", revision: generationRef.current });
@@ -92,7 +78,6 @@ export function useUsage(allowDemo: boolean) {
     tenantSummaries,
     setTenantSummaries,
     ...ledger,
-    setPrincipal,
     hydrate,
     invalidate,
     fail,
