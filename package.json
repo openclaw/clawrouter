@@ -32,6 +32,10 @@
     "codex:connect": "node scripts/codex-connect.mjs",
     "cf:smoke": "node scripts/smoke-deployed.mjs"
   },
+  "dependencies": {
+    "stream-chain": "4.2.5",
+    "stream-json": "3.7.0"
+  },
   "devDependencies": {
     "@cfworker/json-schema": "^4.1.1",
     "@cloudflare/workers-types": "^5.20260920.1",
