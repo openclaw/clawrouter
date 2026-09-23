@@ -65,9 +65,12 @@ for (const destination of ["other policy", "New", "same policy"] as const) {
     await expect(tenant(page)).toHaveValue("later-draft");
     await expect(policyId(page)).toHaveValue(destination === "New" ? "new_policy" : destination === "other policy" ? "policy_b" : "policy_a");
     await expect(row(page, "policy_a").locator('[data-label="tenant"]')).toHaveText("canonical-a");
+    state.reads[0].body.policies = state.reads[0].body.policies.map((policy) => policy.policyId === "policy_b" ? { ...policy, tenantId: "refresh-observed" } : policy);
     await state.reads[0].route.fulfill({ json: state.reads[0].body });
-    await expect(page.locator(".statusBar")).toContainText("saved policy policy_a");
+    await expect(row(page, "policy_b").locator('[data-label="tenant"]')).toHaveText("refresh-observed");
+    await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
     await expect(tenant(page)).toHaveValue("later-draft");
+    await expect(policyId(page)).toHaveValue(destination === "New" ? "new_policy" : destination === "other policy" ? "policy_b" : "policy_a");
     expect(state.writes).toHaveLength(1);
   });
 }
@@ -80,7 +83,8 @@ test("sibling saves, failures and refreshes preserve the policy draft and its ow
   await page.getByRole("textbox", { name: "priority", exact: true }).fill("7");
   state.policies[0] = { ...state.policies[0], tenantId: "server-after-binding" };
   await page.getByRole("button", { name: "Save binding", exact: true }).click();
-  await expect(page.locator(".statusBar")).toContainText("saved binding");
+  await expect(row(page, "maintainers").locator('[data-label="priority"]')).toHaveText("7");
+  await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
   await page.getByRole("tab", { name: /^Policies/ }).click();
   await expect(tenant(page)).toHaveValue("policy-draft");
   state.failBinding = true;
