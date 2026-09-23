@@ -141,7 +141,14 @@ stream_idle_timeout_ms = 10000
       assert.ok(held);
       await client.rpc("turn/interrupt", { threadId: thread.thread.id, turnId: interrupted.turn.id });
       assert.equal((await finishTurn(interrupted)).status, "interrupted");
-      await until(async () => (await state()).aborted.includes(held.responseId));
+      try {
+        await until(async () => (await state()).aborted.includes(held.responseId), 5_000);
+      } catch {
+        const observed = await state();
+        const ingress = await (await dispatch("/fixture-ingress")).json();
+        const receipts = (await (await dispatch("/v1/usage")).json()).usage.events.map(({ status, status_code, cost_basis, actual_cost_micros }) => ({ status, status_code, cost_basis, actual_cost_micros }));
+        throw new Error(`native interrupt did not abort upstream: ${JSON.stringify({ aborted: observed.aborted, canceled: observed.canceled, expired: observed.expired, ingress, receipts, ledgers: await ledgerFacts() })}`);
+      }
       assert.deepEqual((await state()).expired, []);
       const priorReceiptIds = new Set(receipts.map(({ request_id }) => request_id));
       const interruptedState = await state();
@@ -224,8 +231,8 @@ stream_idle_timeout_ms = 10000
   });
 }
 
-async function until(predicate) {
-  const deadline = Date.now() + 30_000;
+async function until(predicate, timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 25));
@@ -243,11 +250,19 @@ export class BudgetLedgerObject extends RealBudgetLedger {
     return super.fetch(request);
   }
 }
-export default handler;
+const ingress = [];
+export default { ...handler, async fetch(request, env, context) {
+  if (new URL(request.url).pathname === "/fixture-ingress") return Response.json(ingress);
+  if (request.method === "POST" && new URL(request.url).pathname.endsWith("/responses")) {
+    const entry = { aborted: false }; ingress.push(entry);
+    request.signal.addEventListener("abort", () => { entry.aborted = true; }, { once: true });
+  }
+  return handler.fetch(request, env, context);
+} };
 `; }
 
 function upstreamFixture() { return `
-const requests = [], aborted = [], expired = []; let connections = 0, generated = 0, holdNext = false;
+const requests = [], aborted = [], canceled = [], expired = []; let connections = 0, generated = 0, holdNext = false;
 function respond(body, request, transport, connection = null) {
   const responseId = 'fixture_response_' + (requests.length + 1);
   const warmup = body.generate === false;
@@ -264,7 +279,7 @@ function respond(body, request, transport, connection = null) {
 }
 export default { async fetch(request) {
   const path = new URL(request.url).pathname;
-  if (path === '/state') return Response.json({ requests, connections, aborted, expired });
+  if (path === '/state') return Response.json({ requests, connections, aborted, canceled, expired });
   if (path === '/hold' && request.method === 'POST') { holdNext = true; return new Response('armed'); }
   if (request.url !== 'https://api.openai.com/v1/responses') return new Response('unexpected upstream route', { status: 400 });
   if (request.headers.get('upgrade') === 'websocket') {
@@ -306,7 +321,7 @@ export default { async fetch(request) {
         timer = setTimeout(() => { expired.push(heldId); request.signal.removeEventListener('abort', onAbort); controller.close(); resolve(); }, 30_000);
       });
     },
-    cancel() { clearTimeout(timer); release?.(); },
+    cancel() { canceled.push(heldId); clearTimeout(timer); release?.(); },
   }, { highWaterMark: 0 }), { headers });
 } };
 `; }
