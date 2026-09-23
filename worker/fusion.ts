@@ -1,4 +1,6 @@
 import type { FusionConfig } from "../shared/contracts.ts";
+import { assessModelRequest } from "../shared/model-request-parameters.ts";
+import type { CompiledEndpoint, CompiledModel } from "./types.ts";
 import { HttpError } from "./utils.ts";
 import { InternalHttpAbort } from "./http-operation.ts";
 
@@ -63,8 +65,6 @@ export function buildAdviserBody(original: Record<string, unknown>, model: strin
   return {
     model,
     stream: false,
-    ...(model.startsWith("local/") ? { reasoning_effort: "none" } : {}),
-    ...(modelSupportsTemperature(model) ? { temperature: config.temperature } : {}),
     max_tokens: config.maxOutputTokens,
     messages: [
       {
@@ -78,7 +78,6 @@ export function buildAdviserBody(original: Record<string, unknown>, model: strin
 
 export function buildAggregatorBody(original: Record<string, unknown>, config: FusionConfig, proposals: FusionProposal[]): Record<string, unknown> {
   const body: Record<string, unknown> = { ...original, model: config.aggregatorModel };
-  if (!modelSupportsTemperature(config.aggregatorModel)) delete body.temperature;
   if (!proposals.length || !fusionMessagesValid(original.messages)) return body;
   const messages = [...original.messages] as ChatMessage[];
   const firstNonSystem = messages.findIndex((message) => message.role !== "system");
@@ -90,8 +89,10 @@ export function fusionMessagesValid(value: unknown): value is ChatMessage[] {
   return Array.isArray(value) && value.every((message) => !!message && typeof message === "object" && !Array.isArray(message) && typeof (message as { role?: unknown }).role === "string");
 }
 
-function modelSupportsTemperature(model: string): boolean {
-  return !/^openai\/gpt-5\.(?:4|5)(?:$|-)/.test(model);
+export function prepareAdviserBody(body: Record<string, unknown>, model: CompiledModel | null, endpoint: Pick<CompiledEndpoint, "id" | "request_format">, temperature: number): Record<string, unknown> {
+  const preferred = { ...body, temperature };
+  const assessment = assessModelRequest(model, endpoint, preferred);
+  return assessment.conflicts.length || assessment.unknown.length ? body : preferred;
 }
 
 export async function collectFusionProposals(config: FusionConfig, original: Record<string, unknown>, invoke: InvokeModel): Promise<FusionRunResult> {

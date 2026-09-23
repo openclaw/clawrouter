@@ -141,6 +141,14 @@ credentials, grants, budgets, settled usage records, and retained content.
 Pending, delayed, or retrying local queue messages are memory-only and are lost
 on a crash or restart; drain request traffic before planned maintenance.
 
+Retained content cleanup starts when the Worker is ready and repeats once per
+minute without request traffic. Its dedicated cursor and status row persists in
+the same volume. Watch `content archive cleanup` messages for the last completed
+pass and backlog; `content cleanup retry` means startup or a sweep failed and will
+be retried. Cleanup stops with the Worker. Physical deletion can lag expiry on
+large archives or during downtime, and local R2 has a backing-blob crash window;
+see [request content retention](content-retention.md) for the exact limits.
+
 Upgrading past 0.1.0 does not change the console posture: local sign-in is
 opt-in, so the dashboard keeps failing closed until the operator sets
 `CLAWROUTER_LOCAL_AUTH=enabled`. With the flag set, the dashboard shell and

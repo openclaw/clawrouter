@@ -34,7 +34,7 @@ export function createProxyAccounting(options: AccountingContext) {
   const correlation = correlationMetadata(request);
   const requestId = correlation.requestId;
   const started = Date.now();
-  function finish(statusCode: number, status: UsageEvent["status"], reservation = emptyReservation(), actual = 0, tokens: UsageTokens | null = null, contentRef: string | null = null, basis = cost.basis) {
+  function finish(statusCode: UsageEvent["status_code"], status: UsageEvent["status"], reservation = emptyReservation(), actual = 0, tokens: UsageTokens | null = null, contentRef: string | null = null, basis = cost.basis) {
     const event: UsageEvent = {
       id: randomId("usage"), type: "clawrouter.usage.v1", occurred_at_ms: Date.now(), tenant_id: auth.policy.tenantId ?? "default",
       policy_id: auth.policyId, credential_id: auth.credentialId, principal_id: auth.principalId, auth_type: auth.authType,
@@ -55,7 +55,7 @@ export function createProxyAccounting(options: AccountingContext) {
     };
     return finalizeAccounting(env, reservation, actual, event);
   }
-  function settle(statusCode: number, status: UsageEvent["status"], billable: boolean, tokens: UsageTokens | null, reservation: BudgetReservation, contentRef: string | null) {
+  function settle(statusCode: UsageEvent["status_code"], status: UsageEvent["status"], billable: boolean, tokens: UsageTokens | null, reservation: BudgetReservation, contentRef: string | null) {
     // Token totals and a known served tier cannot establish hosted-search fees.
     const measured = tokens && !unpricedSearch ? actualCost(model, tokens, auth.policy.requestCostMicros) : null;
     const actual = billable ? measured ?? cost.reserveMicros : 0;

@@ -58,8 +58,20 @@ jobs:
           fi
           echo "CLAWROUTER_CODEX_BINARY=$RUNNER_TEMP/codex-$CODEX_VERSION/codex-x86_64-unknown-linux-musl" >> "$GITHUB_ENV"
           echo "CLAWROUTER_CODEX_CATALOG_BINARY=$RUNNER_TEMP/codex-0.155.0/codex-x86_64-unknown-linux-musl" >> "$GITHUB_ENV"
+          if [ "$CODEX_VERSION" = 0.155.0 ]; then
+            echo "CLAWROUTER_DESKTOP_FIXTURE_OUTPUT=$RUNNER_TEMP/codex-desktop-fixture" >> "$GITHUB_ENV"
+          fi
       - name: Native client through real router and ledgers
         run: node --test test/codex-router.test.mjs test/codex-native.test.mjs test/codex-connect.test.mjs
+      - name: Upload synthetic Desktop configuration
+        if: matrix.version == '0.155.0'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: codex-desktop-fixture-${{ github.sha }}
+          path: ${{ runner.temp }}/codex-desktop-fixture
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
 
   self-host:
     runs-on: ubuntu-latest
