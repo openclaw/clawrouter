@@ -4,6 +4,8 @@
 
 - Prevent duplicate playground requests, cancel pending requests when starting a new chat, and preserve new drafts when earlier replies arrive.
 
+- Match Cloudflare Access applications by exact destination instead of display name, reject ambiguous or name-only collisions before writes, and inspect all application and policy pages during provisioning.
+
 - Apply concrete Chat model eligibility to Fusion discovery, including selected-policy pricing, provider limits, and grant availability, while preserving fail-open advisers.
 - Reject hosted web search before dispatch under measured budgets without a fixed policy tariff; keep unmetered forwarding and report its price as unavailable instead of token-only spend.
 - Record failed streaming response and delivery outcomes independently from HTTP status and billed usage, with bounded SSE inspection that retains late terminal facts on long streams.

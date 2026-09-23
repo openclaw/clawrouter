@@ -295,6 +295,20 @@ to the Access application audience tag before deploying. ClawRouter verifies
 the `cf-access-jwt-assertion` signature against the team certs endpoint before
 it trusts the email or role.
 
+`pnpm cf:access` reads every page of the account's Access applications before
+making changes. It updates the unique self-hosted app whose primary domain or
+public destination exactly matches a configured protected path or the bare
+`CLAWROUTER_ACCESS_DOMAIN` hostname. An existing app's display name can differ;
+the update keeps its ID and audience tag. Display names alone never select an
+app for update.
+
+If multiple apps match, resolve their overlapping destinations in Cloudflare
+before rerunning. If only the display name matches another destination, verify
+`CLAWROUTER_ACCESS_DOMAIN` or choose a distinct `CLAWROUTER_ACCESS_APP_NAME` for
+the new deployment. Both cases stop before app or policy writes. A new app is
+created only when neither destination nor name matches. Policy checks also read
+every page before applying the existing unmanaged-policy guard.
+
 The browser console is fail-closed in the Worker. `/` redirects to
 `/dashboard`, and `/dashboard` redirects to `/dashboard/home`; the default
 Access app protects `/dashboard/*`.
