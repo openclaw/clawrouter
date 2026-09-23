@@ -107,6 +107,43 @@ test("pricing completeness follows selected wire declarations without reading cl
   assert.equal(requestPricingGap(pricing, { tools: [{ type: "file_search" }] }, "google.generate_content"), null);
 });
 
+test("opaque Responses prompt references cannot imply token-only pricing", () => {
+  const body = { prompt: { id: "pmpt_fixture", version: "1" } };
+  assert.equal(requestPricingGap(pricing, body, "openai.responses"), "hosted_tool_usage");
+  assert.equal(requestPricingGap(pricing, { ...body, tools: [] }, "openai.responses"), "hosted_tool_usage");
+  for (const format of ["openai.chat_completions", "anthropic.messages", "google.generate_content"]) assert.equal(requestPricingGap(pricing, body, format), null);
+  assert.equal(requestPricingGap(pricing, { prompt: null }, "openai.responses"), null);
+});
+
+test("Responses Lite classifies only declared additional_tools input items", () => {
+  for (const tool of [{ type: "web_search" }, { type: "file_search" }, { type: "code_interpreter" }, { type: "image_generation" }, { type: "shell", environment: { type: "container_auto" } }]) {
+    const body = { tools: [], input: [{ type: "additional_tools", role: "developer", tools: [tool] }] };
+    assert.equal(requestPricingGap(pricing, body, "openai.responses"), "hosted_tool_fee");
+    for (const format of ["openai.chat_completions", "anthropic.messages", "google.generate_content"]) assert.equal(requestPricingGap(pricing, body, format), null);
+  }
+  for (const body of [
+    { input: [{ type: "message", tools: [{ type: "file_search" }] }] },
+    { input: [{ type: "message", content: [{ type: "additional_tools", tools: [{ type: "file_search" }] }] }] },
+    { input: [{ type: "additional_tools", tools: [{ type: "function", name: "file_search", parameters: { tools: [{ type: "code_interpreter" }] } }] }] },
+  ]) assert.equal(requestPricingGap(pricing, body, "openai.responses"), null);
+});
+
+test("Anthropic execution fees preserve the documented free web-tool combination", () => {
+  for (const type of ["code_execution_20250522", "code_execution_20250825", "code_execution_20260120", "code_execution_20260521"]) {
+    const tool = { type, name: "code_execution" };
+    assert.equal(requestPricingGap(pricing, { tools: [tool] }, "anthropic.messages"), "hosted_tool_fee");
+    assert.equal(requestPricingGap(pricing, { tools: [tool, { type: "web_fetch_20250910", name: "web_fetch" }] }, "anthropic.messages"), "hosted_tool_fee");
+    for (const fetch of ["web_fetch_20260209", "web_fetch_20260318"]) {
+      const body = { tools: [tool, { type: fetch, name: "web_fetch" }] };
+      assert.equal(requestPricingGap(pricing, body, "anthropic.messages"), null);
+      assert.equal(estimateModelCost(pricing, body, "anthropic.messages").inputTokens, pricing.maxInputTokens);
+    }
+    assert.equal(requestPricingGap(pricing, { tools: [tool, { type: "web_search_20260209", name: "web_search" }] }, "anthropic.messages"), "hosted_tool_fee");
+    for (const format of ["openai.responses", "google.generate_content"]) assert.equal(requestPricingGap(pricing, { tools: [tool] }, format), null);
+  }
+  assert.equal(requestPricingGap(pricing, { tools: [{ name: "code_execution_20250825", input_schema: { type: "object" } }] }, "anthropic.messages"), null);
+});
+
 test("cache and long-context rates keep settlement within reservation", () => {
   const tiered = { ...pricing, longContext: { thresholdInputTokens: 10, inputMicrosPerMillion: 5_000_000, outputMicrosPerMillion: 22_500_000, cachedInputMicrosPerMillion: 500_000, cacheWriteInputMicrosPerMillion: null, cacheWrite5mInputMicrosPerMillion: null, cacheWrite1hInputMicrosPerMillion: null } };
   const estimate = estimateModelCost(tiered, { input: "hello", max_output_tokens: 1_000, cache_control: { type: "ephemeral", ttl: "1h" } });

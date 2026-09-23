@@ -112,7 +112,11 @@ ClawRouter also recognizes these incomplete request prices by wire format:
 
 - OpenAI Responses web search (including dated variants), file search, code
   interpreter, image generation, and shell tools with hosted container
-  environments; Chat `web_search_options`; Anthropic `web_search_*`.
+  environments, including Responses Lite `additional_tools` input declarations;
+  Chat `web_search_options`; Anthropic `web_search_*` and separately billed
+  `code_execution_*`.
+- Opaque Responses `prompt` references, because
+  [saved prompts retain tool configuration](https://developers.openai.com/api/docs/assistants/migration).
 - Gemini Google Search, legacy search retrieval, and Maps grounding fees.
 - Gemini URL context, File Search, and code execution, whose hosted token work
   is not fully bounded or metered by the ordinary model counters. A tool can
@@ -136,7 +140,12 @@ Model discovery and Fusion preflight apply the same completeness guard for both
 policy and provider budgets. Unmetered models remain available; Fusion displays
 their incomplete prices as unavailable rather than a zero-cost estimate.
 Basic Anthropic web fetch has only token charges and retains its full-input-window
-reservation.
+reservation. Anthropic also [waives code-execution fees](https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool#usage-and-pricing)
+when `web_fetch_20260209`, `web_search_20260209`, or a later version is present;
+the free web-fetch combination remains token-priced, while web search still
+requires its separate fee. Other code-execution requests can incur time-based
+charges beyond the provider's organization allowance and require a fixed
+tariff under a measured budget. This does not introduce a tool-fee meter.
 Client-executed function, custom, namespace, local-shell, and apply-patch tools
 use the model's token rates; a function named `web_search` is still a function.
 A fixed `requestCostMicros` is an operator-defined

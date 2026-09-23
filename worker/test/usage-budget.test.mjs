@@ -619,8 +619,14 @@ test("incomplete pricing admission and unavailable settlement share the HTTP, na
     ["openai", "/v1/native/openai/v1/responses", "gpt-6-astra", { tools: [{ type: "web_search_preview_2025_03_11" }] }],
     ...["file_search", "code_interpreter", "image_generation"].map(type => ["openai", "/v1/responses", "openai/gpt-6-astra", { tools: [{ type }] }]),
     ["openai", "/v1/native/openai/v1/responses", "gpt-6-astra", { tools: [{ type: "shell", environment: { type: "container_auto" } }] }],
+    ...["/v1/responses", "/v1/native/openai/v1/responses", "/v1/proxy/openai/responses"].flatMap(route => [
+      ["openai", route, "openai/gpt-6-astra", { prompt: { id: "pmpt_fixture", version: "1" } }],
+      ["openai", route, "openai/gpt-6-astra", { tools: [], input: [{ type: "additional_tools", role: "developer", tools: [{ type: "file_search" }] }] }],
+    ]),
     ["openai", "/v1/chat/completions", "openai/gpt-6-astra", { web_search_options: {} }],
     ["anthropic", "/v1/native/anthropic/v1/messages", "claude-haiku-4-5", { tools: [{ type: "web_search_20260318", name: "web_search" }] }],
+    ["anthropic", "/v1/native/anthropic/v1/messages", "claude-haiku-4-5", { tools: [{ type: "code_execution_20250825", name: "code_execution" }] }],
+    ["anthropic", "/v1/proxy/anthropic/messages", "claude-haiku-4-5", { tools: [{ type: "code_execution_20260521", name: "code_execution" }] }],
   ]) for (const stream of [false, true]) for (const [limit, providerLimit, fixedCost, servedTier] of [
     [1_000_000, null, null, "priority"], [null, 1_000_000, null, "priority"],
     [null, null, null, "priority"], [null, null, null, "future"], [1_000_000, 1_000_000, 7, "priority"], [1_000_000, 1_000_000, 0, "priority"],
@@ -638,9 +644,10 @@ test("incomplete pricing admission and unavailable settlement share the HTTP, na
       for (const [key, value] of Object.entries(tool)) assert.deepEqual(sent[key], value);
       return new Response(wire, { headers: { "content-type": stream ? "text/event-stream" : "application/json" } });
     });
+    const requestBody = { model, input: "fixture", messages: [{ role: "user", content: "fixture" }], max_tokens: 32, stream, service_tier: "priority", ...tool };
     const response = await handler.fetch(new Request(`https://clawrouter.example${route}`, {
       method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
-      body: JSON.stringify({ model, input: "fixture", messages: [{ role: "user", content: "fixture" }], max_tokens: 32, stream, service_tier: "priority", ...tool }),
+      body: JSON.stringify(route.startsWith("/v1/proxy/") ? { body: requestBody } : requestBody),
     }), env, { waitUntil: promise => pending.push(promise) });
     assert.equal(response.status, denied ? 400 : 200);
     if (denied) { const body = await response.json(); assert.equal(body.error.code, "pricing_required"); assert.match(body.error.message, /fixed policy request price/); }
@@ -654,6 +661,36 @@ test("incomplete pricing admission and unavailable settlement share the HTTP, na
     assert.equal((await providerBudgetStatus(env, provider, 1_000_000)).spentMicros, denied ? 0 : fixedCost ?? 0);
     const usage = await handler.fetch(new Request("https://clawrouter.example/v1/usage", { headers: { authorization: `Bearer ${proxyKey()}` } }), env, {});
     assert.equal((await usage.json()).budget.spentMicros, limit == null ? null : denied ? 0 : fixedCost ?? 0);
+    upstream.mock.restore();
+  }
+});
+
+test("Anthropic free execution with modern web fetch settles both ledgers from token usage", async (t) => {
+  for (const stream of [false, true]) {
+    const events = [], pending = [], limit = 1_000_000;
+    const env = usageEnv([], { provider: "anthropic", limit, fixedCost: null, retainContent: false });
+    env.ANTHROPIC_API_KEY = "fixture-anthropic-key";
+    env.BUDGET_LEDGER = sqlBudgetNamespace(t);
+    env.USAGE_QUEUE = { send: async event => events.push(event) };
+    const tools = [{ type: "code_execution_20260521", name: "code_execution" }, { type: "web_fetch_20260318", name: "web_fetch" }];
+    const wire = stream ? sse(messageStart, messageDelta, messageStop) : JSON.stringify({ type: "message", usage: messageUsage });
+    const upstream = t.mock.method(globalThis, "fetch", async (_url, init) => {
+      assert.deepEqual(JSON.parse(init.body).tools, tools);
+      return new Response(wire, { headers: { "content-type": stream ? "text/event-stream" : "application/json" } });
+    });
+    const response = await handler.fetch(new Request("https://clawrouter.example/v1/native/anthropic/v1/messages", {
+      method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
+      body: JSON.stringify({ model: "claude-haiku-4-5", tools, max_tokens: 20, stream, messages: [{ role: "user", content: [{ type: "text", text: "fixture", cache_control: { type: "ephemeral", ttl: "1h" } }] }] }),
+    }), env, { waitUntil: promise => pending.push(promise) });
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), wire);
+    await Promise.all(pending);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].cost_basis, "manifest_pricing");
+    assert.equal(events[0].actual_cost_micros, 4_710);
+    const usage = await handler.fetch(new Request("https://clawrouter.example/v1/usage", { headers: { authorization: `Bearer ${proxyKey()}` } }), env, {});
+    assert.equal((await usage.json()).budget.spentMicros, 4_710);
+    assert.equal((await providerBudgetStatus(env, "anthropic", limit)).spentMicros, 4_710);
     upstream.mock.restore();
   }
 });
