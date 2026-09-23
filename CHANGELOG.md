@@ -13,6 +13,7 @@
 - Preserve the initiating cause when Responses WebSockets close. Client disconnects record `client_error` without an invented HTTP status; unsent requests release reservations, while sent requests without final usage retain their estimate.
 
 - Keep failed console refreshes visible after successful edits, label stale usage with its snapshot time, and show unavailable spend and balances as unknown.
+- Expose Catalog service-kind filters as a labeled button group with an explicit pressed choice, preserving keyboard operation, search, and result counts.
 
 - Keep a grant's previous provider attachment until replacement credentials commit. Reserve active capacity as unselectable pending membership, allow paused imports into full active pools, retain inactive attachments, and recover partial publication through committed admission receipts and generation-checked owner reconciliation. Repeated revocation clears failed reconnect reservations. This storage upgrade requires forward recovery; environment-fallback activation and legacy attachment backfill remain separate work.
 - Recover corrupt or oversized legacy upstream grants through explicit authenticated replacement or revocation. Preserve owner identity and pool generation fences, discard old secret bytes, and keep ordinary edits, OAuth and contribution imports strict. A missing KV value cannot erase retained legacy attachments during account creation.
