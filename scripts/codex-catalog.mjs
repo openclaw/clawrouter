@@ -41,6 +41,53 @@ export function buildCodexCatalog(catalog, bundled, providerId) {
   return { catalog: { models }, skipped, mappings, nativeBasePath: `${provider.nativeBaseUrl}${responses[0].path.slice(0, -"/responses".length)}` };
 }
 
+export async function readCodexCatalog({ routerUrl, providerId, codex = "codex", env = process.env }) {
+  let origin;
+  try { origin = new URL(routerUrl); } catch { throw new Error("router URL is invalid"); }
+  if (origin.username || origin.password || origin.search || origin.hash || origin.pathname !== "/") throw new Error("router URL must be the router origin without credentials, path, or query");
+  if (origin.protocol !== "https:" && !(origin.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(origin.hostname))) throw new Error("router URL must use HTTPS (except loopback fixtures)");
+  const key = env.CLAWROUTER_API_KEY;
+  if (!key?.trim()) throw new Error("CLAWROUTER_API_KEY is required");
+  let routerBytes;
+  try {
+    const response = await fetch(new URL("/v1/catalog", origin), { headers: { authorization: `Bearer ${key}` }, redirect: "error", signal: AbortSignal.timeout(30_000) });
+    if (!response.ok) {
+      await response.body?.cancel();
+      throw new Error(`authorized router catalog returned HTTP ${response.status}`);
+    }
+    const chunks = [];
+    let size = 0;
+    for await (const chunk of response.body) {
+      size += chunk.length;
+      if (size > 16 * 1024 * 1024) throw new Error("authorized router catalog exceeds 16 MiB");
+      chunks.push(chunk);
+    }
+    routerBytes = Buffer.concat(chunks).toString("utf8");
+  } catch (error) {
+    if (error.message.startsWith("authorized router catalog ")) throw error;
+    throw new Error("authorized router catalog request failed");
+  }
+  let bundledBytes, version;
+  try {
+    const nativeEnv = { ...env, CLAWROUTER_API_KEY: undefined };
+    const options = { encoding: "utf8", env: nativeEnv, maxBuffer: 16 * 1024 * 1024, timeout: 30_000, stdio: ["ignore", "pipe", "pipe"] };
+    bundledBytes = execFileSync(codex, ["debug", "models", "--bundled"], options);
+    version = execFileSync(codex, ["--version"], options).trim();
+    if (!/^codex-cli [\w.+-]+$/.test(version)) throw new Error("invalid producer version");
+  } catch { throw new Error("native Codex bundled export failed; check --codex and producer version"); }
+  let router, bundled;
+  try { router = JSON.parse(routerBytes); bundled = JSON.parse(bundledBytes); }
+  catch { throw new Error("router catalog or native export is invalid JSON"); }
+  const result = buildCodexCatalog(router, bundled, providerId);
+  const baseUrl = new URL(result.nativeBasePath, origin);
+  if (baseUrl.origin !== origin.origin) throw new Error("native route must stay on the router origin");
+  const provider = router.providers.find((item) => item.id === providerId);
+  const hash = (text) => createHash("sha256").update(text).digest("hex");
+  return { ...result, routerUrl: origin.origin, baseUrl: baseUrl.href,
+    supportsWebsockets: provider.routes.find((route) => route.methods?.includes("POST") && route.requestFormat === "openai.responses" && route.responseFormat === "openai.responses" && route.streaming === "sse").websocket === "openai.responses",
+    producer: version, bundledSha256: hash(bundledBytes), routerCatalogSha256: hash(routerBytes) };
+}
+
 async function main(args) {
   if (args.includes("--help")) {
     process.stdout.write("Usage: node scripts/codex-catalog.mjs --router-url https://router.example --provider openai --output ./clawrouter-models.json [--codex /path/to/codex]\nAuthentication: CLAWROUTER_API_KEY. Reads only the authorized catalog and native bundled model metadata.\n");
@@ -52,27 +99,15 @@ async function main(args) {
     options[args[index]] = args[index + 1];
   }
   if (!options["--router-url"] || !options["--provider"] || !options["--output"]) throw new Error("--router-url, --provider, and --output are required");
-  const origin = new URL(options["--router-url"]);
-  if (origin.username || origin.password || origin.search || origin.hash || origin.pathname !== "/") throw new Error("--router-url must be the router origin without credentials, path, or query");
-  if (origin.protocol !== "https:" && !(origin.protocol === "http:" && ["localhost", "127.0.0.1", "[::1]"].includes(origin.hostname))) throw new Error("router URL must use HTTPS (except loopback fixtures)");
-  const key = process.env.CLAWROUTER_API_KEY;
-  if (!key) throw new Error("CLAWROUTER_API_KEY is required");
-  const response = await fetch(new URL("/v1/catalog", origin), { headers: { authorization: `Bearer ${key}` }, redirect: "error", signal: AbortSignal.timeout(30_000) });
-  if (!response.ok) throw new Error(`authorized router catalog returned HTTP ${response.status}`);
-  const routerBytes = await response.text();
-  const codex = options["--codex"] ?? "codex";
-  const nativeEnv = { ...process.env, CLAWROUTER_API_KEY: undefined };
-  const bundledBytes = execFileSync(codex, ["debug", "models", "--bundled"], { encoding: "utf8", env: nativeEnv, maxBuffer: 16 * 1024 * 1024, timeout: 30_000, stdio: ["ignore", "pipe", "pipe"] });
-  const version = execFileSync(codex, ["--version"], { encoding: "utf8", env: nativeEnv, timeout: 10_000, stdio: ["ignore", "pipe", "pipe"] }).trim();
-  const result = buildCodexCatalog(JSON.parse(routerBytes), JSON.parse(bundledBytes), options["--provider"]);
+  const result = await readCodexCatalog({ routerUrl: options["--router-url"], providerId: options["--provider"], codex: options["--codex"] });
   const output = resolve(options["--output"]), temporary = `${output}.${randomUUID()}.tmp`;
   await mkdir(dirname(output), { recursive: true });
   try {
     await writeFile(temporary, `${JSON.stringify(result.catalog)}\n`, { flag: "wx", mode: 0o600 });
     await rename(temporary, output);
   } finally { await rm(temporary, { force: true }); }
-  const hash = (text) => createHash("sha256").update(text).digest("hex");
-  process.stderr.write(`${JSON.stringify({ producer: version, bundledSha256: hash(bundledBytes), routerCatalogSha256: hash(routerBytes), baseUrl: new URL(result.nativeBasePath, origin).href, mappings: result.mappings, skipped: result.skipped })}\n`);
+  const { catalog, nativeBasePath, ...summary } = result;
+  process.stderr.write(`${JSON.stringify(summary)}\n`);
 }
 
 if (process.argv[1] && pathToFileURL(resolve(process.argv[1])).href === import.meta.url) {

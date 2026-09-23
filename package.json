@@ -29,11 +29,13 @@
     "cf:oauth:revoke": "node scripts/oauth-revoke.mjs",
     "pool:ticket": "node scripts/pool-ticket.mjs",
     "pool:contribute": "node scripts/pool-contribute.mjs",
+    "codex:connect": "node scripts/codex-connect.mjs",
     "cf:smoke": "node scripts/smoke-deployed.mjs"
   },
   "devDependencies": {
     "@cfworker/json-schema": "^4.1.1",
     "@cloudflare/workers-types": "^5.20260920.1",
+    "toml-eslint-parser": "^1.0.3",
     "typescript": "^7.0.2",
     "wrangler": "^4.135.0",
     "yaml": "^2.9.1"
