@@ -60,7 +60,12 @@ export function useConsoleController({ session, credentialOwner, request, scope,
     setStatus: session.setStatus,
     setProviderReadiness: catalog.setProviderReadiness,
     refresh: refreshCurrent,
-    refreshPolicyMetadata: () => refreshMetadataAfterMutation(scope.isCurrent),
+    refreshPolicyMetadata: async () => {
+      if (!scope.isCurrent()) return;
+      // Retire pre-commit ledger reads before waiting for metadata already in flight.
+      usage.invalidate();
+      await refreshMetadataAfterMutation(scope.isCurrent);
+    },
     syncDemoAdmin: usage.syncDemoAdmin,
   });
   credentialOwner.observePresentation(session.view === "home" ? "personal" : session.view === "policies" && access.tab.value === "credentials" && session.value.role === "admin" ? "admin" : null);

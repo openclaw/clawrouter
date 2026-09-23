@@ -1,5 +1,5 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
-import type { AccessPolicy, AdminBootstrapResponse, PolicyBinding, UsageSnapshot } from "../src/ui-types";
+import type { AccessPolicy, AdminBootstrapResponse, AdminUsageRow, PolicyBinding, UsageSnapshot } from "../src/ui-types";
 
 for (const initialOutcome of ["success", "failure then retry"] as const) {
   test(`initial policy loading preserves an early New draft through ${initialOutcome} without overwriting an existing ID`, async ({ page }) => {
@@ -223,6 +223,116 @@ for (const outcome of ["connected", "failed"] as const) {
   });
 }
 
+for (const action of ["Save", "Disable"] as const) {
+  for (const order of ["old first", "old last"] as const) {
+    test(`${action} retires a pre-commit lazy ledger on ${action === "Save" ? "Usage" : "Home"} with ${order}`, async ({ page }) => {
+      const state = await fixture(page);
+      state.policies[0].monthlyBudgetMicros = 10_000_000;
+      await open(page);
+      state.holdBootstrap = true;
+      await focus(page, state);
+      await expect.poll(() => state.reads.length).toBe(1);
+      if (action === "Save") await page.getByRole("textbox", { name: "monthly budget ($)", exact: true }).fill("20");
+      await page.getByRole("button", { name: `${action} policy`, exact: true }).click();
+      await expect.poll(() => state.writes.length).toBe(1);
+      state.holdUsage = true;
+      await page.getByRole("button", { name: action === "Save" ? "Usage" : "Dashboard", exact: true }).click();
+      await expect.poll(() => state.ledgers.length).toBe(1);
+      expect(state.ledgers[0].body.policies[0]).toMatchObject({ enabled: true, monthlyBudgetMicros: 10_000_000 });
+      await page.clock.setFixedTime(new Date("2026-09-01T00:02:00.000Z"));
+      await state.commit(0);
+      // The existing metadata read is still held: commit must retire the old ledger before waiting.
+      await expect.poll(() => state.ledgers.length).toBe(2);
+      expect(state.reads).toHaveLength(1);
+      expect(state.ledgers[1].body.policies[0]).toMatchObject({ enabled: action === "Save", monthlyBudgetMicros: action === "Save" ? 20_000_000 : 10_000_000 });
+      if (order === "old first") {
+        await releaseLedger(page, state.ledgers[0]);
+        await expect(page.locator(".usageFreshness")).toBeVisible();
+        await expect(page.getByText("live ledger", { exact: true })).toHaveCount(0);
+      }
+      await state.reads[0].route.fulfill({ json: state.reads[0].body });
+      await expect.poll(() => state.reads.length).toBe(2);
+      state.holdBootstrap = false;
+      await state.reads[1].route.fulfill({ json: state.reads[1].body });
+      await releaseLedger(page, state.ledgers[1]);
+      await expect(page.locator(".usageFreshness")).toHaveCount(0);
+      await expect(page.locator(".connectionMeta time")).toHaveAttribute("datetime", "2026-09-01T00:02:00.000Z");
+      if (order === "old last") await releaseLedger(page, state.ledgers[0]);
+      await expect(page.locator(".usageFreshness")).toHaveCount(0);
+      if (action === "Save") {
+        await expect(row(page, "policy_a").locator(".budgetUsage")).toContainText("$20.00 budget");
+        await expect(row(page, "policy_a").locator('[data-label="health"]')).toHaveText("healthy");
+      } else {
+        await expect(page.locator(".quotaRow").filter({ has: page.getByText("policy_a", { exact: true }) })).toHaveCount(0);
+        await page.getByRole("button", { name: "Usage", exact: true }).click();
+        await expect(row(page, "policy_a").locator('[data-label="health"]')).toHaveText("revoked");
+      }
+      expect(state.usageReads).toBe(2);
+      expect(state.writes).toHaveLength(1);
+    });
+  }
+}
+
+for (const outcome of ["success", "bootstrap failure"] as const) {
+  test(`a policy commit marks an already completed pre-commit snapshot stale through ${outcome}`, async ({ page }) => {
+    const state = await fixture(page);
+    state.policies[0].monthlyBudgetMicros = 10_000_000;
+    await open(page);
+    await page.getByRole("textbox", { name: "monthly budget ($)", exact: true }).fill("20");
+    await save(page).click();
+    await expect.poll(() => state.writes.length).toBe(1);
+    await page.getByRole("button", { name: "Usage", exact: true }).click();
+    await expect(row(page, "policy_a").locator(".budgetUsage")).toContainText("$10.00 budget");
+    await expect(page.locator(".usageFreshness")).toHaveCount(0);
+    state.holdUsage = true;
+    state.holdBootstrap = true;
+    await page.clock.setFixedTime(new Date("2026-09-01T00:01:00.000Z"));
+    await state.commit(0);
+    await expect.poll(() => state.reads.length).toBe(1);
+    await expect.poll(() => state.ledgers.length).toBe(1);
+    await expect(page.locator(".usageFreshness")).toContainText("Showing last known usage");
+    await expect(page.locator(".usageFreshness time")).toHaveAttribute("datetime", "2026-09-01T00:00:00.000Z");
+    await expect(row(page, "policy_a").locator(".budgetUsage")).toContainText("$10.00 budget");
+    state.holdBootstrap = false;
+    if (outcome === "bootstrap failure") {
+      await state.reads[0].route.fulfill({ status: 503, body: "reporting unavailable" });
+      await expect(page.locator(".statusBar")).toContainText("reporting unavailable");
+      await state.ledgers[0].route.fulfill({ status: 503, body: "ledger unavailable" });
+      await expect(page.locator(".statusBar")).toContainText("Usage ledger unavailable");
+      await expect(page.locator(".usageFreshness")).toContainText("Showing last known usage");
+      await expect(page.locator(".connectionMeta time")).toHaveAttribute("datetime", "2026-09-01T00:00:00.000Z");
+    } else {
+      await state.reads[0].route.fulfill({ json: state.reads[0].body });
+      await releaseLedger(page, state.ledgers[0]);
+      await expect(row(page, "policy_a").locator(".budgetUsage")).toContainText("$20.00 budget");
+      await expect(page.locator(".usageFreshness")).toHaveCount(0);
+      await expect(page.locator(".connectionMeta time")).toHaveAttribute("datetime", "2026-09-01T00:01:00.000Z");
+    }
+    expect(state.usageReads).toBe(2);
+    expect(state.writes).toHaveLength(1);
+  });
+}
+
+test("a rejected policy write keeps the pending ledger read and its successful freshness", async ({ page }) => {
+  const state = await fixture(page);
+  state.policies[0].monthlyBudgetMicros = 10_000_000;
+  await open(page);
+  await page.getByRole("textbox", { name: "monthly budget ($)", exact: true }).fill("20");
+  await save(page).click();
+  await expect.poll(() => state.writes.length).toBe(1);
+  state.holdUsage = true;
+  await page.getByRole("button", { name: "Usage", exact: true }).click();
+  await expect.poll(() => state.ledgers.length).toBe(1);
+  await state.writes[0].fulfill({ status: 503, body: "policy unavailable" });
+  await expect(page.locator(".statusBar")).toContainText("policy save failed");
+  await releaseLedger(page, state.ledgers[0]);
+  await expect(page.locator(".usageFreshness")).toHaveCount(0);
+  await expect(row(page, "policy_a").locator(".budgetUsage")).toContainText("$10.00 budget");
+  expect(state.usageReads).toBe(1);
+  expect(state.reads).toHaveLength(0);
+  expect(state.writes).toHaveLength(1);
+});
+
 test("a selected policy deleted by refresh stays visible as missing until explicit New", async ({ page }) => {
   const state = await fixture(page);
   await open(page);
@@ -404,6 +514,12 @@ async function focus(page: Page, state: { refreshes: number }) {
   await page.clock.setFixedTime(new Date(Date.UTC(2026, 8, 1, 0, state.refreshes)));
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
 }
+async function releaseLedger(page: Page, read: { route: Route; body: unknown }) {
+  const response = page.waitForResponse("**/v1/admin/usage");
+  await read.route.fulfill({ json: read.body });
+  await (await response).finished();
+  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
+}
 
 async function fixture(page: Page) {
   await page.clock.setFixedTime(new Date("2026-09-01T00:00:00.000Z"));
@@ -414,9 +530,10 @@ async function fixture(page: Page) {
   const providers = [{ id: "test-provider", display_name: "Test provider", class: "test", service_kind: "model_provider", capabilities: [] }];
   const usage: UsageSnapshot = { ledger: "ready", summary: { requestCount: 0, successCount: 0, errorCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, actualCostMicros: 0 }, providers: [], daily: [], events: [] };
   const state = {
-    policies, groups: [] as string[], failBinding: false, failBootstrap: false, holdBootstrap: false, refreshes: 0, usageReads: 0,
+    policies, groups: [] as string[], failBinding: false, failBootstrap: false, holdBootstrap: false, holdUsage: false, refreshes: 0, usageReads: 0,
     bindings: [{ policyId: "policy_b", principalType: "group", principalId: "maintainers", enabled: true, priority: 100 }] as PolicyBinding[],
     writes: [] as Route[], reads: [] as { route: Route; body: AdminBootstrapResponse }[],
+    ledgers: [] as { route: Route; body: { policies: AdminUsageRow[]; usage: UsageSnapshot } }[],
     async commit(index: number, overrides: Partial<AccessPolicy> = {}) {
       const request = state.writes[index].request();
       const policy = { ...(request.method() === "POST" ? { ...state.policies.find((item) => item.policyId === new URL(request.url()).pathname.split("/").at(-2)), enabled: false } : request.postDataJSON()), ...overrides } as AccessPolicy & { allProviders?: boolean };
@@ -427,7 +544,13 @@ async function fixture(page: Page) {
   };
   await page.route("**/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
-    if (path === "/v1/admin/usage") state.usageReads += 1;
+    if (path === "/v1/admin/usage") {
+      state.usageReads += 1;
+      const body = { policies: state.policies.map((policy) => ({ ...policy, kid: policy.policyId, tenantId: policy.tenantId ?? "default", budget: { configured: policy.monthlyBudgetMicros != null, ledger: "ready", limitMicros: policy.monthlyBudgetMicros, spentMicros: 0, remainingMicros: policy.monthlyBudgetMicros } })), usage };
+      if (state.holdUsage) { state.ledgers.push({ route, body: structuredClone(body) }); return; }
+      await route.fulfill({ json: body });
+      return;
+    }
     if (path.startsWith("/v1/admin/policies/") && (route.request().method() === "PUT" || (route.request().method() === "POST" && path.endsWith("/revoke")))) { state.writes.push(route); return; }
     if (route.request().method() === "PUT" && path === "/v1/admin/policy-bindings") {
       if (state.failBinding) { await route.fulfill({ status: 503, json: { error: { message: "binding unavailable" } } }); return; }
@@ -449,7 +572,6 @@ async function fixture(page: Page) {
       "/v1/providers": { providers }, "/v1/routes": { openaiCompatible: [], manifestProxy: [] },
       "/v1/session": { authenticated: true, auth: "cloudflare_access", role: "admin", email: "admin@example.com", tenantId: "default", groups: state.groups, entitlements: { providers: [] } },
       "/v1/session/usage": { policies: [] }, "/v1/session/credentials": { credentials: [] }, "/v1/admin/bootstrap": bootstrap,
-      "/v1/admin/usage": { policies: state.policies.map((policy) => ({ ...policy, budget: { configured: false, ledger: "ready" } })), usage },
     };
     await route.fulfill({ status: responses[path] ? 200 : 404, json: responses[path] ?? {} });
   });
