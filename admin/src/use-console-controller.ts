@@ -8,6 +8,7 @@ import { useUsage } from "./hooks/use-usage";
 import { useSelfServiceKeys } from "./hooks/use-self-service-keys";
 import { installAutoRefresh } from "./auto-refresh";
 import { demo } from "./ui-config";
+import { demoClientCatalog } from "./demo-data";
 import { localDemoRole, localLoginAvailable, oauthCallbackStatus, request, settled, usagePolicyId } from "./ui-helpers";
 import { syntheticUsageTimeline } from "./usage-analytics";
 import type {
@@ -148,6 +149,7 @@ export function useConsoleController() {
         ? {
           session: sessionData,
           providers: sessionData.entitlements.providers,
+          catalog: sessionData.entitlements.catalog,
           contentRetention: sessionData.contentRetention ?? { enabled: false, retentionDays: 30, policyEnabled: false, userExempt: false },
         }
         : null;
@@ -287,6 +289,7 @@ export function useConsoleController() {
     };
     const entitlements: EntitlementsResponse = {
       session: { ...demo.session, ...user, auth: "demo", contentRetention },
+      catalog: demoClientCatalog(user.email),
       contentRetention,
       providers: demo.entitlements.providers.map((provider) => ({
         ...provider,

@@ -3,11 +3,18 @@ import { demoCatalog } from "./demo-catalog";
 import { demoDisabledProviderIds, demoMissingConfigProviderIds } from "./ui-config";
 import { adminOverviewFromPolicies, serviceItems } from "./ui-helpers";
 import { syntheticUsageTimeline } from "./usage-analytics";
+import type { ClientCatalog } from "../../shared/contracts";
 import type {
   AccessPolicy, AccessRole, AccessUser, AssignmentRule, EntitlementsResponse, FusionConfig, PolicyBinding,
   ProviderConnection, ProviderReadiness, ProviderRow, ProxyCredential, RouteCatalog, UpstreamGrant,
   UsageAuditEvent, UsageSnapshot,
 } from "./ui-types";
+
+export function demoClientCatalog(principalId: string): ClientCatalog {
+  // Demo identities simulate Access sessions; no synthetic executable offers
+  // are asserted until the demo owns concrete operation fixtures.
+  return { version: "clawrouter.client-catalog.v1", observedAt: new Date().toISOString(), scope: { authType: "access", credentialId: null, principalId }, providers: [] };
+}
 
 export function demoUsageSnapshot(): UsageSnapshot {
   const now = Date.now();
@@ -155,6 +162,7 @@ export function demoData() {
   const sessionPolicies = effectiveAccess(users[0], keys, bindings, []).policies;
   const entitlements: EntitlementsResponse = {
     session,
+    catalog: demoClientCatalog(session.email),
     contentRetention,
     providers: [...providers.map((item) => {
       const policies = sessionPolicies.filter((key) => policyCoversProvider(key, item.id)).map((key) => key.policyId);

@@ -94,6 +94,43 @@ test("Fusion observes synthesis first without promising all fail-open advisers f
   assert.equal(catalog.providers.find(({ id }) => id === "clawrouter").offers[0].affordability, "request-dependent");
 });
 
+test("zero-cost Fusion offers stay exact with unavailable observations but configured zero limits still block", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.config.adviserModels = ["openai/gpt-4.1-mini"];
+  fixture.connection.monthlyBudgetMicros = 100;
+  let unavailable = "both";
+  fixture.env.BUDGET_LEDGER = { idFromName: (name) => name, get: (name) => ({ fetch: async (url) => {
+    assert.equal(new URL(url).pathname, "/status");
+    const owner = name.startsWith("provider:") ? "provider" : "policy";
+    return unavailable === "both" || unavailable === owner ? new Response(null, { status: 503 }) : Response.json({ spentMicros: 100, remainingMicros: 0 });
+  } }) };
+  for (const kind of ["fixed-zero", "zero-card"]) {
+    fixture.policy.requestCostMicros = kind === "fixed-zero" ? 0 : null;
+    if (kind === "zero-card") {
+      fixture.policy.providers = ["local-openai"];
+      fixture.connection.providerId = "local-openai";
+      fixture.env.LOCAL_OPENAI_BASE_URL = "https://local-model.example";
+      fixture.config.aggregatorModel = "local/final";
+      fixture.config.adviserModels = ["local/adviser"];
+    }
+    for (const failure of ["policy", "provider", "both"]) {
+      unavailable = failure;
+      const catalog = await (await worker.fetch(fixture.request("key"), fixture.env, {})).json();
+      const offer = catalog.providers.find(({ id }) => id === "clawrouter").offers[0];
+      assert.equal(offer.eligible, true, `${kind}/${failure}`);
+      assert.equal(offer.affordability, "exact-covered", `${kind}/${failure}`);
+    }
+    for (const owner of [fixture.policy, fixture.connection]) {
+      owner.monthlyBudgetMicros = 0;
+      const catalog = await (await worker.fetch(fixture.request("key"), fixture.env, {})).json();
+      const offer = catalog.providers.find(({ id }) => id === "clawrouter").offers[0];
+      assert.equal(offer.eligible, false, kind);
+      assert.equal(offer.affordability, "exact-blocked", kind);
+      owner.monthlyBudgetMicros = 100;
+    }
+  }
+});
+
 test("authorized model metadata preserves declared reasoning efforts without adding sibling metadata", async (t) => {
   const fixture = await fusionDiscoveryFixture(t);
   const catalog = await (await catalogResponse(fixture.request("key"), fixture.env)).json();
