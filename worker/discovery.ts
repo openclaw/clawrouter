@@ -1,7 +1,7 @@
 import { resolveTemplate } from "./provider-templates.ts";
 import { listConnections } from "./authority";
-import { grantPriority, policyGrantCandidates, selectPolicyCandidates } from "./grant-selection";
-import type { GrantRequirement } from "./provider-auth";
+import { activeOperationCandidates, policyGrantCandidates, selectPolicyCandidates } from "./grant-selection";
+import { assertOperationConfiguration, type GrantRequirement } from "./provider-auth";
 import { budgetPrincipal } from "./budget-scope";
 import { budgetStatus, providerBudgetStatus } from "./ledgers";
 import { operationAffordability } from "./operation-budget";
@@ -11,7 +11,7 @@ import { contentRetentionDefault } from "./content-retention.ts";
 import { loadFusionConfig } from "./fusion-config";
 import { FUSION_MODEL_ID } from "./fusion";
 import { authenticateProxyKey } from "./proxy-auth";
-import { assertOperationConfiguration, assertProviderAccess, modelRoute, modelSupportsEndpoint, providerReadinessForState, snapshot, unifiedPathForEndpoint, type Readiness } from "./providers";
+import { assertProviderAccess, modelRoute, modelSupportsEndpoint, providerReadinessForState, snapshot, unifiedPathForEndpoint, type Readiness } from "./providers";
 import type { AccessSession, AuthorizedIdentity, CompiledModel, CompiledProvider, Env, ProviderConnection } from "./types";
 import { errorResponse, HttpError, privateJson, sha256Hex } from "./utils";
 
@@ -256,16 +256,12 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env, conne
       let reasonCode: string | undefined;
       try {
         await assertProviderAccess(provider, auth, env, connection);
-        const available = selected.candidates.available;
-        if (!available.length && selected.candidates.hasConfiguredGrant) throw new HttpError(503, "upstream_grant_pool_unavailable", "no scoped grant supports this operation");
-        const priority = available.length ? Math.min(...available.map(({ grant }) => grantPriority(grant))) : null;
-        const candidates = available.length ? available.filter(({ grant }) => grantPriority(grant) === priority).map(({ grant }) => grant) : [null];
-        let failure: unknown;
-        for (const grant of candidates) {
-          try { assertOperationConfiguration(requirement, grant, env); failure = undefined; configured = true; break; }
-          catch (error) { failure = error; }
+        const available = activeOperationCandidates(selected.candidates.available, env, requirement);
+        if (!available.length) {
+          if (selected.candidates.hasConfiguredGrant) throw new HttpError(503, "upstream_grant_pool_unavailable", "no scoped grant supports this operation");
+          assertOperationConfiguration(requirement, null, env);
         }
-        if (failure) throw failure;
+        configured = true;
       } catch (error) {
         reasonCode = error instanceof HttpError ? error.code : "provider_not_configured";
       }

@@ -1,3 +1,4 @@
+import { applyTemplateHeaders, resolveTemplate } from "./provider-templates.ts";
 import type { AuthScheme, CompiledEndpoint, CompiledGrantTransport, CompiledProvider, CompiledQuotaProbe, Env, GrantTransportAuth, ProxyRequestBody, UpstreamGrant } from "./types.ts";
 import { HttpError } from "./utils.ts";
 
@@ -12,6 +13,28 @@ export function grantSupports(requirement: GrantRequirement, grant: UpstreamGran
   const transport = transportForGrant(requirement.provider, grant);
   if (transport?.allowedEndpoints && !transport.allowedEndpoints.includes(requirement.endpoint.id)) return false;
   return requirement.mode === "http" || (requirement.endpoint.websocket === "openai.responses" && transport === null);
+}
+
+// Catalogs inspect credential metadata; dispatch repeats these checks after the
+// credential owner materializes the selected revision. Neither is a reservation.
+export function assertOperationConfiguration(requirement: GrantRequirement, grant: UpstreamGrant | null, env: Env): void {
+  const { provider, endpoint } = requirement;
+  if (!grantSupports(requirement, grant)) throw new HttpError(400, "grant_transport_unavailable", "upstream authorization does not support this operation");
+  assertProviderCredential(provider, grant, env);
+  const transport = transportForGrant(provider, grant);
+  try {
+    const headers = new Headers();
+    applyTransportHeaders(headers, transport, grant);
+    applyTemplateHeaders(provider, provider.adapter.injectHeaders, env, headers);
+    applyTemplateHeaders(provider, endpoint.headers, env, headers);
+    const path = (transport?.endpointPaths[endpoint.id] ?? endpoint.path).replace(/\$\{([^}]+)\}/g, (template, name: string) => endpoint.path_params.includes(name) ? "path-param" : template);
+    const base = transport?.baseUrl ?? resolveTemplate(provider, provider.base_urls.default, env);
+    new URL(`${base.replace(/\/$/, "")}${resolveTemplate(provider, path, env)}`);
+    for (const value of [...Object.values(provider.adapter.injectQuery), ...Object.values(endpoint.query)]) resolveTemplate(provider, value, env);
+  } catch (error) {
+    if (error instanceof HttpError) throw error;
+    throw new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
+  }
 }
 
 export function quotaProbeForGrant(provider: CompiledProvider, grant: UpstreamGrant | null): CompiledQuotaProbe | null {
@@ -35,7 +58,7 @@ export function applyProviderCredential(
   else if (!secret && !(scheme.type === "bearer" && "required" in scheme && scheme.required === false)) throw new HttpError(503, "provider_not_configured", `provider ${provider.id} has no usable upstream credential`);
 }
 
-export function assertProviderCredential(provider: CompiledProvider, grant: UpstreamGrant | null, env: Env): void {
+function assertProviderCredential(provider: CompiledProvider, grant: UpstreamGrant | null, env: Env): void {
   const scheme = credentialScheme(provider, grant);
   if (scheme.type === "sig_v4") {
     const present = (field: string, key: string) => grant

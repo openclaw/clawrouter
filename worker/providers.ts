@@ -4,7 +4,7 @@ import { observeGrantQuota, observeGrantQuotaProbe } from "./grant-quota.ts";
 import { grantRevision, grantUsable as canonicalGrantUsable, recordGrantRuntime, resolveGrantSelection, type PinnedGrant } from "./grant-selection.ts";
 import { grantsVisibleToPolicies, type GrantRecord } from "./grant-scope.ts";
 import { materializeGrantCredentials } from "./grant-credentials.ts";
-import { applyProviderCredential, applyTransportHeaders, assertProviderCredential, grantSupports, quotaProbeForGrant, requiredGrantTemplate, transportForGrant, type GrantRequirement } from "./provider-auth.ts";
+import { applyProviderCredential, applyTransportHeaders, assertOperationConfiguration, quotaProbeForGrant, requiredGrantTemplate, transportForGrant, type GrantRequirement } from "./provider-auth.ts";
 import type {
   AccessPolicyEntry, AuthorizedIdentity, CompiledEndpoint, CompiledGrantTransport, CompiledModel, CompiledProvider, Env,
   ProviderConnection, ProviderHealth, ProviderSnapshot, UpstreamGrant,
@@ -228,19 +228,6 @@ export async function upstreamAuth(provider: CompiledProvider, auth: AuthorizedI
     transportPaths: transport?.endpointPaths ?? {},
     transport,
   };
-}
-
-// Catalogs inspect credential metadata; dispatch repeats these checks after the
-// credential owner materializes the selected revision. Neither is a reservation.
-export function assertOperationConfiguration(requirement: GrantRequirement, grant: UpstreamGrant | null, env: Env): void {
-  const { provider, endpoint } = requirement;
-  if (!grantSupports(requirement, grant)) throw new HttpError(400, "grant_transport_unavailable", "upstream authorization does not support this operation");
-  assertProviderCredential(provider, grant, env);
-  const transport = transportForGrant(provider, grant);
-  applyTransportHeaders(new Headers(), transport, grant);
-  const path = (transport?.endpointPaths[endpoint.id] ?? endpoint.path).replace(/\$\{([^}]+)\}/g, (template, name: string) => endpoint.path_params.includes(name) ? "path-param" : template);
-  const values = [transport?.baseUrl ?? provider.base_urls.default, path, ...Object.values(provider.adapter.injectHeaders), ...Object.values(provider.adapter.injectQuery), ...Object.values(endpoint.query), ...Object.values(endpoint.headers)];
-  for (const value of values) resolveTemplate(provider, value, env);
 }
 
 export function upstreamPath(provider: CompiledProvider, endpoint: CompiledEndpoint, pathParams: Record<string, string>, env: Env, auth: UpstreamAuth): string {

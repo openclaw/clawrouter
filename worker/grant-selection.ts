@@ -1,4 +1,5 @@
-import { grantSupports, type GrantRequirement } from "./provider-auth.ts";
+import { HttpError } from "./utils.ts";
+import { assertOperationConfiguration, grantSupports, type GrantRequirement } from "./provider-auth.ts";
 import { authorityCall } from "./authority.ts";
 import { grantCoolingDown, grantQuotaRatio, grantRuntimeFresh } from "./grant-quota.ts";
 import type { AccessPolicyEntry, Env, GrantRoutingPolicy, GrantRuntimeState, UpstreamGrant } from "./types";
@@ -103,6 +104,17 @@ export async function selectGrant(
   return (await resolveGrantSelection(providerId, policyId, tenantId, defaultTokenRef, env, excludedKeys, routing, stickyHash)).selected;
 }
 
+export function activeOperationCandidates(available: SelectedGrant[], env: Env, requirement?: GrantRequirement): SelectedGrant[] {
+  // Qualification follows policy choice. Preserve the original pool-presence
+  // fact so an unusable configured pool cannot fall back to environment auth.
+  const configured = requirement ? available.filter(({ grant }) => {
+    try { assertOperationConfiguration(requirement, grant, env); return true; }
+    catch (error) { if (error instanceof HttpError) return false; throw error; }
+  }) : available;
+  const priority = configured.length ? Math.min(...configured.map(({ grant }) => grantPriority(grant))) : null;
+  return configured.filter(({ grant }) => grantPriority(grant) === priority);
+}
+
 export async function resolveGrantSelection(
   providerId: string,
   policyId: string,
@@ -119,8 +131,7 @@ export async function resolveGrantSelection(
   routing = grantRoutingPolicy(routing);
   const { available, hasConfiguredGrant } = await resolveGrantCandidates(providerId, policyId, tenantId, defaultTokenRef, env, excludedKeys, routing, pinnedKey, requirement);
   const nowMs = Date.now();
-  const activePriority = available.length ? Math.min(...available.map((entry) => grantPriority(entry.grant))) : null;
-  const active = activePriority === null ? [] : available.filter((entry) => grantPriority(entry.grant) === activePriority);
+  const active = activeOperationCandidates(available, env, requirement);
   let selected: SelectedGrant | null = null;
   if (active.length && !recordSelection) selected = active[0];
   else if (active.length) {

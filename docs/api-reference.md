@@ -42,19 +42,23 @@ providers appear; configured but unavailable rows remain inspectable. Static
 `/v1/providers` and `/v1/routes` describe registration, not caller eligibility.
 
 Each provider's `offers` identifies an endpoint, model (or an operation form
-without a selected model), route, transport, selected policy and generation, `eligible`, and an
-optional `reasonCode`. `affordability` is `exact-covered`, `exact-blocked`, or
+without a selected model), route, transport, selected policy and generation,
+`eligible`, and an optional `reasonCode`. `affordability` is `exact-covered`, `exact-blocked`, or
 `request-dependent`: fixed tariffs can be compared with observed balances,
 while token-priced requests depend on their actual input and parameters. Free
 token counting and declared zero-price operations remain available at exhausted
 positive limits. A configured zero limit still blocks ordinary requests.
+Affordability describes the plain operation; request parameters and hosted
+tools are assessed again at dispatch.
 
 The projection observes the actual principal's policy ledger and the provider
 ledger without reserving budget, selecting credentials, refreshing accounts, or
 probing upstream. Observations are advisory; HTTP dispatch and every WebSocket
 create authenticate, check current grants, and reserve budget independently.
 Policy order is chosen by grant/transport eligibility before price or budget;
-an exhausted selected policy never causes a switch to a richer policy.
+an exhausted selected policy never causes a switch to a richer policy. Within
+that policy, deterministic credential/configuration checks precede grant
+priority, so an unusable account cannot displace a configured sibling.
 
 Session offers target HTTP playground routes only. A session catalog cannot
 certify an issued key's native or WebSocket access; fetch the catalog with that
