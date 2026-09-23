@@ -1,4 +1,4 @@
-import type { ModelPricing, ServiceTierPricing, TokenRates } from "./types";
+import type { CompiledEndpoint, ModelPricing, ServiceTierPricing, TokenRates } from "./types";
 import { googleField, googleInt32, googleRequestServiceTier, googleServiceTier } from "./google-protocol.ts";
 
 export interface CostEstimate {
@@ -82,8 +82,10 @@ export function hostedToolPricingGap(tools: readonly unknown[], requestFormat: s
   return usageGap ? "hosted_tool_usage" : null;
 }
 
-export function estimateModelCost(pricing: ModelPricing, body: Record<string, unknown>, requestFormat?: string): CostEstimate {
-  const google = requestFormat === "google.generate_content";
+export type PricingEndpoint = Pick<CompiledEndpoint, "request_format" | "outputTokenLimit">;
+
+export function estimateModelCost(pricing: ModelPricing, body: Record<string, unknown>, endpoint?: PricingEndpoint): CostEstimate {
+  const google = endpoint?.request_format === "google.generate_content";
   const bytes = new TextEncoder().encode(JSON.stringify(body)).byteLength;
   const inputLimit = pricing.maxRequestInputTokens ?? pricing.maxInputTokens;
   const inputTokens = (google ? googleHasUnboundedInput(body) : requestHasUnboundedInput(body))
@@ -96,7 +98,13 @@ export function estimateModelCost(pricing: ModelPricing, body: Record<string, un
     .map(nonNegativeInteger)
     .filter((value): value is number => value != null);
   const choices = Math.max(1, (google ? googleInt32(googleField(config, "candidateCount", "candidate_count")) : nonNegativeInteger(body.n)) ?? 1);
-  const outputTokens = saturatingMultiply(requestedOutput.length ? Math.max(...requestedOutput) : pricing.defaultMaxOutputTokens, choices);
+  const limit = endpoint?.outputTokenLimit;
+  const declaredOutput = limit ? nonNegativeInteger(body[limit.field]) : null;
+  // Undocumented aliases and malformed/omitted limits cannot lower a declared
+  // endpoint bound. This qualifies the estimate; the upstream body is unchanged.
+  const output = limit ? declaredOutput != null && declaredOutput >= limit.minimum && declaredOutput <= limit.maximum ? declaredOutput : limit.maximum
+    : requestedOutput.length ? Math.max(...requestedOutput) : pricing.defaultMaxOutputTokens;
+  const outputTokens = saturatingMultiply(output, choices);
   const rates = resolveRates(pricing, inputTokens, google ? googleRequestServiceTier(body) : body.service_tier, true, google);
   if (!rates) return { reserveMicros: 0, inputTokens, outputTokens, pricingAvailable: false };
   const inputRate = reservationInputRate(body, rates);

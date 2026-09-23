@@ -126,6 +126,28 @@ test("provider schema bounds reasoning efforts to canonical wire values", () => 
   });
 });
 
+test("endpoint output limits compile with closed, finite field and integer range contracts", () => {
+  const valid = parse(readFileSync("providers/deepseek.provider.yaml", "utf8"));
+  const expected = { field: "max_tokens", minimum: 1, maximum: 393_216 };
+  withManifest((path) => {
+    writeFileSync(path, JSON.stringify(valid));
+    const compiled = JSON.parse(compile(path)).providers[0];
+    assert.deepEqual(compiled.endpoints[0].outputTokenLimit, expected);
+    assert.ok(compiled.models.every(model => model.pricing.maxInputTokens === 1_048_576 && model.pricing.defaultMaxOutputTokens === expected.maximum));
+    for (const limit of [
+      {}, null, { ...expected, field: "custom_limit" }, { ...expected, path: "/max_tokens" },
+      { ...expected, minimum: 0 }, { ...expected, maximum: 0 },
+      { ...expected, minimum: 1.5 }, { ...expected, maximum: "393216" },
+      { ...expected, maximum: Number.MAX_SAFE_INTEGER + 1 }, { ...expected, minimum: expected.maximum + 1 },
+    ]) {
+      const manifest = structuredClone(valid);
+      manifest.endpoints.chat_completions.outputTokenLimit = limit;
+      writeFileSync(path, JSON.stringify(manifest));
+      assert.throws(() => compile(path), /outputTokenLimit/);
+    }
+  });
+});
+
 test("compiled providers have unique ids, models, capabilities, and executable endpoint references", () => {
   const snapshot = JSON.parse(readFileSync("worker/generated/provider-snapshot.json", "utf8"));
   assert.equal(new Set(snapshot.providers.map((provider) => provider.id)).size, snapshot.providers.length);

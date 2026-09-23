@@ -199,7 +199,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     }
     return auth;
   }
-  const estimatedCost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability, selection.endpoint.request_format);
+  const estimatedCost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability, selection.endpoint);
   const accounting = createProxyAccounting({ context, env, auth, selection, request, cost: reservedBudget?.cost ?? estimatedCost, compound });
   const { cost, requestId } = accounting;
   if (reservedBudget && (reservedBudget.providerId !== selection.provider.id || reservedBudget.modelId !== selection.model?.id || reservedBudget.capability !== selection.capability || estimatedCost.reserveMicros > reservedBudget.cost.reserveMicros)) {
