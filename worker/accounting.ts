@@ -1,6 +1,7 @@
 import type { AuthorizedIdentity, BudgetReserveRequest, BudgetSettleRequest, Env, ProviderConnection, UsageEvent } from "./types";
 import { budgetLedgerAddress, budgetPrincipal, providerBudgetLedgerAddress } from "./budget-scope.ts";
 import { logCorrelationError } from "./correlation.ts";
+import { ingestUsage } from "./ledgers.ts";
 import { HttpError, randomId } from "./utils.ts";
 
 export interface BudgetReservation {
@@ -79,7 +80,7 @@ async function reserveLedger(
 export async function finalizeAccounting(env: Env, reservation: BudgetReservation, actualCostMicros: number, event: UsageEvent): Promise<boolean> {
   const results = await Promise.allSettled([
     settleBudget(env, reservation, actualCostMicros),
-    env.USAGE_QUEUE.send(event),
+    publishUsage(env, event),
   ]);
   for (const result of results) {
     if (result.status === "rejected") logCorrelationError("accounting finalization failed", event.request_id);
@@ -87,6 +88,15 @@ export async function finalizeAccounting(env: Env, reservation: BudgetReservatio
   // HTTP has already delivered its response; persistent sessions must stop
   // accepting work if either durable settlement recovery or usage delivery fails.
   return results.every((result) => result.status === "fulfilled");
+}
+
+async function publishUsage(env: Env, event: UsageEvent): Promise<void> {
+  try { await env.USAGE_QUEUE.send(event); }
+  catch {
+    // A rejected send can still have been accepted. Reuse the event ID so
+    // direct recovery and later queue delivery converge on one stored row.
+    await ingestUsage(env, event);
+  }
 }
 
 export async function settleBudget(env: Env, reservation: BudgetReservation, actualCostMicros: number): Promise<void> {

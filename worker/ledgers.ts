@@ -158,18 +158,22 @@ export class UsageLedgerObject implements DurableObject {
 export async function queue(batch: MessageBatch<QueueMessage>, env: Env): Promise<void> {
   for (const message of batch.messages) {
     try {
-      let response: Response;
-      if ("type" in message.body) response = await usageStub(env, message.body.tenant_id, message.body.policy_id).fetch("https://clawrouter.internal/ingest", { method: "POST", body: JSON.stringify(message.body) });
+      if ("type" in message.body) await ingestUsage(env, message.body);
       else {
         const job = message.body;
         const objectName = "ledger" in job ? job.ledger.objectName : `${job.tenant_id}:${job.policy_id}${job.principal_id ? `:${job.principal_id}` : ""}`;
         const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(objectName));
-        response = await stub.fetch("https://clawrouter.internal/settle", { method: "POST", body: JSON.stringify(job.request) });
+        const response = await stub.fetch("https://clawrouter.internal/settle", { method: "POST", body: JSON.stringify(job.request) });
+        if (!response.ok) throw new Error(`ledger queue write returned ${response.status}`);
       }
-      if (!response.ok) throw new Error(`ledger queue write returned ${response.status}`);
       message.ack();
     } catch { message.retry(); }
   }
+}
+
+export async function ingestUsage(env: Env, event: UsageEvent): Promise<void> {
+  const response = await usageStub(env, event.tenant_id, event.policy_id).fetch("https://clawrouter.internal/ingest", { method: "POST", body: JSON.stringify(event) });
+  if (!response.ok) throw new Error(`usage ledger write returned ${response.status}`);
 }
 
 export async function usageSnapshot(env: Env, tenantId: string, policyId: string, limit = 100): Promise<UsageSnapshot> {

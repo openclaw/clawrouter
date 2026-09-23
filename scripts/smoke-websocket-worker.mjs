@@ -177,23 +177,29 @@ try {
   // Faults belong to the fixture wrapper, never a production configuration surface.
   for (const phase of ["terminal", "preflight", "rollback"]) {
     await authorityObject.fetch("https://authority/policies/put", { method: "POST", body: JSON.stringify({ policyId: "fixture", policy: { ...policy, retainRequestContent: phase === "preflight" } }) });
-    for (const fault of ["recovered", "settlement", "usage"]) {
+    for (const fault of ["recovered", "settlement", "usage_recovered", "usage", "usage_throw"]) {
+      const recovered = fault === "recovered" || fault === "usage_recovered";
+      const session = `accounting-${phase}-${fault}`;
       const before = (await stateFrames()).length;
-      const opened = await dispatch("/v1/responses", { headers: { upgrade: "websocket", "x-fixture-accounting-fault": fault, "x-fixture-accounting-phase": phase } });
+      const opened = await dispatch("/v1/responses", { headers: { upgrade: "websocket", "x-fixture-accounting-fault": fault, "x-fixture-accounting-phase": phase, "x-clawrouter-session-id": session } });
       const current = opened.webSocket; current.accept(); sockets.push(current);
       const events = []; let closed = false;
       current.addEventListener("message", ({ data }) => events.push(JSON.parse(data)));
       current.addEventListener("close", () => { closed = true; });
       for (let index = 0; index < 2; index++) current.send(JSON.stringify({ type: "response.create", model: "openai/gpt-6-astra", input: "accounting fixture", max_output_tokens: 16, service_tier: "priority" }));
-      if (fault === "recovered") {
+      if (recovered) {
         await until(() => events.filter(({ type }) => type === "response.completed" || type === "error").length === 2);
+        await until(async () => {
+          const receipts = (await (await dispatch("/v1/usage")).json()).usage.events.filter(({ session_id }) => session_id === session);
+          return receipts.length === 2 && new Set(receipts.map(({ id }) => id)).size === 2;
+        });
         assert.equal(closed, false);
         assert.ok(!events.some(({ error }) => error?.code === "accounting_unavailable"));
       } else {
         await until(() => closed);
         assert.ok(events.some(({ error }) => error?.code === "accounting_unavailable"));
       }
-      assert.equal((await stateFrames()).length - before, phase !== "terminal" ? 0 : fault === "recovered" ? 2 : 1);
+      assert.equal((await stateFrames()).length - before, phase !== "terminal" ? 0 : recovered ? 2 : 1);
       if (phase === "rollback") {
         const trace = await (await dispatch("/fixture-accounting")).json();
         assert.deepEqual(trace.slice(0, 4).map(({ kind }) => kind), ["policy_reserved", "provider_denied", "rollback_attempted", "rollback_queued"]);
@@ -202,6 +208,18 @@ try {
     }
   }
   await authorityObject.fetch("https://authority/policies/put", { method: "POST", body: JSON.stringify({ policyId: "fixture", policy }) });
+  // Publication recovery and exhaustion must both preserve the consumed HTTP response.
+  for (const fault of ["usage_recovered", "usage", "usage_throw"]) {
+    const session = `http-${fault}`;
+    const response = await dispatch("/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json", "x-fixture-accounting-fault": fault, "x-clawrouter-session-id": session },
+      body: JSON.stringify({ model: "openai/gpt-6-astra", input: "publication fixture", max_output_tokens: 16, service_tier: "priority" }),
+    });
+    assert.equal(response.status, 200);
+    assert.deepEqual(await response.json(), { id: "http-fixture", object: "response", status: "completed", output: [], service_tier: "priority", usage: { input_tokens: 14, output_tokens: 8, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } });
+    await until(async () => (await (await dispatch("/fixture-accounting")).json()).some(({ kind }) => kind === "usage_ingest"));
+    if (fault === "usage_recovered") await until(async () => (await (await dispatch("/v1/usage")).json()).usage.events.some(({ session_id }) => session_id === session));
+  }
   // Mutate only fixture authority: queued/next creates must see revocation.
   const revoke = await authorityObject.fetch("https://authority/credentials/put", { method: "POST", body: JSON.stringify({ credentialId: "fixture", credential: { ...credential, enabled: false } }) });
   assert.equal(revoke.status, 200);
@@ -231,6 +249,7 @@ function upstreamFixture() { return `
 const frames = []; let headerMatch = false;
 export default { async fetch(request) {
   if (new URL(request.url).pathname === '/state') return Response.json({ frames, headerMatch });
+  if (request.url === 'https://api.openai.com/v1/responses' && request.method === 'POST') return Response.json({ id: 'http-fixture', object: 'response', status: 'completed', output: [], service_tier: 'priority', usage: { input_tokens: 14, output_tokens: 8, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } });
   if (request.url !== 'https://api.openai.com/v1/responses' || request.headers.get('upgrade') !== 'websocket') return new Response('unexpected upstream route', { status: 400 });
   headerMatch = request.headers.get('authorization') === 'Bearer fixture-upstream-key' && request.headers.get('session-id') === 'fixture-session' && request.headers.get('x-openai-internal-codex-responses-lite') === 'true';
   const pair = new WebSocketPair(); pair[1].accept();
@@ -276,7 +295,7 @@ export default { ...handler, fetch(request, env, context) {
   if (new URL(request.url).pathname === "/fixture-accounting") return Response.json(trace);
   const fault = request.headers.get("x-fixture-accounting-fault");
   if (fault) {
-    const ledger = env.BUDGET_LEDGER, queue = env.USAGE_QUEUE;
+    const ledger = env.BUDGET_LEDGER, queue = env.USAGE_QUEUE, usage = env.USAGE_LEDGER;
     const rollback = request.headers.get("x-fixture-accounting-phase") === "rollback";
     trace = [];
     env = { ...env,
@@ -293,9 +312,17 @@ export default { ...handler, fetch(request, env, context) {
           return stub.fetch(url, init);
         } };
       } },
+      USAGE_LEDGER: { idFromName: (name) => usage.idFromName(name), get: (id) => ({ async fetch(url, init) {
+        if (new URL(url).pathname === "/ingest") {
+          trace.push({ kind: "usage_ingest" });
+          if (fault === "usage_throw") throw new Error("fixture ingest outage");
+          if (fault === "usage") return new Response("fixture ingest outage", { status: 503 });
+        }
+        return usage.get(id).fetch(url, init);
+      } }) },
       USAGE_QUEUE: { send(message) {
         if (message.kind === "budget_settlement") trace.push({ kind: "rollback_queued" });
-        if ((fault === "settlement" && message.kind === "budget_settlement") || (fault === "usage" && message.type === "clawrouter.usage.v1")) return Promise.reject(new Error("fixture queue outage"));
+        if ((fault === "settlement" && message.kind === "budget_settlement") || (fault.startsWith("usage") && message.type === "clawrouter.usage.v1")) return Promise.reject(new Error("fixture queue outage"));
         return queue.send(message);
       } },
     };
