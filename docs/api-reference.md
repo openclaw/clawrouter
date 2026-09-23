@@ -25,6 +25,17 @@ The optional `/private/v1/{models,catalog,responses}` facade has its own pinned 
 | `GET` | `/v1/usage` | Caller policy or principal budget and usage summary |
 | `GET` | `/v1/key/inspect` | Proxy-credential verification and readiness status |
 
+Usage summaries, provider totals, and daily totals remain shared across each
+authorized policy. The budget follows the policy's configured policy or principal
+scope. Recent `usage.events` on `/v1/usage` and `/v1/session/usage` contain only
+events attributed to the authenticated principal. A service key without a
+principal sees only events with its exact credential ID and no principal.
+Unattributed historical events without that credential ID remain admin-only;
+reassigning a credential does not transfer a previous principal's event history.
+This tightens earlier releases' policy-wide recent-event visibility. Administrators
+use `/v1/admin/usage` for the complete audit; their personal session endpoint
+still returns only their own events. Retained request content remains admin-only.
+
 `GET /v1/catalog` is the client integration contract. Each provider row reports whether the unified OpenAI-compatible route is executable, its native proxy base URL, and the request and response formats for executable native routes.
 
 `/v1/models` and `/v1/catalog` use the same executable model projection. It applies the selected policy, provider budget, grant eligibility and cooldown, and endpoint requirements without selecting or refreshing credentials. A configured but unavailable grant pool never falls back to an environment credential. Token counting retains its zero-cost exemption; Fusion discovery still uses its separate readiness projection.

@@ -193,7 +193,7 @@ async function adminUsage(env: Env): Promise<Response> {
   const [policies, credentials, users, bindings] = await Promise.all([listPolicies(env), listCredentials(env), listUsers(env), listBindings(env)]);
   const principals = budgetPrincipalsByPolicy(credentials, users, bindings);
   const rows = await Promise.all(policies.map(async (entry) => ({ ...legacyKeyResponse(entry), budget: await adminBudgetStatus(env, entry, principals.get(entry.policyId) ?? []) })));
-  return privateJson({ policies: rows, keys: rows, usage: await usageSnapshots(env, policies.map((entry) => ({ policyId: entry.policyId, tenantId: entry.policy.tenantId ?? "default" }))) });
+  return privateJson({ policies: rows, keys: rows, usage: await usageSnapshots(env, policies.map((entry) => ({ policyId: entry.policyId, tenantId: entry.policy.tenantId ?? "default" })), { kind: "admin" }) });
 }
 
 export async function adminBudgetStatus(env: Env, entry: AccessPolicyEntry, principals: string[]) {

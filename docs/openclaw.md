@@ -113,7 +113,9 @@ snapshot through `/status` in chat and its usage UI.
 
 - The proxy credential reaches only ClawRouter, never an upstream provider.
 - Upstream credentials remain server-side in Worker secrets or scoped grants.
-- Catalog and usage responses are policy-scoped.
+- Catalog and usage totals are policy-scoped. Recent usage events are limited to
+  the credential's principal, or its own unattributed events for a service key
+  without a principal. Complete request audits remain administrator-only.
 - OpenClaw attaches the proxy credential only when dispatching catalog, usage,
   or inference requests; it is not model metadata.
 - Revoking the credential blocks that client. Disabling the policy blocks every
