@@ -189,10 +189,10 @@ function receipt(text, profile) {
   return state;
 }
 
-function baseCompatible(text, profile) {
+function baseCompatible(text, profile, ownsProvider = false) {
   const { fields, tables } = document(text ?? "");
   for (const { path, node } of [...fields.values(), ...tables.map((node) => ({ path: node.resolvedKey }))]) {
-    const target = path[0] === "model_providers" ? providerId(profile) : path[0] === "profiles" ? profile : null;
+    const target = path[0] === "model_providers" ? ownsProvider ? null : providerId(profile) : path[0] === "profiles" ? profile : null;
     const inlineCollision = target && path.length === 1 && node?.value.type === "TOMLInlineTable" && node.value.body.some((field) => getStaticTOMLValue(field.key)[0] === target);
     if (path[0] === "profile" || (target && path[1] === target) || inlineCollision) {
       throw new Error("base config has a conflicting provider or legacy profile; choose another profile or resolve it manually");
@@ -249,7 +249,7 @@ export async function manageCodex(args, env = process.env) {
     text = patched.text;
     retained = patched.retained;
   } else {
-    if (!desktop || command === "connect") baseCompatible(await readRegular(join(home, "config.toml")), profile);
+    baseCompatible(await readRegular(join(home, "config.toml")), profile, desktop && state !== null);
     if (state && patch(original.slice(original.indexOf("\n") + 1), state.fields, state.fields).retained.length) throw new Error("owned profile settings changed; review them before remove/reconnect");
     if (state && (!oldBytes || hash(oldBytes) !== state.catalogSha256)) throw new Error("owned model catalog changed or is missing; no files changed");
     let keyValue = env.CLAWROUTER_API_KEY;
@@ -294,7 +294,7 @@ export async function manageCodex(args, env = process.env) {
   let createdCatalog = false, committed = false;
   try {
     if (await readRegular(path) !== original) throw new Error("profile changed during the operation; no files changed");
-    if (command !== "remove" && (!desktop || command === "connect")) baseCompatible(await readRegular(join(home, "config.toml")), profile);
+    if (command !== "remove") baseCompatible(await readRegular(join(home, "config.toml")), profile, desktop && state !== null);
     if (nextCatalog) {
       const existing = await readRegular(nextCatalog);
       if (existing !== null && existing !== nextBytes) throw new Error("catalog generation already exists with different content");

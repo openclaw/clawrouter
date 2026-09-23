@@ -407,6 +407,19 @@ test("Desktop collisions and CLI-only options fail before catalog access", async
   assert.equal(f.state.requests.length, 0);
 });
 
+test("Desktop verify and update reject a root profile selector added after setup", async (t) => {
+  const f = await desktopFixture(t);
+  await manageCodex(f.connect, f.env);
+  const installed = await readFile(f.profile, "utf8"), line = installed.indexOf("\n") + 1;
+  const edited = installed.slice(0, line) + 'profile = "other"\n' + installed.slice(line);
+  await writeFile(f.profile, edited);
+  const files = await readdir(f.home), requestCount = f.state.requests.length;
+  for (const command of ["verify", "update"]) await assert.rejects(f.run(command), /conflicting/);
+  assert.equal(await readFile(f.profile, "utf8"), edited);
+  assert.deepEqual(await readdir(f.home), files);
+  assert.equal(f.state.requests.length, requestCount);
+});
+
 for (const map of ['{}', '{ other = { name = "Other", http_headers = { "x-user" = "kept" } } }', '{ "other.provider" = { name = "Other" }, another.name = "Another" }']) test(`Desktop preserves unrelated inline provider members ${map}`, async (t) => {
   const original = `# inline map remains user-owned\nmodel_providers = ${map}\n[profiles.other]\nmodel = "unselected"\n`;
   const f = await desktopFixture(t, original);
