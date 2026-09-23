@@ -149,7 +149,7 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
     : manifestEnvelope(await readJson<unknown>(request));
   const method = (envelope.method ?? endpoint.method).toUpperCase();
   if (!endpoint.methods.includes(method)) return errorResponse("method_not_allowed", `endpoint does not allow ${method}`, 405);
-  const prepared = prepareManifestRequest(provider, endpoint, envelope.body ?? {}, envelope.pathParams ?? {}, env);
+  const prepared = prepareManifestRequest(provider, endpoint, envelope.body, envelope.pathParams, env);
   const capability = provider.capabilities.find((item) => item.endpoint === endpoint.id)?.id ?? endpoint.id;
   return proxySelected(request, env, context, mode, { provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method }, envelope.query, preauthenticated);
 }
@@ -165,7 +165,7 @@ export async function proxyNative(request: Request, env: Env, context: Execution
   if (!endpoint || !endpoint.native_proxy) return errorResponse("route_not_found", "native provider route not found", 404);
   const method = request.method.toUpperCase();
   if (!endpoint.methods.includes(method)) return errorResponse("method_not_allowed", `endpoint does not allow ${method}`, 405);
-  const body = request.method === "GET" || request.method === "HEAD" ? {} : requestObject(await readJson<unknown>(request));
+  const body = request.method === "GET" || request.method === "HEAD" ? {} : await readJson<unknown>(request);
   const prepared = prepareNativeRequest(provider, endpoint, body, match[2], env);
   const capability = provider.capabilities.find((item) => item.endpoint === endpoint.id)?.id ?? endpoint.id;
   return proxySelected(request, env, context, "proxy_key", { provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method }, searchParamsRecord(new URL(request.url).searchParams), preauthenticated);
@@ -239,7 +239,10 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
         // Keep the first provider response when no alternate grant is ready or its request fails.
       }
     }
-    response = await normalizePreStreamError(response, selection.body.stream === true);
+    const streaming = Array.isArray(selection.body)
+      ? selection.body.some(({ query }) => !!query && typeof query === "object" && "stream" in query && query.stream === true)
+      : selection.body.stream === true;
+    response = await normalizePreStreamError(response, streaming);
   } catch (error) {
     clearTimeout(timeout);
     // A fetch failure can incur cost; a received rejection stays nonbillable

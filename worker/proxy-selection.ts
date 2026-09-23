@@ -1,5 +1,5 @@
 import { resolveTemplate } from "./provider-templates.ts";
-import type { CompiledEndpoint, CompiledModel, CompiledProvider, Env } from "./types";
+import type { CompiledEndpoint, CompiledModel, CompiledProvider, Env, ProxyRequestBody } from "./types";
 import { capabilityForPath, endpointForPath, modelRoute, modelSupportsEndpoint, providerForModel, providerModel, transformRequestBody } from "./providers";
 import { decodePathSegment, errorResponse, HttpError } from "./utils";
 
@@ -8,7 +8,7 @@ export interface ProxySelection {
   endpoint: CompiledEndpoint;
   model: CompiledModel | null;
   capability: string;
-  body: Record<string, unknown>;
+  body: ProxyRequestBody;
   pathParams: Record<string, string>;
   method: string;
   timeoutMs?: number;
@@ -48,7 +48,14 @@ export function isSelectionFailure(value: ProxySelection | ProxySelectionFailure
   return "response" in value;
 }
 
-export function prepareManifestRequest(provider: CompiledProvider, endpoint: CompiledEndpoint, body: Record<string, unknown>, inputPathParams: Record<string, string>, env: Env, native = false): { model: CompiledModel | null; body: Record<string, unknown>; pathParams: Record<string, string> } {
+export function prepareManifestRequest(provider: CompiledProvider, endpoint: CompiledEndpoint, inputBody: unknown, inputPathParams: Record<string, string>, env: Env, native = false): { model: CompiledModel | null; body: ProxyRequestBody; pathParams: Record<string, string> } {
+  if (endpoint.request_format === "cloudflare_ai_gateway.universal") {
+    if (!Array.isArray(inputBody)) throw new HttpError(400, "invalid_request_body", "universal gateway body must be a JSON array");
+    // Entries are ordered upstream fallbacks, not one model request. Keep their
+    // native queries intact and do not invent a model or price for the wrapper.
+    return { model: null, body: inputBody.map((entry) => requestObject(entry, "universal gateway entry")), pathParams: inputPathParams };
+  }
+  const body = requestObject(inputBody);
   const modelId = typeof body.model === "string" ? body.model : null;
   const pathModelId = inputPathParams.model ?? inputPathParams.deployment ?? null;
   const resolve = (value: string | null) => {
@@ -80,7 +87,7 @@ export function prepareManifestRequest(provider: CompiledProvider, endpoint: Com
   };
 }
 
-export function prepareNativeRequest(provider: CompiledProvider, endpoint: CompiledEndpoint, body: Record<string, unknown>, path: string, env: Env): { model: CompiledModel | null; body: Record<string, unknown>; pathParams: Record<string, string> } {
+export function prepareNativeRequest(provider: CompiledProvider, endpoint: CompiledEndpoint, body: unknown, path: string, env: Env): { model: CompiledModel | null; body: ProxyRequestBody; pathParams: Record<string, string> } {
   return prepareManifestRequest(provider, endpoint, body, nativeParams(endpoint, path), env, true);
 }
 
@@ -95,7 +102,7 @@ export function directManifestEnvelope(request: Request, endpoint: CompiledEndpo
   return { method: request.method, pathParams, query: searchParamsRecord(query), body: {} };
 }
 
-export function manifestEnvelope(value: unknown): { method?: string; pathParams: Record<string, string>; query: Record<string, unknown>; body: Record<string, unknown> } {
+export function manifestEnvelope(value: unknown): { method?: string; pathParams: Record<string, string>; query: Record<string, unknown>; body: unknown } {
   const envelope = requestObject(value, "manifest request");
   if (envelope.method !== undefined && typeof envelope.method !== "string") throw new HttpError(400, "invalid_request_body", "manifest method must be a string");
   const pathParams = optionalObject(envelope.pathParams, "manifest pathParams");
@@ -104,7 +111,7 @@ export function manifestEnvelope(value: unknown): { method?: string; pathParams:
     method: envelope.method as string | undefined,
     pathParams: pathParams as Record<string, string>,
     query: optionalObject(envelope.query, "manifest query"),
-    body: optionalObject(envelope.body, "manifest body"),
+    body: envelope.body === undefined ? {} : envelope.body,
   };
 }
 

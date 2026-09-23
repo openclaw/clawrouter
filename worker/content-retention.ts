@@ -1,11 +1,12 @@
-import type { AuthorizedIdentity, CompiledModel, ContentRecord, Env } from "./types";
+import type { AuthorizedIdentity, CompiledEndpoint, CompiledModel, ContentRecord, Env, ProxyRequestBody } from "./types";
 import { randomId } from "./utils.ts";
 
 interface RetainedSelection {
   provider: { id: string };
+  endpoint: Pick<CompiledEndpoint, "request_format">;
   model: CompiledModel | null;
   capability: string;
-  body: Record<string, unknown>;
+  body: ProxyRequestBody;
 }
 
 export function retentionRequired(auth: AuthorizedIdentity, capability: string): boolean {
@@ -35,7 +36,11 @@ export async function retainRequestContent(env: Env, auth: AuthorizedIdentity, s
     provider: selection.provider.id,
     capability: selection.capability,
     model: selection.model?.id ?? null,
-    body: selection.body,
+    // Universal gateway entries carry transport credentials inside the JSON
+    // body. Archive query content, never their authorization or header fields.
+    body: selection.endpoint.request_format === "cloudflare_ai_gateway.universal" && Array.isArray(selection.body)
+      ? selection.body.map(({ headers: _headers, authorization: _authorization, ...entry }) => entry)
+      : selection.body,
   };
   await env.CONTENT_ARCHIVE.put(contentKey(record.tenantId, contentRef), JSON.stringify(record), {
     httpMetadata: { contentType: "application/json" },
