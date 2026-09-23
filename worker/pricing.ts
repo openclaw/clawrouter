@@ -28,12 +28,31 @@ interface Rates {
   cacheWrite1hInput: number | null;
 }
 
-export function requestHasHostedSearch(body: Record<string, unknown>, capability: string): boolean {
-  if (capability === "llm.chat") return isObject(body.web_search_options);
-  if (capability !== "llm.responses" && capability !== "llm.messages") return false;
-  // Match hosted wire types, never user-defined function names or tool results.
-  return Array.isArray(body.tools) && body.tools.some((tool) => isObject(tool) && typeof tool.type === "string" &&
-    (capability === "llm.messages" ? /^web_search_\d{8}$/.test(tool.type) : /^web_search(?:_preview)?(?:_\d{4}_\d{2}_\d{2})?$/.test(tool.type)));
+export type PricingGap = "model_request_fee" | "hosted_tool_fee" | "hosted_tool_usage";
+
+export function requestPricingGap(pricing: ModelPricing | null | undefined, body: Record<string, unknown>, requestFormat: string): PricingGap | null {
+  if (pricing?.unpricedCosts?.includes("request_fee")) return "model_request_fee";
+  if (requestFormat === "openai.chat_completions" && isObject(body.web_search_options)) return "hosted_tool_fee";
+  // CachedContent retains tools and toolConfig. The reference alone cannot
+  // prove that generation has only the token costs represented by this card.
+  if (requestFormat === "google.generate_content" && googleField(body, "cachedContent", "cached_content") != null) return "hosted_tool_usage";
+  if (!Array.isArray(body.tools)) return null;
+  for (const tool of body.tools) {
+    if (!isObject(tool)) continue;
+    // Inspect protocol declarations, never function names or user JSON schemas.
+    if (requestFormat === "openai.responses" && typeof tool.type === "string") {
+      if (/^web_search(?:_preview)?(?:_\d{4}_\d{2}_\d{2})?$/.test(tool.type) || ["file_search", "code_interpreter", "image_generation"].includes(tool.type)) return "hosted_tool_fee";
+      if (tool.type === "shell" && isObject(tool.environment) && ["container_auto", "container_reference"].includes(String(tool.environment.type))) return "hosted_tool_fee";
+    }
+    if (requestFormat === "anthropic.messages" && typeof tool.type === "string" && /^web_search_\d{8}$/.test(tool.type)) return "hosted_tool_fee";
+    if (requestFormat === "google.generate_content") {
+      if ([["googleSearch", "google_search"], ["googleSearchRetrieval", "google_search_retrieval"], ["googleMaps", "google_maps"]].some(([camel, proto]) => isObject(googleField(tool, camel, proto)))) return "hosted_tool_fee";
+      // These tools have token charges rather than a flat tool fee, but their
+      // server-side work is not covered by our ordinary prompt/output bounds.
+      if ([["urlContext", "url_context"], ["fileSearch", "file_search"], ["codeExecution", "code_execution"]].some(([camel, proto]) => isObject(googleField(tool, camel, proto)))) return "hosted_tool_usage";
+    }
+  }
+  return null;
 }
 
 export function estimateModelCost(pricing: ModelPricing, body: Record<string, unknown>, requestFormat?: string): CostEstimate {

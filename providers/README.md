@@ -107,6 +107,12 @@ billing:
   per million tokens. Change `pricingRef` whenever rates or effective dates
   change. Declare `longContext` when a model changes rates above an input-token
   threshold; omit `pricing` when a model cannot be priced safely.
+- `pricing.unpricedCosts: [request_fee]` retains known token rates while marking
+  additional mandatory request fees that ClawRouter does not yet meter. Such a
+  model requires a fixed policy tariff when either monthly budget is enforced.
+  With both budgets disabled, requests forward and report an unavailable price.
+  Request-specific hosted tools are assessed from the selected endpoint's wire
+  format; do not mark every model merely because it supports optional tools.
 - `pricing.serviceTiers` declares complete rate cards with unique wire `id`s,
   optional `aliases`, optional `longContext`, and an optional `maxInputTokens`
   price-applicability limit. Include a `default` card identical to the root

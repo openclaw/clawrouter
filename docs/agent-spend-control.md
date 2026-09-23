@@ -53,7 +53,7 @@ is configured. Every budgeted call fails closed until its route has versioned
 manifest pricing or a fixed policy price. A zero-cost route, such as Anthropic
 token counting, skips reservation.
 
-Gemini native requests containing `cachedContent`, `fileData`, or `inlineData`
+Gemini native requests containing `fileData` or `inlineData`
 reserve the full declared input window, including media in system instructions
 or typed function-response parts. With the bundled Standard Gemini 3.5 Flash
 rate card, 1,048,576 input tokens reserve **$1.572864 before output**.
@@ -63,7 +63,7 @@ candidate add $0.000900, for a total reservation of **$1.573764**.
 
 Each configured policy and provider monthly budget must have enough unreserved
 headroom for the entire request. Otherwise ClawRouter returns HTTP 402 before
-dispatch, even for a small cached-content or media request. This corrected bound
+dispatch, even for a small media request. This corrected bound
 also applies to existing callers after upgrading. Increase the applicable budget
 headroom, or explicitly choose the fixed `requestCostMicros` policy tariff when
 that accounting model fits your deployment. A fixed tariff records the operator's
@@ -75,26 +75,45 @@ rates and releases the unused reservation. Missing or malformed usage retains
 the reservation, as for other providers. The reservation is not an upstream
 invoice charge.
 
-Hosted web search adds fees and repeated model work that token pricing does not
-cover. Requests enabling Responses `web_search` or `web_search_preview` (including
-dated versions), Anthropic `web_search_*`, or Chat `web_search_options` now return
-`pricing_required` before dispatch when either policy or provider has a monthly
-budget and no fixed policy price. Disable hosted search for token-priced budgets,
-or let the operator set an explicit fixed request tariff.
+Token rates alone do not always describe a complete request price. Sonar Pro has
+a [mandatory request fee](https://docs.perplexity.ai/docs/sonar/models/sonar-pro),
+including its default search mode. Its manifest retains the known token rates
+and declares `pricing.unpricedCosts: [request_fee]` until fee metering is available.
+The documented example of 26 input and 832 output tokens costs $0.018558 including
+the low-context fee, rather than the token-only $0.012558.
 
-With both monthly limits disabled, hosted-search requests still forward. Their
+ClawRouter also recognizes these incomplete request prices by wire format:
+
+- OpenAI Responses web search (including dated variants), file search, code
+  interpreter, image generation, and shell tools with hosted container
+  environments; Chat `web_search_options`; Anthropic `web_search_*`.
+- Gemini Google Search, legacy search retrieval, and Maps grounding fees.
+- Gemini URL context, File Search, and code execution, whose hosted token work
+  is not fully bounded or metered by the ordinary model counters. A tool can
+  have no separate fee and still make token-only settlement incomplete.
+- Gemini `cachedContent` references, because a
+  [cached resource can retain tools and tool configuration](https://ai.google.dev/api/caching).
+  The opaque reference cannot establish a complete token-only request price.
+
+These calls return `pricing_required` before dispatch when either policy or
+provider has a monthly budget and no fixed policy price. Choose a model/request
+with complete token pricing, or let the operator set an explicit fixed tariff.
+This applies to existing callers after upgrading, including native and manifest
+proxy routes and every Responses WebSocket turn.
+
+With both monthly limits disabled, these requests still forward. Their
 billable usage records zero accounted micros with `cost_basis: unpriced_usage`,
 meaning **price unavailable**, even when complete tokens and a known served tier
 are returned. Pre-dispatch denials and proven nonbillable responses remain known
 zero. Free token counting and fixed policy tariffs keep their existing behavior.
 Basic Anthropic web fetch has only token charges and retains its full-input-window
-reservation. Other hosted tools remain outside complete fee accounting.
+reservation.
 Client-executed function, custom, namespace, local-shell, and apply-patch tools
 use the model's token rates; a function named `web_search` is still a function.
 A fixed `requestCostMicros` is an operator-defined
 tariff, not a measurement of provider tool charges.
 
-Full hosted-search metering remains unqualified. The published
+Complete hosted-tool metering remains unqualified. The published
 [OpenAI tool prices](https://developers.openai.com/api/docs/pricing) and
 [search contract](https://developers.openai.com/api/docs/guides/tools-web-search)
 do not establish a complete mapping from returned input usage to separately billed
@@ -106,7 +125,14 @@ or isolated upstream usage/cost reconciliation, plus a demonstrated finite bound
 on cumulative input and tool work. Anthropic also charges
 [searches separately](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool),
 while [web fetch](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool)
-has no additional tool fee. This guard does not claim an upstream invoice cap.
+has no additional tool fee. OpenAI containers and generated images need their
+own [billing contracts](https://developers.openai.com/api/docs/pricing), rather
+than a guessed flat fee per model response. Gemini
+[tool pricing](https://ai.google.dev/gemini-api/docs/pricing) and
+[URL-context usage](https://ai.google.dev/gemini-api/docs/generate-content/url-context)
+include hosted work beyond ordinary prompt and candidate counters. ClawRouter
+preserves reported token counts and totals without claiming they account for
+every charged dimension. This guard does not claim an upstream invoice cap.
 
 Pricing lives beside the model in `providers/*.provider.yaml`:
 
@@ -323,8 +349,9 @@ is a separate policy-controlled R2 archive; see [Content retention](content-rete
 
 ## Current boundary
 
-The enforcement slice covers token-priced model calls and rejects unpriced hosted
-search under measured budgets. Provider tool-call fees are not metered; unknown dynamic models require manifest pricing or a policy
+The enforcement slice covers token-priced model calls and rejects known incomplete
+request prices under measured budgets. Provider request/tool fees and cumulative
+hosted-tool work are not metered; unknown dynamic models require manifest pricing or a policy
 `requestCostMicros` override. This is not a hard provider invoice cap.
 
 Reservations have a 15-minute admission lease. Before upstream dispatch, both

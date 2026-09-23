@@ -235,6 +235,10 @@ test("ordinary pricing cards reject invalid schema fields before emitting a snap
     ["unsafe input limit", (pricing) => { pricing.maxInputTokens = Number.MAX_SAFE_INTEGER + 1; }],
     ["negative output limit", (pricing) => { pricing.defaultMaxOutputTokens = -1; }],
     ["negative overhead", (pricing) => { pricing.inputTokenOverhead = -1; }],
+    ["unknown unpriced cost", (pricing) => { pricing.unpricedCosts = ["unknown_fee"]; }],
+    ["empty unpriced costs", (pricing) => { pricing.unpricedCosts = []; }],
+    ["duplicate unpriced costs", (pricing) => { pricing.unpricedCosts = ["request_fee", "request_fee"]; }],
+    ["unpriced cost scalar", (pricing) => { pricing.unpricedCosts = "request_fee"; }],
     ["unknown field", (pricing) => { pricing.inputMicrosPerToken = 1; }],
     ["partial long-context card", (pricing) => { pricing.longContext = { thresholdInputTokens: 100, inputMicrosPerMillion: 1 }; }],
     ["unsafe long-context rate", (pricing) => { pricing.longContext = { thresholdInputTokens: 100, inputMicrosPerMillion: Number.MAX_SAFE_INTEGER + 1, outputMicrosPerMillion: 1 }; }],
@@ -255,9 +259,12 @@ test("ordinary pricing cards reject invalid schema fields before emitting a snap
       assert.throws(() => compile(path), /invalid manifest:.*\/inputMicrosPerMillion:/);
     }
     const pricing = valid.models.entries[0].pricing;
-    Object.assign(pricing, { effectiveAt: "2028-02-29", inputMicrosPerMillion: 0, outputMicrosPerMillion: 0, defaultMaxOutputTokens: 0 });
+    Object.assign(pricing, { effectiveAt: "2028-02-29", inputMicrosPerMillion: 0, outputMicrosPerMillion: 0, defaultMaxOutputTokens: 0, unpricedCosts: ["request_fee"] });
     writeFileSync(path, JSON.stringify(valid));
-    assert.equal(JSON.parse(compile(path)).providers[0].models[0].pricing.outputMicrosPerMillion, 0);
+    const snapshot = JSON.parse(compile(path));
+    assert.equal(snapshot.providers[0].models[0].pricing.outputMicrosPerMillion, 0);
+    assert.deepEqual(snapshot.providers[0].models[0].pricing.unpricedCosts, ["request_fee"]);
+    assert.deepEqual(Object.values(snapshot.model_index)[0].pricing.unpricedCosts, ["request_fee"]);
   });
 });
 

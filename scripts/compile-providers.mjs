@@ -198,6 +198,7 @@ function normalizePricing(pricing) {
     maxRequestInputTokens: pricing.maxRequestInputTokens ?? null,
     defaultMaxOutputTokens: pricing.defaultMaxOutputTokens,
     inputTokenOverhead: pricing.inputTokenOverhead ?? 1024,
+    ...(pricing.unpricedCosts ? { unpricedCosts: pricing.unpricedCosts } : {}),
     longContext: normalizeLongContext(pricing.longContext),
     ...(pricing.serviceTiers ? { serviceTiers: pricing.serviceTiers.map((tier) => ({ id: tier.id, aliases: tier.aliases ?? [], ...normalizeRates(tier), maxInputTokens: tier.maxInputTokens ?? null, longContext: normalizeLongContext(tier.longContext) })) } : {}),
   };
