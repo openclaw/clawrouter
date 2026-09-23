@@ -8,6 +8,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { createInterface } from "node:readline";
 import test from "node:test";
+import { nativeCodexClient } from "./helpers/native-codex.mjs";
 import { buildCodexCatalog } from "../scripts/codex-catalog.mjs";
 
 const { providerById } = await import("../worker/providers.ts");
@@ -222,7 +223,7 @@ guardian_approval = true
 url = "${origin}/mcp"
 default_tools_approval_mode = "prompt"
 `);
-      client = nativeGuardianClient(t, home, env);
+      client = nativeCodexClient(t, binary, home, env);
       await client.rpc("initialize", { clientInfo: { name: "clawrouter_fixture", version: "1.0.0" }, capabilities: { experimentalApi: true } });
       client.child.stdin.write('{"method":"initialized"}\n');
       const thread = await client.rpc("thread/start", { model, modelProvider: "fixture", cwd: home, ephemeral: true, approvalPolicy: "on-request", approvalsReviewer: "auto_review", sandbox: "read-only" });
@@ -270,43 +271,4 @@ default_tools_approval_mode = "prompt"
       await rm(home, { recursive: true, force: true });
     }
   });
-}
-
-function nativeGuardianClient(t, home, env) {
-  const child = spawn(binary, ["app-server", "--listen", "stdio://"], { cwd: home, env, stdio: ["pipe", "pipe", "pipe"] });
-  const pending = new Map(), notifications = [], errors = [];
-  let nextId = 0, stderr = "";
-  child.stderr.on("data", chunk => { stderr = (stderr + chunk).slice(-32_768); });
-  const fail = (message) => {
-    errors.push(message);
-    for (const entry of pending.values()) { clearTimeout(entry.timer); entry.reject(new Error(message)); }
-    pending.clear();
-  };
-  child.once("error", () => fail("native Codex failed to start"));
-  child.once("exit", () => { if (pending.size) fail("native Codex exited before its RPC response"); });
-  t.signal.addEventListener("abort", () => fail("native Guardian fixture timed out"), { once: true });
-  createInterface({ input: child.stdout }).on("line", line => {
-    const message = JSON.parse(line);
-    if (message.id != null && message.method) { fail(`unexpected client approval RPC ${message.method}`); return; }
-    if (message.id != null && pending.has(message.id)) {
-      const entry = pending.get(message.id); pending.delete(message.id); clearTimeout(entry.timer);
-      if (message.error) entry.reject(new Error(JSON.stringify(message.error))); else entry.resolve(message.result);
-    } else notifications.push(message);
-  });
-  return {
-    child, notifications, errors, stderr: () => stderr,
-    rpc: (method, params) => new Promise((resolve, reject) => {
-      const id = ++nextId, timer = setTimeout(() => { pending.delete(id); reject(new Error(`native RPC ${method} timed out`)); }, 10_000);
-      pending.set(id, { resolve, reject, timer });
-      child.stdin.write(`${JSON.stringify({ id, method, params })}\n`);
-    }),
-    async close() {
-      if (child.pid && child.exitCode === null) {
-        const exited = once(child, "exit");
-        child.kill("SIGTERM");
-        const force = setTimeout(() => child.kill("SIGKILL"), 2_000);
-        await exited; clearTimeout(force);
-      }
-    },
-  };
 }

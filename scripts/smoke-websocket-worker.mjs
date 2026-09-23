@@ -2,14 +2,10 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { request as httpRequest } from "node:http";
-import { createRequire } from "node:module";
+import { startWorkerdFixture } from "../test/helpers/workerd.mjs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 
-// Use the same locked workerd and bundler as Wrangler, without upstream network.
-const require = createRequire(import.meta.resolve("wrangler/package.json"));
-const { Miniflare, convertV4MiniflareOptions } = require("miniflare");
-const { build } = require("esbuild");
 const temporary = await mkdtemp(join(tmpdir(), "clawrouter-ws-worker-"));
 const secret = "websocket-fixture-secret", key = `clawrouter-live-fixture-${secret}`;
 const policy = { enabled: true, generation: "g1", providers: ["openai"], tenantId: "default", monthlyBudgetMicros: 100_000_000, requestCostMicros: null, retainRequestContent: false };
@@ -17,15 +13,7 @@ const credential = { enabled: true, secretSha256: createHash("sha256").update(se
 let mf;
 const sockets = [];
 try {
-  const bundle = await build({ stdin: { contents: accountingFixture(), resolveDir: process.cwd(), sourcefile: "websocket-fixture.ts", loader: "ts" }, write: false, bundle: true, format: "esm", platform: "browser", target: "es2022", logLevel: "silent" });
-  mf = new Miniflare(convertV4MiniflareOptions({ resourceTmpPath: temporary, workers: [{
-    name: "router", modules: true, script: bundle.outputFiles[0].text, compatibilityDate: "2026-06-05", compatibilityFlags: ["enable_request_signal"],
-    bindings: { OPENAI_API_KEY: "fixture-upstream-key" },
-    kvNamespaces: ["POLICY_KV"],
-    durableObjects: Object.fromEntries([["ACCESS_CONTROL", "PolicyBindingIndexObject"], ["BUDGET_LEDGER", "BudgetLedgerObject"], ["USAGE_LEDGER", "UsageLedgerObject"], ["GRANT_CREDENTIALS", "GrantCredentialObject"]].map(([binding, className]) => [binding, { className, useSQLite: true }])),
-    queueProducers: { USAGE_QUEUE: "usage" }, queueConsumers: { usage: { maxBatchSize: 1, maxBatchTimeout: 0 } },
-    outboundService: "upstream",
-  }, { name: "upstream", modules: true, script: upstreamFixture(), compatibilityDate: "2026-06-05", compatibilityFlags: ["enable_request_signal"] }] }));
+  mf = await startWorkerdFixture(temporary, accountingFixture(), upstreamFixture());
   const kv = await mf.getKVNamespace("POLICY_KV", "router");
   await kv.put("policies/fixture", JSON.stringify(policy));
   await kv.put("credentials/fixture", JSON.stringify(credential));
