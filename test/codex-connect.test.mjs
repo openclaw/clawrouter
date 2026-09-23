@@ -20,10 +20,14 @@ const instructions = "Synthetic full native instructions.\nKeep these bytes.\n";
 const descriptor = { slug: "fixture-model", base_instructions: instructions,
   model_messages: { instructions_template: "Synthetic {{ tools }}", future: { preserved: true } },
   context_window: 1000, service_tiers: [{ id: "priority", name: "Fast" }], additional_speed_tiers: ["fast"], use_responses_lite: true };
-const route = { path: "/v1/responses", methods: ["POST"], requestFormat: "openai.responses", responseFormat: "openai.responses", streaming: "sse", websocket: "openai.responses" };
-const catalog = { providers: [{ id: "fixture", allowed: true, executable: true, nativeBaseUrl: "/v1/native/fixture", routes: [route], models: [
+const route = { endpoint: "responses", path: "/v1/responses", methods: ["POST"], requestFormat: "openai.responses", responseFormat: "openai.responses", streaming: "sse", websocket: "openai.responses" };
+function offersFor(models, websocket = true) {
+  return models.flatMap((model) => (websocket ? ["http", "websocket"] : ["http"]).map((transport) => ({ endpoint: "responses", modelId: model.id, transport, routeKind: "native", route: "/v1/native/fixture/v1/responses", policyId: "fixture-policy", policyGeneration: "fixture-generation", eligible: true, affordability: "request-dependent" })));
+}
+const catalog = { version: "clawrouter.client-catalog.v1", scope: { authType: "proxy_key", credentialId: "fixture-credential", principalId: null }, providers: [{ id: "fixture", allowed: true, executable: true, nativeBaseUrl: "/v1/native/fixture", policies: ["fixture-policy"], routes: [route], models: [
   { id: "fixture/model", upstream: "fixture-model", capabilities: ["llm.responses"], pricing: { serviceTiers: [{ id: "priority", maxInputTokens: null }] } },
 ] }] };
+catalog.providers[0].offers = offersFor(catalog.providers[0].models);
 const base = '# base stays byte-identical\r\nmodel = "original"\r\nsandbox_mode = "workspace-write"\r\napproval_policy = "on-request"\r\n[model_providers.original]\r\nenv_key = "OTHER_KEY"\r\n';
 
 async function fixture(t) {
@@ -174,7 +178,7 @@ test("refresh switches one complete generation and preserves user comments, fiel
   const nextDescriptor = { ...descriptor, unknown_future_metadata: { complete: true } };
   await writeFile(f.bundle, JSON.stringify({ models: [nextDescriptor] }));
   await assert.rejects(f.run("verify"), /run update/);
-  f.state.catalog.providers[0].routes[0].websocket = undefined;
+  f.state.catalog.providers[0].offers = offersFor(f.state.catalog.providers[0].models, false);
   const updated = await f.run("update");
   assert.ok(updated.changed.includes("model_catalog_json"));
   const config = await f.read();
@@ -231,8 +235,8 @@ test("invalid/empty/unauthorized refreshes and unqualified priority keep previou
   const f = await fixture(t);
   await manageCodex(f.connect, f.env);
   const before = await readFile(f.profile, "utf8"), names = await readdir(f.home);
-  for (const body of ["not JSON with a private response", { providers: [] }, { providers: [{ ...catalog.providers[0], models: [] }] },
-    { providers: [{ ...catalog.providers[0], models: [{ ...catalog.providers[0].models[0], pricing: { serviceTiers: [] } }] }] }]) {
+  for (const body of ["not JSON with a private response", { ...catalog, providers: [] }, { ...catalog, providers: [{ ...catalog.providers[0], models: [] }] },
+    { ...catalog, providers: [{ ...catalog.providers[0], models: [{ ...catalog.providers[0].models[0], pricing: { serviceTiers: [] } }] }] }]) {
     f.state.catalog = body;
     await assert.rejects(f.run("update"));
     assert.equal(await readFile(f.profile, "utf8"), before);
@@ -401,6 +405,48 @@ async function changeRoot(f, name, value) {
   const text = await readFile(f.profile, "utf8");
   const node = parseTOML(text).body[0].body.find((node) => node.type === "TOMLKeyValue" && getStaticTOMLValue(node.key)[0] === name);
   await writeFile(f.profile, text.slice(0, node.value.range[0]) + JSON.stringify(value) + text.slice(node.value.range[1]));
+}
+
+for (const target of ["CLI", "Desktop"]) {
+  test(`${target} never replaces an ineligible selected model with an eligible sibling`, async (t) => {
+    const f = await (target === "Desktop" ? desktopFixture(t) : fixture(t));
+    await manageCodex(f.connect, f.env);
+    const before = await readFile(f.profile, "utf8"), files = await readdir(f.home);
+    const provider = f.state.catalog.providers[0];
+    const sibling = { ...provider.models[0], id: "fixture/sibling", upstream: "fixture-sibling", codexModel: descriptor.slug };
+    provider.models.push(sibling);
+    provider.offers = [...offersFor([sibling]), ...offersFor([provider.models[0]]).map((offer) => ({ ...offer, eligible: false, affordability: "exact-blocked" }))];
+    for (const command of ["verify", "update"]) {
+      await assert.rejects(f.run(command), /selected model has no authorized native descriptor/);
+      assert.equal(await readFile(f.profile, "utf8"), before);
+      assert.deepEqual(await readdir(f.home), files);
+    }
+    await f.run("remove");
+    await assert.rejects(manageCodex(f.connect, f.env), /selected model has no authorized native descriptor/);
+  });
+
+  test(`${target} updates provider-wide WebSockets when an exported sibling loses its offer`, async (t) => {
+    const f = await (target === "Desktop" ? desktopFixture(t) : fixture(t));
+    const provider = f.state.catalog.providers[0];
+    provider.models.push({ ...provider.models[0], id: "fixture/sibling", upstream: "fixture-sibling", codexModel: descriptor.slug });
+    provider.offers = offersFor(provider.models);
+    await manageCodex(f.connect, f.env);
+    const original = await f.read(), providerId = original.model_provider;
+    assert.equal(original.model_providers[providerId].supports_websockets, true);
+    // The route still advertises the format and the selected main model's WS
+    // offer remains eligible. The sibling must govern the shared native flag.
+    provider.offers.find((offer) => offer.modelId === "fixture/sibling" && offer.transport === "websocket").eligible = false;
+    await assert.rejects(f.run("verify"), /transport changed/);
+    const updated = await f.run("update");
+    assert.ok(updated.changed.includes(`model_providers.${providerId}.supports_websockets`));
+    const current = await f.read();
+    assert.equal(current.model_catalog_json, original.model_catalog_json);
+    assert.equal(current.model_providers[providerId].supports_websockets, false);
+    assert.equal((await f.run("verify")).status, "verified");
+    provider.offers = offersFor(provider.models);
+    await f.run("update");
+    assert.equal((await f.read()).model_providers[providerId].supports_websockets, true);
+  });
 }
 
 for (const root of [null, "", "# only a user comment\n", desktopBase]) test(`Desktop restores original root values and absence (${root === null ? "absent" : root.length})`, async (t) => {
@@ -587,6 +633,7 @@ for (const shape of ["table", "inline"]) test(`native Desktop root lifecycle pre
   const env = { PATH: process.env.PATH, HOME: f.directory, CODEX_HOME: f.home, RUST_LOG: "warn", CLAWROUTER_API_KEY: secret };
   f.state.catalog.providers[0].routes[0].websocket = undefined;
   f.state.catalog.providers[0].models = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"].map((slug) => ({ id: `fixture/${slug}`, upstream: slug, capabilities: ["llm.responses"], pricing: { serviceTiers: [{ id: "priority", maxInputTokens: null }] } }));
+  f.state.catalog.providers[0].offers = offersFor(f.state.catalog.providers[0].models, false);
   f.state.respond = async (request, response) => {
     if (request.method !== "POST") return false;
     let text = "";
@@ -702,6 +749,7 @@ for (const additions of ["empty", "comments", "provider"]) test(`native generate
   f.state.catalog.providers[0].models = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"].map((slug) => ({
     id: `fixture/${slug}`, upstream: slug, capabilities: ["llm.responses"], pricing: { serviceTiers: [{ id: "priority", maxInputTokens: null }] },
   }));
+  f.state.catalog.providers[0].offers = offersFor(f.state.catalog.providers[0].models, false);
   const common = ["--codex-home", f.home, "--codex", nativeProducer];
   await manageCodex(["connect", "--router-url", f.connect[2], "--provider", "fixture", "--model", "gpt-6-astra", ...common], env);
   const generated = await f.read();

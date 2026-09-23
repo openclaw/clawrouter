@@ -31,8 +31,17 @@ and approval settings, and key file stay unchanged. This command configures the
 CLI; Desktop uses the explicit root target described below.
 
 The profile selects the requested upstream model and the router's native
-provider URL. It disables hosted web search and enables WebSockets only when
-the authorized catalog qualifies that route. `--service-tier` defaults to
+provider URL. Each exported model needs an eligible native HTTP Responses offer
+in the issued key's catalog. Provider readiness, session access, and model-less
+operation forms do not qualify a model. Use a router version that publishes
+operation offers; older catalogs fail setup before any files change.
+
+The profile disables hosted web search and enables WebSockets only when every
+exported model has a matching WebSocket offer for the same endpoint, route,
+policy, and generation. Codex applies that flag to the whole provider, including
+internal models. Catalog observations do not reserve budget or probe upstream;
+token-priced offers remain request-dependent, and dispatch checks access and
+budget again. `--service-tier` defaults to
 `default`; request `priority` explicitly for Fast. A missing native descriptor
 or unqualified priority tier fails before installation. Use a producer that
 contains the selected model, such as Codex 0.155.0 for Astra.

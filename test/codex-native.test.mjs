@@ -12,6 +12,15 @@ import { buildCodexCatalog } from "../scripts/codex-catalog.mjs";
 
 const { providerById } = await import("../worker/providers.ts");
 
+function nativeFixtureCatalog(provider, bundled) {
+  const nativeBaseUrl = `/v1/native/${provider.id}`;
+  const routes = provider.endpoints.filter((endpoint) => endpoint.native_proxy).map((endpoint) => ({ endpoint: endpoint.id, path: endpoint.path, methods: endpoint.methods, requestFormat: endpoint.request_format, responseFormat: endpoint.response_format, streaming: endpoint.streaming }));
+  // These responders implement HTTP Responses only. Real Worker eligibility is
+  // exercised separately through its issued-key catalog in codex-router.test.
+  const offers = routes.filter((route) => route.requestFormat === "openai.responses").flatMap((route) => provider.models.filter((model) => model.capabilities.includes("llm.responses")).map((model) => ({ endpoint: route.endpoint, modelId: model.id, transport: "http", routeKind: "native", route: `${nativeBaseUrl}${route.path}`, policyId: "fixture-policy", policyGeneration: "fixture-generation", eligible: true, affordability: "request-dependent" })));
+  return buildCodexCatalog({ version: "clawrouter.client-catalog.v1", scope: { authType: "proxy_key", credentialId: "fixture-credential", principalId: null }, providers: [{ id: provider.id, allowed: true, nativeBaseUrl, policies: ["fixture-policy"], routes, models: provider.models, offers }] }, bundled, provider.id).catalog;
+}
+
 // Opt-in proof uses installed official binaries; normal CI needs no Codex account.
 // These isolated metadata/auth fixtures use manifest rows. The workerd fixture
 // separately exercises the router's authenticated catalog and dispatch.
@@ -53,8 +62,7 @@ for (const mode of ["key-only", "hybrid", "hybrid-missing-key"]) {
       if (mode !== "hybrid-missing-key") env.CLAWROUTER_API_KEY = routerKey;
       const bundled = JSON.parse(execFileSync(producer, ["debug", "models", "--bundled"], { encoding: "utf8", env, maxBuffer: 16 * 1024 * 1024, timeout: 20_000 }));
       const provider = providerById("openai");
-      const routes = provider.endpoints.filter((endpoint) => endpoint.native_proxy).map((endpoint) => ({ path: endpoint.path, methods: endpoint.methods, requestFormat: endpoint.request_format, responseFormat: endpoint.response_format, streaming: endpoint.streaming }));
-      const catalog = buildCodexCatalog({ providers: [{ id: provider.id, allowed: true, executable: true, nativeBaseUrl: "/v1/native/openai", routes, models: provider.models }] }, bundled, provider.id).catalog;
+      const catalog = nativeFixtureCatalog(provider, bundled);
       for (const slug of [model, "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) assert.ok(catalog.models.some((entry) => entry.slug === slug), `compiled native catalog must include ${slug}`);
       await writeFile(join(home, "models.json"), JSON.stringify(catalog));
       await writeFile(join(home, "config.toml"), `model = "${model}"\nmodel_provider = "fixture"\nmodel_catalog_json = ${JSON.stringify(join(home, "models.json"))}\nservice_tier = "priority"\nweb_search = "disabled"\napproval_policy = "never"\nsandbox_mode = "read-only"\ncli_auth_credentials_store = "file"\nchatgpt_base_url = "${origin}/control"\n[model_providers.fixture]\nname = "Fixture"\nbase_url = "${origin}/v1/native/openai/v1"\nenv_key = "CLAWROUTER_API_KEY"\nwire_api = "responses"\nrequires_openai_auth = ${mode !== "key-only"}\nsupports_websockets = false\n`);
@@ -162,9 +170,7 @@ for (const decision of ["allow", "deny"]) {
       const origin = `http://127.0.0.1:${server.address().port}`;
       const env = { PATH: process.env.PATH, HOME: home, CODEX_HOME: home, RUST_LOG: "warn", CLAWROUTER_API_KEY: routerKey };
       const bundled = JSON.parse(execFileSync(producer, ["debug", "models", "--bundled"], { encoding: "utf8", env, maxBuffer: 16 * 1024 * 1024, timeout: 20_000 }));
-      const provider = providerById("openai");
-      const routes = provider.endpoints.filter(({ native_proxy }) => native_proxy).map(endpoint => ({ path: endpoint.path, methods: endpoint.methods, requestFormat: endpoint.request_format, responseFormat: endpoint.response_format, streaming: endpoint.streaming }));
-      const catalog = buildCodexCatalog({ providers: [{ id: provider.id, allowed: true, executable: true, nativeBaseUrl: "/v1/native/openai", routes, models: provider.models }] }, bundled, provider.id).catalog;
+      const catalog = nativeFixtureCatalog(providerById("openai"), bundled);
       await writeFile(join(home, "models.json"), JSON.stringify(catalog));
       await writeFile(join(home, "config.toml"), `model = "${model}"
 model_provider = "fixture"
