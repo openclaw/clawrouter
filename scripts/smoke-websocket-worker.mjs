@@ -321,14 +321,23 @@ export default { async fetch(request) {
     const body = await request.json();
     const usage = { input_tokens: 14, output_tokens: 8, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } };
     if (body.input === 'late-failed' || body.input === 'cancel-stream') {
-      let index = 0;
+      let index = 0, timer, release;
       return new Response(new ReadableStream({ pull(controller) {
         if (index++ === 0) controller.enqueue(new TextEncoder().encode('data: {"type":"response.created"}\\n\\n'));
-        else if (body.input === 'cancel-stream') return new Promise(() => {});
+        // A live timer keeps workerd's stream pending until consumer cancellation.
+        else if (body.input === 'cancel-stream') return new Promise((resolve) => {
+          release = resolve;
+          timer = setTimeout(() => {
+            timer = undefined; release = undefined;
+            if (index < 400) controller.enqueue(new TextEncoder().encode(': heartbeat\\n\\n'));
+            else controller.close();
+            resolve();
+          }, 25);
+        });
         else if (index <= 111) controller.enqueue(new TextEncoder().encode('data: ' + JSON.stringify({ type: 'response.output_text.delta', delta: 'x'.repeat(20000) }) + '\\n\\n'));
         else if (index === 112) controller.enqueue(new TextEncoder().encode('data: ' + JSON.stringify({ type: 'response.failed', response: { status: 'failed', service_tier: 'priority', usage } }) + '\\n\\n'));
         else controller.close();
-      }, cancel() { httpCanceled = true; } }, { highWaterMark: 0 }), { headers: { 'content-type': 'text/event-stream' } });
+      }, cancel() { httpCanceled = true; clearTimeout(timer); release?.(); } }, { highWaterMark: 0 }), { headers: { 'content-type': 'text/event-stream' } });
     }
     return Response.json({ id: 'http-fixture', object: 'response', status: 'completed', output: [], service_tier: 'priority', usage });
   }
