@@ -33,7 +33,7 @@ for (const failure of ["retention", "provider"]) {
     assert.equal(events[0].reserved_cost_micros, 1);
     const charged = failure === "retention" ? 0 : 1;
     assert.equal(events[0].actual_cost_micros, charged);
-    assert.equal(events[0].cost_basis, "policy_fixed");
+    assert.equal(events[0].cost_basis, failure === "retention" ? "none" : "policy_fixed");
     const usage = await handler.fetch(new Request("https://clawrouter.example/v1/usage", { headers: { authorization: `Bearer ${proxyKey()}` } }), env, {});
     assert.equal((await usage.json()).budget.spentMicros, charged);
     assert.equal((await providerBudgetStatus(env, "local-openai", 100)).spentMicros, charged);
@@ -77,6 +77,7 @@ test("failed dispatch confirmation never reaches upstream and releases both real
     assert.equal(upstream.mock.callCount(), 0);
     assert.equal(events.length, 1);
     assert.equal(events[0].actual_cost_micros, 0);
+    assert.equal(events[0].cost_basis, "none");
     const usage = await handler.fetch(new Request("https://clawrouter.example/v1/usage", { headers: { authorization: `Bearer ${proxyKey()}` } }), env, {});
     assert.equal((await usage.json()).budget.spentMicros, 0);
     assert.equal((await providerBudgetStatus(env, "openai", 1_000_000)).spentMicros, 0);
@@ -214,6 +215,7 @@ for (const [name, body, contentType, measured, measuredCost = 4_710, outputToken
     const expectedCost = measured ? measuredCost : event.reserved_cost_micros;
     assert.ok(event.reserved_cost_micros > 4_710);
     assert.equal(event.actual_cost_micros, expectedCost);
+    assert.equal(event.cost_basis, !measured ? "manifest_reservation" : measuredCost === 0 ? "none" : "manifest_pricing");
     if (measured) {
       assert.deepEqual([event.input_tokens, event.output_tokens, event.total_tokens, event.cached_input_tokens, event.cache_write_input_tokens], [4_010, outputTokens, 4_010 + outputTokens, 1_000, 3_000]);
     }
@@ -432,7 +434,7 @@ test("dispatched pre-header HTTP and native failures retain estimates through in
 });
 
 test("cancellation before fetch stays zero after preflight, retention, or dispatch confirmation", async (t) => {
-  for (const route of ["/v1/responses", "/v1/native/openai/v1/responses"]) for (const phase of ["initial", "retention", "dispatch"]) for (const fixedCost of [null, 7]) {
+  for (const route of ["/v1/responses", "/v1/native/openai/v1/responses"]) for (const phase of ["initial", "retention", "dispatch"]) for (const fixedCost of [null, 0, 7]) {
     const events = [], pending = [], abort = new AbortController();
     const env = usageEnv([], { limit: 1_000_000, fixedCost, retainContent: phase === "retention" });
     env.OPENAI_API_KEY = "fixture-openai-key";
@@ -459,6 +461,7 @@ test("cancellation before fetch stays zero after preflight, retention, or dispat
     assert.equal(events.length, 1);
     assert.equal(events[0].status, "client_error");
     assert.equal(events[0].actual_cost_micros, 0);
+    assert.equal(events[0].cost_basis, "none");
     assert.equal(upstream.mock.callCount(), 0);
     for (const name of ["tenant:maintainer_access:owner@example.com", "provider:openai"]) {
       const [row] = ledger.get(name).reservations();
@@ -468,26 +471,61 @@ test("cancellation before fetch stays zero after preflight, retention, or dispat
   }
 });
 
-test("known nonbillable responses stay zero when their SSE error body fails", async (t) => {
-  for (const route of ["/v1/responses", "/v1/native/openai/v1/responses"]) for (const status of [400, 500]) {
-    const env = usageEnv([], { limit: 1_000_000, fixedCost: null, retainContent: false });
+test("known nonbillable responses stay zero across tariffs and complete or broken error bodies", async (t) => {
+  for (const route of ["/v1/responses", "/v1/native/openai/v1/responses"]) for (const status of [400, 500]) for (const fixedCost of [null, 0, 7]) for (const broken of [false, true]) {
+    const env = usageEnv([], { limit: 1_000_000, fixedCost, retainContent: false });
     env.OPENAI_API_KEY = "fixture-openai-key";
     env.BUDGET_LEDGER = sqlBudgetNamespace(t);
     const events = [], pending = [];
     env.USAGE_QUEUE = { send: async event => events.push(event) };
-    const upstream = t.mock.method(globalThis, "fetch", async () => new Response(new ReadableStream({
+    const upstream = t.mock.method(globalThis, "fetch", async () => broken ? new Response(new ReadableStream({
       pull(controller) { controller.error(new Error("fixture broken SSE error body")); },
-    }, { highWaterMark: 0 }), { status, headers: { "content-type": "text/event-stream" } }));
+    }, { highWaterMark: 0 }), { status, headers: { "content-type": "text/event-stream" } }) : Response.json({ error: { message: "fixture rejection" }, usage: astraUsage }, { status }));
     const response = await handler.fetch(new Request(`https://clawrouter.example${route}`, {
       method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
       body: JSON.stringify({ model: "openai/gpt-6-astra", input: "fixture", max_output_tokens: 32, service_tier: "priority", stream: true }),
     }), env, { waitUntil: promise => pending.push(promise) });
-    assert.equal(response.status, 502);
+    assert.equal(response.status, broken ? 502 : status);
+    await response.text();
     await Promise.all(pending);
     assert.equal(events.length, 1);
     assert.equal(events[0].actual_cost_micros, 0);
+    assert.equal(events[0].cost_basis, "none");
     for (const name of ["tenant:maintainer_access:owner@example.com", "provider:openai"]) assert.equal(env.BUDGET_LEDGER.get(name).reservations()[0].reserved_micros, 0);
     upstream.mock.restore();
+  }
+});
+
+test("settlement bases distinguish nonbillable work from tariffs, fallback charges, and free rates", async () => {
+  const { createProxyAccounting } = await import("../proxy-accounting.ts");
+  const { modelRoute } = await import("../providers.ts");
+  const { extractUsageTokens } = await import("../token-usage.ts");
+  const { correlateIngressRequest } = await import("../correlation.ts");
+  const route = modelRoute("anthropic/claude-haiku-4-5");
+  const unbilled = extractUsageTokens(earlyRefusal);
+  const normal = extractUsageTokens({ usage: messageUsage });
+  const freeModel = { ...route.model, pricing: { ...route.model.pricing, inputMicrosPerMillion: 0, outputMicrosPerMillion: 0, cachedInputMicrosPerMillion: 0, cacheWriteInputMicrosPerMillion: 0, cacheWrite5mInputMicrosPerMillion: 0, cacheWrite1hInputMicrosPerMillion: 0, longContext: null, serviceTiers: [] } };
+  for (const [name, model, fixed, tokens, actual, basis] of [
+    ["measured refusal", route.model, null, unbilled, 0, "none"],
+    ["zero tariff", route.model, 0, unbilled, 0, "policy_fixed"],
+    ["positive tariff", route.model, 7, unbilled, 7, "policy_fixed"],
+    ["unpriced fallback", { ...route.model, pricing: null }, null, unbilled, 1, "flat_fallback"],
+    ["free manifest rate", freeModel, null, normal, 0, "manifest_pricing"],
+  ]) {
+    const events = [];
+    const owner = createProxyAccounting({
+      env: { USAGE_QUEUE: { send: async event => events.push(event) } }, context: {},
+      auth: { policyId: "fixture", policy: { requestCostMicros: fixed } },
+      selection: { ...route, model, endpoint: route.provider.endpoints.find(endpoint => endpoint.id === "messages"), body: {}, capability: "llm.messages" },
+      request: correlateIngressRequest(new Request("https://router.example/v1/messages")).request,
+    });
+    const reservation = { reservations: [], reservedMicros: owner.cost.reserveMicros };
+    assert.equal(await owner.settle(200, "success", true, tokens, reservation, null), true);
+    assert.equal(events.length, 1, name);
+    assert.equal(events[0].actual_cost_micros, actual, name);
+    assert.equal(events[0].cost_basis, basis, name);
+    assert.equal(events[0].reserved_cost_micros, reservation.reservedMicros, name);
+    assert.equal(events[0].input_tokens, tokens.input, name);
   }
 });
 

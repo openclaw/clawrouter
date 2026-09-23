@@ -81,7 +81,7 @@ try {
     const expected = measured ? 1_080 : scenario === "error_before_start" ? 0 : event.reserved_cost_micros;
     assert.equal(event.actual_cost_micros, expected);
     assert.equal(event.status, scenario === "incomplete" ? "success" : "provider_error");
-    if (!measured && expected) assert.equal(event.cost_basis, "manifest_reservation");
+    assert.equal(event.cost_basis, measured ? "manifest_pricing" : scenario === "error_before_start" ? "none" : "manifest_reservation");
     spent += expected;
     assert.equal(usage.budget.spentMicros, spent);
     current.close(1000, "scenario complete");
@@ -90,12 +90,19 @@ try {
     const updated = await authorityObject.fetch("https://authority/policies/put", { method: "POST", body: JSON.stringify({ policyId: "fixture", policy: change }) });
     assert.equal(updated.status, 200);
     const before = (await (await upstream.fetch("https://fixture.example/state")).json()).frames.length;
+    const existingEvents = new Set(usage.usage.events.map(event => event.id));
     const next = messages.filter((event) => ["response.completed", "response.incomplete", "response.failed", "error"].includes(event.type)).length + 1;
     create({ input: "must not be sent" });
     assert.equal((await terminal(next)).error.code, code);
     assert.equal((await (await upstream.fetch("https://fixture.example/state")).json()).frames.length, before);
     count++;
     await until(async () => { usage = await (await dispatch("/v1/usage")).json(); return usage.usage.summary.requestCount === count; });
+    const receipts = usage.usage.events.filter(event => !existingEvents.has(event.id));
+    assert.equal(receipts.length, 1);
+    const [receipt] = receipts;
+    assert.equal(receipt.status_code, code === "budget_exhausted" ? 402 : 503);
+    assert.equal(receipt.actual_cost_micros, 0);
+    assert.equal(receipt.cost_basis, "none");
     // A zero limit intentionally projects a blocked budget with zero spend.
     // Read the ledger to prove rejected work did not alter previous charges.
     const ledger = await budgets.get(budgets.idFromName("default:fixture")).fetch(`https://budget/status?policy_id=default/fixture&window_key=default/fixture/${month}&limit_micros=100000000`);
@@ -215,6 +222,7 @@ try {
     assert.ok(receipts.length <= 1); rejectedReceipt = receipts[0]; return !!rejectedReceipt;
   });
   assert.equal(rejectedReceipt.actual_cost_micros, 0);
+  assert.equal(rejectedReceipt.cost_basis, "none");
   assert.equal(rejectedReceipt.status_code, 503);
   assert.equal((await stateFrames()).length, beforeDispatchFrames);
   assert.deepEqual(await ledgerFacts(), beforeDispatchFailure);
@@ -366,6 +374,7 @@ try {
         await until(() => events.filter(({ type }) => type === "response.completed" || type === "error").length === 2);
         await until(async () => {
           const receipts = (await (await dispatch("/v1/usage")).json()).usage.events.filter(({ session_id }) => session_id === session);
+          assert.ok(receipts.every(({ cost_basis }) => cost_basis === (phase === "terminal" ? "manifest_pricing" : "none")));
           return receipts.length === 2 && new Set(receipts.map(({ id }) => id)).size === 2;
         });
         assert.equal(closed, false);
