@@ -49,6 +49,22 @@ export async function retainRequestContent(env: Env, auth: AuthorizedIdentity, s
   return contentRef;
 }
 
+export async function readRetainedContent(env: Env, tenant: string, ref: string): Promise<Record<string, unknown> | null> {
+  const object = await env.CONTENT_ARCHIVE.get(contentKey(tenant, ref));
+  if (!object) return null;
+  const text = await object.text();
+  let value: unknown;
+  try { value = JSON.parse(text); }
+  catch { return null; }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  // Physical deletion can lag expiry. Check the archive identity and current time
+  // after reading the body so expired content cannot escape during a slow read.
+  if (record.version !== "clawrouter.retained-request.v1" || record.tenantId !== tenant || record.contentRef !== ref
+    || typeof record.expiresAtMs !== "number" || !Number.isFinite(record.expiresAtMs) || record.expiresAtMs <= Date.now()) return null;
+  return record;
+}
+
 export function contentKey(tenant: string, ref: string): string {
   return `v1/${encodeURIComponent(tenant)}/${encodeURIComponent(ref)}.json`;
 }

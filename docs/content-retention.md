@@ -21,12 +21,16 @@ metadata-only; request retention requires an explicit policy opt-in.
   unavailable, ClawRouter returns `503 content_retention_unavailable` and does not
   call the provider.
 - R2 encrypts objects at rest. The `request-content-v1-30-days` lifecycle rule
-  deletes objects under the dedicated `v1/` archive prefix after 30 days without
-  affecting unrelated bucket content. Usage metadata remains separate.
+  schedules deletion under the dedicated `v1/` archive prefix after 30 days without
+  affecting unrelated bucket content. Physical deletion is asynchronous. Usage
+  metadata remains separate.
 - Cloudflare AI Gateway universal requests retain their ordered provider queries
   and configuration, but omit each entry's entire `headers` map and `authorization` field.
   These fields can contain upstream credentials. The forwarded request is
   unchanged; the retention header still reports `on` when query content is stored.
+- Admin reads deny expired archives even while their objects still exist. Local
+  self-host storage does not yet delete expired archive objects automatically;
+  denying reads does not remove those persisted bytes.
 
 ## Disclosure
 
@@ -43,8 +47,12 @@ or `off`. Browsers may read this header through CORS.
 
 Admins configure retention in Access → Policies and exemptions in Users. The Usage
 screen marks events whose request content was retained and can load the archived
-body through its server-generated, collision-resistant content reference. Admin content reads require the existing Cloudflare Access admin
-authorization and are returned with `Cache-Control: private, no-store`.
+body through its server-generated, collision-resistant content reference. Admin
+content reads require administrator authorization and return `Cache-Control: no-store`.
+Only v1 records matching the requested tenant and reference with a finite, future
+expiry are readable. Missing, expired, malformed, or mismatched records return the
+same `404 content_not_found` response with no archived content and the same cache
+protection. Storage failures remain server errors.
 
 Do not copy archived bodies into logs, screenshots, issue reports, usage events, or
 other analytics systems.
