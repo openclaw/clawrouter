@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add explicit Codex Desktop root setup with coherent restoration of prior routing settings, preserved authentication and user preferences, and clear API-key Fast and environment-loading limits.
+
 - Keep policy selection separate from existing binding edits, while new bindings still default to the selected policy.
 
 - Keep failed console refreshes visible after successful edits, label stale usage with its snapshot time, and show unavailable spend and balances as unknown.

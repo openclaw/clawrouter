@@ -6,11 +6,12 @@ import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { syncBuiltinESMExports } from "node:module";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
 import { getStaticTOMLValue, parseTOML } from "toml-eslint-parser";
 import { manageCodex } from "../scripts/codex-connect.mjs";
+import { nativeCodexClient } from "./helpers/native-codex.mjs";
 
 const secret = "fixture-client-key-not-a-real-credential";
 const instructions = "Synthetic full native instructions.\nKeep these bytes.\n";
@@ -314,8 +315,258 @@ test("CLI failures never print a key, response body, or native producer stderr",
   await assert.rejects(manageCodex(f.connect, f.env), (error) => /bundled export failed/.test(error.message) && !error.message.includes(instructions));
 });
 
+const desktopBase = `# existing root comment\nmodel = 'original'\nmodel_provider = 'original'\nmodel_catalog_json = 'original.json'\nweb_search = 'cached'\nservice_tier = 'priority'\nmodel_reasoning_effort = 'high'\nsandbox_mode = 'read-only'\napproval_policy = 'on-request'\n[model_providers.original]\nname = 'Original'\nenv_key = 'OTHER_KEY'\n`;
+async function desktopFixture(t, root = desktopBase) {
+  const f = await fixture(t), profile = join(f.home, "config.toml");
+  if (root === null) await rm(profile); else await writeFile(profile, root);
+  const common = ["--target", "desktop", ...f.common];
+  return { ...f, profile, common,
+    connect: ["connect", "--router-url", f.connect[2], "--provider", "fixture", "--model", "fixture-model", ...common],
+    read: async () => getStaticTOMLValue(parseTOML(await readFile(profile, "utf8"))),
+    run: (command, ...args) => manageCodex([command, ...common, ...args], f.env) };
+}
+async function changeRoot(f, name, value) {
+  const text = await readFile(f.profile, "utf8");
+  const node = parseTOML(text).body[0].body.find((node) => node.type === "TOMLKeyValue" && getStaticTOMLValue(node.key)[0] === name);
+  await writeFile(f.profile, text.slice(0, node.value.range[0]) + JSON.stringify(value) + text.slice(node.value.range[1]));
+}
+
+for (const root of [null, "", "# only a user comment\n", desktopBase]) test(`Desktop restores original root values and absence (${root === null ? "absent" : root.length})`, async (t) => {
+  const f = await desktopFixture(t, root);
+  const before = await readdir(f.home);
+  const dry = await manageCodex([...f.connect, "--dry-run"], f.env);
+  assert.equal(dry.target, "desktop");
+  assert.deepEqual(await readdir(f.home), before);
+  const applied = await manageCodex(f.connect, f.env), config = await f.read();
+  assert.match(applied.scope, /unprofiled CLI/);
+  assert.equal(config.model_provider, "clawrouter.desktop");
+  assert.equal(config.model_providers["clawrouter.desktop"].requires_openai_auth, false);
+  assert.equal(config.service_tier, root === desktopBase ? "priority" : undefined);
+  assert.equal(config.model_reasoning_effort, root === desktopBase ? "high" : undefined);
+  assert.ok(config.model_catalog_json.startsWith(".clawrouter-desktop."));
+  assert.equal((await f.run("verify")).inferenceProbed, false);
+  await f.run("remove");
+  if (root === null) await assert.rejects(readFile(f.profile), { code: "ENOENT" });
+  else {
+    const restored = await readFile(f.profile, "utf8");
+    assert.deepEqual(getStaticTOMLValue(parseTOML(restored)), getStaticTOMLValue(parseTOML(root)));
+    if (root === desktopBase) assert.ok(restored.includes("model = 'original'") && restored.includes("# existing root comment"));
+    if (root.startsWith("# only")) assert.ok(restored.includes(root));
+  }
+  assert.deepEqual(await readdir(f.home), before);
+  assert.equal(await readFile(join(f.home, "auth.json"), "utf8"), '{"fixture":"unrelated-auth"}\n');
+});
+
+test("Desktop update preserves comments, custom provider fields, tier and reasoning preferences", async (t) => {
+  const f = await desktopFixture(t);
+  await manageCodex(f.connect, f.env);
+  const old = await f.read();
+  await writeFile(f.profile, `${await readFile(f.profile, "utf8")}\n# added after setup\nstream_max_retries = 7\n[model_providers."clawrouter.desktop".http_headers]\n"x-user-setting" = "fixture"\n`);
+  await changeRoot(f, "service_tier", "default");
+  await changeRoot(f, "model_reasoning_effort", "medium");
+  await writeFile(f.bundle, JSON.stringify({ models: [{ ...descriptor, future_metadata: "desktop generation" }] }));
+  await f.run("update");
+  const updated = await f.read();
+  assert.notEqual(updated.model_catalog_json, old.model_catalog_json);
+  assert.equal(updated.service_tier, "default");
+  assert.equal(updated.model_reasoning_effort, "medium");
+  assert.ok(await readFile(join(f.home, old.model_catalog_json)));
+  const result = await f.run("remove");
+  assert.ok(result.retained.includes("model_providers.clawrouter.desktop.name"));
+  const restored = await f.read();
+  assert.equal(restored.model, "original");
+  assert.equal(restored.service_tier, "default");
+  assert.equal(restored.model_reasoning_effort, "medium");
+  assert.deepEqual(restored.model_providers["clawrouter.desktop"], { name: "ClawRouter", stream_max_retries: 7, http_headers: { "x-user-setting": "fixture" } });
+  assert.ok((await readFile(f.profile, "utf8")).includes("# added after setup"));
+});
+
+for (const name of ["model", "model_provider", "model_catalog_json", "web_search"]) test(`Desktop preserves the complete routing group when ${name} changes`, async (t) => {
+  const f = await desktopFixture(t);
+  await manageCodex(f.connect, f.env);
+  await changeRoot(f, name, "user-selected");
+  const text = await readFile(f.profile, "utf8"), files = await readdir(f.home);
+  await assert.rejects(f.run("update"), /owned profile settings changed/);
+  const result = await f.run("remove");
+  assert.equal(result.status, "retained");
+  assert.deepEqual(result.retained, [name]);
+  assert.deepEqual(result.changed, []);
+  assert.equal(await readFile(f.profile, "utf8"), text);
+  assert.deepEqual(await readdir(f.home), files);
+});
+
+test("Desktop collisions and CLI-only options fail before catalog access", async (t) => {
+  const f = await desktopFixture(t);
+  for (const text of ['[model_providers."clawrouter.desktop"]\nname = "Existing"\n', 'model_providers = { "clawrouter.desktop" = { name = "Existing" } }\n', 'profile = "existing"\n']) {
+    await writeFile(f.profile, text);
+    await assert.rejects(manageCodex(f.connect, f.env), /conflicting/);
+    assert.equal(await readFile(f.profile, "utf8"), text);
+  }
+  for (const args of [["--profile", "other"], ["--service-tier", "priority"]]) await assert.rejects(manageCodex([...f.connect, ...args], f.env), /CLI-only/);
+  assert.equal(f.state.requests.length, 0);
+});
+
+for (const map of ['{}', '{ other = { name = "Other", http_headers = { "x-user" = "kept" } } }', '{ "other.provider" = { name = "Other" }, another.name = "Another" }']) test(`Desktop preserves unrelated inline provider members ${map}`, async (t) => {
+  const original = `# inline map remains user-owned\nmodel_providers = ${map}\n[profiles.other]\nmodel = "unselected"\n`;
+  const f = await desktopFixture(t, original);
+  await manageCodex(f.connect, f.env);
+  await writeFile(f.bundle, JSON.stringify({ models: [{ ...descriptor, future_metadata: "inline refresh" }] }));
+  await f.run("update");
+  await f.run("remove");
+  const restored = await readFile(f.profile, "utf8");
+  assert.ok(restored.includes(original));
+  assert.deepEqual(getStaticTOMLValue(parseTOML(restored)), getStaticTOMLValue(parseTOML(original)));
+});
+
+test("Desktop retains an extended inline provider as one valid owned dependency", async (t) => {
+  const f = await desktopFixture(t, 'model_providers = {}\n');
+  await manageCodex(f.connect, f.env);
+  const config = await f.read(), text = await readFile(f.profile, "utf8");
+  const member = parseTOML(text).body[0].body.find((node) => node.type === "TOMLKeyValue" && getStaticTOMLValue(node.key)[0] === "model_providers").value.body[0];
+  const at = member.value.range[1] - 1;
+  await writeFile(f.profile, text.slice(0, at) + ', http_headers = { "x-user-setting" = "kept" }' + text.slice(at));
+  const result = await f.run("remove");
+  assert.ok(result.retained.includes("provider retained for user settings"));
+  const restored = await f.read();
+  assert.equal(restored.model, undefined);
+  assert.equal(restored.model_providers["clawrouter.desktop"].name, "ClawRouter");
+  assert.deepEqual(restored.model_providers["clawrouter.desktop"].http_headers, { "x-user-setting": "kept" });
+  assert.ok(await readFile(join(f.home, config.model_catalog_json)));
+});
+
+for (const position of [0, 1, 2]) test(`Desktop removes only its inline member and separator at position ${position}`, async (t) => {
+  const original = 'model_providers = { left = { name = "Left" }, right = { name = "Right" } }\n';
+  const f = await desktopFixture(t, original);
+  await manageCodex(f.connect, f.env);
+  const text = await readFile(f.profile, "utf8");
+  const table = parseTOML(text).body[0].body.find((node) => node.type === "TOMLKeyValue" && getStaticTOMLValue(node.key)[0] === "model_providers").value;
+  const members = table.body.map((node) => text.slice(...node.range));
+  members.splice(position, 0, members.pop());
+  await writeFile(f.profile, text.slice(0, table.range[0]) + `{ ${members.join(", ")} }` + text.slice(table.range[1]));
+  await f.run("remove");
+  const restored = await readFile(f.profile, "utf8");
+  assert.deepEqual(await f.read(), getStaticTOMLValue(parseTOML(original)));
+  assert.ok(restored.includes('left = { name = "Left" }') && restored.includes('right = { name = "Right" }'));
+});
+
+test("Desktop removes an unchanged provider rewritten as a dotted inline member", async (t) => {
+  const f = await desktopFixture(t, "# retained root comment\n");
+  await manageCodex(f.connect, f.env);
+  const text = await readFile(f.profile, "utf8"), config = await f.read();
+  const table = parseTOML(text).body[0].body.find((node) => node.type === "TOMLTable");
+  const inline = `model_providers."clawrouter.desktop" = { ${Object.entries(config.model_providers["clawrouter.desktop"]).map(([name, value]) => `${name} = ${JSON.stringify(value)}`).join(", ")} }`;
+  await writeFile(f.profile, text.slice(0, table.range[0]) + inline + text.slice(table.range[1]));
+  await f.run("remove");
+  assert.deepEqual(await f.read(), {});
+  assert.ok((await readFile(f.profile, "utf8")).includes("# retained root comment"));
+});
+
+test("Desktop locks and observed concurrent root edits preserve existing files", async (t) => {
+  const f = await desktopFixture(t);
+  const lock = join(f.home, ".clawrouter-desktop.lock");
+  await mkdir(lock);
+  await assert.rejects(manageCodex(f.connect, f.env), /lock/);
+  assert.equal(await readFile(f.profile, "utf8"), desktopBase);
+  await rm(lock, { recursive: true });
+  f.state.beforeResponse = () => writeFile(f.profile, `${desktopBase}# concurrent edit\n`);
+  await assert.rejects(manageCodex(f.connect, f.env), /changed during the operation/);
+  assert.equal(await readFile(f.profile, "utf8"), `${desktopBase}# concurrent edit\n`);
+  assert.deepEqual((await readdir(f.home)).sort(), ["auth.json", "config.toml"]);
+});
+
+test("Desktop failed catalog refresh and root commit retain the last usable generation", async (t) => {
+  const f = await desktopFixture(t);
+  await manageCodex(f.connect, f.env);
+  const before = await readFile(f.profile, "utf8"), files = await readdir(f.home);
+  f.state.catalog = { providers: [] };
+  await assert.rejects(f.run("update"));
+  assert.equal(await readFile(f.profile, "utf8"), before);
+  f.state.catalog = structuredClone(catalog);
+  await writeFile(f.bundle, JSON.stringify({ models: [{ ...descriptor, future_metadata: "desktop next" }] }));
+  const rename = fs.promises.rename;
+  const mocked = t.mock.method(fs.promises, "rename", async (from, to) => {
+    if (to === f.profile) throw Object.assign(new Error("synthetic root commit failure"), { code: "EACCES" });
+    return rename(from, to);
+  });
+  syncBuiltinESMExports();
+  try { await assert.rejects(f.run("update"), { code: "EACCES" }); }
+  finally { mocked.mock.restore(); syncBuiltinESMExports(); }
+  assert.equal(await readFile(f.profile, "utf8"), before);
+  assert.deepEqual(await readdir(f.home), files);
+});
+
 const nativeBinary = process.env.CLAWROUTER_CODEX_BINARY;
 const nativeProducer = process.env.CLAWROUTER_CODEX_CATALOG_BINARY ?? nativeBinary;
+for (const shape of ["table", "inline"]) test(`native Desktop root lifecycle preserves auth and clears GUI tier (${shape})`, { skip: !nativeBinary, timeout: 180_000 }, async (t) => {
+  const f = await desktopFixture(t), origin = f.connect[2], requests = [];
+  const env = { PATH: process.env.PATH, HOME: f.directory, CODEX_HOME: f.home, RUST_LOG: "warn", CLAWROUTER_API_KEY: secret };
+  f.state.catalog.providers[0].routes[0].websocket = undefined;
+  f.state.catalog.providers[0].models = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"].map((slug) => ({ id: `fixture/${slug}`, upstream: slug, capabilities: ["llm.responses"], pricing: { serviceTiers: [{ id: "priority", maxInputTokens: null }] } }));
+  f.state.respond = async (request, response) => {
+    if (request.method !== "POST") return false;
+    let text = "";
+    for await (const chunk of request) text += chunk;
+    const body = JSON.parse(text);
+    requests.push({ body, url: request.url, authorization: request.headers.authorization });
+    const item = { id: "desktop_message", type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Synthetic Desktop complete.", annotations: [] }] };
+    const result = { id: "desktop_response", object: "response", status: "completed", model: body.model, output: [item], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } };
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    for (const event of [{ type: "response.created", response: { ...result, status: "in_progress", output: [] } }, { type: "response.output_item.done", output_index: 0, item }, { type: "response.completed", response: result }]) response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+    response.end();
+    return true;
+  };
+  const bundle = await promisify(execFile)(nativeProducer, ["debug", "models", "--bundled"], { env: { ...env, CLAWROUTER_API_KEY: undefined }, timeout: 20_000, maxBuffer: 16 * 1024 * 1024 });
+  await writeFile(join(f.home, "original.json"), bundle.stdout);
+  const provider = `name = "Original", base_url = "${origin}/v1", env_key = "CLAWROUTER_API_KEY", requires_openai_auth = false`;
+  const root = `# native Desktop base\nmodel = 'gpt-5.6-sol'\nmodel_provider = 'original'\nmodel_catalog_json = 'original.json'\nservice_tier = 'priority'\nmodel_reasoning_effort = 'high'\nweb_search = 'disabled'\nsandbox_mode = 'read-only'\napproval_policy = 'on-request'\ncli_auth_credentials_store = 'file'\nchatgpt_base_url = '${origin}/control'\n${shape === "inline" ? `model_providers = { original = { ${provider} } }` : `[model_providers.original]\n${provider.replaceAll(", ", "\n")}`}\n`;
+  await writeFile(f.profile, root);
+  await rm(join(f.home, "auth.json"));
+  const common = ["--target", "desktop", "--codex-home", f.home, "--codex", nativeProducer];
+  const run = async (connected) => {
+    const client = nativeCodexClient(t, nativeBinary, f.home, env), count = requests.length;
+    try {
+      await client.rpc("initialize", { clientInfo: { name: "clawrouter_desktop_fixture", version: "1.0.0" }, capabilities: { experimentalApi: true } });
+      client.child.stdin.write('{"method":"initialized"}\n');
+      const config = (await client.rpc("config/read", { includeLayers: false })).config;
+      assert.equal(config.model_provider, connected ? "clawrouter.desktop" : "original");
+      assert.equal(config.model, connected ? "gpt-6-astra" : "gpt-5.6-sol");
+      assert.equal(resolve(f.home, config.model_catalog_json), resolve(f.home, (await f.read()).model_catalog_json));
+      assert.equal(config.service_tier, "priority", "setup must preserve the preexisting tier preference");
+      assert.ok((await client.rpc("model/list", {})).data.some((entry) => entry.model === "gpt-6-astra"));
+      assert.deepEqual(await client.rpc("account/read", { refreshToken: false }), { account: null, requiresOpenaiAuth: false });
+      const auth = await client.rpc("getAuthStatus", { includeToken: false, refreshToken: false });
+      assert.equal(auth.authMethod, null);
+      assert.equal(auth.requiresOpenaiAuth, false);
+      // The installed GUI emits null when its account gate disables Fast.
+      // A preserved root priority preference must not turn this into Fast.
+      const thread = await client.rpc("thread/start", { cwd: f.home, ephemeral: true, serviceTier: null });
+      await client.rpc("turn/start", { threadId: thread.thread.id, input: [{ type: "text", text: "Return synthetic Desktop complete without tools." }], serviceTier: null });
+      const deadline = Date.now() + 30_000;
+      while (!client.notifications.some(({ method }) => method === "turn/completed") && Date.now() < deadline) await new Promise((done) => setTimeout(done, 25));
+      assert.equal(client.notifications.find(({ method }) => method === "turn/completed")?.params.turn.status, "completed");
+      assert.equal(requests.length, count + 1);
+      const request = requests.at(-1);
+      assert.equal(request.url, connected ? "/v1/native/fixture/v1/responses" : "/v1/responses");
+      assert.equal(request.body.model, connected ? "gpt-6-astra" : "gpt-5.6-sol");
+      assert.equal(request.authorization, `Bearer ${secret}`);
+      assert.equal(request.body.service_tier, undefined);
+      assert.equal(/fallback model metadata/i.test(client.stderr()), false);
+      assert.deepEqual(client.errors, []);
+    } finally { await client.close(); }
+  };
+  await manageCodex(["connect", "--router-url", origin, "--provider", "fixture", "--model", "gpt-6-astra", ...common], env);
+  await run(true);
+  for (const model of f.state.catalog.providers[0].models) model.pricing.serviceTiers = [];
+  await manageCodex(["update", ...common], env);
+  await run(true);
+  await manageCodex(["remove", ...common], env);
+  await run(false);
+  assert.deepEqual(await f.read(), getStaticTOMLValue(parseTOML(root)));
+  assert.equal(await readFile(join(f.home, "original.json"), "utf8"), bundle.stdout);
+  await assert.rejects(readFile(join(f.home, "auth.json")), { code: "ENOENT" });
+  assert.deepEqual(f.state.requests.filter(({ method, url }) => !((method === "GET" && url === "/v1/catalog") || (method === "POST" && ["/v1/native/fixture/v1/responses", "/v1/responses"].includes(url)))).map(({ method, url }) => ({ method, url })), []);
+});
+
 for (const additions of ["empty", "comments", "provider"]) test(`native generated profile loads through connect/update/remove with ${additions}`, { skip: !nativeBinary, timeout: 180_000 }, async (t) => {
   const f = await fixture(t);
   const env = { PATH: process.env.PATH, HOME: f.directory, CODEX_HOME: f.home, RUST_LOG: "warn", CLAWROUTER_API_KEY: secret };
