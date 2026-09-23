@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { actualModelCost, estimateModelCost, requestPricingGap } from "../pricing.ts";
+import { actualModelCost, estimateModelCost, hostedToolPricingGap, requestPricingGap } from "../pricing.ts";
 
 const pricing = {
   effectiveAt: "2026-06-19", source: "https://example.com", inputMicrosPerMillion: 2_500_000,
@@ -98,7 +98,8 @@ test("pricing completeness follows selected wire declarations without reading cl
       { tools: [{ name: "web_search", input_schema: { type: "object" } }] },
       { tools: [{ functionDeclarations: [{ name: "codeExecution", parameters: { urlContext: {} } }] }] },
       { tools: [{ type: "shell", environment: { type: "local" } }] },
-      { tools: [{ type: "web_fetch_20250910", name: "web_fetch" }] },
+      { tools: [{ type: "tool_search", execution: "client" }] },
+      ...["function", "custom", "namespace", "local_shell", "apply_patch", "computer", "computer_use_preview", "memory_20250818", "bash_20250124", "text_editor_20250728", "computer_toolset_20260801", "browser_toolset_20260801"].map(type => ({ tools: [{ type, name: "advisor_20260301" }] })),
       { input: [{ type: "web_search_call" }] }, { web_search_options: null },
     ]) assert.equal(requestPricingGap(pricing, body, format), null);
     assert.equal(requestPricingGap({ ...pricing, unpricedCosts: ["request_fee"] }, {}, format), "model_request_fee");
@@ -116,9 +117,12 @@ test("opaque Responses prompt references cannot imply token-only pricing", () =>
 });
 
 test("Responses classifies only protocol-tagged input tool declarations", () => {
-  for (const type of ["additional_tools", "tool_search_output"]) for (const tool of [{ type: "web_search" }, { type: "file_search" }, { type: "code_interpreter" }, { type: "image_generation" }, { type: "shell", environment: { type: "container_auto" } }]) {
+  for (const type of ["additional_tools", "tool_search_output"]) for (const [tool, gap] of [
+    ...[{ type: "web_search" }, { type: "file_search" }, { type: "code_interpreter" }, { type: "image_generation" }, { type: "shell", environment: { type: "container_auto" } }].map(tool => [tool, "hosted_tool_fee"]),
+    ...["mcp", "programmatic_tool_calling", "tool_search"].map(type => [{ type }, "hosted_tool_usage"]),
+  ]) {
     const body = { tools: [], input: [{ type, ...(type === "additional_tools" ? { role: "developer" } : { call_id: "call_fixture", execution: "client" }), tools: [tool] }] };
-    assert.equal(requestPricingGap(pricing, body, "openai.responses"), "hosted_tool_fee");
+    assert.equal(requestPricingGap(pricing, body, "openai.responses"), gap);
     for (const format of ["openai.chat_completions", "anthropic.messages", "google.generate_content"]) assert.equal(requestPricingGap(pricing, body, format), null);
   }
   for (const body of [
@@ -130,20 +134,56 @@ test("Responses classifies only protocol-tagged input tool declarations", () => 
   ]) assert.equal(requestPricingGap(pricing, body, "openai.responses"), null);
 });
 
-test("Anthropic execution fees preserve the documented free web-tool combination", () => {
+test("Anthropic execution fee waivers do not qualify cumulative server-loop usage", () => {
   for (const type of ["code_execution_20250522", "code_execution_20250825", "code_execution_20260120", "code_execution_20260521"]) {
     const tool = { type, name: "code_execution" };
     assert.equal(requestPricingGap(pricing, { tools: [tool] }, "anthropic.messages"), "hosted_tool_fee");
     assert.equal(requestPricingGap(pricing, { tools: [tool, { type: "web_fetch_20250910", name: "web_fetch" }] }, "anthropic.messages"), "hosted_tool_fee");
     for (const fetch of ["web_fetch_20260209", "web_fetch_20260318"]) {
       const body = { tools: [tool, { type: fetch, name: "web_fetch" }] };
-      assert.equal(requestPricingGap(pricing, body, "anthropic.messages"), null);
+      assert.equal(requestPricingGap(pricing, body, "anthropic.messages"), "hosted_tool_usage");
+      assert.equal(requestPricingGap(pricing, { tools: body.tools.toReversed() }, "anthropic.messages"), "hosted_tool_usage");
       assert.equal(estimateModelCost(pricing, body, "anthropic.messages").inputTokens, pricing.maxInputTokens);
     }
     assert.equal(requestPricingGap(pricing, { tools: [tool, { type: "web_search_20260209", name: "web_search" }] }, "anthropic.messages"), "hosted_tool_fee");
     for (const format of ["openai.responses", "google.generate_content"]) assert.equal(requestPricingGap(pricing, { tools: [tool] }, format), null);
   }
   assert.equal(requestPricingGap(pricing, { tools: [{ name: "code_execution_20250825", input_schema: { type: "object" } }] }, "anthropic.messages"), null);
+});
+
+test("hosted declaration classification covers the finite server-work inventory without inventing fees", () => {
+  for (const [format, tools] of [
+    ...["mcp", "programmatic_tool_calling", "tool_search"].map(type => ["openai.responses", [{ type }]]),
+    ["openai.responses", [{ type: "tool_search", execution: "server" }]],
+    ...["advisor_20260301", "mcp_toolset", "tool_search_tool_regex", "tool_search_tool_bm25", "tool_search_tool_regex_20251119", "tool_search_tool_bm25_20251119", "web_fetch_20250910", "web_fetch_20260209", "web_fetch_20260309", "web_fetch_20260318"].map(type => ["anthropic.messages", [{ type }]]),
+    ...["mcpServers", "mcp_servers"].map(key => ["google.generate_content", [{ [key]: [{ name: "fixture", streamableHttpTransport: { url: "https://example.com/mcp" } }] }]]),
+  ]) {
+    assert.equal(hostedToolPricingGap(tools, format), "hosted_tool_usage");
+    assert.equal(requestPricingGap(pricing, { tools }, format), "hosted_tool_usage");
+    for (const other of ["openai.responses", "anthropic.messages", "google.generate_content", "openai.chat_completions"].filter(value => value !== format)) assert.equal(requestPricingGap(pricing, { tools }, other), null);
+  }
+  assert.equal(hostedToolPricingGap([{ type: "future_tool" }, null], "openai.responses"), null, "null does not attest a complete retained inventory");
+  for (const tools of [[{ type: "mcp" }, { type: "file_search" }], [{ type: "file_search" }, { type: "mcp" }]]) assert.equal(hostedToolPricingGap(tools, "openai.responses"), "hosted_tool_fee");
+  for (const tools of [[{ mcpServers: [] }], [{ mcpServers: [{}], mcp_servers: null }], [{ mcpServers: {} }]]) assert.equal(hostedToolPricingGap(tools, "google.generate_content"), null);
+  assert.equal(hostedToolPricingGap([{ mcp_servers: null, mcpServers: [{}] }], "google.generate_content"), "hosted_tool_usage");
+});
+
+test("only exact request-level orchestration and compaction declarations add usage gaps", () => {
+  for (const [format, body] of [
+    ["openai.responses", { multi_agent: { enabled: true, max_concurrent_subagents: 1 } }],
+    ["anthropic.messages", { mcp_servers: [{ type: "url", name: "fixture", url: "https://example.com/mcp" }] }],
+    ["anthropic.messages", { context_management: { edits: [{ type: "compact_20260112" }] } }],
+    ["anthropic.messages", { compaction: { type: "summarize" } }],
+  ]) {
+    assert.equal(requestPricingGap(pricing, body, format), "hosted_tool_usage");
+    for (const other of ["openai.responses", "anthropic.messages", "google.generate_content", "openai.chat_completions"].filter(value => value !== format)) assert.equal(requestPricingGap(pricing, body, other), null);
+  }
+  for (const body of [
+    { multi_agent: { enabled: false } }, { multi_agent: { enabled: "true" } }, { mcp_servers: [] },
+    { context_management: { edits: [{ type: "clear_tool_uses_20250919" }, { type: "clear_thinking_20251015" }] } },
+    { messages: [{ role: "assistant", content: [{ type: "compaction", content: "summary", signature: "fixture" }] }] },
+    { tools: [{ name: "compact_20260112", input_schema: { compaction: { type: "summarize" }, mcp_servers: [{}], multi_agent: { enabled: true } } }] },
+  ]) for (const format of ["openai.responses", "anthropic.messages", "google.generate_content", "openai.chat_completions"]) assert.equal(requestPricingGap(pricing, body, format), null);
 });
 
 test("cache and long-context rates keep settlement within reservation", () => {

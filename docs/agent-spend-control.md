@@ -90,10 +90,20 @@ ClawRouter also recognizes these incomplete request prices by wire format:
   [tool search `tool_search_output` input declarations](https://developers.openai.com/api/docs/guides/tools-tool-search#understand-what-gets-loaded);
   Chat `web_search_options`; Anthropic `web_search_*` and separately billed
   `code_execution_*`.
+- OpenAI Responses MCP, programmatic tool calling, hosted tool search, and
+  `multi_agent.enabled`. Their server work lacks a qualified cumulative
+  reservation bound. Hosted tool search is conservatively unqualified under
+  measured budgets; this does not assert a separate fee or an observed overrun.
+- Anthropic web fetch, fee-waived code execution, advisor, server tool search,
+  and MCP toolsets/server declarations. Server tool loops can accumulate input
+  across iterations; one context window does not bound the total.
+- Anthropic `context_management.edits` with `compact_20260112` and on-demand
+  `compaction: {type: summarize}`. [Compaction usage](https://platform.claude.com/docs/en/build-with-claude/compaction-on-demand#count-compaction-usage)
+  is billed through iterations outside the ordinary top-level totals.
 - Opaque Responses `prompt` references, because
   [saved prompts retain tool configuration](https://developers.openai.com/api/docs/assistants/migration).
 - Gemini Google Search, legacy search retrieval, and Maps grounding fees.
-- Gemini URL context, File Search, and code execution, whose hosted token work
+- Gemini URL context, File Search, code execution, and MCP servers, whose hosted token work
   is not fully bounded or metered by the ordinary model counters. A tool can
   have no separate fee and still make token-only settlement incomplete.
 - Gemini `cachedContent` references, because a
@@ -114,17 +124,23 @@ zero. Free token counting and fixed policy tariffs keep their existing behavior.
 Model discovery and Fusion preflight apply the same completeness guard for both
 policy and provider budgets. Unmetered models remain available; Fusion displays
 their incomplete prices as unavailable rather than a zero-cost estimate.
-Basic Anthropic web fetch has only token charges and retains its full-input-window
-reservation. Anthropic also [waives code-execution fees](https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool#usage-and-pricing)
+Anthropic [waives code-execution fees](https://platform.claude.com/docs/en/agents-and-tools/tool-use/code-execution-tool#usage-and-pricing)
 when `web_fetch_20260209`, `web_search_20260209`, or a later version is present;
-the free web-fetch combination remains token-priced, while web search still
-requires its separate fee. Other code-execution requests can incur time-based
-charges beyond the provider's organization allowance and require a fixed
-tariff under a measured budget. This does not introduce a tool-fee meter.
+the waived combination still needs a fixed tariff under a measured budget
+because cumulative server-loop token usage is unqualified. Web search retains
+its separate fee. This does not introduce a tool-fee or sub-inference meter.
 Client-executed function, custom, namespace, local-shell, and apply-patch tools
-use the model's token rates; a function named `web_search` is still a function.
+use the model's token rates, as does OpenAI tool search with `execution: client`.
+Claude client tools, historical compaction blocks, and `clear_*` context edits
+do not introduce these server-work gaps. A function named `web_search` is still
+a function.
 A fixed `requestCostMicros` is an operator-defined
 tariff, not a measurement of provider tool charges.
+
+This classification inspects the current request. Inherited executable tool
+declarations through Responses continuation or conversation state require
+separate qualification; response-ID routing alone does not establish pricing
+completeness.
 
 Complete hosted-tool metering remains unqualified. The published
 [OpenAI tool prices](https://developers.openai.com/api/docs/pricing) and

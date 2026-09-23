@@ -1,10 +1,12 @@
+import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fusionReadiness } from "../fusion-readiness.ts";
 import { buildAdviserBody, DEFAULT_FUSION_CONFIG } from "../fusion.ts";
 import { estimateModelCost } from "../pricing.ts";
 import { providerById } from "../providers.ts";
 import { fixture, policy } from "./credential-fixture.mjs";
+
+const { fusionReadiness } = await import("../fusion-readiness.ts");
 
 const baseReadiness = {
   displayName: "Provider",

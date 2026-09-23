@@ -36,6 +36,11 @@ export function requestPricingGap(pricing: ModelPricing | null | undefined, body
   // Saved Responses prompts retain tools; an opaque reference cannot prove
   // that the effective request has only the declared token charges.
   if (requestFormat === "openai.responses" && body.prompt != null) return "hosted_tool_usage";
+  if (requestFormat === "openai.responses" && isObject(body.multi_agent) && body.multi_agent.enabled === true) return "hosted_tool_usage";
+  if (requestFormat === "anthropic.messages" && Array.isArray(body.mcp_servers) && body.mcp_servers.length) return "hosted_tool_usage";
+  // Claude bills compaction iterations outside the ordinary top-level usage.
+  if (requestFormat === "anthropic.messages" && (isObject(body.compaction) && body.compaction.type === "summarize"
+    || isObject(body.context_management) && Array.isArray(body.context_management.edits) && body.context_management.edits.some((edit) => isObject(edit) && edit.type === "compact_20260112"))) return "hosted_tool_usage";
   // CachedContent retains tools and toolConfig. The reference alone cannot
   // prove that generation has only the token costs represented by this card.
   if (requestFormat === "google.generate_content" && googleField(body, "cachedContent", "cached_content") != null) return "hosted_tool_usage";
@@ -43,26 +48,38 @@ export function requestPricingGap(pricing: ModelPricing | null | undefined, body
   // input items. Do not search ordinary output data, content, or function schemas.
   const inputTools = requestFormat === "openai.responses" && Array.isArray(body.input)
     ? body.input.flatMap((item) => isObject(item) && (item.type === "additional_tools" || item.type === "tool_search_output") && Array.isArray(item.tools) ? item.tools : []) : [];
-  const tools = (Array.isArray(body.tools) ? body.tools : []).concat(inputTools);
+  return hostedToolPricingGap((Array.isArray(body.tools) ? body.tools : []).concat(inputTools), requestFormat);
+}
+
+// Classify known executable declarations only. A null result does not attest
+// that an unknown or partially observed tool inventory is complete.
+export function hostedToolPricingGap(tools: readonly unknown[], requestFormat: string): Exclude<PricingGap, "model_request_fee"> | null {
+  let usageGap = false;
   for (const tool of tools) {
     if (!isObject(tool)) continue;
     // Inspect protocol declarations, never function names or user JSON schemas.
     if (requestFormat === "openai.responses" && typeof tool.type === "string") {
       if (/^web_search(?:_preview)?(?:_\d{4}_\d{2}_\d{2})?$/.test(tool.type) || ["file_search", "code_interpreter", "image_generation"].includes(tool.type)) return "hosted_tool_fee";
       if (tool.type === "shell" && isObject(tool.environment) && ["container_auto", "container_reference"].includes(String(tool.environment.type))) return "hosted_tool_fee";
+      // Hosted search has no qualified cumulative bound; this is not a fee claim.
+      if (["mcp", "programmatic_tool_calling"].includes(tool.type) || tool.type === "tool_search" && tool.execution !== "client") usageGap = true;
     }
     if (requestFormat === "anthropic.messages" && typeof tool.type === "string" && /^web_search_\d{8}$/.test(tool.type)) return "hosted_tool_fee";
     // Anthropic waives execution fees when these web-tool versions are present.
     // Their search fee, when applicable, is still handled by the branch above.
     if (requestFormat === "anthropic.messages" && typeof tool.type === "string" && /^code_execution_\d{8}$/.test(tool.type) && !tools.some((candidate) => isObject(candidate) && typeof candidate.type === "string" && /^web_(?:search|fetch)_\d{8}$/.test(candidate.type) && candidate.type.slice(-8) >= "20260209")) return "hosted_tool_fee";
+    // A waived execution fee does not bound accumulated server-loop input.
+    if (requestFormat === "anthropic.messages" && typeof tool.type === "string" && (/^(?:web_fetch|code_execution)_\d{8}$/.test(tool.type) || /^(?:tool_search_tool_regex|tool_search_tool_bm25)(?:_20251119)?$/.test(tool.type) || ["advisor_20260301", "mcp_toolset"].includes(tool.type))) usageGap = true;
     if (requestFormat === "google.generate_content") {
       if ([["googleSearch", "google_search"], ["googleSearchRetrieval", "google_search_retrieval"], ["googleMaps", "google_maps"]].some(([camel, proto]) => isObject(googleField(tool, camel, proto)))) return "hosted_tool_fee";
       // These tools have token charges rather than a flat tool fee, but their
       // server-side work is not covered by our ordinary prompt/output bounds.
-      if ([["urlContext", "url_context"], ["fileSearch", "file_search"], ["codeExecution", "code_execution"]].some(([camel, proto]) => isObject(googleField(tool, camel, proto)))) return "hosted_tool_usage";
+      if ([["urlContext", "url_context"], ["fileSearch", "file_search"], ["codeExecution", "code_execution"]].some(([camel, proto]) => isObject(googleField(tool, camel, proto)))) usageGap = true;
+      const servers = googleField(tool, "mcpServers", "mcp_servers");
+      if (Array.isArray(servers) && servers.length) usageGap = true;
     }
   }
-  return null;
+  return usageGap ? "hosted_tool_usage" : null;
 }
 
 export function estimateModelCost(pricing: ModelPricing, body: Record<string, unknown>, requestFormat?: string): CostEstimate {
