@@ -18,7 +18,15 @@ export function smokeReadinessTimeoutMs(env = process.env) {
   return value;
 }
 
-export async function waitForHealth({
+export function waitForHealth(options) {
+  return waitForReadiness(options, "deployed");
+}
+
+export function waitForSelfHostHealth(baseUrl) {
+  return waitForReadiness({ baseUrl, timeoutMs: 30_000 }, "self-host");
+}
+
+async function waitForReadiness({
   baseUrl,
   expectedEnvironment,
   timeoutMs = DEFAULT_READINESS_TIMEOUT_MS,
@@ -27,7 +35,8 @@ export async function waitForHealth({
   nowImpl = Date.now,
   probeImpl,
   log = console.log,
-}) {
+}, profile) {
+  const selfHost = profile === "self-host";
   const origin = requiredBaseUrl(baseUrl);
   if (!Number.isInteger(timeoutMs) || timeoutMs < 1_000 || timeoutMs > MAX_READINESS_TIMEOUT_MS) {
     throw new Error("health readiness timeout must be an integer from 1000 to 600000 ms");
@@ -41,22 +50,32 @@ export async function waitForHealth({
     attempt += 1;
     const requestTimeoutMs = Math.max(
       1,
-      Math.min(10_000, deadline - nowImpl()),
+      Math.min(selfHost ? 2_000 : 10_000, deadline - nowImpl()),
     );
     try {
-      const response = await fetchImpl(`${origin}/v1/health`, {
-        redirect: "manual",
-        signal: AbortSignal.timeout(requestTimeoutMs),
-      });
+      const { response, health } = await runWithinDeadline(async (signal) => {
+        const response = await fetchImpl(`${origin}/v1/health`, {
+          redirect: selfHost ? "follow" : "manual",
+          signal,
+        });
+        if (!response.ok) {
+          await response.body?.cancel();
+          return { response };
+        }
+        try {
+          return { response, health: await response.json() };
+        } catch (error) {
+          if (signal.aborted || selfHost) throw error;
+          return { response, health: null };
+        }
+      }, requestTimeoutMs, "health request deadline elapsed");
       if (!response.ok) {
         lastFailure = `HTTP ${response.status}`;
+      } else if (selfHost) {
+        // The self-host CLI owns its immediate payload/version assertions and
+        // follows local reverse-proxy redirects; deployed readiness retries them.
+        return health;
       } else {
-        let health;
-        try {
-          health = await response.json();
-        } catch {
-          health = null;
-        }
         if (health?.ok !== true) {
           lastFailure = "invalid health payload";
         } else if (
@@ -71,11 +90,11 @@ export async function waitForHealth({
               if (remainingMs <= 0) {
                 throw new Error("readiness probe deadline elapsed");
               }
-              await runProbeWithinDeadline({
-                health,
-                probeImpl,
+              await runWithinDeadline(
+                (signal) => probeImpl(health, { signal, remainingMs }),
                 remainingMs,
-              });
+                "readiness probe deadline elapsed",
+              );
             }
             log(
               `health readiness passed after ${attempt} attempt${attempt === 1 ? "" : "s"}`,
@@ -92,34 +111,37 @@ export async function waitForHealth({
 
     const remainingMs = deadline - nowImpl();
     if (remainingMs <= 0) break;
-    const delayMs = Math.min(10_000, 1_000 * 2 ** (attempt - 1), remainingMs);
+    const delayMs = Math.min(
+      selfHost ? 500 : Math.min(10_000, 1_000 * 2 ** (attempt - 1)),
+      remainingMs,
+    );
     log(
       `health readiness pending: attempt=${attempt} reason=${lastFailure} retryInMs=${delayMs}`,
     );
     await sleepImpl(delayMs);
   }
 
+  if (selfHost) throw new Error(`self-host health did not become ready: ${lastFailure}`);
   throw new Error(
     `health readiness timed out after ${timeoutMs}ms (${attempt} attempts): ${lastFailure}`,
   );
 }
 
-async function runProbeWithinDeadline({ health, probeImpl, remainingMs }) {
+async function runWithinDeadline(run, timeoutMs, message) {
   const controller = new AbortController();
   let timeoutId;
   const timeout = new Promise((_, reject) => {
     timeoutId = setTimeout(() => {
-      controller.abort();
-      reject(new Error("readiness probe deadline elapsed"));
-    }, remainingMs);
+      const error = new Error(message);
+      controller.abort(error);
+      reject(error);
+    }, timeoutMs);
   });
   try {
-    await Promise.race([
-      Promise.resolve().then(() =>
-        probeImpl(health, {
-          signal: controller.signal,
-          remainingMs,
-        })),
+    // AbortSignal.timeout() is unref'ed. This owned timer must keep standalone
+    // smoke processes alive through fetch AND body reads, then settle visibly.
+    return await Promise.race([
+      Promise.resolve().then(() => run(controller.signal)),
       timeout,
     ]);
   } finally {
