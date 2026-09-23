@@ -47,6 +47,7 @@ test("rendered config keeps the usage queue and dead-letter queue distinct", () 
     );
     assert.equal(result.status, 0, result.stderr);
     const config = readFileSync(target, "utf8");
+    assert.match(config, /^compatibility_flags = \["enable_request_signal"\]$/m);
     assert.equal(config.match(/^queue = "test-usage"$/gm)?.length, 2);
     assert.match(config, /^dead_letter_queue = "test-usage-dead-letter"$/m);
     assert.match(config, /^AZURE_OPENAI_DEPLOYMENT = "prod-chat"$/m);
