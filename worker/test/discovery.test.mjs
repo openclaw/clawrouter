@@ -4,6 +4,95 @@ import test from "node:test";
 
 const { catalogResponse, modelsResponse, sessionResponse, entitlementResponse } = await import("../discovery.ts");
 const { sha256Hex } = await import("../utils.ts");
+const { default: worker } = await import("../index.ts");
+const { snapshot } = await import("../providers.ts");
+
+test("Worker catalog and session expose one exact HTTP Fusion offer and refresh its policy generation", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.policy.requestCostMicros = 0;
+  for (const generation of ["g1", "g2"]) {
+    fixture.policy.generation = generation;
+    fixture.credential.policyGeneration = generation;
+    for (const mode of ["key", "session"]) {
+      for (const path of mode === "key" ? ["/v1/catalog"] : ["/v1/catalog", "/v1/session", "/v1/entitlements"]) {
+        const request = new Request(`https://router.example${path}`, fixture.request(mode));
+        const response = await worker.fetch(request, fixture.env, {});
+        assert.equal(response.status, 200);
+        const body = await response.json(), catalog = body.entitlements?.catalog ?? body.catalog ?? body;
+        const fusion = catalog.providers.find(({ id }) => id === "clawrouter");
+        assert.deepEqual(fusion.policies, ["fixture"]);
+        assert.deepEqual(fusion.offers, [{
+          endpoint: "chat_completions", modelId: "clawrouter/fusion", transport: "http", routeKind: "unified",
+          route: mode === "key" ? "/v1/chat/completions" : "/v1/playground/v1/chat/completions",
+          policyId: "fixture", policyGeneration: generation, eligible: true, affordability: "exact-covered",
+        }]);
+        assert.equal(catalog.scope.authType, mode === "key" ? "proxy_key" : "access");
+      }
+    }
+  }
+  fixture.userRecord.enabled = false;
+  assert.equal((await worker.fetch(fixture.request("session"), fixture.env, {})).status, 401);
+});
+
+test("Fusion cannot borrow Chat eligibility from a sibling Responses or native-only operation", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  const index = snapshot.providers.findIndex(({ id }) => id === "openai"), original = snapshot.providers[index];
+  const provider = structuredClone(original);
+  snapshot.providers[index] = provider;
+  t.after(() => { snapshot.providers[index] = original; });
+  fixture.policy.requestCostMicros = 0;
+  provider.capabilities.push({ id: "llm.chat", endpoint: "responses" });
+  fixture.records.set("oauth/fixture/subscription", { provider: "openai", kind: "subscription", enabled: true, accessToken: "fixture-subscription", accountId: "fixture-account" });
+  const view = async () => {
+    const response = await worker.fetch(fixture.request("key"), fixture.env, {});
+    assert.equal(response.status, 200);
+    return (await response.json()).providers;
+  };
+  let providers = await view();
+  assert.ok(providers.find(({ id }) => id === "openai").offers.some(({ endpoint, eligible }) => endpoint === "responses" && eligible));
+  let fusion = providers.find(({ id }) => id === "clawrouter");
+  assert.equal(fusion.executable, false);
+  assert.equal(fusion.offers[0].eligible, false);
+  assert.equal(fusion.offers[0].endpoint, "chat_completions");
+
+  fixture.records.delete("oauth/fixture/subscription");
+  provider.endpoints.find(({ id }) => id === "chat_completions").request_format = "fixture.native_chat";
+  providers = await view();
+  assert.ok(providers.find(({ id }) => id === "openai").offers.some(({ endpoint, eligible }) => endpoint === "chat_completions" && eligible));
+  fusion = providers.find(({ id }) => id === "clawrouter");
+  assert.equal(fusion, undefined, "the existing Fusion config validator rejects native-only Chat");
+});
+
+test("Fusion observes synthesis first without promising all fail-open advisers fit a shared balance", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.policy.requestCostMicros = 7;
+  fixture.config.adviserModels = ["openai/gpt-4.1-mini", "openai/gpt-4.1"];
+  fixture.connection.monthlyBudgetMicros = 100;
+  let policyRemaining = 100, providerRemaining = 100;
+  fixture.env.BUDGET_LEDGER = { idFromName: (name) => name, get: (name) => ({ fetch: async (url) => {
+    assert.equal(new URL(url).pathname, "/status", "catalog must never reserve");
+    return Response.json({ spentMicros: 0, remainingMicros: name.startsWith("provider:") ? providerRemaining : policyRemaining });
+  } }) };
+  for (const [policy, provider, eligible, affordability, ready] of [
+    [21, 21, true, "exact-covered", 2], [14, 21, true, "request-dependent", 2],
+    [21, 14, true, "request-dependent", 2], [7, 7, true, "exact-covered", 0],
+    [6, 100, false, "exact-blocked", 0], [100, 6, false, "exact-blocked", 0],
+  ]) {
+    policyRemaining = policy; providerRemaining = provider;
+    const response = await worker.fetch(fixture.request("key"), fixture.env, {});
+    assert.equal(response.status, 200);
+    const fusion = (await response.json()).providers.find(({ id }) => id === "clawrouter");
+    assert.equal(fusion.offers[0].eligible, eligible);
+    assert.equal(fusion.offers[0].affordability, affordability);
+    assert.equal(fusion.readiness.reasons.some((reason) => reason.startsWith(`${ready}/2 advisers`)), ready !== 2);
+  }
+  fixture.policy.requestCostMicros = 0; policyRemaining = 0; providerRemaining = 0;
+  let catalog = await (await worker.fetch(fixture.request("key"), fixture.env, {})).json();
+  assert.equal(catalog.providers.find(({ id }) => id === "clawrouter").offers[0].affordability, "exact-covered");
+  fixture.policy.requestCostMicros = null; policyRemaining = 100; providerRemaining = 100;
+  catalog = await (await worker.fetch(fixture.request("key"), fixture.env, {})).json();
+  assert.equal(catalog.providers.find(({ id }) => id === "clawrouter").offers[0].affordability, "request-dependent");
+});
 
 test("authorized model metadata preserves declared reasoning efforts without adding sibling metadata", async (t) => {
   const fixture = await fusionDiscoveryFixture(t);
@@ -358,6 +447,11 @@ test("Fusion shares selected-policy model eligibility across key and session dis
   records.set("oauth/second/api", { provider: "openai", kind: "api_key", enabled: true, credential: "fixture-second-api" });
   await compare(false, ["key"]);
   await compare(true, ["session"]);
+  const catalog = await (await catalogResponse(fixture.request("session"), env)).json();
+  const offer = catalog.providers.find(({ id }) => id === "clawrouter").offers[0];
+  assert.equal(offer.policyId, "second");
+  assert.equal(offer.policyGeneration, policies[1].policy.generation);
+  assert.equal(offer.transport, "http");
 });
 
 test("catalog balances are principal scoped, fresh, and use the dispatch default tenant", async (t) => {
