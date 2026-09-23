@@ -135,7 +135,7 @@ async function previewFusion(request: Request, env: Env): Promise<Response> {
       modelId,
       providerId: route.provider.id,
       providerDisplayName: route.provider.display_name,
-      endpointId: endpointForPath(route.provider, "/v1/chat/completions")!.id,
+      endpoint: endpointForPath(route.provider, "/v1/chat/completions")!,
       model: route.model,
     };
   });

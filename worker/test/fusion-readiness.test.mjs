@@ -29,8 +29,8 @@ const baseReadiness = {
 };
 
 const routes = [
-  { modelId: "local/qwen3:8b", providerId: "local-openai", providerDisplayName: "Local OpenAI-compatible", endpointId: "chat_completions", model: { id: "local/qwen3:8b", upstream: "qwen3:8b", capabilities: ["llm.chat"], pricing_ref: null, pricing: null } },
-  { modelId: "openai/gpt-4.1-mini", providerId: "openai", providerDisplayName: "OpenAI", endpointId: "chat_completions", model: { id: "openai/gpt-4.1-mini", upstream: "gpt-4.1-mini", capabilities: ["llm.chat"], pricing_ref: null, pricing: null } },
+  { modelId: "local/qwen3:8b", providerId: "local-openai", providerDisplayName: "Local OpenAI-compatible", endpoint: { id: "chat_completions", request_format: "openai.chat_completions" }, model: { id: "local/qwen3:8b", upstream: "qwen3:8b", capabilities: ["llm.chat"], pricing_ref: null, pricing: null } },
+  { modelId: "openai/gpt-4.1-mini", providerId: "openai", providerDisplayName: "OpenAI", endpoint: { id: "chat_completions", request_format: "openai.chat_completions" }, model: { id: "openai/gpt-4.1-mini", upstream: "gpt-4.1-mini", capabilities: ["llm.chat"], pricing_ref: null, pricing: null } },
 ];
 
 test("fusion readiness reports policy-scoped execution and exact fixed-price call envelope", () => {
@@ -48,6 +48,7 @@ test("fusion readiness reports policy-scoped execution and exact fixed-price cal
   assert.equal(readiness.estimatedReservationMicros, 21);
   assert.deepEqual(readiness.calls.map((call) => call.stage), ["adviser", "adviser", "synthesizer"]);
   assert.ok(readiness.calls.every((call) => call.estimateBasis === "policy_fixed"));
+  assert.match(readiness.calls[0].reasons.join(" "), /temperature preference omitted/);
 });
 
 test("fusion readiness prevents adviser fan-out when the policy blocks its synthesizer", () => {

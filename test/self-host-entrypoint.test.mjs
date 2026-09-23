@@ -1,17 +1,70 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { readFileSync } from "node:fs";
+import { EventEmitter } from "node:events";
+import { setTimeout as delay } from "node:timers/promises";
 import {
   localAdminEmail,
   localAuthMode,
   publicOrigin,
   renderSelfHostConfig,
   selfHostVariableNames,
+  startContentCleanup,
 } from "../deploy/self-host/entrypoint.mjs";
 
 test("self-host preserves the canonical ingress abort compatibility flag", () => {
   const rendered = renderSelfHostConfig(readFileSync(new URL("../wrangler.toml", import.meta.url), "utf8"));
   assert.match(rendered, /^compatibility_flags = \["enable_request_signal"\]$/m);
+});
+
+test("self-host cleanup waits for readiness, never overlaps ticks, and stops with its child", async (t) => {
+  const child = new EventEmitter();
+  let ready, complete, active = 0, calls = 0, signal;
+  const health = new Promise((resolve) => { ready = resolve; });
+  const sweep = new Promise((resolve) => { complete = resolve; });
+  const stop = startContentCleanup(child, "http://localhost", { intervalMs: 5, fetchImpl: async (url, options) => {
+    assert.equal(options.redirect, "manual");
+    if (url.endsWith("/v1/health")) return health;
+    assert.equal(url, "http://localhost/cdn-cgi/local/scheduled?format=json");
+    signal = options.signal;
+    calls++;
+    assert.equal(++active, 1);
+    const response = await sweep;
+    active--;
+    return response;
+  } });
+  t.after(stop);
+  await delay(15);
+  assert.equal(calls, 0);
+  ready(Response.json({ ok: true }));
+  await delay(15);
+  assert.equal(calls, 1);
+  child.emit("exit", 0);
+  assert.equal(signal.aborted, true);
+  complete(Response.json({ outcome: "ok" }));
+  await delay(15);
+  assert.equal(calls, 1);
+  assert.equal(child.listenerCount("exit"), 0);
+});
+
+test("native cleanup rejects HTTP and outcome failures before a later successful tick", async (t) => {
+  const child = new EventEmitter(), errors = [];
+  t.mock.method(console, "error", (...args) => errors.push(args));
+  let calls = 0;
+  const stop = startContentCleanup(child, "http://localhost", { intervalMs: 5, fetchImpl: async (url) => {
+    if (url.endsWith("/v1/health")) return Response.json({ ok: true });
+    calls++;
+    if (calls === 1) return Response.json({ outcome: "ok" }, { status: 500 });
+    if (calls === 2) return Response.json({ outcome: "exception", detail: "synthetic private detail" });
+    child.emit("exit", 0);
+    return Response.json({ outcome: "ok" });
+  } });
+  t.after(stop);
+  const deadline = Date.now() + 1_000;
+  while (calls < 3 && Date.now() < deadline) await delay(5);
+  assert.equal(calls, 3);
+  assert.equal(errors.length, 2);
+  assert.doesNotMatch(JSON.stringify(errors), /synthetic private/);
 });
 
 test("self-host config removes custom routes and adds local policy KV", () => {
