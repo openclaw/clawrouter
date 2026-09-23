@@ -1,3 +1,43 @@
+import type { ModelRequestParameters, ProviderReasoningEffort } from "./model-request-parameters";
+
+export interface TokenRates { inputMicrosPerMillion: number; outputMicrosPerMillion: number; cachedInputMicrosPerMillion: number | null; cacheWriteInputMicrosPerMillion: number | null; cacheWrite5mInputMicrosPerMillion: number | null; cacheWrite1hInputMicrosPerMillion: number | null }
+export interface LongContextPricing extends TokenRates { thresholdInputTokens: number }
+export interface ServiceTierPricing extends TokenRates { id: string; aliases: string[]; maxInputTokens: number | null; longContext: LongContextPricing | null }
+export interface ModelPricing extends TokenRates { effectiveAt: string; source: string; maxInputTokens: number; maxRequestInputTokens: number | null; defaultMaxOutputTokens: number; inputTokenOverhead: number; longContext: LongContextPricing | null; serviceTiers?: ServiceTierPricing[]; unpricedCosts?: Array<"request_fee"> }
+export interface ClientCatalogModel { id: string; upstream: string; codexModel?: string; capabilities: string[]; supportedReasoningEfforts?: ProviderReasoningEffort[]; requestParameters?: Record<string, ModelRequestParameters>; pricing_ref: string | null; pricing: ModelPricing | null }
+export interface CatalogOffer {
+  endpoint: string;
+  modelId: string | null;
+  transport: "http" | "websocket";
+  routeKind: "unified" | "native" | "manifest" | "playground";
+  route: string;
+  policyId: string;
+  policyGeneration: string;
+  eligible: boolean;
+  affordability: "exact-covered" | "exact-blocked" | "request-dependent";
+  reasonCode?: string;
+}
+export interface ClientCatalogProvider {
+  id: string;
+  displayName: string;
+  allowed: boolean;
+  executable: boolean;
+  openaiCompatible: boolean;
+  nativeBaseUrl: string | null;
+  policies: string[];
+  readiness: ProviderReadiness;
+  connectionTypes: string[];
+  routes: Array<{ endpoint: string; methods: string[]; path: string; requestFormat: string; responseFormat: string; streaming: string | null; websocket?: "openai.responses" }>;
+  models: ClientCatalogModel[];
+  offers: CatalogOffer[];
+}
+export interface ClientCatalog {
+  version: "clawrouter.client-catalog.v1";
+  observedAt: string;
+  scope: { authType: "proxy_key" | "access"; credentialId: string | null; principalId: string | null };
+  providers: ClientCatalogProvider[];
+}
+
 export interface ProviderRow {
   id: string;
   display_name: string;
@@ -182,7 +222,7 @@ export interface SessionResponse {
   subject?: string | null;
   tenantId?: string | null;
   groups?: string[];
-  entitlements?: { providers: ProviderAccess[] } | null;
+  entitlements?: { providers: ProviderAccess[]; catalog: ClientCatalog } | null;
   entitlementsError?: string | null;
   contentRetention?: ContentRetention;
 }
@@ -213,7 +253,7 @@ export interface ProviderReadiness {
 }
 
 export interface ProviderAccess { provider: string; displayName: string; serviceKind: string; allowed: boolean; policies: string[]; readiness: ProviderReadiness }
-export interface EntitlementsResponse { session: SessionResponse; providers: ProviderAccess[]; contentRetention: ContentRetention }
+export interface EntitlementsResponse { session: SessionResponse; providers: ProviderAccess[]; catalog: ClientCatalog; contentRetention: ContentRetention }
 export interface AccessUser { email: string; role: AccessRole; tenantId: string; enabled: boolean; groups: string[]; contentRetentionDisabled: boolean }
 export interface PolicyBinding { policyId: string; principalType: "user" | "group"; principalId: string; enabled: boolean; priority: number }
 

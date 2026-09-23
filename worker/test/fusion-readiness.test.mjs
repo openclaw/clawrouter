@@ -6,7 +6,52 @@ import { estimateModelCost } from "../pricing.ts";
 import { providerById } from "../providers.ts";
 import { fixture, policy } from "./credential-fixture.mjs";
 
-const { fusionReadiness } = await import("../fusion-readiness.ts");
+const { fusionReadiness, fusionCatalogReadiness } = await import("../fusion-readiness.ts");
+const { operationAffordability } = await import("../operation-budget.ts");
+
+test("Fusion catalog keeps adviser policy ledgers distinct while accounting for a shared provider", () => {
+  const config = { ...DEFAULT_FUSION_CONFIG, enabled: true, aggregatorModel: "fixture/final", adviserModels: ["fixture/adviser"] };
+  const auth = (policyId, principalId) => ({ authType: "access", credentialId: null, principalId, policyId, policy: { enabled: true, generation: "g1", tenantId: "default", budgetScope: "principal", monthlyBudgetMicros: 100, requestCostMicros: 7 } });
+  const endpoint = { id: "renamed_chat", request_format: "openai.chat_completions" };
+  const final = { auth: auth("first", "first@example.com"), providerId: "fixture", endpoint, model: { id: "fixture/final", pricing: null }, connection: { providerId: "fixture", monthlyBudgetMicros: null }, observation: { policyRemaining: 7, providerRemaining: null } };
+  const adviser = { ...final, auth: auth("second", "second@example.com"), model: { id: "fixture/adviser", pricing: null } };
+  const project = () => fusionCatalogReadiness(config, (body) => {
+    const selected = body.model === config.aggregatorModel ? final : adviser;
+    return { ...selected, body, availability: operationAffordability(selected.auth, selected.connection, selected.model, "llm.chat", endpoint.request_format, selected.observation) };
+  });
+  assert.equal(project().readyAdviserCount, 1);
+  assert.equal(project().offers[0].affordability, "exact-covered");
+  adviser.auth.policyId = "first";
+  assert.equal(project().readyAdviserCount, 1, "different principals retain separate policy balances");
+  adviser.auth.principalId = "first@example.com";
+  assert.equal(project().readyAdviserCount, 0, "same principal spends synthesis first");
+  adviser.auth = auth("second", "second@example.com");
+  for (const selected of [final, adviser]) {
+    selected.connection = { providerId: "fixture", monthlyBudgetMicros: 100 };
+    selected.observation = { policyRemaining: 7, providerRemaining: 7 };
+  }
+  assert.equal(project().readyAdviserCount, 0, "the provider ledger is shared across distinct policies");
+  assert.equal(project().offers[0].eligible, true, "adviser affordability never denies a funded synthesizer");
+});
+
+test("Fusion catalog applies canonical parameter assessment after exact selection", () => {
+  const config = { ...DEFAULT_FUSION_CONFIG, enabled: true, aggregatorModel: "fixture/final", adviserModels: ["fixture/adviser"] };
+  const endpoint = { id: "renamed_chat", request_format: "openai.chat_completions" };
+  let conflict = false;
+  const project = () => fusionCatalogReadiness(config, (body) => ({
+    providerId: "fixture", endpoint, model: { id: body.model, pricing: null, requestParameters: { renamed_chat: { temperature: "unsupported" } } },
+    auth: { authType: "proxy_key", credentialId: "fixture", principalId: null, policyId: "chosen", policy: { generation: "g2", requestCostMicros: 0 } },
+    connection: { providerId: "fixture" },
+    body: { ...body, ...(conflict && body.model === config.aggregatorModel ? { temperature: 1 } : {}) },
+    availability: { status: "exact-covered" },
+  }));
+  assert.equal(project().readyAdviserCount, 1);
+  conflict = true;
+  const blocked = project();
+  assert.equal(blocked.readyAdviserCount, 0);
+  assert.equal(blocked.offers[0].reasonCode, "model_parameter_unsupported");
+  assert.equal(blocked.offers[0].eligible, false);
+});
 
 const baseReadiness = {
   displayName: "Provider",
