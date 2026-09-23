@@ -122,8 +122,16 @@ No ChatGPT login or user approval RPC is fabricated for these tests.
 
 To run the opt-in fixtures, set `CLAWROUTER_CODEX_BINARY` to the official binary
 and `CLAWROUTER_CODEX_CATALOG_BINARY` to a 0.155.0 catalog producer, then run
-`node --test test/codex-native.test.mjs`. Ordinary CI skips native cases when
+`node --test test/codex-native.test.mjs`. Ordinary script tests skip native cases when
 the binary is absent. Each case removes its temporary home and loopback server.
+
+`node --test test/codex-router.test.mjs` also runs those engines through the actual
+Worker, authority, and SQL budget/usage ledgers with an isolated synthetic
+upstream. It covers credential-scoped metadata discovery, HTTP and WebSocket
+priority requests, a tool continuation, two turns, and revocation before the
+next turn. CI downloads checksum-pinned official Linux engines for 0.153.0 and
+0.155.0; neither case needs an account or paid upstream call. This qualifies
+native engine routing, not macOS Desktop UI behavior or live model quality.
 
 ## WebSocket contract
 
