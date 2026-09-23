@@ -142,10 +142,10 @@ function ConsoleDataProvider({ session, credentialOwner, requestForScope, probe,
     verifySession: () => probe(scope),
   });
   useEffect(() => {
-    const refresh = controller.refreshCredentialMetadata;
+    const refresh = controller.refreshMetadataAfterMutation;
     credentialRefresh.current = refresh;
     return () => { if (credentialRefresh.current === refresh) credentialRefresh.current = async () => undefined; };
-  }, [controller.refreshCredentialMetadata, credentialRefresh]);
+  }, [controller.refreshMetadataAfterMutation, credentialRefresh]);
   return <ConsoleControllerContext.Provider value={controller}>{children}</ConsoleControllerContext.Provider>;
 }
 

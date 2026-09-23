@@ -41,8 +41,8 @@ export function useConsoleController({ session, credentialOwner, request, scope,
   const initialSession = useRef<SessionResponse | null>(session.value);
   const refreshRef = useRef<(options?: RefreshOptions) => Promise<void>>(async () => undefined);
   const refreshCurrent = useCallback(() => refreshRef.current(), []);
-  const refreshCredentialMetadata = useCallback(async (ownsScope: () => boolean) => {
-    // The current read may predate the mutation and fail its credential hydration fence.
+  const refreshMetadataAfterMutation = useCallback(async (ownsScope: () => boolean) => {
+    // The current read may predate the mutation and fail its resource hydration fence.
     await refreshPromiseRef.current;
     if (ownsScope()) await refreshRef.current({ background: true });
   }, []);
@@ -60,6 +60,12 @@ export function useConsoleController({ session, credentialOwner, request, scope,
     setStatus: session.setStatus,
     setProviderReadiness: catalog.setProviderReadiness,
     refresh: refreshCurrent,
+    refreshPolicyMetadata: async () => {
+      if (!scope.isCurrent()) return;
+      // Retire pre-commit ledger reads before waiting for metadata already in flight.
+      usage.invalidate();
+      await refreshMetadataAfterMutation(scope.isCurrent);
+    },
     syncDemoAdmin: usage.syncDemoAdmin,
   });
   credentialOwner.observePresentation(session.view === "home" ? "personal" : session.view === "policies" && access.tab.value === "credentials" && session.value.role === "admin" ? "admin" : null);
@@ -129,6 +135,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
   }
 
   async function refreshData({ background = false }: RefreshOptions) {
+    const publishStatus = background ? null : session.captureStatusPublisher();
     if (!background) {
       session.setRefreshing(true);
       access.setLoaded(false);
@@ -137,6 +144,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
     if (!background || (session.view !== "home" && session.view !== "usage" && !usage.error)) usage.invalidate();
     const failUsageRefresh = usage.captureRefreshFailure();
     const keySnapshot = credentialOwner.captureHydration();
+    const policySnapshot = access.capturePolicyHydration();
     try {
       const staticCatalog = catalogLoadedRef.current
         ? Promise.resolve({ providerData: { providers: catalog.providers }, routeData: catalog.routes })
@@ -174,12 +182,12 @@ export function useConsoleController({ session, credentialOwner, request, scope,
       // Entitlement waits cannot adopt a credential scope invalidated by another read.
       if (!scope.isCurrent()) return;
       const result = sessionData.role === "admin"
-        ? await loadAdminData(sessionData, providerData, background, warnings, keySnapshot)
+        ? await loadAdminData(sessionData, providerData, background, warnings, keySnapshot, policySnapshot)
         : await loadUserData(sessionData, warnings, keySnapshot);
       if (!scope.isCurrent()) return;
       session.setRefreshError(result.warnings.join("; "));
       if (result.complete) session.setLastUpdatedAt(Date.now());
-      if (!background) session.setStatus(oauthCallbackStatus() ?? "connected");
+      publishStatus?.(oauthCallbackStatus() ?? "connected");
     } catch (caught) {
       if (!scope.isCurrent()) return;
       const message = errorMessage(caught);
@@ -191,7 +199,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
     }
   }
 
-  async function loadAdminData(sessionData: SessionResponse, providerData: ProviderResponse, background: boolean, initialWarnings: string[], keySnapshot: number) {
+  async function loadAdminData(sessionData: SessionResponse, providerData: ProviderResponse, background: boolean, initialWarnings: string[], keySnapshot: number, policySnapshot: number | null) {
     let warnings = initialWarnings;
     const [data, sessionUsageResult, sessionCredentialsResult] = await Promise.all([
       request<AdminBootstrapResponse>(session.gatewayOrigin, "/v1/admin/bootstrap"),
@@ -207,7 +215,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
       grants: data.grants,
       rules: data.rules,
       fusion: data.fusion,
-    }, background, sessionData, providerData.providers, keySnapshot);
+    }, background, sessionData, providerData.providers, keySnapshot, policySnapshot);
     catalog.mergeReadiness(data.providers);
     usage.setAdminOverview(data.overview);
     usage.setTenantSummaries(data.tenants);
@@ -308,7 +316,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
     session.navigateTo(...args);
   }
 
-  return { session: { ...session, navigateTo }, catalog, access, usage, selfServiceKeys, credentialOwner, playground, request, refresh, refreshCredentialMetadata };
+  return { session: { ...session, navigateTo }, catalog, access, usage, selfServiceKeys, credentialOwner, playground, request, refresh, refreshMetadataAfterMutation };
 }
 
 export type ConsoleController = ReturnType<typeof useConsoleController>;
