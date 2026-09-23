@@ -256,7 +256,7 @@ for (const [name, route, requestedTier, payload, contentType, expected, servedTi
 }
 
 test("HTTP and native streaming outcomes settle each ledger once without rewriting delivery", async (t) => {
-  for (const route of ["/v1/responses", "/v1/native/openai/v1/responses"]) for (const scenario of ["failed", "failed_without_usage", "error", "eof", "cancel", "cancel_after_terminal", "broken_after_terminal"]) {
+  for (const route of ["/v1/responses", "/v1/native/openai/v1/responses"]) for (const scenario of ["failed", "failed_without_usage", "error", "eof", "cancel", "cancel_after_terminal", "abort", "abort_after_terminal", "broken_after_terminal"]) {
     const events = [], pending = [], limit = 1_000_000;
     const env = usageEnv([], { limit, fixedCost: null, retainContent: false });
     env.OPENAI_API_KEY = "fixture-openai-key";
@@ -267,31 +267,63 @@ test("HTTP and native streaming outcomes settle each ledger once without rewriti
       : scenario === "error" ? { type: "error", error: { message: "fixture" } }
       : measured ? { type: "response.completed", response: { service_tier: "priority", usage: astraUsage } } : null;
     const body = sse({ type: "response.created" }, ...(terminal ? [terminal] : []));
+    const abort = new AbortController(), callerCanceled = scenario.startsWith("cancel") || scenario.startsWith("abort");
     let pulls = 0, canceled = false;
     const upstream = t.mock.method(globalThis, "fetch", async () => new Response(new ReadableStream({ pull(controller) {
       if (pulls++ === 0) controller.enqueue(new TextEncoder().encode(body));
       else if (scenario === "broken_after_terminal") controller.error(new Error("fixture broken stream"));
-      else if (!scenario.startsWith("cancel")) controller.close();
+      else if (!callerCanceled) controller.close();
     }, cancel() { canceled = true; } }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } }));
     const response = await handler.fetch(new Request(`https://clawrouter.example${route}`, {
-      method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
+      method: "POST", signal: abort.signal, headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
       body: JSON.stringify({ model: "openai/gpt-6-astra", input: "fixture", max_output_tokens: 32, service_tier: "priority", stream: true }),
     }), env, { waitUntil: promise => pending.push(promise) });
     assert.equal(response.status, 200);
     const reader = response.body.getReader();
     assert.equal(new TextDecoder().decode((await reader.read()).value), body);
-    if (scenario.startsWith("cancel")) { await reader.cancel(); assert.equal(canceled, true); }
+    if (scenario.startsWith("abort")) {
+      const read = reader.read(), rejected = assert.rejects(read, /fixture caller abort/);
+      abort.abort(new Error("fixture caller abort"));
+      await rejected;
+      assert.equal(canceled, true);
+    } else if (scenario.startsWith("cancel")) { await reader.cancel(); assert.equal(canceled, true); }
     else if (scenario === "broken_after_terminal") await assert.rejects(reader.read(), /fixture broken stream/);
     else assert.equal((await reader.read()).done, true);
     await Promise.all(pending);
     assert.equal(events.length, 1);
     const [event] = events, cost = measured ? 1_080 : event.reserved_cost_micros;
-    assert.equal(event.status, scenario.startsWith("cancel") ? "client_error" : "provider_error");
+    assert.equal(event.status, callerCanceled ? "client_error" : "provider_error");
     assert.equal(event.status_code, 200);
     assert.equal(event.actual_cost_micros, cost);
     assert.equal(event.cost_basis, measured ? "manifest_pricing" : "manifest_reservation");
     assert.equal((await (await handler.fetch(new Request("https://clawrouter.example/v1/usage", { headers: { authorization: `Bearer ${proxyKey()}` } }), env, {})).json()).budget.spentMicros, cost);
     assert.equal((await providerBudgetStatus(env, "openai", limit)).spentMicros, cost);
+    upstream.mock.restore();
+  }
+});
+
+test("pre-header caller abort stays distinct from upstream timeout and preserves zero settlement", async (t) => {
+  for (const callerAbort of [false, true]) {
+    const events = [], pending = [], abort = new AbortController(), limit = 1_000_000;
+    const env = usageEnv([], { limit, fixedCost: null, retainContent: false });
+    env.OPENAI_API_KEY = "fixture-openai-key";
+    env.BUDGET_LEDGER = sqlBudgetNamespace(t);
+    env.USAGE_QUEUE = { send: async event => events.push(event) };
+    const upstream = t.mock.method(globalThis, "fetch", async () => {
+      if (callerAbort) abort.abort();
+      throw new DOMException("fixture upstream abort", "AbortError");
+    });
+    const response = await handler.fetch(new Request("https://clawrouter.example/v1/responses", {
+      method: "POST", signal: abort.signal, headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
+      body: JSON.stringify({ model: "openai/gpt-6-astra", input: "fixture", max_output_tokens: 32, service_tier: "priority", stream: true }),
+    }), env, { waitUntil: promise => pending.push(promise) });
+    assert.equal(response.status, 502);
+    await Promise.all(pending);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].status, callerAbort ? "client_error" : "timeout");
+    assert.equal(events[0].actual_cost_micros, 0);
+    assert.equal((await (await handler.fetch(new Request("https://clawrouter.example/v1/usage", { headers: { authorization: `Bearer ${proxyKey()}` } }), env, {})).json()).budget.spentMicros, 0);
+    assert.equal((await providerBudgetStatus(env, "openai", limit)).spentMicros, 0);
     upstream.mock.restore();
   }
 });

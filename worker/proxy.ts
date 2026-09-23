@@ -233,11 +233,11 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   } catch (error) {
     clearTimeout(timeout);
     // A failed dispatched request can have upstream cost even without a response.
-    accounting.fail(502, error instanceof DOMException && error.name === "AbortError" ? "timeout" : "provider_error", reservation, content, true);
+    accounting.fail(502, request.signal.aborted ? "client_error" : error instanceof DOMException && error.name === "AbortError" ? "timeout" : "provider_error", reservation, content, true);
     return errorResponse("provider_unavailable", `upstream request to provider ${selection.provider.id} failed`, 502, undefined);
   }
   clearTimeout(timeout);
-  const observed = observeUsage(response);
+  const observed = observeUsage(response, request.signal);
   context.waitUntil(observed.result.then(result => accounting.complete(response, result, reservation, content)));
   response = observed.response;
   const outputHeaders = new Headers(response.headers);

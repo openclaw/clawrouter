@@ -80,7 +80,14 @@ a provider error; Responses `incomplete` remains successful. Delivery failure an
 consumer cancellation are recorded independently, without rewriting HTTP status
 or bytes. Authoritative terminal usage remains billable even after delivery fails
 or is canceled; otherwise accounting retains the conservative reservation.
-Settlement starts when delivery completes, fails, or is canceled. Private alias
+Settlement starts when delivery completes, fails, or is canceled. The canonical
+Worker config enables `enable_request_signal`, preserved by Cloudflare and
+self-host config rendering. Ingress abort settles the same observer once even
+when workerd drops its response pump without invoking the stream's `cancel`
+callback. This is caller cancellation, including an internal Fusion adviser
+deadline; it does not always mean a human disconnected. The observer detaches
+its abort listener on completion and cancels its owned upstream reader.
+Private alias
 inference keeps its separate containment and continuation protocol.
 
 Usage events are queued into a Durable Object shard named by tenant and policy.

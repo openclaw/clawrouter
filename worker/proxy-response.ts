@@ -5,7 +5,7 @@ export interface ObservedUsage extends UsageInspection { delivery: "complete" | 
 // Accounting observes the delivered stream; a tee would drain upstream ahead of
 // the client and buffer arbitrary output. JSON and individual SSE frames are
 // bounded; a long stream can still report authoritative late terminal facts.
-export function observeUsage(response: Response): { response: Response; result: Promise<ObservedUsage> } {
+export function observeUsage(response: Response, signal?: AbortSignal): { response: Response; result: Promise<ObservedUsage> } {
   if (!response.body) return { response, result: Promise.resolve({ tokens: null, outcome: null, delivery: "complete" }) };
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   const sse = contentType.includes("text/event-stream") ? createSseUsageInspector() : null;
@@ -15,9 +15,10 @@ export function observeUsage(response: Response): { response: Response; result: 
   let text = "", bytes = 0, finished = false;
   let resolve!: (result: ObservedUsage) => void;
   const result = new Promise<ObservedUsage>(done => { resolve = done; });
-  function finish(delivery: ObservedUsage["delivery"]) {
-    if (finished) return;
+  function finish(delivery: ObservedUsage["delivery"], reason?: unknown): Promise<void> {
+    if (finished) return Promise.resolve();
     finished = true;
+    signal?.removeEventListener("abort", aborted);
     let inspection: UsageInspection = sse?.result(delivery === "complete") ?? { tokens: null, outcome: null };
     if (delivery === "complete" && inspect) {
       try {
@@ -27,10 +28,21 @@ export function observeUsage(response: Response): { response: Response; result: 
       } catch { inspection.outcome = "provider_error"; }
     }
     text = "";
-    reader.releaseLock();
     resolve({ ...inspection, delivery });
+    // Claim completion before cancellation can resolve/reject a pending read.
+    // The result owns accounting even if the transport's cancellation rejects.
+    const cleanup = delivery === "canceled" ? reader.cancel(reason).catch(() => undefined) : Promise.resolve();
+    reader.releaseLock();
+    return cleanup;
+  }
+  let downstream: ReadableStreamDefaultController<Uint8Array>;
+  function aborted() {
+    if (finished) return;
+    void finish("canceled", signal?.reason);
+    downstream.error(signal?.reason);
   }
   const body = new ReadableStream<Uint8Array>({
+    start(controller) { downstream = controller; },
     async pull(controller) {
       try {
         const next = await reader.read();
@@ -45,12 +57,12 @@ export function observeUsage(response: Response): { response: Response; result: 
         controller.enqueue(next.value);
       } catch (error) { if (!finished) { finish("failed"); controller.error(error); } }
     },
-    cancel(reason) {
-      const canceled = reader.cancel(reason);
-      finish("canceled");
-      return canceled;
-    },
+    cancel(reason) { return finish("canceled", reason); },
   }, { highWaterMark: 0 });
+  // workerd can drop its response pump without calling the JS stream's cancel.
+  // Ingress abort is the authoritative caller-lifecycle signal in that case.
+  if (signal?.aborted) aborted();
+  else signal?.addEventListener("abort", aborted, { once: true });
   return { response: new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers }), result };
 }
 

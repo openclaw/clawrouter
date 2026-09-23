@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -18,13 +19,13 @@ const sockets = [];
 try {
   const bundle = await build({ stdin: { contents: accountingFixture(), resolveDir: process.cwd(), sourcefile: "websocket-fixture.ts", loader: "ts" }, write: false, bundle: true, format: "esm", platform: "browser", target: "es2022", logLevel: "silent" });
   mf = new Miniflare(convertV4MiniflareOptions({ resourceTmpPath: temporary, workers: [{
-    name: "router", modules: true, script: bundle.outputFiles[0].text, compatibilityDate: "2026-06-05",
+    name: "router", modules: true, script: bundle.outputFiles[0].text, compatibilityDate: "2026-06-05", compatibilityFlags: ["enable_request_signal"],
     bindings: { OPENAI_API_KEY: "fixture-upstream-key" },
     kvNamespaces: ["POLICY_KV"],
     durableObjects: Object.fromEntries([["ACCESS_CONTROL", "PolicyBindingIndexObject"], ["BUDGET_LEDGER", "BudgetLedgerObject"], ["USAGE_LEDGER", "UsageLedgerObject"], ["GRANT_CREDENTIALS", "GrantCredentialObject"]].map(([binding, className]) => [binding, { className, useSQLite: true }])),
     queueProducers: { USAGE_QUEUE: "usage" }, queueConsumers: { usage: { maxBatchSize: 1, maxBatchTimeout: 0 } },
     outboundService: "upstream",
-  }, { name: "upstream", modules: true, script: upstreamFixture(), compatibilityDate: "2026-06-05" }] }));
+  }, { name: "upstream", modules: true, script: upstreamFixture(), compatibilityDate: "2026-06-05", compatibilityFlags: ["enable_request_signal"] }] }));
   const kv = await mf.getKVNamespace("POLICY_KV", "router");
   await kv.put("policies/fixture", JSON.stringify(policy));
   await kv.put("credentials/fixture", JSON.stringify(credential));
@@ -210,19 +211,20 @@ try {
   laneSocket.close(1000, "named lanes complete");
 
   // HTTP status remains 200 while protocol and delivery outcomes drive receipts.
-  for (const scenario of ["late-failed", "cancel-stream"]) {
+  for (const scenario of ["late-failed", "cancel-stream", "cancel-after-terminal"]) {
     const before = await ledgerFacts(), session = `sse-${scenario}`;
-    const response = await dispatch(scenario === "cancel-stream" ? "/fixture-cancel-stream" : "/v1/native/openai/v1/responses", {
+    const canceled = scenario.startsWith("cancel-");
+    const init = {
       method: "POST", headers: { "content-type": "application/json", "x-clawrouter-session-id": session },
       body: JSON.stringify({ model: "gpt-6-astra", input: scenario, max_output_tokens: 32, service_tier: "priority", stream: true }),
-    });
-    assert.equal(response.status, 200);
-    if (scenario === "cancel-stream") {
-      const consumed = await response.json();
-      assert.equal(consumed.status, 200);
-      assert.match(consumed.first, /response.created/);
-      await until(async () => (await (await upstream.fetch("https://fixture.example/state")).json()).httpCanceled);
+    };
+    if (canceled) {
+      await disconnectHttp(new URL("/v1/native/openai/v1/responses", await mf.ready), { ...init, headers: { ...init.headers, authorization: `Bearer ${key}` } }, scenario === "cancel-stream" ? "response.created" : "response.completed");
+      await until(async () => (await (await upstream.fetch("https://fixture.example/state")).json()).httpAborts[scenario]);
+      assert.equal((await (await upstream.fetch("https://fixture.example/state")).json()).httpEofs[scenario], undefined);
     } else {
+      const response = await dispatch("/v1/native/openai/v1/responses", init);
+      assert.equal(response.status, 200);
       const body = await response.text();
       const prefix = 'data: {"type":"response.created"}\n\n';
       const delta = `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "x".repeat(20_000) })}\n\n`;
@@ -235,7 +237,7 @@ try {
       assert.ok(receipts.length <= 1); receipt = receipts[0]; return !!receipt;
     });
     assert.equal(receipt.status_code, 200);
-    assert.equal(receipt.status, scenario === "cancel-stream" ? "client_error" : "provider_error");
+    assert.equal(receipt.status, canceled ? "client_error" : "provider_error");
     assert.equal(receipt.cost_basis, scenario === "cancel-stream" ? "manifest_reservation" : "manifest_pricing");
     const cost = scenario === "cancel-stream" ? receipt.reserved_cost_micros : 1_080;
     assert.equal(receipt.actual_cost_micros, cost);
@@ -313,31 +315,55 @@ async function until(predicate) {
   throw new Error("WebSocket fixture timed out");
 }
 
+// Destroy an actual ingress TCP socket after observing bytes from the Worker.
+// JS body.cancel() alone cannot prove workerd's external disconnect lifecycle.
+async function disconnectHttp(url, init, marker) {
+  await new Promise((resolve, reject) => {
+    let destroyed = false, text = "";
+    const request = httpRequest(url, { method: init.method, headers: init.headers }, (response) => {
+      assert.equal(response.statusCode, 200);
+      response.on("data", (chunk) => {
+        text += chunk.toString();
+        if (!destroyed && text.includes(marker)) { destroyed = true; response.socket.destroy(); }
+      });
+      response.on("close", () => { clearTimeout(timer); destroyed ? resolve() : reject(new Error("fixture stream ended before socket destruction")); });
+      response.on("error", (error) => { if (!destroyed) reject(error); });
+    });
+    const timer = setTimeout(() => { request.destroy(); reject(new Error("fixture HTTP disconnect timed out")); }, 10_000);
+    request.on("error", (error) => { if (!destroyed) { clearTimeout(timer); reject(error); } });
+    request.end(init.body);
+  });
+}
+
 function upstreamFixture() { return `
-const frames = []; let headerMatch = false, httpCanceled = false;
+const frames = [], httpAborts = {}, httpEofs = {}; let headerMatch = false;
 export default { async fetch(request) {
-  if (new URL(request.url).pathname === '/state') return Response.json({ frames, headerMatch, httpCanceled });
+  if (new URL(request.url).pathname === '/state') return Response.json({ frames, headerMatch, httpAborts, httpEofs });
   if (request.url === 'https://api.openai.com/v1/responses' && request.method === 'POST') {
     const body = await request.json();
     const usage = { input_tokens: 14, output_tokens: 8, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } };
-    if (body.input === 'late-failed' || body.input === 'cancel-stream') {
+    if (body.input === 'late-failed' || body.input.startsWith('cancel-')) {
       let index = 0, timer, release;
+      const aborted = () => { httpAborts[body.input] = true; clearTimeout(timer); release?.(); };
+      request.signal.addEventListener('abort', aborted, { once: true });
       return new Response(new ReadableStream({ pull(controller) {
-        if (index++ === 0) controller.enqueue(new TextEncoder().encode('data: {"type":"response.created"}\\n\\n'));
-        // A live timer keeps workerd's stream pending until consumer cancellation.
-        else if (body.input === 'cancel-stream') return new Promise((resolve) => {
+        if (index++ === 0) {
+          const terminal = body.input === 'cancel-after-terminal' ? 'data: ' + JSON.stringify({ type: 'response.completed', response: { status: 'completed', service_tier: 'priority', usage } }) + '\\n\\n' : '';
+          controller.enqueue(new TextEncoder().encode('data: {"type":"response.created"}\\n\\n' + terminal));
+        }
+        // Keep a bounded live response; only the native request signal records abort.
+        else if (body.input.startsWith('cancel-')) return new Promise((resolve) => {
           release = resolve;
           timer = setTimeout(() => {
-            timer = undefined; release = undefined;
-            if (index < 400) controller.enqueue(new TextEncoder().encode(': heartbeat\\n\\n'));
-            else controller.close();
+            httpEofs[body.input] = true; request.signal.removeEventListener('abort', aborted);
+            controller.close();
             resolve();
-          }, 25);
+          }, 30_000);
         });
         else if (index <= 111) controller.enqueue(new TextEncoder().encode('data: ' + JSON.stringify({ type: 'response.output_text.delta', delta: 'x'.repeat(20000) }) + '\\n\\n'));
         else if (index === 112) controller.enqueue(new TextEncoder().encode('data: ' + JSON.stringify({ type: 'response.failed', response: { status: 'failed', service_tier: 'priority', usage } }) + '\\n\\n'));
-        else controller.close();
-      }, cancel() { httpCanceled = true; clearTimeout(timer); release?.(); } }, { highWaterMark: 0 }), { headers: { 'content-type': 'text/event-stream' } });
+        else { request.signal.removeEventListener('abort', aborted); controller.close(); }
+      }, cancel() { clearTimeout(timer); release?.(); } }, { highWaterMark: 0 }), { headers: { 'content-type': 'text/event-stream' } });
     }
     return Response.json({ id: 'http-fixture', object: 'response', status: 'completed', output: [], service_tier: 'priority', usage });
   }
@@ -384,15 +410,6 @@ export class BudgetLedgerObject extends RealBudgetLedger {
 let trace = [];
 export default { ...handler, async fetch(request, env, context) {
   if (new URL(request.url).pathname === "/fixture-accounting") return Response.json(trace);
-  if (new URL(request.url).pathname === "/fixture-cancel-stream") {
-    // Consume and cancel in workerd's owning request, without relying on a
-    // Node/undici network disconnect to cancel the Worker response body.
-    const response = await handler.fetch(new Request(new URL("/v1/native/openai/v1/responses", request.url), request), env, context);
-    const reader = response.body.getReader();
-    const first = new TextDecoder().decode((await reader.read()).value);
-    await reader.cancel();
-    return Response.json({ status: response.status, first });
-  }
   const fault = request.headers.get("x-fixture-accounting-fault");
   if (fault) {
     const ledger = env.BUDGET_LEDGER, queue = env.USAGE_QUEUE, usage = env.USAGE_LEDGER;
