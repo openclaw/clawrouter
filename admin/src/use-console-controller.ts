@@ -6,6 +6,7 @@ import { usePlayground } from "./hooks/use-playground";
 import { useSession } from "./hooks/use-session";
 import { useUsage } from "./hooks/use-usage";
 import { useSelfServiceKeys } from "./hooks/use-self-service-keys";
+import { useCredentialOperations } from "./hooks/use-credential-operations";
 import { installAutoRefresh } from "./auto-refresh";
 import { demo } from "./ui-config";
 import { localDemoRole, localLoginAvailable, oauthCallbackStatus, request, settled, usagePolicyId } from "./ui-helpers";
@@ -27,14 +28,17 @@ export function useConsoleController() {
   const session = useSession();
   const catalog = useCatalog(session.allowDemo);
   const usage = useUsage(session.allowDemo);
-  const selfServiceKeys = useSelfServiceKeys(session.gatewayOrigin, session.demoMode, session.setStatus);
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
   const refreshBackgroundRef = useRef(false);
   const catalogLoadedRef = useRef(false);
   const principalRef = useRef<string | null>(null);
   const refreshRef = useRef<(options?: RefreshOptions) => Promise<void>>(async () => undefined);
   const refreshCurrent = useCallback(() => refreshRef.current(), []);
+  const refreshCredentialMetadata = useCallback(() => refreshRef.current({ background: true }), []);
+  const credentialOwner = useCredentialOperations({ origin: session.gatewayOrigin, demo: session.demoMode, session: session.value }, session.setStatus, refreshCredentialMetadata);
+  const selfServiceKeys = useSelfServiceKeys(credentialOwner);
   const access = useAccessAdmin({
+    credentialOwner,
     allowDemo: session.allowDemo,
     gatewayOrigin: session.gatewayOrigin,
     session: session.value,
@@ -46,6 +50,7 @@ export function useConsoleController() {
     refresh: refreshCurrent,
     syncDemoAdmin: usage.syncDemoAdmin,
   });
+  credentialOwner.observePresentation(session.view === "home" ? "personal" : session.view === "policies" && access.tab.value === "credentials" && session.value.role === "admin" ? "admin" : null);
   const playground = usePlayground({
     gatewayOrigin: session.gatewayOrigin,
     demoMode: session.demoMode,
@@ -78,7 +83,7 @@ export function useConsoleController() {
   }, [session.demoMode]);
 
   useEffect(() => {
-    const onPopState = () => session.syncViewFromPath();
+    const onPopState = () => { credentialOwner.invalidatePresentation(); session.syncViewFromPath(); };
     window.addEventListener("popstate", onPopState);
     return () => window.removeEventListener("popstate", onPopState);
   }, [session.setView]);
@@ -139,7 +144,7 @@ export function useConsoleController() {
       }
       session.setValue(sessionData);
       session.setLoginRequired(false);
-      selfServiceKeys.setPrincipal(sessionData.email ?? "");
+      credentialOwner.setScope({ origin: session.gatewayOrigin, demo: false, session: sessionData });
       catalog.setProviders(providerData.providers);
       catalog.setRoutes(routeData);
       catalogLoadedRef.current = true;
@@ -169,6 +174,10 @@ export function useConsoleController() {
       if (!background) session.setStatus(oauthCallbackStatus() ?? "connected");
     } catch (caught) {
       const message = errorMessage(caught);
+      if (message.includes("access_session_required")) {
+        // Confirmed auth loss clears one-time material before the login probe yields.
+        credentialOwner.setScope(null);
+      }
       if (message.includes("access_session_required") && await localLoginAvailable(session.gatewayOrigin)) {
         principalRef.current = null;
         usage.setPrincipal("");
@@ -193,7 +202,7 @@ export function useConsoleController() {
 
   async function loadAdminData(sessionData: SessionResponse, providerData: ProviderResponse, background: boolean, initialWarnings: string[]) {
     let warnings = initialWarnings;
-    const keySnapshot = selfServiceKeys.captureHydration();
+    const keySnapshot = credentialOwner.captureHydration();
     const [data, sessionUsageResult, sessionCredentialsResult] = await Promise.all([
       request<AdminBootstrapResponse>(session.gatewayOrigin, "/v1/admin/bootstrap"),
       settled(() => request<{ policies: AdminUsageRow[] }>(session.gatewayOrigin, "/v1/session/usage")),
@@ -208,11 +217,11 @@ export function useConsoleController() {
       grants: data.grants,
       rules: data.rules,
       fusion: data.fusion,
-    }, background, sessionData, providerData.providers);
+    }, background, sessionData, providerData.providers, keySnapshot);
     catalog.mergeReadiness(data.providers);
     usage.setAdminOverview(data.overview);
     usage.setTenantSummaries(data.tenants);
-    if (sessionUsageResult.ok && sessionCredentialsResult.ok) selfServiceKeys.hydrate(sessionUsageResult.value.policies.map(usagePolicyId), sessionCredentialsResult.value.credentials, keySnapshot);
+    if (sessionUsageResult.ok && sessionCredentialsResult.ok) credentialOwner.hydrate("personal", sessionCredentialsResult.value.credentials, keySnapshot, sessionUsageResult.value.policies.filter((policy) => policy.enabled).map(usagePolicyId));
     else warnings = [...warnings, "personal credentials unavailable"];
     const includeUsage = session.view === "home" || session.view === "usage" || Boolean(usage.error);
     const usageFresh = includeUsage ? await usage.refreshLedger(session.gatewayOrigin) : true;
@@ -221,7 +230,7 @@ export function useConsoleController() {
 
   async function loadUserData(sessionData: SessionResponse, initialWarnings: string[]) {
     let warnings = initialWarnings;
-    const keySnapshot = selfServiceKeys.captureHydration();
+    const keySnapshot = credentialOwner.captureHydration();
     const user: AccessUser = {
       email: sessionData.email ?? "access-user",
       role: sessionData.role,
@@ -239,7 +248,7 @@ export function useConsoleController() {
     ]);
     if (result.ok) {
       usage.hydrate(result.value.policies, result.value.usage);
-      if (credentialResult.ok) selfServiceKeys.hydrate(result.value.policies.map(usagePolicyId), credentialResult.value.credentials, keySnapshot);
+      if (credentialResult.ok) credentialOwner.hydrate("personal", credentialResult.value.credentials, keySnapshot, result.value.policies.filter((policy) => policy.enabled).map(usagePolicyId));
       else warnings = [...warnings, `personal credentials unavailable: ${credentialResult.error}`];
     } else {
       usage.fail(`Quota status unavailable: ${result.error}`);
@@ -248,7 +257,7 @@ export function useConsoleController() {
   }
 
   function loadAdminDemo() {
-    selfServiceKeys.setPrincipal(demo.session.email ?? "");
+    credentialOwner.setScope({ origin: session.gatewayOrigin, demo: true, session: demo.session });
     session.setValue(demo.session);
     catalog.setProviders(demo.providers);
     catalog.setRoutes(demo.routes);
@@ -257,7 +266,7 @@ export function useConsoleController() {
     usage.setAdminOverview(demo.overview);
     usage.setTenantSummaries(demo.tenants);
     usage.hydrate(demo.usageRows, demo.usage);
-    selfServiceKeys.hydrate(demo.keys.map((policy) => policy.policyId), demo.credentials.filter((credential) => credential.principalId === demo.session.email));
+    credentialOwner.hydrate("personal", demo.credentials.filter((credential) => credential.principalId === demo.session.email), credentialOwner.captureHydration(), demo.keys.filter((policy) => policy.enabled).map((policy) => policy.policyId));
     session.setRefreshError("");
     session.setDemoMode(true);
     session.setLastUpdatedAt(Date.now());
@@ -266,7 +275,6 @@ export function useConsoleController() {
 
   function loadUserDemo() {
     const user = demo.users.find((candidate) => candidate.email === "research@example.com") ?? demo.users.find((candidate) => candidate.role === "user")!;
-    selfServiceKeys.setPrincipal(user.email);
     const effective = effectiveAccess(user, demo.keys, demo.bindings, demo.services);
     const providerIds = new Set(effective.services.map((service) => service.provider));
     const providerUsage = demo.usage.providers.filter((provider) => providerIds.has(provider.provider));
@@ -295,6 +303,7 @@ export function useConsoleController() {
       })),
     };
     session.setValue(entitlements.session);
+    credentialOwner.setScope({ origin: session.gatewayOrigin, demo: true, session: entitlements.session });
     catalog.setProviders(demo.providers);
     catalog.setRoutes(demo.routes);
     catalog.setEntitlements(entitlements);
@@ -302,14 +311,19 @@ export function useConsoleController() {
     usage.setAdminOverview(null);
     usage.setTenantSummaries([]);
     usage.hydrate(effective.policies.map(policyUsageFallback), { ...demo.usage, summary, providers: providerUsage, daily: syntheticUsageTimeline(Date.now(), summary), events: [] });
-    selfServiceKeys.hydrate(effective.policies.map((policy) => policy.policyId), demo.credentials.filter((credential) => credential.principalId === user.email));
+    credentialOwner.hydrate("personal", demo.credentials.filter((credential) => credential.principalId === user.email), credentialOwner.captureHydration(), effective.policies.filter((policy) => policy.enabled).map((policy) => policy.policyId));
     session.setRefreshError("");
     session.setLastUpdatedAt(Date.now());
     session.setStatus("local user demo loaded");
     session.setDemoMode(true);
   }
 
-  return { session, catalog, access, usage, selfServiceKeys, playground, refresh };
+  function navigateTo(...args: Parameters<typeof session.navigateTo>) {
+    if (args[0] !== session.view) credentialOwner.invalidatePresentation();
+    session.navigateTo(...args);
+  }
+
+  return { session: { ...session, navigateTo }, catalog, access, usage, selfServiceKeys, credentialOwner, playground, refresh };
 }
 
 export type ConsoleController = ReturnType<typeof useConsoleController>;

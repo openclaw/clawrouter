@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Keep policy selection separate from existing binding edits, while new bindings still default to the selected policy.
+- Separate proxy-key creation from rotation in the console, serialize key actions across admin and personal screens, and keep one-time secrets and drafts owned by the operation that created them. Show uncertain outcomes and clipboard failures without replaying dismissed secrets.
 
 - Keep failed console refreshes visible after successful edits, label stale usage with its snapshot time, and show unavailable spend and balances as unknown.
 
