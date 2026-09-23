@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add explicit Codex Desktop root setup with coherent restoration of prior routing settings, preserved authentication and user preferences, and clear API-key Fast and environment-loading limits.
+
 - Keep policy selection separate from existing binding edits, while new bindings still default to the selected policy.
 - Assess Fusion sampling, reasoning, and tool intent from source-linked model/endpoint facts. Reject documented synthesizer conflicts before adviser spend, preserve caller fields, and omit unqualified adviser temperature and local reasoning defaults.
 
