@@ -71,6 +71,7 @@ test("missing policy references and effective services are static while loaded p
   await expect(missing).toHaveCount(1);
   expect(await missing.evaluate((element) => (element as HTMLElement).tabIndex)).toBe(-1);
   await expect(page.locator(".miniList").getByRole("button")).toHaveCount(2);
+  await expect(page.getByRole("button", { name: "Try in playground", exact: true })).toBeDisabled();
   await policyLink(page, "policy_b").focus();
   await page.keyboard.press("Tab");
   await expect(page.getByRole("button", { name: "Disable connection", exact: true })).toBeFocused();
@@ -128,9 +129,9 @@ async function open(page: Page, role: AccessRole = "admin") {
   const provider = { id: "test-provider", display_name: "Test provider", class: "test", service_kind: "model_provider", capabilities: [] };
   const readiness: ProviderReadiness = {
     id: provider.id, displayName: provider.display_name, class: provider.class, serviceKind: provider.service_kind,
-    requiredConfig: [], optionalConfig: [], missingConfig: [], configPresent: true, connectionEnabled: true,
+    requiredConfig: ["TEST_PROVIDER_API_KEY"], optionalConfig: [], missingConfig: ["TEST_PROVIDER_API_KEY"], configPresent: false, connectionEnabled: true,
     oauthGrantRequired: false, oauthGrantCount: 0, upstreamGrantCount: 0, openaiCompatible: false,
-    manifestRoutes: 0, modelCount: 0, executable: false, verified: false, status: "declared", reasons: [],
+    manifestRoutes: 0, modelCount: 0, executable: false, verified: false, status: "missing_config", reasons: ["Missing TEST_PROVIDER_API_KEY."],
   };
   const usage: UsageSnapshot = { ledger: "ready", summary: { requestCount: 0, successCount: 0, errorCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, actualCostMicros: 0 }, providers: [], daily: [], events: [] };
   await page.route("**/v1/**", async (route) => {
