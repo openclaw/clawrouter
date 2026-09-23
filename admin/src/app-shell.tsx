@@ -154,7 +154,7 @@ export function AppShell() {
             }}
             onAdd={(service) => {
               setPolicyForm((current) => ({
-                ...current,
+                allProviders: current.allProviders,
                 providers: current.allProviders || current.providers.includes(service.provider) ? current.providers : [...current.providers, service.provider].sort(),
               }));
               navigateTo("policies");

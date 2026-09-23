@@ -46,7 +46,7 @@ export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selec
   fusionModels: CatalogModel[];
   providers: ProviderRow[];
   form: PolicyForm;
-  setForm: (form: PolicyForm) => void;
+  setForm: (patch: Partial<PolicyForm>) => void;
   credentialForm: CredentialForm;
   setCredentialForm: (form: CredentialForm) => void;
   bindingForm: BindingForm;
@@ -452,7 +452,7 @@ export function PolicyPanel({ keys, selected, providers, form, setForm, error, d
   selected?: AccessPolicy;
   providers: ProviderRow[];
   form: PolicyForm;
-  setForm: (form: PolicyForm) => void;
+  setForm: (patch: Partial<PolicyForm>) => void;
   error: string;
   dirty: boolean;
   missing: boolean;
@@ -511,26 +511,26 @@ export function PolicyPanel({ keys, selected, providers, form, setForm, error, d
           <div className="presetRow" aria-label="policy templates">{Object.keys(rolePresets).map((role) => <button key={role} type="button" className="buttonSecondary" onClick={() => onPreset(role as keyof typeof rolePresets)}>{role}</button>)}</div>
           <div className="editorSectionHeader"><strong>Policy details</strong><span>Tenant, role, and limits</span></div>
           <div className="formGrid compact">
-            <label><span>policy id</span><input value={form.policyId} readOnly={Boolean(selected) || missing} onChange={(event) => setForm({ ...form, policyId: event.target.value })} /></label>
-            <label><span>tenant</span><input value={form.tenantId} onChange={(event) => setForm({ ...form, tenantId: event.target.value })} /></label>
-            <label><span>role</span><input value={form.tokenRole} onChange={(event) => setForm({ ...form, tokenRole: event.target.value })} /></label>
-            <label><span>status</span><select value={form.enabled ? "active" : "disabled"} onChange={(event) => setForm({ ...form, enabled: event.target.value === "active" })}><option value="active">active</option><option value="disabled">disabled</option></select></label>
-            <label><span>monthly budget ($)</span><input inputMode="decimal" value={form.monthlyBudgetMicros} onChange={(event) => setForm({ ...form, monthlyBudgetMicros: event.target.value })} placeholder="unlimited" /></label>
-            <label><span>fixed request cost (micros)</span><input inputMode="decimal" value={form.requestCostMicros} onChange={(event) => setForm({ ...form, requestCostMicros: event.target.value })} placeholder="blank = manifest-priced routes only" title="Required for any budgeted route without manifest pricing; blank uses versioned list pricing where available." /></label>
-            <label className="full"><span>budget quota</span><select value={form.budgetScope} onChange={(event) => setForm({ ...form, budgetScope: event.target.value as PolicyForm["budgetScope"] })}><option value="policy">shared by policy</option><option value="principal">per maintainer</option></select></label>
-            <label className="full"><span>request content retention</span><select value={form.retainRequestContent ? "enabled" : "disabled"} onChange={(event) => setForm({ ...form, retainRequestContent: event.target.value === "enabled" })}><option value="enabled">enabled · retain 30 days</option><option value="disabled">disabled</option></select></label>
+            <label><span>policy id</span><input value={form.policyId} readOnly={Boolean(selected) || missing} onChange={(event) => setForm({ policyId: event.target.value })} /></label>
+            <label><span>tenant</span><input value={form.tenantId} onChange={(event) => setForm({ tenantId: event.target.value })} /></label>
+            <label><span>role</span><input value={form.tokenRole} onChange={(event) => setForm({ tokenRole: event.target.value })} /></label>
+            <label><span>status</span><select value={form.enabled ? "active" : "disabled"} onChange={(event) => setForm({ enabled: event.target.value === "active" })}><option value="active">active</option><option value="disabled">disabled</option></select></label>
+            <label><span>monthly budget ($)</span><input inputMode="decimal" value={form.monthlyBudgetMicros} onChange={(event) => setForm({ monthlyBudgetMicros: event.target.value })} placeholder="unlimited" /></label>
+            <label><span>fixed request cost (micros)</span><input inputMode="decimal" value={form.requestCostMicros} onChange={(event) => setForm({ requestCostMicros: event.target.value })} placeholder="blank = manifest-priced routes only" title="Required for any budgeted route without manifest pricing; blank uses versioned list pricing where available." /></label>
+            <label className="full"><span>budget quota</span><select value={form.budgetScope} onChange={(event) => setForm({ budgetScope: event.target.value as PolicyForm["budgetScope"] })}><option value="policy">shared by policy</option><option value="principal">per maintainer</option></select></label>
+            <label className="full"><span>request content retention</span><select value={form.retainRequestContent ? "enabled" : "disabled"} onChange={(event) => setForm({ retainRequestContent: event.target.value === "enabled" })}><option value="enabled">enabled · retain 30 days</option><option value="disabled">disabled</option></select></label>
           </div>
           <InlineNote>Enabled by default. Users see this setting before use. A per-user exemption always overrides the policy.</InlineNote>
           <div className="editorSectionHeader"><strong>Grant routing</strong><span>Active-tier selection and quota freshness</span></div>
           <div className="formGrid compact">
-            <label><span>selection</span><select value={form.grantStrategy} onChange={(event) => setForm({ ...form, grantStrategy: event.target.value as PolicyForm["grantStrategy"], ...(event.target.value === "threshold" ? { grantStickiness: "none" as const } : {}) })}><option value="priority">priority · stable order</option><option value="round_robin">round robin</option><option value="least_used">least used</option><option value="most_remaining">most remaining</option><option value="threshold">threshold · consume then switch</option><option value="weighted_random">weighted random</option></select></label>
-            <label><span>stickiness</span><select value={form.grantStickiness} onChange={(event) => setForm({ ...form, grantStickiness: event.target.value as PolicyForm["grantStickiness"] })}><option value="none">none</option><option value="identity">user / credential</option><option value="session">session header</option></select></label>
-            <label><span>same-provider failover</span><select value={form.grantFailover ? "enabled" : "disabled"} onChange={(event) => setForm({ ...form, grantFailover: event.target.value === "enabled" })}><option value="enabled">enabled</option><option value="disabled">disabled</option></select></label>
-            <label><span>stale quota state</span><select value={form.grantStaleState} onChange={(event) => setForm({ ...form, grantStaleState: event.target.value as PolicyForm["grantStaleState"] })}><option value="allow">fail open · allow stale</option><option value="deny">fail closed · require fresh</option></select></label>
-            <label><span>fresh for (seconds)</span><input inputMode="numeric" min="30" max="86400" value={form.grantStaleAfterSeconds} onChange={(event) => setForm({ ...form, grantStaleAfterSeconds: event.target.value })} /></label>
-            <label><span>switch at used (%)</span><input inputMode="decimal" min="0" max="100" value={form.grantSwitchAtUsedPercent} disabled={form.grantStrategy !== "threshold"} onChange={(event) => setForm({ ...form, grantSwitchAtUsedPercent: event.target.value })} /></label>
-            <label><span>switch margin (%)</span><input inputMode="decimal" min="0" max="100" value={form.grantHysteresisPercent} disabled={form.grantStrategy !== "threshold"} onChange={(event) => setForm({ ...form, grantHysteresisPercent: event.target.value })} /></label>
-            <label className="full"><span>eligible grants · optional JSON map</span><textarea value={form.eligibleGrants} onChange={(event) => setForm({ ...form, eligibleGrants: event.target.value })} placeholder={'{"openai":["team-a","team,b"],"anthropic":["production"]}'} /></label>
+            <label><span>selection</span><select value={form.grantStrategy} onChange={(event) => setForm({ grantStrategy: event.target.value as PolicyForm["grantStrategy"] })}><option value="priority">priority · stable order</option><option value="round_robin">round robin</option><option value="least_used">least used</option><option value="most_remaining">most remaining</option><option value="threshold">threshold · consume then switch</option><option value="weighted_random">weighted random</option></select></label>
+            <label><span>stickiness</span><select value={form.grantStickiness} onChange={(event) => setForm({ grantStickiness: event.target.value as PolicyForm["grantStickiness"] })}><option value="none">none</option><option value="identity">user / credential</option><option value="session">session header</option></select></label>
+            <label><span>same-provider failover</span><select value={form.grantFailover ? "enabled" : "disabled"} onChange={(event) => setForm({ grantFailover: event.target.value === "enabled" })}><option value="enabled">enabled</option><option value="disabled">disabled</option></select></label>
+            <label><span>stale quota state</span><select value={form.grantStaleState} onChange={(event) => setForm({ grantStaleState: event.target.value as PolicyForm["grantStaleState"] })}><option value="allow">fail open · allow stale</option><option value="deny">fail closed · require fresh</option></select></label>
+            <label><span>fresh for (seconds)</span><input inputMode="numeric" min="30" max="86400" value={form.grantStaleAfterSeconds} onChange={(event) => setForm({ grantStaleAfterSeconds: event.target.value })} /></label>
+            <label><span>switch at used (%)</span><input inputMode="decimal" min="0" max="100" value={form.grantSwitchAtUsedPercent} disabled={form.grantStrategy !== "threshold"} onChange={(event) => setForm({ grantSwitchAtUsedPercent: event.target.value })} /></label>
+            <label><span>switch margin (%)</span><input inputMode="decimal" min="0" max="100" value={form.grantHysteresisPercent} disabled={form.grantStrategy !== "threshold"} onChange={(event) => setForm({ grantHysteresisPercent: event.target.value })} /></label>
+            <label className="full"><span>eligible grants · optional JSON map</span><textarea value={form.eligibleGrants} onChange={(event) => setForm({ eligibleGrants: event.target.value })} placeholder={'{"openai":["team-a","team,b"],"anthropic":["production"]}'} /></label>
           </div>
           <InlineNote>Priority always defines fallback tiers; the selection mode applies within the lowest available tier. An empty provider allowlist denies every grant for that provider. Fail-closed stale state requires a fresh response-header or provider-probe observation.</InlineNote>
           <div className="editorSectionHeader serviceAccessHeader"><div><strong>Service access</strong><span>{formSelectionLabel}</span></div>{form.allProviders ? <span className="wildcardScope">Wildcard scope · all current and future services</span> : null}</div>

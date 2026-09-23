@@ -1,4 +1,4 @@
-import { type FormEvent, type SetStateAction, useRef, useState } from "react";
+import { type FormEvent, useRef, useState } from "react";
 import { currencyInput, errorMessage, knownPolicyProviders, optionalCurrencyMicros, optionalNumber, parseEligibleGrants, unique } from "../../domain";
 import { defaultPolicy, demo, rolePresets } from "../../ui-config";
 import { policyFormFromPolicy } from "../../ui-helpers";
@@ -31,7 +31,7 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
   const baseline = useRef(draft.value);
   const revision = useRef(0);
   const incarnation = useRef(0);
-  const enabledEditRevision = useRef(0);
+  const fieldEditRevisions = useRef<Partial<Record<keyof PolicyForm, number>>>({});
   const recordsEpoch = useRef(0);
   const pending = useRef(false);
   const [busy, setBusy] = useState(false);
@@ -114,14 +114,24 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
       const saved = await write(submitted.value, submitted.selection);
       updateRows([saved, ...rows.current.filter((key) => key.policyId !== saved.policyId)]);
       const canonical = policyFormFromPolicy(saved), current = currentDraft.current;
-      // Clean replacement drafts follow the committed row; Disable still honors later enabled edits.
-      const cleanReplacement = current.selection === saved.policyId && incarnation.current !== submittedIncarnation && !current.dirty
-        && (action === "save" || enabledEditRevision.current <= submittedRevision);
-      if (cleanReplacement || (revision.current === submittedRevision && (action === "save" || !submitted.dirty))) resetDraft(saved.policyId, canonical);
+      const replacement = current.selection === saved.policyId && incarnation.current !== submittedIncarnation;
+      const enabledEdited = (fieldEditRevisions.current.enabled ?? 0) > submittedRevision;
+      // Only untouched replacement drafts adopt the entire row; edit-back is still intent.
+      const untouchedReplacement = replacement && !Object.keys(fieldEditRevisions.current).length;
+      if (untouchedReplacement || (revision.current === submittedRevision && (action === "save" || !submitted.dirty))) resetDraft(saved.policyId, canonical);
       else if (current.selection === saved.policyId || (action === "save" && !submitted.selection && !current.selection && incarnation.current === submittedIncarnation)) {
         // A committed create owns this New draft's identity, but never a replacement draft.
         // Later edits stay dirty against the committed baseline, including a return to old values.
-        const value = action === "disable" && enabledEditRevision.current <= submittedRevision ? { ...current.value, enabled: canonical.enabled } : current.value;
+        let value = current.value;
+        if (replacement) {
+          // Reselecting reads the old row while its write is pending. Only edits
+          // in this replacement draft may override the acknowledged fields.
+          value = { ...canonical };
+          for (const field of Object.keys(current.value) as (keyof PolicyForm)[]) {
+            if ((fieldEditRevisions.current[field] ?? 0) > submittedRevision) Object.assign(value, { [field]: current.value[field] });
+          }
+        }
+        if (action === "disable" && !enabledEdited) value = { ...value, enabled: canonical.enabled };
         rebaseDraft(canonical, { ...current, selection: saved.policyId, value });
       }
       if (demoMode) syncDemoAdmin(rows.current, credentials, providers, routes, true);
@@ -165,7 +175,7 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
   function resetDraft(selection: string, value: PolicyForm) {
     baseline.current = value;
     incarnation.current += 1;
-    enabledEditRevision.current = 0;
+    fieldEditRevisions.current = {};
     publishDraft({ selection, value, dirty: false, initialized: true });
   }
 
@@ -180,32 +190,39 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
     setDraft(next);
   }
 
-  function setPolicyForm(next: SetStateAction<PolicyForm>) {
+  function setPolicyForm(next: Partial<PolicyForm> | ((current: PolicyForm) => Partial<PolicyForm>)) {
     const current = currentDraft.current;
-    const value = typeof next === "function" ? next(current.value) : next;
-    if (JSON.stringify(value) === JSON.stringify(current.value)) return;
-    if (!current.selection && value.policyId !== current.value.policyId) incarnation.current += 1;
-    // Disable merges its enabled=false intent unless the operator edited that field later.
-    if (value.enabled !== current.value.enabled) enabledEditRevision.current = revision.current + 1;
+    let patch = typeof next === "function" ? next(current.value) : next;
+    // Choosing threshold also chooses no stickiness, even if it already reads none.
+    if (patch.grantStrategy === "threshold" && current.value.grantStrategy !== "threshold") patch = { ...patch, grantStickiness: "none" };
+    const fields = Object.keys(patch) as (keyof PolicyForm)[];
+    if (!fields.length) return;
+    const value = { ...current.value, ...patch };
+    if (!current.selection && value.policyId !== current.value.policyId) {
+      incarnation.current += 1;
+      fieldEditRevisions.current = {};
+    }
+    // A named field is explicit intent, including unchanged presets and edit-back.
+    for (const field of fields) fieldEditRevisions.current[field] = revision.current + 1;
     publishDraft({ ...current, value, dirty: JSON.stringify(value) !== JSON.stringify(baseline.current), initialized: true });
   }
 
   function applyPreset(role: keyof typeof rolePresets) {
     const preset = rolePresets[role], available = new Set(providers.map((provider) => provider.id));
-    setPolicyForm((current) => ({ ...current, tokenRole: role, monthlyBudgetMicros: currencyInput(optionalNumber(preset.budget)), requestCostMicros: preset.request, providers: preset.providers.length ? preset.providers.filter((id) => available.has(id)) : providers.map((provider) => provider.id), allProviders: false }));
+    setPolicyForm({ tokenRole: role, monthlyBudgetMicros: currencyInput(optionalNumber(preset.budget)), requestCostMicros: preset.request, providers: preset.providers.length ? preset.providers.filter((id) => available.has(id)) : providers.map((provider) => provider.id), allProviders: false });
   }
 
   function toggleProvider(providerId: string) {
     const allProviderIds = providers.map((provider) => provider.id);
-    setPolicyForm((current) => ({ ...current, allProviders: false, providers: (current.allProviders ? allProviderIds : current.providers).includes(providerId) ? (current.allProviders ? allProviderIds : current.providers).filter((id) => id !== providerId) : [...current.providers, providerId].sort() }));
+    setPolicyForm((current) => ({ allProviders: false, providers: (current.allProviders ? allProviderIds : current.providers).includes(providerId) ? (current.allProviders ? allProviderIds : current.providers).filter((id) => id !== providerId) : [...current.providers, providerId].sort() }));
   }
 
   function setProviderGroup(providerIds: string[], checked: boolean) {
     const allProviderIds = providers.map((provider) => provider.id);
     setPolicyForm((current) => {
-      if (current.allProviders && checked) return current;
+      if (current.allProviders && checked) return { allProviders: true, providers: current.providers };
       const selected = current.allProviders ? allProviderIds : current.providers;
-      return { ...current, allProviders: false, providers: checked ? unique([...selected, ...providerIds]).sort() : selected.filter((id) => !providerIds.includes(id)) };
+      return { allProviders: false, providers: checked ? unique([...selected, ...providerIds]).sort() : selected.filter((id) => !providerIds.includes(id)) };
     });
   }
 
