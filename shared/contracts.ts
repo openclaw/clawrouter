@@ -89,7 +89,7 @@ export interface FusionReadinessCall {
   status: string;
   reasons: string[];
   estimatedReservationMicros: number;
-  estimateBasis: "policy_fixed" | "manifest_pricing" | "flat_fallback";
+  estimateBasis: "policy_fixed" | "manifest_pricing" | "flat_fallback" | "unpriced_request";
 }
 
 export interface FusionReadiness {

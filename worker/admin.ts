@@ -128,14 +128,17 @@ async function previewFusion(request: Request, env: Env): Promise<Response> {
   if (!entry) throw new HttpError(404, "fusion_policy_not_found", "fusion readiness policy was not found");
   const config = normalizeFusionConfig(input.config);
   assertFusionModels(config);
-  const [readiness, budget] = await Promise.all([providerReadinessForPolicies(env, [entry]), policyBudgetStatus(env, entry.policyId, entry.policy)]);
+  const connections = await listConnections(env, snapshot.providers.map((provider) => provider.id));
+  const [readiness, budget] = await Promise.all([providerReadinessForPolicies(env, [entry], connections), policyBudgetStatus(env, entry.policyId, entry.policy)]);
   const routes = [...config.adviserModels, config.aggregatorModel].map((modelId) => {
     const route = modelRoute(modelId, "llm.chat")!;
+    const endpoint = endpointForPath(route.provider, "/v1/chat/completions")!;
     return {
       modelId,
       providerId: route.provider.id,
       providerDisplayName: route.provider.display_name,
-      endpoint: endpointForPath(route.provider, "/v1/chat/completions")!,
+      endpoint,
+      connection: connections.find((connection) => connection.providerId === route.provider.id),
       model: route.model,
     };
   });

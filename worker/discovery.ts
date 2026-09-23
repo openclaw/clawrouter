@@ -1,4 +1,6 @@
 import { resolveTemplate } from "./provider-templates.ts";
+import { validateBudgetReservation } from "./accounting.ts";
+import { estimateCost } from "./proxy-accounting.ts";
 import { listConnections } from "./authority";
 import { resolveGrantCandidates } from "./grant-selection";
 import { grantSupports } from "./provider-auth";
@@ -214,12 +216,17 @@ async function clientEntitlements(request: Request, env: Env): Promise<ClientEnt
 export function catalogModels(provider: CompiledProvider, endpoints: string[], proxyPolicy: AccessPolicyEntry["policy"] | null, providerBudget: number | null = null, endpointPolicies?: Map<string, AccessPolicyEntry["policy"]>) {
   return provider.models.flatMap((model) => {
     const capabilities = executableCapabilities(provider, model.capabilities, endpoints).filter((capability) => {
-      if (capability === "llm.count_tokens") return true; // Same zero-cost admission as reserveBudget.
-      const endpoint = provider.capabilities.find((candidate) => candidate.id === capability)!.endpoint;
-      const policy = endpointPolicies?.get(endpoint) ?? proxyPolicy;
-      if (policy?.monthlyBudgetMicros === 0 || providerBudget === 0) return false;
-      const requiresPricing = (policy?.monthlyBudgetMicros != null || providerBudget != null) && policy?.requestCostMicros == null;
-      return !requiresPricing || model.pricing != null;
+      const endpointId = provider.capabilities.find((candidate) => candidate.id === capability)!.endpoint;
+      const endpoint = provider.endpoints.find((candidate) => candidate.id === endpointId)!;
+      const policy = endpointPolicies?.get(endpointId) ?? proxyPolicy;
+      const cost = estimateCost(model, {}, policy?.requestCostMicros, capability, endpoint.request_format);
+      try {
+        validateBudgetReservation(capability, cost, policy?.monthlyBudgetMicros, { providerId: provider.id, enabled: true, monthlyBudgetMicros: providerBudget });
+        return true;
+      } catch (error) {
+        if (error instanceof HttpError) return false;
+        throw error;
+      }
     });
     return capabilities.length ? [{ id: model.id, upstream: model.upstream, ...(model.codexModel ? { codexModel: model.codexModel } : {}), capabilities, ...(model.supportedReasoningEfforts ? { supportedReasoningEfforts: model.supportedReasoningEfforts } : {}), pricing_ref: model.pricing_ref, pricing: model.pricing }] : [];
   });

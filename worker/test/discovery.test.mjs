@@ -58,6 +58,18 @@ test("provider budgets and the selected endpoint policy govern the same model pr
   assert.ok(!catalogModels(fireworks, endpoints, unmetered, null, endpointPolicies).some((model) => model.id === "fireworks/gpt-oss-120b"));
 });
 
+test("mandatory request fees have the same catalog admission for policy and provider budgets", () => {
+  const provider = providerById("perplexity");
+  const endpoints = provider.endpoints.map((endpoint) => endpoint.id);
+  for (const [policyLimit, providerLimit, fixed, visible] of [
+    [100_000_000, null, null, false], [null, 100_000_000, null, false],
+    [null, null, null, true], [100_000_000, 100_000_000, 0, true],
+  ]) {
+    const policy = { monthlyBudgetMicros: policyLimit, requestCostMicros: fixed };
+    assert.equal(catalogModels(provider, endpoints, policy, providerLimit).some((model) => model.id === "perplexity/sonar-pro"), visible);
+  }
+});
+
 test("models and catalog share read-only grant eligibility, transport support, and provider budget filtering", async (t) => {
   const secret = "fixture-discovery-secret";
   const credential = { enabled: true, secretSha256: await sha256Hex(secret), policyId: "fixture", policyGeneration: "g1" };

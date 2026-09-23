@@ -3,6 +3,7 @@ import { budgetLedgerAddress, budgetPrincipal, providerBudgetLedgerAddress } fro
 import { logCorrelationError } from "./correlation.ts";
 import { ingestUsage, settleLedger } from "./ledgers.ts";
 import { HttpError, randomId } from "./utils.ts";
+import type { PricingGap } from "./pricing.ts";
 
 export interface BudgetReservation {
   reservations: LedgerBudgetReservation[];
@@ -19,20 +20,29 @@ export interface EstimatedCost {
   basis: string;
   inputTokens: number | null;
   outputTokens: number | null;
+  pricingGap?: PricingGap;
 }
 
-export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capability: string, cost: EstimatedCost, connection?: ProviderConnection): Promise<BudgetReservation> {
-  if (capability === "llm.count_tokens") return emptyReservation();
-  const policyLimit = auth.policy.monthlyBudgetMicros;
+// Shared with read-only availability. Passing this guard never replaces the
+// atomic reservation; the return value only says whether a ledger is required.
+export function validateBudgetReservation(capability: string, cost: EstimatedCost, policyLimit: number | null | undefined, connection?: ProviderConnection): boolean {
+  if (capability === "llm.count_tokens") return false;
   const providerLimit = connection?.monthlyBudgetMicros;
   // Unmetered callers retain upstream tier selection; only an enforced budget
   // needs a provable reservation price before dispatch.
-  if (policyLimit == null && providerLimit == null) return emptyReservation();
+  if (policyLimit == null && providerLimit == null) return false;
   if (policyLimit === 0) throw new HttpError(402, "budget_exhausted", "proxy key budget is exhausted");
   if (providerLimit === 0) throw new HttpError(402, "provider_budget_exhausted", `provider ${connection?.providerId ?? "unknown"} monthly budget is exhausted`);
   if (cost.basis === "unpriced_service_tier") throw new HttpError(400, "pricing_required", "requested service tier has no versioned manifest price; select a declared tier or configure a fixed policy request price");
-  if (cost.basis === "unpriced_hosted_search") throw new HttpError(400, "pricing_required", "hosted search has no complete bounded price; disable hosted search or configure a fixed policy request price");
+  if (cost.pricingGap) throw new HttpError(400, "pricing_required", `${cost.pricingGap === "model_request_fee" ? "model request fees" : cost.pricingGap === "hosted_tool_fee" ? "hosted tool fees" : "hosted tool usage"} have no complete bounded price; choose a token-priced request or configure a fixed policy request price`);
   if (cost.basis === "flat_fallback") throw new HttpError(400, "pricing_required", "budgeted requests require versioned manifest pricing or a fixed policy request price");
+  return true;
+}
+
+export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capability: string, cost: EstimatedCost, connection?: ProviderConnection): Promise<BudgetReservation> {
+  if (!validateBudgetReservation(capability, cost, auth.policy.monthlyBudgetMicros, connection)) return emptyReservation();
+  const policyLimit = auth.policy.monthlyBudgetMicros;
+  const providerLimit = connection?.monthlyBudgetMicros;
   const reservation: BudgetReservation = { reservations: [], reservedMicros: cost.reserveMicros };
   if (policyLimit != null) {
     const principal = budgetPrincipal(auth);

@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
+import type { AccessPolicy } from "../src/ui-types";
 
 test.beforeEach(async ({ page }) => {
   await page.clock.setFixedTime(new Date("2026-07-06T12:00:00.000Z"));
@@ -63,6 +64,40 @@ test("Fusion preflight is WCAG AA clean and visually stable", async ({ page }) =
   // macOS text rasterization can vary by a handful of pixels with the pinned browser.
   await expect(page).toHaveScreenshot("fusion-readiness.png", { animations: "disabled", fullPage: true, maxDiffPixels: process.platform === "darwin" ? 10 : 0 });
   await expectA11yClean(page);
+});
+
+test("Fusion distinguishes unavailable request prices from an explicit zero tariff", async ({ page }) => {
+  const policy: AccessPolicy = {
+    policyId: "fixture", enabled: true, providers: [], monthlyBudgetMicros: null, requestCostMicros: null, retainRequestContent: false,
+    grantRouting: { strategy: "most_remaining", stickiness: "none", failover: true, staleState: "allow", staleAfterSeconds: 300, switchAtUsedPercent: 90, hysteresisPercent: 10, eligibleGrants: {} },
+  };
+  const fusion = { version: 1, modelId: "clawrouter/fusion", enabled: true, adviserModels: [], aggregatorModel: "perplexity/sonar-pro", adviserTimeoutMs: 1000, maxOutputTokens: 100, maxInputChars: 1000, maxProposalChars: 1000, temperature: 0.7 };
+  const call = { stage: "synthesizer", index: null, model: fusion.aggregatorModel, provider: "perplexity", policyAllowed: true, executable: true, verified: false, status: "unverified", reasons: [], estimatedReservationMicros: 0, estimateBasis: "unpriced_request" };
+  const preview = { policyId: policy.policyId, policyEnabled: true, configEnabled: true, executable: true, advertisable: true, readyAdviserCount: 0, adviserCount: 0, callCount: 1, estimatedReservationMicros: 0, budgetConfigured: false, budgetLedger: "unmetered", remainingBudgetMicros: null, budgetSufficientForAll: null, estimateNote: "Complete price unavailable.", calls: [call] };
+  const responses: Record<string, unknown> = {
+    "/v1/providers": { providers: [] }, "/v1/routes": { openaiCompatible: [], manifestProxy: [] },
+    "/v1/session": { authenticated: true, auth: "cloudflare_access", role: "admin", email: "admin@example.com", entitlements: { providers: [] } },
+    "/v1/session/credentials": { credentials: [] },
+    "/v1/admin/bootstrap": { policies: [policy], credentials: [], connections: [], users: [], bindings: [], grants: [], rules: [], providers: [], tenants: [], overview: {}, fusion },
+    "/v1/admin/fusion/preview": preview,
+  };
+  await page.route("**/v1/**", async (route) => {
+    const body = responses[new URL(route.request().url()).pathname];
+    await route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
+  });
+  await page.goto("/dashboard/access");
+  await page.getByRole("tab", { name: /Fusion/ }).click();
+  await expect(page.getByRole("combobox", { name: "readiness policy", exact: true })).toHaveValue(policy.policyId);
+  await expect(page.getByRole("combobox", { name: "final synthesizer", exact: true })).toHaveValue(fusion.aggregatorModel);
+  const checkReadiness = page.getByRole("button", { name: "Check readiness" });
+  await expect(checkReadiness).toBeEnabled();
+  const panel = page.getByRole("region", { name: "Fusion readiness" });
+  for (const [basis, label] of [["unpriced_request", "Price unavailable"], ["policy_fixed", "$0.00"]]) {
+    call.estimateBasis = basis;
+    await checkReadiness.click();
+    await expect(panel.locator(".fusionReadinessCalls b")).toHaveText(label);
+    await expect(panel.locator(".fusionReadinessEstimate strong")).toHaveText(label);
+  }
 });
 
 test("keyboard focus remains visible", async ({ page }) => {
