@@ -60,7 +60,14 @@ fusion profile where its quality justifies the added token price.
 Enable the configuration to advertise `clawrouter/fusion` through `/v1/models`,
 `/v1/catalog`, and the Playground. The synthesizer provider must be allowed and
 its chat-completions route must be executable for the caller; otherwise the
-virtual model stays hidden. ClawRouter preflights that final route before it
+virtual model stays hidden. Discovery uses the same selected-policy Chat
+eligibility as concrete models, including policy and provider budget caps,
+available pricing, grant restrictions, cooldowns, and transport support. This
+also applies to configured prefix-routed models: an unpriced model requires
+unmetered policy and provider limits, or a fixed per-request policy price.
+Session entitlements and key-based model catalogs share this projection;
+discovery does not select credentials or read remaining budget balances.
+ClawRouter preflights that final route before it
 starts advisers, so a denied or unavailable synthesizer cannot spend adviser
 budget. It also reserves the final model's worst-case configured proposal input
 before advisers run, so an unfunded final answer fails without adviser spend.

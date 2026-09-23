@@ -1,6 +1,7 @@
 name = "clawrouter-edge"
 main = "worker/index.ts"
 compatibility_date = "2026-06-05"
+compatibility_flags = ["enable_request_signal"]
 keep_vars = true
 
 [build]

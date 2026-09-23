@@ -94,7 +94,8 @@ an admin, upstream provider, or ChatGPT token in `CLAWROUTER_API_KEY`.
 ## Desktop account features and voice
 
 CLI and engine priority forwarding is separate from the Desktop Fast control.
-The installed Desktop clears Fast in custom-key-only mode. Desktop Fast requires
+The installed Desktop clears Fast in custom-key-only mode
+([upstream report](https://github.com/openai/codex/issues/43635)). Desktop Fast requires
 a genuine ChatGPT login, a catalog model advertising priority, and permission
 from any managed `fast_mode` requirements. An optional hybrid
 configuration sets `requires_openai_auth = true` while retaining the explicit
@@ -109,6 +110,20 @@ pipe, so those fixtures do not prove the graphical Fast control, microphone
 permission, or a particular account's entitlement. Desktop dictation
 continues to use the app's OpenAI service and genuine ChatGPT account. ClawRouter
 does not proxy dictation, speech, or the Realtime API through Responses WebSockets.
+
+The isolated native fixture also exercises synchronous Guardian approval with
+the official catalog, a key-only loopback provider, and a prompt-approved
+synthetic MCP echo. On both 0.153.0 and 0.155.0, the native reviewer selected
+`gpt-6-astra`: an allow decision invoked the tool once; a deny decision invoked
+it zero times. Review notifications matched the target call, thread, and turn.
+These cases emitted no Luna classifier traffic and do not qualify asynchronous
+Guardian scoring, genuine upstream review decisions, or the Desktop UI.
+No ChatGPT login or user approval RPC is fabricated for these tests.
+
+To run the opt-in fixtures, set `CLAWROUTER_CODEX_BINARY` to the official binary
+and `CLAWROUTER_CODEX_CATALOG_BINARY` to a 0.155.0 catalog producer, then run
+`node --test test/codex-native.test.mjs`. Ordinary CI skips native cases when
+the binary is absent. Each case removes its temporary home and loopback server.
 
 ## WebSocket contract
 
@@ -130,11 +145,12 @@ fixed policy tariff. For concrete provider models, both `/v1/models` and `/v1/ca
 policy, provider budget, and eligible grant transport. Verify the chosen upstream
 account and model before use.
 
-Follow-ups: Fusion discovery budget eligibility still uses the existing compound
-readiness path; this change does not extend the concrete-model projection to it.
-OpenAI hosted-tool admission and fee accounting remains separate.
-The setup disables hosted web search because token rates do not cover its tool
-fees or provider-added search input. The existing 15-minute reservation lease
+Fusion discovery applies the same Chat model eligibility to its configured
+synthesizer and advisers; unavailable advisers remain optional.
+Hosted search is rejected before dispatch under measured policy or provider
+budgets unless a fixed policy tariff is configured. Full hosted-tool fee metering
+remains separate. Keep this setup's hosted web search disabled: token rates do not
+cover its tool fees or repeated search input. The existing 15-minute reservation lease
 also remains a boundary for long-running HTTP streams.
 
 Sources: [Codex custom providers](https://developers.openai.com/codex/config-reference),

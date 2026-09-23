@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { readFileSync } from "node:fs";
 import {
   localAdminEmail,
   localAuthMode,
@@ -7,6 +8,11 @@ import {
   renderSelfHostConfig,
   selfHostVariableNames,
 } from "../deploy/self-host/entrypoint.mjs";
+
+test("self-host preserves the canonical ingress abort compatibility flag", () => {
+  const rendered = renderSelfHostConfig(readFileSync(new URL("../wrangler.toml", import.meta.url), "utf8"));
+  assert.match(rendered, /^compatibility_flags = \["enable_request_signal"\]$/m);
+});
 
 test("self-host config removes custom routes and adds local policy KV", () => {
   const rendered = renderSelfHostConfig(`name = "clawrouter"

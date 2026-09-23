@@ -106,6 +106,7 @@ test("Anthropic early refusals retain observed usage without billing it", () => 
     assert.equal(actualModelCost(cachePricing, tokens), 0);
   }
   assert.equal(extractSseUsageTokens(sse(start, delta)), null);
+  assert.equal(extractSseUsageTokens(sse(start, delta, { type: "message_delta", usage: { output_tokens: 0 } }, stop)).billable, false);
   for (const tokens of [
     extractUsageTokens({ ...message, stop_reason: "end_turn" }),
     extractUsageTokens({ ...message, content: [{ type: "text", text: "Partial output" }], usage: { input_tokens: 412, output_tokens: 2 } }),

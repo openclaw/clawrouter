@@ -1,6 +1,7 @@
 import type { AuthorizedIdentity, BudgetReserveRequest, BudgetSettleRequest, Env, ProviderConnection, UsageEvent } from "./types";
 import { budgetLedgerAddress, budgetPrincipal, providerBudgetLedgerAddress } from "./budget-scope.ts";
 import { logCorrelationError } from "./correlation.ts";
+import { ingestUsage } from "./ledgers.ts";
 import { HttpError, randomId } from "./utils.ts";
 
 export interface BudgetReservation {
@@ -30,6 +31,7 @@ export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capabili
   if (policyLimit === 0) throw new HttpError(402, "budget_exhausted", "proxy key budget is exhausted");
   if (providerLimit === 0) throw new HttpError(402, "provider_budget_exhausted", `provider ${connection?.providerId ?? "unknown"} monthly budget is exhausted`);
   if (cost.basis === "unpriced_service_tier") throw new HttpError(400, "pricing_required", "requested service tier has no versioned manifest price; select a declared tier or configure a fixed policy request price");
+  if (cost.basis === "unpriced_hosted_search") throw new HttpError(400, "pricing_required", "hosted search has no complete bounded price; disable hosted search or configure a fixed policy request price");
   if (cost.basis === "flat_fallback") throw new HttpError(400, "pricing_required", "budgeted requests require versioned manifest pricing or a fixed policy request price");
   const reservation: BudgetReservation = { reservations: [], reservedMicros: cost.reserveMicros };
   if (policyLimit != null) {
@@ -79,7 +81,7 @@ async function reserveLedger(
 export async function finalizeAccounting(env: Env, reservation: BudgetReservation, actualCostMicros: number, event: UsageEvent): Promise<boolean> {
   const results = await Promise.allSettled([
     settleBudget(env, reservation, actualCostMicros),
-    env.USAGE_QUEUE.send(event),
+    publishUsage(env, event),
   ]);
   for (const result of results) {
     if (result.status === "rejected") logCorrelationError("accounting finalization failed", event.request_id);
@@ -87,6 +89,15 @@ export async function finalizeAccounting(env: Env, reservation: BudgetReservatio
   // HTTP has already delivered its response; persistent sessions must stop
   // accepting work if either durable settlement recovery or usage delivery fails.
   return results.every((result) => result.status === "fulfilled");
+}
+
+async function publishUsage(env: Env, event: UsageEvent): Promise<void> {
+  try { await env.USAGE_QUEUE.send(event); }
+  catch {
+    // A rejected send can still have been accepted. Reuse the event ID so
+    // direct recovery and later queue delivery converge on one stored row.
+    await ingestUsage(env, event);
+  }
 }
 
 export async function settleBudget(env: Env, reservation: BudgetReservation, actualCostMicros: number): Promise<void> {

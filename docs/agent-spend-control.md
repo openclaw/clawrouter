@@ -53,12 +53,38 @@ is configured. Every budgeted call fails closed until its route has versioned
 manifest pricing or a fixed policy price. A zero-cost route, such as Anthropic
 token counting, skips reservation.
 
-Server-executed tools can add fees and repeated model work that token pricing
-does not cover. The proxy forwards these requests; its accounting allowance is
-not an upstream invoice cap. Disable hosted tools for token-only accounting.
+Hosted web search adds fees and repeated model work that token pricing does not
+cover. Requests enabling Responses `web_search` or `web_search_preview` (including
+dated versions), Anthropic `web_search_*`, or Chat `web_search_options` now return
+`pricing_required` before dispatch when either policy or provider has a monthly
+budget and no fixed policy price. Disable hosted search for token-priced budgets,
+or let the operator set an explicit fixed request tariff.
+
+With both monthly limits disabled, hosted-search requests still forward. Their
+billable usage records zero accounted micros with `cost_basis: unpriced_usage`,
+meaning **price unavailable**, even when complete tokens and a known served tier
+are returned. Pre-dispatch denials and proven nonbillable responses remain known
+zero. Free token counting and fixed policy tariffs keep their existing behavior.
+Basic Anthropic web fetch has only token charges and retains its full-input-window
+reservation. Other hosted tools remain outside complete fee accounting.
 Client-executed function, custom, namespace, local-shell, and apply-patch tools
-use the model's token rates. A fixed `requestCostMicros` is an operator-defined
+use the model's token rates; a function named `web_search` is still a function.
+A fixed `requestCostMicros` is an operator-defined
 tariff, not a measurement of provider tool charges.
+
+Full hosted-search metering remains unqualified. The published
+[OpenAI tool prices](https://developers.openai.com/api/docs/pricing) and
+[search contract](https://developers.openai.com/api/docs/guides/tools-web-search)
+do not establish a complete mapping from returned input usage to separately billed
+search content, the mini-model 8,000-token block, multiple queries per action, or
+failed/incomplete search charges. The
+[search usage API](https://developers.openai.com/api/reference/python/resources/admin/subresources/organization/subresources/usage/methods/web_search_calls)
+can support later reconciliation. Complete metering needs provider clarification
+or isolated upstream usage/cost reconciliation, plus a demonstrated finite bound
+on cumulative input and tool work. Anthropic also charges
+[searches separately](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-search-tool),
+while [web fetch](https://platform.claude.com/docs/en/agents-and-tools/tool-use/web-fetch-tool)
+has no additional tool fee. This guard does not claim an upstream invoice cap.
 
 Pricing lives beside the model in `providers/*.provider.yaml`:
 
@@ -254,8 +280,8 @@ is a separate policy-controlled R2 archive; see [Content retention](content-rete
 
 ## Current boundary
 
-The enforcement slice covers token-priced model calls. Provider tool-call
-fees are not included; unknown dynamic models require manifest pricing or a policy
+The enforcement slice covers token-priced model calls and rejects unpriced hosted
+search under measured budgets. Provider tool-call fees are not metered; unknown dynamic models require manifest pricing or a policy
 `requestCostMicros` override. Reservations have a 15-minute lease; streams that
 outlast it need a separate reservation-renewal follow-up before this can be
 described as a hard invoice cap. Durable Objects remain the authoritative ledger;

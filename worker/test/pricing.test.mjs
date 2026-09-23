@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { actualModelCost, estimateModelCost } from "../pricing.ts";
+import { actualModelCost, estimateModelCost, requestHasHostedSearch } from "../pricing.ts";
 
 const pricing = {
   effectiveAt: "2026-06-19", source: "https://example.com", inputMicrosPerMillion: 2_500_000,
@@ -22,6 +22,26 @@ test("pricing reserves serialized text plus overhead and every requested choice"
 test("opaque inputs and provider-added tools reserve the full input window", () => {
   assert.equal(estimateModelCost(pricing, { input: [{ type: "input_image", image_url: "https://example.com/a.png" }] }).inputTokens, pricing.maxInputTokens);
   assert.equal(estimateModelCost(pricing, { tools: [{ type: "computer_20250124" }] }).inputTokens, pricing.maxInputTokens);
+});
+
+test("hosted search recognition follows wire types without claiming every provider-added tool has fees", () => {
+  for (const type of ["web_search", "web_search_preview", "web_search_2025_08_26", "web_search_preview_2025_03_11"]) {
+    assert.equal(requestHasHostedSearch({ tools: [{ type }] }, "llm.responses"), true);
+  }
+  for (const type of ["web_search_20250305", "web_search_20260209", "web_search_20260318"]) {
+    assert.equal(requestHasHostedSearch({ tools: [{ type, name: "web_search" }] }, "llm.messages"), true);
+  }
+  assert.equal(requestHasHostedSearch({ web_search_options: {} }, "llm.chat"), true);
+  for (const capability of ["llm.responses", "llm.messages", "llm.chat"]) {
+    for (const body of [
+      { tools: [{ type: "function", name: "web_search" }] },
+      { tools: [{ type: "function", function: { name: "web_search" } }] },
+      { tools: [{ name: "web_search", input_schema: { type: "object" } }] },
+      { tools: [{ type: "web_fetch_20250910", name: "web_fetch" }] },
+      { input: [{ type: "web_search_call" }] }, { web_search_options: null },
+    ]) assert.equal(requestHasHostedSearch(body, capability), false);
+  }
+  assert.equal(estimateModelCost(pricing, { tools: [{ type: "web_fetch_20250910" }] }).inputTokens, pricing.maxInputTokens);
 });
 
 test("cache and long-context rates keep settlement within reservation", () => {

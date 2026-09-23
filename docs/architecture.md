@@ -66,17 +66,36 @@ usage event and delegates independent settlement and delivery to `accounting.ts`
 8. On an upstream 401, 403, or 429, record sanitized grant state and, when the
    policy permits, try at most one same-provider alternate for an LLM or GET/HEAD
    route.
-9. Settle budget and enqueue the single final usage event independently. Either failure is
-   retried without masking the provider response or suppressing the other task.
+9. Settle budget and publish the single final usage event independently. Recovery
+   for either task never masks the provider response or suppresses the other task.
 
 `proxy-response.ts` owns shared response normalization and usage inspection. One
 observer follows client consumption for JSON, SSE, and binary responses, without
-cloning or draining ahead of the client. It inspects at most 2 MiB for usage;
-oversized, canceled, or broken bodies retain the conservative reservation.
-Settlement starts when delivery completes, fails, or is canceled. Private alias
+cloning or draining ahead of the client. JSON inspection and each SSE frame are
+bounded to 2 MiB; SSE history is discarded after extracting terminal facts and
+cumulative counters, so a small late terminal remains observable on long streams.
+An oversized frame leaves evidence unknown, rather than proving provider failure.
+Recognized failed/error events and streams missing their required terminal record
+a provider error; Responses `incomplete` remains successful. Delivery failure and
+consumer cancellation are recorded independently, without rewriting HTTP status
+or bytes. Authoritative terminal usage remains billable even after delivery fails
+or is canceled; otherwise accounting retains the conservative reservation.
+Settlement starts when delivery completes, fails, or is canceled. The canonical
+Worker config enables `enable_request_signal`, preserved by Cloudflare and
+self-host config rendering. Ingress abort settles the same observer once even
+when workerd drops its response pump without invoking the stream's `cancel`
+callback. This is caller cancellation, including an internal Fusion adviser
+deadline; it does not always mean a human disconnected. The observer detaches
+its abort listener on completion and cancels its owned upstream reader.
+Private alias
 inference keeps its separate containment and continuation protocol.
 
 Usage events are queued into a Durable Object shard named by tenant and policy.
+If queue publication rejects, the Worker writes the same event directly to that
+shard through the queue consumer's ingest path. The event ID remains unchanged:
+SQL `INSERT OR IGNORE` deduplicates a later delivery if the rejected send was
+actually accepted. Successful queue acceptance or direct ingestion completes
+publication; failure of both remains an accounting failure.
 Session/admin reads aggregate each relevant tenant/policy shard once, even when
 the input policy list repeats a scope. The former global ledger's migration
 window ended on 2026-07-23; it is no longer queried. Stored data and Durable
@@ -86,8 +105,16 @@ Object bindings are unchanged.
 
 - Revocation, provider connection state, and budget preflight fail closed.
 - Required request retention fails closed before upstream traffic.
-- Provider failures release a reservation to zero and emit audit metadata.
-- Settlement and usage delivery retry independently through `USAGE_QUEUE`.
+- Rejected, nonbillable work releases reservations to zero. Received billable
+  responses can still incur cost when generation or stream delivery fails:
+  authoritative usage settles the charge; missing usage retains the qualified
+  reservation. Pre-response HTTP fetch failures keep their existing zero-charge
+  policy. Audit outcome alone does not decide billability.
+- Failed budget settlement retries through `USAGE_QUEUE`; rejected usage
+  publication recovers through the policy's usage ledger independently.
+- HTTP response delivery stays unchanged on accounting failure. A WebSocket
+  session reports `accounting_unavailable` and closes if settlement recovery or
+  both usage-publication destinations fail; successful recovery permits more work.
 - Each reservation keeps only its reservation ID and exact ledger address.
   Immediate settlement and queued retries use that same address; neither
   reconstructs it from authentication or policy state. The queue consumer still
