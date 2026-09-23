@@ -613,15 +613,17 @@ for (const existingUnmetered of [false, true]) {
   });
 }
 
-test("hosted search admission and unavailable settlement share the HTTP, native, JSON and SSE owner", async (t) => {
+test("incomplete pricing admission and unavailable settlement share the HTTP, native, JSON and SSE owner", async (t) => {
   for (const [provider, route, model, tool] of [
     ["openai", "/v1/responses", "openai/gpt-6-astra", { tools: [{ type: "web_search" }] }],
     ["openai", "/v1/native/openai/v1/responses", "gpt-6-astra", { tools: [{ type: "web_search_preview_2025_03_11" }] }],
+    ...["file_search", "code_interpreter", "image_generation"].map(type => ["openai", "/v1/responses", "openai/gpt-6-astra", { tools: [{ type }] }]),
+    ["openai", "/v1/native/openai/v1/responses", "gpt-6-astra", { tools: [{ type: "shell", environment: { type: "container_auto" } }] }],
     ["openai", "/v1/chat/completions", "openai/gpt-6-astra", { web_search_options: {} }],
     ["anthropic", "/v1/native/anthropic/v1/messages", "claude-haiku-4-5", { tools: [{ type: "web_search_20260318", name: "web_search" }] }],
   ]) for (const stream of [false, true]) for (const [limit, providerLimit, fixedCost, servedTier] of [
     [1_000_000, null, null, "priority"], [null, 1_000_000, null, "priority"],
-    [null, null, null, "priority"], [null, null, null, "future"], [1_000_000, 1_000_000, 7, "priority"],
+    [null, null, null, "priority"], [null, null, null, "future"], [1_000_000, 1_000_000, 7, "priority"], [1_000_000, 1_000_000, 0, "priority"],
   ]) {
     const events = [], pending = [];
     const env = usageEnv([], { provider, limit, providerLimit, fixedCost, retainContent: false });
@@ -641,26 +643,29 @@ test("hosted search admission and unavailable settlement share the HTTP, native,
       body: JSON.stringify({ model, input: "fixture", messages: [{ role: "user", content: "fixture" }], max_tokens: 32, stream, service_tier: "priority", ...tool }),
     }), env, { waitUntil: promise => pending.push(promise) });
     assert.equal(response.status, denied ? 400 : 200);
-    if (denied) { const body = await response.json(); assert.equal(body.error.code, "pricing_required"); assert.match(body.error.message, /disable hosted search/); }
+    if (denied) { const body = await response.json(); assert.equal(body.error.code, "pricing_required"); assert.match(body.error.message, /fixed policy request price/); }
     else assert.equal(await response.text(), wire);
     await Promise.all(pending);
     assert.equal(upstream.mock.callCount(), denied ? 0 : 1);
     assert.equal(events.length, 1);
     assert.equal(events[0].cost_basis, denied ? "none" : fixedCost != null ? "policy_fixed" : "unpriced_usage");
     assert.equal(events[0].actual_cost_micros, denied ? 0 : fixedCost ?? 0);
-    if (!denied) assert.ok(events[0].input_tokens > 0, "complete token usage must not imply a complete hosted-search price");
+    if (!denied) assert.ok(events[0].input_tokens > 0, "complete token usage must not imply a complete request price");
     assert.equal((await providerBudgetStatus(env, provider, 1_000_000)).spentMicros, denied ? 0 : fixedCost ?? 0);
+    const usage = await handler.fetch(new Request("https://clawrouter.example/v1/usage", { headers: { authorization: `Bearer ${proxyKey()}` } }), env, {});
+    assert.equal((await usage.json()).budget.spentMicros, limit == null ? null : denied ? 0 : fixedCost ?? 0);
     upstream.mock.restore();
   }
 });
 
-test("hosted search preserves fixed tariffs, free counting, and known nonbillable outcomes", async () => {
+test("incomplete pricing preserves fixed tariffs, free counting, and known nonbillable outcomes", async () => {
   const { estimateCost, createProxyAccounting } = await import("../proxy-accounting.ts");
   const { modelRoute } = await import("../providers.ts");
   const { correlateIngressRequest } = await import("../correlation.ts");
   const route = modelRoute("openai/gpt-6-astra"), body = { tools: [{ type: "web_search" }] };
-  assert.equal(estimateCost(route.model, body, 7, "llm.responses").basis, "policy_fixed");
-  assert.equal(estimateCost(route.model, body, null, "llm.count_tokens").basis, "none");
+  assert.equal(estimateCost(route.model, body, 7, "llm.responses", "openai.responses").basis, "policy_fixed");
+  assert.equal(estimateCost(route.model, body, 0, "llm.responses", "openai.responses").basis, "policy_fixed");
+  assert.equal(estimateCost(route.model, body, null, "llm.count_tokens", "openai.responses").basis, "none");
   for (const [billable, tokens, dispatched, expected] of [[true, { billable: false }, null, "none"], [false, null, null, "none"], [true, null, null, "unpriced_usage"], [null, null, false, "none"], [null, null, true, "unpriced_usage"]]) {
     const events = [], pending = [];
     const owner = createProxyAccounting({ env: { USAGE_QUEUE: { send: async event => events.push(event) } }, context: { waitUntil: promise => pending.push(promise) }, auth: { policyId: "fixture", policy: {} }, selection: { ...route, endpoint: route.provider.endpoints.find(endpoint => endpoint.id === "responses"), body, capability: "llm.responses" }, request: correlateIngressRequest(new Request("https://router.example/v1/responses")).request });
@@ -668,6 +673,52 @@ test("hosted search preserves fixed tariffs, free counting, and known nonbillabl
     else owner.fail(502, "provider_error", undefined, null, dispatched);
     await Promise.all(pending);
     assert.equal(events.length, 1); assert.equal(events[0].cost_basis, expected); assert.equal(events[0].actual_cost_micros, 0);
+  }
+});
+
+test("Sonar mandatory fees and Gemini hosted work never settle at token-only prices", async (t) => {
+  for (const [provider, model, gapBody, counts] of [
+    ...["googleSearch", "google_search", "googleSearchRetrieval", "googleMaps", "urlContext", "url_context", "fileSearch", "codeExecution"].map(key => ["google-gemini", "gemini-3.5-flash", { tools: [{ [key]: {} }] }, [27, 76, 10_412]]),
+    ["google-gemini", "gemini-3.5-flash", { cached_content: "cachedContents/fixture" }, [27, 76, 10_412]],
+    ["perplexity", "sonar-pro", {}, [26, 832, 858]],
+  ]) for (const manifest of [false, true]) for (const stream of [false, true]) for (const [limit, providerLimit, fixedCost] of [
+    [100_000, null, null], [null, 100_000, null], [100_000, 100_000, null],
+    [null, null, null], [100_000, 100_000, 7], [100_000, 100_000, 0],
+  ]) {
+    const events = [], pending = [], google = provider === "google-gemini";
+    const env = usageEnv([], { provider, limit, providerLimit, fixedCost, retainContent: false });
+    Object.assign(env, { GOOGLE_API_KEY: "fixture-google-key", PERPLEXITY_API_KEY: "fixture-perplexity-key" });
+    env.BUDGET_LEDGER = sqlBudgetNamespace(t);
+    env.USAGE_QUEUE = { send: async event => events.push(event) };
+    const denied = fixedCost == null && (limit != null || providerLimit != null);
+    const result = google ? { candidates: [{ finishReason: "STOP" }], usageMetadata: { promptTokenCount: 27, toolUsePromptTokenCount: 10_309, candidatesTokenCount: 45, thoughtsTokenCount: 31, totalTokenCount: 10_412 } }
+      : { choices: [{ finish_reason: "stop" }], usage: { prompt_tokens: 26, completion_tokens: 832, total_tokens: 858, cost: { total_cost: 0.019 } } };
+    const wire = stream ? google ? sse(result) : sse(result, "[DONE]") : JSON.stringify(result);
+    const upstream = t.mock.method(globalThis, "fetch", async (_url, init) => {
+      for (const [key, value] of Object.entries(gapBody)) assert.deepEqual(JSON.parse(init.body)[key], value);
+      return new Response(wire, { headers: { "content-type": stream ? "text/event-stream" : "application/json" } });
+    });
+    const endpoint = google ? stream ? "stream_generate_content" : "generate_content" : "chat_completions";
+    const route = manifest ? `/v1/proxy/${provider}/${endpoint}` : google ? `/v1/native/google-gemini/v1beta/models/${model}:${stream ? "streamGenerateContent?alt=sse" : "generateContent"}` : "/v1/chat/completions";
+    const body = google ? { contents: [{ parts: [{ text: "fixture" }] }], generationConfig: { maxOutputTokens: 100 }, ...gapBody }
+      : { model: manifest ? model : `${provider}/${model}`, messages: [{ role: "user", content: "fixture" }], max_tokens: 1_000, stream };
+    const response = await handler.fetch(new Request(`https://clawrouter.example${route}`, {
+      method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
+      body: JSON.stringify(manifest ? { body, pathParams: { model }, query: google && stream ? { alt: "sse" } : {} } : body),
+    }), env, { waitUntil: promise => pending.push(promise) });
+    assert.equal(response.status, denied ? 400 : 200, `${provider}/${endpoint}`);
+    if (denied) assert.equal((await response.json()).error.code, "pricing_required");
+    else assert.equal(await response.text(), wire);
+    await Promise.all(pending);
+    assert.equal(upstream.mock.callCount(), denied ? 0 : 1);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].cost_basis, denied ? "none" : fixedCost == null ? "unpriced_usage" : "policy_fixed");
+    assert.equal(events[0].actual_cost_micros, denied ? 0 : fixedCost ?? 0);
+    if (!denied) assert.deepEqual([events[0].input_tokens, events[0].output_tokens, events[0].total_tokens], counts);
+    const usage = await handler.fetch(new Request("https://clawrouter.example/v1/usage", { headers: { authorization: `Bearer ${proxyKey()}` } }), env, {});
+    assert.equal((await usage.json()).budget.spentMicros, limit == null ? null : denied ? 0 : fixedCost ?? 0);
+    assert.equal((await providerBudgetStatus(env, provider, 100_000)).spentMicros, denied ? 0 : fixedCost ?? 0);
+    upstream.mock.restore();
   }
 });
 
@@ -741,7 +792,6 @@ test("Gemini final malformed SSE usage retains reservation instead of settling a
 
 test("either budget rejects Gemini remote input before dispatch", async (t) => {
   for (const manifest of [false, true]) for (const [limit, providerLimit] of [[20_000, null], [null, 20_000]]) for (const remote of [
-    { cachedContent: "cachedContents/fixture" },
     { contents: [{ parts: [{ fileData: { mimeType: "application/pdf", fileUri: "https://example.com/file.pdf" } }] }] },
   ]) {
     const pending = [], env = usageEnv([], { provider: "google-gemini", limit, providerLimit, fixedCost: null, retainContent: false });

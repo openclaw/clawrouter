@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import test from "node:test";
-import { actualModelCost, estimateModelCost, requestHasHostedSearch } from "../pricing.ts";
+import { actualModelCost, estimateModelCost, requestPricingGap } from "../pricing.ts";
 
 const pricing = {
   effectiveAt: "2026-06-19", source: "https://example.com", inputMicrosPerMillion: 2_500_000,
@@ -70,24 +70,41 @@ test("native Gemini remote cache and typed media inputs reserve the full input b
   assert.ok(estimateModelCost(pricing, { cachedContent: "cachedContents/fixture" }, "openai.responses").inputTokens < pricing.maxInputTokens);
 });
 
-test("hosted search recognition follows wire types without claiming every provider-added tool has fees", () => {
-  for (const type of ["web_search", "web_search_preview", "web_search_2025_08_26", "web_search_preview_2025_03_11"]) {
-    assert.equal(requestHasHostedSearch({ tools: [{ type }] }, "llm.responses"), true);
+test("pricing completeness follows selected wire declarations without reading client function JSON", () => {
+  for (const type of ["web_search", "web_search_preview", "web_search_2025_08_26", "web_search_preview_2025_03_11", "file_search", "code_interpreter", "image_generation"]) {
+    assert.equal(requestPricingGap(pricing, { tools: [{ type }] }, "openai.responses"), "hosted_tool_fee");
+  }
+  for (const type of ["container_auto", "container_reference"]) {
+    assert.equal(requestPricingGap(pricing, { tools: [{ type: "shell", environment: { type } }] }, "openai.responses"), "hosted_tool_fee");
   }
   for (const type of ["web_search_20250305", "web_search_20260209", "web_search_20260318"]) {
-    assert.equal(requestHasHostedSearch({ tools: [{ type, name: "web_search" }] }, "llm.messages"), true);
+    assert.equal(requestPricingGap(pricing, { tools: [{ type, name: "web_search" }] }, "anthropic.messages"), "hosted_tool_fee");
   }
-  assert.equal(requestHasHostedSearch({ web_search_options: {} }, "llm.chat"), true);
-  for (const capability of ["llm.responses", "llm.messages", "llm.chat"]) {
+  assert.equal(requestPricingGap(pricing, { web_search_options: {} }, "openai.chat_completions"), "hosted_tool_fee");
+  for (const [key, gap] of [
+    ...["googleSearch", "google_search", "googleSearchRetrieval", "google_search_retrieval", "googleMaps", "google_maps"].map(key => [key, "hosted_tool_fee"]),
+    ...["urlContext", "url_context", "fileSearch", "file_search", "codeExecution", "code_execution"].map(key => [key, "hosted_tool_usage"]),
+  ]) assert.equal(requestPricingGap(pricing, { tools: [{ [key]: {} }] }, "google.generate_content"), gap);
+  for (const key of ["cachedContent", "cached_content"]) {
+    assert.equal(requestPricingGap(pricing, { [key]: "cachedContents/fixture" }, "google.generate_content"), "hosted_tool_usage");
+  }
+  assert.equal(requestPricingGap(pricing, { tools: [{ googleSearch: {}, google_search: null }] }, "google.generate_content"), null);
+  assert.equal(requestPricingGap(pricing, { tools: [{ google_search: null, googleSearch: {} }] }, "google.generate_content"), "hosted_tool_fee");
+  assert.equal(requestPricingGap(pricing, { cachedContent: "cachedContents/fixture", cached_content: null }, "google.generate_content"), null);
+  for (const format of ["openai.responses", "anthropic.messages", "openai.chat_completions", "google.generate_content"]) {
     for (const body of [
-      { tools: [{ type: "function", name: "web_search" }] },
-      { tools: [{ type: "function", function: { name: "web_search" } }] },
+      { tools: [{ type: "function", name: "web_search", parameters: { googleSearch: {} } }] },
+      { tools: [{ type: "function", function: { name: "file_search" } }] },
       { tools: [{ name: "web_search", input_schema: { type: "object" } }] },
+      { tools: [{ functionDeclarations: [{ name: "codeExecution", parameters: { urlContext: {} } }] }] },
+      { tools: [{ type: "shell", environment: { type: "local" } }] },
       { tools: [{ type: "web_fetch_20250910", name: "web_fetch" }] },
       { input: [{ type: "web_search_call" }] }, { web_search_options: null },
-    ]) assert.equal(requestHasHostedSearch(body, capability), false);
+    ]) assert.equal(requestPricingGap(pricing, body, format), null);
+    assert.equal(requestPricingGap({ ...pricing, unpricedCosts: ["request_fee"] }, {}, format), "model_request_fee");
   }
-  assert.equal(estimateModelCost(pricing, { tools: [{ type: "web_fetch_20250910" }] }).inputTokens, pricing.maxInputTokens);
+  assert.equal(requestPricingGap(pricing, { tools: [{ googleSearch: {} }] }, "openai.responses"), null);
+  assert.equal(requestPricingGap(pricing, { tools: [{ type: "file_search" }] }, "google.generate_content"), null);
 });
 
 test("cache and long-context rates keep settlement within reservation", () => {

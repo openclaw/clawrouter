@@ -1,6 +1,6 @@
 import { emptyReservation, finalizeAccounting, type BudgetReservation, type EstimatedCost } from "./accounting";
 import { correlationMetadata } from "./correlation";
-import { actualModelCost, estimateModelCost, requestHasHostedSearch } from "./pricing";
+import { actualModelCost, estimateModelCost, requestPricingGap } from "./pricing";
 import type { ProxySelection } from "./proxy-selection";
 import type { ObservedUsage } from "./proxy-response";
 import { extractServiceTier, type UsageTokens } from "./token-usage";
@@ -28,7 +28,7 @@ interface AccountingContext {
 export function createProxyAccounting(options: AccountingContext) {
   const { env, context, auth, selection, request, compound } = options;
   const cost = options.cost ?? estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability, selection.endpoint.request_format);
-  const unpricedSearch = cost.basis === "unpriced_hosted_search";
+  const unpricedRequest = cost.pricingGap != null;
   const providerId = selection.provider.id, model = selection.model, capability = selection.capability;
   const requestedTier = extractServiceTier(Array.isArray(selection.body) ? null : selection.body) ?? null;
   const correlation = correlationMetadata(request);
@@ -56,15 +56,15 @@ export function createProxyAccounting(options: AccountingContext) {
     return finalizeAccounting(env, reservation, actual, event);
   }
   function settle(statusCode: UsageEvent["status_code"], status: UsageEvent["status"], billable: boolean, tokens: UsageTokens | null, reservation: BudgetReservation, contentRef: string | null) {
-    // Token totals and a known served tier cannot establish hosted-search fees.
-    const measured = tokens && !unpricedSearch ? actualCost(model, tokens, auth.policy.requestCostMicros) : null;
+    // Token totals and a served tier cannot resolve omitted fees or hosted work.
+    const measured = tokens && !unpricedRequest ? actualCost(model, tokens, auth.policy.requestCostMicros) : null;
     const actual = billable ? measured ?? cost.reserveMicros : 0;
     // Proven nonbillable work is distinct from missing prices or zero tariffs.
     // Keep explicit fixed prices and the fallback's existing charged contract.
     const knownNoCharge = !billable || (tokens?.billable === false && actual === 0 && cost.basis !== "policy_fixed");
     // Zero accounted micros with an unpriced basis means unavailable, not free.
     // A known served tier can supply a price even for an undeclared request tier.
-    const basis = knownNoCharge ? "none" : unpricedSearch ? "unpriced_usage" : cost.basis === "unpriced_service_tier"
+    const basis = knownNoCharge ? "none" : unpricedRequest ? "unpriced_usage" : cost.basis === "unpriced_service_tier"
       ? measured == null ? "unpriced_usage" : "manifest_pricing"
       : measured == null && cost.basis === "manifest_pricing" ? "manifest_reservation" : cost.basis;
     return finish(statusCode, status, reservation, actual, tokens, contentRef, basis);
@@ -86,12 +86,13 @@ export function createProxyAccounting(options: AccountingContext) {
   };
 }
 
-export function estimateCost(model: CompiledModel | null, body: ProxyRequestBody, fixed: number | null | undefined, capability: string, requestFormat?: string): EstimatedCost {
+export function estimateCost(model: CompiledModel | null, body: ProxyRequestBody, fixed: number | null | undefined, capability: string, requestFormat: string): EstimatedCost {
   if (capability === "llm.count_tokens") return { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 };
   if (fixed != null) return { reserveMicros: fixed, basis: "policy_fixed", inputTokens: null, outputTokens: null };
   if (Array.isArray(body)) return { reserveMicros: 1, basis: "flat_fallback", inputTokens: null, outputTokens: null };
-  if (requestHasHostedSearch(body, capability)) return { reserveMicros: 0, basis: "unpriced_hosted_search", inputTokens: null, outputTokens: null };
   const pricing = model?.pricing;
+  const pricingGap = requestPricingGap(pricing, body, requestFormat);
+  if (pricingGap) return { reserveMicros: 0, basis: "unpriced_request", pricingGap, inputTokens: null, outputTokens: null };
   if (!pricing) return { reserveMicros: 1, basis: "flat_fallback", inputTokens: null, outputTokens: null };
   const estimate = estimateModelCost(pricing, body, requestFormat);
   return { reserveMicros: estimate.reserveMicros, basis: estimate.pricingAvailable === false ? "unpriced_service_tier" : "manifest_pricing", inputTokens: estimate.inputTokens, outputTokens: estimate.outputTokens };

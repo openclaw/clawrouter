@@ -549,6 +549,7 @@
         "maxRequestInputTokens": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
         "defaultMaxOutputTokens": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
         "inputTokenOverhead": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "unpricedCosts": { "type": "array", "minItems": 1, "maxItems": 1, "uniqueItems": true, "items": { "enum": ["request_fee"] } },
         "longContext": { "$ref": "#/$defs/longContextPricing" },
         "serviceTiers": {
           "type": "array",
