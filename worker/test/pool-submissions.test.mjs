@@ -45,6 +45,17 @@ test("contributors cannot inject refresh endpoints or change ticket scope", asyn
   assert.equal(env.released, 1);
 });
 
+test("a contribution cannot acquire explicit administrator recovery intent", async () => {
+  const key = "oauth/policy/openai-maintainer", raw = '{"accessToken":"legacy-private",';
+  const values = new Map([[key, raw]]), env = await submissionEnv(values, "submission-secret");
+  const response = await poolSubmissionApi(request("submission-secret", { accessToken: "access-private" }), env, "/v1/pool-submissions/pst_submission_ticket_1/consume");
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).error.code, "invalid_upstream_grant");
+  assert.equal(env.GRANT_CREDENTIALS.objects.get(key).values.has("credential"), false);
+  assert.equal(values.get(key), raw);
+  assert.equal(env.released, 1);
+});
+
 async function submissionEnv(values, ticketToken) {
   const expectedDigest = await sha256Hex(ticketToken);
   const env = {

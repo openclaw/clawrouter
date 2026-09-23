@@ -228,6 +228,15 @@ ignore these hints and retain their canonical identity. Revocation stores a
 secretless, disabled tombstone and cancels maintenance; an unknown grant returns
 HTTP 404. Retrying revocation preserves the same tombstone generation.
 
+Explicit replacement and revocation can recover an existing legacy KV grant with
+invalid JSON or metadata larger than the 3 MiB migration limit. Corrupt or oversized
+bytes are discarded, never imported into the credential owner. Supply fresh credentials
+through `cf:oauth:put` or `PUT ...?mode=replace`, or use `cf:oauth:revoke` to remove
+the account. Ordinary edits, OAuth callbacks, contributions, refresh and automatic
+migration remain strict. A failed KV read is unavailable state, not proof of an
+absent account. Recovery preserves retained pool generations; a newer index than
+an existing owner requires operator recovery instead of resetting ownership.
+
 ### Credential creation, rotation, and revocation
 
 Use `POST /v1/admin/credentials` or `POST /v1/session/credentials` with
