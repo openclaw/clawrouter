@@ -216,6 +216,30 @@ for (const policyId of ["error_budget", "invalid_policy"]) {
   }
 }
 
+for (const [policyId, message] of [["ready_policy", "policy unavailable"], ["saved_policy", "connected"]]) {
+  for (const action of ["save", "disable"]) {
+    test(`${action} rejection for ${policyId} stays visible after a later edit`, async () => {
+      const fixture = mount();
+      hydrate(fixture, [policy(policyId)]);
+      const operation = action === "save" ? fixture.render().policies.save(event) : fixture.render().policies.revoke(policyId);
+      change(fixture, { tenantId: "later-draft" });
+      fixture.requests[0].reject(new Error(message));
+      await operation;
+      const current = fixture.render().policies;
+      assert.equal(current.form.tenantId, "later-draft");
+      assert.equal(current.dirty, true);
+      assert.equal(current.error, "");
+      assert.equal(current.busy, false);
+      assert.equal(current.selected.tenantId, "default");
+      assert.equal(fixture.requests.length, 1);
+      assert.equal(fixture.refreshes, 0);
+      const status = fixture.statuses.at(-1);
+      assert.deepEqual(consoleStatusPresentation(status, false), { tone: "error", label: "Needs attention", showBar: true });
+      assert.ok(status.includes(action) && status.includes(policyId) && status.includes(message));
+    });
+  }
+}
+
 test("an old selection's failed save cannot attach its error to the new draft", async () => {
   const fixture = ready();
   const operation = fixture.render().policies.save(event);

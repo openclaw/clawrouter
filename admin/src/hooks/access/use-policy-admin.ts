@@ -127,7 +127,7 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
     } catch (caught) {
       const message = errorMessage(caught);
       if (revision.current === submittedRevision) setError(message);
-      setStatus(`policy ${submitted.value.policyId || "save"}: ${message}`);
+      setStatus(`policy ${action} failed (${submitted.value.policyId || "new policy"}): ${message}`);
     } finally {
       pending.current = false;
       setBusy(false);
