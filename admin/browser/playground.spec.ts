@@ -164,6 +164,38 @@ for (const change of ["blocked", "removed", "generation"] as const) {
   });
 }
 
+for (const change of ["removal", "generation", "refresh failure"] as const) {
+  test(`a scoped GET/path draft remains visible after ${change} without dispatch`, async ({ page }) => {
+    const provider = state.catalog!.providers[1];
+    const lookup = { ...provider.offers[0], endpoint: "lookup", route: "/v1/playground/proxy/test-service/lookup" };
+    provider.offers.push(lookup);
+    await refreshCatalog(page);
+    await choose(page, "test-service", "lookup · JSON", "Custom JSON request");
+    const method = page.getByRole("combobox", { name: "Method", exact: true });
+    const path = page.getByRole("textbox", { name: "id", exact: true });
+    const body = page.getByRole("textbox", { name: "JSON request body", exact: true });
+    await method.selectOption("GET");
+    await path.fill("retained-path");
+    await body.fill('{"query":"retained body"}');
+    if (change === "removal") provider.offers = provider.offers.filter((item) => item !== lookup);
+    else if (change === "generation") lookup.policyGeneration = "replacement-generation";
+    else state.failSession = true;
+    await refreshCatalog(page);
+    await expect(page.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
+    await expect(method).toHaveValue("GET");
+    await expect(path).toBeVisible();
+    await expect(path).toHaveValue("retained-path");
+    await expect(body).toHaveValue('{"query":"retained body"}');
+    await page.locator("form.chatPlayground").evaluate((form: HTMLFormElement) => form.requestSubmit());
+    await expect(page.locator(".chatMessageAssistant")).toContainText("no longer available");
+    expect(await requestCount(page)).toBe(0);
+    await page.getByRole("button", { name: "Conversation controls" }).click();
+    await expect(method).toHaveValue("GET");
+    await expect(path).toHaveValue("retained-path");
+    await expect(body).toHaveValue('{"query":"retained body"}');
+  });
+}
+
 test("model providers expose native operations and null-model request forms", async ({ page }) => {
   await choose(page, "test-model", "embeddings · JSON", "test-model/embedding");
   const payload = page.getByRole("textbox", { name: "JSON request body", exact: true });
@@ -371,6 +403,7 @@ const bootstrap: Record<string, unknown> = {
     }],
     manifestProxy: [
       { provider: "test-service", endpoint: "search", route: "/v1/proxy/test-service/search", methods: ["POST"] },
+      { provider: "test-service", endpoint: "lookup", route: "/v1/proxy/test-service/lookup", methods: ["GET", "POST"], pathParams: ["id"] },
       { provider: "test-model", endpoint: "embeddings", route: "/v1/proxy/test-model/embeddings", methods: ["POST"], requestFormat: "openai.embeddings" },
       { provider: "openai", endpoint: "embeddings", route: "/v1/proxy/openai/embeddings", methods: ["POST"], requestFormat: "openai.embeddings" },
       { provider: "azure-openai", endpoint: "embeddings", route: "/v1/proxy/azure-openai/embeddings", methods: ["POST"], pathParams: ["deployment"], requestFormat: "openai.embeddings" },

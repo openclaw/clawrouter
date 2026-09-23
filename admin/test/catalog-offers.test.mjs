@@ -135,3 +135,39 @@ test("concrete scoped path models validate every supplied carrier without requir
   for (const supplied of ["other/model", null, 42]) assert.throws(() => targetRequest(target, { ...form, servicePayload: JSON.stringify({ model: supplied }) }), /differs from the selected offer/);
   assert.throws(() => targetRequest(target, { ...form, servicePath: "other", servicePayload: JSON.stringify({ model: model.id }) }), /differs from the selected offer/);
 });
+
+test("custom requests assess exact qualified Astra IDs without rewriting explicit or blank fields", () => {
+  const snapshot = JSON.parse(readFileSync(new URL("../../worker/generated/provider-snapshot.json", import.meta.url), "utf8"));
+  const astra = snapshot.providers.find((item) => item.id === "openai").models.find((item) => item.id === "openai/gpt-6-astra");
+  const entry = { ...provider, id: "openai", models: [astra], offers: [{ ...offer, modelId: null, routeKind: "playground", route: "/v1/playground/proxy/openai/responses" }] };
+  const [target] = catalogTargets({ ...catalog, providers: [entry] }, { ...routes, manifestProxy: [{ ...routes.manifestProxy[0], provider: "openai" }] });
+  assert.equal(target.providerModels, entry.models);
+  const explicit = { model: astra.id, input: "retained", temperature: 0.7 };
+  const result = targetRequest(target, { ...draft, servicePayload: JSON.stringify(explicit) });
+  assert.match(result.assessment.conflicts[0].message, /temperature field presence is not supported/);
+  assert.deepEqual(result.payload.body, explicit);
+  const blank = { model: astra.id, input: "retained" };
+  const omitted = targetRequest(target, { ...draft, servicePayload: JSON.stringify(blank) });
+  assert.equal(omitted.assessment.conflicts.length, 0);
+  assert.deepEqual(omitted.payload.body, blank);
+});
+
+test("custom path metadata uses exact IDs and keeps opaque body precedence and unequal aliases intact", () => {
+  const custom = { ...offer, modelId: null, routeKind: "playground", route: "/v1/playground/proxy/fixture/responses" };
+  for (const param of ["model", "deployment"]) {
+    const [target] = catalogTargets({ ...catalog, providers: [{ ...provider, offers: [custom] }] }, { ...routes, manifestProxy: [{ ...routes.manifestProxy[0], pathParams: [param] }] });
+    const form = { ...draft, servicePath: model.id, servicePayload: '{"temperature":0.7}' };
+    assert.match(targetRequest(target, form).assessment.conflicts[0].message, /requires reasoning.effort: none/);
+    for (const id of ["opaque", model.upstream, ""]) {
+      const body = { model: id, temperature: 0.7 };
+      const result = targetRequest(target, { ...form, servicePayload: JSON.stringify(body) });
+      assert.equal(result.assessment.conflicts.length, 0);
+      assert.equal(result.assessment.unknown.length, 1);
+      assert.deepEqual(result.payload, { method: "POST", pathParams: { [param]: model.id }, body });
+    }
+    const body = { model: model.id, input: "valid unequal carriers" };
+    const result = targetRequest(target, { ...form, servicePath: model.upstream, servicePayload: JSON.stringify(body) });
+    assert.equal(result.assessment.conflicts.length, 0);
+    assert.deepEqual(result.payload, { method: "POST", pathParams: { [param]: model.upstream }, body });
+  }
+});

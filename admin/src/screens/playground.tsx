@@ -27,7 +27,8 @@ export function PlaygroundScreen({ form, setForm, targets, selection, selected, 
   busy: boolean;
 }) {
   const transcript = useRef<HTMLDivElement>(null);
-  const methods = selected?.descriptor?.methods ?? ["POST"];
+  const displayTarget = selected ?? selection;
+  const methods = displayTarget?.descriptor?.methods ?? ["POST"];
   const selectedTurn = turns.find((turn) => turn.id === selectedTurnId);
   useEffect(() => {
     const element = transcript.current;
@@ -141,7 +142,7 @@ export function PlaygroundScreen({ form, setForm, targets, selection, selected, 
               ) : selection?.offer.routeKind === "playground" ? (
                 <>
                   <label><span>Method</span><select value={form.serviceMethod} onChange={(event) => setForm({ ...form, serviceMethod: event.target.value })}>{methods.map((method) => <option key={method} value={method}>{method}</option>)}</select></label>
-                  {selected?.descriptor?.pathParams?.length ? <label><span>{selected.descriptor!.pathParams!.join(" / ")}</span><input value={form.servicePath} onChange={(event) => setForm({ ...form, servicePath: event.target.value })} placeholder="route path value" /></label> : null}
+                  {displayTarget?.descriptor?.pathParams?.length ? <label><span>{displayTarget.descriptor!.pathParams!.join(" / ")}</span><input value={form.servicePath} onChange={(event) => setForm({ ...form, servicePath: event.target.value })} placeholder="route path value" /></label> : null}
                 </>
               ) : null}
             </div>

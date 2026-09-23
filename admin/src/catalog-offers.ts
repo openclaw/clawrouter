@@ -10,6 +10,7 @@ export interface CatalogTarget {
   observedAt: string;
   offer: CatalogOffer;
   model?: ClientCatalogModel;
+  providerModels: ClientCatalogModel[];
   descriptor?: RouteCatalog["manifestProxy"][number];
   mode: PlaygroundForm["mode"];
   blocker: string | null;
@@ -44,7 +45,7 @@ export function catalogTargets(catalog: ClientCatalog | null, routes: RouteCatal
     const blocker = !offer.eligible || offer.affordability === "exact-blocked" ? `Unavailable: ${offer.reasonCode ?? "operation blocked"}.`
       : !supported ? "Operation form unavailable. Refresh the catalog."
       : offer.modelId !== null && !model ? "Model metadata unavailable. Refresh the catalog." : null;
-    return [{ key: offerKey(catalog!.scope, provider.id, offer), provider: provider.id, providerName: provider.displayName, observedAt: catalog!.observedAt, offer, model, descriptor, mode, blocker }];
+    return [{ key: offerKey(catalog!.scope, provider.id, offer), provider: provider.id, providerName: provider.displayName, observedAt: catalog!.observedAt, offer, model, providerModels: provider.models, descriptor, mode, blocker }];
   }));
 }
 
@@ -89,15 +90,20 @@ export function targetRequest(target: CatalogTarget, form: PlaygroundForm, conve
   const unified = target.offer.routeKind === "unified";
   const payload = playgroundPayload(canonical, unified ? undefined : target.descriptor, conversation);
   const body = target.mode === "service" ? (payload as { body: unknown }).body : payload;
+  const fields = body && typeof body === "object" && !Array.isArray(body) ? body as Record<string, unknown> : {};
+  const pathParams: Record<string, string> = target.mode === "service" && !unified ? (payload as { pathParams: Record<string, string> }).pathParams : {};
   if (target.mode === "service" && target.offer.modelId !== null) {
-    const fields = body && typeof body === "object" && !Array.isArray(body) ? body as Record<string, unknown> : {};
-    const pathModels = unified ? [] : Object.entries((payload as { pathParams: Record<string, string> }).pathParams).filter(([name]) => name === "model" || name === "deployment").map(([, value]) => value);
+    const pathModels = Object.entries(pathParams).filter(([name]) => name === "model" || name === "deployment").map(([, value]) => value);
     // Unified dispatch resolves a qualified catalog ID. Scoped dispatch can use
     // upstream aliases, but every supplied body/path carrier must match the offer.
     const supplied = [...pathModels, ...(Object.hasOwn(fields, "model") || !pathModels.length ? [fields.model] : [])];
     if (supplied.some((value) => value !== target.offer.modelId && (unified || value !== target.model?.upstream))) throw new Error("Request model differs from the selected offer. Choose that model or a custom request first.");
   }
   const format = target.offer.routeKind === "unified" ? target.offer.route.endsWith("/responses") ? "openai.responses" : target.offer.route.endsWith("/embeddings") ? "openai.embeddings" : "openai.chat_completions" : target.descriptor?.requestFormat ?? "";
-  const assessment = assessModelRequest(target.model ?? null, { id: target.offer.endpoint, request_format: format }, body && typeof body === "object" && !Array.isArray(body) ? body as Record<string, unknown> : {});
+  // Custom forms borrow facts only for exact catalog IDs. Alias/template
+  // resolution and agreement between their carriers belong to scoped routing.
+  const suppliedModel = typeof fields.model === "string" ? fields.model : pathParams.model ?? pathParams.deployment;
+  const model = target.offer.modelId === null ? target.providerModels.find((item) => item.id === suppliedModel) : target.model;
+  const assessment = assessModelRequest(model ?? null, { id: target.offer.endpoint, request_format: format }, fields);
   return { payload: target.mode === "service" && target.offer.routeKind === "unified" ? body : payload, assessment };
 }
