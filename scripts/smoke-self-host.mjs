@@ -1,8 +1,8 @@
 import assert from "node:assert/strict";
 import packageMetadata from "../package.json" with { type: "json" };
 import { createHash, randomBytes } from "node:crypto";
-import { setTimeout as delay } from "node:timers/promises";
 import { adminRequest } from "./admin-api.mjs";
+import { waitForSelfHostHealth } from "./smoke-readiness.mjs";
 
 const baseUrl = requiredEnv("CLAWROUTER_BASE_URL").replace(/\/$/, "");
 requiredEnv("CLAWROUTER_ADMIN_TOKEN");
@@ -14,7 +14,7 @@ const proxyKey = `clawrouter-live-${credentialId}-${proxySecret}`;
 let created = false;
 
 try {
-  const health = await waitForHealth();
+  const health = await waitForSelfHostHealth(baseUrl);
   assert.equal(health.ok, true, "health response must report ok");
   assert.equal(health.version, packageMetadata.version, "health must report the built release version");
 
@@ -49,25 +49,6 @@ try {
   console.log("self-host smoke ok: health, admin mutation, scoped catalog, revocation");
 } finally {
   if (created) await revoke();
-}
-
-async function waitForHealth() {
-  const deadline = Date.now() + 30_000;
-  let lastError;
-  while (Date.now() < deadline) {
-    try {
-      const response = await fetch(`${baseUrl}/v1/health`, {
-        signal: AbortSignal.timeout(2_000),
-      });
-      const body = await response.json();
-      if (response.ok) return body;
-      lastError = new Error(`health returned ${response.status}`);
-    } catch (error) {
-      lastError = error;
-    }
-    await delay(500);
-  }
-  throw new Error(`self-host health did not become ready: ${lastError?.message ?? "timeout"}`);
 }
 
 async function revoke() {

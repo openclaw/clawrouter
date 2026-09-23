@@ -1,4 +1,3 @@
-import { request as dashboardRequest } from "./dashboard-fetch";
 import providerIconManifest from "./provider-icons.json";
 import {
   catalogProviderIds,
@@ -62,15 +61,6 @@ export async function settled<T>(loader: () => Promise<T>): Promise<{ ok: true; 
     return { ok: true, value: await loader() };
   } catch (error) {
     return { ok: false, error: errorMessage(error) };
-  }
-}
-
-export async function localLoginAvailable(baseUrl: string): Promise<boolean> {
-  try {
-    const index = await dashboardRequest<{ endpoints?: { sessionLogin?: unknown } }>(baseUrl, "/v1");
-    return typeof index.endpoints?.sessionLogin === "string";
-  } catch {
-    return false;
   }
 }
 

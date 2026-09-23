@@ -71,31 +71,52 @@ export function extractSseUsageTokens(text: string): UsageTokens | null {
   return inspector.result().tokens;
 }
 
+export type SseUsageEvidence = { kind: "data"; value: unknown } | { kind: "done" } | { kind: "error" } | { kind: "invalid" } | { kind: "unavailable" };
+
 export function createSseUsageInspector() {
+  const accumulator = createSseUsageAccumulator();
+  function inspect(frame: string | null) {
+    if (frame === null) { accumulator.accept({ kind: "unavailable" }); return; }
+    const lines = frame.split("\n");
+    const data = lines.filter(line => line.startsWith("data:")).map(line => line.slice(5).trim()).join("\n");
+    if (lines.some(line => /^event:\s*error\s*$/.test(line))) { accumulator.accept({ kind: "error" }); return; }
+    if (!data) return;
+    if (data === "[DONE]") { accumulator.accept({ kind: "done" }); return; }
+    try { accumulator.accept({ kind: "data", value: JSON.parse(data) }); }
+    catch { accumulator.accept({ kind: "invalid" }); }
+  }
+  const frames = sseFrames(inspect);
+  return {
+    push: frames.push,
+    result: (ended = true): UsageInspection => accumulator.result(ended, frames.overflowed()),
+  };
+}
+
+// Both bounded frame parsing and the Responses scalar projection feed one
+// accounting state owner; parser limits cannot invent a terminal provider error.
+export function createSseUsageAccumulator() {
   let found: UsageTokens | null = null, terminalTokens: UsageTokens | null = null;
   let message: Record<string, unknown> | null = null, messageUsage: Record<string, unknown> | null = null;
   let messageDeltaSeen = false, uncertain = false;
   let protocol: "message" | "response" | "chat" | null = null;
   let outcome: ResponseOutcome = null, chatTier: string | undefined;
-  function inspect(frame: string | null) {
-    if (frame === null) {
+  function accept(evidence: SseUsageEvidence) {
+    if (evidence.kind === "unavailable") {
       // Skipped oversized evidence is not proof of provider failure. A later
       // bounded terminal can restore authoritative outcome and usage.
       uncertain = true; found = null; messageUsage = null;
       return;
     }
-    const lines = frame.split("\n");
-    const data = lines.filter(line => line.startsWith("data:")).map(line => line.slice(5).trim()).join("\n");
-    if (lines.some(line => /^event:\s*error\s*$/.test(line))) { outcome = "provider_error"; return; }
-    if (!data || outcome !== null) return;
-    if (data === "[DONE]") {
+    if (evidence.kind === "error") { outcome = "provider_error"; return; }
+    if (outcome !== null) return;
+    if (evidence.kind === "done") {
       if (protocol === "message" || protocol === "response") { outcome = "provider_error"; return; }
       outcome = "success";
       terminalTokens = found && chatTier ? { ...found, serviceTier: chatTier } : found;
       return;
     }
-    let root: Record<string, unknown> | null;
-    try { root = record(JSON.parse(data)); } catch { if (protocol) outcome = "provider_error"; found = null; return; }
+    if (evidence.kind === "invalid") { if (protocol) outcome = "provider_error"; found = null; return; }
+    const root = record(evidence.value);
     if (!root) { if (protocol) outcome = "provider_error"; found = null; return; }
     const terminal = responseOutcome(root);
     if (terminal) { outcome = terminal; terminalTokens = extractUsageTokens(root); return; }
@@ -136,11 +157,10 @@ export function createSseUsageInspector() {
       found = root && ("usageMetadata" in root || "usage_metadata" in root) ? tokens : tokens ?? found;
     }
   }
-  const frames = sseFrames(inspect);
   return {
-    push: frames.push,
-    result(ended = true): UsageInspection {
-      return { tokens: outcome ? terminalTokens : protocol || !ended ? null : found, outcome: outcome ?? (ended && protocol && !uncertain && !frames.overflowed() ? "provider_error" : null) };
+    accept,
+    result(ended = true, overflowed = false): UsageInspection {
+      return { tokens: outcome ? terminalTokens : protocol || !ended ? null : found, outcome: outcome ?? (ended && protocol && !uncertain && !overflowed ? "provider_error" : null) };
     },
   };
 }

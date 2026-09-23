@@ -376,7 +376,7 @@ async function fixture(page: Page) {
     const responses: Record<string, unknown> = {
       "/v1/providers": { providers: [] },
       "/v1/routes": { openaiCompatible: [], manifestProxy: [] },
-      "/v1/session": { authenticated: true, auth: "access", role: state.role, email: state.email, tenantId: "default", entitlements: { providers: [] } },
+      "/v1/session": { authenticated: true, auth: "cloudflare_access", role: state.role, email: state.email, tenantId: "default", entitlements: { providers: [] } },
       "/v1/session/usage": state.usage,
       "/v1/session/credentials": { credentials: [] },
       "/v1/admin/bootstrap": {

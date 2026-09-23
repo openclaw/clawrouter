@@ -130,7 +130,7 @@ const bootstrap: Record<string, unknown> = {
     manifestProxy: [{ provider: "test-service", endpoint: "search", route: "/v1/proxy/test-service/search", methods: ["POST"] }],
   },
   "/v1/session": {
-    authenticated: true, auth: "access", role: "user", email: "user@example.com", entitlements: { providers: entitlements },
+    authenticated: true, auth: "cloudflare_access", role: "user", email: "user@example.com", entitlements: { providers: entitlements },
   },
   "/v1/session/credentials": { credentials: [] },
   "/v1/session/usage": {

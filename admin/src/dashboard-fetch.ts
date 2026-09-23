@@ -3,11 +3,25 @@ import type { PlaygroundHttpResponse } from "./ui-types";
 
 export class DashboardRequestError extends Error {
   status: number;
+  code: string | null;
   constructor(message: string, status: number) {
     super(message);
     this.status = status;
+    this.code = null;
+    try {
+      const value = JSON.parse(message);
+      if (typeof value?.error?.code === "string") this.code = value.error.code;
+    } catch { /* Non-JSON failures remain ordinary request errors. */ }
   }
 }
+
+export function authenticationRequired(error: unknown, path: string): boolean {
+  if (!(error instanceof DashboardRequestError) || error.status !== 401) return false;
+  if (path.startsWith("/v1/admin/")) return error.code === "admin_unauthorized";
+  return (path === "/v1/session" || path.startsWith("/v1/session/") || path === "/v1/entitlements") && error.code === "access_session_required";
+}
+
+export type ConsoleRequest = typeof request;
 
 export async function localLogin(baseUrl: string, token: string): Promise<string | null> {
   const response = await fetch(`${baseUrl.replace(/\/$/, "")}/v1/session/login`, {

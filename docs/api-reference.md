@@ -301,6 +301,8 @@ Budgeted requests reserve an upper-bound token cost before the upstream call whe
 
 Successful responses settle to reported usage, including cached input where available, or the explicit fixed policy tariff. Known-unsent work and received non-2xx responses settle at zero with `cost_basis: none`. Transport failures after dispatch, and missing or interrupted usage, retain the qualified estimate or fixed tariff because upstream work may have occurred. Streaming responses are metered without buffering the client stream.
 
+Declared Responses JSON and SSE bodies are inspected incrementally for usage and terminal status, including fields after large output. The observer retains only bounded metadata; excessive nesting or oversized selected fields leave usage unknown and preserve the applicable estimate or fixed tariff. These inspection limits do not impose a response-size limit or change delivered bytes.
+
 Usage events are delivered through `USAGE_QUEUE` to tenant- and policy-sharded `USAGE_LEDGER` Durable Objects. Settlement and audit delivery retry independently, and exhausted messages move to the configured usage dead-letter queue. Ledgers keep bounded identity, route, timing, outcome, token, cost, request ID, and trace metadata; they do not store prompts or completions.
 
 Policies can retain LLM request bodies in the separate `CONTENT_ARCHIVE` R2 binding. Retention failure is fail-closed before upstream traffic. See [Request content retention](content-retention.md) for the policy and disclosure contract.
