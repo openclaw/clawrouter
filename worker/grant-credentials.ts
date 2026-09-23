@@ -173,41 +173,46 @@ export class GrantCredentialObject implements DurableObject {
     if (!record) throw new HttpError(404, "grant_credential_missing", "upstream grant credential is not registered");
     // Materialization may rotate tokens, but cannot adopt lifecycle state from a
     // stale KV read. Only explicit owner mutations can re-enable or reconnect.
-    if (input.grant.credentialGeneration !== record.generation || input.grant.enabled !== record.enabled) await this.publishProjection(record);
-    assertCredentialEnabled(record);
-    if (record.providerId && record.providerId !== input.providerId || record.kind !== input.grant.kind) throw new HttpError(409, "upstream_grant_changed", "upstream grant changed; retry discovery before dispatch");
-    if (record.status === "reauth_required") throw new ReauthorizationRequired("upstream grant requires reauthorization", credentialProjection(record));
-
-    const expected = input.expectedGeneration;
-    const mayForce = input.force && (expected != null ? expected === record.generation : migrated || !input.legacy);
-    const expiresAtMs = record.expiresAt ? Date.parse(record.expiresAt) : NaN;
-    const expiring = Number.isFinite(expiresAtMs) && expiresAtMs <= Date.now() + REFRESH_MARGIN_MS;
-    const deferredRefresh = record.nextRefreshAttemptAt ? Date.parse(record.nextRefreshAttemptAt) > Date.now() : false;
+    const stale = input.grant.credentialGeneration !== record.generation || input.grant.enabled !== record.enabled;
     let changed = false;
-    if (mayForce || expiring) {
-      if (!record.refreshToken) {
-        if (mayForce) throw new HttpError(400, "grant_refresh_unavailable", "upstream grant has no refresh token");
-      } else if (!mayForce && deferredRefresh) {
-        throw new HttpError(502, "grant_refresh_failed", `provider ${input.providerId} refresh is waiting for its retry window`);
-      } else {
-        try {
-          record = await this.refresh(record, input.providerId, input.refresh ?? null);
-          changed = true;
-        } catch (error) {
-          record = await this.state.storage.get<CredentialRecord>("credential") ?? record;
-          if (record.status !== "reauth_required") {
-            record.nextRefreshAttemptAt = new Date(Date.now() + REFRESH_MARGIN_MS).toISOString();
-            await this.state.storage.put("credential", record);
-            await this.schedule(record);
-          } else await this.state.storage.deleteAlarm();
-          await this.publishProjection(record);
-          throw error;
+    try {
+      assertCredentialEnabled(record);
+      if (record.providerId && record.providerId !== input.providerId || record.kind !== input.grant.kind) throw new HttpError(409, "upstream_grant_changed", "upstream grant changed; retry discovery before dispatch");
+      if (record.status === "reauth_required") throw new ReauthorizationRequired("upstream grant requires reauthorization", credentialProjection(record));
+
+      const expected = input.expectedGeneration;
+      const mayForce = input.force && (expected != null ? expected === record.generation : migrated || !input.legacy);
+      const expiresAtMs = record.expiresAt ? Date.parse(record.expiresAt) : NaN;
+      const expiring = Number.isFinite(expiresAtMs) && expiresAtMs <= Date.now() + REFRESH_MARGIN_MS;
+      const deferredRefresh = record.nextRefreshAttemptAt ? Date.parse(record.nextRefreshAttemptAt) > Date.now() : false;
+      if (mayForce || expiring) {
+        if (!record.refreshToken) {
+          if (mayForce) throw new HttpError(400, "grant_refresh_unavailable", "upstream grant has no refresh token");
+        } else if (!mayForce && deferredRefresh) {
+          throw new HttpError(502, "grant_refresh_failed", `provider ${input.providerId} refresh is waiting for its retry window`);
+        } else {
+          try {
+            record = await this.refresh(record, input.providerId, input.refresh ?? null);
+            changed = true;
+          } catch (error) {
+            record = await this.state.storage.get<CredentialRecord>("credential") ?? record;
+            changed = true;
+            if (record.status !== "reauth_required") {
+              record.nextRefreshAttemptAt = new Date(Date.now() + REFRESH_MARGIN_MS).toISOString();
+              await this.state.storage.put("credential", record);
+              await this.schedule(record);
+            } else await this.state.storage.deleteAlarm();
+            throw error;
+          }
         }
       }
+      if (changed || migrated) await this.schedule(record);
+      return { grant: materializedGrant(metadataGrant(record), record) };
+    } finally {
+      // KV permits one write per key per second. Publish the final owner state
+      // once, including failed refreshes and stale disabled/revoked reads.
+      if (stale || changed || migrated) await this.publishProjection(record);
     }
-    if (changed || migrated) await this.schedule(record);
-    if (changed) await this.publishProjection(record);
-    return { grant: materializedGrant(metadataGrant(record), record) };
   }
 
   private async refresh(record: CredentialRecord, providerId: string, providerRefresh: RefreshConfig | null): Promise<CredentialRecord> {

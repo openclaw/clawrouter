@@ -77,6 +77,39 @@ test("permanent refresh rejection marks only metadata and never returns provider
   assert.equal(JSON.stringify(metadata).includes("refresh-old"), false);
 });
 
+for (const outcome of ["success", "permanent", "transient"]) test(`legacy migration publishes only the final ${outcome} refresh state within the KV write limit`, async (context) => {
+  const key = "oauth/policy/openai", values = new Map([[key, legacyGrant({ expiresAt: "2020-01-01T00:00:00.000Z" })]]), env = credentialEnv(values);
+  const limit = rateLimitKv(env);
+  context.mock.method(globalThis, "fetch", async () => outcome === "success"
+    ? Response.json({ access_token: "access-new", refresh_token: "refresh-new", expires_in: 3600 })
+    : Response.json({ error: outcome === "permanent" ? "invalid_grant" : "unavailable" }, { status: outcome === "permanent" ? 400 : 503 }));
+  const materialize = () => materializeGrantCredentials(env, key, values.get(key), "openai", refreshConfig(), false);
+  if (outcome === "success") assert.equal((await materialize()).accessToken, "access-new");
+  else await assert.rejects(materialize, (error) => error.code === (outcome === "permanent" ? "grant_reauthorization_required" : "grant_refresh_failed"));
+  const record = env.GRANT_CREDENTIALS.objects.get(key).values.get("credential"), metadata = values.get(key);
+  assert.equal(limit.writes(), 1);
+  assert.equal(metadata.credentialGeneration, record.generation);
+  assert.equal(metadata.credentialStatus, outcome === "permanent" ? "reauth_required" : "active");
+  assert.equal(metadata.accessToken, undefined);
+  assert.equal(metadata.refreshToken, undefined);
+});
+
+for (const action of ["disable", "revoke"]) test(`consecutive explicit ${action} remains authoritative when KV rate limits publication`, async () => {
+  const key = "oauth/policy/openai", values = new Map(), env = credentialEnv(values), limit = rateLimitKv(env);
+  const active = await putGrantCredentials(env, key, legacyGrant());
+  await assert.rejects(() => action === "revoke" ? revokeGrantCredentials(env, key) : putGrantCredentials(env, key, { ...active, enabled: false }, true), (error) => error.code === "credential_owner_error");
+  const owner = env.GRANT_CREDENTIALS.objects.get(key), record = owner.values.get("credential");
+  assert.equal(record.enabled, false);
+  assert.equal(owner.alarm(), null);
+  assert.equal(values.get(key).enabled, true, "the rejected projection remains visibly stale");
+  if (action === "revoke") { assert.ok(record.revokedAt); assert.equal(record.accessToken, undefined); assert.equal(record.refreshToken, undefined); }
+  await assert.rejects(() => materializeGrantCredentials(env, key, active, "openai", refreshConfig(), false), (error) => error.code === "credential_owner_error");
+  limit.advance();
+  await assert.rejects(() => materializeGrantCredentials(env, key, active, "openai", refreshConfig(), false), (error) => error.code === "grant_disabled");
+  assert.equal(values.get(key).enabled, false);
+  assert.equal(values.get(key).credentialGeneration, record.generation);
+});
+
 test("revocation retains a secretless tombstone and requires fresh credentials to reconnect", async () => {
   const key = "oauth/policy/openai";
   const values = new Map();
@@ -304,6 +337,17 @@ function credentialEnv(values) {
       async put(key, value) { values.set(key, JSON.parse(value)); },
     },
   });
+}
+
+function rateLimitKv(env) {
+  const put = env.POLICY_KV.put;
+  let now = 0, lastWrite = -Infinity, writes = 0;
+  env.POLICY_KV.put = async (...args) => {
+    if (now - lastWrite < 1_000) throw new Error("KV PUT failed: 429 Too Many Requests");
+    await put(...args);
+    lastWrite = now; writes += 1;
+  };
+  return { advance() { now += 1_000; }, writes: () => writes };
 }
 
 function legacyGrant(overrides = {}) {
