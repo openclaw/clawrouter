@@ -1,4 +1,4 @@
-import { type FormEvent, type SetStateAction, useRef, useState } from "react";
+import { type FormEvent, useRef, useState } from "react";
 import { currencyInput, errorMessage, knownPolicyProviders, optionalCurrencyMicros, optionalNumber, parseEligibleGrants, unique } from "../../domain";
 import { defaultPolicy, demo, rolePresets } from "../../ui-config";
 import { policyFormFromPolicy } from "../../ui-helpers";
@@ -116,14 +116,14 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
       const canonical = policyFormFromPolicy(saved), current = currentDraft.current;
       const replacement = current.selection === saved.policyId && incarnation.current !== submittedIncarnation;
       const enabledEdited = (fieldEditRevisions.current.enabled ?? 0) > submittedRevision;
-      // Clean replacement drafts follow the committed row; Disable still honors later enabled edits.
-      const cleanReplacement = replacement && !current.dirty && (action === "save" || !enabledEdited);
-      if (cleanReplacement || (revision.current === submittedRevision && (action === "save" || !submitted.dirty))) resetDraft(saved.policyId, canonical);
+      // Only untouched replacement drafts adopt the entire row; edit-back is still intent.
+      const untouchedReplacement = replacement && !Object.keys(fieldEditRevisions.current).length;
+      if (untouchedReplacement || (revision.current === submittedRevision && (action === "save" || !submitted.dirty))) resetDraft(saved.policyId, canonical);
       else if (current.selection === saved.policyId || (action === "save" && !submitted.selection && !current.selection && incarnation.current === submittedIncarnation)) {
         // A committed create owns this New draft's identity, but never a replacement draft.
         // Later edits stay dirty against the committed baseline, including a return to old values.
         let value = current.value;
-        if (replacement && current.dirty) {
+        if (replacement) {
           // Reselecting reads the old row while its write is pending. Only edits
           // in this replacement draft may override the acknowledged fields.
           value = { ...canonical };
@@ -190,42 +190,39 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
     setDraft(next);
   }
 
-  function setPolicyForm(next: SetStateAction<PolicyForm>) {
+  function setPolicyForm(next: Partial<PolicyForm> | ((current: PolicyForm) => Partial<PolicyForm>)) {
     const current = currentDraft.current;
-    let value = typeof next === "function" ? next(current.value) : next;
-    const thresholdSelected = value.grantStrategy === "threshold" && current.value.grantStrategy !== "threshold";
-    if (thresholdSelected) value = { ...value, grantStickiness: "none" };
-    if (JSON.stringify(value) === JSON.stringify(current.value)) return;
+    let patch = typeof next === "function" ? next(current.value) : next;
+    // Choosing threshold also chooses no stickiness, even if it already reads none.
+    if (patch.grantStrategy === "threshold" && current.value.grantStrategy !== "threshold") patch = { ...patch, grantStickiness: "none" };
+    const fields = Object.keys(patch) as (keyof PolicyForm)[];
+    if (!fields.length) return;
+    const value = { ...current.value, ...patch };
     if (!current.selection && value.policyId !== current.value.policyId) {
       incarnation.current += 1;
       fieldEditRevisions.current = {};
     }
-    // Choosing threshold also chooses no stickiness, even if it already reads none.
-    if (thresholdSelected) fieldEditRevisions.current.grantStickiness = revision.current + 1;
-    // Record edit-back intent too; equality with the old baseline cannot prove
-    // that a field was untouched while an earlier save was in flight.
-    for (const field of Object.keys(value) as (keyof PolicyForm)[]) {
-      if (JSON.stringify(value[field]) !== JSON.stringify(current.value[field])) fieldEditRevisions.current[field] = revision.current + 1;
-    }
+    // A named field is explicit intent, including unchanged presets and edit-back.
+    for (const field of fields) fieldEditRevisions.current[field] = revision.current + 1;
     publishDraft({ ...current, value, dirty: JSON.stringify(value) !== JSON.stringify(baseline.current), initialized: true });
   }
 
   function applyPreset(role: keyof typeof rolePresets) {
     const preset = rolePresets[role], available = new Set(providers.map((provider) => provider.id));
-    setPolicyForm((current) => ({ ...current, tokenRole: role, monthlyBudgetMicros: currencyInput(optionalNumber(preset.budget)), requestCostMicros: preset.request, providers: preset.providers.length ? preset.providers.filter((id) => available.has(id)) : providers.map((provider) => provider.id), allProviders: false }));
+    setPolicyForm({ tokenRole: role, monthlyBudgetMicros: currencyInput(optionalNumber(preset.budget)), requestCostMicros: preset.request, providers: preset.providers.length ? preset.providers.filter((id) => available.has(id)) : providers.map((provider) => provider.id), allProviders: false });
   }
 
   function toggleProvider(providerId: string) {
     const allProviderIds = providers.map((provider) => provider.id);
-    setPolicyForm((current) => ({ ...current, allProviders: false, providers: (current.allProviders ? allProviderIds : current.providers).includes(providerId) ? (current.allProviders ? allProviderIds : current.providers).filter((id) => id !== providerId) : [...current.providers, providerId].sort() }));
+    setPolicyForm((current) => ({ allProviders: false, providers: (current.allProviders ? allProviderIds : current.providers).includes(providerId) ? (current.allProviders ? allProviderIds : current.providers).filter((id) => id !== providerId) : [...current.providers, providerId].sort() }));
   }
 
   function setProviderGroup(providerIds: string[], checked: boolean) {
     const allProviderIds = providers.map((provider) => provider.id);
     setPolicyForm((current) => {
-      if (current.allProviders && checked) return current;
+      if (current.allProviders && checked) return { allProviders: true, providers: current.providers };
       const selected = current.allProviders ? allProviderIds : current.providers;
-      return { ...current, allProviders: false, providers: checked ? unique([...selected, ...providerIds]).sort() : selected.filter((id) => !providerIds.includes(id)) };
+      return { allProviders: false, providers: checked ? unique([...selected, ...providerIds]).sort() : selected.filter((id) => !providerIds.includes(id)) };
     });
   }
 
