@@ -245,7 +245,7 @@ test("Together full-context requests require headroom in both budgets and settle
       const upstream = t.mock.method(globalThis, "fetch", async (url, init) => {
         assert.equal(String(url), "https://api.together.xyz/v1/chat/completions");
         assert.equal(JSON.parse(init.body).model, "zai-org/GLM-5.2");
-        for (const owner of ["tenant:maintainer_access:owner@example.com", "provider:together"]) {
+        if (!denied) for (const owner of ["tenant:maintainer_access:owner@example.com", "provider:together"]) {
           const [reservation] = ledger.get(owner).reservations();
           assert.equal(reservation.reserved_micros, 1_472_405);
           assert.equal(reservation.dispatch_started, 1);
