@@ -35,14 +35,15 @@ test("workerd HTTP endpoint deadline retires before delivery with caller and bot
     }));
     // The original whitespace cancellation remains an unresolved diagnostic.
     // Run independent delivered-body cases first; never turn its failure into a skip.
-    for (const scenario of ["json", "sse", "headers", "first-event", "cancel-json-active", "cancel-sse", "cancel-json"]) {
+    for (const scenario of ["json", "sse", "headers", "first-event", "cancel-json-active", "cancel-sse", "cancel-json-pre-body-progress", "cancel-json"]) {
       let cleanupError;
       await t.test(scenario === "cancel-json" ? "cancel-json (unresolved whitespace cancellation)" : scenario, async () => {
         const caller = new AbortController(), watchStop = new AbortController();
         const requestId = `deadline-${scenario}`, cancellation = new Error("fixture caller after endpoint deadline retirement");
         const streaming = scenario.includes("sse") || scenario === "first-event";
         const canceled = scenario.startsWith("cancel-");
-        const requireDeliveredBytes = canceled && scenario !== "cancel-json";
+        const preBodyProgress = scenario === "cancel-json-pre-body-progress";
+        const requireDeliveredBytes = canceled && scenario !== "cancel-json" && !preBodyProgress;
         const timedOut = scenario === "headers" || scenario === "first-event";
         const beforeUsage = await read("/v1/usage"), beforeLedgers = await ledgerFacts();
         const previousReceipts = new Set(beforeUsage.usage.events.map(event => event.request_id));
@@ -122,6 +123,17 @@ test("workerd HTTP endpoint deadline retires before delivery with caller and bot
             assert.ok(client.bytesAtAbort > 0, "the active-delivery case must observe body bytes before cancellation");
             assert.ok(client.firstBodyAt <= client.abortRequestedAt);
           }
+          if (preBodyProgress) {
+            assert.equal(client.status, 200); assert.equal(client.contentEncoding, "gzip");
+            assert.equal(client.bytesAtAbort, 0); assert.equal(client.firstBodyAt, null);
+            assert.ok(client.headersAt <= client.abortRequestedAt);
+            assert.notEqual(ingress.abortedAt, null); assert.ok(ingress.abortedAt >= client.abortRequestedAt);
+            assert.equal(state.aborted, true); assert.equal(state.complete, false);
+            if (state.firstPayloadAt !== null) {
+              assert.ok(client.abortRequestedAt < state.firstPayloadAt);
+              assert.ok(state.firstPayloadAt - state.startedAt >= 2_000);
+            }
+          }
           for (const [index, { spent, rows }] of ledgers.entries()) {
             assert.equal(spent, beforeLedgers[index].spent + 7); assert.equal(rows.length, beforeLedgers[index].rows.length + 1);
             const added = addedRows(ledgers, index);
@@ -190,7 +202,9 @@ const state = {}, encoder = new TextEncoder();
 export default { async fetch(request) {
   if (new URL(request.url).pathname === "/state") return Response.json(state);
   const body = await request.json(), scenario = body.input;
+  const preBodyProgress = scenario === "cancel-json-pre-body-progress";
   const entry = state[scenario] = { startedAt: Date.now(), lastProgressAt: null, progressCount: 0, complete: false, aborted: false, canceled: false };
+  if (preBodyProgress) entry.firstPayloadAt = null;
   let timer, controller, release, stopped = false;
   const finish = () => { stopped = true; clearTimeout(timer); release?.(); };
   const wait = ms => new Promise(resolve => { release = resolve; timer = setTimeout(resolve, ms); });
@@ -204,7 +218,7 @@ export default { async fetch(request) {
   }
   const result = { object: "response", status: "completed", output: [], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } };
   let activeJson = null;
-  if (scenario === "cancel-json-active") {
+  if (scenario === "cancel-json-active" || preBodyProgress) {
     const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789";
     let seed = 1, text = "";
     for (let index = 0; index < 64 * 1024; index++) {
@@ -221,7 +235,9 @@ export default { async fetch(request) {
       if (chunks > 0) await wait(50);
       if (stopped) return;
       entry.lastProgressAt = Date.now(); entry.progressCount++;
-      if (activeJson !== null) {
+      // This probe's payload starts on the upstream clock, independently of caller abort.
+      if (activeJson !== null && (!preBodyProgress || entry.lastProgressAt - entry.startedAt >= 2_000)) {
+        if (preBodyProgress && entry.firstPayloadAt === null) { entry.firstPayloadAt = entry.lastProgressAt; chunks = 0; }
         const offset = chunks++ * 2048;
         value.enqueue(encoder.encode(activeJson.slice(offset, offset + 2048)));
         if (offset + 2048 >= activeJson.length) { entry.complete = true; finish(); value.close(); }
