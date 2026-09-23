@@ -94,7 +94,8 @@ an admin, upstream provider, or ChatGPT token in `CLAWROUTER_API_KEY`.
 ## Desktop account features and voice
 
 CLI and engine priority forwarding is separate from the Desktop Fast control.
-The installed Desktop clears Fast in custom-key-only mode. Desktop Fast requires
+The installed Desktop clears Fast in custom-key-only mode
+([upstream report](https://github.com/openai/codex/issues/43635)). Desktop Fast requires
 a genuine ChatGPT login, a catalog model advertising priority, and permission
 from any managed `fast_mode` requirements. An optional hybrid
 configuration sets `requires_openai_auth = true` while retaining the explicit
@@ -109,6 +110,20 @@ pipe, so those fixtures do not prove the graphical Fast control, microphone
 permission, or a particular account's entitlement. Desktop dictation
 continues to use the app's OpenAI service and genuine ChatGPT account. ClawRouter
 does not proxy dictation, speech, or the Realtime API through Responses WebSockets.
+
+The isolated native fixture also exercises synchronous Guardian approval with
+the official catalog, a key-only loopback provider, and a prompt-approved
+synthetic MCP echo. On both 0.153.0 and 0.155.0, the native reviewer selected
+`gpt-6-astra`: an allow decision invoked the tool once; a deny decision invoked
+it zero times. Review notifications matched the target call, thread, and turn.
+These cases emitted no Luna classifier traffic and do not qualify asynchronous
+Guardian scoring, genuine upstream review decisions, or the Desktop UI.
+No ChatGPT login or user approval RPC is fabricated for these tests.
+
+To run the opt-in fixtures, set `CLAWROUTER_CODEX_BINARY` to the official binary
+and `CLAWROUTER_CODEX_CATALOG_BINARY` to a 0.155.0 catalog producer, then run
+`node --test test/codex-native.test.mjs`. Ordinary CI skips native cases when
+the binary is absent. Each case removes its temporary home and loopback server.
 
 ## WebSocket contract
 
