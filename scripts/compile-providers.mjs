@@ -1,8 +1,11 @@
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
+import { Validator } from "@cfworker/json-schema";
 import { parse } from "yaml";
 
 const optionalRateFields = ["cachedInputMicrosPerMillion", "cacheWriteInputMicrosPerMillion", "cacheWrite5mInputMicrosPerMillion", "cacheWrite1hInputMicrosPerMillion"];
+const manifestSchema = JSON.parse(readFileSync(new URL("../providers/_schema/service-provider.schema.json", import.meta.url), "utf8"));
+const manifestValidator = new Validator(manifestSchema, "2020-12");
 
 const rawArgs = process.argv.slice(2).filter((arg) => arg !== "--");
 const outputIndex = rawArgs.indexOf("--output");
@@ -204,55 +207,42 @@ function normalizeLongContext(value) {
   return value ? { thresholdInputTokens: value.thresholdInputTokens, ...normalizeRates(value) } : null;
 }
 
-function validateServiceTiers(pricing, modelId) {
-  if (pricing?.serviceTiers === undefined) return;
+function validatePricing(pricing, modelId) {
+  if (!pricing) return;
+  if (pricing.longContext && pricing.longContext.thresholdInputTokens >= pricing.maxInputTokens) throw new Error(`model ${modelId} has an invalid long-context threshold`);
+  if (pricing.serviceTiers === undefined) return;
   const tiers = pricing.serviceTiers;
   const fail = (message) => { throw new Error(`model ${modelId} serviceTiers ${message}`); };
-  if (!Array.isArray(tiers) || tiers.length === 0 || tiers.length > 8) fail("must contain 1-8 entries");
   const ids = new Set();
   for (const tier of tiers) {
-    if (!tier || typeof tier !== "object" || (tier.aliases !== undefined && (!Array.isArray(tier.aliases) || tier.aliases.length > 8))) fail("has an invalid card");
     for (const id of [tier.id, ...(tier.aliases ?? [])]) {
-      if (typeof id !== "string" || !/^[a-z][a-z0-9_-]{0,63}$/.test(id) || id === "auto" || ids.has(id)) fail("ids and aliases must be unique bounded wire values other than auto");
+      if (id === "auto" || ids.has(id)) fail("ids and aliases must be unique bounded wire values other than auto");
       ids.add(id);
     }
-    if (tier.maxInputTokens != null && (!Number.isSafeInteger(tier.maxInputTokens) || tier.maxInputTokens < 1 || tier.maxInputTokens > pricing.maxInputTokens)) fail("has an invalid input limit");
-    for (const card of [tier, ...(tier.longContext ? [tier.longContext] : [])]) {
-      for (const field of ["inputMicrosPerMillion", "outputMicrosPerMillion", ...optionalRateFields.filter((field) => card[field] != null)]) {
-        if (!Number.isSafeInteger(card[field]) || card[field] < 0) fail("requires complete nonnegative integer rates");
-      }
-    }
-    if (tier.longContext && (!Number.isSafeInteger(tier.longContext.thresholdInputTokens) || tier.longContext.thresholdInputTokens < 1 || tier.longContext.thresholdInputTokens >= (tier.maxInputTokens ?? pricing.maxInputTokens))) fail("has an invalid long-context threshold");
+    if (tier.maxInputTokens != null && tier.maxInputTokens > pricing.maxInputTokens) fail("has an invalid input limit");
+    if (tier.longContext && tier.longContext.thresholdInputTokens >= (tier.maxInputTokens ?? pricing.maxInputTokens)) fail("has an invalid long-context threshold");
   }
   const standard = tiers.find((tier) => tier.id === "default");
   if (!standard || standard.maxInputTokens != null || JSON.stringify(normalizeRates(standard)) !== JSON.stringify(normalizeRates(pricing)) || JSON.stringify(normalizeLongContext(standard.longContext)) !== JSON.stringify(normalizeLongContext(pricing.longContext))) fail("default card must match the canonical model rates and context");
 }
 
 function validateManifest(manifest) {
-  if (manifest.schema !== "clawrouter.service-provider.v1") throw new Error(`provider ${manifest.id ?? "?"} has unsupported schema ${manifest.schema}`);
-  if (!manifest.id) throw new Error("provider id is empty");
-  if (!manifest.auth?.schemes?.length) throw new Error(`provider ${manifest.id} has no auth schemes`);
+  // Validate before normalization so defaults cannot hide a malformed manifest.
+  // Cross-field references below remain semantic checks on this canonical shape.
+  const validation = manifestValidator.validate(manifest);
+  if (!validation.valid) throw new Error(`provider ${manifest?.id ?? "?"} invalid manifest: ${validation.errors.map(({ instanceLocation, error }) => `${instanceLocation}: ${error}`).join("; ")}`);
   if (!manifest.baseUrls?.default) throw new Error(`provider ${manifest.id} is missing baseUrls.default`);
-  if (!Object.keys(manifest.endpoints ?? {}).length) throw new Error(`provider ${manifest.id} has no endpoints`);
-  if (!(manifest.capabilities ?? []).length) throw new Error(`provider ${manifest.id} has no capabilities`);
   const configKeys = new Set(manifest.service?.configKeys ?? []);
   for (const key of manifest.service?.optionalConfigKeys ?? []) if (!configKeys.has(key)) throw new Error(`provider ${manifest.id} optional config key ${key} is not declared in configKeys`);
   for (const capability of manifest.capabilities) {
-    if (!manifest.endpoints[capability.endpoint]) throw new Error(`provider ${manifest.id} capability ${capability.id} references missing endpoint ${capability.endpoint}`);
+    if (!Object.hasOwn(manifest.endpoints, capability.endpoint)) throw new Error(`provider ${manifest.id} capability ${capability.id} references missing endpoint ${capability.endpoint}`);
   }
-  const reasoningEfforts = new Set(["none", "minimal", "low", "medium", "high", "xhigh", "max"]);
   for (const model of manifest.models?.entries ?? []) {
     if (model.codexModel !== undefined && (typeof model.codexModel !== "string" || !model.codexModel.trim())) throw new Error(`model ${model.id} codexModel must be a nonempty exact native slug`);
-    validateServiceTiers(model.pricing, model.id);
-    const efforts = model.supportedReasoningEfforts;
-    if (efforts === undefined) continue;
-    if (!Array.isArray(efforts) || efforts.length === 0 || efforts.length > reasoningEfforts.size) throw new Error(`provider ${manifest.id} model ${model.id} supportedReasoningEfforts must contain 1-${reasoningEfforts.size} entries`);
-    if (efforts.some((effort) => !reasoningEfforts.has(effort))) throw new Error(`provider ${manifest.id} model ${model.id} supportedReasoningEfforts contains an unsupported effort`);
-    if (new Set(efforts).size !== efforts.length) throw new Error(`provider ${manifest.id} model ${model.id} supportedReasoningEfforts must contain unique entries`);
+    validatePricing(model.pricing, model.id);
   }
   for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
     if (endpoint.websocket !== undefined && (endpoint.websocket !== "openai.responses" || endpoint.requestFormat !== "openai.responses" || endpoint.responseFormat !== "openai.responses" || endpoint.streaming !== "sse" || (endpoint.method ?? "POST") !== "POST" || endpoint.nativeProxy === false)) throw new Error(`provider ${manifest.id} endpoint ${id} websocket requires a native POST Responses SSE endpoint`);
-    if (!endpoint.path?.startsWith("/")) throw new Error(`provider ${manifest.id} endpoint ${id} path must start with /`);
     for (const placeholder of endpoint.path.matchAll(/\$\{([^}]+)\}/g)) {
       if (!(endpoint.pathParams ?? []).includes(placeholder[1])) throw new Error(`provider ${manifest.id} endpoint ${id} path parameter ${placeholder[1]} is not declared`);
     }
@@ -261,11 +251,11 @@ function validateManifest(manifest) {
   for (const [kind, transport] of Object.entries(manifest.auth.grantTransports ?? {})) {
     if (!new Set(["api_key", "oauth", "subscription"]).has(kind)) throw new Error(`provider ${manifest.id} grant transport ${kind} has an invalid grant kind`);
     for (const name of [...Object.keys(transport.headers ?? {}), ...Object.keys(transport.appendHeaders ?? {})]) if (!headerName.test(name)) throw new Error(`provider ${manifest.id} grant transport ${kind} has an invalid header`);
-    if (transport.allowedEndpoints !== undefined && (!Array.isArray(transport.allowedEndpoints) || !transport.allowedEndpoints.length || new Set(transport.allowedEndpoints).size !== transport.allowedEndpoints.length || transport.allowedEndpoints.some((id) => typeof id !== "string" || !Object.hasOwn(manifest.endpoints, id)))) throw new Error(`provider ${manifest.id} grant transport ${kind} allowedEndpoints must reference unique existing endpoints`);
+    if (transport.allowedEndpoints?.some((id) => !Object.hasOwn(manifest.endpoints, id))) throw new Error(`provider ${manifest.id} grant transport ${kind} allowedEndpoints must reference unique existing endpoints`);
     const warm = transport.maintenance?.keepWarm;
     if (warm) {
+      if (!Object.hasOwn(manifest.endpoints, warm.endpoint)) throw new Error(`provider ${manifest.id} grant transport ${kind} keep-warm references missing endpoint ${warm.endpoint}`);
       const endpoint = manifest.endpoints[warm.endpoint];
-      if (!endpoint) throw new Error(`provider ${manifest.id} grant transport ${kind} keep-warm references missing endpoint ${warm.endpoint}`);
       if ((endpoint.method ?? "POST").toUpperCase() !== "POST" || (endpoint.pathParams ?? []).length) throw new Error(`provider ${manifest.id} grant transport ${kind} keep-warm requires a POST endpoint without path parameters`);
       if (JSON.stringify(warm.body).length > 16 * 1024) throw new Error(`provider ${manifest.id} grant transport ${kind} keep-warm body is too large`);
     }
@@ -275,39 +265,25 @@ function validateManifest(manifest) {
 }
 
 function validateQuota(providerId, quota) {
-  if (quota != null && (typeof quota !== "object" || Array.isArray(quota))) throw new Error(`provider ${providerId} quota must be an object`);
-  const kinds = new Set(["requests", "tokens", "input_tokens", "output_tokens", "credits", "subscription", "generic"]);
-  const grantKinds = new Set(["api_key", "oauth", "subscription"]);
-  const validateBase = (window, source) => {
-    if (!window || typeof window !== "object" || !/^[a-z0-9][a-z0-9_-]{0,63}$/.test(window.id ?? "") || !kinds.has(window.kind)) throw new Error(`provider ${providerId} has an invalid ${source} quota window`);
+  const validateBase = (window) => {
     if (window.fixedLimit != null && (!Number.isFinite(window.fixedLimit) || window.fixedLimit < 0)) throw new Error(`provider ${providerId} quota window ${window.id} has an invalid fixed limit`);
     if (window.metricScale != null && (!Number.isFinite(window.metricScale) || window.metricScale <= 0 || window.metricScale > 1_000_000)) throw new Error(`provider ${providerId} quota window ${window.id} has an invalid metric scale`);
   };
   const responseHeaders = quota?.responseHeaders ?? [];
-  if (!Array.isArray(responseHeaders) || responseHeaders.length > 12) throw new Error(`provider ${providerId} has too many response quota windows`);
   for (const window of responseHeaders) {
-    validateBase(window, "response");
+    validateBase(window);
     const fields = ["limitHeaders", "remainingHeaders", "usedHeaders", "resetHeaders"];
-    for (const field of fields) if (window[field] != null && !Array.isArray(window[field])) throw new Error(`provider ${providerId} quota window ${window.id} ${field} must be an array`);
     const headers = fields.flatMap((field) => window[field] ?? []);
     if (!headers.length && window.fixedLimit == null) throw new Error(`provider ${providerId} quota window ${window.id} has no response source`);
     if (headers.some((header) => typeof header !== "string" || !/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(header))) throw new Error(`provider ${providerId} quota window ${window.id} has an invalid header`);
   }
   const probes = quota?.probes ?? [];
-  if (!Array.isArray(probes) || probes.length > 4) throw new Error(`provider ${providerId} has too many quota probes`);
   for (const probe of probes) {
-    if (!Array.isArray(probe.grantKinds) || !probe.grantKinds.length || probe.grantKinds.some((kind) => !grantKinds.has(kind))) throw new Error(`provider ${providerId} quota probe has invalid grant kinds`);
-    if (probe.requiresRefreshToken != null && typeof probe.requiresRefreshToken !== "boolean") throw new Error(`provider ${providerId} quota probe requiresRefreshToken must be boolean`);
-    if (!probe.url?.startsWith("https://")) throw new Error(`provider ${providerId} quota probe URL must use https`);
-    if (probe.method != null && !["GET", "POST"].includes(probe.method)) throw new Error(`provider ${providerId} quota probe method is invalid`);
-    if (!Array.isArray(probe.windows) || !probe.windows.length || probe.windows.length > 12) throw new Error(`provider ${providerId} quota probe has invalid windows`);
-    if (probe.headers != null && (typeof probe.headers !== "object" || Array.isArray(probe.headers))) throw new Error(`provider ${providerId} quota probe headers must be an object`);
     for (const [name, value] of Object.entries(probe.headers ?? {})) if (!/^[!#$%&'*+.^_`|~0-9A-Za-z-]+$/.test(name) || typeof value !== "string") throw new Error(`provider ${providerId} quota probe has an invalid header`);
     for (const window of probe.windows) {
-      validateBase(window, "probe");
+      validateBase(window);
       const pointers = ["limitPointer", "remainingPointer", "usedPointer", "resetPointer"].flatMap((field) => window[field] == null ? [] : [window[field]]);
       if (!pointers.length && window.fixedLimit == null) throw new Error(`provider ${providerId} quota probe window ${window.id} has no data source`);
-      if (pointers.some((pointer) => typeof pointer !== "string" || !pointer.startsWith("/"))) throw new Error(`provider ${providerId} quota probe window ${window.id} has an invalid JSON pointer`);
     }
   }
 }

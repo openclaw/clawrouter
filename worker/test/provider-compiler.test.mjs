@@ -4,6 +4,7 @@ import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "n
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
+import { parse } from "yaml";
 
 test("TypeScript provider compiler is deterministic and preserves the catalog contract", () => {
   const files = readdirSync("providers").filter((file) => file.endsWith(".provider.yaml")).sort().map((file) => `providers/${file}`);
@@ -125,7 +126,7 @@ test("quota header sources must retain their declared array shape", () => {
   try {
     const invalid = readFileSync("providers/openai.provider.yaml", "utf8").replace("limitHeaders: [x-ratelimit-limit-requests]", "limitHeaders: x-ratelimit-limit-requests");
     writeFileSync(manifest, invalid);
-    assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), /limitHeaders must be an array/);
+    assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), /invalid manifest:.*\/limitHeaders:/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -137,9 +138,9 @@ test("quota metric scales and probe requirements reject invalid manifest values"
   const source = readFileSync("providers/anthropic.provider.yaml", "utf8");
   try {
     writeFileSync(manifest, source.replace("metricScale: 100", "metricScale: 0"));
-    assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), /invalid metric scale/);
+    assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), /invalid manifest:.*\/metricScale:/);
     writeFileSync(manifest, source.replace("requiresRefreshToken: true", "requiresRefreshToken: refresh"));
-    assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), /requiresRefreshToken must be boolean/);
+    assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), /invalid manifest:.*\/requiresRefreshToken:/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
   }
@@ -149,15 +150,11 @@ test("reasoning effort metadata rejects empty, duplicate, and unsupported values
   const directory = mkdtempSync(join(tmpdir(), "clawrouter-provider-"));
   const manifest = join(directory, "openai.provider.yaml");
   const source = readFileSync("providers/openai.provider.yaml", "utf8");
-  const cases = [
-    ["[]", /must contain 1-7 entries/],
-    ["[none, low, low]", /must contain unique entries/],
-    ["[none, ultra]", /contains an unsupported effort/],
-  ];
+  const cases = ["[]", "[none, low, low]", "[none, ultra]"];
   try {
-    for (const [value, expected] of cases) {
+    for (const value of cases) {
       writeFileSync(manifest, source.replace("[none, low, medium, high, xhigh, max]", value));
-      assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), expected);
+      assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), /invalid manifest:.*\/supportedReasoningEfforts/);
     }
   } finally {
     rmSync(directory, { recursive: true, force: true });
@@ -173,8 +170,8 @@ test("service tier compilation rejects ambiguous, incomplete, and drifting rate 
     ["aliases: [fast]", "aliases: [auto]", /ids and aliases must be unique/],
     ["- id: default\n            inputMicrosPerMillion: 4000000", "- id: default\n            inputMicrosPerMillion: 5000000", /default card must match/],
     ["- id: default", "- id: missing", /default card must match/],
-    ["inputMicrosPerMillion: 8000000\n            cachedInputMicrosPerMillion", "inputMicrosPerMillion: -1\n            cachedInputMicrosPerMillion", /nonnegative integer rates/],
-    ["maxInputTokens: 272000", "maxInputTokens: 0", /invalid input limit/],
+    ["inputMicrosPerMillion: 8000000\n            cachedInputMicrosPerMillion", "inputMicrosPerMillion: -1\n            cachedInputMicrosPerMillion", /invalid manifest:.*\/inputMicrosPerMillion:/],
+    ["maxInputTokens: 272000", "maxInputTokens: 0", /invalid manifest:.*\/maxInputTokens:/],
   ];
   try {
     for (const [from, to, expected] of cases) {
@@ -194,7 +191,7 @@ test("grant transport endpoint restrictions require unique own endpoint names", 
   try {
     for (const value of ["responses", "[]", "[responses, responses]", "[missing_endpoint]", "[null]", "[1]", "[[responses]]", "[toString]", "[constructor]"]) {
       writeFileSync(manifest, source.replace(anchor, `allowedEndpoints: ${value}`));
-      assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), /allowedEndpoints must reference unique existing endpoints/);
+      assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), /allowedEndpoints/);
     }
     writeFileSync(manifest, source);
     const compiled = JSON.parse(execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8" }));
@@ -217,7 +214,79 @@ test("Codex model aliases require an explicit nonempty native slug", () => {
   try {
     for (const value of ['""', '" "', "null", "42", "[gpt-5.6-sol]"]) {
       writeFileSync(manifest, source.replace(anchor, `codexModel: ${value}`));
-      assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), /codexModel must be a nonempty exact native slug/);
+      assert.throws(() => execFileSync(process.execPath, ["scripts/compile-providers.mjs", manifest], { encoding: "utf8", stdio: "pipe" }), /codexModel/);
     }
   } finally { rmSync(directory, { recursive: true, force: true }); }
 });
+
+test("ordinary pricing cards reject invalid schema fields before emitting a snapshot", () => {
+  const valid = parse(readFileSync("providers/deepseek.provider.yaml", "utf8"));
+  const rateFields = ["inputMicrosPerMillion", "outputMicrosPerMillion", "cachedInputMicrosPerMillion", "cacheWriteInputMicrosPerMillion", "cacheWrite5mInputMicrosPerMillion", "cacheWrite1hInputMicrosPerMillion"];
+  const cases = [
+    ...rateFields.map((field) => [field, (pricing) => { pricing[field] = -1; }]),
+    ["fractional rate", (pricing) => { pricing.inputMicrosPerMillion = 0.5; }],
+    ["unsafe rate", (pricing) => { pricing.outputMicrosPerMillion = Number.MAX_SAFE_INTEGER + 1; }],
+    ["missing rate", (pricing) => { delete pricing.outputMicrosPerMillion; }],
+    ["invalid calendar date", (pricing) => { pricing.effectiveAt = "2026-02-29"; }],
+    ["missing source", (pricing) => { delete pricing.source; }],
+    ["insecure source", (pricing) => { pricing.source = "http://example.com/pricing"; }],
+    ["zero input limit", (pricing) => { pricing.maxInputTokens = 0; }],
+    ["unsafe input limit", (pricing) => { pricing.maxInputTokens = Number.MAX_SAFE_INTEGER + 1; }],
+    ["negative output limit", (pricing) => { pricing.defaultMaxOutputTokens = -1; }],
+    ["negative overhead", (pricing) => { pricing.inputTokenOverhead = -1; }],
+    ["unknown field", (pricing) => { pricing.inputMicrosPerToken = 1; }],
+    ["partial long-context card", (pricing) => { pricing.longContext = { thresholdInputTokens: 100, inputMicrosPerMillion: 1 }; }],
+    ["unsafe long-context rate", (pricing) => { pricing.longContext = { thresholdInputTokens: 100, inputMicrosPerMillion: Number.MAX_SAFE_INTEGER + 1, outputMicrosPerMillion: 1 }; }],
+  ];
+  withManifest((path) => {
+    for (const [name, mutate] of cases) {
+      const manifest = structuredClone(valid);
+      mutate(manifest.models.entries[0].pricing);
+      writeFileSync(path, JSON.stringify(manifest));
+      assert.throws(() => compile(path), (error) => {
+        assert.equal(error.stdout, "", name);
+        assert.match(error.stderr, /provider deepseek invalid manifest:.*#\/models\/entries\/0\/pricing/);
+        return true;
+      }, name);
+    }
+    for (const value of [".inf", ".nan"]) {
+      writeFileSync(path, readFileSync("providers/deepseek.provider.yaml", "utf8").replace("inputMicrosPerMillion: 435000", `inputMicrosPerMillion: ${value}`));
+      assert.throws(() => compile(path), /invalid manifest:.*\/inputMicrosPerMillion:/);
+    }
+    const pricing = valid.models.entries[0].pricing;
+    Object.assign(pricing, { effectiveAt: "2028-02-29", inputMicrosPerMillion: 0, outputMicrosPerMillion: 0, defaultMaxOutputTokens: 0 });
+    writeFileSync(path, JSON.stringify(valid));
+    assert.equal(JSON.parse(compile(path)).providers[0].models[0].pricing.outputMicrosPerMillion, 0);
+  });
+});
+
+test("canonical schema validates root, endpoint and auth shapes without hiding reference errors", () => {
+  const valid = parse(readFileSync("providers/deepseek.provider.yaml", "utf8"));
+  const cases = [
+    ["null root", () => null, /invalid manifest: #:/],
+    ["unknown root field", (manifest) => ({ ...manifest, display_name: "wrong field" }), /invalid manifest: #:/],
+    ["missing endpoint format", (manifest) => { delete manifest.endpoints.chat_completions.requestFormat; return manifest; }, /invalid manifest:.*\/endpoints\/chat_completions:/],
+    ["missing bearer header", (manifest) => { delete manifest.auth.schemes[0].header; return manifest; }, /invalid manifest:.*\/auth\/schemes\/0/],
+    ["unknown auth field", (manifest) => { manifest.auth.schemes[0].token = "fixture"; return manifest; }, /invalid manifest:.*\/auth\/schemes\/0/],
+    ["missing capability endpoint", (manifest) => { manifest.capabilities[0].endpoint = "missing"; return manifest; }, /references missing endpoint missing/],
+    ["inherited capability endpoint", (manifest) => { manifest.capabilities[0].endpoint = "constructor"; return manifest; }, /references missing endpoint constructor/],
+    ["undeclared path parameter", (manifest) => { manifest.endpoints.chat_completions.path = "/${missing}"; return manifest; }, /path parameter missing is not declared/],
+    ["ordinary long-context boundary", (manifest) => { const pricing = manifest.models.entries[0].pricing; pricing.longContext = { thresholdInputTokens: pricing.maxInputTokens, inputMicrosPerMillion: 1, outputMicrosPerMillion: 1 }; return manifest; }, /invalid long-context threshold/],
+  ];
+  withManifest((path) => {
+    for (const [name, mutate, expected] of cases) {
+      writeFileSync(path, JSON.stringify(mutate(structuredClone(valid))));
+      assert.throws(() => compile(path), expected, name);
+    }
+  });
+});
+
+function compile(path) {
+  return execFileSync(process.execPath, ["scripts/compile-providers.mjs", path], { encoding: "utf8", stdio: "pipe" });
+}
+
+function withManifest(run) {
+  const directory = mkdtempSync(join(tmpdir(), "clawrouter-provider-"));
+  try { run(join(directory, "provider.yaml")); }
+  finally { rmSync(directory, { recursive: true, force: true }); }
+}

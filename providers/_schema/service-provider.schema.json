@@ -514,16 +514,16 @@
       "properties": {
         "effectiveAt": { "type": "string", "format": "date" },
         "source": { "type": "string", "pattern": "^https://" },
-        "inputMicrosPerMillion": { "type": "integer", "minimum": 0 },
-        "outputMicrosPerMillion": { "type": "integer", "minimum": 0 },
-        "cachedInputMicrosPerMillion": { "type": "integer", "minimum": 0 },
-        "cacheWriteInputMicrosPerMillion": { "type": "integer", "minimum": 0 },
-        "cacheWrite5mInputMicrosPerMillion": { "type": "integer", "minimum": 0 },
-        "cacheWrite1hInputMicrosPerMillion": { "type": "integer", "minimum": 0 },
-        "maxInputTokens": { "type": "integer", "minimum": 1 },
-        "maxRequestInputTokens": { "type": "integer", "minimum": 1 },
-        "defaultMaxOutputTokens": { "type": "integer", "minimum": 0 },
-        "inputTokenOverhead": { "type": "integer", "minimum": 0 },
+        "inputMicrosPerMillion": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "outputMicrosPerMillion": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "cachedInputMicrosPerMillion": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "cacheWriteInputMicrosPerMillion": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "cacheWrite5mInputMicrosPerMillion": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "cacheWrite1hInputMicrosPerMillion": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "maxInputTokens": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "maxRequestInputTokens": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "defaultMaxOutputTokens": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "inputTokenOverhead": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
         "longContext": { "$ref": "#/$defs/longContextPricing" },
         "serviceTiers": {
           "type": "array",
@@ -540,13 +540,13 @@
       "properties": {
         "id": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" },
         "aliases": { "type": "array", "maxItems": 8, "uniqueItems": true, "items": { "type": "string", "pattern": "^[a-z][a-z0-9_-]{0,63}$" } },
-        "inputMicrosPerMillion": { "type": "integer", "minimum": 0 },
-        "outputMicrosPerMillion": { "type": "integer", "minimum": 0 },
-        "cachedInputMicrosPerMillion": { "type": "integer", "minimum": 0 },
-        "cacheWriteInputMicrosPerMillion": { "type": "integer", "minimum": 0 },
-        "cacheWrite5mInputMicrosPerMillion": { "type": "integer", "minimum": 0 },
-        "cacheWrite1hInputMicrosPerMillion": { "type": "integer", "minimum": 0 },
-        "maxInputTokens": { "type": "integer", "minimum": 1 },
+        "inputMicrosPerMillion": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "outputMicrosPerMillion": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "cachedInputMicrosPerMillion": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "cacheWriteInputMicrosPerMillion": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "cacheWrite5mInputMicrosPerMillion": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "cacheWrite1hInputMicrosPerMillion": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "maxInputTokens": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
         "longContext": { "$ref": "#/$defs/longContextPricing" }
       }
     },
@@ -559,13 +559,13 @@
       ],
       "additionalProperties": false,
       "properties": {
-        "thresholdInputTokens": { "type": "integer", "minimum": 1 },
-        "inputMicrosPerMillion": { "type": "integer", "minimum": 0 },
-        "outputMicrosPerMillion": { "type": "integer", "minimum": 0 },
-        "cachedInputMicrosPerMillion": { "type": "integer", "minimum": 0 },
-        "cacheWriteInputMicrosPerMillion": { "type": "integer", "minimum": 0 },
-        "cacheWrite5mInputMicrosPerMillion": { "type": "integer", "minimum": 0 },
-        "cacheWrite1hInputMicrosPerMillion": { "type": "integer", "minimum": 0 }
+        "thresholdInputTokens": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+        "inputMicrosPerMillion": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "outputMicrosPerMillion": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "cachedInputMicrosPerMillion": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "cacheWriteInputMicrosPerMillion": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "cacheWrite5mInputMicrosPerMillion": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "cacheWrite1hInputMicrosPerMillion": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 }
       }
     },
     "meterCounter": {
