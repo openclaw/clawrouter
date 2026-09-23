@@ -344,10 +344,12 @@ test("metadata-only pause and resume preserve owner credential continuity fields
   const env = fixture();
   const active = await putGrantCredentials(env, key, grant());
   const owner = env.GRANT_CREDENTIALS.objects.get(key);
-  owner.values.get("credential").lineage = "owner-continuity-fixture";
+  assert.match(active.credentialLineage, /^[0-9a-f-]{36}$/);
   const paused = await putGrantCredentials(env, key, { ...active, enabled: false }, true);
-  await putGrantCredentials(env, key, { ...paused, enabled: true }, true);
-  assert.equal(owner.values.get("credential").lineage, "owner-continuity-fixture");
+  const resumed = await putGrantCredentials(env, key, { ...paused, enabled: true }, true);
+  assert.equal(paused.credentialLineage, active.credentialLineage);
+  assert.equal(resumed.credentialLineage, active.credentialLineage);
+  assert.equal(owner.values.get("credential").lineage, active.credentialLineage);
   assert.deepEqual((await pool(env, "openai")).keys, [key]);
 });
 
