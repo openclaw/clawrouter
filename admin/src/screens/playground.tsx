@@ -146,6 +146,7 @@ export function PlaygroundScreen({ form, setForm, models, selected, serviceRoute
               onKeyDown={(event) => {
                 if (event.key === "Enter" && !event.shiftKey) {
                   event.preventDefault();
+                  if (busy || blocker) return;
                   event.currentTarget.form?.requestSubmit();
                 }
               }}
