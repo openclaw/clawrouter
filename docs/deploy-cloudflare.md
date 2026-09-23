@@ -550,14 +550,18 @@ printf '%s' "$CLAWROUTER_PROXY_SECRET" | pnpm cf:key:put -- \
   --request-cost-micros 1000
 ```
 
-Remote key commands call the admin API so serialized authority is updated
-before compatibility KV. `--providers` is required unless the operator
+Key commands call the admin API to update serialized authority.
+`--providers` is required unless the operator
 deliberately passes `--all-providers`; omitting scope never creates an implicit
 wildcard. Policies and credentials carry the same policy generation.
 Authorization rejects mixed generations, and replacing an existing id rejects
-changing policy scope and secret in the same operation. `--local` writes local
-KV only for bootstrap and tests; it is not an authoritative way to mutate a
-running Worker.
+changing policy scope and secret in the same operation. `--local` uses the same
+authenticated API on a running local Worker. It defaults to
+`http://127.0.0.1:8787` when `CLAWROUTER_BASE_URL` is unset and rejects non-loopback
+targets. Configure that Worker's `CLAWROUTER_ADMIN_TOKEN`; there is no offline KV
+fallback. `--binding` and `--config` are rejected before reading secrets. Replace
+them with the API URL and token. Do not use old CLI versions or raw KV writes to
+change keys after authority migration.
 
 Revoke access:
 

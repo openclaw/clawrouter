@@ -93,9 +93,11 @@ deployment.
 
 ## Create a proxy key
 
-The normal key helper uses the running Worker's admin bearer-token API. It does
-not use Wrangler, Cloudflare credentials, or direct local KV mutation unless
-`--local` is explicitly supplied.
+Key creation and revocation use the running Worker's admin bearer-token API,
+including with `--local`. That flag defaults to `http://127.0.0.1:8787` when
+`CLAWROUTER_BASE_URL` is unset and rejects non-loopback targets. Start the Worker
+and configure its `CLAWROUTER_ADMIN_TOKEN` first. The helpers never write offline
+KV; replace old `--binding` or `--config` arguments with the API URL and token.
 
 ```sh
 export CLAWROUTER_BASE_URL=http://localhost:8787

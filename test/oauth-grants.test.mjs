@@ -140,7 +140,7 @@ test("CLI rejects retired KV selectors, unsafe local targets and argv secrets be
     for (const flag of ["--binding", "--config"]) {
       const result = await fixture.run(name, [...args, flag, "obsolete"]);
       assert.notEqual(result.status, 0);
-      assert.match(result.stderr, /grant mutations use the admin API/);
+      assert.match(result.stderr, /key and grant mutations use the admin API/);
       assert.doesNotMatch(result.stderr, /ENOENT/);
     }
     const local = await fixture.run(name, [...args, "--local"], { CLAWROUTER_BASE_URL: "https://router.example" });

@@ -1,7 +1,4 @@
 export function grantTarget(args) {
-  if (args.binding !== undefined || args.config !== undefined) {
-    throw new Error("grant mutations use the admin API; replace --binding/--config with CLAWROUTER_BASE_URL and CLAWROUTER_ADMIN_TOKEN");
-  }
   const env = localAdminEnvironment(args);
   if (Boolean(args.kid) === Boolean(args.tenant)) throw new Error("exactly one of --kid or --tenant is required");
   const scope = args.kid ? "policies" : "tenants";
@@ -16,6 +13,9 @@ export function grantTarget(args) {
 }
 
 export function localAdminEnvironment(args, env = process.env) {
+  if (args.binding !== undefined || args.config !== undefined) {
+    throw new Error("key and grant mutations use the admin API; replace --binding/--config with CLAWROUTER_BASE_URL and CLAWROUTER_ADMIN_TOKEN");
+  }
   if (args.local !== undefined && args.local !== true) throw new Error("--local is a flag and does not accept a value");
   if (args.local) {
     const baseUrl = env.CLAWROUTER_BASE_URL?.trim() || "http://127.0.0.1:8787";
