@@ -1,11 +1,26 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { adminActor, binding, credential, digest, fixture, policy, session } from "./credential-fixture.mjs";
+import { adminActor, binding, credential, digest, fixture, policy, session, sha256 } from "./credential-fixture.mjs";
 
 const nextDigest = "cd".repeat(32);
 const payload = { policyId: "maintainer_access", secretSha256: digest };
 const adminPath = "/v1/admin/credentials";
 const personalPath = "/v1/session/credentials";
+
+test("new admin keys require usable IDs while released PUT keeps its ID contract", async t => {
+  const env = await fixture(t), secret = "fixture-id-secret", secretSha256 = await sha256(secret);
+  for (const credentialId of ["c", "ci", "cli"]) {
+    await error(await env.http(adminPath, "POST", { ...payload, credentialId, secretSha256 }), 400, "invalid_credential");
+    assert.equal(env.credentials.has(credentialId), false);
+  }
+  for (const credentialId of ["test", "k".repeat(128)]) {
+    assert.equal((await env.http(adminPath, "POST", { ...payload, credentialId, secretSha256 })).status, 201);
+    const verified = await env.http("/v1/key/inspect", "GET", undefined, { headers: { authorization: `Bearer clawrouter-live-${credentialId}-${secret}` } });
+    assert.equal(verified.status, 200);
+    assert.equal((await verified.json()).verified, true);
+  }
+  assert.equal((await env.http(`${adminPath}/ci`, "PUT", { ...payload, secretSha256 })).status, 200);
+});
 
 for (const scope of ["admin", "personal"]) {
   const path = scope === "admin" ? adminPath : personalPath;

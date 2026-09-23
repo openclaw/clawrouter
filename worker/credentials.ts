@@ -7,8 +7,10 @@ export async function credentialMutationResponse(request: Request, env: Env, res
   if (request.method !== (operation === "put" ? "PUT" : "POST")) throw new HttpError(405, "method_not_allowed", "credential method is not allowed");
   const body: Record<string, unknown> = operation === "revoke" ? {} : mutationObject(await readJson<unknown>(request));
   const rawId = rest === null ? body.credentialId : decodePathSegment(operation === "put" ? rest : rest.slice(0, -7));
-  const credentialId = typeof rawId === "string" ? (scope === "personal" ? selfServiceCredentialId(rawId) : cleanId(rawId)) : null;
-  if (!credentialId) throw new HttpError(400, "invalid_credential", scope === "personal" ? "credential id must be 4-128 letters, digits, or underscores" : "invalid credential id");
+  // New keys must satisfy proxy-key syntax; admin PUT retains its released ID contract.
+  const keyIdRequired = scope === "personal" || operation === "create";
+  const credentialId = typeof rawId === "string" ? (keyIdRequired ? proxyCredentialId(rawId) : cleanId(rawId)) : null;
+  if (!credentialId) throw new HttpError(400, "invalid_credential", keyIdRequired ? "credential id must be 4-128 letters, digits, or underscores" : "invalid credential id");
   const actor = { auth: session.auth, email: session.email, role: session.role };
   const target = { credentialId, actor, scope };
   let mutation: CredentialMutation;
@@ -75,7 +77,7 @@ function credentialDigest(value: unknown): string {
   return value.toLowerCase();
 }
 
-export function selfServiceCredentialId(value: string): string | null {
+function proxyCredentialId(value: string): string | null {
   const id = cleanId(value);
   return id && id.length >= 4 ? id : null;
 }

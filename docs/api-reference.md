@@ -192,7 +192,8 @@ HTTP 404. Retrying revocation preserves the same tombstone generation.
 
 Use `POST /v1/admin/credentials` or `POST /v1/session/credentials` with
 `{ "credentialId": "my_key", "policyId": "my_policy", "secretSha256": "<64 hex characters>" }`
-to create a key. Success returns `201`; an existing ID returns `409 credential_exists`
+to create a key. IDs must contain 4–128 letters, digits, or underscores so the key
+can be authenticated. Success returns `201`; an existing ID returns `409 credential_exists`
 without replacing the key or pruning retained records. Admin creation also accepts
 `enabled` (default `true`) and `principalId` (an email or `null`, default `null`).
 Personal creation always enables the key and assigns the signed-in user as owner.
