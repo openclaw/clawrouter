@@ -343,10 +343,10 @@ export default { async fetch(request) {
     const body = await request.json();
     const usage = { input_tokens: 14, output_tokens: 8, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } };
     if (body.input === 'late-failed' || body.input.startsWith('cancel-')) {
-      let index = 0, timer, release;
-      const aborted = () => { httpAborts[body.input] = true; clearTimeout(timer); release?.(); };
+      let index = 0, timer, release, producer;
+      const aborted = () => { httpAborts[body.input] = true; clearTimeout(timer); producer.error(request.signal.reason); release?.(); };
       request.signal.addEventListener('abort', aborted, { once: true });
-      return new Response(new ReadableStream({ pull(controller) {
+      return new Response(new ReadableStream({ start(controller) { producer = controller; }, pull(controller) {
         if (index++ === 0) {
           const terminal = body.input === 'cancel-after-terminal' ? 'data: ' + JSON.stringify({ type: 'response.completed', response: { status: 'completed', service_tier: 'priority', usage } }) + '\\n\\n' : '';
           controller.enqueue(new TextEncoder().encode('data: {"type":"response.created"}\\n\\n' + terminal));
