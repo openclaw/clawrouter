@@ -48,6 +48,7 @@ test("dashboard distinguishes unavailable prices from mixed and fully priced spe
 test("a provider without a cap still explains the other budget scopes", async ({ page }) => {
   await openDemo(page);
   await page.getByRole("button", { name: "Catalog", exact: true }).click();
+  await page.locator(".tableRow").filter({ hasText: "OpenAI" }).click();
   const budget = page.locator(".providerBudgetEditor");
   await expect(budget).toContainText("No cap at this scope");
   await expect(budget).toContainText("Provider-wide · UTC calendar month · Used includes reservations");

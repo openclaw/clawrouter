@@ -1,19 +1,36 @@
 import { accessMap, effectiveAccess, policyCoversProvider, policyUsageFallback, readinessMap, tenantSummaryFallback } from "./domain";
-import { demoCatalog } from "./demo-catalog";
+import { demoCatalog, demoModel } from "./demo-catalog";
 import { demoDisabledProviderIds, demoMissingConfigProviderIds } from "./ui-config";
 import { adminOverviewFromPolicies, serviceItems } from "./ui-helpers";
 import { syntheticUsageTimeline } from "./usage-analytics";
 import type { ClientCatalog } from "../../shared/contracts";
 import type {
   AccessPolicy, AccessRole, AccessUser, AssignmentRule, EntitlementsResponse, FusionConfig, PolicyBinding,
-  ProviderConnection, ProviderReadiness, ProviderRow, ProxyCredential, RouteCatalog, UpstreamGrant,
+  ProviderAccess, ProviderConnection, ProviderReadiness, ProviderRow, ProxyCredential, RouteCatalog, UpstreamGrant,
   UsageAuditEvent, UsageSnapshot,
 } from "./ui-types";
 
-export function demoClientCatalog(principalId: string): ClientCatalog {
-  // Demo identities simulate Access sessions; no synthetic executable offers
-  // are asserted until the demo owns concrete operation fixtures.
-  return { version: "clawrouter.client-catalog.v1", observedAt: new Date().toISOString(), scope: { authType: "access", credentialId: null, principalId }, providers: [] };
+export function demoClientCatalog(principalId: string, access: ProviderAccess[]): ClientCatalog {
+  // These are explicit synthetic grants, not a readiness-to-permission fallback.
+  const fixtures: Array<[string, string, string | null, string]> = [
+    ["openai", "responses", "openai/gpt-6-astra", "/v1/playground/v1/responses"],
+    ["openai", "chat_completions", "openai/gpt-4.1-mini", "/v1/playground/v1/chat/completions"],
+    ["anthropic", "messages", "anthropic/claude-sonnet-5", "/v1/playground/proxy/anthropic/messages"],
+    ["cohere", "chat", "cohere/command-a-plus-05-2026", "/v1/playground/proxy/cohere/chat"],
+    ["cohere", "embed", "cohere/embed-v4.0", "/v1/playground/proxy/cohere/embed"],
+    ["google-gemini", "generate_content", "google/gemini-3.5-flash", "/v1/playground/proxy/google-gemini/generate_content"],
+    ["tavily", "search", null, "/v1/playground/proxy/tavily/search"],
+    ["clawrouter", "chat_completions", "clawrouter/fusion", "/v1/playground/v1/chat/completions"],
+  ];
+  return { version: "clawrouter.client-catalog.v1", observedAt: new Date().toISOString(), scope: { authType: "access", credentialId: null, principalId }, providers: access.filter((row) => row.allowed && row.policies.length && fixtures.some(([id]) => id === row.provider)).map((row) => {
+    const offers = fixtures.filter(([id]) => id === row.provider).map(([, endpoint, modelId, route]) => ({ endpoint, modelId, route, routeKind: route.includes("/proxy/") ? "playground" as const : "unified" as const, transport: "http" as const, policyId: row.policies[0], policyGeneration: "demo-v1", eligible: true, affordability: "request-dependent" as const }));
+    const models = offers.flatMap(({ modelId }) => {
+      if (!modelId) return [];
+      const model = demoModel(row.provider, modelId);
+      return model ? [model] : modelId === "clawrouter/fusion" ? [{ id: modelId, upstream: modelId, capabilities: ["llm.chat"], pricing_ref: null, pricing: null }] : [];
+    });
+    return { id: row.provider, displayName: row.displayName, allowed: true, executable: true, openaiCompatible: row.readiness.openaiCompatible, nativeBaseUrl: null, policies: row.policies, readiness: row.readiness, connectionTypes: [], routes: [], models, offers };
+  }) };
 }
 
 export function demoUsageSnapshot(): UsageSnapshot {
@@ -162,7 +179,7 @@ export function demoData() {
   const sessionPolicies = effectiveAccess(users[0], keys, bindings, []).policies;
   const entitlements: EntitlementsResponse = {
     session,
-    catalog: demoClientCatalog(session.email),
+    catalog: { version: "clawrouter.client-catalog.v1", observedAt: new Date().toISOString(), scope: { authType: "access", credentialId: null, principalId: session.email }, providers: [] },
     contentRetention,
     providers: [...providers.map((item) => {
       const policies = sessionPolicies.filter((key) => policyCoversProvider(key, item.id)).map((key) => key.policyId);
@@ -189,6 +206,7 @@ export function demoData() {
       },
     }],
   };
+  entitlements.catalog = demoClientCatalog(session.email, entitlements.providers);
   const accessByProvider = accessMap(entitlements);
   const readinessByProvider = readinessMap(entitlements.providers.map((item) => item.readiness));
   const usageRows = keys.map(policyUsageFallback);

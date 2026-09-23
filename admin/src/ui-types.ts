@@ -11,6 +11,9 @@ export type {
   AdminUsageRow,
   AssignmentRule,
   BudgetStatus,
+  CatalogOffer,
+  ClientCatalog,
+  ClientCatalogModel,
   ContentRetention,
   EntitlementsResponse,
   FusionConfig,
@@ -51,6 +54,7 @@ export interface ServiceItem {
   routeCount: number;
   models: number;
   modelIds: string[];
+  offers?: import("./catalog-offers").CatalogTarget[];
   access?: ProviderAccess;
   readiness?: ProviderReadiness;
   brandIcon?: BrandIcon;

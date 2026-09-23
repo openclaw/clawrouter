@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
+import { fixtureCatalog } from "./catalog-fixture";
 
 test("bootstrap authentication loss removes protected data before siblings or login discovery finish", async ({ page }) => {
   const state = await fixture(page);
@@ -189,7 +190,7 @@ for (const mode of ["model", "service"] as const) {
         };
       });
       await open(page, "/dashboard/playground");
-      if (mode === "service") await page.getByRole("combobox", { name: "Provider", exact: true }).selectOption("test-service");
+      await choosePlayground(page, mode);
       const message = page.getByRole("textbox", { name: mode === "model" ? "Message" : "JSON request body", exact: true });
       await message.fill(mode === "model" ? "private-history" : '{"query":"private-history"}');
       await message.press("Enter");
@@ -217,7 +218,7 @@ for (const mode of ["model", "service"] as const) {
       await page.getByRole("button", { name: "Retry access" }).click();
       await connected(page);
       await expect(page.locator(".chatExchange")).toHaveCount(0);
-      if (mode === "service") await page.getByRole("combobox", { name: "Provider", exact: true }).selectOption("test-service");
+      await choosePlayground(page, mode);
       await expect(message).not.toHaveValue(/private-/);
       if (mode === "model") {
         await page.locator(".composerInspect").click();
@@ -229,6 +230,54 @@ for (const mode of ["model", "service"] as const) {
     });
   }
 }
+
+test("a delayed old catalog cannot replace a recovered identity's selection", async ({ page }) => {
+  const state = await fixture(page);
+  await open(page, "/dashboard/playground");
+  await choosePlayground(page, "model");
+  const oldCatalog = deferred();
+  const oldSession = { authenticated: true, auth: "cloudflare_access", role: "admin", email: state.email, subject: state.subject, groups: state.groups, tenantId: "default" };
+  state.replies.set("/v1/session", { status: 200, json: oldSession });
+  state.replies.set("/v1/entitlements", { status: 200, json: { session: oldSession, providers: [], catalog: fixtureCatalog(state.email, "team_policy") } });
+  state.waits.set("/v1/entitlements", oldCatalog.promise);
+  await focus(page);
+  await expect.poll(() => state.requests.filter((item) => item.path === "/v1/entitlements").length).toBe(1);
+  await page.getByRole("button", { name: "Access", exact: true }).click();
+  await page.getByRole("tab", { name: /^Credentials/ }).click();
+  await page.getByRole("button", { name: /owned_key.*proxy credential/ }).click();
+  state.replies.set("/v1/admin/credentials/owned_key/revoke", authError("admin_unauthorized"));
+  await page.getByRole("button", { name: "Revoke credential", exact: true }).click();
+  await signedOut(page);
+  state.replies.delete("/v1/session");
+  state.email = "second@example.com";
+  await page.getByRole("button", { name: "Retry access" }).click();
+  await connected(page);
+  await page.getByRole("button", { name: "Playground", exact: true }).click();
+  await choosePlayground(page, "model");
+  const message = page.getByRole("textbox", { name: "Message", exact: true });
+  await message.fill("New identity draft");
+  const late = page.waitForResponse("**/v1/entitlements");
+  oldCatalog.release();
+  await late; await flush(page);
+  await expect(message).toHaveValue("New identity draft");
+  await expect(page.getByRole("combobox", { name: "Model or request" })).toHaveValue(/second@example.com/);
+  await expect(page.getByRole("button", { name: "Send", exact: true })).toBeEnabled();
+});
+
+test("global admin readiness cannot override a blocked personal offer", async ({ page }) => {
+  const state = await fixture(page);
+  await open(page, "/dashboard/playground");
+  await choosePlayground(page, "model");
+  const catalog = fixtureCatalog(state.email, "team_policy");
+  catalog.providers[0].offers[0] = { ...catalog.providers[0].offers[0], eligible: false, affordability: "exact-blocked", reasonCode: "provider_budget_exhausted" };
+  state.replies.set("/v1/session", { status: 200, json: { authenticated: true, auth: "cloudflare_access", role: "admin", email: state.email, subject: state.subject, tenantId: "default", groups: state.groups, entitlements: { providers: [], catalog } } });
+  await page.getByRole("textbox", { name: "Message", exact: true }).fill("Preserved personal draft");
+  await focus(page);
+  await expect.poll(() => state.requests.filter((item) => item.path === "/v1/admin/bootstrap").length).toBe(2);
+  await expect(page.locator(".composerDock")).toContainText("provider_budget_exhausted");
+  await expect(page.getByRole("textbox", { name: "Message", exact: true })).toHaveValue("Preserved personal draft");
+  await expect(page.getByRole("button", { name: "Send", exact: true })).toBeDisabled();
+});
 
 test("same-identity group refresh preserves drafts while a changed public subject starts a new lifetime", async ({ page }) => {
   const state = await fixture(page);
@@ -330,6 +379,12 @@ async function completePlayground(page: Page, index: number, text: string) {
   await flush(page);
 }
 
+async function choosePlayground(page: Page, mode: "model" | "service") {
+  await page.getByRole("combobox", { name: "Provider", exact: true }).selectOption(mode === "model" ? "test-model" : "test-service");
+  await page.getByRole("combobox", { name: "Operation", exact: true }).selectOption({ label: mode === "model" ? "chat completions" : "search · JSON" });
+  await page.getByRole("combobox", { name: "Model or request", exact: true }).selectOption({ label: mode === "model" ? "test-model/example" : "Custom JSON request" });
+}
+
 async function fixture(page: Page) {
   const state = {
     email: "admin@example.com", subject: "first-subject", groups: [] as string[], local: false,
@@ -347,7 +402,7 @@ async function fixture(page: Page) {
     const request = route.request(), path = new URL(request.url()).pathname, method = request.method();
     state.requests.push({ path, method });
     if (method !== "GET") state.writes.push({ path, method });
-    const session = { authenticated: true, auth: state.local ? "local" : "cloudflare_access", role: "admin", email: state.email, subject: state.subject, groups: state.groups, tenantId: "default", entitlements: { providers: access } };
+    const session = { authenticated: true, auth: state.local ? "local" : "cloudflare_access", role: "admin", email: state.email, subject: state.subject, groups: state.groups, tenantId: "default", entitlements: { providers: access, catalog: fixtureCatalog(state.email, policy.policyId) } };
     const responses: Record<string, unknown> = {
       "/v1": { endpoints: state.local ? { sessionLogin: "/v1/session/login" } : {} },
       "/v1/session": session, "/v1/session/login": { ok: true },

@@ -34,7 +34,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
   scope: CapturedSessionScope;
   verifySession: () => Promise<SessionResponse | null>;
 }) {
-  const catalog = useCatalog(session.demoMode);
+  const catalog = useCatalog(session.demoMode, session.value.email);
   const usage = useUsage(session.demoMode, request);
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
   const refreshBackgroundRef = useRef(false);
@@ -68,10 +68,8 @@ export function useConsoleController({ session, credentialOwner, request, scope,
     gatewayOrigin: session.gatewayOrigin,
     demoMode: session.demoMode,
     setStatus: session.setStatus,
-    models: catalog.models,
-    serviceRoutes: catalog.serviceRoutes,
-    accessByProvider: catalog.accessByProvider,
-    providerReadiness: catalog.providerReadiness,
+    targets: catalog.targets,
+    resolveTarget: catalog.resolveTarget,
   });
   const busyRef = useRef(session.busy);
   busyRef.current = session.busy;
@@ -138,6 +136,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
     if (!background || (session.view !== "home" && session.view !== "usage" && !usage.error)) usage.invalidate();
     const failUsageRefresh = usage.captureRefreshFailure();
     const keySnapshot = credentialOwner.captureHydration();
+    let acceptedCatalog = false;
     try {
       const staticCatalog = catalogLoadedRef.current
         ? Promise.resolve({ providerData: { providers: catalog.providers }, routeData: catalog.routes })
@@ -173,6 +172,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
           warnings = [...warnings, `entitlements unavailable: ${entitlementResult.error}`];
         }
       }
+      acceptedCatalog = true;
       // Entitlement waits cannot adopt a credential scope invalidated by another read.
       if (!scope.isCurrent()) return;
       const result = sessionData.role === "admin"
@@ -186,6 +186,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
       if (!scope.isCurrent()) return;
       const message = errorMessage(caught);
       // Refresh health is separate from the mutation result that the caller reports.
+      if (!acceptedCatalog) catalog.markUnavailable();
       session.setRefreshError(`Console data refresh failed: ${message}`);
       failUsageRefresh(`Usage was not refreshed: ${message}`);
     } finally {
@@ -210,7 +211,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
       rules: data.rules,
       fusion: data.fusion,
     }, background, sessionData, providerData.providers, keySnapshot);
-    catalog.mergeReadiness(data.providers);
+    catalog.setProviderReadiness(Object.fromEntries(data.providers.map((provider) => [provider.id, provider])));
     usage.setAdminOverview(data.overview);
     usage.setTenantSummaries(data.tenants);
     if (sessionUsageResult.ok && sessionCredentialsResult.ok) credentialOwner.hydrate("personal", sessionCredentialsResult.value.credentials, keySnapshot, sessionUsageResult.value.policies.filter((policy) => policy.enabled).map(usagePolicyId));
@@ -284,7 +285,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
     };
     const entitlements: EntitlementsResponse = {
       session: { ...demo.session, ...user, auth: "demo", contentRetention },
-      catalog: demoClientCatalog(user.email),
+      catalog: { ...demo.entitlements.catalog, scope: { authType: "access", credentialId: null, principalId: user.email }, providers: [] },
       contentRetention,
       providers: demo.entitlements.providers.map((provider) => ({
         ...provider,
@@ -292,6 +293,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
         policies: effective.policies.filter((policy) => policyCoversProvider(policy, provider.provider)).map((policy) => policy.policyId),
       })),
     };
+    entitlements.catalog = demoClientCatalog(user.email, entitlements.providers);
     session.setValue(entitlements.session);
     catalog.setProviders(demo.providers);
     catalog.setRoutes(demo.routes);

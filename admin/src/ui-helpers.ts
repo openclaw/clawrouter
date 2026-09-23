@@ -6,10 +6,7 @@ import {
   errorMessage,
   optionalNumber,
   parseGroups,
-  playgroundAccessEndpoint,
-  playgroundPayload,
   playgroundResponseText,
-  routeKey,
   tenantSummaryFallback,
   unique,
 } from "./domain";
@@ -23,7 +20,6 @@ import type {
   AssignmentRuleForm,
   BrandIcon,
   OutcomeTone,
-  PlaygroundForm,
   PlaygroundTurn,
   PolicyForm,
   ProviderAccess,
@@ -261,44 +257,6 @@ export function catalogModels(routes: RouteCatalog): CatalogModel[] {
     .map((model) => ({ id: model.id, provider: route.provider, capabilities: model.capabilities })));
 }
 
-export function providerName(provider: string, readinessByProvider: Record<string, ProviderReadiness>) {
-  return readinessByProvider[provider]?.displayName ?? provider.split("-").map((part) => part[0]?.toUpperCase() + part.slice(1)).join(" ");
-}
-
-export function shortModelName(model: string, provider: string) {
-  const prefix = `${provider}/`;
-  return model.startsWith(prefix) ? model.slice(prefix.length) : model;
-}
-
-export function serviceModelOptions(routes: RouteCatalog["manifestProxy"]) {
-  const seen = new Set<string>();
-  return [...routes].sort((left, right) => serviceRouteRank(left) - serviceRouteRank(right)).flatMap((route) => (route.models ?? []).flatMap((model) => {
-    if (seen.has(model.id)) return [];
-    seen.add(model.id);
-    return [{
-      model: model.id,
-      route,
-      value: `service-model:${routeKey(route)}:${model.id}`,
-    }];
-  }));
-}
-
-export function serviceRouteRank(route: RouteCatalog["manifestProxy"][number]) {
-  if (["messages", "chat", "chat_completions", "generate_content", "responses"].includes(route.endpoint)) return 0;
-  if (route.streaming) return 2;
-  return 1;
-}
-
-export function serviceModelFromForm(form: PlaygroundForm, route?: RouteCatalog["manifestProxy"][number]) {
-  if (route?.pathParams?.includes("model")) return form.servicePath;
-  try {
-    const body = JSON.parse(form.servicePayload) as { model?: unknown };
-    return typeof body.model === "string" ? body.model : "";
-  } catch {
-    return "";
-  }
-}
-
 export function groupedProviders(providers: ProviderRow[], query: string) {
   const needle = query.trim().toLowerCase();
   const matches = providers.filter((provider) => {
@@ -414,20 +372,4 @@ export interface CatalogModel {
   id: string;
   provider: string;
   capabilities: string[];
-}
-
-export function playgroundCurl(form: PlaygroundForm, payload: unknown, route?: RouteCatalog["manifestProxy"][number]) {
-  const method = "POST";
-  const endpoint = playgroundAccessEndpoint(form, route);
-  const lines = [`curl -X ${method} '${window.location.origin}${endpoint}' \\`, `  -b '$CLOUDFLARE_ACCESS_COOKIE' \\`, `  -H 'content-type: application/json' \\`, `  -d '${JSON.stringify(payload ?? {}, null, 2).replace(/'/g, `'\\''`)}'`];
-  return lines.join("\n");
-}
-
-export function playgroundRequestPreview(form: PlaygroundForm, mode: "json" | "curl", route?: RouteCatalog["manifestProxy"][number]) {
-  try {
-    const payload = playgroundPayload(form, route);
-    return mode === "json" ? JSON.stringify(payload, null, 2) : playgroundCurl(form, payload, route);
-  } catch (error) {
-    return errorMessage(error);
-  }
 }

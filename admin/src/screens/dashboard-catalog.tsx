@@ -15,7 +15,6 @@ import {
   currencyInput,
   grantNamesForService,
   optionalCurrencyMicros,
-  playgroundBlockedForService,
   policyCoversProvider,
   policyUsageFallback,
   readinessLabel,
@@ -42,6 +41,8 @@ import {
   matchesServiceQuery,
   usagePolicyId,
 } from "../ui-helpers";
+import { OfferPicker } from "../offer-picker";
+import { resolveCatalogTarget, targetBlocker, type CatalogTarget } from "../catalog-offers";
 import { CredentialNotice, type CredentialFeedback } from "../credential-notice";
 import { EntityTable, UsageFreshness } from "./users-usage";
 import type {
@@ -72,9 +73,12 @@ export function UserAvatar({ email }: { email?: string | null }) {
   );
 }
 
-export function DashboardScreen({ session, services, policies, credentials, users, tenants, overview, usageRows, usage, usageLoaded, usageStale, usageError, usageUpdatedAt, myCredentials, myPolicyIds, myKeyFeedback, myKeyScope, myKeysBusy, onMyKeyDraftChange, onIssueMyKey, onRevokeMyKey, onOpenCatalog, onOpenPlayground, onOpenUsage, onOpenAccess }: {
+export function DashboardScreen({ session, services, inventory, catalogNotice, catalogAvailable, policies, credentials, users, tenants, overview, usageRows, usage, usageLoaded, usageStale, usageError, usageUpdatedAt, myCredentials, myPolicyIds, myKeyFeedback, myKeyScope, myKeysBusy, onMyKeyDraftChange, onIssueMyKey, onRevokeMyKey, onOpenCatalog, onOpenPlayground, onOpenUsage, onOpenAccess }: {
   session: SessionResponse;
   services: ServiceItem[];
+  inventory: ServiceItem[];
+  catalogNotice: string;
+  catalogAvailable: boolean;
   policies: AccessPolicy[];
   credentials: ProxyCredential[];
   users: AccessUser[];
@@ -103,7 +107,7 @@ export function DashboardScreen({ session, services, policies, credentials, user
   const grantedServices = services.filter((service) => service.access?.allowed);
   const visibleServices = isAdmin ? services : grantedServices;
   const usableServices = grantedServices.filter((service) => serviceOutcome(service).playable);
-  const configuredServices = services.filter((service) => service.readiness?.executable);
+  const configuredServices = usableServices;
   const attentionServices = visibleServices.filter((service) => !serviceOutcome(service).playable);
   const rows = (usageRows.length ? usageRows : isAdmin ? policies.map(policyUsageFallback) : []).filter((row) => row.enabled);
   const successRate = usage.summary.requestCount ? Math.round((usage.summary.successCount / usage.summary.requestCount) * 100) : null;
@@ -131,7 +135,7 @@ export function DashboardScreen({ session, services, policies, credentials, user
 
       <UsageFreshness loaded={usageLoaded} stale={usageStale} error={usageError} updatedAt={usageUpdatedAt} />
       <section className="dashboardStats" aria-label="access overview">
-        <DashboardStat label={isAdmin ? "catalog coverage" : "available services"} value={isAdmin ? `${configuredServices.length}/${services.length}` : String(grantedServices.length)} note={isAdmin ? `${services.length - configuredServices.length} need attention` : `${usableServices.length} ready to call`} />
+        <DashboardStat label="your configured services" value={catalogAvailable ? `${configuredServices.length}/${services.length}` : "—"} note={catalogAvailable ? `${usableServices.length} available to test` : "Catalog unavailable"} />
         <DashboardStat label="requests" value={usageLoaded ? formatCount(usage.summary.requestCount) : "—"} note={usageLoaded ? `${formatCount(usage.summary.totalTokens)} tokens in 30 days` : "Usage unavailable"} />
         <DashboardStat label="success rate" value={successRate === null ? "—" : `${successRate}%`} note={!usageLoaded ? "Usage unavailable" : successRate === null ? "No requests in this period" : `${formatCount(usage.summary.successCount)} successful`} />
         <DashboardStat label={isAdmin ? "active policies" : "quota pools"} value={String(isAdmin ? overview?.policiesActive ?? activePolicies : rows.length)} note={isAdmin ? `${overview?.tenantsTotal ?? tenants.length} tenants` : usageLoaded ? "live policy ledgers" : "status unavailable"} />
@@ -145,18 +149,19 @@ export function DashboardScreen({ session, services, policies, credentials, user
         </section>
         <section className="dashboardPanel dashboardProviderPanel">
           <DashboardPanelHeader eyebrow="Provider mix" title="Traffic distribution" meta={usageLoaded ? `${usage.providers.length} active` : "unavailable"} />
-          {usageLoaded ? <ProviderUsageChart providers={usage.providers} services={services} limit={5} /> : <InlineNote>Provider usage unavailable.</InlineNote>}
+          {usageLoaded ? <ProviderUsageChart providers={usage.providers} services={inventory} limit={5} /> : <InlineNote>Provider usage unavailable.</InlineNote>}
         </section>
       </div>
 
       <div className="dashboardGrid">
         <MyKeysCard key={myKeyScope} credentials={myCredentials} policyIds={myPolicyIds} feedback={myKeyFeedback} onDraftChange={onMyKeyDraftChange} busy={myKeysBusy} onIssue={onIssueMyKey} onRevoke={onRevokeMyKey} />
         <section className="dashboardPanel servicePanel">
-          <DashboardPanelHeader eyebrow={isAdmin ? "service estate" : "your access"} title={isAdmin ? "Provider readiness" : "Services you can use"} meta={`${isAdmin ? configuredServices.length : usableServices.length} ready`} action="View catalog" onAction={onOpenCatalog} />
-          <div className="serviceSpectrum" role="img" aria-label={`${servicePercent}% of ${isAdmin ? "catalog services are configured" : "granted services are usable"}`}>
+          <DashboardPanelHeader eyebrow="your access" title="Configured services" meta={catalogAvailable ? `${usableServices.length} available to test` : "availability unknown"} action="View catalog" onAction={onOpenCatalog} />
+          {catalogNotice ? <InlineNote>{catalogNotice}</InlineNote> : null}
+          {catalogAvailable ? <div className="serviceSpectrum" role="img" aria-label={`${servicePercent}% of your configured services have available operations`}>
             <span className="serviceSpectrumReady" style={{ width: `${servicePercent}%` }} />
             <span className="serviceSpectrumBlocked" style={{ width: `${100 - servicePercent}%` }} />
-          </div>
+          </div> : null}
           <div className="dashboardServiceGrid">
             {visibleServices.slice(0, isAdmin ? 10 : 8).map((service, index) => {
               const outcome = serviceOutcome(service);
@@ -168,7 +173,7 @@ export function DashboardScreen({ session, services, policies, credentials, user
                 </article>
               );
             })}
-            {!visibleServices.length ? <div className="dashboardEmpty"><CircleSlash2 aria-hidden="true" /><strong>No services assigned</strong><p>Ask an administrator to bind a service policy to your identity or group.</p></div> : null}
+            {!visibleServices.length ? <div className="dashboardEmpty"><CircleSlash2 aria-hidden="true" /><strong>{catalogAvailable ? "No services assigned" : "Catalog unavailable"}</strong><p>{catalogAvailable ? "Ask an administrator to bind a service policy to your identity or group." : "Refresh to check current operation availability."}</p></div> : null}
           </div>
           {visibleServices.length > (isAdmin ? 10 : 8) ? <button className="dashboardTextAction" type="button" onClick={onOpenCatalog}>Show {visibleServices.length - (isAdmin ? 10 : 8)} more services <ChevronRight aria-hidden="true" /></button> : null}
         </section>
@@ -181,7 +186,7 @@ export function DashboardScreen({ session, services, policies, credentials, user
               const budget = presentPolicyBudget(row);
               return (
                 <article className="quotaRow" key={usagePolicyId(row)} title={budget.note}>
-                  <span className="quotaIdentity"><strong>{usagePolicyId(row)}</strong><small>{budget.scopeLabel} · {effectiveProviderCount(row.providers, services)} services</small></span>
+                  <span className="quotaIdentity"><strong>{usagePolicyId(row)}</strong><small>{budget.scopeLabel} · {effectiveProviderCount(row.providers, inventory)} services</small></span>
                   <span className="quotaNumbers"><strong>{budget.remaining}</strong><small>{budget.limit} · {budget.used}</small></span>
                   <span className={`quotaTrack${budget.percent !== null && budget.percent >= 90 ? " warning" : ""}`}><span style={{ width: `${budget.percent ?? 0}%` }} /></span>
                   <strong className="quotaPercent">{budget.percent === null ? "—" : `${Math.round(budget.percent)}%`}</strong>
@@ -195,12 +200,12 @@ export function DashboardScreen({ session, services, policies, credentials, user
 
         {isAdmin ? (
           <section className="dashboardPanel operationsPanel">
-            <DashboardPanelHeader eyebrow="administration" title="Control plane" meta={`${attentionServices.length} signals`} action="Manage access" onAction={onOpenAccess} />
+            <DashboardPanelHeader eyebrow="administration" title="Control plane" meta={catalogAvailable ? `${attentionServices.length} personal service signals` : "service availability unknown"} action="Manage access" onAction={onOpenAccess} />
             <div className="operationsDiagram">
               <div><span>identities</span><strong>{users.length}</strong><small>{users.filter((user) => user.enabled).length} enabled</small></div>
               <div><span>credentials</span><strong>{activeCredentials}</strong><small>{credentials.length} provisioned</small></div>
               <div><span>tenants</span><strong>{overview?.tenantsTotal ?? tenants.length}</strong><small>{overview?.policiesTotal ?? policies.length} policies</small></div>
-              <div className={attentionServices.length ? "needsAttention" : "healthy"}><span>service alerts</span><strong>{attentionServices.length}</strong><small>{attentionServices.length ? "configuration required" : "all clear"}</small></div>
+              <div className={!catalogAvailable || attentionServices.length ? "needsAttention" : "healthy"}><span>your blocked services</span><strong>{catalogAvailable ? attentionServices.length : "—"}</strong><small>{!catalogAvailable ? "availability unknown" : attentionServices.length ? "inspect current reasons" : "none"}</small></div>
             </div>
             <div className="operationsFooter"><ShieldCheck aria-hidden="true" /><span><strong>Access boundary active</strong><small>Identity, policy, quota, then provider</small></span></div>
           </section>
@@ -251,7 +256,7 @@ export function DashboardStat({ label, value, note }: { label: string; value: st
   return <div><span>{label}</span><strong>{value}</strong><small>{note}</small></div>;
 }
 
-export function CatalogScreen({ services, allServices, selected, policies, connections, pendingProviderIds, query, setQuery, kind, setKind, kinds, canAdminister, onSelect, onSetConnection, onSetProviderBudget, onPlay, onAdd }: {
+export function CatalogScreen({ services, allServices, selected, policies, connections, pendingProviderIds, query, setQuery, kind, setKind, kinds, canAdminister, targets, catalogNotice, inventoryMode, setInventoryMode, onSelect, onSetConnection, onSetProviderBudget, onPlay, onAdd }: {
   services: ServiceItem[];
   allServices: ServiceItem[];
   selected?: ServiceItem;
@@ -267,9 +272,15 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
   onSelect: (service: ServiceItem) => void;
   onSetConnection: (providerId: string, enabled: boolean) => void;
   onSetProviderBudget: (providerId: string, monthlyBudgetMicros: number | null) => void;
-  onPlay: (service: ServiceItem) => void;
+  targets: CatalogTarget[];
+  catalogNotice: string;
+  inventoryMode: boolean;
+  setInventoryMode: (value: boolean) => void;
+  onPlay: (target: CatalogTarget) => void;
   onAdd: (service: ServiceItem) => void;
 }) {
+  const [playTarget, setPlayTarget] = useState<CatalogTarget | null>(null);
+  const selectedTarget = playTarget?.provider === selected?.provider ? playTarget : null;
   const activePolicies = policies.filter((policy) => policy.enabled);
   const queryMatchedServices = allServices.filter((service) => matchesServiceQuery(service, query));
   const selectedPolicies = selected ? activePolicies.filter((policy) => policyCoversProvider(policy, selected.provider)) : [];
@@ -285,6 +296,8 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
     <div className="entityLayout">
       <section className="mainPane">
         <div className="catalogControls">
+          {canAdminister ? <button type="button" className="buttonSecondary" onClick={() => { setInventoryMode(!inventoryMode); setKind("all"); }}>{inventoryMode ? "Your configured services" : "Configure providers"}</button> : null}
+          {inventoryMode ? <InlineNote>Provider inventory for configuration. Switch to your configured services to test an authorized operation.</InlineNote> : catalogNotice ? <InlineNote>{catalogNotice}</InlineNote> : null}
           <div className="catalogMeta"><strong>{services.length} services</strong><span>{usableCount} usable · {grantedCount} granted · {blockedCount} blocked</span></div>
           <label><span>search catalog</span><div className="inputWithIcon"><Search aria-hidden="true" /><input name="catalog-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="service, provider, model, route" /></div></label>
           <div className="kindTabs" role="tablist" aria-label="service kind">
@@ -299,7 +312,7 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
             return {
               id: service.id,
               active: selected?.id === service.id,
-              onClick: () => onSelect(service),
+              onClick: () => { if (service.provider !== selected?.provider) setPlayTarget(null); onSelect(service); },
               cells: [
                 <EntityName brandIcon={service.brandIcon} icon={kindIcon(service.kind)} title={service.name} subtitle={`${service.provider} · ${kindLabel(service.kind)}`} />,
                 <Status label={service.access?.allowed ? "granted" : service.access ? "not granted" : "unknown"} tone={service.access?.allowed ? "active" : service.access ? "revoked" : "neutral"} />,
@@ -316,7 +329,8 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
           <>
             {(() => {
               const outcome = serviceOutcome(selected);
-              const playBlocker = playgroundBlockedForService(selected);
+              const currentTarget = resolveCatalogTarget(targets, selectedTarget);
+              const playBlocker = inventoryMode ? "Switch to your configured services to test an operation." : targetBlocker(targets, selectedTarget);
               const connection = connectionByProvider.get(selected.provider);
               const connectionEnabled = connection?.enabled ?? selected.readiness?.connectionEnabled;
               const connectionPending = pendingProviderIds.has(selected.provider);
@@ -345,8 +359,9 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
             <div className="miniList">
               {grantNamesForService(selected, selectedPolicies).length ? grantNamesForService(selected, selectedPolicies).map((policyId) => <button key={policyId} type="button">{policyId}<span>{selectedPolicies.find((policy) => policy.policyId === policyId)?.tenantId ?? "identity policy"}</span></button>) : <p>No active policy includes this service yet.</p>}
             </div>
+            {!inventoryMode ? <div className="playgroundToolbar"><OfferPicker key={selected.provider} provider={selected.provider} targets={targets} selected={selectedTarget} onSelect={setPlayTarget} />{playBlocker ? <InlineNote>{playBlocker}</InlineNote> : null}</div> : null}
             <div className="inspectorActions">
-              <button type="button" disabled={Boolean(playBlocker)} onClick={() => onPlay(selected)} title={playBlocker ?? undefined}><Play className="buttonIcon" aria-hidden="true" /><span>Try in playground</span></button>
+              <button type="button" disabled={Boolean(playBlocker)} onClick={() => { if (currentTarget && !playBlocker) onPlay(currentTarget); }} title={playBlocker ?? undefined}><Play className="buttonIcon" aria-hidden="true" /><span>Try in playground</span></button>
               {canAdminister ? <button type="button" disabled={connectionPending} aria-busy={connectionPending} className={connectionEnabled === false ? "buttonSecondary" : "buttonDanger"} onClick={() => onSetConnection(selected.provider, connectionEnabled === false)}><ServerCog className="buttonIcon" aria-hidden="true" /><span>{connectionEnabled === false ? "Enable connection" : "Disable connection"}</span></button> : null}
               {canAdminister ? <button type="button" className="buttonSecondary" onClick={() => onAdd(selected)}><Plus className="buttonIcon" aria-hidden="true" /><span>Add to selected policy</span></button> : null}
             </div>
@@ -354,7 +369,12 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
               );
             })()}
           </>
-        ) : <p>Select a service.</p>}
+        ) : !inventoryMode && playTarget ? <>
+          <InspectorHeader title={playTarget.providerName} subtitle="Selected provider unavailable" />
+          <InlineNote>{targetBlocker([], playTarget)}</InlineNote>
+          <div className="playgroundToolbar"><OfferPicker provider={playTarget.provider} targets={[]} selected={playTarget} onSelect={setPlayTarget} /></div>
+          <div className="inspectorActions"><button type="button" disabled><Play className="buttonIcon" aria-hidden="true" /><span>Try in playground</span></button></div>
+        </> : <p>Select a configured service to inspect its available operations.</p>}
       </aside>
     </div>
   );
