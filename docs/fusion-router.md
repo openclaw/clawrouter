@@ -48,10 +48,14 @@ Open the admin console, select **Access**, then **Fusion**. Configure:
 - one final synthesizer model id;
 - adviser timeout and output-token limits;
 - input and injected-proposal character limits; and
-- adviser temperature.
+- adviser temperature preference.
 
 Every selected model must expose OpenAI chat-completions request and response
 formats. Provider-native chat routes without that wire contract are rejected.
+Advisers receive the temperature preference only when that model and endpoint
+document support for it. Otherwise Fusion omits it and the readiness preview
+explains that the provider default applies. Local and opaque model names do not
+imply sampling or reasoning support; Fusion does not inject a reasoning effort.
 
 A cost-oriented starting point is one or two `local/*` advisers with
 `openai/gpt-4.1-mini` as the synthesizer. Use a stronger synthesizer only for a
@@ -146,6 +150,13 @@ curl "$CLAWROUTER_BASE_URL/v1/chat/completions" \
 The final upstream response body is preserved, including streaming and tool
 calls. Diagnostic response headers report the synthesizer, successful and
 failed adviser counts, successful adviser ids, and adviser-layer latency.
+The synthesizer preserves caller-supplied sampling, reasoning, and tool fields.
+Documented model/endpoint conflicts return `model_parameter_unsupported` before
+any reservation or adviser dispatch. For example, Astra Chat tool calls and
+temperature fields are rejected; GPT-5.4 sampling requires its documented
+`none` effort. Unknown parameter support remains subject to upstream validation.
+An empty assessment is not a guarantee that the provider accepts the full request.
+Direct public, native, and manifest routes retain their protocol passthrough.
 
 ## Security and privacy boundaries
 
