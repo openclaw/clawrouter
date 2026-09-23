@@ -172,7 +172,10 @@ test("Fusion shares selected-policy model eligibility across key and session dis
         assert.equal(visible, expected, `${mode} ${surface}: ${config.aggregatorModel}`);
         if (fusion) {
           assert.equal(fusion.readiness.reasons.some((reason) => reason.includes("0/1 advisers")), readyAdvisers === 0);
-          if (surface === "catalog") assert.equal(fusion.models.length, expected ? 1 : 0);
+          if (surface === "catalog") {
+            assert.equal(fusion.models.length, expected ? 1 : 0);
+            assert.equal(fusion.nativeBaseUrl, mode === "key" ? "/v1" : null);
+          }
         }
         // One connection snapshot and one read-only pool resolution per eligible
         // provider/policy serve both concrete rows and every Fusion participant.

@@ -105,7 +105,7 @@ function catalogProjection(entitlements: ClientEntitlements) {
     allowed: true,
     executable: fusion.readiness.executable,
     openaiCompatible: true,
-    nativeBaseUrl: "/v1",
+    nativeBaseUrl: entitlements.scope.authType === "proxy_key" ? "/v1" : null,
     policies: fusion.policies,
     readiness: fusion.readiness,
     connectionTypes: ["compound"],
