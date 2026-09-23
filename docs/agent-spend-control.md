@@ -86,7 +86,8 @@ ClawRouter also recognizes these incomplete request prices by wire format:
 
 - OpenAI Responses web search (including dated variants), file search, code
   interpreter, image generation, and shell tools with hosted container
-  environments, including Responses Lite `additional_tools` input declarations;
+  environments, including Responses Lite `additional_tools` and
+  [tool search `tool_search_output` input declarations](https://developers.openai.com/api/docs/guides/tools-tool-search#understand-what-gets-loaded);
   Chat `web_search_options`; Anthropic `web_search_*` and separately billed
   `code_execution_*`.
 - Opaque Responses `prompt` references, because

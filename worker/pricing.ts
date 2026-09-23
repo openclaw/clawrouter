@@ -39,10 +39,10 @@ export function requestPricingGap(pricing: ModelPricing | null | undefined, body
   // CachedContent retains tools and toolConfig. The reference alone cannot
   // prove that generation has only the token costs represented by this card.
   if (requestFormat === "google.generate_content" && googleField(body, "cachedContent", "cached_content") != null) return "hosted_tool_usage";
-  // Responses Lite puts executable declarations in additional_tools input
-  // items. Do not search message content, function schemas, or tool results.
+  // Responses Lite and tool search load executable declarations through tagged
+  // input items. Do not search ordinary output data, content, or function schemas.
   const inputTools = requestFormat === "openai.responses" && Array.isArray(body.input)
-    ? body.input.flatMap((item) => isObject(item) && item.type === "additional_tools" && Array.isArray(item.tools) ? item.tools : []) : [];
+    ? body.input.flatMap((item) => isObject(item) && (item.type === "additional_tools" || item.type === "tool_search_output") && Array.isArray(item.tools) ? item.tools : []) : [];
   const tools = (Array.isArray(body.tools) ? body.tools : []).concat(inputTools);
   for (const tool of tools) {
     if (!isObject(tool)) continue;

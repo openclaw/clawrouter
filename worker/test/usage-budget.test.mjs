@@ -577,7 +577,7 @@ test("incomplete pricing admission and unavailable settlement share the HTTP, na
     ["openai", "/v1/native/openai/v1/responses", "gpt-6-astra", { tools: [{ type: "shell", environment: { type: "container_auto" } }] }],
     ...["/v1/responses", "/v1/native/openai/v1/responses", "/v1/proxy/openai/responses"].flatMap(route => [
       ["openai", route, "openai/gpt-6-astra", { prompt: { id: "pmpt_fixture", version: "1" } }],
-      ["openai", route, "openai/gpt-6-astra", { tools: [], input: [{ type: "additional_tools", role: "developer", tools: [{ type: "file_search" }] }] }],
+      ...["additional_tools", "tool_search_output"].map(type => ["openai", route, "openai/gpt-6-astra", { tools: [], input: [{ type, ...(type === "additional_tools" ? { role: "developer" } : { call_id: "call_fixture", execution: "client" }), tools: [{ type: "file_search" }] }] }]),
     ]),
     ["openai", "/v1/chat/completions", "openai/gpt-6-astra", { web_search_options: {} }],
     ["anthropic", "/v1/native/anthropic/v1/messages", "claude-haiku-4-5", { tools: [{ type: "web_search_20260318", name: "web_search" }] }],
