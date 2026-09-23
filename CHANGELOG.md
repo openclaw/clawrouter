@@ -20,6 +20,8 @@
 - Account for OpenAI Standard, Fast/priority, and supported Flex tiers using dated per-model prices, conservative admission, and actual served-tier settlement. Preserve unmetered forwarding for undeclared tiers, show unavailable prices in usage totals, retain estimates when metered usage is incomplete, and refresh the GPT-5.6 Sol alias prices.
 - Add GPT-6 Astra to the OpenAI catalog with its reasoning efforts, standard token and cache-write pricing, long-context rates, and Chat Completions token-limit mapping.
 
+- Select smoke-test models from the chosen endpoint's declared capabilities, preserving native model names and configured Azure deployments instead of stale or synthetic defaults.
+
 ## 0.4.0 - 2026-09-22
 
 **Highlights:** Lanseq joins the provider catalog, with more reliable Fusion accounting, safer route parsing, and corrected Bedrock request signing.
