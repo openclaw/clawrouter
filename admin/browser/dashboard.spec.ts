@@ -87,8 +87,8 @@ test("Fusion distinguishes unavailable request prices from an explicit zero tari
   });
   await page.goto("/dashboard/access");
   await page.getByRole("tab", { name: /Fusion/ }).click();
-  await expect(page.getByLabel("readiness policy", { exact: true })).toHaveValue(policy.policyId);
-  await expect(page.getByLabel("final synthesizer", { exact: true })).toHaveValue(fusion.aggregatorModel);
+  await expect(page.getByRole("combobox", { name: "readiness policy", exact: true })).toHaveValue(policy.policyId);
+  await expect(page.getByRole("combobox", { name: "final synthesizer", exact: true })).toHaveValue(fusion.aggregatorModel);
   const checkReadiness = page.getByRole("button", { name: "Check readiness" });
   await expect(checkReadiness).toBeEnabled();
   const panel = page.getByRole("region", { name: "Fusion readiness" });
