@@ -34,7 +34,7 @@ export function createProxyAccounting(options: AccountingContext) {
   const correlation = correlationMetadata(request);
   const requestId = correlation.requestId;
   const started = Date.now();
-  function finish(statusCode: number, status: UsageEvent["status"], reservation = emptyReservation(), actual = 0, tokens: UsageTokens | null = null, contentRef: string | null = null, basis = cost.basis) {
+  function finish(statusCode: UsageEvent["status_code"], status: UsageEvent["status"], reservation = emptyReservation(), actual = 0, tokens: UsageTokens | null = null, contentRef: string | null = null, basis = cost.basis) {
     const event: UsageEvent = {
       id: randomId("usage"), type: "clawrouter.usage.v1", occurred_at_ms: Date.now(), tenant_id: auth.policy.tenantId ?? "default",
       policy_id: auth.policyId, credential_id: auth.credentialId, principal_id: auth.principalId, auth_type: auth.authType,
@@ -55,15 +55,18 @@ export function createProxyAccounting(options: AccountingContext) {
     };
     return finalizeAccounting(env, reservation, actual, event);
   }
-  function settle(statusCode: number, status: UsageEvent["status"], billable: boolean, tokens: UsageTokens | null, reservation: BudgetReservation, contentRef: string | null) {
+  function settle(statusCode: UsageEvent["status_code"], status: UsageEvent["status"], billable: boolean, tokens: UsageTokens | null, reservation: BudgetReservation, contentRef: string | null) {
     // Token totals and a known served tier cannot establish hosted-search fees.
     const measured = tokens && !unpricedSearch ? actualCost(model, tokens, auth.policy.requestCostMicros) : null;
     const actual = billable ? measured ?? cost.reserveMicros : 0;
+    // Proven nonbillable work is distinct from missing prices or zero tariffs.
+    // Keep explicit fixed prices and the fallback's existing charged contract.
+    const knownNoCharge = !billable || (tokens?.billable === false && actual === 0 && cost.basis !== "policy_fixed");
     // Zero accounted micros with an unpriced basis means unavailable, not free.
     // A known served tier can supply a price even for an undeclared request tier.
-    const basis = unpricedSearch ? !billable || tokens?.billable === false ? "none" : "unpriced_usage" : cost.basis === "unpriced_service_tier"
-      ? !billable ? "none" : measured == null ? "unpriced_usage" : "manifest_pricing"
-      : billable && measured == null && cost.basis === "manifest_pricing" ? "manifest_reservation" : cost.basis;
+    const basis = knownNoCharge ? "none" : unpricedSearch ? "unpriced_usage" : cost.basis === "unpriced_service_tier"
+      ? measured == null ? "unpriced_usage" : "manifest_pricing"
+      : measured == null && cost.basis === "manifest_pricing" ? "manifest_reservation" : cost.basis;
     return finish(statusCode, status, reservation, actual, tokens, contentRef, basis);
   }
   return {

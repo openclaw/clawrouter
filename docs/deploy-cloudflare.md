@@ -703,6 +703,23 @@ active tier; routing never spills into a higher tier while a lower tier has an
 eligible grant. CLI imports, admin writes, and browser OAuth maintain the
 bounded pool index automatically.
 
+Each scope/provider permits 32 active grants or pending active reservations.
+A replacement reserves capacity before storing active credentials; a paused
+replacement records a pending proposal without consuming an active slot. Neither
+proposal can receive requests, and the previous provider remains attached until
+the store commits.
+Paused and reauthorization-required accounts remain attached while freeing an
+active slot. Revocation removes the attachment after deleting its secrets.
+These attachment facts do not yet change environment-credential fallback;
+legacy backfill and fallback activation require the subsequent control-plane
+migration.
+
+The attachment storage upgrade is forward-only. Recovery must use the current
+Worker or a forward fix so the owner can reconcile unfinished publication.
+Do not roll back to a Worker that predates attachment statuses: its pool query
+ignores those statuses and does not safely handle retained inactive accounts.
+Do not delete the index fences or restore an older index over current owners.
+
 `cf:oauth:put` replaces the entire grant at that key, including its credentials
 and account metadata. Omitted refresh tokens, credential bundles, and refresh
 configuration are cleared. Supply a fresh primary credential for each import.
@@ -909,8 +926,13 @@ The Access service token must be allowed by the application's Service Auth
 policy; it supplements the admin bearer token. Configure both Access variables
 or neither for an unprotected self-hosted endpoint. Ticket creation shares the
 key commands' admin transport: it refuses redirects with an Access setup hint
-and does not print raw response bodies in errors. Shared admin responses are
-limited to 128 KiB; rejected responses do not create a ticket file.
+and does not print raw response bodies in errors. Admin responses consumed as
+JSON, including tickets and all error responses, are limited to 128 KiB;
+rejected responses do not create a ticket file. Key and grant mutation commands
+acknowledge successful JSON response headers and discard the unused body, so
+large accepted grant metadata does not turn a committed mutation into a CLI
+failure. A bodyless 204 also acknowledges success; redirects and non-JSON
+responses remain errors. No automatic mutation retry is performed.
 The provider manifest supplies the default. Claude tickets enable keep-warm when
 neither flag is present. Use `--no-keep-warm` to disable it for one grant;
 `--keep-warm` remains available as an explicit override for providers whose

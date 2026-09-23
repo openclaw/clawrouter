@@ -2,13 +2,19 @@
 
 ## Unreleased
 
-- Preserve unsaved policy drafts across refreshes and completed saves, provide explicit discard, and keep missing selections visible. Keep explicit disablement and later edits intact, attach edits made during creation to the created policy for the next save, and wait for the initial policy list before enabling saves.
+- Record known no-charge outcomes with an explicit usage basis across HTTP and WebSockets, while preserving fixed tariffs, retained estimates, unavailable prices, and all budget amounts.
+- Add explicit Codex Desktop root setup with coherent restoration of prior routing settings, preserved authentication and user preferences, and clear API-key Fast and environment-loading limits.
 
-- Clear protected console data and drafts when browser authentication expires or identity changes. Keep sign-in gated until the session is verified, preserve in-flight key ownership, and distinguish authentication loss from permission, CSRF, and reporting failures.
 - Keep policy selection separate from existing binding edits, while new bindings still default to the selected policy.
+- Preserve unsaved policy drafts across refreshes and completed saves, provide explicit discard, and keep missing selections visible. Keep explicit disablement and later edits intact, attach edits made during creation to the created policy for the next save, and wait for the initial policy list before enabling saves.
 - Separate proxy-key creation from rotation in the console, serialize key actions across admin and personal screens, and keep one-time secrets, drafts, and action status owned by the operation's identity. Show uncertain outcomes and clipboard failures without replaying dismissed secrets, and preserve table action contrast in both themes.
+- Assess Fusion sampling, reasoning, and tool intent from source-linked model/endpoint facts. Reject documented synthesizer conflicts before adviser spend, preserve caller fields, and omit unqualified adviser temperature and local reasoning defaults.
+
+- Preserve the initiating cause when Responses WebSockets close. Client disconnects record `client_error` without an invented HTTP status; unsent requests release reservations, while sent requests without final usage retain their estimate.
 
 - Keep failed console refreshes visible after successful edits, label stale usage with its snapshot time, and show unavailable spend and balances as unknown.
+
+- Keep a grant's previous provider attachment until replacement credentials commit. Reserve active capacity as unselectable pending membership, allow paused imports into full active pools, retain inactive attachments, and recover partial publication through committed admission receipts and generation-checked owner reconciliation. Repeated revocation clears failed reconnect reservations. This storage upgrade requires forward recovery; environment-fallback activation and legacy attachment backfill remain separate work.
 
 - Restrict personal usage audit events to the authenticated principal, or unattributed events for the authenticated service key, while preserving shared policy totals and administrator audit access.
 - Keep public HTTP Responses continuations on the original credential owner across token refresh. Register response and Codex turn identities before publication, preserve ordinary pool failover, and require a visible restart when ownership changes or expires.
@@ -16,6 +22,7 @@
 - Preserve provider kill switches and budgets during concurrent connection edits, and show per-provider pending state in the console.
 
 - Deny proxy requests and subsequent WebSocket turns for explicitly disabled key owners, and show their credentials as owner-disabled without changing unowned service keys or retained policy bindings.
+- Clear protected console data and drafts when browser authentication expires or identity changes. Keep sign-in gated until the session is verified, preserve in-flight key ownership, and distinguish authentication loss from permission, CSRF, and reporting failures.
 - Add collision-safe proxy-key creation and active-key-only rotation. Serialize credential authorization, current-policy checks, and revocation in the authority so concurrent writes cannot restore an old secret or owner; preserve existing PUT and CLI upserts.
 
 - Preserve local administrator roles during user, policy-assignment, and automatic-assignment edits, including profile saves that race with an explicit role change.
@@ -34,6 +41,7 @@
 - Keep upstream grant lifecycle changes authoritative in their credential owner. Stale requests cannot undo disablement or revocation; secretless revocation tombstones require fresh credentials to reconnect, and grant metadata and pool updates are serialized with owner mutations. Publish each materialization's final state once to respect KV write limits.
 - Route grant CLI imports and revocations through the authenticated admin API, including explicit loopback `--local` targets. Preserve whole-grant replacement, clear omitted old credentials, and migrate legacy KV disablement or revocation before credential-owner maintenance can use secrets.
 - Deny expired or invalid retained-content reads with a content-free, non-cacheable not-found response, independently of physical archive deletion.
+- Sweep expired self-host archive objects after startup and on bounded periodic ticks, persist cleanup progress across restarts, and cap legacy archive retention by upload age without changing managed R2 lifecycle ownership.
 
 - Match Cloudflare Access applications by exact destination instead of display name, reject ambiguous or name-only collisions before writes, and inspect all application and policy pages during provisioning.
 
@@ -41,6 +49,7 @@
 - Retain qualified estimates or fixed tariffs when dispatched HTTP requests fail before response headers, while keeping pre-dispatch failures at zero and preserving error and cancellation outcomes.
 - Isolate policy, principal, and provider budget charges when their identifiers share a ledger address, preserving existing balances and ambiguous legacy debt without resetting budgets or orphaning settlement receipts.
 - Use the shared Access-aware admin transport for pool-ticket issuance, preserving protected ticket output while bounding admin responses and keeping raw response bodies out of error messages.
+- Acknowledge completed key and grant mutations without reading unused success payloads, preserving successful CLI outcomes for large accepted grant metadata while keeping ticket and error reads bounded.
 
 - Apply concrete Chat model eligibility to Fusion discovery, including selected-policy pricing, provider limits, and grant availability, while preserving fail-open advisers.
 - Reject hosted web search before dispatch under measured budgets without a fixed policy tariff; keep unmetered forwarding and report its price as unavailable instead of token-only spend.

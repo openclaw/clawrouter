@@ -28,7 +28,7 @@ separate `<name>.config.toml` profile files over the base configuration;
 `[profiles.NAME]` is not the supported format. Existing profiles are never
 adopted or overwritten by `connect`. The base `config.toml`, `auth.json`, sandbox
 and approval settings, and key file stay unchanged. This command configures the
-CLI; Desktop uses the shared root configuration described below.
+CLI; Desktop uses the explicit root target described below.
 
 The profile selects the requested upstream model and the router's native
 provider URL. It disables hosted web search and enables WebSockets only when
@@ -74,6 +74,59 @@ Credential revocation is a separate operator action through the admin UI or
 a profile lock directory, check that no setup command is still running before
 removing that named lock.
 
+## Connect Desktop
+
+Fully quit Desktop before `connect`, `update`, or `remove`. These commands edit
+`$CODEX_HOME/config.toml`, which also supplies defaults to CLI sessions without
+a named profile. They preserve authentication files, sandbox and approval
+settings, reasoning effort, existing tier preferences, and unrelated config.
+
+```sh
+pnpm codex:connect connect --target desktop \
+  --router-url https://router.example.com \
+  --provider openai --model gpt-6-astra \
+  --codex /path/to/codex-0.155 --dry-run
+# Review the field changes, then repeat without --dry-run.
+pnpm codex:connect verify --target desktop --codex /path/to/codex-0.155
+pnpm codex:connect update --target desktop --codex /path/to/codex-0.155
+pnpm codex:connect remove --target desktop
+```
+
+Use `--codex-home DIR` consistently if Desktop uses another home. `--codex`
+selects the metadata producer; it does not replace the app's embedded engine.
+Desktop does not accept `--profile` or `--service-tier`. The installed app's
+API-key mode clears Fast even when an existing root preference requests priority.
+Use the CLI profile workflow when you need to request priority through ClawRouter.
+
+The root file's first comment records the original value or absence of each
+owned routing setting. Keep that receipt intact. A dedicated provider collision
+or active legacy profile selector fails explicitly. Existing unrelated providers
+and profiles remain; ordinary and inline provider tables are supported.
+`update` refuses changed owned fields. `remove` restores model, provider, catalog,
+and hosted-search settings together only when all still match the installation.
+On a conflict it preserves the whole connection and reports the field names.
+User-added provider settings survive with their required name; an edited inline
+provider stays intact with its catalog generations. Removal does not revoke keys.
+
+One root lock coordinates setup commands. Rereading before replacement detects
+observed edits; it cannot lock out an unrelated editor or running app. Keep the
+app closed during changes. Catalogs are installed before the atomic root-config
+switch, and failed preparation keeps the previous configuration usable.
+
+Export the key from the actual interactive login shell that the macOS launcher
+reads. For zsh, add a loader to `.zshrc` using the saved key file's real path:
+
+```sh
+if [ -r "$HOME/.config/clawrouter/client-key.txt" ]; then
+  export CLAWROUTER_API_KEY="$(cat "$HOME/.config/clawrouter/client-key.txt")"
+fi
+```
+
+The setup command does not edit shell startup or `launchctl` state. A Terminal
+export does not change an already-running app. Fully quit and restart Desktop,
+then start a new thread. Never put an admin, upstream provider, or ChatGPT token
+in `CLAWROUTER_API_KEY`; use only the issued router client key.
+
 ## Export native model metadata
 
 Codex needs its complete model descriptor, including instructions and service
@@ -102,7 +155,7 @@ The OpenAI export uses upstream slugs such as `gpt-6-astra` and
 base. The documented `gpt-5.6` API alias uses Sol's descriptor. Refresh the file
 after changes to the authorized router catalog or the producer's bundled models.
 
-## Configure the client
+## Configure the CLI manually
 
 Merge these settings into the shared user configuration, `$CODEX_HOME/config.toml`
 (default `~/.codex/config.toml`). CLI and Desktop instances using the same directory
@@ -155,40 +208,24 @@ forward; unknown final prices are marked unavailable rather than reported as fre
 The monthly allowance is ClawRouter list-price accounting,
 not a guarantee about the provider invoice. See [spend control](agent-spend-control.md).
 
-For the macOS app, load the downloaded key file from the interactive shell that
-its launcher reads. Add a loader to `.zshrc`, using the actual saved file path:
-
-```sh
-if [ -r "$HOME/.config/clawrouter/client-key.txt" ]; then
-  export CLAWROUTER_API_KEY="$(cat "$HOME/.config/clawrouter/client-key.txt")"
-fi
-```
-
-After regenerating the catalog or changing providers, fully quit and restart the
-app, then start a new thread. A Terminal export alone
-does not change an already-running GUI process. `launchctl setenv` is an optional
-session-only alternative that must be reapplied after login or reboot. Never put
-an admin, upstream provider, or ChatGPT token in `CLAWROUTER_API_KEY`.
-
 ## Desktop account features and voice
 
 CLI and engine priority forwarding is separate from the Desktop Fast control.
-The installed Desktop clears Fast in custom-key-only mode
-([upstream report](https://github.com/openai/codex/issues/43635)). Desktop Fast requires
-a genuine ChatGPT login, a catalog model advertising priority, and permission
-from any managed `fast_mode` requirements. An optional hybrid
-configuration sets `requires_openai_auth = true` while retaining the explicit
-router `base_url` and `env_key`, and uses a genuine ChatGPT login in the app.
-The router key still authenticates inference; a missing router key fails rather
-than sending the ChatGPT token to ClawRouter.
+The inspected macOS build 26.901.22334 (7746), with embedded Codex 0.153.0,
+clears Fast in API-key mode ([upstream report](https://github.com/openai/codex/issues/43635)).
+Its account gate sends `serviceTier: null`; changing the root priority preference
+does not bypass that gate. Setup keeps `requires_openai_auth = false` and the
+explicit router `env_key`. It does not fabricate a ChatGPT account or change the
+provider's authentication requirement to expose an account-only control.
 
 The installed 0.153.0 app engine and 0.155.0 CLI are covered by isolated native
 fixtures for account state, catalog loading, Lite payloads, priority forwarding,
-and bearer ownership. Graphical validation was blocked by the Computer Use native
-pipe, so those fixtures do not prove the graphical Fast control, microphone
-permission, or a particular account's entitlement. Desktop dictation
-continues to use the app's OpenAI service and genuine ChatGPT account. ClawRouter
-does not proxy dictation, speech, or the Realtime API through Responses WebSockets.
+and bearer ownership. Root setup fixtures separately check config/account reads
+and connect/update/remove through synthetic native turns, including the GUI's
+null-tier request shape. Native fixtures do not prove the graphical controls,
+microphone permission, or an account's entitlement. Desktop dictation uses a
+separate authenticated OpenAI `/transcribe` request. Dictation and Realtime remain
+unqualified by this setup; Responses WebSockets do not proxy those voice services.
 
 The isolated native fixture also exercises synchronous Guardian approval with
 the official catalog, a key-only loopback provider, and a prompt-approved

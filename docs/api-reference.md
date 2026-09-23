@@ -134,7 +134,13 @@ The bridge forwards native response IDs, errors, metadata, tool results,
 `previous_response_id`, and `stream_options`. Prewarm `generate: false` requests
 receive normal admission and accounting. It never replays requests or switches
 grants after dispatch. A terminal response with usable usage settles once;
-disconnects and deadlines without final usage retain the reservation. If budget
+sent requests interrupted by disconnects or deadlines without final usage retain
+the reservation. Unsent admitted requests release it; queued requests have no
+receipt. The first terminal outcome or close cause owns settlement, including
+when admission finishes after cancellation. A client disconnect records
+`client_error` with `status_code: null`; only the response whose deadline expired
+records `timeout`/504. Other active lanes closed with that connection do not
+inherit its timeout. If budget
 settlement and its durable recovery both fail, or usage publication fails, the
 socket reports `accounting_unavailable` and closes before accepting more work.
 
@@ -293,7 +299,7 @@ Disable one credential to revoke one key, disable a policy to revoke every crede
 
 Budgeted requests reserve an upper-bound token cost before the upstream call when the selected model has versioned pricing. A policy `requestCostMicros` value is a fixed-cost override; budgeted routes without versioned pricing or an override fail closed.
 
-Successful responses settle to reported usage, including cached input where available. Non-2xx and transport failures refund the reservation. Missing or interrupted usage remains charged at the conservative reservation. Streaming responses are metered without buffering the client stream.
+Successful responses settle to reported usage, including cached input where available, or the explicit fixed policy tariff. Known-unsent work and received non-2xx responses settle at zero with `cost_basis: none`. Transport failures after dispatch, and missing or interrupted usage, retain the qualified estimate or fixed tariff because upstream work may have occurred. Streaming responses are metered without buffering the client stream.
 
 Usage events are delivered through `USAGE_QUEUE` to tenant- and policy-sharded `USAGE_LEDGER` Durable Objects. Settlement and audit delivery retry independently, and exhausted messages move to the configured usage dead-letter queue. Ledgers keep bounded identity, route, timing, outcome, token, cost, request ID, and trace metadata; they do not store prompts or completions.
 
