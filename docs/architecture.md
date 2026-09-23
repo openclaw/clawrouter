@@ -144,9 +144,21 @@ inference keeps its separate containment and continuation protocol.
 Usage events are queued into a Durable Object shard named by tenant and policy.
 If queue publication rejects, the Worker writes the same event directly to that
 shard through the queue consumer's ingest path. The event ID remains unchanged:
-SQL `INSERT OR IGNORE` deduplicates a later delivery if the rejected send was
-actually accepted. Successful queue acceptance or direct ingestion completes
+an ID-targeted SQL conflict deduplicates a later delivery if the rejected send
+was actually accepted. Successful queue acceptance or direct ingestion completes
 publication; failure of both remains an accounting failure.
+
+The usage ledger's internal `/ingest` returns JSON `{ eventId, outcome }`, with
+`stored`, `duplicate`, or `expired_by_retention`. It requires a nonempty event ID
+and the supplied nonnegative safe-integer `occurred_at_ms`; it never replaces a
+missing timestamp with the current time. Cleanup and admission share one captured
+30-day cutoff: timestamps strictly before it expire, while a retained duplicate
+keeps its first payload and timestamp. A new expired event is not inserted.
+SQL and alarm scheduling must succeed before a receipt is returned. This is a
+producer-first rollout: current direct and queue consumers still check HTTP
+status only. A strict receipt consumer requires verified deployment of this
+producer first; background accounting is not enabled by this change.
+
 Session/admin reads aggregate each relevant tenant/policy shard once, even when
 the input policy list repeats a scope. The former global ledger's migration
 window ended on 2026-07-23; it is no longer queried. Stored data and Durable
