@@ -132,6 +132,9 @@ billable usage records zero accounted micros with `cost_basis: unpriced_usage`,
 meaning **price unavailable**, even when complete tokens and a known served tier
 are returned. Pre-dispatch denials and proven nonbillable responses remain known
 zero. Free token counting and fixed policy tariffs keep their existing behavior.
+Model discovery and Fusion preflight apply the same completeness guard for both
+policy and provider budgets. Unmetered models remain available; Fusion displays
+their incomplete prices as unavailable rather than a zero-cost estimate.
 Basic Anthropic web fetch has only token charges and retains its full-input-window
 reservation.
 Client-executed function, custom, namespace, local-shell, and apply-patch tools
