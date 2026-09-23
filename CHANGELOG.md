@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Build smoke requests from declared formats and capabilities, preserving renamed provider and endpoint support. Keep unresolved request templates visible without dispatching or claiming provider verification, and scope inline AWS/Cloudflare smoke overrides to their bundled providers.
+
 - Keep policy selection separate from existing binding edits, while new bindings still default to the selected policy.
 
 - Keep failed console refreshes visible after successful edits, label stale usage with its snapshot time, and show unavailable spend and balances as unknown.

@@ -231,10 +231,22 @@ Run this after adding or changing providers:
 pnpm provider:smoke-plan
 ```
 
-The smoke planner compiles `providers/*.provider.yaml`, derives one executable
-smoke target per provider, and fails if any provider lacks a route plan. It does
-not call upstream APIs; deployed live calls are opt-in through
-`CLAWROUTER_SMOKE_LIVE_PROVIDERS`.
+The smoke planner compiles `providers/*.provider.yaml`, derives one route
+candidate per provider, and fails if any provider lacks a route plan. Request
+templates and preferred operations follow the endpoint's request format and
+capabilities, so renamed provider and endpoint IDs keep the same request shape.
+Anthropic token counting omits the output limit required by Messages generation.
+
+A planned target is not upstream verification. Unknown formats and resource-bound
+requests without a fixture remain visible with `target.unresolved`; live smoke
+execution fails before dispatch and does not update provider health. Replicate
+prediction lookup still needs support for an operator-selected existing prediction
+ID. This remains a separate fixture follow-up, not a verified smoke target.
+
+Planning does not call upstream APIs; deployed live calls are opt-in through
+`CLAWROUTER_SMOKE_LIVE_PROVIDERS`. The bundled AWS body override and Cloudflare
+inline credential/model overrides apply only to their named bundled providers;
+renamed manifests do not inherit those values.
 
 ## Lanseq
 
