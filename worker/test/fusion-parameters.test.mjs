@@ -99,6 +99,46 @@ test("direct public, native and manifest requests keep explicit unsupported fiel
   }
 });
 
+test("compiled OpenAI parameter facts govern the actual Fusion handler", async (t) => {
+  const openai = providerById("openai"), sent = [];
+  t.mock.method(globalThis, "fetch", async (_url, init) => {
+    sent.push(JSON.parse(init.body));
+    return Response.json({ choices: [{ message: { content: "fixture answer" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+  });
+  const tools = [{ type: "function", function: { name: "lookup" } }];
+  for (const [id, conflict, accepted, adviserTemperature] of [
+    ["gpt-6-astra", { temperature: 0.2 }, {}, undefined],
+    ["gpt-5.4", { temperature: 0.2, reasoning_effort: "high" }, { temperature: 0.2, reasoning_effort: "none" }, 0.2],
+    ...["gpt-5.5", "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"].map((id) => [id, { tools }, { tools, reasoning_effort: "none" }, undefined]),
+    ["gpt-4.1-mini", null, { temperature: 0.6 }, 0.2],
+  ]) {
+    const modelId = `openai/${id}`;
+    assert.ok(openai.models.find(({ id }) => id === modelId)?.requestParameters?.chat_completions, `${id} requires compiled facts`);
+    const f = await fixture(modelId, ["openai/gpt-4.1-mini"]);
+    if (conflict) {
+      const before = sent.length, response = await f.call(conflict);
+      assert.equal(response.status, 400, id);
+      assert.equal((await response.json()).error.code, "model_parameter_unsupported");
+      await f.drain();
+      assert.equal(sent.length, before, id);
+      assert.deepEqual(f.ledgerCalls, [], id);
+    }
+    const response = await f.call(accepted);
+    assert.equal(response.status, 200, id);
+    await response.text(); await f.drain();
+    assert.equal(sent.at(-1).model, id);
+    for (const [field, value] of Object.entries(accepted)) assert.deepEqual(sent.at(-1)[field], value, `${id}:${field}`);
+
+    const adviser = await fixture("openai/gpt-4.1-mini", [modelId]);
+    const advised = await adviser.call({});
+    assert.equal(advised.status, 200, id);
+    await advised.text(); await adviser.drain();
+    assert.equal(sent.at(-2).model, id);
+    assert.equal(sent.at(-2).temperature, adviserTemperature, id);
+    assert.equal(sent.at(-2).reasoning_effort, undefined, id);
+  }
+});
+
 async function fixture(aggregatorModel, adviserModels) {
   const pending = [], events = [], ledgerCalls = [], secret = "fixture-fusion-secret";
   const config = normalizeFusionConfig({ enabled: true, aggregatorModel, adviserModels, maxProposalChars: 256 });
