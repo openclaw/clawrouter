@@ -866,6 +866,9 @@ for one exact pool slot and save its one-time secret to a new protected file:
 
 ```sh
 export CLAWROUTER_ADMIN_TOKEN=...
+# Also required when Cloudflare Access protects the admin route for automation:
+export CF_ACCESS_CLIENT_ID=...
+export CF_ACCESS_CLIENT_SECRET=...
 pnpm pool:ticket -- \
   --url https://clawrouter.openclaw.ai \
   --out ./maintainer-openai.ticket.json \
@@ -882,6 +885,12 @@ The command creates the ticket file with mode `0600` and refuses to overwrite
 an existing path. Transfer it to the named contributor over an approved secret
 channel. The ticket defaults to 15 minutes and is bound to the scope, provider,
 grant kind, priority, and weight chosen by the administrator.
+The Access service token must be allowed by the application's Service Auth
+policy; it supplements the admin bearer token. Configure both Access variables
+or neither for an unprotected self-hosted endpoint. Ticket creation shares the
+key commands' admin transport: it refuses redirects with an Access setup hint
+and does not print raw response bodies in errors. Shared admin responses are
+limited to 128 KiB; rejected responses do not create a ticket file.
 The provider manifest supplies the default. Claude tickets enable keep-warm when
 neither flag is present. Use `--no-keep-warm` to disable it for one grant;
 `--keep-warm` remains available as an explicit override for providers whose
