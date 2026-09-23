@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Fix production Cloudflare KV provisioning by using the same exact-title API creation as FakeCo, and require account credentials before changing resources.
+
 - Keep policy selection separate from existing binding edits, while new bindings still default to the selected policy.
 
 - Keep failed console refreshes visible after successful edits, label stale usage with its snapshot time, and show unavailable spend and balances as unknown.
