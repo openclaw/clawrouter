@@ -41,6 +41,7 @@ else process.exit(2);\n`);
   const server = createServer(async (request, response) => {
     state.requests.push({ url: request.url, method: request.method, authorization: request.headers.authorization });
     await state.beforeResponse?.();
+    if (await state.respond?.(request, response)) return;
     response.writeHead(state.status, { "content-type": "application/json" });
     response.end(typeof state.catalog === "string" ? state.catalog : JSON.stringify(state.catalog));
   });
@@ -318,7 +319,24 @@ const nativeProducer = process.env.CLAWROUTER_CODEX_CATALOG_BINARY ?? nativeBina
 for (const additions of ["empty", "comments", "provider"]) test(`native generated profile loads through connect/update/remove with ${additions}`, { skip: !nativeBinary, timeout: 180_000 }, async (t) => {
   const f = await fixture(t);
   const env = { PATH: process.env.PATH, HOME: f.directory, CODEX_HOME: f.home, RUST_LOG: "warn", CLAWROUTER_API_KEY: secret };
-  const root = `model = "gpt-5.6-sol"\nmodel_provider = "original"\nsandbox_mode = "read-only"\napproval_policy = "on-request"\ndeveloper_instructions = "Synthetic base configuration marker."\ncli_auth_credentials_store = "file"\nchatgpt_base_url = "http://127.0.0.1:1/control"\n[model_providers.original]\nname = "Original"\nbase_url = "http://127.0.0.1:1/v1"\nenv_key = "CLAWROUTER_API_KEY"\nrequires_openai_auth = false\n`;
+  const origin = f.connect[2], requests = [];
+  f.state.respond = async (request, response) => {
+    if (request.method !== "POST") return false;
+    let text = "";
+    for await (const chunk of request) text += chunk;
+    const body = JSON.parse(text);
+    requests.push({ body, url: request.url, authorization: request.headers.authorization });
+    const item = { id: "fixture_message", type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Synthetic profile complete.", annotations: [] }] };
+    const result = { id: "fixture_response", object: "response", status: "completed", model: body.model, output: [item], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } };
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    for (const event of [{ type: "response.created", response: { ...result, status: "in_progress", output: [] } }, { type: "response.output_item.done", output_index: 0, item }, { type: "response.completed", response: result }]) response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+    response.end();
+    return true;
+  };
+  // Exercise profile loading over HTTP. Existing native fixtures qualify WS;
+  // its speculative startup prewarm is unnecessary for this lifecycle proof.
+  f.state.catalog.providers[0].routes[0].websocket = undefined;
+  const root = `model = "gpt-5.6-sol"\nmodel_provider = "original"\nsandbox_mode = "read-only"\napproval_policy = "on-request"\ndeveloper_instructions = "Synthetic base configuration marker."\ncli_auth_credentials_store = "file"\nchatgpt_base_url = "${origin}/control"\n[model_providers.original]\nname = "Original"\nbase_url = "${origin}/v1"\nenv_key = "CLAWROUTER_API_KEY"\nrequires_openai_auth = false\n`;
   await writeFile(join(f.home, "config.toml"), root);
   await rm(join(f.home, "auth.json"));
   f.state.catalog.providers[0].models = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"].map((slug) => ({
@@ -329,22 +347,28 @@ for (const additions of ["empty", "comments", "provider"]) test(`native generate
   const generated = await f.read();
   assert.equal(generated.model, "gpt-6-astra");
   assert.equal(generated.model_provider, "clawrouter_clawrouter");
-  const run = async (valid = true, selectProfile = true) => {
-    // Both engines reject --profile on app-server. This runtime command loads
-    // the real profile and builds an ephemeral prompt without entering run_turn.
+  const run = async (valid = true, selectProfile = true, connected = true) => {
+    // Both engines reject --profile on app-server. Exec loads the real profile
+    // and sends a synthetic turn only to this isolated loopback responder.
+    const count = requests.length;
     let result;
-    try { result = await promisify(execFile)(nativeBinary, [...(selectProfile ? ["--profile", "clawrouter"] : []), "debug", "prompt-input", "Synthetic profile-loading probe."], { cwd: f.home, env, timeout: 30_000, maxBuffer: 16 * 1024 * 1024 }); }
+    try { result = await promisify(execFile)(nativeBinary, [...(selectProfile ? ["--profile", "clawrouter"] : []), "exec", "--json", "--ephemeral", "--skip-git-repo-check", "Return synthetic profile complete without tools."], { cwd: f.home, env, timeout: 30_000, maxBuffer: 16 * 1024 * 1024 }); }
     catch (error) { if (valid) assert.fail(`native profile load failed (${error.code})`); return { failed: true, stderr: error.stderr ?? "" }; }
     if (valid) {
-      assert.ok(Array.isArray(JSON.parse(result.stdout)), "native debugger must render prompt input");
-      assert.ok(result.stdout.includes("Synthetic base configuration marker."), "base configuration must remain effective");
+      assert.ok(result.stdout.includes("Synthetic profile complete."), "native turn must consume the synthetic response");
+      assert.equal(requests.length, count + 1);
+      const request = requests.at(-1);
+      assert.equal(request.body.model, connected ? "gpt-6-astra" : "gpt-5.6-sol");
+      assert.equal(request.url, connected ? "/v1/native/fixture/v1/responses" : "/v1/responses");
+      assert.equal(request.authorization, `Bearer ${secret}`);
+      assert.ok(JSON.stringify(request.body).includes("Synthetic base configuration marker."), "base configuration must remain effective");
       assert.equal(/fallback model metadata/i.test(result.stderr), false, "native profile must resolve official model metadata");
     }
     return result;
   };
   await run();
   if (additions === "empty") {
-    // Negative controls prove this is the selected profile/model/catalog,
+    // Negative controls prove this is the selected profile/provider/catalog,
     // rather than a bundled-export bypass or a parse-only TOML assertion.
     const original = await readFile(f.profile, "utf8");
     await writeFile(f.profile, original.replace('[model_providers."clawrouter_clawrouter"]', '[model_providers."unselected_fixture"]'));
@@ -358,10 +382,7 @@ for (const additions of ["empty", "comments", "provider"]) test(`native generate
     assert.equal(catalogFailure.failed, true);
     assert.ok(catalogFailure.stderr.includes(path) && catalogFailure.stderr.includes("must contain at least one model"));
     await writeFile(path, bytes);
-    await writeFile(f.profile, original.replace('"model" = "gpt-6-astra"', '"model" = "unknown-native-profile-probe"'));
-    const modelProbe = await run(false);
-    assert.ok(modelProbe.stderr.includes("unknown-native-profile-probe") && modelProbe.stderr.includes("fallback model metadata"));
-    await writeFile(f.profile, original);
+    assert.equal(requests.length, 1, "invalid config must fail before inference");
   }
   const extra = additions === "comments" ? "\n# retained user comment\n[tools]\n" : additions === "provider" ? "\nstream_max_retries = 7\n[model_providers.clawrouter_clawrouter.http_headers]\n\"x-user-setting\" = \"fixture\"\n" : "";
   await writeFile(f.profile, `${await readFile(f.profile, "utf8")}${extra}`);
@@ -373,7 +394,7 @@ for (const additions of ["empty", "comments", "provider"]) test(`native generate
   if (additions === "empty") {
     await assert.rejects(readFile(f.profile), { code: "ENOENT" });
   } else assert.ok((await readFile(f.profile, "utf8")).endsWith(extra));
-  await run(true, additions !== "empty");
+  await run(true, additions !== "empty", false);
   assert.equal(await readFile(join(f.home, "config.toml"), "utf8"), root);
-  assert.ok(f.state.requests.every((request) => request.method === "GET" && request.url === "/v1/catalog"), "profile loading must make no inference requests");
+  assert.ok(f.state.requests.every((request) => (request.method === "GET" && request.url === "/v1/catalog") || (request.method === "POST" && ["/v1/native/fixture/v1/responses", "/v1/responses"].includes(request.url))), "native proof must use only the isolated catalog and synthetic inference routes");
 });
