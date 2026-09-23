@@ -238,7 +238,17 @@ Rates are integer micro-US-dollars per million tokens. Update `pricingRef` and
 the equivalent public API list price for governance; it is not an invoice for
 the subscription.
 
-Bundled dated pricing also covers Together Qwen 2.5 7B, DeepSeek V4 Flash,
+Together GLM-5.2 uses the [published 1,048,575-token context ceiling](https://docs.together.ai/docs/serverless/models)
+for input reservation and retains its [131,072-token output limit](https://www.together.ai/models/glm-52).
+The September 23, 2026 snapshot corrects the earlier 262,144-token ceiling;
+it does not mark a provider price change. Rates remain $1.40 input, $0.26 cached
+input, and $4.40 output per million tokens. A full-window input bound with a
+1,000-token output limit reserves **$1.472405** in each configured budget.
+Existing callers with less headroom receive HTTP 402 before dispatch. Complete
+reported usage settles at the same rates and releases unused capacity; this
+reservation is not an upstream invoice charge.
+
+Bundled dated pricing also covers Together GLM-5.2, DeepSeek V4 Flash,
 MiniMax M3, Google Gemini 2.5 Flash, Groq Llama 3.1 8B Instant, and xAI Grok
 4.3, including provider cache and long-context tiers where applicable.
 Dynamic catalogs such as OpenRouter and generic Hugging Face model routes stay

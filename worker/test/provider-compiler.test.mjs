@@ -14,6 +14,12 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.deepEqual(compiled, generated);
   assert.equal(compiled.providers.length, 22);
   assert.equal(compiled.model_index["lanseq/qwen3.8-27b-int4"].provider, "lanseq");
+  const together = compiled.model_index["together/glm-5.2"];
+  assert.equal(together.pricing_ref, "together-glm-5-2-standard-2026-09-23");
+  assert.equal(together.pricing.effectiveAt, "2026-09-23");
+  assert.equal(together.pricing.maxInputTokens, 1_048_575);
+  assert.equal(together.pricing.defaultMaxOutputTokens, 131_072);
+  assert.deepEqual([together.pricing.inputMicrosPerMillion, together.pricing.cachedInputMicrosPerMillion, together.pricing.outputMicrosPerMillion], [1_400_000, 260_000, 4_400_000]);
   assert.equal(compiled.model_index["openai/gpt-5.6"].provider, "openai");
   assert.equal(compiled.model_index["anthropic/claude-opus-4-8"].provider, "anthropic");
   assert.deepEqual(compiled.providers.find((provider) => provider.id === "aws-bedrock").optional_config_keys, ["AWS_SESSION_TOKEN"]);

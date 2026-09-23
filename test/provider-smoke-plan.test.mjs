@@ -120,7 +120,7 @@ test("newly budgeted provider defaults compile with dated pricing", () => {
     "google-gemini": ["2026-06-22", 1500000, 9000000],
     groq: ["2026-06-22", 150000, 600000],
     minimax: ["2026-06-22", 300000, 1200000],
-    together: ["2026-06-22", 1400000, 4400000],
+    together: ["2026-09-23", 1400000, 4400000],
     xai: ["2026-06-21", 1250000, 2500000],
   };
   for (const [providerId, [effectiveAt, input, output]] of Object.entries(expectations)) {
