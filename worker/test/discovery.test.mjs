@@ -2,8 +2,6 @@ import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { providerById } from "../providers.ts";
-
 const { catalogResponse, modelsResponse, sessionResponse, entitlementResponse } = await import("../discovery.ts");
 const { sha256Hex } = await import("../utils.ts");
 
@@ -15,15 +13,30 @@ test("authorized model metadata preserves declared reasoning efforts without add
   assert.equal("supportedReasoningEfforts" in models.find(({ id }) => id === "openai/gpt-5.5"), false);
 });
 
-test("mandatory request fees have the same catalog admission for policy and provider budgets", () => {
-  const provider = providerById("perplexity");
-  const endpoints = provider.endpoints.map((endpoint) => endpoint.id);
+test("mandatory request fees have the same catalog admission for policy and provider budgets", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.config.enabled = false;
+  fixture.policy.providers = ["perplexity"];
+  fixture.env.PERPLEXITY_API_KEY = "fixture-perplexity-key";
+  const connection = { providerId: "perplexity", enabled: true, monthlyBudgetMicros: null };
+  fixture.connections.splice(0, fixture.connections.length, connection);
   for (const [policyLimit, providerLimit, fixed, visible] of [
     [100_000_000, null, null, false], [null, 100_000_000, null, false],
     [null, null, null, true], [100_000_000, 100_000_000, 0, true],
   ]) {
-    const policy = { monthlyBudgetMicros: policyLimit, requestCostMicros: fixed };
-    assert.equal(catalogModels(provider, endpoints, policy, providerLimit).some((model) => model.id === "perplexity/sonar-pro"), visible);
+    fixture.policy.monthlyBudgetMicros = policyLimit;
+    fixture.policy.requestCostMicros = fixed;
+    connection.monthlyBudgetMicros = providerLimit;
+    for (const mode of ["key", "session"]) {
+      const catalog = await (await catalogResponse(fixture.request(mode), fixture.env)).json();
+      const view = catalog.providers.find(({ id }) => id === "perplexity");
+      const models = await (await modelsResponse(fixture.request(mode), fixture.env)).json();
+      assert.deepEqual(models.data.map(({ id }) => id), view.models.map(({ id }) => id));
+      assert.equal(view.models.some(({ id }) => id === "perplexity/sonar-pro"), visible);
+      const offers = view.offers.filter(({ modelId }) => modelId === "perplexity/sonar-pro");
+      assert.ok(offers.length > 0);
+      assert.ok(offers.every(({ eligible, reasonCode }) => eligible === visible && reasonCode === (visible ? undefined : "pricing_required")));
+    }
   }
 });
 

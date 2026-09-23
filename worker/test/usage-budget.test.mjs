@@ -173,6 +173,8 @@ test("reservation reuse reassesses a final pricing gap before admission and unme
     // later request's completeness. Fusion's current builder preserves tools.
     const body = { ...originalBody, web_search_options: {} };
     const final = estimateCost(route.model, body, null, "llm.chat", endpoint.request_format);
+    assert.equal(final.basis, "unpriced_request");
+    assert.equal(final.pricingGap, "hosted_tool_fee");
     assert.ok(final.reserveMicros <= initial.reserveMicros);
     const owner = createProxyAccounting({ env, context: { waitUntil: (promise) => pending.push(promise) }, auth, selection: { ...route, endpoint, body, capability: "llm.chat" }, cost: final, request: correlateIngressRequest(new Request("https://router.example/v1/chat/completions")).request });
     const budgeted = policyLimit != null || providerLimit != null;
