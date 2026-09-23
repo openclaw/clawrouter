@@ -328,3 +328,61 @@ function sqlBudgetNamespace(t) {
     },
   };
 }
+
+test("hosted search admission and unavailable settlement share the HTTP, native, JSON and SSE owner", async (t) => {
+  for (const [provider, route, model, tool] of [
+    ["openai", "/v1/responses", "openai/gpt-6-astra", { tools: [{ type: "web_search" }] }],
+    ["openai", "/v1/native/openai/v1/responses", "gpt-6-astra", { tools: [{ type: "web_search_preview_2025_03_11" }] }],
+    ["openai", "/v1/chat/completions", "openai/gpt-6-astra", { web_search_options: {} }],
+    ["anthropic", "/v1/native/anthropic/v1/messages", "claude-haiku-4-5", { tools: [{ type: "web_search_20260318", name: "web_search" }] }],
+  ]) for (const stream of [false, true]) for (const [limit, providerLimit, fixedCost, servedTier] of [
+    [1_000_000, null, null, "priority"], [null, 1_000_000, null, "priority"],
+    [null, null, null, "priority"], [null, null, null, "future"], [1_000_000, 1_000_000, 7, "priority"],
+  ]) {
+    const events = [], pending = [];
+    const env = usageEnv([], { provider, limit, providerLimit, fixedCost, retainContent: false });
+    Object.assign(env, { OPENAI_API_KEY: "fixture-openai-key", ANTHROPIC_API_KEY: "fixture-anthropic-key" });
+    env.BUDGET_LEDGER = sqlBudgetNamespace(t);
+    env.USAGE_QUEUE = { send: async event => events.push(event) };
+    const denied = fixedCost == null && (limit != null || providerLimit != null);
+    const result = provider === "anthropic" ? { type: "message", stop_reason: "end_turn", usage: messageUsage } : { status: "completed", service_tier: servedTier, usage: astraUsage };
+    const wire = !stream ? JSON.stringify(result) : provider === "anthropic" ? sse(messageStart, messageDelta, messageStop) : route.endsWith("chat/completions") ? sse({ object: "chat.completion.chunk", ...result }, "[DONE]") : sse({ type: "response.completed", response: result });
+    const upstream = t.mock.method(globalThis, "fetch", async (_url, init) => {
+      const sent = JSON.parse(init.body);
+      for (const [key, value] of Object.entries(tool)) assert.deepEqual(sent[key], value);
+      return new Response(wire, { headers: { "content-type": stream ? "text/event-stream" : "application/json" } });
+    });
+    const response = await handler.fetch(new Request(`https://clawrouter.example${route}`, {
+      method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
+      body: JSON.stringify({ model, input: "fixture", messages: [{ role: "user", content: "fixture" }], max_tokens: 32, stream, service_tier: "priority", ...tool }),
+    }), env, { waitUntil: promise => pending.push(promise) });
+    assert.equal(response.status, denied ? 400 : 200);
+    if (denied) { const body = await response.json(); assert.equal(body.error.code, "pricing_required"); assert.match(body.error.message, /disable hosted search/); }
+    else assert.equal(await response.text(), wire);
+    await Promise.all(pending);
+    assert.equal(upstream.mock.callCount(), denied ? 0 : 1);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].cost_basis, denied ? "none" : fixedCost != null ? "policy_fixed" : "unpriced_usage");
+    assert.equal(events[0].actual_cost_micros, denied ? 0 : fixedCost ?? 0);
+    if (!denied) assert.ok(events[0].input_tokens > 0, "complete token usage must not imply a complete hosted-search price");
+    assert.equal((await providerBudgetStatus(env, provider, 1_000_000)).spentMicros, denied ? 0 : fixedCost ?? 0);
+    upstream.mock.restore();
+  }
+});
+
+test("hosted search preserves fixed tariffs, free counting, and known nonbillable outcomes", async () => {
+  const { estimateCost, createProxyAccounting } = await import("../proxy-accounting.ts");
+  const { modelRoute } = await import("../providers.ts");
+  const { correlateIngressRequest } = await import("../correlation.ts");
+  const route = modelRoute("openai/gpt-6-astra"), body = { tools: [{ type: "web_search" }] };
+  assert.equal(estimateCost(route.model, body, 7, "llm.responses").basis, "policy_fixed");
+  assert.equal(estimateCost(route.model, body, null, "llm.count_tokens").basis, "none");
+  for (const [billable, tokens, dispatched, expected] of [[true, { billable: false }, null, "none"], [false, null, null, "none"], [true, null, null, "unpriced_usage"], [null, null, false, "none"], [null, null, true, "unpriced_usage"]]) {
+    const events = [], pending = [];
+    const owner = createProxyAccounting({ env: { USAGE_QUEUE: { send: async event => events.push(event) } }, context: { waitUntil: promise => pending.push(promise) }, auth: { policyId: "fixture", policy: {} }, selection: { ...route, body, capability: "llm.responses" }, request: correlateIngressRequest(new Request("https://router.example/v1/responses")).request });
+    if (dispatched == null) await owner.settle(200, "provider_error", billable, tokens, { reservations: [], reservedMicros: 0 }, null);
+    else owner.fail(502, "provider_error", undefined, null, dispatched);
+    await Promise.all(pending);
+    assert.equal(events.length, 1); assert.equal(events[0].cost_basis, expected); assert.equal(events[0].actual_cost_micros, 0);
+  }
+});

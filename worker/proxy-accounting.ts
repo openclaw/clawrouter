@@ -1,6 +1,6 @@
 import { emptyReservation, finalizeAccounting, type BudgetReservation, type EstimatedCost } from "./accounting";
 import { correlationMetadata } from "./correlation";
-import { actualModelCost, estimateModelCost } from "./pricing";
+import { actualModelCost, estimateModelCost, requestHasHostedSearch } from "./pricing";
 import type { ProxySelection } from "./proxy-selection";
 import { extractServiceTier, type UsageTokens } from "./token-usage";
 import type { AuthorizedIdentity, CompiledModel, Env, UsageEvent } from "./types";
@@ -27,6 +27,7 @@ interface AccountingContext {
 export function createProxyAccounting(options: AccountingContext) {
   const { env, context, auth, selection, request, compound } = options;
   const cost = options.cost ?? estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability);
+  const unpricedSearch = cost.basis === "unpriced_hosted_search";
   const providerId = selection.provider.id, model = selection.model, capability = selection.capability;
   const requestedTier = extractServiceTier(selection.body) ?? null;
   const correlation = correlationMetadata(request);
@@ -54,11 +55,12 @@ export function createProxyAccounting(options: AccountingContext) {
     return finalizeAccounting(env, reservation, actual, event);
   }
   function settle(statusCode: number, status: UsageEvent["status"], billable: boolean, tokens: UsageTokens | null, reservation: BudgetReservation, contentRef: string | null) {
-    const measured = tokens ? actualCost(model, tokens, auth.policy.requestCostMicros) : null;
+    // Token totals and a known served tier cannot establish hosted-search fees.
+    const measured = tokens && !unpricedSearch ? actualCost(model, tokens, auth.policy.requestCostMicros) : null;
     const actual = billable ? measured ?? cost.reserveMicros : 0;
     // Zero accounted micros with an unpriced basis means unavailable, not free.
     // A known served tier can supply a price even for an undeclared request tier.
-    const basis = cost.basis === "unpriced_service_tier"
+    const basis = unpricedSearch ? !billable || tokens?.billable === false ? "none" : "unpriced_usage" : cost.basis === "unpriced_service_tier"
       ? !billable ? "none" : measured == null ? "unpriced_usage" : "manifest_pricing"
       : billable && measured == null && cost.basis === "manifest_pricing" ? "manifest_reservation" : cost.basis;
     return finish(statusCode, status, reservation, actual, tokens, contentRef, basis);
@@ -68,7 +70,7 @@ export function createProxyAccounting(options: AccountingContext) {
     cost,
     requestId,
     fail(statusCode: number, status: UsageEvent["status"], reservation?: BudgetReservation, contentRef: string | null = null, dispatched = false) {
-      const basis = cost.basis === "unpriced_service_tier" ? dispatched ? "unpriced_usage" : "none" : cost.basis;
+      const basis = unpricedSearch || cost.basis === "unpriced_service_tier" ? dispatched ? "unpriced_usage" : "none" : cost.basis;
       context.waitUntil(finish(statusCode, status, reservation, 0, null, contentRef, basis));
     },
     complete(response: Response, tokens: UsageTokens | null, reservation: BudgetReservation, contentRef: string | null) {
@@ -80,6 +82,7 @@ export function createProxyAccounting(options: AccountingContext) {
 export function estimateCost(model: CompiledModel | null, body: Record<string, unknown>, fixed: number | null | undefined, capability: string): EstimatedCost {
   if (capability === "llm.count_tokens") return { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 };
   if (fixed != null) return { reserveMicros: fixed, basis: "policy_fixed", inputTokens: null, outputTokens: null };
+  if (requestHasHostedSearch(body, capability)) return { reserveMicros: 0, basis: "unpriced_hosted_search", inputTokens: null, outputTokens: null };
   const pricing = model?.pricing;
   if (!pricing) return { reserveMicros: 1, basis: "flat_fallback", inputTokens: null, outputTokens: null };
   const estimate = estimateModelCost(pricing, body);
