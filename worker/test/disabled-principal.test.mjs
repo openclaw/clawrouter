@@ -98,6 +98,6 @@ async function authorityFixture(t, principalId = email) {
   const setUser = (enabled) => authorityCall(env, "/users/put", { email, record: { enabled, contentRetentionDisabled: true } });
   await setUser(true);
   await authorityCall(env, "/policies/put", { policyId: "fixture", policy: { enabled: true, generation: "g1", providers: ["openai"], tenantId: "default", monthlyBudgetMicros: null } });
-  await authorityCall(env, "/credentials/put", { credentialId: "fixture", credential: { enabled: true, policyId: "fixture", policyGeneration: "g1", secretSha256: await sha256Hex(secret), principalId } });
+  await authorityCall(env, "/credentials/mutate", { credentialId: "fixture", operation: "put", scope: "admin", actor: { auth: "admin_token", role: "admin", email: "token-admin" }, credential: { enabled: true, policyId: "fixture", secretSha256: await sha256Hex(secret), principalId } });
   return { env, setUser };
 }

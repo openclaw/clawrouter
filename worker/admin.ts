@@ -8,7 +8,7 @@ import {
   type AssignmentEvidence,
 } from "./assignments";
 import { contentKey, contentRetentionDefault } from "./content-retention.ts";
-import { credentialResponsesFrom, normalizeCredential } from "./credentials";
+import { credentialMutationResponse, credentialResponsesFrom } from "./credentials";
 import { correlationRequestId, logCorrelationError } from "./correlation.ts";
 import { currentGrantRuntime, grantPriority, grantRoutingPolicy, grantRuntimeStates, grantSelectionStats, grantUsable, grantWeight, validCredentialBundle, validGrantSegment } from "./grant-selection";
 import { assertFusionModels, loadFusionConfig, storeFusionConfig } from "./fusion-config";
@@ -20,8 +20,8 @@ import { startOAuth } from "./oauth";
 import { endpointForPath, listGrantRecords, listHealth, modelRoute, providerReadiness, providerReadinessForPolicies, providerReadinessFromState, refreshStoredGrant, refreshStoredGrantQuota, snapshot } from "./providers";
 import type { AdminBootstrapResponse } from "../shared/contracts";
 import type {
-  AccessControlUser, AccessPolicy, AccessPolicyEntry, AssignmentRule, Env, PolicyBinding,
-  GrantRuntimeState, ProviderConnection, ProxyCredential, ProxyCredentialEntry, UpstreamGrant,
+  AccessControlUser, AccessPolicy, AccessPolicyEntry, AccessSession, AssignmentRule, Env, PolicyBinding,
+  GrantRuntimeState, ProviderConnection, ProxyCredentialEntry, UpstreamGrant,
 } from "./types";
 import { decodePathSegment, cleanId, errorResponse, HttpError, normalizeEmail, nowIso, privateJson, randomId, readJson, sha256Hex } from "./utils";
 
@@ -54,11 +54,11 @@ export async function adminApi(request: Request, env: Env, path: string): Promis
     if (path.startsWith("/v1/admin/access-user-grants/") && request.method === "PUT") return putUserGrants(request, env, path.slice("/v1/admin/access-user-grants/".length));
     if (path.startsWith("/v1/admin/access-users/") && request.method === "PUT") return putUser(request, env, path.slice("/v1/admin/access-users/".length));
     if (path.startsWith("/v1/admin/policies/")) return policyMutation(request, env, path.slice("/v1/admin/policies/".length));
-    if (path.startsWith("/v1/admin/credentials/")) return credentialMutation(request, env, path.slice("/v1/admin/credentials/".length));
+    if (path === "/v1/admin/credentials" || path.startsWith("/v1/admin/credentials/")) return await credentialMutationResponse(request, env, path === "/v1/admin/credentials" ? null : path.slice("/v1/admin/credentials/".length), authorization, "admin");
     if (path.startsWith("/v1/admin/connections/") && request.method === "PUT") return putConnection(request, env, path.slice("/v1/admin/connections/".length));
     if (path.startsWith("/v1/admin/upstream-grants/")) return upstreamGrantMutation(request, env, path.slice("/v1/admin/upstream-grants/".length));
     if (path === "/v1/admin/keys" && request.method === "GET") return privateJson({ keys: (await listPolicies(env)).map(legacyKeyResponse) });
-    if (path.startsWith("/v1/admin/keys/")) return legacyKeyMutation(request, env, path.slice("/v1/admin/keys/".length));
+    if (path.startsWith("/v1/admin/keys/")) return await legacyKeyMutation(request, env, path.slice("/v1/admin/keys/".length), authorization);
     return errorResponse("route_not_found", "admin route not found", 404);
   } catch (error) {
     if (error instanceof HttpError) return errorResponse(error.code, error.message, error.status);
@@ -324,20 +324,6 @@ async function policyMutation(request: Request, env: Env, rest: string): Promise
   return privateJson(policyResponse(entry));
 }
 
-async function credentialMutation(request: Request, env: Env, rest: string): Promise<Response> {
-  const revoke = rest.endsWith("/revoke"), id = cleanId(decodePathSegment(revoke ? rest.slice(0, -7) : rest)); if (!id) throw new HttpError(400, "invalid_credential", "invalid credential id");
-  const existing = (await listCredentials(env)).find((entry) => entry.credentialId === id)?.credential;
-  let credential: ProxyCredential;
-  if (revoke && request.method === "POST") { if (!existing) throw new HttpError(404, "unknown_credential", "credential not found"); credential = { ...existing, enabled: false }; }
-  else if (request.method === "PUT") {
-    const body = normalizeCredential(await readJson<unknown>(request)); const policy = (await listPolicies(env)).find((entry) => entry.policyId === body.policyId);
-    if (!policy) throw new HttpError(404, "unknown_policy", "credential policy does not exist");
-    credential = { ...body, policyId: policy.policyId, policyGeneration: policy.policy.generation };
-  } else throw new HttpError(405, "method_not_allowed", "admin method is not allowed");
-  const entry: ProxyCredentialEntry = { credentialId: id, credential }; await authorityCall(env, "/credentials/put", entry);
-  return privateJson((await credentialResponses(env)).find((item) => item.credentialId === id));
-}
-
 async function putConnection(request: Request, env: Env, encodedId: string): Promise<Response> {
   const id = decodePathSegment(encodedId), provider = snapshot.providers.find((item) => item.id === id); if (!provider) throw new HttpError(404, "unknown_provider", "provider does not exist");
   const connection = normalizeConnection(await readJson<unknown>(request), id, await resolveConnection(env, id));
@@ -466,9 +452,9 @@ async function reconcileAssignments(request: Request, env: Env): Promise<Respons
   return privateJson({ results });
 }
 
-async function legacyKeyMutation(request: Request, env: Env, rest: string): Promise<Response> {
+async function legacyKeyMutation(request: Request, env: Env, rest: string, authorization: AccessSession): Promise<Response> {
   const revoke = rest.endsWith("/revoke"), id = revoke ? rest.slice(0, -7) : rest;
-  if (revoke) return credentialMutation(request, env, `${id}/revoke`);
+  if (revoke) return credentialMutationResponse(request, env, `${id}/revoke`, authorization, "admin");
   if (request.method !== "PUT") throw new HttpError(405, "method_not_allowed", "admin method is not allowed");
   const body = mutationObject(await readJson<unknown>(request), "invalid_policy", "legacy key");
   if (body.secretSha256 !== undefined && (typeof body.secretSha256 !== "string" || !/^[0-9a-f]{64}$/i.test(body.secretSha256))) throw new HttpError(400, "invalid_credential", "secretSha256 must be a SHA-256 hex digest");
@@ -483,7 +469,7 @@ async function legacyKeyMutation(request: Request, env: Env, rest: string): Prom
   if (!secretSha256) throw new HttpError(400, "invalid_credential", "secretSha256 is required when creating a legacy key");
   const policyResult = await policyMutation(new Request(request.url, { method: "PUT", headers: request.headers, body: JSON.stringify(body) }), env, id);
   if (!policyResult.ok) return policyResult;
-  return credentialMutation(new Request(request.url, { method: "PUT", headers: request.headers, body: JSON.stringify({ secretSha256, policyId: id, enabled: body.enabled }) }), env, id);
+  return credentialMutationResponse(new Request(request.url, { method: "PUT", headers: request.headers, body: JSON.stringify({ secretSha256, policyId: id, enabled: body.enabled }) }), env, id, authorization, "admin");
 }
 
 export function normalizePolicy(

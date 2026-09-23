@@ -120,7 +120,9 @@ See the upstream [Responses WebSocket contract](https://developers.openai.com/ap
 | `GET` | `/v1/session/usage` | Session quota and usage summary |
 | `GET` | `/v1/entitlements` | Compatibility entitlement response |
 | `GET` | `/v1/session/credentials` | Credentials owned by the signed-in user |
+| `POST` | `/v1/session/credentials` | Create a caller-owned credential; reject an existing ID |
 | `PUT` | `/v1/session/credentials/<credential-id>` | Create or rotate a caller-owned credential |
+| `POST` | `/v1/session/credentials/<credential-id>/rotate` | Replace only an active credential's secret hash |
 | `POST` | `/v1/session/credentials/<credential-id>/revoke` | Revoke a caller-owned credential |
 | `POST` | `/v1/playground/<route>` | Run a console playground request through an allowed route |
 | `GET` | `/v1/oauth/callback` | Complete a provider-approved browser OAuth flow |
@@ -156,7 +158,9 @@ The Worker redirects `/` to `/dashboard`, and `/dashboard` to `/dashboard/home`.
 | `PUT` | `/v1/admin/policy-bindings` | Create or update a user or group binding |
 | `PUT` | `/v1/admin/policies/<policy-id>` | Create or update a policy |
 | `POST` | `/v1/admin/policies/<policy-id>/revoke` | Disable a policy and every credential bound to it |
+| `POST` | `/v1/admin/credentials` | Create an issued credential; reject an existing ID |
 | `PUT` | `/v1/admin/credentials/<credential-id>` | Create or update an issued credential |
+| `POST` | `/v1/admin/credentials/<credential-id>/rotate` | Replace only an active credential's secret hash |
 | `POST` | `/v1/admin/credentials/<credential-id>/revoke` | Revoke one issued credential |
 | `PUT` | `/v1/admin/connections/<provider-id>` | Update a global provider connection |
 | `PUT` | `/v1/admin/upstream-grants/<policies\|tenants>/<scope-id>/<token-ref>` | Create or update a scoped upstream grant |
@@ -183,6 +187,39 @@ Grant revocation accepts an optional JSON object with `kind`, `provider`, and
 ignore these hints and retain their canonical identity. Revocation stores a
 secretless, disabled tombstone and cancels maintenance; an unknown grant returns
 HTTP 404. Retrying revocation preserves the same tombstone generation.
+
+### Credential creation, rotation, and revocation
+
+Use `POST /v1/admin/credentials` or `POST /v1/session/credentials` with
+`{ "credentialId": "my_key", "policyId": "my_policy", "secretSha256": "<64 hex characters>" }`
+to create a key. Success returns `201`; an existing ID returns `409 credential_exists`
+without replacing the key or pruning retained records. Admin creation also accepts
+`enabled` (default `true`) and `principalId` (an email or `null`, default `null`).
+Personal creation always enables the key and assigns the signed-in user as owner.
+
+Use `POST .../credentials/<credential-id>/rotate` with only
+`{ "secretSha256": "<64 hex characters>" }` to replace a key's hash. Rotation preserves
+its owner, policy, generation, and enabled state. It requires an enabled key, an
+enabled policy with the same generation, and an owner who is not disabled. An
+inactive key returns `409 credential_inactive`; a missing key returns `404`.
+Rotation cannot reactivate a revoked key or renew a revoked policy generation.
+
+The existing `PUT .../credentials/<credential-id>` remains an upsert: it can replace
+the owner or policy on an admin key, reenable a key, and bind the current policy
+generation. Personal PUT keeps its existing forced-enabled, caller-owned behavior.
+Use create and rotate for operations that must not overwrite an existing key or
+change its authorization. Secret hashes are lowercase SHA-256 hex; responses never
+include a raw secret or hash and describe the record committed by that operation.
+
+Personal create, PUT, and rotate recheck the current enabled user, groups, bindings,
+and policy at the serialized write boundary. Personal revoke requires ownership
+but remains available after group, binding, or policy access is removed. Revoke
+disables the latest record, preserves any intervening hash rotation, and is
+idempotent for an existing key. Local administrator disable or demotion is also
+rechecked before credential writes; Cloudflare administrator status comes from
+the verified Access configuration. Personal keys remain limited to 10 enabled
+and 100 retained records; creating another key can prune revoked records in ID
+order at the retention limit. Rotation consumes no additional slot.
 
 ## Pool contribution
 
