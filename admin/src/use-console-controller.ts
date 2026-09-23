@@ -34,7 +34,11 @@ export function useConsoleController() {
   const principalRef = useRef<string | null>(null);
   const refreshRef = useRef<(options?: RefreshOptions) => Promise<void>>(async () => undefined);
   const refreshCurrent = useCallback(() => refreshRef.current(), []);
-  const refreshCredentialMetadata = useCallback(() => refreshRef.current({ background: true }), []);
+  const refreshCredentialMetadata = useCallback(async (ownsScope: () => boolean) => {
+    // The current read may predate the mutation and fail its credential hydration fence.
+    await refreshPromiseRef.current;
+    if (ownsScope()) await refreshRef.current({ background: true });
+  }, []);
   const credentialOwner = useCredentialOperations({ origin: session.gatewayOrigin, demo: session.demoMode, session: session.value }, session.setStatus, refreshCredentialMetadata);
   const selfServiceKeys = useSelfServiceKeys(credentialOwner);
   const access = useAccessAdmin({
@@ -122,6 +126,7 @@ export function useConsoleController() {
     // Invalidate before reads begin so later navigation keeps its new ledger read.
     if (!background || (session.view !== "home" && session.view !== "usage" && !usage.error)) usage.invalidate();
     let failUsageRefresh = usage.captureRefreshFailure();
+    const initialScope = credentialOwner.captureScope();
     try {
       const staticCatalog = catalogLoadedRef.current
         ? Promise.resolve({ providerData: { providers: catalog.providers }, routeData: catalog.routes })
@@ -130,7 +135,10 @@ export function useConsoleController() {
           request<RouteCatalog>(session.gatewayOrigin, "/v1/routes"),
       ]).then(([providerData, routeData]) => ({ providerData, routeData }));
       const [sessionData, { providerData, routeData }] = await Promise.all([
-        request<SessionResponse>(session.gatewayOrigin, "/v1/session"),
+        request<SessionResponse>(session.gatewayOrigin, "/v1/session").catch((caught) => {
+          if (errorMessage(caught).includes("access_session_required")) initialScope.invalidate();
+          throw caught;
+        }),
         staticCatalog,
       ]);
       const principal = JSON.stringify([sessionData.email, sessionData.tenantId, sessionData.role, sessionData.authenticated]);
@@ -145,6 +153,7 @@ export function useConsoleController() {
       session.setValue(sessionData);
       session.setLoginRequired(false);
       credentialOwner.setScope({ origin: session.gatewayOrigin, demo: false, session: sessionData });
+      const onAuthenticationLoss = credentialOwner.captureScope().invalidate;
       catalog.setProviders(providerData.providers);
       catalog.setRoutes(routeData);
       catalogLoadedRef.current = true;
@@ -158,7 +167,7 @@ export function useConsoleController() {
         : null;
       if (sessionEntitlements) catalog.setEntitlements(sessionEntitlements);
       else {
-        const entitlementResult = await settledSessionData(() => request<EntitlementsResponse>(session.gatewayOrigin, "/v1/entitlements"));
+        const entitlementResult = await settledSessionData(() => request<EntitlementsResponse>(session.gatewayOrigin, "/v1/entitlements"), onAuthenticationLoss);
         if (entitlementResult.ok) catalog.setEntitlements(entitlementResult.value);
         else {
           catalog.setEntitlements(null);
@@ -166,18 +175,14 @@ export function useConsoleController() {
         }
       }
       const result = sessionData.role === "admin"
-        ? await loadAdminData(sessionData, providerData, background, warnings)
-        : await loadUserData(sessionData, warnings);
+        ? await loadAdminData(sessionData, providerData, background, warnings, onAuthenticationLoss)
+        : await loadUserData(sessionData, warnings, onAuthenticationLoss);
       session.setDemoMode(false);
       session.setRefreshError(result.warnings.join("; "));
       if (result.complete) session.setLastUpdatedAt(Date.now());
       if (!background) session.setStatus(oauthCallbackStatus() ?? "connected");
     } catch (caught) {
       const message = errorMessage(caught);
-      if (message.includes("access_session_required")) {
-        // Confirmed auth loss clears one-time material before the login probe yields.
-        credentialOwner.setScope(null);
-      }
       if (message.includes("access_session_required") && await localLoginAvailable(session.gatewayOrigin)) {
         principalRef.current = null;
         usage.setPrincipal("");
@@ -200,13 +205,13 @@ export function useConsoleController() {
     }
   }
 
-  async function loadAdminData(sessionData: SessionResponse, providerData: ProviderResponse, background: boolean, initialWarnings: string[]) {
+  async function loadAdminData(sessionData: SessionResponse, providerData: ProviderResponse, background: boolean, initialWarnings: string[], onAuthenticationLoss: () => void) {
     let warnings = initialWarnings;
     const keySnapshot = credentialOwner.captureHydration();
     const [data, sessionUsageResult, sessionCredentialsResult] = await Promise.all([
       request<AdminBootstrapResponse>(session.gatewayOrigin, "/v1/admin/bootstrap"),
-      settledSessionData(() => request<{ policies: AdminUsageRow[] }>(session.gatewayOrigin, "/v1/session/usage")),
-      settledSessionData(() => request<{ credentials: AdminBootstrapResponse["credentials"] }>(session.gatewayOrigin, "/v1/session/credentials")),
+      settledSessionData(() => request<{ policies: AdminUsageRow[] }>(session.gatewayOrigin, "/v1/session/usage"), onAuthenticationLoss),
+      settledSessionData(() => request<{ credentials: AdminBootstrapResponse["credentials"] }>(session.gatewayOrigin, "/v1/session/credentials"), onAuthenticationLoss),
     ]);
     access.hydrateAdmin({
       policies: data.policies,
@@ -228,7 +233,7 @@ export function useConsoleController() {
     return { warnings, complete: !warnings.length && usageFresh };
   }
 
-  async function loadUserData(sessionData: SessionResponse, initialWarnings: string[]) {
+  async function loadUserData(sessionData: SessionResponse, initialWarnings: string[], onAuthenticationLoss: () => void) {
     let warnings = initialWarnings;
     const keySnapshot = credentialOwner.captureHydration();
     const user: AccessUser = {
@@ -243,8 +248,8 @@ export function useConsoleController() {
     usage.setAdminOverview(null);
     usage.setTenantSummaries([]);
     const [result, credentialResult] = await Promise.all([
-      settledSessionData(() => request<{ policies: AdminUsageRow[]; usage: UsageSnapshot }>(session.gatewayOrigin, "/v1/session/usage")),
-      settledSessionData(() => request<{ credentials: AdminBootstrapResponse["credentials"] }>(session.gatewayOrigin, "/v1/session/credentials")),
+      settledSessionData(() => request<{ policies: AdminUsageRow[]; usage: UsageSnapshot }>(session.gatewayOrigin, "/v1/session/usage"), onAuthenticationLoss),
+      settledSessionData(() => request<{ credentials: AdminBootstrapResponse["credentials"] }>(session.gatewayOrigin, "/v1/session/credentials"), onAuthenticationLoss),
     ]);
     if (result.ok) {
       usage.hydrate(result.value.policies, result.value.usage);
@@ -328,9 +333,12 @@ export function useConsoleController() {
 
 export type ConsoleController = ReturnType<typeof useConsoleController>;
 
-async function settledSessionData<T>(loader: () => Promise<T>) {
+async function settledSessionData<T>(loader: () => Promise<T>, onAuthenticationLoss: () => void) {
   const result = await settled(loader);
-  // Auth loss must reach the scope reset even when sibling reads are still pending.
-  if (!result.ok && result.error.includes("access_session_required")) throw new Error(result.error);
+  // Observe each failure: a sibling may have already rejected the aggregate read.
+  if (!result.ok && result.error.includes("access_session_required")) {
+    onAuthenticationLoss();
+    throw new Error(result.error);
+  }
   return result;
 }

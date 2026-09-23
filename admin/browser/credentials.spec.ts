@@ -279,6 +279,124 @@ test("a lost response is visibly uncertain and never retried or revealed automat
   await expect(page.locator(".issuedKey code")).toHaveCount(0);
 });
 
+test("a secondary auth failure clears a reveal after bootstrap has already failed", async ({ page }) => {
+  const state = await fixture(page);
+  await openAdmin(page);
+  await revealAdminKey(page, "late_auth_key");
+  const auth = deferred();
+  state.failBootstrap = true;
+  state.authLostPath = "/v1/session/credentials";
+  state.holdAuthLoss = auth.promise;
+  await focusRefresh(page);
+  await expect.poll(() => state.authLossReads).toBe(1);
+  await expect(page.locator(".statusBar")).toContainText("Console data refresh failed");
+  const reads = state.sessionReads;
+  auth.release();
+  await expect(page.locator(".issuedKey code")).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /owned_key.*proxy credential/ })).toHaveCount(0);
+  expect(state.sessionReads).toBe(reads);
+});
+
+for (const identity of ["same", "changed"] as const) {
+  test(`a delayed auth observation belongs to its ${identity} identity despite a later mutation`, async ({ page }) => {
+    const state = await fixture(page);
+    await openAdmin(page);
+    const auth = deferred();
+    state.failBootstrap = true;
+    state.authLostPath = "/v1/session/credentials";
+    state.holdAuthLoss = auth.promise;
+    await focusRefresh(page);
+    await expect.poll(() => state.authLossReads).toBe(1);
+    await expect(page.locator(".statusBar")).toContainText("Console data refresh failed");
+    state.failBootstrap = false;
+    state.authLostPath = "";
+    state.holdAuthLoss = null;
+    if (identity === "changed") {
+      state.email = "second@example.com";
+      state.role = "user";
+      await focusRefresh(page);
+      await expect(page.locator(".tenantSwitch strong")).toHaveText(state.email);
+      await page.getByRole("button", { name: "Dashboard", exact: true }).click();
+      await connected(page);
+      await page.locator(".myKeysPanel").getByRole("button", { name: "Create key", exact: true }).click();
+      await expect(page.locator(".issuedKey code")).toBeVisible();
+    } else await revealAdminKey(page, "same_identity_key");
+    const secret = await page.locator(".issuedKey code").textContent();
+    const response = page.waitForResponse((item) => item.url().endsWith("/v1/session/credentials") && item.status() === 401);
+    auth.release();
+    await response;
+    await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+    if (identity === "changed") await expect(page.locator(".issuedKey code")).toHaveText(secret!);
+    else await expect(page.locator(".issuedKey code")).toHaveCount(0);
+  });
+}
+
+test("a lost create response is reconciled by a fresh read after stale snapshots finish", async ({ page }) => {
+  const state = await fixture(page);
+  await openAdmin(page);
+  await draft(page, "recovered_key");
+  const reads = deferred();
+  state.holdKeys = reads.promise;
+  await focusRefresh(page);
+  await expect.poll(() => state.keyReads).toBe(4);
+  state.loseResponse = true;
+  await page.getByRole("button", { name: "Issue credential", exact: true }).click();
+  await expect(page.locator(".inspector")).toContainText("could not be confirmed");
+  state.holdKeys = null;
+  reads.release();
+  await expect.poll(() => state.keyReads).toBe(6);
+  await expect(page.getByRole("button", { name: /recovered_key.*proxy credential/ })).toBeVisible();
+  await expect(page.locator(".issuedKey code")).toHaveCount(0);
+  expect(state.writes).toHaveLength(1);
+});
+
+test("old-identity recovery does not start a refresh after an in-flight read accepts another identity", async ({ page }) => {
+  const state = await fixture(page);
+  await openAdmin(page);
+  await draft(page, "previous_recovery");
+  const sessionRead = deferred();
+  state.holdSession = sessionRead.promise;
+  await focusRefresh(page);
+  await expect.poll(() => state.sessionReads).toBe(2);
+  state.loseResponse = true;
+  await page.getByRole("button", { name: "Issue credential", exact: true }).click();
+  await expect(page.locator(".inspector")).toContainText("could not be confirmed");
+  state.email = "second@example.com";
+  state.role = "user";
+  state.credentials.push({ credentialId: "second_key", policyId: "team_policy", principalId: state.email, enabled: true, active: true });
+  state.holdSession = null;
+  sessionRead.release();
+  await expect(page.locator(".tenantSwitch strong")).toHaveText(state.email);
+  await page.getByRole("button", { name: "Dashboard", exact: true }).click();
+  await expect(page.locator(".myKeysList")).toContainText("second_key");
+  await connected(page);
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+  expect(state.sessionReads).toBe(2);
+  expect(state.writes).toHaveLength(1);
+  await expect(page.locator(".issuedKey code")).toHaveCount(0);
+});
+
+for (const status of [401, 403]) {
+  test(`personal mutation ${status} distinguishes sign-in loss from a policy rejection`, async ({ page }) => {
+    const state = await fixture(page);
+    state.role = "user";
+    await page.goto("/");
+    await connected(page);
+    state.reject = status === 401 ? "access_session_required" : "credential_policy_not_held";
+    state.rejectStatus = status;
+    const card = page.locator(".myKeysPanel");
+    await card.getByRole("button", { name: "Rotate", exact: true }).click();
+    await expect(card).toContainText(status === 401 ? "Sign-in required. Sign in again, then refresh keys." : "credential_policy_not_held");
+    await expect(card.locator(".myKeysList article")).toHaveCount(status === 401 ? 0 : 1);
+    await expect(page.locator(".issuedKey code")).toHaveCount(0);
+    expect(state.writes).toHaveLength(1);
+    if (status === 401) {
+      await card.getByRole("button", { name: "Refresh keys", exact: true }).click();
+      await expect(card.locator(".myKeysList")).toContainText("owned_key");
+    }
+  });
+}
+
 test("binding loss keeps an active key revocable while rotation and the chosen policy become unavailable", async ({ page }) => {
   const state = await fixture(page);
   await page.goto("/");
@@ -347,6 +465,13 @@ async function draft(page: Page, id: string) {
   await page.getByRole("textbox", { name: "credential id", exact: true }).fill(id);
   await page.getByRole("combobox", { name: "policy", exact: true }).selectOption("team_policy");
 }
+async function revealAdminKey(page: Page, id: string) {
+  const previousRefresh = await page.locator(".connectionMeta time").getAttribute("datetime");
+  await draft(page, id);
+  await page.getByRole("button", { name: "Issue credential", exact: true }).click();
+  await expect(page.locator(".issuedKey code")).toBeVisible();
+  await expect(page.locator(".connectionMeta time")).not.toHaveAttribute("datetime", previousRefresh!);
+}
 async function focusRefresh(page: Page) { await page.evaluate(() => window.dispatchEvent(new Event("focus"))); }
 
 async function fixture(page: Page) {
@@ -354,8 +479,8 @@ async function fixture(page: Page) {
   const state = {
     credentials: [{ credentialId: "owned_key", policyId: policy.policyId, principalId: "admin@example.com", enabled: true, active: true }] as ProxyCredential[],
     writes: [] as { path: string; method: string; body: Record<string, string> }[],
-    reject: "", failBootstrap: false, loseResponse: false, held: true, authLost: false, authLostPath: "", omitEntitlements: false, holdReadPath: "", email: "admin@example.com", role: "admin", keyReads: 0, sessionReads: 0, loginReads: 0,
-    holdMutation: null as Promise<void> | null, holdKeys: null as Promise<void> | null, holdSession: null as Promise<void> | null, holdLogin: null as Promise<void> | null, holdRead: null as Promise<void> | null,
+    reject: "", rejectStatus: 409, failBootstrap: false, loseResponse: false, held: true, authLost: false, authLostPath: "", authLossReads: 0, omitEntitlements: false, holdReadPath: "", email: "admin@example.com", role: "admin", keyReads: 0, sessionReads: 0, loginReads: 0,
+    holdMutation: null as Promise<void> | null, holdKeys: null as Promise<void> | null, holdSession: null as Promise<void> | null, holdLogin: null as Promise<void> | null, holdRead: null as Promise<void> | null, holdAuthLoss: null as Promise<void> | null,
   };
   const usage = { ledger: "ready", providers: [], daily: [], events: [], summary: { requestCount: 0, successCount: 0, errorCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, actualCostMicros: 0 } };
   await page.route("**/v1**", async (route) => {
@@ -363,7 +488,7 @@ async function fixture(page: Page) {
     if (request.method() === "POST") {
       const body = request.postData() ? request.postDataJSON() : {};
       state.writes.push({ path, method: request.method(), body });
-      if (state.reject) { await route.fulfill({ status: 409, body: state.reject }); return; }
+      if (state.reject) { await route.fulfill({ status: state.rejectStatus, body: state.reject }); return; }
       const create = path.endsWith("/credentials");
       const credentialId = create ? body.credentialId : decodeURIComponent(path.split("/").at(-2)!);
       const prior = state.credentials.find((item) => item.credentialId === credentialId);
@@ -383,7 +508,14 @@ async function fixture(page: Page) {
       state.loginReads += 1;
       if (state.holdLogin) await state.holdLogin;
     }
-    if (path === state.authLostPath) { await route.fulfill({ status: 401, body: "access_session_required" }); return; }
+    if (path === state.authLostPath) {
+      // Capture this request's failure before a later identity changes the fixture.
+      const held = state.holdAuthLoss;
+      state.authLossReads += 1;
+      if (held) await held;
+      await route.fulfill({ status: 401, body: "access_session_required" });
+      return;
+    }
     if (path === state.holdReadPath && state.holdRead) await state.holdRead;
     const policies = state.held ? [policy] : [];
     const responses: Record<string, unknown> = {
