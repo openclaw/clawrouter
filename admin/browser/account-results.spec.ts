@@ -226,6 +226,40 @@ test("an older bootstrap cannot replace a confirmed result, including a later ed
   await expect(page.locator(".tableRow").filter({ hasText: "submitted" })).toBeVisible();
 });
 
+test("a lost save response preserves edit-back through reconciliation and the next PUT", async ({ page }) => {
+  const state = await openAccounts(page);
+  state.holdBootstrap = true;
+  const label = page.getByLabel("label", { exact: true });
+  await label.fill("submitted B");
+  await page.getByRole("button", { name: "Save grant", exact: true }).click();
+  await expect.poll(() => state.writes.length).toBe(1);
+  expect(state.writes[0].request().postDataJSON().label).toBe("submitted B");
+  await label.fill("Account A");
+  // The server committed independently; only its write response is lost.
+  state.grants[0] = grant("account_a", { label: "submitted B" });
+  await state.writes[0].abort("failed");
+  await expect(page.locator(".inspector")).toContainText("could not be confirmed");
+  await expect.poll(() => state.reads.length).toBe(1);
+  expect(state.reads[0].body.grants[0].label).toBe("submitted B");
+  await state.reads[0].route.fulfill({ json: state.reads[0].body });
+  await expect(page.locator(".tableRow").filter({ hasText: "submitted B" })).toBeVisible();
+  await expect(label).toHaveValue("Account A");
+  await page.getByRole("button", { name: "Save grant", exact: true }).click();
+  await expect.poll(() => state.writes.length).toBe(2);
+  expect(state.writes[1].request().method()).toBe("PUT");
+  expect(state.writes[1].request().postDataJSON().label).toBe("Account A");
+  state.grants[0] = grant();
+  await state.writes[1].fulfill({ json: grant() });
+  await expect.poll(() => state.reads.length).toBe(2);
+  await state.reads[1].route.fulfill({ json: state.reads[1].body });
+  await flush(page);
+  state.grants[0] = grant("account_a", { label: "later canonical label" });
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect.poll(() => state.reads.length).toBe(3);
+  await state.reads[2].route.fulfill({ json: state.reads[2].body });
+  await expect(label).toHaveValue("later canonical label");
+});
+
 test("same-role identity replacement retires a pending account response and its metadata refresh", async ({ page }) => {
   const state = await openAccounts(page);
   state.email = "second@example.com";
@@ -255,7 +289,7 @@ function revoked() { return grant("account_a", { enabled: false, usable: false, 
 async function flush(page: Page) { await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))); }
 
 async function openAccounts(page: Page, holdInitialBootstrap = false, authorization = false) {
-  const state = { writes: [] as Route[], reads: [] as { route: Route; body: AdminBootstrapResponse }[], sessions: [] as { route: Route; body: unknown }[], holdBootstrap: holdInitialBootstrap, holdSession: false, email: "admin@example.com" };
+  const state = { writes: [] as Route[], reads: [] as { route: Route; body: AdminBootstrapResponse }[], sessions: [] as { route: Route; body: unknown }[], grants: [grant(), grant("account_b")], holdBootstrap: holdInitialBootstrap, holdSession: false, email: "admin@example.com" };
   const mutations: Record<string, string> = {
     "/v1/admin/upstream-grants/policies/team_policy/account_a": "PUT",
     "/v1/admin/upstream-grants/policies/team_policy/account_a/revoke": "POST",
@@ -266,7 +300,7 @@ async function openAccounts(page: Page, holdInitialBootstrap = false, authorizat
   };
   const policy: AccessPolicy = { policyId: "team_policy", enabled: true, providers: [], tenantId: "default", retainRequestContent: false, grantRouting: { strategy: "priority", stickiness: "none", failover: true, staleState: "allow", staleAfterSeconds: 300, switchAtUsedPercent: 90, hysteresisPercent: 10, eligibleGrants: {} } };
   const bootstrap: AdminBootstrapResponse = {
-    policies: [policy], grants: [grant(), grant("account_b")], credentials: [], connections: [], users: [], bindings: [], rules: [], providers: [], tenants: [],
+    policies: [policy], grants: state.grants, credentials: [], connections: [], users: [], bindings: [], rules: [], providers: [], tenants: [],
     overview: { policiesTotal: 1, policiesActive: 1, tenantsTotal: 1, keysTotal: 0, keysActive: 0, providerCount: 1, openaiCompatibleProviders: 0, manifestRoutes: 0, monthlyBudgetMicros: 0, requestCostMicros: 0 },
     fusion: { version: 1, modelId: "clawrouter/fusion", enabled: false, adviserModels: [], aggregatorModel: "", adviserTimeoutMs: 10_000, maxOutputTokens: 100, maxInputChars: 1000, maxProposalChars: 1000, temperature: 0.7 },
   };

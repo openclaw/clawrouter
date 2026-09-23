@@ -39,9 +39,10 @@ export function useUpstreamAdmin({ request, isCurrent, allowDemo, gatewayOrigin,
   const readyRef = useRef(ready);
   const [draft, setDraft] = useState<Draft>(() => ({ selection: grants[0]?.key ?? "", value: grants[0] ? upstreamGrantFormFromGrant(grants[0]) : defaultUpstreamGrant, initialized: allowDemo }));
   const currentDraft = useRef(draft);
-  const baseline = useRef(draft.value);
   const incarnation = useRef(0);
   const revision = useRef(0);
+  // Revisions mark unacknowledged edits. Matching reporting values cannot consume
+  // them: a lost write response may still be followed by deliberate edit-back.
   const fieldRevisions = useRef<Partial<Record<Field, number>>>({});
   const recordsEpoch = useRef(0);
   const operation = useRef<Operation | null>(null);
@@ -64,7 +65,7 @@ export function useUpstreamAdmin({ request, isCurrent, allowDemo, gatewayOrigin,
     if (grant) {
       const canonical = upstreamGrantFormFromGrant(grant);
       if (!current.initialized) resetDraft(grant.key, canonical);
-      else rebaseDraft(grant.key, canonical, new Set(fields.filter((field) => current.value[field] !== baseline.current[field])));
+      else rebaseDraft(grant.key, canonical, new Set(fields.filter((field) => Boolean(fieldRevisions.current[field]))));
     } else if (!current.initialized) resetDraft("", { ...defaultUpstreamGrant, scopeId: policyId, provider: providerRows[0]?.id ?? "", tokenRef: providerRows[0]?.id ?? "" });
   }
 
@@ -88,7 +89,7 @@ export function useUpstreamAdmin({ request, isCurrent, allowDemo, gatewayOrigin,
     const op = beginWrite();
     if (!op) return;
     const submitted = currentDraft.current, submittedIncarnation = incarnation.current, submittedRevision = revision.current;
-    const dirty = new Set(fields.filter((field) => submitted.value[field] !== baseline.current[field]));
+    const intent = new Set(fields.filter((field) => Boolean(fieldRevisions.current[field])));
     const form = submitted.value;
     const identity = action === "save" ? { scope: form.scope, scopeId: form.scopeId.trim(), tokenRef: form.tokenRef.trim() } : target!;
     const key = identity.scope === "tenants" ? `oauth/tenants/${identity.scopeId}/${identity.tokenRef}` : `oauth/${identity.scopeId}/${identity.tokenRef}`;
@@ -120,7 +121,7 @@ export function useUpstreamAdmin({ request, isCurrent, allowDemo, gatewayOrigin,
           ? Boolean(fieldRevisions.current[field]) || secretFields.includes(field)
           : (fieldRevisions.current[field] ?? 0) > submittedRevision
           || action === "save" && secretFields.includes(field) && !submittedSecrets[field]
-          || action !== "save" && dirty.has(field) && !(action === "revoke" && (field === "enabled" || secretFields.includes(field)))));
+          || action !== "save" && intent.has(field) && !(action === "revoke" && (field === "enabled" || secretFields.includes(field)))));
         rebaseDraft(key, upstreamGrantFormFromGrant(saved), preserve);
       }
       setStatus(messages[action][1]);
@@ -199,13 +200,14 @@ export function useUpstreamAdmin({ request, isCurrent, allowDemo, gatewayOrigin,
   function resetDraft(selection: string, value: UpstreamGrantForm) {
     incarnation.current += 1;
     fieldRevisions.current = {};
-    baseline.current = value;
     publishDraft({ selection, value, initialized: true });
   }
   function rebaseDraft(selection: string, canonical: UpstreamGrantForm, preserve: Set<Field>) {
     const value = { ...canonical };
-    for (const field of preserve) Object.assign(value, { [field]: currentDraft.current.value[field] });
-    baseline.current = canonical;
+    for (const field of fields) {
+      if (preserve.has(field)) Object.assign(value, { [field]: currentDraft.current.value[field] });
+      else delete fieldRevisions.current[field];
+    }
     publishDraft({ selection, value, initialized: true });
   }
   function setForm(next: SetStateAction<UpstreamGrantForm>) {

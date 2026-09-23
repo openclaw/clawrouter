@@ -465,6 +465,101 @@ for (const failure of [new DashboardRequestError('{"error":{"message":"invalid g
   });
 }
 
+test("lost acknowledgement preserves edit-back through repeated reads until a later Save acknowledges it", async () => {
+  const fixture = ready();
+  change(fixture, { label: "submitted B" });
+  const write = act(fixture, "save");
+  change(fixture, { label: "Account A" });
+  fixture.requests[0].reject(new Error("response lost"));
+  await write;
+  assert.equal(fixture.refreshes[0].owns(), true);
+  for (const label of ["submitted B", "Account A", "submitted B"]) {
+    hydrate(fixture, [grant("account_a", { label, priority: 7 })]);
+    assert.equal(fixture.render().upstream.form.label, "Account A");
+    assert.equal(fixture.render().upstream.form.priority, "7");
+    assert.equal(fixture.render().upstream.selected.label, label);
+  }
+  fixture.refreshes[0].resolve();
+  await flush();
+  const next = act(fixture, "save");
+  assert.equal(JSON.parse(fixture.requests[1].init.body).label, "Account A");
+  fixture.requests[1].resolve(grant());
+  await next;
+  fixture.refreshes[1].resolve();
+  await flush();
+  hydrate(fixture, [grant("account_a", { label: "later canonical label" })]);
+  assert.equal(fixture.render().upstream.form.label, "later canonical label");
+});
+
+test("lost secret acknowledgement preserves the later replacement until its own Save succeeds", async () => {
+  const fixture = ready();
+  change(fixture, { accessToken: "synthetic-submitted", refreshToken: "synthetic-refresh" });
+  const write = act(fixture, "save");
+  change(fixture, { accessToken: "synthetic-later" });
+  fixture.requests[0].reject(new Error("response lost"));
+  await write;
+  hydrate(fixture, [grant()]);
+  hydrate(fixture, [grant()]);
+  assert.equal(fixture.render().upstream.form.accessToken, "synthetic-later");
+  assert.equal(fixture.render().upstream.form.refreshToken, "synthetic-refresh");
+  const next = act(fixture, "save"), body = JSON.parse(fixture.requests[1].init.body);
+  assert.equal(body.accessToken, "synthetic-later");
+  assert.equal(body.refreshToken, "synthetic-refresh");
+  fixture.requests[1].resolve(grant());
+  await next;
+  fixture.refreshes[1].resolve();
+  await flush();
+  hydrate(fixture, [grant()]);
+  assert.equal(fixture.render().upstream.form.accessToken, "");
+  assert.equal(fixture.render().upstream.form.refreshToken, "");
+});
+
+for (const action of ["refresh", "refreshQuota"]) {
+  test(`${action} and subsequent reads cannot acknowledge earlier edit-back intent`, async () => {
+    const fixture = ready();
+    change(fixture, { label: "intermediate", accessToken: "synthetic-draft" });
+    change(fixture, { label: "Account A" });
+    const write = act(fixture, action);
+    fixture.requests[0].resolve(grant("account_a", { label: "remote label", expiresAt: "2030-01-01T00:00:00Z" }));
+    await write;
+    fixture.refreshes[0].resolve();
+    await flush();
+    for (const label of ["Account A", "remote label"]) hydrate(fixture, [grant("account_a", { label })]);
+    assert.equal(fixture.render().upstream.form.label, "Account A");
+    assert.equal(fixture.render().upstream.form.accessToken, "synthetic-draft");
+    const next = act(fixture, "save"), body = JSON.parse(fixture.requests[1].init.body);
+    assert.equal(body.label, "Account A");
+    assert.equal(body.accessToken, "synthetic-draft");
+    fixture.requests[1].resolve(grant());
+    await next;
+    fixture.refreshes[1].resolve();
+    await flush();
+    hydrate(fixture, [grant("account_a", { label: "after acknowledgement" })]);
+    assert.equal(fixture.render().upstream.form.label, "after acknowledgement");
+    assert.equal(fixture.render().upstream.form.accessToken, "");
+  });
+}
+
+for (const later of [false, true]) {
+  test(`Revoke retires old state and secret marks but ${later ? "preserves later" : "does not invent"} intent through hydration`, async () => {
+    const fixture = ready();
+    change(fixture, { enabled: false, accessToken: "synthetic-old", label: "intermediate" });
+    change(fixture, { label: "Account A" });
+    const write = act(fixture, "revoke");
+    if (later) change(fixture, { enabled: true, accessToken: "synthetic-later" });
+    fixture.requests[0].resolve(tombstone());
+    await write;
+    fixture.refreshes[0].resolve();
+    await flush();
+    for (const enabled of [true, false]) {
+      hydrate(fixture, [grant("account_a", { enabled, label: "remote label" })]);
+      assert.equal(fixture.render().upstream.form.enabled, later || enabled);
+      assert.equal(fixture.render().upstream.form.accessToken, later ? "synthetic-later" : "");
+      assert.equal(fixture.render().upstream.form.label, "Account A");
+    }
+  });
+}
+
 test("mismatched result is unconfirmed and never inserted as a different account", async () => {
   const fixture = ready(), write = act(fixture, "save");
   fixture.requests[0].resolve(grant("wrong_account"));
