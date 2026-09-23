@@ -81,7 +81,7 @@ test("revocation retains a secretless tombstone and requires fresh credentials t
   const key = "oauth/policy/openai";
   const values = new Map();
   const env = credentialEnv(values);
-  const stale = legacyGrant();
+  const stale = legacyGrant({ scopes: ["inference"], subscription: { plan: "fixture-plan", subject: "fixture-subject" }, maintenance: { keepWarm: false } });
   const active = await putGrantCredentials(env, key, stale);
   assert.ok(env.GRANT_CREDENTIALS.objects.get(key).values.get("credential"));
   const revoked = await revokeGrantCredentials(env, key);
@@ -90,6 +90,7 @@ test("revocation retains a secretless tombstone and requires fresh credentials t
   assert.equal(tombstone.enabled, false);
   assert.ok(tombstone.revokedAt);
   assert.equal(tombstone.generation, active.credentialGeneration + 1);
+  for (const field of ["label", "accountId", "subscription", "scopes", "expiresAt", "maintenance", "createdAt"]) assert.deepEqual(revoked[field], active[field], `revocation preserves non-secret ${field}`);
   assert.equal(JSON.stringify(tombstone).includes("access-old"), false);
   assert.equal(JSON.stringify(tombstone).includes("refresh-old"), false);
   assert.equal(owner.alarm(), null);

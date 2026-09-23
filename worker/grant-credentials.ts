@@ -383,7 +383,14 @@ function metadataGrant(record: CredentialRecord): UpstreamGrant {
 
 function revokedRecord(key: string, metadata: UpstreamGrant | null, generation = metadata?.credentialGeneration ?? 0): CredentialRecord {
   const revokedAt = metadata?.revokedAt ?? new Date().toISOString();
-  return { version: 1, generation: generation + 1, enabled: false, status: "active", grantKey: key, providerId: metadata?.provider, kind: metadata?.kind, createdAt: metadata?.createdAt, updatedAt: revokedAt, revokedAt, metadata: secretlessGrant(metadata ?? {}) };
+  return {
+    version: 1, generation: generation + 1, enabled: false, status: "active",
+    grantKey: key, providerId: metadata?.provider, kind: metadata?.kind,
+    tokenType: metadata?.tokenType, expiresAt: metadata?.expiresAt, scopes: metadata?.scopes,
+    accountId: metadata?.accountId, subscription: metadata?.subscription, refresh: metadata?.refresh,
+    maintenance: { keepWarm: metadata?.maintenance?.keepWarm === true },
+    createdAt: metadata?.createdAt, updatedAt: revokedAt, revokedAt, metadata: secretlessGrant(metadata ?? {}),
+  };
 }
 
 async function probeQuota(env: Env, provider: CompiledProvider, record: CredentialRecord): Promise<GrantRuntimeState> {
