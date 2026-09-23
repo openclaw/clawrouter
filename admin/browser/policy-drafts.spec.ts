@@ -260,7 +260,7 @@ for (const action of ["Save", "Disable"] as const) {
       if (order === "old last") await releaseLedger(page, state.ledgers[0]);
       await expect(page.locator(".usageFreshness")).toHaveCount(0);
       if (action === "Save") {
-        await expect(row(page, "policy_a").locator(".budgetUsage")).toContainText("$20.00 budget");
+        await expect(row(page, "policy_a").locator(".budgetUsage > span > small")).toHaveText(/^\$20\.00(?:\s|$)/);
         await expect(row(page, "policy_a").locator('[data-label="health"]')).toHaveText("healthy");
       } else {
         await expect(page.locator(".quotaRow").filter({ has: page.getByText("policy_a", { exact: true }) })).toHaveCount(0);
@@ -282,7 +282,7 @@ for (const outcome of ["success", "bootstrap failure"] as const) {
     await save(page).click();
     await expect.poll(() => state.writes.length).toBe(1);
     await page.getByRole("button", { name: "Usage", exact: true }).click();
-    await expect(row(page, "policy_a").locator(".budgetUsage")).toContainText("$10.00 budget");
+    await expect(row(page, "policy_a").locator(".budgetUsage > span > small")).toHaveText(/^\$10\.00(?:\s|$)/);
     await expect(page.locator(".usageFreshness")).toHaveCount(0);
     state.holdUsage = true;
     state.holdBootstrap = true;
@@ -292,7 +292,7 @@ for (const outcome of ["success", "bootstrap failure"] as const) {
     await expect.poll(() => state.ledgers.length).toBe(1);
     await expect(page.locator(".usageFreshness")).toContainText("Showing last known usage");
     await expect(page.locator(".usageFreshness time")).toHaveAttribute("datetime", "2026-09-01T00:00:00.000Z");
-    await expect(row(page, "policy_a").locator(".budgetUsage")).toContainText("$10.00 budget");
+    await expect(row(page, "policy_a").locator(".budgetUsage > span > small")).toHaveText(/^\$10\.00(?:\s|$)/);
     state.holdBootstrap = false;
     if (outcome === "bootstrap failure") {
       await state.reads[0].route.fulfill({ status: 503, body: "reporting unavailable" });
@@ -304,7 +304,7 @@ for (const outcome of ["success", "bootstrap failure"] as const) {
     } else {
       await state.reads[0].route.fulfill({ json: state.reads[0].body });
       await releaseLedger(page, state.ledgers[0]);
-      await expect(row(page, "policy_a").locator(".budgetUsage")).toContainText("$20.00 budget");
+      await expect(row(page, "policy_a").locator(".budgetUsage > span > small")).toHaveText(/^\$20\.00(?:\s|$)/);
       await expect(page.locator(".usageFreshness")).toHaveCount(0);
       await expect(page.locator(".connectionMeta time")).toHaveAttribute("datetime", "2026-09-01T00:01:00.000Z");
     }
@@ -327,7 +327,7 @@ test("a rejected policy write keeps the pending ledger read and its successful f
   await expect(page.locator(".statusBar")).toContainText("policy save failed");
   await releaseLedger(page, state.ledgers[0]);
   await expect(page.locator(".usageFreshness")).toHaveCount(0);
-  await expect(row(page, "policy_a").locator(".budgetUsage")).toContainText("$10.00 budget");
+  await expect(row(page, "policy_a").locator(".budgetUsage > span > small")).toHaveText(/^\$10\.00(?:\s|$)/);
   expect(state.usageReads).toBe(1);
   expect(state.reads).toHaveLength(0);
   expect(state.writes).toHaveLength(1);
