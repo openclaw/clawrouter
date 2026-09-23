@@ -38,7 +38,9 @@ for (const pending of [false, true]) for (const action of [replace, revoke]) tes
   if (pending) await env.grantAuthority.call("admit", { key, generation: 7, revision: 4, provider: "anthropic", status: "active" });
   env.values.delete(key);
   const before = await attachment(env), rows = await members(env);
-  await assert.rejects(() => action(env), error => error.status === (action === revoke ? 404 : 409));
+  await assert.rejects(() => action(env), error => action === revoke
+    ? error.status === 404 && error.code === "unknown_upstream_grant"
+    : error.status === 500 && error.code === "credential_owner_error");
   assert.equal(owner(env).values.has("credential"), false);
   assert.deepEqual(await attachment(env), before);
   assert.deepEqual(await members(env), rows);
@@ -130,12 +132,12 @@ for (const raw of [corrupt, { provider: "wrong-provider", account_id: "wrong-acc
 test("an existing owner revokes locally even when the index is newer, retaining the dirty tombstone", async () => {
   const env = fixture({ generation: 10 });
   seedOldOwner(env);
-  await assert.rejects(() => revoke(env), error => error.code === "grant_attachment_changed");
+  await assert.rejects(() => revoke(env), error => error.status === 500 && error.code === "credential_owner_error");
   const tombstone = structuredClone(owner(env).values.get("credential"));
   assert.equal(tombstone.generation, 8);
   assert.equal(tombstone.poolSyncPending, true);
   assert.equal(tombstone.credential, undefined);
-  await assert.rejects(() => revoke(env), error => error.code === "grant_attachment_changed");
+  await assert.rejects(() => revoke(env), error => error.status === 500 && error.code === "credential_owner_error");
   assert.deepEqual(owner(env).values.get("credential"), tombstone);
   assert.equal((await attachment(env)).generation, 10);
 });
