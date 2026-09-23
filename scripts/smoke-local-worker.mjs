@@ -532,10 +532,10 @@ try {
   }
   const canonicalCredential = await fetch(`${base}/v1/admin/credentials/shape_credential`, { method: "PUT", headers: userHeaders, body: JSON.stringify({ policyId: " migrate ", secretSha256: credentialDigest.toUpperCase(), enabled: false, principalId: " Owner@Example.com ", policyGeneration: "injected", ignored: true }) });
   assert.equal(canonicalCredential.status, 200);
-  assert.deepEqual(await canonicalCredential.json(), { credentialId: "shape_credential", policyId: "migrate", enabled: false, policyEnabled: true, generationMatches: true, active: false, principalId: "owner@example.com" });
+  assert.deepEqual(await canonicalCredential.json(), { credentialId: "shape_credential", policyId: "migrate", enabled: false, policyEnabled: true, generationMatches: true, principalEnabled: true, active: false, principalId: "owner@example.com" });
   const credentialsAfterMutation = await fetch(`${base}/v1/admin/credentials`, { headers: userHeaders });
   assert.equal(credentialsAfterMutation.status, 200);
-  assert.deepEqual((await credentialsAfterMutation.json()).credentials.find((credential) => credential.credentialId === "shape_credential"), { credentialId: "shape_credential", policyId: "migrate", enabled: false, policyEnabled: true, generationMatches: true, active: false, principalId: "owner@example.com" });
+  assert.deepEqual((await credentialsAfterMutation.json()).credentials.find((credential) => credential.credentialId === "shape_credential"), { credentialId: "shape_credential", policyId: "migrate", enabled: false, policyEnabled: true, generationMatches: true, principalEnabled: true, active: false, principalId: "owner@example.com" });
   const policiesBeforeInvalidRoots = await fetch(`${base}/v1/admin/policies`, { headers: userHeaders });
   assert.equal(policiesBeforeInvalidRoots.status, 200);
   const migratePolicyBeforeInvalidRoots = (await policiesBeforeInvalidRoots.json()).policies.find((policy) => policy.policyId === "migrate");
