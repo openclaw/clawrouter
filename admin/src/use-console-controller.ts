@@ -158,7 +158,7 @@ export function useConsoleController() {
         : null;
       if (sessionEntitlements) catalog.setEntitlements(sessionEntitlements);
       else {
-        const entitlementResult = await settled(() => request<EntitlementsResponse>(session.gatewayOrigin, "/v1/entitlements"));
+        const entitlementResult = await settledSessionData(() => request<EntitlementsResponse>(session.gatewayOrigin, "/v1/entitlements"));
         if (entitlementResult.ok) catalog.setEntitlements(entitlementResult.value);
         else {
           catalog.setEntitlements(null);
@@ -205,8 +205,8 @@ export function useConsoleController() {
     const keySnapshot = credentialOwner.captureHydration();
     const [data, sessionUsageResult, sessionCredentialsResult] = await Promise.all([
       request<AdminBootstrapResponse>(session.gatewayOrigin, "/v1/admin/bootstrap"),
-      settled(() => request<{ policies: AdminUsageRow[] }>(session.gatewayOrigin, "/v1/session/usage")),
-      settled(() => request<{ credentials: AdminBootstrapResponse["credentials"] }>(session.gatewayOrigin, "/v1/session/credentials")),
+      settledSessionData(() => request<{ policies: AdminUsageRow[] }>(session.gatewayOrigin, "/v1/session/usage")),
+      settledSessionData(() => request<{ credentials: AdminBootstrapResponse["credentials"] }>(session.gatewayOrigin, "/v1/session/credentials")),
     ]);
     access.hydrateAdmin({
       policies: data.policies,
@@ -243,8 +243,8 @@ export function useConsoleController() {
     usage.setAdminOverview(null);
     usage.setTenantSummaries([]);
     const [result, credentialResult] = await Promise.all([
-      settled(() => request<{ policies: AdminUsageRow[]; usage: UsageSnapshot }>(session.gatewayOrigin, "/v1/session/usage")),
-      settled(() => request<{ credentials: AdminBootstrapResponse["credentials"] }>(session.gatewayOrigin, "/v1/session/credentials")),
+      settledSessionData(() => request<{ policies: AdminUsageRow[]; usage: UsageSnapshot }>(session.gatewayOrigin, "/v1/session/usage")),
+      settledSessionData(() => request<{ credentials: AdminBootstrapResponse["credentials"] }>(session.gatewayOrigin, "/v1/session/credentials")),
     ]);
     if (result.ok) {
       usage.hydrate(result.value.policies, result.value.usage);
@@ -327,3 +327,10 @@ export function useConsoleController() {
 }
 
 export type ConsoleController = ReturnType<typeof useConsoleController>;
+
+async function settledSessionData<T>(loader: () => Promise<T>) {
+  const result = await settled(loader);
+  // Auth loss must reach the scope reset even when sibling reads are still pending.
+  if (!result.ok && result.error.includes("access_session_required")) throw new Error(result.error);
+  return result;
+}

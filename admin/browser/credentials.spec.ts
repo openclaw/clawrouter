@@ -237,6 +237,35 @@ test("confirmed auth loss clears a reveal before the login availability probe fi
   login.release();
 });
 
+for (const role of ["admin", "user"] as const) {
+  for (const path of ["/v1/session/usage", "/v1/session/credentials", "/v1/entitlements"]) {
+    test(`${role} auth loss at ${path} clears the reveal before sibling reads and login finish`, async ({ page }) => {
+      const state = await fixture(page);
+      state.role = role;
+      if (role === "admin") await openAdmin(page);
+      else { await page.goto("/"); await connected(page); }
+      const previousRefresh = await page.locator(".connectionMeta time").getAttribute("datetime");
+      if (role === "admin") {
+        await draft(page, "secondary_key");
+        await page.getByRole("button", { name: "Issue credential", exact: true }).click();
+      } else await page.locator(".myKeysPanel").getByRole("button", { name: "Create key", exact: true }).click();
+      await expect(page.locator(".issuedKey code")).toBeVisible();
+      await expect(page.locator(".connectionMeta time")).not.toHaveAttribute("datetime", previousRefresh!);
+      const login = deferred(), sibling = deferred();
+      state.holdLogin = login.promise;
+      state.authLostPath = path;
+      state.omitEntitlements = path === "/v1/entitlements";
+      state.holdReadPath = path === "/v1/session/usage" ? "/v1/session/credentials" : "/v1/session/usage";
+      state.holdRead = sibling.promise;
+      await focusRefresh(page);
+      await expect.poll(() => state.loginReads).toBe(1);
+      await expect(page.locator(".issuedKey code")).toHaveCount(0);
+      sibling.release();
+      login.release();
+    });
+  }
+}
+
 test("a lost response is visibly uncertain and never retried or revealed automatically", async ({ page }) => {
   const state = await fixture(page);
   state.loseResponse = true;
@@ -325,8 +354,8 @@ async function fixture(page: Page) {
   const state = {
     credentials: [{ credentialId: "owned_key", policyId: policy.policyId, principalId: "admin@example.com", enabled: true, active: true }] as ProxyCredential[],
     writes: [] as { path: string; method: string; body: Record<string, string> }[],
-    reject: "", failBootstrap: false, loseResponse: false, held: true, authLost: false, email: "admin@example.com", role: "admin", keyReads: 0, sessionReads: 0, loginReads: 0,
-    holdMutation: null as Promise<void> | null, holdKeys: null as Promise<void> | null, holdSession: null as Promise<void> | null, holdLogin: null as Promise<void> | null,
+    reject: "", failBootstrap: false, loseResponse: false, held: true, authLost: false, authLostPath: "", omitEntitlements: false, holdReadPath: "", email: "admin@example.com", role: "admin", keyReads: 0, sessionReads: 0, loginReads: 0,
+    holdMutation: null as Promise<void> | null, holdKeys: null as Promise<void> | null, holdSession: null as Promise<void> | null, holdLogin: null as Promise<void> | null, holdRead: null as Promise<void> | null,
   };
   const usage = { ledger: "ready", providers: [], daily: [], events: [], summary: { requestCount: 0, successCount: 0, errorCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, actualCostMicros: 0 } };
   await page.route("**/v1**", async (route) => {
@@ -354,12 +383,14 @@ async function fixture(page: Page) {
       state.loginReads += 1;
       if (state.holdLogin) await state.holdLogin;
     }
+    if (path === state.authLostPath) { await route.fulfill({ status: 401, body: "access_session_required" }); return; }
+    if (path === state.holdReadPath && state.holdRead) await state.holdRead;
     const policies = state.held ? [policy] : [];
     const responses: Record<string, unknown> = {
       "/v1": { endpoints: {} },
       "/v1/providers": { providers: [] },
       "/v1/routes": { openaiCompatible: [], manifestProxy: [] },
-      "/v1/session": { authenticated: true, auth: "access", role: state.role, email: state.email, tenantId: "default", entitlements: { providers: [] } },
+      "/v1/session": { authenticated: true, auth: "access", role: state.role, email: state.email, tenantId: "default", ...(!state.omitEntitlements ? { entitlements: { providers: [] } } : {}) },
       "/v1/session/usage": { policies: policies.map((item) => ({ ...item, budget: { configured: false, ledger: "ready" } })), usage },
       "/v1/session/credentials": { credentials: state.credentials.filter((item) => item.principalId === state.email) },
       "/v1/admin/usage": { policies: [], usage },
