@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { spawn } from "node:child_process";
+import { execFile, spawn } from "node:child_process";
 import { once } from "node:events";
 import fs from "node:fs";
 import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
@@ -7,6 +7,7 @@ import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { syncBuiltinESMExports } from "node:module";
 import { join } from "node:path";
+import { promisify } from "node:util";
 import test from "node:test";
 import { getStaticTOMLValue, parseTOML } from "toml-eslint-parser";
 import { manageCodex } from "../scripts/codex-connect.mjs";
@@ -66,7 +67,7 @@ test("connect dry-run, verify, update, and remove preserve base/auth/key and com
   assert.deepEqual(await readdir(f.home), ["auth.json", "config.toml"]);
   const applied = await manageCodex(args, { ...f.env, CLAWROUTER_API_KEY: undefined });
   assert.equal(applied.status, "applied");
-  assert.equal(applied.launch, `CODEX_HOME='${f.home}' codex --profile clawrouter`);
+  assert.equal(applied.launch, `CODEX_HOME='${f.home}' '${f.binary}' --profile clawrouter`);
   const config = await f.read();
   assert.equal(config.model_provider, "clawrouter_clawrouter");
   assert.equal(config.model_providers.clawrouter_clawrouter.env_key, "CLAWROUTER_API_KEY");
@@ -113,7 +114,7 @@ test("refresh switches one complete generation and preserves user comments, fiel
   await assert.rejects(readFile(join(f.home, original.model_catalog_json)), { code: "ENOENT" });
   await assert.rejects(readFile(join(f.home, config.model_catalog_json)), { code: "ENOENT" });
   assert.ok((await readFile(f.profile, "utf8")).endsWith(extra));
-  assert.deepEqual(await f.read(), { model_providers: { clawrouter_clawrouter: { stream_max_retries: 7 } }, tools: {}, custom: { multi: "line one\nline two" } });
+  assert.deepEqual(await f.read(), { model_providers: { clawrouter_clawrouter: { name: "ClawRouter", stream_max_retries: 7 } }, tools: {}, custom: { multi: "line one\nline two" } });
 });
 
 test("update refuses changed owned fields; remove retains their user values and modified catalog", async (t) => {
@@ -134,7 +135,7 @@ test("update refuses changed owned fields; remove retains their user values and 
   assert.equal(removed.revoked, false);
 });
 
-test("remove keeps published catalogs when the user rolls the retained pointer back", async (t) => {
+for (const form of ["rollback", "absolute", "relative"]) test(`remove keeps published catalogs for a retained ${form} pointer`, async (t) => {
   const f = await fixture(t);
   await manageCodex(f.connect, f.env);
   const original = await f.read();
@@ -142,9 +143,10 @@ test("remove keeps published catalogs when the user rolls the retained pointer b
   await f.run("update");
   const current = await f.read();
   const text = await readFile(f.profile, "utf8");
-  await writeFile(f.profile, text.replace(`"model_catalog_json" = "${current.model_catalog_json}"`, `"model_catalog_json" = "${original.model_catalog_json}"`));
+  const pointer = form === "absolute" ? join(f.home, current.model_catalog_json) : form === "relative" ? `./${current.model_catalog_json}` : original.model_catalog_json;
+  await writeFile(f.profile, text.replace(`"model_catalog_json" = "${current.model_catalog_json}"`, `"model_catalog_json" = ${JSON.stringify(pointer)}`));
   const result = await f.run("remove");
-  assert.equal((await f.read()).model_catalog_json, original.model_catalog_json);
+  assert.equal((await f.read()).model_catalog_json, pointer);
   assert.ok(result.retained.includes("model_catalog_json"));
   assert.ok(result.retained.includes("model catalogs retained because the catalog pointer changed"));
   assert.deepEqual(JSON.parse(await readFile(join(f.home, original.model_catalog_json), "utf8")).models, [descriptor]);
@@ -206,18 +208,40 @@ test("unrelated explicit and inline provider containers do not collide with the 
   }
 });
 
-test("custom home launch instructions quote shell metacharacters and select the installed profile", async (t) => {
+test("launch quotes the selected binary and home and selects the installed profile", async (t) => {
   const f = await fixture(t);
   const customHome = join(f.directory, "a home'with$dollars");
-  const args = f.connect.map((value) => value === f.home ? customHome : value);
+  const customBinary = join(f.directory, "a codex'with$dollars");
+  await writeFile(customBinary, (await readFile(f.binary, "utf8")).replace('if (process.env.CLAWROUTER_API_KEY)', `if (process.argv[2] === "--profile") process.exit(process.env.CODEX_HOME === process.env.EXPECTED_HOME && process.argv[3] === "clawrouter" ? 0 : 3);\nif (process.env.CLAWROUTER_API_KEY)`));
+  await chmod(customBinary, 0o700);
+  const args = f.connect.map((value) => value === f.home ? customHome : value === f.binary ? customBinary : value);
   const result = await manageCodex(args, { ...f.env, CODEX_HOME: undefined });
-  assert.equal(result.launch, `CODEX_HOME='${customHome.replaceAll("'", "'\\''")}' codex --profile clawrouter`);
-  const child = spawn("/bin/sh", ["-c", `codex() { [ "$CODEX_HOME" = "$EXPECTED_HOME" ] && [ "$1" = "--profile" ] && [ "$2" = "clawrouter" ]; }\n${result.launch}`], {
+  const child = spawn("/bin/sh", ["-c", result.launch], {
     env: { ...f.env, EXPECTED_HOME: customHome, CODEX_HOME: undefined }, stdio: "ignore",
   });
   assert.equal((await once(child, "close"))[0], 0);
   assert.ok(await readFile(join(customHome, "clawrouter.config.toml"), "utf8"));
   assert.deepEqual(await readdir(f.home), ["auth.json", "config.toml"]);
+});
+
+test("remove deletes only the empty owned table, preserving comments and unrelated settings", async (t) => {
+  const f = await fixture(t);
+  await manageCodex(f.connect, f.env);
+  const before = await readFile(f.profile, "utf8");
+  await writeFile(f.profile, before.replace('"model" =', '# user root comment\nmodel_reasoning_effort = "high"\n"model" =') + "# user trailing comment\n");
+  await f.run("remove");
+  assert.deepEqual(await f.read(), { model_reasoning_effort: "high" });
+  const removed = await readFile(f.profile, "utf8");
+  assert.ok(removed.includes("# user root comment") && removed.includes("# user trailing comment"));
+});
+
+test("remove keeps the required provider name for user fields and subtables", async (t) => {
+  const f = await fixture(t);
+  await manageCodex(f.connect, f.env);
+  await writeFile(f.profile, `${await readFile(f.profile, "utf8")}\n[model_providers.clawrouter_clawrouter.http_headers]\n"x-user-setting" = "fixture"\n`);
+  const removed = await f.run("remove");
+  assert.ok(removed.retained.includes("model_providers.clawrouter_clawrouter.name"));
+  assert.deepEqual(await f.read(), { model_providers: { clawrouter_clawrouter: { name: "ClawRouter", http_headers: { "x-user-setting": "fixture" } } } });
 });
 
 test("remove preserves an editor save made during catalog cleanup", async (t) => {
@@ -287,4 +311,69 @@ test("CLI failures never print a key, response body, or native producer stderr",
   await writeFile(f.binary, `#!${process.execPath}\nprocess.stderr.write(${JSON.stringify(instructions)}); process.exit(1);\n`);
   await assert.rejects(f.run("verify"), /not owned/);
   await assert.rejects(manageCodex(f.connect, f.env), (error) => /bundled export failed/.test(error.message) && !error.message.includes(instructions));
+});
+
+const nativeBinary = process.env.CLAWROUTER_CODEX_BINARY;
+const nativeProducer = process.env.CLAWROUTER_CODEX_CATALOG_BINARY ?? nativeBinary;
+for (const additions of ["empty", "comments", "provider"]) test(`native generated profile loads through connect/update/remove with ${additions}`, { skip: !nativeBinary, timeout: 180_000 }, async (t) => {
+  const f = await fixture(t);
+  const env = { PATH: process.env.PATH, HOME: f.directory, CODEX_HOME: f.home, RUST_LOG: "warn", CLAWROUTER_API_KEY: secret };
+  const root = `model = "gpt-5.6-sol"\nmodel_provider = "original"\nsandbox_mode = "read-only"\napproval_policy = "on-request"\ndeveloper_instructions = "Synthetic base configuration marker."\ncli_auth_credentials_store = "file"\nchatgpt_base_url = "http://127.0.0.1:1/control"\n[model_providers.original]\nname = "Original"\nbase_url = "http://127.0.0.1:1/v1"\nenv_key = "CLAWROUTER_API_KEY"\nrequires_openai_auth = false\n`;
+  await writeFile(join(f.home, "config.toml"), root);
+  await rm(join(f.home, "auth.json"));
+  f.state.catalog.providers[0].models = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"].map((slug) => ({
+    id: `fixture/${slug}`, upstream: slug, capabilities: ["llm.responses"], pricing: { serviceTiers: [{ id: "priority", maxInputTokens: null }] },
+  }));
+  const common = ["--codex-home", f.home, "--codex", nativeProducer];
+  await manageCodex(["connect", "--router-url", f.connect[2], "--provider", "fixture", "--model", "gpt-6-astra", ...common], env);
+  const generated = await f.read();
+  assert.equal(generated.model, "gpt-6-astra");
+  assert.equal(generated.model_provider, "clawrouter_clawrouter");
+  const run = async (valid = true, selectProfile = true) => {
+    // Both engines reject --profile on app-server. This runtime command loads
+    // the real profile and builds an ephemeral prompt without entering run_turn.
+    let result;
+    try { result = await promisify(execFile)(nativeBinary, [...(selectProfile ? ["--profile", "clawrouter"] : []), "debug", "prompt-input", "Synthetic profile-loading probe."], { cwd: f.home, env, timeout: 30_000, maxBuffer: 16 * 1024 * 1024 }); }
+    catch (error) { if (valid) assert.fail(`native profile load failed (${error.code})`); return { failed: true, stderr: error.stderr ?? "" }; }
+    if (valid) {
+      assert.ok(Array.isArray(JSON.parse(result.stdout)), "native debugger must render prompt input");
+      assert.ok(result.stdout.includes("Synthetic base configuration marker."), "base configuration must remain effective");
+      assert.equal(/fallback model metadata/i.test(result.stderr), false, "native profile must resolve official model metadata");
+    }
+    return result;
+  };
+  await run();
+  if (additions === "empty") {
+    // Negative controls prove this is the selected profile/model/catalog,
+    // rather than a bundled-export bypass or a parse-only TOML assertion.
+    const original = await readFile(f.profile, "utf8");
+    await writeFile(f.profile, original.replace('[model_providers."clawrouter_clawrouter"]', '[model_providers."unselected_fixture"]'));
+    const providerFailure = await run(false);
+    assert.equal(providerFailure.failed, true);
+    assert.ok(providerFailure.stderr.includes("Model provider `clawrouter_clawrouter` not found"));
+    await writeFile(f.profile, original);
+    const path = join(f.home, generated.model_catalog_json), bytes = await readFile(path, "utf8");
+    await writeFile(path, '{"models":[]}');
+    const catalogFailure = await run(false);
+    assert.equal(catalogFailure.failed, true);
+    assert.ok(catalogFailure.stderr.includes(path) && catalogFailure.stderr.includes("must contain at least one model"));
+    await writeFile(path, bytes);
+    await writeFile(f.profile, original.replace('"model" = "gpt-6-astra"', '"model" = "unknown-native-profile-probe"'));
+    const modelProbe = await run(false);
+    assert.ok(modelProbe.stderr.includes("unknown-native-profile-probe") && modelProbe.stderr.includes("fallback model metadata"));
+    await writeFile(f.profile, original);
+  }
+  const extra = additions === "comments" ? "\n# retained user comment\n[tools]\n" : additions === "provider" ? "\nstream_max_retries = 7\n[model_providers.clawrouter_clawrouter.http_headers]\n\"x-user-setting\" = \"fixture\"\n" : "";
+  await writeFile(f.profile, `${await readFile(f.profile, "utf8")}${extra}`);
+  for (const model of f.state.catalog.providers[0].models) model.pricing.serviceTiers = [];
+  await manageCodex(["update", ...common], env);
+  assert.notEqual((await f.read()).model_catalog_json, generated.model_catalog_json);
+  await run();
+  await manageCodex(["remove", ...common], env);
+  if (additions === "empty") {
+    await assert.rejects(readFile(f.profile), { code: "ENOENT" });
+  } else assert.ok((await readFile(f.profile, "utf8")).endsWith(extra));
+  await run(true, additions !== "empty");
+  assert.equal(await readFile(join(f.home, "config.toml"), "utf8"), root);
+  assert.ok(f.state.requests.every((request) => request.method === "GET" && request.url === "/v1/catalog"), "profile loading must make no inference requests");
 });

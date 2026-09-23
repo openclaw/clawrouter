@@ -27,7 +27,7 @@ function document(text) {
       fields.set(key(path), { node: field, path });
     }
   }
-  return { fields, tables: ast.body[0].body.filter((node) => node.type === "TOMLTable").map((node) => node.resolvedKey) };
+  return { fields, tables: ast.body[0].body.filter((node) => node.type === "TOMLTable") };
 }
 
 function fieldsFor(profile, options, catalog) {
@@ -68,6 +68,26 @@ function patch(text, previous, next) {
   }
   document(text);
   return { text, retained };
+}
+
+function removeOwned(text, state) {
+  let patched = patch(text, state.fields);
+  const { fields, tables } = document(patched.text);
+  const inProvider = (path) => path[0] === "model_providers" && path[1] === providerId(state.profile);
+  const table = tables.find((node) => inProvider(node.resolvedKey) && node.resolvedKey.length === 2);
+  // Codex validates even unselected providers. User provider additions need
+  // their required name; an empty generated header has no remaining owner.
+  if ([...fields.values()].some(({ path }) => inProvider(path)) || tables.some((node) => inProvider(node.resolvedKey) && node.resolvedKey.length > 2)) {
+    const name = state.fields.find(([path]) => inProvider(path) && path[2] === "name");
+    if (!patched.retained.includes(name[0].join("."))) {
+      patched = patch(text, state.fields.filter((field) => field !== name));
+      patched.retained.push(name[0].join("."), "provider name retained for user provider settings");
+    }
+  } else if (table) {
+    patched.text = patched.text.slice(0, table.range[0]) + patched.text.slice(table.range[1]);
+  }
+  document(patched.text);
+  return patched;
 }
 
 async function readRegular(path) {
@@ -114,7 +134,7 @@ function receipt(text, profile) {
 
 function baseCompatible(text, profile) {
   const { fields, tables } = document(text ?? "");
-  for (const { path, node } of [...fields.values(), ...tables.map((path) => ({ path }))]) {
+  for (const { path, node } of [...fields.values(), ...tables.map((node) => ({ path: node.resolvedKey }))]) {
     const target = path[0] === "model_providers" ? providerId(profile) : path[0] === "profiles" ? profile : null;
     const inlineCollision = target && path.length === 1 && node?.value.type === "TOMLInlineTable" && node.value.body.some((field) => getStaticTOMLValue(field.key)[0] === target);
     if (path[0] === "profile" || (target && path[1] === target) || inlineCollision) {
@@ -157,7 +177,7 @@ export async function manageCodex(args, env = process.env) {
   const oldBytes = oldCatalog && await readRegular(oldCatalog);
   let text, nextBytes, nextCatalog, nextState, retained = [];
   if (command === "remove") {
-    const patched = patch(original.slice(original.indexOf("\n") + 1), state.fields);
+    const patched = removeOwned(original.slice(original.indexOf("\n") + 1), state);
     text = patched.text;
     retained = patched.retained;
   } else {
@@ -192,7 +212,7 @@ export async function manageCodex(args, env = process.env) {
   const changed = command === "remove" ? state.fields.map(([path]) => path.join(".")).filter((field) => !retained.includes(field))
     : nextState.fields.filter(([path, value]) => !state?.fields.some(([oldPath, oldValue]) => key(path) === key(oldPath) && value === oldValue)).map(([path]) => path.join("."));
   const summary = { command, profile, status: dryRun ? "planned" : "applied", changed, retained,
-    ...(command === "remove" ? { revoked: false } : { catalogSha256: nextState.catalogSha256, restartRequired: true, launch: `CODEX_HOME=${shellQuote(home)} codex --profile ${profile}`, credential: "CLAWROUTER_API_KEY must be exported in the Codex process environment" }) };
+    ...(command === "remove" ? { revoked: false } : { catalogSha256: nextState.catalogSha256, restartRequired: true, launch: `CODEX_HOME=${shellQuote(home)} ${shellQuote(options.codex ?? "codex")} --profile ${profile}`, credential: "CLAWROUTER_API_KEY must be exported in the Codex process environment" }) };
   if (dryRun) return summary;
 
   await mkdir(home, { recursive: true, mode: 0o700 });
@@ -230,7 +250,7 @@ export async function manageCodex(args, env = process.env) {
           else if (current !== null) summary.retained.push(`${name}: modified outside setup`);
         } catch { summary.retained.push(`${name}: could not be removed`); }
       }
-      if (text.replace(/\s/g, "") === `[model_providers.${JSON.stringify(providerId(profile))}]`) {
+      if (!text.trim()) {
         if (await readRegular(path) === text) await rm(path);
         else summary.retained.push("profile changed during removal");
       }

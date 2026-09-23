@@ -17,7 +17,8 @@ pnpm codex:connect connect \
   --provider openai --model gpt-6-astra --service-tier priority \
   --codex /path/to/codex --dry-run
 # Repeat without --dry-run to apply the displayed field changes.
-codex --profile clawrouter
+# Run the returned launch command; it preserves --codex and --codex-home.
+/path/to/codex --profile clawrouter
 ```
 
 This creates `$CODEX_HOME/clawrouter.config.toml` and a complete native catalog
@@ -66,7 +67,8 @@ To change connection settings, remove and reconnect. `remove` deletes only
 unchanged owned fields and catalog files; modified fields/files remain and
 are reported. If the user changes the catalog pointer, all published catalog
 generations remain available for that retained reference. It keeps unrelated
-additions and does not revoke the key.
+additions and does not revoke the key. An empty generated provider table is
+removed; user-added provider settings retain the required provider name.
 Credential revocation is a separate operator action through the admin UI or
 `pnpm cf:key:revoke -- --kid <credential-id>`. If an interrupted process leaves
 a profile lock directory, check that no setup command is still running before
