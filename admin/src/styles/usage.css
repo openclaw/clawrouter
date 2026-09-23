@@ -46,14 +46,16 @@
 }
 
 .auditIdentity,
-.auditOperation {
+.auditOperation,
+.auditCost {
   display: grid;
   gap: 2px;
   min-width: 0;
 }
 
 .auditIdentity strong,
-.auditOperation strong {
+.auditOperation strong,
+.auditCost strong {
   overflow: hidden;
   color: var(--ink);
   font-size: 10.5px;
@@ -63,13 +65,26 @@
 }
 
 .auditIdentity small,
-.auditOperation small {
+.auditOperation small,
+.auditCost small {
   overflow: hidden;
   color: var(--muted);
   font-family: var(--font-mono);
   font-size: 9.5px;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.auditCost strong,
+.auditCost small {
+  white-space: normal;
+  overflow-wrap: anywhere;
+}
+
+.dashboardStats > div:last-child small,
+.usageSummaryGrid .metric:last-child small,
+.quotaNumbers strong {
+  white-space: normal;
 }
 
 .compoundRequestToggle {

@@ -5,6 +5,31 @@ post-response settlement. Provider credentials remain server-side; clients use
 a ClawRouter credential and receive only the providers and models allowed by
 their policy.
 
+## Reading costs and budgets
+
+Dashboard and Usage show **accounted spend** for the last 30 days. This total
+can include token-based estimates, fixed policy tariffs, and retained
+reservation estimates; it is not a provider invoice. Unpriced calls are counted
+separately. Recent request rows label their recorded accounting basis:
+
+| Label | Meaning |
+| --- | --- |
+| Token-based estimate | Reported usage priced at declared rates. A published rate upper bound is labeled separately when recorded. |
+| Fixed policy tariff | The operator's configured request amount, including an explicit zero. |
+| Retained reservation estimate | Usage was incomplete or dispatch outcome uncertain. |
+| Accounted · no charge | The recorded `none` basis, shown as `$0.00`. |
+| Price unavailable | No complete price is available; the call is excluded from accounted spend. |
+| Accounting basis unavailable | A historical or unknown basis; the recorded amount is preserved. |
+
+Fusion detail covers the calls visible in the recent-event window. Partial
+groups stay labeled partial; their sum does not replace the 30-day totals.
+Budget balances use the **UTC calendar month**. **Used** includes outstanding
+reservations, and **remaining** is the capacity reported by that budget ledger.
+Shared policy pools, per-principal balances, and provider-wide budgets stay
+separate. No cap at one scope does not remove other policy or provider limits.
+Unavailable balances remain unknown; failed refreshes keep their last-known
+timestamp and stale warning.
+
 ## Enforcement contract
 
 For a model with manifest pricing, ClawRouter reserves a conservative upper

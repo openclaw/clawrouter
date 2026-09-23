@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { niceChartMaximum, providerChartRows, syntheticUsageTimeline, usageCostLabel, usageDayMs, usageEventGroups, usageTimeline } from "../src/usage-analytics.ts";
+import { niceChartMaximum, providerChartRows, syntheticUsageTimeline, usageDayMs, usageEventGroups, usageTimeline } from "../src/usage-analytics.ts";
 
 const summary = { requestCount: 10, successCount: 9, errorCount: 1, inputTokens: 80, outputTokens: 20, totalTokens: 100, actualCostMicros: 500 };
 
@@ -85,12 +85,12 @@ test("unavailable prices remain distinct from known zero and mixed accounted tot
     { ...base, id: "mixed-unknown", compound_request_id: "mixed", cost_basis: "unpriced_usage" },
     { ...base, id: "mixed-known", compound_request_id: "mixed", actual_cost_micros: 5, cost_basis: "manifest_pricing" },
   ]);
-  assert.equal(usageCostLabel("$0", unknown.events.length, unknown.unpricedRequestCount), "Price unavailable");
-  assert.equal(usageCostLabel("$0", knownZero.events.length, knownZero.unpricedRequestCount), "$0");
-  assert.equal(usageCostLabel("$5", mixed.events.length, mixed.unpricedRequestCount), "$5 accounted; 1 unpriced");
+  assert.equal(unknown.unpricedRequestCount, 1);
+  assert.equal(knownZero.unpricedRequestCount, 0);
+  assert.equal(mixed.unpricedRequestCount, 1);
   assert.equal(mixed.actualCostMicros, 5);
   const [historicalDenial] = usageEventGroups([{ ...base, id: "old-denial", status: "client_error", status_code: 400, cost_basis: "unpriced_service_tier" }]);
-  assert.equal(usageCostLabel("$0", 1, historicalDenial.unpricedRequestCount), "$0");
+  assert.equal(historicalDenial.unpricedRequestCount, 0);
   const dayStartMs = Math.floor(Date.now() / usageDayMs) * usageDayMs;
   const daily = { dayStartMs, requestCount: 2, successCount: 2, errorCount: 0, totalTokens: 2, actualCostMicros: 5, unpricedRequestCount: 1 };
   assert.equal(usageTimeline({ summary, events: [], providers: [], daily: [daily, daily] }, 1)[0].unpricedRequestCount, 2);

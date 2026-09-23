@@ -118,11 +118,6 @@ function emptyUsageDay(dayStartMs: number): UsageDailySummary {
   return { dayStartMs, requestCount: 0, successCount: 0, errorCount: 0, totalTokens: 0, actualCostMicros: 0, unpricedRequestCount: 0 };
 }
 
-export function usageCostLabel(formattedCost: string, requestCount: number, unpricedRequestCount = 0): string {
-  if (!unpricedRequestCount) return formattedCost;
-  return unpricedRequestCount === requestCount ? "Price unavailable" : `${formattedCost} accounted; ${unpricedRequestCount} unpriced`;
-}
-
 export function providerChartRows(providers: ProviderUsageSummary[], limit: number): ProviderUsageSummary[] {
   if (providers.length <= limit) return providers;
   const visibleCount = Math.max(1, limit - 1);

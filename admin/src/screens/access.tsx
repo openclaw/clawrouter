@@ -3,7 +3,8 @@ import { CircleSlash2, KeyRound, LogIn, Plus, RefreshCw, Search, ServerCog, Shie
 import { bindingKey, type CatalogModel } from "../domain";
 import { EntityName, InlineError, InlineNote, InspectorHeader, Status, kindLabel } from "../components";
 import { rolePresets } from "../ui-config";
-import { credentialOutcome, formatMicros, groupedProviders } from "../ui-helpers";
+import { credentialOutcome, groupedProviders } from "../ui-helpers";
+import { formatMicros, presentCost } from "../cost-presentation";
 import { EntityTable, Metric } from "./users-usage";
 import type {
   AccessPolicy,
@@ -181,6 +182,11 @@ export function FusionPanel({ config, readiness, policies, policyId, onSelectPol
 
 function FusionReadinessPanel({ readiness }: { readiness: FusionReadiness | null }) {
   if (!readiness) return <div className="fusionReadiness fusionReadiness-empty"><strong>Readiness pending</strong><span>Select a policy and check the draft profile before enabling it.</span></div>;
+  const calls = readiness.calls.map((call) => ({ call, cost: presentCost(call.estimatedReservationMicros, call.estimateBasis, true) }));
+  const estimate = calls.some(({ cost }) => cost.unavailable) ? "Price unavailable" : formatMicros(readiness.estimatedReservationMicros);
+  const budgetNote = readiness.budgetConfigured
+    ? `${readiness.remainingBudgetMicros == null ? "Budget unavailable" : `${formatMicros(readiness.remainingBudgetMicros)} remains this UTC calendar month`}${readiness.budgetSufficientForAll === false ? "; not enough for every eligible call" : ""}.`
+    : "No monthly cap at this policy; provider limits still apply.";
   return (
     <section className="fusionReadiness" aria-label="Fusion readiness">
       <div className="fusionReadinessHeader">
@@ -188,13 +194,13 @@ function FusionReadinessPanel({ readiness }: { readiness: FusionReadiness | null
         <Status label={readiness.executable ? readiness.advertisable ? "ready" : "executable" : "blocked"} tone={readiness.executable ? "active" : "revoked"} />
       </div>
       <div className="fusionReadinessCalls">
-        {readiness.calls.map((call) => <article key={`${call.stage}-${call.index ?? "final"}`} className={call.executable ? "ready" : "blocked"}>
+        {calls.map(({ call, cost }) => <article key={`${call.stage}-${call.index ?? "final"}`} className={call.executable ? "ready" : "blocked"}>
           <span>{call.stage === "synthesizer" ? "FINAL" : `A${call.index}`}</span>
-          <div><strong>{call.model}</strong><small>{call.provider} · {call.status}</small>{call.reasons.map((reason) => <em key={reason}>{reason}</em>)}</div>
-          <b>{formatMicros(call.estimatedReservationMicros)}</b>
+          <div><strong>{call.model}</strong><small>{call.provider} · {call.status}</small><small>{cost.label}</small>{call.reasons.map((reason) => <em key={reason}>{reason}</em>)}</div>
+          <b>{cost.value}</b>
         </article>)}
       </div>
-      <div className="fusionReadinessEstimate"><span>Eligible-call reservation</span><strong>{formatMicros(readiness.estimatedReservationMicros)}</strong><small>{readiness.estimateNote} {readiness.budgetConfigured ? `${readiness.remainingBudgetMicros == null ? "Budget unavailable" : `${formatMicros(readiness.remainingBudgetMicros)} remains`}${readiness.budgetSufficientForAll === false ? "; not enough for every eligible call" : ""}.` : "Policy is unmetered."}</small></div>
+      <div className="fusionReadinessEstimate"><span>Eligible-call reservation estimate</span><strong>{estimate}</strong><small>{readiness.estimateNote} {budgetNote}</small></div>
     </section>
   );
 }
