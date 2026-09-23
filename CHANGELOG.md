@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Preserve unsaved policy drafts across refreshes and completed saves, provide explicit discard, and keep missing selections visible. Keep explicit disablement and later edits intact, and attach edits made during creation to the created policy for the next save.
+- Preserve unsaved policy drafts across refreshes and completed saves, provide explicit discard, and keep missing selections visible. Keep explicit disablement and later edits intact, attach edits made during creation to the created policy for the next save, and wait for the initial policy list before enabling saves.
 
 - Clear protected console data and drafts when browser authentication expires or identity changes. Keep sign-in gated until the session is verified, preserve in-flight key ownership, and distinguish authentication loss from permission, CSRF, and reporting failures.
 - Keep policy selection separate from existing binding edits, while new bindings still default to the selected policy.

@@ -24,7 +24,7 @@ import type {
   UpstreamGrantForm,
 } from "../ui-types";
 
-export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selectedCredential, bindings, selectedBinding, upstreamGrants, selectedUpstreamGrant, assignmentRules, selectedAssignmentRule, fusionConfig, fusionReadiness, fusionPolicyId, onSelectFusionPolicy, setFusionConfig, fusionModels, providers, form, setForm, credentialForm, setCredentialForm, bindingForm, setBindingForm, upstreamGrantForm, setUpstreamGrantForm, assignmentRuleForm, setAssignmentRuleForm, credentialFeedback, error, policyError, policyDirty, policyMissing, policyBusy, onDiscardPolicy, fusionError, onSave, onIssueCredential, onRevokeCredential, onRotateCredential, onNewCredential, onSaveBinding, onSaveUpstreamGrant, onRevokeUpstreamGrant, onRefreshUpstreamGrant, onRefreshUpstreamGrantQuota, onAuthorizeUpstreamGrant, onSaveAssignmentRule, onReconcileAssignments, onSaveFusion, onCheckFusion, onNew, onEdit, onEditCredential, onEditBinding, onNewBinding, onEditUpstreamGrant, onNewUpstreamGrant, onEditAssignmentRule, onNewAssignmentRule, onRevoke, onPreset, onToggleProvider, onSetProviderGroup, busy }: {
+export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selectedCredential, bindings, selectedBinding, upstreamGrants, selectedUpstreamGrant, assignmentRules, selectedAssignmentRule, fusionConfig, fusionReadiness, fusionPolicyId, onSelectFusionPolicy, setFusionConfig, fusionModels, providers, form, setForm, credentialForm, setCredentialForm, bindingForm, setBindingForm, upstreamGrantForm, setUpstreamGrantForm, assignmentRuleForm, setAssignmentRuleForm, credentialFeedback, error, policyError, policyDirty, policyMissing, policyReady, policyBusy, onDiscardPolicy, fusionError, onSave, onIssueCredential, onRevokeCredential, onRotateCredential, onNewCredential, onSaveBinding, onSaveUpstreamGrant, onRevokeUpstreamGrant, onRefreshUpstreamGrant, onRefreshUpstreamGrantQuota, onAuthorizeUpstreamGrant, onSaveAssignmentRule, onReconcileAssignments, onSaveFusion, onCheckFusion, onNew, onEdit, onEditCredential, onEditBinding, onNewBinding, onEditUpstreamGrant, onNewUpstreamGrant, onEditAssignmentRule, onNewAssignmentRule, onRevoke, onPreset, onToggleProvider, onSetProviderGroup, busy }: {
   tab: AccessTab;
   setTab: (tab: AccessTab) => void;
   keys: AccessPolicy[];
@@ -59,6 +59,7 @@ export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selec
   policyError: string;
   policyDirty: boolean;
   policyMissing: boolean;
+  policyReady: boolean;
   policyBusy: boolean;
   onDiscardPolicy: () => void;
   fusionError: string;
@@ -113,7 +114,7 @@ export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selec
         <button type="button" role="tab" aria-selected={tab === "assignments"} className={tab === "assignments" ? "active" : ""} onClick={() => setTab("assignments")}>Assignments <span>{assignmentRules.filter((rule) => rule.enabled).length}</span></button>
         <button type="button" role="tab" aria-selected={tab === "fusion"} className={tab === "fusion" ? "active" : ""} onClick={() => setTab("fusion")}>Fusion <span>{fusionConfig.enabled ? "on" : "off"}</span></button>
       </div>
-      {tab === "policies" ? <PolicyPanel keys={keys} selected={selected} providers={providers} form={form} setForm={setForm} error={policyError} dirty={policyDirty} missing={policyMissing} onDiscard={onDiscardPolicy} onSave={onSave} onNew={onNew} onEdit={onEdit} onRevoke={onRevoke} onPreset={onPreset} onToggleProvider={onToggleProvider} onSetProviderGroup={onSetProviderGroup} busy={policyBusy} /> : null}
+      {tab === "policies" ? <PolicyPanel keys={keys} selected={selected} providers={providers} form={form} setForm={setForm} error={policyError} dirty={policyDirty} missing={policyMissing} ready={policyReady} onDiscard={onDiscardPolicy} onSave={onSave} onNew={onNew} onEdit={onEdit} onRevoke={onRevoke} onPreset={onPreset} onToggleProvider={onToggleProvider} onSetProviderGroup={onSetProviderGroup} busy={policyBusy} /> : null}
       {tab === "credentials" ? <CredentialPanel policies={keys} credentials={credentials} selected={selectedCredential} form={credentialForm} setForm={setCredentialForm} feedback={credentialFeedback} onIssue={onIssueCredential} onEdit={onEditCredential} onRevoke={onRevokeCredential} onRotate={onRotateCredential} onNew={onNewCredential} busy={busy || credentialFeedback.busy} /> : null}
       {tab === "bindings" ? <BindingPanel policies={keys} bindings={bindings} selected={selectedBinding} form={bindingForm} setForm={setBindingForm} error={error} onSave={onSaveBinding} onEdit={onEditBinding} onNew={onNewBinding} busy={busy} /> : null}
       {tab === "upstream" ? <UpstreamGrantPanel policies={keys} providers={providers} grants={upstreamGrants} selected={selectedUpstreamGrant} form={upstreamGrantForm} setForm={setUpstreamGrantForm} error={error} onSave={onSaveUpstreamGrant} onEdit={onEditUpstreamGrant} onNew={onNewUpstreamGrant} onRefresh={onRefreshUpstreamGrant} onRefreshQuota={onRefreshUpstreamGrantQuota} onAuthorize={onAuthorizeUpstreamGrant} onRevoke={onRevokeUpstreamGrant} busy={busy} /> : null}
@@ -439,7 +440,7 @@ export function BindingPanel({ policies, bindings, selected, form, setForm, erro
   );
 }
 
-export function PolicyPanel({ keys, selected, providers, form, setForm, error, dirty, missing, onDiscard, onSave, onNew, onEdit, onRevoke, onPreset, onToggleProvider, onSetProviderGroup, busy }: {
+export function PolicyPanel({ keys, selected, providers, form, setForm, error, dirty, missing, ready, onDiscard, onSave, onNew, onEdit, onRevoke, onPreset, onToggleProvider, onSetProviderGroup, busy }: {
   keys: AccessPolicy[];
   selected?: AccessPolicy;
   providers: ProviderRow[];
@@ -448,6 +449,7 @@ export function PolicyPanel({ keys, selected, providers, form, setForm, error, d
   error: string;
   dirty: boolean;
   missing: boolean;
+  ready: boolean;
   onDiscard: () => void;
   onSave: (event: FormEvent) => void;
   onNew: () => void;
@@ -492,6 +494,7 @@ export function PolicyPanel({ keys, selected, providers, form, setForm, error, d
           </div>
           {error ? <InlineError message={error} /> : null}
           {missing ? <InlineError message="This policy is no longer available. Your draft is preserved. Select another policy or start a new one." /> : null}
+          {!ready ? <InlineNote>Saving is unavailable until policies load. You can keep editing your draft; use Retry refresh if loading fails.</InlineNote> : null}
           {dirty ? <InlineNote>Unsaved policy changes.</InlineNote> : null}
           <div className="grantSummary">
             <strong>{form.tenantId || "default"}</strong>
@@ -542,7 +545,7 @@ export function PolicyPanel({ keys, selected, providers, form, setForm, error, d
               );
             }) : <p>No services match this filter.</p>}
           </div>
-          <div className="inspectorActions">{dirty ? <button type="button" className="buttonSecondary" disabled={missing} onClick={onDiscard}>Discard changes</button> : null}<button type="submit" disabled={busy || missing || (!form.allProviders && !form.providers.length)}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save policy</span></button>{selected ? <button type="button" className="buttonDanger" disabled={!selected.enabled || busy} onClick={() => onRevoke(selected.policyId)}><CircleSlash2 className="buttonIcon" aria-hidden="true" /><span>Disable policy</span></button> : null}</div>
+          <div className="inspectorActions">{dirty ? <button type="button" className="buttonSecondary" disabled={missing} onClick={onDiscard}>Discard changes</button> : null}<button type="submit" disabled={!ready || busy || missing || (!form.allProviders && !form.providers.length)}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save policy</span></button>{selected ? <button type="button" className="buttonDanger" disabled={!ready || !selected.enabled || busy} onClick={() => onRevoke(selected.policyId)}><CircleSlash2 className="buttonIcon" aria-hidden="true" /><span>Disable policy</span></button> : null}</div>
           </fieldset>
         </form>
       </aside>

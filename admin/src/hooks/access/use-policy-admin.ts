@@ -24,6 +24,8 @@ interface PolicyDraft { selection: string; value: PolicyForm; dirty: boolean; in
 export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, demoMode, providers, credentials, routes, setStatus, refresh, syncDemoAdmin }: Dependencies) {
   const [keys, setKeys] = useState<AccessPolicy[]>(allowDemo ? demo.keys : []);
   const rows = useRef(keys);
+  const [ready, setReady] = useState(allowDemo);
+  const readyRef = useRef(ready);
   const [draft, setDraft] = useState<PolicyDraft>(() => ({ selection: keys[0]?.policyId ?? "", value: keys[0] ? policyFormFromPolicy(keys[0]) : newPolicyForm(session), dirty: false, initialized: allowDemo }));
   const currentDraft = useRef(draft);
   const baseline = useRef(draft.value);
@@ -43,6 +45,8 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
     // A bootstrap admitted before or during a write cannot replace its committed row.
     if (snapshot === null || snapshot !== recordsEpoch.current || pending.current) return;
     updateRows(policies);
+    readyRef.current = true;
+    setReady(true);
     const current = currentDraft.current;
     if (current.dirty || (current.initialized && !current.selection)) return;
     const policy = current.initialized ? policies.find((item) => item.policyId === current.selection) : policies[0];
@@ -93,7 +97,8 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
   }
 
   async function mutate(action: "save" | "disable", write: (value: PolicyForm, selection: string) => Promise<AccessPolicy>) {
-    if (pending.current) return;
+    // An early submit must neither overwrite an unknown ID nor retire its initial bootstrap.
+    if (!readyRef.current || pending.current) return;
     const submitted = currentDraft.current, submittedRevision = revision.current, submittedIncarnation = incarnation.current;
     pending.current = true;
     recordsEpoch.current += 1;
@@ -194,7 +199,7 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
   }
 
   return {
-    policies: { items: keys, selected: selectedPolicy, selectedId: draft.selection, form: draft.value, setForm: setPolicyForm, dirty: draft.dirty, missing, busy, error, save, revoke: revokePolicy, edit, startNew, discard, applyPreset, toggleProvider, setProviderGroup },
+    policies: { items: keys, selected: selectedPolicy, selectedId: draft.selection, form: draft.value, setForm: setPolicyForm, dirty: draft.dirty, missing, ready, busy, error, save, revoke: revokePolicy, edit, startNew, discard, applyPreset, toggleProvider, setProviderGroup },
     captureHydration,
     hydrate,
   };

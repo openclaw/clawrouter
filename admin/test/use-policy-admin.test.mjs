@@ -24,6 +24,53 @@ test("bootstrap initializes once, preserves an early New draft, and clean select
   assert.equal(fixture.render().policies.form.tenantId, "updated");
 });
 
+test("initial hydration gates writes without retiring bootstrap or replacing an early New draft", async () => {
+  const fixture = mount();
+  const snapshot = fixture.render().captureHydration();
+  fixture.render().policies.startNew();
+  change(fixture, { policyId: "policy_a", allProviders: true, tenantId: "early-draft" });
+  const save = fixture.render().policies.save(event);
+  assert.equal(fixture.requests.length, 0);
+  await save;
+  await fixture.render().policies.revoke("policy_a");
+  assert.equal(fixture.requests.length, 0);
+  assert.equal(fixture.render().captureHydration(), snapshot);
+  assert.equal(fixture.render().policies.ready, false);
+  assert.equal(fixture.render().policies.busy, false);
+  assert.deepEqual(fixture.statuses, []);
+  fixture.render().hydrate([policy("policy_a")], session, snapshot);
+  assert.equal(fixture.render().policies.ready, true);
+  assert.equal(fixture.render().policies.selectedId, "");
+  assert.equal(fixture.render().policies.form.tenantId, "early-draft");
+  assert.equal(fixture.render().policies.error, "");
+  await fixture.render().policies.save(event);
+  assert.equal(fixture.requests.length, 0);
+  assert.match(fixture.render().policies.error, /already exists/);
+  assert.equal(fixture.render().policies.items[0].tenantId, "default");
+});
+
+test("only admitted initial hydration enables writes, including a valid empty policy list", async () => {
+  const fixture = mount();
+  fixture.render().policies.startNew();
+  change(fixture, { policyId: "policy_new", allProviders: true, tenantId: "early-draft" });
+  const owner = fixture.render(), snapshot = owner.captureHydration();
+  owner.hydrate([], session, null);
+  owner.hydrate([], session, snapshot + 1);
+  assert.equal(fixture.render().policies.ready, false);
+  await owner.policies.save(event);
+  assert.equal(fixture.requests.length, 0);
+  owner.hydrate([], session, snapshot);
+  assert.equal(fixture.render().policies.ready, true);
+  assert.equal(fixture.render().policies.form.tenantId, "early-draft");
+  const save = owner.policies.save(event); // Admission observes accepted hydration before rerender.
+  assert.equal(fixture.requests.length, 1);
+  fixture.requests[0].resolve(policy("policy_new", "early-draft"));
+  await save;
+  fixture.render().hydrate([], session, snapshot); // A retired read cannot unset readiness.
+  assert.equal(fixture.render().policies.ready, true);
+  assert.equal(fixture.render().policies.selectedId, "policy_new");
+});
+
 test("dirty drafts survive repeated hydration and discard reads the latest server row", () => {
   const fixture = ready();
   change(fixture, { tenantId: "draft" });
@@ -142,6 +189,7 @@ test("New and selection ask only for actual changes, and cancelled discard prese
 
 test("demo save and disable update canonical rows without losing an unsaved draft", async () => {
   const fixture = mount(true);
+  assert.equal(fixture.render().policies.ready, true);
   change(fixture, { tenantId: "demo-saved" });
   await fixture.render().policies.save(event);
   assert.equal(fixture.render().policies.selected.tenantId, "demo-saved");

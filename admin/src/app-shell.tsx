@@ -220,6 +220,7 @@ export function AppShell() {
             policyError={policyError}
             policyDirty={policies.dirty}
             policyMissing={policies.missing}
+            policyReady={policies.ready}
             policyBusy={policies.busy}
             onDiscardPolicy={policies.discard}
             fusionError={fusionError}

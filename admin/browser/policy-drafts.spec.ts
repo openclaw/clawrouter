@@ -1,6 +1,47 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 import type { AccessPolicy, AdminBootstrapResponse, PolicyBinding } from "../src/ui-types";
 
+for (const initialOutcome of ["success", "failure then retry"] as const) {
+  test(`initial policy loading preserves an early New draft through ${initialOutcome} without overwriting an existing ID`, async ({ page }) => {
+    const state = await fixture(page);
+    state.holdBootstrap = true;
+    await page.goto("/dashboard/access");
+    await expect.poll(() => state.reads.length).toBe(1);
+    await page.getByRole("button", { name: "New policy", exact: true }).click();
+    await policyId(page).fill("policy_a");
+    await page.getByRole("button", { name: "service", exact: true }).click();
+    await tenant(page).fill("early-new-draft");
+    await expect(page.getByText(/Saving is unavailable until policies load/)).toBeVisible();
+    await expect(save(page)).toBeDisabled();
+    await tenant(page).focus();
+    await page.keyboard.press("Enter");
+    expect(state.writes).toHaveLength(0);
+    state.holdBootstrap = false;
+    if (initialOutcome === "failure then retry") {
+      await state.reads[0].route.fulfill({ status: 503, body: "reporting unavailable" });
+      await expect(page.locator(".statusBar")).toContainText("reporting unavailable");
+      await expect(save(page)).toBeDisabled();
+      await expect(tenant(page)).toHaveValue("early-new-draft");
+      await page.getByRole("button", { name: "Retry refresh", exact: true }).click();
+    } else await state.reads[0].route.fulfill({ json: state.reads[0].body });
+    await expect(row(page, "policy_a").locator('[data-label="tenant"]')).toHaveText("default");
+    await expect(save(page)).toBeEnabled();
+    await expect(page.getByText(/Saving is unavailable until policies load/)).toHaveCount(0);
+    await expect(tenant(page)).toHaveValue("early-new-draft");
+    await expect(policyId(page)).not.toHaveAttribute("readonly", "");
+    await save(page).click();
+    await expect(page.locator(".inspector .inlineError")).toContainText("policy id already exists");
+    expect(state.writes).toHaveLength(0);
+    await policyId(page).fill("policy_new");
+    await save(page).click();
+    await expect.poll(() => state.writes.length).toBe(1);
+    expect(state.writes[0].request().postDataJSON()).toMatchObject({ policyId: "policy_new", tenantId: "early-new-draft" });
+    await state.commit(0);
+    await expect(row(page, "policy_new").locator('[data-label="tenant"]')).toHaveText("early-new-draft");
+    await expect(row(page, "policy_a").locator('[data-label="tenant"]')).toHaveText("default");
+  });
+}
+
 for (const destination of ["other policy", "New", "same policy"] as const) {
   test(`a held save keeps later edits to ${destination} and releases admission before refresh`, async ({ page }) => {
     const state = await fixture(page);
