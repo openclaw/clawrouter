@@ -64,7 +64,6 @@ async function submissionEnv(values, ticketToken) {
           }
           if (path === "/submission-tickets/complete") return Response.json({ outcome: "already_consumed", ticket: ticketView(), receipt: body.receipt });
           if (path === "/submission-tickets/release") { env.released += 1; return new Response("released"); }
-          if (path === "/grant-pools/sync") return new Response("updated");
           return new Response("not found", { status: 404 });
         } };
       },
