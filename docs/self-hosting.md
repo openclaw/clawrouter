@@ -131,6 +131,9 @@ node scripts/smoke-self-host.mjs
 
 The smoke script creates a temporary policy and credential through the admin
 API, verifies its scoped catalog, and revokes it.
+Health readiness waits up to 30 seconds, with a two-second deadline covering
+each request and its response body and 500 milliseconds between failed attempts.
+If readiness fails, the script exits with the last failure reason.
 
 ## Persistence, backup, and upgrades
 

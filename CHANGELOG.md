@@ -22,6 +22,7 @@
 - Preserve provider kill switches and budgets during concurrent connection edits, and show per-provider pending state in the console.
 
 - Deny proxy requests and subsequent WebSocket turns for explicitly disabled key owners, and show their credentials as owner-disabled without changing unowned service keys or retained policy bindings.
+- Clear protected console data and drafts when browser authentication expires or identity changes. Keep sign-in gated until the session is verified, preserve in-flight key ownership, and distinguish authentication loss from permission, CSRF, and reporting failures.
 - Add collision-safe proxy-key creation and active-key-only rotation. Serialize credential authorization, current-policy checks, and revocation in the authority so concurrent writes cannot restore an old secret or owner; preserve existing PUT and CLI upserts.
 
 - Preserve local administrator roles during user, policy-assignment, and automatic-assignment edits, including profile saves that race with an explicit role change.
@@ -41,11 +42,13 @@
 - Route grant CLI imports and revocations through the authenticated admin API, including explicit loopback `--local` targets. Preserve whole-grant replacement, clear omitted old credentials, and migrate legacy KV disablement or revocation before credential-owner maintenance can use secrets.
 - Deny expired or invalid retained-content reads with a content-free, non-cacheable not-found response, independently of physical archive deletion.
 - Sweep expired self-host archive objects after startup and on bounded periodic ticks, persist cleanup progress across restarts, and cap legacy archive retention by upload age without changing managed R2 lifecycle ownership.
+- Keep standalone smoke readiness alive through stalled health requests and response bodies, cancel each expired attempt, and preserve existing self-host and deployed readiness limits.
 
 - Match Cloudflare Access applications by exact destination instead of display name, reject ambiguous or name-only collisions before writes, and inspect all application and policy pages during provisioning.
 
 - Preserve dispatched budget charges through reservation expiry and delayed recovery, release abandoned pre-dispatch work to zero, and require confirmed idempotent settlement receipts before acknowledging retries.
 - Retain qualified estimates or fixed tariffs when dispatched HTTP requests fail before response headers, while keeping pre-dispatch failures at zero and preserving error and cancellation outcomes.
+- Cancel discarded grant-rejection bodies before HTTP failover, and retain one conservative budget charge when an alternate request fails without response headers. Preserve the original rejection when no alternate can be selected.
 - Isolate policy, principal, and provider budget charges when their identifiers share a ledger address, preserving existing balances and ambiguous legacy debt without resetting budgets or orphaning settlement receipts.
 - Use the shared Access-aware admin transport for pool-ticket issuance, preserving protected ticket output while bounding admin responses and keeping raw response bodies out of error messages.
 - Acknowledge completed key and grant mutations without reading unused success payloads, preserving successful CLI outcomes for large accepted grant metadata while keeping ticket and error reads bounded.
@@ -53,6 +56,7 @@
 - Apply concrete Chat model eligibility to Fusion discovery, including selected-policy pricing, provider limits, and grant availability, while preserving fail-open advisers.
 - Reject hosted web search before dispatch under measured budgets without a fixed policy tariff; keep unmetered forwarding and report its price as unavailable instead of token-only spend.
 - Record failed streaming response and delivery outcomes independently from HTTP status and billed usage, with bounded SSE inspection that retains late terminal facts on long streams.
+- Meter declared Responses JSON and SSE bodies with bounded scalar inspection, including usage after large output or inside a large terminal event, while preserving stream delivery, cancellation, and conservative charges when metadata cannot be verified.
 - Settle HTTP accounting on ingress cancellation through the Worker request signal, including external socket disconnects, without losing already reported terminal usage.
 
 - Recover rejected usage-queue publication through the existing policy usage ledger, retaining event IDs to deduplicate redelivery without masking budget-settlement failures.

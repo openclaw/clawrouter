@@ -1,10 +1,13 @@
 import { type FormEvent, useState } from "react";
 import { errorMessage } from "../../domain";
 import { defaultUpstreamGrant, demo } from "../../ui-config";
-import { demoGrantFromForm, parseCredentialBundle, request, upstreamGrantFormFromGrant } from "../../ui-helpers";
+import { demoGrantFromForm, parseCredentialBundle, upstreamGrantFormFromGrant } from "../../ui-helpers";
+import type { ConsoleRequest } from "../../dashboard-fetch";
 import type { AccessPolicy, ProviderRow, UpstreamGrant, UpstreamGrantForm } from "../../ui-types";
 
 interface Dependencies {
+  request: ConsoleRequest;
+  isCurrent: () => boolean;
   allowDemo: boolean;
   gatewayOrigin: string;
   demoMode: boolean;
@@ -16,7 +19,7 @@ interface Dependencies {
   refresh: () => Promise<void>;
 }
 
-export function useUpstreamAdmin({ allowDemo, gatewayOrigin, demoMode, providers, policies, selectedPolicyId, setError, setStatus, refresh }: Dependencies) {
+export function useUpstreamAdmin({ request, isCurrent, allowDemo, gatewayOrigin, demoMode, providers, policies, selectedPolicyId, setError, setStatus, refresh }: Dependencies) {
   const [grants, setGrants] = useState<UpstreamGrant[]>(allowDemo ? demo.upstreamGrants : []);
   const [form, setForm] = useState<UpstreamGrantForm>(allowDemo && demo.upstreamGrants[0] ? upstreamGrantFormFromGrant(demo.upstreamGrants[0]) : defaultUpstreamGrant);
   const [selectedKey, setSelectedKey] = useState(allowDemo ? demo.upstreamGrants[0]?.key ?? "" : "");
@@ -120,7 +123,7 @@ export function useUpstreamAdmin({ allowDemo, gatewayOrigin, demoMode, providers
       setStatus("connecting upstream grant");
       if (demoMode) { setStatus("browser OAuth unavailable in local demo"); return; }
       const result = await request<{ authorizationUrl: string }>(gatewayOrigin, `/v1/admin/upstream-grants/${form.scope}/${encodeURIComponent(scopeId)}/${encodeURIComponent(tokenRef)}/authorize`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider, priority, weight }) });
-      window.location.assign(result.authorizationUrl);
+      if (isCurrent()) window.location.assign(result.authorizationUrl);
     } catch (caught) { handleError(caught); }
   }
 

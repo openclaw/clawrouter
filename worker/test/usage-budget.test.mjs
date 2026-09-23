@@ -1,11 +1,11 @@
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
+import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 import test from "node:test";
 
 
 const { default: handler } = await import("../index.ts");
-const { BudgetLedgerObject, providerBudgetStatus, queue } = await import("../ledgers.ts");
+const { providerBudgetStatus, queue } = await import("../ledgers.ts");
 const keyMaterial = "abcdefgh";
 const keyDigest = await sha256(keyMaterial);
 
@@ -232,6 +232,7 @@ for (const [name, body, contentType, measured, measuredCost = 4_710, outputToken
 }
 
 const astraUsage = { input_tokens: 14, output_tokens: 8, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } };
+const largeResponsesOutput = [{ type: "message", content: [{ type: "output_text", text: "x".repeat(2 * 1024 * 1024 + 1024) }] }];
 test("live HTTP and native streams keep both reservations past 15 minutes until completion", async (t) => {
   let now = Date.now();
   t.mock.method(Date, "now", () => now);
@@ -273,8 +274,14 @@ test("live HTTP and native streams keep both reservations past 15 minutes until 
   }
 });
 
-for (const [name, route, requestedTier, payload, contentType, expected, servedTier, outcome = "success"] of [
+for (const [name, route, requestedTier, payload, contentType, expected, servedTier, outcome = "success", fixedCost = null] of [
   ["JSON priority", "/v1/responses", "priority", { service_tier: "priority", usage: astraUsage }, "application/json", 1_080, "priority"],
+  ["large JSON late usage", "/v1/responses", "priority", { output: largeResponsesOutput, object: "response", status: "completed", service_tier: "priority", usage: astraUsage }, "application/json", 1_080, "priority"],
+  ["large native SSE terminal", "/v1/native/openai/v1/responses", "priority", sse({ type: "response.created" }, { type: "response.completed", response: { output: largeResponsesOutput, service_tier: "priority", usage: astraUsage } }), "text/event-stream", 1_080, "priority"],
+  ["large JSON fixed tariff 7", "/v1/responses", "priority", { output: largeResponsesOutput, object: "response", status: "completed", service_tier: "priority", usage: astraUsage }, "application/json", 7, "priority", "success", 7],
+  ["large JSON fixed tariff 0", "/v1/responses", "priority", { output: largeResponsesOutput, object: "response", status: "completed", service_tier: "priority", usage: astraUsage }, "application/json", 0, "priority", "success", 0],
+  ["inspection cap remains estimated", "/v1/responses", "priority", { object: "response", status: "completed", service_tier: "x".repeat(65), usage: astraUsage }, "application/json", null, null],
+  ["syntax after late usage remains estimated", "/v1/responses", "priority", JSON.stringify({ output: largeResponsesOutput, service_tier: "priority", usage: astraUsage }) + "!", "application/json", null, null, "provider_error"],
   ["native fast alias", "/v1/native/openai/v1/responses", "fast", { service_tier: "fast", usage: astraUsage }, "application/json", 1_080, "fast"],
   ["JSON Flex", "/v1/responses", "flex", { service_tier: "flex", usage: astraUsage }, "application/json", 270, "flex"],
   ["omitted inherits Fast", "/v1/responses", undefined, { service_tier: "priority", usage: astraUsage }, "application/json", 1_080, "priority"],
@@ -292,7 +299,7 @@ for (const [name, route, requestedTier, payload, contentType, expected, servedTi
 ]) {
   test(`Astra ${name} settles both real SQL ledgers and records its price basis`, async (t) => {
     const limit = 1_000_000, events = [], pending = [];
-    const env = usageEnv([], { limit, fixedCost: null, retainContent: false });
+    const env = usageEnv([], { limit, fixedCost, retainContent: false });
     env.OPENAI_API_KEY = "fixture-openai-key";
     env.BUDGET_LEDGER = sqlBudgetNamespace(t);
     env.USAGE_QUEUE = { send: async (event) => { events.push(event); } };
@@ -311,13 +318,14 @@ for (const [name, route, requestedTier, payload, contentType, expected, servedTi
     assert.equal(events.length, 1);
     const [event] = events;
     const charged = expected ?? event.reserved_cost_micros;
-    assert.ok(event.reserved_cost_micros > 1_080);
+    if (fixedCost == null) assert.ok(event.reserved_cost_micros > 1_080);
+    else assert.equal(event.reserved_cost_micros, fixedCost);
     assert.equal(event.actual_cost_micros, charged);
     assert.equal(event.status, outcome);
     assert.equal(event.status_code, 200);
     assert.equal(event.requested_service_tier, requestedTier ?? null);
     assert.equal(event.served_service_tier, servedTier);
-    assert.equal(event.cost_basis, expected == null ? "manifest_reservation" : "manifest_pricing");
+    assert.equal(event.cost_basis, fixedCost != null ? "policy_fixed" : expected == null ? "manifest_reservation" : "manifest_pricing");
     assert.equal(event.content_retained, false);
     const usage = await handler.fetch(new Request("https://clawrouter.example/v1/usage", { headers: { authorization: `Bearer ${proxyKey()}` } }), env, {});
     assert.equal((await usage.json()).budget.spentMicros, charged);
@@ -583,28 +591,6 @@ for (const existingUnmetered of [false, true]) {
       upstream.mock.restore();
     }
   });
-}
-
-function sqlBudgetNamespace(t) {
-  const objects = new Map();
-  return {
-    idFromName: (name) => name,
-    get(name) {
-      if (!objects.has(name)) {
-        const db = new DatabaseSync(":memory:");
-        t.after(() => db.close());
-        const sql = { exec(query, ...bindings) {
-          const statement = db.prepare(query);
-          if (statement.columns().length) return statement.all(...bindings);
-          statement.run(...bindings);
-          return [];
-        } };
-        const ledger = new BudgetLedgerObject({ storage: { sql, getAlarm: async () => 1 } });
-        objects.set(name, { fetch: (url, init) => ledger.fetch(new Request(url, init)), reservations: () => db.prepare("SELECT * FROM budget_reservations").all() });
-      }
-      return objects.get(name);
-    },
-  };
 }
 
 test("hosted search admission and unavailable settlement share the HTTP, native, JSON and SSE owner", async (t) => {

@@ -1,10 +1,11 @@
 import { useRef, useState } from "react";
 import { errorMessage } from "../../domain";
 import { demo } from "../../ui-config";
-import { request } from "../../ui-helpers";
+import type { ConsoleRequest } from "../../dashboard-fetch";
 import type { ProviderConnection, ProviderReadiness } from "../../ui-types";
 
 interface Dependencies {
+  request: ConsoleRequest;
   allowDemo: boolean;
   gatewayOrigin: string;
   demoMode: boolean;
@@ -13,7 +14,7 @@ interface Dependencies {
   refresh: () => Promise<void>;
 }
 
-export function useConnectionAdmin({ allowDemo, gatewayOrigin, demoMode, setStatus, setProviderReadiness, refresh }: Dependencies) {
+export function useConnectionAdmin({ request, allowDemo, gatewayOrigin, demoMode, setStatus, setProviderReadiness, refresh }: Dependencies) {
   const [connections, setConnections] = useState<ProviderConnection[]>(allowDemo ? demo.connections : []);
   const pendingRef = useRef(new Set<string>());
   const [pendingProviderIds, setPendingProviderIds] = useState<ReadonlySet<string>>(new Set());

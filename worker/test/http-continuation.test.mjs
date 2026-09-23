@@ -10,14 +10,16 @@ import { sha256Hex } from "../utils.ts";
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
 import { continuationAuthority } from "./continuation-authority.mjs";
 import { HttpContinuation } from "../http-continuation.ts";
+import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 
 const grantKeys = ["oauth/fixture/account-a", "oauth/fixture/account-b"];
-async function fixture(t, pooled = true) {
+async function fixture(t, pooled = true, { limit = null, fixedCost = 7 } = {}) {
   const pending = [], events = [], values = new Map(), sent = [];
-  const policy = { enabled: true, generation: "g1", providers: ["openai"], tenantId: "default", monthlyBudgetMicros: null, requestCostMicros: 7, retainRequestContent: false, grantRouting: { strategy: "round_robin", stickiness: "none", failover: true } };
+  const policy = { enabled: true, generation: "g1", providers: ["openai"], tenantId: "default", monthlyBudgetMicros: limit, requestCostMicros: fixedCost, retainRequestContent: false, grantRouting: { strategy: "round_robin", stickiness: "none", failover: true } };
   const credential = { enabled: true, secretSha256: await sha256Hex("fixture-secret"), policyId: "fixture" };
   const env = attachGrantCredentialNamespace({
     ACCESS_CONTROL: continuationAuthority(t),
+    BUDGET_LEDGER: sqlBudgetNamespace(t),
     POLICY_KV: {
       async get(key) { return Array.isArray(key) ? new Map(key.map(key => [key, structuredClone(values.get(key) ?? null)])) : structuredClone(values.get(key) ?? null); },
       async put(key, value) { values.set(key, JSON.parse(value)); },
@@ -36,7 +38,7 @@ async function fixture(t, pooled = true) {
   }
   await authority("/policies/put", { policyId: "fixture", policy });
   await mutateCredential({ operation: "create", credentialId: "fixture", credential });
-  await authority("/connections/put", { providerId: "openai", enabled: true, monthlyBudgetMicros: null });
+  await authority("/connections/put", { providerId: "openai", enabled: true, monthlyBudgetMicros: limit });
   if (pooled) for (const [index, key] of grantKeys.entries()) {
     await putGrantCredentials(env, key, { provider: "openai", kind: "subscription", enabled: true, accessToken: `synthetic-access-${index}`, refreshToken: `synthetic-refresh-${index}`, accountId: `synthetic-account-${index}`, expiresAt: "2099-01-01T00:00:00.000Z" });
   }
@@ -118,15 +120,135 @@ test("WebSocket metadata-only reconnect resolves its owner and all supplied iden
 
 test("the successful stateless failover grant owns the response it actually produced", async t => {
   const f = await fixture(t);
-  f.response = (_request, index) => index === 1 ? Response.json({ error: "fixture unavailable" }, { status: 429 }) : Response.json({ object: "response", id: `resp_${index}` });
+  f.response = (_request, index) => index === 1 ? Response.json({ error: "fixture unavailable" }, { status: 429 }) : Response.json({ object: "response", id: `resp_${index}` }, { headers: { "x-codex-turn-state": `turn_${index}` } });
   const first = await f.request();
   assert.equal(first.status, 200); assert.equal(first.headers.get("x-clawrouter-grant-failover"), "1");
   await f.consume(first);
-  const next = await f.request({ previous_response_id: "resp_2" });
+  const next = await f.request({ previous_response_id: "resp_2" }, { "x-codex-turn-state": first.headers.get("x-codex-turn-state") });
   assert.equal(next.status, 200); await f.consume(next);
   assert.equal(f.sent.length, 3);
-  assert.equal(f.sent[2].headers.get("chatgpt-account-id"), "synthetic-account-1");
+  assert.deepEqual(f.sent.map(request => request.headers.get("chatgpt-account-id")), ["synthetic-account-0", "synthetic-account-1", "synthetic-account-1"]);
+  assert.equal(f.sent[2].headers.get("x-codex-turn-state"), "turn_2");
 });
+
+for (const fixedCost of [null, 7]) {
+  test(`failed alternate dispatch retains one ${fixedCost === null ? "measured bound" : "fixed tariff"} in both SQL ledgers`, async t => {
+    const f = await fixture(t, true, { limit: 1_000_000, fixedCost });
+    const cancellation = Promise.withResolvers();
+    let canceled = false, response;
+    f.response = (_request, index) => {
+      if (index === 1) return new Response(new ReadableStream({ cancel() { canceled = true; return cancellation.promise; } }, { highWaterMark: 0 }), { status: 429 });
+      assert.equal(canceled, true, "discard the first body before dispatch without waiting for its cleanup");
+      throw new Error("fixture connection lost after alternate dispatch");
+    };
+    try {
+      response = await f.request({ max_output_tokens: 32 });
+      assert.equal(response.status, 502);
+      assert.equal(JSON.parse(await f.consume(response)).error.code, "provider_unavailable");
+      assert.equal(f.sent.length, 2);
+      assert.deepEqual(f.sent.map(request => request.headers.get("chatgpt-account-id")), ["synthetic-account-0", "synthetic-account-1"]);
+      assert.equal(f.events.length, 1);
+      const [event] = f.events;
+      assert.equal(event.status, "provider_error"); assert.equal(event.status_code, 502);
+      assert.ok(event.reserved_cost_micros > 0);
+      assert.equal(event.actual_cost_micros, event.reserved_cost_micros);
+      assert.equal(event.cost_basis, fixedCost === null ? "manifest_reservation" : "policy_fixed");
+      assert.equal(event.total_tokens, null);
+      await assertBudgets(f, [event.actual_cost_micros]);
+    } finally {
+      cancellation.resolve();
+      await response?.body?.cancel().catch(() => {});
+      await f.drain();
+    }
+  });
+}
+
+test("failed alternate selection preserves the original rejection body and zero charge", async t => {
+  for (const scenario of ["unavailable", "selection_error"]) {
+    const f = await fixture(t, true, { limit: 1_000_000, fixedCost: null });
+    let selections = 0, canceled = false;
+    if (scenario === "unavailable") await revokeGrantCredentials(f.env, grantKeys[1]);
+    f.env.ACCESS_CONTROL.beforeFetch = (_name, request) => {
+      if (new URL(request.url).pathname === "/grant-pools/select" && ++selections === 2 && scenario === "selection_error") throw new Error("fixture selection outage");
+    };
+    const body = '{"error":{"code":"fixture_rejection"}}';
+    f.response = () => new Response(new ReadableStream({
+      pull(controller) { controller.enqueue(new TextEncoder().encode(body)); controller.close(); },
+      cancel() { canceled = true; },
+    }, { highWaterMark: 0 }), { status: 429, headers: { "content-type": "application/json", "retry-after": "17" } });
+    const response = await f.request({ max_output_tokens: 32 });
+    assert.equal(response.status, 429);
+    assert.equal(response.headers.get("retry-after"), "17");
+    assert.equal(response.headers.has("x-clawrouter-grant-failover"), false);
+    assert.equal(await f.consume(response), body);
+    assert.equal(canceled, false); assert.equal(f.sent.length, 1);
+    assert.equal(f.events.length, 1); assert.equal(f.events[0].actual_cost_micros, 0);
+    await assertBudgets(f, [0]);
+  }
+});
+
+test("an alternate rejection remains nonbillable after discarding the first response", async t => {
+  const f = await fixture(t, true, { limit: 1_000_000, fixedCost: null });
+  f.response = (_request, index) => Response.json({ error: `fixture rejection ${index}` }, { status: index === 1 ? 429 : 403 });
+  const response = await f.request({ max_output_tokens: 32 });
+  assert.equal(response.status, 403);
+  assert.equal(JSON.parse(await f.consume(response)).error, "fixture rejection 2");
+  assert.equal(f.sent.length, 2); assert.equal(f.events.length, 1);
+  assert.equal(f.events[0].actual_cost_micros, 0);
+  await assertBudgets(f, [0]);
+});
+
+for (const phase of ["selection", "body_cancel"]) {
+  test(`caller cancellation during alternate ${phase} never dispatches another attempt`, async t => {
+    const f = await fixture(t, true, { limit: 1_000_000, fixedCost: null });
+    const caller = new AbortController();
+    let selections = 0, canceled = false;
+    f.env.ACCESS_CONTROL.beforeFetch = (_name, request) => {
+      if (new URL(request.url).pathname === "/grant-pools/select" && ++selections === 2 && phase === "selection") caller.abort();
+    };
+    f.response = () => new Response(new ReadableStream({ cancel() { canceled = true; if (phase === "body_cancel") caller.abort(); } }, { highWaterMark: 0 }), { status: 429 });
+    const response = await f.request({ max_output_tokens: 32 }, {}, "/v1/responses", caller.signal);
+    assert.equal(response.status, 502);
+    await f.consume(response);
+    assert.equal(canceled, true); assert.equal(f.sent.length, 1);
+    assert.equal(f.events.length, 1); assert.equal(f.events[0].status, "client_error");
+    await assertBudgets(f, [0]);
+  });
+}
+
+test("the request deadline during alternate selection prevents another dispatch", async t => {
+  const f = await fixture(t, true, { limit: 1_000_000, fixedCost: null });
+  const { modelRoute } = await import("../providers.ts");
+  const timeout = modelRoute("openai/gpt-6-astra").provider.endpoints.find(endpoint => endpoint.id === "responses").timeout_ms;
+  const setTimer = globalThis.setTimeout;
+  let deadline, selections = 0, canceled = false;
+  t.mock.method(globalThis, "setTimeout", (callback, delay, ...args) => {
+    if (delay === timeout) deadline = callback;
+    return setTimer(callback, delay, ...args);
+  });
+  f.env.ACCESS_CONTROL.beforeFetch = (_name, request) => {
+    if (new URL(request.url).pathname === "/grant-pools/select" && ++selections === 2) {
+      assert.equal(typeof deadline, "function"); deadline();
+    }
+  };
+  f.response = () => new Response(new ReadableStream({ cancel() { canceled = true; } }, { highWaterMark: 0 }), { status: 429 });
+  const response = await f.request({ max_output_tokens: 32 });
+  assert.equal(response.status, 502); await f.consume(response);
+  assert.equal(canceled, true); assert.equal(f.sent.length, 1);
+  assert.equal(f.events.length, 1); assert.equal(f.events[0].status, "timeout");
+  await assertBudgets(f, [0]);
+});
+
+async function assertBudgets(f, charges) {
+  for (const owner of ["default:fixture", "provider:openai"]) {
+    const ledger = f.env.BUDGET_LEDGER.get(owner), rows = ledger.reservations();
+    assert.deepEqual(rows.map(row => row.reserved_micros), charges);
+    assert.ok(rows.every(row => row.settled === 1 && row.dispatch_started === 1));
+    const policyId = owner.replace(":", "/"), month = new Date().toISOString().slice(0, 7);
+    const status = await (await ledger.fetch(`https://budget/status?policy_id=${policyId}&window_key=${policyId}/${month}&limit_micros=1000000`)).json();
+    assert.equal(status.spentMicros, charges.reduce((sum, cost) => sum + cost, 0));
+  }
+}
 
 test("owner refresh preserves lineage while explicit primary or refresh replacement requires restart", async t => {
   for (const mutation of ["refresh", "accessToken", "refreshToken", "accountId"]) {

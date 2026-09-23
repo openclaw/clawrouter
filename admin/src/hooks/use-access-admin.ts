@@ -5,6 +5,7 @@ import { useAssignmentAdmin } from "./access/use-assignment-admin";
 import { useConnectionAdmin } from "./access/use-connection-admin";
 import { useCredentialAdmin } from "./access/use-credential-admin";
 import type { CredentialOperations } from "./use-credential-operations";
+import type { ConsoleRequest } from "../dashboard-fetch";
 import { useFusionAdmin } from "./access/use-fusion-admin";
 import { usePolicyAdmin } from "./access/use-policy-admin";
 import { usePrincipalAdmin } from "./access/use-principal-admin";
@@ -13,6 +14,8 @@ import { useUpstreamAdmin } from "./access/use-upstream-admin";
 interface Dependencies {
   allowDemo: boolean;
   credentialOwner: CredentialOperations;
+  request: ConsoleRequest;
+  isCurrent: () => boolean;
   gatewayOrigin: string;
   session: SessionResponse;
   demoMode: boolean;
@@ -36,16 +39,16 @@ interface AdminRecords {
 }
 
 export function useAccessAdmin(dependencies: Dependencies) {
-  const { allowDemo, credentialOwner, gatewayOrigin, session, demoMode, providers, routes, setStatus, setProviderReadiness, refresh, syncDemoAdmin } = dependencies;
+  const { allowDemo, credentialOwner, request, isCurrent, gatewayOrigin, session, demoMode, providers, routes, setStatus, setProviderReadiness, refresh, syncDemoAdmin } = dependencies;
   const [loaded, setLoaded] = useState(allowDemo);
   const [tab, setTab] = useState<AccessTab>(initialAccessTab);
-  const policy = usePolicyAdmin({ allowDemo, gatewayOrigin, session, demoMode, providers, credentials: credentialOwner.rows.admin, routes, setStatus, refresh, syncDemoAdmin });
+  const policy = usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, demoMode, providers, credentials: credentialOwner.rows.admin, routes, setStatus, refresh, syncDemoAdmin });
   const credentials = useCredentialAdmin(credentialOwner, policy.policies.items);
-  const principal = usePrincipalAdmin({ allowDemo, gatewayOrigin, session, demoMode, policies: policy.policies.items, selectedPolicyId: policy.policies.selectedId, setPolicyError: policy.policies.setError, setStatus, refresh });
-  const connection = useConnectionAdmin({ allowDemo, gatewayOrigin, demoMode, setStatus, setProviderReadiness, refresh });
-  const upstream = useUpstreamAdmin({ allowDemo, gatewayOrigin, demoMode, providers, policies: policy.policies.items, selectedPolicyId: policy.policies.selectedId, setError: policy.policies.setError, setStatus, refresh });
-  const assignment = useAssignmentAdmin({ allowDemo, gatewayOrigin, demoMode, setError: policy.policies.setError, setStatus, refresh });
-  const fusion = useFusionAdmin({ allowDemo, gatewayOrigin, demoMode, policies: policy.policies.items, selectedPolicyId: policy.policies.selectedId, setStatus, refresh });
+  const principal = usePrincipalAdmin({ request, allowDemo, gatewayOrigin, session, demoMode, policies: policy.policies.items, selectedPolicyId: policy.policies.selectedId, setPolicyError: policy.policies.setError, setStatus, refresh });
+  const connection = useConnectionAdmin({ request, allowDemo, gatewayOrigin, demoMode, setStatus, setProviderReadiness, refresh });
+  const upstream = useUpstreamAdmin({ request, isCurrent, allowDemo, gatewayOrigin, demoMode, providers, policies: policy.policies.items, selectedPolicyId: policy.policies.selectedId, setError: policy.policies.setError, setStatus, refresh });
+  const assignment = useAssignmentAdmin({ request, allowDemo, gatewayOrigin, demoMode, setError: policy.policies.setError, setStatus, refresh });
+  const fusion = useFusionAdmin({ request, allowDemo, gatewayOrigin, demoMode, policies: policy.policies.items, selectedPolicyId: policy.policies.selectedId, setStatus, refresh });
 
   function hydrateAdmin(records: AdminRecords, background: boolean, sessionData: SessionResponse, providerRows: ProviderRow[], credentialSnapshot: number) {
     policy.hydrate(records.policies, background, sessionData);

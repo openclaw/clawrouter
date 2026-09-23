@@ -56,6 +56,23 @@ test("health readiness fails with a clear bounded timeout", async () => {
   );
 });
 
+test("deployed readiness keeps capped backoff and clips its final sleep to the deadline", async () => {
+  let now = 0;
+  const delays = [];
+  await assert.rejects(waitForHealth({
+    baseUrl: "https://router.example.com",
+    timeoutMs: 26_500,
+    fetchImpl: async () => new Response(null, { status: 503 }),
+    sleepImpl: async (delayMs) => {
+      delays.push(delayMs);
+      now += delayMs;
+    },
+    nowImpl: () => now,
+    log: () => {},
+  }), /health readiness timed out after 26500ms/);
+  assert.deepEqual(delays, [1_000, 2_000, 4_000, 8_000, 10_000, 1_500]);
+});
+
 test("health readiness retries a stale deployment until the authenticated probe passes", async () => {
   let now = 0;
   let probes = 0;
@@ -98,6 +115,24 @@ test("health readiness aborts a stalled custom probe at the shared deadline", as
   );
   assert.equal(signal.aborted, true);
   assert.ok(Date.now() - startedAt < 1_500);
+});
+
+test("authenticated probes retain the total remaining deadline beyond the request cap", async () => {
+  let now = 0;
+  await waitForHealth({
+    baseUrl: "https://router.example.com",
+    timeoutMs: 20_000,
+    fetchImpl: async () => {
+      now = 500;
+      return Response.json({ ok: true });
+    },
+    nowImpl: () => now,
+    probeImpl: (_health, { signal, remainingMs }) => {
+      assert.equal(remainingMs, 19_500);
+      assert.equal(signal.aborted, false);
+    },
+    log: () => {},
+  });
 });
 
 test("health readiness timeout configuration is constrained", () => {

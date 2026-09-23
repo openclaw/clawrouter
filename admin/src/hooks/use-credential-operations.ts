@@ -1,63 +1,36 @@
 import { type Dispatch, type SetStateAction, useRef, useState } from "react";
-import { DashboardRequestError } from "../dashboard-fetch";
+import { DashboardRequestError, type ConsoleRequest } from "../dashboard-fetch";
 import { errorMessage } from "../domain";
-import { generateSecret, request, sha256Hex } from "../ui-helpers";
-import type { ProxyCredential, SessionResponse } from "../ui-types";
+import { generateSecret, sha256Hex } from "../ui-helpers";
+import type { CapturedSessionScope } from "../session-scope";
+import type { ProxyCredential } from "../ui-types";
 
 type Surface = "admin" | "personal";
 type Intent = { surface: Surface; operation: "create" | "rotate" | "revoke"; credentialId: string; policyId: string; principalId?: string | null };
-type Scope = { origin: string; demo: boolean; session: SessionResponse };
 type Reveal = { key: string; credentialId: string; policyId: string; operation: "create" | "rotate"; scope: number; presentation: number };
 type Feedback = { surface: Surface; error: string; notice: string; reveal: Reveal | null };
 const emptyFeedback: Feedback = { surface: "personal", error: "", notice: "", reveal: null };
 const emptyRows = { admin: [] as ProxyCredential[], personal: [] as ProxyCredential[], policyIds: [] as string[] };
 
-function scopeKey({ origin, demo, session }: Scope) {
-  return JSON.stringify([origin, demo, session.auth, session.email, session.tenantId, session.role, session.authenticated]);
-}
-
-export function useCredentialOperations(initial: Scope, setStatus: Dispatch<SetStateAction<string>>, refresh: (ownsScope: () => boolean) => Promise<void>) {
-  const scopeRef = useRef({ ...initial, key: scopeKey(initial), epoch: 0 });
+export function useCredentialOperations(captureScope: () => CapturedSessionScope, requestForScope: (scope: CapturedSessionScope) => ConsoleRequest, setStatus: Dispatch<SetStateAction<string>>, refresh: (ownsScope: () => boolean) => Promise<void>) {
   const presentationRef = useRef({ surface: null as Surface | null, epoch: 0 });
   const mutationRef = useRef(0);
   const pendingRef = useRef<(Intent & { scope: number }) | null>(null);
-  const publishedStatusRef = useRef<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [rows, setRows] = useState(emptyRows);
   const [feedback, setFeedback] = useState<Feedback>(emptyFeedback);
-  const [scopeEpoch, setScopeEpoch] = useState(0);
 
-  function publishStatus(status: string) {
-    publishedStatusRef.current = status;
-    setStatus(status);
-  }
-
-  function setScope(next: Scope | null) {
-    const key = next ? scopeKey(next) : "signed-out";
-    if (scopeRef.current.key === key) return;
-    scopeRef.current = { ...(next ?? scopeRef.current), key, epoch: scopeRef.current.epoch + 1 };
+  function clearScope() {
     mutationRef.current += 1;
     presentationRef.current.epoch += 1;
-    setScopeEpoch(scopeRef.current.epoch);
     setRows(emptyRows);
     setFeedback(emptyFeedback);
-    const previousStatus = publishedStatusRef.current;
-    publishedStatusRef.current = null;
-    // A settled outcome can name the old identity's key; preserve unrelated status.
-    if (previousStatus !== null) setStatus((current) => current === previousStatus ? next?.session.authenticated ? "connected" : "sign-in required" : current);
     // A dispatched request still owns admission until its outcome is known.
   }
 
   function invalidatePresentation() {
     presentationRef.current.epoch += 1;
     setFeedback((current) => ({ ...current, reveal: null }));
-  }
-
-  function captureScope() {
-    // Same-identity mutations cannot invalidate an outstanding authentication observation.
-    const epoch = scopeRef.current.epoch;
-    const isCurrent = () => scopeRef.current.epoch === epoch;
-    return { isCurrent, invalidate: () => { if (isCurrent()) setScope(null); } };
   }
 
   function observePresentation(surface: Surface | null) {
@@ -67,8 +40,9 @@ export function useCredentialOperations(initial: Scope, setStatus: Dispatch<SetS
 
   function captureHydration() { return mutationRef.current; }
   function hydrate(surface: Surface, credentials: ProxyCredential[], snapshot: number, policies: string[] = []) {
-    if (scopeRef.current.key === "signed-out" || pendingRef.current?.scope === scopeRef.current.epoch || snapshot !== mutationRef.current) return;
-    if (surface === "admin" && scopeRef.current.session.role !== "admin") return;
+    const scope = captureScope();
+    if (!scope.session.authenticated || pendingRef.current?.scope === scope.epoch || snapshot !== mutationRef.current) return;
+    if (surface === "admin" && scope.session.role !== "admin") return;
     setRows((current) => ({ ...current, [surface]: credentials, ...(surface === "personal" ? { policyIds: [...new Set(policies)].sort() } : {}) }));
   }
 
@@ -80,25 +54,25 @@ export function useCredentialOperations(initial: Scope, setStatus: Dispatch<SetS
 
   async function mutate(intent: Intent): Promise<{ credential: ProxyCredential; presented: boolean } | null> {
     if (pendingRef.current) return null;
-    const scope = scopeRef.current;
-    if (scope.key === "signed-out" || !scope.session.authenticated || (intent.surface === "admin" && scope.session.role !== "admin")) return null;
+    const scope = captureScope();
+    if (!scope.session.authenticated || (intent.surface === "admin" && scope.session.role !== "admin")) return null;
     const operation = { ...intent, scope: scope.epoch };
     pendingRef.current = operation;
     mutationRef.current += 1;
     setBusy(true);
     setFeedback({ ...emptyFeedback, surface: intent.surface });
     const presentation = presentationRef.current.epoch;
-    const capturedScope = captureScope();
-    const ownsScope = capturedScope.isCurrent;
+    const ownsScope = scope.isCurrent;
+    const request = requestForScope(scope);
     const ownsPresentation = () => ownsScope() && presentationRef.current.epoch === presentation && presentationRef.current.surface === intent.surface;
     let sent = false;
-    publishStatus(`${intent.operation === "create" ? "issuing" : intent.operation === "rotate" ? "rotating" : "revoking"} credential`);
+    setStatus(`${intent.operation === "create" ? "issuing" : intent.operation === "rotate" ? "rotating" : "revoking"} credential`);
     try {
       const secret = intent.operation === "revoke" ? "" : generateSecret(24);
       const digest = secret ? await sha256Hex(secret) : "";
       // Leaving and returning must not dispatch an intent admitted by the old panel.
       if (!ownsPresentation()) {
-        if (ownsScope()) publishStatus("credential change canceled before sending");
+        if (ownsScope()) setStatus("credential change canceled before sending");
         return null;
       }
       const collection = `/v1/${intent.surface === "admin" ? "admin" : "session"}/credentials`;
@@ -122,22 +96,16 @@ export function useCredentialOperations(initial: Scope, setStatus: Dispatch<SetS
       const reveal = secret && ownsPresentation() ? { key: `clawrouter-live-${intent.credentialId}-${secret}`, credentialId: intent.credentialId, policyId: credential.policyId, operation: intent.operation as "create" | "rotate", scope: scope.epoch, presentation } : null;
       const notice = `${verb} ${intent.credentialId}.${secret && !reveal ? " The one-time secret was dismissed. Rotate the active key to obtain a new secret." : ""}`;
       setFeedback({ surface: intent.surface, error: "", notice, reveal });
-      publishStatus(`${intent.operation === "create" ? "issued" : verb.toLowerCase()} credential`);
+      setStatus(`${intent.operation === "create" ? "issued" : verb.toLowerCase()} credential`);
       return { credential, presented: ownsPresentation() };
     } catch (caught) {
       if (!ownsScope()) return null;
-      if (intent.surface === "personal" && caught instanceof DashboardRequestError && caught.status === 401 && caught.message.includes("access_session_required")) {
-        capturedScope.invalidate();
-        setFeedback({ surface: intent.surface, error: "Sign-in required. Sign in again, then refresh keys.", notice: "", reveal: null });
-        publishStatus("credential error: sign-in required");
-        return null;
-      }
       const rejected = caught instanceof DashboardRequestError && caught.status >= 400 && caught.status < 500;
       const error = sent && !rejected
         ? `Change to ${intent.credentialId} could not be confirmed. Refresh and check this key before trying again; the server may have applied it. No secret can be recovered.`
         : errorMessage(caught);
       setFeedback({ surface: intent.surface, error, notice: "", reveal: null });
-      publishStatus(`credential error: ${error}`);
+      setStatus(`credential error: ${error}`);
       return null;
     } finally {
       if (pendingRef.current === operation) {
@@ -152,13 +120,14 @@ export function useCredentialOperations(initial: Scope, setStatus: Dispatch<SetS
   }
 
   function forSurface(surface: Surface) {
+    const scope = captureScope();
     const owned = feedback.surface === surface;
-    const reveal = owned && feedback.reveal?.scope === scopeRef.current.epoch && feedback.reveal.presentation === presentationRef.current.epoch && presentationRef.current.surface === surface ? feedback.reveal : null;
-    const pendingReveal = busy && pendingRef.current?.surface === surface && pendingRef.current.scope === scopeRef.current.epoch && pendingRef.current.operation !== "revoke";
+    const reveal = owned && feedback.reveal?.scope === scope.epoch && feedback.reveal.presentation === presentationRef.current.epoch && presentationRef.current.surface === surface ? feedback.reveal : null;
+    const pendingReveal = busy && pendingRef.current?.surface === surface && pendingRef.current.scope === scope.epoch && pendingRef.current.operation !== "revoke";
     return { items: rows[surface], busy, pendingReveal, error: owned ? feedback.error : "", notice: owned ? feedback.notice : "", reveal, dismiss: invalidatePresentation, refresh: () => refresh(captureScope().isCurrent) };
   }
 
-  return { rows, scopeEpoch, busy, setScope, captureScope, observePresentation, invalidatePresentation, captureHydration, hydrate, mutate, forSurface, reject };
+  return { rows, scopeEpoch: captureScope().epoch, busy, clearScope, observePresentation, invalidatePresentation, captureHydration, hydrate, mutate, forSurface, reject };
 }
 
 export type CredentialOperations = ReturnType<typeof useCredentialOperations>;

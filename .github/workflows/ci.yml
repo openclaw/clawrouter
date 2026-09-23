@@ -87,6 +87,7 @@ jobs:
             -e CLAWROUTER_ADMIN_TOKEN_SHA256="$admin_hash" \
             clawrouter-self-host:ci)"
           trap 'docker logs "$container_id"; docker rm -fv "$container_id" >/dev/null' EXIT
+          node -p 'JSON.stringify({ node: process.version, undici: process.versions.undici, platform: process.platform, arch: process.arch })'
           CLAWROUTER_BASE_URL=http://127.0.0.1:8787 \
             CLAWROUTER_ADMIN_TOKEN="$admin_token" \
             node scripts/smoke-self-host.mjs

@@ -301,7 +301,6 @@ test("an entitlement wait cannot restore keys or freshness after its accepted sc
   const state = await fixture(page);
   await openAdmin(page);
   await revealAdminKey(page, "entitlement_key");
-  const previousRefresh = await page.locator(".connectionMeta time").getAttribute("datetime");
   const auth = deferred(), entitlements = deferred();
   state.failBootstrap = true;
   state.authLostPath = "/v1/session/credentials";
@@ -327,8 +326,8 @@ test("an entitlement wait cannot restore keys or freshness after its accepted sc
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
   expect(state.keyReads).toBe(keyReads);
   await expect(page.getByRole("button", { name: /owned_key.*proxy credential/ })).toHaveCount(0);
-  await expect(page.locator(".connectionMeta time")).toHaveAttribute("datetime", previousRefresh!);
-  await expect(page.locator(".statusBar")).toContainText("Console data refresh failed");
+  await expect(page.locator(".connectionMeta time")).toHaveCount(0);
+  await expect(page.locator(".loginShell")).toContainText("Sign-in required");
 });
 
 for (const identity of ["same", "changed"] as const) {
@@ -414,7 +413,7 @@ test("old-identity recovery does not start a refresh after an in-flight read acc
   await expect(page.locator(".issuedKey code")).toHaveCount(0);
 });
 
-test("credential scope reset preserves an unrelated action error and refresh failure", async ({ page }) => {
+test("identity replacement clears previous action detail and reports the new refresh failure", async ({ page }) => {
   const state = await fixture(page);
   await openAdmin(page);
   const previousRefresh = await page.locator(".connectionMeta time").getAttribute("datetime");
@@ -432,7 +431,7 @@ test("credential scope reset preserves an unrelated action error and refresh fai
   await focusRefresh(page);
   await expect(page.locator(".tenantSwitch strong")).toHaveText(state.email);
   await expect(page.locator(".statusBar")).toContainText("Console data refresh failed");
-  await expect(page.locator(".statusBar")).toContainText("eligible grants must be a JSON provider-to-token-reference map");
+  await expect(page.locator("body")).not.toContainText("eligible grants must be a JSON provider-to-token-reference map");
   await expect(page.locator(".statusBar")).not.toContainText("old_key_result");
   expect(state.writes).toHaveLength(1);
 });
@@ -447,12 +446,13 @@ for (const status of [401, 403]) {
     state.rejectStatus = status;
     const card = page.locator(".myKeysPanel");
     await card.getByRole("button", { name: "Rotate", exact: true }).click();
-    await expect(card).toContainText(status === 401 ? "Sign-in required. Sign in again, then refresh keys." : "credential_policy_not_held");
+    if (status === 401) await expect(page.locator(".loginShell")).toContainText("Sign-in required");
+    else await expect(card).toContainText("credential_policy_not_held");
     await expect(card.locator(".myKeysList article")).toHaveCount(status === 401 ? 0 : 1);
     await expect(page.locator(".issuedKey code")).toHaveCount(0);
     expect(state.writes).toHaveLength(1);
     if (status === 401) {
-      await card.getByRole("button", { name: "Refresh keys", exact: true }).click();
+      await page.getByRole("button", { name: "Retry access", exact: true }).click();
       await expect(card.locator(".myKeysList")).toContainText("owned_key");
     }
   });
@@ -507,7 +507,7 @@ test("clipboard failure is visible, Dismiss works by keyboard, and refresh canno
     if (theme === "dark") await page.getByRole("switch", { name: "Light mode", exact: true }).click();
     await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
     const button = page.getByRole("button", { name: "New credential", exact: true });
-    await expect(button.locator("span")).toHaveCSS("color", await button.evaluate((element) => getComputedStyle(element).color));
+    await expect.poll(() => button.evaluate((element) => getComputedStyle(element.querySelector("span")!).color === getComputedStyle(element).color)).toBe(true);
     expect((await new AxeBuilder({ page }).include(".tableSectionHeader").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
   }
 });
@@ -556,7 +556,7 @@ async function fixture(page: Page) {
     if (request.method() === "POST") {
       const body = request.postData() ? request.postDataJSON() : {};
       state.writes.push({ path, method: request.method(), body });
-      if (state.reject) { await route.fulfill({ status: state.rejectStatus, body: state.reject }); return; }
+      if (state.reject) { await route.fulfill({ status: state.rejectStatus, json: { error: { code: state.reject, message: state.reject } } }); return; }
       const create = path.endsWith("/credentials");
       const credentialId = create ? body.credentialId : decodeURIComponent(path.split("/").at(-2)!);
       const prior = state.credentials.find((item) => item.credentialId === credentialId);
@@ -570,7 +570,7 @@ async function fixture(page: Page) {
     if (path === "/v1/session") {
       state.sessionReads += 1;
       if (state.holdSession) await state.holdSession;
-      if (state.authLost) { await route.fulfill({ status: 401, body: "access_session_required" }); return; }
+      if (state.authLost) { await route.fulfill({ status: 401, json: { error: { code: "access_session_required", message: "Sign-in required" } } }); return; }
     }
     if (path === "/v1") {
       state.loginReads += 1;
@@ -581,7 +581,7 @@ async function fixture(page: Page) {
       const held = state.holdAuthLoss;
       state.authLossReads += 1;
       if (held) await held;
-      await route.fulfill({ status: 401, body: "access_session_required" });
+      await route.fulfill({ status: 401, json: { error: { code: "access_session_required", message: "Sign-in required" } } });
       return;
     }
     if (path === state.holdReadPath && state.holdRead) await state.holdRead;
@@ -590,8 +590,8 @@ async function fixture(page: Page) {
       "/v1": { endpoints: {} },
       "/v1/providers": { providers: [] },
       "/v1/routes": { openaiCompatible: [], manifestProxy: [] },
-      "/v1/session": { authenticated: true, auth: "access", role: state.role, email: state.email, tenantId: "default", ...(!state.omitEntitlements ? { entitlements: { providers: [] } } : {}) },
-      "/v1/entitlements": { session: { authenticated: true, auth: "access", role: state.role, email: state.email, tenantId: "default" }, providers: [], contentRetention: { enabled: false, retentionDays: 30, policyEnabled: false, userExempt: false } },
+      "/v1/session": { authenticated: true, auth: "cloudflare_access", role: state.role, email: state.email, tenantId: "default", ...(!state.omitEntitlements ? { entitlements: { providers: [] } } : {}) },
+      "/v1/entitlements": { session: { authenticated: true, auth: "cloudflare_access", role: state.role, email: state.email, tenantId: "default" }, providers: [], contentRetention: { enabled: false, retentionDays: 30, policyEnabled: false, userExempt: false } },
       "/v1/session/usage": { policies: policies.map((item) => ({ ...item, budget: { configured: false, ledger: "ready" } })), usage },
       "/v1/session/credentials": { credentials: state.credentials.filter((item) => item.principalId === state.email) },
       "/v1/admin/usage": { policies: [], usage },

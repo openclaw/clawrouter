@@ -12,7 +12,6 @@ const empty = { ...snapshot, ledger: "unavailable", summary: { requestCount: 0, 
 test("failed first read stays unknown and a retry clears the error", async () => {
   const fixture = mount();
   let hook = fixture.render();
-  hook.setPrincipal("first");
   const failed = hook.refreshLedger("https://console.example");
   fixture.requests[0].reject(new Error("ledger offline"));
   await failed;
@@ -74,20 +73,14 @@ test("an off-screen edit invalidates freshness without discarding the last snaps
   assert.equal(fixture.render().stale, false);
 });
 
-test("empty principal resets publish a revision and transfer metadata failure ownership", () => {
+test("unmount retires metadata failure ownership and the next lifetime starts unknown", () => {
+  const previous = mount();
+  const oldFailure = previous.render().captureRefreshFailure();
+  previous.unmount();
   const fixture = mount();
   let hook = fixture.render();
-  hook.setPrincipal("first");
-  hook = fixture.render();
-  const first = hook;
-  const oldFailure = hook.captureRefreshFailure();
-  hook.setPrincipal("second");
-  hook = fixture.render();
-  assert.equal(hook.loaded, first.loaded);
-  assert.equal(hook.stale, first.stale);
-  assert.equal(hook.error, first.error);
-  assert.notEqual(hook.revision, first.revision);
   oldFailure("old bootstrap failed");
+  assert.equal(previous.render().error, "");
   assert.equal(fixture.render().error, "");
   hook.captureRefreshFailure()("current bootstrap failed");
   hook = fixture.render();
@@ -136,26 +129,26 @@ for (const capture of ["before read", "while pending"]) {
 }
 
 for (const outcome of ["resolve", "reject"]) {
-  test(`principal change drops last-good data and ignores a former principal's late ${outcome}`, async () => {
-    const fixture = mount();
-    let hook = fixture.render();
-    hook.setPrincipal("first");
+  test(`unmount ignores a retired lifetime's late ${outcome} without affecting the new owner`, async () => {
+    const previous = mount();
+    let hook = previous.render();
     hook.hydrate([{ policyId: "first" }], snapshot);
     const oldRead = hook.refreshLedger("https://console.example");
-    hook.setPrincipal("second");
+    previous.unmount();
+    const fixture = mount();
     hook = fixture.render();
     assert.equal(hook.loaded, false);
     assert.equal(hook.updatedAt, null);
     assert.deepEqual(hook.rows, []);
     assert.equal(hook.error, "");
     const currentRead = hook.refreshLedger("https://console.example");
-    fixture.requests[0][outcome](outcome === "resolve" ? { policies: [{ policyId: "first" }], usage: snapshot } : new Error("old failure"));
+    previous.requests[0][outcome](outcome === "resolve" ? { policies: [{ policyId: "first" }], usage: snapshot } : new Error("old failure"));
     await oldRead;
     hook = fixture.render();
     assert.equal(hook.loaded, false);
     assert.equal(hook.error, "");
     assert.equal(hook.refreshLedger("https://console.example"), currentRead);
-    fixture.requests[1].resolve({ policies: [{ policyId: "second" }], usage: snapshot });
+    fixture.requests[0].resolve({ policies: [{ policyId: "second" }], usage: snapshot });
     await currentRead;
     assert.deepEqual(fixture.render().rows, [{ policyId: "second" }]);
   });
@@ -170,12 +163,13 @@ function mount() {
     return [slots[index], (next) => { slots[index] = typeof next === "function" ? next(slots[index]) : next; }];
   };
   const useRef = (initial) => useState(() => ({ current: initial }))[0];
-  const useEffect = () => {};
+  let mounted = false, cleanup;
+  const useEffect = (setup) => { if (!mounted) { mounted = true; cleanup = setup(); } };
   const request = () => new Promise((resolve, reject) => requests.push({ resolve, reject }));
   const settled = async (load) => {
     try { return { ok: true, value: await load() }; }
     catch (error) { return { ok: false, error: error.message }; }
   };
-  const useUsage = new Function("useState", "useRef", "useEffect", "demo", "emptyUsageSnapshot", "request", "settled", `${source}\nreturn useUsage;`)(useState, useRef, useEffect, {}, empty, request, settled);
-  return { requests, render: () => { cursor = 0; return useUsage(false); } };
+  const useUsage = new Function("useState", "useRef", "useEffect", "demo", "emptyUsageSnapshot", "settled", `${source}\nreturn useUsage;`)(useState, useRef, useEffect, {}, empty, settled);
+  return { requests, unmount: () => cleanup?.(), render: () => { cursor = 0; return useUsage(false, request); } };
 }
