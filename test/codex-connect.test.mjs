@@ -352,7 +352,12 @@ for (const additions of ["empty", "comments", "provider"]) test(`native generate
     // and sends a synthetic turn only to this isolated loopback responder.
     const count = requests.length;
     let result;
-    try { result = await promisify(execFile)(nativeBinary, [...(selectProfile ? ["--profile", "clawrouter"] : []), "exec", "--json", "--ephemeral", "--skip-git-repo-check", "Return synthetic profile complete without tools."], { cwd: f.home, env, timeout: 30_000, maxBuffer: 16 * 1024 * 1024 }); }
+    try {
+      const execution = promisify(execFile)(nativeBinary, [...(selectProfile ? ["--profile", "clawrouter"] : []), "exec", "--json", "--ephemeral", "--skip-git-repo-check", "Return synthetic profile complete without tools."], { cwd: f.home, env, timeout: 30_000, maxBuffer: 16 * 1024 * 1024 });
+      // Exec appends piped stdin to positional prompts and waits for its EOF.
+      execution.child.stdin.end();
+      result = await execution;
+    }
     catch (error) { if (valid) assert.fail(`native profile load failed (${error.code})`); return { failed: true, stderr: error.stderr ?? "" }; }
     if (valid) {
       assert.ok(result.stdout.includes("Synthetic profile complete."), "native turn must consume the synthetic response");
