@@ -1,6 +1,77 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 import type { AccessPolicy, AdminBootstrapResponse, UpstreamGrant } from "../src/ui-types";
 
+for (const action of ["Save grant", "Connect with provider"]) {
+  test(`early policy draft ${action} uses the displayed first inventory scope`, async ({ page }) => {
+    const state = await openAccounts(page, true, true);
+    await page.getByRole("button", { name: "New grant", exact: true }).click();
+    const scope = page.getByLabel("scope id", { exact: true });
+    await expect(scope).toHaveValue("");
+    await expect(scope.locator("option:checked")).toHaveText("Select a policy");
+    await page.getByLabel("token reference", { exact: true }).fill("account_a");
+    await page.getByLabel("API key", { exact: true }).fill("synthetic-early-primary");
+    await page.getByLabel("label", { exact: true }).fill("early policy draft");
+    await expect(page.getByRole("button", { name: action, exact: true })).toBeDisabled();
+    if (action === "Connect with provider") {
+      await state.reads[0].route.fulfill({ status: 503, json: { error: { message: "reporting offline" } } });
+      await expect(page.locator(".statusBar")).toContainText("Console data refresh failed");
+      await expect(scope).toHaveValue("");
+      await page.getByRole("button", { name: "Retry refresh", exact: true }).click();
+      await expect.poll(() => state.reads.length).toBe(2);
+    }
+    const read = state.reads.at(-1)!;
+    if (action === "Save grant") read.body.grants = [];
+    await read.route.fulfill({ json: read.body });
+    await expect(scope).toHaveValue("team_policy");
+    await expect(scope.locator("option:checked")).toHaveText("team_policy");
+    await expect(page.getByLabel("provider", { exact: true })).toHaveValue("test-provider");
+    await expect(page.getByLabel("label", { exact: true })).toHaveValue("early policy draft");
+    await expect(page.getByLabel("API key", { exact: true })).toHaveValue("synthetic-early-primary");
+    await page.getByRole("button", { name: action, exact: true }).click();
+    await expect.poll(() => state.writes.length).toBe(1);
+    expect(state.writes[0].request().method()).toBe(action === "Save grant" ? "PUT" : "POST");
+    expect(new URL(state.writes[0].request().url()).pathname).toBe(`/v1/admin/upstream-grants/policies/team_policy/account_a${action === "Save grant" ? "" : "/authorize"}`);
+    expect(state.writes[0].request().postDataJSON().provider).toBe("test-provider");
+    await state.writes[0].fulfill({ status: 400, json: { error: { message: "synthetic rejection" } } });
+  });
+}
+
+test("empty first policy inventory stays unselected until an explicit later choice", async ({ page }) => {
+  const state = await openAccounts(page, true);
+  await page.getByRole("button", { name: "New grant", exact: true }).click();
+  await page.getByLabel("API key", { exact: true }).fill("synthetic-early-primary");
+  state.reads[0].body.policies = [];
+  await state.reads[0].route.fulfill({ json: state.reads[0].body });
+  await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
+  const scope = page.getByLabel("scope id", { exact: true });
+  await expect(scope).toHaveValue("");
+  await expect(scope.locator("option:checked")).toHaveText("Select a policy");
+  await expect(page.getByRole("button", { name: "Save grant", exact: true })).toBeDisabled();
+  await page.locator(".inspector form").evaluate((form: HTMLFormElement) => form.requestSubmit());
+  expect(state.writes).toHaveLength(0);
+  await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect.poll(() => state.reads.length).toBe(2);
+  await state.reads[1].route.fulfill({ json: state.reads[1].body });
+  await expect(scope.locator("option")).toHaveText(["Select a policy", "team_policy"]);
+  await expect(scope).toHaveValue("");
+  await expect(page.getByRole("button", { name: "Save grant", exact: true })).toBeDisabled();
+  await scope.selectOption("team_policy");
+  await expect(page.getByRole("button", { name: "Save grant", exact: true })).toBeEnabled();
+  expect(state.writes).toHaveLength(0);
+});
+
+test("unavailable account identities remain visible instead of displaying the first options", async ({ page }) => {
+  await openAccounts(page, false, false, [grant("account_a", { key: "oauth/removed_policy/account_a", scopeId: "removed_policy", provider: "removed-provider" })]);
+  const scope = page.getByLabel("scope id", { exact: true }), provider = page.getByLabel("provider", { exact: true });
+  await expect(scope).toHaveValue("removed_policy");
+  await expect(scope.locator("option:checked")).toHaveText("removed_policy (unavailable)");
+  await expect(provider).toHaveValue("removed-provider");
+  await expect(provider.locator("option:checked")).toHaveText("removed-provider (unavailable)");
+  await page.getByRole("button", { name: "New grant", exact: true }).click();
+  await expect(scope).toHaveValue("team_policy");
+  await expect(provider).toHaveValue("test-provider");
+});
+
 for (const firstReadFails of [false, true]) {
   test(`initial account loading blocks writes and preserves early drafts${firstReadFails ? " through failure and retry" : ""}`, async ({ page }) => {
     const state = await openAccounts(page, true, true);
@@ -288,8 +359,8 @@ function grant(tokenRef = "account_a", values: Partial<UpstreamGrant> = {}): Ups
 function revoked() { return grant("account_a", { enabled: false, usable: false, hasAccessToken: false, hasRefreshToken: false, revokedAt: "2026-09-01T00:00:00Z" }); }
 async function flush(page: Page) { await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))); }
 
-async function openAccounts(page: Page, holdInitialBootstrap = false, authorization = false) {
-  const state = { writes: [] as Route[], reads: [] as { route: Route; body: AdminBootstrapResponse }[], sessions: [] as { route: Route; body: unknown }[], grants: [grant(), grant("account_b")], holdBootstrap: holdInitialBootstrap, holdSession: false, email: "admin@example.com" };
+async function openAccounts(page: Page, holdInitialBootstrap = false, authorization = false, grants = [grant(), grant("account_b")]) {
+  const state = { writes: [] as Route[], reads: [] as { route: Route; body: AdminBootstrapResponse }[], sessions: [] as { route: Route; body: unknown }[], grants, holdBootstrap: holdInitialBootstrap, holdSession: false, email: "admin@example.com" };
   const mutations: Record<string, string> = {
     "/v1/admin/upstream-grants/policies/team_policy/account_a": "PUT",
     "/v1/admin/upstream-grants/policies/team_policy/account_a/revoke": "POST",
@@ -323,7 +394,10 @@ async function openAccounts(page: Page, holdInitialBootstrap = false, authorizat
   });
   await page.goto("/dashboard/access?resource=upstream");
   if (holdInitialBootstrap) {
-    await expect(page.getByLabel("provider", { exact: true }).locator("option")).toHaveText(["Test Provider"]);
+    const provider = page.getByLabel("provider", { exact: true });
+    await expect(provider.locator("option")).toHaveText(["Select a provider", "Test Provider"]);
+    await expect(provider).toHaveValue("");
+    await expect(provider.locator("option:checked")).toHaveText("Select a provider");
     await expect.poll(() => state.reads.length).toBe(1);
     return state;
   }

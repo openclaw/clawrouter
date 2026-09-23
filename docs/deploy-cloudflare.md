@@ -735,7 +735,9 @@ For a metadata edit that preserves credentials, use the console or the admin
 API's default PUT mode instead of the CLI replacement mode.
 
 The console enables account writes after the first account list loads; you can
-prepare a draft while it loads. It applies confirmed saves, revocations,
+prepare a draft while it loads. That first list supplies untouched policy and
+provider defaults; later refreshes do not retarget the draft. Empty or unavailable
+selections remain visible. The console applies confirmed saves, revocations,
 credential refreshes, and quota results before refreshing the rest of the dashboard. You can edit or
 save again while that refresh runs; later drafts and selections stay intact.
 Provider sign-in keeps account writes blocked while its redirect is pending.

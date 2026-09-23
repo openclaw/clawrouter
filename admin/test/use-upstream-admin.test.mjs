@@ -21,6 +21,109 @@ const helperSource = helpers.slice(helpers.indexOf("export function upstreamGran
   + helpers.slice(helpers.indexOf("export function demoGrantFromForm"), helpers.indexOf("export function demoRuleFromForm"));
 const { upstreamGrantFormFromGrant, demoGrantFromForm, parseCredentialBundle } = evaluate(helperSource, "({ upstreamGrantFormFromGrant, demoGrantFromForm, parseCredentialBundle })");
 
+for (const providersArrived of [false, true]) for (const initialRows of [[], [grant()]]) {
+  test(`first inventory initializes an early New draft ${providersArrived ? "after" : "before"} providers arrive with ${initialRows.length} grants`, async () => {
+    const fixture = mount(false, false, true), availableProviders = fixture.providers;
+    fixture.policies = []; fixture.selectedPolicyId = "";
+    if (!providersArrived) fixture.providers = [];
+    const owner = fixture.render(), snapshot = owner.captureHydration();
+    owner.upstream.startNew();
+    change(fixture, { credential: "synthetic-early", label: "early draft", keepWarm: true });
+    assert.equal(fixture.render().upstream.form.scopeId, "");
+    assert.equal(fixture.render().upstream.form.provider, providersArrived ? "test-provider" : "");
+    fixture.providers = availableProviders; fixture.policies = [{ policyId: "team_policy" }];
+    fixture.render().hydrate(initialRows, "team_policy", availableProviders, snapshot);
+    const form = fixture.render().upstream.form;
+    assert.equal(form.scopeId, "team_policy");
+    assert.equal(form.provider, "test-provider");
+    assert.equal(form.tokenRef, "test-provider");
+    assert.equal(form.kind, "api_key");
+    assert.equal(form.keepWarm, true);
+    assert.equal(form.credential, "synthetic-early");
+    assert.equal(form.label, "early draft");
+    assert.equal(fixture.render().upstream.selectedKey, "");
+    const write = act(fixture, "save");
+    assert.equal(fixture.requests[0].path, "/v1/admin/upstream-grants/policies/team_policy/test-provider");
+    assert.equal(fixture.requests[0].init.method, "PUT");
+    assert.equal(JSON.parse(fixture.requests[0].init.body).provider, form.provider);
+    fixture.requests[0].resolve(grant("test-provider", { kind: "api_key", hasCredential: true }));
+    await write;
+    const connect = act(fixture, "authorize");
+    assert.equal(fixture.requests[1].path, "/v1/admin/upstream-grants/policies/team_policy/test-provider/authorize");
+    assert.equal(fixture.requests[1].init.method, "POST");
+    assert.equal(JSON.parse(fixture.requests[1].init.body).provider, form.provider);
+    fixture.requests[1].reject(new DashboardRequestError("authorization unavailable", 400));
+    await connect;
+  });
+}
+
+test("rejected first reads do not consume defaults, but an accepted empty inventory does", async () => {
+  const fixture = mount();
+  fixture.providers = []; fixture.policies = []; fixture.selectedPolicyId = "";
+  const owner = fixture.render(), snapshot = owner.captureHydration();
+  owner.upstream.startNew();
+  change(fixture, { credential: "synthetic-early" });
+  for (const rejected of [null, snapshot + 1]) owner.hydrate([], "wrong_policy", providers, rejected);
+  fixture.current = false;
+  owner.hydrate([], "wrong_policy", providers, snapshot);
+  fixture.current = true;
+  assert.equal(fixture.render().upstream.ready, false);
+  assert.equal(fixture.render().upstream.form.scopeId, "");
+  owner.hydrate([], "", [], snapshot);
+  assert.equal(fixture.render().upstream.ready, true);
+  const empty = fixture.render().upstream.form;
+  fixture.providers = providers; fixture.policies = [{ policyId: "team_policy" }];
+  hydrate(fixture, []);
+  assert.deepEqual(fixture.render().upstream.form, empty);
+  await act(fixture, "save");
+  await act(fixture, "authorize");
+  assert.equal(fixture.requests.length, 0);
+  assert.match(fixture.render().upstream.error, /scope, token reference, and provider are required/);
+});
+
+test("first defaults preserve deliberate identity edits and never retarget on later catalogs", () => {
+  const variants = [
+    [{ scope: "tenants", scopeId: "tenant_x" }],
+    [{ scope: "tenants", scopeId: "default" }, { scope: "policies", scopeId: "" }],
+    [{ provider: "chosen-provider" }],
+    [{ provider: "other-provider" }, { provider: "test-provider" }],
+    [{ tokenRef: "custom_reference" }],
+    [{ tokenRef: "temporary" }, { tokenRef: "" }],
+  ];
+  for (const edits of variants) {
+    const fixture = mount();
+    fixture.policies = []; fixture.selectedPolicyId = "";
+    fixture.render().upstream.startNew();
+    for (const edit of edits) change(fixture, edit);
+    change(fixture, { kind: "subscription", keepWarm: true, label: "draft", accessToken: "synthetic-access", refreshToken: "synthetic-refresh", credential: "synthetic-primary", credentialBundle: '{"apiKey":"synthetic-bundle"}' });
+    const before = fixture.render().upstream.form, marked = new Set(edits.flatMap((edit) => Object.keys(edit)));
+    fixture.render().hydrate([grant()], "team_policy", [{ id: "catalog-provider" }], fixture.render().captureHydration());
+    const expected = { ...before, scopeId: before.scope === "policies" && !marked.has("scopeId") ? "team_policy" : before.scopeId, provider: marked.has("provider") ? before.provider : "catalog-provider" };
+    if (!marked.has("tokenRef")) expected.tokenRef = expected.provider;
+    assert.deepEqual(fixture.render().upstream.form, expected);
+    fixture.render().hydrate([], "later_policy", providers, fixture.render().captureHydration());
+    assert.deepEqual(fixture.render().upstream.form, expected);
+  }
+});
+
+test("New after readiness uses only a listed policy default and preserves drafts across reordering", () => {
+  const fixture = ready();
+  fixture.policies = [{ policyId: "first" }, { policyId: "chosen" }];
+  fixture.selectedPolicyId = "chosen";
+  fixture.render().upstream.startNew();
+  assert.equal(fixture.render().upstream.form.scopeId, "chosen");
+  fixture.selectedPolicyId = "missing";
+  fixture.render().upstream.startNew();
+  assert.equal(fixture.render().upstream.form.scopeId, "first");
+  const draft = fixture.render().upstream.form;
+  fixture.policies.reverse(); fixture.providers = [{ id: "other-provider" }, ...providers];
+  fixture.render().hydrate([], "chosen", fixture.providers, fixture.render().captureHydration());
+  assert.deepEqual(fixture.render().upstream.form, draft);
+  fixture.policies = [];
+  fixture.render().upstream.startNew();
+  assert.equal(fixture.render().upstream.form.scopeId, "");
+});
+
 for (const initialRows of [[], [grant()]]) {
   test(`initial ${initialRows.length ? "nonempty" : "empty"} hydration enables writes without losing an early draft`, async () => {
     const fixture = mount(), owner = fixture.render(), snapshot = owner.captureHydration();
@@ -654,13 +757,13 @@ function mount(demoMode = false, allowDemo = demoMode, authorization = false) {
     return [slots[index], (next) => { slots[index] = typeof next === "function" ? next(slots[index]) : next; }];
   };
   const useRef = (initial) => useState(() => ({ current: initial }))[0];
-  const fixture = { requests, statuses, refreshes, navigations: [], navigationError: null, current: true };
+  const fixture = { requests, statuses, refreshes, navigations: [], navigationError: null, current: true, providers: authorization ? [{ ...providers[0], auth: { authorization: { grantKind: "subscription" } } }] : providers, policies: [{ policyId: "team_policy" }], selectedPolicyId: "team_policy" };
   const window = { location: { assign: (url) => { if (fixture.navigationError) throw fixture.navigationError; fixture.navigations.push(url); } } };
   const request = (_origin, path, init) => new Promise((resolve, reject) => requests.push({ path, init, resolve, reject }));
   const useUpstreamAdmin = new Function("useState", "useRef", "DashboardRequestError", "errorMessage", "defaultUpstreamGrant", "demo", "demoGrantFromForm", "parseCredentialBundle", "upstreamGrantFormFromGrant", "window", `${source}\nreturn useUpstreamAdmin;`)(useState, useRef, DashboardRequestError, errorMessage, defaultUpstreamGrant, { upstreamGrants: [grant()] }, demoGrantFromForm, parseCredentialBundle, upstreamGrantFormFromGrant, window);
   fixture.render = () => {
     cursor = 0;
-    return useUpstreamAdmin({ request, isCurrent: () => fixture.current, allowDemo, gatewayOrigin: "https://console.example", demoMode, providers: authorization ? [{ ...providers[0], auth: { authorization: { grantKind: "subscription" } } }] : providers, policies: [{ policyId: "team_policy" }], selectedPolicyId: "team_policy", setStatus: (value) => statuses.push(value), refresh: (owns) => new Promise((resolve) => refreshes.push({ owns, resolve })) });
+    return useUpstreamAdmin({ request, isCurrent: () => fixture.current, allowDemo, gatewayOrigin: "https://console.example", demoMode, providers: fixture.providers, policies: fixture.policies, selectedPolicyId: fixture.selectedPolicyId, setStatus: (value) => statuses.push(value), refresh: (owns) => new Promise((resolve) => refreshes.push({ owns, resolve })) });
   };
   return fixture;
 }

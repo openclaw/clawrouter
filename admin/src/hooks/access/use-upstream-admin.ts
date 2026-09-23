@@ -56,11 +56,23 @@ export function useUpstreamAdmin({ request, isCurrent, allowDemo, gatewayOrigin,
     // The dependent bootstrap reads projections, not a versioned owner receipt.
     // It may refresh other resources but cannot undo this operation's acknowledged row.
     if (!isCurrent() || snapshot === null || snapshot !== recordsEpoch.current || operation.current) return;
+    const firstAdmission = !readyRef.current;
     updateRows(nextGrants);
     readyRef.current = true;
     setReady(true);
     const current = currentDraft.current;
-    if (current.initialized && !current.selection) return;
+    if (current.initialized && !current.selection) {
+      // Only the first inventory supplies missing defaults. Later catalog changes
+      // must not retarget a New draft or acknowledge its explicit identity edits.
+      if (firstAdmission) {
+        const value = { ...current.value };
+        if (value.scope === "policies" && !fieldRevisions.current.scopeId) value.scopeId = policyId;
+        if (!fieldRevisions.current.provider) value.provider = providerRows[0]?.id ?? "";
+        if (!fieldRevisions.current.tokenRef) value.tokenRef = value.provider;
+        publishDraft({ ...current, value });
+      }
+      return;
+    }
     const grant = current.initialized ? nextGrants.find((item) => item.key === current.selection) : nextGrants[0];
     if (grant) {
       const canonical = upstreamGrantFormFromGrant(grant);
@@ -220,7 +232,7 @@ export function useUpstreamAdmin({ request, isCurrent, allowDemo, gatewayOrigin,
     publishDraft({ ...current, value, initialized: true });
   }
   function edit(grant: UpstreamGrant) { resetDraft(grant.key, upstreamGrantFormFromGrant(rows.current.find((item) => item.key === grant.key) ?? grant)); setError(""); }
-  function startNew() { const provider = providers[0]?.id ?? ""; resetDraft("", { ...defaultUpstreamGrant, scopeId: selectedPolicyId || policies[0]?.policyId || "default", provider, tokenRef: provider }); setError(""); }
+  function startNew() { const provider = providers[0]?.id ?? ""; resetDraft("", { ...defaultUpstreamGrant, scopeId: policies.find((policy) => policy.policyId === selectedPolicyId)?.policyId ?? policies[0]?.policyId ?? "", provider, tokenRef: provider }); setError(""); }
 
   return { upstream: { items: grants, selected, selectedKey: draft.selection, form: draft.value, setForm, ready, busy, error, save, revoke, refresh: refreshGrant, refreshQuota, authorize, edit, startNew }, captureHydration, hydrate };
 }
