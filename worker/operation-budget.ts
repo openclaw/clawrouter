@@ -10,10 +10,10 @@ export interface OperationAffordability {
   reasonCode?: string;
 }
 
-export function operationAffordability(auth: AuthorizedIdentity, connection: ProviderConnection, model: CompiledModel | null, capability: string, observation?: BudgetObservation): OperationAffordability {
+export function operationAffordability(auth: AuthorizedIdentity, connection: ProviderConnection, model: CompiledModel | null, capability: string, requestFormat: string, observation?: BudgetObservation): OperationAffordability {
   // Only the basis is used for variable prices; an empty body's default output
   // allowance is not a claim that every real request fits the observed balance.
-  const cost = estimateCost(model, {}, auth.policy.requestCostMicros, capability);
+  const cost = estimateCost(model, {}, auth.policy.requestCostMicros, capability, requestFormat);
   try {
     if (!validateBudgetReservation(capability, cost, auth.policy.monthlyBudgetMicros, connection)) return { status: "exact-covered" };
   } catch (error) {

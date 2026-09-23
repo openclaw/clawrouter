@@ -144,7 +144,7 @@ export async function providerReadinessForPolicies(env: Env, policies: AccessPol
 
 export function providerReadinessFromState(env: Env, grants: GrantRecord[], storedConnections: ProviderConnection[], health: Map<string, ProviderHealth>): Readiness[] {
   const connections = new Map(storedConnections.map((connection) => [connection.providerId, connection]));
-  return snapshot.providers.map((provider) => readinessFor(provider, env, grants, connections.get(provider.id) ?? { providerId: provider.id, enabled: true }, health.get(provider.id)));
+  return snapshot.providers.map((provider) => providerReadinessForState(provider, env, grants, connections.get(provider.id) ?? { providerId: provider.id, enabled: true }, health.get(provider.id)));
 }
 
 async function readinessInputs(env: Env, suppliedConnections?: ProviderConnection[]) {
@@ -153,7 +153,7 @@ async function readinessInputs(env: Env, suppliedConnections?: ProviderConnectio
   return { grants, health, connections };
 }
 
-function readinessFor(provider: CompiledProvider, env: Env, grants: GrantRecord[], connection: ProviderConnection, health?: ProviderHealth): Readiness {
+export function providerReadinessForState(provider: CompiledProvider, env: Env, grants: GrantRecord[], connection: ProviderConnection, health?: ProviderHealth): Readiness {
   const configuredOptional = optionalConfigKeys(provider, env);
   const optionalConfig = provider.config_keys.filter((key) => configuredOptional.has(key) || (provider.auth.schemes.every((scheme) => scheme.type === "bearer" && scheme.required === false) && secretConfigKey(key)));
   const requiredConfig = provider.config_keys.filter((key) => !optionalConfig.includes(key));

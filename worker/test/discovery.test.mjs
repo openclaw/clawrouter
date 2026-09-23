@@ -71,7 +71,13 @@ test("models and catalog share read-only grant eligibility, transport support, a
   await compare(["llm.responses", "llm.chat"], true);
   const key = "oauth/fixture/subscription";
   grants.set(key, { provider: "openai", kind: "subscription", enabled: true, accessToken: "fixture-subscription", accountId: "fixture-account" });
-  await compare(["llm.responses"], false);
+  delete env.OPENAI_API_KEY;
+  const subscribed = await compare(["llm.responses"], false);
+  assert.equal(subscribed.readiness.configPresent, true);
+  assert.deepEqual(subscribed.readiness.missingConfig, []);
+  assert.equal(subscribed.readiness.upstreamGrantCount, 1);
+  assert.equal(subscribed.readiness.oauthGrantRequired, false);
+  env.OPENAI_API_KEY = "fixture-environment-key";
   grants.set("oauth/fixture/api", { provider: "openai", kind: "api_key", enabled: true, credential: "fixture-api" });
   await compare(["llm.responses", "llm.chat"], true);
   policy.grantRouting = { eligibleGrants: { openai: ["subscription"] } };
@@ -305,6 +311,58 @@ test("configured unavailable providers stay inspectable and revoked scopes never
   fixture.policy.enabled = false;
   const session = await (await sessionResponse(fixture.request("session"), fixture.env)).json();
   assert.deepEqual(session.entitlements.catalog.providers, []);
+});
+
+test("catalog and HTTP select only configured grants inside the already chosen policy", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.policy.monthlyBudgetMicros = null;
+  fixture.config.enabled = false;
+  const invalidKey = "oauth/fixture/subscription", validKey = "oauth/fixture/api";
+  fixture.records.set(invalidKey, { provider: "openai", kind: "subscription", enabled: true, accessToken: "fixture-subscription", priority: 10 });
+  fixture.records.set(validKey, { provider: "openai", kind: "api_key", enabled: true, credential: "fixture-api", priority: 10 });
+  const original = fixture.env.ACCESS_CONTROL.get;
+  fixture.env.ACCESS_CONTROL.get = () => ({ fetch: async (url, init) => {
+    if (new URL(url).pathname === "/grant-pools/select") {
+      const body = JSON.parse(init.body); fixture.calls.push({ path: "/grant-pools/select", body });
+      return Response.json({ selectedKey: body.candidates[0].key });
+    }
+    return original().fetch(url, init);
+  } });
+  fixture.env.GRANT_CREDENTIALS = { idFromName: (name) => name, get: () => ({ fetch: async (_url, init) => {
+    const { grant } = JSON.parse(init.body);
+    return Response.json({ grant, projection: { credentialGeneration: grant.credentialGeneration }, changed: false, migrated: false });
+  } }) };
+  fixture.env.USAGE_QUEUE = { send: async () => {} };
+  fixture.env.BUDGET_LEDGER.get = () => { throw new Error("unmetered HTTP must not read budget status"); };
+  const sent = [], pending = [];
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    sent.push({ url: String(url), authorization: init.headers.get("authorization") });
+    return Response.json({ usage: { input_tokens: 1, output_tokens: 1 } });
+  });
+  const { default: worker } = await import("../index.ts");
+  async function compare(expected) {
+    const catalog = await (await catalogResponse(fixture.request("key"), fixture.env)).json();
+    const offer = catalog.providers.find(({ id }) => id === "openai").offers.find(({ modelId, routeKind, transport, endpoint }) => modelId === "openai/gpt-6-astra" && routeKind === "unified" && transport === "http" && endpoint === "responses");
+    assert.equal(offer.eligible, expected);
+    const response = await worker.fetch(new Request("https://router.example/v1/responses", { method: "POST", headers: fixture.request("key").headers, body: JSON.stringify({ model: "openai/gpt-6-astra", input: "fixture" }) }), fixture.env, { waitUntil: (promise) => pending.push(promise) });
+    const body = await response.json(); await Promise.all(pending.splice(0));
+    assert.equal(response.status, expected ? 200 : 503, JSON.stringify(body));
+    if (!expected) assert.equal(body.error.code, "upstream_grant_pool_unavailable");
+  }
+  await compare(true);
+  assert.deepEqual(fixture.calls.find(({ path }) => path === "/grant-pools/select").body.candidates.map(({ key }) => key), [validKey]);
+  assert.equal(sent.at(-1).authorization, "Bearer fixture-api");
+  // Configuration qualification precedes priority, not the selected policy.
+  fixture.records.get(validKey).priority = 100;
+  await compare(true);
+  fixture.states[validKey] = { grantRevision: null, status: "cooldown", cooldownUntil: new Date(Date.now() + 60_000).toISOString(), windows: [] };
+  await compare(false);
+  delete fixture.states[validKey];
+  fixture.records.get(validKey).enabled = false;
+  await compare(false);
+  fixture.records.delete(validKey);
+  await compare(false);
+  assert.equal(sent.length, 2, "the environment key never replaces the unusable selected pool");
 });
 
 async function fusionDiscoveryFixture(t) {

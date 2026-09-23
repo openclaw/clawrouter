@@ -11,7 +11,7 @@ import { contentRetentionDefault } from "./content-retention.ts";
 import { loadFusionConfig } from "./fusion-config";
 import { FUSION_MODEL_ID } from "./fusion";
 import { authenticateProxyKey } from "./proxy-auth";
-import { assertOperationConfiguration, assertProviderAccess, modelRoute, modelSupportsEndpoint, providerReadinessFromState, snapshot, unifiedPathForEndpoint, type Readiness } from "./providers";
+import { assertOperationConfiguration, assertProviderAccess, modelRoute, modelSupportsEndpoint, providerReadinessForState, snapshot, unifiedPathForEndpoint, type Readiness } from "./providers";
 import type { AccessSession, AuthorizedIdentity, CompiledModel, CompiledProvider, Env, ProviderConnection } from "./types";
 import { errorResponse, HttpError, privateJson, sha256Hex } from "./utils";
 
@@ -239,7 +239,6 @@ interface CatalogOffer {
 
 async function clientInventory(identities: AuthorizedIdentity[], env: Env, connections: ProviderConnection[]) {
   const policyBalances = new Map<string, ReturnType<typeof budgetStatus>>();
-  const baseReadiness = new Map(providerReadinessFromState(env, [], connections, new Map()).map((row) => [row.id, row]));
   const views = await Promise.all(snapshot.providers.map(async (provider) => {
     const entries = identities.filter((entry) => entry.policy.enabled && (!entry.policy.providers.length || entry.policy.providers.includes(provider.id)));
     const pools = await Promise.all(entries.map((entry) => policyGrantCandidates(entry, provider.id, env, provider.auth.schemes.find((scheme) => scheme.type === "oauth")?.tokenRef ?? provider.id)));
@@ -288,7 +287,7 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env, conne
         try { resolveTemplate(provider, model.upstream, env); }
         catch (error) { if (error instanceof HttpError) return { status: "exact-blocked" as const, reasonCode: error.code }; throw error; }
       }
-      return operationAffordability(context.auth, connection, model, capability, context.observation);
+      return operationAffordability(context.auth, connection, model, capability, context.endpoint.request_format, context.observation);
     };
     const eligibleModels = (models = provider.models) => models.flatMap((model) => {
       const capabilities = model.capabilities.filter((capability) => effective.some((context) => provider.capabilities.some((item) => item.id === capability && item.endpoint === context.endpoint.id) && eligibility(context, model, capability).status !== "exact-blocked"));
@@ -308,9 +307,9 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env, conne
     });
     const endpoints = [...new Set(offers.filter((offer) => offer.eligible && offer.transport === "http").map((offer) => offer.endpoint))];
     const websockets = [...new Set(offers.filter((offer) => offer.eligible && offer.transport === "websocket").map((offer) => offer.endpoint))];
-    const grantCount = new Set(pools.flatMap(({ candidates }) => candidates.available.map(({ key }) => key))).size;
+    const grants = [...new Map(pools.flatMap(({ candidates }) => candidates.available.map(({ key, grant }) => [key, { key, grant }] as const))).values()];
     const executable = offers.some((offer) => offer.eligible);
-    const readiness = { ...baseReadiness.get(provider.id)!, configPresent: !!configured, upstreamGrantCount: grantCount, executableEndpoints: [...new Set([...endpoints, ...websockets])], executable, status: !connection.enabled ? "disabled" : executable ? "configured" : configured ? "unavailable" : "unconfigured", reasons: [...new Set(offers.flatMap((offer) => offer.reasonCode ? [offer.reasonCode] : []))] };
+    const readiness = { ...providerReadinessForState(provider, env, grants, connection), executableEndpoints: [...new Set([...endpoints, ...websockets])], executable, status: !connection.enabled ? "disabled" : executable ? "configured" : configured ? "unavailable" : "unconfigured", reasons: [...new Set(offers.flatMap((offer) => offer.reasonCode ? [offer.reasonCode] : []))] };
     return [provider.id, { configured: !!configured, endpoints, websockets, models: eligibleModels(), eligibleModels, offers, readiness }] as const;
   }));
   return new Map(views);
