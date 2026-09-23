@@ -99,6 +99,7 @@ export interface Env {
   GRANT_CREDENTIALS: DurableObjectNamespace;
   USAGE_QUEUE: Queue<QueueMessage>;
   CONTENT_ARCHIVE: R2Bucket;
+  CONTENT_CLEANUP: DurableObjectNamespace;
   ASSETS: Fetcher;
   CLAWROUTER_ADMIN_TOKEN_SHA256?: string;
   CLAWROUTER_ACCESS_TEAM_DOMAIN?: string;
