@@ -86,6 +86,7 @@ test("HTTP still delivers the upstream response when accounting publication fail
   const env = usageEnv([], { provider: "local-openai", limit: null, retainContent: false });
   env.LOCAL_OPENAI_BASE_URL = "https://upstream.example.invalid";
   env.USAGE_QUEUE = { send: async () => { throw new Error("fixture queue outage"); } };
+  env.USAGE_LEDGER.get = () => ({ fetch: async () => new Response("fixture ingest outage", { status: 503 }) });
   t.mock.method(console, "error", () => {});
   t.mock.method(globalThis, "fetch", async () => Response.json({ fixture: "complete" }));
   const pending = [];

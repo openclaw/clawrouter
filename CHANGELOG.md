@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Recover rejected usage-queue publication through the existing policy usage ledger, retaining event IDs to deduplicate redelivery without masking budget-settlement failures.
+
 - Export authorized native Codex model catalogs while preserving official agent metadata, add sourced Sol/Terra/Luna routes and tier prices, and document API-key and desktop hybrid setup.
 
 - Bridge qualified native Responses WebSockets with per-create authorization, pinned grants, bounded queues, retention, and shared budget settlement.

@@ -19,6 +19,15 @@ test("non-2xx usage and settlement writes retry instead of being acknowledged", 
   }
 });
 
+test("thrown usage writes retain queue retry ownership", async () => {
+  const message = queueMessage(usageEvent());
+  const env = mockEnv([], new Response("unused"));
+  env.USAGE_LEDGER.get = () => ({ fetch: async () => { throw new Error("fixture ingest unavailable"); } });
+  await queue({ messages: [message] }, env);
+  assert.equal(message.ackCount, 0);
+  assert.equal(message.retryCount, 1);
+});
+
 test("principal-scoped settlement retries target the reserved principal ledger", async () => {
   const calls = [], message = queueMessage({ kind: "budget_settlement", tenant_id: "tenant", policy_id: "policy", principal_id: "maintainer@example.com", request: { reservationId: "r1", actualCostMicros: 2 } });
   await queue({ messages: [message] }, mockEnv(calls, new Response("accepted")));
