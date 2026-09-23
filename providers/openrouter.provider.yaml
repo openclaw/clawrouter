@@ -8,6 +8,7 @@ service:
   kind: gateway_platform
   upstreamService: openrouter
   configKeys: [OPENROUTER_API_KEY, OPENROUTER_SITE_URL]
+  optionalConfigKeys: [OPENROUTER_SITE_URL]
 auth:
   schemes:
     - type: bearer

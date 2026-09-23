@@ -76,6 +76,10 @@ billing:
   `allowedEndpoints` optionally restricts that transport to named endpoints;
   `endpointPaths` alone only overrides paths. Compatibility is checked before
   grant priority and selection, without reopening environment credentials.
+- `service.optionalConfigKeys` allows absent bindings without blocking readiness.
+  Injected adapter and endpoint headers are omitted when a missing template binding
+  is optional; missing required bindings still fail, including mixed templates.
+  Base URLs, paths, and query templates always require their bindings.
 - `adapter` declares the request/response family. Use `custom_adapter` only after
   the declarative format cannot express the provider.
 - `billing.meter` and `billing.counters` produce OpenMeter/Lago/Meteroid style

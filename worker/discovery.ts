@@ -1,3 +1,4 @@
+import { resolveTemplate } from "./provider-templates.ts";
 import { listConnections } from "./authority";
 import { resolveGrantCandidates } from "./grant-selection";
 import { grantSupports } from "./provider-auth";
@@ -7,7 +8,7 @@ import { contentRetentionDefault } from "./content-retention.ts";
 import { loadFusionConfig } from "./fusion-config";
 import { FUSION_MODEL_ID } from "./fusion";
 import { authenticateProxyKey } from "./proxy-auth";
-import { modelRoute, providerReadinessForPolicies, providerReadinessFromState, resolveTemplate, snapshot, type Readiness } from "./providers";
+import { modelRoute, providerReadinessForPolicies, providerReadinessFromState, snapshot, type Readiness } from "./providers";
 import type { AccessPolicyEntry, AccessSession, CompiledProvider, Env, ProviderConnection } from "./types";
 import { errorResponse, HttpError, privateJson, sha256Hex } from "./utils";
 
