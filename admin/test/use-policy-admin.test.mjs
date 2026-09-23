@@ -366,6 +366,26 @@ test("a deleted selected policy stays selected and cannot be silently recreated"
   assert.equal(current.selectedId, "");
 });
 
+test("policy selection reports acceptance before navigation and preserves same or cancelled drafts", () => {
+  const fixture = ready();
+  change(fixture, { tenantId: "keep-a" });
+  const draft = fixture.render().policies.form;
+  assert.equal(fixture.render().policies.edit(policy("policy_a")), true);
+  assert.equal(fixture.confirmations, 0);
+  assert.equal(fixture.render().policies.form, draft);
+  fixture.acceptDiscard = false;
+  assert.equal(fixture.render().policies.edit(policy("policy_b")), false);
+  assert.equal(fixture.confirmations, 1);
+  assert.equal(fixture.render().policies.form, draft);
+  assert.equal(fixture.render().policies.selectedId, "policy_a");
+  fixture.acceptDiscard = true;
+  assert.equal(fixture.render().policies.edit(policy("policy_b")), true);
+  assert.equal(fixture.confirmations, 2);
+  assert.equal(fixture.render().policies.selectedId, "policy_b");
+  assert.equal(fixture.render().policies.dirty, false);
+  assert.deepEqual(fixture.requests, []);
+});
+
 test("New and selection ask only for actual changes, and cancelled discard preserves the draft", () => {
   const fixture = ready();
   change(fixture, { tenantId: "temporary" });

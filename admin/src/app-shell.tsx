@@ -10,6 +10,7 @@ import { applyTheme, navItems, readTheme } from "./ui-config";
 import { formatTimestamp } from "./ui-helpers";
 import { useConsole } from "./console-controller-context";
 import { consoleStatusPresentation } from "./status-display";
+import type { AccessPolicy } from "./ui-types";
 
 export function AppShell() {
   const [theme, setTheme] = React.useState(readTheme);
@@ -33,6 +34,11 @@ export function AppShell() {
   const { adminOverview, tenantSummaries, rows: usageRows, snapshot: usageSnapshot, loaded: usageLoaded } = usage;
   const { form: playground, setForm: setPlayground, turns: playgroundTurns, selectedTurnId: selectedPlaygroundTurnId, setSelectedTurnId: setSelectedPlaygroundTurnId, requestMode, setRequestMode, error: playgroundError, selectedModel, selectedServiceRoute, running: playgroundRunning, run: runPlayground, resetConversation } = playgroundDomain;
   const retentionLabel = session.contentRetention ? session.contentRetention.enabled ? `${session.contentRetention.retentionDays}d` : "off" : "pending";
+  function openPolicy(policy: AccessPolicy) {
+    if (!editPolicy(policy)) return;
+    setAccessTab("policies");
+    navigateTo("policies");
+  }
   return (
     <main className="appShell">
       <aside className="sidebar">
@@ -141,6 +147,7 @@ export function AppShell() {
             setKind={setKind}
             kinds={kinds}
             canAdminister={session.role === "admin"}
+            onOpenPolicy={openPolicy}
             onSelect={(service) => setSelectedServiceId(service.id)}
             onSetConnection={setProviderConnection}
             onSetProviderBudget={setProviderBudget}
@@ -266,11 +273,7 @@ export function AppShell() {
             form={accessForm}
             setForm={setAccessForm}
             error={userError}
-            onOpenPolicy={(policy) => {
-              editPolicy(policy);
-              setAccessTab("policies");
-              navigateTo("policies");
-            }}
+            onOpenPolicy={openPolicy}
             onSelect={(user) => {
               setSelectedUserEmail(user.email);
               setAccessForm(accessFormFromUser(user, bindings));

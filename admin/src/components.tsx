@@ -16,6 +16,12 @@ export function InspectorHeader({ brandIcon, icon: Icon, title, subtitle }: { br
   );
 }
 
+export function MiniListItem({ children, onClick }: { children: React.ReactNode; onClick?: () => void }) {
+  return onClick
+    ? <button type="button" className="miniListItem" onClick={onClick}>{children}</button>
+    : <div className="miniListItem">{children}</div>;
+}
+
 export function BrandMark({ brandIcon, fallback: Fallback, className = "" }: { brandIcon?: BrandIcon; fallback?: IconComponent; className?: string }) {
   if (brandIcon?.body && !brandIcon.body.includes("undefined")) {
     return <svg className={className ? `brandSvg ${className}` : "brandSvg"} viewBox={brandIcon.viewBox ?? "0 0 24 24"} aria-hidden="true" dangerouslySetInnerHTML={{ __html: brandIcon.body }} />;
