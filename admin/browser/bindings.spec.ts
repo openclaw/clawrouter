@@ -14,8 +14,8 @@ test("selecting another policy preserves the existing binding target and draft",
   await expect(page.getByRole("textbox", { name: "priority", exact: true })).toHaveValue("7");
   await page.getByRole("button", { name: "Save binding", exact: true }).click();
 
-  await expect(page.getByRole("status")).toContainText("saved binding");
-  expect(writes).toEqual([{ policyId: "policy_b", principalType: "group", principalId: "maintainers", enabled: true, priority: 7 }]);
+  await expect.poll(() => writes).toEqual([{ policyId: "policy_b", principalType: "group", principalId: "maintainers", enabled: true, priority: 7 }]);
+  await expect(page.locator(".tableRow.selected").filter({ hasText: "maintainers" }).locator('[data-label="priority"]')).toHaveText("7");
   await expect(page.getByRole("combobox", { name: "policy", exact: true })).toHaveValue("policy_b");
 });
 
@@ -30,8 +30,10 @@ test("an explicit new binding defaults to the selected policy", async ({ page })
   await page.getByRole("textbox", { name: "principal", exact: true }).fill("new-team");
   await page.getByRole("button", { name: "Save binding", exact: true }).click();
 
-  await expect(page.getByRole("status")).toContainText("saved binding");
-  expect(writes).toEqual([{ policyId: "policy_a", principalType: "group", principalId: "new-team", enabled: true, priority: 100 }]);
+  await expect.poll(() => writes).toEqual([{ policyId: "policy_a", principalType: "group", principalId: "new-team", enabled: true, priority: 100 }]);
+  await expect(page.locator(".tableRow.selected").filter({ hasText: "new-team" })).toBeVisible();
+  await expect(page.getByRole("combobox", { name: "policy", exact: true })).toBeDisabled();
+  await expect(page.getByRole("combobox", { name: "policy", exact: true })).toHaveValue("policy_a");
 });
 
 async function selectPolicyA(page: Page) {
