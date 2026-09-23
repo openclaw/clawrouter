@@ -1,10 +1,11 @@
 import { type FormEvent, useState } from "react";
 import { accessFormFromUser, bindingFormFromBinding, bindingKey, errorMessage, optionalNumber, parseGroups, reconcileDirectUserBindings } from "../../domain";
 import { defaultAccess, defaultBinding, demo } from "../../ui-config";
-import { request } from "../../ui-helpers";
+import type { ConsoleRequest } from "../../dashboard-fetch";
 import type { AccessPolicy, AccessUser, BindingForm, PolicyBinding, SessionResponse } from "../../ui-types";
 
 interface Dependencies {
+  request: ConsoleRequest;
   allowDemo: boolean;
   gatewayOrigin: string;
   session: SessionResponse;
@@ -16,7 +17,7 @@ interface Dependencies {
   refresh: () => Promise<void>;
 }
 
-export function usePrincipalAdmin({ allowDemo, gatewayOrigin, session, demoMode, policies, selectedPolicyId, setPolicyError, setStatus, refresh }: Dependencies) {
+export function usePrincipalAdmin({ request, allowDemo, gatewayOrigin, session, demoMode, policies, selectedPolicyId, setPolicyError, setStatus, refresh }: Dependencies) {
   const [users, setUsers] = useState<AccessUser[]>(allowDemo ? demo.users : []);
   const [bindings, setBindings] = useState<PolicyBinding[]>(allowDemo ? demo.bindings : []);
   const [accessForm, setAccessForm] = useState(allowDemo && demo.users[0] ? accessFormFromUser(demo.users[0], demo.bindings) : defaultAccess);

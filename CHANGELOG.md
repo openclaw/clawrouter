@@ -21,6 +21,7 @@
 - Preserve provider kill switches and budgets during concurrent connection edits, and show per-provider pending state in the console.
 
 - Deny proxy requests and subsequent WebSocket turns for explicitly disabled key owners, and show their credentials as owner-disabled without changing unowned service keys or retained policy bindings.
+- Clear protected console data and drafts when browser authentication expires or identity changes. Keep sign-in gated until the session is verified, preserve in-flight key ownership, and distinguish authentication loss from permission, CSRF, and reporting failures.
 - Add collision-safe proxy-key creation and active-key-only rotation. Serialize credential authorization, current-policy checks, and revocation in the authority so concurrent writes cannot restore an old secret or owner; preserve existing PUT and CLI upserts.
 
 - Preserve local administrator roles during user, policy-assignment, and automatic-assignment edits, including profile saves that race with an explicit role change.
