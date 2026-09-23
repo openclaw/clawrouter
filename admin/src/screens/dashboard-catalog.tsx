@@ -45,6 +45,7 @@ import {
   matchesServiceQuery,
   usagePolicyId,
 } from "../ui-helpers";
+import { CredentialNotice, type CredentialFeedback } from "../credential-notice";
 import { EntityTable, UsageFreshness } from "./users-usage";
 import type {
   AccessPolicy,
@@ -74,7 +75,7 @@ export function UserAvatar({ email }: { email?: string | null }) {
   );
 }
 
-export function DashboardScreen({ session, services, policies, credentials, users, tenants, overview, usageRows, usage, usageLoaded, usageStale, usageError, usageUpdatedAt, myCredentials, myPolicyIds, myIssuedKey, myKeyError, myKeysBusy, onIssueMyKey, onRevokeMyKey, onOpenCatalog, onOpenPlayground, onOpenUsage, onOpenAccess }: {
+export function DashboardScreen({ session, services, policies, credentials, users, tenants, overview, usageRows, usage, usageLoaded, usageStale, usageError, usageUpdatedAt, myCredentials, myPolicyIds, myKeyFeedback, myKeyScope, myKeysBusy, onMyKeyDraftChange, onIssueMyKey, onRevokeMyKey, onOpenCatalog, onOpenPlayground, onOpenUsage, onOpenAccess }: {
   session: SessionResponse;
   services: ServiceItem[];
   policies: AccessPolicy[];
@@ -90,8 +91,9 @@ export function DashboardScreen({ session, services, policies, credentials, user
   usageUpdatedAt: number | null;
   myCredentials: ProxyCredential[];
   myPolicyIds: string[];
-  myIssuedKey: string;
-  myKeyError: string;
+  myKeyFeedback: CredentialFeedback;
+  myKeyScope: number;
+  onMyKeyDraftChange: () => void;
   myKeysBusy: boolean;
   onIssueMyKey: (policyId: string, credentialId?: string) => Promise<void>;
   onRevokeMyKey: (credentialId: string) => Promise<void>;
@@ -150,7 +152,7 @@ export function DashboardScreen({ session, services, policies, credentials, user
       </div>
 
       <div className="dashboardGrid">
-        <MyKeysCard credentials={myCredentials} policyIds={myPolicyIds} issuedKey={myIssuedKey} error={myKeyError} busy={myKeysBusy} onIssue={onIssueMyKey} onRevoke={onRevokeMyKey} />
+        <MyKeysCard key={myKeyScope} credentials={myCredentials} policyIds={myPolicyIds} feedback={myKeyFeedback} onDraftChange={onMyKeyDraftChange} busy={myKeysBusy} onIssue={onIssueMyKey} onRevoke={onRevokeMyKey} />
         <section className="dashboardPanel servicePanel">
           <DashboardPanelHeader eyebrow={isAdmin ? "service estate" : "your access"} title={isAdmin ? "Provider readiness" : "Services you can use"} meta={`${isAdmin ? configuredServices.length : usableServices.length} ready`} action="View catalog" onAction={onOpenCatalog} />
           <div className="serviceSpectrum" role="img" aria-label={`${servicePercent}% of ${isAdmin ? "catalog services are configured" : "granted services are usable"}`}>
@@ -212,31 +214,32 @@ export function DashboardScreen({ session, services, policies, credentials, user
   );
 }
 
-export function MyKeysCard({ credentials, policyIds, issuedKey, error, busy, onIssue, onRevoke }: {
+export function MyKeysCard({ credentials, policyIds, feedback, onDraftChange, busy, onIssue, onRevoke }: {
   credentials: ProxyCredential[];
   policyIds: string[];
-  issuedKey: string;
-  error: string;
+  feedback: CredentialFeedback;
+  onDraftChange: () => void;
   busy: boolean;
   onIssue: (policyId: string, credentialId?: string) => Promise<void>;
   onRevoke: (credentialId: string) => Promise<void>;
 }) {
-  const [policyId, setPolicyId] = useState("");
-  const selectedPolicy = policyIds.includes(policyId) ? policyId : policyIds[0] ?? "";
+  const [policyId, setPolicyId] = useState<string | null>(null);
+  const selectedPolicy = policyId ?? policyIds[0] ?? "";
+  const policyAvailable = policyIds.includes(selectedPolicy);
+  useEffect(() => { if (policyId === null && policyIds.length) setPolicyId(policyIds[0]); }, [policyId, policyIds]);
   return (
     <section className="dashboardPanel myKeysPanel">
       <DashboardPanelHeader eyebrow="personal access" title="My keys" meta={`${credentials.filter((credential) => credential.enabled).length}/${credentials.length} enabled`} />
       <p className="panelIntro">Create proxy keys bound to your signed-in identity and one of your policies.</p>
-      {error ? <InlineNote>{error}</InlineNote> : null}
-      {issuedKey ? <div className="issuedKey"><div><span>copy now · shown once · stored nowhere else</span><code>{issuedKey}</code></div><button type="button" className="buttonSecondary" onClick={() => void navigator.clipboard?.writeText(issuedKey)}>Copy</button></div> : null}
+      <CredentialNotice state={feedback} />
       <div className="myKeysCreate">
-        <label><span>policy</span><select value={selectedPolicy} onChange={(event) => setPolicyId(event.target.value)} disabled={!policyIds.length || busy}>{policyIds.map((id) => <option key={id} value={id}>{id}</option>)}</select></label>
-        <button type="button" disabled={!selectedPolicy || busy} onClick={() => void onIssue(selectedPolicy)}><Plus aria-hidden="true" /> Create key</button>
+        <label><span>policy</span><select value={selectedPolicy} onChange={(event) => { onDraftChange(); setPolicyId(event.target.value); }} disabled={!policyIds.length}>{!policyAvailable ? <option value={selectedPolicy}>{selectedPolicy ? `${selectedPolicy} · unavailable` : "No policies available"}</option> : null}{policyIds.map((id) => <option key={id} value={id}>{id}</option>)}</select></label>
+        <button type="button" disabled={!policyAvailable || busy} onClick={() => void onIssue(selectedPolicy)}><Plus aria-hidden="true" /> Create key</button>
       </div>
       <div className="myKeysList">
         {credentials.map((credential) => <article key={credential.credentialId}>
-          <span><strong>{credential.credentialId}</strong><small>{credential.policyId} · {credential.active ? "active" : credential.enabled ? "stale" : "revoked"}</small></span>
-          <span><button type="button" className="buttonSecondary" disabled={busy || !credential.enabled} onClick={() => void onIssue(credential.policyId, credential.credentialId)}>Rotate</button><button type="button" className="buttonDanger" disabled={busy || !credential.enabled} onClick={() => void onRevoke(credential.credentialId)}>Revoke</button></span>
+          <span><strong>{credential.credentialId}</strong><small>{credential.policyId} · {credential.active ? "active" : credential.enabled ? "inactive" : "revoked"}</small>{credential.active && !policyIds.includes(credential.policyId) ? <small>Policy no longer held: rotation unavailable. This key remains usable and can be revoked.</small> : null}</span>
+          <span><button type="button" className="buttonSecondary" disabled={busy || !credential.active || !policyIds.includes(credential.policyId)} title={!policyIds.includes(credential.policyId) ? "Policy no longer held; rotation unavailable. Existing active keys remain usable and can be revoked." : !credential.active ? "Only active keys can be rotated" : undefined} onClick={() => void onIssue(credential.policyId, credential.credentialId)}>Rotate</button><button type="button" className="buttonDanger" disabled={busy || !credential.enabled} onClick={() => void onRevoke(credential.credentialId)}>Revoke</button></span>
         </article>)}
         {!credentials.length ? <div className="dashboardEmpty"><KeyRound aria-hidden="true" /><strong>No personal keys</strong><p>Create one to use your policy from OpenClaw or another API client.</p></div> : null}
       </div>
