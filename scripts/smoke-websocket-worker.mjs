@@ -261,6 +261,28 @@ try {
     assert.deepEqual(await ledgerFacts(), before.map(({ spent }) => ({ spent: spent + cost, unsettled: 0 })));
   }
 
+  // One large terminal event and a large JSON body both expose usage after output.
+  for (const scenario of ["large-json", "large-terminal"]) {
+    const before = await ledgerFacts(), stream = scenario === "large-terminal";
+    const response = await dispatch(stream ? "/v1/native/openai/v1/responses" : "/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json", "x-clawrouter-session-id": scenario },
+      body: JSON.stringify({ model: "openai/gpt-6-astra", input: scenario, max_output_tokens: 32, service_tier: "priority", stream }),
+    });
+    assert.equal(response.status, 200);
+    const large = { output: [{ type: "message", content: [{ type: "output_text", text: "x".repeat(2 * 1024 * 1024 + 1024) }] }], object: "response", status: "completed", service_tier: "priority", usage: { input_tokens: 14, output_tokens: 8, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } };
+    const expected = stream ? 'data: {"type":"response.created"}\n\ndata: ' + JSON.stringify({ type: "response.completed", response: large }) + "\n\n" : JSON.stringify(large);
+    assert.equal(await response.text(), expected);
+    let receipt;
+    await until(async () => {
+      const receipts = (await (await dispatch("/v1/usage")).json()).usage.events.filter(({ session_id }) => session_id === scenario);
+      assert.ok(receipts.length <= 1); receipt = receipts[0]; return !!receipt;
+    });
+    assert.equal(receipt.status, "success"); assert.equal(receipt.status_code, 200);
+    assert.equal(receipt.actual_cost_micros, 1_080); assert.equal(receipt.cost_basis, "manifest_pricing");
+    assert.equal(receipt.input_tokens, 14); assert.equal(receipt.output_tokens, 8);
+    assert.deepEqual(await ledgerFacts(), before.map(({ spent }) => ({ spent: spent + 1_080, unsettled: 0 })));
+  }
+
   // Exercise the HTTP affinity table in workerd's actual SQLite-backed owner.
   const httpContinuation = (body = {}, headers = {}) => dispatch("/v1/native/openai/v1/responses", {
     method: "POST", headers: { "content-type": "application/json", "x-clawrouter-session-id": "http-affinity", ...headers },
@@ -457,6 +479,10 @@ export default { async fetch(request) {
     const body = await request.json();
     httpFrames.push({ authorization: request.headers.get('authorization'), previous_response_id: body.previous_response_id, turn: request.headers.get('x-codex-turn-state') });
     const usage = { input_tokens: 14, output_tokens: 8, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } };
+    if (body.input === 'large-json' || body.input === 'large-terminal') {
+      const large = { output: [{ type: 'message', content: [{ type: 'output_text', text: 'x'.repeat(2 * 1024 * 1024 + 1024) }] }], object: 'response', status: 'completed', service_tier: 'priority', usage };
+      return body.input === 'large-json' ? Response.json(large) : new Response('data: {"type":"response.created"}\\n\\ndata: ' + JSON.stringify({ type: 'response.completed', response: large }) + '\\n\\n', { headers: { 'content-type': 'text/event-stream' } });
+    }
     if (body.input === 'late-failed' || body.input.startsWith('cancel-')) {
       let index = 0, timer, release, producer;
       const aborted = () => { httpAborts[body.input] = true; clearTimeout(timer); producer.error(request.signal.reason); release?.(); };

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Meter declared Responses JSON and SSE bodies with bounded scalar inspection, including usage after large output or inside a large terminal event, while preserving stream delivery, cancellation, and conservative charges when metadata cannot be verified.
+
 - Keep policy selection separate from existing binding edits, while new bindings still default to the selected policy.
 
 - Keep failed console refreshes visible after successful edits, label stale usage with its snapshot time, and show unavailable spend and balances as unknown.
