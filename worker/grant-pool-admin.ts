@@ -42,7 +42,9 @@ export async function grantPoolAdmin(request: Request, env: Env): Promise<Respon
     return privateJson({ readiness, outcomes });
   }
   if (action === "/repair") {
-    const page = await authorityCall<{ keys: string[]; cursor: string | null }>(env, "/grant-pools/pending", { cursor: body.cursor ?? undefined, limit: PAGE_SIZE });
+    // An indexed active or detached owner can still owe its KV projection.
+    // Pending memberships alone cannot enumerate these committed writes.
+    const page = await authorityCall<{ keys: string[]; cursor: string | null }>(env, "/grant-pools/readiness/keys", { cursor: body.cursor ?? null });
     const outcomes = [];
     for (const key of page.keys) outcomes.push(await repairKey(env, key, false));
     return privateJson({ ...page, outcomes, readiness: await grantPoolReadiness(env) });

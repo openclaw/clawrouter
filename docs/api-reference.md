@@ -96,7 +96,7 @@ Account recovery uses the existing administrator authentication and browser CSRF
 - `POST /v1/admin/grant-pools/scan`: `{revision}` starts or restarts a bounded inventory scan.
 - `POST /v1/admin/grant-pools/advance`: `{scanRevision, phase, cursor}` processes the next page of at most 32 keys. The server owns the next cursor and repair outcomes.
 - `POST /v1/admin/grant-pools/activate`: `{revision}` activates only a complete unchanged scan with no unresolved evidence. Stale commands return `409 grant_pool_readiness_changed`.
-- `POST /v1/admin/grant-pools/repair`: `{cursor: null | string}` reconciles up to 32 pending account writes without contacting providers. The returned cursor advances past unresolved keys.
+- `POST /v1/admin/grant-pools/repair`: `{cursor: null | string}` reconciles up to 32 indexed account keys without contacting providers, including committed owners with missing or stale KV projections. The returned cursor advances past unresolved keys; matching projections are not rewritten.
 
 Bootstrap also includes `grantPoolReadiness`. The status endpoint and recovery screen remain reachable when bootstrap cannot list a malformed legacy account. An `attached`, `detached`, `unattached`, `pending_cancelled`, or unresolved repair outcome describes storage reconciliation, not credential verification. See [deployment activation and forward recovery](deploy-cloudflare.md#account-routing-activation-and-recovery).
 

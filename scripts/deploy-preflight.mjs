@@ -42,13 +42,13 @@ const errors = [];
 if (Boolean(process.env.CF_ACCESS_CLIENT_ID?.trim()) !== Boolean(process.env.CF_ACCESS_CLIENT_SECRET?.trim())) errors.push("CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET must be configured together for account recovery");
 if (process.env.CLAWROUTER_ADMIN_TOKEN?.trim() && process.env.CLAWROUTER_ADMIN_TOKEN_SHA256?.trim() && createHash("sha256").update(process.env.CLAWROUTER_ADMIN_TOKEN.trim()).digest("hex") !== process.env.CLAWROUTER_ADMIN_TOKEN_SHA256.trim().toLowerCase()) errors.push("CLAWROUTER_ADMIN_TOKEN must match CLAWROUTER_ADMIN_TOKEN_SHA256 for post-deploy account recovery");
 for (const name of requiredDeployEnv) {
-  if (!process.env[name]) {
+  if (!process.env[name]?.trim()) {
     errors.push(`missing required deploy env: ${name}`);
   }
 }
 if (
-  process.env.CLAWROUTER_ADMIN_TOKEN_SHA256 &&
-  !/^[a-fA-F0-9]{64}$/.test(process.env.CLAWROUTER_ADMIN_TOKEN_SHA256)
+  process.env.CLAWROUTER_ADMIN_TOKEN_SHA256?.trim() &&
+  !/^[a-fA-F0-9]{64}$/.test(process.env.CLAWROUTER_ADMIN_TOKEN_SHA256.trim())
 ) {
   errors.push("CLAWROUTER_ADMIN_TOKEN_SHA256 must be a 64-character hex string");
 }
@@ -120,6 +120,7 @@ if (
     "smoke key policy inspection deferred to guarded post-deploy FakeCo bootstrap",
   );
 } else if (
+  errors.length === 0 &&
   !beforeAccess &&
   selectedProviders.length > 0 &&
   baseUrl &&
@@ -141,7 +142,8 @@ if (
   }
 }
 
-await checkCloudflarePermissions();
+// Invalid local credentials must not trigger the KV write/delete probe.
+if (errors.length === 0) await checkCloudflarePermissions();
 
 if (errors.length > 0) {
   console.error("clawrouter deploy preflight failed:");

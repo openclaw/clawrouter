@@ -11,7 +11,7 @@ import {
   assertDeploymentMutation,
   assertPolicyKvNamespace,
   deploymentTarget,
-  fakecoAccessServiceTokenIds,
+  accessServiceTokenIds,
   verifyPolicyKvPreviewNamespaceTarget,
   verifyPolicyKvNamespaceTarget,
 } from "../scripts/deployment-profile.mjs";
@@ -101,7 +101,7 @@ test("FakeCo profile locks every named Cloudflare resource away from production"
   );
   assert.equal(namespace.title, "clawrouter-policy-fakeco");
   assert.deepEqual(
-    fakecoAccessServiceTokenIds(target, {
+    accessServiceTokenIds(target, {
       CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS: validServiceTokenIds,
     }),
     [serviceTokenIdA, serviceTokenIdB],

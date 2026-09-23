@@ -111,7 +111,7 @@ evidence that old account storage is absent. Acceptance is recorded once;
 later upgrades run `pnpm cf:accounts` without another acceptance.
 
 With console sign-in enabled, Access → Upstream has the same baseline, paged
-scan, pending-write repair, and activation actions. It loads independently if
+scan, indexed account publication repair, and activation actions. It loads independently if
 a legacy account prevents the normal admin overview from loading. No recovery
 action calls a provider. Resolve reported raw legacy accounts through
 `cf:oauth:put` or `cf:oauth:revoke`, then restart the scan. Owner outages and

@@ -225,6 +225,105 @@ test("unknown readiness denies only environment fallback while admin auth, healt
   assert.equal((await env.dispatch("/v1/admin/grant-pools/readiness", { headers: { cookie } })).status, 403);
 });
 
+for (const activated of [false, true]) for (const failure of ["before-write", "after-write"]) test(`${activated ? "activated repair" : "migration"} completes an indexed owner's ${failure} KV publication failure`, async context => {
+  const env = fixture();
+  context.mock.method(globalThis, "fetch", async () => assert.fail("recovery contacted an upstream"));
+  await acceptGrantPoolBaseline("fresh", { request: env.request });
+  if (activated) await recoverGrantPools({ request: env.request });
+  const put = env.POLICY_KV.put;
+  let fail = true, writes = 0;
+  env.POLICY_KV.put = async (...args) => {
+    if (fail && failure === "before-write") throw new Error("fixture KV unavailable");
+    assert.equal(writes++, 0, "same-key publication must not write twice within the fixture's one-second window");
+    await put(...args);
+    if (fail) throw new Error("fixture KV acknowledgement lost");
+  };
+  await assert.rejects(() => putGrantCredentials(env, key, primary));
+  const owner = env.GRANT_CREDENTIALS.objects.get(key), committed = structuredClone(owner.values.get("credential"));
+  assert.equal(committed.poolSyncPending, true);
+  assert.equal((await env.grantAuthority.call("attachment", { key })).pending, false, "index commit already succeeded");
+  owner.object = new GrantCredentialObject(owner.state, env);
+  if (!activated && failure === "before-write") {
+    await assert.rejects(() => recoverGrantPools({ request: env.request }), /unresolved/);
+    assert.equal((await status(env)).activatedAt, null, "an unpublished projection cannot qualify activation");
+  }
+  fail = false;
+  assert.ok((await recoverGrantPools({ request: env.request })).activatedAt);
+  const repaired = owner.values.get("credential");
+  assert.equal(repaired.poolSyncPending, false);
+  assert.equal(repaired.generation, committed.generation);
+  assert.equal(repaired.lineage, committed.lineage);
+  assert.equal(repaired.poolAdmissionRevision, committed.poolAdmissionRevision);
+  assert.equal(repaired.credential, primary.credential);
+  assert.equal(env.values.get(key).credential, undefined);
+  assert.equal((await upstreamAuth(providerById("openai"), identity, env)).headers.get("authorization"), `Bearer ${primary.credential}`);
+  await recoverGrantPools({ request: env.request });
+  await reconcileGrantAttachment(env, key);
+  assert.equal(writes, 1, "verification and lost acknowledgements do not rewrite matching projections");
+});
+
+for (const corruption of ["missing", "invalid-json"]) test(`activated repair verifies a falsely clean owner's ${corruption} projection`, async () => {
+  const env = fixture();
+  await acceptGrantPoolBaseline("fresh", { request: env.request });
+  await recoverGrantPools({ request: env.request });
+  await putGrantCredentials(env, key, primary);
+  const owner = env.GRANT_CREDENTIALS.objects.get(key), before = structuredClone(owner.values.get("credential"));
+  assert.equal(before.poolSyncPending, false);
+  if (corruption === "missing") env.values.delete(key);
+  else env.values.set(key, "{invalid fixture");
+  owner.object = new GrantCredentialObject(owner.state, env);
+  const put = env.POLICY_KV.put;
+  let writes = 0;
+  env.POLICY_KV.put = async (...args) => {
+    assert.equal(owner.values.get("credential").poolSyncPending, true, "repair records its publication obligation before writing KV");
+    writes++;
+    return put(...args);
+  };
+  await recoverGrantPools({ request: env.request });
+  await recoverGrantPools({ request: env.request });
+  assert.equal(writes, 1);
+  assert.deepEqual(owner.values.get("credential"), before);
+  assert.equal(env.values.get(key).credentialGeneration, before.generation);
+});
+
+test("activated repair finds a detached tombstone after failed revoke projection without restoring secrets", async () => {
+  const env = fixture();
+  await acceptGrantPoolBaseline("fresh", { request: env.request });
+  await recoverGrantPools({ request: env.request });
+  await putGrantCredentials(env, key, primary);
+  const put = env.POLICY_KV.put;
+  env.POLICY_KV.put = async () => { throw new Error("fixture KV unavailable"); };
+  await assert.rejects(() => revokeGrantCredentials(env, key));
+  const owner = env.GRANT_CREDENTIALS.objects.get(key), tombstone = structuredClone(owner.values.get("credential"));
+  assert.equal(tombstone.credential, undefined);
+  assert.equal(tombstone.poolSyncPending, true);
+  assert.equal((await pool(env)).hasAttachment, false);
+  owner.object = new GrantCredentialObject(owner.state, env);
+  env.POLICY_KV.put = put;
+  await recoverGrantPools({ request: env.request });
+  assert.deepEqual(owner.values.get("credential"), { ...tombstone, poolSyncPending: false });
+  assert.equal(env.values.get(key).enabled, false);
+  assert.ok(env.values.get(key).revokedAt);
+});
+
+test("activated recovery resumes bounded indexed pages without restarting at unchanged owners", async () => {
+  const env = fixture();
+  await acceptGrantPoolBaseline("fresh", { request: env.request });
+  await assert.rejects(() => recoverGrantPools({ request: env.request, repairCursor: key }), /only valid after activation/);
+  await recoverGrantPools({ request: env.request });
+  for (let i = 0; i < 40; i++) await putGrantCredentials(env, `oauth/policy/paused-${String(i).padStart(2, "0")}`, { ...primary, enabled: false });
+  env.values.delete("oauth/policy/paused-39");
+  let resume;
+  await assert.rejects(() => recoverGrantPools({ request: env.request, maxPages: 1 }), error => {
+    resume = error.repairCursor;
+    return error.message.includes("--repair-cursor") && resume === "oauth/policy/paused-31";
+  });
+  const pages = [];
+  await recoverGrantPools({ request: env.request, maxPages: 1, repairCursor: resume, onPage: page => pages.push(page.keys) });
+  assert.equal(pages[0].length, 8);
+  assert.ok(env.values.has("oauth/policy/paused-39"));
+});
+
 function fixture() {
   const values = new Map();
   const env = attachGrantCredentialNamespace({

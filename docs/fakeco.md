@@ -145,8 +145,14 @@ The workflow's fail-closed order is:
    prove the same admin path first receives an unauthenticated Access challenge
    and then succeeds with the service-token headers and admin bearer token.
 6. Idempotently register the policy-scoped smoke credential through the remote
-   admin API, then run readiness, catalog, credential-inspection, and live
-   inference smoke.
+   admin API, then run the authenticated account recovery driver. The configured
+   namespace is reused, so the first deployment requires explicit baseline
+   acceptance in **Access → Upstream → Account routing readiness**, followed by
+   a complete unchanged scan and activation. Later deployments reuse that
+   acceptance and repair indexed publication without another prompt.
+7. Run readiness, catalog, credential-inspection, and live inference smoke only
+   after account recovery succeeds. A health response alone cannot pass this
+   gate; failed activation leaves the admin recovery screen reachable.
 
 ClawRouter owns this deployment gate because it installs the Worker secret and
 authoritative proxy credential. Crabhelm may run a later integration check, but

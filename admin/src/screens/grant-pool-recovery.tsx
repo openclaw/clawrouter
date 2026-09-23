@@ -62,7 +62,7 @@ export function GrantPoolRecovery({ gatewayOrigin, demoMode }: { gatewayOrigin: 
         {state.phase === "kv" || state.phase === "index" ? <button type="button" disabled={busy} onClick={() => void act("advance", { scanRevision: state.scanRevision, phase: state.phase, cursor: state.cursor })}>Reconcile next page</button> : null}
         <button type="button" disabled={busy || !canActivate} onClick={() => void act("activate", { revision: state.revision })}>Activate account routing</button>
       </> : null}
-      <button type="button" disabled={busy} onClick={() => void act("repair", { cursor: repairCursor })}>{repairCursor ? "Repair next pending page" : "Repair pending account writes"}</button>
+      <button type="button" disabled={busy} onClick={() => void act("repair", { cursor: repairCursor })}>{repairCursor ? "Repair next indexed page" : "Repair account publication"}</button>
       <p>Repair makes no upstream provider requests. It does not reconnect, refresh, or revoke accounts.</p>
       {state.issues.length || state.overflow ? <>
         <p>For an unavailable owner, restore service and retry the scan. For a raw legacy account, use <code>pnpm cf:oauth:put</code> with its scope, reference, provider, and secret stdin/file, or <code>pnpm cf:oauth:revoke</code> to remove it. Missing owner storage with a retained index requires matched-storage recovery; do not delete the index. Then start a new scan.</p>

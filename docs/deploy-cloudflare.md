@@ -70,6 +70,7 @@ export CLOUDFLARE_ACCOUNT_ID=...
 export CLOUDFLARE_API_TOKEN=... # must be able to manage Zero Trust Access apps/policies
 export CLAWROUTER_ACCESS_GITHUB_ORGS=openclaw
 export CLAWROUTER_ACCESS_ADMIN_EMAILS=you@example.com
+export CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS=... # Cloudflare service-token UUIDs, not client IDs
 pnpm cf:access
 ```
 
@@ -90,8 +91,13 @@ cannot list identity providers. `CLAWROUTER_ACCESS_ALLOWED_*` remains available 
 email-domain exceptions; multiple include rules are ORed by Cloudflare Access.
 These settings control who can pass Cloudflare Access;
 `CLAWROUTER_ACCESS_ADMIN_*` controls who is an admin inside ClawRouter.
-`CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS` creates a separate Service Auth
-(`non_identity`) policy for automation. The default path-scoped Access
+`CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS` is required for managed Access provisioning
+and creates a separate Service Auth (`non_identity`) policy for automation.
+Missing, duplicate, or malformed UUIDs fail before any Cloudflare request, so
+omitting the variable cannot delete the recovery service policy. Use the matching
+client ID and secret as the request headers; the UUID belongs in the policy.
+See [Cloudflare service tokens](https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/).
+The default path-scoped Access
 destinations are `/dashboard/*`, `/v1/session*`, `/v1/playground/*`,
 `/v1/admin/*`, and `/v1/oauth/callback`. This stays within Cloudflare's
 five-destination per-application limit while still protecting the console
@@ -118,9 +124,12 @@ Set these GitHub Actions secrets for workflow deploys:
 CLOUDFLARE_API_TOKEN
 CLOUDFLARE_ACCOUNT_ID
 CLAWROUTER_ADMIN_TOKEN_SHA256
+CLAWROUTER_ADMIN_TOKEN                  # raw token matching the digest, for authenticated recovery
 CLAWROUTER_POLICY_KV_ID
 CLAWROUTER_POLICY_KV_PREVIEW_ID
 CLAWROUTER_SMOKE_KEY
+CLAWROUTER_ACCESS_CLIENT_ID             # required when Access protects the admin route
+CLAWROUTER_ACCESS_CLIENT_SECRET         # configure together with the client ID
 CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY # optional smoke-only upstream key
 ```
 
@@ -134,6 +143,7 @@ CLAWROUTER_USAGE_DLQ                   # optional, defaults to clawrouter-usage-
 CLAWROUTER_CONTENT_BUCKET              # optional, defaults to clawrouter-content
 CLAWROUTER_ACCESS_TEAM_DOMAIN
 CLAWROUTER_ACCESS_AUD
+CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS   # comma-separated service-token UUIDs; required for cf:access
 CLAWROUTER_ACCESS_ADMIN_EMAILS        # comma-separated admin emails
 CLAWROUTER_ACCESS_ADMIN_DOMAINS       # optional comma-separated admin domains
 CLAWROUTER_ACCESS_DEFAULT_TENANT      # optional, defaults to default
@@ -800,7 +810,18 @@ The CLI uses the same actions: `pnpm cf:accounts -- --status`, one-time explicit
 `pnpm cf:accounts`. The driver saves bounded progress and performs at most one
 additional verification scan after backfill changes. It does not accept a
 baseline automatically or retry an unresolved owner. Routine later deployments
-reuse accepted activation and repair indexed pending writes.
+reuse accepted activation and inspect every indexed key, including active
+accounts and detached tombstones whose KV projection may be missing. Repair
+keeps the owner's publication obligation until both the index and canonical KV
+projection are acknowledged. Matching projections are not rewritten. A failure
+remains visible; the driver does not retry writes or switch to environment
+credentials to hide it.
+
+Activated repair uses pages of 32 keys. If the CLI reaches its page limit, use
+the exact `--repair-cursor KEY` command it prints to continue after that page;
+restarting without the cursor starts at the first indexed key. This cursor is
+only for activated repair and cannot skip the initial migration scan. The
+console's **Repair next indexed page** action uses the same cursor.
 
 Manual `cf:deploy` and both hosted deploy workflows run this driver before
 golden provider smoke. Production now needs the raw `CLAWROUTER_ADMIN_TOKEN`
@@ -810,7 +831,10 @@ when needed. FakeCo installs and proves its existing admin access before
 recovery. Its workflow reuses a configured namespace, so first deployment needs
 explicit baseline acceptance. A failed activation fails deploy qualification,
 but leaves the running admin recovery surface accessible. `cf:doctor` reports
-activation independently of provider configuration.
+activation independently of provider configuration and always queries the
+resolved deployment URL, even when `CLAWROUTER_BASE_URL` is omitted. Missing or
+invalid local admin credentials and incomplete Access credential pairs fail
+preflight before any remote permission probe.
 
 Treat POLICY_KV, ACCESS_CONTROL and GRANT_CREDENTIALS as one matched storage set.
 Partial binding swaps or partial restores are not routine deployments and

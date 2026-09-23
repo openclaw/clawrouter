@@ -1,12 +1,15 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import test from "node:test";
 
+const serviceTokenId = "11111111-1111-4111-8111-111111111111";
 const fixtureEnv = {
   CLOUDFLARE_ACCOUNT_ID: "account-placeholder",
   CLOUDFLARE_API_TOKEN: "fixture-token",
   CLAWROUTER_ACCESS_ALLOWED_DOMAINS: "example.com",
   CLAWROUTER_ACCESS_DOMAIN: "clawrouter.example.com",
+  CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS: serviceTokenId,
 };
 
 test("Access provisioning protects the browser OAuth callback by default", () => {
@@ -231,4 +234,25 @@ test("Access provisioning checks unmanaged policies beyond their first page", ()
   assert.equal(result.status, 1);
   assert.match(result.error, /unmanaged policies.*Unmanaged bypass/);
   assert.ok(result.calls.every((call) => call.method === "GET"));
+});
+
+for (const ids of ["", "   ", "not-a-service-token-uuid", `${serviceTokenId},${serviceTokenId}`]) test(`managed Access rejects ${JSON.stringify(ids)} service-token IDs before API calls`, () => {
+  const result = provision({ pages: [[accessApp("intended-app", "clawrouter.example.com/dashboard/*")]] }, { CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS: ids });
+  assert.equal(result.status, 1);
+  assert.match(result.error, /CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS/);
+  assert.deepEqual(result.calls, []);
+});
+
+test("production Access keeps the recovery service policy with configured UUIDs", () => {
+  const result = provision({
+    pages: [[accessApp("intended-app", "clawrouter.example.com/dashboard/*")]],
+    policyPages: [[{ id: "service-policy", name: "ClawRouter Console Service Tokens", decision: "non_identity" }]],
+  });
+  assert.equal(result.status, 0, result.error);
+  const policy = result.calls.find(call => call.method === "PUT" && call.path.endsWith("/policies/service-policy"));
+  assert.equal(policy.body.decision, "non_identity");
+  assert.deepEqual(policy.body.include, [{ service_token: { token_id: serviceTokenId } }]);
+  assert.equal(result.calls.some(call => call.method === "DELETE"), false);
+  const workflow = readFileSync(new URL("../.github/workflows/deploy-cloudflare.yml", import.meta.url), "utf8");
+  assert.match(workflow, /^\s+CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS: \$\{\{ vars\.CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS \}\}$/m);
 });

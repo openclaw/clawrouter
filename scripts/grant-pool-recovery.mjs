@@ -19,12 +19,13 @@ export async function acceptGrantPoolBaseline(baseline, { request = recoveryRequ
   return request(`${prefix}/baseline`, { method: "POST", body: { revision: state.revision, baseline, confirmed: true } });
 }
 
-export async function recoverGrantPools({ request = recoveryRequest, maxPages = 128, onPage = () => {} } = {}) {
+export async function recoverGrantPools({ request = recoveryRequest, maxPages = 128, repairCursor = null, onPage = () => {} } = {}) {
   if (!Number.isSafeInteger(maxPages) || maxPages < 1 || maxPages > 1024) throw new Error("maxPages must be from 1 to 1024");
+  if (repairCursor !== null && (typeof repairCursor !== "string" || !repairCursor || repairCursor.length > 1024)) throw new Error("repair cursor must be a nonempty indexed key");
   let state = await grantPoolStatus({ request });
   if (!state.baseline) throw new Error(`account routing baseline is not accepted. ${nextAction}`);
   if (state.activatedAt) {
-    let cursor = null;
+    let cursor = repairCursor;
     for (let page = 0; page < maxPages; page++) {
       const result = await request(`${prefix}/repair`, { method: "POST", body: { cursor } });
       onPage(result);
@@ -32,8 +33,10 @@ export async function recoverGrantPools({ request = recoveryRequest, maxPages = 
       if (!result.cursor) return result.readiness;
       cursor = result.cursor;
     }
-    throw new Error("account recovery page limit reached; rerun recovery to continue");
+    const quotedCursor = `'${cursor.replaceAll("'", "'\\''")}'`;
+    throw Object.assign(new Error(`account recovery page limit reached; resume with pnpm cf:accounts -- --repair-cursor ${quotedCursor}`), { repairCursor: cursor });
   }
+  if (repairCursor !== null) throw new Error("repair cursor is only valid after activation; initial migration must complete its saved scan");
   if (state.phase === "idle" || state.phase === "complete") state = await request(`${prefix}/scan`, { method: "POST", body: { revision: state.revision } });
   let verificationStarted = false;
   for (let page = 0; page < maxPages; page++) {
@@ -59,13 +62,14 @@ export async function recoverGrantPools({ request = recoveryRequest, maxPages = 
 
 if (resolve(process.argv[1] ?? "") === fileURLToPath(import.meta.url)) {
   const args = process.argv.slice(2).filter(arg => arg !== "--");
-  if (args.length > 1 || args.some(arg => !["--status", "--accept-existing", "--accept-fresh"].includes(arg))) throw new Error("usage: pnpm cf:accounts [-- --status | --accept-existing | --accept-fresh]");
+  const repairCursor = args[0] === "--repair-cursor" && args.length === 2 ? args[1] : null;
+  if (repairCursor === null && (args.length > 1 || args.some(arg => !["--status", "--accept-existing", "--accept-fresh"].includes(arg)))) throw new Error("usage: pnpm cf:accounts [-- --status | --accept-existing | --accept-fresh | --repair-cursor KEY]");
   if (args[0] === "--status") console.log(JSON.stringify(await grantPoolStatus(), null, 2));
   else if (args[0]?.startsWith("--accept-")) {
     const state = await acceptGrantPoolBaseline(args[0].slice("--accept-".length));
     console.log(`account baseline accepted: ${state.baseline}; run pnpm cf:accounts to scan and activate`);
   } else {
-    const state = await recoverGrantPools({ onPage: result => {
+    const state = await recoverGrantPools({ repairCursor, onPage: result => {
       for (const outcome of result.outcomes) if (outcome.reason) console.error(JSON.stringify(outcome));
     } });
     console.log(`account attachment routing active at revision ${state.revision}`);
