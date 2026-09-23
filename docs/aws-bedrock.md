@@ -114,6 +114,10 @@ the repository variable described above.
 
 ### Policy- or tenant-scoped grant
 
+Set `CLAWROUTER_BASE_URL` and `CLAWROUTER_ADMIN_TOKEN` for the running router
+before importing a grant. See [upstream grant setup](deploy-cloudflare.md#upstream-grants)
+for Cloudflare Access credentials and local targets.
+
 Prefer a scoped upstream grant when different ClawRouter policies or tenants
 must use different AWS principals. Build the credential bundle from values
 already present in the operator environment, then send it through the helper's

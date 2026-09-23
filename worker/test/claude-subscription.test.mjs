@@ -68,6 +68,7 @@ test("Claude credential alarms poll quota and keep warm only when explicitly ena
       get() {
         return { async fetch(url, init) {
           const path = new URL(url).pathname, body = JSON.parse(init.body);
+          if (path === "/grant-pools/sync") return new Response("updated");
           if (path === "/grant-pools/states") return Response.json({ states: {} });
           if (path === "/grant-pools/feedback") { feedback.push(body); return new Response("updated"); }
           return new Response("not found", { status: 404 });
@@ -138,7 +139,7 @@ test("disabled Claude grants cancel maintenance and reject credential materializ
   const values = new Map();
   const env = attachGrantCredentialNamespace({
     POLICY_KV: {
-      async get(key) { return structuredClone(values.get(key) ?? null); },
+      async get(key, type) { const value = values.get(key) ?? null; return type === "text" && value !== null ? JSON.stringify(value) : structuredClone(value); },
       async put(key, value) { values.set(key, JSON.parse(value)); },
     },
     ACCESS_CONTROL: {
