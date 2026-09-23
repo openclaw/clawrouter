@@ -323,6 +323,20 @@ proxy smoke key with access to every selected provider. Readiness reports live
 checks as `verified`, `failed`, or `stale`; a configured provider without a live
 check is `unverified`.
 
+The deploy workflow's optional `openai_smoke_model` input selects the OpenAI
+smoke model. Leave it empty to use the first eligible catalog model, currently
+`openai/gpt-5.6`. Set `live_providers=openai` and
+`openai_smoke_model=openai/gpt-6-astra` to use Astra for that same single provider
+request. This does not reorder models or change keys or budgets. For a local
+smoke, the equivalent existing override is
+`CLAWROUTER_SMOKE_MODEL_OPENAI=openai/gpt-6-astra`.
+
+The Chat smoke keeps its small 16-token cap. The router maps it to
+`max_completion_tokens` for Astra, which includes reasoning tokens, so the
+request may produce no visible answer. A successful smoke proves the HTTP
+request and its durable usage-event visibility; it does not validate generated
+text, WebSockets, or native Codex behavior.
+
 ## Cloudflare Access Console
 
 Protect the Worker route with a Cloudflare Access application. Use

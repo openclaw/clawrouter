@@ -11,6 +11,42 @@ const {
   prepareManifestRequest,
 } = await import("../worker/proxy-selection.ts");
 
+test("an omitted or empty OpenAI smoke override keeps the first eligible model", () => {
+  for (const env of [{}, { CLAWROUTER_SMOKE_MODEL_OPENAI: "" }]) {
+    const { target } = buildProviderSmokePlan(snapshot, env).providers.find((entry) => entry.id === "openai");
+    assert.equal(target.model, "openai/gpt-5.6");
+    assert.equal(target.body.model, target.model);
+  }
+});
+
+test("the Astra smoke override reaches the native Chat completion-token transform", () => {
+  const { target } = buildProviderSmokePlan(snapshot, {
+    CLAWROUTER_SMOKE_MODEL_OPENAI: "openai/gpt-6-astra",
+  }).providers.find((entry) => entry.id === "openai");
+  assert.equal(target.route, "/v1/chat/completions");
+  assert.equal(target.method, "POST");
+  assert.equal(target.model, "openai/gpt-6-astra");
+  const selection = concreteOpenAiSelection(target.route, target.body, {});
+  assert.equal(isSelectionFailure(selection), false);
+  assert.equal(selection.model.id, target.model);
+  assert.deepEqual(selection.body, {
+    model: "gpt-6-astra",
+    messages: [{ role: "user", content: "reply with ok" }],
+    max_completion_tokens: 16,
+  });
+  assert.equal(Object.hasOwn(selection.body, "max_tokens"), false);
+  assert.equal(target.body.model, target.model);
+  assert.equal(target.body.max_tokens, 16);
+});
+
+test("OpenAI smoke overrides reject missing, empty, or foreign routing prefixes", () => {
+  for (const model of ["gpt-6-astra", "openai/", "anthropic/claude-sonnet-4-6"]) {
+    assert.throws(() => buildProviderSmokePlan(snapshot, {
+      CLAWROUTER_SMOKE_MODEL_OPENAI: model,
+    }), /must match a catalog id or provider model prefix/);
+  }
+});
+
 test("bundled smoke models belong to the selected endpoint's catalog", () => {
   const plan = buildProviderSmokePlan(snapshot, {});
   for (const { id, target } of plan.providers) {

@@ -33,6 +33,7 @@
 
 - Correct Together GLM-5.2 input reservations to its published 1,048,575-token ceiling, preserving token rates and measured settlement while rejecting underfunded large requests before dispatch.
 - Verify durable usage visibility after each successful deployment smoke request with the same caller key and a bounded read-only poll. Preserve provider health and report ingestion visibility failures without repeating paid requests.
+- Allow the Cloudflare deploy workflow to select an OpenAI smoke model, including Astra, while an empty selection preserves the existing catalog default and single-request smoke.
 
 - Restrict personal usage audit events to the authenticated principal, or unattributed events for the authenticated service key, while preserving shared policy totals and administrator audit access.
 - Distinguish accounted cost estimates, fixed tariffs, unavailable prices, and budget reservations throughout the console; show zero amounts, budget scopes, and UTC monthly limits explicitly.
