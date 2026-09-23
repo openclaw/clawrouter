@@ -471,6 +471,34 @@ for (const recovery of ["revoke", "reconnect"]) test(`legacy revoke keeps origin
   assert.deepEqual(previousProviders, ["old-provider", "old-provider"]);
 });
 
+for (const [name, original, usable] of [
+  ["scalar", { credential: "scalar-private" }, true],
+  ["bundle", { credentials: { apiKey: "bundle-private" } }, true],
+  ["invalid", { credential: "" }, false],
+  ["reauth", { credentialStore: "durable_object", credentialStatus: "reauth_required", hasAccessToken: true }, false],
+]) test(`failed legacy ${name} replacement restores only its previous pool eligibility`, async () => {
+  const key = "oauth/policy/custom-account", previous = { provider: "openai", kind: "api_key", enabled: true, ...original };
+  const values = new Map([[key, previous]]), env = credentialEnv(values), members = new Set(usable ? ["openai"] : []);
+  env.GRANT_CREDENTIALS.get(key);
+  const owner = env.GRANT_CREDENTIALS.objects.get(key), put = owner.state.storage.put;
+  let fail = true;
+  owner.state.storage.put = async (...args) => { if (fail) { fail = false; throw new Error("fixture owner write failed"); } return put(...args); };
+  env.ACCESS_CONTROL.get = () => ({ fetch: async (_url, init) => {
+    const body = JSON.parse(init.body);
+    members.delete(body.previousProvider);
+    if (body.enabled) members.add(body.provider);
+    return new Response("updated");
+  } });
+  await assert.rejects(() => putGrantCredentials(env, key, { provider: "anthropic", kind: "api_key", credential: "replacement-private" }));
+  assert.deepEqual([...members], usable ? ["openai"] : []);
+  assert.equal(owner.values.has("credential"), false);
+  assert.deepEqual(values.get(key), previous);
+  await revokeGrantCredentials(env, key);
+  assert.doesNotMatch(JSON.stringify(owner.values.get("credential")), /scalar-private|bundle-private|replacement-private/);
+  assert.equal(values.get(key).hasCredential, false);
+  assert.equal(values.get(key).hasAccessToken, false);
+});
+
 function credentialEnv(values) {
   return attachGrantCredentialNamespace({
     POLICY_KV: {

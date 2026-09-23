@@ -367,7 +367,7 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string): 
   let grant: UpstreamGrant;
   let existing: UpstreamGrant | null;
   if (action === "revoke" && request.method === "POST") {
-    const body = request.body === null ? {} : mutationObject(await readJson<unknown>(request), "invalid_upstream_grant", "revocation metadata");
+    const body = mutationObject(await readJson<unknown>(request, {}), "invalid_upstream_grant", "revocation metadata");
     grant = await revokeGrantCredentials(env, key, normalizeRevokeMetadata(body));
   }
   else if (!action && request.method === "PUT") {

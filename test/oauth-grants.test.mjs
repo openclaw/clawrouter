@@ -118,6 +118,21 @@ test("CLI replaces raw legacy tokens and revokes legacy metadata without alterin
   assert.match(missing.stderr, /not registered/);
 });
 
+test("Worker revocation accepts bodyless requests and empty streams but rejects malformed or oversized metadata", async (context) => {
+  const fixture = await scriptFixture(context);
+  assert.equal((await fixture.admin(grantPath, "PUT", { provider: "anthropic", kind: "api_key", credential: "access-fixture" })).status, 200);
+  const headers = { authorization: "Bearer admin-fixture", "content-type": "application/json" };
+  for (const body of [undefined, ""]) {
+    const response = await fixture.dispatch(new Request(`http://127.0.0.1${grantPath}/revoke`, { method: "POST", headers, body }));
+    assert.equal(response.status, 200, await response.text());
+  }
+  for (const body of [" ", "not-json", "null", "[]"]) {
+    assert.equal((await fixture.dispatch(new Request(`http://127.0.0.1${grantPath}/revoke`, { method: "POST", headers, body }))).status, 400);
+  }
+  const oversized = await fixture.dispatch(new Request(`http://127.0.0.1${grantPath}/revoke`, { method: "POST", headers: { ...headers, "content-length": String(8 * 1024 * 1024 + 1) } }));
+  assert.equal(oversized.status, 413, "optional body never bypasses the declared size limit");
+});
+
 test("CLI rejects retired KV selectors, unsafe local targets and argv secrets before network or secret input", async (context) => {
   const fixture = await scriptFixture(context);
   for (const name of ["oauth-put.mjs", "oauth-revoke.mjs"]) {
@@ -199,7 +214,7 @@ async function scriptFixture(context) {
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   context.after(async () => { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); rmSync(dir, { force: true, recursive: true }); });
   return {
-    dir, values, env, requests,
+    dir, values, env, requests, dispatch,
     run(name, args, extraEnv = {}, input = "") {
       return new Promise((resolveResult, reject) => {
         const child = spawn(process.execPath, [resolve("scripts", name), ...args], { env: { PATH: dir, NODE_NO_WARNINGS: "1", CLAWROUTER_BASE_URL: `http://127.0.0.1:${server.address().port}`, CLAWROUTER_ADMIN_TOKEN: "admin-fixture", TEST_ACCESS_TOKEN: "access-fixture", ...extraEnv }, timeout: 10_000 });

@@ -1,7 +1,7 @@
 import snapshotJson from "./generated/provider-snapshot.json" with { type: "json" };
 import { authorityCall } from "./authority.ts";
 import { grantCoolingDown, grantQuotaRatio, observeGrantQuota, observeGrantQuotaProbe } from "./grant-quota.ts";
-import { syncGrantPoolIndex } from "./grant-selection.ts";
+import { grantUsable, syncGrantPoolIndex } from "./grant-selection.ts";
 import { applyProviderCredential, applyTransportHeaders, quotaProbeForGrant, requiredGrantTemplate, transformTransportBody, transportForGrant } from "./provider-auth.ts";
 import type { CompiledGrantTransport, CompiledProvider, Env, GrantRuntimeState, ProviderSnapshot, RefreshConfig, UpstreamGrant } from "./types";
 import { errorResponse, HttpError, json, readJson } from "./utils.ts";
@@ -656,6 +656,14 @@ async function legacyGrantMetadata(env: Env, key: string): Promise<UpstreamGrant
     catch { throw new HttpError(400, "invalid_upstream_grant", "legacy grant metadata is invalid JSON"); }
   }
   const metadata = stripLegacySecrets(value) as Record<string, unknown>;
+  const legacy = value as UpstreamGrant;
+  // Compensation needs the old grant's eligibility after its secrets are
+  // stripped. Preserve existing owner status; never revive a denied projection.
+  if (legacy.credentialStore !== "durable_object") Object.assign(metadata, {
+    credentialStore: "durable_object", credentialStatus: grantUsable(legacy) ? "active" : "reauth_required",
+    hasCredential: !!legacy.credential || Object.keys(legacy.credentials ?? {}).length > 0,
+    hasAccessToken: !!legacy.accessToken, hasRefreshToken: !!legacy.refreshToken,
+  });
   for (const [canonical, alias] of [["tokenType", "token_type"], ["expiresAt", "expires_at"], ["accountId", "account_id"], ["createdAt", "created_at"], ["updatedAt", "updated_at"], ["revokedAt", "revoked_at"]]) {
     if (metadata[canonical] === undefined && metadata[alias] !== undefined) metadata[canonical] = metadata[alias];
     delete metadata[alias];
