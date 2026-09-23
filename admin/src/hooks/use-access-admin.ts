@@ -68,16 +68,11 @@ export function useAccessAdmin(dependencies: Dependencies) {
     hydrateAdmin({ policies: demo.keys, credentials: demo.credentials, connections: demo.connections, users: demo.users, bindings: demo.bindings, grants: demo.upstreamGrants, rules: demo.assignmentRules, fusion: demo.fusion }, false, demo.session, demo.providers);
   }
 
-  function editPolicy(item: AccessPolicy) {
-    policy.policies.edit(item);
-    principal.bindings.setForm((current) => ({ ...current, policyId: item.policyId }));
-  }
-
   return {
     loaded,
     setLoaded,
     tab: { value: tab, set: setTab },
-    policies: { ...policy.policies, edit: editPolicy },
+    policies: policy.policies,
     credentials: policy.credentials,
     connections: connection.connections,
     bindings: principal.bindings,
