@@ -138,7 +138,11 @@ try {
     const unsettled = await (await stub.fetch("https://budget/fixture-unsettled")).json();
     return { spent: status.spentMicros, unsettled: unsettled.count };
   }));
-  for (const tool of [{ type: "web_search" }, { type: "file_search" }, { type: "code_interpreter" }, { type: "image_generation" }, { type: "shell", environment: { type: "container_reference", container_id: "cntr_fixture" } }]) for (const [name, policyLimit, providerLimit, fixed, servedInput] of [
+  for (const [toolCase, toolBody] of [
+    ...[{ type: "web_search" }, { type: "file_search" }, { type: "code_interpreter" }, { type: "image_generation" }, { type: "shell", environment: { type: "container_reference", container_id: "cntr_fixture" } }].map(tool => [tool.type, { tools: [tool] }]),
+    ["prompt", { prompt: { id: "pmpt_fixture", version: "1" } }],
+    ["additional_tools", { tools: [], input: [{ type: "additional_tools", role: "developer", tools: [{ type: "file_search" }] }] }],
+  ]) for (const [name, policyLimit, providerLimit, fixed, servedInput] of [
     ["policy", policy.monthlyBudgetMicros, null, null, "known_served"],
     ["provider", null, policy.monthlyBudgetMicros, null, "known_served"],
     ["unmetered", null, null, null, "known_served"],
@@ -148,19 +152,19 @@ try {
   ]) {
     await authorityObject.fetch("https://authority/policies/put", { method: "POST", body: JSON.stringify({ policyId: "fixture", policy: { ...policy, monthlyBudgetMicros: policyLimit, requestCostMicros: fixed } }) });
     await authorityObject.fetch("https://authority/connections/put", { method: "POST", body: JSON.stringify({ providerId: "openai", enabled: true, monthlyBudgetMicros: providerLimit }) });
-    const before = await ledgerFacts(), session = `hosted-tool-${tool.type}-${name}`;
+    const before = await ledgerFacts(), session = `hosted-tool-${toolCase}-${name}`;
     const beforeFrames = (await (await upstream.fetch("https://fixture.example/state")).json()).frames.length;
     const opened = await dispatch("/v1/responses", { headers: { upgrade: "websocket", "x-clawrouter-session-id": session } });
     assert.equal(opened.status, 101);
     const current = opened.webSocket; current.accept(); sockets.push(current);
     const events = []; current.addEventListener("message", ({ data }) => events.push(JSON.parse(data)));
-    current.send(JSON.stringify({ type: "response.create", model: "openai/gpt-6-astra", service_tier: "priority", input: servedInput, max_output_tokens: 32, tools: [tool] }));
+    current.send(JSON.stringify({ type: "response.create", model: "openai/gpt-6-astra", service_tier: "priority", input: servedInput, max_output_tokens: 32, ...toolBody }));
     const denied = fixed == null && (policyLimit != null || providerLimit != null);
     await until(() => events.some(({ type }) => type === (denied ? "error" : "response.completed")));
     if (denied) assert.equal(events.find(({ type }) => type === "error").error.code, "pricing_required");
     const after = (await (await upstream.fetch("https://fixture.example/state")).json()).frames;
     assert.equal(after.length, beforeFrames + (denied ? 0 : 1));
-    if (!denied) assert.deepEqual(after.at(-1).tools, [tool]);
+    if (!denied) for (const [key, value] of Object.entries(toolBody)) assert.deepEqual(after.at(-1)[key], value);
     let receipt;
     await until(async () => {
       const matched = (await (await dispatch("/v1/usage")).json()).usage.events.filter(({ session_id }) => session_id === session);

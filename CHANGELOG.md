@@ -4,7 +4,7 @@
 
 - Keep failed console refreshes visible after successful edits, label stale usage with its snapshot time, and show unavailable spend and balances as unknown.
 
-- Reject incomplete prices for Sonar Pro mandatory request fees, hosted OpenAI tools, and Gemini hosted work or opaque cached tools under measured budgets; align catalog and Fusion preflight admission, preserve fixed tariffs, and mark unmetered costs unavailable.
+- Reject incomplete prices for Sonar Pro mandatory request fees, hosted OpenAI and Anthropic tools, and opaque prompt/cache configurations under measured budgets; cover Responses Lite declarations, align catalog and Fusion preflight admission, preserve fixed tariffs, and mark unmetered costs unavailable.
 
 - Restrict personal usage audit events to the authenticated principal, or unattributed events for the authenticated service key, while preserving shared policy totals and administrator audit access.
 

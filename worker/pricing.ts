@@ -33,11 +33,18 @@ export type PricingGap = "model_request_fee" | "hosted_tool_fee" | "hosted_tool_
 export function requestPricingGap(pricing: ModelPricing | null | undefined, body: Record<string, unknown>, requestFormat: string): PricingGap | null {
   if (pricing?.unpricedCosts?.includes("request_fee")) return "model_request_fee";
   if (requestFormat === "openai.chat_completions" && isObject(body.web_search_options)) return "hosted_tool_fee";
+  // Saved Responses prompts retain tools; an opaque reference cannot prove
+  // that the effective request has only the declared token charges.
+  if (requestFormat === "openai.responses" && body.prompt != null) return "hosted_tool_usage";
   // CachedContent retains tools and toolConfig. The reference alone cannot
   // prove that generation has only the token costs represented by this card.
   if (requestFormat === "google.generate_content" && googleField(body, "cachedContent", "cached_content") != null) return "hosted_tool_usage";
-  if (!Array.isArray(body.tools)) return null;
-  for (const tool of body.tools) {
+  // Responses Lite puts executable declarations in additional_tools input
+  // items. Do not search message content, function schemas, or tool results.
+  const inputTools = requestFormat === "openai.responses" && Array.isArray(body.input)
+    ? body.input.flatMap((item) => isObject(item) && item.type === "additional_tools" && Array.isArray(item.tools) ? item.tools : []) : [];
+  const tools = (Array.isArray(body.tools) ? body.tools : []).concat(inputTools);
+  for (const tool of tools) {
     if (!isObject(tool)) continue;
     // Inspect protocol declarations, never function names or user JSON schemas.
     if (requestFormat === "openai.responses" && typeof tool.type === "string") {
@@ -45,6 +52,9 @@ export function requestPricingGap(pricing: ModelPricing | null | undefined, body
       if (tool.type === "shell" && isObject(tool.environment) && ["container_auto", "container_reference"].includes(String(tool.environment.type))) return "hosted_tool_fee";
     }
     if (requestFormat === "anthropic.messages" && typeof tool.type === "string" && /^web_search_\d{8}$/.test(tool.type)) return "hosted_tool_fee";
+    // Anthropic waives execution fees when these web-tool versions are present.
+    // Their search fee, when applicable, is still handled by the branch above.
+    if (requestFormat === "anthropic.messages" && typeof tool.type === "string" && /^code_execution_\d{8}$/.test(tool.type) && !tools.some((candidate) => isObject(candidate) && typeof candidate.type === "string" && /^web_(?:search|fetch)_\d{8}$/.test(candidate.type) && candidate.type.slice(-8) >= "20260209")) return "hosted_tool_fee";
     if (requestFormat === "google.generate_content") {
       if ([["googleSearch", "google_search"], ["googleSearchRetrieval", "google_search_retrieval"], ["googleMaps", "google_maps"]].some(([camel, proto]) => isObject(googleField(tool, camel, proto)))) return "hosted_tool_fee";
       // These tools have token charges rather than a flat tool fee, but their
