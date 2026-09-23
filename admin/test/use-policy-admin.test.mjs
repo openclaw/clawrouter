@@ -16,7 +16,7 @@ const policyFormFromPolicy = new Function("currencyInput", `${stripTypeScriptTyp
 
 const shell = await readFile(new URL("../src/app-shell.tsx", import.meta.url), "utf8");
 const addStart = shell.indexOf("onAdd={(service) => {") + "onAdd={(service) => {".length;
-const catalogAdd = new Function("setPolicyForm", "navigateTo", "service", shell.slice(addStart, shell.indexOf("\n            }}", addStart)));
+const catalogAdd = new Function("setPolicyForm", "setAccessTab", "navigateTo", "service", shell.slice(addStart, shell.indexOf("\n            }}", addStart)));
 
 test("bootstrap initializes once, preserves an early New draft, and clean selected rows reconcile", () => {
   const fixture = mount();
@@ -333,7 +333,12 @@ for (const action of ["toggle", "group", "catalog"]) {
       for (let repeat = 0; repeat < 2; repeat += 1) {
         if (action === "toggle") owner.toggleProvider("provider_b");
         if (action === "group") owner.setProviderGroup(["provider_a"], true);
-        if (action === "catalog") catalogAdd(owner.setForm, (view) => navigated.push(view), { provider: "provider_b" });
+        if (action === "catalog") catalogAdd(
+          (patch) => { navigated.push("draft"); owner.setForm(patch); },
+          (tab) => navigated.push(`tab:${tab}`),
+          (view) => navigated.push(`view:${view}`),
+          { provider: "provider_b" },
+        );
       }
       const expectedWildcard = wildcard && action !== "toggle";
       const expectedProviders = expectedWildcard ? [] : wildcard ? ["provider_a", "provider_b", "provider_c"] : action === "catalog" ? ["provider_a", "provider_b"] : ["provider_a"];
@@ -344,7 +349,7 @@ for (const action of ["toggle", "group", "catalog"]) {
       assert.equal(form.allProviders, expectedWildcard);
       assert.equal(form.enabled, false);
       assert.equal(form.monthlyBudgetMicros, "25");
-      if (action === "catalog") assert.deepEqual(navigated, ["policies", "policies"]);
+      if (action === "catalog") assert.deepEqual(navigated, ["draft", "tab:policies", "view:policies", "draft", "tab:policies", "view:policies"]);
       const nextSave = fixture.render().policies.save(event);
       const payload = JSON.parse(fixture.requests[1].init.body);
       assert.deepEqual(payload, { ...submitted, providers: expectedProviders, allProviders: expectedWildcard });

@@ -164,6 +164,7 @@ export function AppShell() {
                 allProviders: current.allProviders,
                 providers: current.allProviders || current.providers.includes(service.provider) ? current.providers : [...current.providers, service.provider].sort(),
               }));
+              setAccessTab("policies");
               navigateTo("policies");
             }}
           />

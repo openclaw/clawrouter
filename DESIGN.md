@@ -82,6 +82,9 @@ switch between associated panels.
 Inspector list rows are buttons only when they have an available action. Policy
 links open a loaded policy for administrators after any dirty-draft discard is
 accepted; informational access summaries and unavailable references stay static.
+Catalog **Add to selected policy** opens the Policies tab and updates the current
+or New draft without discarding edits or saving it. Repeated additions keep each
+service selected once.
 
 `pnpm --dir admin test:browser` builds the console and runs desktop/mobile
 screenshot, accessibility, keyboard-focus, and self-service credential checks.
