@@ -191,10 +191,10 @@ function FusionReadinessPanel({ readiness }: { readiness: FusionReadiness | null
         {readiness.calls.map((call) => <article key={`${call.stage}-${call.index ?? "final"}`} className={call.executable ? "ready" : "blocked"}>
           <span>{call.stage === "synthesizer" ? "FINAL" : `A${call.index}`}</span>
           <div><strong>{call.model}</strong><small>{call.provider} · {call.status}</small>{call.reasons.map((reason) => <em key={reason}>{reason}</em>)}</div>
-          <b>{formatMicros(call.estimatedReservationMicros)}</b>
+          <b>{call.estimateBasis === "unpriced_request" ? "Price unavailable" : formatMicros(call.estimatedReservationMicros)}</b>
         </article>)}
       </div>
-      <div className="fusionReadinessEstimate"><span>Eligible-call reservation</span><strong>{formatMicros(readiness.estimatedReservationMicros)}</strong><small>{readiness.estimateNote} {readiness.budgetConfigured ? `${readiness.remainingBudgetMicros == null ? "Budget unavailable" : `${formatMicros(readiness.remainingBudgetMicros)} remains`}${readiness.budgetSufficientForAll === false ? "; not enough for every eligible call" : ""}.` : "Policy is unmetered."}</small></div>
+      <div className="fusionReadinessEstimate"><span>Eligible-call reservation</span><strong>{readiness.calls.some((call) => call.executable && call.estimateBasis === "unpriced_request") ? "Price unavailable" : formatMicros(readiness.estimatedReservationMicros)}</strong><small>{readiness.estimateNote} {readiness.budgetConfigured ? `${readiness.remainingBudgetMicros == null ? "Budget unavailable" : `${formatMicros(readiness.remainingBudgetMicros)} remains`}${readiness.budgetSufficientForAll === false ? "; not enough for every eligible call" : ""}.` : "Policy is unmetered."}</small></div>
     </section>
   );
 }

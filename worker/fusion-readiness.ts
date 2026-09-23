@@ -1,13 +1,17 @@
 import type { FusionConfig, FusionReadiness, FusionReadinessCall } from "../shared/contracts";
 import { buildAdviserBody, buildAggregatorBody, buildFusionReservationProposals } from "./fusion.ts";
-import { estimateModelCost } from "./pricing.ts";
-import type { AccessPolicyEntry, CompiledModel } from "./types.ts";
+import { validateBudgetReservation } from "./accounting.ts";
+import { estimateCost } from "./proxy-accounting.ts";
+import type { AccessPolicyEntry, CompiledModel, ProviderConnection } from "./types.ts";
+import { HttpError } from "./utils.ts";
 
 export interface FusionReadinessRoute {
   modelId: string;
   providerId: string;
   providerDisplayName: string;
   endpointId: string;
+  requestFormat: string;
+  connection?: ProviderConnection;
   model: CompiledModel;
 }
 
@@ -74,6 +78,7 @@ export function fusionReadiness(config: FusionConfig, entry: AccessPolicyEntry, 
     budgetSufficientForAll,
     estimateNote: entry.policy.requestCostMicros != null
       ? "Exact configured price for currently eligible calls; fail-open adviser reservations may be lower."
+      : calls.some((call) => call.executable && call.estimateBasis === "unpriced_request") ? "Complete prices are unavailable for some eligible calls. Token rates do not cover their request fees or hosted work."
       : "Advisers use configured bounds; the synthesizer uses manifest maximum input and default output. Live request parameters can reserve more.",
     calls,
   };
@@ -82,7 +87,6 @@ export function fusionReadiness(config: FusionConfig, entry: AccessPolicyEntry, 
 function applyBudgetReadiness(calls: FusionReadinessCall[], synthesizer: FusionReadinessCall, budget: FusionBudgetReadiness): void {
   if (budget.configured && budget.ledger === "unavailable") block(synthesizer, "Budget ledger is unavailable.");
   if (budget.configured && budget.ledger === "blocked") block(synthesizer, "Policy budget is disabled.");
-  if (budget.configured && synthesizer.estimateBasis === "flat_fallback") block(synthesizer, "Budgeted calls require manifest pricing or a fixed policy request price.");
   if (budget.remainingMicros != null && synthesizer.estimatedReservationMicros > budget.remainingMicros) block(synthesizer, "Remaining budget cannot reserve the synthesizer estimate.");
   if (!synthesizer.executable) {
     for (const call of calls) if (call.stage === "adviser" && call.executable) block(call, "Synthesizer preflight prevents adviser fan-out.");
@@ -91,8 +95,7 @@ function applyBudgetReadiness(calls: FusionReadinessCall[], synthesizer: FusionR
   const adviserBudget = budget.remainingMicros == null ? null : budget.remainingMicros - synthesizer.estimatedReservationMicros;
   for (const call of calls) {
     if (call.stage !== "adviser" || !call.executable) continue;
-    if (budget.configured && call.estimateBasis === "flat_fallback") block(call, "Budgeted calls require manifest pricing or a fixed policy request price.");
-    else if (adviserBudget != null && call.estimatedReservationMicros > adviserBudget) block(call, "Remaining budget after the synthesizer cannot reserve this adviser.");
+    if (adviserBudget != null && call.estimatedReservationMicros > adviserBudget) block(call, "Remaining budget after the synthesizer cannot reserve this adviser.");
   }
 }
 
@@ -113,8 +116,8 @@ function readinessCall(stage: FusionReadinessCall["stage"], index: number | null
     ...(policyAllowed && !executable ? providerReadiness?.reasons.length ? providerReadiness.reasons : ["Chat completions are not executable for this provider."] : []),
     ...(executable && providerReadiness?.verified !== true ? ["Executable, but not verified by a recent live smoke test."] : []),
   ];
-  const estimate = reservationEstimate(route.model, body, entry.policy.requestCostMicros);
-  return {
+  const cost = estimateCost(route.model, body, entry.policy.requestCostMicros, "llm.chat", route.requestFormat);
+  const call: FusionReadinessCall = {
     stage,
     index,
     model: modelId,
@@ -124,13 +127,13 @@ function readinessCall(stage: FusionReadinessCall["stage"], index: number | null
     verified: executable && providerReadiness?.verified === true,
     status: executable ? providerReadiness?.verified ? "verified" : "unverified" : "blocked",
     reasons,
-    ...estimate,
+    estimatedReservationMicros: cost.reserveMicros,
+    estimateBasis: cost.pricingGap ? "unpriced_request" : cost.basis === "policy_fixed" ? "policy_fixed" : cost.basis === "manifest_pricing" ? "manifest_pricing" : "flat_fallback",
   };
-}
-
-function reservationEstimate(model: CompiledModel, body: Record<string, unknown>, fixed: number | null | undefined): Pick<FusionReadinessCall, "estimatedReservationMicros" | "estimateBasis"> {
-  if (fixed != null) return { estimatedReservationMicros: fixed, estimateBasis: "policy_fixed" };
-  if (!model.pricing) return { estimatedReservationMicros: 1, estimateBasis: "flat_fallback" };
-  const estimate = estimateModelCost(model.pricing, body);
-  return { estimatedReservationMicros: estimate.reserveMicros, estimateBasis: estimate.pricingAvailable === false ? "flat_fallback" : "manifest_pricing" };
+  try { validateBudgetReservation("llm.chat", cost, entry.policy.monthlyBudgetMicros, route.connection); }
+  catch (error) {
+    if (!(error instanceof HttpError)) throw error;
+    block(call, error.message);
+  }
+  return call;
 }
