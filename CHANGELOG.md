@@ -41,6 +41,7 @@
 - Route grant CLI imports and revocations through the authenticated admin API, including explicit loopback `--local` targets. Preserve whole-grant replacement, clear omitted old credentials, and migrate legacy KV disablement or revocation before credential-owner maintenance can use secrets.
 - Deny expired or invalid retained-content reads with a content-free, non-cacheable not-found response, independently of physical archive deletion.
 - Sweep expired self-host archive objects after startup and on bounded periodic ticks, persist cleanup progress across restarts, and cap legacy archive retention by upload age without changing managed R2 lifecycle ownership.
+- Keep standalone smoke readiness alive through stalled health requests and response bodies, cancel each expired attempt, and preserve existing self-host and deployed readiness limits.
 
 - Match Cloudflare Access applications by exact destination instead of display name, reject ambiguous or name-only collisions before writes, and inspect all application and policy pages during provisioning.
 
