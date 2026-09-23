@@ -31,6 +31,7 @@ export class PolicyBindingIndexObject implements DurableObject {
       if (path === "/users/initialize") { this.initializeUsers(await readJson<AccessControlUser[]>(request)); return new Response("initialized"); }
       if (path === "/users/initialize-all") { this.initializeUsers(await readJson<AccessControlUser[]>(request)); this.putMeta("users_global_initialized"); return new Response("initialized"); }
       if (path === "/users/put") { this.putUser(await readJson<AccessControlUser>(request)); return new Response("updated"); }
+      if (path === "/users/update-profile") return json(this.updateUserProfile(await readJson<AccessControlUser>(request)));
       if (path === "/users/create") return json(this.createUser(await readJson<AccessControlUser>(request)));
       if (path === "/users/reconcile-assignments") return json(this.reconcileUserAssignments(await readJson<AssignmentReconcileRequest>(request)));
       if (path === "/users/put-bindings") return json(this.putUserBindings(await readJson<UserBindingsRequest>(request)));
@@ -149,6 +150,15 @@ export class PolicyBindingIndexObject implements DurableObject {
     for (const user of users) if (!this.getUser(user.email)) this.putUser(user);
   }
 
+  private updateUserProfile(raw: AccessControlUser): AccessControlUser {
+    // Profile edits do not own roles. Read the role at the write boundary so a
+    // delayed profile save cannot undo an intervening administrative demotion.
+    const role = this.getUser(raw.email)?.record.role ?? "user";
+    const user = normalizeUser({ ...raw, record: { ...raw.record, role } });
+    this.putUser(user);
+    return user;
+  }
+
   private createUser(defaults: AccessControlUser): AccessControlUser {
     const existing = this.getUser(defaults.email);
     if (existing) return existing;
@@ -185,16 +195,15 @@ export class PolicyBindingIndexObject implements DurableObject {
     return result;
   }
 
-  private putUserBindings(request: UserBindingsRequest): { bindings: PolicyBinding[] } {
-    const user = normalizeUser(request.user);
+  private putUserBindings(request: UserBindingsRequest): { user: AccessControlUser; bindings: PolicyBinding[] } {
     this.initializeBindings([request.seed]);
-    this.putUser(user);
+    const user = this.updateUserProfile(request.user);
     const principal: Principal = { principalType: "user", principalId: user.email };
     const current = this.resolveBindings([principal]).bindings;
     const desired = new Set(request.policyIds);
     for (const binding of current) this.putBinding({ ...binding, enabled: desired.has(binding.policyId) });
     for (const policyId of desired) if (!current.some((binding) => binding.policyId === policyId)) this.putBinding({ policyId, ...principal, enabled: true, priority: 100 });
-    return { bindings: this.resolveBindings([principal]).bindings };
+    return { user, bindings: this.resolveBindings([principal]).bindings };
   }
 
   private putPolicy(entry: AccessPolicyEntry): void {
