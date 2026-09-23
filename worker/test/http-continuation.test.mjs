@@ -579,3 +579,65 @@ test("actual Fusion adviser deadlines and oversized consumption stay distinct fr
     await assertBudgets(f, [origin === "caller" ? 0 : 7, 7]);
   }
 });
+
+test("actual Fusion rejection cleanup preserves adviser and synthesizer status with both ledgers at zero", async t => {
+  for (const status of [400, 429, 503]) {
+    const f = await fixture(t, false, { limit: 1_000_000, fixedCost: 7 });
+    f.values.set("config/fusion", { enabled: true, adviserModels: ["openai/gpt-4.1-mini"], aggregatorModel: "openai/gpt-4.1-mini" });
+    let cancels = 0;
+    f.response = (_request, index) => index === 1
+      ? new Response(new ReadableStream({ cancel() { cancels++; } }, { highWaterMark: 0 }), { status })
+      : Response.json({ error: "fixture final rejection" }, { status });
+    const response = await f.request({ model: "clawrouter/fusion", messages: [{ role: "user", content: "fixture" }] }, {}, "/v1/chat/completions");
+    assert.equal(response.status, status);
+    assert.equal(JSON.parse(await f.consume(response)).error, "fixture final rejection");
+    assert.equal(cancels, 1); assert.equal(f.sent.length, 2); assert.equal(f.events.length, 2);
+    for (const event of f.events) {
+      assert.equal(event.status, status < 500 ? "client_error" : "provider_error");
+      assert.equal(event.status_code, status); assert.equal(event.actual_cost_micros, 0);
+    }
+    await assertBudgets(f, [0, 0]);
+  }
+});
+
+for (const format of ["sse", "json"]) test(`${format} rejections own reciprocal cleanup without replacing their selected status`, async t => {
+  const deadline = await endpointDeadline(t);
+  for (const status of [400, 429, 503]) for (const cleanup of ["none", "caller", "deadline"]) {
+    const f = await fixture(t, false, { limit: 1_000_000, fixedCost: 7 }), caller = new AbortController();
+    let cancels = 0;
+    const text = format === "sse" ? `data: ${JSON.stringify({ error: { message: "fixture rejection", code: status } })}\n\n` : JSON.stringify({ error: { message: "x".repeat(70_000) } });
+    f.response = () => new Response(new ReadableStream({
+      pull(controller) { controller.enqueue(new TextEncoder().encode(text)); },
+      cancel() { cancels++; if (cleanup === "caller") caller.abort(new Error("fixture reciprocal cancellation")); else if (cleanup === "deadline") deadline(); },
+    }, { highWaterMark: 0 }), { status: format === "sse" ? 200 : status, headers: { "content-type": format === "sse" ? "text/event-stream" : "application/json" } });
+    const response = await f.request({ stream: true }, {}, "/v1/responses", caller.signal);
+    assert.equal(response.status, status, "cleanup must not replace the accepted rejection with a generic502");
+    if (cleanup === "none") assert.equal(JSON.parse(await f.consume(response)).error.code, status);
+    else { await assert.rejects(response.text(), cleanup === "caller" ? /reciprocal cancellation/ : /deadline/); await f.drain(); }
+    assert.equal(cancels, 1); assert.equal(f.events.length, 1);
+    assert.equal(f.events[0].status, status < 500 ? "client_error" : "provider_error");
+    assert.equal(f.events[0].status_code, status); assert.equal(f.events[0].actual_cost_micros, 0);
+    await assertBudgets(f, [0]);
+  }
+});
+
+test("an accepted rejection keeps its delivery deadline while an earlier selection deadline remains first", async t => {
+  const deadline = await endpointDeadline(t);
+  for (const phase of ["selection", "delivery"]) {
+    const f = await fixture(t, phase === "selection", { limit: 1_000_000, fixedCost: 7 });
+    let selects = 0, cancels = 0;
+    if (phase === "selection") f.env.ACCESS_CONTROL.beforeFetch = (_name, request) => {
+      if (new URL(request.url).pathname === "/grant-pools/select" && ++selects === 2) { deadline(); throw new Error("fixture selection rejected"); }
+    };
+    f.response = () => new Response(new ReadableStream({ cancel() { cancels++; } }, { highWaterMark: 0 }), { status: 429 });
+    const response = await f.request();
+    assert.equal(response.status, 429);
+    const consumed = assert.rejects(response.text(), /deadline/);
+    if (phase === "delivery") deadline();
+    await consumed; await f.drain();
+    assert.equal(cancels, 1); assert.equal(f.sent.length, 1); assert.equal(f.events.length, 1);
+    assert.equal(f.events[0].status, phase === "selection" ? "timeout" : "client_error");
+    assert.equal(f.events[0].status_code, 429); assert.equal(f.events[0].actual_cost_micros, 0);
+    await assertBudgets(f, [0]);
+  }
+});

@@ -258,6 +258,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
         grantFailover = true;
       }
     }
+    if (!response.ok) operation.acceptRejection(response.status);
     const streaming = Array.isArray(selection.body)
       ? selection.body.some(({ query }) => !!query && typeof query === "object" && "stream" in query && query.stream === true)
       : selection.body.stream === true;

@@ -10,7 +10,8 @@ export class InternalHttpAbort extends Error {
 export class HttpOperation {
   private readonly controller = new AbortController();
   readonly signal = this.controller.signal;
-  private cause?: Cause;
+  private cause?: Cause | "client_rejection" | "provider_rejection";
+  private ending?: Cause;
   private timer?: ReturnType<typeof setTimeout>;
   private readonly caller?: AbortSignal;
   private readonly canceled = () => this.cancel(this.caller?.reason);
@@ -25,16 +26,25 @@ export class HttpOperation {
   }
 
   get status(): "client_error" | "timeout" | "provider_error" | undefined {
-    return this.cause === "caller" ? "client_error" : this.cause === "deadline" ? "timeout" : this.cause && this.cause !== "complete" ? "provider_error" : undefined;
+    return this.cause === "caller" || this.cause === "client_rejection" ? "client_error" : this.cause === "deadline" ? "timeout" : this.cause && this.cause !== "complete" ? "provider_error" : undefined;
   }
+
+  get delivery(): "complete" | "canceled" | "failed" | undefined {
+    return this.ending === "complete" ? "complete" : this.ending === "caller" ? "canceled" : this.ending ? "failed" : undefined;
+  }
+
+  // Accept only the final selected rejection. Recording its receipt cause must
+  // neither dispose its readable error body nor retire the delivery deadline.
+  acceptRejection(status: number): void { this.cause ??= status < 500 ? "client_rejection" : "provider_rejection"; }
 
   cancel(reason?: unknown): void { this.stop(reason instanceof InternalHttpAbort ? reason.cause : "caller", reason); }
 
   stop(cause: Cause, reason?: unknown): void {
-    if (this.cause) return;
+    if (this.ending) return;
     // The cause owns cleanup: reciprocal aborts and late registration results
     // cannot rewrite it. A parsed protocol terminal alone is not delivery EOF.
-    this.cause = cause;
+    this.cause ??= cause;
+    this.ending = cause;
     clearTimeout(this.timer);
     this.caller?.removeEventListener("abort", this.canceled);
     if (cause !== "complete") this.controller.abort(reason);

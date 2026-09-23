@@ -24,7 +24,7 @@ export function observeUsage(response: Response, operation = new HttpOperation()
     signal.removeEventListener("abort", aborted);
     if (delivery === "canceled") operation.cancel(reason);
     else operation.stop(delivery === "complete" ? "complete" : "upstream", reason);
-    if (operation.status) delivery = operation.status === "client_error" ? "canceled" : "failed";
+    delivery = operation.delivery ?? delivery;
     let inspection: UsageInspection = sse?.result(delivery === "complete") ?? { tokens: null, outcome: null };
     if (delivery === "complete" && inspect) {
       try {
@@ -80,7 +80,7 @@ export async function normalizePreStreamError(response: Response, streamingReque
   const eventStream = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream") === true;
   if (response.status >= 400) {
     if (eventStream && response.body) return normalizeFirstSseEvent(response, response.status, operation);
-    const body = await readLimited(response, 64 * 1024, operation).catch(() => { operation.signal.throwIfAborted(); return ""; });
+    const body = await readLimited(response, 64 * 1024, operation);
     return mappedUpstreamError(response, upstreamError(body), response.status);
   }
   if (!response.ok || !eventStream || !response.body) return response;
@@ -116,6 +116,7 @@ async function normalizeFirstSseEvent(response: Response, errorStatus: number | 
         if (errorStatus !== null || event.kind === "error") {
           const upstream = event.upstream;
           const status = errorStatus ?? (typeof upstream.code === "number" && Number.isInteger(upstream.code) && upstream.code >= 400 && upstream.code <= 599 ? upstream.code : 502);
+          operation.acceptRejection(status);
           return mappedUpstreamError(response, upstream, status);
         }
         transferred = true;
@@ -246,9 +247,14 @@ async function readLimited(response: Response, limit: number, operation: HttpOpe
       const { done, value } = await operation.wait(reader.read());
       if (done) break;
       size += value.byteLength;
-      if (size > limit) throw new Error("usage payload exceeds inspection limit");
+      if (size > limit) return "";
       text += decoder.decode(value, { stream: true });
     }
     return text + decoder.decode();
+  } catch (error) {
+    // Decide before disposal can trigger a reciprocal abort. A bounded or
+    // unreadable rejection body still keeps its already accepted HTTP status.
+    if (operation.signal.aborted) throw error;
+    return "";
   } finally { void reader.cancel(operation.signal.reason).catch(() => undefined); reader.releaseLock(); }
 }
