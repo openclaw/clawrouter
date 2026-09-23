@@ -297,6 +297,40 @@ test("a secondary auth failure clears a reveal after bootstrap has already faile
   expect(state.sessionReads).toBe(reads);
 });
 
+test("an entitlement wait cannot restore keys or freshness after its accepted scope is invalidated", async ({ page }) => {
+  const state = await fixture(page);
+  await openAdmin(page);
+  await revealAdminKey(page, "entitlement_key");
+  const previousRefresh = await page.locator(".connectionMeta time").getAttribute("datetime");
+  const auth = deferred(), entitlements = deferred();
+  state.failBootstrap = true;
+  state.authLostPath = "/v1/session/credentials";
+  state.holdAuthLoss = auth.promise;
+  await focusRefresh(page);
+  await expect.poll(() => state.authLossReads).toBe(1);
+  await expect(page.locator(".statusBar")).toContainText("Console data refresh failed");
+  state.failBootstrap = false;
+  state.authLostPath = "";
+  state.holdAuthLoss = null;
+  state.omitEntitlements = true;
+  state.holdReadPath = "/v1/entitlements";
+  state.holdRead = entitlements.promise;
+  const entitlementRequest = page.waitForRequest("**/v1/entitlements");
+  await focusRefresh(page);
+  await entitlementRequest;
+  auth.release();
+  await expect(page.locator(".issuedKey code")).toHaveCount(0);
+  const keyReads = state.keyReads;
+  const entitlementResponse = page.waitForResponse("**/v1/entitlements");
+  entitlements.release();
+  await entitlementResponse;
+  await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
+  expect(state.keyReads).toBe(keyReads);
+  await expect(page.getByRole("button", { name: /owned_key.*proxy credential/ })).toHaveCount(0);
+  await expect(page.locator(".connectionMeta time")).toHaveAttribute("datetime", previousRefresh!);
+  await expect(page.locator(".statusBar")).toContainText("Console data refresh failed");
+});
+
 for (const identity of ["same", "changed"] as const) {
   test(`a delayed auth observation belongs to its ${identity} identity despite a later mutation`, async ({ page }) => {
     const state = await fixture(page);
@@ -523,6 +557,7 @@ async function fixture(page: Page) {
       "/v1/providers": { providers: [] },
       "/v1/routes": { openaiCompatible: [], manifestProxy: [] },
       "/v1/session": { authenticated: true, auth: "access", role: state.role, email: state.email, tenantId: "default", ...(!state.omitEntitlements ? { entitlements: { providers: [] } } : {}) },
+      "/v1/entitlements": { session: { authenticated: true, auth: "access", role: state.role, email: state.email, tenantId: "default" }, providers: [], contentRetention: { enabled: false, retentionDays: 30, policyEnabled: false, userExempt: false } },
       "/v1/session/usage": { policies: policies.map((item) => ({ ...item, budget: { configured: false, ledger: "ready" } })), usage },
       "/v1/session/credentials": { credentials: state.credentials.filter((item) => item.principalId === state.email) },
       "/v1/admin/usage": { policies: [], usage },

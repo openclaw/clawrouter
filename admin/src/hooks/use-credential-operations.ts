@@ -58,7 +58,7 @@ export function useCredentialOperations(initial: Scope, setStatus: (status: stri
 
   function captureHydration() { return mutationRef.current; }
   function hydrate(surface: Surface, credentials: ProxyCredential[], snapshot: number, policies: string[] = []) {
-    if (pendingRef.current?.scope === scopeRef.current.epoch || snapshot !== mutationRef.current) return;
+    if (scopeRef.current.key === "signed-out" || pendingRef.current?.scope === scopeRef.current.epoch || snapshot !== mutationRef.current) return;
     if (surface === "admin" && scopeRef.current.session.role !== "admin") return;
     setRows((current) => ({ ...current, [surface]: credentials, ...(surface === "personal" ? { policyIds: [...new Set(policies)].sort() } : {}) }));
   }

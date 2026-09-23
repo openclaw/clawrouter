@@ -153,7 +153,9 @@ export function useConsoleController() {
       session.setValue(sessionData);
       session.setLoginRequired(false);
       credentialOwner.setScope({ origin: session.gatewayOrigin, demo: false, session: sessionData });
-      const onAuthenticationLoss = credentialOwner.captureScope().invalidate;
+      const acceptedScope = credentialOwner.captureScope();
+      const keySnapshot = credentialOwner.captureHydration();
+      const onAuthenticationLoss = acceptedScope.invalidate;
       catalog.setProviders(providerData.providers);
       catalog.setRoutes(routeData);
       catalogLoadedRef.current = true;
@@ -174,9 +176,12 @@ export function useConsoleController() {
           warnings = [...warnings, `entitlements unavailable: ${entitlementResult.error}`];
         }
       }
+      // Entitlement waits cannot adopt a credential scope invalidated by another read.
+      if (!acceptedScope.isCurrent()) return;
       const result = sessionData.role === "admin"
-        ? await loadAdminData(sessionData, providerData, background, warnings, onAuthenticationLoss)
-        : await loadUserData(sessionData, warnings, onAuthenticationLoss);
+        ? await loadAdminData(sessionData, providerData, background, warnings, onAuthenticationLoss, keySnapshot)
+        : await loadUserData(sessionData, warnings, onAuthenticationLoss, keySnapshot);
+      if (!acceptedScope.isCurrent()) return;
       session.setDemoMode(false);
       session.setRefreshError(result.warnings.join("; "));
       if (result.complete) session.setLastUpdatedAt(Date.now());
@@ -205,9 +210,8 @@ export function useConsoleController() {
     }
   }
 
-  async function loadAdminData(sessionData: SessionResponse, providerData: ProviderResponse, background: boolean, initialWarnings: string[], onAuthenticationLoss: () => void) {
+  async function loadAdminData(sessionData: SessionResponse, providerData: ProviderResponse, background: boolean, initialWarnings: string[], onAuthenticationLoss: () => void, keySnapshot: number) {
     let warnings = initialWarnings;
-    const keySnapshot = credentialOwner.captureHydration();
     const [data, sessionUsageResult, sessionCredentialsResult] = await Promise.all([
       request<AdminBootstrapResponse>(session.gatewayOrigin, "/v1/admin/bootstrap"),
       settledSessionData(() => request<{ policies: AdminUsageRow[] }>(session.gatewayOrigin, "/v1/session/usage"), onAuthenticationLoss),
@@ -233,9 +237,8 @@ export function useConsoleController() {
     return { warnings, complete: !warnings.length && usageFresh };
   }
 
-  async function loadUserData(sessionData: SessionResponse, initialWarnings: string[], onAuthenticationLoss: () => void) {
+  async function loadUserData(sessionData: SessionResponse, initialWarnings: string[], onAuthenticationLoss: () => void, keySnapshot: number) {
     let warnings = initialWarnings;
-    const keySnapshot = credentialOwner.captureHydration();
     const user: AccessUser = {
       email: sessionData.email ?? "access-user",
       role: sessionData.role,
