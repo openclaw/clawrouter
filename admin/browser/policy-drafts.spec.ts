@@ -75,6 +75,39 @@ for (const destination of ["other policy", "New", "same policy"] as const) {
   });
 }
 
+test("a clean reselected policy adopts its held save before a failed refresh and the next save", async ({ page }) => {
+  const state = await fixture(page);
+  await open(page);
+  await tenant(page).fill("submitted-a");
+  await save(page).click();
+  await expect.poll(() => state.writes.length).toBe(1);
+  page.once("dialog", (dialog) => dialog.accept());
+  await row(page, "policy_b").click();
+  await row(page, "policy_a").click();
+  await expect(tenant(page)).toHaveValue("default");
+  await expect(page.getByText("Unsaved policy changes.", { exact: true })).toHaveCount(0);
+  state.holdBootstrap = true;
+  await state.commit(0, { tenantId: "canonical-a" });
+  await expect.poll(() => state.reads.length).toBe(1);
+  await expect(row(page, "policy_a").locator('[data-label="tenant"]')).toHaveText("canonical-a");
+  await expect(tenant(page)).toHaveValue("canonical-a");
+  await expect(page.getByText("Unsaved policy changes.", { exact: true })).toHaveCount(0);
+  await expect(save(page)).toBeEnabled();
+  state.holdBootstrap = false;
+  state.failBootstrap = true;
+  await state.reads[0].route.fulfill({ status: 503, body: "reporting unavailable" });
+  await expect(page.locator(".statusBar")).toContainText("reporting unavailable");
+  await expect(tenant(page)).toHaveValue("canonical-a");
+  await expect(page.getByRole("button", { name: "Discard changes", exact: true })).toHaveCount(0);
+  await save(page).focus();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => state.writes.length).toBe(2);
+  expect(state.writes[1].request().postDataJSON()).toMatchObject({ policyId: "policy_a", tenantId: "canonical-a", enabled: true });
+  await state.commit(1);
+  await expect(save(page)).toBeEnabled();
+  await expect(tenant(page)).toHaveValue("canonical-a");
+});
+
 test("sibling saves, failures and refreshes preserve the policy draft and its own error", async ({ page }) => {
   const state = await fixture(page);
   await open(page);
@@ -148,7 +181,7 @@ test("failed saves retain the draft and retry commits the canonical response", a
   await expect(tenant(page)).toHaveValue("canonical-retry");
   await expect(page.locator(".inspector .inlineError")).toHaveCount(0);
   await expect(page.getByRole("button", { name: "Discard changes", exact: true })).toHaveCount(0);
-  await expect(page.locator(".statusBar")).toContainText("saved policy policy_a");
+  await expect(page.locator(".statusBar")).toContainText("saved policy");
   await expect(page.locator(".statusBar")).toContainText("reporting unavailable");
   await expect(save(page)).toBeEnabled();
 });

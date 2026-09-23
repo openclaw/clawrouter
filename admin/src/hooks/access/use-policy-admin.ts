@@ -110,7 +110,10 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
       const saved = await write(submitted.value, submitted.selection);
       updateRows([saved, ...rows.current.filter((key) => key.policyId !== saved.policyId)]);
       const canonical = policyFormFromPolicy(saved), current = currentDraft.current;
-      if (revision.current === submittedRevision && (action === "save" || !submitted.dirty)) resetDraft(saved.policyId, canonical);
+      // Clean replacement drafts follow the committed row; Disable still honors later enabled edits.
+      const cleanReplacement = current.selection === saved.policyId && incarnation.current !== submittedIncarnation && !current.dirty
+        && (action === "save" || enabledEditRevision.current <= submittedRevision);
+      if (cleanReplacement || (revision.current === submittedRevision && (action === "save" || !submitted.dirty))) resetDraft(saved.policyId, canonical);
       else if (current.selection === saved.policyId || (action === "save" && !submitted.selection && !current.selection && incarnation.current === submittedIncarnation)) {
         // A committed create owns this New draft's identity, but never a replacement draft.
         // Later edits stay dirty against the committed baseline, including a return to old values.

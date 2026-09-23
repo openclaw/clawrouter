@@ -103,6 +103,64 @@ for (const destination of ["policy_b", "new", "same"]) {
   });
 }
 
+for (const action of ["save", "disable"]) {
+  for (const replacement of ["clean reselection", "dirty reselection", "roundtrip reselection", "discard", "edited discard"]) {
+    test(`${action} reconciles the ${replacement} replacement draft without rolling back its next save`, async () => {
+      const fixture = ready();
+      change(fixture, { tenantId: "submitted" });
+      const operation = action === "save" ? fixture.render().policies.save(event) : fixture.render().policies.revoke("policy_a");
+      if (replacement.includes("reselection")) {
+        fixture.render().policies.edit(policy("policy_b"));
+        fixture.render().policies.edit(policy("policy_a"));
+      } else fixture.render().policies.discard();
+      const dirty = replacement === "dirty reselection" || replacement === "edited discard";
+      if (dirty) change(fixture, { tenantId: "later-draft" });
+      if (replacement === "roundtrip reselection") {
+        change(fixture, { tenantId: "temporary" });
+        change(fixture, { tenantId: "default" });
+      }
+      assert.equal(fixture.render().policies.dirty, dirty);
+      const canonical = { ...policy("policy_a", action === "save" ? "canonical" : "default"), enabled: action === "save" };
+      fixture.requests[0].resolve(canonical);
+      await operation;
+      const expectedTenant = dirty ? "later-draft" : canonical.tenantId;
+      assert.deepEqual(fixture.render().policies.selected, canonical);
+      assert.equal(fixture.render().policies.form.tenantId, expectedTenant);
+      assert.equal(fixture.render().policies.form.enabled, canonical.enabled);
+      assert.equal(fixture.render().policies.dirty, dirty);
+      hydrate(fixture, [canonical, policy("policy_b")]);
+      assert.equal(fixture.render().policies.form.tenantId, expectedTenant);
+      const nextSave = fixture.render().policies.save(event);
+      const payload = JSON.parse(fixture.requests[1].init.body);
+      assert.equal(payload.tenantId, expectedTenant);
+      assert.equal(payload.enabled, canonical.enabled);
+      fixture.requests[1].resolve({ ...canonical, tenantId: expectedTenant });
+      await nextSave;
+    });
+  }
+}
+
+test("Disable preserves a newer enabled roundtrip in a reselected replacement draft", async () => {
+  const fixture = ready();
+  const operation = fixture.render().policies.revoke("policy_a");
+  fixture.render().policies.edit(policy("policy_b"));
+  fixture.render().policies.edit(policy("policy_a"));
+  change(fixture, { enabled: false });
+  change(fixture, { enabled: true });
+  assert.equal(fixture.render().policies.dirty, false);
+  const canonical = { ...policy("policy_a"), enabled: false };
+  fixture.requests[0].resolve(canonical);
+  await operation;
+  assert.equal(fixture.render().policies.form.enabled, true);
+  assert.equal(fixture.render().policies.dirty, true);
+  hydrate(fixture, [canonical, policy("policy_b")]);
+  assert.equal(fixture.render().policies.form.enabled, true);
+  const nextSave = fixture.render().policies.save(event);
+  assert.equal(JSON.parse(fixture.requests[1].init.body).enabled, true);
+  fixture.requests[1].resolve(policy("policy_a"));
+  await nextSave;
+});
+
 test("pre-write and during-write bootstrap snapshots cannot replace a committed row", async () => {
   const fixture = ready();
   const before = fixture.render().captureHydration();
