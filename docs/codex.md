@@ -198,10 +198,19 @@ the binary is absent. Each case removes its temporary home and loopback server.
 `node --test test/codex-router.test.mjs` also runs those engines through the actual
 Worker, authority, and SQL budget/usage ledgers with an isolated synthetic
 upstream. It covers credential-scoped metadata discovery, HTTP and WebSocket
-priority requests, a tool continuation, two turns, and revocation before the
-next turn. CI downloads checksum-pinned official Linux engines for 0.153.0 and
-0.155.0; neither case needs an account or paid upstream call. This qualifies
+priority requests, a tool continuation, two turns, cancellation during active response
+delivery, upstream shutdown, and settlement in both ledgers. It also verifies a
+fresh turn after interruption, same-ID proxy-key rotation across native processes,
+and revocation before the next turn. CI downloads checksum-pinned official Linux
+engines for 0.153.0 and 0.155.0; neither case needs an account or paid upstream call. This qualifies
 native engine routing, not macOS Desktop UI behavior or live model quality.
+The cancellation case requires upstream shutdown before the native idle timeout.
+It does not qualify stalled HTTP/1 streams: ordinary socket closure and native
+interruption with no further upstream output left the fixture reservation
+unsettled at five seconds. An explicit TCP reset did propagate an ingress abort
+and cancellation receipt. Codex 0.153 also waits for the next recognized SSE
+event to notice a dropped consumer. Stalled-stream shutdown and deployed protocol
+behavior, including HTTP/2, still require qualification.
 
 ## WebSocket contract
 
