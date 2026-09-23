@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Route local proxy-key creation, rotation, and revocation through the running Worker's authenticated authority API, preserving migrated state and rejecting obsolete KV selectors instead of reporting ineffective writes.
+
 - Restrict personal usage audit events to the authenticated principal, or unattributed events for the authenticated service key, while preserving shared policy totals and administrator audit access.
 
 - Deny proxy requests and subsequent WebSocket turns for explicitly disabled key owners, and show their credentials as owner-disabled without changing unowned service keys or retained policy bindings.

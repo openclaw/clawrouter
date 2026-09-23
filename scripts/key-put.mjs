@@ -1,14 +1,13 @@
-import { createHash, randomUUID } from "node:crypto";
-import { spawnSync } from "node:child_process";
-import { readFileSync, rmSync } from "node:fs";
-import { join } from "node:path";
-import { legacyCredential, readLocalKeyRecord, writeKeyJson } from "./local-key-kv.mjs";
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
+import { localAdminEnvironment } from "./grant-target.mjs";
 import { parseArgs } from "./cli-args.mjs";
 import { adminRequest } from "./admin-api.mjs";
 import { deploymentTarget } from "./deployment-profile.mjs";
 
 const args = parseArgs(process.argv.slice(2));
 const deployment = deploymentTarget();
+const env = localAdminEnvironment(args);
 const kid = required(args.kid, "--kid");
 const secret = readSecret(args);
 const allProviders = args["all-providers"] === true;
@@ -25,8 +24,6 @@ const providers =
 if (!allProviders && providers.length === 0) {
   throw new Error("--providers or --all-providers is required");
 }
-const binding = args.binding ?? "POLICY_KV";
-const config = args.config ?? ".wrangler.generated.toml";
 const enabled = args.disabled ? false : true;
 const tenantId = args.tenant ?? deployment.accessDefaultTenant;
 const monthlyBudgetMicros = args["monthly-budget-micros"]
@@ -49,91 +46,14 @@ if (requestCostMicros !== undefined) {
   request.requestCostMicros = requestCostMicros;
 }
 
-if (!args.local) {
-  await adminRequest(`/v1/admin/keys/${encodeURIComponent(kid)}`, {
-    method: "PUT",
-    body: request,
-  });
-  console.log(
-    `stored authoritative access policy and proxy credential for ${kid}; secret was not printed`,
-  );
-} else {
-  putLocalBootstrapRecords(request);
-  console.log(
-    `bootstrapped local KV access policy and proxy credential for ${kid}; secret was not printed`,
-  );
-}
-
-function putLocalBootstrapRecords(request) {
-  const existingPolicy = readLocalKeyRecord(`policies/${kid}`, { binding, config, allowMissing: true });
-  const existingLegacy = readLocalKeyRecord(`keys/${kid}`, { binding, config, allowMissing: true });
-  const existingCredential =
-    readLocalKeyRecord(`credentials/${kid}`, { binding, config, allowMissing: true }) ?? legacyCredential(existingLegacy, kid);
-  const generation = existingPolicy?.generation ?? `policy_${randomUUID()}`;
-  const policy = {
-    ...request,
-    generation,
-    retainRequestContent:
-      typeof existingPolicy?.retainRequestContent === "boolean"
-        ? existingPolicy.retainRequestContent
-        : deployment.contentRetentionDefault,
-  };
-  delete policy.allProviders;
-  delete policy.secretSha256;
-  const credential = {
-    enabled,
-    secretSha256: request.secretSha256,
-    policyId: kid,
-    policyGeneration: generation,
-  };
-  if (
-    existingPolicy &&
-    existingCredential &&
-    policyChanged(existingPolicy, policy) &&
-    existingCredential.secretSha256 !== credential.secretSha256
-  ) {
-    throw new Error(
-      "cannot change policy scope and secret together; update the canonical policy and credential separately",
-    );
-  }
-  const legacy = { ...policy, secretSha256: credential.secretSha256 };
-  const tombstoneCredential = { ...credential, enabled: false };
-  const tombstoneLegacy = { ...legacy, enabled: false };
-  const tombstonePolicy = { ...policy, enabled: false };
-  const records = [
-    [`credentials/${kid}`, writeKeyJson(tombstoneCredential, "credential-tombstone.json")],
-    [`keys/${kid}`, writeKeyJson(tombstoneLegacy, "legacy-key-tombstone.json")],
-    [`policies/${kid}`, writeKeyJson(tombstonePolicy, "policy-tombstone.json")],
-    [`credentials/${kid}`, writeKeyJson(credential, "credential.json")],
-    [`policies/${kid}`, writeKeyJson(policy, "policy.json")],
-  ];
-
-  try {
-    for (const [key, path] of records) {
-      run("pnpm", [
-        "exec",
-        "wrangler",
-        "kv",
-        "key",
-        "put",
-        key,
-        "--path",
-        path,
-        "--binding",
-        binding,
-        "--config",
-        config,
-        "--preview",
-        "false",
-      ]);
-    }
-  } finally {
-    for (const [, path] of records) {
-      rmSync(path, { force: true });
-      rmSync(join(path, ".."), { force: true, recursive: true });
-    }
-  }
-}
+await adminRequest(`/v1/admin/keys/${encodeURIComponent(kid)}`, {
+  method: "PUT",
+  body: request,
+  env,
+});
+console.log(
+  `stored authoritative access policy and proxy credential for ${kid}; secret was not printed`,
+);
 
 function required(value, name) {
   if (!value) {
@@ -169,27 +89,4 @@ function parseNonNegativeInteger(value, name) {
     throw new Error(`${name} must be less than or equal to Number.MAX_SAFE_INTEGER`);
   }
   return parsed;
-}
-
-function run(command, args) {
-  const result = spawnSync(command, args, { encoding: "utf8", stdio: "inherit" });
-  if (result.status !== 0) {
-    throw new Error(`${command} failed`);
-  }
-}
-
-function policyChanged(existing, next) {
-  return JSON.stringify(policyFields(existing)) !== JSON.stringify(policyFields(next));
-}
-
-function policyFields(policy) {
-  return {
-    enabled: policy.enabled !== false,
-    providers: policy.providers ?? [],
-    tenantId: policy.tenantId ?? null,
-    tokenRole: policy.tokenRole ?? null,
-    monthlyBudgetMicros: policy.monthlyBudgetMicros ?? null,
-    requestCostMicros: policy.requestCostMicros ?? null,
-    retainRequestContent: policy.retainRequestContent !== false,
-  };
 }
