@@ -290,8 +290,8 @@ async function putUser(request: Request, env: Env, encodedEmail: string): Promis
   const email = normalizeEmail(decodePathSegment(encodedEmail)); if (!email) throw new HttpError(400, "invalid_access_user", "invalid access user email");
   const existing = (await listUsers(env)).find((item) => item.email === email)?.record ?? {};
   const user: AccessControlUser = { email, record: normalizeUserMutation(await readJson<unknown>(request), existing).record };
-  await authorityCall(env, "/users/put", user);
-  return privateJson(userResponse(user));
+  const updated = await authorityCall<AccessControlUser>(env, "/users/update-profile", user);
+  return privateJson(userResponse(updated));
 }
 
 async function putUserGrants(request: Request, env: Env, encodedEmail: string): Promise<Response> {
@@ -301,8 +301,8 @@ async function putUserGrants(request: Request, env: Env, encodedEmail: string): 
   const known = new Set((await listPolicies(env)).map((entry) => entry.policyId)); if (ids.some((id) => !known.has(id))) throw new HttpError(404, "unknown_policy", "one or more policies do not exist");
   const user: AccessControlUser = { email, record };
   const principal = { principalType: "user" as const, principalId: email }, bindings = (await listBindings(env)).filter((item) => item.principalType === "user" && item.principalId === email);
-  const result = await authorityCall<{ bindings: PolicyBinding[] }>(env, "/users/put-bindings", { user, policyIds: ids, seed: { principal, bindings } });
-  return privateJson({ user: userResponse(user), bindings: result.bindings });
+  const result = await authorityCall<{ user: AccessControlUser; bindings: PolicyBinding[] }>(env, "/users/put-bindings", { user, policyIds: ids, seed: { principal, bindings } });
+  return privateJson({ user: userResponse(result.user), bindings: result.bindings });
 }
 
 async function policyMutation(request: Request, env: Env, rest: string): Promise<Response> {
@@ -602,7 +602,7 @@ function normalizeUserMutation(value: unknown, existing: AccessControlUser["reco
   const enabled = userBoolean(body.enabled, "enabled", existing.enabled ?? true, true);
   const groups = body.groups === undefined ? normalizeGroups(existing.groups ?? []) : userGroups(body.groups);
   const contentRetentionDisabled = userBoolean(body.contentRetentionDisabled, "contentRetentionDisabled", existing.contentRetentionDisabled ?? false);
-  const record: AccessControlUser["record"] = { role: "user", tenantId, enabled, groups, contentRetentionDisabled };
+  const record: AccessControlUser["record"] = { tenantId, enabled, groups, contentRetentionDisabled };
   if (existing.assignmentState) record.assignmentState = existing.assignmentState;
   let policyIds: string[] = [];
   if (includePolicyIds) {

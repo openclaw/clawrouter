@@ -75,7 +75,7 @@ export function evaluateUserAssignments(user: AccessControlUser, rules: Assignme
     return { changed: false as const, user, matchedRuleIds, retainedRuleIds };
   }
   const assignmentState: AssignmentState = { version: 1, revision, assignments, updatedAt: new Date().toISOString() };
-  const updated: AccessControlUser = { ...user, record: { ...user.record, role: "user", groups, assignmentState } };
+  const updated: AccessControlUser = { ...user, record: { ...user.record, role: user.record.role ?? "user", groups, assignmentState } };
   return { changed: true as const, user: updated, matchedRuleIds, retainedRuleIds };
 }
 
