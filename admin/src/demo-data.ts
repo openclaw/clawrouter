@@ -115,9 +115,9 @@ export function demoData() {
     { policyId: "sandbox_eval", enabled: false, providers: ["openai"], tenantId: "sandbox", tokenRole: "sandbox", monthlyBudgetMicros: 5000000, requestCostMicros: 500, retainRequestContent: true, grantRouting },
   ];
   const credentials: ProxyCredential[] = [
-    { credentialId: "maintainer_cli", policyId: "maintainer_models", enabled: true, principalId: "maintainer@example.com" },
-    { credentialId: "openclaw_tools_ci", policyId: "openclaw_tools", enabled: true },
-    { credentialId: "research_notebook", policyId: "user_research", enabled: false, principalId: "research@example.com" },
+    { credentialId: "maintainer_cli", policyId: "maintainer_models", enabled: true, active: true, principalId: "maintainer@example.com" },
+    { credentialId: "openclaw_tools_ci", policyId: "openclaw_tools", enabled: true, active: true },
+    { credentialId: "research_notebook", policyId: "user_research", enabled: false, active: false, principalId: "research@example.com" },
   ];
   const connections: ProviderConnection[] = providers.map((item) => ({ providerId: item.id, enabled: !demoDisabledProviderIds.has(item.id) }));
   const upstreamGrants: UpstreamGrant[] = [

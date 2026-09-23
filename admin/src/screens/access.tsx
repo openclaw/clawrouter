@@ -2,6 +2,7 @@ import React, { type FormEvent, useEffect, useRef, useState } from "react";
 import { CircleSlash2, KeyRound, LogIn, Plus, RefreshCw, Search, ServerCog, ShieldCheck, Users } from "lucide-react";
 import { bindingKey, type CatalogModel } from "../domain";
 import { EntityName, InlineError, InlineNote, InspectorHeader, Status, kindLabel } from "../components";
+import { CredentialNotice, type CredentialFeedback } from "../credential-notice";
 import { rolePresets } from "../ui-config";
 import { credentialOutcome, formatMicros, groupedProviders } from "../ui-helpers";
 import { EntityTable, Metric } from "./users-usage";
@@ -23,7 +24,7 @@ import type {
   UpstreamGrantForm,
 } from "../ui-types";
 
-export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selectedCredential, bindings, selectedBinding, upstreamGrants, selectedUpstreamGrant, assignmentRules, selectedAssignmentRule, fusionConfig, fusionReadiness, fusionPolicyId, onSelectFusionPolicy, setFusionConfig, fusionModels, providers, form, setForm, credentialForm, setCredentialForm, bindingForm, setBindingForm, upstreamGrantForm, setUpstreamGrantForm, assignmentRuleForm, setAssignmentRuleForm, issuedKey, error, fusionError, onSave, onIssueCredential, onRevokeCredential, onSaveBinding, onSaveUpstreamGrant, onRevokeUpstreamGrant, onRefreshUpstreamGrant, onRefreshUpstreamGrantQuota, onAuthorizeUpstreamGrant, onSaveAssignmentRule, onReconcileAssignments, onSaveFusion, onCheckFusion, onNew, onEdit, onEditCredential, onEditBinding, onNewBinding, onEditUpstreamGrant, onNewUpstreamGrant, onEditAssignmentRule, onNewAssignmentRule, onRevoke, onPreset, onToggleProvider, onSetProviderGroup, busy }: {
+export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selectedCredential, bindings, selectedBinding, upstreamGrants, selectedUpstreamGrant, assignmentRules, selectedAssignmentRule, fusionConfig, fusionReadiness, fusionPolicyId, onSelectFusionPolicy, setFusionConfig, fusionModels, providers, form, setForm, credentialForm, setCredentialForm, bindingForm, setBindingForm, upstreamGrantForm, setUpstreamGrantForm, assignmentRuleForm, setAssignmentRuleForm, credentialFeedback, error, fusionError, onSave, onIssueCredential, onRevokeCredential, onRotateCredential, onNewCredential, onSaveBinding, onSaveUpstreamGrant, onRevokeUpstreamGrant, onRefreshUpstreamGrant, onRefreshUpstreamGrantQuota, onAuthorizeUpstreamGrant, onSaveAssignmentRule, onReconcileAssignments, onSaveFusion, onCheckFusion, onNew, onEdit, onEditCredential, onEditBinding, onNewBinding, onEditUpstreamGrant, onNewUpstreamGrant, onEditAssignmentRule, onNewAssignmentRule, onRevoke, onPreset, onToggleProvider, onSetProviderGroup, busy }: {
   tab: AccessTab;
   setTab: (tab: AccessTab) => void;
   keys: AccessPolicy[];
@@ -53,12 +54,14 @@ export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selec
   setUpstreamGrantForm: (form: UpstreamGrantForm) => void;
   assignmentRuleForm: AssignmentRuleForm;
   setAssignmentRuleForm: (form: AssignmentRuleForm) => void;
-  issuedKey: string;
+  credentialFeedback: CredentialFeedback;
   error: string;
   fusionError: string;
   onSave: (event: FormEvent) => void;
   onIssueCredential: (event: FormEvent) => void;
-  onRevokeCredential: (credentialId: string) => void;
+  onRevokeCredential: (credential: ProxyCredential) => void;
+  onRotateCredential: (credential: ProxyCredential) => void;
+  onNewCredential: () => void;
   onSaveBinding: (event: FormEvent) => void;
   onSaveUpstreamGrant: (event: FormEvent) => void;
   onRevokeUpstreamGrant: (grant: UpstreamGrant) => void;
@@ -106,7 +109,7 @@ export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selec
         <button type="button" role="tab" aria-selected={tab === "fusion"} className={tab === "fusion" ? "active" : ""} onClick={() => setTab("fusion")}>Fusion <span>{fusionConfig.enabled ? "on" : "off"}</span></button>
       </div>
       {tab === "policies" ? <PolicyPanel keys={keys} selected={selected} providers={providers} form={form} setForm={setForm} error={error} onSave={onSave} onNew={onNew} onEdit={onEdit} onRevoke={onRevoke} onPreset={onPreset} onToggleProvider={onToggleProvider} onSetProviderGroup={onSetProviderGroup} busy={busy} /> : null}
-      {tab === "credentials" ? <CredentialPanel policies={keys} credentials={credentials} selected={selectedCredential} form={credentialForm} setForm={setCredentialForm} issuedKey={issuedKey} error={error} onIssue={onIssueCredential} onEdit={onEditCredential} onRevoke={onRevokeCredential} busy={busy} /> : null}
+      {tab === "credentials" ? <CredentialPanel policies={keys} credentials={credentials} selected={selectedCredential} form={credentialForm} setForm={setCredentialForm} feedback={credentialFeedback} onIssue={onIssueCredential} onEdit={onEditCredential} onRevoke={onRevokeCredential} onRotate={onRotateCredential} onNew={onNewCredential} busy={busy || credentialFeedback.busy} /> : null}
       {tab === "bindings" ? <BindingPanel policies={keys} bindings={bindings} selected={selectedBinding} form={bindingForm} setForm={setBindingForm} error={error} onSave={onSaveBinding} onEdit={onEditBinding} onNew={onNewBinding} busy={busy} /> : null}
       {tab === "upstream" ? <UpstreamGrantPanel policies={keys} providers={providers} grants={upstreamGrants} selected={selectedUpstreamGrant} form={upstreamGrantForm} setForm={setUpstreamGrantForm} error={error} onSave={onSaveUpstreamGrant} onEdit={onEditUpstreamGrant} onNew={onNewUpstreamGrant} onRefresh={onRefreshUpstreamGrant} onRefreshQuota={onRefreshUpstreamGrantQuota} onAuthorize={onAuthorizeUpstreamGrant} onRevoke={onRevokeUpstreamGrant} busy={busy} /> : null}
       {tab === "assignments" ? <AssignmentRulePanel policies={keys} rules={assignmentRules} selected={selectedAssignmentRule} form={assignmentRuleForm} setForm={setAssignmentRuleForm} error={error} onSave={onSaveAssignmentRule} onEdit={onEditAssignmentRule} onNew={onNewAssignmentRule} onReconcile={onReconcileAssignments} busy={busy} /> : null}
@@ -340,22 +343,23 @@ export function AssignmentRulePanel({ policies, rules, selected, form, setForm, 
   );
 }
 
-export function CredentialPanel({ policies, credentials, selected, form, setForm, issuedKey, error, onIssue, onEdit, onRevoke, busy }: {
+export function CredentialPanel({ policies, credentials, selected, form, setForm, feedback, onIssue, onEdit, onRevoke, onRotate, onNew, busy }: {
   policies: AccessPolicy[];
   credentials: ProxyCredential[];
   selected?: ProxyCredential;
   form: CredentialForm;
   setForm: (form: CredentialForm) => void;
-  issuedKey: string;
-  error: string;
+  feedback: CredentialFeedback;
   onIssue: (event: FormEvent) => void;
   onEdit: (credential: ProxyCredential) => void;
-  onRevoke: (credentialId: string) => void;
+  onRevoke: (credential: ProxyCredential) => void;
+  onRotate: (credential: ProxyCredential) => void;
+  onNew: () => void;
   busy: boolean;
 }) {
-  const copyIssuedKey = () => void navigator.clipboard?.writeText(issuedKey);
   const outcomes = new Map(credentials.map((credential) => [credential.credentialId, credentialOutcome(credential, policies)]));
   const selectedOutcome = selected ? outcomes.get(selected.credentialId) : undefined;
+  const policyAvailable = policies.some((policy) => policy.policyId === form.policyId && policy.enabled);
   return (
     <div className="entityLayout">
       <section className="mainPane">
@@ -364,23 +368,26 @@ export function CredentialPanel({ policies, credentials, selected, form, setForm
           <Metric label="bound policies" value={String(new Set(credentials.map((credential) => credential.policyId)).size)} meta={`${policies.length} available`} />
           <Metric label="inactive" value={String(Array.from(outcomes.values()).filter((outcome) => !outcome.active).length)} meta="revoked, stale, or policy-disabled" />
         </div>
-        <div className="tableSectionHeader"><div><strong>Issued credentials</strong><span>Machine access bound to policies</span></div><span>secrets reveal once</span></div>
+        <div className="tableSectionHeader"><div><strong>Issued credentials</strong><span>Machine access bound to policies</span></div><button type="button" onClick={onNew}><Plus className="buttonIcon" aria-hidden="true" /><span>New credential</span></button></div>
         <EntityTable columns={["credential", "policy", "owner", "state"]} columnTemplate="minmax(190px, 1.25fr) minmax(150px, .9fr) minmax(180px, 1fr) 110px" rows={credentials.map((credential) => { const outcome = outcomes.get(credential.credentialId)!; return { id: credential.credentialId, active: selected?.credentialId === credential.credentialId, onClick: () => onEdit(credential), cells: [<EntityName icon={KeyRound} title={credential.credentialId} subtitle="proxy credential" />, credential.policyId, credential.principalId ?? "unassigned", <Status label={outcome.label} tone={outcome.tone} />] }; })} />
       </section>
       <aside className="inspector">
-        <form onSubmit={onIssue}>
-          <InspectorHeader icon={KeyRound} title="Issue credential" subtitle="creates a new secret for one policy" />
-          {error ? <InlineError message={error} /> : null}
-          {issuedKey ? <div className="issuedKey"><div><span>copy now · shown once</span><code>{issuedKey}</code></div><button type="button" className="buttonSecondary" onClick={copyIssuedKey}>Copy</button></div> : null}
+        <InspectorHeader icon={KeyRound} title={selected ? "Selected credential" : "New credential"} subtitle={selected ? "rotate its secret or revoke access" : "creates a new secret for one policy"} />
+        <CredentialNotice state={feedback} />
+        {selected ? <>
+          <dl className="facts"><dt>id</dt><dd>{selected.credentialId}</dd><dt>policy</dt><dd>{selected.policyId}</dd><dt>owner</dt><dd>{selected.principalId ?? "unassigned"}</dd><dt>state</dt><dd>{selectedOutcome?.label ?? "inactive"}</dd></dl>
+          <InlineNote>Rotation replaces only the secret. The policy and owner stay the same; the previous secret stops working.</InlineNote>
+          <div className="inspectorActions"><button type="button" className="buttonSecondary" disabled={busy || !selected.active} onClick={() => onRotate(selected)}>Rotate credential</button><button type="button" className="buttonDanger" disabled={busy || !selected.enabled} onClick={() => onRevoke(selected)}><CircleSlash2 className="buttonIcon" aria-hidden="true" /><span>Revoke credential</span></button></div>
+        </> : <form onSubmit={onIssue}>
           <div className="formGrid compact">
-            <label className="full"><span>credential id</span><input value={form.credentialId} onChange={(event) => setForm({ ...form, credentialId: event.target.value })} placeholder="auto-generated when blank" /></label>
-            <label className="full"><span>policy</span><select value={form.policyId} onChange={(event) => setForm({ ...form, policyId: event.target.value })}>{policies.map((policy) => <option key={policy.policyId} value={policy.policyId}>{policy.policyId}</option>)}</select></label>
+            <label className="full"><span>credential id</span><input value={form.credentialId} maxLength={128} onChange={(event) => setForm({ ...form, credentialId: event.target.value })} placeholder="auto-generated when blank" /></label>
+            <label className="full"><span>policy</span><select value={form.policyId} onChange={(event) => setForm({ ...form, policyId: event.target.value })}>{!policies.some((policy) => policy.policyId === form.policyId) ? <option value={form.policyId}>{form.policyId ? `${form.policyId} · unavailable` : "Select a policy"}</option> : null}{policies.map((policy) => <option key={policy.policyId} value={policy.policyId} disabled={!policy.enabled}>{policy.policyId}{policy.enabled ? "" : " · disabled"}</option>)}</select></label>
             <label className="full"><span>owner email</span><input type="email" value={form.principalId} onChange={(event) => setForm({ ...form, principalId: event.target.value })} placeholder="required for per-user retention exemption" /></label>
           </div>
+          {form.policyId && !policyAvailable ? <InlineNote>This policy is unavailable. Choose an enabled policy before issuing the credential.</InlineNote> : null}
           <InlineNote>The owner sees policy retention status through the token profile and response header. Their exemption wins before content is stored.</InlineNote>
-          <div className="inspectorActions"><button type="submit" disabled={busy || !form.policyId}><Plus className="buttonIcon" aria-hidden="true" /><span>Issue credential</span></button></div>
-          {selected ? <><div className="sectionTitle">Selected credential</div><dl className="facts"><dt>id</dt><dd>{selected.credentialId}</dd><dt>policy</dt><dd>{selected.policyId}</dd><dt>owner</dt><dd>{selected.principalId ?? "unassigned"}</dd><dt>state</dt><dd>{selectedOutcome?.label ?? "inactive"}</dd></dl><div className="inspectorActions"><button type="button" className="buttonDanger" disabled={busy || !selected.enabled} onClick={() => onRevoke(selected.credentialId)}><CircleSlash2 className="buttonIcon" aria-hidden="true" /><span>Revoke credential</span></button></div></> : null}
-        </form>
+          <div className="inspectorActions"><button type="submit" disabled={busy || !policyAvailable}><Plus className="buttonIcon" aria-hidden="true" /><span>Issue credential</span></button></div>
+        </form>}
       </aside>
     </div>
   );

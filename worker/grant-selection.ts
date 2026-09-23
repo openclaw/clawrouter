@@ -180,17 +180,6 @@ export function currentGrantRuntime(grant: UpstreamGrant, state: GrantRuntimeSta
 
 export function grantRevision(grant: UpstreamGrant): string | null { return grant.updatedAt ?? grant.createdAt ?? null; }
 
-export async function syncGrantPoolIndex(env: Env, key: string, previous: UpstreamGrant | null, current: UpstreamGrant | null): Promise<void> {
-  const scope = parseGrantScope(key);
-  if (!scope) throw new Error("invalid upstream grant key");
-  await authorityCall(env, "/grant-pools/sync", {
-    ...scope,
-    previousProvider: previous?.provider ?? null,
-    provider: current?.provider ?? null,
-    enabled: !!current && current.enabled !== false && grantUsable(current),
-  });
-}
-
 export function grantPriority(grant: UpstreamGrant): number {
   return Number.isInteger(grant.priority) && grant.priority! >= 0 && grant.priority! <= 1_000_000 ? grant.priority! : DEFAULT_GRANT_PRIORITY;
 }

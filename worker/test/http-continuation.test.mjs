@@ -23,7 +23,7 @@ async function fixture(t, pooled = true, { limit = null, fixedCost = 7 } = {}) {
     },
     OPENAI_API_KEY: "synthetic-environment-key",
     USAGE_QUEUE: { async send(event) { events.push(event); } },
-  });
+  }, { useExistingAuthority: true });
   async function authority(path, value) {
     const response = await env.ACCESS_CONTROL.get("policy-bindings").fetch(`https://clawrouter.internal${path}`, { method: "POST", body: JSON.stringify(value) });
     assert.equal(response.status, 200, await response.clone().text());
