@@ -14,7 +14,7 @@ import { consoleStatusPresentation } from "./status-display";
 export function AppShell() {
   const [theme, setTheme] = React.useState(initialTheme);
   React.useEffect(() => { applyTheme(theme); }, [theme]);
-  const { session: shell, catalog, access, usage, selfServiceKeys, playground: playgroundDomain, refresh } = useConsole();
+  const { session: shell, catalog, access, usage, selfServiceKeys, credentialOwner, playground: playgroundDomain, refresh } = useConsole();
   const { view, value: session, status, lastUpdatedAt, demoMode, busy, navigateTo } = shell;
   const refreshError = [shell.refreshError, usage.error].filter(Boolean).join("; ");
   const statusPresentation = consoleStatusPresentation(status, demoMode, Boolean(refreshError), shell.refreshing);
@@ -22,7 +22,7 @@ export function AppShell() {
   const { providers, providerReadiness, accessByProvider, services, models, serviceRoutes, query, setQuery, kind, setKind, kinds, filteredServices, selectedService, setSelectedServiceId } = catalog;
   const { policies, credentials: credentialState, connections: connectionState, bindings: bindingState, upstream, assignments, fusion, users: userState, tab } = access;
   const { items: keys, selected: selectedPolicy, form: policyForm, setForm: setPolicyForm, error: policyError, save: savePolicy, revoke, edit: editPolicy, startNew: startNewPolicy, applyPreset, toggleProvider: togglePolicyProvider, setProviderGroup: setPolicyProviderGroup } = policies;
-  const { items: credentials, selected: selectedCredential, form: credentialForm, setForm: setCredentialForm, issuedKey, issue: issueCredential, revoke: revokeCredential, setSelectedId: setSelectedCredentialId, setIssuedKey } = credentialState;
+  const { items: credentials, selected: selectedCredential, form: credentialForm, setForm: setCredentialForm, issue: issueCredential, rotate: rotateCredential, revoke: revokeCredential, edit: editCredential, startNew: startNewCredential } = credentialState;
   const { items: connections, pendingProviderIds, setEnabled: setProviderConnection, setBudget: setProviderBudget } = connectionState;
   const { items: bindings, selected: selectedBinding, form: bindingForm, setForm: setBindingForm, save: saveBinding, edit: editBinding, startNew: startNewBinding } = bindingState;
   const { items: upstreamGrants, selected: selectedUpstreamGrant, form: upstreamGrantForm, setForm: setUpstreamGrantForm, save: saveUpstreamGrant, revoke: revokeUpstreamGrant, refresh: refreshUpstreamGrant, refreshQuota: refreshUpstreamGrantQuota, authorize: authorizeUpstreamGrant, edit: editUpstreamGrant, startNew: startNewUpstreamGrant } = upstream;
@@ -114,9 +114,10 @@ export function AppShell() {
             usageUpdatedAt={usage.updatedAt}
             myCredentials={selfServiceKeys.items}
             myPolicyIds={selfServiceKeys.policyIds}
-            myIssuedKey={selfServiceKeys.issuedKey}
-            myKeyError={selfServiceKeys.error}
-            myKeysBusy={busy || selfServiceKeys.busy}
+            myKeyFeedback={credentialOwner.forSurface("personal")}
+            myKeyScope={credentialOwner.scopeEpoch}
+            myKeysBusy={busy || credentialOwner.busy}
+            onMyKeyDraftChange={credentialOwner.invalidatePresentation}
             onIssueMyKey={selfServiceKeys.issue}
             onRevokeMyKey={selfServiceKeys.revoke}
             onOpenCatalog={() => navigateTo("catalog")}
@@ -214,12 +215,14 @@ export function AppShell() {
             setUpstreamGrantForm={setUpstreamGrantForm}
             assignmentRuleForm={assignmentRuleForm}
             setAssignmentRuleForm={setAssignmentRuleForm}
-            issuedKey={issuedKey}
+            credentialFeedback={credentialOwner.forSurface("admin")}
             error={policyError}
             fusionError={fusionError}
             onSave={savePolicy}
             onIssueCredential={issueCredential}
             onRevokeCredential={revokeCredential}
+            onRotateCredential={rotateCredential}
+            onNewCredential={startNewCredential}
             onSaveBinding={saveBinding}
             onSaveUpstreamGrant={saveUpstreamGrant}
             onRevokeUpstreamGrant={revokeUpstreamGrant}
@@ -232,11 +235,7 @@ export function AppShell() {
             onCheckFusion={checkFusion}
             onNew={startNewPolicy}
             onEdit={editPolicy}
-            onEditCredential={(credential) => {
-              setSelectedCredentialId(credential.credentialId);
-              setCredentialForm({ credentialId: "", policyId: credential.policyId, principalId: credential.principalId ?? "" });
-              setIssuedKey("");
-            }}
+            onEditCredential={editCredential}
             onEditBinding={editBinding}
             onNewBinding={startNewBinding}
             onEditUpstreamGrant={editUpstreamGrant}

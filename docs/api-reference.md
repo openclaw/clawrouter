@@ -299,7 +299,7 @@ Disable one credential to revoke one key, disable a policy to revoke every crede
 
 Budgeted requests reserve an upper-bound token cost before the upstream call when the selected model has versioned pricing. A policy `requestCostMicros` value is a fixed-cost override; budgeted routes without versioned pricing or an override fail closed.
 
-Successful responses settle to reported usage, including cached input where available. Non-2xx and transport failures refund the reservation. Missing or interrupted usage remains charged at the conservative reservation. Streaming responses are metered without buffering the client stream.
+Successful responses settle to reported usage, including cached input where available, or the explicit fixed policy tariff. Known-unsent work and received non-2xx responses settle at zero with `cost_basis: none`. Transport failures after dispatch, and missing or interrupted usage, retain the qualified estimate or fixed tariff because upstream work may have occurred. Streaming responses are metered without buffering the client stream.
 
 Declared Responses JSON and SSE bodies are inspected incrementally for usage and terminal status, including fields after large output. The observer retains only bounded metadata; excessive nesting or oversized selected fields leave usage unknown and preserve the applicable estimate or fixed tariff. These inspection limits do not impose a response-size limit or change delivered bytes.
 
