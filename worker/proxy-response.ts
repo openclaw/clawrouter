@@ -112,7 +112,9 @@ async function normalizeFirstSseEvent(response: Response, errorStatus: number | 
   let transferred = false;
   try {
     while (true) {
-      const { done, value } = await operation.wait(reader.read(), "upstream");
+      // Missing details on a known rejection must leave its fallback body readable.
+      // A failed HTTP 200 sniff still owns the failure before reader cleanup.
+      const { done, value } = await operation.wait(reader.read(), errorStatus === null ? "upstream" : undefined);
       if (value?.byteLength) {
         chunks.push(value);
         const copyLength = Math.min(value.byteLength, FIRST_SSE_EVENT_LIMIT - sniffedLength);
