@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -20,7 +21,7 @@ const rotatedKey = `clawrouter-live-fixture-${rotatedSecret}`;
 const limit = 1_000_000_000;
 
 for (const transport of ["http", "websocket"]) {
-  test(`native Codex through workerd: ${transport}, continuation, cancellation and credential lifecycle`, { skip: !binary, timeout: 90_000 }, async (t) => {
+  test(`native Codex through workerd: ${transport}, active-stream cancellation and credential lifecycle`, { skip: !binary, timeout: 90_000 }, async (t) => {
     const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
     const home = await mkdtemp(join(tmpdir(), "clawrouter-native-router-"));
     let mf, client;
@@ -232,6 +233,50 @@ stream_idle_timeout_ms = 10000
   });
 }
 
+// Diagnostic control for the separately tracked stalled-HTTP interruption gap.
+// Reuse the same idle upstream and actual workerd TCP ingress as native Codex.
+test("idle HTTP disconnect boundary: raw socket controls", { skip: !binary, timeout: 30_000 }, async (t) => {
+  const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
+  for (const close of ["destroy", "resetAndDestroy"]) {
+    const home = await mkdtemp(join(tmpdir(), "clawrouter-native-boundary-"));
+    let mf;
+    try {
+      mf = await startWorkerdFixture(home, routerFixture(), upstreamFixture());
+      const kv = await mf.getKVNamespace("POLICY_KV", "router");
+      await kv.put("policies/fixture", JSON.stringify({ enabled: true, generation: "g1", providers: ["openai"], tenantId: "default", monthlyBudgetMicros: limit, retainRequestContent: false }));
+      await kv.put("credentials/fixture", JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update(secret).digest("hex"), policyId: "fixture", policyGeneration: "g1" }));
+      await kv.put("connections/openai", JSON.stringify({ providerId: "openai", enabled: true, monthlyBudgetMicros: limit }));
+      const origin = await mf.ready;
+      const upstream = await mf.getWorker("upstream");
+      await upstream.fetch("https://fixture.example/hold?idle=1", { method: "POST" });
+      await new Promise((resolve, reject) => {
+        let destroyed = false, text = "";
+        const request = httpRequest(new URL("/v1/native/openai/v1/responses", origin), { method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json" } }, (response) => {
+          assert.equal(response.statusCode, 200);
+          response.on("data", (chunk) => {
+            text += chunk.toString();
+            if (!destroyed && text.includes("response.output_text.delta")) { destroyed = true; response.socket[close](); }
+          });
+          response.on("close", () => { clearTimeout(timer); destroyed ? resolve() : reject(new Error("fixture stream ended before socket destruction")); });
+          response.on("error", (error) => { if (!destroyed) reject(error); });
+        });
+        const timer = setTimeout(() => { request.destroy(); reject(new Error("raw HTTP disconnect timed out")); }, 5_000);
+        request.on("error", (error) => { if (!destroyed) { clearTimeout(timer); reject(error); } });
+        request.end(JSON.stringify({ model, input: "synthetic boundary control", stream: true, service_tier: "priority", max_output_tokens: 32 }));
+      });
+      let observed;
+      try { await until(async () => { observed = await (await upstream.fetch("https://fixture.example/state")).json(); return observed.aborted.length > 0; }, 5_000); } catch { /* Report the boundary without claiming normal close is qualified. */ }
+      const ingress = await (await fetch(new URL("/fixture-ingress", origin))).json();
+      const usage = await (await fetch(new URL("/v1/usage", origin), { headers: { authorization: `Bearer ${key}` } })).json();
+      t.diagnostic(JSON.stringify({ close, ingress, aborted: observed.aborted, canceled: observed.canceled, expired: observed.expired, receipts: usage.usage.events.map(({ status, status_code, cost_basis }) => ({ status, status_code, cost_basis })) }));
+      if (close === "resetAndDestroy") assert.equal(observed.aborted.length, 1);
+    } finally {
+      await mf?.dispose();
+      await rm(home, { recursive: true, force: true });
+    }
+  }
+});
+
 async function until(predicate, timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -263,12 +308,12 @@ export default { ...handler, async fetch(request, env, context) {
 `; }
 
 function upstreamFixture() { return `
-const requests = [], aborted = [], canceled = [], expired = []; let connections = 0, generated = 0, holdNext = false;
+const requests = [], aborted = [], canceled = [], expired = []; let connections = 0, generated = 0, holdNext = null;
 function respond(body, request, transport, connection = null) {
   const responseId = 'fixture_response_' + (requests.length + 1);
   const warmup = body.generate === false;
-  const held = holdNext && !warmup;
-  if (held) holdNext = false;
+  const held = !!holdNext && !warmup, active = holdNext === 'active';
+  if (held) holdNext = null;
   requests.push({ body, responseId, transport, connection, held, authorized: request.headers.get('authorization') === 'Bearer fixture-upstream-key', lite: request.headers.get('x-openai-internal-codex-responses-lite') === 'true' });
   const output = warmup ? [] : generated++ === 0
     ? [{ id: 'fixture_fc', type: 'function_call', call_id: 'fixture_call', name: 'fixture_echo', arguments: '{"message":"fixture"}' }]
@@ -282,12 +327,12 @@ function respond(body, request, transport, connection = null) {
   } else {
     events.push(...output.map((item, output_index) => ({ type: 'response.output_item.done', output_index, item })), { type: 'response.completed', response: result });
   }
-  return { events, heldId: held ? responseId : null, delta };
+  return { events, heldId: held ? responseId : null, delta, active };
 }
 export default { async fetch(request) {
   const path = new URL(request.url).pathname;
   if (path === '/state') return Response.json({ requests, connections, aborted, canceled, expired });
-  if (path === '/hold' && request.method === 'POST') { holdNext = true; return new Response('armed'); }
+  if (path === '/hold' && request.method === 'POST') { holdNext = new URL(request.url).searchParams.has('idle') ? 'idle' : 'active'; return new Response('armed'); }
   if (request.url !== 'https://api.openai.com/v1/responses') return new Response('unexpected upstream route', { status: 400 });
   if (request.headers.get('upgrade') === 'websocket') {
     const connection = ++connections;
@@ -310,7 +355,7 @@ export default { async fetch(request) {
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
   if (request.method !== 'POST') return new Response('unexpected upstream method', { status: 405 });
-  const { events, heldId, delta } = respond(await request.json(), request, 'http');
+  const { events, heldId, delta, active } = respond(await request.json(), request, 'http');
   const encode = event => 'event: ' + event.type + '\\ndata: ' + JSON.stringify(event) + '\\n\\n';
   const prefix = events.map(encode).join('');
   const headers = { 'content-type': 'text/event-stream' };
@@ -331,7 +376,7 @@ export default { async fetch(request) {
           if (Date.now() >= deadline) { expired.push(heldId); request.signal.removeEventListener('abort', onAbort); controller.close(); }
           else controller.enqueue(new TextEncoder().encode(encode(delta)));
           resolve();
-        }, 100);
+        }, active ? 100 : 30_000);
       });
     },
     cancel() { canceled.push(heldId); clearTimeout(timer); release?.(); },
