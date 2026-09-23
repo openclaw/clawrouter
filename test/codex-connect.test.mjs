@@ -197,11 +197,12 @@ test("base provider or legacy profile collisions fail before catalog access", as
 
 test("unrelated explicit and inline provider containers do not collide with the selected provider", async (t) => {
   const f = await fixture(t);
-  for (const text of ['[model_providers]\n[model_providers.other]\nname = "Other"\n', 'model_providers = {}\n', 'model_providers = { other = { name = "Other" } }\n', '[profiles]\n[profiles.other]\nmodel = "other"\n', 'profiles = { other = { model = "other" } }\n']) {
+  for (const text of ['[model_providers]\n[model_providers.other]\nname = "Other"\n', 'model_providers = {}\n', 'model_providers = { other = { name = "Other" } }\n', 'model_providers = { __proto__.clawrouter_probe = true }\n', '[profiles]\n[profiles.other]\nmodel = "other"\n', 'profiles = { other = { model = "other" } }\n']) {
     await writeFile(join(f.home, "config.toml"), text);
     await manageCodex(f.connect, f.env);
     await f.run("remove");
     assert.equal(await readFile(join(f.home, "config.toml"), "utf8"), text);
+    assert.equal(Object.hasOwn(Object.prototype, "clawrouter_probe"), false);
   }
 });
 

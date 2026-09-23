@@ -116,7 +116,7 @@ function baseCompatible(text, profile) {
   const { fields, tables } = document(text ?? "");
   for (const { path, node } of [...fields.values(), ...tables.map((path) => ({ path }))]) {
     const target = path[0] === "model_providers" ? providerId(profile) : path[0] === "profiles" ? profile : null;
-    const inlineCollision = target && path.length === 1 && node?.value.type === "TOMLInlineTable" && Object.hasOwn(getStaticTOMLValue(node.value), target);
+    const inlineCollision = target && path.length === 1 && node?.value.type === "TOMLInlineTable" && node.value.body.some((field) => getStaticTOMLValue(field.key)[0] === target);
     if (path[0] === "profile" || (target && path[1] === target) || inlineCollision) {
       throw new Error("base config has a conflicting provider or legacy profile; choose another profile or resolve it manually");
     }
