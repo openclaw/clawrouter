@@ -1,7 +1,7 @@
 import type { AuthorizedIdentity, BudgetReserveRequest, BudgetSettleRequest, Env, ProviderConnection, UsageEvent } from "./types";
 import { budgetLedgerAddress, budgetPrincipal, providerBudgetLedgerAddress } from "./budget-scope.ts";
 import { logCorrelationError } from "./correlation.ts";
-import { ingestUsage } from "./ledgers.ts";
+import { ingestUsage, settleLedger } from "./ledgers.ts";
 import { HttpError, randomId } from "./utils.ts";
 
 export interface BudgetReservation {
@@ -91,6 +91,16 @@ export async function finalizeAccounting(env: Env, reservation: BudgetReservatio
   return results.every((result) => result.status === "fulfilled");
 }
 
+export async function markBudgetDispatched(env: Env, reservation: BudgetReservation): Promise<void> {
+  const results = await Promise.allSettled(reservation.reservations.map(async (item) => {
+    const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(item.objectName));
+    const response = await stub.fetch("https://clawrouter.internal/dispatch", { method: "POST", body: JSON.stringify({ reservationId: item.reservationId }) });
+    if (!response.ok || (await response.json<{ dispatched: boolean }>()).dispatched !== true) throw new Error("budget dispatch was not acknowledged");
+  }));
+  const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+  if (failed) throw new HttpError(503, "accounting_unavailable", "Budget dispatch could not be recorded; no upstream request was sent.");
+}
+
 async function publishUsage(env: Env, event: UsageEvent): Promise<void> {
   try { await env.USAGE_QUEUE.send(event); }
   catch {
@@ -109,9 +119,8 @@ export async function settleBudget(env: Env, reservation: BudgetReservation, act
 async function settleReservation(env: Env, reservation: LedgerBudgetReservation, actualCostMicros: number): Promise<void> {
   const body: BudgetSettleRequest = { reservationId: reservation.reservationId, actualCostMicros };
   try {
-    const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(reservation.objectName));
-    const response = await stub.fetch("https://clawrouter.internal/settle", { method: "POST", body: JSON.stringify(body) });
-    if (response.ok) return;
+    await settleLedger(env, reservation.objectName, body);
+    return;
   } catch {
     // The durable queue is the recovery boundary for thrown and non-2xx ledger failures.
   }

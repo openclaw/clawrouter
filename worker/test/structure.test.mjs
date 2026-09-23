@@ -20,9 +20,3 @@ test("build and CI contain no Rust toolchain path", () => {
   assert.doesNotMatch(text, /\b(?:cargo|rustc|rustup|worker-build|wasm32)\b/i);
   assert.equal(JSON.parse(readFileSync("package.json", "utf8")).scripts["provider:compile"], "node scripts/compile-providers.mjs providers/*.provider.yaml");
 });
-
-test("expired pending budget reservations release their reserved amount", () => {
-  const source = readFileSync("worker/ledgers.ts", "utf8");
-  assert.match(source, /DELETE FROM budget_reservations WHERE settled = 0 AND created_at_ms < \?/);
-  assert.doesNotMatch(source, /UPDATE budget_reservations SET settled = 1 WHERE settled = 0/);
-});

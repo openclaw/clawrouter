@@ -119,7 +119,10 @@ Object bindings are unchanged.
   Immediate settlement and queued retries use that same address; neither
   reconstructs it from authentication or policy state. The queue consumer still
   accepts scope-addressed jobs left by earlier deployments.
-- Non-2xx Durable Object queue writes are retried and eventually reach the
+- Both budget ledgers confirm dispatch before upstream work starts. Expiry
+  releases only undispatched reservations; dispatched work becomes a conservative
+  receipt that late actual usage can settle once. Final receipts remain for 45 days.
+- Non-2xx or unconfirmed Durable Object settlements are retried and eventually reach the
   configured dead-letter queue.
 - Raw requests live only in the retention archive; usage ledgers contain metadata
   and content references, never prompts or completions.

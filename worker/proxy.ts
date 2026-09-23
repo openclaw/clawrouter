@@ -5,7 +5,7 @@ import {
   prepareManifestRequest, prepareNativeRequest, requestObject, searchParamsRecord, type ProxySelection,
 } from "./proxy-selection";
 import { accessIdentity } from "./access";
-import { reserveBudget, type BudgetReservation, type EstimatedCost } from "./accounting";
+import { markBudgetDispatched, reserveBudget, type BudgetReservation, type EstimatedCost } from "./accounting";
 import { retainRequestContent } from "./content-retention";
 import { correlationMetadata } from "./correlation.ts";
 import {
@@ -208,6 +208,11 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   catch {
     accounting.fail(503, "provider_error", reservation);
     return errorResponse("content_retention_unavailable", "required request-content retention is temporarily unavailable", 503);
+  }
+  try { await markBudgetDispatched(env, reservation); }
+  catch {
+    accounting.fail(503, "provider_error", reservation, content);
+    return errorResponse("accounting_unavailable", "Budget dispatch could not be recorded; no upstream request was sent.", 503);
   }
   const controller = new AbortController();
   const endpointTimeout = selection.endpoint.timeout_ms ?? 120_000;

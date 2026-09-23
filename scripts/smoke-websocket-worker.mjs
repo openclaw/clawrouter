@@ -210,6 +210,27 @@ try {
   assert.deepEqual(await ledgerFacts(), beforeLanes.map(({ spent }) => ({ spent: spent + 3 * 1_080, unsettled: 0 })));
   laneSocket.close(1000, "named lanes complete");
 
+  // A successful HTTP response without durable dispatch confirmation cannot
+  // admit a WebSocket operation or retain its charge.
+  const beforeDispatchFailure = await ledgerFacts(), beforeDispatchFrames = (await stateFrames()).length;
+  const rejectedDispatch = await dispatch("/v1/responses", { headers: { upgrade: "websocket", "x-fixture-accounting-fault": "dispatch", "x-clawrouter-session-id": "dispatch-failure" } });
+  assert.equal(rejectedDispatch.status, 101);
+  const rejectedSocket = rejectedDispatch.webSocket; rejectedSocket.accept(); sockets.push(rejectedSocket);
+  const rejectedEvents = []; let rejectedClosed = false;
+  rejectedSocket.addEventListener("message", ({ data }) => rejectedEvents.push(JSON.parse(data)));
+  rejectedSocket.addEventListener("close", () => { rejectedClosed = true; });
+  rejectedSocket.send(JSON.stringify({ type: "response.create", model: "openai/gpt-6-astra", service_tier: "priority", max_output_tokens: 32, input: "must not dispatch" }));
+  await until(() => rejectedClosed && rejectedEvents.some(({ error }) => error?.code === "accounting_unavailable"));
+  let rejectedReceipt;
+  await until(async () => {
+    const receipts = (await (await dispatch("/v1/usage")).json()).usage.events.filter(({ session_id }) => session_id === "dispatch-failure");
+    assert.ok(receipts.length <= 1); rejectedReceipt = receipts[0]; return !!rejectedReceipt;
+  });
+  assert.equal(rejectedReceipt.actual_cost_micros, 0);
+  assert.equal(rejectedReceipt.status_code, 503);
+  assert.equal((await stateFrames()).length, beforeDispatchFrames);
+  assert.deepEqual(await ledgerFacts(), beforeDispatchFailure);
+
   // HTTP status remains 200 while protocol and delivery outcomes drive receipts.
   for (const scenario of ["late-failed", "cancel-stream", "cancel-after-terminal"]) {
     const before = await ledgerFacts(), session = `sse-${scenario}`;
@@ -431,7 +452,8 @@ export default { ...handler, async fetch(request, env, context) {
       BUDGET_LEDGER: { idFromName: (name) => ledger.idFromName(name), get: (id) => {
         const stub = ledger.get(id);
         return { async fetch(url, init) {
-          if (new URL(url).pathname === "/settle") { trace.push({ kind: "rollback_attempted" }); return new Response("fixture ledger outage", { status: 503 }); }
+          if (fault === "dispatch" && new URL(url).pathname === "/dispatch") return Response.json({ dispatched: false });
+          if (fault !== "dispatch" && new URL(url).pathname === "/settle") { trace.push({ kind: "rollback_attempted" }); return new Response("fixture ledger outage", { status: 503 }); }
           if (rollback && new URL(url).pathname === "/reserve") {
             if (JSON.parse(init.body).policyId === "provider/openai") { trace.push({ kind: "provider_denied" }); return Response.json({ allowed: false, chargedMicros: 0 }); }
             const result = await stub.fetch(url, init);

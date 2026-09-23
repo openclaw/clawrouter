@@ -28,6 +28,7 @@ export class BudgetLedgerObject implements DurableObject {
       return json({ policyId, windowKey, limitMicros: limit, spentMicros: spent, remainingMicros: Math.max(0, limit - spent) });
     }
     if (request.method === "POST" && url.pathname === "/reserve") return this.reserve(await request.json<BudgetReserveRequest>());
+    if (request.method === "POST" && url.pathname === "/dispatch") return this.dispatch(await request.json<{ reservationId: string }>());
     if (request.method === "POST" && url.pathname === "/settle") return this.settle(await request.json<BudgetSettleRequest>());
     return errorResponse("route_not_found", "route not found", 404);
   }
@@ -46,15 +47,26 @@ export class BudgetLedgerObject implements DurableObject {
     const spent = this.effectiveSpent(request.windowKey);
     const remaining = Math.max(0, request.limitMicros - spent);
     if (request.costMicros > remaining) return json({ allowed: false, policyId: request.policyId, windowKey: request.windowKey, chargedMicros: 0, spentMicros: spent, remainingMicros: remaining });
-    this.sql.exec("INSERT INTO budget_reservations (reservation_id, window_key, policy_id, reserved_micros, created_at_ms, settled) VALUES (?, ?, ?, ?, ?, 0)", request.reservationId, request.windowKey, request.policyId, request.costMicros, Date.now());
+    this.sql.exec("INSERT INTO budget_reservations (reservation_id, window_key, policy_id, reserved_micros, created_at_ms, settled, dispatch_started) VALUES (?, ?, ?, ?, ?, 0, 0)", request.reservationId, request.windowKey, request.policyId, request.costMicros, Date.now());
     void this.scheduleAlarm();
     const next = spent + request.costMicros;
     return json({ allowed: true, policyId: request.policyId, windowKey: request.windowKey, chargedMicros: request.costMicros, spentMicros: next, remainingMicros: Math.max(0, request.limitMicros - next) });
   }
 
+  private dispatch(request: { reservationId: string }): Response {
+    const reservation = first<{ created_at_ms: number; settled: number }>(this.sql.exec("SELECT created_at_ms, settled FROM budget_reservations WHERE reservation_id = ?", request.reservationId));
+    if (!reservation || reservation.settled !== 0 || reservation.created_at_ms + reservationLeaseMs <= Date.now()) return errorResponse("budget_reservation_expired", "budget reservation is no longer available for dispatch", 409);
+    // Egress is allowed only after both ledger owners record this transition.
+    // A crash after this point cannot prove that upstream work was free.
+    this.sql.exec("UPDATE budget_reservations SET dispatch_started = 1 WHERE reservation_id = ?", request.reservationId);
+    return json({ dispatched: true });
+  }
+
   private settle(request: BudgetSettleRequest): Response {
-    const reservation = first<{ window_key: string; policy_id: string; reserved_micros: number }>(this.sql.exec("SELECT window_key, policy_id, reserved_micros FROM budget_reservations WHERE reservation_id = ?", request.reservationId));
-    if (!reservation) return json({ settled: false, chargedMicros: 0, spentMicros: 0 });
+    const reservation = first<{ window_key: string; reserved_micros: number; settled: number; dispatch_started: number }>(this.sql.exec("SELECT window_key, reserved_micros, settled, dispatch_started FROM budget_reservations WHERE reservation_id = ?", request.reservationId));
+    if (!reservation) return errorResponse("budget_reservation_missing", "budget settlement has no retained reservation receipt", 404);
+    if (!Number.isSafeInteger(request.actualCostMicros) || request.actualCostMicros < 0) return errorResponse("invalid_budget_settlement", "actual cost must be a non-negative safe integer", 400);
+    if ((reservation.settled === 1 && reservation.reserved_micros !== request.actualCostMicros) || (!reservation.dispatch_started && request.actualCostMicros !== 0)) return errorResponse("budget_settlement_conflict", "budget settlement conflicts with its retained receipt", 409);
     const current = this.effectiveSpent(reservation.window_key);
     const next = Math.max(0, current - reservation.reserved_micros) + request.actualCostMicros;
     this.sql.exec("UPDATE budget_reservations SET reserved_micros = ?, settled = 1 WHERE reservation_id = ?", request.actualCostMicros, request.reservationId);
@@ -69,8 +81,12 @@ export class BudgetLedgerObject implements DurableObject {
 
   private maintain(): void {
     const now = Date.now();
-    this.sql.exec("DELETE FROM budget_reservations WHERE settled = 0 AND created_at_ms < ?", now - reservationLeaseMs);
-    this.sql.exec("DELETE FROM budget_reservations WHERE settled = 1 AND created_at_ms < ?", now - chargeRetentionMs);
+    // Expiry ends admission, not charge ownership. Undispatched work is known
+    // zero; dispatched work keeps its bound in state 2 until one authoritative
+    // settlement moves it to final state 1. Both receipts have bounded retention.
+    this.sql.exec("UPDATE budget_reservations SET reserved_micros = 0, settled = 1 WHERE settled = 0 AND dispatch_started = 0 AND created_at_ms <= ?", now - reservationLeaseMs);
+    this.sql.exec("UPDATE budget_reservations SET settled = 2 WHERE settled = 0 AND dispatch_started = 1 AND created_at_ms <= ?", now - reservationLeaseMs);
+    this.sql.exec("DELETE FROM budget_reservations WHERE settled != 0 AND created_at_ms < ?", now - chargeRetentionMs);
   }
 
   private async scheduleAlarm(): Promise<void> {
@@ -82,7 +98,7 @@ export class BudgetLedgerObject implements DurableObject {
 
   private ensureSchema(): void {
     this.sql.exec("CREATE TABLE IF NOT EXISTS budget_windows (window_key TEXT PRIMARY KEY, policy_id TEXT NOT NULL, spent_micros INTEGER NOT NULL)");
-    this.sql.exec("CREATE TABLE IF NOT EXISTS budget_reservations (reservation_id TEXT PRIMARY KEY, window_key TEXT NOT NULL, policy_id TEXT NOT NULL, reserved_micros INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, settled INTEGER NOT NULL)");
+    this.sql.exec("CREATE TABLE IF NOT EXISTS budget_reservations (reservation_id TEXT PRIMARY KEY, window_key TEXT NOT NULL, policy_id TEXT NOT NULL, reserved_micros INTEGER NOT NULL, created_at_ms INTEGER NOT NULL, settled INTEGER NOT NULL, dispatch_started INTEGER NOT NULL DEFAULT 1)");
     let columns = new Set(rows<{ name: string }>(this.sql.exec("PRAGMA table_info(budget_reservations)")).map((row) => row.name));
     if (!columns.has("created_at_ms")) {
       for (const reservation of rows<{ window_key: string; policy_id: string; reserved_micros: number }>(this.sql.exec("SELECT window_key, policy_id, reserved_micros FROM budget_reservations"))) {
@@ -94,6 +110,9 @@ export class BudgetLedgerObject implements DurableObject {
       columns = new Set(rows<{ name: string }>(this.sql.exec("PRAGMA table_info(budget_reservations)")).map((row) => row.name));
     }
     if (!columns.has("settled")) this.sql.exec("ALTER TABLE budget_reservations ADD COLUMN settled INTEGER NOT NULL DEFAULT 0");
+    // Existing and older-version reservations lack dispatch evidence. Preserve
+    // their bound rather than refunding potentially completed provider work.
+    if (!columns.has("dispatch_started")) this.sql.exec("ALTER TABLE budget_reservations ADD COLUMN dispatch_started INTEGER NOT NULL DEFAULT 1");
     this.sql.exec("CREATE INDEX IF NOT EXISTS budget_reservations_created_at ON budget_reservations (created_at_ms)");
     this.sql.exec("CREATE INDEX IF NOT EXISTS budget_reservations_pending ON budget_reservations (settled, created_at_ms)");
   }
@@ -162,13 +181,17 @@ export async function queue(batch: MessageBatch<QueueMessage>, env: Env): Promis
       else {
         const job = message.body;
         const objectName = "ledger" in job ? job.ledger.objectName : `${job.tenant_id}:${job.policy_id}${job.principal_id ? `:${job.principal_id}` : ""}`;
-        const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(objectName));
-        const response = await stub.fetch("https://clawrouter.internal/settle", { method: "POST", body: JSON.stringify(job.request) });
-        if (!response.ok) throw new Error(`ledger queue write returned ${response.status}`);
+        await settleLedger(env, objectName, job.request);
       }
       message.ack();
     } catch { message.retry(); }
   }
+}
+
+export async function settleLedger(env: Env, objectName: string, request: BudgetSettleRequest): Promise<void> {
+  const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(objectName));
+  const response = await stub.fetch("https://clawrouter.internal/settle", { method: "POST", body: JSON.stringify(request) });
+  if (!response.ok || (await response.json<{ settled: boolean }>()).settled !== true) throw new Error("budget ledger did not acknowledge settlement");
 }
 
 export async function ingestUsage(env: Env, event: UsageEvent): Promise<void> {

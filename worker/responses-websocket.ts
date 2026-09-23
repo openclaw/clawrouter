@@ -1,4 +1,4 @@
-import { emptyReservation, reserveBudget, type BudgetReservation } from "./accounting";
+import { emptyReservation, markBudgetDispatched, reserveBudget, type BudgetReservation } from "./accounting";
 import { retainRequestContent } from "./content-retention";
 import { authenticateProxyKey } from "./proxy-auth";
 import { createProxyAccounting } from "./proxy-accounting";
@@ -54,6 +54,7 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
         reservation = await reserveBudget(env, auth, selection.capability, accounting.cost, upstream.connection);
         try { content = await retainRequestContent(env, auth, selection, requestId); }
         catch { throw new HttpError(503, "content_retention_unavailable", "required request-content retention is temporarily unavailable"); }
+        await markBudgetDispatched(env, reservation);
         pinned ??= { providerId: selection.provider.id, endpointId: selection.endpoint.id, key: upstream.grantKey, revision: upstream.grantRevision };
         const observe = grantObserver(context, env, upstream.grantKey, upstream.grantRevision, selection.provider.quota);
         return {
