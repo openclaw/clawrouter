@@ -703,6 +703,15 @@ active tier; routing never spills into a higher tier while a lower tier has an
 eligible grant. CLI imports, admin writes, and browser OAuth maintain the
 bounded pool index automatically.
 
+Each scope/provider permits 32 active or pending grants. A replacement reserves
+capacity before storing its credentials; its pending slot cannot receive
+requests, and the previous provider remains attached until the store commits.
+Paused and reauthorization-required accounts remain attached while freeing an
+active slot. Revocation removes the attachment after deleting its secrets.
+These attachment facts do not yet change environment-credential fallback;
+legacy backfill and fallback activation require the subsequent control-plane
+migration.
+
 `cf:oauth:put` replaces the entire grant at that key, including its credentials
 and account metadata. Omitted refresh tokens, credential bundles, and refresh
 configuration are cleared. Supply a fresh primary credential for each import.

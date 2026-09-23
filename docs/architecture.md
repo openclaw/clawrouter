@@ -31,6 +31,33 @@ response reader registers identity evidence before publication, retaining
 backpressure, cancellation, and billable usage if storage fails. See the
 [HTTP continuation contract](api-reference.md#http-continuation-contract).
 
+The credential owner also sequences attachment changes in `ACCESS_CONTROL`.
+An explicit grant write reserves a pending pool slot before storing credentials;
+the previous provider stays attached until that store commits. Pending slots
+count toward the 32 active slots per scope/provider but are never selected.
+Paused and reauthorization-required rows retain attachment presence and free an
+active slot. Revocation commits a secretless tombstone before detaching all of
+that key's provider rows. Existing pool rows remain `legacy` and selectable.
+
+Each credential generation records whether index publication is still pending.
+The owner repairs that fact before materialization or maintenance can contact a
+provider. The index retains a generation/revision fence after detachment; its
+revision also identifies pre-commit admission and repair while owner generation
+is unchanged. Index commits use synchronous SQLite transactions. An internal
+owner `/reconcile` accepts only the grant key, rereads the owner, and uses an
+exact index-revision comparison. A lost acknowledgement is recovered through a
+fresh read, not a stale write or caller-supplied previous provider.
+
+The authority's internal `/grant-pools/pending` lists at most 64 distinct full
+grant keys per page with a keyset cursor. Reconciliation can cancel a failed
+first admission only when the owner is strongly absent and the index generation
+is zero; it removes only pending rows. Legacy evidence remains unresolved, and
+a failed owner read or missing KV record never establishes absence. Raw-KV
+import and ordinary refresh may update an existing attachment but cannot create
+one without admission; they can return an explicit `unattached` result. Legacy
+backfill, readiness, authenticated recovery controls, and consuming attachment
+presence to suppress environment fallback are separate activation work.
+
 Authentication is read-only after an existing user receives versioned
 `assignmentState`. Rule changes reconcile users from the admin mutation path;
 verified GitHub evidence remains an explicit admin operation. Legacy KV

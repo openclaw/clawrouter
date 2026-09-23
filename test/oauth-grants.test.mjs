@@ -163,7 +163,7 @@ async function scriptFixture(context) {
   const dir = mkdtempSync(join(tmpdir(), "clawrouter-grant-test-"));
   // Prevent a regression to Wrangler from ever reaching operator credentials.
   writeFileSync(join(dir, "pnpm"), "#!/bin/sh\necho 'unexpected Wrangler invocation' >&2\nexit 99\n", { mode: 0o755 });
-  const values = new Map(), pool = new Set(), requests = [];
+  const values = new Map(), requests = [];
   const hash = (text) => createHash("sha256").update(text).digest("hex");
   const env = attachGrantCredentialNamespace({
     CLAWROUTER_ADMIN_TOKEN_SHA256: hash("admin-fixture"),
@@ -183,14 +183,9 @@ async function scriptFixture(context) {
       if (path === "/connections/resolve") return Response.json({ initialized: true, connections: [{ providerId: "anthropic", enabled: true, monthlyBudgetMicros: null }], missingProviderIds: [] });
       if (path === "/grant-pools/states") return Response.json({ states: {} });
       if (path === "/grant-pools/stats") return Response.json({ stats: {} });
-      if (path === "/grant-pools/resolve") return Response.json({ keys: [...pool], states: {} });
+      if (path === "/grant-pools/resolve") return Response.json(await env.grantAuthority.call("resolve", body));
       if (path === "/grant-pools/select") return Response.json({ selectedKey: body.candidates[0].key });
       if (path === "/grant-pools/feedback") return new Response("updated");
-      if (path === "/grant-pools/sync") {
-        const key = body.scope === "policies" ? `oauth/${body.scopeId}/${body.tokenRef}` : `oauth/tenants/${body.scopeId}/${body.tokenRef}`;
-        if (body.enabled) pool.add(key); else pool.delete(key);
-        return new Response("updated");
-      }
       throw new Error(`unexpected authority operation ${path}`);
     } }) },
   });

@@ -1,10 +1,14 @@
 import { GrantCredentialObject } from "../grant-credentials.ts";
+import { createGrantAuthority } from "./grant-authority-fixture.mjs";
 
 export function attachGrantCredentialNamespace(env) {
   const objects = new Map();
-  env.ACCESS_CONTROL ??= { idFromName: (name) => name, get: () => ({ fetch: async (url) => {
-    if (new URL(url).pathname === "/grant-pools/sync") return new Response("updated");
-    throw new Error("unexpected authority call");
+  const fallback = env.ACCESS_CONTROL;
+  env.grantAuthority = createGrantAuthority();
+  env.ACCESS_CONTROL = { idFromName: (name) => name, get: (id) => ({ fetch: (url, init) => {
+    const path = new URL(url).pathname;
+    return !fallback || ["attachment", "admit", "publish", "cancel-pending", "pending"].some((name) => path === `/grant-pools/${name}`)
+      ? env.grantAuthority.fetch(url, init) : fallback.get(id).fetch(url, init);
   } }) };
   env.GRANT_CREDENTIALS = {
     objects,

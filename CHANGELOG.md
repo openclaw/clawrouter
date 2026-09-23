@@ -4,6 +4,8 @@
 
 - Keep failed console refreshes visible after successful edits, label stale usage with its snapshot time, and show unavailable spend and balances as unknown.
 
+- Keep a grant's previous provider attachment until replacement credentials commit. Reserve new capacity as unselectable pending membership, retain paused and reauthorization-required attachments, and recover partial publication through generation-checked owner reconciliation. Environment-fallback activation and legacy attachment backfill remain separate work.
+
 - Restrict personal usage audit events to the authenticated principal, or unattributed events for the authenticated service key, while preserving shared policy totals and administrator audit access.
 - Keep public HTTP Responses continuations on the original credential owner across token refresh. Register response and Codex turn identities before publication, preserve ordinary pool failover, and require a visible restart when ownership changes or expires.
 
