@@ -28,7 +28,7 @@ test("CLI acknowledges oversized committed grant imports and revocations", async
   assert.equal(fixture.values.get(key).accountId, accountId);
   assert.equal(fixture.values.get(key).hasAccessToken, true);
   assert.ok(owner.alarm() > Date.now());
-  assert.ok(fixture.pool.has(key));
+  assert.ok((await fixture.env.grantAuthority.call("attachment", { key })).attached);
   assert.ok(fixture.responseBytes[0] > 128 * 1024);
 
   assertSuccess(await fixture.run("oauth-revoke.mjs", ["--kid", "policy", "--provider", "anthropic"]));
@@ -40,7 +40,7 @@ test("CLI acknowledges oversized committed grant imports and revocations", async
   assert.equal(revoked.accountId, accountId);
   assert.doesNotMatch(JSON.stringify(revoked), /access-fixture/);
   assert.equal(owner.alarm(), null);
-  assert.equal(fixture.pool.has(key), false);
+  assert.equal((await fixture.env.grantAuthority.call("attachment", { key })).attached, false);
   assert.equal(fixture.values.get(key).hasAccessToken, false);
   assert.ok(fixture.responseBytes[1] > 128 * 1024);
   assert.deepEqual(fixture.requests, ["PUT " + grantPath + "?mode=replace", "POST " + grantPath + "/revoke"]);
@@ -196,7 +196,7 @@ async function scriptFixture(context) {
   const dir = mkdtempSync(join(tmpdir(), "clawrouter-grant-test-"));
   // Prevent a regression to Wrangler from ever reaching operator credentials.
   writeFileSync(join(dir, "pnpm"), "#!/bin/sh\necho 'unexpected Wrangler invocation' >&2\nexit 99\n", { mode: 0o755 });
-  const values = new Map(), pool = new Set(), requests = [], responseBytes = [];
+  const values = new Map(), requests = [], responseBytes = [];
   const hash = (text) => createHash("sha256").update(text).digest("hex");
   const env = attachGrantCredentialNamespace({
     CLAWROUTER_ADMIN_TOKEN_SHA256: hash("admin-fixture"),
@@ -216,14 +216,9 @@ async function scriptFixture(context) {
       if (path === "/connections/resolve") return Response.json({ initialized: true, connections: [{ providerId: "anthropic", enabled: true, monthlyBudgetMicros: null }], missingProviderIds: [] });
       if (path === "/grant-pools/states") return Response.json({ states: {} });
       if (path === "/grant-pools/stats") return Response.json({ stats: {} });
-      if (path === "/grant-pools/resolve") return Response.json({ keys: [...pool], states: {} });
+      if (path === "/grant-pools/resolve") return Response.json(await env.grantAuthority.call("resolve", body));
       if (path === "/grant-pools/select") return Response.json({ selectedKey: body.candidates[0].key });
       if (path === "/grant-pools/feedback") return new Response("updated");
-      if (path === "/grant-pools/sync") {
-        const key = body.scope === "policies" ? `oauth/${body.scopeId}/${body.tokenRef}` : `oauth/tenants/${body.scopeId}/${body.tokenRef}`;
-        if (body.enabled) pool.add(key); else pool.delete(key);
-        return new Response("updated");
-      }
       throw new Error(`unexpected authority operation ${path}`);
     } }) },
   });
@@ -248,7 +243,7 @@ async function scriptFixture(context) {
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   context.after(async () => { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); rmSync(dir, { force: true, recursive: true }); });
   return {
-    dir, values, pool, env, requests, responseBytes, dispatch,
+    dir, values, env, requests, responseBytes, dispatch,
     run(name, args, extraEnv = {}, input = "") {
       return new Promise((resolveResult, reject) => {
         const child = spawn(process.execPath, [resolve("scripts", name), ...args], { env: { PATH: dir, NODE_NO_WARNINGS: "1", CLAWROUTER_BASE_URL: `http://127.0.0.1:${server.address().port}`, CLAWROUTER_ADMIN_TOKEN: "admin-fixture", TEST_ACCESS_TOKEN: "access-fixture", ...extraEnv }, timeout: 10_000 });
