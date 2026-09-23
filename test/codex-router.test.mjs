@@ -323,6 +323,9 @@ ${forceHttp ? "request_max_retries = 0\nstream_max_retries = 0\nstream_idle_time
     assert.equal(failed.length, 1); assert.equal(failed[0].status, "provider_error");
     assert.equal(failed[0].cost_basis, "manifest_reservation");
     assert.ok(failed[0].actual_cost_micros > 0); assert.equal(failed[0].actual_cost_micros, failed[0].reserved_cost_micros);
+    const successes = usage.usage.events.filter(({ status }) => status === "success");
+    assert.equal(successes.length, after.requests.length - 1);
+    assert.ok(successes.every((receipt) => receipt.cost_basis === "manifest_pricing" && receipt.requested_service_tier === "priority" && receipt.served_service_tier === "priority" && receipt.cached_input_tokens === 0 && receipt.cache_write_input_tokens === 0));
     let expected = after.requests.reduce((sum, request) => sum + (request.held ? failed[0].actual_cost_micros : request.body.generate === false ? 60 : 1080), 0);
     assert.equal(usage.budget.spentMicros, expected); assert.equal(usage.usage.summary.actualCostMicros, expected);
     assert.equal(new Set(usage.usage.events.map(({ request_id }) => request_id)).size, after.requests.length);
@@ -496,7 +499,7 @@ function respond(body, request, transport) {
   const account = authorization === 'Bearer fixture-account-a' ? 'a' : authorization === 'Bearer fixture-account-b' ? 'b' : 'unexpected';
   requests.push({ body, responseId, transport, account, held, turn: request.headers.get('x-codex-turn-state') });
   const item = { id: 'fallback_message', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'fixture complete', annotations: [] }] };
-  const result = { id: responseId, object: 'response', status: 'completed', model: body.model, output: warmup ? [] : [item], service_tier: 'priority', usage: { input_tokens: warmup ? 3 : 14, output_tokens: warmup ? 0 : 8, total_tokens: warmup ? 3 : 22 } };
+  const result = { id: responseId, object: 'response', status: 'completed', model: body.model, output: warmup ? [] : [item], service_tier: 'priority', usage: { input_tokens: warmup ? 3 : 14, output_tokens: warmup ? 0 : 8, total_tokens: warmup ? 3 : 22, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } };
   const events = [];
   if (held || body.input === 'fixture scope') events.push({ type: 'response.metadata', response_id: responseId, headers: { 'x-codex-turn-state': [held ? 'fixture-turn-from-websocket' : 'turn_' + responseId] } });
   events.push({ type: 'response.created', response: { ...result, status: 'in_progress', output: [], usage: null } });
