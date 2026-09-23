@@ -9,6 +9,7 @@ import { readCodexCatalog } from "./codex-catalog.mjs";
 const MARKER = "# clawrouter-connect-v1 ";
 const hash = (text) => createHash("sha256").update(text).digest("hex");
 const key = (path) => JSON.stringify(path);
+const shellQuote = (value) => `'${value.replaceAll("'", "'\\''")}'`;
 const providerId = (profile) => `clawrouter_${profile}`;
 const catalogName = (profile, digest) => `${profile}.${digest}.models.json`;
 const rootFields = ["model", "model_provider", "model_catalog_json", "service_tier", "web_search"];
@@ -100,6 +101,8 @@ function receipt(text, profile) {
   ]);
   if (state.version !== 1 || state.profile !== profile || typeof state.routerUrl !== "string" || typeof state.provider !== "string" || typeof state.model !== "string" || !["default", "priority"].includes(state.serviceTier)
     || !/^[a-f0-9]{64}$/.test(state.catalogSha256) || !Array.isArray(state.fields)
+    || !Array.isArray(state.catalogs) || !state.catalogs.includes(state.catalogSha256)
+    || state.catalogs.some((digest) => !/^[a-f0-9]{64}$/.test(digest))
     || state.fields.length !== allowed.size || state.fields.some((field) => !Array.isArray(field) || field.length !== 2 || !Array.isArray(field[0]))
     || new Set(state.fields.map(([path]) => key(path))).size !== allowed.size
     || state.fields.some(([path, value]) => !allowed.has(key(path)) || !["string", "boolean"].includes(typeof value))) {
@@ -111,9 +114,10 @@ function receipt(text, profile) {
 
 function baseCompatible(text, profile) {
   const { fields, tables } = document(text ?? "");
-  for (const path of [...[...fields.values()].map((field) => field.path), ...tables]) {
-    if ((path[0] === "model_providers" && (path.length === 1 || path[1] === providerId(profile)))
-      || path[0] === "profile" || (path[0] === "profiles" && (path.length === 1 || path[1] === profile))) {
+  for (const { path, node } of [...fields.values(), ...tables.map((path) => ({ path }))]) {
+    const target = path[0] === "model_providers" ? providerId(profile) : path[0] === "profiles" ? profile : null;
+    const inlineCollision = target && path.length === 1 && node?.value.type === "TOMLInlineTable" && Object.hasOwn(getStaticTOMLValue(node.value), target);
+    if (path[0] === "profile" || (target && path[1] === target) || inlineCollision) {
       throw new Error("base config has a conflicting provider or legacy profile; choose another profile or resolve it manually");
     }
   }
@@ -174,7 +178,8 @@ export async function manageCodex(args, env = process.env) {
     nextBytes = `${JSON.stringify(catalog.catalog)}\n`;
     const fields = fieldsFor(profile, settings, catalog);
     nextState = { version: 1, profile, routerUrl: catalog.routerUrl, provider: settings.provider, model: settings.model,
-      serviceTier: settings.serviceTier, catalogSha256: hash(nextBytes), fields };
+      serviceTier: settings.serviceTier, catalogSha256: hash(nextBytes),
+      catalogs: [...new Set([...(state?.catalogs ?? []), hash(nextBytes)])].sort(), fields };
     const body = state ? patch(original.slice(original.indexOf("\n") + 1), state.fields, fields).text : render(fields);
     text = `${MARKER}${JSON.stringify(nextState)}\n${body}`;
     document(text);
@@ -187,7 +192,7 @@ export async function manageCodex(args, env = process.env) {
   const changed = command === "remove" ? state.fields.map(([path]) => path.join(".")).filter((field) => !retained.includes(field))
     : nextState.fields.filter(([path, value]) => !state?.fields.some(([oldPath, oldValue]) => key(path) === key(oldPath) && value === oldValue)).map(([path]) => path.join("."));
   const summary = { command, profile, status: dryRun ? "planned" : "applied", changed, retained,
-    ...(command === "remove" ? { revoked: false } : { catalogSha256: nextState.catalogSha256, restartRequired: true, launch: `codex --profile ${profile}`, credential: "CLAWROUTER_API_KEY must be exported in the Codex process environment" }) };
+    ...(command === "remove" ? { revoked: false } : { catalogSha256: nextState.catalogSha256, restartRequired: true, launch: `CODEX_HOME=${shellQuote(home)} codex --profile ${profile}`, credential: "CLAWROUTER_API_KEY must be exported in the Codex process environment" }) };
   if (dryRun) return summary;
 
   await mkdir(home, { recursive: true, mode: 0o700 });
@@ -210,14 +215,22 @@ export async function manageCodex(args, env = process.env) {
     // its pointer and ownership receipt. Failed refreshes keep the old profile.
     await replace(path, text, original);
     committed = true;
-    if (oldCatalog && oldCatalog !== nextCatalog) {
-      try {
-        const current = await readRegular(oldCatalog);
-        if (current !== null && hash(current) === state.catalogSha256) await rm(oldCatalog);
-        else if (current !== null) summary.retained.push("model catalog modified outside setup");
-      } catch { summary.retained.push("previous model catalog could not be removed"); }
+    // Codex reads the profile and catalog separately. Keep every published
+    // generation until explicit disconnect so concurrent startup stays valid.
+    if (command === "remove") {
+      for (const digest of state.catalogs) {
+        const name = catalogName(profile, digest);
+        try {
+          const current = await readRegular(join(home, name));
+          if (current !== null && hash(current) === digest) await rm(join(home, name));
+          else if (current !== null) summary.retained.push(`${name}: modified outside setup`);
+        } catch { summary.retained.push(`${name}: could not be removed`); }
+      }
+      if (text.replace(/\s/g, "") === `[model_providers.${JSON.stringify(providerId(profile))}]`) {
+        if (await readRegular(path) === text) await rm(path);
+        else summary.retained.push("profile changed during removal");
+      }
     }
-    if (command === "remove" && text.replace(/\s/g, "") === `[model_providers.${JSON.stringify(providerId(profile))}]`) await rm(path);
   } finally {
     // Only this attempt's unreferenced generation is disposable on failure.
     // A concurrently edited profile may already point at it.

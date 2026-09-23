@@ -66,7 +66,7 @@ test("connect dry-run, verify, update, and remove preserve base/auth/key and com
   assert.deepEqual(await readdir(f.home), ["auth.json", "config.toml"]);
   const applied = await manageCodex(args, { ...f.env, CLAWROUTER_API_KEY: undefined });
   assert.equal(applied.status, "applied");
-  assert.equal(applied.launch, "codex --profile clawrouter");
+  assert.equal(applied.launch, `CODEX_HOME='${f.home}' codex --profile clawrouter`);
   const config = await f.read();
   assert.equal(config.model_provider, "clawrouter_clawrouter");
   assert.equal(config.model_providers.clawrouter_clawrouter.env_key, "CLAWROUTER_API_KEY");
@@ -106,8 +106,12 @@ test("refresh switches one complete generation and preserves user comments, fiel
   assert.equal(config.model_providers.clawrouter_clawrouter.supports_websockets, false);
   assert.ok((await readFile(f.profile, "utf8")).endsWith(extra));
   assert.deepEqual(JSON.parse(await readFile(join(f.home, config.model_catalog_json), "utf8")).models, [nextDescriptor]);
-  await assert.rejects(readFile(join(f.home, original.model_catalog_json)), { code: "ENOENT" });
+  // A process that read the previous profile before the switch can still open
+  // its catalog after the updater has finished.
+  assert.deepEqual(JSON.parse(await readFile(join(f.home, original.model_catalog_json), "utf8")).models, [descriptor]);
   await f.run("remove");
+  await assert.rejects(readFile(join(f.home, original.model_catalog_json)), { code: "ENOENT" });
+  await assert.rejects(readFile(join(f.home, config.model_catalog_json)), { code: "ENOENT" });
   assert.ok((await readFile(f.profile, "utf8")).endsWith(extra));
   assert.deepEqual(await f.read(), { model_providers: { clawrouter_clawrouter: { stream_max_retries: 7 } }, tools: {}, custom: { multi: "line one\nline two" } });
 });
@@ -123,7 +127,7 @@ test("update refuses changed owned fields; remove retains their user values and 
   assert.equal(await readFile(f.profile, "utf8"), before);
   const removed = await f.run("remove");
   assert.ok(removed.retained.includes("model"));
-  assert.ok(removed.retained.includes("model catalog modified outside setup"));
+  assert.ok(removed.retained.includes(`${config.model_catalog_json}: modified outside setup`));
   assert.equal((await f.read()).model, "user-selected");
   assert.ok((await readFile(f.profile, "utf8")).includes("# keep"));
   assert.equal(await readFile(join(f.home, config.model_catalog_json), "utf8"), "user-owned catalog bytes\n");
@@ -172,6 +176,44 @@ test("base provider or legacy profile collisions fail before catalog access", as
     assert.equal(await readFile(join(f.home, "config.toml"), "utf8"), text);
   }
   assert.equal(f.state.requests.length, 0);
+});
+
+test("unrelated explicit and inline provider containers do not collide with the selected provider", async (t) => {
+  const f = await fixture(t);
+  for (const text of ['[model_providers]\n[model_providers.other]\nname = "Other"\n', 'model_providers = {}\n', 'model_providers = { other = { name = "Other" } }\n', '[profiles]\n[profiles.other]\nmodel = "other"\n', 'profiles = { other = { model = "other" } }\n']) {
+    await writeFile(join(f.home, "config.toml"), text);
+    await manageCodex(f.connect, f.env);
+    await f.run("remove");
+    assert.equal(await readFile(join(f.home, "config.toml"), "utf8"), text);
+  }
+});
+
+test("custom home launch instructions quote shell metacharacters and select the installed profile", async (t) => {
+  const f = await fixture(t);
+  const customHome = join(f.directory, "a home'with$dollars");
+  const args = f.connect.map((value) => value === f.home ? customHome : value);
+  const result = await manageCodex(args, { ...f.env, CODEX_HOME: undefined });
+  assert.equal(result.launch, `CODEX_HOME='${customHome.replaceAll("'", "'\\''")}' codex --profile clawrouter`);
+  assert.ok(await readFile(join(customHome, "clawrouter.config.toml"), "utf8"));
+  assert.deepEqual(await readdir(f.home), ["auth.json", "config.toml"]);
+});
+
+test("remove preserves an editor save made during catalog cleanup", async (t) => {
+  const f = await fixture(t);
+  await manageCodex(f.connect, f.env);
+  const config = await f.read();
+  const remove = fs.promises.rm;
+  const edited = "# saved during removal\nmodel = 'user-selected'\n";
+  const mocked = t.mock.method(fs.promises, "rm", async (path, ...args) => {
+    if (path === join(f.home, config.model_catalog_json)) await writeFile(f.profile, edited);
+    return remove(path, ...args);
+  });
+  syncBuiltinESMExports();
+  let result;
+  try { result = await f.run("remove"); }
+  finally { mocked.mock.restore(); syncBuiltinESMExports(); }
+  assert.equal(await readFile(f.profile, "utf8"), edited);
+  assert.ok(result.retained.includes("profile changed during removal"));
 });
 
 test("failed profile commit cleans its new generation, temp files, and lock while retaining the old catalog", async (t) => {

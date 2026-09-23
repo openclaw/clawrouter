@@ -54,7 +54,9 @@ file; subsequent Codex processes still need `CLAWROUTER_API_KEY` exported.
 
 `update` writes a complete nonempty catalog generation before atomically
 switching the profile and its ownership receipt. Failed preparation leaves
-the previous profile and catalog usable. Restart Codex after an update; running
+the previous profile and catalog usable. Earlier catalog generations stay
+available until `remove`, so a concurrently starting client can finish loading
+the profile it already read. Restart Codex after an update; running
 clients do not reload the static catalog. Changes and dry-run summaries list
 field names and catalog hashes, never keys or model instructions.
 
