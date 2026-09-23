@@ -41,6 +41,7 @@ interface CredentialRecord {
   nextRefreshAttemptAt?: string | null;
   quotaFailureCount?: number;
   revokedAt?: string | null;
+  revokedProviderId?: string | null;
   metadata?: UpstreamGrant;
 }
 
@@ -122,7 +123,7 @@ export class GrantCredentialObject implements DurableObject {
       if (path === "/put") {
         const input = await readJson<PutRequest>(request);
         const current = await this.loadRecord(input.key);
-        const previous = current ? metadataGrant(current) : await legacyGrantMetadata(this.env, input.key);
+        const previous = current ? poolMetadata(current) : await legacyGrantMetadata(this.env, input.key);
         let record = current && !current.revokedAt && (input.preserveUnspecifiedSecrets || !hasPrimaryCredential(input.grant))
           ? updatedCredentialRecord(current, input.grant)
           : credentialRecord(input.grant, (current?.generation ?? previous?.credentialGeneration ?? 0) + 1);
@@ -141,11 +142,11 @@ export class GrantCredentialObject implements DurableObject {
       if (path === "/revoke") {
         const { key, metadata } = await readJson<{ key: string; metadata?: GrantRevokeMetadata }>(request);
         const current = await this.loadRecord(key);
-        const previous = current ? metadataGrant(current) : await legacyGrantMetadata(this.env, key);
+        const previous = current ? poolMetadata(current) : await legacyGrantMetadata(this.env, key);
         if (!previous) throw new HttpError(404, "unknown_upstream_grant", "upstream grant is not registered");
         // Legacy CLI hints identify a record that has no owner. Once owned, its
         // canonical identity and an existing tombstone cannot be overwritten.
-        const record = current?.revokedAt ? current : revokedRecord(key, current ? previous : { ...previous, ...metadata }, current?.generation);
+        const record = current?.revokedAt ? current : revokedRecord(key, current ? previous : { ...previous, ...metadata }, current?.generation, previous.provider);
         // Never erase the tombstone or restore secrets when a derived write fails.
         // Retrying revoke republishes this same generation after partial failure.
         await this.state.storage.put("credential", record);
@@ -403,7 +404,14 @@ function metadataGrant(record: CredentialRecord): UpstreamGrant {
   return { ...record.metadata, ...credentialProjection(record), enabled: record.enabled === true, provider: record.providerId, kind: record.kind, maintenance: record.maintenance, revokedAt: record.revokedAt ?? null };
 }
 
-function revokedRecord(key: string, metadata: UpstreamGrant | null, generation = metadata?.credentialGeneration ?? 0): CredentialRecord {
+function poolMetadata(record: CredentialRecord): UpstreamGrant {
+  const grant = metadataGrant(record);
+  // A failed legacy revoke may have changed its identifying provider hint.
+  // Retries and reconnects must still remove membership from the original pool.
+  return record.revokedAt ? { ...grant, provider: record.revokedProviderId ?? grant.provider } : grant;
+}
+
+function revokedRecord(key: string, metadata: UpstreamGrant | null, generation = metadata?.credentialGeneration ?? 0, previousProviderId = metadata?.provider): CredentialRecord {
   // Tagged CLI grants could contain nested secret fields in refresh metadata.
   // A tombstone must discard these too, including when the owner predates it.
   metadata = stripLegacySecrets(metadata) as UpstreamGrant | null;
@@ -414,7 +422,7 @@ function revokedRecord(key: string, metadata: UpstreamGrant | null, generation =
     tokenType: metadata?.tokenType, expiresAt: metadata?.expiresAt, scopes: metadata?.scopes,
     accountId: metadata?.accountId, subscription: metadata?.subscription, refresh: metadata?.refresh,
     maintenance: { keepWarm: metadata?.maintenance?.keepWarm === true },
-    createdAt: metadata?.createdAt, updatedAt: revokedAt, revokedAt, metadata: secretlessGrant(metadata ?? {}),
+    createdAt: metadata?.createdAt, updatedAt: revokedAt, revokedAt, revokedProviderId: previousProviderId, metadata: secretlessGrant(metadata ?? {}),
   };
 }
 
@@ -639,7 +647,7 @@ export function hasPrimaryCredential(grant: UpstreamGrant): boolean {
 }
 
 async function legacyGrantMetadata(env: Env, key: string): Promise<UpstreamGrant | null> {
-  const raw = await env.POLICY_KV.get<string>(key, "text");
+  const raw = await env.POLICY_KV.get(key, "text");
   if (raw === null) return null;
   if (new TextEncoder().encode(raw).byteLength > MAX_LEGACY_GRANT_BYTES) throw new HttpError(400, "invalid_upstream_grant", "legacy grant metadata exceeds the migration limit");
   let value: unknown = {};

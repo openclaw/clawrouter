@@ -441,6 +441,36 @@ test("legacy revoke normalizes metadata and removes the previous provider from t
   assert.doesNotMatch(JSON.stringify(tombstone), /legacy-private|nested-private/);
 });
 
+for (const recovery of ["revoke", "reconnect"]) test(`legacy revoke keeps original pool cleanup after failure and ${recovery}`, async () => {
+  const key = "oauth/policy/legacy", values = new Map([[key, legacyGrant({ provider: "old-provider" })]]), env = credentialEnv(values);
+  const members = new Set(["old-provider"]), previousProviders = [];
+  let fail = true;
+  env.ACCESS_CONTROL.get = () => ({ fetch: async (_url, init) => {
+    const body = JSON.parse(init.body);
+    previousProviders.push(body.previousProvider);
+    if (fail) { fail = false; throw new Error("fixture pool unavailable"); }
+    members.delete(body.previousProvider);
+    if (body.enabled) members.add(body.provider);
+    return new Response("updated");
+  } });
+  await assert.rejects(() => revokeGrantCredentials(env, key, { provider: "retired-provider" }));
+  const owner = env.GRANT_CREDENTIALS.objects.get(key), tombstone = owner.values.get("credential");
+  assert.equal(tombstone.enabled, false);
+  assert.equal(tombstone.providerId, "retired-provider");
+  assert.doesNotMatch(JSON.stringify(tombstone), /access-old|refresh-old/);
+  if (recovery === "revoke") {
+    const retried = await revokeGrantCredentials(env, key, { provider: "ignored-provider" });
+    assert.equal(retried.provider, "retired-provider");
+    assert.equal(retried.credentialGeneration, tombstone.generation);
+    assert.equal(members.size, 0);
+  } else {
+    await putGrantCredentials(env, key, legacyGrant({ provider: "anthropic", accessToken: "fresh-access" }));
+    assert.deepEqual([...members], ["anthropic"]);
+    assert.equal(owner.values.get("credential").revokedProviderId, undefined);
+  }
+  assert.deepEqual(previousProviders, ["old-provider", "old-provider"]);
+});
+
 function credentialEnv(values) {
   return attachGrantCredentialNamespace({
     POLICY_KV: {
