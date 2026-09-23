@@ -150,5 +150,36 @@ test("OpenAI streams keep inclusive cache usage and require their terminal event
 
 test("other SSE usage metadata and multiline data retain their existing totals", () => {
   const stream = ': heartbeat\n\ndata: {"usageMetadata": {\ndata: "promptTokenCount": 100, "candidatesTokenCount": 20, "totalTokenCount": 120}}\n\n';
-  assert.deepEqual(extractSseUsageTokens(stream), { input: 100, output: 20, total: 120, cached: null, cacheWrite: null, cacheWrite5m: null, cacheWrite1h: null });
+  assert.deepEqual(extractSseUsageTokens(stream), { input: 100, output: 20, total: 120, cached: 0, cacheWrite: null, cacheWrite5m: null, cacheWrite1h: null });
+});
+
+test("Gemini keeps cache-inclusive input and bills thoughts plus candidates in JSON and cumulative SSE", () => {
+  const usageMetadata = { promptTokenCount: 1_000, cachedContentTokenCount: 900, candidatesTokenCount: 100, thoughtsTokenCount: 1_000, totalTokenCount: 2_100 };
+  const final = { usageMetadata };
+  for (const tokens of [extractUsageTokens(final), extractSseUsageTokens(sse({ usageMetadata: { promptTokenCount: 1_000, candidatesTokenCount: 5, totalTokenCount: 1_005 } }, final, { candidates: [] }))]) {
+    assert.deepEqual(tokens, { input: 1_000, output: 1_100, total: 2_100, cached: 900, cacheWrite: null, cacheWrite5m: null, cacheWrite1h: null });
+    assert.equal(actualModelCost({ ...cachePricing, inputMicrosPerMillion: 1_500_000, cachedInputMicrosPerMillion: 150_000, outputMicrosPerMillion: 9_000_000 }, tokens), 10_185);
+  }
+  const thoughtsOnly = extractUsageTokens({ usageMetadata: { promptTokenCount: 1_000, thoughtsTokenCount: 100, totalTokenCount: 1_100 } });
+  assert.equal(thoughtsOnly.output, 100);
+  assert.equal(thoughtsOnly.cached, 0);
+  assert.equal(extractUsageTokens({ usageMetadata: { ...usageMetadata, totalTokenCount: 2_123 } }).total, 2_123, "keep provider total instead of inferring generated tokens from it");
+});
+
+test("Gemini scalar defaults are distinct from absent or malformed metadata", () => {
+  const zero = { input: 0, output: 0, total: 0, cached: 0, cacheWrite: null, cacheWrite5m: null, cacheWrite1h: null };
+  for (const usageMetadata of [{}, { promptTokenCount: 0, candidatesTokenCount: 0 }, { thoughtsTokenCount: null }]) assert.deepEqual(extractUsageTokens({ usageMetadata }), zero);
+  for (const body of [{}, { usageMetadata: null }, { usageMetadata: [] }]) assert.equal(extractUsageTokens(body), null);
+  const wire = { usage_metadata: { prompt_token_count: "1e3", candidates_token_count: "16", thoughts_token_count: "2", total_token_count: "1018" } };
+  assert.deepEqual(extractUsageTokens(wire), { ...zero, input: 1_000, output: 18, total: 1_018 });
+  const partial = { usageMetadata: { promptTokenCount: 1_000, candidatesTokenCount: 5, totalTokenCount: 1_005 } };
+  for (const field of ["promptTokenCount", "cachedContentTokenCount", "candidatesTokenCount", "thoughtsTokenCount", "totalTokenCount"]) {
+    for (const invalid of [-1, 1.5, 2_147_483_648, "bad", "Infinity", true, {}]) {
+      const final = { usageMetadata: { ...partial.usageMetadata, [field]: invalid } };
+      assert.equal(extractUsageTokens(final), null);
+      assert.equal(extractSseUsageTokens(sse(partial, final)), null, "invalid final usage cannot retain a cheaper partial snapshot");
+    }
+  }
+  assert.equal(extractSseUsageTokens(sse(partial, { usageMetadata: null })), null);
+  assert.equal(extractUsageTokens({ usageMetadata: { candidatesTokenCount: 2_147_483_647, thoughtsTokenCount: 2_147_483_647 } }).output, 4_294_967_294);
 });
