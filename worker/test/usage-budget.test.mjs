@@ -5,12 +5,12 @@ import test from "node:test";
 
 
 const { default: handler } = await import("../index.ts");
-const { BudgetLedgerObject, providerBudgetStatus } = await import("../ledgers.ts");
+const { BudgetLedgerObject, providerBudgetStatus, queue } = await import("../ledgers.ts");
 const keyMaterial = "abcdefgh";
 const keyDigest = await sha256(keyMaterial);
 
 for (const failure of ["retention", "provider"]) {
-  test(`${failure} failure releases both budgets and preserves request attribution in one audit event`, async (t) => {
+  test(`${failure} failure accounts the fixed tariff only after dispatch and preserves request attribution`, async (t) => {
     const env = usageEnv([], { provider: "local-openai", retainContent: failure === "retention" });
     env.LOCAL_OPENAI_BASE_URL = "https://upstream.example.invalid";
     env.BUDGET_LEDGER = sqlBudgetNamespace(t);
@@ -31,10 +31,12 @@ for (const failure of ["retention", "provider"]) {
     assert.equal(events[0].session_id, "synthetic-session");
     assert.equal(events[0].status, "provider_error");
     assert.equal(events[0].reserved_cost_micros, 1);
-    assert.equal(events[0].actual_cost_micros, 0);
+    const charged = failure === "retention" ? 0 : 1;
+    assert.equal(events[0].actual_cost_micros, charged);
+    assert.equal(events[0].cost_basis, "policy_fixed");
     const usage = await handler.fetch(new Request("https://clawrouter.example/v1/usage", { headers: { authorization: `Bearer ${proxyKey()}` } }), env, {});
-    assert.equal((await usage.json()).budget.spentMicros, 0);
-    assert.equal((await providerBudgetStatus(env, "local-openai", 100)).spentMicros, 0);
+    assert.equal((await usage.json()).budget.spentMicros, charged);
+    assert.equal((await providerBudgetStatus(env, "local-openai", 100)).spentMicros, charged);
   });
 }
 
@@ -368,28 +370,123 @@ test("HTTP and native streaming outcomes settle each ledger once without rewriti
   }
 });
 
-test("pre-header caller abort stays distinct from upstream timeout and preserves zero settlement", async (t) => {
-  for (const callerAbort of [false, true]) {
-    const events = [], pending = [], abort = new AbortController(), limit = 1_000_000;
+test("dispatched pre-header HTTP and native failures retain estimates through independent ledger recovery", async (t) => {
+  let now = Date.now();
+  t.mock.method(Date, "now", () => now);
+  const owners = ["tenant:maintainer_access:owner@example.com", "provider:openai"];
+  for (const route of ["/v1/responses", "/v1/native/openai/v1/responses"]) for (const scenario of ["transport", "timeout", "caller_abort"]) for (const failedOwner of [null, ...owners]) {
+    const messages = [], pending = [], abort = new AbortController(), limit = 1_000_000;
     const env = usageEnv([], { limit, fixedCost: null, retainContent: false });
     env.OPENAI_API_KEY = "fixture-openai-key";
-    env.BUDGET_LEDGER = sqlBudgetNamespace(t);
-    env.USAGE_QUEUE = { send: async event => events.push(event) };
+    const ledger = sqlBudgetNamespace(t);
+    let unavailable = failedOwner;
+    env.BUDGET_LEDGER = { ...ledger, get: name => ({ fetch: (url, init) => {
+      if (name === unavailable && new URL(url).pathname === "/settle") throw new Error("fixture ledger unavailable");
+      return ledger.get(name).fetch(url, init);
+    } }) };
+    env.USAGE_QUEUE = { send: async message => messages.push(message) };
     const upstream = t.mock.method(globalThis, "fetch", async () => {
-      if (callerAbort) abort.abort();
+      for (const owner of owners) assert.equal(ledger.get(owner).reservations()[0].dispatch_started, 1);
+      if (scenario === "caller_abort") abort.abort();
+      if (scenario === "transport") throw new Error("fixture connection lost before headers");
       throw new DOMException("fixture upstream abort", "AbortError");
     });
-    const response = await handler.fetch(new Request("https://clawrouter.example/v1/responses", {
+    const response = await handler.fetch(new Request(`https://clawrouter.example${route}`, {
       method: "POST", signal: abort.signal, headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
+      body: JSON.stringify({ model: "openai/gpt-6-astra", input: "fixture", max_output_tokens: 32, service_tier: "priority", stream: true }),
+    }), env, { waitUntil: promise => pending.push(promise) });
+    assert.equal(response.status, 502);
+    assert.equal((await response.json()).error.code, "provider_unavailable");
+    await Promise.all(pending);
+    const events = messages.filter(message => message.type === "clawrouter.usage.v1");
+    assert.equal(events.length, 1);
+    assert.equal(events[0].status, scenario === "caller_abort" ? "client_error" : scenario === "timeout" ? "timeout" : "provider_error");
+    const reserved = events[0].reserved_cost_micros;
+    assert.ok(reserved > 0);
+    assert.equal(events[0].actual_cost_micros, reserved);
+    assert.equal(events[0].cost_basis, "manifest_reservation");
+    assert.equal(events[0].total_tokens, null);
+    for (const owner of owners) assert.equal(ledger.get(owner).reservations()[0].settled, owner === failedOwner ? 0 : 1);
+    now += 20 * 60_000;
+    assert.equal((await (await handler.fetch(new Request("https://clawrouter.example/v1/usage", { headers: { authorization: `Bearer ${proxyKey()}` } }), env, {})).json()).budget.spentMicros, reserved);
+    assert.equal((await providerBudgetStatus(env, "openai", limit)).spentMicros, reserved);
+    const jobs = messages.filter(message => message.kind === "budget_settlement");
+    assert.equal(jobs.length, failedOwner ? 1 : 0);
+    if (failedOwner) {
+      assert.equal(ledger.get(failedOwner).reservations()[0].settled, 2);
+      const delivery = { body: jobs[0], acks: 0, retries: 0, ack() { this.acks++; }, retry() { this.retries++; } };
+      await queue({ messages: [delivery] }, env);
+      assert.equal(delivery.acks, 0); assert.equal(delivery.retries, 1);
+      unavailable = null;
+      await queue({ messages: [delivery] }, env);
+      await queue({ messages: [delivery] }, env);
+      assert.equal(delivery.acks, 2); assert.equal(delivery.retries, 1);
+    }
+    for (const owner of owners) {
+      assert.equal(ledger.get(owner).reservations()[0].settled, 1);
+      assert.equal(ledger.get(owner).reservations()[0].reserved_micros, reserved);
+    }
+    assert.equal(upstream.mock.callCount(), 1);
+    upstream.mock.restore();
+  }
+});
+
+test("cancellation before fetch stays zero after preflight, retention, or dispatch confirmation", async (t) => {
+  for (const route of ["/v1/responses", "/v1/native/openai/v1/responses"]) for (const phase of ["initial", "retention", "dispatch"]) for (const fixedCost of [null, 7]) {
+    const events = [], pending = [], abort = new AbortController();
+    const env = usageEnv([], { limit: 1_000_000, fixedCost, retainContent: phase === "retention" });
+    env.OPENAI_API_KEY = "fixture-openai-key";
+    const ledger = sqlBudgetNamespace(t);
+    env.BUDGET_LEDGER = { ...ledger, get: name => ({ fetch: async (url, init) => {
+      const response = await ledger.get(name).fetch(url, init);
+      if (phase === "dispatch" && name === "provider:openai" && new URL(url).pathname === "/dispatch") abort.abort();
+      return response;
+    } }) };
+    env.CONTENT_ARCHIVE = { put: async () => { abort.abort(); } };
+    env.USAGE_QUEUE = { send: async event => events.push(event) };
+    const upstream = t.mock.method(globalThis, "fetch", async (_url, init) => {
+      init.signal.throwIfAborted();
+      throw new Error("canceled work must never reach upstream");
+    });
+    if (phase === "initial") abort.abort();
+    const response = await handler.fetch(new Request(`https://clawrouter.example${route}`, {
+      method: "POST", signal: abort.signal, headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
+      body: JSON.stringify({ model: "openai/gpt-6-astra", input: "fixture", max_output_tokens: 32, service_tier: "priority" }),
+    }), env, { waitUntil: promise => pending.push(promise) });
+    assert.equal(response.status, 502);
+    assert.equal((await response.json()).error.code, "provider_unavailable");
+    await Promise.all(pending);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].status, "client_error");
+    assert.equal(events[0].actual_cost_micros, 0);
+    assert.equal(upstream.mock.callCount(), 0);
+    for (const name of ["tenant:maintainer_access:owner@example.com", "provider:openai"]) {
+      const [row] = ledger.get(name).reservations();
+      assert.equal(row.reserved_micros, 0); assert.equal(row.settled, 1);
+    }
+    upstream.mock.restore();
+  }
+});
+
+test("known nonbillable responses stay zero when their SSE error body fails", async (t) => {
+  for (const route of ["/v1/responses", "/v1/native/openai/v1/responses"]) for (const status of [400, 500]) {
+    const env = usageEnv([], { limit: 1_000_000, fixedCost: null, retainContent: false });
+    env.OPENAI_API_KEY = "fixture-openai-key";
+    env.BUDGET_LEDGER = sqlBudgetNamespace(t);
+    const events = [], pending = [];
+    env.USAGE_QUEUE = { send: async event => events.push(event) };
+    const upstream = t.mock.method(globalThis, "fetch", async () => new Response(new ReadableStream({
+      pull(controller) { controller.error(new Error("fixture broken SSE error body")); },
+    }, { highWaterMark: 0 }), { status, headers: { "content-type": "text/event-stream" } }));
+    const response = await handler.fetch(new Request(`https://clawrouter.example${route}`, {
+      method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
       body: JSON.stringify({ model: "openai/gpt-6-astra", input: "fixture", max_output_tokens: 32, service_tier: "priority", stream: true }),
     }), env, { waitUntil: promise => pending.push(promise) });
     assert.equal(response.status, 502);
     await Promise.all(pending);
     assert.equal(events.length, 1);
-    assert.equal(events[0].status, callerAbort ? "client_error" : "timeout");
     assert.equal(events[0].actual_cost_micros, 0);
-    assert.equal((await (await handler.fetch(new Request("https://clawrouter.example/v1/usage", { headers: { authorization: `Bearer ${proxyKey()}` } }), env, {})).json()).budget.spentMicros, 0);
-    assert.equal((await providerBudgetStatus(env, "openai", limit)).spentMicros, 0);
+    for (const name of ["tenant:maintainer_access:owner@example.com", "provider:openai"]) assert.equal(env.BUDGET_LEDGER.get(name).reservations()[0].reserved_micros, 0);
     upstream.mock.restore();
   }
 });
@@ -465,7 +562,7 @@ function sqlBudgetNamespace(t) {
           return [];
         } };
         const ledger = new BudgetLedgerObject({ storage: { sql, getAlarm: async () => 1 } });
-        objects.set(name, { fetch: (url, init) => ledger.fetch(new Request(url, init)) });
+        objects.set(name, { fetch: (url, init) => ledger.fetch(new Request(url, init)), reservations: () => db.prepare("SELECT * FROM budget_reservations").all() });
       }
       return objects.get(name);
     },
