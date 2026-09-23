@@ -135,24 +135,29 @@ for (const action of ["disable", "revoke"]) test(`consecutive explicit ${action}
   assert.equal(values.get(key).credentialGeneration, record.generation);
 });
 
-test("revocation retains a secretless tombstone and requires fresh credentials to reconnect", async () => {
+test("paused grants can be revoked into a secretless tombstone and require fresh credentials to reconnect", async () => {
   const key = "oauth/policy/openai";
   const values = new Map();
   const env = credentialEnv(values);
   const stale = legacyGrant({ scopes: ["inference"], subscription: { plan: "fixture-plan", subject: "fixture-subject" }, maintenance: { keepWarm: false } });
   const active = await putGrantCredentials(env, key, stale);
   assert.ok(env.GRANT_CREDENTIALS.objects.get(key).values.get("credential"));
+  const paused = await putGrantCredentials(env, key, { ...active, enabled: false }, true);
+  assert.equal(paused.revokedAt, null);
+  assert.equal(paused.hasAccessToken, true);
+  assert.equal(paused.hasRefreshToken, true);
+  await assert.rejects(() => materializeGrantCredentials(env, key, paused, "openai", refreshConfig(), false), (error) => error.code === "grant_disabled");
   const revoked = await revokeGrantCredentials(env, key);
   const owner = env.GRANT_CREDENTIALS.objects.get(key);
   const tombstone = owner.values.get("credential");
   assert.equal(tombstone.enabled, false);
   assert.ok(tombstone.revokedAt);
-  assert.equal(tombstone.generation, active.credentialGeneration + 1);
+  assert.equal(tombstone.generation, paused.credentialGeneration + 1);
   for (const field of ["label", "accountId", "subscription", "scopes", "expiresAt", "maintenance", "createdAt"]) assert.deepEqual(revoked[field], active[field], `revocation preserves non-secret ${field}`);
   assert.equal(JSON.stringify(tombstone).includes("access-old"), false);
   assert.equal(JSON.stringify(tombstone).includes("refresh-old"), false);
   assert.equal(owner.alarm(), null);
-  for (const old of [stale, active]) await assert.rejects(() => materializeGrantCredentials(env, key, old, "openai", refreshConfig(), false), (error) => error.code === "grant_disabled");
+  for (const old of [stale, active, paused]) await assert.rejects(() => materializeGrantCredentials(env, key, old, "openai", refreshConfig(), false), (error) => error.code === "grant_disabled");
   assert.equal((await revokeGrantCredentials(env, key)).credentialGeneration, revoked.credentialGeneration);
   await assert.rejects(() => putGrantCredentials(env, key, { ...revoked, enabled: true }, true), (error) => error.code === "invalid_upstream_grant");
   const reconnected = await putGrantCredentials(env, key, { ...revoked, enabled: true, accessToken: "replacement-fixture" }, true);

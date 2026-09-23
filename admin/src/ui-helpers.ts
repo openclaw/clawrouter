@@ -141,6 +141,9 @@ export function demoGrantFromForm(form: UpstreamGrantForm, existing?: UpstreamGr
   const now = new Date().toISOString();
   const hasCredential = Boolean(form.credential.trim()) || Boolean(existing?.hasCredential);
   const credentialFields = Object.keys(parseCredentialBundle(form.credentialBundle)).sort();
+  // Pausing retains credentials; reconnecting a tombstone requires a supplied replacement.
+  const freshPrimary = form.kind === "api_key" ? form.credential.trim() || credentialFields.length : form.accessToken.trim();
+  if (existing?.revokedAt && !freshPrimary) throw new Error("revoked upstream grant requires a new primary credential");
   const effectiveCredentialFields = credentialFields.length ? credentialFields : existing?.credentialFields ?? [];
   const hasAccessToken = Boolean(form.accessToken.trim()) || Boolean(existing?.hasAccessToken);
   const hasRefreshToken = Boolean(form.refreshToken.trim()) || Boolean(existing?.hasRefreshToken);
@@ -164,7 +167,7 @@ export function demoGrantFromForm(form: UpstreamGrantForm, existing?: UpstreamGr
     maintenance: { keepWarm: form.keepWarm },
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
-    revokedAt: form.enabled ? null : now,
+    revokedAt: null,
     hasCredential,
     credentialFields: effectiveCredentialFields,
     hasAccessToken,
