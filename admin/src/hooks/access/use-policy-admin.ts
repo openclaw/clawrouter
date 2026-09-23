@@ -52,8 +52,7 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
     const policy = current.initialized ? policies.find((item) => item.policyId === current.selection) : policies[0];
     if (policy) {
       const canonical = policyFormFromPolicy(policy);
-      // Preserve edits but compare future changes with the accepted row, not an obsolete baseline.
-      if (current.dirty) rebaseDraft(canonical, current);
+      if (current.initialized) rebaseDraft(canonical, current);
       else resetDraft(policy.policyId, canonical);
     } else if (!current.initialized) resetDraft("", newPolicyForm(sessionData));
   }
@@ -114,25 +113,16 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
       const saved = await write(submitted.value, submitted.selection);
       updateRows([saved, ...rows.current.filter((key) => key.policyId !== saved.policyId)]);
       const canonical = policyFormFromPolicy(saved), current = currentDraft.current;
-      const replacement = current.selection === saved.policyId && incarnation.current !== submittedIncarnation;
-      const enabledEdited = (fieldEditRevisions.current.enabled ?? 0) > submittedRevision;
-      // Only untouched replacement drafts adopt the entire row; edit-back is still intent.
-      const untouchedReplacement = replacement && !Object.keys(fieldEditRevisions.current).length;
-      if (untouchedReplacement || (revision.current === submittedRevision && (action === "save" || !submitted.dirty))) resetDraft(saved.policyId, canonical);
-      else if (current.selection === saved.policyId || (action === "save" && !submitted.selection && !current.selection && incarnation.current === submittedIncarnation)) {
-        // A committed create owns this New draft's identity, but never a replacement draft.
-        // Later edits stay dirty against the committed baseline, including a return to old values.
-        let value = current.value;
-        if (replacement) {
-          // Reselecting reads the old row while its write is pending. Only edits
-          // in this replacement draft may override the acknowledged fields.
-          value = { ...canonical };
-          for (const field of Object.keys(current.value) as (keyof PolicyForm)[]) {
-            if ((fieldEditRevisions.current[field] ?? 0) > submittedRevision) Object.assign(value, { [field]: current.value[field] });
+      if (current.selection === saved.policyId || (action === "save" && !submitted.selection && !current.selection && incarnation.current === submittedIncarnation)) {
+        // Only this incarnation's acknowledged fields retire; later edits and
+        // replacement drafts still own their intent, even when values match.
+        if (incarnation.current === submittedIncarnation) {
+          for (const field of Object.keys(fieldEditRevisions.current) as (keyof PolicyForm)[]) {
+            if ((fieldEditRevisions.current[field] ?? 0) <= submittedRevision && (action === "save" || field === "enabled")) delete fieldEditRevisions.current[field];
           }
         }
-        if (action === "disable" && !enabledEdited) value = { ...value, enabled: canonical.enabled };
-        rebaseDraft(canonical, { ...current, selection: saved.policyId, value });
+        // A committed create owns this New draft's identity, never a replacement.
+        rebaseDraft(canonical, { ...current, selection: saved.policyId });
       }
       if (demoMode) syncDemoAdmin(rows.current, credentials, providers, routes, true);
       committed = true;
@@ -182,8 +172,12 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
   }
 
   function rebaseDraft(canonical: PolicyForm, next: PolicyDraft) {
+    const value = { ...canonical };
+    // Reporting can update untouched fields, but an equal read does not
+    // acknowledge edits. Only a matching write ACK or explicit reset retires them.
+    for (const field of Object.keys(fieldEditRevisions.current) as (keyof PolicyForm)[]) Object.assign(value, { [field]: next.value[field] });
     baseline.current = canonical;
-    publishDraft({ ...next, dirty: JSON.stringify(next.value) !== JSON.stringify(canonical) });
+    publishDraft({ ...next, value, dirty: JSON.stringify(value) !== JSON.stringify(canonical) });
   }
 
   function publishDraft(next: PolicyDraft) {

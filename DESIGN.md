@@ -54,7 +54,11 @@ save is pending. When that save finishes, untouched fields adopt the saved value
 including disabled status and budget. Each action owns the fields it assigns,
 including unchanged preset values and edits back to an older value. An untouched
 replacement draft follows the saved policy. The next Save submits the reconciled
-draft without depending on a successful metadata refresh.
+draft without depending on a successful metadata refresh. Reporting updates
+untouched fields but never acknowledges edits, even when its values match the
+draft. A successful Save retires only the edits included in that write; Disable
+retires only its enabled-state edit. Later edits and edits after a lost response
+survive refreshes until their own successful write or an explicit draft reset.
 
 Protected console data belongs to one verified browser session. Confirmed sign-in
 loss clears editors, one-time secrets, Playground history and retained request
