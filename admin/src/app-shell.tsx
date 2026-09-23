@@ -216,7 +216,12 @@ export function AppShell() {
             assignmentRuleForm={assignmentRuleForm}
             setAssignmentRuleForm={setAssignmentRuleForm}
             credentialFeedback={credentialOwner.forSurface("admin")}
-            error={policyError}
+            error={access.error}
+            policyError={policyError}
+            policyDirty={policies.dirty}
+            policyMissing={policies.missing}
+            policyBusy={policies.busy}
+            onDiscardPolicy={policies.discard}
             fusionError={fusionError}
             onSave={savePolicy}
             onIssueCredential={issueCredential}

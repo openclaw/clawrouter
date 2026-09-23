@@ -24,6 +24,7 @@ interface Dependencies {
   setStatus: (status: string) => void;
   setProviderReadiness: React.Dispatch<React.SetStateAction<Record<string, ProviderReadiness>>>;
   refresh: () => Promise<void>;
+  refreshPolicyMetadata: () => Promise<void>;
   syncDemoAdmin: (policies: AccessPolicy[], credentials: ProxyCredential[], providers: ProviderRow[], routes: RouteCatalog, syncRows?: boolean) => void;
 }
 
@@ -39,19 +40,20 @@ interface AdminRecords {
 }
 
 export function useAccessAdmin(dependencies: Dependencies) {
-  const { allowDemo, credentialOwner, request, isCurrent, gatewayOrigin, session, demoMode, providers, routes, setStatus, setProviderReadiness, refresh, syncDemoAdmin } = dependencies;
+  const { allowDemo, credentialOwner, request, isCurrent, gatewayOrigin, session, demoMode, providers, routes, setStatus, setProviderReadiness, refresh, refreshPolicyMetadata, syncDemoAdmin } = dependencies;
   const [loaded, setLoaded] = useState(allowDemo);
   const [tab, setTab] = useState<AccessTab>(initialAccessTab);
-  const policy = usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, demoMode, providers, credentials: credentialOwner.rows.admin, routes, setStatus, refresh, syncDemoAdmin });
+  const [error, setError] = useState("");
+  const policy = usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, demoMode, providers, credentials: credentialOwner.rows.admin, routes, setStatus, refresh: refreshPolicyMetadata, syncDemoAdmin });
   const credentials = useCredentialAdmin(credentialOwner, policy.policies.items);
-  const principal = usePrincipalAdmin({ request, allowDemo, gatewayOrigin, session, demoMode, policies: policy.policies.items, selectedPolicyId: policy.policies.selectedId, setPolicyError: policy.policies.setError, setStatus, refresh });
+  const principal = usePrincipalAdmin({ request, allowDemo, gatewayOrigin, session, demoMode, policies: policy.policies.items, selectedPolicyId: policy.policies.selectedId, setPolicyError: setError, setStatus, refresh });
   const connection = useConnectionAdmin({ request, allowDemo, gatewayOrigin, demoMode, setStatus, setProviderReadiness, refresh });
-  const upstream = useUpstreamAdmin({ request, isCurrent, allowDemo, gatewayOrigin, demoMode, providers, policies: policy.policies.items, selectedPolicyId: policy.policies.selectedId, setError: policy.policies.setError, setStatus, refresh });
-  const assignment = useAssignmentAdmin({ request, allowDemo, gatewayOrigin, demoMode, setError: policy.policies.setError, setStatus, refresh });
+  const upstream = useUpstreamAdmin({ request, isCurrent, allowDemo, gatewayOrigin, demoMode, providers, policies: policy.policies.items, selectedPolicyId: policy.policies.selectedId, setError, setStatus, refresh });
+  const assignment = useAssignmentAdmin({ request, allowDemo, gatewayOrigin, demoMode, setError, setStatus, refresh });
   const fusion = useFusionAdmin({ request, allowDemo, gatewayOrigin, demoMode, policies: policy.policies.items, selectedPolicyId: policy.policies.selectedId, setStatus, refresh });
 
-  function hydrateAdmin(records: AdminRecords, background: boolean, sessionData: SessionResponse, providerRows: ProviderRow[], credentialSnapshot: number) {
-    policy.hydrate(records.policies, background, sessionData);
+  function hydrateAdmin(records: AdminRecords, background: boolean, sessionData: SessionResponse, providerRows: ProviderRow[], credentialSnapshot: number, policySnapshot: number | null) {
+    policy.hydrate(records.policies, sessionData, policySnapshot);
     credentialOwner.hydrate("admin", records.credentials, credentialSnapshot);
     connection.hydrate(records.connections);
     const policyId = records.policies.find((item) => item.policyId === policy.policies.selectedId)?.policyId ?? records.policies[0]?.policyId ?? "";
@@ -63,7 +65,7 @@ export function useAccessAdmin(dependencies: Dependencies) {
   }
 
   function hydrateUser(user: AccessUser) {
-    policy.hydrate([], false, session);
+    policy.hydrate([], session, policy.captureHydration());
     connection.hydrate([]);
     upstream.hydrate([], false, "", []);
     assignment.hydrate([], false);
@@ -73,7 +75,7 @@ export function useAccessAdmin(dependencies: Dependencies) {
   }
 
   function hydrateDemo() {
-    hydrateAdmin({ policies: demo.keys, credentials: demo.credentials, connections: demo.connections, users: demo.users, bindings: demo.bindings, grants: demo.upstreamGrants, rules: demo.assignmentRules, fusion: demo.fusion }, false, demo.session, demo.providers, credentialOwner.captureHydration());
+    hydrateAdmin({ policies: demo.keys, credentials: demo.credentials, connections: demo.connections, users: demo.users, bindings: demo.bindings, grants: demo.upstreamGrants, rules: demo.assignmentRules, fusion: demo.fusion }, false, demo.session, demo.providers, credentialOwner.captureHydration(), policy.captureHydration());
   }
 
   return {
@@ -81,6 +83,8 @@ export function useAccessAdmin(dependencies: Dependencies) {
     setLoaded,
     tab: { value: tab, set: (next: AccessTab) => { if (next !== tab) credentialOwner.invalidatePresentation(); setTab(next); } },
     policies: policy.policies,
+    error,
+    capturePolicyHydration: policy.captureHydration,
     credentials,
     connections: connection.connections,
     bindings: principal.bindings,

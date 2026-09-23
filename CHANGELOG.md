@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Preserve unsaved policy drafts across refreshes and completed saves, provide explicit discard, and keep missing selections visible. Keep explicit disablement and later edits intact, and attach edits made during creation to the created policy for the next save.
+
 - Clear protected console data and drafts when browser authentication expires or identity changes. Keep sign-in gated until the session is verified, preserve in-flight key ownership, and distinguish authentication loss from permission, CSRF, and reporting failures.
 - Keep policy selection separate from existing binding edits, while new bindings still default to the selected policy.
 - Separate proxy-key creation from rotation in the console, serialize key actions across admin and personal screens, and keep one-time secrets, drafts, and action status owned by the operation's identity. Show uncertain outcomes and clipboard failures without replaying dismissed secrets, and preserve table action contrast in both themes.
