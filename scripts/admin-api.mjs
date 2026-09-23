@@ -1,10 +1,12 @@
 import { Buffer } from "node:buffer";
 
 const MAX_RESPONSE_BYTES = 128 * 1024;
+// RFC 9110 media-type parameters: reject HTML, lists and malformed JSON lookalikes.
+const JSON_MEDIA_TYPE = /^application\/json(?:[ \t]*;[ \t]*(?:[!#$%&'*+.^_`|~\w-]+=(?:[!#$%&'*+.^_`|~\w-]+|"(?:[\t !#-\[\]-~\x80-\xff]|\\[\t -~\x80-\xff])*"))?)*[ \t]*$/i;
 
 export async function adminRequest(
   path,
-  { method, body, env = process.env, fetchImpl = fetch, signal } = {},
+  { method, body, env = process.env, fetchImpl = fetch, signal, responseMode = "json" } = {},
 ) {
   const baseUrl = requiredEnv("CLAWROUTER_BASE_URL", env).replace(/\/$/, "");
   const adminToken = requiredEnv("CLAWROUTER_ADMIN_TOKEN", env);
@@ -36,6 +38,15 @@ export async function adminRequest(
     throw new Error(
       `admin API redirected with ${response.status}; configure CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET when Cloudflare Access protects this route`,
     );
+  }
+  if (response.ok && responseMode === "ack") {
+    // These mutation handlers commit before sending success headers. Unused
+    // response delivery or cancellation cleanup must not change that outcome.
+    void response.body?.cancel().catch(() => undefined);
+    if (!(response.status === 204 && response.body === null) && !JSON_MEDIA_TYPE.test(response.headers.get("content-type") ?? "")) {
+      throw new Error(`admin API returned non-JSON ${response.status}`);
+    }
+    return;
   }
   const text = await boundedResponseText(response);
   let json = null;

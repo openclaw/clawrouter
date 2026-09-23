@@ -34,7 +34,7 @@ setOptional(grant, "expiresAt", parseTimestamp(optionalValue(args, "expires-at")
 setOptional(grant, "accountId", optionalValue(args, "account-id"));
 setOptional(grant, "subscription", subscriptionMetadata(args));
 setOptional(grant, "refresh", refreshMetadata(args));
-await adminRequest(`${target.path}?mode=replace`, { method: "PUT", body: grant, env: target.env });
+await adminRequest(`${target.path}?mode=replace`, { method: "PUT", body: grant, env: target.env, responseMode: "ack" });
 console.log(`stored authoritative upstream grant ${target.key}; secrets were not printed`);
 
 function required(value, name) {

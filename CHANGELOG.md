@@ -33,6 +33,7 @@
 - Retain qualified estimates or fixed tariffs when dispatched HTTP requests fail before response headers, while keeping pre-dispatch failures at zero and preserving error and cancellation outcomes.
 - Isolate policy, principal, and provider budget charges when their identifiers share a ledger address, preserving existing balances and ambiguous legacy debt without resetting budgets or orphaning settlement receipts.
 - Use the shared Access-aware admin transport for pool-ticket issuance, preserving protected ticket output while bounding admin responses and keeping raw response bodies out of error messages.
+- Acknowledge completed key and grant mutations without reading unused success payloads, preserving successful CLI outcomes for large accepted grant metadata while keeping ticket and error reads bounded.
 
 - Apply concrete Chat model eligibility to Fusion discovery, including selected-policy pricing, provider limits, and grant availability, while preserving fail-open advisers.
 - Reject hosted web search before dispatch under measured budgets without a fixed policy tariff; keep unmetered forwarding and report its price as unavailable instead of token-only spend.

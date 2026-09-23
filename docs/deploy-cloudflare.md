@@ -909,8 +909,13 @@ The Access service token must be allowed by the application's Service Auth
 policy; it supplements the admin bearer token. Configure both Access variables
 or neither for an unprotected self-hosted endpoint. Ticket creation shares the
 key commands' admin transport: it refuses redirects with an Access setup hint
-and does not print raw response bodies in errors. Shared admin responses are
-limited to 128 KiB; rejected responses do not create a ticket file.
+and does not print raw response bodies in errors. Admin responses consumed as
+JSON, including tickets and all error responses, are limited to 128 KiB;
+rejected responses do not create a ticket file. Key and grant mutation commands
+acknowledge successful JSON response headers and discard the unused body, so
+large accepted grant metadata does not turn a committed mutation into a CLI
+failure. A bodyless 204 also acknowledges success; redirects and non-JSON
+responses remain errors. No automatic mutation retry is performed.
 The provider manifest supplies the default. Claude tickets enable keep-warm when
 neither flag is present. Use `--no-keep-warm` to disable it for one grant;
 `--keep-warm` remains available as an explicit override for providers whose
