@@ -391,10 +391,10 @@ async function fixture(page: Page) {
   return state;
 }
 
-const policy: AccessPolicy = {
+const policy = {
   policyId: "team_policy", enabled: true, providers: [], tenantId: "default", monthlyBudgetMicros: 10_000_000, budgetScope: "policy", retainRequestContent: false,
   grantRouting: { strategy: "priority", stickiness: "none", failover: true, staleState: "allow", staleAfterSeconds: 300, switchAtUsedPercent: 90, hysteresisPercent: 10, eligibleGrants: {} },
-};
+} satisfies AccessPolicy;
 const usage: { policies: AdminUsageRow[]; usage: UsageSnapshot } = {
   policies: [{ ...policy, kid: policy.policyId, budget: { configured: true, ledger: "ready", limitMicros: 10_000_000, spentMicros: 2_000_000, remainingMicros: 8_000_000 } }],
   usage: {
