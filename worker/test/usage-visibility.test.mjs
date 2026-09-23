@@ -155,7 +155,7 @@ async function fixture(t, budgetScope = "policy") {
   };
   const setPolicy = (policyId, tenantId = "tenant") => authorityCall(env, "/policies/put", { policyId, policy: { enabled: true, generation: "g1", providers: ["openai"], tenantId, monthlyBudgetMicros: 1000000, budgetScope } });
   const setUser = (email, record = {}) => authorityCall(env, "/users/put", { email, record: { role: "user", enabled: true, tenantId: "tenant", groups: [], ...record } });
-  const setCredential = async (credentialId, principalId, enabled = true) => authorityCall(env, "/credentials/put", { credentialId, credential: { enabled, policyId: "shared", policyGeneration: "g1", principalId, secretSha256: await sha256Hex(`fixture-secret-${credentialId}`) } });
+  const setCredential = async (credentialId, principalId, enabled = true) => authorityCall(env, "/credentials/mutate", { credentialId, operation: "put", scope: "admin", actor: { auth: "admin_token", role: "admin", email: "token-admin" }, credential: { enabled, policyId: "shared", principalId, secretSha256: await sha256Hex(`fixture-secret-${credentialId}`) } });
   async function bind(email, policyIds) {
     const user = (await authorityCall(env, "/users/resolve", { emails: [email] })).users[0];
     await authorityCall(env, "/users/put-bindings", { user, policyIds, seed: { principal: { principalType: "user", principalId: email }, bindings: [] } });

@@ -121,7 +121,7 @@ stream_idle_timeout_ms = 10000
       }
       assert.deepEqual(await ledgerFacts(), [{ spent: expected, unsettled: 0 }, { spent: expected, unsettled: 0 }]);
       const authority = await mf.getDurableObjectNamespace("ACCESS_CONTROL", "router");
-      const revoked = await authority.get(authority.idFromName("policy-bindings")).fetch("https://authority/credentials/put", { method: "POST", body: JSON.stringify({ credentialId: "fixture", credential: { ...credential, enabled: false } }) });
+      const revoked = await authority.get(authority.idFromName("policy-bindings")).fetch("https://authority/credentials/mutate", { method: "POST", body: JSON.stringify({ credentialId: "fixture", operation: "revoke", scope: "admin", actor: { auth: "admin_token", role: "admin", email: "token-admin" } }) });
       assert.equal(revoked.status, 200);
       const rejected = await turn("This revoked turn must not reach upstream.");
       assert.equal(rejected.status, "failed");
