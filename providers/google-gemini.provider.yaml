@@ -51,15 +51,29 @@ models:
     - id: google/gemini-3.5-flash
       upstream: gemini-3.5-flash
       capabilities: [llm.generate, llm.stream]
-      pricingRef: google-gemini-3-5-flash-standard-2026-06-22
+      pricingRef: google-gemini-3-5-flash-tiers-2026-09-23
       pricing:
-        effectiveAt: "2026-06-22"
+        effectiveAt: "2026-09-23"
         source: https://ai.google.dev/gemini-api/docs/pricing#gemini-3.5-flash
         inputMicrosPerMillion: 1500000
         cachedInputMicrosPerMillion: 150000
         outputMicrosPerMillion: 9000000
         maxInputTokens: 1048576
         defaultMaxOutputTokens: 65536
+        serviceTiers:
+          - id: default
+            aliases: [standard]
+            inputMicrosPerMillion: 1500000
+            cachedInputMicrosPerMillion: 150000
+            outputMicrosPerMillion: 9000000
+          - id: flex
+            inputMicrosPerMillion: 750000
+            cachedInputMicrosPerMillion: 80000
+            outputMicrosPerMillion: 4500000
+          - id: priority
+            inputMicrosPerMillion: 2700000
+            cachedInputMicrosPerMillion: 270000
+            outputMicrosPerMillion: 16200000
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

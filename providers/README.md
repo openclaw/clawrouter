@@ -116,10 +116,14 @@ billing:
 - `pricing.serviceTiers` declares complete rate cards with unique wire `id`s,
   optional `aliases`, optional `longContext`, and an optional `maxInputTokens`
   price-applicability limit. Include a `default` card identical to the root
-  pricing; the compiler rejects drift. Omitted/auto requests reserve all known
+  pricing; the compiler rejects drift. OpenAI omitted/auto requests reserve all known
   possible rates, while settlement requires the served tier. Unpublished tiers
   or contexts never silently use Standard rates.
-  Models without this contract retain their provider's existing pricing behavior;
+  Native Gemini uses `standard` as an alias of the default card, defaults omitted
+  requests to Standard, reserves Flex without a Standard upgrade, and allows
+  Priority to downgrade to Standard. Undeclared native tiers are unpriced;
+  a root-only Gemini card prices Standard only.
+  Other models without this contract retain their provider's existing pricing behavior;
   the Worker does not reinterpret another provider's tier parameter as OpenAI's.
 - `models.entries[].supportedReasoningEfforts` advertises the model's exact
   provider-native OpenAI-compatible wire efforts. Values are unique and limited
