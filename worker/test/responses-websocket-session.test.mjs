@@ -474,6 +474,33 @@ test("selector-only WebSocket frames require item completion without changing wi
   }
 });
 
+test("aggregate and partial tool inventories change only WebSocket qualification", async t => {
+  const cases = [];
+  for (const count of [511, 600]) {
+    const output = Array.from({ length: 2 }, () => ({ type: "tool_search_output", tools: Array.from({ length: count }, () => ({ type: "function", name: "run" })) }));
+    const knowledge = count === 511 ? "token_only" : "unknown";
+    cases.push([[complete(undefined, "proof", { output })], knowledge]);
+    cases.push([[...output.map(item => ({ type: "response.output_item.done", item })), complete(undefined, "proof")], knowledge]);
+  }
+  const item = { id: "inventory", type: "additional_tools", tools: [] };
+  cases.push([[
+    { type: "response.output_item.added", item: { ...item, status: "in_progress", tools: [{ type: "web_search" }, null] } },
+    { type: "response.output_item.done", item }, complete(undefined, "proof"),
+  ], "unknown"]);
+  for (const [events, knowledge] of cases) {
+    const tools = createResponsesToolEvidence("token_only");
+    const f = fixture(t, { publish: async (_index, _identities, frame) => tools.accept(frame, true) });
+    f.client.receive(create()); await tick();
+    const frames = [{ type: "response.created", response: { id: "proof" } }, ...events];
+    for (const frame of frames) f.upstream.receive(frame);
+    await tick();
+    assert.equal(tools.result().knowledge, knowledge);
+    assert.deepEqual(f.client.sent, frames.map(frame => JSON.stringify(frame)));
+    assert.equal(f.settled.length, 1); assert.equal(f.settled[0].outcome, "completed");
+    assert.deepEqual(f.settled[0].terminal, events.at(-1), "settlement retains the authoritative usage-bearing terminal");
+  }
+});
+
 test("pending output count and bytes are bounded even while one identity write is held", async t => {
   for (const limits of [{ buffered: 3 }, { bufferedBytes: 250 }]) {
     const gate = Promise.withResolvers();

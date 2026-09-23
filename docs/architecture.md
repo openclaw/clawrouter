@@ -43,8 +43,13 @@ facts; no tool schemas, output, or opaque compaction payloads enter the index.
 The existing streaming parser feeds independent scalar-usage and tool-inventory
 projections in 4 KiB feeds. Qualification bounds nesting, scalar fields, 1,024 total
 selected item/tool entries, and 1,024 output-item associations; exceeding a bound
-loses qualification, not wire delivery. Item completion plus a matching sparse
-terminal supports Codex streams without requiring repeated terminal output.
+loses qualification, not wire delivery. Retained input and each complete output
+snapshot use one aggregate inventory bound. Streams count each associated item's
+largest observed inventory, without counting repeated terminal output twice.
+Explicit malformed added inventories stay unknown even after an empty completion;
+an absent inventory or transient status can still receive a valid completion.
+Item completion plus a matching sparse terminal supports Codex streams without
+requiring repeated terminal output.
 Known output positions must be contiguous, and every added or selector-referenced
 item needs its matching `item.done`; anonymous done-only items remain supported.
 Unknown declarations, opaque references, compaction, failed observation, and

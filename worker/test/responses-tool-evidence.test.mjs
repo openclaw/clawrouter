@@ -75,6 +75,76 @@ test("retained base is independent of tariff and excludes current top-level tool
   for (const knowledge of ["unknown", "hosted_tool_usage", "hosted_tool_fee"]) assert.equal(retainedToolBase({ input: [] }, knowledge), knowledge);
 });
 
+test("retained and complete inventories share one aggregate item and declaration budget", () => {
+  const functions = count => Array.from({ length: count }, () => ({ type: "function", name: "run" }));
+  for (const namespace of [false, true]) for (const extra of [0, 1, 89]) {
+    const output = [0, extra].map(increase => ({
+      type: "tool_search_output", execution: "client", status: "completed",
+      tools: namespace ? [{ type: "namespace", name: "fixture", tools: functions(510 + increase) }] : functions(511 + increase),
+    }));
+    const knowledge = extra ? "unknown" : "token_only";
+    assert.equal(retainedToolBase({ input: output }, "token_only"), knowledge, "the enclosing items and namespace entries count too");
+    for (const sse of [false, true]) for (const projected of [false, true]) {
+      const value = sse ? terminal({ output }) : { object: "response", id: "response_fixture", status: "completed", output };
+      const evidence = createResponsesToolEvidence("token_only");
+      evidence.accept(projected ? project(value).value() : value, sse);
+      assert.equal(evidence.result()?.knowledge ?? "unknown", knowledge, `${namespace}/${extra}/${sse}/${projected}`);
+    }
+  }
+  const output = Array.from({ length: 2 }, () => ({ type: "tool_search_output", tools: functions(600) }));
+  assert.equal(retainedToolBase({ input: output }, "token_only"), "unknown");
+  assert.equal(reduce([terminal({ output })]).knowledge, "unknown", "each inventory fits separately, but their aggregate does not");
+});
+
+test("unsupported nested inventories never certify recognized declaration kinds", () => {
+  for (const nested of [null, [], Array(1024).fill(null)]) for (const type of ["function", "custom"]) {
+    const declaration = { type, name: "run", tools: nested };
+    for (const tool of [declaration, { type: "namespace", name: "fixture", tools: [declaration] }, { type: "namespace", name: "fixture", tools: [{ type: "namespace", name: "nested", tools: nested }] }]) {
+      const output = [{ type: "additional_tools", tools: [tool] }];
+      assert.equal(retainedToolBase({ input: output }, "token_only"), "unknown");
+      for (const projected of [false, true]) {
+        const event = terminal({ output });
+        assert.equal(reduce([projected ? project(event).value() : event])?.knowledge ?? "unknown", "unknown");
+      }
+    }
+  }
+});
+
+test("stream inventories charge only growth per association and bound terminal snapshots independently", () => {
+  const functions = count => Array.from({ length: count }, () => ({ type: "function", name: "run" }));
+  for (const extra of [0, 1]) {
+    const output = [0, extra].map((increase, index) => ({ id: `item-${index}`, type: "additional_tools", tools: functions(511 + increase) }));
+    const events = output.flatMap((item, output_index) => [
+      added({ ...item, status: "in_progress", tools: [] }, { output_index }),
+      added({ ...item, status: "in_progress" }, { output_index }),
+      added({ ...item, status: "in_progress" }), done(item, { output_index }), done(item),
+    ]);
+    for (const projected of [false, true]) for (const complete of [false, true]) {
+      const frames = [...events, terminal(complete ? { output } : {})];
+      assert.equal(reduce(projected ? frames.map(frame => project(frame).value()) : frames)?.knowledge ?? "unknown", extra ? "unknown" : "token_only");
+    }
+  }
+  const item = { id: "repeated", type: "additional_tools", tools: functions(600) };
+  assert.equal(reduce([added(item), done(item), done(item), terminal({ output: [item] })]).knowledge, "token_only");
+  const anonymous = Array.from({ length: 600 }, () => ({ type: "message" }));
+  assert.equal(reduce([...anonymous.map(item => done(item)), terminal({ output: anonymous })]).knowledge, "token_only", "a repeated complete snapshot does not assign anonymous positions or double-count entries");
+});
+
+test("explicit added inventory uncertainty survives empty completion and repeated terminal output", () => {
+  for (const tools of [null, [{ type: "web_search" }, null], [{ type: "future_executor" }], [{ type: "namespace", name: "fixture", tools: [[null]] }]]) {
+    const item = { id: "inventory", type: "additional_tools", tools: [] };
+    for (const complete of [false, true]) for (const projected of [false, true]) {
+      const events = [added({ ...item, status: "in_progress", tools }), done(item), terminal(complete ? { output: [item] } : {})];
+      assert.equal(reduce(projected ? events.map(event => project(event).value()) : events).knowledge, "unknown");
+    }
+  }
+  for (const tools of [[], [{ type: "web_search" }]]) for (const projected of [false, true]) {
+    const item = { id: "inventory", type: "tool_search_output", execution: "client", tools };
+    const events = [added({ id: item.id, type: item.type, status: "in_progress" }), added({ ...item, status: "in_progress" }), done({ ...item, status: "completed" }), terminal()];
+    assert.equal(reduce(projected ? events.map(event => project(event).value()) : events).knowledge, tools.length ? "hosted_tool_fee" : "token_only", "absent inventory and transient status do not erase later complete evidence");
+  }
+});
+
 test("Codex anonymous done-only items and sparse matching completion qualify", () => {
   const result = reduce([done({ type: "message", role: "assistant", content: "first" }), done({ type: "tool_search_call", execution: "client", arguments: {} }), terminal()]);
   assert.deepEqual(result, { responseId: "response_fixture", knowledge: "token_only" });

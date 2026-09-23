@@ -111,6 +111,30 @@ test("HTTP selector completeness preserves JSON/SSE bytes and authoritative scal
   }
 });
 
+test("aggregate and partial inventory uncertainty preserves HTTP bytes and authoritative usage", async () => {
+  const completed = frame({ type: "response.completed", response: { ...response, id: "proof" } });
+  const cases = [];
+  for (const count of [511, 600]) {
+    const output = Array.from({ length: 2 }, () => ({ type: "tool_search_output", tools: Array.from({ length: count }, () => ({ type: "function", name: "run" })) }));
+    const knowledge = count === 511 ? "token_only" : "unknown";
+    const value = { ...response, id: "proof", output };
+    cases.push([JSON.stringify(value), false, knowledge], [frame({ type: "response.completed", response: value }), true, knowledge]);
+    cases.push([output.map(item => frame({ type: "response.output_item.done", item })).join("") + completed, true, knowledge]);
+  }
+  for (const tools of [null, [{ type: "web_search" }, null]]) {
+    const item = { id: "inventory", type: "additional_tools", tools: [] };
+    cases.push([frame({ type: "response.output_item.added", item: { ...item, status: "in_progress", tools } }) + frame({ type: "response.output_item.done", item }) + completed, true, "unknown"]);
+  }
+  for (const [wire, sse, knowledge] of cases) {
+    const tools = createResponsesToolEvidence("token_only");
+    const upstream = new Response(wire, { headers: { "content-type": sse ? "text/event-stream" : "application/json" } });
+    const observed = observeUsage(upstream, undefined, { async push() {}, async end() {}, tools }, "openai.responses");
+    assert.equal(await observed.response.text(), wire);
+    assert.deepEqual(await observed.result, { ...expected(response), delivery: "complete" });
+    assert.equal(tools.result()?.knowledge ?? "unknown", knowledge);
+  }
+});
+
 test("Responses observe late usage beyond 2 MiB in JSON and one terminal SSE event", async () => {
   const large = { output: [{ type: "message", content: [{ type: "output_text", text: "🦊".repeat(600_000) }] }], ...response };
   const json = JSON.stringify(large), sse = frame({ type: "response.created" }) + frame({ response: large, type: "response.completed" });

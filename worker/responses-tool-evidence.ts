@@ -14,11 +14,13 @@ function union(left: ToolKnowledge, right: ToolKnowledge): ToolKnowledge {
 // ToolParam discriminants, not schemas or arbitrary message text, define this
 // inventory. The pricing classifier proves positive gaps; its null is not proof
 // that a new, malformed, or partly observed executable declaration is harmless.
-function declarations(value: unknown, namespace = false): ToolKnowledge {
-  if (!Array.isArray(value) || value.length > toolEvidenceLimit) return "unknown";
-  let knowledge: ToolKnowledge = "token_only", count = value.length;
+type InventoryBudget = { entries: number };
+function declarations(value: unknown, budget: InventoryBudget, namespace = false): ToolKnowledge {
+  if (!Array.isArray(value) || (budget.entries += value.length) > toolEvidenceLimit) return "unknown";
+  let knowledge: ToolKnowledge = "token_only";
   for (const tool of value) {
     if (!record(tool) || typeof tool.type !== "string") return "unknown";
+    if (Object.hasOwn(tool, "tools") && tool.type !== "namespace") return "unknown";
     let next: ToolKnowledge = "unknown";
     if (["function", "custom"].includes(tool.type) && boundedText(tool.name)) next = "token_only";
     else if (!namespace) {
@@ -31,9 +33,7 @@ function declarations(value: unknown, namespace = false): ToolKnowledge {
         || tool.type === "shell" && record(tool.environment) && tool.environment.type === "local"
         || tool.type === "tool_search" && tool.execution === "client") next = "token_only";
       else if (tool.type === "namespace" && boundedText(tool.name) && Array.isArray(tool.tools)) {
-        count += tool.tools.length;
-        if (count > toolEvidenceLimit) return "unknown";
-        next = declarations(tool.tools, true);
+        next = declarations(tool.tools, budget, true);
       }
     }
     knowledge = union(knowledge, next);
@@ -54,12 +54,12 @@ const ordinaryEvents = new Set([
   ...["in_progress", "interpreting", "completed"].map(state => `response.code_interpreter_call.${state}`),
   ...["added", "delta", "done"].map(state => `response.shell_call_command.${state}`),
 ]);
-function itemKnowledge(value: unknown): ToolKnowledge {
-  if (!record(value)) return "unknown";
+function itemKnowledge(value: unknown, budget: InventoryBudget, partial = false): ToolKnowledge {
+  if (++budget.entries > toolEvidenceLimit || !record(value)) return "unknown";
   if (value.type === "additional_tools" || value.type === "tool_search_output") {
-    if (value.status != null && value.status !== "completed") return "unknown";
+    if (!partial && value.status != null && value.status !== "completed") return "unknown";
     if (value.type === "tool_search_output" && value.execution != null && value.execution !== "client" && value.execution !== "server") return "unknown";
-    return declarations(value.tools);
+    return declarations(value.tools, budget);
   }
   if (Object.hasOwn(value, "tools")) return "unknown";
   return typeof value.type === "string" && ordinaryItems.has(value.type)
@@ -72,14 +72,15 @@ export function retainedToolBase(body: Record<string, unknown>, inherited: ToolK
   if (!Array.isArray(body.input) || body.input.length > toolEvidenceLimit) return "unknown";
   // Top-level tools are current-request configuration. Only tagged input tools
   // and retained output declarations attest an inventory inherited by children.
-  return body.input.reduce<ToolKnowledge>((knowledge, item) => union(knowledge, itemKnowledge(item)), inherited);
+  const budget = { entries: 0 };
+  return body.input.reduce<ToolKnowledge>((knowledge, item) => union(knowledge, itemKnowledge(item, budget)), inherited);
 }
 
-type Item = { index?: number; id?: string; done: boolean; type?: unknown; knowledge?: ToolKnowledge; observed?: ToolKnowledge };
+type Item = { index?: number; id?: string; entries: number; done: boolean; type?: unknown; knowledge?: ToolKnowledge; observed?: ToolKnowledge };
 export type ToolEvidenceResult = { responseId: string; knowledge: ToolKnowledge };
 export function createResponsesToolEvidence(base: ToolKnowledge) {
   const items: Item[] = [], indices = new Map<number, Item>(), ids = new Map<string, Item>();
-  let uncertain = false, terminal = false, responseId: string | undefined, result: ToolEvidenceResult | null = null;
+  let uncertain = false, terminal = false, entries = 0, responseId: string | undefined, result: ToolEvidenceResult | null = null;
   function identity(value: unknown) {
     if (value === undefined) return;
     if (!boundedText(value) || responseId && value !== responseId) uncertain = true;
@@ -93,8 +94,8 @@ export function createResponsesToolEvidence(base: ToolKnowledge) {
     if (byIndex && byId && byIndex !== byId) { uncertain = true; return; }
     let item = byIndex ?? byId;
     if (!item) {
-      if (items.length >= toolEvidenceLimit) { uncertain = true; return; }
-      item = { done: false }; items.push(item);
+      if (entries >= toolEvidenceLimit) { uncertain = true; return; }
+      item = { entries: 1, done: false }; items.push(item); entries++;
     }
     if (item.index !== undefined && position !== undefined && item.index !== position || item.id !== undefined && id !== undefined && item.id !== id) { uncertain = true; return; }
     if (position !== undefined) { item.index = position; indices.set(position, item); }
@@ -107,16 +108,22 @@ export function createResponsesToolEvidence(base: ToolKnowledge) {
     if (!item) return;
     if (item.type !== undefined && item.type !== value.type) uncertain = true;
     item.type = value.type;
+    const budget = { entries: 0 }, knowledge = itemKnowledge(value, budget, !done);
+    // Count each associated inventory's largest observation, not each event.
+    // Repeated added/done representations must not multiply the same entries.
+    entries += Math.max(0, budget.entries - item.entries);
+    item.entries = Math.max(item.entries, budget.entries);
+    if (entries > toolEvidenceLimit) uncertain = true;
     if (done) {
-      const knowledge = itemKnowledge(value);
       if (item.done && item.knowledge !== knowledge || item.observed && union(item.observed, knowledge) !== knowledge) uncertain = true;
       item.done = true; item.knowledge = knowledge;
     } else {
       // Anonymous added events cannot safely be paired by arrival order. Codex
       // done-only anonymous items remain supported under this request owner.
       if (index === undefined && value.id === undefined || item.done) uncertain = true;
-      const partial = itemKnowledge(value);
-      if (partial === "hosted_tool_fee" || partial === "hosted_tool_usage") item.observed = union(item.observed ?? "token_only", partial);
+      // Absent inventories may still stream in; explicit unknown inventories
+      // cannot be erased by a later empty or otherwise conflicting completion.
+      if (Object.hasOwn(value, "tools")) item.observed = union(item.observed ?? "token_only", knowledge);
     }
   }
   return {
@@ -146,11 +153,13 @@ export function createResponsesToolEvidence(base: ToolKnowledge) {
         else knowledge = union(knowledge, item.knowledge!);
       }
       if (response && Object.hasOwn(response, "output")) {
-        const output = response.output;
+        // This complete snapshot repeats streamed items, including anonymous
+        // ones. Bound it independently without inventing positional aliases.
+        const output = response.output, budget = { entries: 0 };
         if (!Array.isArray(output) || output.length > toolEvidenceLimit) uncertain = true;
         else for (const [index, value] of output.entries()) {
           const item = indices.get(index), named = record(value) && typeof value.id === "string" ? ids.get(value.id) : undefined;
-          const next = itemKnowledge(value);
+          const next = itemKnowledge(value, budget);
           if (item && named && item !== named || item && (item.type !== (record(value) ? value.type : undefined) || item.knowledge !== next || item.id !== undefined && record(value) && value.id !== undefined && item.id !== value.id)
             || named && (named.index !== undefined && named.index !== index || named.knowledge !== next)) uncertain = true;
           knowledge = union(knowledge, next);
