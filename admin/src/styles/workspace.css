@@ -525,7 +525,8 @@
   font-weight: 660;
 }
 
-.tableSectionHeader span,
+.tableSectionHeader > div > span,
+.tableSectionHeader > span,
 .editorSectionHeader span {
   color: var(--muted);
   font-size: 10.5px;
