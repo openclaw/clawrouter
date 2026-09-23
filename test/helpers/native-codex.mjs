@@ -3,7 +3,9 @@ import { once } from "node:events";
 import { createInterface } from "node:readline";
 
 export function nativeCodexClient(t, binary, home, env, onRequest) {
-  const child = spawn(binary, ["app-server", "--listen", "stdio://"], { cwd: home, env, stdio: ["pipe", "pipe", "pipe"] });
+  // Routing fixtures do not use plugins. Their background Git checkout can
+  // outlive app-server shutdown and write into the home during its removal.
+  const child = spawn(binary, ["-c", "features.plugins=false", "app-server", "--listen", "stdio://"], { cwd: home, env, stdio: ["pipe", "pipe", "pipe"] });
   const pending = new Map(), notifications = [], errors = [];
   let nextId = 0, stderr = "";
   child.stderr.on("data", chunk => { stderr = (stderr + chunk).slice(-32_768); });
