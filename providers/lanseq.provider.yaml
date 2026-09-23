@@ -37,6 +37,7 @@ capabilities:
 
 endpoints:
   chat_completions:
+    modelPassthrough: {}
     path: /v1/chat/completions
     requestFormat: openai.chat_completions
     responseFormat: openai.chat_completions

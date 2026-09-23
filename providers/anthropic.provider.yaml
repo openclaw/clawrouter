@@ -157,6 +157,7 @@ capabilities:
     methods: [POST]
 endpoints:
   messages:
+    modelPassthrough: {}
     path: /v1/messages
     requestHeaders: [anthropic-beta, anthropic-version]
     requestFormat: anthropic.messages
@@ -164,6 +165,7 @@ endpoints:
     streaming: sse
     timeoutMs: 600000
   count_tokens:
+    modelPassthrough: {}
     path: /v1/messages/count_tokens
     requestHeaders: [anthropic-beta, anthropic-version]
     requestFormat: anthropic.messages

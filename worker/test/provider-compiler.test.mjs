@@ -1,3 +1,4 @@
+import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { mkdtempSync, readFileSync, readdirSync, rmSync, writeFileSync } from "node:fs";
@@ -284,6 +285,53 @@ test("canonical schema validates root, endpoint and auth shapes without hiding r
 function compile(path) {
   return execFileSync(process.execPath, ["scripts/compile-providers.mjs", path], { encoding: "utf8", stdio: "pipe" });
 }
+
+test("opaque model contracts validate endpoint-compatible pricing without template inheritance", () => {
+  const valid = parse(readFileSync("providers/local-openai.provider.yaml", "utf8"));
+  withManifest((path) => {
+    writeFileSync(path, JSON.stringify(valid));
+    const provider = JSON.parse(compile(path)).providers[0];
+    assert.deepEqual(provider.endpoints[0].modelPassthrough, { pricing_ref: provider.models[0].pricing_ref, pricing: provider.models[0].pricing });
+    const cases = [
+      ["boolean contract", (manifest) => { manifest.endpoints.chat_completions.modelPassthrough = true; }, /invalid manifest/],
+      ["unknown contract field", (manifest) => { manifest.endpoints.chat_completions.modelPassthrough.model = "fixture"; }, /invalid manifest/],
+      ["missing reference", (manifest) => { manifest.endpoints.chat_completions.modelPassthrough.pricingRef = "missing"; }, /pricingRef must resolve/],
+      ["unpriced reference", (manifest) => { delete manifest.models.entries[0].pricing; }, /pricingRef must resolve/],
+      ["duplicate reference", (manifest) => { manifest.models.entries.push({ ...manifest.models.entries[0], id: "local/duplicate", upstream: "duplicate" }); }, /pricingRef must resolve/],
+      ["incompatible model", (manifest) => { manifest.models.entries[0].capabilities = []; }, /pricingRef must resolve/],
+      ["undeclared model capability", (manifest) => { manifest.models.entries[0].capabilities = ["missing"]; }, /references missing capability/],
+    ];
+    for (const [name, mutate, expected] of cases) {
+      const manifest = structuredClone(valid);
+      mutate(manifest);
+      writeFileSync(path, JSON.stringify(manifest));
+      assert.throws(() => compile(path), expected, name);
+    }
+  });
+});
+
+test("custom manifests keep known models and migrate opaque routing with an explicit endpoint declaration", async () => {
+  const { prepareNativeRequest } = await import("../proxy-selection.ts");
+  const manifest = parse(readFileSync("providers/deepseek.provider.yaml", "utf8"));
+  delete manifest.endpoints.chat_completions.modelPassthrough;
+  withManifest((path) => {
+    writeFileSync(path, JSON.stringify(manifest));
+    const previous = JSON.parse(compile(path)).providers[0];
+    const endpoint = previous.endpoints.find(({ id }) => id === "chat_completions");
+    const known = prepareNativeRequest(previous, endpoint, { model: previous.models[0].id, messages: [] }, endpoint.path, {});
+    assert.deepEqual(known.model, previous.models[0]);
+    assert.throws(() => prepareNativeRequest(previous, endpoint, { model: "fixture-unlisted", messages: [] }, endpoint.path, {}), (error) => error.code === "model_capability_unsupported");
+
+    manifest.endpoints.chat_completions.modelPassthrough = {};
+    writeFileSync(path, JSON.stringify(manifest));
+    const migrated = JSON.parse(compile(path)).providers[0];
+    const declared = migrated.endpoints.find(({ id }) => id === endpoint.id);
+    assert.deepEqual(prepareNativeRequest(migrated, declared, { model: known.model.id, messages: [] }, declared.path, {}), known);
+    const opaque = prepareNativeRequest(migrated, declared, { model: "fixture-unlisted", messages: [] }, declared.path, {});
+    assert.deepEqual(opaque.body, { model: "fixture-unlisted", messages: [] });
+    assert.deepEqual(opaque.model, { id: "fixture-unlisted", upstream: "fixture-unlisted", capabilities: ["llm.chat"], pricing_ref: null, pricing: null });
+  });
+});
 
 function withManifest(run) {
   const directory = mkdtempSync(join(tmpdir(), "clawrouter-provider-"));

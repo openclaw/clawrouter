@@ -6,6 +6,8 @@
 
 - Publish a revision-bound provider snapshot from CI so code-only contributors can regenerate the catalog without a local dependency install.
 
+- Match catalog models to their declared endpoints and reject incompatible native selections. Route opaque model IDs through explicit endpoint passthrough contracts without borrowing the first model's capabilities or pricing, while preserving the local provider's zero API charge.
+
 - Validate every provider manifest against its canonical JSON Schema before compilation, including ordinary pricing cards, safe integer rates, calendar dates, and unknown fields; retain semantic route and pricing checks.
 - Prevent duplicate playground requests, cancel pending requests when starting a new chat, and preserve new drafts when earlier replies arrive.
 - Allow OpenRouter API-key-only setup without a site URL; omit unset optional attribution headers consistently in readiness, requests, and grant maintenance while keeping required templates strict.

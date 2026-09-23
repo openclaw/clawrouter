@@ -118,6 +118,7 @@ capabilities:
     methods: [POST]
 endpoints:
   responses:
+    modelPassthrough: {}
     path: /v1/responses
     requestHeaders: [session-id, thread-id, session_id, x-client-request-id, OpenAI-Beta, x-openai-internal-codex-responses-lite, x-codex-beta-features, x-codex-turn-state]
     requestFormat: openai.responses
@@ -126,12 +127,14 @@ endpoints:
     websocket: openai.responses
     timeoutMs: 600000
   chat_completions:
+    modelPassthrough: {}
     path: /v1/chat/completions
     requestFormat: openai.chat_completions
     responseFormat: openai.chat_completions
     streaming: sse
     timeoutMs: 600000
   embeddings:
+    modelPassthrough: {}
     path: /v1/embeddings
     requestFormat: openai.embeddings
     responseFormat: openai.embeddings
