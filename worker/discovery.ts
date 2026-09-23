@@ -7,8 +7,8 @@ import { contentRetentionDefault } from "./content-retention.ts";
 import { loadFusionConfig } from "./fusion-config";
 import { FUSION_MODEL_ID } from "./fusion";
 import { authenticateProxyKey } from "./proxy-auth";
-import { endpointForPath, modelRoute, providerReadinessForPolicies, providerReadinessFromState, resolveTemplate, snapshot, type Readiness } from "./providers";
-import type { AccessPolicyEntry, AccessSession, CompiledProvider, Env } from "./types";
+import { modelRoute, providerReadinessForPolicies, providerReadinessFromState, resolveTemplate, snapshot, type Readiness } from "./providers";
+import type { AccessPolicyEntry, AccessSession, CompiledProvider, Env, ProviderConnection } from "./types";
 import { errorResponse, HttpError, privateJson, sha256Hex } from "./utils";
 
 export async function sessionResponse(request: Request, env: Env): Promise<Response> {
@@ -44,7 +44,7 @@ export async function modelsResponse(request: Request, env: Env): Promise<Respon
   const entitlements = await clientEntitlements(request, env);
   if (entitlements instanceof Response) return entitlements;
   const rows = entitlements.rows;
-  const inventory = await clientInventory(entitlements, env);
+  const inventory = entitlements.inventory;
   if (request.headers.has("anthropic-version")) {
     const data = snapshot.providers.flatMap((provider) => (inventory.get(provider.id)?.models ?? []).filter((model) => model.capabilities.includes("llm.messages")).map((model) => ({
       id: model.id, type: "model", display_name: `${provider.display_name} · ${model.id}`, created_at: "1970-01-01T00:00:00Z",
@@ -71,7 +71,7 @@ export async function catalogResponse(request: Request, env: Env): Promise<Respo
   const entitlements = await clientEntitlements(request, env);
   if (entitlements instanceof Response) return entitlements;
   const rows = entitlements.rows;
-  const inventory = await clientInventory(entitlements, env);
+  const inventory = entitlements.inventory;
   const providers = rows.filter((row) => row.allowed && row.provider !== "clawrouter").flatMap((row) => {
     const provider = snapshot.providers.find((candidate) => candidate.id === row.provider);
     if (!provider) return [];
@@ -121,31 +121,33 @@ interface EntitlementRow {
 }
 
 async function entitlementRows(session: AccessSession, env: Env): Promise<EntitlementRow[]> {
-  return entitlementRowsForEntries(await sessionPolicies(session, env), env);
+  return (await entitlementRowsForEntries(await sessionPolicies(session, env), session.tenantId, env)).rows;
 }
 
-async function entitlementRowsForEntries(entries: AccessPolicyEntry[], env: Env): Promise<EntitlementRow[]> {
-  const readiness = await providerReadinessForPolicies(env, entries);
+async function entitlementRowsForEntries(entries: AccessPolicyEntry[], tenantId: string, env: Env): Promise<ClientEntitlements> {
+  const connections = await listConnections(env, snapshot.providers.map((provider) => provider.id));
+  const readiness = await providerReadinessForPolicies(env, entries, connections);
   const rows = snapshot.providers.map((provider) => {
     const policies = entries.filter((entry) => entry.policy.enabled && (!entry.policy.providers.length || entry.policy.providers.includes(provider.id))).map((entry) => entry.policyId);
     return { provider: provider.id, displayName: provider.display_name, serviceKind: provider.service_kind, allowed: policies.length > 0, policies, readiness: readiness.find((row) => row.id === provider.id)! };
   });
-  const fusion = await fusionEntitlement(rows, env);
-  return fusion ? [...rows, fusion] : rows;
+  const inventory = await clientInventory({ rows, entries, tenantId }, env, connections);
+  const fusion = await fusionEntitlement(rows, inventory, env);
+  return { rows: fusion ? [...rows, fusion] : rows, inventory };
 }
 
-async function fusionEntitlement(rows: EntitlementRow[], env: Env): Promise<EntitlementRow | null> {
+async function fusionEntitlement(rows: EntitlementRow[], inventory: ClientInventory, env: Env): Promise<EntitlementRow | null> {
   const config = await loadFusionConfig(env);
   if (!config.enabled) return null;
   const aggregator = modelRoute(config.aggregatorModel);
   const aggregatorAccess = aggregator ? rows.find((row) => row.provider === aggregator.provider.id) : undefined;
   const advisers = config.adviserModels.map((model) => modelRoute(model)).filter((route): route is NonNullable<ReturnType<typeof modelRoute>> => !!route);
-  const readyAdvisers = advisers.filter((route) => routeExecutable(route, rows));
+  const readyAdvisers = advisers.filter((route) => routeExecutable(route, inventory));
   const allowed = aggregatorAccess?.allowed === true;
-  const executable = !!aggregator && routeExecutable(aggregator, rows);
+  const executable = !!aggregator && routeExecutable(aggregator, inventory);
   const reasons = [
     ...(!allowed ? ["No active policy grants the configured fusion aggregator provider."] : []),
-    ...(allowed && !executable ? [aggregatorAccess?.readiness.reasons[0] ?? "The configured fusion aggregator is unavailable."] : []),
+    ...(allowed && !executable ? ["The configured fusion aggregator is unavailable under the selected policy, provider budget, or grant."] : []),
     ...(readyAdvisers.length < advisers.length ? [`${readyAdvisers.length}/${advisers.length} advisers are currently executable; unavailable advisers fail open.`] : []),
   ];
   const readiness: Readiness = {
@@ -182,16 +184,16 @@ async function fusionEntitlement(rows: EntitlementRow[], env: Env): Promise<Enti
   };
 }
 
-function routeExecutable(route: NonNullable<ReturnType<typeof modelRoute>>, rows: EntitlementRow[]): boolean {
-  const row = rows.find((candidate) => candidate.provider === route.provider.id);
-  const endpoint = endpointForPath(route.provider, "/v1/chat/completions");
-  return !!endpoint && row?.allowed === true && row.readiness.executableEndpoints.includes(endpoint.id);
+function routeExecutable(route: NonNullable<ReturnType<typeof modelRoute>>, inventory: ClientInventory): boolean {
+  // Prefix-routed models may not have a static catalog row. Project the exact
+  // configured route through the same selected-policy eligibility as that catalog.
+  return inventory.get(route.provider.id)?.eligibleModels([route.model]).some(model => model.capabilities.includes("llm.chat")) === true;
 }
 
+type ClientInventory = Awaited<ReturnType<typeof clientInventory>>;
 interface ClientEntitlements {
   rows: EntitlementRow[];
-  entries: AccessPolicyEntry[];
-  tenantId: string;
+  inventory: ClientInventory;
 }
 
 async function clientEntitlements(request: Request, env: Env): Promise<ClientEntitlements | Response> {
@@ -200,12 +202,12 @@ async function clientEntitlements(request: Request, env: Env): Promise<ClientEnt
     const auth = await authenticateProxyKey(request.headers, env);
     if (auth instanceof Response) return auth;
     const entries = [{ policyId: auth.policyId, policy: auth.policy }];
-    return { rows: await entitlementRowsForEntries(entries, env), entries, tenantId: auth.policy.tenantId ?? "default" };
+    return entitlementRowsForEntries(entries, auth.policy.tenantId ?? "default", env);
   }
   const session = await verifiedAccessSession(request, env);
   if (!session) return errorResponse("client_auth_required", "a valid ClawRouter proxy key or Cloudflare Access session is required", 401);
   const entries = await sessionPolicies(session, env);
-  return { rows: await entitlementRowsForEntries(entries, env), entries, tenantId: session.tenantId };
+  return entitlementRowsForEntries(entries, session.tenantId, env);
 }
 
 export function catalogModels(provider: CompiledProvider, endpoints: string[], proxyPolicy: AccessPolicyEntry["policy"] | null, providerBudget: number | null = null, endpointPolicies?: Map<string, AccessPolicyEntry["policy"]>) {
@@ -222,8 +224,7 @@ export function catalogModels(provider: CompiledProvider, endpoints: string[], p
   });
 }
 
-async function clientInventory(entitlements: ClientEntitlements, env: Env) {
-  const connections = await listConnections(env, snapshot.providers.map((provider) => provider.id));
+async function clientInventory(entitlements: { rows: EntitlementRow[]; entries: AccessPolicyEntry[]; tenantId: string }, env: Env, connections: ProviderConnection[]) {
   const environment = new Map(providerReadinessFromState(env, [], connections, new Map()).map((row) => [row.id, row.executableEndpoints]));
   const views = await Promise.all(snapshot.providers.map(async (provider) => {
     const entries = entitlements.entries.filter((entry) => entry.policy.enabled && (!entry.policy.providers.length || entry.policy.providers.includes(provider.id)));
@@ -246,12 +247,12 @@ async function clientInventory(entitlements: ClientEntitlements, env: Env) {
       }
     }
     const endpoints = [...endpointPolicies.keys()];
-    const models = catalogModels(provider, endpoints, null, connections.find((connection) => connection.providerId === provider.id)?.monthlyBudgetMicros ?? null, endpointPolicies).filter((model) => {
+    const eligibleModels = (models = provider.models) => catalogModels({ ...provider, models }, endpoints, null, connections.find((connection) => connection.providerId === provider.id)?.monthlyBudgetMicros ?? null, endpointPolicies).filter((model) => {
       // Native callers can supply path parameters even when a catalog model's default is absent.
       try { resolveTemplate(provider, model.upstream, env); return true; }
       catch (error) { if (error instanceof HttpError && error.code === "provider_not_configured") return false; throw error; }
     });
-    return [provider.id, { endpoints, websockets, models }] as const;
+    return [provider.id, { endpoints, websockets, models: eligibleModels(), eligibleModels }] as const;
   }));
   return new Map(views);
 }

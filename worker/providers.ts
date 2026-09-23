@@ -122,8 +122,8 @@ export async function providerReadiness(env: Env): Promise<Readiness[]> {
   return providerReadinessFromState(env, grants, [...connections.values()], health);
 }
 
-export async function providerReadinessForPolicies(env: Env, policies: AccessPolicyEntry[]): Promise<Readiness[]> {
-  const { grants, health, connections } = await readinessInputs(env);
+export async function providerReadinessForPolicies(env: Env, policies: AccessPolicyEntry[], storedConnections?: ProviderConnection[]): Promise<Readiness[]> {
+  const { grants, health, connections } = await readinessInputs(env, storedConnections);
   const visibleGrants = grantsVisibleToPolicies(grants, policies);
   return providerReadinessFromState(env, visibleGrants, [...connections.values()], health);
 }
@@ -133,8 +133,8 @@ export function providerReadinessFromState(env: Env, grants: GrantRecord[], stor
   return snapshot.providers.map((provider) => readinessFor(provider, env, grants, connections.get(provider.id) ?? { providerId: provider.id, enabled: true }, health.get(provider.id)));
 }
 
-async function readinessInputs(env: Env) {
-  const [grants, health, storedConnections] = await Promise.all([listGrantRecords(env), listHealth(env), listConnections(env, snapshot.providers.map((provider) => provider.id))]);
+async function readinessInputs(env: Env, suppliedConnections?: ProviderConnection[]) {
+  const [grants, health, storedConnections] = await Promise.all([listGrantRecords(env), listHealth(env), suppliedConnections ?? listConnections(env, snapshot.providers.map((provider) => provider.id))]);
   const connections = new Map(storedConnections.map((connection) => [connection.providerId, connection]));
   return { grants, health, connections };
 }
