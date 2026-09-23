@@ -1,4 +1,5 @@
 import { resolveTemplate } from "./provider-templates.ts";
+import { assessModelRequest } from "../shared/model-request-parameters.ts";
 import { createProxyAccounting, estimateCost, type CompoundRequestContext } from "./proxy-accounting";
 import { authenticateProxyKey } from "./proxy-auth";
 import {
@@ -11,7 +12,7 @@ import { retainRequestContent } from "./content-retention";
 import { correlationMetadata } from "./correlation.ts";
 import {
   FUSION_MODEL_ID, buildAggregatorBody, buildFusionReservationProposals, collectFusionProposals,
-  fusionMessagesValid,
+  fusionMessagesValid, prepareAdviserBody,
 } from "./fusion";
 import { loadFusionConfig } from "./fusion-config";
 import { observeGrantQuota, shouldFailoverGrant } from "./grant-quota";
@@ -113,6 +114,13 @@ async function proxyFusion(
     });
     return aggregatorSelection.response;
   }
+  const parameters = assessModelRequest(aggregatorSelection.model, aggregatorSelection.endpoint, aggregatorSelection.body as Record<string, unknown>);
+  if (parameters.conflicts.length) {
+    await auditSelectionFailure(fusionRequest, env, context, mode, aggregatorSelection, preauthenticated, 400, {
+      id: compoundRequestId, stage: "fusion_synthesizer", index: null, size: 1, startedAtMs: compoundStartedAtMs,
+    });
+    return errorResponse("model_parameter_unsupported", parameters.conflicts.map(({ message }) => message).join(" "), 400);
+  }
   const aggregatorBudget = await reserveSelected(fusionRequest, env, context, mode, aggregatorSelection, preauthenticated, {
     id: compoundRequestId, stage: "fusion_synthesizer", index: null, size: 1, startedAtMs: compoundStartedAtMs,
   });
@@ -121,9 +129,16 @@ async function proxyFusion(
     const headers = new Headers(fusionRequest.headers);
     headers.set("x-request-id", randomId(`fusion-adviser-${index + 1}`));
     const adviserRequest = new Request(fusionRequest.url, { method: "POST", headers, signal: AbortSignal.any([fusionRequest.signal, signal]) });
-    return proxyConcreteOpenAi(adviserRequest, env, context, "/v1/chat/completions", mode, adviserBody, preauthenticated, timeoutMs, undefined, {
+    const compound: CompoundRequestContext = {
       id: compoundRequestId, stage: "fusion_adviser", index: index + 1, size: compoundRequestSize, startedAtMs: compoundStartedAtMs,
-    }, aggregatorBudget.auth);
+    };
+    const selection = concreteOpenAiSelection("/v1/chat/completions", adviserBody, env, timeoutMs);
+    if (isSelectionFailure(selection)) {
+      if (selection.auditSelection) await auditSelectionFailure(adviserRequest, env, context, mode, selection.auditSelection, preauthenticated, selection.response.status, compound, aggregatorBudget.auth);
+      return selection.response;
+    }
+    selection.body = prepareAdviserBody(selection.body as Record<string, unknown>, selection.model, selection.endpoint, config.temperature);
+    return proxySelected(adviserRequest, env, context, mode, selection, {}, preauthenticated, undefined, compound, aggregatorBudget.auth);
   });
   const aggregatorBody = buildAggregatorBody(body, config, result.proposals);
   const response = await proxyConcreteOpenAi(fusionRequest, env, context, "/v1/chat/completions", mode, aggregatorBody, preauthenticated, undefined, aggregatorBudget, {

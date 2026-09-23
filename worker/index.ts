@@ -9,6 +9,7 @@ import { GrantCredentialObject } from "./grant-credentials";
 import { budgetPrincipal } from "./budget-scope.ts";
 import { dashboardSecurityHeaders } from "./dashboard-security";
 import { contentRetentionDefault } from "./content-retention.ts";
+import { scheduledContentCleanup } from "./content-cleanup.ts";
 import { correlateIngressRequest, withRequestId } from "./correlation.ts";
 import { localAuthEnabled, localLogin, localLogout } from "./local-auth";
 import { oauthCallback } from "./oauth";
@@ -27,6 +28,7 @@ import {
 } from "./utils";
 
 export { PolicyBindingIndexObject } from "./authority";
+export { ContentArchiveCleanupObject } from "./content-cleanup.ts";
 export { BudgetLedgerObject, GrantCredentialObject, UsageLedgerObject };
 
 const handler: ExportedHandler<Env, QueueMessage> = {
@@ -47,6 +49,7 @@ const handler: ExportedHandler<Env, QueueMessage> = {
     return corsEnabled(path) ? withCors(response) : response;
   },
   queue,
+  scheduled: scheduledContentCleanup,
 };
 
 export default handler;

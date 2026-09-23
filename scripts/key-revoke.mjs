@@ -13,6 +13,7 @@ const config = args.config ?? ".wrangler.generated.toml";
 if (!args.local) {
   await adminRequest(`/v1/admin/keys/${encodeURIComponent(kid)}/revoke`, {
     method: "POST",
+    responseMode: "ack",
   });
   console.log(`revoked authoritative proxy credential ${kid}`);
 } else {

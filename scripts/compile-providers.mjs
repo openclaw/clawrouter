@@ -44,6 +44,7 @@ export function compileProviderSnapshot(manifests) {
         capabilities: model.capabilities,
         ...(model.codexModel ? { codexModel: model.codexModel } : {}),
         ...(model.supportedReasoningEfforts ? { supportedReasoningEfforts: model.supportedReasoningEfforts } : {}),
+        ...(model.requestParameters ? { requestParameters: model.requestParameters } : {}),
         pricing_ref: model.pricing_ref,
         pricing: model.pricing,
       };
@@ -120,6 +121,7 @@ function compileProvider(manifest, ids) {
     capabilities: model.capabilities ?? [],
     ...(model.codexModel ? { codexModel: model.codexModel } : {}),
     ...(model.supportedReasoningEfforts ? { supportedReasoningEfforts: model.supportedReasoningEfforts } : {}),
+    ...(model.requestParameters ? { requestParameters: model.requestParameters } : {}),
     pricing_ref: model.pricingRef ?? null,
     pricing: model.pricing ? normalizePricing(model.pricing) : null,
   }));
@@ -244,6 +246,12 @@ function validateManifest(manifest) {
   for (const model of manifest.models?.entries ?? []) {
     for (const capability of model.capabilities ?? []) if (!manifest.capabilities.some((item) => item.id === capability)) throw new Error(`provider ${manifest.id} model ${model.id} references missing capability ${capability}`);
     if (model.codexModel !== undefined && (typeof model.codexModel !== "string" || !model.codexModel.trim())) throw new Error(`model ${model.id} codexModel must be a nonempty exact native slug`);
+    for (const [id, parameters] of Object.entries(model.requestParameters ?? {})) {
+      const endpoint = Object.hasOwn(manifest.endpoints, id) ? manifest.endpoints[id] : null;
+      if (!endpoint || !manifest.capabilities.some((capability) => capability.endpoint === id && model.capabilities?.includes(capability.id))) throw new Error(`model ${model.id} requestParameters must reference a supported endpoint`);
+      if (!["openai.chat_completions", "openai.responses"].includes(endpoint.requestFormat)) throw new Error(`model ${model.id} requestParameters requires an OpenAI Chat or Responses wire format`);
+      if (parameters.defaultReasoningEffort !== undefined && !model.supportedReasoningEfforts?.includes(parameters.defaultReasoningEffort)) throw new Error(`model ${model.id} requestParameters default effort must belong to supportedReasoningEfforts`);
+    }
     validatePricing(model.pricing, model.id);
   }
   for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
