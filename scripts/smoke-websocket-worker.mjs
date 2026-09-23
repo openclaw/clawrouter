@@ -212,15 +212,15 @@ try {
   // HTTP status remains 200 while protocol and delivery outcomes drive receipts.
   for (const scenario of ["late-failed", "cancel-stream"]) {
     const before = await ledgerFacts(), session = `sse-${scenario}`;
-    const response = await dispatch("/v1/native/openai/v1/responses", {
+    const response = await dispatch(scenario === "cancel-stream" ? "/fixture-cancel-stream" : "/v1/native/openai/v1/responses", {
       method: "POST", headers: { "content-type": "application/json", "x-clawrouter-session-id": session },
       body: JSON.stringify({ model: "gpt-6-astra", input: scenario, max_output_tokens: 32, service_tier: "priority", stream: true }),
     });
     assert.equal(response.status, 200);
     if (scenario === "cancel-stream") {
-      const reader = response.body.getReader();
-      assert.match(new TextDecoder().decode((await reader.read()).value), /response.created/);
-      await reader.cancel();
+      const consumed = await response.json();
+      assert.equal(consumed.status, 200);
+      assert.match(consumed.first, /response.created/);
       await until(async () => (await (await upstream.fetch("https://fixture.example/state")).json()).httpCanceled);
     } else {
       const body = await response.text();
@@ -382,8 +382,17 @@ export class BudgetLedgerObject extends RealBudgetLedger {
   }
 }
 let trace = [];
-export default { ...handler, fetch(request, env, context) {
+export default { ...handler, async fetch(request, env, context) {
   if (new URL(request.url).pathname === "/fixture-accounting") return Response.json(trace);
+  if (new URL(request.url).pathname === "/fixture-cancel-stream") {
+    // Consume and cancel in workerd's owning request, without relying on a
+    // Node/undici network disconnect to cancel the Worker response body.
+    const response = await handler.fetch(new Request(new URL("/v1/native/openai/v1/responses", request.url), request), env, context);
+    const reader = response.body.getReader();
+    const first = new TextDecoder().decode((await reader.read()).value);
+    await reader.cancel();
+    return Response.json({ status: response.status, first });
+  }
   const fault = request.headers.get("x-fixture-accounting-fault");
   if (fault) {
     const ledger = env.BUDGET_LEDGER, queue = env.USAGE_QUEUE, usage = env.USAGE_LEDGER;
