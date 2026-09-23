@@ -220,7 +220,15 @@ try {
     };
     if (canceled) {
       await disconnectHttp(new URL("/v1/native/openai/v1/responses", await mf.ready), { ...init, headers: { ...init.headers, authorization: `Bearer ${key}` } }, scenario === "cancel-stream" ? "response.created" : "response.completed");
-      await until(async () => (await (await upstream.fetch("https://fixture.example/state")).json()).httpAborts[scenario]);
+      try {
+        await until(async () => (await (await upstream.fetch("https://fixture.example/state")).json()).httpAborts[scenario]);
+      } catch {
+        const state = await (await upstream.fetch("https://fixture.example/state")).json();
+        const ingress = await (await dispatch("/fixture-ingress-aborts")).json();
+        const receipts = (await (await dispatch("/v1/usage")).json()).usage.events.filter(({ session_id }) => session_id === session);
+        throw new Error(`external abort not observed: ${JSON.stringify({ scenario, ingressAborted: ingress[session] ?? false, upstreamAborted: state.httpAborts[scenario] ?? false, upstreamEof: state.httpEofs[scenario] ?? false, receipts, ledgers: await ledgerFacts() })}`);
+      }
+      assert.equal((await (await dispatch("/fixture-ingress-aborts")).json())[session], true);
       assert.equal((await (await upstream.fetch("https://fixture.example/state")).json()).httpEofs[scenario], undefined);
     } else {
       const response = await dispatch("/v1/native/openai/v1/responses", init);
@@ -315,7 +323,7 @@ async function until(predicate) {
   throw new Error("WebSocket fixture timed out");
 }
 
-// Destroy an actual ingress TCP socket after observing bytes from the Worker.
+// Reset an actual ingress TCP socket after observing bytes from the Worker.
 // JS body.cancel() alone cannot prove workerd's external disconnect lifecycle.
 async function disconnectHttp(url, init, marker) {
   await new Promise((resolve, reject) => {
@@ -324,7 +332,7 @@ async function disconnectHttp(url, init, marker) {
       assert.equal(response.statusCode, 200);
       response.on("data", (chunk) => {
         text += chunk.toString();
-        if (!destroyed && text.includes(marker)) { destroyed = true; response.socket.destroy(); }
+        if (!destroyed && text.includes(marker)) { destroyed = true; response.socket.resetAndDestroy(); }
       });
       response.on("close", () => { clearTimeout(timer); destroyed ? resolve() : reject(new Error("fixture stream ended before socket destruction")); });
       response.on("error", (error) => { if (!destroyed) reject(error); });
@@ -408,8 +416,12 @@ export class BudgetLedgerObject extends RealBudgetLedger {
   }
 }
 let trace = [];
+const ingressAborts = {};
 export default { ...handler, async fetch(request, env, context) {
   if (new URL(request.url).pathname === "/fixture-accounting") return Response.json(trace);
+  if (new URL(request.url).pathname === "/fixture-ingress-aborts") return Response.json(ingressAborts);
+  const session = request.headers.get("x-clawrouter-session-id");
+  if (session?.startsWith("sse-")) request.signal.addEventListener("abort", () => { ingressAborts[session] = true; }, { once: true });
   const fault = request.headers.get("x-fixture-accounting-fault");
   if (fault) {
     const ledger = env.BUDGET_LEDGER, queue = env.USAGE_QUEUE, usage = env.USAGE_LEDGER;
