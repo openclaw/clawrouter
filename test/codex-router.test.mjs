@@ -38,33 +38,8 @@ for (const transport of ["http", "websocket"]) {
       const dispatch = (path, credentialKey = currentKey) => fetch(new URL(path, origin), { headers: { authorization: `Bearer ${credentialKey}` }, signal: AbortSignal.timeout(10_000) });
       const discovered = await dispatch("/v1/catalog");
       assert.equal(discovered.status, 200);
-      const env = { PATH: process.env.PATH, HOME: home, CODEX_HOME: home, RUST_LOG: "warn", CLAWROUTER_API_KEY: key };
-      const bundled = JSON.parse(execFileSync(producer, ["debug", "models", "--bundled"], { env, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: 20_000, stdio: ["ignore", "pipe", "pipe"] }));
-      // Export the actual credential's discovery projection, never an admin union.
       const catalog = await discovered.json();
-      const exported = buildCodexCatalog(catalog, bundled, "openai");
-      assert.ok(exported.catalog.models.some(({ slug }) => slug === model));
-      await writeFile(join(home, "models.json"), JSON.stringify(exported.catalog));
-      await writeFile(join(home, "config.toml"), `model = "${model}"
-model_provider = "fixture"
-model_catalog_json = ${JSON.stringify(join(home, "models.json"))}
-service_tier = "priority"
-web_search = "disabled"
-approval_policy = "never"
-sandbox_mode = "read-only"
-cli_auth_credentials_store = "file"
-chatgpt_base_url = "${new URL("/control", origin)}"
-[model_providers.fixture]
-name = "Fixture"
-base_url = "${new URL(exported.nativeBasePath, origin)}"
-env_key = "CLAWROUTER_API_KEY"
-wire_api = "responses"
-requires_openai_auth = false
-supports_websockets = ${transport === "websocket"}
-request_max_retries = 0
-stream_max_retries = 0
-stream_idle_timeout_ms = 10000
-`);
+      const env = await configureNativeClient(home, origin, catalog, transport);
       const toolCalls = [];
       let thread;
       async function startClient(apiKey) {
@@ -233,6 +208,99 @@ stream_idle_timeout_ms = 10000
   });
 }
 
+for (const scenario of ["request_retry", "stream_retry", "interrupt"]) {
+  test(`native Codex through workerd: HTTP defaults, ${scenario}`, { skip: !binary, timeout: 90_000 }, async t => {
+    const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
+    const home = await mkdtemp(join(tmpdir(), "clawrouter-native-retry-"));
+    let mf, client;
+    try {
+      mf = await startWorkerdFixture(home, routerFixture({ failFirstPublication: scenario === "request_retry" }), upstreamFixture({ toolCall: false, turnState: true }));
+      const kv = await mf.getKVNamespace("POLICY_KV", "router");
+      await kv.put("policies/fixture", JSON.stringify({ enabled: true, generation: "g1", providers: ["openai"], tenantId: "default", monthlyBudgetMicros: limit, requestCostMicros: null, retainRequestContent: false }));
+      await kv.put("credentials/fixture", JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update(secret).digest("hex"), policyId: "fixture", policyGeneration: "g1" }));
+      await kv.put("connections/openai", JSON.stringify({ providerId: "openai", enabled: true, monthlyBudgetMicros: limit }));
+      const origin = await mf.ready;
+      const dispatch = path => fetch(new URL(path, origin), { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(10_000) });
+      const discovered = await dispatch("/v1/catalog"); assert.equal(discovered.status, 200);
+      const env = await configureNativeClient(home, origin, await discovered.json(), "http", true);
+      client = nativeCodexClient(t, binary, home, env);
+      await client.rpc("initialize", { clientInfo: { name: "clawrouter_fixture", version: "1.0.0" }, capabilities: { experimentalApi: true } });
+      client.child.stdin.write('{"method":"initialized"}\n');
+      const { thread } = await client.rpc("thread/start", { model, modelProvider: "fixture", cwd: home, ephemeral: true, approvalPolicy: "never", sandbox: "read-only" });
+      const startTurn = text => client.rpc("turn/start", { threadId: thread.id, input: [{ type: "text", text }], serviceTier: "priority" });
+      async function finishTurn(started, status) {
+        let completed;
+        await until(() => {
+          assert.deepEqual(client.errors, []);
+          completed = client.notifications.find(({ method, params }) => method === "turn/completed" && params.turn.id === started.turn.id);
+          return !!completed;
+        });
+        assert.equal(completed.params.turn.status, status, completed.params.turn.error?.message?.replaceAll(key, "[fixture credential]"));
+      }
+      const upstream = await mf.getWorker("upstream");
+      const state = () => upstream.fetch("https://fixture.example/state").then(response => response.json());
+      if (scenario !== "request_retry") assert.equal((await upstream.fetch(`https://fixture.example/hold${scenario === "stream_retry" ? "?broken=1" : ""}`, { method: "POST" })).status, 200);
+      const started = await startTurn("Return a synthetic fixture response.");
+      if (scenario !== "request_retry") {
+        // End the first attempt only after the actual native client receives its
+        // output. EOF is a stream failure without waiting on the default idle timer.
+        await until(() => client.notifications.some(({ method, params }) => method === "item/agentMessage/delta" && params.turnId === started.turn.id));
+        assert.equal((await state()).requests.length, 1);
+        if (scenario === "stream_retry") assert.equal((await upstream.fetch("https://fixture.example/break", { method: "POST" })).status, 200);
+        else await client.rpc("turn/interrupt", { threadId: thread.id, turnId: started.turn.id });
+      }
+      await finishTurn(started, scenario === "interrupt" ? "interrupted" : "completed");
+      if (scenario === "interrupt") {
+        await until(async () => (await state()).aborted.length === 1, 5_000);
+        await finishTurn(await startTurn("Return fixture complete after interruption."), "completed");
+      }
+      const observed = await state();
+      assert.equal(observed.connections, 0);
+      assert.equal(observed.requests.length, 2, "one initial attempt and one successful retry or fresh turn");
+      assert.ok(observed.requests.every(({ transport, authorized, body }) => transport === "http" && authorized && body.generate !== false && body.model === model && body.service_tier === "priority"));
+      assert.deepEqual(observed.expired, []);
+      assert.deepEqual(observed.broken, scenario === "stream_retry" ? [observed.requests[0].responseId] : []);
+      if (scenario === "interrupt") assert.deepEqual(observed.aborted, [observed.requests[0].responseId]);
+      const retries = client.notifications.filter(({ method, params }) => method === "error" && params.turnId === started.turn.id && params.willRetry);
+      assert.equal(retries.length, scenario === "stream_retry" ? 1 : 0, "HTTP request retries stay below the native stream-retry notification layer");
+      let usage;
+      await until(async () => {
+        usage = await (await dispatch("/v1/usage")).json();
+        assert.ok(usage.usage.events.length <= observed.requests.length);
+        return usage.usage.events.length === observed.requests.length;
+      });
+      const ingress = await (await dispatch("/fixture-ingress")).json();
+      assert.deepEqual(ingress.map(({ status }) => status), scenario === "request_retry" ? [503, 200] : [200, 200]);
+      const receipts = ingress.map(({ requestId }) => usage.usage.events.filter(event => event.request_id === requestId));
+      assert.ok(receipts.every(events => events.length === 1), "each actual router attempt has one receipt");
+      const [failed, success] = receipts.map(events => events[0]);
+      assert.equal(new Set(usage.usage.events.map(event => event.id)).size, 2);
+      assert.equal(failed.status, scenario === "interrupt" ? "client_error" : "provider_error");
+      assert.equal(failed.status_code, scenario === "request_retry" ? 503 : 200);
+      assert.equal(failed.cost_basis, "manifest_reservation");
+      assert.ok(failed.reserved_cost_micros > 0);
+      assert.equal(failed.actual_cost_micros, failed.reserved_cost_micros);
+      assert.equal(success.status, "success"); assert.equal(success.cost_basis, "manifest_pricing");
+      assert.equal(success.actual_cost_micros, 1_080);
+      assert.ok(usage.usage.events.every(event => event.credential_id === "fixture" && event.content_retained === false));
+      const expected = failed.actual_cost_micros + success.actual_cost_micros;
+      assert.equal(usage.usage.summary.actualCostMicros, expected); assert.equal(usage.budget.spentMicros, expected);
+      const budgets = await mf.getDurableObjectNamespace("BUDGET_LEDGER", "router");
+      for (const [name, policyId] of [["default:fixture", "default/fixture"], ["provider:openai", "provider/openai"]]) {
+        const ledger = budgets.get(budgets.idFromName(name)), month = new Date().toISOString().slice(0, 7);
+        const status = await (await ledger.fetch(`https://budget/status?policy_id=${policyId}&window_key=${policyId}/${month}&limit_micros=${limit}`)).json();
+        assert.equal(status.spentMicros, expected);
+        assert.deepEqual(await (await ledger.fetch("https://budget/fixture-unsettled")).json(), { count: 0 });
+      }
+      assert.equal(/fallback model metadata|model metadata.*not found/i.test(client.stderr() + JSON.stringify(client.notifications)), false);
+    } finally {
+      await client?.close();
+      await mf?.dispose();
+      await rm(home, { recursive: true, force: true });
+    }
+  });
+}
+
 // A TCP reset is an explicit disconnect even with no further provider output.
 // Ordinary close of a stalled HTTP stream remains a separate qualification gap.
 test("idle HTTP TCP reset: upstream abort and one cancellation receipt", { skip: !binary, timeout: 30_000 }, async () => {
@@ -268,7 +336,7 @@ test("idle HTTP TCP reset: upstream abort and one cancellation receipt", { skip:
     assert.equal(observed.requests.length, 1);
     assert.deepEqual(observed.aborted, [observed.requests[0].responseId]);
     assert.deepEqual(observed.expired, []);
-    assert.deepEqual(await (await fetch(new URL("/fixture-ingress", origin))).json(), [{ aborted: true }]);
+    assert.deepEqual((await (await fetch(new URL("/fixture-ingress", origin))).json()).map(({ aborted, status }) => ({ aborted, status })), [{ aborted: true, status: 200 }]);
     await until(async () => {
       usage = await (await fetch(new URL("/v1/usage", origin), { headers: { authorization: `Bearer ${key}` } })).json();
       return usage.usage.events.length === 1;
@@ -286,6 +354,33 @@ test("idle HTTP TCP reset: upstream abort and one cancellation receipt", { skip:
   }
 });
 
+async function configureNativeClient(home, origin, catalog, transport, useDefaultRetries = false) {
+  const env = { PATH: process.env.PATH, HOME: home, CODEX_HOME: home, RUST_LOG: "warn", CLAWROUTER_API_KEY: key };
+  const bundled = JSON.parse(execFileSync(producer, ["debug", "models", "--bundled"], { env, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: 20_000, stdio: ["ignore", "pipe", "pipe"] }));
+  // Export the actual credential's discovery projection, never an admin union.
+  const exported = buildCodexCatalog(catalog, bundled, "openai");
+  assert.ok(exported.catalog.models.some(({ slug }) => slug === model));
+  await writeFile(join(home, "models.json"), JSON.stringify(exported.catalog));
+  await writeFile(join(home, "config.toml"), `model = "${model}"
+model_provider = "fixture"
+model_catalog_json = ${JSON.stringify(join(home, "models.json"))}
+service_tier = "priority"
+web_search = "disabled"
+approval_policy = "never"
+sandbox_mode = "read-only"
+cli_auth_credentials_store = "file"
+chatgpt_base_url = "${new URL("/control", origin)}"
+[model_providers.fixture]
+name = "Fixture"
+base_url = "${new URL(exported.nativeBasePath, origin)}"
+env_key = "CLAWROUTER_API_KEY"
+wire_api = "responses"
+requires_openai_auth = false
+supports_websockets = ${transport === "websocket"}
+${useDefaultRetries ? "" : "request_max_retries = 0\nstream_max_retries = 0\nstream_idle_timeout_ms = 10000\n"}`);
+  return env;
+}
+
 async function until(predicate, timeoutMs = 30_000) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
@@ -295,7 +390,7 @@ async function until(predicate, timeoutMs = 30_000) {
   throw new Error("native router fixture timed out");
 }
 
-function routerFixture() { return `
+function routerFixture({ failFirstPublication = false } = {}) { return `
 import handler, { BudgetLedgerObject as RealBudgetLedger } from "./worker/index.ts";
 export * from "./worker/index.ts";
 export class BudgetLedgerObject extends RealBudgetLedger {
@@ -305,26 +400,38 @@ export class BudgetLedgerObject extends RealBudgetLedger {
     return super.fetch(request);
   }
 }
-const ingress = [];
+const ingress = []; let failPublication = ${failFirstPublication};
 export default { ...handler, async fetch(request, env, context) {
   if (new URL(request.url).pathname === "/fixture-ingress") return Response.json(ingress);
+  let entry;
   if (request.method === "POST" && new URL(request.url).pathname.endsWith("/responses")) {
-    const entry = { aborted: false }; ingress.push(entry);
+    entry = { aborted: false }; ingress.push(entry);
     request.signal.addEventListener("abort", () => { entry.aborted = true; }, { once: true });
   }
-  return handler.fetch(request, env, context);
+  if (failPublication) {
+    const authority = env.ACCESS_CONTROL;
+    env = { ...env, ACCESS_CONTROL: { idFromName: name => authority.idFromName(name), get: id => ({ fetch(url, init) {
+      if (failPublication && new URL(url).pathname === "/http-continuations" && JSON.parse(init.body).action === "register") {
+        failPublication = false; return Promise.resolve(new Response("fixture publication outage", { status: 503 }));
+      }
+      return authority.get(id).fetch(url, init);
+    } }) } };
+  }
+  const response = await handler.fetch(request, env, context);
+  if (entry) { entry.status = response.status; entry.requestId = response.headers.get("x-request-id"); }
+  return response;
 } };
 `; }
 
-function upstreamFixture() { return `
-const requests = [], aborted = [], canceled = [], expired = []; let connections = 0, generated = 0, holdNext = null;
+function upstreamFixture({ toolCall = true, turnState = false } = {}) { return `
+const requests = [], aborted = [], canceled = [], expired = [], broken = []; let connections = 0, generated = 0, holdNext = null, breakHeld = false, breakRequested = false;
 function respond(body, request, transport, connection = null) {
   const responseId = 'fixture_response_' + (requests.length + 1);
   const warmup = body.generate === false;
-  const held = !!holdNext && !warmup, active = holdNext === 'active';
+  const held = !!holdNext && !warmup, active = holdNext === 'active', breakable = holdNext === 'broken';
   if (held) holdNext = null;
   requests.push({ body, responseId, transport, connection, held, authorized: request.headers.get('authorization') === 'Bearer fixture-upstream-key', lite: request.headers.get('x-openai-internal-codex-responses-lite') === 'true' });
-  const output = warmup ? [] : generated++ === 0 && !held
+  const output = warmup ? [] : generated++ === 0 && !held && ${toolCall}
     ? [{ id: 'fixture_fc', type: 'function_call', call_id: 'fixture_call', name: 'fixture_echo', arguments: '{"message":"fixture"}' }]
     : [{ id: 'fixture_message_' + generated, type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'fixture complete', annotations: [] }] }];
   const result = { id: responseId, object: 'response', status: 'completed', model: body.model, output, service_tier: 'priority', usage: { input_tokens: warmup ? 3 : 14, output_tokens: warmup ? 0 : 8, total_tokens: warmup ? 3 : 22, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } };
@@ -336,12 +443,13 @@ function respond(body, request, transport, connection = null) {
   } else {
     events.push(...output.map((item, output_index) => ({ type: 'response.output_item.done', output_index, item })), { type: 'response.completed', response: result });
   }
-  return { events, heldId: held ? responseId : null, delta, active };
+  return { events, responseId, heldId: held ? responseId : null, delta, active, breakable };
 }
 export default { async fetch(request) {
   const path = new URL(request.url).pathname;
-  if (path === '/state') return Response.json({ requests, connections, aborted, canceled, expired });
-  if (path === '/hold' && request.method === 'POST') { holdNext = new URL(request.url).searchParams.has('idle') ? 'idle' : 'active'; return new Response('armed'); }
+  if (path === '/state') return Response.json({ requests, connections, aborted, canceled, expired, broken });
+  if (path === '/hold' && request.method === 'POST') { const query = new URL(request.url).searchParams; holdNext = query.has('idle') ? 'idle' : query.has('broken') ? 'broken' : 'active'; return new Response('armed'); }
+  if (path === '/break' && request.method === 'POST') { if (!breakHeld) return new Response('no held stream', { status: 409 }); breakRequested = true; return new Response('armed'); }
   if (request.url !== 'https://api.openai.com/v1/responses') return new Response('unexpected upstream route', { status: 400 });
   if (request.headers.get('upgrade') === 'websocket') {
     const connection = ++connections;
@@ -364,15 +472,17 @@ export default { async fetch(request) {
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
   if (request.method !== 'POST') return new Response('unexpected upstream method', { status: 405 });
-  const { events, heldId, delta, active } = respond(await request.json(), request, 'http');
+  const { events, responseId, heldId, delta, active, breakable } = respond(await request.json(), request, 'http');
   const encode = event => 'event: ' + event.type + '\\ndata: ' + JSON.stringify(event) + '\\n\\n';
   const prefix = events.map(encode).join('');
   const headers = { 'content-type': 'text/event-stream' };
+  if (${turnState}) headers['x-codex-turn-state'] = 'fixture_turn_' + responseId;
   if (!heldId) return new Response(prefix, { headers });
   let sent = false, timer, release, producer;
   const deadline = Date.now() + 30_000;
   const onAbort = () => { aborted.push(heldId); clearTimeout(timer); producer.error(request.signal.reason); release?.(); };
   request.signal.addEventListener('abort', onAbort, { once: true });
+  if (breakable) { breakHeld = true; breakRequested = false; }
   return new Response(new ReadableStream({
     start(controller) { producer = controller; },
     pull(controller) {
@@ -381,11 +491,15 @@ export default { async fetch(request) {
       // and the bounded watchdog must not make a broken client lifecycle pass.
       return new Promise((resolve) => {
         release = resolve;
-        timer = setTimeout(() => {
-          if (Date.now() >= deadline) { expired.push(heldId); request.signal.removeEventListener('abort', onAbort); controller.close(); }
+        timer = setTimeout(function deliver() {
+          // A control request changes only a flag. The original request owns
+          // stream completion and its pending promise across workerd contexts.
+          if (breakable && !breakRequested && Date.now() < deadline) { timer = setTimeout(deliver, 25); return; }
+          if (breakable && breakRequested) { breakHeld = false; broken.push(heldId); request.signal.removeEventListener('abort', onAbort); controller.close(); }
+          else if (Date.now() >= deadline) { expired.push(heldId); request.signal.removeEventListener('abort', onAbort); controller.close(); }
           else controller.enqueue(new TextEncoder().encode(encode(delta)));
           resolve();
-        }, active ? 100 : 30_000);
+        }, breakable ? 25 : active ? 100 : 30_000);
       });
     },
     cancel() { canceled.push(heldId); clearTimeout(timer); release?.(); },
