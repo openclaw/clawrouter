@@ -27,7 +27,7 @@ export function AppShell() {
   const { items: users, selected: selectedUser, setSelectedEmail: setSelectedUserEmail, form: accessForm, setForm: setAccessForm, error: userError, save: saveUser, startNew: startNewUser } = userState;
   const { value: accessTab, set: setAccessTab } = tab;
   const { adminOverview, tenantSummaries, rows: usageRows, snapshot: usageSnapshot, loaded: usageLoaded } = usage;
-  const { form: playground, setForm: setPlayground, turns: playgroundTurns, selectedTurnId: selectedPlaygroundTurnId, setSelectedTurnId: setSelectedPlaygroundTurnId, requestMode, setRequestMode, error: playgroundError, selectedModel, selectedServiceRoute, run: runPlayground, resetConversation } = playgroundDomain;
+  const { form: playground, setForm: setPlayground, turns: playgroundTurns, selectedTurnId: selectedPlaygroundTurnId, setSelectedTurnId: setSelectedPlaygroundTurnId, requestMode, setRequestMode, error: playgroundError, selectedModel, selectedServiceRoute, running: playgroundRunning, run: runPlayground, resetConversation } = playgroundDomain;
   const retentionLabel = session.contentRetention ? session.contentRetention.enabled ? `${session.contentRetention.retentionDays}d` : "off" : "pending";
   return (
     <main className="appShell">
@@ -171,7 +171,7 @@ export function AppShell() {
             error={playgroundError}
             onRun={runPlayground}
             onNewConversation={resetConversation}
-            busy={busy}
+            busy={busy || playgroundRunning}
           />
         ) : null}
 

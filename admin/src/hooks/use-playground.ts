@@ -25,6 +25,8 @@ interface PlaygroundDependencies {
 
 export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serviceRoutes, accessByProvider, providerReadiness }: PlaygroundDependencies) {
   const initializedModelsRef = useRef(false);
+  const operationRef = useRef<AbortController | null>(null);
+  const [running, setRunning] = useState(false);
   const [form, setForm] = useState<PlaygroundForm>({
     mode: "model",
     model: catalogModels(demo.routes)[0]?.id ?? "",
@@ -41,6 +43,12 @@ export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serv
   const [error, setError] = useState("");
   const selectedModel = models.find((model) => model.id === form.model) ?? models[0];
   const selectedServiceRoute = serviceRoutes.find((route) => routeKey(route) === form.serviceRoute) ?? serviceRoutes[0];
+
+  useEffect(() => () => {
+    const operation = operationRef.current;
+    operationRef.current = null;
+    operation?.abort();
+  }, []);
 
   useEffect(() => {
     if (!models.length) return;
@@ -60,6 +68,10 @@ export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serv
 
   async function run(event: FormEvent) {
     event.preventDefault();
+    if (operationRef.current) return;
+    const operation = new AbortController();
+    operationRef.current = operation;
+    setRunning(true);
     const startedAt = performance.now();
     const prompt = form.mode === "model" ? form.prompt.trim() : form.servicePayload.trim();
     const conversation = form.mode === "model"
@@ -80,12 +92,13 @@ export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serv
       if (guard) throw new Error(guard);
       const payload = playgroundPayload(form, selectedServiceRoute, conversation);
       requestPreview = JSON.stringify(payload, null, 2);
+      // Clear the submitted draft now; a later reply must not erase newly typed text.
+      if (form.mode === "model") setForm((current) => ({ ...current, prompt: "" }));
       if (demoMode) {
         const raw = JSON.stringify(form.mode === "model"
           ? { provider: selectedModel?.provider, model: selectedModel?.id, output: "Hello from ClawRouter demo mode." }
           : { provider: selectedServiceRoute?.provider, route: selectedServiceRoute?.route, output: "Service proxy demo response." }, null, 2);
         appendTurn({ prompt, raw, requestPreview, provider, model, endpoint, status: 200, startedAt, retention: "demo" });
-        if (form.mode === "model") setForm((current) => ({ ...current, prompt: "" }));
         setStatus("playground ready");
         return;
       }
@@ -93,7 +106,9 @@ export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serv
         method: "POST",
         headers: { "content-type": "application/json" },
         body: JSON.stringify(payload),
+        signal: operation.signal,
       });
+      if (operationRef.current !== operation) return;
       const responseError = result.ok ? undefined : playgroundResponseText(result.raw) || `Request failed with HTTP ${result.status}`;
       appendTurn({ prompt, raw: result.raw, requestPreview, provider, model, endpoint, status: result.status, startedAt, retention: result.retention, error: responseError });
       if (responseError) {
@@ -101,13 +116,18 @@ export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serv
         setStatus(responseError);
         return;
       }
-      if (form.mode === "model") setForm((current) => ({ ...current, prompt: "" }));
       setStatus("playground ready");
     } catch (caught) {
+      if (operationRef.current !== operation) return;
       const message = errorMessage(caught);
       if (prompt) appendTurn({ prompt, raw: message, requestPreview, provider, model, endpoint, status: null, startedAt, retention: "unknown", error: message });
       setError(message);
       setStatus(message);
+    } finally {
+      if (operationRef.current === operation) {
+        operationRef.current = null;
+        setRunning(false);
+      }
     }
   }
 
@@ -141,6 +161,12 @@ export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serv
   }
 
   function resetConversation() {
+    const operation = operationRef.current;
+    // Invalidate before aborting: an old completion must not own the new chat.
+    operationRef.current = null;
+    operation?.abort();
+    setRunning(false);
+    if (operation) setStatus("playground ready");
     setTurns([]);
     setSelectedTurnId("");
     setError("");
@@ -160,6 +186,7 @@ export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serv
     setError,
     selectedModel,
     selectedServiceRoute,
+    running,
     run,
     resetConversation,
   };
