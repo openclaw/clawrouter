@@ -132,11 +132,12 @@ stream_idle_timeout_ms = 10000
       }
       assert.deepEqual(await ledgerFacts(), [{ spent: expected, unsettled: 0 }, { spent: expected, unsettled: 0 }]);
 
-      // Wait for a native item notification, not just an upstream request: this
-      // establishes delivery after headers and excludes pre-header accounting.
+      // A native output delta establishes body delivery before interruption.
+      // Keep HTTP output active: the 0.153 SSE reader notices consumer drop only
+      // on its next recognized event; an idle stream is a separate limitation.
       assert.equal((await upstream.fetch("https://fixture.example/hold", { method: "POST" })).status, 200);
-      const interrupted = await startTurn("Return a synthetic fixture item, then wait.");
-      await until(() => client.notifications.some(({ method, params }) => method === "item/completed" && params.turnId === interrupted.turn.id && params.item.type === "agentMessage"));
+      const interrupted = await startTurn("Stream a synthetic fixture response.");
+      await until(() => client.notifications.some(({ method, params }) => method === "item/agentMessage/delta" && params.turnId === interrupted.turn.id));
       const held = (await state()).requests.find(({ held }) => held);
       assert.ok(held);
       await client.rpc("turn/interrupt", { threadId: thread.thread.id, turnId: interrupted.turn.id });
@@ -273,9 +274,15 @@ function respond(body, request, transport, connection = null) {
     ? [{ id: 'fixture_fc', type: 'function_call', call_id: 'fixture_call', name: 'fixture_echo', arguments: '{"message":"fixture"}' }]
     : [{ id: 'fixture_message_' + generated, type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'fixture complete', annotations: [] }] }];
   const result = { id: responseId, object: 'response', status: 'completed', model: body.model, output, service_tier: 'priority', usage: { input_tokens: warmup ? 3 : 14, output_tokens: warmup ? 0 : 8, total_tokens: warmup ? 3 : 22, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } };
-  const events = [{ type: 'response.created', response: { ...result, status: 'in_progress', output: [] } }, ...output.map((item, output_index) => ({ type: 'response.output_item.done', output_index, item }))];
-  if (!held) events.push({ type: 'response.completed', response: result });
-  return { events, heldId: held ? responseId : null };
+  const events = [{ type: 'response.created', response: { ...result, status: 'in_progress', output: [] } }];
+  const delta = held ? { type: 'response.output_text.delta', item_id: output[0].id, output_index: 0, content_index: 0, delta: 'fixture ' } : null;
+  if (held) {
+    events.push({ type: 'response.output_item.added', output_index: 0, item: { ...output[0], status: 'in_progress', content: [] } });
+    events.push({ type: 'response.content_part.added', item_id: output[0].id, output_index: 0, content_index: 0, part: { type: 'output_text', text: '', annotations: [] } }, delta);
+  } else {
+    events.push(...output.map((item, output_index) => ({ type: 'response.output_item.done', output_index, item })), { type: 'response.completed', response: result });
+  }
+  return { events, heldId: held ? responseId : null, delta };
 }
 export default { async fetch(request) {
   const path = new URL(request.url).pathname;
@@ -303,11 +310,13 @@ export default { async fetch(request) {
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
   if (request.method !== 'POST') return new Response('unexpected upstream method', { status: 405 });
-  const { events, heldId } = respond(await request.json(), request, 'http');
-  const prefix = events.map(event => 'event: ' + event.type + '\\ndata: ' + JSON.stringify(event) + '\\n\\n').join('');
+  const { events, heldId, delta } = respond(await request.json(), request, 'http');
+  const encode = event => 'event: ' + event.type + '\\ndata: ' + JSON.stringify(event) + '\\n\\n';
+  const prefix = events.map(encode).join('');
   const headers = { 'content-type': 'text/event-stream' };
   if (!heldId) return new Response(prefix, { headers });
   let sent = false, timer, release, producer;
+  const deadline = Date.now() + 30_000;
   const onAbort = () => { aborted.push(heldId); clearTimeout(timer); producer.error(request.signal.reason); release?.(); };
   request.signal.addEventListener('abort', onAbort, { once: true });
   return new Response(new ReadableStream({
@@ -318,7 +327,11 @@ export default { async fetch(request) {
       // and the bounded watchdog must not make a broken client lifecycle pass.
       return new Promise((resolve) => {
         release = resolve;
-        timer = setTimeout(() => { expired.push(heldId); request.signal.removeEventListener('abort', onAbort); controller.close(); resolve(); }, 30_000);
+        timer = setTimeout(() => {
+          if (Date.now() >= deadline) { expired.push(heldId); request.signal.removeEventListener('abort', onAbort); controller.close(); }
+          else controller.enqueue(new TextEncoder().encode(encode(delta)));
+          resolve();
+        }, 100);
       });
     },
     cancel() { canceled.push(heldId); clearTimeout(timer); release?.(); },
