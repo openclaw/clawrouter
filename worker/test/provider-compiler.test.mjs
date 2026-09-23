@@ -49,6 +49,14 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.equal(astra.requestParameters.responses.toolCalling, "supported");
   assert.equal(gpt56.requestParameters.chat_completions.defaultReasoningEffort, "medium");
   assert.equal(gpt56.requestParameters.chat_completions.temperature, undefined);
+  for (const id of ["groq/gpt-oss-120b", "fireworks/gpt-oss-120b", "fireworks/glm-5.2"]) {
+    const indexed = compiled.model_index[id];
+    const model = compiled.providers.find(({ id: provider }) => provider === indexed.provider).models.find((model) => model.id === id);
+    assert.deepEqual(indexed.supportedReasoningEfforts, model.supportedReasoningEfforts, id);
+    assert.deepEqual(indexed.requestParameters, model.requestParameters, id);
+    assert.equal(indexed.requestParameters.chat_completions.checkedAt, "2026-09-23", id);
+    assert.ok(indexed.requestParameters.chat_completions.sources.length > 0, id);
+  }
   const { serviceTiers, ...standard } = gpt56.pricing;
   assert.deepEqual(standard, {
     effectiveAt: "2026-09-22",

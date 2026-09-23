@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { assessModelRequest } from "../../shared/model-request-parameters.ts";
 import { buildAdviserBody, normalizeFusionConfig, prepareAdviserBody } from "../fusion.ts";
+import snapshot from "../generated/provider-snapshot.json" with { type: "json" };
 
 const chat = { id: "chat_completions", request_format: "openai.chat_completions" };
 const responses = { id: "responses", request_format: "openai.responses" };
@@ -95,4 +96,56 @@ test("Fusion applies only a qualified adviser preference after model and endpoin
   assert.equal(prepareAdviserBody(body, model({ temperature: "supported" }), chat, 0.2).temperature, 0.2);
   assert.equal(prepareAdviserBody(body, gpt54, chat, 0.2).temperature, 0.2);
   assert.equal(body.temperature, undefined);
+});
+
+const hostedContracts = [
+  ["groq/gpt-oss-120b", ["low", "medium", "high"], undefined],
+  ["fireworks/gpt-oss-120b", ["low", "medium", "high"], "medium"],
+  ["fireworks/glm-5.2", ["none", "low", "medium", "high", "xhigh", "max"], "max"],
+];
+
+test("compiled hosted effort domains preserve accepted strings without injecting defaults", () => {
+  for (const [id, efforts, defaultEffort] of hostedContracts) {
+    const entry = snapshot.model_index[id];
+    assert.deepEqual(entry.supportedReasoningEfforts, efforts, id);
+    assert.equal(entry.requestParameters.chat_completions.defaultReasoningEffort, defaultEffort, id);
+    for (const body of [{}, ...efforts.map((reasoning_effort) => ({ reasoning_effort }))]) {
+      const before = structuredClone(body);
+      assert.deepEqual(assessModelRequest(entry, chat, body), { conflicts: [], unknown: [] }, id);
+      assert.deepEqual(body, before, id);
+    }
+    for (const reasoning_effort of ["minimal", "ultra", "adaptive", ...(!efforts.includes("none") ? ["none", "xhigh", "max"] : [])]) {
+      assert.deepEqual(assessModelRequest(entry, chat, { reasoning_effort }).conflicts.map(({ field }) => field), ["reasoning_effort"], `${id}:${reasoning_effort}`);
+    }
+  }
+  assert.equal(snapshot.model_index["fireworks/gpt-oss-120b"].pricing, null);
+});
+
+test("compiled Groq logprob facts restrict presence without borrowing Fireworks facts", () => {
+  for (const body of [{ logprobs: true }, { logprobs: false }, { logprobs: null }, { top_logprobs: 0 }, { top_logprobs: null }, { top_logprobs: 5 }]) {
+    const before = structuredClone(body);
+    const result = assessModelRequest(snapshot.model_index["groq/gpt-oss-120b"], chat, body);
+    assert.deepEqual(result.conflicts.map(({ field }) => field), Object.keys(body));
+    assert.deepEqual(body, before);
+    for (const id of ["fireworks/gpt-oss-120b", "fireworks/glm-5.2"]) {
+      const unknown = assessModelRequest(snapshot.model_index[id], chat, body);
+      assert.deepEqual(unknown.conflicts, []);
+      assert.deepEqual(unknown.unknown.map(({ field }) => field), Object.keys(body));
+    }
+  }
+});
+
+test("compiled hosted contracts leave non-string efforts and other parameter facts unqualified", () => {
+  for (const [id] of hostedContracts) {
+    const entry = snapshot.model_index[id];
+    for (const reasoning_effort of [null, false, true, 2048, {}]) {
+      const body = { reasoning_effort, temperature: 0.2, top_p: 0.9, tools: [functionTool] }, before = structuredClone(body);
+      const result = assessModelRequest(entry, chat, body);
+      assert.deepEqual(result.conflicts, [], id);
+      assert.deepEqual(result.unknown.map(({ field }) => field), ["reasoning_effort", "temperature", "top_p", "tools"], id);
+      assert.deepEqual(body, before, id);
+    }
+    const adviser = buildAdviserBody({ messages: [] }, id, normalizeFusionConfig({}), 0);
+    assert.equal(prepareAdviserBody(adviser, entry, chat, 0.2), adviser, id);
+  }
 });

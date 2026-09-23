@@ -12,6 +12,7 @@
 - Preserve policy field intent through reporting refreshes and lost save responses, including equal-value reads. Apply untouched server fields and retire only edits covered by the matching Save or Disable acknowledgment.
 - Separate proxy-key creation from rotation in the console, serialize key actions across admin and personal screens, and keep one-time secrets, drafts, and action status owned by the operation's identity. Show uncertain outcomes and clipboard failures without replaying dismissed secrets, and preserve table action contrast in both themes.
 - Assess Fusion sampling, reasoning, and tool intent from source-linked model/endpoint facts. Reject documented synthesizer conflicts before adviser spend, preserve caller fields, and omit unqualified adviser temperature and local reasoning defaults.
+- Qualify Groq GPT-OSS 120B and Fireworks GPT-OSS 120B/GLM 5.2 Chat reasoning values, including Groq logprob field restrictions, before Fusion adviser spend. Preserve accepted effort aliases and native passthrough without inferring sampling, tool support, or prices.
 
 - Preserve the initiating cause when Responses WebSockets close. Client disconnects record `client_error` without an invented HTTP status; unsent requests release reservations, while sent requests without final usage retain their estimate.
 
