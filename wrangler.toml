@@ -43,6 +43,10 @@ class_name = "PolicyBindingIndexObject"
 name = "GRANT_CREDENTIALS"
 class_name = "GrantCredentialObject"
 
+[[durable_objects.bindings]]
+name = "CONTENT_CLEANUP"
+class_name = "ContentArchiveCleanupObject"
+
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["BudgetLedgerObject"]
@@ -58,6 +62,10 @@ new_sqlite_classes = ["PolicyBindingIndexObject"]
 [[migrations]]
 tag = "v4"
 new_sqlite_classes = ["GrantCredentialObject"]
+
+[[migrations]]
+tag = "v5"
+new_sqlite_classes = ["ContentArchiveCleanupObject"]
 
 [[routes]]
 pattern = "clawrouter.openclaw.ai"

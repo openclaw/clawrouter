@@ -28,9 +28,23 @@ metadata-only; request retention requires an explicit policy opt-in.
   and configuration, but omit each entry's entire `headers` map and `authorization` field.
   These fields can contain upstream credentials. The forwarded request is
   unchanged; the retention header still reports `on` when query content is stored.
-- Admin reads deny expired archives even while their objects still exist. Local
-  self-host storage does not yet delete expired archive objects automatically;
-  denying reads does not remove those persisted bytes.
+- Admin reads deny expired archives even while their objects still exist. The
+  upload time plus 30 days caps the archive deadline; a valid earlier `expiresAt`
+  metadata value shortens it. Missing or invalid metadata uses the upload deadline.
+- Self-hosting sweeps the `v1/` archive prefix after startup and once per minute.
+  Each tick scans at most 1,000 objects (local metadata pages can be shorter),
+  deletes expired objects, and checkpoints the cursor in a dedicated Durable
+  Object. It resumes after restart and scans from the start again at EOF, including
+  legacy archives and captures with no usage record. Large backlogs and outages
+  delay physical removal; this is not an exact-at-30-days deletion guarantee.
+- Cleanup logs report scanned/deleted counts for the current pass, backlog, and
+  last completion time without content or archive keys. Failed ticks are visible
+  and retry without advancing the cursor. Managed R2 uses its lifecycle rule;
+  no Cloudflare cron is configured.
+- Local R2 removes its object index before deleting backing blobs asynchronously.
+  A crash in that runtime window can leave unindexed blob bytes that archive
+  sweeps cannot find. This cleanup guarantees R2-visible removal after a successful
+  delete, not crash-proof erasure of every backing byte or backup copy.
 
 ## Disclosure
 
