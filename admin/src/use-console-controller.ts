@@ -60,6 +60,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
     setStatus: session.setStatus,
     setProviderReadiness: catalog.setProviderReadiness,
     refresh: refreshCurrent,
+    refreshUpstreamMetadata: refreshMetadataAfterMutation,
     refreshPolicyMetadata: async () => {
       if (!scope.isCurrent()) return;
       // Retire pre-commit ledger reads before waiting for metadata already in flight.
@@ -145,6 +146,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
     const failUsageRefresh = usage.captureRefreshFailure();
     const keySnapshot = credentialOwner.captureHydration();
     const policySnapshot = access.capturePolicyHydration();
+    const upstreamSnapshot = access.captureUpstreamHydration();
     try {
       const staticCatalog = catalogLoadedRef.current
         ? Promise.resolve({ providerData: { providers: catalog.providers }, routeData: catalog.routes })
@@ -182,7 +184,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
       // Entitlement waits cannot adopt a credential scope invalidated by another read.
       if (!scope.isCurrent()) return;
       const result = sessionData.role === "admin"
-        ? await loadAdminData(sessionData, providerData, background, warnings, keySnapshot, policySnapshot)
+        ? await loadAdminData(sessionData, providerData, background, warnings, keySnapshot, policySnapshot, upstreamSnapshot)
         : await loadUserData(sessionData, warnings, keySnapshot);
       if (!scope.isCurrent()) return;
       session.setRefreshError(result.warnings.join("; "));
@@ -199,7 +201,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
     }
   }
 
-  async function loadAdminData(sessionData: SessionResponse, providerData: ProviderResponse, background: boolean, initialWarnings: string[], keySnapshot: number, policySnapshot: number | null) {
+  async function loadAdminData(sessionData: SessionResponse, providerData: ProviderResponse, background: boolean, initialWarnings: string[], keySnapshot: number, policySnapshot: number | null, upstreamSnapshot: number | null) {
     let warnings = initialWarnings;
     const [data, sessionUsageResult, sessionCredentialsResult] = await Promise.all([
       request<AdminBootstrapResponse>(session.gatewayOrigin, "/v1/admin/bootstrap"),
@@ -215,7 +217,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
       grants: data.grants,
       rules: data.rules,
       fusion: data.fusion,
-    }, background, sessionData, providerData.providers, keySnapshot, policySnapshot);
+    }, background, sessionData, providerData.providers, keySnapshot, policySnapshot, upstreamSnapshot);
     catalog.mergeReadiness(data.providers);
     usage.setAdminOverview(data.overview);
     usage.setTenantSummaries(data.tenants);

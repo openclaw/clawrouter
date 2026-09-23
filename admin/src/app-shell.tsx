@@ -196,6 +196,8 @@ export function AppShell() {
             selectedBinding={selectedBinding}
             upstreamGrants={upstreamGrants}
             selectedUpstreamGrant={selectedUpstreamGrant}
+            upstreamBusy={upstream.busy}
+            upstreamError={upstream.error}
             assignmentRules={assignmentRules}
             selectedAssignmentRule={selectedAssignmentRule}
             fusionConfig={fusionConfig}

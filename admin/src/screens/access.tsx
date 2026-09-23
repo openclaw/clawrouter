@@ -25,7 +25,7 @@ import type {
   UpstreamGrantForm,
 } from "../ui-types";
 
-export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selectedCredential, bindings, selectedBinding, upstreamGrants, selectedUpstreamGrant, assignmentRules, selectedAssignmentRule, fusionConfig, fusionReadiness, fusionPolicyId, onSelectFusionPolicy, setFusionConfig, fusionModels, providers, form, setForm, credentialForm, setCredentialForm, bindingForm, setBindingForm, upstreamGrantForm, setUpstreamGrantForm, assignmentRuleForm, setAssignmentRuleForm, credentialFeedback, error, policyError, policyDirty, policyMissing, policyReady, policyBusy, onDiscardPolicy, fusionError, onSave, onIssueCredential, onRevokeCredential, onRotateCredential, onNewCredential, onSaveBinding, onSaveUpstreamGrant, onRevokeUpstreamGrant, onRefreshUpstreamGrant, onRefreshUpstreamGrantQuota, onAuthorizeUpstreamGrant, onSaveAssignmentRule, onReconcileAssignments, onSaveFusion, onCheckFusion, onNew, onEdit, onEditCredential, onEditBinding, onNewBinding, onEditUpstreamGrant, onNewUpstreamGrant, onEditAssignmentRule, onNewAssignmentRule, onRevoke, onPreset, onToggleProvider, onSetProviderGroup, busy }: {
+export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selectedCredential, bindings, selectedBinding, upstreamGrants, selectedUpstreamGrant, upstreamBusy, upstreamError, assignmentRules, selectedAssignmentRule, fusionConfig, fusionReadiness, fusionPolicyId, onSelectFusionPolicy, setFusionConfig, fusionModels, providers, form, setForm, credentialForm, setCredentialForm, bindingForm, setBindingForm, upstreamGrantForm, setUpstreamGrantForm, assignmentRuleForm, setAssignmentRuleForm, credentialFeedback, error, policyError, policyDirty, policyMissing, policyReady, policyBusy, onDiscardPolicy, fusionError, onSave, onIssueCredential, onRevokeCredential, onRotateCredential, onNewCredential, onSaveBinding, onSaveUpstreamGrant, onRevokeUpstreamGrant, onRefreshUpstreamGrant, onRefreshUpstreamGrantQuota, onAuthorizeUpstreamGrant, onSaveAssignmentRule, onReconcileAssignments, onSaveFusion, onCheckFusion, onNew, onEdit, onEditCredential, onEditBinding, onNewBinding, onEditUpstreamGrant, onNewUpstreamGrant, onEditAssignmentRule, onNewAssignmentRule, onRevoke, onPreset, onToggleProvider, onSetProviderGroup, busy }: {
   tab: AccessTab;
   setTab: (tab: AccessTab) => void;
   keys: AccessPolicy[];
@@ -36,6 +36,8 @@ export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selec
   selectedBinding?: PolicyBinding;
   upstreamGrants: UpstreamGrant[];
   selectedUpstreamGrant?: UpstreamGrant;
+  upstreamBusy: boolean;
+  upstreamError: string;
   assignmentRules: AssignmentRule[];
   selectedAssignmentRule?: AssignmentRule;
   fusionConfig: FusionConfig;
@@ -118,7 +120,7 @@ export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selec
       {tab === "policies" ? <PolicyPanel keys={keys} selected={selected} providers={providers} form={form} setForm={setForm} error={policyError} dirty={policyDirty} missing={policyMissing} ready={policyReady} onDiscard={onDiscardPolicy} onSave={onSave} onNew={onNew} onEdit={onEdit} onRevoke={onRevoke} onPreset={onPreset} onToggleProvider={onToggleProvider} onSetProviderGroup={onSetProviderGroup} busy={policyBusy} /> : null}
       {tab === "credentials" ? <CredentialPanel policies={keys} credentials={credentials} selected={selectedCredential} form={credentialForm} setForm={setCredentialForm} feedback={credentialFeedback} onIssue={onIssueCredential} onEdit={onEditCredential} onRevoke={onRevokeCredential} onRotate={onRotateCredential} onNew={onNewCredential} busy={busy || credentialFeedback.busy} /> : null}
       {tab === "bindings" ? <BindingPanel policies={keys} bindings={bindings} selected={selectedBinding} form={bindingForm} setForm={setBindingForm} error={error} onSave={onSaveBinding} onEdit={onEditBinding} onNew={onNewBinding} busy={busy} /> : null}
-      {tab === "upstream" ? <UpstreamGrantPanel policies={keys} providers={providers} grants={upstreamGrants} selected={selectedUpstreamGrant} form={upstreamGrantForm} setForm={setUpstreamGrantForm} error={error} onSave={onSaveUpstreamGrant} onEdit={onEditUpstreamGrant} onNew={onNewUpstreamGrant} onRefresh={onRefreshUpstreamGrant} onRefreshQuota={onRefreshUpstreamGrantQuota} onAuthorize={onAuthorizeUpstreamGrant} onRevoke={onRevokeUpstreamGrant} busy={busy} /> : null}
+      {tab === "upstream" ? <UpstreamGrantPanel policies={keys} providers={providers} grants={upstreamGrants} selected={selectedUpstreamGrant} form={upstreamGrantForm} setForm={setUpstreamGrantForm} error={upstreamError} onSave={onSaveUpstreamGrant} onEdit={onEditUpstreamGrant} onNew={onNewUpstreamGrant} onRefresh={onRefreshUpstreamGrant} onRefreshQuota={onRefreshUpstreamGrantQuota} onAuthorize={onAuthorizeUpstreamGrant} onRevoke={onRevokeUpstreamGrant} busy={upstreamBusy} authorizationBusy={busy} /> : null}
       {tab === "assignments" ? <AssignmentRulePanel policies={keys} rules={assignmentRules} selected={selectedAssignmentRule} form={assignmentRuleForm} setForm={setAssignmentRuleForm} error={error} onSave={onSaveAssignmentRule} onEdit={onEditAssignmentRule} onNew={onNewAssignmentRule} onReconcile={onReconcileAssignments} busy={busy} /> : null}
       {tab === "fusion" ? <FusionPanel config={fusionConfig} readiness={fusionReadiness} policies={keys} policyId={fusionPolicyId} onSelectPolicy={onSelectFusionPolicy} setConfig={setFusionConfig} models={fusionModels} error={fusionError} onSave={onSaveFusion} onCheck={onCheckFusion} busy={busy} /> : null}
     </div>
@@ -219,7 +221,7 @@ function shortFusionModel(model: string) {
   return value.length > 18 ? `${value.slice(0, 16)}…` : value;
 }
 
-export function UpstreamGrantPanel({ policies, providers, grants, selected, form, setForm, error, onSave, onEdit, onNew, onRefresh, onRefreshQuota, onAuthorize, onRevoke, busy }: {
+export function UpstreamGrantPanel({ policies, providers, grants, selected, form, setForm, error, onSave, onEdit, onNew, onRefresh, onRefreshQuota, onAuthorize, onRevoke, busy, authorizationBusy }: {
   policies: AccessPolicy[];
   providers: ProviderRow[];
   grants: UpstreamGrant[];
@@ -235,6 +237,7 @@ export function UpstreamGrantPanel({ policies, providers, grants, selected, form
   onAuthorize: () => void;
   onRevoke: (grant: UpstreamGrant) => void;
   busy: boolean;
+  authorizationBusy: boolean;
 }) {
   const active = grants.filter((grant) => grant.enabled).length;
   const usable = grants.filter((grant) => grant.usable && grant.quotaStatus !== "cooldown").length;
@@ -251,7 +254,7 @@ export function UpstreamGrantPanel({ policies, providers, grants, selected, form
           <Metric label="usable" value={String(usable)} meta="ready for routing" />
           <Metric label="refreshable" value={String(refreshable)} meta="rotatable OAuth grants" />
         </div>
-        <div className="tableSectionHeader"><div><strong>Upstream credentials</strong><span>Policy and tenant scoped provider access</span></div><button type="button" onClick={onNew} disabled={busy}><Plus className="buttonIcon" aria-hidden="true" /><span>New grant</span></button></div>
+        <div className="tableSectionHeader"><div><strong>Upstream credentials</strong><span>Policy and tenant scoped provider access</span></div><button type="button" onClick={onNew}><Plus className="buttonIcon" aria-hidden="true" /><span>New grant</span></button></div>
         <EntityTable
           columns={["connection", "scope", "provider", "priority", "state"]}
           columnTemplate="minmax(220px, 1.4fr) minmax(150px, 1fr) minmax(130px, .8fr) 90px 100px"
@@ -282,7 +285,7 @@ export function UpstreamGrantPanel({ policies, providers, grants, selected, form
           </div>
           <InlineNote>Lower priorities are fallback tiers. The policy chooses how grants within the active tier rotate. Weight affects weighted and sticky selection. Claude setup tokens go in the access-token field with refresh token left blank. Claude keep-warm defaults on and can be disabled because it consumes provider capacity. Secret values are write-only.</InlineNote>
           {selected ? <dl className="facts"><dt>primary secret</dt><dd>{selected.hasCredential || selected.hasAccessToken || selected.credentialFields.length ? "stored" : "missing"}</dd><dt>credential fields</dt><dd>{selected.credentialFields.length ? selected.credentialFields.join(", ") : "none"}</dd><dt>refresh token</dt><dd>{selected.hasRefreshToken ? "stored" : "none"}</dd><dt>refresh config</dt><dd>{selected.refreshConfigured ? "manifest approved" : "none"}</dd><dt>routing state</dt><dd>{grantRoutingState(selected).label}</dd><dt>selections</dt><dd>{selected.selectedCount}{selected.lastSelectedAt ? ` · last ${quotaTimestamp(selected.lastSelectedAt)}` : ""}</dd><dt>provider signal</dt><dd>{selected.lastProviderSignal ? `${selected.lastProviderSignal.replace("_", " ")} · ${quotaTimestamp(selected.quotaObservedAt)}` : "not observed"}</dd><dt>cooldown</dt><dd>{selected.cooldownUntil ? `until ${quotaTimestamp(selected.cooldownUntil)}` : "none"}</dd><dt>quota windows</dt><dd>{selected.quotaWindows.length ? selected.quotaWindows.map(quotaWindowLabel).join("; ") : "not reported"}</dd></dl> : null}
-          <div className="inspectorActions">{authorizationKind ? <button type="button" disabled={busy || !form.scopeId || !form.tokenRef || !form.provider} onClick={onAuthorize}><LogIn className="buttonIcon" aria-hidden="true" /><span>{selected ? "Reconnect" : "Connect"} with provider</span></button> : null}<button type="submit" className={authorizationKind ? "buttonSecondary" : undefined} disabled={busy || !form.scopeId || !form.tokenRef || !form.provider}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save grant</span></button>{selected?.refreshConfigured && selected.hasRefreshToken ? <button type="button" className="buttonSecondary" disabled={busy || !selected.enabled} onClick={() => onRefresh(selected)}><RefreshCw className="buttonIcon" aria-hidden="true" /><span>Refresh token</span></button> : null}{selected && quotaProbe ? <button type="button" className="buttonSecondary" disabled={busy || !selected.enabled} onClick={() => onRefreshQuota(selected)}><RefreshCw className="buttonIcon" aria-hidden="true" /><span>Refresh quota</span></button> : null}{selected ? <button type="button" className="buttonDanger" disabled={busy || Boolean(selected.revokedAt)} onClick={() => onRevoke(selected)}><CircleSlash2 className="buttonIcon" aria-hidden="true" /><span>Revoke</span></button> : null}</div>
+          <div className="inspectorActions">{authorizationKind ? <button type="button" disabled={busy || authorizationBusy || !form.scopeId || !form.tokenRef || !form.provider} onClick={onAuthorize}><LogIn className="buttonIcon" aria-hidden="true" /><span>{selected ? "Reconnect" : "Connect"} with provider</span></button> : null}<button type="submit" className={authorizationKind ? "buttonSecondary" : undefined} disabled={busy || !form.scopeId || !form.tokenRef || !form.provider}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>Save grant</span></button>{selected?.refreshConfigured && selected.hasRefreshToken ? <button type="button" className="buttonSecondary" disabled={busy || !selected.enabled} onClick={() => onRefresh(selected)}><RefreshCw className="buttonIcon" aria-hidden="true" /><span>Refresh token</span></button> : null}{selected && quotaProbe ? <button type="button" className="buttonSecondary" disabled={busy || !selected.enabled} onClick={() => onRefreshQuota(selected)}><RefreshCw className="buttonIcon" aria-hidden="true" /><span>Refresh quota</span></button> : null}{selected ? <button type="button" className="buttonDanger" disabled={busy || Boolean(selected.revokedAt)} onClick={() => onRevoke(selected)}><CircleSlash2 className="buttonIcon" aria-hidden="true" /><span>Revoke</span></button> : null}</div>
         </form>
       </aside>
     </div>
