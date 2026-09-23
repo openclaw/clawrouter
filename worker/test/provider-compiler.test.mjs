@@ -41,7 +41,14 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.deepEqual(gpt56.capabilities, ["llm.responses", "llm.chat"]);
   assert.deepEqual(gpt56.supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh", "max"]);
   assert.deepEqual(compiled.model_index["openai/gpt-5.6"].supportedReasoningEfforts, gpt56.supportedReasoningEfforts);
-  assert.equal("supportedReasoningEfforts" in openai.models.find((model) => model.id === "openai/gpt-5.5"), false);
+  const gpt55 = openai.models.find((model) => model.id === "openai/gpt-5.5");
+  assert.deepEqual(gpt55.supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh"]);
+  assert.equal(gpt55.requestParameters.chat_completions.defaultReasoningEffort, "medium");
+  assert.equal(gpt55.requestParameters.chat_completions.temperature, undefined);
+  assert.equal(astra.requestParameters.chat_completions.temperature, "unsupported");
+  assert.equal(astra.requestParameters.responses.toolCalling, "supported");
+  assert.equal(gpt56.requestParameters.chat_completions.defaultReasoningEffort, "medium");
+  assert.equal(gpt56.requestParameters.chat_completions.temperature, undefined);
   const { serviceTiers, ...standard } = gpt56.pricing;
   assert.deepEqual(standard, {
     effectiveAt: "2026-09-22",
@@ -338,3 +345,33 @@ function withManifest(run) {
   try { run(join(directory, "provider.yaml")); }
   finally { rmSync(directory, { recursive: true, force: true }); }
 }
+
+test("request parameter facts validate endpoint compatibility, provenance, and reasoning defaults", () => {
+  const valid = parse(readFileSync("providers/openai.provider.yaml", "utf8"));
+  const model = (manifest) => manifest.models.entries.find(({ id }) => id === "openai/gpt-5.4");
+  const rules = (manifest) => model(manifest).requestParameters.chat_completions;
+  const cases = [
+    ["unknown endpoint", (m) => { model(m).requestParameters.missing = rules(m); }, /supported endpoint/],
+    ["incompatible endpoint", (m) => { model(m).requestParameters.embeddings = rules(m); }, /supported endpoint/],
+    ["wrong wire format", (m) => { m.endpoints.chat_completions.requestFormat = "native.chat"; }, /wire format/],
+    ["unsupported default", (m) => { rules(m).defaultReasoningEffort = "max"; }, /default effort/],
+    ["missing effort domain", (m) => { delete model(m).supportedReasoningEfforts; }, /default effort/],
+    ["unknown predicate", (m) => { rules(m).temperature = "sometimes"; }, /invalid manifest/],
+    ["unknown dimension", (m) => { rules(m).customPath = "$.input"; }, /invalid manifest/],
+    ["missing source", (m) => { delete rules(m).sources; }, /invalid manifest/],
+    ["empty sources", (m) => { rules(m).sources = []; }, /invalid manifest/],
+    ["insecure source", (m) => { rules(m).sources = ["http://provider.example/docs"]; }, /invalid manifest/],
+    ["invalid date", (m) => { rules(m).checkedAt = "2026-02-29"; }, /invalid manifest/],
+  ];
+  withManifest((path) => {
+    for (const [name, mutate, expected] of cases) {
+      const manifest = structuredClone(valid);
+      mutate(manifest);
+      writeFileSync(path, JSON.stringify(manifest));
+      assert.throws(() => compile(path), expected, name);
+    }
+    for (const entry of valid.models.entries) delete entry.requestParameters;
+    writeFileSync(path, JSON.stringify(valid));
+    assert.ok(JSON.parse(compile(path)).providers[0].models.every((entry) => !("requestParameters" in entry)));
+  });
+});
