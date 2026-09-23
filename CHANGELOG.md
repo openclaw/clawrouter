@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Distinguish paused upstream grants from revoked credentials, allow paused grants to be revoked, and require fresh credentials to reconnect revoked grants in the demo.
+
 - Keep policy selection separate from existing binding edits, while new bindings still default to the selected policy.
 
 - Keep failed console refreshes visible after successful edits, label stale usage with its snapshot time, and show unavailable spend and balances as unknown.
