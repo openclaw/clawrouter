@@ -19,7 +19,7 @@ function fixture(t, options = {}) {
       const index = admitted.length;
       admitted.push({ body, lane, requestId, pin, signal });
       if (options.admit) await options.admit(index, body, signal);
-      return { pin: "fixture-route:grant-1", payload: JSON.stringify({ type: "response.create", ...body, ...(lane ? { stream_id: lane } : {}) }), timeoutMs: 600_000, connect: options.connect ?? (async () => upstream), publish: async identities => { await options.publish?.(index, identities); }, settle: async (outcome, terminal, sent, executionStarted) => { settled.push({ index, outcome, terminal, sent, executionStarted }); await options.settle?.(); } };
+      return { pin: "fixture-route:grant-1", payload: JSON.stringify({ type: "response.create", ...body, ...(lane ? { stream_id: lane } : {}) }), timeoutMs: 600_000, connect: options.connect ?? (async () => upstream), publish: async (identities, frame) => { await options.publish?.(index, identities, frame); }, settle: async (outcome, terminal, sent, executionStarted) => { settled.push({ index, outcome, terminal, sent, executionStarted }); await options.settle?.(); } };
     },
   });
   t.after(async () => { session.close(); await Promise.all(pending); });
@@ -431,6 +431,24 @@ test("publication FIFO captures each lane owner and waits for settlement before 
   publication.resolve(); await tick();
   assert.deepEqual(calls, [0, 0, 1, 1]); assert.equal(f.admitted.length, 2);
   settlement.resolve(); await tick(); assert.equal(f.admitted.length, 3);
+});
+
+test("every associated sparse item frame reaches its captured producer before forwarding and settlement", async t => {
+  const gate = Promise.withResolvers(), frames = [];
+  const f = fixture(t, { publish: async (index, identities, frame) => {
+    frames.push({ index, identities, frame });
+    if (frame.type === "response.output_item.done") await gate.promise;
+  } });
+  f.client.receive(create()); f.client.receive(create()); await tick();
+  f.upstream.receive({ type: "response.created", response: { id: "first" } });
+  const item = { type: "response.output_item.done", item: { type: "tool_search_output", execution: "client", status: "completed", tools: [] } };
+  f.upstream.receive(item); f.upstream.receive({ type: "response.completed", response: { id: "first" } });
+  await tick();
+  assert.equal(frames.length, 2); assert.deepEqual(frames[1], { index: 0, identities: [], frame: item });
+  assert.equal(f.client.sent.length, 1); assert.equal(f.settled.length, 0); assert.equal(f.admitted.length, 1);
+  gate.resolve(); await tick();
+  assert.deepEqual(f.client.sent.map(JSON.parse).map(value => value.type), ["response.created", "response.output_item.done", "response.completed"]);
+  assert.ok(frames.every(frame => frame.index === 0)); assert.equal(f.settled.length, 1); assert.equal(f.admitted.length, 2);
 });
 
 test("pending output count and bytes are bounded even while one identity write is held", async t => {

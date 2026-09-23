@@ -35,6 +35,7 @@
 - Distinguish accounted cost estimates, fixed tariffs, unavailable prices, and budget reservations throughout the console; show zero amounts, budget scopes, and UTC monthly limits explicitly.
 - Keep public HTTP Responses continuations on the original credential owner across token refresh. Register response and Codex turn identities before publication, preserve ordinary pool failover, and require a visible restart when ownership changes or expires.
 - Preserve Codex turn state and response ownership across WebSocket reconnects and WebSocket-to-HTTP fallback. Register metadata before forwarding, retain per-create authorization, and bound pending publication without changing cancellation accounting.
+- Record bounded retained-tool evidence on Responses identities across HTTP and WebSockets, reject conflicting producers, and preserve unknown history without changing pricing or budget admission. Strict inherited-tool enforcement remains a separate rollout after producer deployment.
 
 - Preserve provider kill switches and budgets during concurrent connection edits, and show per-provider pending state in the console.
 

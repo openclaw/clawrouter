@@ -31,6 +31,31 @@ response reader registers identity evidence before publication, retaining
 backpressure, cancellation, and billable usage if storage fails. See the
 [Responses continuation contract](api-reference.md#responses-continuation-contract).
 
+Response-key rows also carry nullable retained-tool evidence, separate from the
+six immutable routing fields. A worker-generated producer claims `pending` before
+publishing an identity, then qualifies it once from captured ancestry, tagged
+input declarations, and completely observed output. Legacy/null and pending facts
+remain unknown. Turn-state aliases carry no pricing evidence. Another producer,
+including an older claim-less writer, cannot reuse a row with non-null evidence.
+The same authorization scope, 30-day expiry, capacity counter, and alarm own both
+facts; no tool schemas, output, or opaque compaction payloads enter the index.
+
+The existing streaming parser feeds independent scalar-usage and tool-inventory
+projections in 4 KiB feeds. Qualification bounds nesting, scalar fields, 1,024 total
+selected item/tool entries, and 1,024 output-item associations; exceeding a bound
+loses qualification, not wire delivery. Item completion plus a matching sparse terminal supports Codex
+streams without requiring repeated terminal output. Unknown declarations, opaque
+references, compaction, failed observation, and incomplete inventories cannot
+certify token-only history. Identity claim failures stop publication. A transient
+final-proof failure after an acknowledged claim leaves pending/unknown or that
+producer's committed proof, while delivery and accounting continue; semantic CAS
+conflicts still fail publication.
+
+This is a producer-only rollout. Pricing, budget admission, and receipts do not
+consume these facts yet. A strict consumer requires separately reviewed handling
+of opaque history and verified deployment of this producer; recording evidence
+alone does not repair inherited-tool pricing enforcement or add compact routes.
+
 The credential owner also sequences attachment changes in `ACCESS_CONTROL`.
 An explicit grant write records a pending pool proposal before storing credentials;
 the previous provider stays attached until that store commits. Active proposals

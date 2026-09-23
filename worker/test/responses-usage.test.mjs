@@ -4,6 +4,7 @@ import { createResponsesUsageInspector } from "../responses-usage.ts";
 import { extractUsageTokens, responseOutcome } from "../token-usage.ts";
 import { observeUsage } from "../proxy-response.ts";
 import { HttpOperation } from "../http-operation.ts";
+import { createResponsesToolEvidence } from "../responses-tool-evidence.ts";
 
 const encode = value => new TextEncoder().encode(value);
 const usage = { input_tokens: 12, output_tokens: 3, input_tokens_details: { cached_tokens: 2, cache_write_tokens: 0 } };
@@ -18,6 +19,75 @@ async function inspect(wire, sse = false, size = 4093) {
   await inspector.end();
   return inspector.result(true);
 }
+
+async function proof(wire, sse = false, size = 4093) {
+  const tools = createResponsesToolEvidence("token_only"), inspector = createResponsesUsageInspector(sse, tools), bytes = typeof wire === "string" ? encode(wire) : wire;
+  for (let offset = 0; offset < bytes.length; offset += size) await inspector.push(bytes.subarray(offset, offset + size));
+  await inspector.end();
+  return { evidence: tools.result(), usage: inspector.result(true) };
+}
+
+test("complete tool evidence shares the bounded parser while large text and schemas are skipped", async () => {
+  const value = { ...response, id: "proof", output: [{ type: "message", content: [{ text: "x".repeat(2 * 1024 * 1024) }] }, { type: "additional_tools", tools: [{ type: "namespace", name: "fixture", tools: [{ type: "function", name: "run", parameters: { type: "web_search", description: "x".repeat(2 * 1024 * 1024) } }] }] }] };
+  for (const sse of [false, true]) {
+    const wire = sse ? frame({ type: "response.completed", response: value }) : JSON.stringify(value);
+    const actual = await proof(wire, sse, encode(wire).length);
+    assert.deepEqual(actual.evidence, { responseId: "proof", knowledge: "token_only" });
+    assert.deepEqual(actual.usage, expected(value));
+  }
+});
+
+test("late escaped declarations qualify across every byte split and SSE framing", async () => {
+  const raw = '{"output":[{"type":"tool_search_output","tools":[{"ty\\u0070e":"web_search"}]}],"id":"proof","object":"response","status":"completed","usage":{"input_tokens":12,"output_tokens":3}}';
+  const bytes = encode(raw);
+  for (let split = 0; split <= bytes.length; split++) {
+    const tools = createResponsesToolEvidence("token_only"), inspector = createResponsesUsageInspector(false, tools);
+    await inspector.push(bytes.subarray(0, split)); await inspector.push(bytes.subarray(split)); await inspector.end();
+    assert.equal(tools.result().knowledge, "hosted_tool_fee", `split ${split}`);
+  }
+  const wire = '\ufeff: comment\r\nevent: response.output_item.done\r\ndata: {"type":"response.output_item.done",\r\ndata: "item":{"type":"tool_search_output","status":"completed","tools":[{"type":"tool_search","execution":"client"}]}}\r\n\r\n' + frame({ type: "response.completed", response: { id: "proof" } });
+  for (const size of [1, 2, 4093]) assert.equal((await proof(wire, true, size)).evidence.knowledge, "token_only");
+});
+
+test("duplicate selected containers use last-key semantics without merging old declarations", async () => {
+  const fee = '[{"type":"additional_tools","tools":[{"type":"web_search"}]}]';
+  for (const [fields, knowledge] of [
+    [`"output":${fee},"output":[]`, "token_only"],
+    [`"output":[],"output":${fee}`, "hosted_tool_fee"],
+    ['"output":[{"type":"additional_tools","tools":[],"tools":null}]', "unknown"],
+    ['"output":[{"type":"additional_tools","tools":[{"type":"namespace","name":"f","tools":[{"type":"function","name":"run"}],"tools":[]}]}]', "token_only"],
+    ['"output":[{"type":"additional_tools","tools":[{"type":"shell","environment":{"type":"local"},"environment":{}}]}]', "unknown"],
+  ]) assert.equal((await proof(`{"object":"response","status":"completed","id":"proof",${fields}}`, false, 1)).evidence.knowledge, knowledge);
+  const nested = `{"type":"response.completed","response":{"id":"old","output":${fee}},"response":{"id":"proof","output":[]}}`;
+  assert.deepEqual((await proof(frame(nested), true, 1)).evidence, { responseId: "proof", knowledge: "token_only" });
+});
+
+test("proof overflow, unknown executables and malformed frames preserve independent scalar usage", async () => {
+  for (const output of [Array.from({ length: 1025 }, () => ({ type: "message" })), [{ type: "additional_tools", tools: [{ type: "new_executor" }] }], [{ type: "compaction", encrypted_content: "opaque" }]]) {
+    const actual = await proof(JSON.stringify({ ...response, id: "proof", output }));
+    assert.equal(actual.evidence?.knowledge ?? "unknown", "unknown");
+    assert.deepEqual(actual.usage, expected(response));
+  }
+  const invalidThenTerminal = 'data: {broken}\n\n' + frame({ type: "response.completed", response: { ...response, id: "proof", output: [] } });
+  assert.equal((await proof(invalidThenTerminal, true)).evidence.knowledge, "unknown");
+  const noEof = JSON.stringify({ ...response, id: "proof", output: [] }).slice(0, -1);
+  assert.equal((await proof(noEof)).evidence, null);
+  assert.equal((await proof(frame({ type: "response.completed", response: { id: "proof" } }).trimEnd(), true)).evidence, null);
+});
+
+test("aggregate malformed tool entries discard only proof while usage and delivery stay intact", async () => {
+  for (const child of [null, [null]]) for (const sse of [false, true]) {
+    const output = [{ type: "additional_tools", tools: Array.from({ length: 2 }, () => ({ type: "namespace", name: "fixture", tools: Array(511).fill(child) })) }];
+    const value = { id: "proof", output, ...response };
+    const wire = sse ? frame({ type: "response.completed", response: value }) : JSON.stringify(value);
+    const tools = createResponsesToolEvidence("token_only");
+    const upstream = new Response(wire, { headers: { "content-type": sse ? "text/event-stream" : "application/json" } });
+    const observed = observeUsage(upstream, undefined, { async push() {}, async end() {}, tools }, "openai.responses");
+    assert.equal(await observed.response.text(), wire);
+    assert.deepEqual(await observed.result, { ...expected(response), delivery: "complete" });
+    assert.equal(tools.result()?.knowledge ?? "unknown", "unknown");
+  }
+});
 
 test("Responses observe late usage beyond 2 MiB in JSON and one terminal SSE event", async () => {
   const large = { output: [{ type: "message", content: [{ type: "output_text", text: "🦊".repeat(600_000) }] }], ...response };

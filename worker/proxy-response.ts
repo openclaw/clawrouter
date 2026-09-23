@@ -1,9 +1,14 @@
 import { createResponsesUsageInspector } from "./responses-usage.ts";
 import { createSseUsageInspector, extractUsageTokens, responseOutcome, usageInspectionLimit, type UsageInspection } from "./token-usage.ts";
 import { HttpOperation } from "./http-operation.ts";
+import type { createResponsesToolEvidence } from "./responses-tool-evidence.ts";
 
 export interface ObservedUsage extends UsageInspection { delivery: "complete" | "failed" | "canceled" }
-export interface ResponseBodyInspection { push(bytes: Uint8Array): Promise<void>; end(): Promise<void> }
+export interface ResponseBodyInspection {
+  push(bytes: Uint8Array): Promise<void>; end(): Promise<void>;
+  tools?: Pick<ReturnType<typeof createResponsesToolEvidence>, "accept" | "invalid">;
+  qualify?(): Promise<void>;
+}
 
 // Accounting observes the delivered stream; a tee would drain upstream ahead of
 // the client and buffer arbitrary output. Responses retain only bounded scalar
@@ -13,7 +18,7 @@ export function observeUsage(response: Response, operation = new HttpOperation()
   if (!response.body) { operation.stop("complete"); return { response, result: Promise.resolve({ tokens: null, outcome: null, delivery: "complete" }) }; }
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   const eventStream = contentType.includes("text/event-stream"), json = contentType.includes("json");
-  const responses = responseFormat === "openai.responses" && (eventStream || json) ? createResponsesUsageInspector(eventStream) : null;
+  const responses = responseFormat === "openai.responses" && (eventStream || json) ? createResponsesUsageInspector(eventStream, bodyInspection?.tools) : null;
   const sse = !responses && eventStream ? createSseUsageInspector() : null;
   let inspect = !responses && !sse && json;
   const decoder = new TextDecoder();
@@ -59,6 +64,7 @@ export function observeUsage(response: Response, operation = new HttpOperation()
         if (next.done) {
           if (bodyInspection) await operation.wait(bodyInspection.end(), "publication"); if (finished) return;
           await responses?.end(); if (finished) return;
+          if (responses && bodyInspection?.qualify) await operation.wait(bodyInspection.qualify(), "publication"); if (finished) return;
           finish("complete"); controller.close(); return;
         }
         if (responses) { await responses.push(next.value); if (finished) return; }
@@ -71,6 +77,8 @@ export function observeUsage(response: Response, operation = new HttpOperation()
         // Identity registration owns publication; the same reader still owns
         // demand, cancellation, and usage when the durable write fails.
         if (bodyInspection) await operation.wait(bodyInspection.push(next.value), "publication");
+        if (finished) return;
+        if (responses && bodyInspection?.qualify) await operation.wait(bodyInspection.qualify(), "publication");
         if (!finished) controller.enqueue(next.value);
       } catch (error) { if (!finished) { finish("failed", error); controller.error(error); } }
     },

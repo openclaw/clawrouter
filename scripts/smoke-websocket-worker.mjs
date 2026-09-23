@@ -362,6 +362,42 @@ try {
   await until(async () => (await (await dispatch("/v1/usage")).json()).usage.events.filter(event => event.session_id === "http-affinity").length === 3);
   assert.ok((await ledgerFacts()).every(fact => fact.unsettled === 0));
 
+  // Producer-only rollout: a zero-tariff parent still records declarations, and
+  // the measured WebSocket child inherits them without changing admission/cost.
+  const scope = "http-continuations:" + createHash("sha256").update(JSON.stringify(["proxy_key", "default", "fixture", "fixture", null])).digest("hex");
+  const evidenceOwner = authority.get(authority.idFromName(scope));
+  async function evidenceFor(id) {
+    const key = createHash("sha256").update(JSON.stringify(["response", id])).digest("hex");
+    const result = await evidenceOwner.fetch("https://authority/http-continuations", { method: "POST", body: JSON.stringify({ action: "resolve", keys: [key] }) });
+    assert.equal(result.status, 200); return (await result.json()).evidence[0];
+  }
+  const beforeEvidence = await ledgerFacts();
+  await authorityObject.fetch("https://authority/policies/put", { method: "POST", body: JSON.stringify({ policyId: "fixture", policy: { ...policy, requestCostMicros: 0 } }) });
+  const evidenceParent = await httpContinuation({ input: [{ type: "additional_tools", tools: [{ type: "web_search" }] }] }, { "x-clawrouter-session-id": "evidence-parent" });
+  assert.equal(evidenceParent.status, 200);
+  const evidenceParentId = (await evidenceParent.json()).id;
+  assert.equal((await evidenceFor(evidenceParentId)).knowledge, "hosted_tool_fee");
+  await authorityObject.fetch("https://authority/policies/put", { method: "POST", body: JSON.stringify({ policyId: "fixture", policy }) });
+  const evidenceSocketResponse = await dispatch("/v1/responses", { headers: { upgrade: "websocket", "x-clawrouter-session-id": "evidence-child" } });
+  assert.equal(evidenceSocketResponse.status, 101);
+  const evidenceSocket = evidenceSocketResponse.webSocket; evidenceSocket.accept(); sockets.push(evidenceSocket);
+  let evidenceTerminal;
+  evidenceSocket.addEventListener("message", event => { const frame = JSON.parse(event.data); if (frame.type === "response.completed") evidenceTerminal = frame; });
+  evidenceSocket.send(JSON.stringify({ type: "response.create", model: "openai/gpt-6-astra", previous_response_id: evidenceParentId, input: [], service_tier: "priority", max_output_tokens: 32 }));
+  await until(() => !!evidenceTerminal);
+  assert.equal((await evidenceFor(evidenceTerminal.response.id)).knowledge, "hosted_tool_fee");
+  let evidenceReceipts;
+  await until(async () => {
+    evidenceReceipts = (await (await dispatch("/v1/usage")).json()).usage.events.filter(event => ["evidence-parent", "evidence-child"].includes(event.session_id));
+    return evidenceReceipts.length === 2 && (await ledgerFacts()).every(fact => fact.unsettled === 0);
+  });
+  assert.equal(evidenceReceipts.find(event => event.session_id === "evidence-parent").actual_cost_micros, 0);
+  assert.equal(evidenceReceipts.find(event => event.session_id === "evidence-parent").cost_basis, "policy_fixed");
+  assert.equal(evidenceReceipts.find(event => event.session_id === "evidence-child").actual_cost_micros, 1_080);
+  assert.equal(evidenceReceipts.find(event => event.session_id === "evidence-child").cost_basis, "manifest_pricing");
+  assert.deepEqual(await ledgerFacts(), beforeEvidence.map(({ spent }) => ({ spent: spent + 1_080, unsettled: 0 })));
+  evidenceSocket.close(1000, "evidence fixture complete");
+
   // Real credential owners and the real pool index must agree with affinity;
   // neither another pool member nor the configured environment may adopt state.
   const grants = await mf.getDurableObjectNamespace("GRANT_CREDENTIALS", "router");
@@ -461,7 +497,7 @@ try {
       body: JSON.stringify({ model: "openai/gpt-6-astra", input: "publication fixture", max_output_tokens: 16, service_tier: "priority" }),
     });
     assert.equal(response.status, 200);
-    assert.deepEqual(await response.json(), { id: "http-fixture", object: "response", status: "completed", output: [], service_tier: "priority", usage: { input_tokens: 14, output_tokens: 8, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } });
+    assert.deepEqual(await response.json(), { id: `http-fixture-${(await httpFrames()).length}`, object: "response", status: "completed", output: [], service_tier: "priority", usage: { input_tokens: 14, output_tokens: 8, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } });
     await until(async () => (await (await dispatch("/fixture-accounting")).json()).some(({ kind }) => kind === "usage_ingest"));
     if (fault === "usage_recovered") await until(async () => (await (await dispatch("/v1/usage")).json()).usage.events.some(({ session_id }) => session_id === session));
   }
@@ -531,7 +567,7 @@ export default { async fetch(request) {
       const large = { output: [{ type: 'message', content: [{ type: 'output_text', text: 'x'.repeat(2 * 1024 * 1024 + 1024) }] }], object: 'response', status: 'completed', service_tier: 'priority', usage };
       return body.input === 'large-json' ? Response.json(large) : new Response('data: {"type":"response.created"}\\n\\ndata: ' + JSON.stringify({ type: 'response.completed', response: large }) + '\\n\\n', { headers: { 'content-type': 'text/event-stream' } });
     }
-    if (body.input === 'late-failed' || body.input.startsWith('cancel-')) {
+    if (typeof body.input === 'string' && (body.input === 'late-failed' || body.input.startsWith('cancel-'))) {
       let index = 0, timer, release, producer;
       const aborted = () => { httpAborts[body.input] = true; clearTimeout(timer); producer.error(request.signal.reason); release?.(); };
       request.signal.addEventListener('abort', aborted, { once: true });
@@ -554,7 +590,7 @@ export default { async fetch(request) {
         else { request.signal.removeEventListener('abort', aborted); controller.close(); }
       }, cancel() { clearTimeout(timer); release?.(); } }, { highWaterMark: 0 }), { headers: { 'content-type': 'text/event-stream' } });
     }
-    const id = body.input === 'http-affinity' ? 'http-affinity-' + httpFrames.length : 'http-fixture';
+    const id = (body.input === 'http-affinity' ? 'http-affinity-' : 'http-fixture-') + httpFrames.length;
     return Response.json({ id, object: 'response', status: 'completed', output: [], service_tier: 'priority', usage }, { headers: body.input === 'http-affinity' ? { 'x-codex-turn-state': 'turn-' + id } : {} });
   }
   if (request.url !== 'https://api.openai.com/v1/responses' || request.headers.get('upgrade') !== 'websocket') return new Response('unexpected upstream route', { status: 400 });
