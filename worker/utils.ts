@@ -2,7 +2,7 @@ import { logCorrelationError } from "./correlation.ts";
 
 const corsHeaders = {
   "access-control-allow-origin": "*",
-  "access-control-allow-methods": "GET,POST,PUT,OPTIONS",
+  "access-control-allow-methods": "GET,POST,PUT,PATCH,OPTIONS",
   "access-control-allow-headers": [
     "authorization", "content-type", "x-api-key", "anthropic-beta", "anthropic-version",
     "x-request-id", "traceparent", "session-id", "thread-id", "session_id", "x-clawrouter-session-id",

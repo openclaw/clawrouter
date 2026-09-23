@@ -171,6 +171,7 @@ The Worker redirects `/` to `/dashboard`, and `/dashboard` to `/dashboard/home`.
 | `POST` | `/v1/admin/credentials/<credential-id>/rotate` | Replace only an active credential's secret hash |
 | `POST` | `/v1/admin/credentials/<credential-id>/revoke` | Revoke one issued credential |
 | `PUT` | `/v1/admin/connections/<provider-id>` | Update a global provider connection |
+| `PATCH` | `/v1/admin/connections/<provider-id>` | Update only supplied connection fields |
 | `PUT` | `/v1/admin/upstream-grants/<policies\|tenants>/<scope-id>/<token-ref>` | Create or update a scoped upstream grant |
 | `POST` | `/v1/admin/upstream-grants/<policies\|tenants>/<scope-id>/<token-ref>/revoke` | Revoke a scoped upstream grant and remove its secrets |
 | `POST` | `/v1/admin/upstream-grants/<policies\|tenants>/<scope-id>/<token-ref>/refresh` | Refresh an OAuth grant |

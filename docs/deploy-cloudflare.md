@@ -488,6 +488,7 @@ PUT /v1/admin/policy-bindings
 PUT /v1/admin/policies/<policy-id>
 PUT /v1/admin/credentials/<credential-id>
 PUT /v1/admin/connections/<provider-id>
+PATCH /v1/admin/connections/<provider-id>
 PUT /v1/admin/upstream-grants/<policies|tenants>/<scope-id>/<token-ref>
 PUT /v1/admin/assignment-rules/<rule-id>
 POST /v1/admin/policies/<policy-id>/revoke
@@ -524,6 +525,17 @@ email/domain allowlist configured on the Worker. `ACCESS_CONTROL` makes
 policies, credentials, user status, binding mutations, and session grant
 resolution strongly consistent. Provider kill switches use the same serialized
 authority; provider requests only resolve the selected connection.
+
+For independent connection edits, use `PATCH` with only the changed fields:
+`{"enabled": false}` disables a provider without changing its label or budget;
+`{"monthlyBudgetMicros": 50000000}` changes its cap without enabling it.
+Omitted fields stay unchanged. Set `label` or `monthlyBudgetMicros` to `null` to
+clear them; an empty label also clears it, while a zero budget blocks spending.
+The response contains the committed connection. Concurrent edits to different
+fields are merged in the authority; edits to the same field use the last
+accepted value. Unknown fields and read-only spend observations are ignored.
+Existing `PUT` clients retain their defaults: omitted `enabled` becomes `true`,
+omitted `label` becomes `null`, and omitted `monthlyBudgetMicros` stays unchanged.
 
 ## Keys and Revocation
 

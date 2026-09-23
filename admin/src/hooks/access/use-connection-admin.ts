@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useRef, useState } from "react";
 import { errorMessage } from "../../domain";
 import { demo } from "../../ui-config";
 import { request } from "../../ui-helpers";
@@ -15,44 +15,54 @@ interface Dependencies {
 
 export function useConnectionAdmin({ allowDemo, gatewayOrigin, demoMode, setStatus, setProviderReadiness, refresh }: Dependencies) {
   const [connections, setConnections] = useState<ProviderConnection[]>(allowDemo ? demo.connections : []);
+  const pendingRef = useRef(new Set<string>());
+  const [pendingProviderIds, setPendingProviderIds] = useState<ReadonlySet<string>>(new Set());
 
-  async function setEnabled(providerId: string, enabled: boolean) {
+  async function mutate(providerId: string, mutation: Partial<Pick<ProviderConnection, "enabled" | "monthlyBudgetMicros">>, pending: string, completed: string) {
+    if (pendingRef.current.has(providerId)) return;
+    pendingRef.current.add(providerId);
+    setPendingProviderIds(new Set(pendingRef.current));
     try {
-      setStatus(`${enabled ? "enabling" : "disabling"} ${providerId}`);
-      const current = connections.find((connection) => connection.providerId === providerId);
-      const next: ProviderConnection = { providerId, enabled, label: current?.label ?? null, monthlyBudgetMicros: current?.monthlyBudgetMicros ?? null };
+      setStatus(pending);
       if (demoMode) {
-        setConnections((items) => [next, ...items.filter((item) => item.providerId !== providerId)]);
-        setProviderReadiness((items) => {
+        setConnections((items) => {
+          const current = items.find((item) => item.providerId === providerId);
+          const next = { providerId, enabled: true, ...current, ...mutation };
+          if (mutation.monthlyBudgetMicros !== undefined) next.remainingMicros = mutation.monthlyBudgetMicros === null || current?.spentMicros == null ? null : Math.max(0, mutation.monthlyBudgetMicros - current.spentMicros);
+          return [next, ...items.filter((item) => item.providerId !== providerId)];
+        });
+        const enabled = mutation.enabled;
+        if (enabled !== undefined) setProviderReadiness((items) => {
           const readiness = items[providerId];
           return readiness ? { ...items, [providerId]: { ...readiness, connectionEnabled: enabled, executable: enabled && readiness.configPresent && (!readiness.oauthGrantRequired || readiness.oauthGrantCount > 0), status: enabled ? (readiness.verified ? "verified" : "unverified") : "disabled" } } : items;
         });
       } else {
-        await request<ProviderConnection>(gatewayOrigin, `/v1/admin/connections/${encodeURIComponent(providerId)}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(next) });
+        const next = await request<ProviderConnection>(gatewayOrigin, `/v1/admin/connections/${encodeURIComponent(providerId)}`, { method: "PATCH", headers: { "content-type": "application/json" }, body: JSON.stringify(mutation) });
+        setConnections((items) => [next, ...items.filter((item) => item.providerId !== providerId)]);
         await refresh();
       }
-      setStatus(`${enabled ? "enabled" : "disabled"} ${providerId}`);
+      setStatus(completed);
     } catch (caught) {
-      setStatus(errorMessage(caught));
+      setStatus(`connection error: ${errorMessage(caught)}`);
+    } finally {
+      pendingRef.current.delete(providerId);
+      setPendingProviderIds(new Set(pendingRef.current));
     }
   }
 
-  async function setBudget(providerId: string, monthlyBudgetMicros: number | null) {
-    try {
-      setStatus(`updating ${providerId} budget`);
-      const current = connections.find((connection) => connection.providerId === providerId);
-      const next: ProviderConnection = { providerId, enabled: current?.enabled ?? true, label: current?.label ?? null, monthlyBudgetMicros };
-      if (demoMode) {
-        setConnections((items) => [{ ...next, spentMicros: 0, remainingMicros: monthlyBudgetMicros }, ...items.filter((item) => item.providerId !== providerId)]);
-      } else {
-        await request<ProviderConnection>(gatewayOrigin, `/v1/admin/connections/${encodeURIComponent(providerId)}`, { method: "PUT", headers: { "content-type": "application/json" }, body: JSON.stringify(next) });
-        await refresh();
-      }
-      setStatus(`updated ${providerId} budget`);
-    } catch (caught) {
-      setStatus(errorMessage(caught));
-    }
+  function setEnabled(providerId: string, enabled: boolean) {
+    return mutate(providerId, { enabled }, `${enabled ? "enabling" : "disabling"} ${providerId}`, `${enabled ? "enabled" : "disabled"} ${providerId}`);
   }
 
-  return { connections: { items: connections, setItems: setConnections, setEnabled, setBudget }, hydrate: setConnections };
+  function setBudget(providerId: string, monthlyBudgetMicros: number | null) {
+    return mutate(providerId, { monthlyBudgetMicros }, `saving ${providerId} budget`, `saved ${providerId} budget`);
+  }
+
+  function hydrate(items: ProviderConnection[]) {
+    // A refresh started before a write must not replace its committed response.
+    const pending = new Set(pendingRef.current);
+    setConnections((current) => items.map((item) => pending.has(item.providerId) ? current.find((connection) => connection.providerId === item.providerId) ?? item : item));
+  }
+
+  return { connections: { items: connections, setItems: setConnections, pendingProviderIds, setEnabled, setBudget }, hydrate };
 }
