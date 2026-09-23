@@ -231,6 +231,51 @@ for (const [name, body, contentType, measured, measuredCost = 4_710, outputToken
   });
 }
 
+test("Together full-context requests require headroom in both budgets and settle reported usage", async (t) => {
+  for (const [route, model] of [["/v1/chat/completions", "together/glm-5.2"], ["/v1/native/together/v1/chat/completions", "zai-org/GLM-5.2"]]) {
+    for (const [limit, providerLimit, denied] of [[500_000, 2_000_000, "budget_exhausted"], [2_000_000, 500_000, "provider_budget_exhausted"], [2_000_000, 2_000_000, null]]) {
+      const env = usageEnv([], { provider: "together", limit, providerLimit, fixedCost: null, retainContent: false });
+      env.TOGETHER_API_KEY = "fixture-together-key";
+      const ledger = sqlBudgetNamespace(t), events = [], pending = [];
+      env.BUDGET_LEDGER = ledger;
+      env.USAGE_QUEUE = { send: async event => events.push(event) };
+      // This fixture's reported usage fits the published window but exceeds the
+      // old 262,144-token reservation, which admitted it with only $0.50 left.
+      const usage = { prompt_tokens: 500_000, completion_tokens: 1_000, total_tokens: 501_000 };
+      const upstream = t.mock.method(globalThis, "fetch", async (url, init) => {
+        assert.equal(String(url), "https://api.together.xyz/v1/chat/completions");
+        assert.equal(JSON.parse(init.body).model, "zai-org/GLM-5.2");
+        for (const owner of ["tenant:maintainer_access:owner@example.com", "provider:together"]) {
+          const [reservation] = ledger.get(owner).reservations();
+          assert.equal(reservation.reserved_micros, 1_472_405);
+          assert.equal(reservation.dispatch_started, 1);
+        }
+        return Response.json({ usage });
+      });
+      const response = await handler.fetch(new Request(`https://clawrouter.example${route}`, {
+        method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
+        body: JSON.stringify({ model, messages: [{ role: "user", content: "x".repeat(1_100_000) }], max_tokens: 1_000 }),
+      }), env, { waitUntil: promise => pending.push(promise) });
+      assert.equal(response.status, denied ? 402 : 200);
+      if (denied) assert.equal((await response.json()).error.code, denied);
+      else assert.deepEqual(await response.json(), { usage });
+      await Promise.all(pending);
+      assert.equal(upstream.mock.callCount(), denied ? 0 : 1);
+      assert.equal(events.length, 1);
+      assert.equal(events[0].reserved_input_tokens, 1_048_575);
+      assert.equal(events[0].reserved_output_tokens, 1_000);
+      assert.equal(events[0].pricing_ref, "together-glm-5-2-standard-2026-09-23");
+      const cost = denied ? 0 : 704_400;
+      assert.equal(events[0].actual_cost_micros, cost);
+      if (!denied) assert.equal(events[0].cost_basis, "manifest_pricing");
+      const status = await handler.fetch(new Request("https://clawrouter.example/v1/usage", { headers: { authorization: `Bearer ${proxyKey()}` } }), env, {});
+      assert.equal((await status.json()).budget.spentMicros, cost);
+      assert.equal((await providerBudgetStatus(env, "together", providerLimit)).spentMicros, cost);
+      upstream.mock.restore();
+    }
+  }
+});
+
 const astraUsage = { input_tokens: 14, output_tokens: 8, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } };
 const largeResponsesOutput = [{ type: "message", content: [{ type: "output_text", text: "x".repeat(2 * 1024 * 1024 + 1024) }] }];
 test("live HTTP and native streams keep both reservations past 15 minutes until completion", async (t) => {
