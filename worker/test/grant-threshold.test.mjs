@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { selectThresholdGrantKey } from "../authority.ts";
+import { selectThresholdGrantKey } from "../grant-selection-strategies.ts";
 
 test("threshold routing stays on the active grant until the cutoff", () => {
   const candidates = [{ key: "active", remainingRatio: 0.11 }, { key: "reserve", remainingRatio: 0.95 }];

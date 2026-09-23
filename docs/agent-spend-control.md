@@ -69,8 +69,9 @@ from earlier events; an incomplete stream retains its reservation.
 [Anthropic classifier refusals before any output](https://platform.claude.com/docs/en/build-with-claude/refusals-and-fallback)
 report token usage but are not billed. ClawRouter preserves those counts in
 usage events and settles token-priced requests at zero after the complete
-response. Refusals after output begins remain billable. Explicit fixed policy
-prices still apply independently of upstream token billing.
+response with `cost_basis: none`. Refusals after output begins remain billable.
+Explicit fixed policy prices still apply independently of upstream token billing;
+successful fixed zero and positive tariffs retain `cost_basis: policy_fixed`.
 
 `requestCostMicros` on a policy is an explicit fixed-cost override. Routes
 without pricing use the legacy one-micro fallback only when no monthly budget
@@ -227,6 +228,11 @@ This replaces the earlier zero-charge policy for pre-response transport failures
 missing headers cannot prove that upstream work was free. Pre-dispatch failures
 still release reservations to zero; HTTP error and cancellation outcomes are unchanged.
 Historical admission denials marked `unpriced_service_tier` remain known zero. No policy migration or new setting is required.
+New known-unsent and nonbillable outcomes record `cost_basis: none`, while
+preserving their original reservation and observed token fields. A zero amount
+alone does not establish this basis: free manifest rates retain their pricing
+basis, and unavailable prices remain `unpriced_usage`. Existing event strings
+and stored usage history are not rewritten.
 The bundled OpenAI route is pinned to the global `api.openai.com` endpoint.
 Regional data-residency endpoints are not exposed; a regional deployment needs
 a separate versioned price with OpenAI's 10% uplift or a fixed policy price.

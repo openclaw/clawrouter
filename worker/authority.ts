@@ -6,6 +6,7 @@ import { evaluateUserAssignments, withLegacyAssignmentState, type AssignmentEvid
 import { contentRetentionDefault } from "./content-retention.ts";
 import { normalizeConnectionMutation, type ProviderConnectionMutation } from "./provider-connections.ts";
 import { HttpContinuationStore } from "./continuation-store.ts";
+import { boundedPercent, selectThresholdGrantKey, stickyScore, weightedRandom } from "./grant-selection-strategies.ts";
 import { errorResponse, HttpError, json, normalizeEmail, readJson, safeEqual } from "./utils.ts";
 
 type Principal = { principalType: "user" | "group"; principalId: string };
@@ -70,7 +71,11 @@ export class PolicyBindingIndexObject implements DurableObject {
       if (path === "/connections/initialize-all") { this.initializeConnections(await readJson<ProviderConnection[]>(request)); this.putMeta("connections_global_initialized"); return new Response("initialized"); }
       if (path === "/connections/put") return json(this.putConnection(await readJson<ProviderConnectionMutation>(request)));
       if (path === "/grant-pools/resolve") return json(this.resolveGrantPool(await readJson<GrantPoolResolveRequest>(request)));
-      if (path === "/grant-pools/sync") { this.syncGrantPool(await readJson<GrantPoolSyncRequest>(request)); return new Response("updated"); }
+      if (path === "/grant-pools/attachment") return json(this.grantAttachment((await readJson<{ key: string }>(request)).key));
+      if (path === "/grant-pools/admit") return json(this.admitGrantAttachment(await readJson<GrantAttachmentMutation>(request)));
+      if (path === "/grant-pools/publish") return json(this.publishGrantAttachment(await readJson<GrantAttachmentMutation>(request)));
+      if (path === "/grant-pools/cancel-pending") return json(this.cancelPendingAttachment(await readJson<{ key: string; revision: number }>(request)));
+      if (path === "/grant-pools/pending") return json(this.pendingGrantAttachments(await readJson<{ cursor?: string; limit?: number }>(request)));
       if (path === "/grant-pools/feedback") { this.putGrantRuntime(await readJson<GrantRuntimeFeedbackRequest>(request)); return new Response("updated"); }
       if (path === "/grant-pools/states") return json({ states: this.grantRuntimeStates((await readJson<GrantRuntimeStatesRequest>(request)).keys) });
       if (path === "/grant-pools/select") return json(this.selectGrant(await readJson<GrantPoolSelectRequest>(request)));
@@ -99,6 +104,16 @@ export class PolicyBindingIndexObject implements DurableObject {
     this.sql.exec("CREATE TABLE IF NOT EXISTS proxy_credentials (credential_id TEXT PRIMARY KEY, credential_json TEXT NOT NULL)");
     this.sql.exec("CREATE TABLE IF NOT EXISTS provider_connections (provider_id TEXT PRIMARY KEY, connection_json TEXT NOT NULL)");
     this.sql.exec("CREATE TABLE IF NOT EXISTS upstream_grant_pool_members (scope TEXT NOT NULL, scope_id TEXT NOT NULL, provider_id TEXT NOT NULL, token_ref TEXT NOT NULL, PRIMARY KEY (scope, scope_id, provider_id, token_ref))");
+    // Existing rows stay selectable until the explicit attachment migration.
+    // Pending rows originate only from an owner command, never a legacy read.
+    const poolColumns = rows<{ name: string }>(this.sql.exec("PRAGMA table_info(upstream_grant_pool_members)"));
+    if (!poolColumns.some((column) => column.name === "status")) this.sql.exec("ALTER TABLE upstream_grant_pool_members ADD COLUMN status TEXT NOT NULL DEFAULT 'legacy'");
+    if (!poolColumns.some((column) => column.name === "pending_previous_status")) this.sql.exec("ALTER TABLE upstream_grant_pool_members ADD COLUMN pending_previous_status TEXT");
+    this.sql.exec("CREATE INDEX IF NOT EXISTS upstream_grant_pool_pending ON upstream_grant_pool_members (status, scope, scope_id, token_ref)");
+    this.sql.exec("CREATE INDEX IF NOT EXISTS upstream_grant_pool_identity ON upstream_grant_pool_members (scope, scope_id, token_ref)");
+    // Detach retains this fence, so delayed publication cannot resurrect it.
+    // Revision also fences admission/repair while owner generation is unchanged.
+    this.sql.exec("CREATE TABLE IF NOT EXISTS upstream_grant_pool_versions (grant_key TEXT PRIMARY KEY, generation INTEGER NOT NULL, revision INTEGER NOT NULL)");
     this.sql.exec("CREATE TABLE IF NOT EXISTS upstream_grant_runtime (grant_key TEXT PRIMARY KEY, state_json TEXT NOT NULL)");
     this.sql.exec("CREATE TABLE IF NOT EXISTS upstream_grant_selection (pool_key TEXT NOT NULL, grant_key TEXT NOT NULL, selected_count INTEGER NOT NULL, last_selected_ms INTEGER NOT NULL, PRIMARY KEY (pool_key, grant_key))");
     this.sql.exec("CREATE TABLE IF NOT EXISTS upstream_grant_pool_cursors (pool_key TEXT PRIMARY KEY, grant_key TEXT NOT NULL)");
@@ -334,7 +349,7 @@ export class PolicyBindingIndexObject implements DurableObject {
     return { initialized: this.hasMeta("connections_global_initialized"), connections, missingProviderIds };
   }
 
-  private resolveGrantPool(input: GrantPoolResolveRequest): { keys: string[]; states: Record<string, GrantRuntimeState> } {
+  private resolveGrantPool(input: GrantPoolResolveRequest): { keys: string[]; states: Record<string, GrantRuntimeState>; hasAttachment: boolean } {
     const providerId = grantSegment(input.providerId, "providerId");
     const policyId = grantPoolScopeId(input.policyId);
     const tenantId = grantPoolScopeId(input.tenantId);
@@ -343,20 +358,122 @@ export class PolicyBindingIndexObject implements DurableObject {
       ...(policyId ? this.poolTokenRefs("policies", policyId, providerId).map((tokenRef) => `oauth/${policyId}/${tokenRef}`) : []),
       ...(tenantId ? this.poolTokenRefs("tenants", tenantId, providerId).map((tokenRef) => `oauth/tenants/${tenantId}/${tokenRef}`) : []),
     ])];
-    return { keys, states: this.grantRuntimeStates(keys) };
+    const hasAttachment = [policyId && ["policies", policyId], tenantId && ["tenants", tenantId]].some((scope) => scope && rows(this.sql.exec("SELECT 1 FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND provider_id = ? LIMIT 1", ...scope, providerId)).length > 0);
+    return { keys, states: this.grantRuntimeStates(keys), hasAttachment };
   }
 
-  private syncGrantPool(input: GrantPoolSyncRequest): void {
-    const scope = input.scope === "policies" || input.scope === "tenants" ? input.scope : null;
-    if (!scope) invalidAuthorityRequest("grant pool scope is invalid");
-    const scopeId = grantSegment(input.scopeId, "scopeId"), tokenRef = grantSegment(input.tokenRef, "tokenRef");
-    const previousProvider = input.previousProvider == null ? null : grantSegment(input.previousProvider, "previousProvider");
+  private grantAttachment(key: string): GrantAttachmentSnapshot {
+    const identity = grantPoolIdentity(key);
+    const version = rows<{ generation: number; revision: number }>(this.sql.exec("SELECT generation, revision FROM upstream_grant_pool_versions WHERE grant_key = ?", key))[0];
+    const pending = rows(this.sql.exec("SELECT 1 FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND token_ref = ? AND status IN ('pending', 'pending_inactive') LIMIT 1", ...identity)).length > 0;
+    const attached = rows(this.sql.exec("SELECT 1 FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND token_ref = ? AND status NOT IN ('pending', 'pending_inactive') LIMIT 1", ...identity)).length > 0;
+    return { generation: version?.generation ?? 0, revision: version?.revision ?? 0, pending, attached };
+  }
+
+  private admitGrantAttachment(input: GrantAttachmentMutation): GrantAttachmentSnapshot {
+    return this.storage.transactionSync(() => {
+      const { identity, provider, status, current } = this.attachmentMutation(input);
+      if (input.generation !== current.generation) throw new HttpError(409, "grant_attachment_changed", "reconcile the current owner before admission");
+      if (provider && status) {
+        const member = this.attachmentMember(identity, provider);
+        if (!member || status === "active" && !["active", "legacy", "pending"].includes(member.status)) {
+          if (status === "active") {
+            const count = rows<{ count: number }>(this.sql.exec("SELECT count(*) AS count FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND provider_id = ? AND status IN ('legacy', 'active', 'pending')", identity[0], identity[1], provider))[0].count;
+            if (count >= 32) invalidAuthorityRequest("grant pool cannot contain more than 32 active or pending members per scope and provider");
+          }
+          // Inactive proposals still need recoverable provenance before owner
+          // commit, but must not consume capacity reserved for active grants.
+          const previous = member && !["pending", "pending_inactive"].includes(member.status) ? member.status : member?.pending_previous_status ?? null;
+          this.sql.exec("INSERT INTO upstream_grant_pool_members (scope, scope_id, provider_id, token_ref, status, pending_previous_status) VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT (scope, scope_id, provider_id, token_ref) DO UPDATE SET status = excluded.status, pending_previous_status = excluded.pending_previous_status", identity[0], identity[1], provider, identity[2], status === "active" ? "pending" : "pending_inactive", previous);
+        }
+      }
+      // Reserve a fresh revision even when the existing member needs no slot.
+      // An old repair cannot cancel a later command's reservation.
+      this.storeAttachmentVersion(input.key, current.generation, current.revision + 1);
+      return this.grantAttachment(input.key);
+    });
+  }
+
+  private publishGrantAttachment(input: GrantAttachmentMutation): GrantAttachmentResult {
+    return this.storage.transactionSync(() => {
+      const { identity, provider, status, current } = this.attachmentMutation(input);
+      // Only the explicit credential commit can acknowledge its admission.
+      // A later refresh or raw import must not adopt an abandoned proposal.
+      const restored = current.pending && (input.admissionRevision !== current.revision || input.generation === current.generation);
+      if (restored) this.restorePendingAttachment(identity);
+      const prepared = restored ? this.grantAttachment(input.key) : current;
+      const member = provider ? this.attachmentMember(identity, provider) : undefined;
+      const outcome = !status ? "detached" : member ? "attached" : "unattached";
+      if (input.generation === current.generation && !prepared.pending) {
+        const others = rows(this.sql.exec("SELECT 1 FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND token_ref = ? AND provider_id != ? LIMIT 1", ...identity, provider ?? "")).length > 0;
+        // Raw migration and refresh can deliberately remain unattached. They
+        // must replay without inventing admission or erasing legacy evidence.
+        if (status ? !member || member.status === status && !others : !prepared.attached) {
+          // Retire the consumed reservation even when owner state is unchanged.
+          if (restored) this.storeAttachmentVersion(input.key, input.generation, current.revision + 1);
+          return { ...this.grantAttachment(input.key), outcome };
+        }
+        throw new HttpError(409, "grant_attachment_changed", "same-generation attachment publication differs from its committed state");
+      }
+      if (status === "active" && member && !["active", "legacy", "pending"].includes(member.status)) throw new HttpError(409, "grant_attachment_admission_required", "resuming this attachment requires capacity admission");
+      if (!status) this.sql.exec("DELETE FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND token_ref = ?", ...identity);
+      else if (member) {
+        this.sql.exec("UPDATE upstream_grant_pool_members SET status = ?, pending_previous_status = NULL WHERE scope = ? AND scope_id = ? AND token_ref = ? AND provider_id = ?", status, ...identity, provider!);
+        this.sql.exec("DELETE FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND token_ref = ? AND provider_id != ?", ...identity, provider!);
+      } else this.sql.exec("DELETE FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND token_ref = ? AND status IN ('pending', 'pending_inactive')", ...identity);
+      if (status !== "active") this.sql.exec("DELETE FROM upstream_grant_runtime WHERE grant_key = ?", input.key);
+      this.storeAttachmentVersion(input.key, input.generation, current.revision + 1);
+      return { ...this.grantAttachment(input.key), outcome };
+    });
+  }
+
+  private cancelPendingAttachment(input: { key: string; revision: number }): GrantAttachmentResult {
+    return this.storage.transactionSync(() => {
+      const identity = grantPoolIdentity(input.key), current = this.grantAttachment(input.key);
+      if (input.revision !== current.revision) throw new HttpError(409, "grant_attachment_changed", "attachment revision changed; reread the owner before repair");
+      // Only an explicit, uncommitted first admission has generation zero.
+      // Strong owner absence authorizes its cancellation, never legacy removal.
+      if (current.generation !== 0) return { ...current, outcome: "unresolved" };
+      if (current.pending) {
+        this.restorePendingAttachment(identity);
+        this.storeAttachmentVersion(input.key, 0, current.revision + 1);
+      }
+      const updated = this.grantAttachment(input.key);
+      return { ...updated, outcome: updated.attached ? "unresolved" : "pending_cancelled" };
+    });
+  }
+
+  private restorePendingAttachment(identity: [string, string, string]): void {
+    this.sql.exec("UPDATE upstream_grant_pool_members SET status = pending_previous_status, pending_previous_status = NULL WHERE scope = ? AND scope_id = ? AND token_ref = ? AND status IN ('pending', 'pending_inactive') AND pending_previous_status IS NOT NULL", ...identity);
+    this.sql.exec("DELETE FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND token_ref = ? AND status IN ('pending', 'pending_inactive')", ...identity);
+  }
+
+  private pendingGrantAttachments(input: { cursor?: string; limit?: number }): { keys: string[]; cursor: string | null } {
+    const limit = boundedInteger(input.limit ?? 32, "limit", 1, 64);
+    const after = input.cursor ? grantPoolIdentity(input.cursor) : ["", "", ""];
+    const page = rows<{ scope: string; scope_id: string; token_ref: string }>(this.sql.exec("SELECT scope, scope_id, token_ref FROM upstream_grant_pool_members WHERE status IN ('pending', 'pending_inactive') AND (scope, scope_id, token_ref) > (?, ?, ?) GROUP BY scope, scope_id, token_ref ORDER BY scope, scope_id, token_ref LIMIT ?", ...after, limit + 1));
+    const keys = page.slice(0, limit).map((row) => row.scope === "tenants" ? `oauth/tenants/${row.scope_id}/${row.token_ref}` : `oauth/${row.scope_id}/${row.token_ref}`);
+    return { keys, cursor: page.length > limit ? keys[keys.length - 1] : null };
+  }
+
+  private attachmentMutation(input: GrantAttachmentMutation): { identity: [string, string, string]; provider: string | null; status: GrantAttachmentStatus | null; current: GrantAttachmentSnapshot } {
+    const identity = grantPoolIdentity(input.key), current = this.grantAttachment(input.key);
+    boundedInteger(input.generation, "generation", 0, Number.MAX_SAFE_INTEGER - 1);
+    boundedInteger(input.revision, "revision", 0, Number.MAX_SAFE_INTEGER - 1);
+    if (input.admissionRevision !== undefined) boundedInteger(input.admissionRevision, "admissionRevision", 0, Number.MAX_SAFE_INTEGER - 1);
     const provider = input.provider == null ? null : grantSegment(input.provider, "provider");
-    const adding = input.enabled === true && provider !== null;
-    if (adding && !this.hasPoolMember(scope, scopeId, provider, tokenRef) && this.poolTokenRefs(scope, scopeId, provider).length >= 32) invalidAuthorityRequest("grant pool cannot contain more than 32 members per scope and provider");
-    if (previousProvider && (previousProvider !== provider || !adding)) this.sql.exec("DELETE FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND provider_id = ? AND token_ref = ?", scope, scopeId, previousProvider, tokenRef);
-    if (adding) this.sql.exec("INSERT OR IGNORE INTO upstream_grant_pool_members (scope, scope_id, provider_id, token_ref) VALUES (?, ?, ?, ?)", scope, scopeId, provider, tokenRef);
-    if (!adding) this.sql.exec("DELETE FROM upstream_grant_runtime WHERE grant_key = ?", scope === "tenants" ? `oauth/tenants/${scopeId}/${tokenRef}` : `oauth/${scopeId}/${tokenRef}`);
+    const status = input.status;
+    if (status !== null && !["active", "paused", "reauth_required"].includes(status)) invalidAuthorityRequest("attachment status is invalid");
+    if (input.revision !== current.revision || input.generation < current.generation) throw new HttpError(409, "grant_attachment_changed", "attachment changed; reread the current owner before publication");
+    return { identity, provider, status, current };
+  }
+
+  private attachmentMember(identity: [string, string, string], provider: string): { status: string; pending_previous_status: string | null } | undefined {
+    return rows<{ status: string; pending_previous_status: string | null }>(this.sql.exec("SELECT status, pending_previous_status FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND token_ref = ? AND provider_id = ?", ...identity, provider))[0];
+  }
+
+  private storeAttachmentVersion(key: string, generation: number, revision: number): void {
+    this.sql.exec("INSERT INTO upstream_grant_pool_versions (grant_key, generation, revision) VALUES (?, ?, ?) ON CONFLICT (grant_key) DO UPDATE SET generation = excluded.generation, revision = excluded.revision", key, generation, revision);
   }
 
   private putGrantRuntime(input: GrantRuntimeFeedbackRequest): void {
@@ -474,11 +591,7 @@ export class PolicyBindingIndexObject implements DurableObject {
   }
 
   private poolTokenRefs(scope: "policies" | "tenants", scopeId: string, providerId: string): string[] {
-    return rows<{ token_ref: string }>(this.sql.exec("SELECT token_ref FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND provider_id = ? ORDER BY token_ref LIMIT 33", scope, scopeId, providerId)).map((row) => row.token_ref);
-  }
-
-  private hasPoolMember(scope: "policies" | "tenants", scopeId: string, providerId: string, tokenRef: string): boolean {
-    return rows(this.sql.exec("SELECT token_ref FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND provider_id = ? AND token_ref = ?", scope, scopeId, providerId, tokenRef)).length > 0;
+    return rows<{ token_ref: string }>(this.sql.exec("SELECT token_ref FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND provider_id = ? AND status IN ('legacy', 'active') ORDER BY token_ref LIMIT 32", scope, scopeId, providerId)).map((row) => row.token_ref);
   }
 
   private putOAuthState(value: OAuthState): void {
@@ -496,7 +609,10 @@ export class PolicyBindingIndexObject implements DurableObject {
 interface AssignmentReconcileRequest { email: string; rules: AssignmentRuleEntry[]; legacy: Partial<AssignmentState> | null; evidence?: AssignmentEvidence; force: boolean }
 interface UserBindingsRequest { user: AccessControlUser; policyIds: string[]; seed: Seed }
 interface GrantPoolResolveRequest { policyId: string; tenantId: string; providerId: string; defaultKeys?: string[] }
-interface GrantPoolSyncRequest { scope: "policies" | "tenants"; scopeId: string; tokenRef: string; previousProvider: string | null; provider: string | null; enabled: boolean }
+export type GrantAttachmentStatus = "active" | "paused" | "reauth_required";
+export interface GrantAttachmentSnapshot { generation: number; revision: number; pending: boolean; attached: boolean }
+export interface GrantAttachmentResult extends GrantAttachmentSnapshot { outcome: "attached" | "detached" | "unattached" | "pending_cancelled" | "unresolved" }
+interface GrantAttachmentMutation { key: string; generation: number; revision: number; admissionRevision?: number; provider: string | null; status: GrantAttachmentStatus | null }
 interface GrantRuntimeFeedbackRequest { key: string; state: GrantRuntimeState }
 interface GrantRuntimeStatesRequest { keys: string[] }
 interface GrantPoolSelectRequest {
@@ -554,6 +670,13 @@ function grantKey(value: unknown): string {
   return value;
 }
 
+function grantPoolIdentity(value: string): [string, string, string] {
+  const parts = grantKey(value).split("/");
+  if (parts.length === 4 && parts[1] === "tenants") return ["tenants", grantSegment(parts[2], "scopeId"), grantSegment(parts[3], "tokenRef")];
+  if (parts.length === 3 && parts[1] !== "tenants") return ["policies", grantSegment(parts[1], "scopeId"), grantSegment(parts[2], "tokenRef")];
+  return invalidAuthorityRequest("grant key is invalid");
+}
+
 function grantSelectionPoolKey(value: unknown): string {
   if (typeof value !== "string" || !value.length || value.length > 1024 || /[\u0000-\u001f\u007f]/.test(value)) invalidAuthorityRequest("grant selection pool key is invalid");
   return value;
@@ -608,21 +731,6 @@ function boundedInteger(value: unknown, field: string, minimum: number, maximum:
 
 function invalidAuthorityValue(message: string): never {
   invalidAuthorityRequest(message);
-}
-
-function stickyScore(hash: string, candidate: { key: string; weight: number }): number {
-  let value = 2166136261;
-  for (const character of `${hash}:${candidate.key}`) value = Math.imul(value ^ character.charCodeAt(0), 16777619) >>> 0;
-  const unit = (value + 1) / 0x1_0000_0000;
-  return -Math.log(unit) / candidate.weight;
-}
-
-function weightedRandom<T extends { weight: number }>(candidates: T[]): T {
-  const total = candidates.reduce((sum, candidate) => sum + candidate.weight, 0);
-  const random = crypto.getRandomValues(new Uint32Array(1))[0] / 0x1_0000_0000 * total;
-  let cursor = 0;
-  for (const candidate of candidates) { cursor += candidate.weight; if (random < cursor) return candidate; }
-  return candidates.at(-1)!;
 }
 
 function normalizeGrantRuntimeState(value: unknown): GrantRuntimeState {
@@ -832,28 +940,6 @@ function normalizeStoredGrantRouting(value: unknown): GrantRoutingPolicy {
     hysteresisPercent,
     eligibleGrants,
   };
-}
-
-function boundedPercent(value: unknown, fallback: number): number {
-  return typeof value === "number" && Number.isFinite(value) && value >= 0 && value <= 100 ? value : fallback;
-}
-
-export function selectThresholdGrantKey(
-  candidates: Array<{ key: string; remainingRatio: number | null }>,
-  currentKey: string | null,
-  switchAtUsedPercent = 90,
-  hysteresisPercent = 10,
-): string {
-  if (!candidates.length) throw new Error("threshold selection requires at least one candidate");
-  const healthiest = [...candidates].sort((a, b) => (b.remainingRatio ?? -1) - (a.remainingRatio ?? -1) || a.key.localeCompare(b.key))[0];
-  const current = candidates.find((candidate) => candidate.key === currentKey);
-  if (!current || current.remainingRatio === null) return current?.key ?? healthiest.key;
-  const cutoffRemaining = 1 - boundedPercent(switchAtUsedPercent, 90) / 100;
-  if (current.remainingRatio > cutoffRemaining + 1e-9) return current.key;
-  const hysteresis = boundedPercent(hysteresisPercent, 10) / 100;
-  return [...candidates]
-    .filter((candidate) => candidate.key !== current.key && candidate.remainingRatio !== null && candidate.remainingRatio > cutoffRemaining + 1e-9 && candidate.remainingRatio + 1e-9 >= current.remainingRatio! + hysteresis)
-    .sort((a, b) => b.remainingRatio! - a.remainingRatio! || a.key.localeCompare(b.key))[0]?.key ?? current.key;
 }
 
 function validStoredGrantSegment(value: string): boolean {

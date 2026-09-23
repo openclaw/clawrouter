@@ -35,12 +35,14 @@ test("lineage is owner-issued, survives metadata updates and seeds old owner rec
   const enabled = await putGrantCredentials(env, key, { ...updated, enabled: true }, true);
   assert.equal(enabled.credentialLineage, active.credentialLineage);
   const owner = env.GRANT_CREDENTIALS.objects.get(key), record = owner.values.get("credential");
+  const admissionRevision = record.poolAdmissionRevision;
   delete record.lineage;
   owner.values.set("credential", record);
   values.set(key, { ...enabled, credentialLineage: "kv-forged" });
   const migrated = await materializeGrantCredentials(env, key, enabled, "openai", refreshConfig(), false);
   assert.notEqual(migrated.credentialLineage, "kv-forged");
   assert.notEqual(migrated.credentialLineage, active.credentialLineage);
+  assert.equal(owner.values.get("credential").poolAdmissionRevision, admissionRevision);
   const again = await materializeGrantCredentials(env, key, enabled, "openai", refreshConfig(), false);
   assert.equal(again.credentialLineage, migrated.credentialLineage);
   await revokeGrantCredentials(env, key);
@@ -222,9 +224,10 @@ test("revocation never restores secrets after failed pool or KV publication, and
       if (failure === "kv" && fail) { fail = false; throw new Error("fixture KV failure"); }
       return put(...args);
     };
-    env.ACCESS_CONTROL.get = () => ({ fetch: async () => {
+    const get = env.ACCESS_CONTROL.get;
+    env.ACCESS_CONTROL.get = (id) => ({ fetch: async (url, init) => {
       if (failure === "pool" && fail) { fail = false; throw new Error("fixture index failure"); }
-      return new Response("updated");
+      return get(id).fetch(url, init);
     } });
     await assert.rejects(() => revokeGrantCredentials(env, key), (error) => error.code === "credential_owner_error");
     const tombstone = owner.values.get("credential");
@@ -242,31 +245,27 @@ test("revocation never restores secrets after failed pool or KV publication, and
 
 test("pool capacity rejection cannot install a credential", async () => {
   const key = "oauth/policy/full", values = new Map(), env = credentialEnv(values);
-  env.ACCESS_CONTROL.get = () => ({ fetch: async () => new Response("pool full", { status: 400 }) });
+  for (let i = 0; i < 32; i++) env.grantAuthority.seedLegacy(`oauth/policy/legacy-${i}`, "openai");
   await assert.rejects(() => putGrantCredentials(env, key, legacyGrant()));
   assert.equal(env.GRANT_CREDENTIALS.objects.get(key).values.has("credential"), false);
   assert.equal(values.has(key), false);
 });
 
-test("a failed owner installation completes pool compensation before a later command", async () => {
+test("a failed owner installation retains its old attachment until a later command reconciles", async () => {
   const key = "oauth/policy/openai", values = new Map(), env = credentialEnv(values);
   const active = await putGrantCredentials(env, key, legacyGrant());
   const owner = env.GRANT_CREDENTIALS.objects.get(key), put = owner.state.storage.put;
-  let fail = true, compensating = false, release, entered, membership = true;
+  let fail = true, release, entered;
   const ready = new Promise((resolve) => { entered = resolve; });
   const held = new Promise((resolve) => { release = resolve; });
   owner.state.storage.put = async (...args) => {
-    if (fail) { fail = false; compensating = true; throw new Error("fixture storage failure"); }
+    if (fail) { fail = false; entered(); await held; throw new Error("fixture storage failure"); }
     return put(...args);
   };
-  env.ACCESS_CONTROL.get = () => ({ fetch: async (_url, init) => {
-    const body = JSON.parse(init.body);
-    if (compensating) { compensating = false; entered(); await held; }
-    membership = body.enabled;
-    return new Response("updated");
-  } });
-  const failed = assert.rejects(() => putGrantCredentials(env, key, { ...active, enabled: false }, true));
+  const failed = assert.rejects(() => putGrantCredentials(env, key, { ...active, provider: "anthropic" }, true));
   await ready;
+  assert.deepEqual((await env.grantAuthority.call("resolve", { policyId: "policy", providerId: "openai" })).keys, [key]);
+  assert.deepEqual((await env.grantAuthority.call("resolve", { policyId: "policy", providerId: "anthropic" })).keys, []);
   let laterFinished = false;
   const later = putGrantCredentials(env, key, { ...active, label: "later update" }, true).then((grant) => { laterFinished = true; return grant; });
   await new Promise((resolve) => setImmediate(resolve));
@@ -274,7 +273,8 @@ test("a failed owner installation completes pool compensation before a later com
   release();
   await failed;
   const final = await later;
-  assert.equal(membership, true);
+  assert.deepEqual((await env.grantAuthority.call("resolve", { policyId: "policy", providerId: "openai" })).keys, [key]);
+  assert.equal((await env.grantAuthority.call("resolve", { policyId: "policy", providerId: "anthropic" })).hasAttachment, false);
   assert.equal(final.label, "later update");
   assert.deepEqual(values.get(key), final);
 });
@@ -387,10 +387,13 @@ for (const failure of ["index", "storage"]) test(`negative upgrade migration ret
   delete owner.values.get("credential").metadata;
   values.set(key, { ...active, enabled: false, revokedAt: "2026-09-01T01:00:00.000Z" });
   let syncs = 0, fail = true, providerCalls = 0;
-  env.ACCESS_CONTROL.get = () => ({ fetch: async () => {
-    syncs += 1;
-    if (failure === "index" && fail) { fail = false; throw new Error("fixture index unavailable"); }
-    return new Response("updated");
+  const get = env.ACCESS_CONTROL.get;
+  env.ACCESS_CONTROL.get = (id) => ({ fetch: async (url, init) => {
+    if (new URL(url).pathname === "/grant-pools/publish") {
+      syncs += 1;
+      if (failure === "index" && fail) { fail = false; throw new Error("fixture index unavailable"); }
+    }
+    return get(id).fetch(url, init);
   } });
   const put = owner.state.storage.put;
   owner.state.storage.put = async (...args) => {
@@ -399,10 +402,14 @@ for (const failure of ["index", "storage"]) test(`negative upgrade migration ret
   };
   context.mock.method(globalThis, "fetch", async () => { providerCalls += 1; throw new Error("unexpected provider I/O"); });
   await assert.rejects(() => owner.object.alarm());
-  assert.equal(owner.values.get("credential").metadata, undefined);
+  if (failure === "storage") assert.equal(owner.values.get("credential").metadata, undefined);
+  else {
+    assert.equal(owner.values.get("credential").poolSyncPending, true);
+    assert.equal(owner.values.get("credential").accessToken, undefined, "negative migration commits its tombstone before index publication");
+  }
   assert.equal(values.get(key).enabled, false);
   await owner.object.alarm();
-  assert.equal(syncs, 2);
+  assert.equal(syncs, failure === "index" ? 2 : 1);
   assert.equal(owner.values.get("credential").enabled, false);
   assert.equal(owner.values.get("credential").accessToken, undefined);
   assert.equal(owner.alarm(), null);
@@ -416,6 +423,7 @@ test("upgrade migration adopts a legacy pause and never adopts a legacy re-enabl
     const owner = env.GRANT_CREDENTIALS.objects.get(key), old = owner.values.get("credential");
     delete old.metadata;
     old.enabled = ownerEnabled;
+    env.grantAuthority.sql.exec("DELETE FROM upstream_grant_pool_versions");
     values.set(key, { ...active, enabled: kvEnabled });
     await owner.object.alarm();
     assert.equal(owner.values.get("credential").enabled, false);
@@ -452,12 +460,10 @@ test("legacy raw tokens can be replaced or revoked through the owner", async () 
 
 test("legacy revoke normalizes metadata and removes the previous provider from the pool", async () => {
   const key = "oauth/policy/retired", values = new Map([[key, { provider: "old-provider", account_id: "legacy-account", created_at: "2026-09-01T00:00:00.000Z", access_token: "legacy-private", refresh: { extraParams: { client_secret: "nested-private", audience: "fixture" } } }]]), env = credentialEnv(values);
-  let sync;
-  env.ACCESS_CONTROL.get = () => ({ fetch: async (_url, init) => { sync = JSON.parse(init.body); return new Response("updated"); } });
+  env.grantAuthority.seedLegacy(key, "old-provider");
   const tombstone = await revokeGrantCredentials(env, key, { provider: "retired-provider", kind: "oauth" });
-  assert.equal(sync.previousProvider, "old-provider");
-  assert.equal(sync.provider, "retired-provider");
-  assert.equal(sync.enabled, false);
+  assert.equal((await env.grantAuthority.call("resolve", { policyId: "policy", providerId: "old-provider" })).hasAttachment, false);
+  assert.equal((await env.grantAuthority.call("resolve", { policyId: "policy", providerId: "retired-provider" })).hasAttachment, false);
   assert.equal(tombstone.accountId, "legacy-account");
   assert.equal(tombstone.createdAt, "2026-09-01T00:00:00.000Z");
   assert.deepEqual(tombstone.refresh.extraParams, { audience: "fixture" });
@@ -466,15 +472,12 @@ test("legacy revoke normalizes metadata and removes the previous provider from t
 
 for (const recovery of ["revoke", "reconnect"]) test(`legacy revoke keeps original pool cleanup after failure and ${recovery}`, async () => {
   const key = "oauth/policy/legacy", values = new Map([[key, legacyGrant({ provider: "old-provider" })]]), env = credentialEnv(values);
-  const members = new Set(["old-provider"]), previousProviders = [];
+  env.grantAuthority.seedLegacy(key, "old-provider");
   let fail = true;
-  env.ACCESS_CONTROL.get = () => ({ fetch: async (_url, init) => {
-    const body = JSON.parse(init.body);
-    previousProviders.push(body.previousProvider);
-    if (fail) { fail = false; throw new Error("fixture pool unavailable"); }
-    members.delete(body.previousProvider);
-    if (body.enabled) members.add(body.provider);
-    return new Response("updated");
+  const get = env.ACCESS_CONTROL.get;
+  env.ACCESS_CONTROL.get = (id) => ({ fetch: async (url, init) => {
+    if (new URL(url).pathname === "/grant-pools/publish" && fail) { fail = false; throw new Error("fixture pool unavailable"); }
+    return get(id).fetch(url, init);
   } });
   await assert.rejects(() => revokeGrantCredentials(env, key, { provider: "retired-provider" }));
   const owner = env.GRANT_CREDENTIALS.objects.get(key), tombstone = owner.values.get("credential");
@@ -485,13 +488,12 @@ for (const recovery of ["revoke", "reconnect"]) test(`legacy revoke keeps origin
     const retried = await revokeGrantCredentials(env, key, { provider: "ignored-provider" });
     assert.equal(retried.provider, "retired-provider");
     assert.equal(retried.credentialGeneration, tombstone.generation);
-    assert.equal(members.size, 0);
+    assert.equal((await env.grantAuthority.call("attachment", { key })).attached, false);
   } else {
     await putGrantCredentials(env, key, legacyGrant({ provider: "anthropic", accessToken: "fresh-access" }));
-    assert.deepEqual([...members], ["anthropic"]);
-    assert.equal(owner.values.get("credential").revokedProviderId, undefined);
+    assert.deepEqual((await env.grantAuthority.call("resolve", { policyId: "policy", providerId: "anthropic" })).keys, [key]);
   }
-  assert.deepEqual(previousProviders, ["old-provider", "old-provider"]);
+  assert.equal((await env.grantAuthority.call("resolve", { policyId: "policy", providerId: "old-provider" })).hasAttachment, false);
 });
 
 for (const [name, original, usable] of [
@@ -499,21 +501,17 @@ for (const [name, original, usable] of [
   ["bundle", { credentials: { apiKey: "bundle-private" } }, true],
   ["invalid", { credential: "" }, false],
   ["reauth", { credentialStore: "durable_object", credentialStatus: "reauth_required", hasAccessToken: true }, false],
-]) test(`failed legacy ${name} replacement restores only its previous pool eligibility`, async () => {
+]) test(`failed legacy ${name} replacement preserves its previous pool eligibility`, async () => {
   const key = "oauth/policy/custom-account", previous = { provider: "openai", kind: "api_key", enabled: true, ...original };
-  const values = new Map([[key, previous]]), env = credentialEnv(values), members = new Set(usable ? ["openai"] : []);
+  const values = new Map([[key, previous]]), env = credentialEnv(values);
+  if (usable) env.grantAuthority.seedLegacy(key, "openai");
   env.GRANT_CREDENTIALS.get(key);
   const owner = env.GRANT_CREDENTIALS.objects.get(key), put = owner.state.storage.put;
   let fail = true;
   owner.state.storage.put = async (...args) => { if (fail) { fail = false; throw new Error("fixture owner write failed"); } return put(...args); };
-  env.ACCESS_CONTROL.get = () => ({ fetch: async (_url, init) => {
-    const body = JSON.parse(init.body);
-    members.delete(body.previousProvider);
-    if (body.enabled) members.add(body.provider);
-    return new Response("updated");
-  } });
   await assert.rejects(() => putGrantCredentials(env, key, { provider: "anthropic", kind: "api_key", credential: "replacement-private" }));
-  assert.deepEqual([...members], usable ? ["openai"] : []);
+  assert.deepEqual((await env.grantAuthority.call("resolve", { policyId: "policy", providerId: "openai" })).keys, usable ? [key] : []);
+  assert.deepEqual((await env.grantAuthority.call("resolve", { policyId: "policy", providerId: "anthropic" })).keys, []);
   assert.equal(owner.values.has("credential"), false);
   assert.deepEqual(values.get(key), previous);
   await revokeGrantCredentials(env, key);
