@@ -1,5 +1,5 @@
 import snapshot from "../../worker/generated/provider-snapshot.json";
-import type { ProviderRow, RouteCatalog } from "./ui-types";
+import type { ClientCatalogModel, ProviderRow, RouteCatalog } from "./ui-types";
 
 interface CatalogSnapshot {
   providers: Array<{
@@ -15,12 +15,16 @@ interface CatalogSnapshot {
     };
     quota?: { probes?: Array<{ grantKinds?: Array<"api_key" | "oauth" | "subscription">; requiresRefreshToken?: boolean }> };
     routing: { modelPrefixes?: string[] };
-    models: Array<{ id: string; capabilities: string[] }>;
+    models: ClientCatalogModel[];
     endpoints: Array<{ id: string; methods: string[]; path_params: string[]; request_format?: string | null; response_format?: string | null; streaming?: string | null }>;
   }>;
 }
 
 const catalogSnapshot = snapshot as unknown as CatalogSnapshot;
+
+export function demoModel(providerId: string, modelId: string) {
+  return catalogSnapshot.providers.find((provider) => provider.id === providerId)?.models.find((model) => model.id === modelId);
+}
 
 export function demoCatalog(): { providers: ProviderRow[]; routes: RouteCatalog } {
   const providers: ProviderRow[] = catalogSnapshot.providers.map((provider) => ({

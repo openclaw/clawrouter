@@ -291,6 +291,7 @@
 
 .composerControls {
   display: flex;
+  flex-wrap: wrap;
   align-items: center;
   gap: 7px;
   min-width: 0;
@@ -299,6 +300,7 @@
 
 .composerControls select {
   width: auto;
+  min-width: 0;
   min-height: 28px;
   border: 0;
   border-radius: 6px;
@@ -513,8 +515,8 @@
   .chatTranscript { padding: 22px 12px 28px; }
   .composerDock { padding: 10px 10px 12px; }
   .composerStatus { display: none; }
-  .composerControls .providerPicker { max-width: 38%; }
-  .composerControls .modelPicker { max-width: 46%; }
+  .composerControls .providerPicker { flex: 1 1 100%; max-width: 100%; }
+  .composerControls .modelPicker { flex: 1 1 140px; max-width: 100%; }
   .composerInspect span { display: none; }
   .chatMessage { max-width: 94%; }
 }

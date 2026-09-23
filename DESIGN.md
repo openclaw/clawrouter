@@ -37,6 +37,21 @@ selection, and a request/response inspector. It exercises the same policy and
 accounting path as client traffic. Its exact payload view belongs in the
 inspector rather than the main conversation.
 
+Normal Catalog and Playground choices come from the signed-in session's operation
+offers. Choose a provider, operation, then a model or custom JSON request. Catalog's
+**Try in playground** carries that exact choice. A refresh that removes or blocks
+it keeps the selection and draft visible, with sending disabled; the console never
+substitutes another model or policy. An unavailable catalog is distinct from a
+verified empty catalog. Administrators use **Configure providers** to inspect the
+full integration inventory and manage connections.
+
+Availability is an observation, not a reservation. Request-dependent offers are
+checked again against the final request by the gateway. The inspector shows the
+route, policy generation, and catalog observation time. Known model/endpoint
+parameter conflicts preserve input and block sending; unknown support remains
+advisory. Blank temperature is omitted, and explicit values are never silently
+removed. Custom JSON requests do not inherit a first model's parameter facts.
+
 Use existing table, status, inspector, and error components before adding new
 patterns. Keep provider access, configured readiness, recent verification, and
 budget state distinct. An administrator's role alone grants no provider access.
@@ -68,6 +83,7 @@ explanations.
 screenshot, accessibility, keyboard-focus, and self-service credential checks.
 The committed screenshot baselines are for CI's Linux Chromium environment;
 review intended visual changes before updating them. Demo mode uses synthetic
-identities, usage, and the generated provider catalog for safe captures.
+identities, usage, generated provider metadata, and explicit scoped operation
+offers for safe captures.
 Select it explicitly with `?demo=1`, or use `?demo=user` on loopback for a user
 session. A network or sign-in failure never switches the console into demo mode.

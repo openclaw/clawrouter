@@ -59,10 +59,6 @@ export function parseEligibleGrants(value: string): Record<string, string[]> {
   return result;
 }
 
-export function preferredPlaygroundEndpoint(model: CatalogModel): PlaygroundForm["endpoint"] {
-  return model.capabilities.includes("llm.responses") ? "/v1/responses" : "/v1/chat/completions";
-}
-
 export function readinessMap(readiness: ProviderReadiness[]) {
   return Object.fromEntries(readiness.map((item) => [item.id, item]));
 }
@@ -76,52 +72,9 @@ export function grantNamesForService(service: ServiceItem, policies: AccessPolic
 }
 
 export function serviceOutcome(service: ServiceItem): ServiceOutcome {
-  if (service.access && !service.access.allowed) {
-    return {
-      label: "denied",
-      detail: "Current Cloudflare Access identity is denied by policy.",
-      tone: "revoked",
-      playable: false,
-      blocked: true,
-    };
-  }
-  if (!service.access) {
-    return {
-      label: "unknown",
-      detail: "Access entitlements are unavailable, so this identity's policy status cannot be determined.",
-      tone: "neutral",
-      playable: false,
-      blocked: false,
-    };
-  }
-  const policyNames = service.access.policies;
-  if (!service.readiness) {
-    return {
-      label: "unknown",
-      detail: `Granted by ${policyNames.join(", ") || "session"}, but runtime readiness has not loaded yet.`,
-      tone: "neutral",
-      playable: false,
-      blocked: true,
-    };
-  }
-  if (service.readiness.executable) {
-    return {
-      label: "usable",
-      detail: `Granted by ${policyNames.join(", ") || "session"} and executable in the gateway.`,
-      tone: "active",
-      playable: true,
-      blocked: false,
-    };
-  }
-  const missing = service.readiness.missingConfig.length ? `Missing ${service.readiness.missingConfig.join(", ")}.` : "";
-  const oauth = service.readiness.oauthGrantRequired ? "OAuth grant required before calls can run." : "";
-  return {
-    label: service.readiness.status === "missing_config" ? "missing config" : service.readiness.status === "grant_required" ? "needs OAuth" : readinessLabel(service.readiness),
-    detail: [service.readiness.reasons[0], missing, oauth].filter(Boolean).join(" "),
-    tone: "revoked",
-    playable: false,
-    blocked: true,
-  };
+  if (!service.offers) return { label: "unknown", detail: "Current operation availability is unknown. Refresh the catalog before testing a request.", tone: "neutral", playable: false, blocked: false };
+  const playable = service.offers.some((target) => !target.blocker);
+  return { label: playable ? "usable" : "unavailable", detail: playable ? "Choose an available operation and model. The gateway checks the final request and budget at dispatch." : service.offers[0]?.blocker ?? "No browser operations are available for this identity.", tone: playable ? "active" : "revoked", playable, blocked: !playable };
 }
 
 export function readinessLabel(readiness: ProviderReadiness | undefined) {
@@ -330,16 +283,12 @@ export function playgroundPayload(form: PlaygroundForm, route?: RouteCatalog["ma
     };
   }
   const maxTokens = optionalNumber(form.maxTokens);
-  const temperature = playgroundSupportsTemperature(form.model) ? optionalDecimal(form.temperature) : undefined;
+  const temperature = optionalDecimal(form.temperature);
   const messages = [...conversation, { role: "user" as const, content: form.prompt }];
   if (form.endpoint === "/v1/responses") {
-    return { model: form.model, input: messages, instructions: form.system || undefined, max_output_tokens: maxTokens, temperature };
+    return { model: form.model, input: messages, instructions: form.system || undefined, max_output_tokens: maxTokens, ...(temperature === undefined ? {} : { temperature }) };
   }
-  return { model: form.model, messages: [...(form.system ? [{ role: "system", content: form.system }] : []), ...messages], max_tokens: maxTokens, temperature };
-}
-
-export function playgroundSupportsTemperature(model: string) {
-  return model !== "clawrouter/fusion" && !/^openai\/gpt-5\.(?:4|5)(?:$|-)/.test(model);
+  return { model: form.model, messages: [...(form.system ? [{ role: "system", content: form.system }] : []), ...messages], max_tokens: maxTokens, ...(temperature === undefined ? {} : { temperature }) };
 }
 
 export function playgroundResponseText(raw: string) {
@@ -433,41 +382,8 @@ export function playgroundServicePreset(route?: RouteCatalog["manifestProxy"][nu
   };
 }
 
-export function playgroundAccessEndpoint(form: PlaygroundForm, route?: RouteCatalog["manifestProxy"][number]) {
-  if (form.mode === "service") {
-    return resolveProxyRoute(route).replace(/^\/v1\/proxy/, "/v1/playground/proxy");
-  }
-  return `/v1/playground${form.endpoint}`;
-}
-
-export function playgroundBlocker(form: PlaygroundForm, model: CatalogModel | undefined, route: RouteCatalog["manifestProxy"][number] | undefined, accessByProvider: Map<string, ProviderAccess>, readinessByProvider: Record<string, ProviderReadiness>) {
-  if (form.mode === "model" && !model) return "select a model";
-  if (form.mode === "service" && !route) return "select a service route";
-  const provider = form.mode === "model" ? model?.provider : route?.provider;
-  if (!provider) return null;
-  const access = accessByProvider.get(provider);
-  if (!access?.allowed) return "Cloudflare Access identity is not granted this provider";
-  const readiness = readinessByProvider[provider];
-  if (!readiness) return "provider readiness is unknown";
-  if (!readiness.executable) return readiness.reasons[0] ?? `provider is ${readinessLabel(readiness)}`;
-  return null;
-}
-
-export function playgroundBlockedForService(service: ServiceItem) {
-  const outcome = serviceOutcome(service);
-  if (!outcome.playable) return outcome.detail;
-  if (service.readiness && !service.readiness.executable) return service.readiness.reasons[0] ?? `service is ${readinessLabel(service.readiness)}`;
-  if (!service.models && service.surfaces.includes("provider")) return "no executable model or proxy route declared";
-  return null;
-}
-
 export function routeKey(route: RouteCatalog["manifestProxy"][number] | undefined) {
   return route ? `${route.provider}:${route.endpoint}:${route.route}` : "";
-}
-
-export function resolveProxyRoute(route: RouteCatalog["manifestProxy"][number] | undefined) {
-  if (!route) return "/v1/proxy";
-  return route.route;
 }
 
 export function pathParamsForRoute(route: RouteCatalog["manifestProxy"][number] | undefined, value: string) {

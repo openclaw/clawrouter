@@ -9,13 +9,9 @@ import {
   optionalCurrencyMicros,
   optionalNumber,
   parseEligibleGrants,
-  playgroundAccessEndpoint,
-  playgroundBlocker,
   playgroundPayload,
-  preferredPlaygroundEndpoint,
   playgroundResponseText,
   playgroundServicePreset,
-  playgroundSupportsTemperature,
   policyUsageFallback,
   reconcileDirectUserBindings,
   readinessTone,
@@ -122,18 +118,10 @@ test("policy edits discard stale provider ids before saving", () => {
   );
 });
 
-test("service outcome and playground blocker require both access and readiness", () => {
-  const allowed = services[0];
-  assert.equal(serviceOutcome(allowed).label, "usable");
-  assert.equal(playgroundBlocker(modelForm(), { id: "openai/default", provider: "openai", capabilities: [] }, undefined, new Map([["openai", allowed.access]]), { openai: allowed.readiness }), null);
-
-  const denied = { ...allowed, access: { ...allowed.access, allowed: false, policies: [] } };
-  assert.equal(serviceOutcome(denied).label, "denied");
-  assert.match(playgroundBlocker(modelForm(), { id: "openai/default", provider: "openai", capabilities: [] }, undefined, new Map([["openai", denied.access]]), { openai: denied.readiness }), /not granted/);
-
-  const disabled = services[2];
-  assert.equal(serviceOutcome(disabled).label, "disabled");
-  assert.match(playgroundBlocker(modelForm(), { id: "disabled/default", provider: "disabled-provider", capabilities: [] }, undefined, new Map([["disabled-provider", disabled.access]]), { "disabled-provider": disabled.readiness }), /disabled/);
+test("service outcome uses operation offers independently of administrative readiness", () => {
+  assert.equal(serviceOutcome({ ...services[0], offers: [{ blocker: null }] }).label, "usable");
+  assert.equal(serviceOutcome({ ...services[0], offers: [{ blocker: "budget exhausted" }] }).label, "unavailable");
+  assert.equal(serviceOutcome(services[0]).label, "unknown");
 });
 
 test("readiness tone prioritizes current executability over historical verification", () => {
@@ -160,7 +148,6 @@ test("playground payloads preserve model and service semantics", () => {
     pathParams: { prediction_id: "pred_123" },
     body: { detail: true },
   });
-  assert.equal(playgroundAccessEndpoint(form, route), "/v1/playground/proxy/replicate/prediction");
 });
 
 test("playground model requests include the current conversation", () => {
@@ -175,18 +162,11 @@ test("playground model requests include the current conversation", () => {
   ]);
 });
 
-test("playground omits unsupported temperature for current OpenAI reasoning models", () => {
-  assert.equal(playgroundSupportsTemperature("openai/gpt-5.5"), false);
-  assert.equal(playgroundSupportsTemperature("openai/gpt-5.4"), false);
-  assert.equal(playgroundSupportsTemperature("openai/gpt-4.1-mini"), true);
-  assert.equal(playgroundSupportsTemperature("clawrouter/fusion"), false);
-  const payload = playgroundPayload({ ...modelForm(), model: "openai/gpt-5.5", temperature: "0.7" });
-  assert.equal(payload.temperature, undefined);
-});
-
-test("playground model switches choose an endpoint the model supports", () => {
-  assert.equal(preferredPlaygroundEndpoint({ id: "openai/gpt-5.5", provider: "openai", capabilities: ["llm.chat", "llm.responses"] }), "/v1/responses");
-  assert.equal(preferredPlaygroundEndpoint({ id: "groq/gpt-oss-120b", provider: "groq", capabilities: ["llm.chat"] }), "/v1/chat/completions");
+test("playground preserves explicit temperature and omits a blank field", () => {
+  for (const model of ["openai/gpt-5.5", "clawrouter/fusion", "renamed/reasoning-model"]) {
+    assert.equal(playgroundPayload({ ...modelForm(), model, temperature: "0.7" }).temperature, 0.7);
+    assert.equal(Object.hasOwn(playgroundPayload({ ...modelForm(), model, temperature: " " }), "temperature"), false);
+  }
 });
 
 test("playground responses show assistant text while preserving arbitrary responses", () => {

@@ -1,6 +1,6 @@
 import React from "react";
 import { Route } from "lucide-react";
-import { accessFormFromUser, playgroundServicePreset } from "./domain";
+import { accessFormFromUser } from "./domain";
 import { ThemeToggle, viewIcon, viewSubtitle, viewTitle } from "./components";
 import { DashboardScreen, CatalogScreen, UserAvatar } from "./screens/dashboard-catalog";
 import { PlaygroundScreen } from "./screens/playground";
@@ -19,7 +19,7 @@ export function AppShell() {
   const refreshError = [shell.refreshError, usage.error].filter(Boolean).join("; ");
   const statusPresentation = consoleStatusPresentation(status, demoMode, Boolean(refreshError), shell.refreshing);
   const statusTone = statusPresentation.tone;
-  const { providers, providerReadiness, accessByProvider, services, models, serviceRoutes, query, setQuery, kind, setKind, kinds, filteredServices, selectedService, setSelectedServiceId } = catalog;
+  const { providers, services, inventory, inventoryModels, query, setQuery, kind, setKind, kinds, filteredServices, selectedService, setSelectedServiceId } = catalog;
   const { policies, credentials: credentialState, connections: connectionState, bindings: bindingState, upstream, assignments, fusion, users: userState, tab } = access;
   const { items: keys, selected: selectedPolicy, form: policyForm, setForm: setPolicyForm, error: policyError, save: savePolicy, revoke, edit: editPolicy, startNew: startNewPolicy, applyPreset, toggleProvider: togglePolicyProvider, setProviderGroup: setPolicyProviderGroup } = policies;
   const { items: credentials, selected: selectedCredential, form: credentialForm, setForm: setCredentialForm, issue: issueCredential, rotate: rotateCredential, revoke: revokeCredential, edit: editCredential, startNew: startNewCredential } = credentialState;
@@ -31,7 +31,7 @@ export function AppShell() {
   const { items: users, selected: selectedUser, setSelectedEmail: setSelectedUserEmail, form: accessForm, setForm: setAccessForm, error: userError, save: saveUser, startNew: startNewUser } = userState;
   const { value: accessTab, set: setAccessTab } = tab;
   const { adminOverview, tenantSummaries, rows: usageRows, snapshot: usageSnapshot, loaded: usageLoaded } = usage;
-  const { form: playground, setForm: setPlayground, turns: playgroundTurns, selectedTurnId: selectedPlaygroundTurnId, setSelectedTurnId: setSelectedPlaygroundTurnId, requestMode, setRequestMode, error: playgroundError, selectedModel, selectedServiceRoute, running: playgroundRunning, run: runPlayground, resetConversation } = playgroundDomain;
+  const { form: playground, setForm: setPlayground, turns: playgroundTurns, selectedTurnId: selectedPlaygroundTurnId, setSelectedTurnId: setSelectedPlaygroundTurnId, requestMode, setRequestMode, error: playgroundError, selection, selected: selectedTarget, selectTarget, blocker, advisory, requestPreview, running: playgroundRunning, run: runPlayground, resetConversation } = playgroundDomain;
   const retentionLabel = session.contentRetention ? session.contentRetention.enabled ? `${session.contentRetention.retentionDays}d` : "off" : "pending";
   return (
     <main className="appShell">
@@ -101,6 +101,9 @@ export function AppShell() {
           <DashboardScreen
             session={session}
             services={services}
+            inventory={inventory}
+            catalogNotice={catalog.catalogNotice}
+            catalogAvailable={catalog.catalogAvailable}
             policies={keys}
             credentials={credentials}
             users={users}
@@ -130,7 +133,11 @@ export function AppShell() {
         {view === "catalog" ? (
           <CatalogScreen
             services={filteredServices}
-            allServices={services}
+            allServices={catalog.displayedServices}
+            targets={catalog.targets}
+            catalogNotice={catalog.catalogNotice}
+            inventoryMode={catalog.inventoryMode}
+            setInventoryMode={catalog.setInventoryMode}
             selected={selectedService}
             policies={keys}
             connections={connections}
@@ -144,12 +151,8 @@ export function AppShell() {
             onSelect={(service) => setSelectedServiceId(service.id)}
             onSetConnection={setProviderConnection}
             onSetProviderBudget={setProviderBudget}
-            onPlay={(service) => {
-              const model = models.find((item) => item.provider === service.provider);
-              const proxyRoute = serviceRoutes.find((route) => route.provider === service.provider);
-              setPlayground((current) => model
-                ? { ...current, mode: "model", model: model.id }
-                : proxyRoute ? { ...current, mode: "service", ...playgroundServicePreset(proxyRoute) } : current);
+            onPlay={(target) => {
+              selectTarget(target);
               navigateTo("playground");
             }}
             onAdd={(service) => {
@@ -166,12 +169,14 @@ export function AppShell() {
           <PlaygroundScreen
             form={playground}
             setForm={setPlayground}
-            models={models}
-            selected={selectedModel}
-            serviceRoutes={serviceRoutes}
-            selectedServiceRoute={selectedServiceRoute}
-            accessByProvider={accessByProvider}
-            readinessByProvider={providerReadiness}
+            targets={catalog.targets}
+            selection={selection}
+            selected={selectedTarget}
+            onSelect={selectTarget}
+            blocker={blocker}
+            advisory={advisory}
+            catalogNotice={catalog.catalogNotice}
+            requestPreview={requestPreview}
             requestMode={requestMode}
             setRequestMode={setRequestMode}
             turns={playgroundTurns}
@@ -203,7 +208,7 @@ export function AppShell() {
             fusionPolicyId={fusionPolicyId}
             onSelectFusionPolicy={setFusionPolicyId}
             setFusionConfig={setFusionConfig}
-            fusionModels={models}
+            fusionModels={inventoryModels}
             providers={providers}
             form={policyForm}
             setForm={setPolicyForm}
@@ -256,7 +261,7 @@ export function AppShell() {
             selected={selectedUser}
             policies={keys}
             bindings={bindings}
-            services={services}
+            services={inventory}
             form={accessForm}
             setForm={setAccessForm}
             error={userError}
@@ -275,7 +280,7 @@ export function AppShell() {
           />
         ) : null}
 
-        {view === "usage" && session.role === "admin" ? <UsageScreen keys={keys} credentials={credentials} services={services} overview={adminOverview} tenants={tenantSummaries} usageRows={usageRows} usage={usageSnapshot} usageLoaded={usageLoaded} usageStale={usage.stale} usageError={usage.error} usageUpdatedAt={usage.updatedAt} /> : null}
+        {view === "usage" && session.role === "admin" ? <UsageScreen keys={keys} credentials={credentials} services={inventory} overview={adminOverview} tenants={tenantSummaries} usageRows={usageRows} usage={usageSnapshot} usageLoaded={usageLoaded} usageStale={usage.stale} usageError={usage.error} usageUpdatedAt={usage.updatedAt} /> : null}
       </section>
     </main>
   );

@@ -1,70 +1,69 @@
 import { type FormEvent, useEffect, useRef, useState } from "react";
 import {
-  playgroundAccessEndpoint,
-  playgroundBlocker,
-  playgroundPayload,
   playgroundResponseText,
-  playgroundServicePreset,
-  routeKey,
   errorMessage,
 } from "../domain";
-import { demo, demoServicePreset } from "../ui-config";
-import { catalogModels, createPlaygroundTurn, playgroundRequest } from "../ui-helpers";
-import type { CatalogModel } from "../domain";
-import type { PlaygroundForm, PlaygroundTurn, ProviderAccess, ProviderReadiness, RouteCatalog } from "../ui-types";
+import { demoServicePreset } from "../ui-config";
+import { createPlaygroundTurn, playgroundRequest } from "../ui-helpers";
+import { targetBlocker, targetForm, targetRequest, type CatalogTarget } from "../catalog-offers";
+import type { PlaygroundForm, PlaygroundTurn } from "../ui-types";
 
 interface PlaygroundDependencies {
   gatewayOrigin: string;
   demoMode: boolean;
   setStatus: (status: string) => void;
-  models: CatalogModel[];
-  serviceRoutes: RouteCatalog["manifestProxy"];
-  accessByProvider: Map<string, ProviderAccess>;
-  providerReadiness: Record<string, ProviderReadiness>;
+  targets: CatalogTarget[];
+  resolveTarget: (selected: CatalogTarget | null) => CatalogTarget | null;
 }
 
-export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serviceRoutes, accessByProvider, providerReadiness }: PlaygroundDependencies) {
-  const initializedModelsRef = useRef(false);
+export function usePlayground({ gatewayOrigin, demoMode, setStatus, targets, resolveTarget }: PlaygroundDependencies) {
+  const [selection, setSelection] = useState<CatalogTarget | null>(null);
   const operationRef = useRef<AbortController | null>(null);
   const [running, setRunning] = useState(false);
   const [form, setForm] = useState<PlaygroundForm>({
     mode: "model",
-    model: catalogModels(demo.routes)[0]?.id ?? "",
+    model: "",
     endpoint: "/v1/chat/completions",
     ...demoServicePreset,
     system: "You are concise and useful.",
     prompt: "Say hello from ClawRouter in one short sentence.",
     maxTokens: "128",
-    temperature: "0.7",
+    temperature: "",
   });
   const [turns, setTurns] = useState<PlaygroundTurn[]>([]);
   const [selectedTurnId, setSelectedTurnId] = useState("");
   const [requestMode, setRequestMode] = useState<"json" | "curl">("json");
   const [error, setError] = useState("");
-  const selectedModel = models.find((model) => model.id === form.model) ?? models[0];
-  const selectedServiceRoute = serviceRoutes.find((route) => routeKey(route) === form.serviceRoute) ?? serviceRoutes[0];
+  const selected = resolveTarget(selection);
+  const conversation = form.mode === "model"
+    ? turns.filter((turn) => turn.mode === "model" && !turn.error).flatMap((turn) => [
+      { role: "user" as const, content: turn.prompt },
+      { role: "assistant" as const, content: turn.response },
+    ])
+    : [];
+  let blocker = targetBlocker(targets, selection);
+  let advisory = selected?.offer.affordability === "request-dependent" ? "Availability depends on the final request and budget reservation." : "";
+  let requestPreview = "Choose an operation to preview its request.";
+  if (selected && !blocker) {
+    try {
+      const { payload, assessment } = targetRequest(selected, form, conversation);
+      blocker = assessment.conflicts.map((issue) => issue.message).join(" ") || null;
+      advisory = [advisory, ...assessment.unknown.map((issue) => issue.message)].filter(Boolean).join(" ");
+      requestPreview = JSON.stringify(payload, null, 2);
+    } catch (caught) { blocker = errorMessage(caught); requestPreview = blocker; }
+  }
+
+  function selectTarget(target: CatalogTarget | null) {
+    setSelection(target);
+    if (target) setForm((current) => targetForm(current, target));
+    setError("");
+  }
 
   useEffect(() => () => {
     const operation = operationRef.current;
     operationRef.current = null;
     operation?.abort();
   }, []);
-
-  useEffect(() => {
-    if (!models.length) return;
-    if (!initializedModelsRef.current || !models.some((model) => model.id === form.model)) {
-      initializedModelsRef.current = true;
-      const usable = models.filter((model) => accessByProvider.get(model.provider)?.allowed && providerReadiness[model.provider]?.executable);
-      const preferred = usable.find((model) => model.provider === "openai") ?? usable[0] ?? models[0];
-      setForm((current) => ({ ...current, model: preferred.id }));
-    }
-  }, [accessByProvider, form.model, models, providerReadiness]);
-
-  useEffect(() => {
-    if (serviceRoutes.length && !serviceRoutes.some((route) => routeKey(route) === form.serviceRoute)) {
-      setForm((current) => ({ ...current, ...playgroundServicePreset(serviceRoutes[0]) }));
-    }
-  }, [form.serviceRoute, serviceRoutes]);
 
   async function run(event: FormEvent) {
     event.preventDefault();
@@ -74,30 +73,26 @@ export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serv
     setRunning(true);
     const startedAt = performance.now();
     const prompt = form.mode === "model" ? form.prompt.trim() : form.servicePayload.trim();
-    const conversation = form.mode === "model"
-      ? turns.filter((turn) => turn.mode === "model" && !turn.error).flatMap((turn) => [
-        { role: "user" as const, content: turn.prompt },
-        { role: "assistant" as const, content: turn.response },
-      ])
-      : [];
-    const provider = form.mode === "model" ? selectedModel?.provider ?? "unknown" : selectedServiceRoute?.provider ?? "unknown";
-    const model = form.mode === "model" ? selectedModel?.id ?? form.model : selectedServiceRoute?.endpoint ?? form.serviceRoute;
-    const endpoint = playgroundAccessEndpoint(form, selectedServiceRoute);
+    const current = resolveTarget(selection);
+    const provider = selection?.provider ?? "unknown";
+    const model = selection?.offer.modelId ?? selection?.offer.endpoint ?? "unknown";
+    const endpoint = selection?.offer.route ?? "";
     let requestPreview = "";
     try {
       if (!prompt) throw new Error(form.mode === "model" ? "Enter a message." : "Enter a JSON request body.");
       setError("");
       setStatus("running playground");
-      const guard = playgroundBlocker(form, selectedModel, selectedServiceRoute, accessByProvider, providerReadiness);
-      if (guard) throw new Error(guard);
-      const payload = playgroundPayload(form, selectedServiceRoute, conversation);
+      const guard = targetBlocker(targets, selection);
+      if (guard || !current) throw new Error(guard ?? "Selected operation unavailable.");
+      const { payload, assessment } = targetRequest(current, form, conversation);
+      if (assessment.conflicts.length) throw new Error(assessment.conflicts.map((issue) => issue.message).join(" "));
       requestPreview = JSON.stringify(payload, null, 2);
       // Clear the submitted draft now; a later reply must not erase newly typed text.
       if (form.mode === "model") setForm((current) => ({ ...current, prompt: "" }));
       if (demoMode) {
         const raw = JSON.stringify(form.mode === "model"
-          ? { provider: selectedModel?.provider, model: selectedModel?.id, output: "Hello from ClawRouter demo mode." }
-          : { provider: selectedServiceRoute?.provider, route: selectedServiceRoute?.route, output: "Service proxy demo response." }, null, 2);
+          ? { provider, model, output: "Hello from ClawRouter demo mode." }
+          : { provider, route: endpoint, output: "Service proxy demo response." }, null, 2);
         appendTurn({ prompt, raw, requestPreview, provider, model, endpoint, status: 200, startedAt, retention: "demo" });
         setStatus("playground ready");
         return;
@@ -184,8 +179,7 @@ export function usePlayground({ gatewayOrigin, demoMode, setStatus, models, serv
     setRequestMode,
     error,
     setError,
-    selectedModel,
-    selectedServiceRoute,
+    selection, selectTarget, selected, blocker, advisory, requestPreview,
     running,
     run,
     resetConversation,

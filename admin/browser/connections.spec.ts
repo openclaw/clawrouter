@@ -83,6 +83,8 @@ async function openCatalog(page: Page) {
   });
   await page.goto("/dashboard/catalog");
   await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
+  await page.getByRole("button", { name: "Configure providers", exact: true }).click();
+  await page.locator(".tableRow").filter({ hasText: "test-a" }).click();
   await expect(page.getByLabel("monthly provider budget ($)")).toHaveValue("1");
   return pending;
 }
