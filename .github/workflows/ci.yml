@@ -93,6 +93,17 @@ jobs:
       - run: pnpm --dir admin build
       - run: pnpm --dir admin exec playwright install --with-deps chromium
       - run: pnpm --dir admin exec playwright test
+        id: browser
+      - name: Upload browser failure output
+        if: failure() && steps.browser.outcome == 'failure'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: admin-browser-failure-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            admin/test-results
+            admin/playwright-report
+          if-no-files-found: error
+          retention-days: 3
 
   worker-package:
     runs-on: ubuntu-latest

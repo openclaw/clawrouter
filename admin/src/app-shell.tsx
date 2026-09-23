@@ -9,12 +9,16 @@ import { UsageScreen, UsersScreen } from "./screens/users-usage";
 import { applyTheme, initialTheme, navItems } from "./ui-config";
 import { formatTimestamp } from "./ui-helpers";
 import { useConsole } from "./console-controller-context";
+import { consoleStatusPresentation } from "./status-display";
 
 export function AppShell() {
   const [theme, setTheme] = React.useState(initialTheme);
   React.useEffect(() => { applyTheme(theme); }, [theme]);
-  const { session: shell, catalog, access, usage, selfServiceKeys, playground: playgroundDomain } = useConsole();
-  const { view, value: session, status, lastUpdatedAt, demoMode, statusPresentation, busy, statusTone, navigateTo } = shell;
+  const { session: shell, catalog, access, usage, selfServiceKeys, playground: playgroundDomain, refresh } = useConsole();
+  const { view, value: session, status, lastUpdatedAt, demoMode, busy, navigateTo } = shell;
+  const refreshError = [shell.refreshError, usage.error].filter(Boolean).join("; ");
+  const statusPresentation = consoleStatusPresentation(status, demoMode, Boolean(refreshError), shell.refreshing);
+  const statusTone = statusPresentation.tone;
   const { providers, providerReadiness, accessByProvider, services, models, serviceRoutes, query, setQuery, kind, setKind, kinds, filteredServices, selectedService, setSelectedServiceId } = catalog;
   const { policies, credentials: credentialState, connections: connectionState, bindings: bindingState, upstream, assignments, fusion, users: userState, tab } = access;
   const { items: keys, selected: selectedPolicy, form: policyForm, setForm: setPolicyForm, error: policyError, save: savePolicy, revoke, edit: editPolicy, startNew: startNewPolicy, applyPreset, toggleProvider: togglePolicyProvider, setProviderGroup: setPolicyProviderGroup } = policies;
@@ -80,7 +84,7 @@ export function AppShell() {
             </div>
           </div>
           <div className="topActions">
-            <span className={`connectionMeta connectionMeta-${statusTone}`} title="Automatically refreshes every 30 seconds and when this tab regains focus">
+            <span className={`connectionMeta connectionMeta-${statusTone}`} title="Last successful access-data refresh. Automatically refreshes every 30 seconds and when this tab regains focus.">
               <span className="connectionDot" aria-hidden="true" />
               <strong>{statusPresentation.label}</strong>
               <span className="connectionSeparator" aria-hidden="true">·</span>
@@ -91,7 +95,7 @@ export function AppShell() {
           </div>
         </header>
 
-        {statusPresentation.showBar ? <div className={`statusBar statusBar-${statusTone}`} role="status" aria-live="polite"><strong>{statusPresentation.label}</strong><span>{status}</span>{demoMode ? <em>demo</em> : null}</div> : null}
+        {statusPresentation.showBar ? <div className={`statusBar statusBar-${statusTone}`} role="status" aria-live="polite"><strong>{statusPresentation.label}</strong><span>{shell.refreshing ? "Refreshing console data" : status}</span>{refreshError ? <><span>{refreshError} Displayed data may be out of date.</span><button type="button" className="buttonSecondary" disabled={busy} onClick={() => void refresh()}>Retry refresh</button></> : null}{demoMode ? <em>demo</em> : null}</div> : null}
 
         {view === "home" ? (
           <DashboardScreen
@@ -105,6 +109,9 @@ export function AppShell() {
             usageRows={usageRows}
             usage={usageSnapshot}
             usageLoaded={usageLoaded}
+            usageStale={usage.stale}
+            usageError={usage.error}
+            usageUpdatedAt={usage.updatedAt}
             myCredentials={selfServiceKeys.items}
             myPolicyIds={selfServiceKeys.policyIds}
             myIssuedKey={selfServiceKeys.issuedKey}
@@ -268,7 +275,7 @@ export function AppShell() {
           />
         ) : null}
 
-        {view === "usage" && session.role === "admin" ? <UsageScreen keys={keys} credentials={credentials} services={services} overview={adminOverview} tenants={tenantSummaries} usageRows={usageRows} usage={usageSnapshot} usageLoaded={usageLoaded} /> : null}
+        {view === "usage" && session.role === "admin" ? <UsageScreen keys={keys} credentials={credentials} services={services} overview={adminOverview} tenants={tenantSummaries} usageRows={usageRows} usage={usageSnapshot} usageLoaded={usageLoaded} usageStale={usage.stale} usageError={usage.error} usageUpdatedAt={usage.updatedAt} /> : null}
       </section>
     </main>
   );

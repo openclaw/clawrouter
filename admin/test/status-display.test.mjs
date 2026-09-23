@@ -30,3 +30,13 @@ test("healthy status is compact while actionable states retain the status bar", 
   });
   assert.equal(consoleStatusPresentation("saved user; refresh failed", false).label, "Needs attention");
 });
+
+test("refresh failure remains visible alongside a successful action result", () => {
+  assert.deepEqual(consoleStatusPresentation("saved policy", false, true), { tone: "error", label: "Needs attention", showBar: true });
+  assert.equal(consoleStatusPresentation("connected", false, true).tone, "error");
+  assert.equal(consoleStatusPresentation("connected", false, false).tone, "success");
+  // Operation admission still uses the action status, independent of refresh health.
+  assert.equal(consoleStatusPresentation("saving policy", false).tone, "pending");
+  assert.equal(consoleStatusPresentation("connected", false, false, true).tone, "pending");
+  assert.equal(consoleStatusPresentation("saved policy", false, true, true).tone, "error");
+});
