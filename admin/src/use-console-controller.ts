@@ -91,7 +91,7 @@ export function useConsoleController() {
     if ((session.view === "home" || session.view === "usage") && session.value.role === "admin" && access.loaded && !session.demoMode && (!usage.loaded || usage.stale) && !usage.error) {
       void usage.refreshLedger(session.gatewayOrigin);
     }
-  }, [access.loaded, session.demoMode, session.value.role, session.view, usage.loaded, usage.stale, usage.error]);
+  }, [access.loaded, session.demoMode, session.value.role, session.view, usage.loaded, usage.stale, usage.error, usage.revision]);
 
   function refresh(options: RefreshOptions = {}): Promise<void> {
     if (refreshPromiseRef.current) {
@@ -110,13 +110,14 @@ export function useConsoleController() {
   }
 
   async function refreshData({ background = false }: RefreshOptions) {
+    if (!background) {
+      session.setRefreshing(true);
+      access.setLoaded(false);
+    }
+    // Invalidate before reads begin so later navigation keeps its new ledger read.
+    if (!background || (session.view !== "home" && session.view !== "usage" && !usage.error)) usage.invalidate();
+    let failUsageRefresh = usage.captureRefreshFailure();
     try {
-      if (!background) {
-        session.setRefreshing(true);
-        access.setLoaded(false);
-      }
-      // Invalidate before reads begin so later navigation keeps its new ledger read.
-      if (!background || (session.view !== "home" && session.view !== "usage" && !usage.error)) usage.invalidate();
       const staticCatalog = catalogLoadedRef.current
         ? Promise.resolve({ providerData: { providers: catalog.providers }, routeData: catalog.routes })
         : Promise.all([
@@ -133,6 +134,8 @@ export function useConsoleController() {
         session.setRefreshError("");
         session.setLastUpdatedAt(null);
         usage.setPrincipal(principal);
+        // This refresh owns the reset; ordinary waits cannot adopt a newer read.
+        failUsageRefresh = usage.captureRefreshFailure();
       }
       session.setValue(sessionData);
       session.setLoginRequired(false);
@@ -182,7 +185,7 @@ export function useConsoleController() {
       session.setDemoMode(false);
       // Refresh health is separate from the mutation result that the caller reports.
       session.setRefreshError(`Console data refresh failed: ${message}`);
-      usage.fail(`Usage was not refreshed: ${message}`);
+      failUsageRefresh(`Usage was not refreshed: ${message}`);
     } finally {
       if (!background) session.setRefreshing(false);
     }

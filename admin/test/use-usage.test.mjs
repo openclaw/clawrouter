@@ -74,6 +74,67 @@ test("an off-screen edit invalidates freshness without discarding the last snaps
   assert.equal(fixture.render().stale, false);
 });
 
+test("empty principal resets publish a revision and transfer metadata failure ownership", () => {
+  const fixture = mount();
+  let hook = fixture.render();
+  hook.setPrincipal("first");
+  hook = fixture.render();
+  const first = hook;
+  const oldFailure = hook.captureRefreshFailure();
+  hook.setPrincipal("second");
+  hook = fixture.render();
+  assert.equal(hook.loaded, first.loaded);
+  assert.equal(hook.stale, first.stale);
+  assert.equal(hook.error, first.error);
+  assert.notEqual(hook.revision, first.revision);
+  oldFailure("old bootstrap failed");
+  assert.equal(fixture.render().error, "");
+  hook.captureRefreshFailure()("current bootstrap failed");
+  hook = fixture.render();
+  assert.equal(hook.loaded, false);
+  assert.equal(hook.updatedAt, null);
+  assert.equal(hook.error, "current bootstrap failed");
+});
+
+test("metadata failure retains an idle last-good snapshot as stale", () => {
+  const fixture = mount();
+  fixture.render().hydrate([{ policyId: "team" }], snapshot);
+  const before = fixture.render();
+  before.captureRefreshFailure()("bootstrap failed");
+  const after = fixture.render();
+  assert.equal(after.snapshot, before.snapshot);
+  assert.equal(after.rows, before.rows);
+  assert.equal(after.updatedAt, before.updatedAt);
+  assert.equal(after.loaded, true);
+  assert.equal(after.stale, true);
+  assert.equal(after.error, "bootstrap failed");
+});
+
+for (const capture of ["before read", "while pending"]) {
+  for (const outcome of ["resolve", "reject"]) {
+    test(`metadata failure yields to ledger ${outcome} captured ${capture}`, async () => {
+      const fixture = mount();
+      fixture.render().hydrate([{ policyId: "team" }], snapshot);
+      const hook = fixture.render();
+      let metadataFailure = hook.captureRefreshFailure();
+      const read = hook.refreshLedger("https://console.example");
+      if (capture === "while pending") metadataFailure = hook.captureRefreshFailure();
+      assert.equal(hook.refreshLedger("https://console.example"), read);
+      assert.equal(fixture.requests.length, 1);
+      const next = { ...snapshot, summary: { ...snapshot.summary, requestCount: 42 } };
+      fixture.requests[0][outcome](outcome === "resolve" ? { policies: [], usage: next } : new Error("ledger failed"));
+      await read;
+      const before = fixture.render();
+      metadataFailure("bootstrap failed later");
+      const after = fixture.render();
+      assert.equal(after.snapshot, before.snapshot);
+      assert.equal(after.updatedAt, before.updatedAt);
+      assert.equal(after.stale, outcome === "reject");
+      assert.equal(after.error, outcome === "reject" ? "Usage ledger unavailable: ledger failed" : "");
+    });
+  }
+}
+
 for (const outcome of ["resolve", "reject"]) {
   test(`principal change drops last-good data and ignores a former principal's late ${outcome}`, async () => {
     const fixture = mount();

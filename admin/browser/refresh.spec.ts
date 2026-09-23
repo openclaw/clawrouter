@@ -21,24 +21,46 @@ test("unavailable usage shows unknown spend and policy limits, then recovers", a
   await expect(page.locator(".quotaNumbers")).toContainText("$8.00remaining of $10.00");
 });
 
-test("background failure retains the actual snapshot time and recovers on focus", async ({ page }) => {
-  const state = await fixture(page);
-  await page.goto("/");
-  await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
-  const updated = await page.locator(".connectionMeta time").getAttribute("datetime");
-  state.failUsage = true;
-  await focusRefresh(page, "2026-07-06T12:01:00.000Z");
-  await expect(page.locator(".connectionMeta strong")).toHaveText("Needs attention");
-  await expect(page.locator(".connectionMeta time")).toHaveAttribute("datetime", updated!);
-  await expect(page.locator(".usageFreshness time")).toHaveAttribute("datetime", updated!);
-  await expect(page.locator(".quotaPanel")).toContainText("last known ledger");
-  await expect(page.locator(".quotaNumbers")).toContainText("$8.00");
-  state.failUsage = false;
-  await focusRefresh(page, "2026-07-06T12:02:00.000Z");
-  await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
-  await expect(page.locator(".connectionMeta time")).toHaveAttribute("datetime", "2026-07-06T12:02:00.000Z");
-  await expect(page.locator(".usageFreshness")).toHaveCount(0);
-});
+for (const principal of ["initial", "changed"] as const) {
+  test(`bootstrap failure shows unknown usage for the ${principal} principal`, async ({ page }) => {
+    const state = await fixture(page);
+    if (principal === "changed") {
+      await page.goto("/dashboard/catalog");
+      await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
+      state.email = "second@example.com";
+    }
+    state.failBootstrap = true;
+    if (principal === "initial") await page.goto("/dashboard/usage");
+    else await focusRefresh(page, "2026-07-06T12:01:00.000Z");
+    await expect(page.locator(".tenantSwitch strong")).toHaveText(state.email);
+    await expect(page.locator(".statusBar")).toContainText("Console data refresh failed");
+    if (principal === "changed") await page.getByRole("button", { name: "Usage", exact: true }).click();
+    await expect(page.locator(".usageFreshness")).toContainText("Spend and remaining balances are unknown");
+    await expect(page.locator(".usageSummaryGrid .metric strong")).toHaveText(["—", "—", "—", "—"]);
+    await expect(page.getByRole("button", { name: "Retry refresh" })).toBeEnabled();
+  });
+}
+
+for (const failure of ["failUsage", "failBootstrap"] as const) {
+  test(`background ${failure} retains the actual snapshot time and recovers on focus`, async ({ page }) => {
+    const state = await fixture(page);
+    await page.goto("/");
+    await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
+    const updated = await page.locator(".connectionMeta time").getAttribute("datetime");
+    state[failure] = true;
+    await focusRefresh(page, "2026-07-06T12:01:00.000Z");
+    await expect(page.locator(".connectionMeta strong")).toHaveText("Needs attention");
+    await expect(page.locator(".connectionMeta time")).toHaveAttribute("datetime", updated!);
+    await expect(page.locator(".usageFreshness time")).toHaveAttribute("datetime", updated!);
+    await expect(page.locator(".quotaPanel")).toContainText("last known ledger");
+    await expect(page.locator(".quotaNumbers")).toContainText("$8.00");
+    state[failure] = false;
+    await focusRefresh(page, "2026-07-06T12:02:00.000Z");
+    await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
+    await expect(page.locator(".connectionMeta time")).toHaveAttribute("datetime", "2026-07-06T12:02:00.000Z");
+    await expect(page.locator(".usageFreshness")).toHaveCount(0);
+  });
+}
 
 test("successful user edits survive a failed follow-up read", async ({ page }) => {
   const state = await fixture(page);
@@ -134,6 +156,68 @@ test("navigation keeps its first usage read while a Catalog background refresh f
   expect(state.usageReads).toBe(1);
 });
 
+test("same-role principal changes replace the first lazy usage read", async ({ page }) => {
+  const state = await fixture(page);
+  await page.goto("/dashboard/catalog");
+  await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
+  let releaseSession!: () => void;
+  state.holdSession = new Promise<void>((resolve) => { releaseSession = resolve; });
+  state.email = "second@example.com";
+  await focusRefresh(page, "2026-07-06T12:01:00.000Z");
+  await expect.poll(() => state.sessionReads).toBe(2);
+  let releaseOld!: () => void;
+  state.holdUsage = new Promise<void>((resolve) => { releaseOld = resolve; });
+  await page.getByRole("button", { name: "Dashboard", exact: true }).click();
+  await expect.poll(() => state.usageReads).toBe(1);
+  let releaseCurrent!: () => void;
+  state.holdUsage = new Promise<void>((resolve) => { releaseCurrent = resolve; });
+  state.usage.policies[0].budget.remainingMicros = 4_000_000;
+  releaseSession();
+  await expect(page.locator(".tenantSwitch strong")).toHaveText("second@example.com");
+  await expect.poll(() => state.usageReads).toBe(2);
+  const oldResponse = page.waitForResponse("**/v1/admin/usage");
+  releaseOld();
+  await oldResponse;
+  await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
+  await expect(page.locator(".quotaNumbers")).not.toContainText("$8.00");
+  releaseCurrent();
+  await expect(page.locator(".quotaNumbers")).toContainText("$4.00remaining of $10.00");
+  await expect(page.locator(".usageFreshness")).toHaveCount(0);
+  expect(state.usageReads).toBe(2);
+});
+
+for (const readStart of ["before", "after"] as const) {
+  test(`a ledger read started ${readStart} metadata refresh keeps its success`, async ({ page }) => {
+    const state = await fixture(page);
+    await page.goto("/dashboard/catalog");
+    await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
+    const updated = await page.locator(".connectionMeta time").getAttribute("datetime");
+    let releaseUsage!: () => void;
+    state.holdUsage = new Promise<void>((resolve) => { releaseUsage = resolve; });
+    let releaseBootstrap!: () => void;
+    state.holdBootstrap = new Promise<void>((resolve) => { releaseBootstrap = resolve; });
+    state.failBootstrap = true;
+    if (readStart === "before") {
+      await page.getByRole("button", { name: "Dashboard", exact: true }).click();
+      await expect.poll(() => state.usageReads).toBe(1);
+    }
+    await focusRefresh(page, "2026-07-06T12:01:00.000Z");
+    await expect.poll(() => state.bootstrapReads).toBe(2);
+    if (readStart === "after") {
+      await page.getByRole("button", { name: "Dashboard", exact: true }).click();
+      await expect.poll(() => state.usageReads).toBe(1);
+    }
+    releaseUsage();
+    await expect(page.locator(".quotaNumbers")).toContainText("$8.00remaining of $10.00");
+    releaseBootstrap();
+    await expect(page.locator(".statusBar")).toContainText("Console data refresh failed");
+    await expect(page.locator(".connectionMeta time")).toHaveAttribute("datetime", updated!);
+    await expect(page.locator(".usageFreshness")).toHaveCount(0);
+    await expect(page.locator(".quotaPanel")).toContainText("live ledger");
+    expect(state.usageReads).toBe(1);
+  });
+}
+
 test("a late admin usage read cannot overwrite a new principal's unavailable usage", async ({ page }) => {
   const state = await fixture(page);
   await page.goto("/dashboard/catalog");
@@ -165,10 +249,11 @@ async function fixture(page: Page) {
   await page.clock.setFixedTime(new Date("2026-07-06T12:00:00.000Z"));
   const state = {
     failUsage: false, failBootstrap: false, failCredentials: false, failAfterWrite: false,
-    role: "admin", email: "admin@example.com", writes: 0, usageReads: 0, bootstrapReads: 0,
+    role: "admin", email: "admin@example.com", writes: 0, usageReads: 0, bootstrapReads: 0, sessionReads: 0,
     usage: structuredClone(usage),
     holdUsage: null as Promise<void> | null,
     holdBootstrap: null as Promise<void> | null,
+    holdSession: null as Promise<void> | null,
   };
   const user: AccessUser = { email: "member@example.com", role: "user", tenantId: "default", enabled: true, groups: [], contentRetentionDisabled: false };
   await page.route("**/v1/**", async (route) => {
@@ -193,6 +278,10 @@ async function fixture(page: Page) {
     if (path === "/v1/admin/bootstrap") {
       state.bootstrapReads += 1;
       if (state.holdBootstrap) await state.holdBootstrap;
+    }
+    if (path === "/v1/session") {
+      state.sessionReads += 1;
+      if (state.holdSession) await state.holdSession;
     }
     if ((path === "/v1/admin/bootstrap" && state.failBootstrap)
       || (path === "/v1/session/credentials" && state.failCredentials)

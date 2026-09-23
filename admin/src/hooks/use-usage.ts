@@ -14,6 +14,7 @@ export function useUsage(allowDemo: boolean) {
     stale: false,
     updatedAt: allowDemo ? Date.now() : null as number | null,
     error: "",
+    revision: 0, // Empty-to-empty resets must still wake lazy readers.
   });
   const principalRef = useRef("");
   const generationRef = useRef(0);
@@ -26,7 +27,7 @@ export function useUsage(allowDemo: boolean) {
     setTenantSummaries([]);
     generationRef.current += 1;
     pendingRef.current = null;
-    setLedger({ rows: [], snapshot: emptyUsageSnapshot, loaded: false, stale: false, updatedAt: null, error: "" });
+    setLedger({ rows: [], snapshot: emptyUsageSnapshot, loaded: false, stale: false, updatedAt: null, error: "", revision: generationRef.current });
   }
 
   function setPrincipal(principal: string) {
@@ -36,19 +37,28 @@ export function useUsage(allowDemo: boolean) {
   }
 
   function hydrate(rows: AdminUsageRow[], snapshot: UsageSnapshot) {
-    setLedger({ rows, snapshot, loaded: true, stale: false, updatedAt: Date.now(), error: "" });
+    setLedger({ rows, snapshot, loaded: true, stale: false, updatedAt: Date.now(), error: "", revision: generationRef.current });
   }
 
   function invalidate() {
     // A read started before an edit must not restore the old snapshot as fresh.
-    generationRef.current += 1;
+    const revision = ++generationRef.current;
     pendingRef.current = null;
-    setLedger((current) => ({ ...current, stale: current.loaded }));
+    setLedger((current) => ({ ...current, stale: current.loaded, revision }));
   }
 
   function fail(error: string) {
     // Failed reads cannot erase a valid snapshot or turn unknown spend into zero.
-    setLedger((current) => ({ ...current, error, stale: true }));
+    const revision = generationRef.current;
+    setLedger((current) => ({ ...current, error, stale: true, revision }));
+  }
+
+  function captureRefreshFailure() {
+    // Metadata cannot replace an active ledger read's result, even after it settles.
+    const generation = pendingRef.current ? null : generationRef.current;
+    return (error: string) => {
+      if (generation !== null && generation === generationRef.current) fail(error);
+    };
   }
 
   function syncDemoAdmin(policies: AccessPolicy[], credentials: ProxyCredential[], providers: ProviderRow[], routes: RouteCatalog, syncRows = false) {
@@ -61,7 +71,7 @@ export function useUsage(allowDemo: boolean) {
 
   function refreshLedger(gatewayOrigin: string): Promise<boolean> {
     if (pendingRef.current) return pendingRef.current;
-    const generation = generationRef.current;
+    const generation = ++generationRef.current;
     const operation = settled(() => request<{ policies?: AdminUsageRow[]; keys?: AdminUsageRow[]; usage: UsageSnapshot }>(gatewayOrigin, "/v1/admin/usage"))
       .then((result) => {
         // Navigation and full refresh share this read; a former principal cannot publish it.
@@ -86,6 +96,7 @@ export function useUsage(allowDemo: boolean) {
     hydrate,
     invalidate,
     fail,
+    captureRefreshFailure,
     syncDemoAdmin,
     refreshLedger,
   };
