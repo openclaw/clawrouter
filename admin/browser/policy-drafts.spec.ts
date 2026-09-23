@@ -1,6 +1,67 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 import type { AccessPolicy, AdminBootstrapResponse, AdminUsageRow, PolicyBinding, UsageSnapshot } from "../src/ui-types";
 
+for (const draft of ["selected policy", "New policy"] as const) {
+  test(`Catalog Add opens Policies from Bindings and Upstream while preserving the ${draft} draft`, async ({ page }) => {
+    const state = await fixture(page);
+    state.providers.push({ id: "other-provider", display_name: "Other provider", class: "test", service_kind: "model_provider", capabilities: [] });
+    state.policies[1].providers = ["other-provider"];
+    const mutations: string[] = [];
+    let dialogs = 0;
+    page.on("request", (request) => {
+      if (new URL(request.url()).pathname.startsWith("/v1/") && request.method() !== "GET") mutations.push(request.method());
+    });
+    page.on("dialog", async (dialog) => { dialogs += 1; await dialog.dismiss(); });
+    await open(page);
+    await expect(row(page, "policy_a")).toHaveClass(/selected/);
+    if (draft === "New policy") {
+      await page.getByRole("button", { name: "New policy", exact: true }).click();
+      await policyId(page).fill("catalog_new");
+      await page.getByRole("button", { name: "service", exact: true }).click();
+      await page.getByRole("checkbox", { name: /^Test provider/ }).uncheck();
+    } else await row(page, "policy_b").click();
+    await tenant(page).fill("catalog-draft");
+    await page.getByRole("combobox", { name: "status", exact: true }).selectOption("disabled");
+    await page.getByRole("textbox", { name: "monthly budget ($)", exact: true }).fill("37");
+    await expect(page.getByRole("checkbox", { name: /^Test provider/ })).not.toBeChecked();
+    await expect(page.getByRole("checkbox", { name: /^Other provider/ })).toBeChecked();
+
+    for (const resource of ["Bindings", "Upstream"]) {
+      await page.getByRole("tab", { name: new RegExp(`^${resource}`) }).click();
+      await expect(page.getByRole("tab", { name: new RegExp(`^${resource}`) })).toHaveAttribute("aria-selected", "true");
+      await page.getByRole("button", { name: "Catalog", exact: true }).click();
+      await row(page, "Test provider").click();
+      const add = page.getByRole("button", { name: "Add to selected policy", exact: true });
+      await add.focus();
+      await page.keyboard.press("Enter");
+      await expect(page).toHaveURL(/\/dashboard\/access$/);
+      await expect(page.getByRole("tab", { name: /^Policies/ })).toHaveAttribute("aria-selected", "true");
+      await expect(page.getByRole("tab", { name: new RegExp(`^${resource}`) })).toHaveAttribute("aria-selected", "false");
+      await expect(policyId(page)).toHaveValue(draft === "New policy" ? "catalog_new" : "policy_b");
+      await expect(tenant(page)).toHaveValue("catalog-draft");
+      await expect(page.getByRole("combobox", { name: "status", exact: true })).toHaveValue("disabled");
+      await expect(page.getByRole("textbox", { name: "monthly budget ($)", exact: true })).toHaveValue("37");
+      await expect(page.getByRole("checkbox", { name: /^Test provider/ })).toBeChecked();
+      await expect(page.getByRole("checkbox", { name: /^Other provider/ })).toBeChecked();
+      await expect(page.locator(".serviceAccessHeader span")).toHaveText("2 selected · 2 shown");
+      await expect(page.getByText("Unsaved policy changes.", { exact: true })).toBeVisible();
+      await expect(save(page)).toBeEnabled();
+      if (draft === "New policy") {
+        await expect(policyId(page)).not.toHaveAttribute("readonly", "");
+        await expect(page.locator(".tableRow.selected")).toHaveCount(0);
+      } else {
+        await expect(policyId(page)).toHaveAttribute("readonly", "");
+        await expect(row(page, "policy_b")).toHaveClass(/selected/);
+      }
+      expect(dialogs).toBe(0);
+      expect(mutations).toEqual([]);
+      expect(state.writes).toHaveLength(0);
+    }
+    expect(state.policies).toHaveLength(2);
+    expect(state.policies[1]).toMatchObject({ policyId: "policy_b", tenantId: "default", providers: ["other-provider"] });
+  });
+}
+
 for (const initialOutcome of ["success", "failure then retry"] as const) {
   test(`initial policy loading preserves an early New draft through ${initialOutcome} without overwriting an existing ID`, async ({ page }) => {
     const state = await fixture(page);
