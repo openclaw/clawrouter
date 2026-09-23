@@ -42,7 +42,7 @@ test("the Worker reads fresh object and array records produced at their exact en
       const reads = [];
       const response = await lookup(async (key) => {
         reads.push(key);
-        return new Response(objects.get(key));
+        return Object.assign(new Response(objects.get(key)), { uploaded: new Date(now) });
       }, { query: new URLSearchParams({ tenant, ref: generatedRef }) });
       assert.deepEqual(reads, [contentKey(tenant, generatedRef)]);
       assert.equal(response.status, 200);
@@ -79,7 +79,7 @@ test("missing, expired, and invalid archives have indistinguishable private 404 
     await t.test(name, async () => {
       const response = await lookup(async (key) => {
         assert.equal(key, contentKey(tenant, ref));
-        return text === null ? null : new Response(text);
+        return text === null ? null : Object.assign(new Response(text), { uploaded: new Date(now) });
       });
       assert.equal(response.status, 404);
       assert.deepEqual(await response.json(), notFound);
@@ -92,7 +92,7 @@ test("missing, expired, and invalid archives have indistinguishable private 404 
 test("expiry is checked after the asynchronous archive body read", async (t) => {
   let clock = now;
   t.mock.method(Date, "now", () => clock);
-  const response = await lookup(async () => ({ async text() {
+  const response = await lookup(async () => ({ uploaded: new Date(now), async text() {
     await Promise.resolve();
     clock = record.expiresAtMs;
     return JSON.stringify(record);
@@ -100,6 +100,20 @@ test("expiry is checked after the asynchronous archive body read", async (t) => 
   assert.equal(response.status, 404);
   assert.deepEqual(await response.json(), notFound);
   privateHeaders(response);
+});
+
+test("archive upload age caps an overstated record expiry at 30 days", async (t) => {
+  t.mock.method(Date, "now", () => now);
+  const response = await lookup(async () => Object.assign(new Response(JSON.stringify(record)), { uploaded: new Date(now - 30 * 86_400_000) }));
+  assert.equal(response.status, 404);
+  assert.deepEqual(await response.json(), notFound);
+});
+
+test("an earlier metadata expiry also denies reads before physical deletion", async (t) => {
+  t.mock.method(Date, "now", () => now);
+  const response = await lookup(async () => Object.assign(new Response(JSON.stringify(record)), { uploaded: new Date(now), customMetadata: { expiresAt: String(now) } }));
+  assert.equal(response.status, 404);
+  assert.deepEqual(await response.json(), notFound);
 });
 
 test("unauthorized and invalid lookups never read the archive", async () => {
