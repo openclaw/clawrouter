@@ -49,7 +49,9 @@ while token-priced requests depend on their actual input and parameters. Free
 token counting and declared zero-price operations remain available at exhausted
 positive limits. A configured zero limit still blocks ordinary requests.
 Affordability describes the plain operation; request parameters and hosted
-tools are assessed again at dispatch.
+tools are assessed again at dispatch. A form without a selected model remains
+request-dependent when an eligible declared model is available; it does not
+make a model-less or opaque request priced.
 
 The projection observes the actual principal's policy ledger and the provider
 ledger without reserving budget, selecting credentials, refreshing accounts, or

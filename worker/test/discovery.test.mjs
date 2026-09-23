@@ -128,6 +128,30 @@ test("zero policy and provider budgets preserve canonical free token counting", 
   }
 });
 
+test("model selection forms remain request-dependent when a declared model can be priced", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.config.enabled = false;
+  fixture.policy.providers = ["openai", "openrouter"];
+  fixture.connections[1].providerId = "openrouter";
+  fixture.env.OPENROUTER_API_KEY = "fixture-openrouter-key";
+  const form = async (id) => {
+    const catalog = await (await catalogResponse(fixture.request("key"), fixture.env)).json();
+    return catalog.providers.find((provider) => provider.id === id).offers.find(({ modelId, endpoint, transport }) => modelId === null && endpoint === "chat_completions" && transport === "http");
+  };
+  const priced = await form("openai");
+  assert.equal(priced.eligible, true);
+  assert.equal(priced.affordability, "request-dependent");
+  assert.equal(priced.reasonCode, undefined);
+  const unpriced = await form("openrouter");
+  assert.equal(unpriced.eligible, false);
+  assert.equal(unpriced.reasonCode, "pricing_required");
+  fixture.policy.monthlyBudgetMicros = 0;
+  assert.equal((await form("openai")).reasonCode, "budget_exhausted");
+  fixture.policy.monthlyBudgetMicros = 100;
+  fixture.policy.requestCostMicros = 7;
+  assert.equal((await form("openrouter")).affordability, "exact-covered");
+});
+
 test("Azure discovery keeps explicit native routes while hiding an unresolved default model", async (t) => {
   const secret = "fixture-azure-discovery";
   const credential = { enabled: true, secretSha256: await sha256Hex(secret), policyId: "fixture", policyGeneration: "g1" };

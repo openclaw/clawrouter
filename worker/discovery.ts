@@ -4,7 +4,7 @@ import { activeOperationCandidates, policyGrantCandidates, selectPolicyCandidate
 import { assertOperationConfiguration, type GrantRequirement } from "./provider-auth";
 import { budgetPrincipal } from "./budget-scope";
 import { budgetStatus, providerBudgetStatus } from "./ledgers";
-import { operationAffordability } from "./operation-budget";
+import { operationAffordability, type OperationAffordability } from "./operation-budget";
 import { fetchTimeoutSignal } from "../shared/fetch-timeout.ts";
 import { publicSession, sessionPolicies, sessionPolicyIdentity, verifiedAccessSession } from "./access";
 import { contentRetentionDefault } from "./content-retention.ts";
@@ -293,8 +293,12 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env, conne
       const { endpoint, mode, auth } = context;
       const models = provider.models.filter((model) => modelSupportsEndpoint(provider, model, endpoint));
       const capability = provider.capabilities.find((item) => item.endpoint === endpoint.id)?.id ?? endpoint.id;
-      return (mode === "websocket" ? models : [...models, null]).flatMap((model) => {
-        const availability = eligibility(context, model, capability);
+      const assessed = (mode === "websocket" ? models : [...models, null]).map((model) => ({ model, availability: eligibility(context, model, capability) }));
+      const selectableModel = assessed.some(({ model, availability }) => model && availability.status !== "exact-blocked");
+      return assessed.flatMap(({ model, availability: resolved }) => {
+        // A form can defer model selection without declaring a model-less
+        // request priced. Selected models still use their own admission facts.
+        const availability: OperationAffordability = !model && resolved.reasonCode === "pricing_required" && selectableModel ? { status: "request-dependent" } : resolved;
         const common = { endpoint: endpoint.id, modelId: model?.id ?? null, transport: mode, policyId: auth.policyId, policyGeneration: auth.policy.generation, eligible: availability.status !== "exact-blocked", affordability: availability.status, ...(availability.reasonCode ? { reasonCode: availability.reasonCode } : {}) };
         const native: CatalogOffer = { ...common, routeKind: keyScope ? endpoint.native_proxy ? "native" : "manifest" : "playground", route: keyScope && endpoint.native_proxy ? `/v1/native/${provider.id}${endpoint.path}` : `/v1/${keyScope ? "" : "playground/"}proxy/${provider.id}/${endpoint.id}` };
         const unified = model && unifiedPathForEndpoint(provider, endpoint);
