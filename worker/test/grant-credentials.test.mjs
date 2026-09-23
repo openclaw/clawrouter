@@ -35,12 +35,14 @@ test("lineage is owner-issued, survives metadata updates and seeds old owner rec
   const enabled = await putGrantCredentials(env, key, { ...updated, enabled: true }, true);
   assert.equal(enabled.credentialLineage, active.credentialLineage);
   const owner = env.GRANT_CREDENTIALS.objects.get(key), record = owner.values.get("credential");
+  const admissionRevision = record.poolAdmissionRevision;
   delete record.lineage;
   owner.values.set("credential", record);
   values.set(key, { ...enabled, credentialLineage: "kv-forged" });
   const migrated = await materializeGrantCredentials(env, key, enabled, "openai", refreshConfig(), false);
   assert.notEqual(migrated.credentialLineage, "kv-forged");
   assert.notEqual(migrated.credentialLineage, active.credentialLineage);
+  assert.equal(owner.values.get("credential").poolAdmissionRevision, admissionRevision);
   const again = await materializeGrantCredentials(env, key, enabled, "openai", refreshConfig(), false);
   assert.equal(again.credentialLineage, migrated.credentialLineage);
   await revokeGrantCredentials(env, key);

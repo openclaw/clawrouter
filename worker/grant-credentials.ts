@@ -43,6 +43,7 @@ interface CredentialRecord {
   quotaFailureCount?: number;
   revokedAt?: string | null;
   poolSyncPending?: boolean;
+  poolAdmissionRevision?: number;
   metadata?: UpstreamGrant;
 }
 
@@ -134,7 +135,10 @@ export class GrantCredentialObject implements DurableObject {
         const grant = metadataGrant(record);
         // Admission reserves capacity without removing the old attachment. A
         // failed store leaves indexed pending work for this owner to reconcile.
-        await authorityCall(this.env, "/grant-pools/admit", { key: input.key, generation: current?.generation ?? 0, revision: attachment.revision, provider: record.providerId ?? null, status: attachmentStatus(record) });
+        const admitted = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/admit", { key: input.key, generation: current?.generation ?? 0, revision: attachment.revision, provider: record.providerId ?? null, status: attachmentStatus(record) });
+        // Only this explicit commit may acknowledge the reservation; later
+        // refreshes and legacy imports cannot complete a failed account write.
+        record.poolAdmissionRevision = admitted.revision;
         await this.state.storage.put("credential", record);
         await this.schedule(record);
         await this.publishProjection(record);
@@ -361,7 +365,7 @@ export class GrantCredentialObject implements DurableObject {
     const record = await this.state.storage.get<CredentialRecord>("credential");
     const indexed = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/attachment", { key });
     const result = record
-      ? await authorityCall<GrantAttachmentResult>(this.env, "/grant-pools/publish", { key, generation: record.generation, revision: indexed.revision, provider: record.providerId ?? null, status: attachmentStatus(record) })
+      ? await authorityCall<GrantAttachmentResult>(this.env, "/grant-pools/publish", { key, generation: record.generation, revision: indexed.revision, admissionRevision: record.poolAdmissionRevision, provider: record.providerId ?? null, status: attachmentStatus(record) })
       : await authorityCall<GrantAttachmentResult>(this.env, "/grant-pools/cancel-pending", { key, revision: indexed.revision });
     if (record?.poolSyncPending) {
       record.poolSyncPending = false;

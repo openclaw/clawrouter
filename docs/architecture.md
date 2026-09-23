@@ -48,6 +48,12 @@ is unchanged. Index commits use synchronous SQLite transactions. An internal
 owner `/reconcile` accepts only the grant key, rereads the owner, and uses an
 exact index-revision comparison. A lost acknowledgement is recovered through a
 fresh read, not a stale write or caller-supplied previous provider.
+The explicit credential commit stores its admission revision as a receipt.
+Pending rows retain their prior committed status, so failed account writes can
+restore membership without a later refresh or raw import adopting the proposal.
+Restoration and its new revision fence commit together, including no-op owner
+publications. An identity-leading SQLite index bounds key-only attachment reads
+and cleanup even when many inactive memberships are retained.
 
 The authority's internal `/grant-pools/pending` lists at most 64 distinct full
 grant keys per page with a keyset cursor. Reconciliation can cancel a failed

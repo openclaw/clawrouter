@@ -353,6 +353,136 @@ test("metadata-only pause and resume preserve owner credential continuity fields
   assert.deepEqual((await pool(env, "openai")).keys, [key]);
 });
 
+for (const enabled of [true, false]) for (const nextEnabled of [true, false]) test(`failed ${nextEnabled ? "active" : "paused"} admission preserves an unattached ${enabled ? "active" : "paused"} owner`, async () => {
+  const env = fixture(), raw = { ...grant(), enabled };
+  env.values.set(key, raw);
+  const migrate = () => materializeGrantCredentials(env, key, raw, "openai", null, false);
+  if (enabled) await migrate(); else await assert.rejects(migrate);
+  const owner = env.GRANT_CREDENTIALS.objects.get(key), put = owner.state.storage.put;
+  owner.state.storage.put = async () => { throw new Error("fixture owner write failure"); };
+  await assert.rejects(() => putGrantCredentials(env, key, { ...grant(), enabled: nextEnabled }));
+  const pending = await env.grantAuthority.call("attachment", { key });
+  assert.equal(pending.pending, true);
+  owner.state.storage.put = put;
+  env.values.set(key, { ...raw, poolAdmissionRevision: pending.revision });
+  owner.object = new GrantCredentialObject(owner.state, env);
+  const repaired = await reconcileGrantAttachment(env, key);
+  assert.deepEqual(repaired, { generation: 1, revision: pending.revision + 1, pending: false, attached: false, outcome: "unattached" });
+  assert.deepEqual(await reconcileGrantAttachment(env, key), repaired);
+  assert.equal(owner.values.get("credential").enabled, enabled);
+  await assert.rejects(() => env.grantAuthority.call("publish", { key, ...pending, provider: "openai", status: enabled ? "active" : "paused" }), error => error.status === 409);
+  await putGrantCredentials(env, key, { ...grant(), enabled: nextEnabled });
+  assert.equal((await pool(env, "openai")).hasAttachment, true);
+  assert.equal(owner.values.get("credential").generation, 2);
+});
+
+for (const attached of [false, true]) test(`ordinary refresh cannot acknowledge a failed proposal for an ${attached ? "attached" : "unattached"} owner`, async context => {
+  const env = fixture(), now = Date.now();
+  context.mock.timers.enable({ apis: ["Date"], now });
+  const raw = { provider: "openai", kind: "oauth", accessToken: "access-fixture", refreshToken: "refresh-fixture", expiresAt: new Date(now + 3_600_000).toISOString() };
+  env.values.set(key, raw);
+  const active = attached ? await putGrantCredentials(env, key, raw) : await materializeGrantCredentials(env, key, raw, "openai", null, false);
+  const owner = env.GRANT_CREDENTIALS.objects.get(key), put = owner.state.storage.put;
+  const receipt = owner.values.get("credential").poolAdmissionRevision;
+  if (attached) assert.equal(typeof receipt, "number"); else assert.equal(receipt, undefined);
+  owner.state.storage.put = async () => { throw new Error("fixture owner write failure"); };
+  await assert.rejects(() => putGrantCredentials(env, key, { ...raw, provider: attached ? "anthropic" : "openai", accessToken: "replacement-fixture" }));
+  assert.notEqual(receipt, (await env.grantAuthority.call("attachment", { key })).revision);
+  owner.state.storage.put = put;
+  context.mock.method(globalThis, "fetch", async () => Response.json({ access_token: "refreshed-fixture", expires_in: 3600 }));
+  context.mock.timers.tick(7_200_000);
+  const refreshed = await materializeGrantCredentials(env, key, active, "openai", { tokenUrl: "https://token.example/refresh", extraParams: {} }, false);
+  assert.equal(refreshed.accessToken, "refreshed-fixture");
+  assert.equal(refreshed.credentialLineage, active.credentialLineage);
+  assert.equal(owner.values.get("credential").poolAdmissionRevision, receipt);
+  assert.equal(owner.values.get("credential").generation, 2);
+  assert.equal((await pool(env, "openai")).hasAttachment, attached);
+  assert.equal((await pool(env, "anthropic")).hasAttachment, false);
+  assert.equal((await env.grantAuthority.call("attachment", { key })).pending, false);
+});
+
+test("raw migration cannot acknowledge a failed first admission", async () => {
+  const env = fixture(), raw = grant();
+  env.values.set(key, raw);
+  env.GRANT_CREDENTIALS.get(key);
+  const owner = env.GRANT_CREDENTIALS.objects.get(key), put = owner.state.storage.put;
+  owner.state.storage.put = async () => { throw new Error("fixture owner write failure"); };
+  await assert.rejects(() => putGrantCredentials(env, key, { ...raw, credential: "replacement-fixture" }));
+  const pending = await env.grantAuthority.call("attachment", { key });
+  assert.equal(pending.pending, true);
+  owner.state.storage.put = put;
+  env.values.set(key, { ...raw, poolAdmissionRevision: pending.revision });
+  assert.equal((await materializeGrantCredentials(env, key, raw, "openai", null, false)).credential, raw.credential);
+  assert.equal(owner.values.get("credential").poolAdmissionRevision, undefined);
+  assert.deepEqual(await env.grantAuthority.call("attachment", { key }), { generation: 1, revision: pending.revision + 1, pending: false, attached: false });
+});
+
+test("a lost owner-write acknowledgement retains its committed admission receipt", async () => {
+  const env = fixture();
+  env.GRANT_CREDENTIALS.get(key);
+  const owner = env.GRANT_CREDENTIALS.objects.get(key), put = owner.state.storage.put;
+  let fail = true;
+  owner.state.storage.put = async (...args) => {
+    await put(...args);
+    if (fail) { fail = false; throw new Error("fixture acknowledgement lost after owner commit"); }
+  };
+  await assert.rejects(() => putGrantCredentials(env, key, grant()));
+  const pending = await env.grantAuthority.call("attachment", { key });
+  const receipt = owner.values.get("credential").poolAdmissionRevision;
+  assert.equal(receipt, pending.revision);
+  assert.equal(owner.values.get("credential").poolSyncPending, true);
+  owner.object = new GrantCredentialObject(owner.state, env);
+  assert.equal((await reconcileGrantAttachment(env, key)).outcome, "attached");
+  assert.equal(owner.values.get("credential").poolAdmissionRevision, receipt);
+  assert.equal(owner.values.get("credential").poolSyncPending, false);
+  assert.deepEqual((await pool(env, "openai")).keys, [key]);
+});
+
+for (const previous of [null, "paused", "reauth_required"]) test(`repeated admission preserves ${previous ?? "absent"} membership and restores it atomically`, async context => {
+  const env = fixture();
+  if (previous) {
+    if (previous === "reauth_required") {
+      const active = await putGrantCredentials(env, key, { provider: "openai", kind: "oauth", accessToken: "access-fixture", refreshToken: "refresh-fixture" });
+      context.mock.method(globalThis, "fetch", async () => Response.json({ error: "invalid_grant" }, { status: 400 }));
+      await assert.rejects(() => materializeGrantCredentials(env, key, active, "openai", { tokenUrl: "https://token.example/refresh", extraParams: {} }, true));
+    } else await putGrantCredentials(env, key, { ...grant(), enabled: false });
+  }
+  const before = await env.grantAuthority.call("attachment", { key });
+  const first = await env.grantAuthority.call("admit", { key, ...before, provider: "openai", status: previous ? "active" : "paused" });
+  const second = await env.grantAuthority.call("admit", { key, ...first, provider: "openai", status: "active" });
+  assert.equal(env.grantAuthority.sql.exec("SELECT pending_previous_status FROM upstream_grant_pool_members WHERE token_ref = 'account'")[0].pending_previous_status, previous);
+  const sql = env.grantAuthority.sql, exec = sql.exec;
+  sql.exec = (query, ...bindings) => {
+    if (query.startsWith("INSERT INTO upstream_grant_pool_versions")) throw new Error("fixture restoration fence failure");
+    return exec(query, ...bindings);
+  };
+  await assert.rejects(() => reconcileGrantAttachment(env, key));
+  assert.deepEqual(await env.grantAuthority.call("attachment", { key }), second);
+  assert.equal(sql.exec("SELECT pending_previous_status FROM upstream_grant_pool_members WHERE token_ref = 'account'")[0].pending_previous_status, previous);
+  sql.exec = exec;
+  const repaired = await reconcileGrantAttachment(env, key);
+  assert.equal(repaired.outcome, previous ? "attached" : "pending_cancelled");
+  assert.equal(repaired.revision, second.revision + 1);
+  assert.equal(repaired.pending, false);
+  assert.equal(repaired.attached, !!previous);
+  assert.deepEqual(await reconcileGrantAttachment(env, key), repaired);
+  await assert.rejects(() => env.grantAuthority.call("cancel-pending", { key, revision: second.revision }), error => error.status === 409);
+  await assert.rejects(() => env.grantAuthority.call("publish", { key, ...second, provider: "openai", status: previous, admissionRevision: second.revision }), error => error.status === 409);
+  if (previous) assert.equal(sql.exec("SELECT status FROM upstream_grant_pool_members WHERE token_ref = 'account'")[0].status, previous);
+});
+
+test("attachment lookup and cleanup index the complete identity without planner statistics", () => {
+  const env = fixture(), sql = env.grantAuthority.sql;
+  for (let i = 0; i < 64; i++) sql.exec("INSERT INTO upstream_grant_pool_members (scope, scope_id, provider_id, token_ref, status) VALUES ('policies', 'policy', 'openai', ?, 'paused')", `inactive-${i}`);
+  for (const query of [
+    "SELECT 1 FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND token_ref = ? AND status NOT IN ('pending', 'pending_inactive') LIMIT 1",
+    "DELETE FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND token_ref = ?",
+  ]) {
+    const plan = sql.exec(`EXPLAIN QUERY PLAN ${query}`, "policies", "policy", "absent").map(row => row.detail).join("\n");
+    assert.match(plan, /upstream_grant_pool_identity \(scope=\? AND scope_id=\? AND token_ref=\?\)/);
+  }
+});
+
 function fixture() {
   const values = new Map();
   return attachGrantCredentialNamespace({ values, POLICY_KV: {
