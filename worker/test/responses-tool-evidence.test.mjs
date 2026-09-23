@@ -98,6 +98,54 @@ test("item association rejects unresolved additions, alias conflicts and conflic
   assert.equal(reduce([added(message, { output_index: 0 }), done(message, { output_index: 0 }), done(message), terminal({ output: [message] })]).knowledge, "token_only");
 });
 
+test("sparse indexed output requires contiguous observed positions without inferring anonymous positions", () => {
+  const indexed = index => done({ id: `item-${index}`, type: "message" }, { output_index: index });
+  for (const positions of [[1], [0, 2], [Number.MAX_SAFE_INTEGER]]) assert.equal(reduce([...positions.map(indexed), terminal()]).knowledge, "unknown");
+  assert.equal(reduce([indexed(1), indexed(0), terminal()]).knowledge, "token_only", "arrival order does not define position");
+  assert.equal(reduce([done({ type: "message" }), indexed(1), terminal()]).knowledge, "unknown");
+  assert.equal(reduce([indexed(0), done({ id: "item-0", type: "message" }), indexed(1), terminal()]).knowledge, "token_only", "duplicate aliases remain one item");
+});
+
+test("complete terminal output fills only entirely unobserved positions", () => {
+  const message = { id: "one", type: "message" };
+  for (const [first, knowledge] of [
+    [{ type: "message" }, "token_only"],
+    [{ type: "additional_tools", tools: [{ type: "web_search" }] }, "hosted_tool_fee"],
+    [{ type: "future_item" }, "unknown"],
+  ]) assert.equal(reduce([done(message, { output_index: 1 }), terminal({ output: [first, message] })]).knowledge, knowledge);
+  assert.equal(reduce([added(message, { output_index: 1 }), terminal({ output: [{ type: "message" }, message] })]).knowledge, "unknown", "terminal output never completes an observed added item");
+});
+
+test("ordinary event selectors share pending associations and require a matching item.done", () => {
+  const item = { id: "call", type: "function_call" };
+  for (const selector of [{ output_index: 0 }, { item_id: "call" }, { output_index: 0, item_id: "call" }]) {
+    const event = { type: "response.function_call_arguments.delta", ...selector, delta: "{}" };
+    assert.deepEqual(project(event).value(), { type: event.type, ...selector }, "HTTP projection preserves the selectors only");
+    assert.equal(reduce([event, terminal()]).knowledge, "unknown");
+    assert.equal(reduce([event, terminal({ output: [item] })]).knowledge, "unknown", "terminal output never completes a selector reference");
+    const completed = done(item, selector.output_index === undefined ? {} : { output_index: 0 });
+    assert.equal(reduce([event, completed, terminal()]).knowledge, "token_only");
+  }
+  const status = { type: "response.web_search_call.completed", output_index: 0, item_id: "search" };
+  assert.equal(reduce([status, terminal()]).knowledge, "unknown", "a tool status event is not item.done");
+  assert.equal(reduce([status, done({ id: "search", type: "web_search_call" }, { output_index: 0 }), terminal()]).knowledge, "token_only");
+});
+
+test("selector references validate aliases and share the existing association bound", () => {
+  const reference = selector => ({ type: "response.output_text.delta", ...selector, delta: "fixture" });
+  const message = { id: "one", type: "message" };
+  for (const frames of [
+    [reference({ output_index: 0, item_id: "one" }), reference({ output_index: 0, item_id: "two" })],
+    [reference({ output_index: 0, item_id: "one" }), reference({ output_index: 1, item_id: "one" })],
+    [reference({ output_index: 0 }), reference({ item_id: "one" })],
+    ...[{ output_index: -1 }, { output_index: 0.5 }, { item_id: null }, { item_id: "x".repeat(257) }].map(selector => [reference(selector)]),
+  ]) assert.equal(reduce([...frames, done(message, { output_index: 0 }), terminal()]).knowledge, "unknown");
+  const references = Array.from({ length: toolEvidenceLimit }, (_, index) => reference({ item_id: `item-${index}` }));
+  const completions = references.map((event, output_index) => done({ id: event.item_id, type: "message" }, { output_index }));
+  assert.equal(reduce([...references, ...completions, terminal()]).knowledge, "token_only");
+  assert.equal(reduce([...references, reference({ item_id: "overflow" }), ...completions, terminal()]).knowledge, "unknown");
+});
+
 test("terminal output is inspected and cannot erase streamed declarations or conflicts", () => {
   const item = { id: "a", type: "additional_tools", tools: [{ type: "web_search" }] };
   assert.equal(reduce([done(item, { output_index: 0 }), terminal({ output: [item] })]).knowledge, "hosted_tool_fee");

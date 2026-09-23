@@ -85,10 +85,10 @@ export function createResponsesToolEvidence(base: ToolKnowledge) {
     if (!boundedText(value) || responseId && value !== responseId) uncertain = true;
     else responseId = value;
   }
-  function observeItem(value: unknown, index: unknown, done: boolean) {
-    if (!record(value) || index !== undefined && (!Number.isSafeInteger(index) || (index as number) < 0)
-      || value.id !== undefined && !boundedText(value.id)) { uncertain = true; return; }
-    const position = index as number | undefined, id = value.id as string | undefined;
+  function associate(index: unknown, identifier: unknown): Item | undefined {
+    if (index !== undefined && (!Number.isSafeInteger(index) || (index as number) < 0)
+      || identifier !== undefined && !boundedText(identifier)) { uncertain = true; return; }
+    const position = index as number | undefined, id = identifier as string | undefined;
     const byIndex = position === undefined ? undefined : indices.get(position), byId = id === undefined ? undefined : ids.get(id);
     if (byIndex && byId && byIndex !== byId) { uncertain = true; return; }
     let item = byIndex ?? byId;
@@ -99,6 +99,12 @@ export function createResponsesToolEvidence(base: ToolKnowledge) {
     if (item.index !== undefined && position !== undefined && item.index !== position || item.id !== undefined && id !== undefined && item.id !== id) { uncertain = true; return; }
     if (position !== undefined) { item.index = position; indices.set(position, item); }
     if (id !== undefined) { item.id = id; ids.set(id, item); }
+    return item;
+  }
+  function observeItem(value: unknown, index: unknown, done: boolean) {
+    if (!record(value)) { uncertain = true; return; }
+    const item = associate(index, value.id);
+    if (!item) return;
     if (item.type !== undefined && item.type !== value.type) uncertain = true;
     item.type = value.type;
     if (done) {
@@ -108,7 +114,7 @@ export function createResponsesToolEvidence(base: ToolKnowledge) {
     } else {
       // Anonymous added events cannot safely be paired by arrival order. Codex
       // done-only anonymous items remain supported under this request owner.
-      if (position === undefined && id === undefined || item.done) uncertain = true;
+      if (index === undefined && value.id === undefined || item.done) uncertain = true;
       const partial = itemKnowledge(value);
       if (partial === "hosted_tool_fee" || partial === "hosted_tool_usage") item.observed = union(item.observed ?? "token_only", partial);
     }
@@ -125,7 +131,11 @@ export function createResponsesToolEvidence(base: ToolKnowledge) {
       }
       const completed = sse ? value.type === "response.completed" || value.type === "response.incomplete" : ["completed", "incomplete"].includes(value.status as string);
       if (!completed && !(sse && (value.type === "response.failed" || value.type === "error"))) {
-        if (sse && !ordinaryEvents.has(value.type as string) || response?.output != null && (!Array.isArray(response.output) || response.output.length > 0)) uncertain = true;
+        const ordinary = sse && ordinaryEvents.has(value.type as string);
+        if (sse && !ordinary || response?.output != null && (!Array.isArray(response.output) || response.output.length > 0)) uncertain = true;
+        // A selector proves an item exists, not its type or completion. Only a
+        // matching item.done can complete this same bounded association.
+        if (ordinary && (value.output_index !== undefined || value.item_id !== undefined)) associate(value.output_index, value.item_id);
         return;
       }
       terminal = true;
@@ -146,7 +156,11 @@ export function createResponsesToolEvidence(base: ToolKnowledge) {
           knowledge = union(knowledge, next);
         }
         if (Array.isArray(output) && (items.length > output.length || items.some(item => item.index !== undefined && item.index >= output.length))) uncertain = true;
-      } else if (!sse) uncertain = true;
+      } else {
+        // Anonymous items cannot fill a known position gap. Full terminal output
+        // can supply entirely unobserved items, but never complete a pending one.
+        if (!sse || [...indices.keys()].some(index => index >= indices.size)) uncertain = true;
+      }
       result = responseId ? { responseId, knowledge: uncertain ? "unknown" : knowledge } : null;
       items.length = 0; indices.clear(); ids.clear();
     },
@@ -174,7 +188,7 @@ export function createToolEvidenceProjection() {
     if (frame.context === "root" || frame.context === "response") {
       if (["type", "id", "response_id", "status", "object"].includes(key)) return "text";
       if (key === "output") return "items";
-      if (frame.context === "root") return key === "response" ? "response" : key === "item" ? "item" : key === "output_index" ? "number" : null;
+      if (frame.context === "root") return key === "response" ? "response" : key === "item" ? "item" : key === "output_index" ? "number" : key === "item_id" ? "text" : null;
     }
     if (frame.context === "item" || frame.context === "tool") {
       if (["type", "id", "name", "role", "execution", "status"].includes(key)) return "text";

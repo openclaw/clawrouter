@@ -1,6 +1,8 @@
+import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ResponsesOperationAborted, ResponsesWebSocketSession } from "../responses-websocket-session.ts";
+import { createResponsesToolEvidence } from "../responses-tool-evidence.ts";
 
 class Socket extends EventTarget {
   sent = [];
@@ -449,6 +451,27 @@ test("every associated sparse item frame reaches its captured producer before fo
   gate.resolve(); await tick();
   assert.deepEqual(f.client.sent.map(JSON.parse).map(value => value.type), ["response.created", "response.output_item.done", "response.completed"]);
   assert.ok(frames.every(frame => frame.index === 0)); assert.equal(f.settled.length, 1); assert.equal(f.admitted.length, 2);
+});
+
+test("selector-only WebSocket frames require item completion without changing wire or settlement", async t => {
+  for (const selector of [{ output_index: 0 }, { item_id: "call" }, { output_index: 0, item_id: "call" }]) for (const completed of [false, true]) {
+    const tools = createResponsesToolEvidence("token_only");
+    const f = fixture(t, { publish: async (_index, _identities, frame) => tools.accept(frame, true) });
+    f.client.receive(create()); await tick();
+    const terminal = complete(undefined, "proof");
+    const frames = [
+      { type: "response.created", response: { id: "proof" } },
+      { type: "response.function_call_arguments.delta", ...selector, delta: "{}" },
+      ...(completed ? [{ type: "response.output_item.done", item: { id: "call", type: "function_call" }, ...(selector.output_index === undefined ? {} : { output_index: 0 }) }] : []),
+      terminal,
+    ];
+    for (const frame of frames) f.upstream.receive(frame);
+    await tick();
+    assert.equal(tools.result().knowledge, completed ? "token_only" : "unknown");
+    assert.deepEqual(f.client.sent, frames.map(frame => JSON.stringify(frame)));
+    assert.equal(f.settled.length, 1); assert.equal(f.settled[0].outcome, "completed");
+    assert.deepEqual(f.settled[0].terminal, terminal, "settlement keeps the original usage-bearing terminal");
+  }
 });
 
 test("pending output count and bytes are bounded even while one identity write is held", async t => {

@@ -43,9 +43,12 @@ facts; no tool schemas, output, or opaque compaction payloads enter the index.
 The existing streaming parser feeds independent scalar-usage and tool-inventory
 projections in 4 KiB feeds. Qualification bounds nesting, scalar fields, 1,024 total
 selected item/tool entries, and 1,024 output-item associations; exceeding a bound
-loses qualification, not wire delivery. Item completion plus a matching sparse terminal supports Codex
-streams without requiring repeated terminal output. Unknown declarations, opaque
-references, compaction, failed observation, and incomplete inventories cannot
+loses qualification, not wire delivery. Item completion plus a matching sparse
+terminal supports Codex streams without requiring repeated terminal output.
+Known output positions must be contiguous, and every added or selector-referenced
+item needs its matching `item.done`; anonymous done-only items remain supported.
+Unknown declarations, opaque references, compaction, failed observation, and
+incomplete inventories cannot
 certify token-only history. Identity claim failures stop publication. A transient
 final-proof failure after an acknowledged claim leaves pending/unknown or that
 producer's committed proof, while delivery and accounting continue; semantic CAS

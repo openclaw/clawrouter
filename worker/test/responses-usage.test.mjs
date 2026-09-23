@@ -89,6 +89,28 @@ test("aggregate malformed tool entries discard only proof while usage and delive
   }
 });
 
+test("HTTP selector completeness preserves JSON/SSE bytes and authoritative scalar usage", async () => {
+  const item = { id: "call", type: "function_call" };
+  const delta = '{"type":"response.function_call_arguments.delta","item_\\u0069d":"call","delta":"{}"}';
+  const completed = frame({ type: "response.completed", response: { ...response, id: "proof" } });
+  const cases = [
+    [frame(delta) + completed, true, "unknown"],
+    [frame({ type: "response.output_item.done", output_index: 1, item }) + completed, true, "unknown"],
+    [frame(delta) + frame({ type: "response.output_item.done", item }) + completed, true, "token_only"],
+    [JSON.stringify({ ...response, id: "proof", output: [item] }), false, "token_only"],
+  ];
+  for (const [wire, sse, knowledge] of cases) {
+    const parsed = await proof(wire, sse, 1);
+    assert.equal(parsed.evidence.knowledge, knowledge); assert.deepEqual(parsed.usage, expected(response));
+    const tools = createResponsesToolEvidence("token_only");
+    const upstream = new Response(wire, { headers: { "content-type": sse ? "text/event-stream" : "application/json" } });
+    const observed = observeUsage(upstream, undefined, { async push() {}, async end() {}, tools }, "openai.responses");
+    assert.equal(await observed.response.text(), wire);
+    assert.deepEqual(await observed.result, { ...expected(response), delivery: "complete" });
+    assert.equal(tools.result().knowledge, knowledge);
+  }
+});
+
 test("Responses observe late usage beyond 2 MiB in JSON and one terminal SSE event", async () => {
   const large = { output: [{ type: "message", content: [{ type: "output_text", text: "🦊".repeat(600_000) }] }], ...response };
   const json = JSON.stringify(large), sse = frame({ type: "response.created" }) + frame({ response: large, type: "response.completed" });
