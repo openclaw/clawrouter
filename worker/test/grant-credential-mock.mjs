@@ -2,6 +2,10 @@ import { GrantCredentialObject } from "../grant-credentials.ts";
 
 export function attachGrantCredentialNamespace(env) {
   const objects = new Map();
+  env.ACCESS_CONTROL ??= { idFromName: (name) => name, get: () => ({ fetch: async (url) => {
+    if (new URL(url).pathname === "/grant-pools/sync") return new Response("updated");
+    throw new Error("unexpected authority call");
+  } }) };
   env.GRANT_CREDENTIALS = {
     objects,
     idFromName(name) { return name; },

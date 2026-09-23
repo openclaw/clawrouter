@@ -1,6 +1,7 @@
 import snapshotJson from "./generated/provider-snapshot.json" with { type: "json" };
 import { authorityCall } from "./authority.ts";
 import { grantCoolingDown, grantQuotaRatio, observeGrantQuota, observeGrantQuotaProbe } from "./grant-quota.ts";
+import { syncGrantPoolIndex } from "./grant-selection.ts";
 import { applyProviderCredential, applyTransportHeaders, quotaProbeForGrant, requiredGrantTemplate, transformTransportBody, transportForGrant } from "./provider-auth.ts";
 import type { CompiledGrantTransport, CompiledProvider, Env, GrantRuntimeState, ProviderSnapshot, RefreshConfig, UpstreamGrant } from "./types";
 import { errorResponse, HttpError, json, readJson } from "./utils.ts";
@@ -38,6 +39,8 @@ interface CredentialRecord {
   nextKeepWarmAt?: string | null;
   nextRefreshAttemptAt?: string | null;
   quotaFailureCount?: number;
+  revokedAt?: string | null;
+  metadata?: UpstreamGrant;
 }
 
 export interface CredentialProjection {
@@ -60,9 +63,6 @@ export interface CredentialProjection {
 
 interface OwnerResponse {
   grant: UpstreamGrant;
-  projection: CredentialProjection;
-  changed: boolean;
-  migrated: boolean;
 }
 
 interface MaterializeRequest {
@@ -79,10 +79,6 @@ interface PutRequest {
   key: string;
   grant: UpstreamGrant;
   preserveUnspecifiedSecrets: boolean;
-}
-
-class OwnerHttpError extends HttpError {
-  projection?: CredentialProjection;
 }
 
 class ReauthorizationRequired extends HttpError {
@@ -121,21 +117,36 @@ export class GrantCredentialObject implements DurableObject {
     if (request.method !== "POST") return errorResponse("route_not_found", "route not found", 404);
     try {
       if (path === "/put") {
-        const current = await this.state.storage.get<CredentialRecord>("credential");
         const input = await readJson<PutRequest>(request);
-        let record = current && (input.preserveUnspecifiedSecrets || !hasPrimaryCredential(input.grant))
+        const current = await this.loadRecord(input.key);
+        const previous = current ? metadataGrant(current) : await this.env.POLICY_KV.get<UpstreamGrant>(input.key, "json");
+        let record = current && !current.revokedAt && (input.preserveUnspecifiedSecrets || !hasPrimaryCredential(input.grant))
           ? updatedCredentialRecord(current, input.grant)
-          : credentialRecord(input.grant, (current?.generation ?? 0) + 1);
+          : credentialRecord(input.grant, (current?.generation ?? previous?.credentialGeneration ?? 0) + 1);
         record = ownerMetadata(record, input.grant, input.key);
-        await this.state.storage.put("credential", record);
+        const grant = metadataGrant(record);
+        // Pool capacity admission precedes installation; compensation cannot race a
+        // later command because it stays inside this owner's serialized operation.
+        await syncGrantPoolIndex(this.env, input.key, previous, grant);
+        try { await this.state.storage.put("credential", record); }
+        catch (error) { await syncGrantPoolIndex(this.env, input.key, grant, previous).catch(() => undefined); throw error; }
         await this.schedule(record);
-        return json({ projection: credentialProjection(record) });
+        await this.publishProjection(record);
+        return json({ grant });
       }
       if (path === "/materialize") return json(await this.materialize(await readJson<MaterializeRequest>(request)));
       if (path === "/revoke") {
-        await this.state.storage.delete("credential");
+        const { key } = await readJson<{ key: string }>(request);
+        const current = await this.loadRecord(key);
+        const previous = current ? metadataGrant(current) : await this.env.POLICY_KV.get<UpstreamGrant>(key, "json");
+        const record = current?.revokedAt ? current : revokedRecord(key, previous, current?.generation);
+        // Never erase the tombstone or restore secrets when a derived write fails.
+        // Retrying revoke republishes this same generation after partial failure.
+        await this.state.storage.put("credential", record);
         await this.state.storage.deleteAlarm();
-        return new Response("revoked");
+        await syncGrantPoolIndex(this.env, key, previous, metadataGrant(record));
+        await this.publishProjection(record);
+        return json({ grant: metadataGrant(record) });
       }
       return errorResponse("route_not_found", "route not found", 404);
     } catch (error) {
@@ -149,21 +160,22 @@ export class GrantCredentialObject implements DurableObject {
   }
 
   private async materialize(input: MaterializeRequest): Promise<OwnerResponse> {
-    let record = await this.state.storage.get<CredentialRecord>("credential");
+    let record = await this.loadRecord(input.key);
     let migrated = false;
     if (!record && input.legacy && hasPrimaryCredential(input.legacy)) {
-      record = ownerMetadata(credentialRecord(input.legacy, 1), input.legacy, input.key);
+      const metadata = await this.env.POLICY_KV.get<UpstreamGrant>(input.key, "json");
+      if (metadata?.revokedAt) record = revokedRecord(input.key, metadata);
+      else if (metadata && hasPrimaryCredential(metadata)) record = ownerMetadata(credentialRecord(metadata, 1), metadata, input.key);
+      if (!record) throw new HttpError(404, "grant_credential_missing", "upstream grant credential is not registered");
       await this.state.storage.put("credential", record);
       migrated = true;
     }
     if (!record) throw new HttpError(404, "grant_credential_missing", "upstream grant credential is not registered");
-    const adopted = ownerMetadata(record, input.grant, input.key);
-    const metadataChanged = maintenanceMetadataChanged(record, adopted);
-    if (metadataChanged) {
-      record = adopted;
-      await this.state.storage.put("credential", record);
-    }
+    // Materialization may rotate tokens, but cannot adopt lifecycle state from a
+    // stale KV read. Only explicit owner mutations can re-enable or reconnect.
+    if (input.grant.credentialGeneration !== record.generation || input.grant.enabled !== record.enabled) await this.publishProjection(record);
     assertCredentialEnabled(record);
+    if (record.providerId && record.providerId !== input.providerId || record.kind !== input.grant.kind) throw new HttpError(409, "upstream_grant_changed", "upstream grant changed; retry discovery before dispatch");
     if (record.status === "reauth_required") throw new ReauthorizationRequired("upstream grant requires reauthorization", credentialProjection(record));
 
     const expected = input.expectedGeneration;
@@ -188,12 +200,14 @@ export class GrantCredentialObject implements DurableObject {
             await this.state.storage.put("credential", record);
             await this.schedule(record);
           } else await this.state.storage.deleteAlarm();
+          await this.publishProjection(record);
           throw error;
         }
       }
     }
-    if (changed || migrated || metadataChanged) await this.schedule(record);
-    return { grant: materializedGrant(input.grant, record), projection: credentialProjection(record), changed, migrated };
+    if (changed || migrated) await this.schedule(record);
+    if (changed) await this.publishProjection(record);
+    return { grant: materializedGrant(metadataGrant(record), record) };
   }
 
   private async refresh(record: CredentialRecord, providerId: string, providerRefresh: RefreshConfig | null): Promise<CredentialRecord> {
@@ -260,7 +274,7 @@ export class GrantCredentialObject implements DurableObject {
   private async maintain(): Promise<void> {
     let record = await this.state.storage.get<CredentialRecord>("credential");
     if (!record) return;
-    record = await this.resolveEnabled(record);
+    record = await this.loadRecord(record.grantKey ?? "", record) ?? record;
     if (!record.enabled || !record.grantKey || !record.providerId || !record.kind || record.status === "reauth_required") {
       await this.state.storage.deleteAlarm();
       return;
@@ -309,8 +323,7 @@ export class GrantCredentialObject implements DurableObject {
 
   private async publishProjection(record: CredentialRecord): Promise<void> {
     if (!record.grantKey) return;
-    const metadata = await this.env.POLICY_KV.get<UpstreamGrant>(record.grantKey, "json");
-    if (metadata) await this.env.POLICY_KV.put(record.grantKey, JSON.stringify(secretlessGrant(metadata, credentialProjection(record))));
+    await this.env.POLICY_KV.put(record.grantKey, JSON.stringify(metadataGrant(record)));
   }
 
   private async schedule(record: CredentialRecord): Promise<void> {
@@ -326,12 +339,13 @@ export class GrantCredentialObject implements DurableObject {
     await this.state.storage.setAlarm(Math.max(Date.now() + MIN_ALARM_DELAY_MS, Math.min(...next)));
   }
 
-  private async resolveEnabled(record: CredentialRecord): Promise<CredentialRecord> {
-    if (record.enabled !== undefined) return record;
-    const metadata = record.grantKey ? await this.env.POLICY_KV.get<UpstreamGrant>(record.grantKey, "json") : null;
-    const migrated = { ...record, enabled: metadata?.enabled !== false && metadata !== null };
-    await this.state.storage.put("credential", migrated);
-    return migrated;
+  private async loadRecord(key: string, stored?: CredentialRecord): Promise<CredentialRecord | undefined> {
+    let record = stored ?? await this.state.storage.get<CredentialRecord>("credential");
+    if (!record || record.metadata && record.enabled !== undefined) return record;
+    const metadata = key ? await this.env.POLICY_KV.get<UpstreamGrant>(key, "json") : null;
+    record = { ...record, grantKey: key || record.grantKey, metadata: secretlessGrant(metadata ?? {}), enabled: record.enabled ?? (metadata !== null && metadata.enabled !== false) };
+    await this.state.storage.put("credential", record);
+    return record;
   }
 }
 
@@ -358,19 +372,18 @@ function ownerMetadata(record: CredentialRecord, grant: UpstreamGrant, key: stri
       : null,
     quotaFailureCount: record.quotaFailureCount ?? 0,
     nextRefreshAttemptAt: record.nextRefreshAttemptAt ?? null,
+    revokedAt: null,
+    metadata: secretlessGrant(grant),
   };
 }
 
-function maintenanceMetadataChanged(left: CredentialRecord, right: CredentialRecord): boolean {
-  return left.enabled !== right.enabled
-    || left.grantKey !== right.grantKey
-    || left.providerId !== right.providerId
-    || left.kind !== right.kind
-    || left.maintenance?.keepWarm !== right.maintenance?.keepWarm
-    || left.nextQuotaProbeAt !== right.nextQuotaProbeAt
-    || left.nextKeepWarmAt !== right.nextKeepWarmAt
-    || left.nextRefreshAttemptAt !== right.nextRefreshAttemptAt
-    || left.quotaFailureCount !== right.quotaFailureCount;
+function metadataGrant(record: CredentialRecord): UpstreamGrant {
+  return { ...record.metadata, ...credentialProjection(record), enabled: record.enabled === true, provider: record.providerId, kind: record.kind, maintenance: record.maintenance, revokedAt: record.revokedAt ?? null };
+}
+
+function revokedRecord(key: string, metadata: UpstreamGrant | null, generation = metadata?.credentialGeneration ?? 0): CredentialRecord {
+  const revokedAt = metadata?.revokedAt ?? new Date().toISOString();
+  return { version: 1, generation: generation + 1, enabled: false, status: "active", grantKey: key, providerId: metadata?.provider, kind: metadata?.kind, createdAt: metadata?.createdAt, updatedAt: revokedAt, revokedAt, metadata: secretlessGrant(metadata ?? {}) };
 }
 
 async function probeQuota(env: Env, provider: CompiledProvider, record: CredentialRecord): Promise<GrantRuntimeState> {
@@ -454,8 +467,7 @@ function assertCredentialEnabled(record: CredentialRecord): void {
 }
 
 export async function putGrantCredentials(env: Env, key: string, grant: UpstreamGrant, preserveUnspecifiedSecrets = false): Promise<UpstreamGrant> {
-  const response = await ownerCall<{ projection: CredentialProjection }>(env, key, "/put", { key, grant, preserveUnspecifiedSecrets });
-  return secretlessGrant(grant, response.projection);
+  return (await ownerCall<OwnerResponse>(env, key, "/put", { key, grant, preserveUnspecifiedSecrets })).grant;
 }
 
 export async function materializeGrantCredentials(
@@ -467,30 +479,19 @@ export async function materializeGrantCredentials(
   force: boolean,
 ): Promise<UpstreamGrant> {
   const legacy = hasRawCredential(grant) ? grant : null;
-  try {
-    const response = await ownerCall<OwnerResponse>(env, key, "/materialize", {
-      key,
-      grant,
-      legacy,
-      providerId,
-      refresh,
-      force,
-      expectedGeneration: grant.credentialGeneration ?? null,
-    });
-    if (response.changed || response.migrated || grant.credentialGeneration !== response.projection.credentialGeneration) {
-      await env.POLICY_KV.put(key, JSON.stringify(secretlessGrant(grant, response.projection)));
-    }
-    return response.grant;
-  } catch (error) {
-    if (error instanceof OwnerHttpError && error.projection) {
-      await env.POLICY_KV.put(key, JSON.stringify(secretlessGrant(grant, error.projection)));
-    }
-    throw error;
-  }
+  return (await ownerCall<OwnerResponse>(env, key, "/materialize", {
+    key,
+    grant,
+    legacy,
+    providerId,
+    refresh,
+    force,
+    expectedGeneration: grant.credentialGeneration ?? null,
+  })).grant;
 }
 
-export async function revokeGrantCredentials(env: Env, key: string): Promise<void> {
-  await ownerCall(env, key, "/revoke", {});
+export async function revokeGrantCredentials(env: Env, key: string): Promise<UpstreamGrant> {
+  return (await ownerCall<OwnerResponse>(env, key, "/revoke", { key })).grant;
 }
 
 export function secretlessGrant(grant: UpstreamGrant, projection?: CredentialProjection): UpstreamGrant {
@@ -596,9 +597,7 @@ async function ownerCall<T>(env: Env, key: string, path: string, body: unknown):
   if (!response.ok) {
     let payload: { error?: { code?: string; message?: string; detail?: { projection?: CredentialProjection } } } = {};
     try { payload = JSON.parse(text); } catch { /* redacted internal error */ }
-    const error = new OwnerHttpError(response.status, payload.error?.code ?? "credential_owner_error", payload.error?.message ?? "grant credential operation failed");
-    error.projection = payload.error?.detail?.projection;
-    throw error;
+    throw new HttpError(response.status, payload.error?.code ?? "credential_owner_error", payload.error?.message ?? "grant credential operation failed");
   }
   return text && response.headers.get("content-type")?.includes("application/json") ? JSON.parse(text) as T : text as T;
 }

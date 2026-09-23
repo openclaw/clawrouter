@@ -1,6 +1,6 @@
 import { authorityCall, type PoolSubmissionTicketView, type SubmissionReceipt, type SubmissionTicketClaimResult } from "./authority.ts";
 import { putGrantCredentials } from "./grant-credentials.ts";
-import { syncGrantPoolIndex, validCredentialBundle, validGrantSegment } from "./grant-selection.ts";
+import { validCredentialBundle, validGrantSegment } from "./grant-selection.ts";
 import type { Env, UpstreamGrant } from "./types.ts";
 import { decodePathSegment, caughtResponse, errorResponse, HttpError, parseBearer, privateJson, readJson, sha256Hex } from "./utils.ts";
 
@@ -43,16 +43,7 @@ export async function poolSubmissionApi(request: Request, env: Env, path: string
 async function storeSubmission(env: Env, ticket: PoolSubmissionTicketView, value: unknown): Promise<SubmissionReceipt> {
   const grant = normalizeSubmission(ticket, value);
   const key = ticket.scope === "policies" ? `oauth/${ticket.scopeId}/${ticket.tokenRef}` : `oauth/tenants/${ticket.scopeId}/${ticket.tokenRef}`;
-  const existing = await env.POLICY_KV.get<UpstreamGrant>(key, "json");
-  await syncGrantPoolIndex(env, key, existing, grant);
-  let stored: UpstreamGrant;
-  try {
-    stored = await putGrantCredentials(env, key, grant);
-    await env.POLICY_KV.put(key, JSON.stringify(stored));
-  } catch (error) {
-    await syncGrantPoolIndex(env, key, grant, existing).catch(() => undefined);
-    throw error;
-  }
+  const stored = await putGrantCredentials(env, key, grant);
   return { grantKey: key, submittedAt: stored.updatedAt ?? new Date().toISOString() };
 }
 

@@ -10,7 +10,7 @@ import {
 import { contentKey, contentRetentionDefault } from "./content-retention.ts";
 import { credentialResponsesFrom, normalizeCredential } from "./credentials";
 import { correlationRequestId, logCorrelationError } from "./correlation.ts";
-import { currentGrantRuntime, grantPriority, grantRoutingPolicy, grantRuntimeStates, grantSelectionStats, grantUsable, grantWeight, syncGrantPoolIndex, validCredentialBundle, validGrantSegment } from "./grant-selection";
+import { currentGrantRuntime, grantPriority, grantRoutingPolicy, grantRuntimeStates, grantSelectionStats, grantUsable, grantWeight, validCredentialBundle, validGrantSegment } from "./grant-selection";
 import { assertFusionModels, loadFusionConfig, storeFusionConfig } from "./fusion-config";
 import { fusionReadiness } from "./fusion-readiness";
 import { putGrantCredentials, revokeGrantCredentials } from "./grant-credentials.ts";
@@ -369,21 +369,14 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string): 
   if (action === "revoke" && request.method === "POST") {
     existing = await env.POLICY_KV.get<UpstreamGrant>(key, "json");
     if (!existing) throw new HttpError(404, "unknown_upstream_grant", "upstream grant is not registered");
-    await revokeGrantCredentials(env, key);
-    grant = revokeGrant(existing);
+    grant = await revokeGrantCredentials(env, key);
   }
   else if (!action && request.method === "PUT") {
     const body = mutationObject(await readJson<unknown>(request), "invalid_upstream_grant", "upstream grant");
     existing = await env.POLICY_KV.get<UpstreamGrant>(key, "json");
-    grant = normalizeGrant(body, existing);
+    grant = await putGrantCredentials(env, key, normalizeGrant(body, existing), true);
   }
   else throw new HttpError(405, "method_not_allowed", "admin method is not allowed");
-  await syncGrantPoolIndex(env, key, existing, grant);
-  try {
-    if (action !== "revoke") grant = await putGrantCredentials(env, key, grant, true);
-    await env.POLICY_KV.put(key, JSON.stringify(grant));
-  }
-  catch (error) { await syncGrantPoolIndex(env, key, grant, existing).catch(() => undefined); throw error; }
   return privateJson(await upstreamGrantResponse(env, key, grant));
 }
 
@@ -655,7 +648,6 @@ function normalizeGrantMaintenance(value: unknown, existing: UpstreamGrant["main
   if (Object.keys(body).some((key) => key !== "keepWarm") || body.keepWarm !== undefined && typeof body.keepWarm !== "boolean") throw new HttpError(400, "invalid_upstream_grant", "grant maintenance only accepts boolean keepWarm");
   return { keepWarm: body.keepWarm === true };
 }
-function revokeGrant(value: UpstreamGrant): UpstreamGrant { const { credential: _, credentials: __, accessToken: ___, refreshToken: ____, ...safe } = value; return { ...safe, enabled: false, credentials: {}, hasCredential: false, credentialFields: [], hasAccessToken: false, hasRefreshToken: false, updatedAt: nowIso(), revokedAt: nowIso() }; }
 
 function policyResponse(entry: AccessPolicyEntry) { return { policyId: entry.policyId, enabled: entry.policy.enabled, providers: entry.policy.providers, tenantId: entry.policy.tenantId ?? null, tokenRole: entry.policy.tokenRole ?? null, monthlyBudgetMicros: entry.policy.monthlyBudgetMicros ?? null, requestCostMicros: entry.policy.requestCostMicros ?? null, budgetScope: entry.policy.budgetScope ?? "policy", retainRequestContent: entry.policy.retainRequestContent !== false, grantRouting: grantRoutingPolicy(entry.policy.grantRouting) }; }
 function legacyKeyResponse(entry: AccessPolicyEntry) { return { kid: entry.policyId, ...policyResponse(entry) }; }
