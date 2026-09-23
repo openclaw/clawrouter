@@ -3,6 +3,7 @@
 ## Unreleased
 
 - Keep policy selection separate from existing binding edits, while new bindings still default to the selected policy.
+- Assess Fusion sampling, reasoning, and tool intent from source-linked model/endpoint facts. Reject documented synthesizer conflicts before adviser spend, preserve caller fields, and omit unqualified adviser temperature and local reasoning defaults.
 
 - Keep failed console refreshes visible after successful edits, label stale usage with its snapshot time, and show unavailable spend and balances as unknown.
 
