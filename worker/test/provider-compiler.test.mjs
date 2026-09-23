@@ -14,6 +14,14 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.deepEqual(compiled, generated);
   assert.equal(compiled.providers.length, 22);
   assert.equal(compiled.model_index["lanseq/qwen3.8-27b-int4"].provider, "lanseq");
+  const gemini = compiled.model_index["google/gemini-3.5-flash"];
+  assert.equal(gemini.pricing_ref, "google-gemini-3-5-flash-tiers-2026-09-23");
+  assert.equal(gemini.pricing.effectiveAt, "2026-09-23");
+  assert.deepEqual(gemini.pricing.serviceTiers.map(({ id, aliases, inputMicrosPerMillion, cachedInputMicrosPerMillion, outputMicrosPerMillion }) => [id, aliases, inputMicrosPerMillion, cachedInputMicrosPerMillion, outputMicrosPerMillion]), [
+    ["default", ["standard"], 1_500_000, 150_000, 9_000_000],
+    ["flex", [], 750_000, 80_000, 4_500_000],
+    ["priority", [], 2_700_000, 270_000, 16_200_000],
+  ]);
   const together = compiled.model_index["together/glm-5.2"];
   assert.equal(together.pricing_ref, "together-glm-5-2-standard-2026-09-23");
   assert.equal(together.pricing.effectiveAt, "2026-09-23");

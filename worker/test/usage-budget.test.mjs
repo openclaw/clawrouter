@@ -1,13 +1,12 @@
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
+import { proxyKey, sse, usageEnv } from "./usage-budget-fixture.mjs";
 import test from "node:test";
 
 
 const { default: handler } = await import("../index.ts");
 const { providerBudgetStatus, queue } = await import("../ledgers.ts");
-const keyMaterial = "abcdefgh";
-const keyDigest = await sha256(keyMaterial);
 
 for (const failure of ["retention", "provider"]) {
   test(`${failure} failure accounts the fixed tariff only after dispatch and preserves request attribution`, async (t) => {
@@ -85,30 +84,6 @@ test("failed dispatch confirmation never reaches upstream and releases both real
   }
 });
 
-function usageEnv(objectNames, { provider = "openai", limit = 100, providerLimit = limit, fixedCost = 1, retainContent = true, existingUnmetered = false } = {}) {
-  const policy = { enabled: true, generation: "policy_v1", providers: [provider], tenantId: "tenant", monthlyBudgetMicros: limit, requestCostMicros: fixedCost, budgetScope: "principal", retainRequestContent: retainContent };
-  // Existing stored policies can omit the optional limits; new policies use null.
-  if (existingUnmetered) { delete policy.monthlyBudgetMicros; delete policy.requestCostMicros; }
-  const credential = { enabled: true, ["sec" + "retSha256"]: keyDigest, policyId: "maintainer_access", policyGeneration: "policy_v1", principalId: "owner@example.com" };
-  const access = {
-    idFromName: (name) => name,
-    get: () => ({ fetch: async (url) => {
-      const path = new URL(url).pathname;
-      if (path === "/credentials/resolve") return Response.json({ initialized: true, credentials: [{ credentialId: "maintainer_key", credential }], missingCredentialIds: [] });
-      if (path === "/policies/resolve") return Response.json({ initialized: true, policies: [{ policyId: "maintainer_access", policy }], missingPolicyIds: [] });
-      if (path === "/users/resolve") return Response.json({ initialized: true, users: [], missingEmails: [] });
-      if (path === "/connections/resolve") return Response.json({ initialized: true, connections: [{ providerId: provider, enabled: true, monthlyBudgetMicros: providerLimit }], missingProviderIds: [] });
-      if (path === "/grant-pools/resolve") return Response.json({ keys: [], states: {} });
-      throw new Error(`unexpected authority path ${path}`);
-    } }),
-  };
-  const budget = { idFromName: (name) => name, get: (name) => ({ fetch: async () => { objectNames.push(name); return Response.json({ spentMicros: 10, remainingMicros: 90 }); } }) };
-  const emptyUsage = { ledger: "durable_object", summary: { requestCount: 0, successCount: 0, errorCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, actualCostMicros: 0 }, providers: [], daily: [], events: [] };
-  const usage = { idFromName: (name) => name, get: () => ({ fetch: async () => Response.json(emptyUsage) }) };
-  return { ACCESS_CONTROL: access, BUDGET_LEDGER: budget, USAGE_LEDGER: usage, POLICY_KV: { get: async (keys) => Array.isArray(keys) ? new Map() : null } };
-}
-
-function proxyKey() { return ["clawrouter", "live", `maintainer_key-${keyMaterial}`].join("-"); }
 
 test("HTTP still delivers the upstream response when accounting publication fails", async (t) => {
   const env = usageEnv([], { provider: "local-openai", limit: null, retainContent: false });
@@ -167,16 +142,11 @@ test(`${contentType} accounting preserves backpressure and settles on completion
 });
 }
 
-async function sha256(value) {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
 
 const messageUsage = { input_tokens: 10, cache_read_input_tokens: 1_000, cache_creation_input_tokens: 3_000, cache_creation: { ephemeral_5m_input_tokens: 2_000, ephemeral_1h_input_tokens: 1_000 }, output_tokens: 20 };
 const messageStart = { type: "message_start", message: { type: "message", usage: { ...messageUsage, output_tokens: 1 } } };
 const messageDelta = { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 20 } };
 const messageStop = { type: "message_stop" };
-const sse = (...events) => events.map((event) => `data: ${typeof event === "string" ? event : JSON.stringify(event)}\n\n`).join("");
 const earlyRefusal = { type: "message", content: [], stop_reason: "refusal", usage: { ...messageUsage, output_tokens: 0 } };
 
 for (const [name, body, contentType, measured, measuredCost = 4_710, outputTokens = 20] of [
@@ -788,16 +758,17 @@ test("Sonar mandatory fees and Gemini hosted work never settle at token-only pri
     env.BUDGET_LEDGER = sqlBudgetNamespace(t);
     env.USAGE_QUEUE = { send: async event => events.push(event) };
     const denied = fixedCost == null && (limit != null || providerLimit != null);
-    const result = google ? { candidates: [{ finishReason: "STOP" }], usageMetadata: { promptTokenCount: 27, toolUsePromptTokenCount: 10_309, candidatesTokenCount: 45, thoughtsTokenCount: 31, totalTokenCount: 10_412 } }
+    const result = google ? { candidates: [{ finishReason: "STOP" }], usageMetadata: { promptTokenCount: 27, toolUsePromptTokenCount: 10_309, candidatesTokenCount: 45, thoughtsTokenCount: 31, totalTokenCount: 10_412, serviceTier: "standard" } }
       : { choices: [{ finish_reason: "stop" }], usage: { prompt_tokens: 26, completion_tokens: 832, total_tokens: 858, cost: { total_cost: 0.019 } } };
     const wire = stream ? google ? sse(result) : sse(result, "[DONE]") : JSON.stringify(result);
     const upstream = t.mock.method(globalThis, "fetch", async (_url, init) => {
       for (const [key, value] of Object.entries(gapBody)) assert.deepEqual(JSON.parse(init.body)[key], value);
-      return new Response(wire, { headers: { "content-type": stream ? "text/event-stream" : "application/json" } });
+      if (google) assert.equal(JSON.parse(init.body).serviceTier, "priority");
+      return new Response(wire, { headers: { "content-type": stream ? "text/event-stream" : "application/json", ...(google ? { "x-gemini-service-tier": "standard" } : {}) } });
     });
     const endpoint = google ? stream ? "stream_generate_content" : "generate_content" : "chat_completions";
     const route = manifest ? `/v1/proxy/${provider}/${endpoint}` : google ? `/v1/native/google-gemini/v1beta/models/${model}:${stream ? "streamGenerateContent?alt=sse" : "generateContent"}` : "/v1/chat/completions";
-    const body = google ? { contents: [{ parts: [{ text: "fixture" }] }], generationConfig: { maxOutputTokens: 100 }, ...gapBody }
+    const body = google ? { contents: [{ parts: [{ text: "fixture" }] }], generationConfig: { maxOutputTokens: 100 }, serviceTier: "priority", ...gapBody }
       : { model: manifest ? model : `${provider}/${model}`, messages: [{ role: "user", content: "fixture" }], max_tokens: 1_000, stream };
     const response = await handler.fetch(new Request(`https://clawrouter.example${route}`, {
       method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
@@ -812,6 +783,11 @@ test("Sonar mandatory fees and Gemini hosted work never settle at token-only pri
     assert.equal(events[0].cost_basis, denied ? "none" : fixedCost == null ? "unpriced_usage" : "policy_fixed");
     assert.equal(events[0].actual_cost_micros, denied ? 0 : fixedCost ?? 0);
     if (!denied) assert.deepEqual([events[0].input_tokens, events[0].output_tokens, events[0].total_tokens], counts);
+    // A consistent Priority downgrade still cannot price hosted fees/work.
+    if (google) {
+      assert.equal(events[0].requested_service_tier, "priority");
+      assert.equal(events[0].served_service_tier, denied ? null : "standard");
+    }
     const usage = await handler.fetch(new Request("https://clawrouter.example/v1/usage", { headers: { authorization: `Bearer ${proxyKey()}` } }), env, {});
     assert.equal((await usage.json()).budget.spentMicros, limit == null ? null : denied ? 0 : fixedCost ?? 0);
     assert.equal((await providerBudgetStatus(env, provider, 100_000)).spentMicros, denied ? 0 : fixedCost ?? 0);

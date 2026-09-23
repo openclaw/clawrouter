@@ -1,7 +1,7 @@
-import { googleField, googleInt32 } from "./google-protocol.ts";
+import { googleField, googleInt32, googleServiceTier } from "./google-protocol.ts";
 
 export interface UsageTokens {
-  serviceTier?: string;
+  serviceTier?: string | null;
   input: number | null;
   output: number | null;
   total: number | null;
@@ -47,7 +47,11 @@ function googleUsageTokens(value: unknown): UsageTokens | null {
   const candidates = counter("candidatesTokenCount", "candidates_token_count"), thoughts = counter("thoughtsTokenCount", "thoughts_token_count");
   const total = counter("totalTokenCount", "total_token_count");
   if (input == null || cached == null || candidates == null || thoughts == null || total == null) return null;
-  return { input, output: candidates + thoughts, total, cached, cacheWrite: null, cacheWrite5m: null, cacheWrite1h: null };
+  const tier = googleField(value, "serviceTier", "service_tier");
+  // Absent/null ProtoJSON fields are unset; null in normalized usage instead
+  // records an explicit invalid tier so accounting cannot assume Standard.
+  return { input, output: candidates + thoughts, total, cached, cacheWrite: null, cacheWrite5m: null, cacheWrite1h: null,
+    ...(tier == null ? {} : { serviceTier: googleServiceTier(tier) }) };
 }
 
 export type ResponseOutcome = "success" | "provider_error" | null;
