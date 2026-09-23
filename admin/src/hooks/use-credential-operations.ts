@@ -1,4 +1,4 @@
-import { useRef, useState } from "react";
+import { type Dispatch, type SetStateAction, useRef, useState } from "react";
 import { DashboardRequestError } from "../dashboard-fetch";
 import { errorMessage } from "../domain";
 import { generateSecret, request, sha256Hex } from "../ui-helpers";
@@ -16,15 +16,21 @@ function scopeKey({ origin, demo, session }: Scope) {
   return JSON.stringify([origin, demo, session.auth, session.email, session.tenantId, session.role, session.authenticated]);
 }
 
-export function useCredentialOperations(initial: Scope, setStatus: (status: string) => void, refresh: (ownsScope: () => boolean) => Promise<void>) {
+export function useCredentialOperations(initial: Scope, setStatus: Dispatch<SetStateAction<string>>, refresh: (ownsScope: () => boolean) => Promise<void>) {
   const scopeRef = useRef({ ...initial, key: scopeKey(initial), epoch: 0 });
   const presentationRef = useRef({ surface: null as Surface | null, epoch: 0 });
   const mutationRef = useRef(0);
   const pendingRef = useRef<(Intent & { scope: number }) | null>(null);
+  const publishedStatusRef = useRef<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [rows, setRows] = useState(emptyRows);
   const [feedback, setFeedback] = useState<Feedback>(emptyFeedback);
   const [scopeEpoch, setScopeEpoch] = useState(0);
+
+  function publishStatus(status: string) {
+    publishedStatusRef.current = status;
+    setStatus(status);
+  }
 
   function setScope(next: Scope | null) {
     const key = next ? scopeKey(next) : "signed-out";
@@ -35,7 +41,10 @@ export function useCredentialOperations(initial: Scope, setStatus: (status: stri
     setScopeEpoch(scopeRef.current.epoch);
     setRows(emptyRows);
     setFeedback(emptyFeedback);
-    if (pendingRef.current) setStatus("credential result cleared after sign-in changed");
+    const previousStatus = publishedStatusRef.current;
+    publishedStatusRef.current = null;
+    // A settled outcome can name the old identity's key; preserve unrelated status.
+    if (previousStatus !== null) setStatus((current) => current === previousStatus ? next?.session.authenticated ? "connected" : "sign-in required" : current);
     // A dispatched request still owns admission until its outcome is known.
   }
 
@@ -83,13 +92,13 @@ export function useCredentialOperations(initial: Scope, setStatus: (status: stri
     const ownsScope = capturedScope.isCurrent;
     const ownsPresentation = () => ownsScope() && presentationRef.current.epoch === presentation && presentationRef.current.surface === intent.surface;
     let sent = false;
-    setStatus(`${intent.operation === "create" ? "issuing" : intent.operation === "rotate" ? "rotating" : "revoking"} credential`);
+    publishStatus(`${intent.operation === "create" ? "issuing" : intent.operation === "rotate" ? "rotating" : "revoking"} credential`);
     try {
       const secret = intent.operation === "revoke" ? "" : generateSecret(24);
       const digest = secret ? await sha256Hex(secret) : "";
       // Leaving and returning must not dispatch an intent admitted by the old panel.
       if (!ownsPresentation()) {
-        if (ownsScope()) setStatus("credential change canceled before sending");
+        if (ownsScope()) publishStatus("credential change canceled before sending");
         return null;
       }
       const collection = `/v1/${intent.surface === "admin" ? "admin" : "session"}/credentials`;
@@ -113,14 +122,14 @@ export function useCredentialOperations(initial: Scope, setStatus: (status: stri
       const reveal = secret && ownsPresentation() ? { key: `clawrouter-live-${intent.credentialId}-${secret}`, credentialId: intent.credentialId, policyId: credential.policyId, operation: intent.operation as "create" | "rotate", scope: scope.epoch, presentation } : null;
       const notice = `${verb} ${intent.credentialId}.${secret && !reveal ? " The one-time secret was dismissed. Rotate the active key to obtain a new secret." : ""}`;
       setFeedback({ surface: intent.surface, error: "", notice, reveal });
-      setStatus(`${intent.operation === "create" ? "issued" : verb.toLowerCase()} credential`);
+      publishStatus(`${intent.operation === "create" ? "issued" : verb.toLowerCase()} credential`);
       return { credential, presented: ownsPresentation() };
     } catch (caught) {
       if (!ownsScope()) return null;
       if (intent.surface === "personal" && caught instanceof DashboardRequestError && caught.status === 401 && caught.message.includes("access_session_required")) {
         capturedScope.invalidate();
         setFeedback({ surface: intent.surface, error: "Sign-in required. Sign in again, then refresh keys.", notice: "", reveal: null });
-        setStatus("credential error: sign-in required");
+        publishStatus("credential error: sign-in required");
         return null;
       }
       const rejected = caught instanceof DashboardRequestError && caught.status >= 400 && caught.status < 500;
@@ -128,7 +137,7 @@ export function useCredentialOperations(initial: Scope, setStatus: (status: stri
         ? `Change to ${intent.credentialId} could not be confirmed. Refresh and check this key before trying again; the server may have applied it. No secret can be recovered.`
         : errorMessage(caught);
       setFeedback({ surface: intent.surface, error, notice: "", reveal: null });
-      setStatus(`credential error: ${error}`);
+      publishStatus(`credential error: ${error}`);
       return null;
     } finally {
       if (pendingRef.current === operation) {

@@ -387,6 +387,7 @@ test("a lost create response is reconciled by a fresh read after stale snapshots
 test("old-identity recovery does not start a refresh after an in-flight read accepts another identity", async ({ page }) => {
   const state = await fixture(page);
   await openAdmin(page);
+  const previousRefresh = await page.locator(".connectionMeta time").getAttribute("datetime");
   await draft(page, "previous_recovery");
   const sessionRead = deferred();
   state.holdSession = sessionRead.promise;
@@ -403,11 +404,37 @@ test("old-identity recovery does not start a refresh after an in-flight read acc
   await expect(page.locator(".tenantSwitch strong")).toHaveText(state.email);
   await page.getByRole("button", { name: "Dashboard", exact: true }).click();
   await expect(page.locator(".myKeysList")).toContainText("second_key");
+  await expect(page.locator(".connectionMeta time")).not.toHaveAttribute("datetime", previousRefresh!);
   await connected(page);
+  await expect(page.locator("body")).not.toContainText("previous_recovery");
+  await expect(page.locator("body")).not.toContainText("could not be confirmed");
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
   expect(state.sessionReads).toBe(2);
   expect(state.writes).toHaveLength(1);
   await expect(page.locator(".issuedKey code")).toHaveCount(0);
+});
+
+test("credential scope reset preserves an unrelated action error and refresh failure", async ({ page }) => {
+  const state = await fixture(page);
+  await openAdmin(page);
+  const previousRefresh = await page.locator(".connectionMeta time").getAttribute("datetime");
+  state.loseResponse = true;
+  await draft(page, "old_key_result");
+  await page.getByRole("button", { name: "Issue credential", exact: true }).click();
+  await expect(page.locator(".inspector")).toContainText("could not be confirmed");
+  await expect(page.locator(".connectionMeta time")).not.toHaveAttribute("datetime", previousRefresh!);
+  await page.getByRole("tab", { name: /^Policies/ }).click();
+  await page.getByRole("textbox", { name: "eligible grants · optional JSON map", exact: true }).fill("{");
+  await page.getByRole("button", { name: "Save policy", exact: true }).click();
+  await expect(page.locator(".statusBar")).toContainText("eligible grants must be a JSON provider-to-token-reference map");
+  state.email = "second@example.com";
+  state.failBootstrap = true;
+  await focusRefresh(page);
+  await expect(page.locator(".tenantSwitch strong")).toHaveText(state.email);
+  await expect(page.locator(".statusBar")).toContainText("Console data refresh failed");
+  await expect(page.locator(".statusBar")).toContainText("eligible grants must be a JSON provider-to-token-reference map");
+  await expect(page.locator(".statusBar")).not.toContainText("old_key_result");
+  expect(state.writes).toHaveLength(1);
 });
 
 for (const status of [401, 403]) {
@@ -476,6 +503,13 @@ test("clipboard failure is visible, Dismiss works by keyboard, and refresh canno
   await focusRefresh(page);
   await expect(page.locator(".issuedKey code")).toHaveCount(0);
   expect((await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
+  for (const theme of ["light", "dark"] as const) {
+    if (theme === "dark") await page.getByRole("switch", { name: "Light mode", exact: true }).click();
+    await expect(page.locator("html")).toHaveAttribute("data-theme", theme);
+    const button = page.getByRole("button", { name: "New credential", exact: true });
+    await expect(button.locator("span")).toHaveCSS("color", await button.evaluate((element) => getComputedStyle(element).color));
+    expect((await new AxeBuilder({ page }).include(".tableSectionHeader").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
+  }
 });
 
 type HashWindow = Window & { releaseHash?: () => void };
