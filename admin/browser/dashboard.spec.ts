@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
+import type { AccessPolicy } from "../src/ui-types";
 
 test.beforeEach(async ({ page }) => {
   await page.clock.setFixedTime(new Date("2026-07-06T12:00:00.000Z"));
@@ -67,7 +68,10 @@ test("Fusion preflight is WCAG AA clean and visually stable", async ({ page }) =
 });
 
 test("Fusion distinguishes unavailable request prices from an explicit zero tariff", async ({ page }) => {
-  const policy = { policyId: "fixture", enabled: true, providers: [], monthlyBudgetMicros: null, requestCostMicros: null };
+  const policy: AccessPolicy = {
+    policyId: "fixture", enabled: true, providers: [], monthlyBudgetMicros: null, requestCostMicros: null, retainRequestContent: true,
+    grantRouting: { strategy: "most_remaining", stickiness: "none", failover: true, staleState: "allow", staleAfterSeconds: 300, switchAtUsedPercent: 90, hysteresisPercent: 10, eligibleGrants: {} },
+  };
   const fusion = { version: 1, modelId: "clawrouter/fusion", enabled: true, adviserModels: [], aggregatorModel: "perplexity/sonar-pro", adviserTimeoutMs: 1000, maxOutputTokens: 100, maxInputChars: 1000, maxProposalChars: 1000, temperature: 0.7 };
   const call = { stage: "synthesizer", index: null, model: fusion.aggregatorModel, provider: "perplexity", policyAllowed: true, executable: true, verified: false, status: "unverified", reasons: [], estimatedReservationMicros: 0, estimateBasis: "unpriced_request" };
   const preview = { policyId: policy.policyId, policyEnabled: true, configEnabled: true, executable: true, advertisable: true, readyAdviserCount: 0, adviserCount: 0, callCount: 1, estimatedReservationMicros: 0, budgetConfigured: false, budgetLedger: "unmetered", remainingBudgetMicros: null, budgetSufficientForAll: null, estimateNote: "Complete price unavailable.", calls: [call] };
@@ -84,10 +88,14 @@ test("Fusion distinguishes unavailable request prices from an explicit zero tari
   });
   await page.goto("/dashboard/access");
   await page.getByRole("tab", { name: /Fusion/ }).click();
+  await expect(page.getByRole("combobox", { name: "readiness policy" })).toHaveValue(policy.policyId);
+  await expect(page.getByLabel("final synthesizer", { exact: true })).toHaveValue(fusion.aggregatorModel);
   const panel = page.getByRole("region", { name: "Fusion readiness" });
+  const check = page.getByRole("button", { name: "Check readiness" });
   for (const [basis, label] of [["unpriced_request", "Price unavailable"], ["policy_fixed", "$0.00"]]) {
     call.estimateBasis = basis;
-    await page.getByRole("button", { name: "Check readiness" }).click();
+    await expect(check).toBeEnabled();
+    await check.click();
     await expect(panel.locator(".fusionReadinessCalls b")).toHaveText(label);
     await expect(panel.locator(".fusionReadinessEstimate strong")).toHaveText(label);
   }
