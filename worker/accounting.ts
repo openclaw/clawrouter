@@ -65,6 +65,7 @@ async function reserveLedger(
   const request: BudgetReserveRequest = {
     policyId: address.policyId,
     windowKey: address.windowKey,
+    scopeKey: address.scopeKey,
     limitMicros,
     costMicros: cost.reserveMicros,
     reservationId,

@@ -16,6 +16,8 @@ export function budgetLedgerAddress(policyId: string, policy: Pick<AccessPolicy,
   const path = scopedPrincipal ? `/${scopedPrincipal}` : "";
   return {
     tenant,
+    scopeKey: JSON.stringify(scopedPrincipal ? ["principal", tenant, policyId, scopedPrincipal] : ["policy", tenant, policyId]),
+    // Keep the physical shard and window stable for existing balances and receipts.
     objectName: `${tenant}:${policyId}${suffix}`,
     policyId: `${tenant}/${policyId}${path}`,
     windowKey: `${tenant}/${policyId}${path}/${new Date().toISOString().slice(0, 7)}`,
@@ -26,6 +28,7 @@ export function providerBudgetLedgerAddress(providerId: string) {
   const month = new Date().toISOString().slice(0, 7);
   return {
     tenant: "default",
+    scopeKey: JSON.stringify(["provider", providerId]),
     objectName: `provider:${providerId}`,
     policyId: `provider/${providerId}`,
     windowKey: `provider/${providerId}/${month}`,
