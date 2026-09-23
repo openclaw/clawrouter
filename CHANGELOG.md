@@ -2,15 +2,18 @@
 
 ## Unreleased
 
-- Build smoke requests from declared formats and capabilities, preserving renamed provider and endpoint support. Keep unresolved request templates visible without dispatching or claiming provider verification, and scope inline AWS/Cloudflare smoke overrides to their bundled providers.
+- Record known no-charge outcomes with an explicit usage basis across HTTP and WebSockets, while preserving fixed tariffs, retained estimates, unavailable prices, and all budget amounts.
 - Add explicit Codex Desktop root setup with coherent restoration of prior routing settings, preserved authentication and user preferences, and clear API-key Fast and environment-loading limits.
 
 - Keep policy selection separate from existing binding edits, while new bindings still default to the selected policy.
+- Separate proxy-key creation from rotation in the console, serialize key actions across admin and personal screens, and keep one-time secrets, drafts, and action status owned by the operation's identity. Show uncertain outcomes and clipboard failures without replaying dismissed secrets, and preserve table action contrast in both themes.
 - Assess Fusion sampling, reasoning, and tool intent from source-linked model/endpoint facts. Reject documented synthesizer conflicts before adviser spend, preserve caller fields, and omit unqualified adviser temperature and local reasoning defaults.
 
 - Preserve the initiating cause when Responses WebSockets close. Client disconnects record `client_error` without an invented HTTP status; unsent requests release reservations, while sent requests without final usage retain their estimate.
 
 - Keep failed console refreshes visible after successful edits, label stale usage with its snapshot time, and show unavailable spend and balances as unknown.
+
+- Keep a grant's previous provider attachment until replacement credentials commit. Reserve active capacity as unselectable pending membership, allow paused imports into full active pools, retain inactive attachments, and recover partial publication through committed admission receipts and generation-checked owner reconciliation. Repeated revocation clears failed reconnect reservations. This storage upgrade requires forward recovery; environment-fallback activation and legacy attachment backfill remain separate work.
 
 - Restrict personal usage audit events to the authenticated principal, or unattributed events for the authenticated service key, while preserving shared policy totals and administrator audit access.
 - Keep public HTTP Responses continuations on the original credential owner across token refresh. Register response and Codex turn identities before publication, preserve ordinary pool failover, and require a visible restart when ownership changes or expires.
@@ -63,6 +66,7 @@
 - Add GPT-6 Astra to the OpenAI catalog with its reasoning efforts, standard token and cache-write pricing, long-context rates, and Chat Completions token-limit mapping.
 
 - Select smoke-test models from the chosen endpoint's declared capabilities, preserving native model names and configured Azure deployments instead of stale or synthetic defaults.
+- Build smoke requests from declared formats and capabilities, preserving renamed provider and endpoint support. Keep unresolved request templates visible without dispatching or claiming provider verification, and scope inline AWS/Cloudflare smoke overrides to their bundled providers.
 - Accept declared Cloudflare AI Gateway universal array bodies through manifest and native routes, preserve upstream fallback order and request content, and omit per-entry transport credentials from retained content while enforcing existing budgets.
 
 ## 0.4.0 - 2026-09-22
