@@ -233,7 +233,8 @@ stream_idle_timeout_ms = 10000
   });
 }
 
-test("native Codex WebSocket metadata survives automatic HTTP fallback on its original pooled account", { skip: !binary, timeout: 90_000 }, async t => {
+for (const recovery of ["HTTP fallback", "WebSocket reconnect"]) test(`native Codex metadata survives ${recovery} on its original pooled account`, { skip: !binary, timeout: 90_000 }, async t => {
+  const forceHttp = recovery === "HTTP fallback";
   const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
   const home = await mkdtemp(join(tmpdir(), "clawrouter-native-fallback-"));
   let mf, client;
@@ -272,9 +273,7 @@ env_key = "CLAWROUTER_API_KEY"
 wire_api = "responses"
 requires_openai_auth = false
 supports_websockets = true
-request_max_retries = 0
-stream_max_retries = 0
-stream_idle_timeout_ms = 10000
+${forceHttp ? "request_max_retries = 0\nstream_max_retries = 0\nstream_idle_timeout_ms = 10000\n" : ""}
 `);
     client = nativeCodexClient(t, binary, home, env);
     await client.rpc("initialize", { clientInfo: { name: "clawrouter_fallback_fixture", version: "1.0.0" }, capabilities: { experimentalApi: true } });
@@ -287,8 +286,6 @@ stream_idle_timeout_ms = 10000
     const started = (await state()).requests.find(({ held }) => held);
     assert.equal(started.account, "a");
     const post = (body, headers = {}) => dispatch("/v1/responses", { method: "POST", headers: { "content-type": "application/json", ...headers }, body: JSON.stringify({ model: "openai/gpt-6-astra", input: "fixture", max_output_tokens: 32, service_tier: "priority", ...body }) });
-    const ordinary = await post({ generate: false }); assert.equal(ordinary.status, 200); await ordinary.text();
-    assert.equal((await state()).requests.at(-1).account, "b", "ordinary selection must prefer the other account before fallback");
     assert.equal((await upstream.fetch("https://fixture.example/disconnect", { method: "POST" })).status, 200);
     let completed;
     await until(() => {
@@ -297,14 +294,28 @@ stream_idle_timeout_ms = 10000
       return !!completed;
     });
     assert.equal(completed.params.turn.status, "completed", completed.params.turn.error?.message);
+    const recovered = await state();
+    const retries = recovered.requests.filter(({ held, body }) => !held && body.generate !== false);
+    assert.equal(retries.length, 1, "one native retry, no router replay");
+    assert.equal(retries[0].transport, forceHttp ? "http" : "websocket");
+    assert.equal(retries[0].account, "a");
+    assert.equal(recovered.connections, forceHttp ? 1 : 2);
+    if (forceHttp) {
+      assert.equal(retries[0].turn, "fixture-turn-from-websocket");
+      assert.match(JSON.stringify(client.notifications) + client.stderr(), /Falling back from WebSockets to HTTPS/);
+    } else {
+      assert.equal(retries[0].turn, null, "Codex does not send turn state in the upgrade header");
+      assert.equal(retries[0].body.previous_response_id, undefined, "reconnect clears the prior response selector");
+      assert.equal(retries[0].body.client_metadata["x-codex-turn-state"], "fixture-turn-from-websocket");
+      assert.match(JSON.stringify(retries[0].body.input), /Return fixture complete/);
+      assert.doesNotMatch(JSON.stringify(client.notifications) + client.stderr(), /Falling back from WebSockets to HTTPS/);
+    }
+    // Pinned creates leave the round-robin cursor at A. Do not consume the next
+    // ordinary selection before retry: without its identity, retry would use B.
+    const ordinary = await post({ generate: false }); assert.equal(ordinary.status, 200); await ordinary.text();
     const after = await state();
-    const fallback = after.requests.filter(({ transport, body }) => transport === "http" && body.generate !== false);
-    assert.equal(fallback.length, 1, "one native automatic fallback, no router replay");
-    assert.equal(fallback[0].turn, "fixture-turn-from-websocket");
-    assert.equal(fallback[0].account, "a");
-    assert.equal(after.connections, 1);
+    assert.equal(after.requests.at(-1).account, "b");
     assert.ok(after.requests.every(({ account }) => account === "a" || account === "b"));
-    assert.match(JSON.stringify(client.notifications) + client.stderr(), /Falling back from WebSockets to HTTPS/);
     let usage;
     await until(async () => { usage = await (await dispatch("/v1/usage")).json(); return usage.usage.events.length === after.requests.length; });
     const failed = usage.usage.events.filter(({ status }) => status !== "success");
@@ -316,12 +327,18 @@ stream_idle_timeout_ms = 10000
     assert.equal(new Set(usage.usage.events.map(({ request_id }) => request_id)).size, after.requests.length);
     const budgets = await mf.getDurableObjectNamespace("BUDGET_LEDGER", "router"), month = new Date().toISOString().slice(0, 7);
     const assertLedgers = async () => {
+      const totals = [];
       for (const [name, policyId] of [["default:fixture", "default/fixture"], ["provider:openai", "provider/openai"]]) {
         const stub = budgets.get(budgets.idFromName(name));
-        const status = await (await stub.fetch(`https://budget/status?policy_id=${policyId}&window_key=${policyId}/${month}&limit_micros=${limit}`)).json();
-        assert.equal(status.spentMicros, expected);
-        assert.equal((await (await stub.fetch("https://budget/fixture-unsettled")).json()).count, 0);
+        let status, rows;
+        await until(async () => {
+          status = await (await stub.fetch(`https://budget/status?policy_id=${policyId}&window_key=${policyId}/${month}&limit_micros=${limit}`)).json();
+          rows = await (await stub.fetch("https://budget/fixture-unsettled")).json();
+          return status.spentMicros === expected && rows.count === 0;
+        });
+        totals.push(rows.total);
       }
+      return totals;
     };
     await assertLedgers();
     for (const action of ["replace", "revoke"]) {
@@ -341,18 +358,36 @@ stream_idle_timeout_ms = 10000
     t.after(() => { try { socket.close(); } catch {} });
     const messages = [];
     socket.addEventListener("message", ({ data }) => messages.push(JSON.parse(data)));
-    const warmup = body => socket.send(JSON.stringify({ type: "response.create", model: "openai/gpt-6-astra", service_tier: "priority", generate: false, input: [], ...body }));
+    const warmup = body => socket.send(JSON.stringify({ type: "response.create", model: "openai/gpt-6-astra", service_tier: "priority", generate: false, input: "fixture scope", ...body }));
     warmup({});
     await until(() => messages.some(({ type }) => type === "response.completed"));
     const oldId = messages.find(({ type }) => type === "response.completed").response.id;
+    const oldTurn = messages.find(({ type }) => type === "response.metadata").headers["x-codex-turn-state"][0];
+    expected += 60;
+    const beforeRejected = await assertLedgers(), beforeRejectedEgress = (await state()).requests.length;
+    const conflicting = await mf.dispatchFetch("https://router.example/v1/responses", { headers: { authorization: `Bearer ${key}`, upgrade: "websocket", "x-codex-turn-state": oldTurn } });
+    assert.equal(conflicting.status, 101);
+    const conflictingSocket = conflicting.webSocket; conflictingSocket.accept();
+    const conflicts = [];
+    conflictingSocket.addEventListener("message", ({ data }) => conflicts.push(JSON.parse(data)));
+    conflictingSocket.send(JSON.stringify({ type: "response.create", model: "openai/gpt-6-astra", input: "full input", client_metadata: { "x-codex-turn-state": "different-turn" } }));
+    await until(() => conflicts.some(({ type }) => type === "error"));
+    assert.equal(conflicts[0].error.code, "continuation_restart_required");
+    conflictingSocket.close();
+    assert.equal((await state()).requests.length, beforeRejectedEgress);
+    assert.deepEqual(await assertLedgers(), beforeRejected, "conflicting carriers never reserve either ledger");
     const authority = await mf.getDurableObjectNamespace("ACCESS_CONTROL", "router");
     const rebound = await authority.get(authority.idFromName("policy-bindings")).fetch("https://authority/credentials/mutate", { method: "POST", body: JSON.stringify({ operation: "put", credentialId: "fixture", scope: "admin", actor: { auth: "admin_token", role: "admin", email: "token-admin" }, credential: { enabled: true, secretSha256: createHash("sha256").update(secret).digest("hex"), policyId: "fixture", principalId: "other@example.com" } }) });
     assert.equal(rebound.status, 200); assert.equal((await rebound.json()).outcome, "updated");
     const beforeRebound = (await state()).requests.length;
-    warmup({ previous_response_id: oldId });
-    await until(() => messages.some(({ type }) => type === "error"));
-    assert.equal(messages.find(({ type }) => type === "error").error.code, "continuation_restart_required");
-    assert.equal((await state()).requests.length, beforeRebound);
+    for (const body of [{ previous_response_id: oldId }, { client_metadata: { "x-codex-turn-state": oldTurn } }]) {
+      const errors = messages.filter(({ type }) => type === "error").length;
+      warmup(body);
+      await until(() => messages.filter(({ type }) => type === "error").length > errors);
+      assert.equal(messages.at(-1).error.code, "continuation_restart_required");
+      assert.equal((await state()).requests.length, beforeRebound);
+      assert.deepEqual(await assertLedgers(), beforeRejected, "rebound-scope continuations never reserve either ledger");
+    }
     warmup({});
     await until(() => messages.filter(({ type }) => type === "response.completed").length === 2);
     const newId = messages.filter(({ type }) => type === "response.completed")[1].response.id;
@@ -360,12 +395,7 @@ stream_idle_timeout_ms = 10000
     assert.equal(continued.status, 200); await continued.text();
     const rejectedOld = await post({ previous_response_id: oldId });
     assert.equal(rejectedOld.status, 409); await rejectedOld.text();
-    expected += 1200;
-    await until(async () => {
-      const stub = budgets.get(budgets.idFromName("provider:openai"));
-      const status = await (await stub.fetch(`https://budget/status?policy_id=provider/openai&window_key=provider/openai/${month}&limit_micros=${limit}`)).json();
-      return status.spentMicros === expected;
-    });
+    expected += 1140;
     await assertLedgers();
     socket.close();
   } finally {
@@ -441,7 +471,7 @@ export * from "./worker/index.ts";
 export class BudgetLedgerObject extends RealBudgetLedger {
   constructor(state) { super(state); this.fixtureSql = state.storage.sql; }
   async fetch(request) {
-    if (new URL(request.url).pathname === "/fixture-unsettled") return Response.json([...this.fixtureSql.exec("SELECT COUNT(*) AS count FROM budget_reservations WHERE settled = 0")][0]);
+    if (new URL(request.url).pathname === "/fixture-unsettled") return Response.json([...this.fixtureSql.exec("SELECT COUNT(*) AS total, COALESCE(SUM(CASE WHEN settled = 0 THEN 1 ELSE 0 END), 0) AS count FROM budget_reservations")][0]);
     return super.fetch(request);
   }
 }
@@ -460,14 +490,14 @@ function fallbackUpstreamFixture() { return `
 const requests = []; let connections = 0, active;
 function respond(body, request, transport) {
   const responseId = 'fallback_response_' + (requests.length + 1);
-  const warmup = body.generate === false, held = transport === 'websocket' && !warmup;
+  const warmup = body.generate === false, held = transport === 'websocket' && !warmup && !requests.some(request => request.held);
   const authorization = request.headers.get('authorization');
   const account = authorization === 'Bearer fixture-account-a' ? 'a' : authorization === 'Bearer fixture-account-b' ? 'b' : 'unexpected';
   requests.push({ body, responseId, transport, account, held, turn: request.headers.get('x-codex-turn-state') });
   const item = { id: 'fallback_message', type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'fixture complete', annotations: [] }] };
   const result = { id: responseId, object: 'response', status: 'completed', model: body.model, output: warmup ? [] : [item], service_tier: 'priority', usage: { input_tokens: warmup ? 3 : 14, output_tokens: warmup ? 0 : 8, total_tokens: warmup ? 3 : 22 } };
   const events = [];
-  if (held) events.push({ type: 'response.metadata', response_id: responseId, headers: { 'x-codex-turn-state': ['fixture-turn-from-websocket'] } });
+  if (held || body.input === 'fixture scope') events.push({ type: 'response.metadata', response_id: responseId, headers: { 'x-codex-turn-state': [held ? 'fixture-turn-from-websocket' : 'turn_' + responseId] } });
   events.push({ type: 'response.created', response: { ...result, status: 'in_progress', output: [], usage: null } });
   if (held) events.push(
     { type: 'response.output_item.added', output_index: 0, item: { ...item, status: 'in_progress', content: [] } },

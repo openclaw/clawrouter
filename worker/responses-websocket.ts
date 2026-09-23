@@ -49,7 +49,7 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
       const accounting = createProxyAccounting({ env, context, auth, selection, request: operationRequest });
       let reservation = emptyReservation(), content: string | null = null;
       try {
-        const continuation = await HttpContinuation.resolve(operationRequest, selection, auth, env);
+        const continuation = await HttpContinuation.resolve(operationRequest, selection, auth, env, "websocket");
         const upstream = await prepareSelected(operationRequest, env, selection, searchParamsRecord(new URL(request.url).searchParams), auth, new Set(), true, undefined, continuation?.pinned ?? pinned, "websocket");
         if (upstream.continuation) continuation?.bind(upstream.continuation);
         if (!upstream.websocket) throw new HttpError(400, "websocket_transport_unsupported", "selected upstream grant transport is not qualified for Responses WebSockets");

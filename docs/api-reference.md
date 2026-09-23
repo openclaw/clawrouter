@@ -132,7 +132,10 @@ revision; changing either requires a new connection.
 
 Response IDs and `response.metadata` turn state are bound to each create's fresh
 authorization scope and actual upstream owner before forwarding. Codex can then
-fall back to HTTP with the same turn state and account. An upgrade header alone
+reconnect with `client_metadata["x-codex-turn-state"]` or fall back to HTTP with
+the same turn state and account. Conflicting header and metadata tokens are
+rejected; every supplied continuation identity must name the same owner.
+An upgrade header alone
 does not create a synthetic metadata event. Metadata may precede
 `response.created`; it identifies the response without proving execution started.
 Pending publication preserves frame order and blocks the next same-lane create
