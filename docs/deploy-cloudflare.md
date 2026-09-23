@@ -48,11 +48,19 @@ are required.
 
 ## Provision
 
-Authenticate Wrangler first, then create the runtime resources:
+Set the account and API token before creating the runtime resources. The token
+needs queue creation and Workers KV Storage Write permissions:
 
 ```sh
+export CLOUDFLARE_ACCOUNT_ID=...
+export CLOUDFLARE_API_TOKEN=...
 pnpm cf:provision
 ```
+
+Both production and FakeCo create KV through the Cloudflare API using the exact
+deployment namespace title. Missing credentials stop provisioning before any
+resource changes. An existing namespace title is an error; inspect its ID with
+`pnpm exec wrangler kv namespace list` before configuring an existing deployment.
 
 Protect the browser console with Cloudflare Access before treating the custom
 domain as ready:

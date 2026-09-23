@@ -45,6 +45,7 @@
 - Keep standalone smoke readiness alive through stalled health requests and response bodies, cancel each expired attempt, and preserve existing self-host and deployed readiness limits.
 
 - Match Cloudflare Access applications by exact destination instead of display name, reject ambiguous or name-only collisions before writes, and inspect all application and policy pages during provisioning.
+- Fix production Cloudflare KV provisioning by using the same exact-title API creation as FakeCo, and require account credentials before changing resources.
 
 - Preserve dispatched budget charges through reservation expiry and delayed recovery, release abandoned pre-dispatch work to zero, and require confirmed idempotent settlement receipts before acknowledging retries.
 - Retain qualified estimates or fixed tariffs when dispatched HTTP requests fail before response headers, while keeping pre-dispatch failures at zero and preserving error and cancellation outcomes.
