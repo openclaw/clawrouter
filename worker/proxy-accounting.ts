@@ -34,7 +34,7 @@ export function createProxyAccounting(options: AccountingContext) {
   const correlation = correlationMetadata(request);
   const requestId = correlation.requestId;
   const started = Date.now();
-  function finish(statusCode: number, status: UsageEvent["status"], reservation = emptyReservation(), actual = 0, tokens: UsageTokens | null = null, contentRef: string | null = null, basis = cost.basis) {
+  function finish(statusCode: UsageEvent["status_code"], status: UsageEvent["status"], reservation = emptyReservation(), actual = 0, tokens: UsageTokens | null = null, contentRef: string | null = null, basis = cost.basis) {
     const event: UsageEvent = {
       id: randomId("usage"), type: "clawrouter.usage.v1", occurred_at_ms: Date.now(), tenant_id: auth.policy.tenantId ?? "default",
       policy_id: auth.policyId, credential_id: auth.credentialId, principal_id: auth.principalId, auth_type: auth.authType,
@@ -55,15 +55,18 @@ export function createProxyAccounting(options: AccountingContext) {
     };
     return finalizeAccounting(env, reservation, actual, event);
   }
-  function settle(statusCode: number, status: UsageEvent["status"], billable: boolean, tokens: UsageTokens | null, reservation: BudgetReservation, contentRef: string | null) {
+  function settle(statusCode: UsageEvent["status_code"], status: UsageEvent["status"], billable: boolean, tokens: UsageTokens | null, reservation: BudgetReservation, contentRef: string | null) {
     // Token totals and a served tier cannot resolve omitted fees or hosted work.
     const measured = tokens && !unpricedRequest ? actualCost(model, tokens, auth.policy.requestCostMicros) : null;
     const actual = billable ? measured ?? cost.reserveMicros : 0;
+    // Proven nonbillable work is distinct from missing prices or zero tariffs.
+    // Keep explicit fixed prices and the fallback's existing charged contract.
+    const knownNoCharge = !billable || (tokens?.billable === false && actual === 0 && cost.basis !== "policy_fixed");
     // Zero accounted micros with an unpriced basis means unavailable, not free.
     // A known served tier can supply a price even for an undeclared request tier.
-    const basis = unpricedRequest ? !billable || tokens?.billable === false ? "none" : "unpriced_usage" : cost.basis === "unpriced_service_tier"
-      ? !billable ? "none" : measured == null ? "unpriced_usage" : "manifest_pricing"
-      : billable && measured == null && cost.basis === "manifest_pricing" ? "manifest_reservation" : cost.basis;
+    const basis = knownNoCharge ? "none" : unpricedRequest ? "unpriced_usage" : cost.basis === "unpriced_service_tier"
+      ? measured == null ? "unpriced_usage" : "manifest_pricing"
+      : measured == null && cost.basis === "manifest_pricing" ? "manifest_reservation" : cost.basis;
     return finish(statusCode, status, reservation, actual, tokens, contentRef, basis);
   }
   return {
@@ -74,9 +77,8 @@ export function createProxyAccounting(options: AccountingContext) {
       // Missing response headers cannot prove that dispatched upstream work was free.
       context.waitUntil(settle(statusCode, status, dispatched, null, reservation, contentRef));
     },
-    complete(response: Response, observed: ObservedUsage, reservation: BudgetReservation, contentRef: string | null) {
-      const status = !response.ok ? response.status < 500 ? "client_error" : "provider_error"
-        : observed.delivery === "canceled" ? "client_error" : observed.delivery === "failed" ? "provider_error" : observed.outcome ?? "success";
+    complete(response: Response, observed: ObservedUsage, reservation: BudgetReservation, contentRef: string | null, termination?: UsageEvent["status"]) {
+      const status = termination ?? (!response.ok ? response.status < 500 ? "client_error" : "provider_error" : observed.outcome ?? "success");
       // Protocol/delivery failure does not undo dispatched billable work. Keep
       // the actual HTTP status and any authoritative terminal usage separately.
       return settle(response.status, status, response.ok, observed.tokens, reservation, contentRef);

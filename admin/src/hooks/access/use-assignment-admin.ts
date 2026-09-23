@@ -1,10 +1,12 @@
 import { type FormEvent, useState } from "react";
 import { errorMessage, optionalNumber, parseGroups } from "../../domain";
 import { defaultAssignmentRule, demo } from "../../ui-config";
-import { assignmentRuleFormFromRule, demoRuleFromForm, request } from "../../ui-helpers";
+import { assignmentRuleFormFromRule, demoRuleFromForm } from "../../ui-helpers";
+import type { ConsoleRequest } from "../../dashboard-fetch";
 import type { AssignmentRule, AssignmentRuleForm } from "../../ui-types";
 
 interface Dependencies {
+  request: ConsoleRequest;
   allowDemo: boolean;
   gatewayOrigin: string;
   demoMode: boolean;
@@ -13,7 +15,7 @@ interface Dependencies {
   refresh: () => Promise<void>;
 }
 
-export function useAssignmentAdmin({ allowDemo, gatewayOrigin, demoMode, setError, setStatus, refresh }: Dependencies) {
+export function useAssignmentAdmin({ request, allowDemo, gatewayOrigin, demoMode, setError, setStatus, refresh }: Dependencies) {
   const [rules, setRules] = useState<AssignmentRule[]>(allowDemo ? demo.assignmentRules : []);
   const [form, setForm] = useState<AssignmentRuleForm>(allowDemo && demo.assignmentRules[0] ? assignmentRuleFormFromRule(demo.assignmentRules[0]) : defaultAssignmentRule);
   const [selectedId, setSelectedId] = useState(allowDemo ? demo.assignmentRules[0]?.ruleId ?? "" : "");

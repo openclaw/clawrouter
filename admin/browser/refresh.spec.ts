@@ -1,5 +1,5 @@
 import { expect, test, type Page } from "@playwright/test";
-import type { AccessPolicy, AccessUser, AdminBootstrapResponse } from "../src/ui-types";
+import type { AccessPolicy, AccessUser, AdminBootstrapResponse, AdminUsageRow, UsageAuditEvent, UsageSnapshot } from "../src/ui-types";
 
 test("unavailable usage shows unknown spend and policy limits, then recovers", async ({ page }) => {
   const state = await fixture(page);
@@ -9,16 +9,100 @@ test("unavailable usage shows unknown spend and policy limits, then recovers", a
   await expect(page.locator(".usageSummaryGrid .metric strong")).toHaveText(["—", "—", "—", "—"]);
   await expect(page.getByText("No request audit events recorded yet.")).toHaveCount(0);
   await expect(page.getByText("Request audit events unavailable.")).toBeVisible();
-  await expect(page.locator(".budgetUsage")).toContainText("Spend unavailable");
+  await expect(page.locator(".budgetUsage")).toContainText("Used amount unavailable");
   await page.getByRole("button", { name: "Dashboard", exact: true }).click();
-  await expect(page.locator(".quotaNumbers")).toContainText("$10.00monthly limit");
-  await expect(page.locator(".quotaNumbers")).not.toContainText("remaining of");
+  await expect(page.locator(".quotaNumbers")).toContainText("$10.00 monthly limit");
+  await expect(page.locator(".quotaNumbers")).toContainText("Remaining unavailable");
   await expect(page.locator(".dashboardStats > div").filter({ has: page.getByText("requests", { exact: true }) }).locator("strong")).toHaveText("—");
   state.failUsage = false;
   await page.getByRole("button", { name: "Retry refresh" }).click();
   await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
   await expect(page.locator(".usageFreshness")).toHaveCount(0);
-  await expect(page.locator(".quotaNumbers")).toContainText("$8.00remaining of $10.00");
+  await expect(page.locator(".quotaNumbers")).toContainText("$8.00 remaining$10.00 monthly limit · $2.00 used");
+});
+
+test("Usage renders recorded cost bases and partial Fusion without reclassifying the 30-day totals", async ({ page }) => {
+  const state = await fixture(page);
+  const cases = [
+    ["none", 0, "$0.00", "Accounted · no charge"],
+    ["policy_fixed", 0, "$0.00", "Fixed policy tariff"],
+    ["manifest_pricing", 1_000_000, "$1.00", "Token-based estimate"],
+    ["manifest_rate_upper_bound", 1_000_000, "$1.00", "Token-based estimate (rate upper bound)"],
+    ["manifest_reservation", 1_000_000, "$1.00", "Retained reservation estimate"],
+    ["unpriced_usage", 0, "Price unavailable", "Unpriced usage"],
+    ["model_pricing", 1_000_000, "$1.00", "Accounting basis unavailable"],
+  ] as const;
+  const event = (id: string, basis: string, amount: number): UsageAuditEvent => ({
+    id, type: "clawrouter.usage.v1", occurred_at_ms: Date.UTC(2026, 6, 6, 12), tenant_id: "default", provider: "example",
+    model: id, actual_cost_micros: amount, reserved_cost_micros: 1_000_000, cost_basis: basis, status: "success",
+  });
+  state.usage.usage.events = [
+    ...cases.map(([basis, amount]) => event(basis, basis, amount)),
+    { ...event("synth", "policy_fixed", 1_000_000), compound_request_id: "fusion", compound_request_stage: "fusion_synthesizer", compound_request_size: 3 },
+    { ...event("adviser", "unpriced_usage", 0), compound_request_id: "fusion", compound_request_stage: "fusion_adviser", compound_request_index: 1, compound_request_size: 3 },
+  ];
+  Object.assign(state.usage.usage.summary, { requestCount: 1_000, actualCostMicros: 2_000_000, unpricedRequestCount: 2 });
+  await page.goto("/dashboard/usage");
+  await expect(page.locator(".auditCost strong")).toHaveText([...cases.map(([, , value]) => value), "≥$1.00 accounted; 1 unpriced"]);
+  await expect(page.locator(".auditCost small")).toHaveText([...cases.map(([, , , label]) => label), "accounted spend"]);
+  const spend = page.locator(".usageSummaryGrid .metric").filter({ has: page.getByText("accounted spend", { exact: true }) });
+  await expect(spend.locator("strong")).toHaveText("$2.00 accounted; 2 unpriced");
+  await expect(spend.locator("small")).toContainText("Last 30 days · May include estimates");
+  await page.locator(".compoundRequestToggle").click();
+  await expect(page.locator(".compoundRequest")).toContainText("Partial model call detail");
+  await expect(page.locator(".compoundRequest")).toContainText("partial call history");
+  await expect(page.locator(".compoundRequest")).toContainText("2 of 3 calls");
+  await expect(page.locator(".compoundRequestCalls")).toContainText("Fixed policy tariff");
+  await expect(page.locator(".compoundRequestCalls")).toContainText("Price unavailable");
+});
+
+test("Fusion total prices only the server's executable calls", async ({ page }) => {
+  await fixture(page);
+  const readiness = {
+    policyId: policy.policyId, policyEnabled: true, configEnabled: false, executable: true, advertisable: false,
+    readyAdviserCount: 0, adviserCount: 1, callCount: 2, estimatedReservationMicros: 1_000_000,
+    budgetConfigured: true, budgetLedger: "ready", remainingBudgetMicros: 8_000_000, budgetSufficientForAll: true,
+    estimateNote: "Estimate for currently eligible calls.",
+    calls: [
+      { stage: "adviser", index: 1, model: "example/adviser", provider: "example", policyAllowed: true, executable: false, verified: false,
+        status: "blocked", reasons: ["Price unavailable for this budgeted call."], estimatedReservationMicros: 0, estimateBasis: "unpriced_request" },
+      { stage: "synthesizer", index: null, model: "example/final", provider: "example", policyAllowed: true, executable: true, verified: true,
+        status: "verified", reasons: [] as string[], estimatedReservationMicros: 1_000_000, estimateBasis: "manifest_pricing" },
+    ],
+  };
+  await page.route("**/v1/admin/fusion/preview", (route) => route.fulfill({ json: readiness }));
+  await page.goto("/dashboard/access");
+  await page.getByRole("tab", { name: /Fusion/ }).click();
+  await page.getByLabel("final synthesizer", { exact: true }).fill("example/final");
+  await page.getByRole("button", { name: "Check readiness" }).click();
+  await expect(page.locator(".fusionReadinessCalls article").first().locator("b")).toHaveText("Price unavailable");
+  await expect(page.locator(".fusionReadinessEstimate strong")).toHaveText("$1.00");
+
+  readiness.executable = false;
+  readiness.estimatedReservationMicros = 0;
+  Object.assign(readiness.calls[1], { executable: false, verified: false, status: "blocked", estimateBasis: "unpriced_request", estimatedReservationMicros: 0 });
+  await page.getByRole("button", { name: "Check readiness" }).click();
+  await expect(page.locator(".fusionReadinessCalls article b")).toHaveText(["Price unavailable", "Price unavailable"]);
+  await expect(page.locator(".fusionReadinessEstimate strong")).toHaveText("$0.00");
+});
+
+test("policy and principal budget views show used reservations separately from remaining", async ({ page }) => {
+  const state = await fixture(page);
+  state.usage.policies.push({
+    ...state.usage.policies[0], policyId: "personal", kid: "personal", budgetScope: "principal",
+    budget: { configured: true, ledger: "per_principal", limitMicros: 10_000_000, spentMicros: null, remainingMicros: null,
+      breakdown: [{ principal: "member@example.com", configured: true, ledger: "ready", limitMicros: 10_000_000, spentMicros: 2_000_000, remainingMicros: 8_000_000 }] },
+  });
+  await page.goto("/dashboard/usage");
+  await expect(page.locator(".budgetUsage").first()).toContainText("$2.00 used");
+  await expect(page.locator(".budgetUsage").first()).toContainText("$8.00 remaining · Shared policy pool");
+  await expect(page.locator(".budgetUsage").nth(1)).toContainText("Separate balance per principal");
+  await expect(page.locator(".budgetBreakdown")).toContainText("$2.00 used");
+  await expect(page.locator(".budgetBreakdown")).toContainText("$8.00 remaining");
+  await expect(page.locator(".budgetTablePanel")).toContainText("UTC calendar month · Used includes reservations");
+  await page.getByRole("button", { name: "Dashboard", exact: true }).click();
+  await expect(page.locator(".quotaNumbers").nth(1)).toContainText("Per-principal balances");
+  await expect(page.locator(".quotaPercent").nth(1)).toHaveText("—");
 });
 
 for (const principal of ["initial", "changed"] as const) {
@@ -151,7 +235,7 @@ test("navigation keeps its first usage read while a Catalog background refresh f
   releaseBootstrap();
   await expect(page.locator(".connectionMeta time")).toHaveAttribute("datetime", "2026-07-06T12:01:00.000Z");
   releaseUsage();
-  await expect(page.locator(".quotaNumbers")).toContainText("$8.00remaining of $10.00");
+  await expect(page.locator(".quotaNumbers")).toContainText("$8.00 remaining$10.00 monthly limit · $2.00 used");
   await expect(page.locator(".usageFreshness")).toHaveCount(0);
   expect(state.usageReads).toBe(1);
 });
@@ -181,7 +265,7 @@ test("same-role principal changes replace the first lazy usage read", async ({ p
   await page.evaluate(() => new Promise((resolve) => setTimeout(resolve, 0)));
   await expect(page.locator(".quotaNumbers")).not.toContainText("$8.00");
   releaseCurrent();
-  await expect(page.locator(".quotaNumbers")).toContainText("$4.00remaining of $10.00");
+  await expect(page.locator(".quotaNumbers")).toContainText("$4.00 remaining$10.00 monthly limit · $2.00 used");
   await expect(page.locator(".usageFreshness")).toHaveCount(0);
   expect(state.usageReads).toBe(2);
 });
@@ -208,7 +292,7 @@ for (const readStart of ["before", "after"] as const) {
       await expect.poll(() => state.usageReads).toBe(1);
     }
     releaseUsage();
-    await expect(page.locator(".quotaNumbers")).toContainText("$8.00remaining of $10.00");
+    await expect(page.locator(".quotaNumbers")).toContainText("$8.00 remaining$10.00 monthly limit · $2.00 used");
     releaseBootstrap();
     await expect(page.locator(".statusBar")).toContainText("Console data refresh failed");
     await expect(page.locator(".connectionMeta time")).toHaveAttribute("datetime", updated!);
@@ -292,7 +376,7 @@ async function fixture(page: Page) {
     const responses: Record<string, unknown> = {
       "/v1/providers": { providers: [] },
       "/v1/routes": { openaiCompatible: [], manifestProxy: [] },
-      "/v1/session": { authenticated: true, auth: "access", role: state.role, email: state.email, tenantId: "default", entitlements: { providers: [] } },
+      "/v1/session": { authenticated: true, auth: "cloudflare_access", role: state.role, email: state.email, tenantId: "default", entitlements: { providers: [] } },
       "/v1/session/usage": state.usage,
       "/v1/session/credentials": { credentials: [] },
       "/v1/admin/bootstrap": {
@@ -307,12 +391,12 @@ async function fixture(page: Page) {
   return state;
 }
 
-const policy: AccessPolicy = {
+const policy = {
   policyId: "team_policy", enabled: true, providers: [], tenantId: "default", monthlyBudgetMicros: 10_000_000, budgetScope: "policy", retainRequestContent: false,
   grantRouting: { strategy: "priority", stickiness: "none", failover: true, staleState: "allow", staleAfterSeconds: 300, switchAtUsedPercent: 90, hysteresisPercent: 10, eligibleGrants: {} },
-};
-const usage = {
-  policies: [{ ...policy, budget: { configured: true, ledger: "ready", limitMicros: 10_000_000, spentMicros: 2_000_000, remainingMicros: 8_000_000 } }],
+} satisfies AccessPolicy;
+const usage: { policies: AdminUsageRow[]; usage: UsageSnapshot } = {
+  policies: [{ ...policy, kid: policy.policyId, budget: { configured: true, ledger: "ready", limitMicros: 10_000_000, spentMicros: 2_000_000, remainingMicros: 8_000_000 } }],
   usage: {
     ledger: "ready", providers: [], daily: [], events: [],
     summary: { requestCount: 7, successCount: 6, errorCount: 1, inputTokens: 10, outputTokens: 10, totalTokens: 20, actualCostMicros: 2_000_000 },

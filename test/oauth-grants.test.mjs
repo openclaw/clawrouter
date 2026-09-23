@@ -28,7 +28,7 @@ test("CLI acknowledges oversized committed grant imports and revocations", async
   assert.equal(fixture.values.get(key).accountId, accountId);
   assert.equal(fixture.values.get(key).hasAccessToken, true);
   assert.ok(owner.alarm() > Date.now());
-  assert.ok(fixture.pool.has(key));
+  assert.ok((await fixture.env.grantAuthority.call("attachment", { key })).attached);
   assert.ok(fixture.responseBytes[0] > 128 * 1024);
 
   assertSuccess(await fixture.run("oauth-revoke.mjs", ["--kid", "policy", "--provider", "anthropic"]));
@@ -40,7 +40,7 @@ test("CLI acknowledges oversized committed grant imports and revocations", async
   assert.equal(revoked.accountId, accountId);
   assert.doesNotMatch(JSON.stringify(revoked), /access-fixture/);
   assert.equal(owner.alarm(), null);
-  assert.equal(fixture.pool.has(key), false);
+  assert.equal((await fixture.env.grantAuthority.call("attachment", { key })).attached, false);
   assert.equal(fixture.values.get(key).hasAccessToken, false);
   assert.ok(fixture.responseBytes[1] > 128 * 1024);
   assert.deepEqual(fixture.requests, ["PUT " + grantPath + "?mode=replace", "POST " + grantPath + "/revoke"]);
@@ -151,6 +151,58 @@ test("CLI replaces raw legacy tokens and revokes legacy metadata without alterin
   assert.match(missing.stderr, /not registered/);
 });
 
+for (const [name, raw] of [
+  ["malformed JSON", '{"accessToken":"legacy-private",'],
+  ["oversized JSON", JSON.stringify({ accessToken: "legacy-private", padding: "x".repeat(3 * 1024 * 1024) })],
+  ["raw token", "legacy-private"],
+  ["valid aliases", { access_token: "legacy-private", account_id: "old-account", refresh: { extraParams: { client_secret: "nested-private", audience: "fixture" } } }],
+]) test(`actual CLI replacement and revocation recover ${name} through the authenticated owner`, async (context) => {
+  const fixture = await scriptFixture(context);
+  for (const operation of ["put", "revoke"]) {
+    const tokenRef = `legacy-${operation}`, key = `oauth/policy/${tokenRef}`;
+    fixture.values.set(key, raw);
+    fixture.env.grantAuthority.seedLegacy(key, "old-provider");
+    fixture.env.grantAuthority.sql.exec("INSERT INTO upstream_grant_pool_versions (grant_key, generation, revision) VALUES (?, ?, ?)", key, 5, 2);
+    const args = ["--kid", "policy", "--token-ref", tokenRef, "--provider", "anthropic", "--kind", "oauth"];
+    if (operation === "put") args.push("--access-token-env", "TEST_ACCESS_TOKEN");
+    const result = await fixture.run(`oauth-${operation}.mjs`, args);
+    assertSuccess(result);
+    assert.doesNotMatch(result.stdout + result.stderr, /legacy-private|nested-private/);
+    const stored = fixture.env.GRANT_CREDENTIALS.objects.get(key).values.get("credential");
+    assert.equal(stored.generation, 6);
+    assert.equal(stored.enabled, operation === "put");
+    assert.doesNotMatch(JSON.stringify([stored, fixture.values.get(key)]), /legacy-private|nested-private/);
+    if (operation === "revoke" && name === "valid aliases") {
+      assert.equal(stored.accountId, "old-account");
+      assert.deepEqual(stored.refresh.extraParams, { audience: "fixture" });
+    }
+    assert.equal((await fixture.env.grantAuthority.call("resolve", { policyId: "policy", providerId: "old-provider" })).hasAttachment, false);
+  }
+});
+
+test("corrupt grant recovery retains admin authentication, browser CSRF and explicit fresh-primary gates", async (context) => {
+  const fixture = await scriptFixture(context), key = "oauth/policy/anthropic", raw = '{"accessToken":"legacy-private",';
+  fixture.values.set(key, raw);
+  const token = "a".repeat(64);
+  fixture.env.CLAWROUTER_LOCAL_AUTH = "enabled";
+  fixture.values.set(`local/sessions/${createHash("sha256").update(token).digest("hex")}`, { email: "admin@example.com", role: "admin", expiresAtMs: Date.now() + 60_000 });
+  const get = fixture.env.ACCESS_CONTROL.get;
+  fixture.env.ACCESS_CONTROL.get = id => ({ fetch: (url, init) => new URL(url).pathname === "/users/resolve"
+    ? Response.json({ initialized: true, users: [{ email: "admin@example.com", record: { enabled: true, role: "admin" } }], missingEmails: [] }) : get(id).fetch(url, init) });
+  for (const [method, suffix, body] of [["PUT", "?mode=replace", { provider: "anthropic", kind: "oauth", accessToken: "access-fixture" }], ["POST", "/revoke", {}]]) {
+    for (const [headers, status, code] of [[{}, 401, "admin_unauthorized"], [{ cookie: `clawrouter_session=${token}`, origin: "https://other.example" }, 403, "access_csrf_required"]]) {
+      const response = await fixture.dispatch(new Request(`http://127.0.0.1${grantPath}${suffix}`, { method, headers, body: JSON.stringify(body) }));
+      assert.equal(response.status, status);
+      assert.equal((await response.json()).error.code, code);
+    }
+  }
+  for (const suffix of ["?mode=replace", "?mode=unknown"]) assert.equal((await fixture.admin(grantPath + suffix, "PUT", { provider: "anthropic", hasAccessToken: true })).status, 400);
+  assert.equal((await fixture.admin(grantPath, "PUT", { provider: "anthropic", kind: "oauth", accessToken: "access-fixture" })).status, 500, "default merge still rejects corrupt legacy JSON");
+  assert.equal((await fixture.admin(grantPath + "/refresh", "POST", {})).status, 500, "refresh cannot acquire replacement intent");
+  assert.equal(fixture.env.GRANT_CREDENTIALS.objects.size, 0);
+  assert.equal(fixture.values.get(key), raw);
+});
+
 test("Worker revocation accepts bodyless requests and empty streams but rejects malformed or oversized metadata", async (context) => {
   const fixture = await scriptFixture(context);
   assert.equal((await fixture.admin(grantPath, "PUT", { provider: "anthropic", kind: "api_key", credential: "access-fixture" })).status, 200);
@@ -196,7 +248,7 @@ async function scriptFixture(context) {
   const dir = mkdtempSync(join(tmpdir(), "clawrouter-grant-test-"));
   // Prevent a regression to Wrangler from ever reaching operator credentials.
   writeFileSync(join(dir, "pnpm"), "#!/bin/sh\necho 'unexpected Wrangler invocation' >&2\nexit 99\n", { mode: 0o755 });
-  const values = new Map(), pool = new Set(), requests = [], responseBytes = [];
+  const values = new Map(), requests = [], responseBytes = [];
   const hash = (text) => createHash("sha256").update(text).digest("hex");
   const env = attachGrantCredentialNamespace({
     CLAWROUTER_ADMIN_TOKEN_SHA256: hash("admin-fixture"),
@@ -216,14 +268,9 @@ async function scriptFixture(context) {
       if (path === "/connections/resolve") return Response.json({ initialized: true, connections: [{ providerId: "anthropic", enabled: true, monthlyBudgetMicros: null }], missingProviderIds: [] });
       if (path === "/grant-pools/states") return Response.json({ states: {} });
       if (path === "/grant-pools/stats") return Response.json({ stats: {} });
-      if (path === "/grant-pools/resolve") return Response.json({ keys: [...pool], states: {} });
+      if (path === "/grant-pools/resolve") return Response.json(await env.grantAuthority.call("resolve", body));
       if (path === "/grant-pools/select") return Response.json({ selectedKey: body.candidates[0].key });
       if (path === "/grant-pools/feedback") return new Response("updated");
-      if (path === "/grant-pools/sync") {
-        const key = body.scope === "policies" ? `oauth/${body.scopeId}/${body.tokenRef}` : `oauth/tenants/${body.scopeId}/${body.tokenRef}`;
-        if (body.enabled) pool.add(key); else pool.delete(key);
-        return new Response("updated");
-      }
       throw new Error(`unexpected authority operation ${path}`);
     } }) },
   });
@@ -248,7 +295,7 @@ async function scriptFixture(context) {
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
   context.after(async () => { server.closeAllConnections(); await new Promise((resolve) => server.close(resolve)); rmSync(dir, { force: true, recursive: true }); });
   return {
-    dir, values, pool, env, requests, responseBytes, dispatch,
+    dir, values, env, requests, responseBytes, dispatch,
     run(name, args, extraEnv = {}, input = "") {
       return new Promise((resolveResult, reject) => {
         const child = spawn(process.execPath, [resolve("scripts", name), ...args], { env: { PATH: dir, NODE_NO_WARNINGS: "1", CLAWROUTER_BASE_URL: `http://127.0.0.1:${server.address().port}`, CLAWROUTER_ADMIN_TOKEN: "admin-fixture", TEST_ACCESS_TOKEN: "access-fixture", ...extraEnv }, timeout: 10_000 });

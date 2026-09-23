@@ -42,6 +42,36 @@ patterns. Keep provider access, configured readiness, recent verification, and
 budget state distinct. An administrator's role alone grants no provider access.
 Do not reveal an issued credential after the one-time copy surface is cleared.
 
+Dashboard **My keys** creates keys for held policies. Access **Credentials**
+creates a new credential or selects an existing key to rotate or revoke. Rotation
+changes only the secret of an active key. A key whose policy is no longer held
+can still be revoked. Copy a new secret before dismissing it or leaving the panel;
+the console cannot retrieve it later. If a request outcome is uncertain, refresh
+the key list before choosing another action. Creation drafts survive refreshes.
+
+Access **Policies** keeps edits made after returning to a policy while its earlier
+save is pending. When that save finishes, untouched fields adopt the saved values,
+including disabled status and budget. Each action owns the fields it assigns,
+including unchanged preset values and edits back to an older value. An untouched
+replacement draft follows the saved policy. The next Save submits the reconciled
+draft without depending on a successful metadata refresh. Reporting updates
+untouched fields but never acknowledges edits, even when its values match the
+draft. A successful Save retires only the edits included in that write; Disable
+retires only its enabled-state edit. Later edits and edits after a lost response
+survive refreshes until their own successful write or an explicit draft reset.
+
+Protected console data belongs to one verified browser session. Confirmed sign-in
+loss clears editors, one-time secrets, Playground history and retained request
+content. Sign in locally or reload through managed Access, then verify the session
+before showing protected data again. Reauthentication starts a fresh draft lifetime;
+ordinary reporting failures retain the current identity and show refresh errors.
+Already-sent key operations keep admission until they settle and are never replayed
+by sign-in recovery.
+
+Retained-request inspection follows the latest selected call. Selecting another
+call clears the previous content; Close dismisses loading, errors and content.
+Late replies cannot replace a newer selection or reopen a closed inspector.
+
 ## Accessibility and validation
 
 Preserve visible keyboard focus, labeled controls, reduced motion, and WCAG AA
@@ -49,8 +79,29 @@ contrast in both themes. Mobile layouts must retain the information and actions
 available on desktop. Empty, loading, error, and disabled states need explicit
 explanations.
 
+Filters that change one result list use labeled groups of native buttons with
+`aria-pressed` for the active choice. Reserve tab semantics for controls that
+switch between associated panels.
+
+Access resource tabs use manual activation: Left/Right wrap focus, Home/End move
+to the first/last tab, and Enter/Space opens the focused resource. Tab leaves the
+list for the active panel; returning to the list starts at the selected tab.
+Focus movement alone preserves one-time credentials. Activating another resource
+dismisses them through the existing credential lifecycle while retaining editor
+drafts. Every tab names its panel; inactive panels remain empty and hidden.
+Narrow layouts reveal the focused tab by scrolling only the tablist horizontally.
+
+Inspector list rows are buttons only when they have an available action. Policy
+links open a loaded policy for administrators after any dirty-draft discard is
+accepted; informational access summaries and unavailable references stay static.
+Catalog **Add to selected policy** opens the Policies tab and updates the current
+or New draft without discarding edits or saving it. Repeated additions keep each
+service selected once.
+
 `pnpm --dir admin test:browser` builds the console and runs desktop/mobile
 screenshot, accessibility, keyboard-focus, and self-service credential checks.
 The committed screenshot baselines are for CI's Linux Chromium environment;
 review intended visual changes before updating them. Demo mode uses synthetic
 identities, usage, and the generated provider catalog for safe captures.
+Select it explicitly with `?demo=1`, or use `?demo=user` on loopback for a user
+session. A network or sign-in failure never switches the console into demo mode.

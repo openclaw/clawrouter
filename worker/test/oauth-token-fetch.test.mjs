@@ -19,6 +19,7 @@ registerHooks({
 });
 
 const { oauthCallback } = await import("../oauth.ts");
+const { attachGrantCredentialNamespace } = await import("./grant-credential-mock.mjs");
 
 test("OAuth token exchange aborts a hung tokenUrl instead of stalling the callback", async (context) => {
   const timeouts = [];
@@ -51,4 +52,19 @@ test("OAuth token timeout returns the connection-failed page instead of throwing
   const response = await oauthCallback(new Request("https://console.example/v1/oauth/callback?state=state-1&code=auth-code"), {});
   assert.equal(response.status, 400);
   assert.match(await response.text(), /Provider token exchange failed/);
+});
+
+test("OAuth token exchange cannot recover corrupt legacy metadata through ordinary owner PUT", async (context) => {
+  const key = "oauth/policy/openai", raw = '{"accessToken":"legacy-private",';
+  let writes = 0;
+  const env = attachGrantCredentialNamespace({ POLICY_KV: {
+    // A stale discovery projection cannot grant the later owner read permission
+    // to discard corruption or use the administrator's replacement operation.
+    async get(_key, type) { return type === "text" ? raw : { provider: "openai", kind: "oauth" }; },
+    async put() { writes += 1; },
+  } });
+  context.mock.method(globalThis, "fetch", async () => Response.json({ access_token: "fresh-private" }));
+  await assert.rejects(() => oauthCallback(new Request("https://console.example/v1/oauth/callback?state=state-1&code=auth-code"), env), error => error.code === "invalid_upstream_grant");
+  assert.equal(writes, 0);
+  assert.equal(env.GRANT_CREDENTIALS.objects.get(key).values.has("credential"), false);
 });

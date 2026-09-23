@@ -41,6 +41,13 @@ models:
     - id: fireworks/glm-5.2
       upstream: accounts/fireworks/models/glm-5p2
       capabilities: [llm.chat]
+      supportedReasoningEfforts: [none, low, medium, high, xhigh, max]
+      requestParameters:
+        chat_completions:
+          sources:
+            - https://docs.fireworks.ai/api-reference/post-chatcompletions
+          checkedAt: "2026-09-23"
+          defaultReasoningEffort: max
       pricingRef: fireworks-glm-5p2-standard-2026-06-22
       pricing:
         effectiveAt: "2026-06-22"
@@ -53,6 +60,13 @@ models:
     - id: fireworks/gpt-oss-120b
       upstream: accounts/fireworks/models/gpt-oss-120b
       capabilities: [llm.chat]
+      supportedReasoningEfforts: [low, medium, high]
+      requestParameters:
+        chat_completions:
+          sources:
+            - https://docs.fireworks.ai/api-reference/post-chatcompletions
+          checkedAt: "2026-09-23"
+          defaultReasoningEffort: medium
       pricingRef: fireworks-gpt-oss-120b
 billing:
   meter: clawrouter.tokens

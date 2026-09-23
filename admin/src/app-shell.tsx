@@ -6,15 +6,16 @@ import { DashboardScreen, CatalogScreen, UserAvatar } from "./screens/dashboard-
 import { PlaygroundScreen } from "./screens/playground";
 import { PoliciesScreen } from "./screens/access";
 import { UsageScreen, UsersScreen } from "./screens/users-usage";
-import { applyTheme, initialTheme, navItems } from "./ui-config";
+import { applyTheme, navItems, readTheme } from "./ui-config";
 import { formatTimestamp } from "./ui-helpers";
 import { useConsole } from "./console-controller-context";
 import { consoleStatusPresentation } from "./status-display";
+import type { AccessPolicy } from "./ui-types";
 
 export function AppShell() {
-  const [theme, setTheme] = React.useState(initialTheme);
+  const [theme, setTheme] = React.useState(readTheme);
   React.useEffect(() => { applyTheme(theme); }, [theme]);
-  const { session: shell, catalog, access, usage, selfServiceKeys, playground: playgroundDomain, refresh } = useConsole();
+  const { session: shell, catalog, access, usage, selfServiceKeys, credentialOwner, playground: playgroundDomain, refresh } = useConsole();
   const { view, value: session, status, lastUpdatedAt, demoMode, busy, navigateTo } = shell;
   const refreshError = [shell.refreshError, usage.error].filter(Boolean).join("; ");
   const statusPresentation = consoleStatusPresentation(status, demoMode, Boolean(refreshError), shell.refreshing);
@@ -22,7 +23,7 @@ export function AppShell() {
   const { providers, providerReadiness, accessByProvider, services, models, serviceRoutes, query, setQuery, kind, setKind, kinds, filteredServices, selectedService, setSelectedServiceId } = catalog;
   const { policies, credentials: credentialState, connections: connectionState, bindings: bindingState, upstream, assignments, fusion, users: userState, tab } = access;
   const { items: keys, selected: selectedPolicy, form: policyForm, setForm: setPolicyForm, error: policyError, save: savePolicy, revoke, edit: editPolicy, startNew: startNewPolicy, applyPreset, toggleProvider: togglePolicyProvider, setProviderGroup: setPolicyProviderGroup } = policies;
-  const { items: credentials, selected: selectedCredential, form: credentialForm, setForm: setCredentialForm, issuedKey, issue: issueCredential, revoke: revokeCredential, setSelectedId: setSelectedCredentialId, setIssuedKey } = credentialState;
+  const { items: credentials, selected: selectedCredential, form: credentialForm, setForm: setCredentialForm, issue: issueCredential, rotate: rotateCredential, revoke: revokeCredential, edit: editCredential, startNew: startNewCredential } = credentialState;
   const { items: connections, pendingProviderIds, setEnabled: setProviderConnection, setBudget: setProviderBudget } = connectionState;
   const { items: bindings, selected: selectedBinding, form: bindingForm, setForm: setBindingForm, save: saveBinding, edit: editBinding, startNew: startNewBinding } = bindingState;
   const { items: upstreamGrants, selected: selectedUpstreamGrant, form: upstreamGrantForm, setForm: setUpstreamGrantForm, save: saveUpstreamGrant, revoke: revokeUpstreamGrant, refresh: refreshUpstreamGrant, refreshQuota: refreshUpstreamGrantQuota, authorize: authorizeUpstreamGrant, edit: editUpstreamGrant, startNew: startNewUpstreamGrant } = upstream;
@@ -33,6 +34,11 @@ export function AppShell() {
   const { adminOverview, tenantSummaries, rows: usageRows, snapshot: usageSnapshot, loaded: usageLoaded } = usage;
   const { form: playground, setForm: setPlayground, turns: playgroundTurns, selectedTurnId: selectedPlaygroundTurnId, setSelectedTurnId: setSelectedPlaygroundTurnId, requestMode, setRequestMode, error: playgroundError, selectedModel, selectedServiceRoute, running: playgroundRunning, run: runPlayground, resetConversation } = playgroundDomain;
   const retentionLabel = session.contentRetention ? session.contentRetention.enabled ? `${session.contentRetention.retentionDays}d` : "off" : "pending";
+  function openPolicy(policy: AccessPolicy) {
+    if (!editPolicy(policy)) return;
+    setAccessTab("policies");
+    navigateTo("policies");
+  }
   return (
     <main className="appShell">
       <aside className="sidebar">
@@ -114,9 +120,10 @@ export function AppShell() {
             usageUpdatedAt={usage.updatedAt}
             myCredentials={selfServiceKeys.items}
             myPolicyIds={selfServiceKeys.policyIds}
-            myIssuedKey={selfServiceKeys.issuedKey}
-            myKeyError={selfServiceKeys.error}
-            myKeysBusy={busy || selfServiceKeys.busy}
+            myKeyFeedback={credentialOwner.forSurface("personal")}
+            myKeyScope={credentialOwner.scopeEpoch}
+            myKeysBusy={busy || credentialOwner.busy}
+            onMyKeyDraftChange={credentialOwner.invalidatePresentation}
             onIssueMyKey={selfServiceKeys.issue}
             onRevokeMyKey={selfServiceKeys.revoke}
             onOpenCatalog={() => navigateTo("catalog")}
@@ -140,6 +147,7 @@ export function AppShell() {
             setKind={setKind}
             kinds={kinds}
             canAdminister={session.role === "admin"}
+            onOpenPolicy={openPolicy}
             onSelect={(service) => setSelectedServiceId(service.id)}
             onSetConnection={setProviderConnection}
             onSetProviderBudget={setProviderBudget}
@@ -153,9 +161,10 @@ export function AppShell() {
             }}
             onAdd={(service) => {
               setPolicyForm((current) => ({
-                ...current,
+                allProviders: current.allProviders,
                 providers: current.allProviders || current.providers.includes(service.provider) ? current.providers : [...current.providers, service.provider].sort(),
               }));
+              setAccessTab("policies");
               navigateTo("policies");
             }}
           />
@@ -195,6 +204,9 @@ export function AppShell() {
             selectedBinding={selectedBinding}
             upstreamGrants={upstreamGrants}
             selectedUpstreamGrant={selectedUpstreamGrant}
+            upstreamBusy={upstream.busy}
+            upstreamReady={upstream.ready}
+            upstreamError={upstream.error}
             assignmentRules={assignmentRules}
             selectedAssignmentRule={selectedAssignmentRule}
             fusionConfig={fusionConfig}
@@ -214,12 +226,20 @@ export function AppShell() {
             setUpstreamGrantForm={setUpstreamGrantForm}
             assignmentRuleForm={assignmentRuleForm}
             setAssignmentRuleForm={setAssignmentRuleForm}
-            issuedKey={issuedKey}
-            error={policyError}
+            credentialFeedback={credentialOwner.forSurface("admin")}
+            error={access.error}
+            policyError={policyError}
+            policyDirty={policies.dirty}
+            policyMissing={policies.missing}
+            policyReady={policies.ready}
+            policyBusy={policies.busy}
+            onDiscardPolicy={policies.discard}
             fusionError={fusionError}
             onSave={savePolicy}
             onIssueCredential={issueCredential}
             onRevokeCredential={revokeCredential}
+            onRotateCredential={rotateCredential}
+            onNewCredential={startNewCredential}
             onSaveBinding={saveBinding}
             onSaveUpstreamGrant={saveUpstreamGrant}
             onRevokeUpstreamGrant={revokeUpstreamGrant}
@@ -232,11 +252,7 @@ export function AppShell() {
             onCheckFusion={checkFusion}
             onNew={startNewPolicy}
             onEdit={editPolicy}
-            onEditCredential={(credential) => {
-              setSelectedCredentialId(credential.credentialId);
-              setCredentialForm({ credentialId: "", policyId: credential.policyId, principalId: credential.principalId ?? "" });
-              setIssuedKey("");
-            }}
+            onEditCredential={editCredential}
             onEditBinding={editBinding}
             onNewBinding={startNewBinding}
             onEditUpstreamGrant={editUpstreamGrant}
@@ -261,11 +277,7 @@ export function AppShell() {
             form={accessForm}
             setForm={setAccessForm}
             error={userError}
-            onOpenPolicy={(policy) => {
-              editPolicy(policy);
-              setAccessTab("policies");
-              navigateTo("policies");
-            }}
+            onOpenPolicy={openPolicy}
             onSelect={(user) => {
               setSelectedUserEmail(user.email);
               setAccessForm(accessFormFromUser(user, bindings));

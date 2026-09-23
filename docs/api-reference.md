@@ -125,9 +125,9 @@ curl "$CLAWROUTER_BASE_URL/v1/proxy/tavily/search" \
 
 `clawrouter/fusion` is an optional virtual model on `/v1/chat/completions`. It fans a bounded text-only prompt out to configured adviser models and asks one configured synthesizer for the final response. Every subrequest uses normal policy, budget, readiness, retention, and usage-accounting paths. See [Fusion routing](fusion-router.md).
 
-## HTTP continuation contract
+## Responses continuation contract
 
-Responses HTTP/SSE routes preserve upstream `previous_response_id` and
+Responses HTTP/SSE and WebSocket routes preserve upstream `previous_response_id` and
 `x-codex-turn-state` bytes. The router binds returned identities to the caller's
 authorization scope, provider route, and credential owner before publishing them.
 Every continuation still checks current authorization, grant eligibility, and
@@ -149,12 +149,69 @@ it never evicts a live binding to admit another. Binding-store failure or capaci
 exhaustion returns `continuation_unavailable` before headers, or terminates an
 already-started stream. The upstream call can still incur charges. Response IDs
 are limited to 256 UTF-8 bytes and turn state to 8 KiB. Output/frame size is not
-limited by identity observation, and raw identities and model output are not
+limited by HTTP identity observation, and raw identities and model output are not
 stored in this index.
 
 This contract covers `previous_response_id` and Codex turn state. Responses
 `conversation` selectors remain an unpinned, separate contract gap; do not rely on
-pooled account affinity for them. WebSockets use the connection contract below.
+pooled account affinity for them. WebSockets also use the connection contract below.
+
+HTTP endpoint deadlines start after preflight and end after response
+normalization, before continuation-header registration and body delivery. For
+streaming SSE requests, normalization includes bounded first-event inspection; for
+successful JSON responses, it ends at the response headers. These deadlines do
+not impose a total or idle timeout on body delivery. Caller cancellation remains
+active through EOF. Fusion advisers retain their separate consumption deadline.
+Caller cancellation, router deadline, and upstream or publication failure retain
+the first observed cause in usage receipts. The selected HTTP status stays
+separate from that outcome. An accepted HTTP rejection keeps its status when JSON
+or SSE error details cannot be read; later cancellation still ends delivery.
+A parsed terminal usage event retains its measured
+charge if delivery later stops; dispatched work without final usage retains its
+estimate. This does not guarantee that every transport reports an idle client
+disconnect.
+
+### HTTP cancellation diagnostics
+
+Cancellation accounting starts when the runtime reports an ingress abort or
+response-body cancellation. A client-local abort alone does not guarantee a
+prompt server notification or a receipt within ten seconds for an indefinitely
+idle HTTP response.
+
+`pnpm test:scripts` includes the seven affirmative deadline and cancellation
+cases: progressing JSON/SSE delivery, initial-response deadlines, active-delivery
+cancellation, and cancellation observed after independently delayed JSON output.
+Each cancellation case requires upstream shutdown, one receipt, and settlement
+in both real budget ledgers. The strict idle-disconnect reproduction is explicit:
+
+```sh
+pnpm diagnostic:http-idle-disconnect
+```
+
+That command replays the original eight-case sequence, including the final
+whitespace-only response. It retains every strict assertion and exits nonzero
+when the limitation reproduces. Its nested entry point is outside the default
+`test/*.test.mjs` script-test glob; no result is suppressed or treated as a pass.
+
+At commit `750a4093c9685829e9423f124c56022e7a2ce838`, the
+[hosted diagnostic run](https://github.com/openclaw/clawrouter/actions/runs/35856640488/job/107166567427)
+used Node 24.21.0, Miniflare 5.20260918.0-alpha and workerd 1.20260918.1.
+The delayed-output case received HTTP 200/gzip headers and zero decoded body
+bytes before the client aborted at 1.048 seconds. Independent payload output
+started at 2.044 seconds; ingress abort followed at 2.452 seconds, before EOF.
+It recorded one `200`/`client_error` receipt with unknown tokens and a fixed
+charge of 7 micros in both ledgers. The unchanged whitespace-only case recorded no
+ingress abort or receipt, and both reservations remained unsettled during the
+observation window. That limitation remains unresolved.
+
+The pinned [KJ disconnect contract](https://github.com/capnproto/capnproto/blob/0501d343/c++/src/kj/async-io.h#L205-L214)
+allows detection to remain pending without a write; its
+[HTTP implementation discusses the half-close tradeoff](https://github.com/capnproto/capnproto/blob/0501d343/c++/src/kj/compat/http.c++#L8278-L8287).
+Node 24.21.0 [Fetch abort](https://github.com/nodejs/node/blob/v24.21.0/deps/undici/src/lib/web/fetch/index.js#L104-L126)
+reaches [HTTP/1 socket destruction](https://github.com/nodejs/node/blob/v24.21.0/deps/undici/src/lib/dispatcher/client-h1.js#L1198-L1206),
+whose [ordinary-close path is distinct from reset](https://github.com/nodejs/node/blob/v24.21.0/lib/net.js#L1097-L1130).
+The fixture does not establish physical FIN/RST behavior, compression causality,
+or deployed HTTP/2 behavior. No idle or total-delivery timeout is added.
 
 ## WebSocket contract
 
@@ -165,17 +222,36 @@ readiness. Every create rechecks credential, policy, provider, grant, retention,
 and budget before dispatch. The connection pins its provider route and grant
 revision; changing either requires a new connection.
 
+Response IDs and `response.metadata` turn state are bound to each create's fresh
+authorization scope and actual upstream owner before forwarding. Codex can then
+reconnect with `client_metadata["x-codex-turn-state"]` or fall back to HTTP with
+the same turn state and account. Conflicting header and metadata tokens are
+rejected; every supplied continuation identity must name the same owner.
+An upgrade header alone
+does not create a synthetic metadata event. Metadata may precede
+`response.created`; it identifies the response without proving execution started.
+Pending publication preserves frame order and blocks the next same-lane create
+until publication and settlement finish. Closing the connection suppresses late
+publication acknowledgments and queued output.
+
 The bridge forwards native response IDs, errors, metadata, tool results,
 `previous_response_id`, and `stream_options`. Prewarm `generate: false` requests
 receive normal admission and accounting. It never replays requests or switches
 grants after dispatch. A terminal response with usable usage settles once;
-disconnects and deadlines without final usage retain the reservation. If budget
+sent requests interrupted by disconnects or deadlines without final usage retain
+the reservation. Unsent admitted requests release it; queued requests have no
+receipt. The first terminal outcome or close cause owns settlement, including
+when admission finishes after cancellation. A client disconnect records
+`client_error` with `status_code: null`; only the response whose deadline expired
+records `timeout`/504. Other active lanes closed with that connection do not
+inherit its timeout. If budget
 settlement and its durable recovery both fail, or usage publication fails, the
 socket reports `accounting_unavailable` and closes before accepting more work.
 
 Limits per connection are 16 active responses, 32 named lanes plus the default
 lane, 48 buffered creates, 4 MiB per incoming frame, 8 MiB total buffered create
-bytes, and 16 MiB cumulative downstream output. The output limit bounds a slow
+bytes, at most 48 output frames/8 MiB awaiting publication, and 16 MiB cumulative
+downstream output. The output limit bounds a slow
 reader because Workers' WebSocket API has no supported drain/queue metric.
 Connections last at most 60 minutes; each response uses its endpoint deadline,
 capped at 600 seconds. Clients must reconnect after a limit or deadline closes
@@ -263,6 +339,18 @@ ignore these hints and retain their canonical identity. Revocation stores a
 secretless, disabled tombstone and cancels maintenance; an unknown grant returns
 HTTP 404. Retrying revocation preserves the same tombstone generation.
 
+Explicit replacement and revocation can recover an existing legacy KV grant with
+invalid JSON or metadata larger than the 3 MiB migration limit. Corrupt or oversized
+bytes are discarded, never imported into the credential owner. Supply fresh credentials
+through `cf:oauth:put` or `PUT ...?mode=replace`, or use `cf:oauth:revoke` to remove
+the account. Ordinary edits, OAuth callbacks, contributions, refresh and automatic
+migration remain strict. A failed KV read is unavailable state, not proof of an
+absent account. Recovery preserves retained pool generations; a newer index than
+an existing owner requires operator recovery instead of resetting ownership.
+When both the owner and KV record are missing, either PUT mode creates an account
+only after confirming an empty attachment index. Retained legacy membership or
+generation history returns HTTP 409, including generation-zero legacy rows.
+
 ### Credential creation, rotation, and revocation
 
 Use `POST /v1/admin/credentials` or `POST /v1/session/credentials` with
@@ -328,7 +416,9 @@ Disable one credential to revoke one key, disable a policy to revoke every crede
 
 Budgeted requests reserve an upper-bound token cost before the upstream call when the selected model has versioned pricing. A policy `requestCostMicros` value is a fixed-cost override; budgeted routes without versioned pricing or an override fail closed.
 
-Successful responses settle to reported usage, including cached input where available. Non-2xx and transport failures refund the reservation. Missing or interrupted usage remains charged at the conservative reservation. Streaming responses are metered without buffering the client stream.
+Successful responses settle to reported usage, including cached input where available, or the explicit fixed policy tariff. Known-unsent work and received non-2xx responses settle at zero with `cost_basis: none`. Transport failures after dispatch, and missing or interrupted usage, retain the qualified estimate or fixed tariff because upstream work may have occurred. Streaming responses are metered without buffering the client stream.
+
+Declared Responses JSON and SSE bodies are inspected incrementally for usage and terminal status, including fields after large output. The observer retains only bounded metadata; excessive nesting or oversized selected fields leave usage unknown and preserve the applicable estimate or fixed tariff. These inspection limits do not impose a response-size limit or change delivered bytes.
 
 Usage events are delivered through `USAGE_QUEUE` to tenant- and policy-sharded `USAGE_LEDGER` Durable Objects. Settlement and audit delivery retry independently, and exhausted messages move to the configured usage dead-letter queue. Ledgers keep bounded identity, route, timing, outcome, token, cost, request ID, and trace metadata; they do not store prompts or completions.
 

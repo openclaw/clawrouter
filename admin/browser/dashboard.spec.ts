@@ -1,5 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
+import type { AccessPolicy } from "../src/ui-types";
 
 test.beforeEach(async ({ page }) => {
   await page.clock.setFixedTime(new Date("2026-07-06T12:00:00.000Z"));
@@ -18,7 +19,7 @@ test("dashboard distinguishes unavailable prices from mixed and fully priced spe
   const responses: Record<string, unknown> = {
     "/v1/providers": { providers: [] },
     "/v1/routes": { openaiCompatible: [], manifestProxy: [] },
-    "/v1/session": { authenticated: true, auth: "access", role: "user", email: "user@example.com", entitlements: { providers: [] } },
+    "/v1/session": { authenticated: true, auth: "cloudflare_access", role: "user", email: "user@example.com", entitlements: { providers: [] } },
     "/v1/session/credentials": { credentials: [] },
     "/v1/session/usage": { policies: [], usage: { ledger: "ready", summary, providers: [provider], daily: [], events: [] } },
   };
@@ -26,12 +27,12 @@ test("dashboard distinguishes unavailable prices from mixed and fully priced spe
     const body = responses[new URL(route.request().url()).pathname];
     await route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
   });
-  const spend = page.locator(".dashboardStats > div").filter({ has: page.getByText(/^(actual|accounted) spend$/) });
+  const spend = page.locator(".dashboardStats > div").filter({ has: page.getByText("accounted spend", { exact: true }) });
   for (const [unpriced, cost, label, value] of [
     [2, 0, "accounted spend", "Price unavailable"],
     [1, 1_000_000, "accounted spend", "$1.00 accounted; 1 unpriced"],
-    [0, 1_000_000, "actual spend", "$1.00"],
-    [0, 0, "actual spend", "none"],
+    [0, 1_000_000, "accounted spend", "$1.00"],
+    [0, 0, "accounted spend", "$0.00"],
   ] as const) {
     summary.unpricedRequestCount = unpriced;
     summary.actualCostMicros = cost;
@@ -39,9 +40,19 @@ test("dashboard distinguishes unavailable prices from mixed and fully priced spe
     await page.goto("/");
     await expect(spend.locator("span")).toHaveText(label);
     await expect(spend.locator("strong")).toHaveText(value);
+    await expect(spend.locator("small")).toContainText("Last 30 days · May include estimates");
     await expect(page.locator(".providerChartValue small")).toHaveText(value);
-    await expect(page.locator(".providerChartLegendMeta")).toHaveText(unpriced ? "Requests · accounted spend" : "Requests · spend");
+    await expect(page.locator(".providerChartLegendMeta")).toHaveText("Requests · accounted spend · may include estimates");
   }
+});
+
+test("a provider without a cap still explains the other budget scopes", async ({ page }) => {
+  await openDemo(page);
+  await page.getByRole("button", { name: "Catalog", exact: true }).click();
+  const budget = page.locator(".providerBudgetEditor");
+  await expect(budget).toContainText("No cap at this scope");
+  await expect(budget).toContainText("Provider-wide · UTC calendar month · Used includes reservations");
+  await expect(budget).toContainText("Other policy or provider limits still apply");
 });
 
 test("Fusion preflight is WCAG AA clean and visually stable", async ({ page }) => {
@@ -56,13 +67,16 @@ test("Fusion preflight is WCAG AA clean and visually stable", async ({ page }) =
 });
 
 test("Fusion distinguishes unavailable request prices from an explicit zero tariff", async ({ page }) => {
-  const policy = { policyId: "fixture", enabled: true, providers: [], monthlyBudgetMicros: null, requestCostMicros: null };
+  const policy: AccessPolicy = {
+    policyId: "fixture", enabled: true, providers: [], monthlyBudgetMicros: null, requestCostMicros: null, retainRequestContent: false,
+    grantRouting: { strategy: "most_remaining", stickiness: "none", failover: true, staleState: "allow", staleAfterSeconds: 300, switchAtUsedPercent: 90, hysteresisPercent: 10, eligibleGrants: {} },
+  };
   const fusion = { version: 1, modelId: "clawrouter/fusion", enabled: true, adviserModels: [], aggregatorModel: "perplexity/sonar-pro", adviserTimeoutMs: 1000, maxOutputTokens: 100, maxInputChars: 1000, maxProposalChars: 1000, temperature: 0.7 };
   const call = { stage: "synthesizer", index: null, model: fusion.aggregatorModel, provider: "perplexity", policyAllowed: true, executable: true, verified: false, status: "unverified", reasons: [], estimatedReservationMicros: 0, estimateBasis: "unpriced_request" };
   const preview = { policyId: policy.policyId, policyEnabled: true, configEnabled: true, executable: true, advertisable: true, readyAdviserCount: 0, adviserCount: 0, callCount: 1, estimatedReservationMicros: 0, budgetConfigured: false, budgetLedger: "unmetered", remainingBudgetMicros: null, budgetSufficientForAll: null, estimateNote: "Complete price unavailable.", calls: [call] };
   const responses: Record<string, unknown> = {
     "/v1/providers": { providers: [] }, "/v1/routes": { openaiCompatible: [], manifestProxy: [] },
-    "/v1/session": { authenticated: true, auth: "access", role: "admin", email: "admin@example.com", entitlements: { providers: [] } },
+    "/v1/session": { authenticated: true, auth: "cloudflare_access", role: "admin", email: "admin@example.com", entitlements: { providers: [] } },
     "/v1/session/credentials": { credentials: [] },
     "/v1/admin/bootstrap": { policies: [policy], credentials: [], connections: [], users: [], bindings: [], grants: [], rules: [], providers: [], tenants: [], overview: {}, fusion },
     "/v1/admin/fusion/preview": preview,
@@ -73,10 +87,14 @@ test("Fusion distinguishes unavailable request prices from an explicit zero tari
   });
   await page.goto("/dashboard/access");
   await page.getByRole("tab", { name: /Fusion/ }).click();
+  await expect(page.getByRole("combobox", { name: "readiness policy", exact: true })).toHaveValue(policy.policyId);
+  await expect(page.getByRole("combobox", { name: "final synthesizer", exact: true })).toHaveValue(fusion.aggregatorModel);
+  const checkReadiness = page.getByRole("button", { name: "Check readiness" });
+  await expect(checkReadiness).toBeEnabled();
   const panel = page.getByRole("region", { name: "Fusion readiness" });
-  for (const [basis, label] of [["unpriced_request", "Price unavailable"], ["policy_fixed", "none"]]) {
+  for (const [basis, label] of [["unpriced_request", "Price unavailable"], ["policy_fixed", "$0.00"]]) {
     call.estimateBasis = basis;
-    await page.getByRole("button", { name: "Check readiness" }).click();
+    await checkReadiness.click();
     await expect(panel.locator(".fusionReadinessCalls b")).toHaveText(label);
     await expect(panel.locator(".fusionReadinessEstimate strong")).toHaveText(label);
   }

@@ -47,7 +47,7 @@ test("AWS Bedrock smoke uses an executable Nova InvokeModel request", () => {
   assert.equal(provider.target.kind, "manifest_proxy");
   assert.equal(provider.target.endpoint, "invoke_model");
   assert.deepEqual(provider.target.envelope.pathParams, {
-    model: "amazon.nova-lite-v1:0",
+    model: "bedrock/amazon.nova-lite-v1:0",
   });
   assert.deepEqual(provider.target.envelope.body, {
     schemaVersion: "messages-v1",
@@ -110,7 +110,7 @@ test("Anthropic count_tokens smoke omits messages-only max_tokens", () => {
   assert.equal(provider.target.kind, "manifest_proxy");
   assert.equal(provider.target.endpoint, "count_tokens");
   assert.equal(provider.target.envelope.body.max_tokens, undefined);
-  assert.equal(provider.target.envelope.body.model, snapshot.providers.find((entry) => entry.id === "anthropic").models[0].upstream);
+  assert.equal(provider.target.envelope.body.model, snapshot.providers.find((entry) => entry.id === "anthropic").models[0].id);
 });
 
 test("newly budgeted provider defaults compile with dated pricing", () => {

@@ -48,11 +48,19 @@ are required.
 
 ## Provision
 
-Authenticate Wrangler first, then create the runtime resources:
+Set the account and API token before creating the runtime resources. The token
+needs queue creation and Workers KV Storage Write permissions:
 
 ```sh
+export CLOUDFLARE_ACCOUNT_ID=...
+export CLOUDFLARE_API_TOKEN=...
 pnpm cf:provision
 ```
+
+Both production and FakeCo create KV through the Cloudflare API using the exact
+deployment namespace title. Missing credentials stop provisioning before any
+resource changes. An existing namespace title is an error; inspect its ID with
+`pnpm exec wrangler kv namespace list` before configuring an existing deployment.
 
 Protect the browser console with Cloudflare Access before treating the custom
 domain as ready:
@@ -703,11 +711,39 @@ active tier; routing never spills into a higher tier while a lower tier has an
 eligible grant. CLI imports, admin writes, and browser OAuth maintain the
 bounded pool index automatically.
 
+Each scope/provider permits 32 active grants or pending active reservations.
+A replacement reserves capacity before storing active credentials; a paused
+replacement records a pending proposal without consuming an active slot. Neither
+proposal can receive requests, and the previous provider remains attached until
+the store commits.
+Paused and reauthorization-required accounts remain attached while freeing an
+active slot. Revocation removes the attachment after deleting its secrets.
+These attachment facts do not yet change environment-credential fallback;
+legacy backfill and fallback activation require the subsequent control-plane
+migration.
+
+The attachment storage upgrade is forward-only. Recovery must use the current
+Worker or a forward fix so the owner can reconcile unfinished publication.
+Do not roll back to a Worker that predates attachment statuses: its pool query
+ignores those statuses and does not safely handle retained inactive accounts.
+Do not delete the index fences or restore an older index over current owners.
+
 `cf:oauth:put` replaces the entire grant at that key, including its credentials
 and account metadata. Omitted refresh tokens, credential bundles, and refresh
 configuration are cleared. Supply a fresh primary credential for each import.
 For a metadata edit that preserves credentials, use the console or the admin
 API's default PUT mode instead of the CLI replacement mode.
+
+The console enables account writes after the first account list loads; you can
+prepare a draft while it loads. That first list supplies untouched policy and
+provider defaults; later refreshes do not retarget the draft. Empty or unavailable
+selections remain visible. The console applies confirmed saves, revocations,
+credential refreshes, and quota results before refreshing the rest of the dashboard. You can edit or
+save again while that refresh runs; later drafts and selections stay intact.
+Provider sign-in keeps account writes blocked while its redirect is pending.
+A reporting failure does not undo a confirmed change. If a write cannot be
+confirmed, refresh and inspect the account before retrying; the console does
+not retry the write automatically.
 
 `--local` now calls a running local Worker through the same authenticated API.
 It defaults to `http://127.0.0.1:8787` when `CLAWROUTER_BASE_URL` is unset, and

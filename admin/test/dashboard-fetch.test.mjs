@@ -12,7 +12,39 @@ registerHooks({
   },
 });
 
-const { localLogin, playgroundRequest, request } = await import("../src/dashboard-fetch.ts");
+const { DashboardRequestError, authenticationRequired, localLogin, playgroundRequest, request } = await import("../src/dashboard-fetch.ts");
+
+test("only exact console authentication envelopes invalidate a browser session", async (context) => {
+  for (const [path, status, body, expected] of [
+    ["/v1/admin/bootstrap", 401, { error: { code: "admin_unauthorized" } }, true],
+    ["/v1/admin/credentials/key/rotate", 401, { error: { code: "admin_unauthorized" } }, true],
+    ["/v1/session/credentials", 401, { error: { code: "access_session_required" } }, true],
+    ["/v1/entitlements", 401, { error: { code: "access_session_required" } }, true],
+    ["/v1/admin/bootstrap", 403, { error: { code: "access_admin_required" } }, false],
+    ["/v1/admin/credentials", 403, { error: { code: "access_csrf_required" } }, false],
+    ["/v1/admin/bootstrap", 503, { error: { code: "admin_unauthorized" } }, false],
+    ["/v1/admin/bootstrap", 401, "admin_unauthorized", false],
+    ["/v1/session", 401, { message: "access_session_required" }, false],
+    ["/v1/session", 401, { error: { code: "admin_unauthorized" } }, false],
+    ["/v1/session/login", 401, { error: { code: "login_invalid" } }, false],
+    ["/v1/playground/responses", 401, { error: { code: "access_session_required" } }, false],
+  ]) {
+    const raw = typeof body === "string" ? body : JSON.stringify(body);
+    context.mock.method(globalThis, "fetch", async () => new Response(raw, { status }));
+    await assert.rejects(request("https://console.example", path), (error) => {
+      assert.equal(error.message, raw);
+      assert.equal(authenticationRequired(error, path), expected);
+      return true;
+    });
+  }
+});
+
+test("JSON requests distinguish confirmed HTTP rejection from an uncertain transport outcome", async (context) => {
+  context.mock.method(globalThis, "fetch", async () => new Response("credential_exists", { status: 409 }));
+  await assert.rejects(request("https://console.example", "/v1/session/credentials"), (error) => error instanceof DashboardRequestError && error.status === 409 && error.message === "credential_exists");
+  context.mock.method(globalThis, "fetch", async () => { throw new TypeError("network failed"); });
+  await assert.rejects(request("https://console.example", "/v1/session/credentials"), (error) => !(error instanceof DashboardRequestError));
+});
 
 test("dashboard JSON request leaves headroom for a typed 30s Worker timeout and keeps a caller signal", async (context) => {
   const timeouts = [];

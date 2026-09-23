@@ -85,7 +85,7 @@ try {
     const expected = measured ? 1_080 : scenario === "error_before_start" ? 0 : event.reserved_cost_micros;
     assert.equal(event.actual_cost_micros, expected);
     assert.equal(event.status, scenario === "incomplete" ? "success" : "provider_error");
-    if (!measured && expected) assert.equal(event.cost_basis, "manifest_reservation");
+    assert.equal(event.cost_basis, measured ? "manifest_pricing" : scenario === "error_before_start" ? "none" : "manifest_reservation");
     spent += expected;
     assert.equal(usage.budget.spentMicros, spent);
     current.close(1000, "scenario complete");
@@ -94,6 +94,7 @@ try {
     const updated = await authorityObject.fetch("https://authority/policies/put", { method: "POST", body: JSON.stringify({ policyId: "fixture", policy: change }) });
     assert.equal(updated.status, 200);
     const before = (await (await upstream.fetch("https://fixture.example/state")).json()).frames.length;
+    const existingEvents = new Set(usage.usage.events.map(event => event.id));
     const next = messages.filter((event) => ["response.completed", "response.incomplete", "response.failed", "error"].includes(event.type)).length + 1;
     create({ input: "must not be sent" });
     assert.equal((await terminal(next)).error.code, code);
@@ -106,6 +107,12 @@ try {
     assert.equal((await (await upstream.fetch("https://fixture.example/state")).json()).frames.length, before);
     count++;
     await until(async () => { usage = await (await dispatch("/v1/usage")).json(); return usage.usage.summary.requestCount === count; });
+    const receipts = usage.usage.events.filter(event => !existingEvents.has(event.id));
+    assert.equal(receipts.length, 1);
+    const [receipt] = receipts;
+    assert.equal(receipt.status_code, code === "budget_exhausted" ? 402 : 503);
+    assert.equal(receipt.actual_cost_micros, 0);
+    assert.equal(receipt.cost_basis, "none");
     // A zero limit intentionally projects a blocked budget with zero spend.
     // Read the ledger to prove rejected work did not alter previous charges.
     const ledger = await budgets.get(budgets.idFromName("default:fixture")).fetch(`https://budget/status?policy_id=default/fixture&window_key=default/fixture/${month}&limit_micros=100000000`);
@@ -232,9 +239,42 @@ try {
     assert.ok(receipts.length <= 1); rejectedReceipt = receipts[0]; return !!rejectedReceipt;
   });
   assert.equal(rejectedReceipt.actual_cost_micros, 0);
+  assert.equal(rejectedReceipt.cost_basis, "none");
   assert.equal(rejectedReceipt.status_code, 503);
   assert.equal((await stateFrames()).length, beforeDispatchFrames);
   assert.deepEqual(await ledgerFacts(), beforeDispatchFailure);
+
+  // Delay retention after both real reservations exist. A late resolve and a
+  // late rejection must both preserve the socket owner's cancellation receipt.
+  await authorityObject.fetch("https://authority/policies/put", { method: "POST", body: JSON.stringify({ policyId: "fixture", policy: { ...policy, retainRequestContent: true } }) });
+  const admissionGate = budgets.get(budgets.idFromName("fixture:admission"));
+  for (const result of ["resolve", "reject"]) {
+    const before = await ledgerFacts(), beforeFrames = (await stateFrames()).length;
+    const session = `admission-cancel-${result}`;
+    const opened = await dispatch("/v1/responses", { headers: { upgrade: "websocket", "x-fixture-admission-result": result, "x-clawrouter-session-id": session } });
+    assert.equal(opened.status, 101);
+    const current = opened.webSocket; current.accept(); sockets.push(current);
+    let closed = false;
+    current.addEventListener("close", () => { closed = true; });
+    for (let index = 0; index < 2; index++) current.send(JSON.stringify({ type: "response.create", model: "openai/gpt-6-astra", input: "cancel before dispatch", max_output_tokens: 32 }));
+    await until(async () => (await (await admissionGate.fetch("https://fixture/fixture-admission")).json()).waiting);
+    assert.ok((await ledgerFacts()).every(({ unsettled }) => unsettled === 1));
+    current.close(1000, "cancel admission");
+    await until(() => closed);
+    assert.equal((await admissionGate.fetch("https://fixture/fixture-admission", { method: "POST" })).status, 200);
+    let receipt;
+    await until(async () => {
+      const receipts = (await (await dispatch("/v1/usage")).json()).usage.events.filter(({ session_id }) => session_id === session);
+      assert.ok(receipts.length <= 1); receipt = receipts[0]; return !!receipt;
+    });
+    assert.equal(receipt.status, "client_error");
+    assert.equal(receipt.status_code, null);
+    assert.ok(receipt.reserved_cost_micros > 0);
+    assert.equal(receipt.actual_cost_micros, 0);
+    assert.equal((await stateFrames()).length, beforeFrames);
+    assert.deepEqual(await ledgerFacts(), before);
+  }
+  await authorityObject.fetch("https://authority/policies/put", { method: "POST", body: JSON.stringify({ policyId: "fixture", policy }) });
 
   // HTTP status remains 200 while protocol and delivery outcomes drive receipts.
   for (const scenario of ["late-failed", "cancel-stream", "cancel-after-terminal"]) {
@@ -276,6 +316,28 @@ try {
     const cost = scenario === "cancel-stream" ? receipt.reserved_cost_micros : 1_080;
     assert.equal(receipt.actual_cost_micros, cost);
     assert.deepEqual(await ledgerFacts(), before.map(({ spent }) => ({ spent: spent + cost, unsettled: 0 })));
+  }
+
+  // One large terminal event and a large JSON body both expose usage after output.
+  for (const scenario of ["large-json", "large-terminal"]) {
+    const before = await ledgerFacts(), stream = scenario === "large-terminal";
+    const response = await dispatch(stream ? "/v1/native/openai/v1/responses" : "/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json", "x-clawrouter-session-id": scenario },
+      body: JSON.stringify({ model: "openai/gpt-6-astra", input: scenario, max_output_tokens: 32, service_tier: "priority", stream }),
+    });
+    assert.equal(response.status, 200);
+    const large = { output: [{ type: "message", content: [{ type: "output_text", text: "x".repeat(2 * 1024 * 1024 + 1024) }] }], object: "response", status: "completed", service_tier: "priority", usage: { input_tokens: 14, output_tokens: 8, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } };
+    const expected = stream ? 'data: {"type":"response.created"}\n\ndata: ' + JSON.stringify({ type: "response.completed", response: large }) + "\n\n" : JSON.stringify(large);
+    assert.equal(await response.text(), expected);
+    let receipt;
+    await until(async () => {
+      const receipts = (await (await dispatch("/v1/usage")).json()).usage.events.filter(({ session_id }) => session_id === scenario);
+      assert.ok(receipts.length <= 1); receipt = receipts[0]; return !!receipt;
+    });
+    assert.equal(receipt.status, "success"); assert.equal(receipt.status_code, 200);
+    assert.equal(receipt.actual_cost_micros, 1_080); assert.equal(receipt.cost_basis, "manifest_pricing");
+    assert.equal(receipt.input_tokens, 14); assert.equal(receipt.output_tokens, 8);
+    assert.deepEqual(await ledgerFacts(), before.map(({ spent }) => ({ spent: spent + 1_080, unsettled: 0 })));
   }
 
   // Exercise the HTTP affinity table in workerd's actual SQLite-backed owner.
@@ -383,6 +445,7 @@ try {
         await until(() => events.filter(({ type }) => type === "response.completed" || type === "error").length === 2);
         await until(async () => {
           const receipts = (await (await dispatch("/v1/usage")).json()).usage.events.filter(({ session_id }) => session_id === session);
+          assert.ok(receipts.every(({ cost_basis }) => cost_basis === (phase === "terminal" ? "manifest_pricing" : "none")));
           return receipts.length === 2 && new Set(receipts.map(({ id }) => id)).size === 2;
         });
         assert.equal(closed, false);
@@ -474,6 +537,10 @@ export default { async fetch(request) {
     const body = await request.json();
     httpFrames.push({ authorization: request.headers.get('authorization'), previous_response_id: body.previous_response_id, turn: request.headers.get('x-codex-turn-state') });
     const usage = { input_tokens: 14, output_tokens: 8, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } };
+    if (body.input === 'large-json' || body.input === 'large-terminal') {
+      const large = { output: [{ type: 'message', content: [{ type: 'output_text', text: 'x'.repeat(2 * 1024 * 1024 + 1024) }] }], object: 'response', status: 'completed', service_tier: 'priority', usage };
+      return body.input === 'large-json' ? Response.json(large) : new Response('data: {"type":"response.created"}\\n\\ndata: ' + JSON.stringify({ type: 'response.completed', response: large }) + '\\n\\n', { headers: { 'content-type': 'text/event-stream' } });
+    }
     if (body.input === 'late-failed' || body.input.startsWith('cancel-')) {
       let index = 0, timer, release, producer;
       const aborted = () => { httpAborts[body.input] = true; clearTimeout(timer); producer.error(request.signal.reason); release?.(); };
@@ -536,7 +603,19 @@ export * from "./worker/index.ts";
 export class BudgetLedgerObject extends RealBudgetLedger {
   constructor(state) { super(state); this.fixtureSql = state.storage.sql; }
   async fetch(request) {
-    if (new URL(request.url).pathname === "/fixture-unsettled") return Response.json([...this.fixtureSql.exec("SELECT COUNT(*) AS count FROM budget_reservations WHERE settled = 0")][0]);
+    const path = new URL(request.url).pathname;
+    if (path === "/fixture-unsettled") return Response.json([...this.fixtureSql.exec("SELECT COUNT(*) AS count FROM budget_reservations WHERE settled = 0")][0]);
+    // Actors may resolve another request's promise. The pending DO fetch also
+    // keeps the original admission's storage I/O alive after its socket closes.
+    if (path === "/fixture-admission/wait") {
+      if (this.releaseAdmission) return new Response(null, { status: 409 });
+      await new Promise((resolve) => { this.releaseAdmission = resolve; });
+      return new Response(null);
+    }
+    if (path === "/fixture-admission") {
+      if (request.method === "POST") { this.releaseAdmission?.(); this.releaseAdmission = undefined; }
+      return Response.json({ waiting: !!this.releaseAdmission });
+    }
     return super.fetch(request);
   }
 }
@@ -545,6 +624,13 @@ const ingressAborts = {};
 export default { ...handler, async fetch(request, env, context) {
   if (new URL(request.url).pathname === "/fixture-accounting") return Response.json(trace);
   if (new URL(request.url).pathname === "/fixture-ingress-aborts") return Response.json(ingressAborts);
+  const admissionResult = request.headers.get("x-fixture-admission-result");
+  if (admissionResult) env = { ...env, CONTENT_ARCHIVE: { async put() {
+    const gate = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName("fixture:admission"));
+    const released = await gate.fetch("https://fixture/fixture-admission/wait");
+    if (!released.ok) throw new Error("fixture admission already waiting");
+    if (admissionResult === "reject") throw new Error("fixture late retention failure");
+  } } };
   const session = request.headers.get("x-clawrouter-session-id");
   if (session?.startsWith("sse-")) request.signal.addEventListener("abort", () => { ingressAborts[session] = true; }, { once: true });
   if (request.headers.get("x-fixture-continuation-fault") === "register") {

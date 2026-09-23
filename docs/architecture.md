@@ -29,7 +29,49 @@ alarm cleanup. `GRANT_CREDENTIALS` issues lineage and preserves it during its ow
 refresh; explicit credential/account replacement invalidates it. The existing
 response reader registers identity evidence before publication, retaining
 backpressure, cancellation, and billable usage if storage fails. See the
-[HTTP continuation contract](api-reference.md#http-continuation-contract).
+[Responses continuation contract](api-reference.md#responses-continuation-contract).
+
+The credential owner also sequences attachment changes in `ACCESS_CONTROL`.
+An explicit grant write records a pending pool proposal before storing credentials;
+the previous provider stays attached until that store commits. Active proposals
+reserve one of the 32 active slots per scope/provider; inactive proposals use
+`pending_inactive` and reserve no active capacity. Neither can be selected.
+Paused and reauthorization-required rows retain attachment presence and free an
+active slot. Revocation commits a secretless tombstone before detaching all of
+that key's provider rows. Existing pool rows remain `legacy` and selectable.
+
+Each credential generation records whether index publication is still pending.
+The owner repairs that fact before materialization or maintenance can contact a
+provider. The index retains a generation/revision fence after detachment; its
+revision also identifies pre-commit admission and repair while owner generation
+is unchanged. Index commits use synchronous SQLite transactions. An internal
+owner `/reconcile` accepts only the grant key, rereads the owner, and uses an
+exact index-revision comparison. A lost acknowledgement is recovered through a
+fresh read, not a stale write or caller-supplied previous provider.
+The explicit credential commit stores its admission revision as a receipt.
+Pending rows retain their prior committed status, so failed account writes can
+restore membership without a later refresh or raw import adopting the proposal.
+Restoration and its new revision fence commit together, including no-op owner
+publications. An identity-leading SQLite index bounds key-only attachment reads
+and cleanup even when many inactive memberships are retained.
+
+The authority's internal `/grant-pools/pending` lists at most 64 distinct full
+grant keys per page with a keyset cursor. Reconciliation can cancel a failed
+first admission only when the owner is strongly absent and the index generation
+is zero; it removes only pending rows. Legacy evidence remains unresolved, and
+a failed owner read or missing KV record never establishes absence. Raw-KV
+import and ordinary refresh may update an existing attachment but cannot create
+one without admission; they can return an explicit `unattached` result. Legacy
+backfill, readiness, authenticated recovery controls, and consuming attachment
+presence to suppress environment fallback are separate activation work.
+
+This storage upgrade is forward-only. Reconstructing the current authority
+preserves populated legacy rows, and the current credential owner retries dirty
+publication after a failed commit or acknowledgement. Rolling back Worker code
+is not qualified: older pool readers ignore status and can select pending or
+inactive rows or exceed their discovery bounds. Recover with this version or a
+forward fix; do not remove the generation/revision fences or restore an older
+membership snapshot over newer credential state.
 
 Authentication is read-only after an existing user receives versioned
 `assignmentState`. Rule changes reconcile users from the admin mutation path;
@@ -91,20 +133,35 @@ or bytes. Authoritative terminal usage remains billable even after delivery fail
 or is canceled; otherwise accounting retains the conservative reservation.
 Settlement starts when delivery completes, fails, or is canceled. The canonical
 Worker config enables `enable_request_signal`, preserved by Cloudflare and
-self-host config rendering. Ingress abort settles the same observer once even
-when workerd drops its response pump without invoking the stream's `cancel`
-callback. This is caller cancellation, including an internal Fusion adviser
-deadline; it does not always mean a human disconnected. The observer detaches
-its abort listener on completion and cancels its owned upstream reader.
+self-host config rendering. A runtime-reported ingress abort settles the same
+observer once even when workerd drops its response pump without invoking the
+stream's `cancel` callback. A client-local abort does not guarantee prompt runtime notification
+during idle delivery; the [strict diagnostic and observed limitation](api-reference.md#http-cancellation-diagnostics)
+remain explicit. The operation distinguishes caller cancellation from an internal
+Fusion adviser deadline. Endpoint timers retire after response normalization;
+caller cancellation remains active through delivery. The observer detaches its
+abort listener on completion and cancels its owned upstream reader.
 Private alias
 inference keeps its separate containment and continuation protocol.
 
 Usage events are queued into a Durable Object shard named by tenant and policy.
 If queue publication rejects, the Worker writes the same event directly to that
 shard through the queue consumer's ingest path. The event ID remains unchanged:
-SQL `INSERT OR IGNORE` deduplicates a later delivery if the rejected send was
-actually accepted. Successful queue acceptance or direct ingestion completes
+an ID-targeted SQL conflict deduplicates a later delivery if the rejected send
+was actually accepted. Successful queue acceptance or direct ingestion completes
 publication; failure of both remains an accounting failure.
+
+The usage ledger's internal `/ingest` returns JSON `{ eventId, outcome }`, with
+`stored`, `duplicate`, or `expired_by_retention`. It requires a nonempty event ID
+and the supplied nonnegative safe-integer `occurred_at_ms`; it never replaces a
+missing timestamp with the current time. Cleanup and admission share one captured
+30-day cutoff: timestamps strictly before it expire, while a retained duplicate
+keeps its first payload and timestamp. A new expired event is not inserted.
+SQL and alarm scheduling must succeed before a receipt is returned. This is a
+producer-first rollout: current direct and queue consumers still check HTTP
+status only. A strict receipt consumer requires verified deployment of this
+producer first; background accounting is not enabled by this change.
+
 Session/admin reads aggregate each relevant tenant/policy shard once, even when
 the input policy list repeats a scope. The former global ledger's migration
 window ended on 2026-07-23; it is no longer queried. Stored data and Durable

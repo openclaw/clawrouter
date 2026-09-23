@@ -131,9 +131,11 @@ export class UsageLedgerObject implements DurableObject {
   async fetch(request: Request): Promise<Response> {
     const url = new URL(request.url);
     if (request.method === "POST" && url.pathname === "/ingest") {
-      this.ingest(await request.json<UsageEvent>());
+      const event = await request.json<UsageEvent>();
+      if (typeof event?.id !== "string" || !event.id.length || !Number.isSafeInteger(event.occurred_at_ms) || event.occurred_at_ms < 0) return errorResponse("invalid_usage_event", "id must be a nonempty string and occurred_at_ms must be a nonnegative safe integer", 400);
+      const receipt = this.ingest(event);
       if (!(await this.state.storage.getAlarm())) await this.state.storage.setAlarm(Date.now() + 86_400_000);
-      return new Response("accepted");
+      return json(receipt);
     }
     if (request.method === "GET" && url.pathname === "/snapshot") {
       const kind = url.searchParams.get("events"), id = url.searchParams.get("event_owner");
@@ -148,15 +150,21 @@ export class UsageLedgerObject implements DurableObject {
     if (first(this.sql.exec("SELECT id FROM usage_events LIMIT 1"))) await this.state.storage.setAlarm(Date.now() + 86_400_000);
   }
 
-  private ingest(event: UsageEvent): void {
-    event.occurred_at_ms ||= Date.now();
+  private ingest(event: UsageEvent): { eventId: string; outcome: "stored" | "duplicate" | "expired_by_retention" } {
+    const cutoff = Date.now() - usageRetentionMs;
+    this.cleanup(cutoff);
+    // A retained ID owns its first payload and time, even if a replay carries an
+    // expired timestamp. Cleanup and admission use the same retention boundary.
+    if (first(this.sql.exec("SELECT id FROM usage_events WHERE id = ?", event.id))) return { eventId: event.id, outcome: "duplicate" };
+    if (event.occurred_at_ms < cutoff) return { eventId: event.id, outcome: "expired_by_retention" };
     event.policy_id ||= event.key_id;
-    this.sql.exec(
-      "INSERT OR IGNORE INTO usage_events (id, occurred_at_ms, tenant_id, policy_id, provider, status, status_code, input_tokens, output_tokens, total_tokens, actual_cost_micros, event_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+    const inserted = first<{ id: string }>(this.sql.exec(
+      "INSERT INTO usage_events (id, occurred_at_ms, tenant_id, policy_id, provider, status, status_code, input_tokens, output_tokens, total_tokens, actual_cost_micros, event_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING RETURNING id",
       event.id, event.occurred_at_ms, event.tenant_id, event.policy_id, event.provider, event.status, event.status_code,
       event.input_tokens, event.output_tokens, event.total_tokens, event.actual_cost_micros, JSON.stringify(event),
-    );
-    this.cleanup();
+    ));
+    if (inserted?.id !== event.id) throw new Error("usage ledger did not confirm insertion");
+    return { eventId: event.id, outcome: "stored" };
   }
 
   private snapshot(policyIds: string[], scope: UsageEventScope, limit: number) {
@@ -189,7 +197,7 @@ export class UsageLedgerObject implements DurableObject {
     return { where: `${where} AND json_type(event_json, '$.principal_id') = 'text' AND json_extract(event_json, '$.principal_id') IN (SELECT value FROM json_each(?))`, params: [...params, JSON.stringify(aliases)] };
   }
 
-  private cleanup(): void { this.sql.exec("DELETE FROM usage_events WHERE occurred_at_ms < ?", Date.now() - usageRetentionMs); }
+  private cleanup(cutoff = Date.now() - usageRetentionMs): void { this.sql.exec("DELETE FROM usage_events WHERE occurred_at_ms < ?", cutoff); }
   private ensureSchema(): void {
     this.sql.exec("CREATE TABLE IF NOT EXISTS usage_events (id TEXT PRIMARY KEY, occurred_at_ms INTEGER NOT NULL, tenant_id TEXT NOT NULL, policy_id TEXT NOT NULL, provider TEXT NOT NULL, status TEXT NOT NULL, status_code INTEGER, input_tokens INTEGER, output_tokens INTEGER, total_tokens INTEGER, actual_cost_micros INTEGER NOT NULL, event_json TEXT NOT NULL)");
     this.sql.exec("CREATE INDEX IF NOT EXISTS usage_events_occurred_at ON usage_events (occurred_at_ms DESC)");

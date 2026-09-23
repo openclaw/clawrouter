@@ -369,7 +369,7 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string): 
     const body = mutationObject(await readJson<unknown>(request), "invalid_upstream_grant", "upstream grant");
     if (mode === "replace" && !hasPrimaryCredential(body as UpstreamGrant)) throw new HttpError(400, "invalid_upstream_grant", "grant replacement requires a fresh primary credential");
     existing = mode === "replace" ? null : await env.POLICY_KV.get<UpstreamGrant>(key, "json");
-    grant = await putGrantCredentials(env, key, normalizeGrant(body, existing), mode !== "replace");
+    grant = await putGrantCredentials(env, key, normalizeGrant(body, existing), mode !== "replace", mode === "replace" ? "replace" : undefined);
   }
   else throw new HttpError(405, "method_not_allowed", "admin method is not allowed");
   return privateJson(await upstreamGrantResponse(env, key, grant));

@@ -1,6 +1,28 @@
 import { DASHBOARD_FETCH_TIMEOUT_MS, fetchTimeoutSignal, PLAYGROUND_FETCH_TIMEOUT_MS } from "../../shared/fetch-timeout";
 import type { PlaygroundHttpResponse } from "./ui-types";
 
+export class DashboardRequestError extends Error {
+  status: number;
+  code: string | null;
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+    this.code = null;
+    try {
+      const value = JSON.parse(message);
+      if (typeof value?.error?.code === "string") this.code = value.error.code;
+    } catch { /* Non-JSON failures remain ordinary request errors. */ }
+  }
+}
+
+export function authenticationRequired(error: unknown, path: string): boolean {
+  if (!(error instanceof DashboardRequestError) || error.status !== 401) return false;
+  if (path.startsWith("/v1/admin/")) return error.code === "admin_unauthorized";
+  return (path === "/v1/session" || path.startsWith("/v1/session/") || path === "/v1/entitlements") && error.code === "access_session_required";
+}
+
+export type ConsoleRequest = typeof request;
+
 export async function localLogin(baseUrl: string, token: string): Promise<string | null> {
   const response = await fetch(`${baseUrl.replace(/\/$/, "")}/v1/session/login`, {
     method: "POST",
@@ -18,7 +40,7 @@ export async function localLogin(baseUrl: string, token: string): Promise<string
 export async function request<T>(baseUrl: string, path: string, init: RequestInit = {}): Promise<T> {
   const headers = new Headers(init.headers);
   const response = await fetch(`${baseUrl.replace(/\/$/, "")}${path}`, { ...init, credentials: "same-origin", headers, signal: fetchTimeoutSignal(init.signal, DASHBOARD_FETCH_TIMEOUT_MS) });
-  if (!response.ok) throw new Error((await response.text()) || `${path} failed with ${response.status}`);
+  if (!response.ok) throw new DashboardRequestError((await response.text()) || `${path} failed with ${response.status}`, response.status);
   if (!(response.headers.get("content-type") ?? "").includes("application/json")) throw new Error(`${path} returned a non-JSON response from ${baseUrl}`);
   return response.json() as Promise<T>;
 }

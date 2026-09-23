@@ -11,6 +11,26 @@ export function responseIdentity(kind: ResponseIdentity["kind"], value: unknown)
   return { kind, value };
 }
 
+// WebSockets already own a parsed frame. Inspect the same protocol fields as
+// the HTTP scanner without reparsing output or treating metadata as execution.
+export function responseEventIdentities(event: Record<string, unknown>): ResponseIdentity[] {
+  if (typeof event.type !== "string" || !event.type.startsWith("response.")) return [];
+  const response = event.response && typeof event.response === "object" && !Array.isArray(event.response) ? event.response as Record<string, unknown> : null;
+  const identities = [responseIdentity("response", response?.id), responseIdentity("response", event.response_id)].filter((value): value is ResponseIdentity => !!value);
+  if (event.type === "response.metadata" && event.headers && typeof event.headers === "object" && !Array.isArray(event.headers)) {
+    for (const [name, value] of Object.entries(event.headers)) {
+      if (name.toLowerCase() !== "x-codex-turn-state") continue;
+      let first = value;
+      while (Array.isArray(first)) first = first[0];
+      if (typeof first !== "string") continue;
+      const identity = responseIdentity("turn", first);
+      if (identity) identities.push(identity);
+      break;
+    }
+  }
+  return identities;
+}
+
 // Observe only protocol paths, never reconstruct output/tool content. Unlike a
 // full JSON/SSE parser, skipped strings, frames and nesting consume no storage.
 export function createResponseIdentityInspector(sse: boolean, emit: (identity: ResponseIdentity) => void) {

@@ -19,6 +19,7 @@ import { observeGrantQuota, shouldFailoverGrant } from "./grant-quota";
 import { grantRoutingPolicy, recordGrantRuntime, type PinnedGrant } from "./grant-selection";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import { HttpContinuation, continuationRestart } from "./http-continuation.ts";
+import { HttpOperation } from "./http-operation.ts";
 import {
   assertProviderAccess, copyRequestHeaders, providerById,
   signSigV4, upstreamAuth, upstreamPath,
@@ -240,55 +241,68 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     accounting.fail(503, "provider_error", reservation, content);
     return errorResponse("accounting_unavailable", "Budget dispatch could not be recorded; no upstream request was sent.", 503);
   }
-  const controller = new AbortController();
   const endpointTimeout = selection.endpoint.timeout_ms ?? 120_000;
-  const timeout = setTimeout(() => controller.abort(), Math.min(selection.timeoutMs ?? endpointTimeout, endpointTimeout));
+  const operation = new HttpOperation(request.signal, Math.min(selection.timeoutMs ?? endpointTimeout, endpointTimeout));
+  const signal = operation.signal;
+  const discard = (response: Response) => { void response.body?.cancel(signal.reason).catch(() => undefined); };
   let response: Response | undefined;
   let grantFailover = false;
   let dispatched = false;
   try {
     // A canceled preflight is known-unsent even if the ledger marks already landed.
-    request.signal.throwIfAborted();
+    signal.throwIfAborted();
     dispatched = true;
-    response = await fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal: AbortSignal.any([request.signal, controller.signal]) });
+    response = await operation.wait(fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal }), "upstream", discard);
     captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response);
     if (!continuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
+      let retry: PreparedUpstream | undefined;
       try {
-        const retry = await prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]), true, prepared.connection);
-        const retryResponse = await fetch(retry.url, { method: selection.method, headers: retry.headers, body: retry.requestBody, signal: AbortSignal.any([request.signal, controller.signal]) });
-        captureGrantRuntime(context, env, retry.grantKey, retry.grantRevision, selection.provider.quota, retryResponse);
+        retry = await prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]), true, prepared.connection);
+      } catch {
+        // Selection failure leaves the original rejection available to the caller.
+      }
+      if (retry) {
+        signal.throwIfAborted();
         void response.body?.cancel().catch(() => undefined);
-        response = retryResponse;
+        signal.throwIfAborted();
+        // The alternate may execute without returning headers. Its uncertainty
+        // must not inherit the discarded attempt's nonbillable rejection.
+        response = undefined;
         prepared = retry;
+        response = await operation.wait(fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal }), "upstream", discard);
+        captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response);
         if (prepared.continuation) continuation?.bind(prepared.continuation);
         grantFailover = true;
-      } catch {
-        // Keep the first provider response when no alternate grant is ready or its request fails.
       }
     }
+    if (!response.ok) operation.acceptRejection(response.status);
     const streaming = Array.isArray(selection.body)
       ? selection.body.some(({ query }) => !!query && typeof query === "object" && "stream" in query && query.stream === true)
       : selection.body.stream === true;
-    response = await normalizePreStreamError(response, streaming);
+    response = await normalizePreStreamError(response, streaming, operation);
   } catch (error) {
-    clearTimeout(timeout);
+    operation.stop("upstream", error);
+    void response?.body?.cancel().catch(() => undefined);
     // A fetch failure can incur cost; a received rejection stays nonbillable
     // even if reading its SSE error body failed.
-    accounting.fail(502, request.signal.aborted ? "client_error" : error instanceof DOMException && error.name === "AbortError" ? "timeout" : "provider_error", reservation, content, dispatched && response?.ok !== false);
+    accounting.fail(502, operation.status ?? "provider_error", reservation, content, dispatched && response?.ok !== false);
     return errorResponse("provider_unavailable", `upstream request to provider ${selection.provider.id} failed`, 502, undefined);
   }
-  clearTimeout(timeout);
+  // Endpoint timeouts cover fetch and first-event normalization, not delivery.
+  // Retire only the timer; the caller and first cause still own delivery through EOF.
+  operation.retireDeadline();
   if (continuation && response.ok) {
-    try { await continuation.headers(response); }
+    try { await operation.wait(continuation.headers(response), "publication"); }
     catch (error) {
-      void response.body?.cancel().catch(() => undefined); controller.abort();
+      operation.stop("publication", error);
+      discard(response);
       const failure = selectedFailure(error);
-      context.waitUntil(accounting.settle(failure.status, "provider_error", true, null, reservation, content));
+      context.waitUntil(accounting.settle(failure.status, operation.status ?? "provider_error", true, null, reservation, content));
       return errorResponse(failure.code, failure.message, failure.status);
     }
   }
-  const observed = observeUsage(response, request.signal, response.ok ? continuation?.inspect(response) : undefined);
-  context.waitUntil(observed.result.then(result => accounting.complete(observed.response, result, reservation, content)));
+  const observed = observeUsage(response, operation, response.ok ? continuation?.inspect(response) : undefined, selection.endpoint.response_format);
+  context.waitUntil(observed.result.then(result => accounting.complete(observed.response, result, reservation, content, operation.status)));
   response = observed.response;
   const outputHeaders = new Headers(response.headers);
   for (const name of ["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "set-cookie", "trailer", "transfer-encoding", "upgrade"]) outputHeaders.delete(name);
@@ -347,7 +361,7 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
     const requestBody = ["GET", "HEAD"].includes(selection.method) ? undefined : JSON.stringify(transformTransportBody(upstream.transport, selection.body));
     await signSigV4(selection.provider, url, selection.method, requestBody, headers, env, upstream.grant);
     let continuation: ContinuationOwner | undefined;
-    if (selection.capability === "llm.responses" && transport === "http") {
+    if (selection.capability === "llm.responses") {
       if (upstream.grantKey && !upstream.grant?.credentialLineage) throw new HttpError(503, "continuation_unavailable", "upstream credential ownership is unavailable");
       const routeUrl = new URL(url);
       const scheme = providerCredentialScheme(selection.provider, upstream.grant);
@@ -357,7 +371,9 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
       continuation = {
         providerId: selection.provider.id, endpointId: selection.endpoint.id, grantKey: upstream.grantKey,
         lineage: upstream.grant?.credentialLineage ?? null,
-        routeSha256: await sha256Hex(JSON.stringify([selection.method, routeUrl.href, identity, passthrough])),
+        // A WebSocket GET is only the handshake; both transports execute the
+        // same logical Responses POST and must share continuation ownership.
+        routeSha256: await sha256Hex(JSON.stringify(["POST", routeUrl.href, identity, passthrough])),
         policyGeneration: auth.policy.generation,
       };
     }

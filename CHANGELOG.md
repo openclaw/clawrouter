@@ -2,19 +2,40 @@
 
 ## Unreleased
 
+- Keep retained-request inspection on the latest selection, cancel replaced or closed reads, and prevent late replies from reopening or overwriting the panel.
+- Record known no-charge outcomes with an explicit usage basis across HTTP and WebSockets, while preserving fixed tariffs, retained estimates, unavailable prices, and all budget amounts.
+- Add explicit Codex Desktop root setup with coherent restoration of prior routing settings, preserved authentication and user preferences, and clear API-key Fast and environment-loading limits.
+
 - Keep policy selection separate from existing binding edits, while new bindings still default to the selected policy.
+- Preserve unsaved policy drafts across refreshes and completed saves, provide explicit discard, and keep missing selections visible. Keep explicit disablement and later edits intact, attach edits made during creation to the created policy for the next save, and wait for the initial policy list before enabling saves. Keep newer action outcomes visible when an older console refresh completes.
+- Reconcile pending policy saves by field after reselection or discard, preserving explicit field, template, and provider edits without rolling back untouched disabled state or budget on the next save.
+- Preserve policy field intent through reporting refreshes and lost save responses, including equal-value reads. Apply untouched server fields and retire only edits covered by the matching Save or Disable acknowledgment.
+- Separate proxy-key creation from rotation in the console, serialize key actions across admin and personal screens, and keep one-time secrets, drafts, and action status owned by the operation's identity. Show uncertain outcomes and clipboard failures without replaying dismissed secrets, and preserve table action contrast in both themes.
 - Assess Fusion sampling, reasoning, and tool intent from source-linked model/endpoint facts. Reject documented synthesizer conflicts before adviser spend, preserve caller fields, and omit unqualified adviser temperature and local reasoning defaults.
+- Qualify Groq GPT-OSS 120B and Fireworks GPT-OSS 120B/GLM 5.2 Chat reasoning values, including Groq logprob field restrictions, before Fusion adviser spend. Preserve accepted effort aliases and native passthrough without inferring sampling, tool support, or prices.
+
+- Preserve the initiating cause when Responses WebSockets close. Client disconnects record `client_error` without an invented HTTP status; unsent requests release reservations, while sent requests without final usage retain their estimate.
 
 - Keep failed console refreshes visible after successful edits, label stale usage with its snapshot time, and show unavailable spend and balances as unknown.
+- Expose Catalog service-kind filters as a labeled button group with an explicit pressed choice, preserving keyboard operation, search, and result counts.
+- Make Access resource tabs keyboard navigable with manual activation, associated panels, and visible focus at narrow widths. Preserve one-time secrets during focus-only movement and editor drafts across resource changes.
+- Open loaded policies from Catalog and Users only after accepting any unsaved-draft discard; keep informational access rows and unavailable policy references noninteractive.
+- Open the Policies tab when adding a Catalog service to the current or New policy draft, preserving unsaved edits and avoiding duplicate service selections.
+
+- Keep a grant's previous provider attachment until replacement credentials commit. Reserve active capacity as unselectable pending membership, allow paused imports into full active pools, retain inactive attachments, and recover partial publication through committed admission receipts and generation-checked owner reconciliation. Repeated revocation clears failed reconnect reservations. This storage upgrade requires forward recovery; environment-fallback activation and legacy attachment backfill remain separate work.
+- Recover corrupt or oversized legacy upstream grants through explicit authenticated replacement or revocation. Preserve owner identity and pool generation fences, discard old secret bytes, and keep ordinary edits, OAuth and contribution imports strict. A missing KV value cannot erase retained legacy attachments during account creation.
 
 - Reject incomplete prices for Sonar Pro mandatory request fees, hosted tools, remote MCP, multi-agent work, Claude compaction, and opaque prompt/cache configurations under measured budgets; cover Responses Lite and tool-search declarations, align catalog and Fusion preflight admission, preserve fixed tariffs and client tools, and mark unmetered costs unavailable.
 
 - Restrict personal usage audit events to the authenticated principal, or unattributed events for the authenticated service key, while preserving shared policy totals and administrator audit access.
+- Distinguish accounted cost estimates, fixed tariffs, unavailable prices, and budget reservations throughout the console; show zero amounts, budget scopes, and UTC monthly limits explicitly.
 - Keep public HTTP Responses continuations on the original credential owner across token refresh. Register response and Codex turn identities before publication, preserve ordinary pool failover, and require a visible restart when ownership changes or expires.
+- Preserve Codex turn state and response ownership across WebSocket reconnects and WebSocket-to-HTTP fallback. Register metadata before forwarding, retain per-create authorization, and bound pending publication without changing cancellation accounting.
 
 - Preserve provider kill switches and budgets during concurrent connection edits, and show per-provider pending state in the console.
 
 - Deny proxy requests and subsequent WebSocket turns for explicitly disabled key owners, and show their credentials as owner-disabled without changing unowned service keys or retained policy bindings.
+- Clear protected console data and drafts when browser authentication expires or identity changes. Keep sign-in gated until the session is verified, preserve in-flight key ownership, and distinguish authentication loss from permission, CSRF, and reporting failures.
 - Add collision-safe proxy-key creation and active-key-only rotation. Serialize credential authorization, current-policy checks, and revocation in the authority so concurrent writes cannot restore an old secret or owner; preserve existing PUT and CLI upserts.
 
 - Preserve local administrator roles during user, policy-assignment, and automatic-assignment edits, including profile saves that race with an explicit role change.
@@ -34,14 +55,19 @@
 - Prevent duplicate playground requests, cancel pending requests when starting a new chat, and preserve new drafts when earlier replies arrive.
 - Allow OpenRouter API-key-only setup without a site URL; omit unset optional attribution headers consistently in readiness, requests, and grant maintenance while keeping required templates strict.
 - Keep upstream grant lifecycle changes authoritative in their credential owner. Stale requests cannot undo disablement or revocation; secretless revocation tombstones require fresh credentials to reconnect, and grant metadata and pool updates are serialized with owner mutations. Publish each materialization's final state once to respect KV write limits.
+- Distinguish paused upstream grants from revoked credentials, allow paused grants to be revoked, and require fresh credentials to reconnect revoked grants in the demo.
+- Show confirmed upstream account saves, revocations, credential refreshes, and quota results immediately. Keep later edits and selections intact, release write controls before metadata refresh, and prevent older reads from undoing the acknowledged result.
 - Route grant CLI imports and revocations through the authenticated admin API, including explicit loopback `--local` targets. Preserve whole-grant replacement, clear omitted old credentials, and migrate legacy KV disablement or revocation before credential-owner maintenance can use secrets.
 - Deny expired or invalid retained-content reads with a content-free, non-cacheable not-found response, independently of physical archive deletion.
 - Sweep expired self-host archive objects after startup and on bounded periodic ticks, persist cleanup progress across restarts, and cap legacy archive retention by upload age without changing managed R2 lifecycle ownership.
+- Keep standalone smoke readiness alive through stalled health requests and response bodies, cancel each expired attempt, and preserve existing self-host and deployed readiness limits.
 
 - Match Cloudflare Access applications by exact destination instead of display name, reject ambiguous or name-only collisions before writes, and inspect all application and policy pages during provisioning.
+- Fix production Cloudflare KV provisioning by using the same exact-title API creation as FakeCo, and require account credentials before changing resources.
 
 - Preserve dispatched budget charges through reservation expiry and delayed recovery, release abandoned pre-dispatch work to zero, and require confirmed idempotent settlement receipts before acknowledging retries.
 - Retain qualified estimates or fixed tariffs when dispatched HTTP requests fail before response headers, while keeping pre-dispatch failures at zero and preserving error and cancellation outcomes.
+- Cancel discarded grant-rejection bodies before HTTP failover, and retain one conservative budget charge when an alternate request fails without response headers. Preserve the original rejection when no alternate can be selected.
 - Isolate policy, principal, and provider budget charges when their identifiers share a ledger address, preserving existing balances and ambiguous legacy debt without resetting budgets or orphaning settlement receipts.
 - Use the shared Access-aware admin transport for pool-ticket issuance, preserving protected ticket output while bounding admin responses and keeping raw response bodies out of error messages.
 - Acknowledge completed key and grant mutations without reading unused success payloads, preserving successful CLI outcomes for large accepted grant metadata while keeping ticket and error reads bounded.
@@ -49,9 +75,12 @@
 - Apply concrete Chat model eligibility to Fusion discovery, including selected-policy pricing, provider limits, and grant availability, while preserving fail-open advisers.
 - Reject hosted web search before dispatch under measured budgets without a fixed policy tariff; keep unmetered forwarding and report its price as unavailable instead of token-only spend.
 - Record failed streaming response and delivery outcomes independently from HTTP status and billed usage, with bounded SSE inspection that retains late terminal facts on long streams.
-- Settle HTTP accounting on ingress cancellation through the Worker request signal, including external socket disconnects, without losing already reported terminal usage.
+- Meter declared Responses JSON and SSE bodies with bounded scalar inspection, including usage after large output or inside a large terminal event, while preserving stream delivery, cancellation, and conservative charges when metadata cannot be verified.
+- Settle HTTP accounting when the Worker runtime reports ingress cancellation, without losing already reported terminal usage. Document the unresolved idle-disconnect notification limit and its explicit strict diagnostic.
+- Preserve the first HTTP cancellation or failure cause through response delivery without extending endpoint deadlines beyond response normalization. Keep accepted rejection statuses when error details cannot be read. Internal Fusion deadlines no longer appear as caller cancellations.
 
 - Recover rejected usage-queue publication through the existing policy usage ledger, retaining event IDs to deduplicate redelivery without masking budget-settlement failures.
+- Return explicit stored, duplicate, and retention-expired usage-ingest receipts, preserving the first retained event and its timestamp without hiding storage failures. Existing usage consumers remain status-based for producer-first rollout.
 
 - Export authorized native Codex model catalogs while preserving official agent metadata, add sourced Sol/Terra/Luna routes and tier prices, and document API-key and desktop hybrid setup.
 
@@ -63,6 +92,7 @@
 - Add GPT-6 Astra to the OpenAI catalog with its reasoning efforts, standard token and cache-write pricing, long-context rates, and Chat Completions token-limit mapping.
 
 - Select smoke-test models from the chosen endpoint's declared capabilities, preserving native model names and configured Azure deployments instead of stale or synthetic defaults.
+- Build smoke requests from declared formats and capabilities, preserving renamed provider and endpoint support. Keep unresolved request templates visible without dispatching or claiming provider verification, and scope inline AWS/Cloudflare smoke overrides to their bundled providers.
 - Accept declared Cloudflare AI Gateway universal array bodies through manifest and native routes, preserve upstream fallback order and request content, and omit per-entry transport credentials from retained content while enforcing existing budgets.
 
 ## 0.4.0 - 2026-09-22

@@ -1,4 +1,3 @@
-import { request as dashboardRequest } from "./dashboard-fetch";
 import providerIconManifest from "./provider-icons.json";
 import {
   catalogProviderIds,
@@ -62,15 +61,6 @@ export async function settled<T>(loader: () => Promise<T>): Promise<{ ok: true; 
     return { ok: true, value: await loader() };
   } catch (error) {
     return { ok: false, error: errorMessage(error) };
-  }
-}
-
-export async function localLoginAvailable(baseUrl: string): Promise<boolean> {
-  try {
-    const index = await dashboardRequest<{ endpoints?: { sessionLogin?: unknown } }>(baseUrl, "/v1");
-    return typeof index.endpoints?.sessionLogin === "string";
-  } catch {
-    return false;
   }
 }
 
@@ -151,6 +141,9 @@ export function demoGrantFromForm(form: UpstreamGrantForm, existing?: UpstreamGr
   const now = new Date().toISOString();
   const hasCredential = Boolean(form.credential.trim()) || Boolean(existing?.hasCredential);
   const credentialFields = Object.keys(parseCredentialBundle(form.credentialBundle)).sort();
+  // Pausing retains credentials; reconnecting a tombstone requires a supplied replacement.
+  const freshPrimary = form.kind === "api_key" ? form.credential.trim() || credentialFields.length : form.accessToken.trim();
+  if (existing?.revokedAt && !freshPrimary) throw new Error("revoked upstream grant requires a new primary credential");
   const effectiveCredentialFields = credentialFields.length ? credentialFields : existing?.credentialFields ?? [];
   const hasAccessToken = Boolean(form.accessToken.trim()) || Boolean(existing?.hasAccessToken);
   const hasRefreshToken = Boolean(form.refreshToken.trim()) || Boolean(existing?.hasRefreshToken);
@@ -174,7 +167,7 @@ export function demoGrantFromForm(form: UpstreamGrantForm, existing?: UpstreamGr
     maintenance: { keepWarm: form.keepWarm },
     createdAt: existing?.createdAt ?? now,
     updatedAt: now,
-    revokedAt: form.enabled ? null : now,
+    revokedAt: null,
     hasCredential,
     credentialFields: effectiveCredentialFields,
     hasAccessToken,
@@ -221,27 +214,6 @@ export function demoRuleFromForm(form: AssignmentRuleForm): AssignmentRule {
     createdAt: now,
     updatedAt: now,
   };
-}
-
-export function formatBudget(value: number | null | undefined) {
-  if (value === undefined || value === null) return "unlimited";
-  if (value === 0) return "blocked";
-  return formatMicros(value);
-}
-
-export function budgetPercent(row: AdminUsageRow) {
-  const limit = row.budget.limitMicros ?? row.monthlyBudgetMicros;
-  const spent = row.budget.spentMicros;
-  if (row.budget.ledger === "blocked" || limit === 0) return 100;
-  if (limit === undefined || limit === null || spent === undefined || spent === null) return null;
-  return Math.min(100, Math.max(0, (spent / limit) * 100));
-}
-
-export function formatMicros(value: number | null | undefined) {
-  if (value === undefined || value === null) return "unknown";
-  if (!value) return "none";
-  if (value < 10_000) return "<$0.01";
-  return `$${(value / 1_000_000).toFixed(2)}`;
 }
 
 export function formatCount(value: number | null | undefined) {

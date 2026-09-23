@@ -46,12 +46,15 @@ test("generated model requests pass the real router selection and envelope seams
   }
 });
 
-test("native bodies and paths skip earlier models with incompatible capabilities", () => {
+test("manifest model IDs skip earlier incompatible models and resolve upstream", () => {
   for (const id of ["anthropic", "aws-bedrock", "cohere", "google-gemini"]) {
     const provider = structuredClone(snapshot.providers.find((entry) => entry.id === id));
     provider.models.unshift({ id: `${id}/unrelated`, upstream: "unrelated", capabilities: ["llm.unrelated"] });
-    const { envelope } = buildProviderSmokePlan({ providers: [provider] }, {}).providers[0].target;
-    assert.equal(envelope.body.model ?? envelope.pathParams.model, provider.models[1].upstream, id);
+    const target = buildProviderSmokePlan({ providers: [provider] }, {}).providers[0].target;
+    const { envelope } = target;
+    assert.equal(envelope.body.model ?? envelope.pathParams.model, provider.models[1].id, id);
+    const prepared = prepareManifestRequest(provider, provider.endpoints.find(endpoint => endpoint.id === target.endpoint), envelope.body, envelope.pathParams, {});
+    assert.equal(prepared.body.model ?? prepared.pathParams.model, provider.models[1].upstream, id);
   }
 });
 
@@ -63,8 +66,11 @@ test("Cohere body and path share the selected native name without stripping its 
     const { envelope } = buildProviderSmokePlan({ providers: [provider] }, {
       CLAWROUTER_SMOKE_MODEL_COHERE: override,
     }).providers[0].target;
-    assert.equal(envelope.body.model, "cohere/native-model");
+    assert.equal(envelope.body.model, provider.models[0].id);
     assert.equal(envelope.pathParams.model, envelope.body.model);
+    const prepared = prepareManifestRequest(provider, provider.endpoints.find(endpoint => endpoint.id === "chat"), envelope.body, envelope.pathParams, {});
+    assert.equal(prepared.pathParams.model, "cohere/native-model");
+    assert.equal(prepared.body.model, undefined);
   }
 });
 

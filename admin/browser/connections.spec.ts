@@ -25,7 +25,7 @@ test("connection edits admit one operation per provider and consume the committe
   await pending[0].fulfill({ json: { providerId: "test-a", enabled: false, label: "Shared", monthlyBudgetMicros: 1_000_000 } });
   await expect(page.getByRole("button", { name: "Enable connection", exact: true })).toBeEnabled();
   await expect(page.getByRole("button", { name: "Save budget", exact: true })).toBeEnabled();
-  await expect(page.locator(".providerBudgetEditor")).toContainText("Month to date unknown · unknown remaining");
+  await expect(page.locator(".providerBudgetEditor")).toContainText("Used amount unavailable · Remaining unavailable");
 
   await page.getByLabel("monthly provider budget ($)").fill("2");
   await page.getByRole("button", { name: "Save budget", exact: true }).click();
@@ -66,7 +66,7 @@ async function openCatalog(page: Page) {
   const bootstrap: Record<string, unknown> = {
     "/v1/providers": { providers },
     "/v1/routes": { openaiCompatible: [], manifestProxy: [] },
-    "/v1/session": { authenticated: true, auth: "access", role: "admin", email: "admin@example.com", entitlements: { providers: [] } },
+    "/v1/session": { authenticated: true, auth: "cloudflare_access", role: "admin", email: "admin@example.com", entitlements: { providers: [] } },
     "/v1/session/credentials": { credentials: [] },
     "/v1/session/usage": { policies: [] },
     "/v1/admin/bootstrap": {

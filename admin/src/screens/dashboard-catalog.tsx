@@ -26,25 +26,24 @@ import {
   EntityName,
   InlineNote,
   InspectorHeader,
+  MiniListItem,
   OutcomeStatus,
   ReadinessStatus,
   Status,
   kindIcon,
   kindLabel,
 } from "../components";
-import { usageCostLabel } from "../usage-analytics";
+import { presentAccountedSpend, presentPolicyBudget, presentProviderBudget } from "../cost-presentation";
 import { ProviderUsageChart, TrafficAreaChart } from "../analytics-charts";
 import {
-  budgetPercent,
   effectiveProviderCount,
-  formatBudget,
   formatCount,
   formatDuration,
-  formatMicros,
   formatRelativeTime,
   matchesServiceQuery,
   usagePolicyId,
 } from "../ui-helpers";
+import { CredentialNotice, type CredentialFeedback } from "../credential-notice";
 import { EntityTable, UsageFreshness } from "./users-usage";
 import type {
   AccessPolicy,
@@ -74,7 +73,7 @@ export function UserAvatar({ email }: { email?: string | null }) {
   );
 }
 
-export function DashboardScreen({ session, services, policies, credentials, users, tenants, overview, usageRows, usage, usageLoaded, usageStale, usageError, usageUpdatedAt, myCredentials, myPolicyIds, myIssuedKey, myKeyError, myKeysBusy, onIssueMyKey, onRevokeMyKey, onOpenCatalog, onOpenPlayground, onOpenUsage, onOpenAccess }: {
+export function DashboardScreen({ session, services, policies, credentials, users, tenants, overview, usageRows, usage, usageLoaded, usageStale, usageError, usageUpdatedAt, myCredentials, myPolicyIds, myKeyFeedback, myKeyScope, myKeysBusy, onMyKeyDraftChange, onIssueMyKey, onRevokeMyKey, onOpenCatalog, onOpenPlayground, onOpenUsage, onOpenAccess }: {
   session: SessionResponse;
   services: ServiceItem[];
   policies: AccessPolicy[];
@@ -90,8 +89,9 @@ export function DashboardScreen({ session, services, policies, credentials, user
   usageUpdatedAt: number | null;
   myCredentials: ProxyCredential[];
   myPolicyIds: string[];
-  myIssuedKey: string;
-  myKeyError: string;
+  myKeyFeedback: CredentialFeedback;
+  myKeyScope: number;
+  onMyKeyDraftChange: () => void;
   myKeysBusy: boolean;
   onIssueMyKey: (policyId: string, credentialId?: string) => Promise<void>;
   onRevokeMyKey: (credentialId: string) => Promise<void>;
@@ -114,6 +114,7 @@ export function DashboardScreen({ session, services, policies, credentials, user
   const displayName = session.email?.split("@")[0] ?? (isAdmin ? "operator" : "member");
   const activePolicies = policies.filter((policy) => policy.enabled).length;
   const activeCredentials = credentials.filter((credential) => credential.enabled && credential.active !== false).length;
+  const spend = presentAccountedSpend(usage.summary);
 
   return (
     <div className="dashboardCanvas">
@@ -135,7 +136,7 @@ export function DashboardScreen({ session, services, policies, credentials, user
         <DashboardStat label="requests" value={usageLoaded ? formatCount(usage.summary.requestCount) : "—"} note={usageLoaded ? `${formatCount(usage.summary.totalTokens)} tokens in 30 days` : "Usage unavailable"} />
         <DashboardStat label="success rate" value={successRate === null ? "—" : `${successRate}%`} note={!usageLoaded ? "Usage unavailable" : successRate === null ? "No requests in this period" : `${formatCount(usage.summary.successCount)} successful`} />
         <DashboardStat label={isAdmin ? "active policies" : "quota pools"} value={String(isAdmin ? overview?.policiesActive ?? activePolicies : rows.length)} note={isAdmin ? `${overview?.tenantsTotal ?? tenants.length} tenants` : usageLoaded ? "live policy ledgers" : "status unavailable"} />
-        <DashboardStat label={usage.summary.unpricedRequestCount ? "accounted spend" : "actual spend"} value={usageLoaded ? usageCostLabel(formatMicros(usage.summary.actualCostMicros), usage.summary.requestCount, usage.summary.unpricedRequestCount) : "—"} note={!usageLoaded ? "Usage unavailable" : isAdmin ? `${usage.providers.length} active providers` : "across your policy pools"} />
+        <DashboardStat label={spend.label} value={usageLoaded ? spend.value : "—"} note={usageLoaded ? `Last 30 days · ${spend.note}${isAdmin ? "" : " · across your policy pools"}` : "Usage unavailable"} />
       </section>
 
       <div className="dashboardAnalyticsGrid">
@@ -150,7 +151,7 @@ export function DashboardScreen({ session, services, policies, credentials, user
       </div>
 
       <div className="dashboardGrid">
-        <MyKeysCard credentials={myCredentials} policyIds={myPolicyIds} issuedKey={myIssuedKey} error={myKeyError} busy={myKeysBusy} onIssue={onIssueMyKey} onRevoke={onRevokeMyKey} />
+        <MyKeysCard key={myKeyScope} credentials={myCredentials} policyIds={myPolicyIds} feedback={myKeyFeedback} onDraftChange={onMyKeyDraftChange} busy={myKeysBusy} onIssue={onIssueMyKey} onRevoke={onRevokeMyKey} />
         <section className="dashboardPanel servicePanel">
           <DashboardPanelHeader eyebrow={isAdmin ? "service estate" : "your access"} title={isAdmin ? "Provider readiness" : "Services you can use"} meta={`${isAdmin ? configuredServices.length : usableServices.length} ready`} action="View catalog" onAction={onOpenCatalog} />
           <div className="serviceSpectrum" role="img" aria-label={`${servicePercent}% of ${isAdmin ? "catalog services are configured" : "granted services are usable"}`}>
@@ -174,19 +175,17 @@ export function DashboardScreen({ session, services, policies, credentials, user
         </section>
 
         <section className="dashboardPanel quotaPanel">
-          <DashboardPanelHeader eyebrow="policy budgets" title={isAdmin ? "Budget posture" : "Your shared quotas"} meta={usageStale && usageLoaded ? "last known ledger" : usageLoaded ? "live ledger" : "policy limits only"} />
-          <p className="panelIntro">{isAdmin ? "Spend and remaining capacity across active policies." : "Your requests draw from these shared policy pools; totals may include activity from teammates on the same policy."}</p>
+          <DashboardPanelHeader eyebrow="policy budgets" title={isAdmin ? "Budget posture" : "Your policy budgets"} meta={usageStale && usageLoaded ? "last known ledger" : usageLoaded ? "live ledger" : "policy limits only"} />
+          <p className="panelIntro">UTC calendar month · Used includes reservations. {isAdmin ? "Balances follow each policy's shared or per-principal scope." : "Shared pools include other users; per-principal balances apply to your identity."} Other policy or provider limits still apply.</p>
           <div className="quotaList">
             {rows.slice(0, 6).map((row) => {
-              const percent = budgetPercent(row);
-              const limit = row.budget.limitMicros ?? row.monthlyBudgetMicros;
-              const remaining = row.budget.remainingMicros;
+              const budget = presentPolicyBudget(row);
               return (
-                <article className="quotaRow" key={usagePolicyId(row)}>
-                  <span className="quotaIdentity"><strong>{usagePolicyId(row)}</strong><small>{row.tokenRole ?? "custom"} · {effectiveProviderCount(row.providers, services)} services</small></span>
-                  <span className="quotaNumbers"><strong>{remaining === undefined || remaining === null ? formatBudget(limit) : formatMicros(remaining)}</strong><small>{remaining === undefined || remaining === null ? "monthly limit" : `remaining of ${formatBudget(limit)}`}</small></span>
-                  <span className={`quotaTrack${percent !== null && percent >= 90 ? " warning" : ""}`}><span style={{ width: `${percent ?? 0}%` }} /></span>
-                  <strong className="quotaPercent">{percent === null ? limit === undefined || limit === null ? "∞" : "—" : `${Math.round(percent)}%`}</strong>
+                <article className="quotaRow" key={usagePolicyId(row)} title={budget.note}>
+                  <span className="quotaIdentity"><strong>{usagePolicyId(row)}</strong><small>{budget.scopeLabel} · {effectiveProviderCount(row.providers, services)} services</small></span>
+                  <span className="quotaNumbers"><strong>{budget.remaining}</strong><small>{budget.limit} · {budget.used}</small></span>
+                  <span className={`quotaTrack${budget.percent !== null && budget.percent >= 90 ? " warning" : ""}`}><span style={{ width: `${budget.percent ?? 0}%` }} /></span>
+                  <strong className="quotaPercent">{budget.percent === null ? "—" : `${Math.round(budget.percent)}%`}</strong>
                 </article>
               );
             })}
@@ -212,31 +211,32 @@ export function DashboardScreen({ session, services, policies, credentials, user
   );
 }
 
-export function MyKeysCard({ credentials, policyIds, issuedKey, error, busy, onIssue, onRevoke }: {
+export function MyKeysCard({ credentials, policyIds, feedback, onDraftChange, busy, onIssue, onRevoke }: {
   credentials: ProxyCredential[];
   policyIds: string[];
-  issuedKey: string;
-  error: string;
+  feedback: CredentialFeedback;
+  onDraftChange: () => void;
   busy: boolean;
   onIssue: (policyId: string, credentialId?: string) => Promise<void>;
   onRevoke: (credentialId: string) => Promise<void>;
 }) {
-  const [policyId, setPolicyId] = useState("");
-  const selectedPolicy = policyIds.includes(policyId) ? policyId : policyIds[0] ?? "";
+  const [policyId, setPolicyId] = useState<string | null>(null);
+  const selectedPolicy = policyId ?? policyIds[0] ?? "";
+  const policyAvailable = policyIds.includes(selectedPolicy);
+  useEffect(() => { if (policyId === null && policyIds.length) setPolicyId(policyIds[0]); }, [policyId, policyIds]);
   return (
     <section className="dashboardPanel myKeysPanel">
       <DashboardPanelHeader eyebrow="personal access" title="My keys" meta={`${credentials.filter((credential) => credential.enabled).length}/${credentials.length} enabled`} />
       <p className="panelIntro">Create proxy keys bound to your signed-in identity and one of your policies.</p>
-      {error ? <InlineNote>{error}</InlineNote> : null}
-      {issuedKey ? <div className="issuedKey"><div><span>copy now · shown once · stored nowhere else</span><code>{issuedKey}</code></div><button type="button" className="buttonSecondary" onClick={() => void navigator.clipboard?.writeText(issuedKey)}>Copy</button></div> : null}
+      <CredentialNotice state={feedback} />
       <div className="myKeysCreate">
-        <label><span>policy</span><select value={selectedPolicy} onChange={(event) => setPolicyId(event.target.value)} disabled={!policyIds.length || busy}>{policyIds.map((id) => <option key={id} value={id}>{id}</option>)}</select></label>
-        <button type="button" disabled={!selectedPolicy || busy} onClick={() => void onIssue(selectedPolicy)}><Plus aria-hidden="true" /> Create key</button>
+        <label><span>policy</span><select value={selectedPolicy} onChange={(event) => { onDraftChange(); setPolicyId(event.target.value); }} disabled={!policyIds.length}>{!policyAvailable ? <option value={selectedPolicy}>{selectedPolicy ? `${selectedPolicy} · unavailable` : "No policies available"}</option> : null}{policyIds.map((id) => <option key={id} value={id}>{id}</option>)}</select></label>
+        <button type="button" disabled={!policyAvailable || busy} onClick={() => void onIssue(selectedPolicy)}><Plus aria-hidden="true" /> Create key</button>
       </div>
       <div className="myKeysList">
         {credentials.map((credential) => <article key={credential.credentialId}>
-          <span><strong>{credential.credentialId}</strong><small>{credential.policyId} · {credential.active ? "active" : credential.enabled ? "stale" : "revoked"}</small></span>
-          <span><button type="button" className="buttonSecondary" disabled={busy || !credential.enabled} onClick={() => void onIssue(credential.policyId, credential.credentialId)}>Rotate</button><button type="button" className="buttonDanger" disabled={busy || !credential.enabled} onClick={() => void onRevoke(credential.credentialId)}>Revoke</button></span>
+          <span><strong>{credential.credentialId}</strong><small>{credential.policyId} · {credential.active ? "active" : credential.enabled ? "inactive" : "revoked"}</small>{credential.active && !policyIds.includes(credential.policyId) ? <small>Policy no longer held: rotation unavailable. This key remains usable and can be revoked.</small> : null}</span>
+          <span><button type="button" className="buttonSecondary" disabled={busy || !credential.active || !policyIds.includes(credential.policyId)} title={!policyIds.includes(credential.policyId) ? "Policy no longer held; rotation unavailable. Existing active keys remain usable and can be revoked." : !credential.active ? "Only active keys can be rotated" : undefined} onClick={() => void onIssue(credential.policyId, credential.credentialId)}>Rotate</button><button type="button" className="buttonDanger" disabled={busy || !credential.enabled} onClick={() => void onRevoke(credential.credentialId)}>Revoke</button></span>
         </article>)}
         {!credentials.length ? <div className="dashboardEmpty"><KeyRound aria-hidden="true" /><strong>No personal keys</strong><p>Create one to use your policy from OpenClaw or another API client.</p></div> : null}
       </div>
@@ -252,7 +252,7 @@ export function DashboardStat({ label, value, note }: { label: string; value: st
   return <div><span>{label}</span><strong>{value}</strong><small>{note}</small></div>;
 }
 
-export function CatalogScreen({ services, allServices, selected, policies, connections, pendingProviderIds, query, setQuery, kind, setKind, kinds, canAdminister, onSelect, onSetConnection, onSetProviderBudget, onPlay, onAdd }: {
+export function CatalogScreen({ services, allServices, selected, policies, connections, pendingProviderIds, query, setQuery, kind, setKind, kinds, canAdminister, onOpenPolicy, onSelect, onSetConnection, onSetProviderBudget, onPlay, onAdd }: {
   services: ServiceItem[];
   allServices: ServiceItem[];
   selected?: ServiceItem;
@@ -265,6 +265,7 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
   setKind: (value: string) => void;
   kinds: string[];
   canAdminister: boolean;
+  onOpenPolicy: (policy: AccessPolicy) => void;
   onSelect: (service: ServiceItem) => void;
   onSetConnection: (providerId: string, enabled: boolean) => void;
   onSetProviderBudget: (providerId: string, monthlyBudgetMicros: number | null) => void;
@@ -288,8 +289,8 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
         <div className="catalogControls">
           <div className="catalogMeta"><strong>{services.length} services</strong><span>{usableCount} usable · {grantedCount} granted · {blockedCount} blocked</span></div>
           <label><span>search catalog</span><div className="inputWithIcon"><Search aria-hidden="true" /><input name="catalog-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="service, provider, model, route" /></div></label>
-          <div className="kindTabs" role="tablist" aria-label="service kind">
-            {kinds.map((item) => <button key={item} type="button" className={kind === item ? "active" : ""} onClick={() => setKind(item)}>{kindLabel(item)}<span>{kindCounts.get(item) ?? 0}</span></button>)}
+          <div className="kindTabs" role="group" aria-label="service kind">
+            {kinds.map((item) => <button key={item} type="button" aria-pressed={kind === item} className={kind === item ? "active" : ""} onClick={() => setKind(item)}>{kindLabel(item)}<span>{kindCounts.get(item) ?? 0}</span></button>)}
           </div>
         </div>
         <EntityTable
@@ -344,7 +345,10 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
             {selected.readiness?.reasons.length ? <InlineNote>{selected.readiness.reasons.join("; ")}</InlineNote> : null}
             <div className="sectionTitle">Policies including this service</div>
             <div className="miniList">
-              {grantNamesForService(selected, selectedPolicies).length ? grantNamesForService(selected, selectedPolicies).map((policyId) => <button key={policyId} type="button">{policyId}<span>{selectedPolicies.find((policy) => policy.policyId === policyId)?.tenantId ?? "identity policy"}</span></button>) : <p>No active policy includes this service yet.</p>}
+              {grantNamesForService(selected, selectedPolicies).length ? grantNamesForService(selected, selectedPolicies).map((policyId) => {
+                const policy = policies.find((item) => item.policyId === policyId);
+                return <MiniListItem key={policyId} onClick={canAdminister && policy ? () => onOpenPolicy(policy) : undefined}>{policyId}<span>{policy?.tenantId ?? "identity policy"}</span></MiniListItem>;
+              }) : <p>No active policy includes this service yet.</p>}
             </div>
             <div className="inspectorActions">
               <button type="button" disabled={Boolean(playBlocker)} onClick={() => onPlay(selected)} title={playBlocker ?? undefined}><Play className="buttonIcon" aria-hidden="true" /><span>Try in playground</span></button>
@@ -361,13 +365,10 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
   );
 }
 
-function formatSpendMicros(value: number | null | undefined) {
-  return value === 0 ? "$0.00" : formatMicros(value);
-}
-
 function ProviderBudgetEditor({ connection, pending, onSave }: { connection: ProviderConnection; pending: boolean; onSave: (providerId: string, monthlyBudgetMicros: number | null) => void }) {
   const [value, setValue] = useState(currencyInput(connection.monthlyBudgetMicros));
   const [error, setError] = useState("");
+  const budget = presentProviderBudget(connection);
   useEffect(() => { setValue(currencyInput(connection.monthlyBudgetMicros)); setError(""); }, [connection.providerId, connection.monthlyBudgetMicros]);
   return (
     <form className="providerBudgetEditor" onSubmit={(event) => {
@@ -376,9 +377,10 @@ function ProviderBudgetEditor({ connection, pending, onSave }: { connection: Pro
       try { onSave(connection.providerId, optionalCurrencyMicros(value) ?? null); setError(""); }
       catch (caught) { setError(caught instanceof Error ? caught.message : "invalid monthly budget"); }
     }}>
-      <label><span>monthly provider budget ($)</span><input disabled={pending} inputMode="decimal" value={value} onChange={(event) => setValue(event.target.value)} placeholder="unlimited" /></label>
+      <label><span>monthly provider budget ($)</span><input disabled={pending} inputMode="decimal" value={value} onChange={(event) => setValue(event.target.value)} placeholder="no provider cap" /></label>
       <button type="submit" className="buttonSecondary" disabled={pending} aria-busy={pending}>{pending ? "Saving connection…" : "Save budget"}</button>
-      {connection.monthlyBudgetMicros != null ? <small>Month to date {formatSpendMicros(connection.spentMicros)} · {formatSpendMicros(connection.remainingMicros)} remaining</small> : <small>Unlimited across all policies and principals</small>}
+      <small>{budget.used} · {budget.remaining}</small>
+      <small>{budget.note}</small>
       {error ? <small className="providerBudgetError">{error}</small> : null}
     </form>
   );
