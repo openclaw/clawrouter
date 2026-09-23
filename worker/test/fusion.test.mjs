@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { observeUsage } from "../proxy-response.ts";
+import { HttpOperation } from "../http-operation.ts";
 import {
   FUSION_MODEL_ID,
   buildAdviserBody,
@@ -88,13 +89,13 @@ test("fusion fails open when adviser bodies stall or exceed their byte bound", a
       controller.enqueue(new TextEncoder().encode('{"choices":[{"message":{"content":"partial'));
     },
     cancel() { aborted = true; },
-  }), { headers: { "content-type": "application/json" } }), signal);
+  }), { headers: { "content-type": "application/json" } }), new HttpOperation(signal));
     return observed.response;
   });
   assert.deepEqual(stalled.proposals, []);
   assert.deepEqual(stalled.failedModels, ["local/stalled"]);
   assert.equal(aborted, true);
-  assert.equal((await observed.result).delivery, "canceled");
+  assert.equal((await observed.result).delivery, "failed");
   assert.equal((await observed.result).tokens, null);
 
   const oversizedConfig = normalizeFusionConfig({ adviserModels: ["local/oversized"], maxProposalChars: 256 });

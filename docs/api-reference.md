@@ -121,6 +121,14 @@ This contract covers `previous_response_id` and Codex turn state. Responses
 `conversation` selectors remain an unpinned, separate contract gap; do not rely on
 pooled account affinity for them. WebSockets use the connection contract below.
 
+HTTP endpoint deadlines start after preflight and remain active through header
+registration and response delivery, including a stalled response body. Caller
+cancellation, router deadline, and upstream or publication failure retain the
+first observed cause in usage receipts. The selected HTTP status stays separate
+from that outcome. A parsed terminal usage event retains its measured charge if
+delivery later stops; dispatched work without final usage retains its estimate.
+This does not guarantee that every transport reports an idle client disconnect.
+
 ## WebSocket contract
 
 Send authenticated upgrades to `/v1/responses` or

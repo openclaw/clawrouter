@@ -1,5 +1,6 @@
 import type { FusionConfig } from "../shared/contracts.ts";
 import { HttpError } from "./utils.ts";
+import { InternalHttpAbort } from "./http-operation.ts";
 
 export const FUSION_MODEL_ID = "clawrouter/fusion" as const;
 const MAX_ADVISERS = 4;
@@ -98,12 +99,12 @@ export async function collectFusionProposals(config: FusionConfig, original: Rec
   const settled = await Promise.all(config.adviserModels.map(async (model, index) => {
     const controller = new AbortController();
     const deadline = Date.now() + config.adviserTimeoutMs;
-    const timeout = setTimeout(() => controller.abort(new Error("fusion adviser deadline exceeded")), config.adviserTimeoutMs);
+    const timeout = setTimeout(() => controller.abort(new InternalHttpAbort("deadline", "fusion adviser deadline exceeded")), config.adviserTimeoutMs);
     let bodyComplete = false;
     try {
       const invocation = invoke(model, buildAdviserBody(original, model, config, index), config.adviserTimeoutMs, index, controller.signal).then(response => {
         // Discarded responses still own upstream resources and delivery-based accounting.
-        if (controller.signal.aborted || !response.ok) void response.body?.cancel().catch(() => undefined);
+        if (controller.signal.aborted || !response.ok) void response.body?.cancel(controller.signal.reason ?? new InternalHttpAbort("upstream", "fusion adviser rejected")).catch(() => undefined);
         return response;
       });
       const response = await beforeDeadline(invocation, deadline);
@@ -118,7 +119,7 @@ export async function collectFusionProposals(config: FusionConfig, original: Rec
       return { model, failed: true as const };
     } finally {
       clearTimeout(timeout);
-      if (!bodyComplete && !controller.signal.aborted) controller.abort(new Error("fusion adviser failed before its response completed"));
+      if (!bodyComplete && !controller.signal.aborted) controller.abort(new InternalHttpAbort("upstream", "fusion adviser failed before its response completed"));
     }
   }));
   return {
@@ -133,13 +134,11 @@ async function readJsonBeforeDeadline(response: Response, maxBytes: number, dead
   const reader = response.body.getReader();
   const decoder = new TextDecoder();
   let bytes = 0;
-  let complete = false;
   let text = "";
   try {
     while (true) {
       const { done, value } = await beforeDeadline(reader.read(), deadline);
       if (done) {
-        complete = true;
         break;
       }
       bytes += value.byteLength;
@@ -147,9 +146,10 @@ async function readJsonBeforeDeadline(response: Response, maxBytes: number, dead
       text += decoder.decode(value, { stream: true });
     }
     return JSON.parse(text + decoder.decode());
-  } finally {
-    if (!complete) void reader.cancel().catch(() => undefined);
-  }
+  } catch (error) {
+    void reader.cancel(error instanceof InternalHttpAbort ? error : new InternalHttpAbort("upstream", "fusion adviser response could not be consumed")).catch(() => undefined);
+    throw error;
+  } finally { reader.releaseLock(); }
 }
 
 async function beforeDeadline<T>(operation: Promise<T>, deadline: number): Promise<T> {
@@ -157,11 +157,11 @@ async function beforeDeadline<T>(operation: Promise<T>, deadline: number): Promi
   if (remaining <= 0) {
     // The caller already started this operation; observe its rejection even when discarding it.
     void operation.catch(() => undefined);
-    throw new Error("fusion adviser deadline exceeded");
+    throw new InternalHttpAbort("deadline", "fusion adviser deadline exceeded");
   }
   let timeout: ReturnType<typeof setTimeout> | undefined;
   const expired = new Promise<never>((_resolve, reject) => {
-    timeout = setTimeout(() => reject(new Error("fusion adviser deadline exceeded")), remaining);
+    timeout = setTimeout(() => reject(new InternalHttpAbort("deadline", "fusion adviser deadline exceeded")), remaining);
   });
   try {
     return await Promise.race([operation, expired]);

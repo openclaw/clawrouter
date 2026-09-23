@@ -373,8 +373,16 @@ test("HTTP and native streaming outcomes settle each ledger once without rewriti
 test("dispatched pre-header HTTP and native failures retain estimates through independent ledger recovery", async (t) => {
   let now = Date.now();
   t.mock.method(Date, "now", () => now);
+  const { modelRoute } = await import("../providers.ts");
+  const endpointTimeout = modelRoute("openai/gpt-6-astra").provider.endpoints.find(endpoint => endpoint.id === "responses").timeout_ms;
+  const setTimer = globalThis.setTimeout;
+  let deadline;
+  t.mock.method(globalThis, "setTimeout", (callback, delay, ...args) => {
+    if (delay === endpointTimeout) deadline = callback;
+    return setTimer(callback, delay, ...args);
+  });
   const owners = ["tenant:maintainer_access:owner@example.com", "provider:openai"];
-  for (const route of ["/v1/responses", "/v1/native/openai/v1/responses"]) for (const scenario of ["transport", "timeout", "caller_abort"]) for (const failedOwner of [null, ...owners]) {
+  for (const route of ["/v1/responses", "/v1/native/openai/v1/responses"]) for (const scenario of ["transport", "upstream_abort", "timeout", "caller_abort"]) for (const failedOwner of [null, ...owners]) {
     const messages = [], pending = [], abort = new AbortController(), limit = 1_000_000;
     const env = usageEnv([], { limit, fixedCost: null, retainContent: false });
     env.OPENAI_API_KEY = "fixture-openai-key";
@@ -388,6 +396,7 @@ test("dispatched pre-header HTTP and native failures retain estimates through in
     const upstream = t.mock.method(globalThis, "fetch", async () => {
       for (const owner of owners) assert.equal(ledger.get(owner).reservations()[0].dispatch_started, 1);
       if (scenario === "caller_abort") abort.abort();
+      if (scenario === "timeout") { assert.equal(typeof deadline, "function"); deadline(); }
       if (scenario === "transport") throw new Error("fixture connection lost before headers");
       throw new DOMException("fixture upstream abort", "AbortError");
     });

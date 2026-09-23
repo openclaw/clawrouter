@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { getEventListeners } from "node:events";
 import { observeUsage, normalizePreStreamError } from "../proxy-response.ts";
+import { HttpOperation } from "../http-operation.ts";
 
 const encoder = new TextEncoder();
 const usage = { input_tokens: 12, output_tokens: 3 };
@@ -21,7 +22,7 @@ test("ingress abort owns pending and already-aborted streams exactly once", asyn
       },
       cancel() { cancels++; if (rejectCancel) return Promise.reject(new Error("fixture cleanup rejection")); },
     }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } });
-    const observed = observeUsage(upstream, abort.signal);
+    const observed = observeUsage(upstream, new HttpOperation(abort.signal));
     observed.result.then(() => { results++; });
     const reader = observed.response.body.getReader();
     if (stage !== "already") {
@@ -50,7 +51,7 @@ test("normal completion and delivery failure remove the ingress abort listener",
     const observed = observeUsage(new Response(new ReadableStream({ pull(controller) {
       if (fail) controller.error(new Error("fixture failure"));
       else controller.close();
-    } })), abort.signal);
+    } })), new HttpOperation(abort.signal));
     assert.equal(getEventListeners(abort.signal, "abort").length, 1);
     if (fail) await assert.rejects(observed.response.text(), /fixture failure/);
     else await observed.response.text();
@@ -199,4 +200,44 @@ test("first-event normalization and accounting do not prefetch later SSE chunks"
   assert.equal(pulls, 1);
   assert.equal(await observed.response.text(), first + last);
   assert.equal((await observed.result).tokens.total, 15);
+});
+
+test("EOF wins over late caller and deadline signals, while a protocol terminal still permits cancellation", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  for (const eof of [false, true]) {
+    const caller = new AbortController(), operation = new HttpOperation(caller.signal, 1000);
+    let emitted = false;
+    const observed = observeUsage(new Response(new ReadableStream({ pull(controller) {
+      if (!emitted) { emitted = true; controller.enqueue(encoder.encode(frame(created) + frame(terminal("completed")))); }
+      else if (eof) controller.close();
+    } }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } }), operation);
+    const reader = observed.response.body.getReader();
+    await reader.read();
+    if (eof) assert.equal((await reader.read()).done, true);
+    caller.abort(new Error("fixture caller"));
+    t.mock.timers.tick(1000);
+    const result = await observed.result;
+    assert.equal(result.delivery, eof ? "complete" : "canceled");
+    assert.equal(operation.status, eof ? undefined : "client_error");
+    assert.equal(result.tokens.total, 15);
+    assert.equal(getEventListeners(caller.signal, "abort").length, 0);
+  }
+});
+
+test("end registration failure owns cleanup aborts and cancellation never waits for rejected or stalled cleanup", async () => {
+  for (const cleanup of ["reject", "stall"]) for (const ending of ["publication", "cancel", "read"]) {
+    const caller = new AbortController(), operation = new HttpOperation(caller.signal);
+    let cancels = 0;
+    const observed = observeUsage(new Response(new ReadableStream({
+      pull(controller) { if (ending === "read") controller.error(new Error("fixture read")); else if (ending === "publication") controller.close(); },
+      cancel() { cancels++; caller.abort(new Error("cleanup must not own failure")); return cleanup === "reject" ? Promise.reject(new Error("cleanup failed")) : new Promise(() => {}); },
+    }, { highWaterMark: 0 })), operation, { async push() {}, async end() { throw new Error("fixture publication"); } });
+    if (ending === "cancel") await observed.response.body.cancel();
+    else await assert.rejects(observed.response.text(), new RegExp(`fixture ${ending}`));
+    const result = await observed.result;
+    caller.abort();
+    assert.equal(operation.status, ending === "cancel" ? "client_error" : "provider_error");
+    assert.equal(result.delivery, ending === "cancel" ? "canceled" : "failed");
+    assert.equal(cancels, ending === "cancel" ? 1 : 0);
+  }
 });
