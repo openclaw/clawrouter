@@ -261,6 +261,94 @@ try {
     assert.deepEqual(await ledgerFacts(), before.map(({ spent }) => ({ spent: spent + cost, unsettled: 0 })));
   }
 
+  // Exercise the HTTP affinity table in workerd's actual SQLite-backed owner.
+  const httpContinuation = (body = {}, headers = {}) => dispatch("/v1/native/openai/v1/responses", {
+    method: "POST", headers: { "content-type": "application/json", "x-clawrouter-session-id": "http-affinity", ...headers },
+    body: JSON.stringify({ model: "gpt-6-astra", input: "http-affinity", max_output_tokens: 32, ...body }),
+  });
+  const initialHttp = await httpContinuation();
+  assert.equal(initialHttp.status, 200);
+  const previous_response_id = (await initialHttp.json()).id;
+  const continuedHttp = await httpContinuation({ previous_response_id }, { "x-codex-turn-state": initialHttp.headers.get("x-codex-turn-state") });
+  assert.equal(continuedHttp.status, 200); await continuedHttp.text();
+  const httpFrames = async () => (await (await upstream.fetch("https://fixture.example/state")).json()).httpFrames;
+  const expectRestart = async (body, headers = {}) => {
+    const before = (await httpFrames()).length;
+    const response = await httpContinuation(body, headers);
+    assert.equal(response.status, 409);
+    assert.equal((await response.json()).error.code, "continuation_restart_required");
+    assert.equal((await httpFrames()).length, before);
+  };
+  const another = await authorityObject.fetch("https://authority/credentials/mutate", { method: "POST", body: JSON.stringify({
+    credentialId: "another", operation: "create", scope: "admin", actor: { auth: "admin_token", role: "admin", email: "token-admin" },
+    credential: { enabled: true, policyId: "fixture", secretSha256: credential.secretSha256 },
+  }) });
+  assert.equal(another.status, 200); assert.equal((await another.json()).outcome, "updated");
+  await expectRestart({ previous_response_id }, { authorization: `Bearer clawrouter-live-another-${secret}` });
+  const beforeChangedProject = (await httpFrames()).length;
+  const changedProject = await httpContinuation({ previous_response_id }, { "openai-project": "different-fixture-project" });
+  assert.equal(changedProject.status, 409);
+  assert.equal((await changedProject.json()).error.code, "continuation_restart_required");
+  assert.equal((await httpFrames()).length, beforeChangedProject);
+  await until(async () => (await (await dispatch("/v1/usage")).json()).usage.events.filter(event => event.session_id === "http-affinity").length === 3);
+  assert.ok((await ledgerFacts()).every(fact => fact.unsettled === 0));
+
+  // Real credential owners and the real pool index must agree with affinity;
+  // neither another pool member nor the configured environment may adopt state.
+  const grants = await mf.getDurableObjectNamespace("GRANT_CREDENTIALS", "router");
+  const grantCall = async (name, action, grant) => {
+    const key = `oauth/fixture/${name}`;
+    const response = await grants.get(grants.idFromName(key)).fetch(`https://credential/${action}`, { method: "POST", body: JSON.stringify({ key, grant, preserveUnspecifiedSecrets: false }) });
+    assert.equal(response.status, 200, await response.clone().text());
+    return (await response.json()).grant;
+  };
+  const grant = name => ({ provider: "openai", kind: "api_key", enabled: true, credential: `fixture-upstream-${name}` });
+  const accountA = await grantCall("account-a", "put", grant("account-a"));
+  await grantCall("account-b", "put", grant("account-b"));
+  await authorityObject.fetch("https://authority/policies/put", { method: "POST", body: JSON.stringify({ policyId: "fixture", policy: { ...policy, grantRouting: { strategy: "round_robin", stickiness: "none", failover: true } } }) });
+  const pooledA = await httpContinuation(); assert.equal(pooledA.status, 200);
+  const idA = (await pooledA.json()).id;
+  assert.equal((await httpFrames()).at(-1).authorization, "Bearer fixture-upstream-account-a");
+  const replayA = await httpContinuation({ previous_response_id: idA }, { "x-codex-turn-state": pooledA.headers.get("x-codex-turn-state") });
+  assert.equal(replayA.status, 200); await replayA.text();
+  assert.equal((await httpFrames()).at(-1).authorization, "Bearer fixture-upstream-account-a");
+  assert.equal((await httpFrames()).at(-1).previous_response_id, idA);
+  assert.equal((await httpFrames()).at(-1).turn, pooledA.headers.get("x-codex-turn-state"));
+  const pooledB = await httpContinuation(); assert.equal(pooledB.status, 200);
+  const idB = (await pooledB.json()).id;
+  assert.equal((await httpFrames()).at(-1).authorization, "Bearer fixture-upstream-account-b");
+  const replacedA = await grantCall("account-a", "put", grant("replacement-a"));
+  assert.notEqual(replacedA.credentialLineage, accountA.credentialLineage);
+  await expectRestart({ previous_response_id: idA });
+  await grantCall("account-b", "revoke");
+  await expectRestart({ previous_response_id: idB });
+  await grantCall("account-a", "revoke");
+  await expectRestart({ previous_response_id: idA });
+  await expectRestart({ previous_response_id: "unobserved-before-upgrade" });
+  const independentHttp = await httpContinuation(); assert.equal(independentHttp.status, 200); await independentHttp.text();
+  assert.equal((await httpFrames()).at(-1).authorization, "Bearer fixture-upstream-key");
+  await authorityObject.fetch("https://authority/policies/put", { method: "POST", body: JSON.stringify({ policyId: "fixture", policy }) });
+
+  // A failed publication happens after egress: both SQL ledgers retain exactly
+  // one conservative charge even though the client never receives the identity.
+  await until(async () => (await ledgerFacts()).every(fact => fact.unsettled === 0));
+  const beforePublication = await ledgerFacts(), beforePublicationFrames = (await httpFrames()).length;
+  const publication = await httpContinuation({}, { "x-fixture-continuation-fault": "register", "x-clawrouter-session-id": "http-affinity-publication-failed" });
+  assert.equal(publication.status, 503); assert.equal((await publication.json()).error.code, "continuation_unavailable");
+  let publicationReceipt;
+  await until(async () => {
+    const receipts = (await (await dispatch("/v1/usage")).json()).usage.events.filter(event => event.session_id === "http-affinity-publication-failed");
+    assert.ok(receipts.length <= 1); publicationReceipt = receipts[0];
+    return !!publicationReceipt && (await ledgerFacts()).every(fact => fact.unsettled === 0);
+  });
+  assert.equal((await httpFrames()).length, beforePublicationFrames + 1);
+  assert.equal(publicationReceipt.status, "provider_error");
+  assert.equal(publicationReceipt.status_code, 503);
+  assert.equal(publicationReceipt.cost_basis, "manifest_reservation");
+  assert.ok(publicationReceipt.reserved_cost_micros > 0);
+  assert.equal(publicationReceipt.actual_cost_micros, publicationReceipt.reserved_cost_micros);
+  assert.deepEqual(await ledgerFacts(), beforePublication.map(({ spent }) => ({ spent: spent + publicationReceipt.actual_cost_micros, unsettled: 0 })));
+
   // Faults belong to the fixture wrapper, never a production configuration surface.
   for (const phase of ["terminal", "preflight", "rollback"]) {
     await authorityObject.fetch("https://authority/policies/put", { method: "POST", body: JSON.stringify({ policyId: "fixture", policy: { ...policy, retainRequestContent: phase === "preflight" } }) });
@@ -362,11 +450,12 @@ async function disconnectHttp(url, init, marker) {
 }
 
 function upstreamFixture() { return `
-const frames = [], httpAborts = {}, httpEofs = {}; let headerMatch = false;
+const frames = [], httpFrames = [], httpAborts = {}, httpEofs = {}; let headerMatch = false;
 export default { async fetch(request) {
-  if (new URL(request.url).pathname === '/state') return Response.json({ frames, headerMatch, httpAborts, httpEofs });
+  if (new URL(request.url).pathname === '/state') return Response.json({ frames, httpFrames, headerMatch, httpAborts, httpEofs });
   if (request.url === 'https://api.openai.com/v1/responses' && request.method === 'POST') {
     const body = await request.json();
+    httpFrames.push({ authorization: request.headers.get('authorization'), previous_response_id: body.previous_response_id, turn: request.headers.get('x-codex-turn-state') });
     const usage = { input_tokens: 14, output_tokens: 8, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } };
     if (body.input === 'late-failed' || body.input.startsWith('cancel-')) {
       let index = 0, timer, release, producer;
@@ -391,7 +480,8 @@ export default { async fetch(request) {
         else { request.signal.removeEventListener('abort', aborted); controller.close(); }
       }, cancel() { clearTimeout(timer); release?.(); } }, { highWaterMark: 0 }), { headers: { 'content-type': 'text/event-stream' } });
     }
-    return Response.json({ id: 'http-fixture', object: 'response', status: 'completed', output: [], service_tier: 'priority', usage });
+    const id = body.input === 'http-affinity' ? 'http-affinity-' + httpFrames.length : 'http-fixture';
+    return Response.json({ id, object: 'response', status: 'completed', output: [], service_tier: 'priority', usage }, { headers: body.input === 'http-affinity' ? { 'x-codex-turn-state': 'turn-' + id } : {} });
   }
   if (request.url !== 'https://api.openai.com/v1/responses' || request.headers.get('upgrade') !== 'websocket') return new Response('unexpected upstream route', { status: 400 });
   headerMatch = request.headers.get('authorization') === 'Bearer fixture-upstream-key' && request.headers.get('session-id') === 'fixture-session' && request.headers.get('x-openai-internal-codex-responses-lite') === 'true';
@@ -440,6 +530,13 @@ export default { ...handler, async fetch(request, env, context) {
   if (new URL(request.url).pathname === "/fixture-ingress-aborts") return Response.json(ingressAborts);
   const session = request.headers.get("x-clawrouter-session-id");
   if (session?.startsWith("sse-")) request.signal.addEventListener("abort", () => { ingressAborts[session] = true; }, { once: true });
+  if (request.headers.get("x-fixture-continuation-fault") === "register") {
+    const authority = env.ACCESS_CONTROL;
+    env = { ...env, ACCESS_CONTROL: { idFromName: name => authority.idFromName(name), get: id => ({ fetch(url, init) {
+      if (new URL(url).pathname === "/http-continuations" && JSON.parse(init.body).action === "register") return Promise.resolve(new Response("fixture publication outage", { status: 503 }));
+      return authority.get(id).fetch(url, init);
+    } }) } };
+  }
   const fault = request.headers.get("x-fixture-accounting-fault");
   if (fault) {
     const ledger = env.BUDGET_LEDGER, queue = env.USAGE_QUEUE, usage = env.USAGE_LEDGER;

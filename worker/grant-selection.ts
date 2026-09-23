@@ -48,7 +48,7 @@ export interface GrantSelectionResult {
   selected: SelectedGrant | null;
   hasConfiguredGrant: boolean;
 }
-export interface PinnedGrant { key: string | null; revision: string | null }
+export type PinnedGrant = { key: string | null; revision: string | null } | { key: string; lineage: string };
 
 export function grantUsable(grant: UpstreamGrant): boolean {
   if (grant.credentialStore === "durable_object") {

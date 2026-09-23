@@ -16,11 +16,13 @@ import {
 import { loadFusionConfig } from "./fusion-config";
 import { observeGrantQuota, shouldFailoverGrant } from "./grant-quota";
 import { grantRoutingPolicy, recordGrantRuntime, type PinnedGrant } from "./grant-selection";
+import type { ContinuationOwner } from "./continuation-store.ts";
+import { HttpContinuation, continuationRestart } from "./http-continuation.ts";
 import {
   assertProviderAccess, copyRequestHeaders, providerById,
   signSigV4, upstreamAuth, upstreamPath,
 } from "./providers";
-import { applyTransportHeaders, transformTransportBody } from "./provider-auth.ts";
+import { applyTransportHeaders, providerCredentialScheme, transformTransportBody } from "./provider-auth.ts";
 import { normalizePreStreamError, observeUsage } from "./proxy-response";
 import type { AuthorizedIdentity, CompiledQuotaConfig, Env, ProviderConnection } from "./types";
 import {
@@ -38,6 +40,7 @@ interface PreparedUpstream {
   grantRevision: string | null;
   connection: ProviderConnection;
   websocket: boolean;
+  continuation?: ContinuationOwner;
 }
 
 interface ReservedProxyBudget {
@@ -188,9 +191,14 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     return errorResponse("fusion_reservation_invalid", "fusion synthesizer reservation does not cover the final request", 500);
   }
   let prepared: PreparedUpstream;
-  try { prepared = await prepareSelected(request, env, selection, queryInput, auth, new Set(), true, reservedBudget?.connection); }
+  let continuation: HttpContinuation | undefined;
+  try {
+    continuation = await HttpContinuation.resolve(request, selection, auth, env);
+    prepared = await prepareSelected(request, env, selection, queryInput, auth, new Set(), true, reservedBudget?.connection, continuation?.pinned);
+    if (prepared.continuation) continuation?.bind(prepared.continuation);
+  }
   catch (error) {
-    const failure = selectedFailure(error);
+    const failure = continuation?.requested && error instanceof HttpError && ["upstream_grant_pool_unavailable", "upstream_grant_changed", "grant_reauthorization_required", "grant_refresh_failed", "grant_disabled", "grant_credential_missing", "provider_not_configured", "grant_transport_unavailable"].includes(error.code) ? continuationRestart() : selectedFailure(error);
     const status = failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error";
     accounting.fail(failure.status, status, reservedBudget?.reservation);
     return errorResponse(failure.code, failure.message, failure.status);
@@ -227,13 +235,15 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     dispatched = true;
     response = await fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal: AbortSignal.any([request.signal, controller.signal]) });
     captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response);
-    if (shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
+    if (!continuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
       try {
         const retry = await prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]), true, prepared.connection);
         const retryResponse = await fetch(retry.url, { method: selection.method, headers: retry.headers, body: retry.requestBody, signal: AbortSignal.any([request.signal, controller.signal]) });
         captureGrantRuntime(context, env, retry.grantKey, retry.grantRevision, selection.provider.quota, retryResponse);
         void response.body?.cancel().catch(() => undefined);
         response = retryResponse;
+        prepared = retry;
+        if (prepared.continuation) continuation?.bind(prepared.continuation);
         grantFailover = true;
       } catch {
         // Keep the first provider response when no alternate grant is ready or its request fails.
@@ -251,7 +261,16 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     return errorResponse("provider_unavailable", `upstream request to provider ${selection.provider.id} failed`, 502, undefined);
   }
   clearTimeout(timeout);
-  const observed = observeUsage(response, request.signal);
+  if (continuation && response.ok) {
+    try { await continuation.headers(response); }
+    catch (error) {
+      void response.body?.cancel().catch(() => undefined); controller.abort();
+      const failure = selectedFailure(error);
+      context.waitUntil(accounting.settle(failure.status, "provider_error", true, null, reservation, content));
+      return errorResponse(failure.code, failure.message, failure.status);
+    }
+  }
+  const observed = observeUsage(response, request.signal, response.ok ? continuation?.inspect(response) : undefined);
   context.waitUntil(observed.result.then(result => accounting.complete(observed.response, result, reservation, content)));
   response = observed.response;
   const outputHeaders = new Headers(response.headers);
@@ -310,7 +329,22 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
     for (const [name, value] of Object.entries(queryInput)) if (value != null) url.searchParams.set(name, String(value));
     const requestBody = ["GET", "HEAD"].includes(selection.method) ? undefined : JSON.stringify(transformTransportBody(upstream.transport, selection.body));
     await signSigV4(selection.provider, url, selection.method, requestBody, headers, env, upstream.grant);
-    return { headers, url, requestBody, grantKey: upstream.grantKey, grantRevision: upstream.grantRevision, connection, websocket: selection.endpoint.websocket === "openai.responses" && upstream.transport === null };
+    let continuation: ContinuationOwner | undefined;
+    if (selection.capability === "llm.responses" && transport === "http") {
+      if (upstream.grantKey && !upstream.grant?.credentialLineage) throw new HttpError(503, "continuation_unavailable", "upstream credential ownership is unavailable");
+      const routeUrl = new URL(url);
+      const scheme = providerCredentialScheme(selection.provider, upstream.grant);
+      if (upstream.grantKey && scheme.type === "query_api_key") routeUrl.searchParams.delete(scheme.param);
+      const identity = upstream.grant?.credentialLineage ?? await sha256Hex(JSON.stringify([[...upstream.headers], [...upstream.query]]));
+      const passthrough = selection.provider.adapter.passthroughHeaders.map(name => [name.toLowerCase(), headers.get(name)]).sort();
+      continuation = {
+        providerId: selection.provider.id, endpointId: selection.endpoint.id, grantKey: upstream.grantKey,
+        lineage: upstream.grant?.credentialLineage ?? null,
+        routeSha256: await sha256Hex(JSON.stringify([selection.method, routeUrl.href, identity, passthrough])),
+        policyGeneration: auth.policy.generation,
+      };
+    }
+    return { headers, url, requestBody, grantKey: upstream.grantKey, grantRevision: upstream.grantRevision, connection, websocket: selection.endpoint.websocket === "openai.responses" && upstream.transport === null, continuation };
   } catch (error) {
     throw error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
   }

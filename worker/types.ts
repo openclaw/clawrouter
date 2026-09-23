@@ -235,6 +235,7 @@ export interface UpstreamGrant {
   maintenance?: { keepWarm?: boolean } | null;
   credentialStore?: "durable_object";
   credentialGeneration?: number;
+  credentialLineage?: string;
   credentialStatus?: "active" | "reauth_required";
   hasCredential?: boolean;
   credentialFields?: string[];

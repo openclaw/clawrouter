@@ -22,6 +22,15 @@ and consistency needs. `GRANT_CREDENTIALS` is the canonical raw-secret owner,
 sharded one Durable Object per grant. KV holds its redacted routing projection;
 a legacy secret-bearing KV grant is imported and scrubbed on first use.
 
+Public HTTP Responses affinity uses authorization-scoped `ACCESS_CONTROL`
+objects with additive SQLite tables. They store hashed response/turn identities
+and their immutable route and credential lineage, with fixed expiry and bounded
+alarm cleanup. `GRANT_CREDENTIALS` issues lineage and preserves it during its own
+refresh; explicit credential/account replacement invalidates it. The existing
+response reader registers identity evidence before publication, retaining
+backpressure, cancellation, and billable usage if storage fails. See the
+[HTTP continuation contract](api-reference.md#http-continuation-contract).
+
 Authentication is read-only after an existing user receives versioned
 `assignmentState`. Rule changes reconcile users from the admin mutation path;
 verified GitHub evidence remains an explicit admin operation. Legacy KV

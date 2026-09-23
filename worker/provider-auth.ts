@@ -26,14 +26,17 @@ export function applyProviderCredential(
   headers: Headers,
   query: URLSearchParams,
 ): void {
-  const transport = transportForGrant(provider, grant);
-  const scheme = transport?.auth ?? provider.auth.schemes.find((candidate) => candidate.type !== "oauth") ?? provider.auth.schemes[0];
+  const scheme = providerCredentialScheme(provider, grant);
   const secret = providerSecret(provider, scheme, grant, env);
   if (scheme.type === "bearer" && secret) headers.set(scheme.header, scheme.format.replace("${secret}", secret));
   else if (scheme.type === "api_key" && secret) headers.set(scheme.header, secret);
   else if (scheme.type === "query_api_key" && secret) query.set(scheme.param, secret);
   else if (scheme.type === "sig_v4") { /* signed after the final URL and request body are known */ }
   else if (!secret && !(scheme.type === "bearer" && "required" in scheme && scheme.required === false)) throw new HttpError(503, "provider_not_configured", `provider ${provider.id} has no usable upstream credential`);
+}
+
+export function providerCredentialScheme(provider: CompiledProvider, grant: UpstreamGrant | null): AuthScheme | GrantTransportAuth {
+  return transportForGrant(provider, grant)?.auth ?? provider.auth.schemes.find(candidate => candidate.type !== "oauth") ?? provider.auth.schemes[0];
 }
 
 export function resolvedTransportHeaders(transport: CompiledGrantTransport | null, grant: UpstreamGrant | null): Record<string, string> {

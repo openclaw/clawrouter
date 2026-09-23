@@ -1,11 +1,12 @@
 import { createSseUsageInspector, extractUsageTokens, responseOutcome, usageInspectionLimit, type UsageInspection } from "./token-usage.ts";
 
 export interface ObservedUsage extends UsageInspection { delivery: "complete" | "failed" | "canceled" }
+export interface ResponseBodyInspection { push(bytes: Uint8Array): Promise<void>; end(): Promise<void> }
 
 // Accounting observes the delivered stream; a tee would drain upstream ahead of
 // the client and buffer arbitrary output. JSON and individual SSE frames are
 // bounded; a long stream can still report authoritative late terminal facts.
-export function observeUsage(response: Response, signal?: AbortSignal): { response: Response; result: Promise<ObservedUsage> } {
+export function observeUsage(response: Response, signal?: AbortSignal, bodyInspection?: ResponseBodyInspection): { response: Response; result: Promise<ObservedUsage> } {
   if (!response.body) return { response, result: Promise.resolve({ tokens: null, outcome: null, delivery: "complete" }) };
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   const sse = contentType.includes("text/event-stream") ? createSseUsageInspector() : null;
@@ -31,7 +32,7 @@ export function observeUsage(response: Response, signal?: AbortSignal): { respon
     resolve({ ...inspection, delivery });
     // Claim completion before cancellation can resolve/reject a pending read.
     // The result owns accounting even if the transport's cancellation rejects.
-    const cleanup = delivery === "canceled" ? reader.cancel(reason).catch(() => undefined) : Promise.resolve();
+    const cleanup = delivery !== "complete" ? reader.cancel(reason).catch(() => undefined) : Promise.resolve();
     reader.releaseLock();
     return cleanup;
   }
@@ -47,14 +48,17 @@ export function observeUsage(response: Response, signal?: AbortSignal): { respon
       try {
         const next = await reader.read();
         if (finished) return; // A pending read can resolve after consumer cancellation.
-        if (next.done) { finish("complete"); controller.close(); return; }
+        if (next.done) { await bodyInspection?.end(); if (finished) return; finish("complete"); controller.close(); return; }
         sse?.push(next.value);
         if (inspect) {
           bytes += next.value.byteLength;
           if (bytes > usageInspectionLimit) { inspect = false; text = ""; }
           else text += decoder.decode(next.value, { stream: true });
         }
-        controller.enqueue(next.value);
+        // Identity registration owns publication; the same reader still owns
+        // demand, cancellation, and usage when the durable write fails.
+        await bodyInspection?.push(next.value);
+        if (!finished) controller.enqueue(next.value);
       } catch (error) { if (!finished) { finish("failed"); controller.error(error); } }
     },
     cancel(reason) { return finish("canceled", reason); },
