@@ -1,5 +1,6 @@
 import { closeSync, openSync, readFileSync, writeFileSync } from "node:fs";
 import { parseArgs } from "./cli-args.mjs";
+import { adminRequest } from "./admin-api.mjs";
 
 const args = parseArgs(process.argv.slice(2));
 const baseUrl = requiredOption(args, "url").replace(/\/$/, "");
@@ -23,13 +24,11 @@ if (args["keep-warm"] === true && args["no-keep-warm"] === true) throw new Error
 if (args["keep-warm"] === true) payload.keepWarm = true;
 else if (args["no-keep-warm"] === true) payload.keepWarm = false;
 
-const response = await fetch(`${baseUrl}/v1/admin/pool-submission-tickets`, {
+const body = await adminRequest("/v1/admin/pool-submission-tickets", {
   method: "POST",
-  headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json", accept: "application/json" },
-  body: JSON.stringify(payload),
+  body: payload,
+  env: { ...process.env, CLAWROUTER_BASE_URL: baseUrl, CLAWROUTER_ADMIN_TOKEN: adminToken },
 });
-const body = await boundedJson(response);
-if (!response.ok) throw new Error(`ticket issuance failed (${response.status}): ${safeError(body)}`);
 if (typeof body?.ticketToken !== "string" || typeof body?.submissionUrl !== "string" || !body?.ticket?.id) throw new Error("ticket issuance returned an invalid response");
 
 const descriptor = JSON.stringify({ version: 1, ticket: body.ticket, ticketToken: body.ticketToken, submissionUrl: new URL(body.submissionUrl, `${baseUrl}/`).toString() }, null, 2) + "\n";
@@ -52,5 +51,3 @@ function required(value, name) { if (typeof value !== "string" || !value.trim())
 function optionalValue(values, name) { const value = values[name]; if (value === undefined) return undefined; if (value === true) throw new Error(`--${name} requires a value`); return value.trim(); }
 function optionalNumber(values, name) { const value = optionalValue(values, name); if (value === undefined) return undefined; const number = Number(value); if (!Number.isFinite(number)) throw new Error(`--${name} must be a number`); return number; }
 function setOptional(object, key, value) { if (value !== undefined) object[key] = value; }
-async function boundedJson(response) { const text = await response.text(); if (text.length > 128 * 1024) throw new Error("server response was too large"); try { return JSON.parse(text); } catch { throw new Error("server returned invalid JSON"); } }
-function safeError(body) { return typeof body?.error?.message === "string" ? body.error.message : "request rejected"; }
