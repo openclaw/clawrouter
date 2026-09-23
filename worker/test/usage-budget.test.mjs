@@ -618,6 +618,8 @@ test("incomplete pricing admission and unavailable settlement share the HTTP, na
     ["openai", "/v1/responses", "openai/gpt-6-astra", { tools: [{ type: "web_search" }] }],
     ["openai", "/v1/native/openai/v1/responses", "gpt-6-astra", { tools: [{ type: "web_search_preview_2025_03_11" }] }],
     ...["file_search", "code_interpreter", "image_generation"].map(type => ["openai", "/v1/responses", "openai/gpt-6-astra", { tools: [{ type }] }]),
+    ...["mcp", "programmatic_tool_calling", "tool_search"].map(type => ["openai", "/v1/responses", "openai/gpt-6-astra", { tools: [{ type }] }]),
+    ["openai", "/v1/native/openai/v1/responses", "gpt-6-astra", { multi_agent: { enabled: true } }],
     ["openai", "/v1/native/openai/v1/responses", "gpt-6-astra", { tools: [{ type: "shell", environment: { type: "container_auto" } }] }],
     ...["/v1/responses", "/v1/native/openai/v1/responses", "/v1/proxy/openai/responses"].flatMap(route => [
       ["openai", route, "openai/gpt-6-astra", { prompt: { id: "pmpt_fixture", version: "1" } }],
@@ -627,6 +629,11 @@ test("incomplete pricing admission and unavailable settlement share the HTTP, na
     ["anthropic", "/v1/native/anthropic/v1/messages", "claude-haiku-4-5", { tools: [{ type: "web_search_20260318", name: "web_search" }] }],
     ["anthropic", "/v1/native/anthropic/v1/messages", "claude-haiku-4-5", { tools: [{ type: "code_execution_20250825", name: "code_execution" }] }],
     ["anthropic", "/v1/proxy/anthropic/messages", "claude-haiku-4-5", { tools: [{ type: "code_execution_20260521", name: "code_execution" }] }],
+    ...["advisor_20260301", "web_fetch_20260318", "tool_search_tool_regex_20251119", "tool_search_tool_bm25"].map(type => ["anthropic", "/v1/native/anthropic/v1/messages", "claude-haiku-4-5", { tools: [{ type }] }]),
+    ["anthropic", "/v1/proxy/anthropic/messages", "claude-haiku-4-5", { tools: [{ type: "code_execution_20260521", name: "code_execution" }, { type: "web_fetch_20260318", name: "web_fetch" }] }],
+    ...[[], [{ type: "mcp_toolset", mcp_server_name: "fixture" }]].map(tools => ["anthropic", "/v1/native/anthropic/v1/messages", "claude-sonnet-4-6", { tools, mcp_servers: [{ type: "url", name: "fixture", url: "https://example.com/mcp" }] }]),
+    ["anthropic", "/v1/native/anthropic/v1/messages", "claude-sonnet-4-6", { context_management: { edits: [{ type: "compact_20260112" }] } }],
+    ["anthropic", "/v1/proxy/anthropic/messages", "claude-sonnet-4-6", { compaction: { type: "summarize" } }],
   ]) for (const stream of [false, true]) for (const [limit, providerLimit, fixedCost, servedTier] of [
     [1_000_000, null, null, "priority"], [null, 1_000_000, null, "priority"],
     [null, null, null, "priority"], [null, null, null, "future"], [1_000_000, 1_000_000, 7, "priority"], [1_000_000, 1_000_000, 0, "priority"],
@@ -637,8 +644,10 @@ test("incomplete pricing admission and unavailable settlement share the HTTP, na
     env.BUDGET_LEDGER = sqlBudgetNamespace(t);
     env.USAGE_QUEUE = { send: async event => events.push(event) };
     const denied = fixedCost == null && (limit != null || providerLimit != null);
-    const result = provider === "anthropic" ? { type: "message", stop_reason: "end_turn", usage: messageUsage } : { status: "completed", service_tier: servedTier, usage: astraUsage };
-    const wire = !stream ? JSON.stringify(result) : provider === "anthropic" ? sse(messageStart, messageDelta, messageStop) : route.endsWith("chat/completions") ? sse({ object: "chat.completion.chunk", ...result }, "[DONE]") : sse({ type: "response.completed", response: result });
+    const usage = tool.compaction ? { input_tokens: 0, output_tokens: 0, iterations: [{ type: "compaction", input_tokens: 144, output_tokens: 276 }] } : messageUsage;
+    const stop_reason = tool.compaction ? "compaction" : "end_turn";
+    const result = provider === "anthropic" ? { type: "message", stop_reason, usage } : { status: "completed", service_tier: servedTier, usage: astraUsage };
+    const wire = !stream ? JSON.stringify(result) : provider === "anthropic" ? sse({ type: "message_start", message: result }, { type: "message_delta", delta: { stop_reason }, usage }, messageStop) : route.endsWith("chat/completions") ? sse({ object: "chat.completion.chunk", ...result }, "[DONE]") : sse({ type: "response.completed", response: result });
     const upstream = t.mock.method(globalThis, "fetch", async (_url, init) => {
       const sent = JSON.parse(init.body);
       for (const [key, value] of Object.entries(tool)) assert.deepEqual(sent[key], value);
@@ -657,22 +666,22 @@ test("incomplete pricing admission and unavailable settlement share the HTTP, na
     assert.equal(events.length, 1);
     assert.equal(events[0].cost_basis, denied ? "none" : fixedCost != null ? "policy_fixed" : "unpriced_usage");
     assert.equal(events[0].actual_cost_micros, denied ? 0 : fixedCost ?? 0);
-    if (!denied) assert.ok(events[0].input_tokens > 0, "complete token usage must not imply a complete request price");
+    if (!denied) assert.ok(tool.compaction ? events[0].input_tokens === 0 : events[0].input_tokens > 0, "top-level token usage must not imply a complete request price");
     assert.equal((await providerBudgetStatus(env, provider, 1_000_000)).spentMicros, denied ? 0 : fixedCost ?? 0);
-    const usage = await handler.fetch(new Request("https://clawrouter.example/v1/usage", { headers: { authorization: `Bearer ${proxyKey()}` } }), env, {});
-    assert.equal((await usage.json()).budget.spentMicros, limit == null ? null : denied ? 0 : fixedCost ?? 0);
+    const report = await handler.fetch(new Request("https://clawrouter.example/v1/usage", { headers: { authorization: `Bearer ${proxyKey()}` } }), env, {});
+    assert.equal((await report.json()).budget.spentMicros, limit == null ? null : denied ? 0 : fixedCost ?? 0);
     upstream.mock.restore();
   }
 });
 
-test("Anthropic free execution with modern web fetch settles both ledgers from token usage", async (t) => {
+test("Anthropic client-owned tools settle both ledgers from token usage", async (t) => {
   for (const stream of [false, true]) {
     const events = [], pending = [], limit = 1_000_000;
     const env = usageEnv([], { provider: "anthropic", limit, fixedCost: null, retainContent: false });
     env.ANTHROPIC_API_KEY = "fixture-anthropic-key";
     env.BUDGET_LEDGER = sqlBudgetNamespace(t);
     env.USAGE_QUEUE = { send: async event => events.push(event) };
-    const tools = [{ type: "code_execution_20260521", name: "code_execution" }, { type: "web_fetch_20260318", name: "web_fetch" }];
+    const tools = [{ type: "bash_20250124", name: "bash" }, { name: "advisor_20260301", input_schema: { type: "object" } }];
     const wire = stream ? sse(messageStart, messageDelta, messageStop) : JSON.stringify({ type: "message", usage: messageUsage });
     const upstream = t.mock.method(globalThis, "fetch", async (_url, init) => {
       assert.deepEqual(JSON.parse(init.body).tools, tools);
@@ -703,6 +712,11 @@ test("incomplete pricing preserves fixed tariffs, free counting, and known nonbi
   assert.equal(estimateCost(route.model, body, 7, "llm.responses", "openai.responses").basis, "policy_fixed");
   assert.equal(estimateCost(route.model, body, 0, "llm.responses", "openai.responses").basis, "policy_fixed");
   assert.equal(estimateCost(route.model, body, null, "llm.count_tokens", "openai.responses").basis, "none");
+  for (const [format, request] of [["openai.responses", { multi_agent: { enabled: true } }], ["anthropic.messages", { compaction: { type: "summarize" } }], ["anthropic.messages", { context_management: { edits: [{ type: "compact_20260112" }] } }], ["google.generate_content", { tools: [{ mcpServers: [{}] }] }]]) {
+    assert.equal(estimateCost(route.model, request, 0, "llm.chat", format).basis, "policy_fixed");
+    assert.equal(estimateCost(route.model, request, 7, "llm.count_tokens", format).basis, "none");
+  }
+  assert.equal(estimateCost(route.model, { tools: [{ type: "tool_search", execution: "client" }] }, null, "llm.responses", "openai.responses").basis, "manifest_pricing");
   for (const [billable, tokens, dispatched, expected] of [[true, { billable: false }, null, "none"], [false, null, null, "none"], [true, null, null, "unpriced_usage"], [null, null, false, "none"], [null, null, true, "unpriced_usage"]]) {
     const events = [], pending = [];
     const owner = createProxyAccounting({ env: { USAGE_QUEUE: { send: async event => events.push(event) } }, context: { waitUntil: promise => pending.push(promise) }, auth: { policyId: "fixture", policy: {} }, selection: { ...route, endpoint: route.provider.endpoints.find(endpoint => endpoint.id === "responses"), body, capability: "llm.responses" }, request: correlateIngressRequest(new Request("https://router.example/v1/responses")).request });
@@ -716,6 +730,7 @@ test("incomplete pricing preserves fixed tariffs, free counting, and known nonbi
 test("Sonar mandatory fees and Gemini hosted work never settle at token-only prices", async (t) => {
   for (const [provider, model, gapBody, counts] of [
     ...["googleSearch", "google_search", "googleSearchRetrieval", "googleMaps", "urlContext", "url_context", "fileSearch", "codeExecution"].map(key => ["google-gemini", "gemini-3.5-flash", { tools: [{ [key]: {} }] }, [27, 76, 10_412]]),
+    ...["mcpServers", "mcp_servers"].map(key => ["google-gemini", "gemini-3.5-flash", { tools: [{ [key]: [{ name: "fixture", streamableHttpTransport: { url: "https://example.com/mcp" } }] }] }, [27, 76, 10_412]]),
     ["google-gemini", "gemini-3.5-flash", { cached_content: "cachedContents/fixture" }, [27, 76, 10_412]],
     ["perplexity", "sonar-pro", {}, [26, 832, 858]],
   ]) for (const manifest of [false, true]) for (const stream of [false, true]) for (const [limit, providerLimit, fixedCost] of [

@@ -324,7 +324,7 @@ test("local opaque Chat models retain explicitly declared zero pricing on unifie
   }
   const route = modelRoute("local/fixture-model", "llm.chat");
   assert.equal(route.model.pricing_ref, "local-compute-zero-api-charge-v1");
-  assert.equal(estimateCost(route.model, { messages: [] }, null, "llm.chat").reserveMicros, 0);
+  assert.equal(estimateCost(route.model, { messages: [] }, null, "llm.chat", "openai.chat_completions").reserveMicros, 0);
   assert.equal(modelRoute("local/fixture-model", "llm.embeddings"), null);
 });
 
