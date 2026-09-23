@@ -3,6 +3,9 @@
 ## Unreleased
 
 - Preserve local administrator roles during user, policy-assignment, and automatic-assignment edits, including profile saves that race with an explicit role change.
+
+- Publish a revision-bound provider snapshot from CI so code-only contributors can regenerate the catalog without a local dependency install.
+
 - Prevent duplicate playground requests, cancel pending requests when starting a new chat, and preserve new drafts when earlier replies arrive.
 
 - Match Cloudflare Access applications by exact destination instead of display name, reject ambiguous or name-only collisions before writes, and inspect all application and policy pages during provisioning.

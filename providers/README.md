@@ -148,6 +148,44 @@ or from request path params:
 - Refresh requests default to form encoding. Set `auth.refresh.requestFormat`
   to `json` only when the provider's token endpoint requires a JSON body.
 
+## Compile and retrieve the snapshot
+
+After changing manifests, regenerate `worker/generated/provider-snapshot.json`
+with a qualified dependency install:
+
+```sh
+pnpm install --frozen-lockfile
+pnpm provider:compile -- --output worker/generated/provider-snapshot.json
+```
+
+For a code-only checkout, push the source change to a draft PR and use the
+existing CI `worker-package` job. It compiles immediately after the frozen
+install and uploads only `provider-snapshot.json`, retained for three days.
+Compilation failures stop the job; a later test failure does not remove a
+successfully uploaded snapshot. The artifact is compiler output, not a passing
+test verdict.
+
+Select the run for the exact PR head and record its URL and attempt:
+
+```sh
+ghx run view RUN_ID --repo openclaw/clawrouter --json headSha,event,attempt,url
+ghx run view RUN_ID --repo openclaw/clawrouter --log
+ghx run download RUN_ID --repo openclaw/clawrouter \
+  --name provider-snapshot-CHECKOUT_SHA-ATTEMPT --dir /path/to/task-scratch
+shasum -a 256 /path/to/task-scratch/provider-snapshot.json
+```
+
+Use the checkout SHA and file SHA-256 printed by `Compile provider snapshot`.
+For `pull_request`, the checkout SHA is GitHub's test merge commit, while the
+run's `headSha` identifies the PR revision. Confirm that revision is still the
+intended PR head. Before copying the JSON into the branch, compare the checkout's
+`scripts/compile-providers.mjs`, `providers/`, `package.json`, `pnpm-lock.yaml`,
+and `pnpm-workspace.yaml` with the branch's current inputs, including uncommitted
+changes. Stop if they differ. Verify the downloaded file's checksum against the
+compile log, inspect its diff, commit it, and rerun CI for the new head. Do not
+reuse an older run after changing compiler inputs. A qualified checkout of the
+recorded SHA can reproduce the artifact with the same compile command above.
+
 ## Smoke Coverage
 
 Run this after adding or changing providers:
