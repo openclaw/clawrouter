@@ -27,6 +27,14 @@ interface Rates {
   cacheWrite1hInput: number | null;
 }
 
+export function requestHasHostedSearch(body: Record<string, unknown>, capability: string): boolean {
+  if (capability === "llm.chat") return isObject(body.web_search_options);
+  if (capability !== "llm.responses" && capability !== "llm.messages") return false;
+  // Match hosted wire types, never user-defined function names or tool results.
+  return Array.isArray(body.tools) && body.tools.some((tool) => isObject(tool) && typeof tool.type === "string" &&
+    (capability === "llm.messages" ? /^web_search_\d{8}$/.test(tool.type) : /^web_search(?:_preview)?(?:_\d{4}_\d{2}_\d{2})?$/.test(tool.type)));
+}
+
 export function estimateModelCost(pricing: ModelPricing, body: Record<string, unknown>): CostEstimate {
   const bytes = new TextEncoder().encode(JSON.stringify(body)).byteLength;
   const inputLimit = pricing.maxRequestInputTokens ?? pricing.maxInputTokens;

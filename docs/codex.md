@@ -132,9 +132,10 @@ account and model before use.
 
 Fusion discovery applies the same Chat model eligibility to its configured
 synthesizer and advisers; unavailable advisers remain optional.
-OpenAI hosted-tool admission and fee accounting remains a separate follow-up.
-The setup disables hosted web search because token rates do not cover its tool
-fees or provider-added search input. The existing 15-minute reservation lease
+Hosted search is rejected before dispatch under measured policy or provider
+budgets unless a fixed policy tariff is configured. Full hosted-tool fee metering
+remains separate. Keep this setup's hosted web search disabled: token rates do not
+cover its tool fees or repeated search input. The existing 15-minute reservation lease
 also remains a boundary for long-running HTTP streams.
 
 Sources: [Codex custom providers](https://developers.openai.com/codex/config-reference),
