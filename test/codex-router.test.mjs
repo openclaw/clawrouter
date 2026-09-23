@@ -295,6 +295,7 @@ ${forceHttp ? "request_max_retries = 0\nstream_max_retries = 0\nstream_idle_time
     });
     assert.equal(completed.params.turn.status, "completed", completed.params.turn.error?.message);
     const recovered = await state();
+    assert.equal(recovered.disconnected, true); assert.equal(recovered.expired, false, "the watchdog must not stand in for the controlled disconnect");
     const retries = recovered.requests.filter(({ held, body }) => !held && body.generate !== false);
     assert.equal(retries.length, 1, "one native retry, no router replay");
     assert.equal(retries[0].transport, forceHttp ? "http" : "websocket");
@@ -487,7 +488,7 @@ export default { ...handler, async fetch(request, env, context) {
 `; }
 
 function fallbackUpstreamFixture() { return `
-const requests = []; let connections = 0, active;
+const requests = []; let connections = 0, disconnectRequested = false, disconnected = false, expired = false;
 function respond(body, request, transport) {
   const responseId = 'fallback_response_' + (requests.length + 1);
   const warmup = body.generate === false, held = transport === 'websocket' && !warmup && !requests.some(request => request.held);
@@ -505,25 +506,40 @@ function respond(body, request, transport) {
     { type: 'response.output_text.delta', response_id: responseId, item_id: item.id, output_index: 0, content_index: 0, delta: 'fixture ' }
   );
   else events.push(...result.output.map((item, output_index) => ({ type: 'response.output_item.done', output_index, item })), { type: 'response.completed', response: result });
-  return events;
+  return { events, held };
 }
 export default { async fetch(request) {
   const path = new URL(request.url).pathname;
-  if (path === '/state') return Response.json({ requests, connections });
-  if (path === '/disconnect' && request.method === 'POST') { active.close(1011, 'fixture disconnect'); return new Response('disconnected'); }
+  if (path === '/state') return Response.json({ requests, connections, disconnected, expired });
+  if (path === '/disconnect' && request.method === 'POST') { disconnectRequested = true; return new Response('disconnect requested'); }
   if (request.url !== 'https://api.openai.com/v1/responses') return new Response('unexpected upstream route', { status: 400 });
   if (request.headers.get('upgrade') === 'websocket') {
     connections++;
-    const pair = new WebSocketPair(); pair[1].accept(); active = pair[1];
-    pair[1].addEventListener('close', () => pair[1].close());
+    const pair = new WebSocketPair(); pair[1].accept();
+    let timer;
+    const close = () => { clearTimeout(timer); pair[1].close(); };
+    pair[1].addEventListener('close', close); pair[1].addEventListener('error', close);
     pair[1].addEventListener('message', ({ data }) => {
       const body = JSON.parse(data);
-      for (const event of respond(body, request, 'websocket')) pair[1].send(JSON.stringify(event));
+      const { events, held } = respond(body, request, 'websocket');
+      for (const event of events) pair[1].send(JSON.stringify(event));
+      if (held) {
+        // The control request shares only a flag. Socket I/O and its timer
+        // stay in this message's Worker context until close or watchdog expiry.
+        const deadline = Date.now() + 30_000;
+        const poll = () => {
+          if (disconnectRequested || Date.now() >= deadline) {
+            disconnected = disconnectRequested; expired = !disconnectRequested;
+            pair[1].close(1011, 'fixture disconnect');
+          } else timer = setTimeout(poll, 10);
+        };
+        timer = setTimeout(poll, 10);
+      }
     });
     return new Response(null, { status: 101, headers: { 'x-codex-turn-state': 'fixture-turn-only-in-upgrade' }, webSocket: pair[0] });
   }
   if (request.method !== 'POST') return new Response('unexpected upstream method', { status: 405 });
-  const events = respond(await request.json(), request, 'http');
+  const { events } = respond(await request.json(), request, 'http');
   return new Response(events.map(event => 'event: ' + event.type + '\\ndata: ' + JSON.stringify(event) + '\\n\\n').join(''), { headers: { 'content-type': 'text/event-stream' } });
 } };
 `; }
