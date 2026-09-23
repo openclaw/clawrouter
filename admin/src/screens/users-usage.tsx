@@ -100,20 +100,42 @@ export function UsageScreen({ keys, credentials, services, overview, tenants, us
   const [contentLoading, setContentLoading] = useState(false);
   const [expandedRequestId, setExpandedRequestId] = useState<string | null>(null);
   const contentFeedbackRef = useRef<HTMLDivElement>(null);
+  const contentOperationRef = useRef<AbortController | null>(null);
+  function retireContentRead() {
+    const operation = contentOperationRef.current;
+    // Revoke publication before aborting: cancellation may race a completed read.
+    contentOperationRef.current = null;
+    operation?.abort();
+  }
+  useEffect(() => retireContentRead, []);
   useEffect(() => {
     if (contentLoading || contentError || retainedContent) contentFeedbackRef.current?.scrollIntoView({ block: "nearest" });
   }, [contentError, contentLoading, retainedContent]);
+  function closeContent() {
+    retireContentRead();
+    setRetainedContent(null);
+    setContentError("");
+    setContentLoading(false);
+  }
   async function inspectContent(event: UsageAuditEvent) {
     if (!event.content_ref) return;
+    retireContentRead();
+    const operation = new AbortController();
+    contentOperationRef.current = operation;
+    setRetainedContent(null);
     setContentLoading(true);
     setContentError("");
     try {
-      setRetainedContent(await request<RetainedRequestContent>(window.location.origin, `/v1/admin/content?tenant=${encodeURIComponent(event.tenant_id)}&ref=${encodeURIComponent(event.content_ref)}`));
+      const content = await request<RetainedRequestContent>(window.location.origin, `/v1/admin/content?tenant=${encodeURIComponent(event.tenant_id)}&ref=${encodeURIComponent(event.content_ref)}`, { signal: operation.signal });
+      if (contentOperationRef.current === operation) setRetainedContent(content);
     } catch (error) {
-      setRetainedContent(null);
+      if (contentOperationRef.current !== operation) return;
       setContentError(errorMessage(error));
     } finally {
-      setContentLoading(false);
+      if (contentOperationRef.current === operation) {
+        contentOperationRef.current = null;
+        setContentLoading(false);
+      }
     }
   }
   const activePolicies = keys.filter((key) => key.enabled);
@@ -171,9 +193,11 @@ export function UsageScreen({ keys, credentials, services, overview, tenants, us
       </div>
 
       {contentLoading || contentError || retainedContent ? <div ref={contentFeedbackRef} className="retainedContentFeedback" aria-live="polite">
+        <section className="analyticsPanel retainedContentPanel"><header className="analyticsPanelHeader"><div><span>Request content</span><h2>Retained request</h2>{retainedContent ? <p>{retainedContent.requestId}</p> : null}</div><button type="button" className="buttonSecondary" onClick={closeContent}>Close</button></header>
         {contentLoading ? <InlineNote>Loading retained request…</InlineNote> : null}
         {contentError ? <InlineError message={contentError} /> : null}
-        {retainedContent ? <section className="analyticsPanel retainedContentPanel"><header className="analyticsPanelHeader"><div><span>Request content</span><h2>Retained request</h2><p>{retainedContent.requestId}</p></div><button type="button" className="buttonSecondary" onClick={() => setRetainedContent(null)}>Close</button></header><dl className="facts"><dt>identity</dt><dd>{retainedContent.principalId ?? "credential"}</dd><dt>service</dt><dd>{retainedContent.provider}</dd><dt>expires</dt><dd>{formatTimestamp(retainedContent.expiresAtMs, true)}</dd></dl><pre>{JSON.stringify(retainedContent.body, null, 2)}</pre></section> : null}
+        {retainedContent ? <><dl className="facts"><dt>identity</dt><dd>{retainedContent.principalId ?? "credential"}</dd><dt>service</dt><dd>{retainedContent.provider}</dd><dt>expires</dt><dd>{formatTimestamp(retainedContent.expiresAtMs, true)}</dd></dl><pre>{JSON.stringify(retainedContent.body, null, 2)}</pre></> : null}
+        </section>
       </div> : null}
 
       <section className="analyticsPanel usageTablePanel">

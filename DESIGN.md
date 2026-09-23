@@ -57,6 +57,10 @@ ordinary reporting failures retain the current identity and show refresh errors.
 Already-sent key operations keep admission until they settle and are never replayed
 by sign-in recovery.
 
+Retained-request inspection follows the latest selected call. Selecting another
+call clears the previous content; Close dismisses loading, errors and content.
+Late replies cannot replace a newer selection or reopen a closed inspector.
+
 ## Accessibility and validation
 
 Preserve visible keyboard focus, labeled controls, reduced motion, and WCAG AA
