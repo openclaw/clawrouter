@@ -5,7 +5,7 @@ for (const action of ["Save grant", "Connect with provider"]) {
   test(`early policy draft ${action} uses the displayed first inventory scope`, async ({ page }) => {
     const state = await openAccounts(page, true, true);
     await page.getByRole("button", { name: "New grant", exact: true }).click();
-    const scope = page.getByLabel("scope id", { exact: true });
+    const scope = page.getByRole("combobox", { name: "scope id", exact: true });
     await expect(scope).toHaveValue("");
     await expect(scope.locator("option:checked")).toHaveText("Select a policy");
     await page.getByLabel("token reference", { exact: true }).fill("account_a");
@@ -24,7 +24,7 @@ for (const action of ["Save grant", "Connect with provider"]) {
     await read.route.fulfill({ json: read.body });
     await expect(scope).toHaveValue("team_policy");
     await expect(scope.locator("option:checked")).toHaveText("team_policy");
-    await expect(page.getByLabel("provider", { exact: true })).toHaveValue("test-provider");
+    await expect(page.getByRole("combobox", { name: "provider", exact: true })).toHaveValue("test-provider");
     await expect(page.getByLabel("label", { exact: true })).toHaveValue("early policy draft");
     await expect(page.getByLabel("API key", { exact: true })).toHaveValue("synthetic-early-primary");
     await page.getByRole("button", { name: action, exact: true }).click();
@@ -43,7 +43,7 @@ test("empty first policy inventory stays unselected until an explicit later choi
   state.reads[0].body.policies = [];
   await state.reads[0].route.fulfill({ json: state.reads[0].body });
   await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
-  const scope = page.getByLabel("scope id", { exact: true });
+  const scope = page.getByRole("combobox", { name: "scope id", exact: true });
   await expect(scope).toHaveValue("");
   await expect(scope.locator("option:checked")).toHaveText("Select a policy");
   await expect(page.getByRole("button", { name: "Save grant", exact: true })).toBeDisabled();
@@ -62,7 +62,7 @@ test("empty first policy inventory stays unselected until an explicit later choi
 
 test("unavailable account identities remain visible instead of displaying the first options", async ({ page }) => {
   await openAccounts(page, false, false, [grant("account_a", { key: "oauth/removed_policy/account_a", scopeId: "removed_policy", provider: "removed-provider" })]);
-  const scope = page.getByLabel("scope id", { exact: true }), provider = page.getByLabel("provider", { exact: true });
+  const scope = page.getByRole("combobox", { name: "scope id", exact: true }), provider = page.getByRole("combobox", { name: "provider", exact: true });
   await expect(scope).toHaveValue("removed_policy");
   await expect(scope.locator("option:checked")).toHaveText("removed_policy (unavailable)");
   await expect(provider).toHaveValue("removed-provider");
@@ -76,7 +76,7 @@ for (const firstReadFails of [false, true]) {
   test(`initial account loading blocks writes and preserves early drafts${firstReadFails ? " through failure and retry" : ""}`, async ({ page }) => {
     const state = await openAccounts(page, true, true);
     await page.getByRole("button", { name: "New grant", exact: true }).click();
-    await page.getByLabel("scope", { exact: true }).selectOption("tenants");
+    await page.getByRole("combobox", { name: "scope", exact: true }).selectOption("tenants");
     await page.getByLabel("scope id", { exact: true }).fill("default");
     await page.getByLabel("token reference", { exact: true }).fill("account_a");
     await page.getByLabel("API key", { exact: true }).fill("synthetic-early-primary");
@@ -187,7 +187,7 @@ test("Save then keyboard Revoke proceeds during held metadata and old cleanup ca
   await state.reads[1].route.fulfill({ json: state.reads[1].body });
   await flush(page);
   await expect(page.locator('.tableRow.selected [data-label="state"]')).toHaveText("revoked");
-  await expect(page.getByLabel("state", { exact: true })).toHaveValue("disabled");
+  await expect(page.getByRole("combobox", { name: "state", exact: true })).toHaveValue("disabled");
   await expect(revoke).toBeDisabled();
   expect(state.writes).toHaveLength(2);
 });
@@ -258,14 +258,14 @@ test("New save adopts its account for another save while metadata remains held",
 test("returning to a pending pause adopts its state without discarding a replacement draft", async ({ page }) => {
   const state = await openAccounts(page);
   state.holdBootstrap = true;
-  await page.getByLabel("state", { exact: true }).selectOption("disabled");
+  await page.getByRole("combobox", { name: "state", exact: true }).selectOption("disabled");
   await page.getByRole("button", { name: "Save grant", exact: true }).click();
   await expect.poll(() => state.writes.length).toBe(1);
   await page.locator(".tableRow").filter({ hasText: "Account B" }).click();
   await page.locator(".tableRow").filter({ hasText: "Account A" }).click();
   await page.getByLabel("label", { exact: true }).fill("replacement draft");
   await state.writes[0].fulfill({ json: grant("account_a", { enabled: false, label: "confirmed pause" }) });
-  await expect(page.getByLabel("state", { exact: true })).toHaveValue("disabled");
+  await expect(page.getByRole("combobox", { name: "state", exact: true })).toHaveValue("disabled");
   await expect(page.getByLabel("label", { exact: true })).toHaveValue("replacement draft");
   await expect(page.locator('.tableRow.selected [data-label="state"]')).toHaveText("paused");
   await expect.poll(() => state.reads.length).toBe(1);
@@ -394,7 +394,7 @@ async function openAccounts(page: Page, holdInitialBootstrap = false, authorizat
   });
   await page.goto("/dashboard/access?resource=upstream");
   if (holdInitialBootstrap) {
-    const provider = page.getByLabel("provider", { exact: true });
+    const provider = page.getByRole("combobox", { name: "provider", exact: true });
     await expect(provider.locator("option")).toHaveText(["Select a provider", "Test Provider"]);
     await expect(provider).toHaveValue("");
     await expect(provider.locator("option:checked")).toHaveText("Select a provider");
