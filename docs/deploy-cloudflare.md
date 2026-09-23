@@ -571,6 +571,13 @@ revokes every credential, Access user, and Access group bound to it. Neither
 operation rotates upstream provider credentials. Never use `--local` to revoke
 a deployed credential.
 
+Disabling an Access user also denies proxy keys whose `principalId` identifies
+that user, including subsequent turns on an existing Responses WebSocket.
+Re-enabling the user restores those keys if their credential and policy remain
+enabled. Unowned service keys and keys without a materialized owner record are
+unaffected. Removing a policy binding alone does not revoke already-issued keys;
+disable the owner, credential, or policy when offboarding requires that result.
+
 Inspect a key without making an upstream provider call:
 
 ```sh

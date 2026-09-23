@@ -150,15 +150,15 @@ async function getContent(request: Request, env: Env): Promise<Response> {
 }
 
 async function overview(env: Env) {
-  const policies = await listPolicies(env), credentials = await listCredentials(env);
-  return overviewFrom(policies, credentials);
+  const [policies, credentials, users] = await Promise.all([listPolicies(env), listCredentials(env), listUsers(env)]);
+  return overviewFrom(policies, credentials, users);
 }
 
-function overviewFrom(policies: AccessPolicyEntry[], credentials: ProxyCredentialEntry[]) {
-  const active = new Map(policies.map((entry) => [entry.policyId, entry.policy.enabled]));
+function overviewFrom(policies: AccessPolicyEntry[], credentials: ProxyCredentialEntry[], users: AccessControlUser[]) {
+  const active = credentialResponsesFrom(policies, credentials, users).filter((credential) => credential.active);
   return {
     policiesTotal: policies.length, policiesActive: policies.filter((entry) => entry.policy.enabled).length,
-    keysTotal: credentials.length, keysActive: credentials.filter((entry) => entry.credential.enabled && active.get(entry.credential.policyId)).length,
+    keysTotal: credentials.length, keysActive: active.length,
     tenantsTotal: new Set(policies.map((entry) => entry.policy.tenantId ?? "default")).size,
     providerCount: snapshot.providers.length, openaiCompatibleProviders: snapshot.providers.filter((provider) => provider.class === "openai_compatible").length,
     manifestRoutes: snapshot.providers.reduce((sum, provider) => sum + provider.endpoints.length, 0),
@@ -167,11 +167,11 @@ function overviewFrom(policies: AccessPolicyEntry[], credentials: ProxyCredentia
 }
 
 async function tenants(env: Env) {
-  const policies = await listPolicies(env), credentials = await listCredentials(env);
-  return tenantsFrom(policies, credentials);
+  const [policies, credentials, users] = await Promise.all([listPolicies(env), listCredentials(env), listUsers(env)]);
+  return tenantsFrom(policies, credentials, users);
 }
 
-function tenantsFrom(policies: AccessPolicyEntry[], credentials: ProxyCredentialEntry[]) {
+function tenantsFrom(policies: AccessPolicyEntry[], credentials: ProxyCredentialEntry[], users: AccessControlUser[]) {
   const groups = new Map<string, { tenantId: string; policies: number; activePolicies: number; keys: number; activeKeys: number; providers: Set<string>; allProviders: boolean; monthlyBudgetMicros: number; requestCostMicros: number }>();
   for (const entry of policies) {
     const id = entry.policy.tenantId ?? "default";
@@ -182,9 +182,9 @@ function tenantsFrom(policies: AccessPolicyEntry[], credentials: ProxyCredential
     groups.set(id, row);
   }
   const byId = new Map(policies.map((entry) => [entry.policyId, entry.policy]));
-  for (const entry of credentials) {
-    const policy = byId.get(entry.credential.policyId); if (!policy) continue;
-    const row = groups.get(policy.tenantId ?? "default")!; row.keys += 1; row.activeKeys += Number(entry.credential.enabled && policy.enabled && entry.credential.policyGeneration === policy.generation);
+  for (const entry of credentialResponsesFrom(policies, credentials, users)) {
+    const policy = byId.get(entry.policyId); if (!policy) continue;
+    const row = groups.get(policy.tenantId ?? "default")!; row.keys += 1; row.activeKeys += Number(entry.active);
   }
   return [...groups.values()].map((row) => ({ ...row, providers: [...row.providers].sort() }));
 }
@@ -226,7 +226,8 @@ export function budgetPrincipalsByPolicy(credentialEntries: ProxyCredentialEntry
 }
 
 async function credentialResponses(env: Env) {
-  return credentialResponsesFrom(await listPolicies(env), await listCredentials(env));
+  const [policies, credentials, users] = await Promise.all([listPolicies(env), listCredentials(env), listUsers(env)]);
+  return credentialResponsesFrom(policies, credentials, users);
 }
 
 async function connections(env: Env): Promise<ProviderConnection[]> {
@@ -264,7 +265,7 @@ async function adminBootstrap(env: Env): Promise<AdminBootstrapResponse> {
   const connectionResponseRows = await connectionResponses(env, connectionRows);
   return {
     policies: policies.map(policyResponse),
-    credentials: credentialResponsesFrom(policies, credentials),
+    credentials: credentialResponsesFrom(policies, credentials, users),
     connections: connectionResponseRows,
     users: users.map(userResponse),
     bindings,
@@ -272,8 +273,8 @@ async function adminBootstrap(env: Env): Promise<AdminBootstrapResponse> {
     grants: await upstreamGrantResponses(env, grants),
     rules,
     fusion,
-    overview: overviewFrom(policies, credentials),
-    tenants: tenantsFrom(policies, credentials),
+    overview: overviewFrom(policies, credentials, users),
+    tenants: tenantsFrom(policies, credentials, users),
   };
 }
 

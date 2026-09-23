@@ -53,6 +53,7 @@ export interface ProxyCredential {
   generationMatches?: boolean;
   active?: boolean;
   principalId?: string | null;
+  principalEnabled?: boolean;
 }
 
 export interface ProviderConnection {

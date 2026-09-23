@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import {
   catalogProviderIds,
+  credentialOutcome,
   directUserBindingChanges,
   effectiveAccess,
   knownPolicyProviders,
@@ -21,6 +22,15 @@ import {
   serviceOutcome,
   tenantSummaryFallback,
 } from "../src/domain.ts";
+
+test("credential status names disabled owners while legacy and unowned rows stay usable", () => {
+  const credential = { credentialId: "fixture", policyId: "fixture", enabled: true };
+  const policies = [{ policyId: "fixture", enabled: true }];
+  assert.deepEqual(credentialOutcome({ ...credential, principalEnabled: false, active: false }, policies), { label: "owner disabled", tone: "revoked", active: false });
+  assert.equal(credentialOutcome(credential, policies).active, true);
+  assert.equal(credentialOutcome({ ...credential, principalEnabled: true }, policies).active, true);
+  assert.equal(credentialOutcome({ ...credential, enabled: false, principalEnabled: false }, policies).label, "revoked");
+});
 
 test("eligible grant JSON preserves delimiter-bearing references and empty deny lists", () => {
   assert.deepEqual(parseEligibleGrants('{"openai":["team,a","team-a","team,a"],"anthropic":[]}'), { openai: ["team,a", "team-a"], anthropic: [] });
