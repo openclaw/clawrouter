@@ -738,6 +738,7 @@ The console enables account writes after the first account list loads; you can
 prepare a draft while it loads. It applies confirmed saves, revocations,
 credential refreshes, and quota results before refreshing the rest of the dashboard. You can edit or
 save again while that refresh runs; later drafts and selections stay intact.
+Provider sign-in keeps account writes blocked while its redirect is pending.
 A reporting failure does not undo a confirmed change. If a write cannot be
 confirmed, refresh and inspect the account before retrying; the console does
 not retry the write automatically.

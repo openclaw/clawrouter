@@ -3,7 +3,7 @@ import type { AccessPolicy, AdminBootstrapResponse, UpstreamGrant } from "../src
 
 for (const firstReadFails of [false, true]) {
   test(`initial account loading blocks writes and preserves early drafts${firstReadFails ? " through failure and retry" : ""}`, async ({ page }) => {
-    const state = await openAccounts(page, true);
+    const state = await openAccounts(page, true, true);
     await page.getByRole("button", { name: "New grant", exact: true }).click();
     await page.getByLabel("scope", { exact: true }).selectOption("tenants");
     await page.getByLabel("scope id", { exact: true }).fill("default");
@@ -12,6 +12,7 @@ for (const firstReadFails of [false, true]) {
     await page.getByLabel("label", { exact: true }).fill("early draft");
     const save = page.getByRole("button", { name: "Save grant", exact: true });
     await expect(save).toBeDisabled();
+    await expect(page.getByRole("button", { name: "Connect with provider", exact: true })).toBeDisabled();
     await expect(page.locator(".inspector")).toContainText("Upstream accounts have not loaded");
     await page.locator(".inspector form").evaluate((form: HTMLFormElement) => form.requestSubmit());
     await flush(page);
@@ -33,6 +34,31 @@ for (const firstReadFails of [false, true]) {
     expect(state.writes).toHaveLength(0);
   });
 }
+
+test("held OAuth authorization blocks account writes and failure restores them", async ({ page }) => {
+  const state = await openAccounts(page, false, true);
+  state.holdBootstrap = true;
+  const connect = page.getByRole("button", { name: "Reconnect with provider", exact: true });
+  await connect.click();
+  await expect.poll(() => state.writes.length).toBe(1);
+  expect(state.writes[0].request().method()).toBe("POST");
+  expect(new URL(state.writes[0].request().url()).pathname).toBe("/v1/admin/upstream-grants/policies/team_policy/account_a/authorize");
+  await expect(connect).toBeDisabled();
+  for (const name of ["Save grant", "Revoke", "Refresh token", "Refresh quota"]) await expect(page.getByRole("button", { name, exact: true })).toBeDisabled();
+  await page.locator(".inspector form").evaluate((form: HTMLFormElement) => { form.requestSubmit(); form.requestSubmit(); });
+  await flush(page);
+  expect(state.writes).toHaveLength(1);
+  await state.writes[0].fulfill({ status: 503, json: { error: { message: "authorization unavailable" } } });
+  await expect(page.locator(".inspector")).toContainText("authorization unavailable");
+  await expect(connect).toBeEnabled();
+  for (const name of ["Save grant", "Revoke", "Refresh token", "Refresh quota"]) await expect(page.getByRole("button", { name, exact: true })).toBeEnabled();
+  await page.getByRole("button", { name: "Save grant", exact: true }).click();
+  await expect.poll(() => state.writes.length).toBe(2);
+  expect(state.writes[1].request().method()).toBe("PUT");
+  expect(new URL(state.writes[1].request().url()).pathname).toBe("/v1/admin/upstream-grants/policies/team_policy/account_a");
+  await state.writes[1].fulfill({ json: grant() });
+  await expect(page.getByRole("button", { name: "Save grant", exact: true })).toBeEnabled();
+});
 
 for (const [action, method, suffix] of [["Save grant", "PUT", ""], ["Revoke", "POST", "/revoke"], ["Refresh token", "POST", "/refresh"], ["Refresh quota", "POST", "/quota-refresh"]] as const) {
   test(`${action} shows its canonical result before a held, then failed bootstrap`, async ({ page }) => {
@@ -228,13 +254,14 @@ function grant(tokenRef = "account_a", values: Partial<UpstreamGrant> = {}): Ups
 function revoked() { return grant("account_a", { enabled: false, usable: false, hasAccessToken: false, hasRefreshToken: false, revokedAt: "2026-09-01T00:00:00Z" }); }
 async function flush(page: Page) { await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))); }
 
-async function openAccounts(page: Page, holdInitialBootstrap = false) {
+async function openAccounts(page: Page, holdInitialBootstrap = false, authorization = false) {
   const state = { writes: [] as Route[], reads: [] as { route: Route; body: AdminBootstrapResponse }[], sessions: [] as { route: Route; body: unknown }[], holdBootstrap: holdInitialBootstrap, holdSession: false, email: "admin@example.com" };
   const mutations: Record<string, string> = {
     "/v1/admin/upstream-grants/policies/team_policy/account_a": "PUT",
     "/v1/admin/upstream-grants/policies/team_policy/account_a/revoke": "POST",
     "/v1/admin/upstream-grants/policies/team_policy/account_a/refresh": "POST",
     "/v1/admin/upstream-grants/policies/team_policy/account_a/quota-refresh": "POST",
+    "/v1/admin/upstream-grants/policies/team_policy/account_a/authorize": "POST",
     "/v1/admin/upstream-grants/policies/team_policy/created": "PUT",
   };
   const policy: AccessPolicy = { policyId: "team_policy", enabled: true, providers: [], tenantId: "default", retainRequestContent: false, grantRouting: { strategy: "priority", stickiness: "none", failover: true, staleState: "allow", staleAfterSeconds: 300, switchAtUsedPercent: 90, hysteresisPercent: 10, eligibleGrants: {} } };
@@ -254,7 +281,7 @@ async function openAccounts(page: Page, holdInitialBootstrap = false) {
     if (path === "/v1/admin/bootstrap" && state.holdBootstrap) { state.reads.push({ route, body: structuredClone(bootstrap) }); return; }
     if (path === "/v1/session" && state.holdSession) { state.sessions.push({ route, body: session }); return; }
     const responses: Record<string, unknown> = {
-      "/v1/providers": { providers: [{ id: "test-provider", display_name: "Test Provider", class: "test", service_kind: "model_provider", capabilities: [], quota: { probes: [{ grantKinds: ["subscription"], requiresRefreshToken: false }] } }] },
+      "/v1/providers": { providers: [{ id: "test-provider", display_name: "Test Provider", class: "test", service_kind: "model_provider", capabilities: [], ...(authorization ? { auth: { authorization: { grantKind: "subscription" } } } : {}), quota: { probes: [{ grantKinds: ["subscription"], requiresRefreshToken: false }] } }] },
       "/v1/routes": { openaiCompatible: [], manifestProxy: [] }, "/v1/session": session,
       "/v1/session/usage": { policies: [] }, "/v1/session/credentials": { credentials: [] }, "/v1/admin/bootstrap": bootstrap,
     };

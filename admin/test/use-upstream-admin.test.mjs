@@ -63,6 +63,111 @@ test("missing or rejected initial hydration stays unready, including live mode o
   assert.equal(fixture.render().upstream.form.credential, "synthetic-primary");
 });
 
+test("OAuth admission blocks all four writes and duplicate authorization through navigation", async () => {
+  const fixture = ready(true), owner = fixture.render().upstream;
+  const authorization = owner.authorize();
+  await Promise.all([owner.save(event), owner.revoke(owner.selected), owner.refresh(owner.selected), owner.refreshQuota(owner.selected), owner.authorize()]);
+  assert.equal(fixture.requests.length, 1);
+  assert.equal(fixture.requests[0].path, "/v1/admin/upstream-grants/policies/team_policy/account_a/authorize");
+  assert.equal(fixture.requests[0].init.method, "POST");
+  assert.equal(fixture.render().upstream.busy, true);
+  assert.equal(fixture.render().captureHydration(), null);
+  fixture.requests[0].resolve({ authorizationUrl: "https://provider.example/authorize" });
+  await authorization;
+  assert.deepEqual(fixture.navigations, ["https://provider.example/authorize"]);
+  assert.equal(fixture.render().upstream.busy, true);
+  await owner.save(event);
+  assert.equal(fixture.requests.length, 1);
+});
+
+test("a write blocks OAuth, then authorization supersedes metadata without old cleanup releasing it", async () => {
+  const fixture = ready(true), owner = fixture.render().upstream, write = owner.save(event);
+  await owner.authorize();
+  assert.equal(fixture.requests.length, 1);
+  fixture.requests[0].resolve(grant());
+  await write;
+  const authorization = owner.authorize();
+  assert.equal(fixture.requests.length, 2);
+  assert.equal(fixture.refreshes[0].owns(), false);
+  fixture.refreshes[0].resolve();
+  await flush();
+  assert.equal(fixture.render().upstream.busy, true);
+  assert.equal(fixture.render().captureHydration(), null);
+  fixture.requests[1].resolve({ authorizationUrl: "https://provider.example/authorize" });
+  await authorization;
+  assert.equal(fixture.render().upstream.busy, true);
+});
+
+test("OAuth cannot retire or bypass initial inventory admission", async () => {
+  const fixture = mount(false, false, true), snapshot = fixture.render().captureHydration();
+  fixture.render().upstream.startNew();
+  await fixture.render().upstream.authorize();
+  assert.equal(fixture.requests.length, 0);
+  assert.equal(fixture.statuses.length, 0);
+  assert.equal(fixture.render().captureHydration(), snapshot);
+  hydrate(fixture, [], snapshot);
+  const authorization = fixture.render().upstream.authorize();
+  assert.equal(fixture.requests.length, 1);
+  fixture.requests[0].resolve({ authorizationUrl: "https://provider.example/authorize" });
+  await authorization;
+});
+
+test("OAuth validation and demo outcomes release write admission", async () => {
+  const fixture = ready(true);
+  change(fixture, { priority: "-1" });
+  await fixture.render().upstream.authorize();
+  assert.match(fixture.render().upstream.error, /priority must/);
+  assert.equal(fixture.render().upstream.busy, false);
+  assert.notEqual(fixture.render().captureHydration(), null);
+  assert.equal(fixture.requests.length, 0);
+  const demoFixture = mount(true, true, true);
+  await demoFixture.render().upstream.authorize();
+  assert.equal(demoFixture.render().upstream.busy, false);
+  assert.equal(demoFixture.statuses.at(-1), "browser OAuth unavailable in local demo");
+  assert.equal(demoFixture.requests.length, 0);
+});
+
+for (const failure of [new DashboardRequestError("authorization unavailable", 503), new Error("authorization unavailable")]) {
+  test(`OAuth ${failure.status ?? "transport"} failure releases admission for a later write`, async () => {
+    const fixture = ready(true), authorization = fixture.render().upstream.authorize();
+    fixture.requests[0].reject(failure);
+    await authorization;
+    assert.equal(fixture.render().upstream.busy, false);
+    assert.match(fixture.render().upstream.error, /authorization unavailable/);
+    assert.equal(fixture.refreshes.length, 0);
+    const write = act(fixture, "save");
+    assert.equal(fixture.requests.length, 2);
+    fixture.requests[1].resolve(grant());
+    await write;
+  });
+}
+
+test("synchronous navigation failure releases admission and reports the outcome", async () => {
+  const fixture = ready(true);
+  fixture.navigationError = new Error("navigation denied");
+  const authorization = fixture.render().upstream.authorize();
+  fixture.requests[0].resolve({ authorizationUrl: "https://provider.example/authorize" });
+  await authorization;
+  assert.equal(fixture.render().upstream.busy, false);
+  assert.match(fixture.render().upstream.error, /navigation denied/);
+  assert.notEqual(fixture.render().captureHydration(), null);
+});
+
+for (const outcome of ["success", "failure"]) {
+  test(`scope retirement suppresses OAuth ${outcome} and releases only its admission`, async () => {
+    const fixture = ready(true), authorization = fixture.render().upstream.authorize(), statuses = fixture.statuses.length;
+    fixture.current = false;
+    if (outcome === "success") fixture.requests[0].resolve({ authorizationUrl: "https://provider.example/authorize" });
+    else fixture.requests[0].reject(new Error("old authorization failure"));
+    await authorization;
+    assert.equal(fixture.navigations.length, 0);
+    assert.equal(fixture.statuses.length, statuses);
+    assert.equal(fixture.refreshes.length, 0);
+    assert.notEqual(fixture.render().captureHydration(), null);
+    assert.equal(ready(true).render().upstream.busy, false);
+  });
+}
+
 for (const [action, method, suffix] of [["save", "PUT", ""], ["revoke", "POST", "/revoke"], ["refresh", "POST", "/refresh"], ["refreshQuota", "POST", "/quota-refresh"]]) {
   test(`${action} publishes canonical facts and releases buttons before dependent metadata`, async () => {
     const fixture = ready(), before = fixture.render().captureHydration();
@@ -441,11 +546,11 @@ function tombstone() { return grant("account_a", { enabled: false, usable: false
 function evaluate(value, result) { return new Function(`${stripTypeScriptTypes(value).replaceAll("export ", "")}\nreturn ${result};`)(); }
 function change(fixture, values) { fixture.render().upstream.setForm((current) => ({ ...current, ...values })); }
 function hydrate(fixture, rows, snapshot = fixture.render().captureHydration()) { fixture.render().hydrate(rows, "team_policy", providers, snapshot); }
-function ready() { const fixture = mount(); hydrate(fixture, [grant(), grant("account_b")]); return fixture; }
+function ready(authorization = false) { const fixture = mount(false, false, authorization); hydrate(fixture, [grant(), grant("account_b")]); return fixture; }
 function act(fixture, action) { const owner = fixture.render().upstream; return owner[action](action === "save" ? event : owner.selected); }
 async function flush() { await new Promise((resolve) => setImmediate(resolve)); }
 
-function mount(demoMode = false, allowDemo = demoMode) {
+function mount(demoMode = false, allowDemo = demoMode, authorization = false) {
   const slots = [], requests = [], statuses = [], refreshes = [];
   let cursor = 0;
   const useState = (initial) => {
@@ -454,12 +559,13 @@ function mount(demoMode = false, allowDemo = demoMode) {
     return [slots[index], (next) => { slots[index] = typeof next === "function" ? next(slots[index]) : next; }];
   };
   const useRef = (initial) => useState(() => ({ current: initial }))[0];
-  const fixture = { requests, statuses, refreshes, current: true };
+  const fixture = { requests, statuses, refreshes, navigations: [], navigationError: null, current: true };
+  const window = { location: { assign: (url) => { if (fixture.navigationError) throw fixture.navigationError; fixture.navigations.push(url); } } };
   const request = (_origin, path, init) => new Promise((resolve, reject) => requests.push({ path, init, resolve, reject }));
-  const useUpstreamAdmin = new Function("useState", "useRef", "DashboardRequestError", "errorMessage", "defaultUpstreamGrant", "demo", "demoGrantFromForm", "parseCredentialBundle", "upstreamGrantFormFromGrant", `${source}\nreturn useUpstreamAdmin;`)(useState, useRef, DashboardRequestError, errorMessage, defaultUpstreamGrant, { upstreamGrants: [grant()] }, demoGrantFromForm, parseCredentialBundle, upstreamGrantFormFromGrant);
+  const useUpstreamAdmin = new Function("useState", "useRef", "DashboardRequestError", "errorMessage", "defaultUpstreamGrant", "demo", "demoGrantFromForm", "parseCredentialBundle", "upstreamGrantFormFromGrant", "window", `${source}\nreturn useUpstreamAdmin;`)(useState, useRef, DashboardRequestError, errorMessage, defaultUpstreamGrant, { upstreamGrants: [grant()] }, demoGrantFromForm, parseCredentialBundle, upstreamGrantFormFromGrant, window);
   fixture.render = () => {
     cursor = 0;
-    return useUpstreamAdmin({ request, isCurrent: () => fixture.current, allowDemo, gatewayOrigin: "https://console.example", demoMode, providers, policies: [{ policyId: "team_policy" }], selectedPolicyId: "team_policy", setStatus: (value) => statuses.push(value), refresh: (owns) => new Promise((resolve) => refreshes.push({ owns, resolve })) });
+    return useUpstreamAdmin({ request, isCurrent: () => fixture.current, allowDemo, gatewayOrigin: "https://console.example", demoMode, providers: authorization ? [{ ...providers[0], auth: { authorization: { grantKind: "subscription" } } }] : providers, policies: [{ policyId: "team_policy" }], selectedPolicyId: "team_policy", setStatus: (value) => statuses.push(value), refresh: (owns) => new Promise((resolve) => refreshes.push({ owns, resolve })) });
   };
   return fixture;
 }

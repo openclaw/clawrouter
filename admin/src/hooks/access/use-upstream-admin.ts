@@ -73,14 +73,20 @@ export function useUpstreamAdmin({ request, isCurrent, allowDemo, gatewayOrigin,
   async function refreshGrant(grant: UpstreamGrant) { await mutate("refresh", grant); }
   async function refreshQuota(grant: UpstreamGrant) { await mutate("quota-refresh", grant); }
 
-  async function mutate(action: Action, target?: UpstreamGrant) {
+  function beginWrite(): Operation | null {
     // An early submit must not overwrite an unseen account or retire its initial read.
-    if (!isCurrent() || !readyRef.current || operation.current?.phase === "writing") return;
+    if (!isCurrent() || !readyRef.current || operation.current?.phase === "writing") return null;
     const op: Operation = { phase: "writing" };
     operation.current = op;
     recordsEpoch.current += 1;
     setBusy(true);
     setError("");
+    return op;
+  }
+
+  async function mutate(action: Action, target?: UpstreamGrant) {
+    const op = beginWrite();
+    if (!op) return;
     const submitted = currentDraft.current, submittedIncarnation = incarnation.current, submittedRevision = revision.current;
     const dirty = new Set(fields.filter((field) => submitted.value[field] !== baseline.current[field]));
     const form = submitted.value;
@@ -167,10 +173,10 @@ export function useUpstreamAdmin({ request, isCurrent, allowDemo, gatewayOrigin,
     };
   }
   async function authorize() {
-    if (!isCurrent() || operation.current?.phase === "writing") return;
+    const op = beginWrite();
+    if (!op) return;
     const form = currentDraft.current.value;
     try {
-      setError("");
       const scopeId = form.scopeId.trim(), tokenRef = form.tokenRef.trim(), provider = form.provider.trim();
       if (!scopeId || !tokenRef || !provider) throw new Error("scope, token reference, and provider are required");
       const priority = Number(form.priority);
@@ -179,10 +185,13 @@ export function useUpstreamAdmin({ request, isCurrent, allowDemo, gatewayOrigin,
       if (!Number.isFinite(weight) || weight <= 0 || weight > 1_000_000) throw new Error("weight must be greater than 0 and at most 1000000");
       if (!providers.find((item) => item.id === provider)?.auth?.authorization) throw new Error("selected provider does not support browser OAuth");
       setStatus("connecting upstream grant");
-      if (demoMode) { setStatus("browser OAuth unavailable in local demo"); return; }
+      if (demoMode) { release(op); setStatus("browser OAuth unavailable in local demo"); return; }
       const result = await request<{ authorizationUrl: string }>(gatewayOrigin, `/v1/admin/upstream-grants/${form.scope}/${encodeURIComponent(scopeId)}/${encodeURIComponent(tokenRef)}/authorize`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider, priority, weight }) });
-      if (isCurrent()) window.location.assign(result.authorizationUrl);
-    } catch (caught) { if (isCurrent()) { const message = errorMessage(caught); setError(message); setStatus(message); } }
+      if (!isCurrent()) { release(op); return; }
+      // assign() returns before unloading. Keep admission until navigation so a new
+      // write cannot lose its acknowledgement when this redirect takes effect.
+      window.location.assign(result.authorizationUrl);
+    } catch (caught) { release(op); if (isCurrent()) { const message = errorMessage(caught); setError(message); setStatus(message); } }
   }
 
   function updateRows(next: UpstreamGrant[]) { rows.current = next; setGrants(next); }
