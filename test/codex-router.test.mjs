@@ -233,47 +233,56 @@ stream_idle_timeout_ms = 10000
   });
 }
 
-// Diagnostic control for the separately tracked stalled-HTTP interruption gap.
-// Reuse the same idle upstream and actual workerd TCP ingress as native Codex.
-test("idle HTTP disconnect boundary: raw socket controls", { skip: !binary, timeout: 30_000 }, async (t) => {
+// A TCP reset is an explicit disconnect even with no further provider output.
+// Ordinary close of a stalled HTTP stream remains a separate qualification gap.
+test("idle HTTP TCP reset: upstream abort and one cancellation receipt", { skip: !binary, timeout: 30_000 }, async () => {
   const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
-  for (const close of ["destroy", "resetAndDestroy"]) {
-    const home = await mkdtemp(join(tmpdir(), "clawrouter-native-boundary-"));
-    let mf;
-    try {
-      mf = await startWorkerdFixture(home, routerFixture(), upstreamFixture());
-      const kv = await mf.getKVNamespace("POLICY_KV", "router");
-      await kv.put("policies/fixture", JSON.stringify({ enabled: true, generation: "g1", providers: ["openai"], tenantId: "default", monthlyBudgetMicros: limit, retainRequestContent: false }));
-      await kv.put("credentials/fixture", JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update(secret).digest("hex"), policyId: "fixture", policyGeneration: "g1" }));
-      await kv.put("connections/openai", JSON.stringify({ providerId: "openai", enabled: true, monthlyBudgetMicros: limit }));
-      const origin = await mf.ready;
-      const upstream = await mf.getWorker("upstream");
-      await upstream.fetch("https://fixture.example/hold?idle=1", { method: "POST" });
-      await new Promise((resolve, reject) => {
-        let destroyed = false, text = "";
-        const request = httpRequest(new URL("/v1/native/openai/v1/responses", origin), { method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json" } }, (response) => {
-          assert.equal(response.statusCode, 200);
-          response.on("data", (chunk) => {
-            text += chunk.toString();
-            if (!destroyed && text.includes("response.output_text.delta")) { destroyed = true; response.socket[close](); }
-          });
-          response.on("close", () => { clearTimeout(timer); destroyed ? resolve() : reject(new Error("fixture stream ended before socket destruction")); });
-          response.on("error", (error) => { if (!destroyed) reject(error); });
+  const home = await mkdtemp(join(tmpdir(), "clawrouter-native-boundary-"));
+  let mf;
+  try {
+    mf = await startWorkerdFixture(home, routerFixture(), upstreamFixture());
+    const kv = await mf.getKVNamespace("POLICY_KV", "router");
+    await kv.put("policies/fixture", JSON.stringify({ enabled: true, generation: "g1", providers: ["openai"], tenantId: "default", monthlyBudgetMicros: limit, retainRequestContent: false }));
+    await kv.put("credentials/fixture", JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update(secret).digest("hex"), policyId: "fixture", policyGeneration: "g1" }));
+    await kv.put("connections/openai", JSON.stringify({ providerId: "openai", enabled: true, monthlyBudgetMicros: limit }));
+    const origin = await mf.ready;
+    const upstream = await mf.getWorker("upstream");
+    await upstream.fetch("https://fixture.example/hold?idle=1", { method: "POST" });
+    await new Promise((resolve, reject) => {
+      let destroyed = false, text = "";
+      const request = httpRequest(new URL("/v1/native/openai/v1/responses", origin), { method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json" } }, (response) => {
+        assert.equal(response.statusCode, 200);
+        response.on("data", (chunk) => {
+          text += chunk.toString();
+          if (!destroyed && text.includes("response.output_text.delta")) { destroyed = true; response.socket.resetAndDestroy(); }
         });
-        const timer = setTimeout(() => { request.destroy(); reject(new Error("raw HTTP disconnect timed out")); }, 5_000);
-        request.on("error", (error) => { if (!destroyed) { clearTimeout(timer); reject(error); } });
-        request.end(JSON.stringify({ model, input: "synthetic boundary control", stream: true, service_tier: "priority", max_output_tokens: 32 }));
+        response.on("close", () => { clearTimeout(timer); destroyed ? resolve() : reject(new Error("fixture stream ended before socket destruction")); });
+        response.on("error", (error) => { if (!destroyed) reject(error); });
       });
-      let observed;
-      try { await until(async () => { observed = await (await upstream.fetch("https://fixture.example/state")).json(); return observed.aborted.length > 0; }, 5_000); } catch { /* Report the boundary without claiming normal close is qualified. */ }
-      const ingress = await (await fetch(new URL("/fixture-ingress", origin))).json();
-      const usage = await (await fetch(new URL("/v1/usage", origin), { headers: { authorization: `Bearer ${key}` } })).json();
-      t.diagnostic(JSON.stringify({ close, ingress, aborted: observed.aborted, canceled: observed.canceled, expired: observed.expired, receipts: usage.usage.events.map(({ status, status_code, cost_basis }) => ({ status, status_code, cost_basis })) }));
-      if (close === "resetAndDestroy") assert.equal(observed.aborted.length, 1);
-    } finally {
-      await mf?.dispose();
-      await rm(home, { recursive: true, force: true });
-    }
+      const timer = setTimeout(() => { request.destroy(); reject(new Error("raw HTTP disconnect timed out")); }, 5_000);
+      request.on("error", (error) => { if (!destroyed) { clearTimeout(timer); reject(error); } });
+      request.end(JSON.stringify({ model, input: "synthetic boundary control", stream: true, service_tier: "priority", max_output_tokens: 32 }));
+    });
+    let observed, usage;
+    await until(async () => { observed = await (await upstream.fetch("https://fixture.example/state")).json(); return observed.aborted.length > 0; }, 5_000);
+    assert.equal(observed.requests.length, 1);
+    assert.deepEqual(observed.aborted, [observed.requests[0].responseId]);
+    assert.deepEqual(observed.expired, []);
+    assert.deepEqual(await (await fetch(new URL("/fixture-ingress", origin))).json(), [{ aborted: true }]);
+    await until(async () => {
+      usage = await (await fetch(new URL("/v1/usage", origin), { headers: { authorization: `Bearer ${key}` } })).json();
+      return usage.usage.events.length === 1;
+    });
+    const [receipt] = usage.usage.events;
+    assert.equal(receipt.status, "client_error");
+    assert.equal(receipt.status_code, 200);
+    assert.equal(receipt.cost_basis, "manifest_reservation");
+    assert.ok(receipt.actual_cost_micros > 0);
+    assert.equal(receipt.actual_cost_micros, receipt.reserved_cost_micros);
+    assert.equal(usage.budget.spentMicros, receipt.actual_cost_micros);
+  } finally {
+    await mf?.dispose();
+    await rm(home, { recursive: true, force: true });
   }
 });
 

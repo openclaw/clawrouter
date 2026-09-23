@@ -135,10 +135,12 @@ and revocation before the next turn. CI downloads checksum-pinned official Linux
 engines for 0.153.0 and 0.155.0; neither case needs an account or paid upstream call. This qualifies
 native engine routing, not macOS Desktop UI behavior or live model quality.
 The cancellation case requires upstream shutdown before the native idle timeout.
-It does not qualify stalled HTTP streams: an interrupted turn with no further
-upstream output did not promptly propagate an ingress abort in this fixture on
-either pinned engine, leaving its reservation unsettled. Codex 0.153 also waits
-for the next recognized SSE event to notice a dropped consumer.
+It does not qualify stalled HTTP/1 streams: ordinary socket closure and native
+interruption with no further upstream output left the fixture reservation
+unsettled at five seconds. An explicit TCP reset did propagate an ingress abort
+and cancellation receipt. Codex 0.153 also waits for the next recognized SSE
+event to notice a dropped consumer. Stalled-stream shutdown and deployed protocol
+behavior, including HTTP/2, still require qualification.
 
 ## WebSocket contract
 
