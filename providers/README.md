@@ -57,6 +57,10 @@ billing:
 
 ## Mapping Rules
 
+- The compiler validates the complete manifest against
+  `_schema/service-provider.schema.json` before applying defaults. Errors identify
+  the provider and JSON pointer; rates and token counts must be safe integers.
+  Cross-field references and pricing relationships are checked separately.
 - `service.platform` is the stable service id used by admin, billing, OAuth, and
   policy grants.
 - `routing.nativePrefixes` lets OpenClaw route native keys such as
