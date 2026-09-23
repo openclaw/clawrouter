@@ -116,7 +116,7 @@ test("Anthropic count_tokens smoke omits messages-only max_tokens", () => {
 test("newly budgeted provider defaults compile with dated pricing", () => {
   const snapshot = compileProviderSnapshot();
   const expectations = {
-    deepseek: ["2026-06-22", 435000, 870000],
+    deepseek: ["2026-09-23", 1320000, 3960000],
     "google-gemini": ["2026-09-23", 1500000, 9000000],
     groq: ["2026-06-22", 150000, 600000],
     minimax: ["2026-06-22", 300000, 1200000],

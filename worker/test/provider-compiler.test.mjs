@@ -13,6 +13,18 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   const generated = JSON.parse(readFileSync("worker/generated/provider-snapshot.json", "utf8"));
   assert.deepEqual(compiled, generated);
   assert.equal(compiled.providers.length, 22);
+  const deepseek = compiled.providers.find(provider => provider.id === "deepseek");
+  assert.deepEqual(deepseek.models.map(model => model.upstream), ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-flash", "deepseek-v4-flash-vision-exp"]);
+  for (const model of deepseek.models) {
+    const pro = model.upstream === "deepseek-v4-pro", pricing = model.pricing;
+    assert.equal(model.id, `deepseek/${model.upstream}`);
+    assert.equal(model.pricing_ref, pro ? "deepseek-v4-pro-peak-upper-bound-2026-09-23" : "deepseek-flash-peak-upper-bound-2026-09-23");
+    assert.equal(pricing.effectiveAt, "2026-09-23");
+    assert.equal(pricing.settlementBasis, "published_upper_bound");
+    assert.deepEqual([pricing.inputMicrosPerMillion, pricing.cachedInputMicrosPerMillion, pricing.outputMicrosPerMillion], pro ? [1_320_000, 44_000, 3_960_000] : [300_000, 6_000, 1_200_000]);
+    assert.deepEqual(compiled.model_index[model.id], { provider: "deepseek", ...Object.fromEntries(Object.entries(model).filter(([key]) => key !== "id")) });
+  }
+  assert.ok(compiled.providers.filter(provider => provider.id !== "deepseek").flatMap(provider => provider.models).every(model => !model.pricing || !Object.hasOwn(model.pricing, "settlementBasis")));
   assert.equal(compiled.model_index["lanseq/qwen3.8-27b-int4"].provider, "lanseq");
   const gemini = compiled.model_index["google/gemini-3.5-flash"];
   assert.equal(gemini.pricing_ref, "google-gemini-3-5-flash-tiers-2026-09-23");
@@ -290,6 +302,7 @@ test("ordinary pricing cards reject invalid schema fields before emitting a snap
     ["empty unpriced costs", (pricing) => { pricing.unpricedCosts = []; }],
     ["duplicate unpriced costs", (pricing) => { pricing.unpricedCosts = ["request_fee", "request_fee"]; }],
     ["unpriced cost scalar", (pricing) => { pricing.unpricedCosts = "request_fee"; }],
+    ...["invoice_exact", null, [], {}].map(value => ["invalid settlement basis", (pricing) => { pricing.settlementBasis = value; }]),
     ["unknown field", (pricing) => { pricing.inputMicrosPerToken = 1; }],
     ["partial long-context card", (pricing) => { pricing.longContext = { thresholdInputTokens: 100, inputMicrosPerMillion: 1 }; }],
     ["unsafe long-context rate", (pricing) => { pricing.longContext = { thresholdInputTokens: 100, inputMicrosPerMillion: Number.MAX_SAFE_INTEGER + 1, outputMicrosPerMillion: 1 }; }],
@@ -306,7 +319,9 @@ test("ordinary pricing cards reject invalid schema fields before emitting a snap
       }, name);
     }
     for (const value of [".inf", ".nan"]) {
-      writeFileSync(path, readFileSync("providers/deepseek.provider.yaml", "utf8").replace("inputMicrosPerMillion: 435000", `inputMicrosPerMillion: ${value}`));
+      const source = readFileSync("providers/deepseek.provider.yaml", "utf8"), anchor = "inputMicrosPerMillion: 1320000";
+      assert.ok(source.includes(anchor));
+      writeFileSync(path, source.replace(anchor, `inputMicrosPerMillion: ${value}`));
       assert.throws(() => compile(path), /invalid manifest:.*\/inputMicrosPerMillion:/);
     }
     const pricing = valid.models.entries[0].pricing;
