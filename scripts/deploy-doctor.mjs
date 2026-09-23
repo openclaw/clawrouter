@@ -1,4 +1,5 @@
 import { spawnSync } from "node:child_process";
+import { grantPoolStatus } from "./grant-pool-recovery.mjs";
 
 import {
   buildProviderSmokePlan,
@@ -19,6 +20,7 @@ const requiredLocalEnv = [
   "CLOUDFLARE_API_TOKEN",
   "CLOUDFLARE_ACCOUNT_ID",
   "CLAWROUTER_ADMIN_TOKEN_SHA256",
+  "CLAWROUTER_ADMIN_TOKEN",
   "CLAWROUTER_POLICY_KV_ID",
 ];
 
@@ -26,6 +28,7 @@ const productionRequiredSecrets = [
   "CLOUDFLARE_API_TOKEN",
   "CLOUDFLARE_ACCOUNT_ID",
   "CLAWROUTER_ADMIN_TOKEN_SHA256",
+  "CLAWROUTER_ADMIN_TOKEN",
   "CLAWROUTER_POLICY_KV_ID",
   "CLAWROUTER_SMOKE_KEY",
 ];
@@ -78,6 +81,13 @@ await checkCloudflareWorkerPermission();
 await checkCloudflareKvPermission();
 checkGitHubRepository(repo);
 printProviderConfig(plan);
+if (process.env.CLAWROUTER_BASE_URL && process.env.CLAWROUTER_ADMIN_TOKEN) {
+  try {
+    const state = await grantPoolStatus();
+    if (!state.activatedAt) errors.push("account attachment routing is not active; inspect pnpm cf:accounts -- --status and complete the first-admin baseline/scan action");
+    else console.log(`account attachment routing: active at revision ${state.revision}`);
+  } catch (error) { errors.push(`account routing status unavailable: ${error.message}`); }
+}
 
 if (warnings.length > 0) {
   console.log("");

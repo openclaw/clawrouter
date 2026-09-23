@@ -91,6 +91,38 @@ attempts are rate limited. Local sign-in is refused whenever Cloudflare
 Access variables are configured, so it cannot be enabled on a managed
 deployment.
 
+## Activate account routing
+
+Before using environment credentials, explicitly accept the storage baseline
+and reconcile the account inventory. Health success alone does not activate
+routing. The admin API and console remain available during this step.
+
+```sh
+export CLAWROUTER_BASE_URL=http://localhost:8787
+pnpm cf:accounts -- --status
+# For existing or unknown /data: stop old writers and verify the account inventory.
+pnpm cf:accounts -- --accept-existing
+pnpm cf:accounts
+```
+
+Use `--accept-fresh` instead only when you know this complete storage set was
+newly created. An empty scan, new container, or empty-looking volume is not
+evidence that old account storage is absent. Acceptance is recorded once;
+later upgrades run `pnpm cf:accounts` without another acceptance.
+
+With console sign-in enabled, Access → Upstream has the same baseline, paged
+scan, pending-write repair, and activation actions. It loads independently if
+a legacy account prevents the normal admin overview from loading. No recovery
+action calls a provider. Resolve reported raw legacy accounts through
+`cf:oauth:put` or `cf:oauth:revoke`, then restart the scan. Owner outages and
+partial storage restores require restoring the owner or matched storage set.
+
+Until activation, requests needing environment credentials return
+`503 grant_pool_not_ready`; existing scoped account checks continue. After
+activation, paused and reauthorization-required accounts prevent environment
+fallback. Explicitly revoking the final account detaches it and permits the
+existing fallback only when policy restrictions allow it.
+
 ## Create a proxy key
 
 The normal key helper uses the running Worker's admin bearer-token API. It does
@@ -129,8 +161,11 @@ CLAWROUTER_ADMIN_TOKEN="$CLAWROUTER_ADMIN_TOKEN" \
 node scripts/smoke-self-host.mjs
 ```
 
-The smoke script creates a temporary policy and credential through the admin
-API, verifies its scoped catalog, and revokes it.
+The smoke script requires the accepted baseline, reconciles account routing,
+creates a temporary policy and credential through the admin API, verifies its
+scoped catalog, and revokes it. It never accepts an unknown persisted volume
+automatically. `--fresh-storage` is reserved for isolated fixtures whose caller
+created a new storage volume in that invocation.
 Health readiness waits up to 30 seconds, with a two-second deadline covering
 each request and its response body and 500 milliseconds between failed attempts.
 If readiness fails, the script exits with the last failure reason.
@@ -164,7 +199,16 @@ release notes, then pull fresh base layers, rebuild, and restart:
 ```sh
 docker compose -f deploy/self-host/docker-compose.yml build --pull
 docker compose -f deploy/self-host/docker-compose.yml up -d
+pnpm cf:accounts
 ```
+
+Keep `POLICY_KV`, `ACCESS_CONTROL`, and `GRANT_CREDENTIALS` together in a
+matched backup/restore. Partial binding replacements need a reviewed migration;
+an old readiness record cannot certify a newly substituted credential store.
+Once attachment states are written, recovery is forward-only. Do not downgrade
+to a build that treats paused/pending index rows as active candidates. Restore
+a complete pre-upgrade backup only after stopping traffic and reviewing lost
+writes; otherwise repair with the current build through the admin actions.
 
 ## Version 1 limitations
 

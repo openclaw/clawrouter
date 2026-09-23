@@ -171,7 +171,7 @@ test("HTTP and native requests reserve 60 in each colliding budget and settle 25
         if (route === "/credentials/resolve") return Response.json({ initialized: true, credentials: [{ credentialId: "fixture_key", credential: { enabled: true, secretSha256: digest, policyId: "openai", policyGeneration: policy.generation } }], missingCredentialIds: [] });
         if (route === "/policies/resolve") return Response.json({ initialized: true, policies: [auth], missingPolicyIds: [] });
         if (route === "/connections/resolve") return Response.json({ initialized: true, connections: [{ ...connection, enabled: true }], missingProviderIds: [] });
-        if (route === "/grant-pools/resolve") return Response.json({ keys: [], states: {} });
+        if (route === "/grant-pools/resolve") return Response.json({ keys: [], states: {}, ready: true });
         throw new Error(`unexpected authority path ${route}`);
       } }) },
     });

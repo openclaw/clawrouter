@@ -11,6 +11,7 @@ import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
 import { continuationAuthority } from "./continuation-authority.mjs";
 import { HttpContinuation } from "../http-continuation.ts";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
+import { acceptGrantPoolBaseline, recoverGrantPools } from "../../scripts/grant-pool-recovery.mjs";
 
 const grantKeys = ["oauth/fixture/account-a", "oauth/fixture/account-b"];
 async function fixture(t, pooled = true, { limit = null, fixedCost = 7 } = {}) {
@@ -18,15 +19,24 @@ async function fixture(t, pooled = true, { limit = null, fixedCost = 7 } = {}) {
   const policy = { enabled: true, generation: "g1", providers: ["openai"], tenantId: "default", monthlyBudgetMicros: limit, requestCostMicros: fixedCost, retainRequestContent: false, grantRouting: { strategy: "round_robin", stickiness: "none", failover: true } };
   const credential = { enabled: true, secretSha256: await sha256Hex("fixture-secret"), policyId: "fixture" };
   const env = attachGrantCredentialNamespace({
+    CLAWROUTER_ADMIN_TOKEN_SHA256: await sha256Hex("fixture-admin"),
     ACCESS_CONTROL: continuationAuthority(t),
     BUDGET_LEDGER: sqlBudgetNamespace(t),
     POLICY_KV: {
       async get(key) { return Array.isArray(key) ? new Map(key.map(key => [key, structuredClone(values.get(key) ?? null)])) : structuredClone(values.get(key) ?? null); },
       async put(key, value) { values.set(key, JSON.parse(value)); },
+      async list({ prefix }) { return { keys: [...values.keys()].filter(key => key.startsWith(prefix)).map(name => ({ name })), list_complete: true }; },
     },
     OPENAI_API_KEY: "synthetic-environment-key",
     USAGE_QUEUE: { async send(event) { events.push(event); } },
   }, { useExistingAuthority: true });
+  const admin = async (path, { method = "GET", body } = {}) => {
+    const response = await handler.fetch(new Request(`https://router.example${path}`, { method, headers: { authorization: "Bearer fixture-admin", "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), env, { waitUntil() {} });
+    assert.equal(response.status, 200, await response.clone().text());
+    return response.json();
+  };
+  await acceptGrantPoolBaseline("fresh", { request: admin });
+  await recoverGrantPools({ request: admin });
   async function authority(path, value) {
     const response = await env.ACCESS_CONTROL.get("policy-bindings").fetch(`https://clawrouter.internal${path}`, { method: "POST", body: JSON.stringify(value) });
     assert.equal(response.status, 200, await response.clone().text());

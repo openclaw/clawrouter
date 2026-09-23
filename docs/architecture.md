@@ -95,8 +95,27 @@ is zero; it removes only pending rows. Legacy evidence remains unresolved, and
 a failed owner read or missing KV record never establishes absence. Raw-KV
 import and ordinary refresh may update an existing attachment but cannot create
 one without admission; they can return an explicit `unattached` result. Legacy
-backfill, readiness, authenticated recovery controls, and consuming attachment
-presence to suppress environment fallback are separate activation work.
+backfill is an explicit key-only command in the same credential-owner tail,
+gated by an accepted baseline scan. It can admit only an existing canonical
+owner, commits a new generation and admission receipt without changing secrets
+or credential lineage, and leaves ordinary reconciliation semantics unchanged.
+KV inventory contributes key names only; it cannot create an owner or receipt.
+
+One fixed readiness row in the existing authority owns baseline acceptance,
+bounded scan progress, unresolved outcomes and activation. Its global revision
+fences a complete inventory against concurrent attachment changes; per-account
+generation/revision still fence membership. Backfill changes that revision, so
+the driver performs a subsequent unchanged verification scan. Cursor plus scan
+revision rejects stale page acknowledgements. Overflow or unresolved owner
+reads prevent activation. Neither a new readiness row nor an empty KV listing
+proves storage is fresh: baseline acceptance is an explicit administrator act.
+
+Before activation, only would-be environment fallback is denied. After it,
+selection consumes attachment presence independently of available candidates:
+paused and reauthorization-required owners block environment fallback, while a
+final explicit revoke can permit it subject to policy and continuation rules.
+Administrator authentication, recovery, health and existing scoped grant checks
+do not depend on the activation gate.
 
 This storage upgrade is forward-only. Reconstructing the current authority
 preserves populated legacy rows, and the current credential owner retries dirty

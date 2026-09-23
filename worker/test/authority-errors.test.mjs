@@ -1,7 +1,18 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 
-import { PolicyBindingIndexObject } from "../authority.ts";
+import { authorityCall, PolicyBindingIndexObject } from "../authority.ts";
+import { HttpError } from "../utils.ts";
+
+test("authority transport preserves typed conflicts without echoing an unstructured body", async () => {
+  for (const [response, expected] of [
+    [Response.json({ error: { code: "grant_pool_readiness_changed", message: "read the current revision" } }, { status: 409 }), { status: 409, code: "grant_pool_readiness_changed", message: "read the current revision" }],
+    [new Response("private-stack-fixture", { status: 500 }), { status: 500, code: "authority_error", message: "authority request failed" }],
+  ]) {
+    const env = { ACCESS_CONTROL: { idFromName: name => name, get: () => ({ fetch: async () => response }) } };
+    await assert.rejects(() => authorityCall(env, "/grant-pools/readiness/activate", {}), error => error instanceof HttpError && Object.entries(expected).every(([key, value]) => error[key] === value));
+  }
+});
 
 test("authority responses preserve validation errors and hide runtime failures", async () => {
   let failReads = false;

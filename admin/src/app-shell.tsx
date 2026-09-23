@@ -5,6 +5,7 @@ import { ThemeToggle, viewIcon, viewSubtitle, viewTitle } from "./components";
 import { DashboardScreen, CatalogScreen, UserAvatar } from "./screens/dashboard-catalog";
 import { PlaygroundScreen } from "./screens/playground";
 import { PoliciesScreen } from "./screens/access";
+import { GrantPoolRecovery } from "./screens/grant-pool-recovery";
 import { UsageScreen, UsersScreen } from "./screens/users-usage";
 import { applyTheme, navItems, readTheme } from "./ui-config";
 import { formatTimestamp } from "./ui-helpers";
@@ -192,6 +193,7 @@ export function AppShell() {
           />
         ) : null}
 
+        {view === "policies" && session.role === "admin" && accessTab === "upstream" ? <GrantPoolRecovery key={shell.gatewayOrigin} gatewayOrigin={shell.gatewayOrigin} demoMode={demoMode} /> : null}
         {view === "policies" && session.role === "admin" ? (
           <PoliciesScreen
             tab={accessTab}

@@ -750,15 +750,73 @@ proposal can receive requests, and the previous provider remains attached until
 the store commits.
 Paused and reauthorization-required accounts remain attached while freeing an
 active slot. Revocation removes the attachment after deleting its secrets.
-These attachment facts do not yet change environment-credential fallback;
-legacy backfill and fallback activation require the subsequent control-plane
-migration.
+After the account-inventory activation below, these attachment facts prevent
+environment-credential fallback from paused or reauthorization-required pools.
+Before activation, would-be environment fallback returns `503 grant_pool_not_ready`.
 
 The attachment storage upgrade is forward-only. Recovery must use the current
 Worker or a forward fix so the owner can reconcile unfinished publication.
 Do not roll back to a Worker that predates attachment statuses: its pool query
 ignores those statuses and does not safely handle retained inactive accounts.
 Do not delete the index fences or restore an older index over current owners.
+
+### Account routing activation and recovery
+
+After upgrading, sign in as an administrator and open **Access → Upstream →
+Account routing readiness**. This panel reads its own status endpoint, so a
+failed account-listing refresh does not prevent recovery. Existing scoped
+accounts keep their checks; admin login and recovery stay available. Health
+means the process is running, not that environment fallback is activated.
+
+1. Stop old Worker deployments and CLI tools that write grants directly to KV.
+   Check the complete account inventory, including paused named accounts that
+   were omitted from the old active index. Wait for old writes to become visible
+   before scanning; [KV listings can lag](https://developers.cloudflare.com/kv/api/list-keys/).
+2. Accept **Existing or unknown storage** and its inventory confirmation. Choose
+   **Newly provisioned storage** only when the matched storage set was actually
+   created for this deployment. Empty KV, a new readiness row, matching namespace
+   titles, and an existing namespace ID do not establish freshness.
+3. Start the scan and reconcile each bounded page. Existing credential owners
+   backfill their own attachments; scans never adopt raw KV secrets or metadata.
+   A failed first admission may report `pending_cancelled`; ambiguous legacy
+   membership and unavailable owners remain unresolved.
+4. Resolve reported keys. To retain a raw-only account, use the existing
+   authenticated replacement command with a fresh primary secret, for example
+   `pnpm cf:oauth:put -- --kid POLICY --token-ref REF --provider PROVIDER --kind oauth --access-token-stdin`.
+   Use `--tenant` instead of `--kid` for tenant scope; API keys use
+   `--credential-stdin` or `--credentials-json-stdin`. To remove an account, use
+   `pnpm cf:oauth:revoke -- --kid POLICY --token-ref REF --provider PROVIDER`.
+   These commands require `CLAWROUTER_BASE_URL`, `CLAWROUTER_ADMIN_TOKEN`, and the
+   Access service-token pair when the admin route is protected. They never need
+   direct KV edits. Owner/index failures remain unresolved until repaired.
+5. Start a new verification scan after repairs or concurrent account changes.
+   Activate only when the complete scan is unchanged and has no unresolved
+   outcomes. A page limit or more than 64 unresolved keys blocks activation;
+   resolve the displayed set, then rescan. A stale revision returns 409 and the
+   panel rereads the canonical status.
+
+The CLI uses the same actions: `pnpm cf:accounts -- --status`, one-time explicit
+`--accept-existing` (or `--accept-fresh` after actual provisioning), then
+`pnpm cf:accounts`. The driver saves bounded progress and performs at most one
+additional verification scan after backfill changes. It does not accept a
+baseline automatically or retry an unresolved owner. Routine later deployments
+reuse accepted activation and repair indexed pending writes.
+
+Manual `cf:deploy` and both hosted deploy workflows run this driver before
+golden provider smoke. Production now needs the raw `CLAWROUTER_ADMIN_TOKEN`
+secret in addition to its SHA256; recovery and smoke receive it only in their
+steps, with `CLAWROUTER_ACCESS_CLIENT_ID` and `CLAWROUTER_ACCESS_CLIENT_SECRET`
+when needed. FakeCo installs and proves its existing admin access before
+recovery. Its workflow reuses a configured namespace, so first deployment needs
+explicit baseline acceptance. A failed activation fails deploy qualification,
+but leaves the running admin recovery surface accessible. `cf:doctor` reports
+activation independently of provider configuration.
+
+Treat POLICY_KV, ACCESS_CONTROL and GRANT_CREDENTIALS as one matched storage set.
+Partial binding swaps or partial restores are not routine deployments and
+require a reviewed storage migration; the runtime cannot infer namespace lineage
+from a KV read. Keep forward recovery available. Never downgrade to a build that
+ignores attachment statuses or deletes retained generation fences.
 
 `cf:oauth:put` replaces the entire grant at that key, including its credentials
 and account metadata. Omitted refresh tokens, credential bundles, and refresh

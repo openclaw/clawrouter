@@ -8,6 +8,8 @@ import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createTcpServer } from "node:net";
 import { fileURLToPath } from "node:url";
+import { adminRequest } from "./admin-api.mjs";
+import { acceptGrantPoolBaseline, recoverGrantPools } from "./grant-pool-recovery.mjs";
 
 // Signal Wrangler directly; a package-manager launcher may leave its child alive.
 const wrangler = fileURLToPath(new URL(wranglerMetadata.bin.wrangler, import.meta.resolve("wrangler/package.json")));
@@ -189,6 +191,17 @@ try {
   assert.equal(bootstrapBody.fusion.modelId, "clawrouter/fusion");
   assert.equal(bootstrapBody.fusion.enabled, false);
   const adminHeaders = { authorization: `Bearer ${adminToken}`, "content-type": "application/json" };
+  const recoveryRequest = (path, options) => adminRequest(path, { ...options, env: { CLAWROUTER_BASE_URL: base, CLAWROUTER_ADMIN_TOKEN: adminToken } });
+  const beforeActivation = await fetch(`${base}/v1/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${fusionReadyKey}`, "content-type": "application/json" }, body: JSON.stringify({ model: "local/default", messages: [{ role: "user", content: "readiness fixture" }] }) });
+  assert.equal(beforeActivation.status, 503);
+  assert.equal((await beforeActivation.json()).error.code, "grant_pool_not_ready");
+  assert.equal(upstreamCalls.length, 0);
+  // The fixture knows its complete legacy inventory and has stopped seeding.
+  // An unresolved raw account must be explicitly removed before activation.
+  await acceptGrantPoolBaseline("existing", { request: recoveryRequest });
+  await assert.rejects(() => recoverGrantPools({ request: recoveryRequest }), /migration remains unresolved/);
+  assert.equal((await fetch(`${base}/v1/admin/upstream-grants/policies/migrate/legacy_invalid/revoke`, { method: "POST", headers: adminHeaders })).status, 200);
+  assert.ok((await recoverGrantPools({ request: recoveryRequest })).activatedAt);
   for (const [method, path] of [
     ["POST", "/v1/proxy/%ZZ/search"],
     ["POST", "/v1/proxy/tavily/%ZZ"],

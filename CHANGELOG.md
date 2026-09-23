@@ -21,6 +21,7 @@
 - Qualify Groq GPT-OSS 120B and Fireworks GPT-OSS 120B/GLM 5.2 Chat reasoning values, including Groq logprob field restrictions, before Fusion adviser spend. Preserve accepted effort aliases and native passthrough without inferring sampling, tool support, or prices.
 
 - Preserve the initiating cause when Responses WebSockets close. Client disconnects record `client_error` without an invented HTTP status; unsent requests release reservations, while sent requests without final usage retain their estimate.
+- Add an authenticated account-inventory migration and recovery flow. Require explicit storage-baseline acceptance and a complete unchanged scan before environment fallback; keep paused and reauthorization-required accounts attached, expose recovery independently of account listing, and qualify deployments with the same activation driver before smoke tests.
 
 - Keep failed console refreshes visible after successful edits, label stale usage with its snapshot time, and show unavailable spend and balances as unknown.
 - Expose Catalog service-kind filters as a labeled button group with an explicit pressed choice, preserving keyboard operation, search, and result counts.
@@ -28,7 +29,7 @@
 - Open loaded policies from Catalog and Users only after accepting any unsaved-draft discard; keep informational access rows and unavailable policy references noninteractive.
 - Open the Policies tab when adding a Catalog service to the current or New policy draft, preserving unsaved edits and avoiding duplicate service selections.
 
-- Keep a grant's previous provider attachment until replacement credentials commit. Reserve active capacity as unselectable pending membership, allow paused imports into full active pools, retain inactive attachments, and recover partial publication through committed admission receipts and generation-checked owner reconciliation. Repeated revocation clears failed reconnect reservations. This storage upgrade requires forward recovery; environment-fallback activation and legacy attachment backfill remain separate work.
+- Keep a grant's previous provider attachment until replacement credentials commit. Reserve active capacity as unselectable pending membership, allow paused imports into full active pools, retain inactive attachments, and recover partial publication through committed admission receipts and generation-checked owner reconciliation. Repeated revocation clears failed reconnect reservations. This storage upgrade requires forward recovery.
 - Recover corrupt or oversized legacy upstream grants through explicit authenticated replacement or revocation. Preserve owner identity and pool generation fences, discard old secret bytes, and keep ordinary edits, OAuth and contribution imports strict. A missing KV value cannot erase retained legacy attachments during account creation.
 
 - Reject incomplete prices for Sonar Pro mandatory request fees, hosted tools, remote MCP, multi-agent work, Claude compaction, and opaque prompt/cache configurations under measured budgets; cover Responses Lite and tool-search declarations, align catalog and Fusion preflight admission, preserve fixed tariffs and client tools, and mark unmetered costs unavailable.

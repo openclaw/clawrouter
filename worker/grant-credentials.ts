@@ -6,6 +6,7 @@ import { applyProviderCredential, applyTransportHeaders, quotaProbeForGrant, req
 import type { CompiledGrantTransport, CompiledProvider, Env, GrantRuntimeState, ProviderSnapshot, RefreshConfig, UpstreamGrant } from "./types";
 import { errorResponse, HttpError, json, readJson } from "./utils.ts";
 import { applyTemplateHeaders, resolveTemplate } from "./provider-templates.ts";
+import type { GrantPoolReadiness } from "../shared/contracts.ts";
 
 const REFRESH_MARGIN_MS = 5 * 60_000;
 const MAX_SECRET_BYTES = 64 * 1024;
@@ -170,6 +171,28 @@ export class GrantCredentialObject implements DurableObject {
         return json({ grant });
       }
       if (path === "/materialize") return json(await this.materialize(await readJson<MaterializeRequest>(request)));
+      if (path === "/backfill") {
+        const { key } = await readJson<{ key: string }>(request);
+        const readiness = await authorityCall<GrantPoolReadiness>(this.env, "/grant-pools/readiness", {});
+        if (!readiness.baseline || readiness.activatedAt || !["kv", "index"].includes(readiness.phase)) throw new HttpError(409, "grant_pool_migration_required", "backfill requires an accepted baseline and an active migration scan");
+        const loaded = await this.loadRecord(key, undefined, false);
+        let publish = loaded?.poolSyncPending === true;
+        let { record, result } = await this.reconcileAttachment(key);
+        if (record && !record.revokedAt && result.outcome === "unattached" && record.providerId) {
+          if (record.generation >= Number.MAX_SAFE_INTEGER - 1) throw new HttpError(409, "grant_generation_exhausted", "account generation is exhausted; operator recovery is required");
+          // Only explicit migration may attach a canonical legacy owner. It
+          // commits real admission provenance without replacing its account.
+          const admitted = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/admit", { key, generation: record.generation, revision: result.revision, provider: record.providerId, status: attachmentStatus(record) });
+          record = { ...record, generation: record.generation + 1, poolAdmissionRevision: admitted.revision, poolSyncPending: true };
+          await this.state.storage.put("credential", record);
+          publish = true;
+          ({ record, result } = await this.reconcileAttachment(key));
+        }
+        // A verification pass does not rewrite unchanged KV projections. The
+        // same key can appear in both the legacy inventory and indexed pages.
+        if (record && publish) await this.publishProjection(record);
+        return json({ ...result, ownerPresent: !!record });
+      }
       if (path === "/reconcile") {
         const { key } = await readJson<{ key: string }>(request);
         await this.loadRecord(key, undefined, false);
@@ -591,6 +614,10 @@ export async function putGrantCredentials(env: Env, key: string, grant: Upstream
 
 export async function reconcileGrantAttachment(env: Env, key: string): Promise<GrantAttachmentResult> {
   return ownerCall<GrantAttachmentResult>(env, key, "/reconcile", { key });
+}
+
+export async function backfillGrantAttachment(env: Env, key: string): Promise<GrantAttachmentResult & { ownerPresent: boolean }> {
+  return ownerCall(env, key, "/backfill", { key });
 }
 
 export async function materializeGrantCredentials(

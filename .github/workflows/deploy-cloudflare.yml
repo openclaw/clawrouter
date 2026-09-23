@@ -116,6 +116,10 @@ jobs:
       - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
       - run: pnpm install --frozen-lockfile
       - run: pnpm cf:preflight
+        env:
+          CLAWROUTER_ADMIN_TOKEN: ${{ secrets.CLAWROUTER_ADMIN_TOKEN }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CLAWROUTER_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CLAWROUTER_ACCESS_CLIENT_SECRET }}
       - run: pnpm worker:check
       - run: pnpm --dir admin check
       - run: pnpm --dir admin test
@@ -161,6 +165,15 @@ jobs:
           XAI_API_KEY: ${{ secrets.CLAWROUTER_PROVIDER_XAI_API_KEY }}
         run: pnpm cf:secrets
       - run: pnpm exec wrangler deploy --config .wrangler.generated.toml
+      - name: Reconcile and activate account routing
+        env:
+          CLAWROUTER_ADMIN_TOKEN: ${{ secrets.CLAWROUTER_ADMIN_TOKEN }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CLAWROUTER_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CLAWROUTER_ACCESS_CLIENT_SECRET }}
+        run: pnpm cf:accounts
       - env:
+          CLAWROUTER_ADMIN_TOKEN: ${{ secrets.CLAWROUTER_ADMIN_TOKEN }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CLAWROUTER_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CLAWROUTER_ACCESS_CLIENT_SECRET }}
           CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY: ${{ secrets.CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY }}
         run: pnpm cf:smoke

@@ -8,7 +8,7 @@ export function attachGrantCredentialNamespace(env, { useExistingAuthority = fal
     env.grantAuthority = createGrantAuthority();
     env.ACCESS_CONTROL = { idFromName: (name) => name, get: (id) => ({ fetch: (url, init) => {
       const path = new URL(url).pathname;
-      return !fallback || ["attachment", "admit", "publish", "cancel-pending", "pending"].some((name) => path === `/grant-pools/${name}`)
+      return !fallback || path.startsWith("/grant-pools/readiness") || ["attachment", "admit", "publish", "cancel-pending", "pending"].some((name) => path === `/grant-pools/${name}`)
         ? env.grantAuthority.fetch(url, init) : fallback.get(id).fetch(url, init);
     } }) };
   }

@@ -117,6 +117,7 @@ test("models and catalog share read-only grant eligibility, transport support, a
   const policies = [{ policyId: "fixture", policy }];
   const connection = { providerId: "openai", enabled: true, monthlyBudgetMicros: null };
   const grants = new Map(), states = {};
+  let ready = false;
   const paths = [];
   const env = {
     OPENAI_API_KEY: "fixture-environment-key",
@@ -133,7 +134,7 @@ test("models and catalog share read-only grant eligibility, transport support, a
       if (path === "/connections/resolve") return Response.json({ initialized: true, connections: [connection], missingProviderIds: [] });
       if (path === "/grant-pools/resolve") {
         const { policyId } = JSON.parse(init.body);
-        return Response.json({ keys: [...grants.keys()].filter((key) => key.startsWith(`oauth/${policyId}/`)), states });
+        return Response.json({ keys: [...grants.keys()].filter((key) => key.startsWith(`oauth/${policyId}/`)), states, ready });
       }
       throw new Error(`discovery unexpectedly mutated authority: ${path}`);
     } }) },
@@ -152,6 +153,8 @@ test("models and catalog share read-only grant eligibility, transport support, a
     assert.ok(!paths.includes("/grant-pools/select"));
     return view;
   }
+  await compare([], false); // Unknown readiness never advertises env-only routes.
+  ready = true;
   await compare(["llm.responses", "llm.chat"], true);
   const key = "oauth/fixture/subscription";
   grants.set(key, { provider: "openai", kind: "subscription", enabled: true, accessToken: "fixture-subscription", accountId: "fixture-account" });
@@ -252,7 +255,7 @@ test("Azure discovery keeps explicit native routes while hiding an unresolved de
       if (path === "/credentials/resolve") return Response.json({ initialized: true, credentials: [{ credentialId: "fixture", credential }], missingCredentialIds: [] });
       if (path === "/policies/resolve") return Response.json({ initialized: true, policies: [{ policyId: "fixture", policy }], missingPolicyIds: [] });
       if (path === "/connections/resolve") return Response.json({ initialized: true, connections: [{ providerId: "azure-openai", enabled: true, monthlyBudgetMicros: null }], missingProviderIds: [] });
-      if (path === "/grant-pools/resolve") return Response.json({ keys: [], states: {} });
+      if (path === "/grant-pools/resolve") return Response.json({ keys: [], states: {}, ready: true });
       throw new Error(`discovery unexpectedly mutated authority: ${path}`);
     } }) },
   };
@@ -512,7 +515,7 @@ async function fusionDiscoveryFixture(t) {
       if (path === "/users/resolve") return Response.json({ initialized: true, users: [{ email: "fixture@example.com", record: userRecord }], missingEmails: [] });
       if (path === "/resolve") return Response.json({ initialized: true, bindings: policies.map(({ policyId }, priority) => ({ policyId, priority, enabled: true, principalType: "user", principalId: "fixture@example.com" })), missingPrincipals: [] });
       if (path === "/connections/resolve") return Response.json({ initialized: true, connections, missingProviderIds: [] });
-      if (path === "/grant-pools/resolve") return Response.json({ keys: [...records.keys()].filter((key) => key.startsWith(`oauth/${body.policyId}/`) && records.get(key).provider === body.providerId), states });
+      if (path === "/grant-pools/resolve") return Response.json({ keys: [...records.keys()].filter((key) => key.startsWith(`oauth/${body.policyId}/`) && records.get(key).provider === body.providerId), states, ready: true });
       throw new Error(`discovery unexpectedly mutated authority: ${path}`);
     } }) },
   };

@@ -12,6 +12,7 @@ import {
   deploymentTarget,
 } from "./deployment-profile.mjs";
 import { validateFakecoBootstrapInputs } from "./bootstrap-fakeco.mjs";
+import { createHash } from "node:crypto";
 import {
   fakecoProviderCredentialPlan,
   verifyExistingFakecoProviderCredentials,
@@ -33,10 +34,13 @@ const requiredDeployEnv = [
   "CLOUDFLARE_API_TOKEN",
   "CLOUDFLARE_ACCOUNT_ID",
   "CLAWROUTER_ADMIN_TOKEN_SHA256",
+  "CLAWROUTER_ADMIN_TOKEN",
   "CLAWROUTER_POLICY_KV_ID",
 ];
 
 const errors = [];
+if (Boolean(process.env.CF_ACCESS_CLIENT_ID?.trim()) !== Boolean(process.env.CF_ACCESS_CLIENT_SECRET?.trim())) errors.push("CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET must be configured together for account recovery");
+if (process.env.CLAWROUTER_ADMIN_TOKEN?.trim() && process.env.CLAWROUTER_ADMIN_TOKEN_SHA256?.trim() && createHash("sha256").update(process.env.CLAWROUTER_ADMIN_TOKEN.trim()).digest("hex") !== process.env.CLAWROUTER_ADMIN_TOKEN_SHA256.trim().toLowerCase()) errors.push("CLAWROUTER_ADMIN_TOKEN must match CLAWROUTER_ADMIN_TOKEN_SHA256 for post-deploy account recovery");
 for (const name of requiredDeployEnv) {
   if (!process.env[name]) {
     errors.push(`missing required deploy env: ${name}`);
