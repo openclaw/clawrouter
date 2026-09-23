@@ -13,6 +13,11 @@ on:
         required: true
         default: "openai"
         type: string
+      openai_smoke_model:
+        description: "Optional OpenAI smoke model; empty uses the first eligible catalog model"
+        required: false
+        default: ""
+        type: string
       provision_access:
         description: "Provision/update the Cloudflare Access console app before deploy"
         required: false
@@ -96,6 +101,7 @@ jobs:
       AWS_REGION: ${{ vars.CLAWROUTER_PROVIDER_AWS_REGION || secrets.CLAWROUTER_PROVIDER_AWS_REGION }}
       CLAWROUTER_SMOKE_KEY: ${{ secrets.CLAWROUTER_SMOKE_KEY }}
       CLAWROUTER_SMOKE_LIVE_PROVIDERS: ${{ inputs.live_providers }}
+      CLAWROUTER_SMOKE_MODEL_OPENAI: ${{ inputs.openai_smoke_model }}
       CLAWROUTER_SMOKE_MODEL_AWS_BEDROCK: ${{ vars.CLAWROUTER_SMOKE_MODEL_AWS_BEDROCK }}
       CLAWROUTER_SMOKE_BODY_AWS_BEDROCK: ${{ vars.CLAWROUTER_SMOKE_BODY_AWS_BEDROCK }}
       CLAWROUTER_SMOKE_MODEL_AZURE_OPENAI: ${{ vars.CLAWROUTER_SMOKE_MODEL_AZURE_OPENAI }}
