@@ -1,50 +1,57 @@
-import { extractSseUsageTokens, extractUsageTokens, type UsageTokens } from "./token-usage.ts";
+import { createSseUsageInspector, extractUsageTokens, responseOutcome, usageInspectionLimit, type UsageInspection } from "./token-usage.ts";
+
+export interface ObservedUsage extends UsageInspection { delivery: "complete" | "failed" | "canceled" }
 
 // Accounting observes the delivered stream; a tee would drain upstream ahead of
-// the client and buffer arbitrary output. Inspection alone is capped at 2 MiB.
-export function observeUsage(response: Response): { response: Response; tokens: Promise<UsageTokens | null> } {
-  if (!response.body) return { response, tokens: Promise.resolve(null) };
+// the client and buffer arbitrary output. JSON and individual SSE frames are
+// bounded; a long stream can still report authoritative late terminal facts.
+export function observeUsage(response: Response): { response: Response; result: Promise<ObservedUsage> } {
+  if (!response.body) return { response, result: Promise.resolve({ tokens: null, outcome: null, delivery: "complete" }) };
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-  let inspect = contentType.includes("json") || contentType.includes("text/event-stream");
+  const sse = contentType.includes("text/event-stream") ? createSseUsageInspector() : null;
+  let inspect = !sse && contentType.includes("json");
   const decoder = new TextDecoder();
   const reader = response.body.getReader();
   let text = "", bytes = 0, finished = false;
-  let resolve!: (tokens: UsageTokens | null) => void;
-  const tokens = new Promise<UsageTokens | null>(done => { resolve = done; });
-  function finish(complete: boolean) {
+  let resolve!: (result: ObservedUsage) => void;
+  const result = new Promise<ObservedUsage>(done => { resolve = done; });
+  function finish(delivery: ObservedUsage["delivery"]) {
     if (finished) return;
     finished = true;
-    let measured: UsageTokens | null = null;
-    if (complete && inspect) {
+    let inspection: UsageInspection = sse?.result(delivery === "complete") ?? { tokens: null, outcome: null };
+    if (delivery === "complete" && inspect) {
       try {
         text += decoder.decode();
-        measured = contentType.includes("json") ? extractUsageTokens(JSON.parse(text)) : extractSseUsageTokens(text);
-      } catch { /* Incomplete usage keeps the conservative reservation. */ }
+        const value: unknown = JSON.parse(text);
+        inspection = { tokens: extractUsageTokens(value), outcome: responseOutcome(value) };
+      } catch { inspection.outcome = "provider_error"; }
     }
     text = "";
     reader.releaseLock();
-    resolve(measured);
+    resolve({ ...inspection, delivery });
   }
   const body = new ReadableStream<Uint8Array>({
     async pull(controller) {
       try {
         const next = await reader.read();
-        if (next.done) { finish(true); controller.close(); return; }
+        if (finished) return; // A pending read can resolve after consumer cancellation.
+        if (next.done) { finish("complete"); controller.close(); return; }
+        sse?.push(next.value);
         if (inspect) {
           bytes += next.value.byteLength;
-          if (bytes > 2 * 1024 * 1024) { inspect = false; text = ""; }
+          if (bytes > usageInspectionLimit) { inspect = false; text = ""; }
           else text += decoder.decode(next.value, { stream: true });
         }
         controller.enqueue(next.value);
-      } catch (error) { finish(false); controller.error(error); }
+      } catch (error) { if (!finished) { finish("failed"); controller.error(error); } }
     },
     cancel(reason) {
       const canceled = reader.cancel(reason);
-      finish(false);
+      finish("canceled");
       return canceled;
     },
   }, { highWaterMark: 0 });
-  return { response: new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers }), tokens };
+  return { response: new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers }), result };
 }
 
 export async function normalizePreStreamError(response: Response, streamingRequested: boolean): Promise<Response> {

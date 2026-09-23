@@ -141,7 +141,7 @@ for (const cancellation of ["complete", "reject", "stall"]) {
         if (cancellation === "stall") return new Promise(() => {});
       },
     }), { status: 503, headers: { "content-type": "application/json" } }));
-    observed.tokens.then(() => { accounted = true; });
+    observed.result.then(() => { accounted = true; });
     const result = await collectFusionProposals(config, { messages: [] }, async () => observed.response);
     assert.deepEqual(result.failedModels, ["local/unavailable"]);
     assert.equal(canceled, true, "a skipped response must release its upstream body");
@@ -160,7 +160,7 @@ for (const status of [200, 503]) {
     assert.deepEqual(result.failedModels, ["local/late"]);
     let canceled = false, accounted = false;
     const observed = observeUsage(new Response(new ReadableStream({ cancel() { canceled = true; } }), { status }));
-    observed.tokens.then(() => { accounted = true; });
+    observed.result.then(() => { accounted = true; });
     deferred.resolve(observed.response);
     await new Promise(resolve => setImmediate(resolve));
     assert.equal(canceled, true, "a late response has no consumer and must be canceled");

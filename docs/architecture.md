@@ -71,8 +71,15 @@ usage event and delegates independent settlement and delivery to `accounting.ts`
 
 `proxy-response.ts` owns shared response normalization and usage inspection. One
 observer follows client consumption for JSON, SSE, and binary responses, without
-cloning or draining ahead of the client. It inspects at most 2 MiB for usage;
-oversized, canceled, or broken bodies retain the conservative reservation.
+cloning or draining ahead of the client. JSON inspection and each SSE frame are
+bounded to 2 MiB; SSE history is discarded after extracting terminal facts and
+cumulative counters, so a small late terminal remains observable on long streams.
+An oversized frame leaves evidence unknown, rather than proving provider failure.
+Recognized failed/error events and streams missing their required terminal record
+a provider error; Responses `incomplete` remains successful. Delivery failure and
+consumer cancellation are recorded independently, without rewriting HTTP status
+or bytes. Authoritative terminal usage remains billable even after delivery fails
+or is canceled; otherwise accounting retains the conservative reservation.
 Settlement starts when delivery completes, fails, or is canceled. Private alias
 inference keeps its separate containment and continuation protocol.
 
@@ -91,7 +98,11 @@ Object bindings are unchanged.
 
 - Revocation, provider connection state, and budget preflight fail closed.
 - Required request retention fails closed before upstream traffic.
-- Provider failures release a reservation to zero and emit audit metadata.
+- Rejected, nonbillable work releases reservations to zero. Received billable
+  responses can still incur cost when generation or stream delivery fails:
+  authoritative usage settles the charge; missing usage retains the qualified
+  reservation. Pre-response HTTP fetch failures keep their existing zero-charge
+  policy. Audit outcome alone does not decide billability.
 - Failed budget settlement retries through `USAGE_QUEUE`; rejected usage
   publication recovers through the policy's usage ledger independently.
 - HTTP response delivery stays unchanged on accounting failure. A WebSocket

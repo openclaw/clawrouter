@@ -238,7 +238,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   }
   clearTimeout(timeout);
   const observed = observeUsage(response);
-  context.waitUntil(observed.tokens.then(tokens => accounting.complete(response, tokens, reservation, content)));
+  context.waitUntil(observed.result.then(result => accounting.complete(response, result, reservation, content)));
   response = observed.response;
   const outputHeaders = new Headers(response.headers);
   for (const name of ["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "set-cookie", "trailer", "transfer-encoding", "upgrade"]) outputHeaders.delete(name);

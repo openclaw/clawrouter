@@ -209,6 +209,39 @@ try {
   assert.deepEqual(await ledgerFacts(), beforeLanes.map(({ spent }) => ({ spent: spent + 3 * 1_080, unsettled: 0 })));
   laneSocket.close(1000, "named lanes complete");
 
+  // HTTP status remains 200 while protocol and delivery outcomes drive receipts.
+  for (const scenario of ["late-failed", "cancel-stream"]) {
+    const before = await ledgerFacts(), session = `sse-${scenario}`;
+    const response = await dispatch("/v1/native/openai/v1/responses", {
+      method: "POST", headers: { "content-type": "application/json", "x-clawrouter-session-id": session },
+      body: JSON.stringify({ model: "gpt-6-astra", input: scenario, max_output_tokens: 32, service_tier: "priority", stream: true }),
+    });
+    assert.equal(response.status, 200);
+    if (scenario === "cancel-stream") {
+      const reader = response.body.getReader();
+      assert.match(new TextDecoder().decode((await reader.read()).value), /response.created/);
+      await reader.cancel();
+      await until(async () => (await (await upstream.fetch("https://fixture.example/state")).json()).httpCanceled);
+    } else {
+      const body = await response.text();
+      const prefix = 'data: {"type":"response.created"}\n\n';
+      const delta = `data: ${JSON.stringify({ type: "response.output_text.delta", delta: "x".repeat(20_000) })}\n\n`;
+      const last = `data: ${JSON.stringify({ type: "response.failed", response: { status: "failed", service_tier: "priority", usage: { input_tokens: 14, output_tokens: 8, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } } })}\n\n`;
+      assert.equal(body, prefix + delta.repeat(110) + last);
+    }
+    let receipt;
+    await until(async () => {
+      const receipts = (await (await dispatch("/v1/usage")).json()).usage.events.filter(({ session_id }) => session_id === session);
+      assert.ok(receipts.length <= 1); receipt = receipts[0]; return !!receipt;
+    });
+    assert.equal(receipt.status_code, 200);
+    assert.equal(receipt.status, scenario === "cancel-stream" ? "client_error" : "provider_error");
+    assert.equal(receipt.cost_basis, scenario === "cancel-stream" ? "manifest_reservation" : "manifest_pricing");
+    const cost = scenario === "cancel-stream" ? receipt.reserved_cost_micros : 1_080;
+    assert.equal(receipt.actual_cost_micros, cost);
+    assert.deepEqual(await ledgerFacts(), before.map(({ spent }) => ({ spent: spent + cost, unsettled: 0 })));
+  }
+
   // Faults belong to the fixture wrapper, never a production configuration surface.
   for (const phase of ["terminal", "preflight", "rollback"]) {
     await authorityObject.fetch("https://authority/policies/put", { method: "POST", body: JSON.stringify({ policyId: "fixture", policy: { ...policy, retainRequestContent: phase === "preflight" } }) });
@@ -281,10 +314,24 @@ async function until(predicate) {
 }
 
 function upstreamFixture() { return `
-const frames = []; let headerMatch = false;
+const frames = []; let headerMatch = false, httpCanceled = false;
 export default { async fetch(request) {
-  if (new URL(request.url).pathname === '/state') return Response.json({ frames, headerMatch });
-  if (request.url === 'https://api.openai.com/v1/responses' && request.method === 'POST') return Response.json({ id: 'http-fixture', object: 'response', status: 'completed', output: [], service_tier: 'priority', usage: { input_tokens: 14, output_tokens: 8, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } });
+  if (new URL(request.url).pathname === '/state') return Response.json({ frames, headerMatch, httpCanceled });
+  if (request.url === 'https://api.openai.com/v1/responses' && request.method === 'POST') {
+    const body = await request.json();
+    const usage = { input_tokens: 14, output_tokens: 8, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } };
+    if (body.input === 'late-failed' || body.input === 'cancel-stream') {
+      let index = 0;
+      return new Response(new ReadableStream({ pull(controller) {
+        if (index++ === 0) controller.enqueue(new TextEncoder().encode('data: {"type":"response.created"}\\n\\n'));
+        else if (body.input === 'cancel-stream') return new Promise(() => {});
+        else if (index <= 111) controller.enqueue(new TextEncoder().encode('data: ' + JSON.stringify({ type: 'response.output_text.delta', delta: 'x'.repeat(20000) }) + '\\n\\n'));
+        else if (index === 112) controller.enqueue(new TextEncoder().encode('data: ' + JSON.stringify({ type: 'response.failed', response: { status: 'failed', service_tier: 'priority', usage } }) + '\\n\\n'));
+        else controller.close();
+      }, cancel() { httpCanceled = true; } }, { highWaterMark: 0 }), { headers: { 'content-type': 'text/event-stream' } });
+    }
+    return Response.json({ id: 'http-fixture', object: 'response', status: 'completed', output: [], service_tier: 'priority', usage });
+  }
   if (request.url !== 'https://api.openai.com/v1/responses' || request.headers.get('upgrade') !== 'websocket') return new Response('unexpected upstream route', { status: 400 });
   headerMatch = request.headers.get('authorization') === 'Bearer fixture-upstream-key' && request.headers.get('session-id') === 'fixture-session' && request.headers.get('x-openai-internal-codex-responses-lite') === 'true';
   const pair = new WebSocketPair(); pair[1].accept();

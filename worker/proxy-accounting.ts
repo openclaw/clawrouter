@@ -2,6 +2,7 @@ import { emptyReservation, finalizeAccounting, type BudgetReservation, type Esti
 import { correlationMetadata } from "./correlation";
 import { actualModelCost, estimateModelCost, requestHasHostedSearch } from "./pricing";
 import type { ProxySelection } from "./proxy-selection";
+import type { ObservedUsage } from "./proxy-response";
 import { extractServiceTier, type UsageTokens } from "./token-usage";
 import type { AuthorizedIdentity, CompiledModel, Env, UsageEvent } from "./types";
 import { randomId } from "./utils";
@@ -73,8 +74,12 @@ export function createProxyAccounting(options: AccountingContext) {
       const basis = unpricedSearch || cost.basis === "unpriced_service_tier" ? dispatched ? "unpriced_usage" : "none" : cost.basis;
       context.waitUntil(finish(statusCode, status, reservation, 0, null, contentRef, basis));
     },
-    complete(response: Response, tokens: UsageTokens | null, reservation: BudgetReservation, contentRef: string | null) {
-      return settle(response.status, response.ok ? "success" : response.status < 500 ? "client_error" : "provider_error", response.ok, tokens, reservation, contentRef);
+    complete(response: Response, observed: ObservedUsage, reservation: BudgetReservation, contentRef: string | null) {
+      const status = !response.ok ? response.status < 500 ? "client_error" : "provider_error"
+        : observed.delivery === "canceled" ? "client_error" : observed.delivery === "failed" ? "provider_error" : observed.outcome ?? "success";
+      // Protocol/delivery failure does not undo dispatched billable work. Keep
+      // the actual HTTP status and any authoritative terminal usage separately.
+      return settle(response.status, status, response.ok, observed.tokens, reservation, contentRef);
     },
   };
 }
