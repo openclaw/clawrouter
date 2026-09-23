@@ -1,6 +1,8 @@
+import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 import { ResponsesOperationAborted, ResponsesWebSocketSession } from "../responses-websocket-session.ts";
+import { createResponsesToolEvidence } from "../responses-tool-evidence.ts";
 
 class Socket extends EventTarget {
   sent = [];
@@ -19,7 +21,7 @@ function fixture(t, options = {}) {
       const index = admitted.length;
       admitted.push({ body, lane, requestId, pin, signal });
       if (options.admit) await options.admit(index, body, signal);
-      return { pin: "fixture-route:grant-1", payload: JSON.stringify({ type: "response.create", ...body, ...(lane ? { stream_id: lane } : {}) }), timeoutMs: 600_000, connect: options.connect ?? (async () => upstream), publish: async identities => { await options.publish?.(index, identities); }, settle: async (outcome, terminal, sent, executionStarted) => { settled.push({ index, outcome, terminal, sent, executionStarted }); await options.settle?.(); } };
+      return { pin: "fixture-route:grant-1", payload: JSON.stringify({ type: "response.create", ...body, ...(lane ? { stream_id: lane } : {}) }), timeoutMs: 600_000, connect: options.connect ?? (async () => upstream), publish: async (identities, frame) => { await options.publish?.(index, identities, frame); }, settle: async (outcome, terminal, sent, executionStarted) => { settled.push({ index, outcome, terminal, sent, executionStarted }); await options.settle?.(); } };
     },
   });
   t.after(async () => { session.close(); await Promise.all(pending); });
@@ -431,6 +433,72 @@ test("publication FIFO captures each lane owner and waits for settlement before 
   publication.resolve(); await tick();
   assert.deepEqual(calls, [0, 0, 1, 1]); assert.equal(f.admitted.length, 2);
   settlement.resolve(); await tick(); assert.equal(f.admitted.length, 3);
+});
+
+test("every associated sparse item frame reaches its captured producer before forwarding and settlement", async t => {
+  const gate = Promise.withResolvers(), frames = [];
+  const f = fixture(t, { publish: async (index, identities, frame) => {
+    frames.push({ index, identities, frame });
+    if (frame.type === "response.output_item.done") await gate.promise;
+  } });
+  f.client.receive(create()); f.client.receive(create()); await tick();
+  f.upstream.receive({ type: "response.created", response: { id: "first" } });
+  const item = { type: "response.output_item.done", item: { type: "tool_search_output", execution: "client", status: "completed", tools: [] } };
+  f.upstream.receive(item); f.upstream.receive({ type: "response.completed", response: { id: "first" } });
+  await tick();
+  assert.equal(frames.length, 2); assert.deepEqual(frames[1], { index: 0, identities: [], frame: item });
+  assert.equal(f.client.sent.length, 1); assert.equal(f.settled.length, 0); assert.equal(f.admitted.length, 1);
+  gate.resolve(); await tick();
+  assert.deepEqual(f.client.sent.map(JSON.parse).map(value => value.type), ["response.created", "response.output_item.done", "response.completed"]);
+  assert.ok(frames.every(frame => frame.index === 0)); assert.equal(f.settled.length, 1); assert.equal(f.admitted.length, 2);
+});
+
+test("selector-only WebSocket frames require item completion without changing wire or settlement", async t => {
+  for (const selector of [{ output_index: 0 }, { item_id: "call" }, { output_index: 0, item_id: "call" }]) for (const completed of [false, true]) {
+    const tools = createResponsesToolEvidence("token_only");
+    const f = fixture(t, { publish: async (_index, _identities, frame) => tools.accept(frame, true) });
+    f.client.receive(create()); await tick();
+    const terminal = complete(undefined, "proof");
+    const frames = [
+      { type: "response.created", response: { id: "proof" } },
+      { type: "response.function_call_arguments.delta", ...selector, delta: "{}" },
+      ...(completed ? [{ type: "response.output_item.done", item: { id: "call", type: "function_call" }, ...(selector.output_index === undefined ? {} : { output_index: 0 }) }] : []),
+      terminal,
+    ];
+    for (const frame of frames) f.upstream.receive(frame);
+    await tick();
+    assert.equal(tools.result().knowledge, completed ? "token_only" : "unknown");
+    assert.deepEqual(f.client.sent, frames.map(frame => JSON.stringify(frame)));
+    assert.equal(f.settled.length, 1); assert.equal(f.settled[0].outcome, "completed");
+    assert.deepEqual(f.settled[0].terminal, terminal, "settlement keeps the original usage-bearing terminal");
+  }
+});
+
+test("aggregate and partial tool inventories change only WebSocket qualification", async t => {
+  const cases = [];
+  for (const count of [511, 600]) {
+    const output = Array.from({ length: 2 }, () => ({ type: "tool_search_output", tools: Array.from({ length: count }, () => ({ type: "function", name: "run" })) }));
+    const knowledge = count === 511 ? "token_only" : "unknown";
+    cases.push([[complete(undefined, "proof", { output })], knowledge]);
+    cases.push([[...output.map(item => ({ type: "response.output_item.done", item })), complete(undefined, "proof")], knowledge]);
+  }
+  const item = { id: "inventory", type: "additional_tools", tools: [] };
+  cases.push([[
+    { type: "response.output_item.added", item: { ...item, status: "in_progress", tools: [{ type: "web_search" }, null] } },
+    { type: "response.output_item.done", item }, complete(undefined, "proof"),
+  ], "unknown"]);
+  for (const [events, knowledge] of cases) {
+    const tools = createResponsesToolEvidence("token_only");
+    const f = fixture(t, { publish: async (_index, _identities, frame) => tools.accept(frame, true) });
+    f.client.receive(create()); await tick();
+    const frames = [{ type: "response.created", response: { id: "proof" } }, ...events];
+    for (const frame of frames) f.upstream.receive(frame);
+    await tick();
+    assert.equal(tools.result().knowledge, knowledge);
+    assert.deepEqual(f.client.sent, frames.map(frame => JSON.stringify(frame)));
+    assert.equal(f.settled.length, 1); assert.equal(f.settled[0].outcome, "completed");
+    assert.deepEqual(f.settled[0].terminal, events.at(-1), "settlement retains the authoritative usage-bearing terminal");
+  }
 });
 
 test("pending output count and bytes are bounded even while one identity write is held", async t => {

@@ -65,7 +65,7 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
           payload: JSON.stringify({ type: "response.create", ...selection.body, ...(lane ? { stream_id: lane } : {}) }),
           timeoutMs: selection.endpoint.timeout_ms ?? 120_000,
           connect: upstreamConnection(upstream.url, upstream.headers, signal, observe),
-          publish: identities => continuation?.publish(identities) ?? Promise.resolve(),
+          publish: (identities, frame) => continuation?.publishFrame(identities, frame) ?? Promise.resolve(),
           settle: settlement(accounting, reservation, content, observe),
         };
       } catch (error) {
