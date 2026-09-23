@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { after } from "node:test";
 import { PolicyBindingIndexObject } from "../authority.ts";
 
-export function createGrantAuthority() {
+export function createGrantAuthority(initialize) {
   const db = new DatabaseSync(":memory:");
   after(() => db.close());
   const sql = { exec(query, ...bindings) {
@@ -19,6 +19,7 @@ export function createGrantAuthority() {
       catch (error) { db.exec("ROLLBACK"); throw error; }
     },
   };
+  initialize?.(sql);
   const object = new PolicyBindingIndexObject({ storage });
   return {
     sql, storage, object,

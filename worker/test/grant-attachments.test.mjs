@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import test from "node:test";
+import { PolicyBindingIndexObject } from "../authority.ts";
 import { GrantCredentialObject, materializeGrantCredentials, putGrantCredentials, reconcileGrantAttachment, revokeGrantCredentials } from "../grant-credentials.ts";
+import { createGrantAuthority } from "./grant-authority-fixture.mjs";
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
 
 const key = "oauth/policy/account";
@@ -50,14 +52,14 @@ test("same-key replacement and revocation serialize through the final secretless
   assert.equal((await pool(env, "anthropic")).hasAttachment, false);
 });
 
-for (const legacy of ["none", "indexed-with-kv-miss", "raw-kv"]) test(`failed new admission repairs only its proposal with ${legacy} evidence`, async () => {
+for (const enabled of [true, false]) for (const legacy of ["none", "indexed-with-kv-miss", "raw-kv"]) test(`failed new ${enabled ? "active" : "paused"} admission repairs only its proposal with ${legacy} evidence`, async () => {
   const env = fixture();
   if (legacy === "indexed-with-kv-miss") env.grantAuthority.seedLegacy(key, "retired-provider");
   if (legacy === "raw-kv") env.values.set(key, "legacy-private-fixture");
   env.GRANT_CREDENTIALS.get(key);
   const owner = env.GRANT_CREDENTIALS.objects.get(key);
   owner.state.storage.put = async () => { throw new Error("owner store unavailable"); };
-  await assert.rejects(() => putGrantCredentials(env, key, grant()));
+  await assert.rejects(() => putGrantCredentials(env, key, { ...grant(), enabled }));
   assert.deepEqual((await env.grantAuthority.call("pending", {})).keys, [key]);
   assert.deepEqual((await pool(env, "openai")).keys, []);
   assert.equal((await pool(env, "openai")).hasAttachment, true);
@@ -191,6 +193,37 @@ test("active capacity counts legacy and pending reservations while paused and re
   assert.equal(resolved.hasAttachment, true);
 });
 
+for (const replace of [false, true]) test(`${replace ? "provider replacement with pause" : "new paused grant"} does not reserve active capacity in a full destination`, async () => {
+  const env = fixture();
+  for (let i = 0; i < 32; i++) await putGrantCredentials(env, `oauth/policy/active-${i}`, grant());
+  if (replace) await putGrantCredentials(env, key, grant("anthropic"));
+  env.GRANT_CREDENTIALS.get(key);
+  const owner = env.GRANT_CREDENTIALS.objects.get(key), put = owner.state.storage.put;
+  const entered = Promise.withResolvers(), held = Promise.withResolvers();
+  owner.state.storage.put = async (...args) => {
+    if (args[1].providerId === "openai" && args[1].poolSyncPending) { entered.resolve(); await held.promise; }
+    return put(...args);
+  };
+  const paused = putGrantCredentials(env, key, { ...grant(), enabled: false });
+  try {
+    await Promise.race([entered.promise, paused]);
+    assert.equal(owner.values.get("credential")?.providerId, replace ? "anthropic" : undefined);
+    assert.deepEqual((await pool(env, "anthropic")).keys, replace ? [key] : []);
+    assert.equal((await pool(env, "openai")).keys.length, 32);
+    assert.equal(env.grantAuthority.sql.exec("SELECT status FROM upstream_grant_pool_members WHERE provider_id = 'openai' AND token_ref = 'account'")[0].status, "pending_inactive");
+    assert.deepEqual((await env.grantAuthority.call("pending", {})).keys, [key]);
+    await assert.rejects(() => putGrantCredentials(env, "oauth/policy/overflow", grant()));
+  } finally { held.resolve(); }
+  const saved = await paused;
+  assert.equal(saved.enabled, false);
+  assert.equal((await pool(env, "openai")).keys.length, 32);
+  assert.equal((await pool(env, "anthropic")).hasAttachment, false);
+  assert.equal(env.grantAuthority.sql.exec("SELECT status FROM upstream_grant_pool_members WHERE token_ref = 'account'")[0].status, "paused");
+  assert.deepEqual((await env.grantAuthority.call("pending", {})).keys, []);
+  await assert.rejects(() => putGrantCredentials(env, key, { ...saved, enabled: true }, true));
+  assert.equal(owner.values.get("credential").enabled, false);
+});
+
 test("raw migration and ordinary refresh remain unattached after a lost publication acknowledgement", async context => {
   const env = fixture();
   const raw = { provider: "openai", kind: "oauth", accessToken: "access-fixture", refreshToken: "refresh-fixture", expiresAt: "2020-01-01T00:00:00.000Z" };
@@ -244,6 +277,53 @@ test("admission rolls back its reservation when the SQL commit section fails", a
   sql.exec = exec;
   assert.deepEqual(await env.grantAuthority.call("attachment", { key }), { generation: 0, revision: 0, pending: false, attached: false });
   assert.equal(env.GRANT_CREDENTIALS.objects.get(key).values.has("credential"), false);
+});
+
+for (const mutation of ["replacement", "revoke"]) test(`publication SQL failure after ${mutation} commit preserves dirty owner recovery`, async () => {
+  const env = fixture();
+  await putGrantCredentials(env, key, grant());
+  const owner = env.GRANT_CREDENTIALS.objects.get(key), sql = env.grantAuthority.sql, exec = sql.exec;
+  const before = await env.grantAuthority.call("attachment", { key });
+  sql.exec = (query, ...bindings) => {
+    if (query.startsWith("INSERT INTO upstream_grant_pool_versions") && bindings[1] === 2) throw new Error("fixture publication SQL failure");
+    return exec(query, ...bindings);
+  };
+  await assert.rejects(() => mutation === "revoke" ? revokeGrantCredentials(env, key) : putGrantCredentials(env, key, grant("anthropic")));
+  assert.equal(owner.values.get("credential").generation, 2);
+  assert.equal(owner.values.get("credential").poolSyncPending, true);
+  if (mutation === "revoke") assert.equal(owner.values.get("credential").credential, undefined);
+  else assert.equal(owner.values.get("credential").providerId, "anthropic");
+  assert.deepEqual(await env.grantAuthority.call("attachment", { key }), { ...before, revision: before.revision + (mutation === "replacement" ? 1 : 0), pending: mutation === "replacement" });
+  assert.deepEqual((await pool(env, "openai")).keys, [key]);
+  assert.deepEqual((await pool(env, "anthropic")).keys, []);
+  assert.equal(env.values.get(key).provider, "openai");
+  sql.exec = exec;
+  owner.object = new GrantCredentialObject(owner.state, env);
+  assert.equal((await reconcileGrantAttachment(env, key)).outcome, mutation === "revoke" ? "detached" : "attached");
+  assert.equal(owner.values.get("credential").poolSyncPending, false);
+  assert.equal(owner.values.get("credential").generation, 2);
+  assert.equal((await pool(env, "openai")).hasAttachment, false);
+  assert.deepEqual((await pool(env, "anthropic")).keys, mutation === "replacement" ? [key] : []);
+  assert.equal(env.values.get(key).credentialGeneration, 2);
+});
+
+test("populated pre-attachment SQLite schema upgrades and reconstructs without losing legacy membership", async () => {
+  const authority = createGrantAuthority(sql => {
+    // This is the pre-C06 table: construction must add status without replacing
+    // populated rows or assuming their owner state has already been migrated.
+    sql.exec("CREATE TABLE upstream_grant_pool_members (scope TEXT NOT NULL, scope_id TEXT NOT NULL, provider_id TEXT NOT NULL, token_ref TEXT NOT NULL, PRIMARY KEY (scope, scope_id, provider_id, token_ref))");
+    for (let i = 0; i < 32; i++) sql.exec("INSERT INTO upstream_grant_pool_members VALUES ('policies', 'policy', 'openai', ?)", `legacy-${String(i).padStart(2, "0")}`);
+  });
+  const expected = Array.from({ length: 32 }, (_, i) => `oauth/policy/legacy-${String(i).padStart(2, "0")}`);
+  assert.deepEqual(authority.sql.exec("SELECT DISTINCT status FROM upstream_grant_pool_members").map(row => row.status), ["legacy"]);
+  const restarted = new PolicyBindingIndexObject({ storage: authority.storage });
+  const response = await restarted.fetch(new Request("https://clawrouter.internal/grant-pools/resolve", { method: "POST", body: JSON.stringify({ policyId: "policy", providerId: "openai" }) }));
+  assert.equal(response.status, 200);
+  assert.deepEqual((await response.json()).keys, expected);
+  assert.deepEqual(await authority.call("attachment", { key: expected[0] }), { generation: 0, revision: 0, pending: false, attached: true });
+  await assert.rejects(() => authority.call("admit", { key, provider: "openai", status: "active", generation: 0, revision: 0 }), error => error.status === 400);
+  await authority.call("admit", { key, provider: "openai", status: "paused", generation: 0, revision: 0 });
+  assert.deepEqual((await authority.call("resolve", { policyId: "policy", providerId: "openai" })).keys, expected);
 });
 
 test("pending pages use full grant keys and advance past unresolved legacy evidence", async () => {

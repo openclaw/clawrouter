@@ -703,14 +703,22 @@ active tier; routing never spills into a higher tier while a lower tier has an
 eligible grant. CLI imports, admin writes, and browser OAuth maintain the
 bounded pool index automatically.
 
-Each scope/provider permits 32 active or pending grants. A replacement reserves
-capacity before storing its credentials; its pending slot cannot receive
-requests, and the previous provider remains attached until the store commits.
+Each scope/provider permits 32 active grants or pending active reservations.
+A replacement reserves capacity before storing active credentials; a paused
+replacement records a pending proposal without consuming an active slot. Neither
+proposal can receive requests, and the previous provider remains attached until
+the store commits.
 Paused and reauthorization-required accounts remain attached while freeing an
 active slot. Revocation removes the attachment after deleting its secrets.
 These attachment facts do not yet change environment-credential fallback;
 legacy backfill and fallback activation require the subsequent control-plane
 migration.
+
+The attachment storage upgrade is forward-only. Recovery must use the current
+Worker or a forward fix so the owner can reconcile unfinished publication.
+Do not roll back to a Worker that predates attachment statuses: its pool query
+ignores those statuses and does not safely handle retained inactive accounts.
+Do not delete the index fences or restore an older index over current owners.
 
 `cf:oauth:put` replaces the entire grant at that key, including its credentials
 and account metadata. Omitted refresh tokens, credential bundles, and refresh

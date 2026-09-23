@@ -361,8 +361,8 @@ export class PolicyBindingIndexObject implements DurableObject {
   private grantAttachment(key: string): GrantAttachmentSnapshot {
     const identity = grantPoolIdentity(key);
     const version = rows<{ generation: number; revision: number }>(this.sql.exec("SELECT generation, revision FROM upstream_grant_pool_versions WHERE grant_key = ?", key))[0];
-    const pending = rows(this.sql.exec("SELECT 1 FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND token_ref = ? AND status = 'pending' LIMIT 1", ...identity)).length > 0;
-    const attached = rows(this.sql.exec("SELECT 1 FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND token_ref = ? AND status != 'pending' LIMIT 1", ...identity)).length > 0;
+    const pending = rows(this.sql.exec("SELECT 1 FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND token_ref = ? AND status IN ('pending', 'pending_inactive') LIMIT 1", ...identity)).length > 0;
+    const attached = rows(this.sql.exec("SELECT 1 FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND token_ref = ? AND status NOT IN ('pending', 'pending_inactive') LIMIT 1", ...identity)).length > 0;
     return { generation: version?.generation ?? 0, revision: version?.revision ?? 0, pending, attached };
   }
 
@@ -373,9 +373,13 @@ export class PolicyBindingIndexObject implements DurableObject {
       if (provider && status) {
         const member = this.attachmentMember(identity, provider);
         if (!member || status === "active" && !["active", "legacy", "pending"].includes(member.status)) {
-          const count = rows<{ count: number }>(this.sql.exec("SELECT count(*) AS count FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND provider_id = ? AND status IN ('legacy', 'active', 'pending')", identity[0], identity[1], provider))[0].count;
-          if (count >= 32) invalidAuthorityRequest("grant pool cannot contain more than 32 active or pending members per scope and provider");
-          this.sql.exec("INSERT INTO upstream_grant_pool_members (scope, scope_id, provider_id, token_ref, status) VALUES (?, ?, ?, ?, 'pending') ON CONFLICT (scope, scope_id, provider_id, token_ref) DO UPDATE SET status = 'pending'", identity[0], identity[1], provider, identity[2]);
+          if (status === "active") {
+            const count = rows<{ count: number }>(this.sql.exec("SELECT count(*) AS count FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND provider_id = ? AND status IN ('legacy', 'active', 'pending')", identity[0], identity[1], provider))[0].count;
+            if (count >= 32) invalidAuthorityRequest("grant pool cannot contain more than 32 active or pending members per scope and provider");
+          }
+          // Inactive proposals still need recoverable provenance before owner
+          // commit, but must not consume capacity reserved for active grants.
+          this.sql.exec("INSERT INTO upstream_grant_pool_members (scope, scope_id, provider_id, token_ref, status) VALUES (?, ?, ?, ?, ?) ON CONFLICT (scope, scope_id, provider_id, token_ref) DO UPDATE SET status = excluded.status", identity[0], identity[1], provider, identity[2], status === "active" ? "pending" : "pending_inactive");
         }
       }
       // Reserve a fresh revision even when the existing member needs no slot.
@@ -402,7 +406,7 @@ export class PolicyBindingIndexObject implements DurableObject {
       else if (member) {
         this.sql.exec("UPDATE upstream_grant_pool_members SET status = ? WHERE scope = ? AND scope_id = ? AND token_ref = ? AND provider_id = ?", status, ...identity, provider!);
         this.sql.exec("DELETE FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND token_ref = ? AND provider_id != ?", ...identity, provider!);
-      } else this.sql.exec("DELETE FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND token_ref = ? AND status = 'pending'", ...identity);
+      } else this.sql.exec("DELETE FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND token_ref = ? AND status IN ('pending', 'pending_inactive')", ...identity);
       if (status !== "active") this.sql.exec("DELETE FROM upstream_grant_runtime WHERE grant_key = ?", input.key);
       this.storeAttachmentVersion(input.key, input.generation, current.revision + 1);
       return { ...this.grantAttachment(input.key), outcome };
@@ -417,7 +421,7 @@ export class PolicyBindingIndexObject implements DurableObject {
       // Strong owner absence authorizes its cancellation, never legacy removal.
       if (current.generation !== 0) return { ...current, outcome: "unresolved" };
       if (current.pending) {
-        this.sql.exec("DELETE FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND token_ref = ? AND status = 'pending'", ...identity);
+        this.sql.exec("DELETE FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND token_ref = ? AND status IN ('pending', 'pending_inactive')", ...identity);
         this.storeAttachmentVersion(input.key, 0, current.revision + 1);
       }
       const updated = this.grantAttachment(input.key);
@@ -428,7 +432,7 @@ export class PolicyBindingIndexObject implements DurableObject {
   private pendingGrantAttachments(input: { cursor?: string; limit?: number }): { keys: string[]; cursor: string | null } {
     const limit = boundedInteger(input.limit ?? 32, "limit", 1, 64);
     const after = input.cursor ? grantPoolIdentity(input.cursor) : ["", "", ""];
-    const page = rows<{ scope: string; scope_id: string; token_ref: string }>(this.sql.exec("SELECT scope, scope_id, token_ref FROM upstream_grant_pool_members WHERE status = 'pending' AND (scope, scope_id, token_ref) > (?, ?, ?) GROUP BY scope, scope_id, token_ref ORDER BY scope, scope_id, token_ref LIMIT ?", ...after, limit + 1));
+    const page = rows<{ scope: string; scope_id: string; token_ref: string }>(this.sql.exec("SELECT scope, scope_id, token_ref FROM upstream_grant_pool_members WHERE status IN ('pending', 'pending_inactive') AND (scope, scope_id, token_ref) > (?, ?, ?) GROUP BY scope, scope_id, token_ref ORDER BY scope, scope_id, token_ref LIMIT ?", ...after, limit + 1));
     const keys = page.slice(0, limit).map((row) => row.scope === "tenants" ? `oauth/tenants/${row.scope_id}/${row.token_ref}` : `oauth/${row.scope_id}/${row.token_ref}`);
     return { keys, cursor: page.length > limit ? keys[keys.length - 1] : null };
   }

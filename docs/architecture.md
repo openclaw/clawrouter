@@ -32,9 +32,10 @@ backpressure, cancellation, and billable usage if storage fails. See the
 [HTTP continuation contract](api-reference.md#http-continuation-contract).
 
 The credential owner also sequences attachment changes in `ACCESS_CONTROL`.
-An explicit grant write reserves a pending pool slot before storing credentials;
-the previous provider stays attached until that store commits. Pending slots
-count toward the 32 active slots per scope/provider but are never selected.
+An explicit grant write records a pending pool proposal before storing credentials;
+the previous provider stays attached until that store commits. Active proposals
+reserve one of the 32 active slots per scope/provider; inactive proposals use
+`pending_inactive` and reserve no active capacity. Neither can be selected.
 Paused and reauthorization-required rows retain attachment presence and free an
 active slot. Revocation commits a secretless tombstone before detaching all of
 that key's provider rows. Existing pool rows remain `legacy` and selectable.
@@ -57,6 +58,14 @@ import and ordinary refresh may update an existing attachment but cannot create
 one without admission; they can return an explicit `unattached` result. Legacy
 backfill, readiness, authenticated recovery controls, and consuming attachment
 presence to suppress environment fallback are separate activation work.
+
+This storage upgrade is forward-only. Reconstructing the current authority
+preserves populated legacy rows, and the current credential owner retries dirty
+publication after a failed commit or acknowledgement. Rolling back Worker code
+is not qualified: older pool readers ignore status and can select pending or
+inactive rows or exceed their discovery bounds. Recover with this version or a
+forward fix; do not remove the generation/revision fences or restore an older
+membership snapshot over newer credential state.
 
 Authentication is read-only after an existing user receives versioned
 `assignmentState`. Rule changes reconcile users from the admin mutation path;
