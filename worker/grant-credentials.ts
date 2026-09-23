@@ -160,7 +160,8 @@ export class GrantCredentialObject implements DurableObject {
         if (!previous) throw new HttpError(404, "unknown_upstream_grant", "upstream grant is not registered");
         // Legacy CLI hints identify a record that has no owner. Once owned, its
         // canonical identity and an existing tombstone cannot be overwritten.
-        const record = current?.revokedAt ? current : revokedRecord(key, current ? previous : { ...previous, ...metadata }, current?.generation);
+        // A failed reconnect can leave pending admission after a clean revoke.
+        const record = current?.revokedAt ? { ...current, poolSyncPending: true } : revokedRecord(key, current ? previous : { ...previous, ...metadata }, current?.generation);
         // Never erase the tombstone or restore secrets when a derived write fails.
         // Retrying revoke republishes this same generation after partial failure.
         await this.state.storage.put("credential", record);

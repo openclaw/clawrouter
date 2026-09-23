@@ -168,6 +168,54 @@ test("revocation removes secrets even when an earlier active publication still c
   assert.equal((await pool(env, "openai")).hasAttachment, false);
 });
 
+for (const legacy of [false, true]) test(`repeat revoke repairs a failed reconnect from a ${legacy ? "pre-attachment" : "clean"} tombstone`, async () => {
+  const env = fixture();
+  await putGrantCredentials(env, key, grant());
+  await revokeGrantCredentials(env, key);
+  const owner = env.GRANT_CREDENTIALS.objects.get(key), put = owner.state.storage.put;
+  const tombstone = owner.values.get("credential");
+  if (legacy) delete tombstone.poolSyncPending;
+  owner.values.set("credential", tombstone);
+  owner.state.storage.put = async () => { throw new Error("fixture reconnect write failure"); };
+  await assert.rejects(() => putGrantCredentials(env, key, grant()));
+  owner.state.storage.put = put;
+  const pending = await env.grantAuthority.call("attachment", { key });
+  assert.equal(pending.pending, true);
+  const fetch = env.grantAuthority.fetch;
+  env.grantAuthority.fetch = (url, init) => {
+    if (new URL(url).pathname === "/grant-pools/publish") throw new Error("fixture index unavailable");
+    return fetch(url, init);
+  };
+  await assert.rejects(() => revokeGrantCredentials(env, key));
+  const saved = owner.values.get("credential");
+  assert.equal(saved.poolSyncPending, true);
+  assert.equal(saved.credential, undefined);
+  assert.equal(saved.generation, tombstone.generation);
+  assert.equal(saved.lineage, tombstone.lineage);
+  assert.equal(saved.revokedAt, tombstone.revokedAt);
+  env.grantAuthority.fetch = fetch;
+  owner.object = new GrantCredentialObject(owner.state, env);
+  await revokeGrantCredentials(env, key);
+  assert.deepEqual(await env.grantAuthority.call("attachment", { key }), { generation: tombstone.generation, revision: pending.revision + 1, pending: false, attached: false });
+  assert.equal(owner.values.get("credential").poolSyncPending, false);
+  assert.equal((await pool(env, "openai")).hasAttachment, false);
+});
+
+test("repeat revoke finishes legacy membership cleanup for a pre-attachment tombstone", async () => {
+  const env = fixture();
+  await putGrantCredentials(env, key, grant());
+  await revokeGrantCredentials(env, key);
+  const owner = env.GRANT_CREDENTIALS.objects.get(key), tombstone = owner.values.get("credential");
+  delete tombstone.poolSyncPending;
+  owner.values.set("credential", tombstone);
+  env.grantAuthority.sql.exec("DELETE FROM upstream_grant_pool_versions WHERE grant_key = ?", key);
+  env.grantAuthority.seedLegacy(key, "openai");
+  await revokeGrantCredentials(env, key);
+  assert.equal((await pool(env, "openai")).hasAttachment, false);
+  assert.equal(owner.values.get("credential").generation, tombstone.generation);
+  assert.equal(owner.values.get("credential").lineage, tombstone.lineage);
+});
+
 test("active capacity counts legacy and pending reservations while paused and reauth attachments remain present", async context => {
   const env = fixture();
   for (let i = 0; i < 40; i++) {
