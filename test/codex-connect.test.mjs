@@ -212,6 +212,10 @@ test("custom home launch instructions quote shell metacharacters and select the 
   const args = f.connect.map((value) => value === f.home ? customHome : value);
   const result = await manageCodex(args, { ...f.env, CODEX_HOME: undefined });
   assert.equal(result.launch, `CODEX_HOME='${customHome.replaceAll("'", "'\\''")}' codex --profile clawrouter`);
+  const child = spawn("/bin/sh", ["-c", `codex() { [ "$CODEX_HOME" = "$EXPECTED_HOME" ] && [ "$1" = "--profile" ] && [ "$2" = "clawrouter" ]; }\n${result.launch}`], {
+    env: { ...f.env, EXPECTED_HOME: customHome, CODEX_HOME: undefined }, stdio: "ignore",
+  });
+  assert.equal((await once(child, "close"))[0], 0);
   assert.ok(await readFile(join(customHome, "clawrouter.config.toml"), "utf8"));
   assert.deepEqual(await readdir(f.home), ["auth.json", "config.toml"]);
 });
