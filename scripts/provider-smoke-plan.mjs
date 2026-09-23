@@ -201,7 +201,7 @@ export function summarizePlan(plan) {
         ? " oauth=ready"
         : " oauth=grant-required"
       : "";
-    lines.push(`${provider.id}\t${provider.class}\t${config}${grant}\t${target}`);
+    lines.push(`${provider.id}\t${provider.class}\t${config}${grant}\t${target}${provider.target?.unresolved ? ` unresolved=${provider.target.unresolved}` : ""}`);
   }
   return lines.join("\n");
 }
@@ -209,7 +209,7 @@ export function summarizePlan(plan) {
 function smokeTarget(provider, env) {
   const chatEndpointId = provider.capabilities.find((capability) => capability.id === "llm.chat")?.endpoint;
   const chatEndpoint = provider.endpoints.find((endpoint) => endpoint.id === chatEndpointId);
-  if (chatEndpoint && supportsOpenAiCompatibleProxy(provider)) {
+  if (chatEndpoint && supportsOpenAiCompatibleProxy(provider, chatEndpoint)) {
     const model = smokeModel(provider, chatEndpoint, env);
     if (model) {
       return {
@@ -230,24 +230,33 @@ function smokeTarget(provider, env) {
   if (!endpoint || !supportsManifestProxy(provider, endpoint)) {
     return null;
   }
+  // Router envelopes use catalog identity. The Worker resolves native names,
+  // which can themselves start with another provider's routing prefix.
   const model = manifestSmokeModelOverride(provider, endpoint, env)
-    ?? modelsForEndpoint(provider, endpoint).find((model) => !model.upstream.includes("${"))?.upstream;
-  if (provider.service_kind === "model_provider" && !model) return null;
+    ?? modelsForEndpoint(provider, endpoint).find((model) => !model.upstream.includes("${"))?.id;
+  if (["openai.chat_completions", "openai.responses", "openai.embeddings", "anthropic.messages", "cohere.chat", "cohere.embed", "google.generate_content", "aws_bedrock.invoke"].includes(endpoint.request_format) && !model) return null;
   const pathParams = Object.fromEntries(
-    endpoint.path_params.map((param) => [param, samplePathParam(param, model, env)]),
+    endpoint.path_params.map((param) => [param, samplePathParam(provider, param, model, env)]),
   );
   const upstreamMethod = smokeMethod(endpoint);
+  const body = sampleBody(provider, endpoint, upstreamMethod, model, env);
+  const unresolvedParams = endpoint.path_params.filter(param => !["model", "deployment"].includes(param)
+    && !(endpoint.request_format === "cloudflare_ai_gateway.universal" && ["account", "gateway"].includes(param)));
   return {
     kind: "manifest_proxy",
     route: `/v1/proxy/${provider.id}/${endpoint.id}`,
     method: "POST",
     upstreamMethod,
     endpoint: endpoint.id,
+    ...(body === null || unresolvedParams.length ? { unresolved: endpoint.request_format === "replicate.prediction_get"
+      ? "prediction lookup requires an existing prediction ID; no smoke fixture is declared"
+      : unresolvedParams.length ? `path parameters require a smoke fixture: ${unresolvedParams.join(", ")}`
+      : `no smoke request template for ${endpoint.request_format}` } : {}),
     envelope: {
       method: upstreamMethod,
       pathParams,
       query: {},
-      body: sampleBody(provider, endpoint, upstreamMethod, model, env),
+      body: body ?? {},
     },
   };
 }
@@ -294,12 +303,24 @@ function providerSmokeModelOverride(provider, endpoint, env) {
 }
 
 function smokeEndpoint(provider) {
-  const preferredId = preferredEndpointId(provider.id);
-  if (preferredId) {
-    const preferred = provider.endpoints.find((endpoint) => endpoint.id === preferredId);
-    if (preferred) {
-      return preferred;
-    }
+  // Prefer the declared operation, not a provider or endpoint spelling. Counting
+  // shares the Messages format but avoids generating output during a smoke.
+  for (const [format, capability] of [
+    ["anthropic.messages", "llm.count_tokens"],
+    ["openai.chat_completions", "llm.chat"],
+    ["anthropic.messages", "llm.messages"],
+    ["cohere.chat", "llm.chat"],
+    ["google.generate_content", "llm.generate"],
+    ["aws_bedrock.invoke", "llm.invoke"],
+    ["tavily.search", "web.search"],
+    ["openai.responses", "llm.responses"],
+    ["openai.embeddings", "llm.embeddings"],
+    ["cohere.embed", "llm.embeddings"],
+    ["tavily.extract", "web.extract"],
+  ]) {
+    const preferred = provider.endpoints.find(endpoint => endpoint.request_format === format
+      && provider.capabilities.some(item => item.endpoint === endpoint.id && item.id === capability));
+    if (preferred) return preferred;
   }
   const nonStreaming = provider.endpoints.filter((endpoint) => !endpoint.streaming);
   return (
@@ -315,21 +336,15 @@ function smokeMethod(endpoint) {
   return endpoint.methods.includes("GET") ? "GET" : endpoint.method ?? "POST";
 }
 
-function preferredEndpointId(providerId) {
-  return {
-    "aws-bedrock": "invoke_model",
-    cohere: "chat",
-    tavily: "search",
-  }[providerId];
-}
-
-function supportsOpenAiCompatibleProxy(provider) {
+function supportsOpenAiCompatibleProxy(provider, endpoint) {
   return (
+    endpoint.request_format === "openai.chat_completions" &&
+    endpoint.response_format === "openai.chat_completions" &&
     provider.class === "openai_compatible" &&
     provider.adapter.request === "openai" &&
     provider.adapter.response === "openai" &&
     templatesSupportedByConfig(provider, provider.base_urls.default ?? "") &&
-    provider.endpoints.every(openAiEndpointPathSupported) &&
+    openAiEndpointPathSupported(endpoint) &&
     Object.values(provider.adapter.injectQuery ?? {}).every((value) =>
       templatesSupportedByConfig(provider, value),
     ) &&
@@ -470,6 +485,7 @@ function openAiEndpointPathSupported(endpoint) {
   return (
     placeholders.length === 0 ||
     (endpoint.path_params.length === 1 &&
+      ["model", "deployment"].includes(endpoint.path_params[0]) &&
       placeholders.every((name) => endpoint.path_params.includes(name)))
   );
 }
@@ -490,62 +506,62 @@ function pushUnique(values, value) {
   }
 }
 
-function samplePathParam(param, model, env) {
-  if (param === "path") {
-    return "status";
-  }
-  if (param === "method") {
-    return "status";
-  }
-  if (param === "model") {
+function samplePathParam(provider, param, model, env) {
+  if (param === "model" || param === "deployment") {
     return model;
   }
   if (param === "account") {
-    return env.CLOUDFLARE_ACCOUNT_ID ?? "account";
+    return provider.id === "cloudflare-ai-gateway" ? env.CLOUDFLARE_ACCOUNT_ID ?? "account" : "account";
   }
   if (param === "gateway") {
-    return env.CLOUDFLARE_AI_GATEWAY_ID ?? "gateway";
-  }
-  if (param.endsWith("_id")) {
-    return "smoke";
+    return provider.id === "cloudflare-ai-gateway" ? env.CLOUDFLARE_AI_GATEWAY_ID ?? "gateway" : "gateway";
   }
   return "smoke";
 }
 
 function sampleBody(provider, endpoint, method, model, env) {
-  if (!methodAllowsBody(method)) {
-    return {};
-  }
-  if (
-    endpoint.request_format.includes("graphql") ||
-    provider.adapter.request.includes("graphql")
-  ) {
-    return { query: "{ viewer { id } }" };
-  }
-  if (provider.id === "tavily" && endpoint.id === "search") {
+  const format = endpoint.request_format;
+  const graphql = format.includes("graphql") || provider.adapter.request?.includes("graphql");
+  // GET/HEAD have no body. GraphQL GET still needs a schema-specific query
+  // fixture; the existing POST query below is retained without claiming that.
+  if (!methodAllowsBody(method)) return graphql ? null : {};
+  if (graphql) return { query: "{ viewer { id } }" };
+  if (format === "tavily.search") {
     return { query: "OpenClaw", max_results: 1 };
   }
-  if (provider.id === "firecrawl" && endpoint.id === "scrape") {
+  if (format === "tavily.extract") {
+    return { urls: ["https://example.com"] };
+  }
+  if (format === "firecrawl.scrape") {
     return { url: "https://example.com", formats: ["markdown"] };
   }
-  if (provider.id === "google-gemini") {
+  if (format === "google.generate_content") {
     return { contents: [{ parts: [{ text: "reply with ok" }] }] };
   }
-  if (provider.id === "anthropic") {
+  if (format === "anthropic.messages" || format === "openai.chat_completions") {
     const body = {
       model,
       messages: [{ role: "user", content: "reply with ok" }],
     };
-    if (endpoint.id === "messages") {
+    if (format !== "anthropic.messages" || !provider.capabilities.some(item => item.endpoint === endpoint.id && item.id === "llm.count_tokens")) {
       body.max_tokens = 16;
     }
     return body;
   }
-  if (provider.id === "cohere") {
+  if (format === "cohere.chat") {
     return { model, messages: [{ role: "user", content: "reply with ok" }] };
   }
-  if (provider.id === "aws-bedrock") {
-    const override = env.CLAWROUTER_SMOKE_BODY_AWS_BEDROCK;
+  if (format === "openai.responses") {
+    return { model, input: "reply with ok", max_output_tokens: 16 };
+  }
+  if (format === "openai.embeddings") {
+    return { model, input: "OpenClaw" };
+  }
+  if (format === "cohere.embed") {
+    return { model, texts: ["OpenClaw"], input_type: "search_query", embedding_types: ["float"] };
+  }
+  if (format === "aws_bedrock.invoke") {
+    const override = provider.id === "aws-bedrock" ? env.CLAWROUTER_SMOKE_BODY_AWS_BEDROCK : null;
     if (override) {
       let parsed;
       try {
@@ -564,17 +580,20 @@ function sampleBody(provider, endpoint, method, model, env) {
       inferenceConfig: { maxTokens: 16 },
     };
   }
-  if (provider.id === "cloudflare-ai-gateway") {
+  if (format === "cloudflare_ai_gateway.universal") {
+    // These legacy operator overrides belong only to the bundled gateway;
+    // a renamed manifest must never inherit another provider's inline key.
+    const builtin = provider.id === "cloudflare-ai-gateway";
     const step = {
       provider: "openai",
       endpoint: "chat/completions",
       query: {
-        model: env.CLOUDFLARE_AI_GATEWAY_SMOKE_MODEL ?? "openai/gpt-4.1-mini",
+        model: builtin ? env.CLOUDFLARE_AI_GATEWAY_SMOKE_MODEL ?? "openai/gpt-4.1-mini" : "openai/gpt-4.1-mini",
         messages: [{ role: "user", content: "reply with ok" }],
         max_tokens: 8,
       },
     };
-    if (env.CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY) {
+    if (builtin && env.CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY) {
       step.headers = {
         Authorization: `Bearer ${env.CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY}`,
         "Content-Type": "application/json",
@@ -582,7 +601,7 @@ function sampleBody(provider, endpoint, method, model, env) {
     }
     return [step];
   }
-  return {};
+  return null;
 }
 
 function manifestSmokeModelOverride(provider, endpoint, env) {
@@ -597,7 +616,7 @@ function manifestSmokeModelOverride(provider, endpoint, env) {
     if (!modelsForEndpoint(provider, endpoint).includes(catalog)) {
       throw new Error(`smoke model override for ${provider.id} must support ${endpoint.id}`);
     }
-    if (!catalog.upstream.includes("${")) return catalog.upstream;
+    return catalog.id;
   }
   const prefix = (provider.routing.modelPrefixes ?? []).find((candidate) => value.startsWith(candidate));
   return prefix ? value.slice(prefix.length) : value;
@@ -611,6 +630,10 @@ export async function runProviderTarget(baseUrl, smokeKey, provider) {
   const target = provider.target;
   const startedAt = Date.now();
   const checkedAt = new Date(startedAt).toISOString();
+  if (target.unresolved) return {
+    provider: provider.id, status: "failed", checkedAt, latencyMs: 0,
+    statusCode: null, error: target.unresolved, providerAttempted: false,
+  };
   let response;
   try {
     response = await fetch(`${baseUrl.replace(/\/$/, "")}${target.route}`, {
