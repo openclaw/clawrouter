@@ -183,7 +183,7 @@ export function FusionPanel({ config, readiness, policies, policyId, onSelectPol
 function FusionReadinessPanel({ readiness }: { readiness: FusionReadiness | null }) {
   if (!readiness) return <div className="fusionReadiness fusionReadiness-empty"><strong>Readiness pending</strong><span>Select a policy and check the draft profile before enabling it.</span></div>;
   const calls = readiness.calls.map((call) => ({ call, cost: presentCost(call.estimatedReservationMicros, call.estimateBasis, true) }));
-  const estimate = calls.some(({ cost }) => cost.unavailable) ? "Price unavailable" : formatMicros(readiness.estimatedReservationMicros);
+  const estimate = readiness.executable && calls.some(({ call, cost }) => call.executable && cost.unavailable) ? "Price unavailable" : formatMicros(readiness.estimatedReservationMicros);
   const budgetNote = readiness.budgetConfigured
     ? `${readiness.remainingBudgetMicros == null ? "Budget unavailable" : `${formatMicros(readiness.remainingBudgetMicros)} remains this UTC calendar month`}${readiness.budgetSufficientForAll === false ? "; not enough for every eligible call" : ""}.`
     : "No monthly cap at this policy; provider limits still apply.";

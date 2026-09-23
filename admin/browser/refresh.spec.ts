@@ -56,6 +56,36 @@ test("Usage renders recorded cost bases and partial Fusion without reclassifying
   await expect(page.locator(".compoundRequestCalls")).toContainText("Price unavailable");
 });
 
+test("Fusion total prices only the server's executable calls", async ({ page }) => {
+  await fixture(page);
+  const readiness = {
+    policyId: policy.policyId, policyEnabled: true, configEnabled: false, executable: true, advertisable: false,
+    readyAdviserCount: 0, adviserCount: 1, callCount: 2, estimatedReservationMicros: 1_000_000,
+    budgetConfigured: true, budgetLedger: "ready", remainingBudgetMicros: 8_000_000, budgetSufficientForAll: true,
+    estimateNote: "Estimate for currently eligible calls.",
+    calls: [
+      { stage: "adviser", index: 1, model: "example/adviser", provider: "example", policyAllowed: true, executable: false, verified: false,
+        status: "blocked", reasons: ["Price unavailable for this budgeted call."], estimatedReservationMicros: 0, estimateBasis: "unpriced_request" },
+      { stage: "synthesizer", index: null, model: "example/final", provider: "example", policyAllowed: true, executable: true, verified: true,
+        status: "verified", reasons: [] as string[], estimatedReservationMicros: 1_000_000, estimateBasis: "manifest_pricing" },
+    ],
+  };
+  await page.route("**/v1/admin/fusion/preview", (route) => route.fulfill({ json: readiness }));
+  await page.goto("/dashboard/access");
+  await page.getByRole("tab", { name: /Fusion/ }).click();
+  await page.getByLabel("final synthesizer", { exact: true }).fill("example/final");
+  await page.getByRole("button", { name: "Check readiness" }).click();
+  await expect(page.locator(".fusionReadinessCalls article").first().locator("b")).toHaveText("Price unavailable");
+  await expect(page.locator(".fusionReadinessEstimate strong")).toHaveText("$1.00");
+
+  readiness.executable = false;
+  readiness.estimatedReservationMicros = 0;
+  Object.assign(readiness.calls[1], { executable: false, verified: false, status: "blocked", estimateBasis: "unpriced_request", estimatedReservationMicros: 0 });
+  await page.getByRole("button", { name: "Check readiness" }).click();
+  await expect(page.locator(".fusionReadinessCalls article b")).toHaveText(["Price unavailable", "Price unavailable"]);
+  await expect(page.locator(".fusionReadinessEstimate strong")).toHaveText("$0.00");
+});
+
 test("policy and principal budget views show used reservations separately from remaining", async ({ page }) => {
   const state = await fixture(page);
   state.usage.policies.push({
