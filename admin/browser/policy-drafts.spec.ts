@@ -108,6 +108,63 @@ test("a clean reselected policy adopts its held save before a failed refresh and
   await expect(tenant(page)).toHaveValue("canonical-a");
 });
 
+for (const draftEdit of ["tenant", "threshold"] as const) {
+  test(`a dirty reselected policy keeps its ${draftEdit} edit and saved fields through failed metadata and the next PUT`, async ({ page }) => {
+    const state = await fixture(page);
+    state.policies[0].monthlyBudgetMicros = 10_000_000;
+    await open(page);
+    const status = page.getByRole("combobox", { name: "status", exact: true });
+    const budget = page.getByRole("textbox", { name: "monthly budget ($)", exact: true });
+    const selection = page.getByRole("combobox", { name: "selection", exact: true });
+    const stickiness = page.getByRole("combobox", { name: "stickiness", exact: true });
+    if (draftEdit === "threshold") await stickiness.selectOption("identity");
+    await status.selectOption("disabled");
+    await budget.fill("25");
+    await save(page).click();
+    await expect.poll(() => state.writes.length).toBe(1);
+    const submitted = state.writes[0].request().postDataJSON();
+    expect(submitted).toMatchObject({ policyId: "policy_a", enabled: false, monthlyBudgetMicros: 25_000_000 });
+    if (draftEdit === "threshold") expect(submitted.grantRouting).toMatchObject({ strategy: "priority", stickiness: "identity" });
+    page.once("dialog", (dialog) => dialog.accept());
+    await row(page, "policy_b").click();
+    await row(page, "policy_a").click();
+    await expect(status).toHaveValue("active");
+    await expect(budget).toHaveValue("10");
+    await expect(stickiness).toHaveValue("none");
+    if (draftEdit === "threshold") await selection.selectOption("threshold");
+    else await tenant(page).fill("later-tenant");
+    state.holdBootstrap = true;
+    await state.commit(0);
+    await expect.poll(() => state.reads.length).toBe(1);
+    await expect(status).toHaveValue("disabled");
+    await expect(budget).toHaveValue("25");
+    const expectedTenant = draftEdit === "tenant" ? "later-tenant" : "default";
+    await expect(tenant(page)).toHaveValue(expectedTenant);
+    if (draftEdit === "threshold") {
+      await expect(selection).toHaveValue("threshold");
+      await expect(stickiness).toHaveValue("none");
+    }
+    await expect(page.getByText("Unsaved policy changes.", { exact: true })).toBeVisible();
+    await expect(save(page)).toBeEnabled();
+    state.holdBootstrap = false;
+    state.failBootstrap = true;
+    await state.reads[0].route.fulfill({ status: 503, body: "reporting unavailable" });
+    await expect(page.locator(".statusBar")).toContainText("reporting unavailable");
+    await save(page).focus();
+    await page.keyboard.press("Enter");
+    await expect.poll(() => state.writes.length).toBe(2);
+    expect(state.writes[1].request().method()).toBe("PUT");
+    expect(state.writes[1].request().postDataJSON()).toEqual({
+      ...submitted, tenantId: expectedTenant,
+      grantRouting: draftEdit === "threshold" ? { ...submitted.grantRouting, strategy: "threshold", stickiness: "none" } : submitted.grantRouting,
+    });
+    await state.commit(1);
+    await expect(row(page, "policy_a").locator('[data-label="state"]')).toHaveText("revoked");
+    await expect(row(page, "policy_a").locator('[data-label="tenant"]')).toHaveText(expectedTenant);
+    await expect(page.getByText("Unsaved policy changes.", { exact: true })).toHaveCount(0);
+  });
+}
+
 test("typing the original tenant after a server refresh stays unsaved through another refresh and keyboard Save", async ({ page }) => {
   const state = await fixture(page);
   await open(page);

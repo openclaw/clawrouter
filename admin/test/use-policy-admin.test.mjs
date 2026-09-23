@@ -202,7 +202,7 @@ for (const action of ["save", "disable"]) {
   for (const replacement of ["clean reselection", "dirty reselection", "roundtrip reselection", "discard", "edited discard"]) {
     test(`${action} reconciles the ${replacement} replacement draft without rolling back its next save`, async () => {
       const fixture = ready();
-      change(fixture, { tenantId: "submitted" });
+      change(fixture, { tenantId: "submitted", ...(action === "save" ? { enabled: false, monthlyBudgetMicros: "25" } : {}) });
       const operation = action === "save" ? fixture.render().policies.save(event) : fixture.render().policies.revoke("policy_a");
       if (replacement.includes("reselection")) {
         fixture.render().policies.edit(policy("policy_b"));
@@ -215,13 +215,14 @@ for (const action of ["save", "disable"]) {
         change(fixture, { tenantId: "default" });
       }
       assert.equal(fixture.render().policies.dirty, dirty);
-      const canonical = { ...policy("policy_a", action === "save" ? "canonical" : "default"), enabled: action === "save" };
+      const canonical = { ...policy("policy_a", action === "save" ? "canonical" : "default"), enabled: false, ...(action === "save" ? { monthlyBudgetMicros: 25_000_000 } : {}) };
       fixture.requests[0].resolve(canonical);
       await operation;
       const expectedTenant = dirty ? "later-draft" : canonical.tenantId;
       assert.deepEqual(fixture.render().policies.selected, canonical);
       assert.equal(fixture.render().policies.form.tenantId, expectedTenant);
       assert.equal(fixture.render().policies.form.enabled, canonical.enabled);
+      assert.equal(fixture.render().policies.form.monthlyBudgetMicros, action === "save" ? "25" : "");
       assert.equal(fixture.render().policies.dirty, dirty);
       hydrate(fixture, [canonical, policy("policy_b")]);
       assert.equal(fixture.render().policies.form.tenantId, expectedTenant);
@@ -229,11 +230,93 @@ for (const action of ["save", "disable"]) {
       const payload = JSON.parse(fixture.requests[1].init.body);
       assert.equal(payload.tenantId, expectedTenant);
       assert.equal(payload.enabled, canonical.enabled);
+      assert.equal(payload.monthlyBudgetMicros, canonical.monthlyBudgetMicros ?? null);
       fixture.requests[1].resolve({ ...canonical, tenantId: expectedTenant });
       await nextSave;
     });
   }
 }
+
+for (const roundtrip of [false, true]) {
+  test(`a dirty replacement preserves an explicit enabled ${roundtrip ? "roundtrip" : "edit"} and adopts its saved budget`, async () => {
+    const fixture = ready();
+    change(fixture, { enabled: false, monthlyBudgetMicros: "25" });
+    const operation = fixture.render().policies.save(event);
+    fixture.render().policies.edit(policy("policy_b"));
+    fixture.render().policies.edit(policy("policy_a"));
+    change(fixture, { tenantId: "later-tenant", enabled: false });
+    if (roundtrip) change(fixture, { enabled: true });
+    const canonical = { ...policy("policy_a"), enabled: false, monthlyBudgetMicros: 25_000_000 };
+    fixture.requests[0].resolve(canonical);
+    await operation;
+    assert.equal(fixture.render().policies.form.enabled, roundtrip);
+    assert.equal(fixture.render().policies.form.monthlyBudgetMicros, "25");
+    assert.equal(fixture.render().policies.form.tenantId, "later-tenant");
+    const nextSave = fixture.render().policies.save(event);
+    const payload = JSON.parse(fixture.requests[1].init.body);
+    assert.equal(payload.enabled, roundtrip);
+    assert.equal(payload.monthlyBudgetMicros, 25_000_000);
+    assert.equal(payload.tenantId, "later-tenant");
+    fixture.requests[1].resolve({ ...canonical, enabled: roundtrip, tenantId: "later-tenant" });
+    await nextSave;
+    assert.equal(fixture.render().policies.dirty, false);
+  });
+}
+
+for (const laterStickiness of [false, true]) {
+  test(`threshold selection records its paired stickiness edit through a held save${laterStickiness ? " and preserves a later explicit stickiness choice" : ""}`, async () => {
+    const fixture = ready();
+    change(fixture, { enabled: false, monthlyBudgetMicros: "25", grantStickiness: "identity" });
+    const operation = fixture.render().policies.save(event);
+    const submitted = JSON.parse(fixture.requests[0].init.body);
+    const { allProviders, ...canonical } = submitted;
+    assert.equal(allProviders, true);
+    fixture.render().policies.edit(policy("policy_b"));
+    fixture.render().policies.edit(policy("policy_a"));
+    change(fixture, { grantStrategy: "threshold" });
+    assert.equal(fixture.render().policies.form.grantStickiness, "none");
+    if (laterStickiness) change(fixture, { grantStickiness: "session" });
+    fixture.requests[0].resolve(canonical);
+    await operation;
+    const expectedStickiness = laterStickiness ? "session" : "none";
+    assert.equal(fixture.render().policies.form.grantStrategy, "threshold");
+    assert.equal(fixture.render().policies.form.grantStickiness, expectedStickiness);
+    assert.equal(fixture.render().policies.form.enabled, false);
+    assert.equal(fixture.render().policies.form.monthlyBudgetMicros, "25");
+    // A later explicit choice remains visible; the operator can select a compatible strategy.
+    if (laterStickiness) change(fixture, { grantStrategy: "priority" });
+    const nextSave = fixture.render().policies.save(event);
+    const payload = JSON.parse(fixture.requests[1].init.body);
+    assert.deepEqual(payload, { ...submitted, grantRouting: { ...canonical.grantRouting, strategy: laterStickiness ? "priority" : "threshold", stickiness: expectedStickiness } });
+    fixture.requests[1].resolve({ ...canonical, grantRouting: payload.grantRouting });
+    await nextSave;
+    assert.equal(fixture.render().policies.dirty, false);
+  });
+}
+
+test("replacement field roundtrips preserve arrays, booleans and text without restoring other stale fields", async () => {
+  const fixture = mount(), original = { ...policy("policy_a"), monthlyBudgetMicros: 5_000_000, providers: ["provider_a"] };
+  fixture.providers = [{ id: "provider_a" }, { id: "provider_b" }];
+  hydrate(fixture, [original, policy("policy_b")]);
+  change(fixture, { enabled: false, monthlyBudgetMicros: "25", providers: ["provider_b"], retainRequestContent: true, grantStrategy: "least_used", requestCostMicros: "9", grantFailover: false });
+  const operation = fixture.render().policies.save(event);
+  const { allProviders, ...canonical } = JSON.parse(fixture.requests[0].init.body);
+  assert.equal(allProviders, false);
+  fixture.render().policies.edit(policy("policy_b"));
+  fixture.render().policies.edit(original);
+  change(fixture, { tenantId: "later-tenant", monthlyBudgetMicros: "10", providers: ["provider_b"], retainRequestContent: true, grantStrategy: "round_robin" });
+  change(fixture, { monthlyBudgetMicros: "5", providers: ["provider_a"], retainRequestContent: false, grantStrategy: "priority" });
+  fixture.requests[0].resolve(canonical);
+  await operation;
+  const expected = { enabled: false, tenantId: "later-tenant", monthlyBudgetMicros: "5", providers: ["provider_a"], retainRequestContent: false, grantStrategy: "priority", requestCostMicros: "9", grantFailover: false };
+  for (const [field, value] of Object.entries(expected)) assert.deepEqual(fixture.render().policies.form[field], value, field);
+  const nextSave = fixture.render().policies.save(event);
+  const payload = JSON.parse(fixture.requests[1].init.body);
+  assert.deepEqual(payload, { ...canonical, allProviders: false, tenantId: "later-tenant", monthlyBudgetMicros: 5_000_000, providers: ["provider_a"], retainRequestContent: false, grantRouting: { ...canonical.grantRouting, strategy: "priority" } });
+  fixture.requests[1].resolve(payload);
+  await nextSave;
+  assert.equal(fixture.render().policies.dirty, false);
+});
 
 test("Disable preserves a newer enabled roundtrip in a reselected replacement draft", async () => {
   const fixture = ready();
@@ -512,13 +595,13 @@ function mount(demoMode = false) {
     return [slots[index], (next) => { slots[index] = typeof next === "function" ? next(slots[index]) : next; }];
   };
   const useRef = (initial) => useState(() => ({ current: initial }))[0];
-  const fixture = { requests, statuses, refreshes: 0, confirmations: 0, acceptDiscard: true, demoRows: [] };
+  const fixture = { requests, statuses, refreshes: 0, confirmations: 0, acceptDiscard: true, demoRows: [], providers: [] };
   const window = { confirm: () => { fixture.confirmations += 1; return fixture.acceptDiscard; } };
   const request = (_origin, path, init) => new Promise((resolve, reject) => requests.push({ path, init, resolve, reject }));
   const usePolicyAdmin = new Function("useState", "useRef", "window", "demo", "defaultPolicy", "rolePresets", "policyFormFromPolicy", "currencyInput", "errorMessage", "knownPolicyProviders", "optionalCurrencyMicros", "optionalNumber", "parseEligibleGrants", "unique", `${hookSource}\nreturn usePolicyAdmin;`)(useState, useRef, window, { keys: [policy("policy_a")] }, defaultPolicy, rolePresets, policyFormFromPolicy, currencyInput, errorMessage, knownPolicyProviders, optionalCurrencyMicros, optionalNumber, parseEligibleGrants, unique);
   fixture.render = () => {
     cursor = 0;
-    return usePolicyAdmin({ request, allowDemo: demoMode, gatewayOrigin: "https://console.example", session, demoMode, providers: [], credentials: [], routes: {}, setStatus: (status) => statuses.push(status), refresh: () => { fixture.refreshes += 1; return new Promise(() => {}); }, syncDemoAdmin: (rows) => { fixture.demoRows = rows; } });
+    return usePolicyAdmin({ request, allowDemo: demoMode, gatewayOrigin: "https://console.example", session, demoMode, providers: fixture.providers, credentials: [], routes: {}, setStatus: (status) => statuses.push(status), refresh: () => { fixture.refreshes += 1; return new Promise(() => {}); }, syncDemoAdmin: (rows) => { fixture.demoRows = rows; } });
   };
   return fixture;
 }

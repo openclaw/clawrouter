@@ -31,7 +31,7 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
   const baseline = useRef(draft.value);
   const revision = useRef(0);
   const incarnation = useRef(0);
-  const enabledEditRevision = useRef(0);
+  const fieldEditRevisions = useRef<Partial<Record<keyof PolicyForm, number>>>({});
   const recordsEpoch = useRef(0);
   const pending = useRef(false);
   const [busy, setBusy] = useState(false);
@@ -114,14 +114,24 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
       const saved = await write(submitted.value, submitted.selection);
       updateRows([saved, ...rows.current.filter((key) => key.policyId !== saved.policyId)]);
       const canonical = policyFormFromPolicy(saved), current = currentDraft.current;
+      const replacement = current.selection === saved.policyId && incarnation.current !== submittedIncarnation;
+      const enabledEdited = (fieldEditRevisions.current.enabled ?? 0) > submittedRevision;
       // Clean replacement drafts follow the committed row; Disable still honors later enabled edits.
-      const cleanReplacement = current.selection === saved.policyId && incarnation.current !== submittedIncarnation && !current.dirty
-        && (action === "save" || enabledEditRevision.current <= submittedRevision);
+      const cleanReplacement = replacement && !current.dirty && (action === "save" || !enabledEdited);
       if (cleanReplacement || (revision.current === submittedRevision && (action === "save" || !submitted.dirty))) resetDraft(saved.policyId, canonical);
       else if (current.selection === saved.policyId || (action === "save" && !submitted.selection && !current.selection && incarnation.current === submittedIncarnation)) {
         // A committed create owns this New draft's identity, but never a replacement draft.
         // Later edits stay dirty against the committed baseline, including a return to old values.
-        const value = action === "disable" && enabledEditRevision.current <= submittedRevision ? { ...current.value, enabled: canonical.enabled } : current.value;
+        let value = current.value;
+        if (replacement && current.dirty) {
+          // Reselecting reads the old row while its write is pending. Only edits
+          // in this replacement draft may override the acknowledged fields.
+          value = { ...canonical };
+          for (const field of Object.keys(current.value) as (keyof PolicyForm)[]) {
+            if ((fieldEditRevisions.current[field] ?? 0) > submittedRevision) Object.assign(value, { [field]: current.value[field] });
+          }
+        }
+        if (action === "disable" && !enabledEdited) value = { ...value, enabled: canonical.enabled };
         rebaseDraft(canonical, { ...current, selection: saved.policyId, value });
       }
       if (demoMode) syncDemoAdmin(rows.current, credentials, providers, routes, true);
@@ -165,7 +175,7 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
   function resetDraft(selection: string, value: PolicyForm) {
     baseline.current = value;
     incarnation.current += 1;
-    enabledEditRevision.current = 0;
+    fieldEditRevisions.current = {};
     publishDraft({ selection, value, dirty: false, initialized: true });
   }
 
@@ -182,11 +192,21 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
 
   function setPolicyForm(next: SetStateAction<PolicyForm>) {
     const current = currentDraft.current;
-    const value = typeof next === "function" ? next(current.value) : next;
+    let value = typeof next === "function" ? next(current.value) : next;
+    const thresholdSelected = value.grantStrategy === "threshold" && current.value.grantStrategy !== "threshold";
+    if (thresholdSelected) value = { ...value, grantStickiness: "none" };
     if (JSON.stringify(value) === JSON.stringify(current.value)) return;
-    if (!current.selection && value.policyId !== current.value.policyId) incarnation.current += 1;
-    // Disable merges its enabled=false intent unless the operator edited that field later.
-    if (value.enabled !== current.value.enabled) enabledEditRevision.current = revision.current + 1;
+    if (!current.selection && value.policyId !== current.value.policyId) {
+      incarnation.current += 1;
+      fieldEditRevisions.current = {};
+    }
+    // Choosing threshold also chooses no stickiness, even if it already reads none.
+    if (thresholdSelected) fieldEditRevisions.current.grantStickiness = revision.current + 1;
+    // Record edit-back intent too; equality with the old baseline cannot prove
+    // that a field was untouched while an earlier save was in flight.
+    for (const field of Object.keys(value) as (keyof PolicyForm)[]) {
+      if (JSON.stringify(value[field]) !== JSON.stringify(current.value[field])) fieldEditRevisions.current[field] = revision.current + 1;
+    }
     publishDraft({ ...current, value, dirty: JSON.stringify(value) !== JSON.stringify(baseline.current), initialized: true });
   }
 

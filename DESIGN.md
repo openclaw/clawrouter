@@ -49,6 +49,13 @@ can still be revoked. Copy a new secret before dismissing it or leaving the pane
 the console cannot retrieve it later. If a request outcome is uncertain, refresh
 the key list before choosing another action. Creation drafts survive refreshes.
 
+Access **Policies** keeps edits made after returning to a policy while its earlier
+save is pending. When that save finishes, untouched fields adopt the saved values,
+including disabled status and budget; fields edited in the new draft keep those
+edits, even when changed back to an older value. A clean replacement draft follows
+the saved policy. The next Save submits the reconciled draft without depending on
+a successful metadata refresh.
+
 Protected console data belongs to one verified browser session. Confirmed sign-in
 loss clears editors, one-time secrets, Playground history and retained request
 content. Sign in locally or reload through managed Access, then verify the session
