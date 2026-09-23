@@ -33,6 +33,7 @@ interface SessionOptions {
 }
 
 const DEFAULT_LIMITS = { active: 16, lanes: 32, buffered: 48, frameBytes: 4 * 1024 * 1024, bufferedBytes: 8 * 1024 * 1024, outputBytes: 16 * 1024 * 1024, responseMs: 600_000, connectionMs: 3_600_000 };
+const OUTPUT_LIMIT_ERROR: ErrorNotice = { code: "websocket_connection_limit_reached", message: "Router WebSocket output limit reached; open a new connection.", status: 400 };
 const encoder = new TextEncoder();
 const terminalTypes = new Map<string, Outcome>([["response.completed", "completed"], ["response.incomplete", "incomplete"], ["response.failed", "failed"], ["error", "error"]]);
 
@@ -267,7 +268,7 @@ export class ResponsesWebSocketSession {
     // Workers WebSocket.send has no drain promise or supported bufferedAmount.
     // A cumulative cap bounds even a peer that never reads; reconnect, never replay here.
     if (this.outputBytes > this.limits.outputBytes) {
-      this.close("router_limit", 1009, { code: "websocket_connection_limit_reached", message: "Router WebSocket output limit reached; open a new connection.", status: 400 });
+      this.close("router_limit", 1009, OUTPUT_LIMIT_ERROR);
       return;
     }
     try { this.client.send(message); } catch { this.close("client_disconnect"); }
@@ -287,7 +288,10 @@ export class ResponsesWebSocketSession {
       op.controller.abort(new ResponsesOperationAborted(ownedCause === "timeout" ? "timeout" : cause));
     }
     // Cause ownership precedes abort, error delivery and reciprocal close events.
-    if (notice) { try { this.client.send(typeof notice === "string" ? notice : JSON.stringify(this.errorFrame(notice))); } catch { /* Peer already closed. */ } }
+    if (notice) {
+      if (typeof notice === "string" && this.outputBytes + encoder.encode(notice).byteLength > this.limits.outputBytes) notice = OUTPUT_LIMIT_ERROR;
+      try { this.client.send(typeof notice === "string" ? notice : JSON.stringify(this.errorFrame(notice))); } catch { /* Peer already closed. */ }
+    }
     try { this.upstream?.close(code, "session closed"); } catch { /* Socket already closed. */ }
     try { this.client.close(code, "session closed"); } catch { /* Socket already closed. */ }
   }

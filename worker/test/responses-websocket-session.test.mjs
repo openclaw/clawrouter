@@ -340,6 +340,18 @@ test("an upstream global error owns collateral lanes before failed error deliver
   assert.deepEqual(f.settled.map(({ outcome }) => outcome), ["upstream_disconnect", "upstream_disconnect"]);
 });
 
+test("an upstream global error keeps its cause without bypassing the output cap", async (t) => {
+  const f = fixture(t, { limits: { outputBytes: 256 } });
+  f.client.receive(create("lane"));
+  await tick();
+  f.upstream.receive({ type: "response.created", stream_id: "lane", response: { id: "held" } });
+  f.upstream.receive({ type: "error", status: 503, error: { code: "upstream_unavailable", message: "x".repeat(1_000) } });
+  await tick();
+  assert.ok(f.client.sent.reduce((sum, value) => sum + Buffer.byteLength(value), 0) < 700);
+  assert.equal(JSON.parse(f.client.sent.at(-1)).error.code, "websocket_connection_limit_reached");
+  assert.deepEqual(f.settled.map(({ outcome }) => outcome), ["upstream_disconnect"]);
+});
+
 test("a rejected handshake keeps its error when error delivery closes the client", async (t) => {
   const f = fixture(t, { connect: async () => { throw Object.assign(new Error("upgrade rejected"), { code: "upgrade_rejected", status: 403 }); } });
   f.client.send = () => { throw new Error("peer closed"); };
