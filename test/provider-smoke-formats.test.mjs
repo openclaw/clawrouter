@@ -1,5 +1,6 @@
 import "../worker/test/typescript-setup.mjs";
 import assert from "node:assert/strict";
+import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { buildProviderSmokePlan, runLiveProviderSmokes, summarizePlan } from "../scripts/provider-smoke-plan.mjs";
 import catalog from "../worker/generated/provider-snapshot.json" with { type: "json" };
@@ -7,6 +8,7 @@ import catalog from "../worker/generated/provider-snapshot.json" with { type: "j
 const { default: handler } = await import("../worker/index.ts");
 const { snapshot } = await import("../worker/providers.ts");
 const { sha256Hex } = await import("../worker/utils.ts");
+const { UsageLedgerObject } = await import("../worker/ledgers.ts");
 
 function renamed(id) {
   const provider = structuredClone(catalog.providers.find(provider => provider.id === id));
@@ -64,7 +66,9 @@ for (const [source, messagesOnly, manifestOnly, formatOnly, method, override] of
     const planEnv = {}, envKey = `CLAWROUTER_SMOKE_MODEL_${provider.id.replaceAll("-", "_").toUpperCase()}`;
     if (override?.startsWith("catalog")) planEnv[envKey] = provider.models[1].id;
     if (override?.startsWith("native")) planEnv[envKey] = provider.models[1].upstream;
-    const env = await smokeEnvironment(provider), pending = [], upstream = [], recorded = [];
+    const env = await smokeEnvironment(provider, t), pending = [], upstream = [], recorded = [];
+    const delayIngestion = source === "openai" && !manifestOnly && !formatOnly;
+    let usageReads = 0;
     const providers = [...original.providers, provider];
     const plan = buildProviderSmokePlan({ providers }, planEnv), target = plan.providers.find(item => item.id === provider.id).target;
     assert.equal(target.unresolved, undefined);
@@ -77,6 +81,13 @@ for (const [source, messagesOnly, manifestOnly, formatOnly, method, override] of
     }
     t.mock.method(globalThis, "fetch", async (url, init) => {
       if (new URL(url).origin === "https://smoke-router.example") {
+        if (new URL(url).pathname === "/v1/usage") {
+          assert.equal(init.headers.authorization, `Bearer ${env.fixtureKey}`);
+          assert.equal(recorded.length, 1, "publish provider health before usage polling");
+          await Promise.all(pending);
+          usageReads += 1;
+          if (!delayIngestion || usageReads > 1) await handler.queue({ messages: env.fixtureQueue }, env);
+        }
         const response = await handler.fetch(new Request(url, init), env, { waitUntil: promise => pending.push(promise) });
         if (!response.ok) t.diagnostic(await response.clone().text());
         return response;
@@ -129,6 +140,19 @@ for (const [source, messagesOnly, manifestOnly, formatOnly, method, override] of
       assert.equal(upstream.length, 1);
       assert.deepEqual(results.map(result => [result.provider, result.status, result.providerAttempted]), [[provider.id, "verified", true]]);
       assert.deepEqual(recorded, results);
+      assert.equal(usageReads, delayIngestion ? 2 : 1);
+      assert.equal(env.fixtureQueue.length, 1, "one POST produces one queued usage event");
+      const message = env.fixtureQueue[0];
+      assert.equal(message.ackCount, 1);
+      assert.equal(message.retryCount, 0);
+      assert.equal(message.body.request_id, results[0].requestId);
+      assert.equal(message.body.id, results[0].usageEventId);
+      assert.notEqual(message.body.id, message.body.request_id);
+      const scoped = await handler.fetch(new Request("https://smoke-router.example/v1/usage", { headers: { authorization: `Bearer ${env.fixtureOtherKey}` } }), env, {});
+      assert.equal(scoped.status, 200);
+      assert.deepEqual((await scoped.json()).usage.events, [], "another service key cannot observe the smoke event");
+      const denied = await handler.fetch(new Request("https://smoke-router.example/v1/usage", { headers: { authorization: "Bearer clawrouter-live-fixture-wrong-secret" } }), env, {});
+      assert.equal(denied.status, 401);
     } finally { Object.assign(snapshot, original); }
   });
 }
@@ -210,15 +234,26 @@ test("additional model formats require an endpoint-compatible model or explicit 
   }
 });
 
-async function smokeEnvironment(provider) {
+async function smokeEnvironment(provider, t) {
   const secret = "fixture-smoke-secret", policy = { enabled: true, generation: "g1", providers: [provider.id], monthlyBudgetMicros: null, requestCostMicros: 0, retainRequestContent: false };
   const credential = { enabled: true, secretSha256: await sha256Hex(secret), policyId: "fixture", policyGeneration: "g1" };
+  const fixtureQueue = [], ledgers = new Map();
   return {
-    ...Object.fromEntries(provider.config_keys.map(key => [key, "fixture-upstream-key"])), fixtureKey: `clawrouter-live-fixture-${secret}`,
-    POLICY_KV: { get: async keys => Array.isArray(keys) ? new Map() : null }, USAGE_QUEUE: { send: async () => {} },
-    ACCESS_CONTROL: { idFromName: name => name, get: () => ({ fetch: async (url) => {
+    ...Object.fromEntries(provider.config_keys.map(key => [key, "fixture-upstream-key"])), fixtureKey: `clawrouter-live-fixture-${secret}`, fixtureOtherKey: `clawrouter-live-observer-${secret}`, fixtureQueue,
+    POLICY_KV: { get: async keys => Array.isArray(keys) ? new Map() : null },
+    USAGE_QUEUE: { send: async (body) => { fixtureQueue.push({ body, ackCount: 0, retryCount: 0, ack() { this.ackCount += 1; }, retry() { this.retryCount += 1; } }); } },
+    USAGE_LEDGER: { idFromName: name => name, get(name) {
+      if (!ledgers.has(name)) {
+        const db = new DatabaseSync(":memory:"); t.after(() => db.close());
+        const sql = { exec(query, ...bindings) { const statement = db.prepare(query); if (statement.columns().length) return statement.all(...bindings); statement.run(...bindings); return []; } };
+        const ledger = new UsageLedgerObject({ storage: { sql, getAlarm: async () => 1 } });
+        ledgers.set(name, { fetch: (url, init) => ledger.fetch(new Request(url, init)) });
+      }
+      return ledgers.get(name);
+    } },
+    ACCESS_CONTROL: { idFromName: name => name, get: () => ({ fetch: async (url, init) => {
       const path = new URL(url).pathname;
-      if (path === "/credentials/resolve") return Response.json({ initialized: true, credentials: [{ credentialId: "fixture", credential }], missingCredentialIds: [] });
+      if (path === "/credentials/resolve") return Response.json({ initialized: true, credentials: JSON.parse(init.body).credentialIds.filter(id => ["fixture", "observer"].includes(id)).map(credentialId => ({ credentialId, credential })), missingCredentialIds: [] });
       if (path === "/policies/resolve") return Response.json({ initialized: true, policies: [{ policyId: "fixture", policy }], missingPolicyIds: [] });
       if (path === "/connections/resolve") return Response.json({ initialized: true, connections: [{ providerId: provider.id, enabled: true }], missingProviderIds: [] });
       if (path === "/grant-pools/resolve") return Response.json({ keys: [], states: {} });

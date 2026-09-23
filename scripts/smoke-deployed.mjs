@@ -88,6 +88,7 @@ const results = await runLiveProviderSmokes({
   onResult: recordProviderHealth,
 });
 console.log(`live provider smoke passed: ${results.map((result) => result.provider).join(",")}`);
+console.log(`usage visibility verified: ${results.map((result) => `${result.provider} request=${result.requestId} event=${result.usageEventId}`).join(", ")}`);
 
 console.log("deployed smoke passed");
 
