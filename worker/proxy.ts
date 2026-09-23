@@ -226,27 +226,35 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   const controller = new AbortController();
   const endpointTimeout = selection.endpoint.timeout_ms ?? 120_000;
   const timeout = setTimeout(() => controller.abort(), Math.min(selection.timeoutMs ?? endpointTimeout, endpointTimeout));
+  const signal = AbortSignal.any([request.signal, controller.signal]);
   let response: Response | undefined;
   let grantFailover = false;
   let dispatched = false;
   try {
     // A canceled preflight is known-unsent even if the ledger marks already landed.
-    request.signal.throwIfAborted();
+    signal.throwIfAborted();
     dispatched = true;
-    response = await fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal: AbortSignal.any([request.signal, controller.signal]) });
+    response = await fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal });
     captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response);
     if (!continuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
+      let retry: PreparedUpstream | undefined;
       try {
-        const retry = await prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]), true, prepared.connection);
-        const retryResponse = await fetch(retry.url, { method: selection.method, headers: retry.headers, body: retry.requestBody, signal: AbortSignal.any([request.signal, controller.signal]) });
-        captureGrantRuntime(context, env, retry.grantKey, retry.grantRevision, selection.provider.quota, retryResponse);
+        retry = await prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]), true, prepared.connection);
+      } catch {
+        // Selection failure leaves the original rejection available to the caller.
+      }
+      if (retry) {
+        signal.throwIfAborted();
         void response.body?.cancel().catch(() => undefined);
-        response = retryResponse;
+        signal.throwIfAborted();
+        // The alternate may execute without returning headers. Its uncertainty
+        // must not inherit the discarded attempt's nonbillable rejection.
+        response = undefined;
         prepared = retry;
+        response = await fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal });
+        captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response);
         if (prepared.continuation) continuation?.bind(prepared.continuation);
         grantFailover = true;
-      } catch {
-        // Keep the first provider response when no alternate grant is ready or its request fails.
       }
     }
     const streaming = Array.isArray(selection.body)
@@ -255,6 +263,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     response = await normalizePreStreamError(response, streaming);
   } catch (error) {
     clearTimeout(timeout);
+    void response?.body?.cancel().catch(() => undefined);
     // A fetch failure can incur cost; a received rejection stays nonbillable
     // even if reading its SSE error body failed.
     accounting.fail(502, request.signal.aborted ? "client_error" : error instanceof DOMException && error.name === "AbortError" ? "timeout" : "provider_error", reservation, content, dispatched && response?.ok !== false);

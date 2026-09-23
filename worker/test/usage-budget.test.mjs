@@ -1,11 +1,11 @@
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
-import { DatabaseSync } from "node:sqlite";
+import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 import test from "node:test";
 
 
 const { default: handler } = await import("../index.ts");
-const { BudgetLedgerObject, providerBudgetStatus, queue } = await import("../ledgers.ts");
+const { providerBudgetStatus, queue } = await import("../ledgers.ts");
 const keyMaterial = "abcdefgh";
 const keyDigest = await sha256(keyMaterial);
 
@@ -545,28 +545,6 @@ for (const existingUnmetered of [false, true]) {
       upstream.mock.restore();
     }
   });
-}
-
-function sqlBudgetNamespace(t) {
-  const objects = new Map();
-  return {
-    idFromName: (name) => name,
-    get(name) {
-      if (!objects.has(name)) {
-        const db = new DatabaseSync(":memory:");
-        t.after(() => db.close());
-        const sql = { exec(query, ...bindings) {
-          const statement = db.prepare(query);
-          if (statement.columns().length) return statement.all(...bindings);
-          statement.run(...bindings);
-          return [];
-        } };
-        const ledger = new BudgetLedgerObject({ storage: { sql, getAlarm: async () => 1 } });
-        objects.set(name, { fetch: (url, init) => ledger.fetch(new Request(url, init)), reservations: () => db.prepare("SELECT * FROM budget_reservations").all() });
-      }
-      return objects.get(name);
-    },
-  };
 }
 
 test("hosted search admission and unavailable settlement share the HTTP, native, JSON and SSE owner", async (t) => {

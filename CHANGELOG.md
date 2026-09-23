@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Cancel discarded grant-rejection bodies before HTTP failover, and retain one conservative budget charge when an alternate request fails without response headers. Preserve the original rejection when no alternate can be selected.
+
 - Keep policy selection separate from existing binding edits, while new bindings still default to the selected policy.
 
 - Keep failed console refreshes visible after successful edits, label stale usage with its snapshot time, and show unavailable spend and balances as unknown.
