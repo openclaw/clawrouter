@@ -52,6 +52,7 @@ for (const [source, messagesOnly, manifestOnly, formatOnly, method] of [
     }
     if (method) {
       Object.assign(provider.endpoints[0], { request_format: formatOnly, method, methods: [method] });
+      if (["GET", "HEAD"].includes(method)) provider.adapter.request = null;
     } else if (formatOnly) {
       provider.endpoints = provider.endpoints.filter(endpoint => endpoint.request_format === formatOnly);
       provider.capabilities = provider.capabilities.filter(capability => provider.endpoints.some(endpoint => endpoint.id === capability.endpoint));

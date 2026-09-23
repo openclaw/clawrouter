@@ -519,7 +519,7 @@ function samplePathParam(provider, param, model, env) {
 
 function sampleBody(provider, endpoint, method, model, env) {
   const format = endpoint.request_format;
-  const graphql = format.includes("graphql") || provider.adapter.request.includes("graphql");
+  const graphql = format.includes("graphql") || provider.adapter.request?.includes("graphql");
   // GET/HEAD have no body. GraphQL GET still needs a schema-specific query
   // fixture; the existing POST query below is retained without claiming that.
   if (!methodAllowsBody(method)) return graphql ? null : {};
