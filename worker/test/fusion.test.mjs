@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { observeUsage } from "../proxy-response.ts";
-import { HttpOperation } from "../http-operation.ts";
+import { HttpOperation, InternalHttpAbort } from "../http-operation.ts";
 import {
   FUSION_MODEL_ID,
   buildAdviserBody,
@@ -109,12 +109,16 @@ test("fusion fails open when adviser bodies stall or exceed their byte bound", a
 test("fusion consumes adviser rejections when the deadline has already elapsed", async (t) => {
   t.mock.timers.enable({ apis: ["Date"], now: 0 });
   const config = normalizeFusionConfig({ adviserModels: ["local/expired"], adviserTimeoutMs: 1_000 });
-  const result = await collectFusionProposals(config, { messages: [] }, () => {
+  let adviserSignal;
+  const result = await collectFusionProposals(config, { messages: [] }, (_model, _body, _timeout, _index, signal) => {
+    adviserSignal = signal;
     t.mock.timers.setTime(1_000);
     return Promise.reject(new Error("synthetic expired adviser rejection"));
   });
   assert.deepEqual(result.proposals, []);
   assert.deepEqual(result.failedModels, ["local/expired"]);
+  assert.ok(adviserSignal.reason instanceof InternalHttpAbort);
+  assert.equal(adviserSignal.reason.cause, "deadline");
   await new Promise(resolve => setImmediate(resolve));
 });
 

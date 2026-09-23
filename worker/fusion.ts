@@ -116,7 +116,9 @@ export async function collectFusionProposals(config: FusionConfig, original: Rec
       return content
         ? { model, content: content.slice(0, config.maxProposalChars) }
         : { model, failed: true as const };
-    } catch {
+    } catch (error) {
+      // The invocation watchdog can expire before the controller's own timer.
+      if (error instanceof InternalHttpAbort) controller.abort(error);
       return { model, failed: true as const };
     } finally {
       clearTimeout(timeout);

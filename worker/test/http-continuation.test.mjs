@@ -634,6 +634,54 @@ test("actual Fusion adviser deadlines and oversized consumption stay distinct fr
   }
 });
 
+for (const late of ["response", "rejection"]) test(`Fusion invocation watchdog owns the dispatched deadline before late upstream ${late}`, async t => {
+  const now = Date.now();
+  t.mock.timers.enable({ apis: ["setTimeout", "Date"], now });
+  const schedule = globalThis.setTimeout, timers = [];
+  t.mock.method(globalThis, "setTimeout", (callback, delay, ...args) => {
+    const timer = { fired: false, fire() { this.fired = true; callback(...args); } };
+    if (delay === 1_000) timers.push(timer);
+    return schedule(() => timer.fire(), delay);
+  });
+  const f = await fixture(t, false, { limit: 1_000_000, fixedCost: 7 });
+  f.values.set("config/fusion", { enabled: true, adviserModels: ["openai/gpt-4.1-mini"], aggregatorModel: "openai/gpt-4.1-mini", adviserTimeoutMs: 1_000 });
+  const entered = Promise.withResolvers(), upstream = Promise.withResolvers();
+  f.response = (_request, index) => {
+    if (index === 1) { entered.resolve(); return upstream.promise; }
+    return Response.json({ choices: [{ message: { content: "fixture complete" } }], usage: { prompt_tokens: 1, completion_tokens: 1 } });
+  };
+  const pending = f.request({ model: "clawrouter/fusion", messages: [{ role: "user", content: "fixture" }] }, {}, "/v1/chat/completions");
+  await entered.promise;
+  assert.equal(f.sent.length, 1);
+  for (const owner of ["default:fixture", "provider:openai"]) assert.equal(f.env.BUDGET_LEDGER.get(owner).reservations().filter(row => row.dispatch_started === 1).length, 1);
+  // The invocation watchdog is registered after Fusion's controller timer and
+  // before the admitted HTTP request's timer. Exercise its earlier expiry alone.
+  assert.equal(timers.length, 3);
+  t.mock.timers.setTime(now + 1_000);
+  timers[1].fire();
+  const response = await pending;
+  assert.equal(response.status, 200); await f.consume(response);
+  assert.equal(timers[0].fired, false); assert.equal(timers[2].fired, false);
+  assert.equal(f.sent[0].signal.reason.cause, "deadline");
+  const expected = [
+    { stage: "fusion_adviser", status: "timeout", code: 502, cost: 7 },
+    { stage: "fusion_synthesizer", status: "success", code: 200, cost: 7 },
+  ];
+  const receipts = () => f.events.map(event => ({ stage: event.compound_request_stage, status: event.status, code: event.status_code, cost: event.actual_cost_micros })).sort((a, b) => a.stage.localeCompare(b.stage));
+  assert.deepEqual(receipts(), expected);
+  assert.equal(new Set(f.events.map(event => event.request_id)).size, 2);
+  assert.ok(f.events.every(event => event.cost_basis === "policy_fixed"));
+  assert.equal(f.events.find(event => event.compound_request_stage === "fusion_adviser").total_tokens, null);
+  await assertBudgets(f, [7, 7]);
+  let canceled = 0;
+  if (late === "response") upstream.resolve(new Response(new ReadableStream({ cancel() { canceled++; } }, { highWaterMark: 0 })));
+  else upstream.reject(new Error("fixture late upstream failure"));
+  await setImmediate(); await f.drain();
+  assert.equal(canceled, late === "response" ? 1 : 0);
+  assert.equal(f.sent.length, 2); assert.deepEqual(receipts(), expected);
+  await assertBudgets(f, [7, 7]);
+});
+
 test("actual Fusion rejection cleanup preserves adviser and synthesizer status with both ledgers at zero", async t => {
   for (const status of [400, 429, 503]) {
     const f = await fixture(t, false, { limit: 1_000_000, fixedCost: 7 });
