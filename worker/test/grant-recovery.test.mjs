@@ -7,6 +7,7 @@ const key = "oauth/policy/legacy-account";
 const corrupt = '{"accessToken":"old-private",';
 const grant = { provider: "anthropic", kind: "api_key", credential: "new-private", enabled: true };
 const replace = env => putGrantCredentials(env, key, grant, false, "replace");
+const create = env => putGrantCredentials(env, key, grant);
 const revoke = env => revokeGrantCredentials(env, key, { provider: "retired-provider", label: "legacy account" });
 
 for (const enabled of [true, false]) test(`explicit ${enabled ? "active" : "paused"} recovery fences retained index generations and clears all old provider rows`, async () => {
@@ -33,17 +34,34 @@ test("ownerless revocation commits above retained index state, then detaches eve
   assert.deepEqual(await revoke(env), saved);
 });
 
-for (const pending of [false, true]) for (const action of [replace, revoke]) test(`${action.name} requires positive legacy existence before recovering ownerless ${pending ? "pending" : "attached"} evidence`, async () => {
-  const env = fixture();
-  if (pending) await env.grantAuthority.call("admit", { key, generation: 7, revision: 4, provider: "anthropic", status: "active" });
-  env.values.delete(key);
+for (const generation of [0, 7]) for (const pending of [false, true]) for (const action of [replace, create, revoke]) test(`${action.name} preserves ownerless ${pending ? "pending" : "attached"} generation ${generation} evidence when KV is missing`, async () => {
+  const env = fixture({ generation, raw: null });
+  if (pending) await env.grantAuthority.call("admit", { key, generation, revision: (await attachment(env)).revision, provider: "anthropic", status: "active" });
   const before = await attachment(env), rows = await members(env);
   await assert.rejects(() => action(env), error => action === revoke
     ? error.status === 404 && error.code === "unknown_upstream_grant"
-    : error.status === 500 && error.code === "credential_owner_error");
+    : error.status === 409 && error.code === "grant_attachment_changed");
   assert.equal(owner(env).values.has("credential"), false);
-  assert.deepEqual(await attachment(env), before);
-  assert.deepEqual(await members(env), rows);
+  assert.equal(env.values.has(key), false);
+  if (pending && generation === 0 && action !== revoke) {
+    assert.deepEqual(await attachment(env), { generation: 0, revision: before.revision + 1, pending: false, attached: true });
+    assert.deepEqual(await members(env), rows.filter(row => row.status === "legacy"));
+  } else {
+    assert.deepEqual(await attachment(env), before);
+    assert.deepEqual(await members(env), rows);
+  }
+});
+
+for (const status of ["paused", "reauth_required"]) for (const action of [replace, create]) test(`${action.name} restores pending_previous_status ${status} evidence before refusing a KV-miss creation`, async () => {
+  const env = fixture({ generation: 0, raw: null, providers: ["anthropic"] });
+  env.grantAuthority.sql.exec("UPDATE upstream_grant_pool_members SET status = ? WHERE token_ref = 'legacy-account'", status);
+  await env.grantAuthority.call("admit", { key, generation: 0, revision: 0, provider: "anthropic", status: "active" });
+  assert.deepEqual(await attachment(env), { generation: 0, revision: 1, pending: true, attached: false });
+  await assert.rejects(() => action(env), error => error.status === 409 && error.code === "grant_attachment_changed");
+  assert.deepEqual(await attachment(env), { generation: 0, revision: 2, pending: false, attached: true });
+  assert.deepEqual(await members(env), [{ provider_id: "anthropic", status }]);
+  assert.equal(owner(env).values.has("credential"), false);
+  assert.equal(env.values.has(key), false);
 });
 
 test("known-existing legacy revocation also clears a failed admission at a retained generation", async () => {
@@ -55,9 +73,22 @@ test("known-existing legacy revocation also clears a failed admission at a retai
   assert.equal((await attachment(env)).pending, false);
 });
 
-test("explicit first creation remains available without owner, legacy KV or index state", async () => {
+for (const action of [replace, create]) test(`${action.name} permits first creation without owner, legacy KV or index state`, async () => {
   const env = fixture({ generation: 0, providers: [], raw: null });
-  assert.equal((await replace(env)).credentialGeneration, 1);
+  assert.equal((await action(env)).credentialGeneration, 1);
+  assert.deepEqual(await members(env), [{ provider_id: "anthropic", status: "active" }]);
+});
+
+for (const action of [replace, create]) test(`${action.name} retries a failed genuine first proposal after key-only owner reconciliation`, async () => {
+  const env = fixture({ generation: 0, providers: [], raw: null }), restore = failOnce(env, "owner-store");
+  await assert.rejects(() => action(env), error => error.status === 500 && error.code === "credential_owner_error");
+  assert.deepEqual(await attachment(env), { generation: 0, revision: 1, pending: true, attached: false });
+  assert.equal(owner(env).values.has("credential"), false);
+  restore();
+  owner(env).object = new GrantCredentialObject(owner(env).state, env);
+  assert.equal((await action(env)).credentialGeneration, 1);
+  assert.equal(owner(env).values.get("credential").poolAdmissionRevision, 3);
+  assert.deepEqual(await attachment(env), { generation: 1, revision: 4, pending: false, attached: true });
   assert.deepEqual(await members(env), [{ provider_id: "anthropic", status: "active" }]);
 });
 

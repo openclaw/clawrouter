@@ -236,6 +236,9 @@ the account. Ordinary edits, OAuth callbacks, contributions, refresh and automat
 migration remain strict. A failed KV read is unavailable state, not proof of an
 absent account. Recovery preserves retained pool generations; a newer index than
 an existing owner requires operator recovery instead of resetting ownership.
+When both the owner and KV record are missing, either PUT mode creates an account
+only after confirming an empty attachment index. Retained legacy membership or
+generation history returns HTTP 409, including generation-zero legacy rows.
 
 ### Credential creation, rotation, and revocation
 

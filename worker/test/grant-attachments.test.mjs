@@ -58,11 +58,16 @@ for (const enabled of [true, false]) for (const legacy of ["none", "indexed-with
   if (legacy === "raw-kv") env.values.set(key, "legacy-private-fixture");
   env.GRANT_CREDENTIALS.get(key);
   const owner = env.GRANT_CREDENTIALS.objects.get(key);
-  owner.state.storage.put = async () => { throw new Error("owner store unavailable"); };
-  await assert.rejects(() => putGrantCredentials(env, key, { ...grant(), enabled }));
-  assert.deepEqual((await env.grantAuthority.call("pending", {})).keys, [key]);
+  let writes = 0;
+  owner.state.storage.put = async () => { writes += 1; throw new Error("owner store unavailable"); };
+  const ambiguous = legacy === "indexed-with-kv-miss";
+  await assert.rejects(() => putGrantCredentials(env, key, { ...grant(), enabled }), error => ambiguous
+    ? error.status === 409 && error.code === "grant_attachment_changed"
+    : error.status === 500 && error.code === "credential_owner_error");
+  assert.equal(writes, ambiguous ? 0 : 1);
+  assert.deepEqual((await env.grantAuthority.call("pending", {})).keys, ambiguous ? [] : [key]);
   assert.deepEqual((await pool(env, "openai")).keys, []);
-  assert.equal((await pool(env, "openai")).hasAttachment, true);
+  assert.equal((await pool(env, "openai")).hasAttachment, !ambiguous);
   const result = await reconcileGrantAttachment(env, key);
   assert.equal(result.outcome, legacy === "indexed-with-kv-miss" ? "unresolved" : "pending_cancelled");
   assert.deepEqual((await env.grantAuthority.call("pending", {})).keys, []);

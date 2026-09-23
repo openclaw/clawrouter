@@ -145,6 +145,12 @@ export class GrantCredentialObject implements DurableObject {
           ({ record: current, result: attachment } = await this.reconcileAttachment(input.key));
           previous = current ? metadataGrant(current) : await legacyGrantMetadata(this.env, input.key);
         }
+        if (!current && !previous) {
+          // A KV miss cannot erase legacy membership, including generation zero.
+          // Reconcile only a proven first proposal before admitting a new owner.
+          if (attachment.generation === 0 && attachment.pending) ({ result: attachment } = await this.reconcileAttachment(input.key));
+          if (attachment.generation !== 0 || attachment.attached || attachment.pending) throw new HttpError(409, "grant_attachment_changed", "upstream attachment has no recoverable credential metadata; operator recovery is required");
+        }
         const admissionGeneration = replace && (current || previous) ? attachment.generation : current?.generation ?? 0;
         const generation = nextCredentialGeneration(current?.generation ?? (replace && previous ? attachment.generation : previous?.credentialGeneration ?? 0));
         let record = !replace && current && !current.revokedAt && (input.preserveUnspecifiedSecrets || !hasPrimaryCredential(input.grant))
