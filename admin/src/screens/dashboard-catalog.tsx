@@ -32,15 +32,12 @@ import {
   kindIcon,
   kindLabel,
 } from "../components";
-import { usageCostLabel } from "../usage-analytics";
+import { presentAccountedSpend, presentPolicyBudget, presentProviderBudget } from "../cost-presentation";
 import { ProviderUsageChart, TrafficAreaChart } from "../analytics-charts";
 import {
-  budgetPercent,
   effectiveProviderCount,
-  formatBudget,
   formatCount,
   formatDuration,
-  formatMicros,
   formatRelativeTime,
   matchesServiceQuery,
   usagePolicyId,
@@ -116,6 +113,7 @@ export function DashboardScreen({ session, services, policies, credentials, user
   const displayName = session.email?.split("@")[0] ?? (isAdmin ? "operator" : "member");
   const activePolicies = policies.filter((policy) => policy.enabled).length;
   const activeCredentials = credentials.filter((credential) => credential.enabled && credential.active !== false).length;
+  const spend = presentAccountedSpend(usage.summary);
 
   return (
     <div className="dashboardCanvas">
@@ -137,7 +135,7 @@ export function DashboardScreen({ session, services, policies, credentials, user
         <DashboardStat label="requests" value={usageLoaded ? formatCount(usage.summary.requestCount) : "—"} note={usageLoaded ? `${formatCount(usage.summary.totalTokens)} tokens in 30 days` : "Usage unavailable"} />
         <DashboardStat label="success rate" value={successRate === null ? "—" : `${successRate}%`} note={!usageLoaded ? "Usage unavailable" : successRate === null ? "No requests in this period" : `${formatCount(usage.summary.successCount)} successful`} />
         <DashboardStat label={isAdmin ? "active policies" : "quota pools"} value={String(isAdmin ? overview?.policiesActive ?? activePolicies : rows.length)} note={isAdmin ? `${overview?.tenantsTotal ?? tenants.length} tenants` : usageLoaded ? "live policy ledgers" : "status unavailable"} />
-        <DashboardStat label={usage.summary.unpricedRequestCount ? "accounted spend" : "actual spend"} value={usageLoaded ? usageCostLabel(formatMicros(usage.summary.actualCostMicros), usage.summary.requestCount, usage.summary.unpricedRequestCount) : "—"} note={!usageLoaded ? "Usage unavailable" : isAdmin ? `${usage.providers.length} active providers` : "across your policy pools"} />
+        <DashboardStat label={spend.label} value={usageLoaded ? spend.value : "—"} note={usageLoaded ? `Last 30 days · ${spend.note}${isAdmin ? "" : " · across your policy pools"}` : "Usage unavailable"} />
       </section>
 
       <div className="dashboardAnalyticsGrid">
@@ -176,19 +174,17 @@ export function DashboardScreen({ session, services, policies, credentials, user
         </section>
 
         <section className="dashboardPanel quotaPanel">
-          <DashboardPanelHeader eyebrow="policy budgets" title={isAdmin ? "Budget posture" : "Your shared quotas"} meta={usageStale && usageLoaded ? "last known ledger" : usageLoaded ? "live ledger" : "policy limits only"} />
-          <p className="panelIntro">{isAdmin ? "Spend and remaining capacity across active policies." : "Your requests draw from these shared policy pools; totals may include activity from teammates on the same policy."}</p>
+          <DashboardPanelHeader eyebrow="policy budgets" title={isAdmin ? "Budget posture" : "Your policy budgets"} meta={usageStale && usageLoaded ? "last known ledger" : usageLoaded ? "live ledger" : "policy limits only"} />
+          <p className="panelIntro">UTC calendar month · Used includes reservations. {isAdmin ? "Balances follow each policy's shared or per-principal scope." : "Shared pools include other users; per-principal balances apply to your identity."} Other policy or provider limits still apply.</p>
           <div className="quotaList">
             {rows.slice(0, 6).map((row) => {
-              const percent = budgetPercent(row);
-              const limit = row.budget.limitMicros ?? row.monthlyBudgetMicros;
-              const remaining = row.budget.remainingMicros;
+              const budget = presentPolicyBudget(row);
               return (
-                <article className="quotaRow" key={usagePolicyId(row)}>
-                  <span className="quotaIdentity"><strong>{usagePolicyId(row)}</strong><small>{row.tokenRole ?? "custom"} · {effectiveProviderCount(row.providers, services)} services</small></span>
-                  <span className="quotaNumbers"><strong>{remaining === undefined || remaining === null ? formatBudget(limit) : formatMicros(remaining)}</strong><small>{remaining === undefined || remaining === null ? "monthly limit" : `remaining of ${formatBudget(limit)}`}</small></span>
-                  <span className={`quotaTrack${percent !== null && percent >= 90 ? " warning" : ""}`}><span style={{ width: `${percent ?? 0}%` }} /></span>
-                  <strong className="quotaPercent">{percent === null ? limit === undefined || limit === null ? "∞" : "—" : `${Math.round(percent)}%`}</strong>
+                <article className="quotaRow" key={usagePolicyId(row)} title={budget.note}>
+                  <span className="quotaIdentity"><strong>{usagePolicyId(row)}</strong><small>{budget.scopeLabel} · {effectiveProviderCount(row.providers, services)} services</small></span>
+                  <span className="quotaNumbers"><strong>{budget.remaining}</strong><small>{budget.limit} · {budget.used}</small></span>
+                  <span className={`quotaTrack${budget.percent !== null && budget.percent >= 90 ? " warning" : ""}`}><span style={{ width: `${budget.percent ?? 0}%` }} /></span>
+                  <strong className="quotaPercent">{budget.percent === null ? "—" : `${Math.round(budget.percent)}%`}</strong>
                 </article>
               );
             })}
@@ -364,13 +360,10 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
   );
 }
 
-function formatSpendMicros(value: number | null | undefined) {
-  return value === 0 ? "$0.00" : formatMicros(value);
-}
-
 function ProviderBudgetEditor({ connection, pending, onSave }: { connection: ProviderConnection; pending: boolean; onSave: (providerId: string, monthlyBudgetMicros: number | null) => void }) {
   const [value, setValue] = useState(currencyInput(connection.monthlyBudgetMicros));
   const [error, setError] = useState("");
+  const budget = presentProviderBudget(connection);
   useEffect(() => { setValue(currencyInput(connection.monthlyBudgetMicros)); setError(""); }, [connection.providerId, connection.monthlyBudgetMicros]);
   return (
     <form className="providerBudgetEditor" onSubmit={(event) => {
@@ -379,9 +372,10 @@ function ProviderBudgetEditor({ connection, pending, onSave }: { connection: Pro
       try { onSave(connection.providerId, optionalCurrencyMicros(value) ?? null); setError(""); }
       catch (caught) { setError(caught instanceof Error ? caught.message : "invalid monthly budget"); }
     }}>
-      <label><span>monthly provider budget ($)</span><input disabled={pending} inputMode="decimal" value={value} onChange={(event) => setValue(event.target.value)} placeholder="unlimited" /></label>
+      <label><span>monthly provider budget ($)</span><input disabled={pending} inputMode="decimal" value={value} onChange={(event) => setValue(event.target.value)} placeholder="no provider cap" /></label>
       <button type="submit" className="buttonSecondary" disabled={pending} aria-busy={pending}>{pending ? "Saving connection…" : "Save budget"}</button>
-      {connection.monthlyBudgetMicros != null ? <small>Month to date {formatSpendMicros(connection.spentMicros)} · {formatSpendMicros(connection.remainingMicros)} remaining</small> : <small>Unlimited across all policies and principals</small>}
+      <small>{budget.used} · {budget.remaining}</small>
+      <small>{budget.note}</small>
       {error ? <small className="providerBudgetError">{error}</small> : null}
     </form>
   );

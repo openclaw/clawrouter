@@ -26,12 +26,12 @@ test("dashboard distinguishes unavailable prices from mixed and fully priced spe
     const body = responses[new URL(route.request().url()).pathname];
     await route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
   });
-  const spend = page.locator(".dashboardStats > div").filter({ has: page.getByText(/^(actual|accounted) spend$/) });
+  const spend = page.locator(".dashboardStats > div").filter({ has: page.getByText("accounted spend", { exact: true }) });
   for (const [unpriced, cost, label, value] of [
     [2, 0, "accounted spend", "Price unavailable"],
     [1, 1_000_000, "accounted spend", "$1.00 accounted; 1 unpriced"],
-    [0, 1_000_000, "actual spend", "$1.00"],
-    [0, 0, "actual spend", "none"],
+    [0, 1_000_000, "accounted spend", "$1.00"],
+    [0, 0, "accounted spend", "$0.00"],
   ] as const) {
     summary.unpricedRequestCount = unpriced;
     summary.actualCostMicros = cost;
@@ -39,9 +39,19 @@ test("dashboard distinguishes unavailable prices from mixed and fully priced spe
     await page.goto("/");
     await expect(spend.locator("span")).toHaveText(label);
     await expect(spend.locator("strong")).toHaveText(value);
+    await expect(spend.locator("small")).toContainText("Last 30 days · May include estimates");
     await expect(page.locator(".providerChartValue small")).toHaveText(value);
-    await expect(page.locator(".providerChartLegendMeta")).toHaveText(unpriced ? "Requests · accounted spend" : "Requests · spend");
+    await expect(page.locator(".providerChartLegendMeta")).toHaveText("Requests · accounted spend · may include estimates");
   }
+});
+
+test("a provider without a cap still explains the other budget scopes", async ({ page }) => {
+  await openDemo(page);
+  await page.getByRole("button", { name: "Catalog", exact: true }).click();
+  const budget = page.locator(".providerBudgetEditor");
+  await expect(budget).toContainText("No cap at this scope");
+  await expect(budget).toContainText("Provider-wide · UTC calendar month · Used includes reservations");
+  await expect(budget).toContainText("Other policy or provider limits still apply");
 });
 
 test("Fusion preflight is WCAG AA clean and visually stable", async ({ page }) => {

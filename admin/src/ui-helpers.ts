@@ -216,27 +216,6 @@ export function demoRuleFromForm(form: AssignmentRuleForm): AssignmentRule {
   };
 }
 
-export function formatBudget(value: number | null | undefined) {
-  if (value === undefined || value === null) return "unlimited";
-  if (value === 0) return "blocked";
-  return formatMicros(value);
-}
-
-export function budgetPercent(row: AdminUsageRow) {
-  const limit = row.budget.limitMicros ?? row.monthlyBudgetMicros;
-  const spent = row.budget.spentMicros;
-  if (row.budget.ledger === "blocked" || limit === 0) return 100;
-  if (limit === undefined || limit === null || spent === undefined || spent === null) return null;
-  return Math.min(100, Math.max(0, (spent / limit) * 100));
-}
-
-export function formatMicros(value: number | null | undefined) {
-  if (value === undefined || value === null) return "unknown";
-  if (!value) return "none";
-  if (value < 10_000) return "<$0.01";
-  return `$${(value / 1_000_000).toFixed(2)}`;
-}
-
 export function formatCount(value: number | null | undefined) {
   return new Intl.NumberFormat("en-US", { notation: value !== undefined && value !== null && Math.abs(value) >= 10_000 ? "compact" : "standard", maximumFractionDigits: 1 }).format(value ?? 0);
 }

@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from "react";
 import { ServerCog } from "lucide-react";
 import { BrandMark } from "./components";
-import { formatCount, formatMicros } from "./ui-helpers";
-import { niceChartMaximum, providerChartRows, usageCostLabel, usageTimeline } from "./usage-analytics";
+import { formatCount } from "./ui-helpers";
+import { presentAccountedSpend } from "./cost-presentation";
+import { niceChartMaximum, providerChartRows, usageTimeline } from "./usage-analytics";
 import type { ProviderUsageSummary, ServiceItem, UsageDailySummary, UsageSnapshot } from "./ui-types";
 
 export function TrafficAreaChart({ usage, compact = false }: { usage: UsageSnapshot; compact?: boolean }) {
@@ -90,15 +91,16 @@ export function ProviderUsageChart({ providers, services, limit = 6 }: { provide
         const successWidth = (provider.successCount / maximum) * 100;
         const errorWidth = (provider.errorCount / maximum) * 100;
         const successRate = provider.requestCount ? Math.round((provider.successCount / provider.requestCount) * 100) : 0;
+        const cost = presentAccountedSpend(provider);
         return (
           <div className="providerChartRow" role="listitem" key={provider.provider}>
             <span className="providerChartIdentity"><span className="providerChartMark"><BrandMark brandIcon={service?.brandIcon} fallback={ServerCog} /></span><span><strong>{providerLabel}</strong><small>{formatCount(provider.totalTokens)} tokens · {successRate}% success</small></span></span>
             <span className="providerChartTrack" role="img" aria-label={`${provider.requestCount} requests, ${provider.errorCount} errors`}><span className="providerChartSuccess" style={{ width: `${successWidth}%` }} /><span className="providerChartErrors" style={{ width: `${errorWidth}%` }} /></span>
-            <span className="providerChartValue"><strong>{formatCount(provider.requestCount)}</strong><small>{usageCostLabel(formatMicros(provider.actualCostMicros), provider.requestCount, provider.unpricedRequestCount)}</small></span>
+            <span className="providerChartValue"><strong>{formatCount(provider.requestCount)}</strong><small title={cost.note}>{cost.value}</small></span>
           </div>
         );
       })}
-      {visible.length ? <div className="providerChartLegend" aria-hidden="true"><span><i className="success" />Successful</span><span><i className="errors" />Errors</span><span className="providerChartLegendMeta">Requests · {visible.some((provider) => provider.unpricedRequestCount) ? "accounted spend" : "spend"}</span></div> : null}
+      {visible.length ? <div className="providerChartLegend"><span><i className="success" />Successful</span><span><i className="errors" />Errors</span><span className="providerChartLegendMeta">Requests · accounted spend · may include estimates</span></div> : null}
       {!visible.length ? <div className="chartListEmpty"><ServerCog aria-hidden="true" /><strong>No provider activity</strong><span>Provider distribution will appear after the first routed request.</span></div> : null}
     </div>
   );
@@ -106,7 +108,8 @@ export function ProviderUsageChart({ providers, services, limit = 6 }: { provide
 
 function ChartTooltip({ point, xPercent }: { point: UsageDailySummary; xPercent: number }) {
   const style = xPercent > 0.72 ? { right: `${(1 - xPercent) * 100}%` } : { left: `${xPercent * 100}%` };
-  return <div className="chartTooltip" style={style} role="status" aria-live="polite"><strong>{formatChartDay(point.dayStartMs, true)}</strong><span>{formatCount(point.requestCount)} requests</span><span>{formatCount(point.totalTokens)} tokens</span><span>{usageCostLabel(formatMicros(point.actualCostMicros), point.requestCount, point.unpricedRequestCount)}{point.unpricedRequestCount ? "" : " spend"}</span>{point.errorCount ? <em className="error">{point.errorCount} errors</em> : <em className="success">All successful</em>}</div>;
+  const cost = presentAccountedSpend(point);
+  return <div className="chartTooltip" style={style} role="status" aria-live="polite"><strong>{formatChartDay(point.dayStartMs, true)}</strong><span>{formatCount(point.requestCount)} requests</span><span>{formatCount(point.totalTokens)} tokens</span><span>{cost.value} · {cost.label}</span><small>{cost.note}</small>{point.errorCount ? <em className="error">{point.errorCount} errors</em> : <em className="success">All successful</em>}</div>;
 }
 
 function smoothPath(points: Array<{ x: number; y: number }>) {

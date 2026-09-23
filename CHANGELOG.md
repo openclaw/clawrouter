@@ -17,6 +17,7 @@
 - Recover corrupt or oversized legacy upstream grants through explicit authenticated replacement or revocation. Preserve owner identity and pool generation fences, discard old secret bytes, and keep ordinary edits, OAuth and contribution imports strict. A missing KV value cannot erase retained legacy attachments during account creation.
 
 - Restrict personal usage audit events to the authenticated principal, or unattributed events for the authenticated service key, while preserving shared policy totals and administrator audit access.
+- Distinguish accounted cost estimates, fixed tariffs, unavailable prices, and budget reservations throughout the console; show zero amounts, budget scopes, and UTC monthly limits explicitly.
 - Keep public HTTP Responses continuations on the original credential owner across token refresh. Register response and Codex turn identities before publication, preserve ordinary pool failover, and require a visible restart when ownership changes or expires.
 
 - Preserve provider kill switches and budgets during concurrent connection edits, and show per-provider pending state in the console.

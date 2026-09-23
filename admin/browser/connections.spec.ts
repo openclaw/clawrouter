@@ -25,7 +25,7 @@ test("connection edits admit one operation per provider and consume the committe
   await pending[0].fulfill({ json: { providerId: "test-a", enabled: false, label: "Shared", monthlyBudgetMicros: 1_000_000 } });
   await expect(page.getByRole("button", { name: "Enable connection", exact: true })).toBeEnabled();
   await expect(page.getByRole("button", { name: "Save budget", exact: true })).toBeEnabled();
-  await expect(page.locator(".providerBudgetEditor")).toContainText("Month to date unknown · unknown remaining");
+  await expect(page.locator(".providerBudgetEditor")).toContainText("Used amount unavailable · Remaining unavailable");
 
   await page.getByLabel("monthly provider budget ($)").fill("2");
   await page.getByRole("button", { name: "Save budget", exact: true }).click();
