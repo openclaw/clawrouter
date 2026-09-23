@@ -127,7 +127,7 @@ async function waitForReadiness({
   );
 }
 
-async function runWithinDeadline(run, timeoutMs, message) {
+export async function runWithinDeadline(run, timeoutMs, message) {
   const controller = new AbortController();
   let timeoutId;
   const timeout = new Promise((_, reject) => {
