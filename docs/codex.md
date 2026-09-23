@@ -130,9 +130,9 @@ fixed policy tariff. For concrete provider models, both `/v1/models` and `/v1/ca
 policy, provider budget, and eligible grant transport. Verify the chosen upstream
 account and model before use.
 
-Follow-ups: Fusion discovery budget eligibility still uses the existing compound
-readiness path; this change does not extend the concrete-model projection to it.
-OpenAI hosted-tool admission and fee accounting remains separate.
+Fusion discovery applies the same Chat model eligibility to its configured
+synthesizer and advisers; unavailable advisers remain optional.
+OpenAI hosted-tool admission and fee accounting remains a separate follow-up.
 The setup disables hosted web search because token rates do not cover its tool
 fees or provider-added search input. The existing 15-minute reservation lease
 also remains a boundary for long-running HTTP streams.
