@@ -401,5 +401,6 @@ for (const additions of ["empty", "comments", "provider"]) test(`native generate
   } else assert.ok((await readFile(f.profile, "utf8")).endsWith(extra));
   await run(true, additions !== "empty", false);
   assert.equal(await readFile(join(f.home, "config.toml"), "utf8"), root);
-  assert.ok(f.state.requests.every((request) => (request.method === "GET" && request.url === "/v1/catalog") || (request.method === "POST" && ["/v1/native/fixture/v1/responses", "/v1/responses"].includes(request.url))), "native proof must use only the isolated catalog and synthetic inference routes");
+  const unexpected = f.state.requests.filter((request) => !((request.method === "GET" && request.url === "/v1/catalog") || (request.method === "POST" && ["/v1/native/fixture/v1/responses", "/v1/responses"].includes(request.url))));
+  assert.deepEqual(unexpected.map(({ method, url }) => ({ method, url })), [], "native proof must use only the isolated catalog and synthetic inference routes");
 });
