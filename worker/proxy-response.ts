@@ -79,9 +79,15 @@ export async function normalizePreStreamError(response: Response, streamingReque
   if (!streamingRequested) return response;
   const eventStream = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream") === true;
   if (response.status >= 400) {
-    if (eventStream && response.body) return normalizeFirstSseEvent(response, response.status, operation);
-    const body = await readLimited(response, 64 * 1024, operation);
-    return mappedUpstreamError(response, upstreamError(body), response.status);
+    try {
+      if (eventStream && response.body) return await normalizeFirstSseEvent(response, response.status, operation);
+      const body = await readLimited(response, 64 * 1024, operation);
+      return mappedUpstreamError(response, upstreamError(body), response.status);
+    } catch {
+      // Failure to read error details cannot replace an accepted HTTP status.
+      // The operation still owns cancellation and the accounting cause.
+      return mappedUpstreamError(response, {}, response.status);
+    }
   }
   if (!response.ok || !eventStream || !response.body) return response;
   return normalizeFirstSseEvent(response, null, operation);
@@ -251,10 +257,5 @@ async function readLimited(response: Response, limit: number, operation: HttpOpe
       text += decoder.decode(value, { stream: true });
     }
     return text + decoder.decode();
-  } catch (error) {
-    // Decide before disposal can trigger a reciprocal abort. A bounded or
-    // unreadable rejection body still keeps its already accepted HTTP status.
-    if (operation.signal.aborted) throw error;
-    return "";
   } finally { void reader.cancel(operation.signal.reason).catch(() => undefined); reader.releaseLock(); }
 }

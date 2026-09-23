@@ -38,6 +38,27 @@ test("HTTP 200 first-event SSE errors become mapped JSON failures", async () => 
   assert.deepEqual(await response.json(), { error: { message: "invalid request", type: "invalid_request", code: 400 } });
 });
 
+test("unreadable known HTTP error details keep their status and use a generic envelope", async () => {
+  for (const status of [400, 429, 503]) for (const contentType of ["application/json", "text/event-stream"]) {
+    const source = new Response(new ReadableStream({ pull() { throw new Error("fixture unreadable error details"); } }, { highWaterMark: 0 }), {
+      status, headers: { "content-type": contentType, "retry-after": "17", "content-length": "999" },
+    });
+    const response = await normalizePreStreamError(source, true);
+    assert.equal(response.status, status);
+    assert.deepEqual(await response.json(), { error: { message: "upstream request failed", type: "upstream_error", code: status } });
+    assert.equal(response.headers.get("retry-after"), "17");
+    assert.equal(response.headers.get("content-length"), null);
+    assert.equal(source.body.locked, false);
+  }
+});
+
+test("HTTP 200 first-event read failure remains exceptional", async () => {
+  const failure = new Error("fixture first-event read failure");
+  const source = new Response(new ReadableStream({ pull() { throw failure; } }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } });
+  await assert.rejects(normalizePreStreamError(source, true), error => error === failure);
+  assert.equal(source.body.locked, false);
+});
+
 test("leading SSE comments and empty blocks do not hide a first error event", async () => {
   const response = await normalizePreStreamError(chunkedSse([
     ': ping\r\n\r\n\n\nevent: error\n\n: still here\n\ndata: {"error":{"message":"bad model","type":"invalid_request","code":422}}\n\n',

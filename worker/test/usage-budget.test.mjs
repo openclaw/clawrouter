@@ -494,10 +494,13 @@ test("known nonbillable responses stay zero across tariffs and complete or broke
       method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
       body: JSON.stringify({ model: "openai/gpt-6-astra", input: "fixture", max_output_tokens: 32, service_tier: "priority", stream: true }),
     }), env, { waitUntil: promise => pending.push(promise) });
-    assert.equal(response.status, broken ? 502 : status);
-    await response.text();
+    assert.equal(response.status, status);
+    if (broken) await assert.rejects(response.text(), /fixture broken SSE error body/);
+    else await response.text();
     await Promise.all(pending);
     assert.equal(events.length, 1);
+    assert.equal(events[0].status_code, status);
+    assert.equal(events[0].status, status < 500 ? "client_error" : "provider_error");
     assert.equal(events[0].actual_cost_micros, 0);
     assert.equal(events[0].cost_basis, "none");
     for (const name of ["tenant:maintainer_access:owner@example.com", "provider:openai"]) assert.equal(env.BUDGET_LEDGER.get(name).reservations()[0].reserved_micros, 0);

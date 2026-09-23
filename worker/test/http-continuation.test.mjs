@@ -612,6 +612,38 @@ test("actual Fusion rejection cleanup preserves adviser and synthesizer status w
   }
 });
 
+for (const format of ["json", "sse"]) for (const origin of ["caller", "deadline"]) test(`${format} known HTTP rejections preserve status through ${origin} while error details are stalled`, async t => {
+  const deadline = await endpointDeadline(t);
+  for (const status of [400, 429, 503]) for (const cleanup of ["pending", "rejecting"]) {
+    const f = await fixture(t, false, { limit: 1_000_000, fixedCost: 7 }), caller = new AbortController();
+    const entered = Promise.withResolvers(), disposal = Promise.withResolvers();
+    let cancels = 0, upstream;
+    f.response = () => upstream = new Response(new ReadableStream({
+      pull() { entered.resolve(); },
+      cancel() { cancels++; return cleanup === "pending" ? disposal.promise : Promise.reject(new Error("fixture cleanup rejection")); },
+    }, { highWaterMark: 0 }), { status, headers: { "content-type": format === "sse" ? "text/event-stream" : "application/json", "retry-after": "17" } });
+    try {
+      const pending = f.request({ stream: true }, {}, "/v1/responses", caller.signal);
+      await entered.promise;
+      if (origin === "caller") caller.abort(new Error("fixture caller during error normalization"));
+      else assert.equal(deadline(), true, "error normalization still owns the endpoint timer");
+      const response = await pending;
+      assert.equal(response.status, status, "missing error details must not replace a known rejection with 502");
+      assert.equal(response.headers.get("retry-after"), "17");
+      await assert.rejects(response.text(), origin === "caller" ? /fixture caller/ : /deadline/);
+      await f.drain();
+      assert.equal(upstream.body.locked, false); assert.equal(cancels, 1);
+      assert.equal(f.sent.length, 1); assert.equal(f.events.length, 1);
+      assert.equal(f.events[0].status, status < 500 ? "client_error" : "provider_error");
+      assert.equal(f.events[0].status_code, status); assert.equal(f.events[0].actual_cost_micros, 0);
+      assert.equal(f.events[0].cost_basis, "none");
+      await assertBudgets(f, [0]);
+    } finally { disposal.resolve(); }
+    await setImmediate();
+    assert.equal(f.events.length, 1, "late cleanup does not publish a second receipt");
+  }
+});
+
 for (const format of ["sse", "json"]) test(`${format} rejections own reciprocal cleanup without replacing their selected status`, async t => {
   const deadline = await endpointDeadline(t);
   for (const status of [400, 429, 503]) for (const cleanup of ["none", "caller", "deadline"]) {

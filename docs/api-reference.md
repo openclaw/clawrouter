@@ -129,7 +129,9 @@ not impose a total or idle timeout on body delivery. Caller cancellation remains
 active through EOF. Fusion advisers retain their separate consumption deadline.
 Caller cancellation, router deadline, and upstream or publication failure retain
 the first observed cause in usage receipts. The selected HTTP status stays
-separate from that outcome. A parsed terminal usage event retains its measured
+separate from that outcome. An accepted HTTP rejection keeps its status when JSON
+or SSE error details cannot be read; later cancellation still ends delivery.
+A parsed terminal usage event retains its measured
 charge if delivery later stops; dispatched work without final usage retains its
 estimate. This does not guarantee that every transport reports an idle client
 disconnect.

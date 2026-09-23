@@ -54,7 +54,7 @@
 - Reject hosted web search before dispatch under measured budgets without a fixed policy tariff; keep unmetered forwarding and report its price as unavailable instead of token-only spend.
 - Record failed streaming response and delivery outcomes independently from HTTP status and billed usage, with bounded SSE inspection that retains late terminal facts on long streams.
 - Settle HTTP accounting on ingress cancellation through the Worker request signal, including external socket disconnects, without losing already reported terminal usage.
-- Preserve the first HTTP cancellation or failure cause through response delivery without extending endpoint deadlines beyond response normalization. Internal Fusion deadlines no longer appear as caller cancellations.
+- Preserve the first HTTP cancellation or failure cause through response delivery without extending endpoint deadlines beyond response normalization. Keep accepted rejection statuses when error details cannot be read. Internal Fusion deadlines no longer appear as caller cancellations.
 
 - Recover rejected usage-queue publication through the existing policy usage ledger, retaining event IDs to deduplicate redelivery without masking budget-settlement failures.
 
