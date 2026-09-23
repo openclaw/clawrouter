@@ -1,6 +1,6 @@
 import type {
-  AccessControlUser, AccessPolicyEntry, AccessUserRecord, Env, OAuthState, PolicyBinding,
-  AssignmentState, GrantRoutingPolicy, GrantRuntimeState, ProviderConnection, ProxyCredentialEntry,
+  AccessControlUser, AccessPolicyEntry, AccessSession, AccessUserRecord, Env, OAuthState, PolicyBinding,
+  AssignmentState, GrantRoutingPolicy, GrantRuntimeState, ProviderConnection, ProxyCredential, ProxyCredentialEntry,
 } from "./types";
 import { evaluateUserAssignments, withLegacyAssignmentState, type AssignmentEvidence, type AssignmentRuleEntry } from "./assignment-evaluator.ts";
 import { contentRetentionDefault } from "./content-retention.ts";
@@ -8,7 +8,20 @@ import { errorResponse, HttpError, json, normalizeEmail, readJson, safeEqual } f
 
 type Principal = { principalType: "user" | "group"; principalId: string };
 type Seed = { principal: Principal; bindings: PolicyBinding[] };
-type CredentialPutRequest = ProxyCredentialEntry & { guard?: { principalId: string; maxEnabled: number; maxTotal: number; requireExisting: boolean } };
+export type CredentialMutation = {
+  credentialId: string;
+  scope: "admin" | "personal";
+  actor: Pick<AccessSession, "auth" | "email" | "role">;
+} & (
+  | { operation: "create" | "put"; credential: Omit<ProxyCredential, "policyGeneration"> }
+  | { operation: "rotate"; secretSha256: string }
+  | { operation: "revoke" }
+);
+export type CredentialMutationResult =
+  | { outcome: "updated"; entry: ProxyCredentialEntry; policy: AccessPolicyEntry | null; principalEnabled: boolean }
+  | { outcome: "exists" | "missing" | "owned_elsewhere" | "limit_reached" | "policy_not_held" | "unknown_policy" | "inactive" | "actor_disabled" | "admin_required" };
+export const selfServiceCredentialLimit = 10;
+const selfServiceCredentialRetentionLimit = 100;
 
 export class PolicyBindingIndexObject implements DurableObject {
   private sql: SqlStorage;
@@ -40,12 +53,11 @@ export class PolicyBindingIndexObject implements DurableObject {
       if (path === "/policies/initialize") { this.initializePolicies(await readJson<AccessPolicyEntry[]>(request)); return new Response("initialized"); }
       if (path === "/policies/initialize-all") { this.initializePolicies(await readJson<AccessPolicyEntry[]>(request)); this.putMeta("policies_global_initialized"); return new Response("initialized"); }
       if (path === "/policies/put") { this.putPolicy(await readJson<AccessPolicyEntry>(request)); return new Response("updated"); }
-      if (path === "/policies/put-with-credential") { const body = await readJson<{ policy: AccessPolicyEntry; credential: ProxyCredentialEntry }>(request); this.putPolicy(body.policy); this.putCredential(body.credential); return new Response("updated"); }
       if (path === "/policies/list") return json({ initialized: this.hasMeta("policies_global_initialized"), policies: this.listPolicies() });
       if (path === "/credentials/resolve") return json(this.resolveCredentials((await readJson<{ credentialIds: string[] }>(request)).credentialIds));
       if (path === "/credentials/initialize") { this.initializeCredentials(await readJson<ProxyCredentialEntry[]>(request)); return new Response("initialized"); }
       if (path === "/credentials/initialize-all") { this.initializeCredentials(await readJson<ProxyCredentialEntry[]>(request)); this.putMeta("credentials_global_initialized"); return new Response("initialized"); }
-      if (path === "/credentials/put") return json(this.putCredentialGuarded(await readJson<CredentialPutRequest>(request)));
+      if (path === "/credentials/mutate") return json(this.mutateCredential(await readJson<CredentialMutation>(request)));
       if (path === "/credentials/list") return json({ initialized: this.hasMeta("credentials_global_initialized"), credentials: this.listCredentials() });
       if (path === "/connections/resolve") return json(this.resolveConnections((await readJson<{ providerIds: string[] }>(request)).providerIds));
       if (path === "/connections/initialize") { this.initializeConnections(await readJson<ProviderConnection[]>(request)); return new Response("initialized"); }
@@ -231,24 +243,48 @@ export class PolicyBindingIndexObject implements DurableObject {
   private putCredential(entry: ProxyCredentialEntry): void {
     this.sql.exec("INSERT OR REPLACE INTO proxy_credentials (credential_id, credential_json) VALUES (?, ?)", entry.credentialId, JSON.stringify(entry.credential));
   }
-  private putCredentialGuarded(entry: CredentialPutRequest): { outcome: "updated" | "owned_elsewhere" | "limit_reached" | "missing" } {
-    const existing = this.getCredential(entry.credentialId);
-    const guard = entry.guard;
-    if (guard) {
-      if (guard.requireExisting && !existing) return { outcome: "missing" };
-      if (existing && existing.credential.principalId !== guard.principalId) return { outcome: "owned_elsewhere" };
-      const owned = this.listCredentials().filter((candidate) => candidate.credentialId !== entry.credentialId && candidate.credential.principalId === guard.principalId);
+  private mutateCredential(request: CredentialMutation): CredentialMutationResult {
+    // Actor provenance comes only from the verified HTTP session. Local roles,
+    // user state and policy holdings must still be current at the write boundary.
+    const { actor, scope, operation, credentialId } = request;
+    const principalId = normalizeEmail(actor.email), user = principalId ? this.getUser(principalId) : null;
+    if (actor.auth !== "admin_token" && (!user || user.record.enabled === false)) return { outcome: "actor_disabled" };
+    if (scope === "admin" && (actor.role !== "admin" || actor.auth === "local" && user?.record.role !== "admin")) return { outcome: "admin_required" };
+    if (scope === "personal" && (!principalId || actor.auth === "admin_token")) return { outcome: "actor_disabled" };
+    const existing = this.getCredential(credentialId);
+    // A create collision must not prune retained rows or replace any part of the key.
+    if (operation === "create" && existing) return { outcome: "exists" };
+    if ((operation === "rotate" || operation === "revoke") && !existing) return { outcome: "missing" };
+    if (scope === "personal" && existing && normalizeEmail(existing.credential.principalId ?? "") !== principalId) return { outcome: "owned_elsewhere" };
+    const policyId = operation === "create" || operation === "put" ? request.credential.policyId : existing!.credential.policyId;
+    const policy = this.getPolicy(policyId);
+    const ownerEnabled = !existing?.credential.principalId || this.getUser(existing.credential.principalId)?.record.enabled !== false;
+    if (operation === "rotate" && (!existing!.credential.enabled || !policy?.policy.enabled || existing!.credential.policyGeneration !== policy.policy.generation || !ownerEnabled)) return { outcome: "inactive" };
+    if (operation !== "revoke") {
+      if (scope === "personal") {
+        const principals: Principal[] = [{ principalType: "user", principalId: principalId! }, ...(user?.record.groups ?? []).map((group) => ({ principalType: "group" as const, principalId: group }))];
+        if (!policy?.policy.enabled || !this.resolveBindings(principals).bindings.some((binding) => binding.enabled && binding.policyId === policyId)) return { outcome: "policy_not_held" };
+      } else if (!policy) return { outcome: "unknown_policy" };
+    }
+    // Rotate and revoke mutate the latest row, never a caller's earlier snapshot.
+    // Only explicit PUT may rebind a key or renew its policy generation.
+    const credential = operation === "create" || operation === "put"
+      ? { ...request.credential, policyGeneration: policy!.policy.generation, ...(scope === "personal" ? { enabled: true, principalId } : {}) }
+      : { ...existing!.credential, ...(operation === "rotate" ? { secretSha256: request.secretSha256 } : { enabled: false }) };
+    const entry = { credentialId, credential };
+    if (scope === "personal" && (operation === "create" || operation === "put")) {
+      const owned = this.listCredentials().filter((candidate) => candidate.credentialId !== credentialId && normalizeEmail(candidate.credential.principalId ?? "") === principalId);
       const enabled = owned.filter((candidate) => candidate.credential.enabled).length;
-      if (entry.credential.enabled && enabled >= guard.maxEnabled) return { outcome: "limit_reached" };
-      if (!existing && owned.length >= guard.maxTotal) {
-        const pruneCount = owned.length - guard.maxTotal + 1;
+      if (enabled >= selfServiceCredentialLimit) return { outcome: "limit_reached" };
+      if (!existing && owned.length >= selfServiceCredentialRetentionLimit) {
+        const pruneCount = owned.length - selfServiceCredentialRetentionLimit + 1;
         const revoked = owned.filter((candidate) => !candidate.credential.enabled).sort((left, right) => left.credentialId.localeCompare(right.credentialId));
         if (revoked.length < pruneCount) return { outcome: "limit_reached" };
         for (const candidate of revoked.slice(0, pruneCount)) this.deleteCredential(candidate.credentialId);
       }
     }
     this.putCredential(entry);
-    return { outcome: "updated" };
+    return { outcome: "updated", entry, policy, principalEnabled: !credential.principalId || this.getUser(credential.principalId)?.record.enabled !== false };
   }
   private deleteCredential(id: string): void { this.sql.exec("DELETE FROM proxy_credentials WHERE credential_id = ?", id); }
   private initializeCredentials(entries: ProxyCredentialEntry[]): void {

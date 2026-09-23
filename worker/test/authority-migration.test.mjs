@@ -13,7 +13,7 @@ const families = [
     put: "/policies/put", close: "/policies/initialize-all", list: listPolicies, resolve: env => resolvePolicies(env, ["fixture"]) },
   { name: "credentials", key: "credentials/fixture", value: { enabled: true, policyId: "fixture", policyGeneration: "v1", secretSha256: "a".repeat(64) },
     row: value => ({ credentialId: "fixture", credential: value }), enabled: row => row.credential.enabled,
-    put: "/credentials/put", close: "/credentials/initialize-all", list: listCredentials, resolve: env => resolveCredentials(env, ["fixture"]) },
+    put: "/credentials/mutate", close: "/credentials/initialize-all", list: listCredentials, resolve: env => resolveCredentials(env, ["fixture"]) },
   { name: "users", key: "access/users/fixture@example.com", value: { enabled: true, role: "user", tenantId: "fixture", groups: [] },
     row: value => ({ email: "fixture@example.com", record: value }), enabled: row => row.record.enabled,
     put: "/users/put", close: "/users/initialize-all", list: listUsers, resolve: env => resolveUsers(env, ["fixture@example.com"]) },
@@ -74,6 +74,10 @@ function migrationEnv(t, family) {
   const fixture = {
     beforeRead: null, reads: 0, store: new Map([[family.key, family.value]]),
     async call(path, body) {
+      if (path === "/credentials/mutate") {
+        await this.call("/policies/put", { policyId: "fixture", policy: { enabled: true, generation: "v1", providers: [] } });
+        body = { ...body, operation: "put", scope: "admin", actor: { auth: "admin_token", role: "admin", email: "token-admin" } };
+      }
       const response = await authority.fetch(new Request(`https://clawrouter.internal${path}`, { method: "POST", body: JSON.stringify(body) }));
       assert.equal(response.status, 200, await response.clone().text());
       return response;

@@ -53,6 +53,28 @@ is configured. Every budgeted call fails closed until its route has versioned
 manifest pricing or a fixed policy price. A zero-cost route, such as Anthropic
 token counting, skips reservation.
 
+Gemini native requests containing `cachedContent`, `fileData`, or `inlineData`
+reserve the full declared input window, including media in system instructions
+or typed function-response parts. With the bundled Standard Gemini 3.5 Flash
+rate card, 1,048,576 input tokens reserve **$1.572864 before output**.
+`generationConfig.maxOutputTokens` [bounds thinking and visible output together](https://ai.google.dev/gemini-api/docs/generate-content/thinking#token-limits-and-max_output_tokens);
+`candidateCount` multiplies that bound. For example, 100 output tokens and one
+candidate add $0.000900, for a total reservation of **$1.573764**.
+
+Each configured policy and provider monthly budget must have enough unreserved
+headroom for the entire request. Otherwise ClawRouter returns HTTP 402 before
+dispatch, even for a small cached-content or media request. This corrected bound
+also applies to existing callers after upgrading. Increase the applicable budget
+headroom, or explicitly choose the fixed `requestCostMicros` policy tariff when
+that accounting model fits your deployment. A fixed tariff records the operator's
+chosen amount rather than measured provider charges.
+
+These amounts reserve budget capacity. Complete valid response usage settles
+the reported input, cache hits, visible output, and thinking tokens at the manifest
+rates and releases the unused reservation. Missing or malformed usage retains
+the reservation, as for other providers. The reservation is not an upstream
+invoice charge.
+
 Hosted web search adds fees and repeated model work that token pricing does not
 cover. Requests enabling Responses `web_search` or `web_search_preview` (including
 dated versions), Anthropic `web_search_*`, or Chat `web_search_options` now return
@@ -115,6 +137,21 @@ exhausted provider limit returns HTTP 402 with `provider_budget_exhausted`.
 Leaving the provider budget blank keeps the provider unmetered and adds no
 provider-ledger call to the request path.
 
+Policy, principal, and provider budgets have distinct logical scopes, even when
+their identifiers share a storage address. For example, tenant `provider` with
+policy `openai` does not consume the OpenAI provider budget twice. Admission and
+budget status use the same scope recorded on each reservation receipt.
+
+Upgrades keep existing storage addresses, monthly balances, and settlement
+receipts. Older charges lack a scope tag and cannot be reliably separated, so
+they remain shared conservative debt for their original monthly window. Late
+settlement updates that original receipt; it never moves debt into a new month.
+No operator migration or budget reset is needed. During mixed-version deployment,
+older callers conservatively count all charges in the shared window. Rolling back
+to the durable-settlement implementation also retains every charge, but restores
+that shared-budget behavior until re-upgrade. Rollback to versions predating
+durable settlement is not covered by this compatibility guarantee.
+
 Rates are integer micro-US-dollars per million tokens. Update `pricingRef` and
 `effectiveAt` together when a provider changes price. Subscription traffic uses
 the equivalent public API list price for governance; it is not an invoice for
@@ -157,7 +194,13 @@ is unavailable, not that the request was free. Summary, provider, and daily usag
 include `unpricedRequestCount`; spend totals exclude these unavailable prices.
 The console marks them as unavailable or reports the known subtotal with the
 unpriced count. Pre-dispatch denials and nonbillable responses do not increment this count.
-Dispatched requests whose transport fails still have unavailable upstream cost.
+Dispatched requests whose transport fails before response headers have no complete
+usage. Token-priced calls retain their qualified estimate with
+`cost_basis: manifest_reservation`; fixed tariffs remain `policy_fixed`, and
+unpriced calls remain `unpriced_usage`. An estimate is not measured upstream spend.
+This replaces the earlier zero-charge policy for pre-response transport failures:
+missing headers cannot prove that upstream work was free. Pre-dispatch failures
+still release reservations to zero; HTTP error and cancellation outcomes are unchanged.
 Historical admission denials marked `unpriced_service_tier` remain known zero. No policy migration or new setting is required.
 The bundled OpenAI route is pinned to the global `api.openai.com` endpoint.
 Regional data-residency endpoints are not exposed; a regional deployment needs

@@ -2,15 +2,30 @@
 
 ## Unreleased
 
+- Restrict personal usage audit events to the authenticated principal, or unattributed events for the authenticated service key, while preserving shared policy totals and administrator audit access.
+
+- Deny proxy requests and subsequent WebSocket turns for explicitly disabled key owners, and show their credentials as owner-disabled without changing unowned service keys or retained policy bindings.
+- Add collision-safe proxy-key creation and active-key-only rotation. Serialize credential authorization, current-policy checks, and revocation in the authority so concurrent writes cannot restore an old secret or owner; preserve existing PUT and CLI upserts.
+
 - Preserve local administrator roles during user, policy-assignment, and automatic-assignment edits, including profile saves that race with an explicit role change.
 
 - Publish a revision-bound provider snapshot from CI so code-only contributors can regenerate the catalog without a local dependency install.
 
+- Match catalog models to their declared endpoints and reject incompatible native selections. Route opaque model IDs through explicit endpoint passthrough contracts without borrowing the first model's capabilities or pricing, while preserving the local provider's zero API charge.
+
+- Validate every provider manifest against its canonical JSON Schema before compilation, including ordinary pricing cards, safe integer rates, calendar dates, and unknown fields; retain semantic route and pricing checks.
+- Account for Gemini native thinking and cached tokens, honor native output and candidate limits, and reserve the full input bound for cached content and media references.
+
 - Prevent duplicate playground requests, cancel pending requests when starting a new chat, and preserve new drafts when earlier replies arrive.
+- Allow OpenRouter API-key-only setup without a site URL; omit unset optional attribution headers consistently in readiness, requests, and grant maintenance while keeping required templates strict.
+- Keep upstream grant lifecycle changes authoritative in their credential owner. Stale requests cannot undo disablement or revocation; secretless revocation tombstones require fresh credentials to reconnect, and grant metadata and pool updates are serialized with owner mutations. Publish each materialization's final state once to respect KV write limits.
+- Route grant CLI imports and revocations through the authenticated admin API, including explicit loopback `--local` targets. Preserve whole-grant replacement, clear omitted old credentials, and migrate legacy KV disablement or revocation before credential-owner maintenance can use secrets.
 
 - Match Cloudflare Access applications by exact destination instead of display name, reject ambiguous or name-only collisions before writes, and inspect all application and policy pages during provisioning.
 
 - Preserve dispatched budget charges through reservation expiry and delayed recovery, release abandoned pre-dispatch work to zero, and require confirmed idempotent settlement receipts before acknowledging retries.
+- Retain qualified estimates or fixed tariffs when dispatched HTTP requests fail before response headers, while keeping pre-dispatch failures at zero and preserving error and cancellation outcomes.
+- Isolate policy, principal, and provider budget charges when their identifiers share a ledger address, preserving existing balances and ambiguous legacy debt without resetting budgets or orphaning settlement receipts.
 - Apply concrete Chat model eligibility to Fusion discovery, including selected-policy pricing, provider limits, and grant availability, while preserving fail-open advisers.
 - Reject hosted web search before dispatch under measured budgets without a fixed policy tariff; keep unmetered forwarding and report its price as unavailable instead of token-only spend.
 - Record failed streaming response and delivery outcomes independently from HTTP status and billed usage, with bounded SSE inspection that retains late terminal facts on long streams.
@@ -26,6 +41,8 @@
 
 - Account for OpenAI Standard, Fast/priority, and supported Flex tiers using dated per-model prices, conservative admission, and actual served-tier settlement. Preserve unmetered forwarding for undeclared tiers, show unavailable prices in usage totals, retain estimates when metered usage is incomplete, and refresh the GPT-5.6 Sol alias prices.
 - Add GPT-6 Astra to the OpenAI catalog with its reasoning efforts, standard token and cache-write pricing, long-context rates, and Chat Completions token-limit mapping.
+
+- Select smoke-test models from the chosen endpoint's declared capabilities, preserving native model names and configured Azure deployments instead of stale or synthetic defaults.
 
 ## 0.4.0 - 2026-09-22
 

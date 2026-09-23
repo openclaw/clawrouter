@@ -207,8 +207,10 @@ export function summarizePlan(plan) {
 }
 
 function smokeTarget(provider, env) {
-  if (supportsOpenAiCompatibleProxy(provider)) {
-    const model = smokeModel(provider, env);
+  const chatEndpointId = provider.capabilities.find((capability) => capability.id === "llm.chat")?.endpoint;
+  const chatEndpoint = provider.endpoints.find((endpoint) => endpoint.id === chatEndpointId);
+  if (chatEndpoint && supportsOpenAiCompatibleProxy(provider)) {
+    const model = smokeModel(provider, chatEndpoint, env);
     if (model) {
       return {
         kind: "openai_chat",
@@ -228,8 +230,11 @@ function smokeTarget(provider, env) {
   if (!endpoint || !supportsManifestProxy(provider, endpoint)) {
     return null;
   }
+  const model = manifestSmokeModelOverride(provider, endpoint, env)
+    ?? modelsForEndpoint(provider, endpoint).find((model) => !model.upstream.includes("${"))?.upstream;
+  if (provider.service_kind === "model_provider" && !model) return null;
   const pathParams = Object.fromEntries(
-    endpoint.path_params.map((param) => [param, samplePathParam(provider, endpoint, param, env)]),
+    endpoint.path_params.map((param) => [param, samplePathParam(param, model, env)]),
   );
   const upstreamMethod = smokeMethod(endpoint);
   return {
@@ -242,30 +247,26 @@ function smokeTarget(provider, env) {
       method: upstreamMethod,
       pathParams,
       query: {},
-      body: sampleBody(provider, endpoint, upstreamMethod, env),
+      body: sampleBody(provider, endpoint, upstreamMethod, model, env),
     },
   };
 }
 
-function smokeModel(provider, env) {
-  const override = providerSmokeModelOverride(provider, env);
+function modelsForEndpoint(provider, endpoint) {
+  const capabilities = provider.capabilities.filter((capability) => capability.endpoint === endpoint.id);
+  return provider.models.filter((model) => capabilities.some((capability) => model.capabilities.includes(capability.id)));
+}
+
+function smokeModel(provider, endpoint, env) {
+  const override = providerSmokeModelOverride(provider, endpoint, env);
   if (override) {
     return override;
   }
-  const direct = provider.models.find((model) => {
-    return model.capabilities.includes("llm.chat") && !model.upstream.includes("${");
-  });
-  if (direct) {
-    return direct.id;
-  }
-  const prefix = provider.routing.modelPrefixes?.[0];
-  if (prefix) {
-    return `${prefix}smoke-model`;
-  }
-  return provider.models.find((model) => !model.upstream.includes("${"))?.id ?? null;
+  const models = modelsForEndpoint(provider, endpoint);
+  return (models.find((model) => !model.upstream.includes("${")) ?? models[0])?.id ?? null;
 }
 
-function providerSmokeModelOverride(provider, env) {
+function providerSmokeModelOverride(provider, endpoint, env) {
   const providerName = envName(provider.id);
   const override =
     env[`CLAWROUTER_SMOKE_MODEL_${providerName}`] ||
@@ -276,8 +277,8 @@ function providerSmokeModelOverride(provider, env) {
   }
   const catalogModel = provider.models.find((model) => model.id === override);
   if (catalogModel) {
-    if (!catalogModel.capabilities.includes("llm.chat")) {
-      throw new Error(`smoke model override for ${provider.id} must support llm.chat`);
+    if (!modelsForEndpoint(provider, endpoint).includes(catalogModel)) {
+      throw new Error(`smoke model override for ${provider.id} must support ${endpoint.id}`);
     }
     return override;
   }
@@ -489,7 +490,7 @@ function pushUnique(values, value) {
   }
 }
 
-function samplePathParam(provider, endpoint, param, env) {
+function samplePathParam(param, model, env) {
   if (param === "path") {
     return "status";
   }
@@ -497,12 +498,7 @@ function samplePathParam(provider, endpoint, param, env) {
     return "status";
   }
   if (param === "model") {
-    const override = manifestSmokeModelOverride(provider, env);
-    if (override) return override;
-    if (provider.id === "aws-bedrock") return "amazon.nova-lite-v1:0";
-    return (
-      provider.models.find((model) => !model.upstream.includes("${"))?.upstream ?? "smoke-model"
-    );
+    return model;
   }
   if (param === "account") {
     return env.CLOUDFLARE_ACCOUNT_ID ?? "account";
@@ -516,7 +512,7 @@ function samplePathParam(provider, endpoint, param, env) {
   return "smoke";
 }
 
-function sampleBody(provider, endpoint, method, env) {
+function sampleBody(provider, endpoint, method, model, env) {
   if (!methodAllowsBody(method)) {
     return {};
   }
@@ -537,7 +533,7 @@ function sampleBody(provider, endpoint, method, env) {
   }
   if (provider.id === "anthropic") {
     const body = {
-      model: provider.models.find((model) => !model.upstream.includes("${"))?.upstream,
+      model,
       messages: [{ role: "user", content: "reply with ok" }],
     };
     if (endpoint.id === "messages") {
@@ -546,7 +542,7 @@ function sampleBody(provider, endpoint, method, env) {
     return body;
   }
   if (provider.id === "cohere") {
-    return { model: "command", messages: [{ role: "user", content: "reply with ok" }] };
+    return { model, messages: [{ role: "user", content: "reply with ok" }] };
   }
   if (provider.id === "aws-bedrock") {
     const override = env.CLAWROUTER_SMOKE_BODY_AWS_BEDROCK;
@@ -589,15 +585,20 @@ function sampleBody(provider, endpoint, method, env) {
   return {};
 }
 
-function manifestSmokeModelOverride(provider, env) {
+function manifestSmokeModelOverride(provider, endpoint, env) {
   const raw = env[`CLAWROUTER_SMOKE_MODEL_${envName(provider.id)}`];
   const value = typeof raw === "string" ? raw.trim() : "";
   if (!value) return null;
   if (value.length > 2048 || /[\u0000-\u001f\u007f]/.test(value)) {
     throw new Error(`smoke model override for ${provider.id} is invalid`);
   }
-  const catalog = provider.models.find((model) => model.id === value);
-  if (catalog && !catalog.upstream.includes("${")) return catalog.upstream;
+  const catalog = provider.models.find((model) => model.id === value || model.upstream === value);
+  if (catalog) {
+    if (!modelsForEndpoint(provider, endpoint).includes(catalog)) {
+      throw new Error(`smoke model override for ${provider.id} must support ${endpoint.id}`);
+    }
+    if (!catalog.upstream.includes("${")) return catalog.upstream;
+  }
   const prefix = (provider.routing.modelPrefixes ?? []).find((candidate) => value.startsWith(candidate));
   return prefix ? value.slice(prefix.length) : value;
 }

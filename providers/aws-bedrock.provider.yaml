@@ -33,6 +33,7 @@ capabilities:
     methods: [POST]
 endpoints:
   invoke_model:
+    modelPassthrough: {}
     path: /model/${model}/invoke
     pathParams: [model]
     pathParamStyles:
@@ -52,6 +53,7 @@ endpoints:
     responseFormat: aws_bedrock.invoke
     timeoutMs: 600000
   invoke_model_stream:
+    modelPassthrough: {}
     path: /model/${model}/invoke-with-response-stream
     pathParams: [model]
     pathParamStyles:

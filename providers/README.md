@@ -57,12 +57,26 @@ billing:
 
 ## Mapping Rules
 
+- The compiler validates the complete manifest against
+  `_schema/service-provider.schema.json` before applying defaults. Errors identify
+  the provider and JSON pointer; rates and token counts must be safe integers.
+  Cross-field references and pricing relationships are checked separately.
 - `service.platform` is the stable service id used by admin, billing, OAuth, and
   policy grants.
 - `routing.nativePrefixes` lets OpenClaw route native keys such as
   `clawrouter-openai-*` to a provider without users setting `base_url`.
 - `routing.modelPrefixes` maps model names like `openai/gpt-4.1-mini` to the
   provider snapshot.
+- A model's `capabilities` map it to endpoints through the provider's capability
+  declarations. Native route catalogs include only models for that endpoint;
+  known models are rejected on incompatible endpoints before dispatch.
+- `endpoints.*.modelPassthrough: {}` permits caller-supplied model identifiers
+  for that operation. It does not advertise those models or attest upstream
+  availability. Opaque models inherit no reasoning, client metadata, or prices.
+  An optional `pricingRef` must name exactly one priced, endpoint-compatible
+  model in this provider. Use it only when that price applies to every opaque
+  model, as with the local provider's zero API charge. Requests without a model
+  do not acquire metadata or prices from the first catalog entry.
 - `auth.schemes` declares how ClawRouter injects the upstream credential.
 - Bearer credentials are required by default. Set `required: false` when an
   upstream offers keyless access and an API key only raises limits; ClawRouter
@@ -76,6 +90,10 @@ billing:
   `allowedEndpoints` optionally restricts that transport to named endpoints;
   `endpointPaths` alone only overrides paths. Compatibility is checked before
   grant priority and selection, without reopening environment credentials.
+- `service.optionalConfigKeys` allows absent bindings without blocking readiness.
+  Injected adapter and endpoint headers are omitted when a missing template binding
+  is optional; missing required bindings still fail, including mixed templates.
+  Base URLs, paths, and query templates always require their bindings.
 - `adapter` declares the request/response family. Use `custom_adapter` only after
   the declarative format cannot express the provider.
 - `billing.meter` and `billing.counters` produce OpenMeter/Lago/Meteroid style
@@ -106,6 +124,25 @@ billing:
 - `endpoints.*.websocket: openai.responses` explicitly qualifies a native
   POST Responses/SSE endpoint for the Worker WebSocket bridge. Other endpoints
   and alternate grant transports do not gain WebSocket support implicitly.
+
+## Upgrading custom manifests
+
+Known model entries keep their declared endpoints and prices. Opaque model
+requests now require an explicit declaration on each intended endpoint. Add
+`modelPassthrough: {}` to the existing endpoint mapping, then regenerate the
+provider snapshot:
+
+```yaml
+endpoints:
+  chat_completions:
+    modelPassthrough: {}
+    # Keep the endpoint's existing path and protocol fields.
+```
+
+Without this declaration, a native request for an unknown model returns
+`model_capability_unsupported`. The declaration restores opaque routing without
+copying another model's price or metadata. Budgeted opaque requests still need
+a fixed policy tariff or an applicable endpoint `pricingRef`.
 
 ## Edge Support Rules
 

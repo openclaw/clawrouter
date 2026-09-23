@@ -8,6 +8,7 @@ service:
   kind: gateway_platform
   upstreamService: openrouter
   configKeys: [OPENROUTER_API_KEY, OPENROUTER_SITE_URL]
+  optionalConfigKeys: [OPENROUTER_SITE_URL]
 auth:
   schemes:
     - type: bearer
@@ -36,12 +37,14 @@ capabilities:
     methods: [POST]
 endpoints:
   responses:
+    modelPassthrough: {}
     path: /v1/responses
     requestFormat: openai.responses
     responseFormat: openai.responses
     streaming: sse
     timeoutMs: 600000
   chat_completions:
+    modelPassthrough: {}
     path: /v1/chat/completions
     requestFormat: openai.chat_completions
     responseFormat: openai.chat_completions

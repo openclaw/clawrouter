@@ -24,6 +24,52 @@ test("opaque inputs and provider-added tools reserve the full input window", () 
   assert.equal(estimateModelCost(pricing, { tools: [{ type: "computer_20250124" }] }).inputTokens, pricing.maxInputTokens);
 });
 
+test("native Gemini bounds use the selected wire format, ProtoJSON aliases, and the combined output ceiling", () => {
+  const format = "google.generate_content";
+  for (const [config, expected] of [
+    [{ maxOutputTokens: 16 }, 16],
+    [{ max_output_tokens: "1.6e1", candidate_count: "2" }, 32],
+    [{ maxOutputTokens: 16, thinkingConfig: { thinkingBudget: 1_024 }, candidateCount: 2 }, 32],
+    [{ maxOutputTokens: 16, max_output_tokens: 32 }, 32],
+    [{ max_output_tokens: 32, maxOutputTokens: 16 }, 16],
+    [{ maxOutputTokens: 16, max_output_tokens: null }, pricing.defaultMaxOutputTokens],
+    [{ maxOutputTokens: 16, candidateCount: 1, candidate_count: 2 }, 32],
+    [{ maxOutputTokens: 16, candidate_count: 2, candidateCount: 1 }, 16],
+    [{ maxOutputTokens: 2_147_483_647, candidateCount: 2_147_483_647 }, Number.MAX_SAFE_INTEGER],
+  ]) {
+    const body = { contents: [{ parts: [{ text: "hello" }] }], generationConfig: config, max_output_tokens: 1, n: 9 };
+    const before = structuredClone(body), estimate = estimateModelCost(pricing, body, format);
+    assert.equal(estimate.outputTokens, expected);
+    assert.equal(estimate.inputTokens, new TextEncoder().encode(JSON.stringify(body)).byteLength + pricing.inputTokenOverhead);
+    assert.deepEqual(body, before);
+    assert.equal(estimateModelCost(pricing, body, "openai.responses").outputTokens, 9);
+  }
+  for (const [body, expected] of [
+    [{ generationConfig: { maxOutputTokens: 16 }, generation_config: { max_output_tokens: 32 } }, 32],
+    [{ generation_config: { max_output_tokens: 32 }, generationConfig: { maxOutputTokens: 16 } }, 16],
+    [{ generationConfig: { maxOutputTokens: 16 }, generation_config: null }, pricing.defaultMaxOutputTokens],
+    [{ max_output_tokens: 1, n: 9 }, pricing.defaultMaxOutputTokens],
+  ]) assert.equal(estimateModelCost(pricing, body, format).outputTokens, expected);
+  for (const invalid of [-1, 1.5, 2_147_483_648, "Infinity", "bad", {}, true]) {
+    assert.equal(estimateModelCost(pricing, { generationConfig: { maxOutputTokens: invalid } }, format).outputTokens, pricing.defaultMaxOutputTokens);
+  }
+});
+
+test("native Gemini remote cache and typed media inputs reserve the full input bound", () => {
+  const media = { mimeType: "image/png", data: "AA==" };
+  for (const body of [
+    { cachedContent: "cachedContents/fixture" }, { cached_content: "cachedContents/fixture" },
+    { contents: [{ parts: [{ fileData: { fileUri: "https://example.com/file" } }] }] },
+    { contents: [{ parts: [{ inline_data: media }] }] },
+    { systemInstruction: { parts: [{ inlineData: media }] } },
+    { system_instruction: { parts: [{ file_data: { file_uri: "https://example.com/file" } }] } },
+    { contents: [{ parts: [{ functionResponse: { name: "fixture", response: {}, parts: [{ inlineData: media }] } }] }] },
+  ]) assert.equal(estimateModelCost(pricing, body, "google.generate_content").inputTokens, pricing.maxInputTokens);
+  const body = { contents: [{ parts: [{ functionResponse: { name: "fixture", response: { fileData: "user-defined JSON", parts: [{ inlineData: media }] } } }] }] };
+  assert.ok(estimateModelCost(pricing, body, "google.generate_content").inputTokens < pricing.maxInputTokens);
+  assert.ok(estimateModelCost(pricing, { cachedContent: "cachedContents/fixture" }, "openai.responses").inputTokens < pricing.maxInputTokens);
+});
+
 test("hosted search recognition follows wire types without claiming every provider-added tool has fees", () => {
   for (const type of ["web_search", "web_search_preview", "web_search_2025_08_26", "web_search_preview_2025_03_11"]) {
     assert.equal(requestHasHostedSearch({ tools: [{ type }] }, "llm.responses"), true);

@@ -138,10 +138,13 @@ export function randomId(prefix: string): string { return `${prefix}_${crypto.ra
 
 export const maxJsonBodyBytes = 8 * 1024 * 1024;
 
-export async function readJson<T>(request: Request): Promise<T> {
+export async function readJson<T>(request: Request, emptyValue?: T): Promise<T> {
   const declared = Number(request.headers.get("content-length"));
   if (Number.isFinite(declared) && declared > maxJsonBodyBytes) throw new HttpError(413, "request_too_large", "JSON request body exceeds the 8 MiB limit");
-  if (!request.body) throw new HttpError(400, "invalid_json", "request body must be valid JSON");
+  if (!request.body) {
+    if (emptyValue !== undefined) return emptyValue;
+    throw new HttpError(400, "invalid_json", "request body must be valid JSON");
+  }
   const reader = request.body.getReader(), decoder = new TextDecoder();
   let size = 0, text = "";
   try {
@@ -155,6 +158,9 @@ export async function readJson<T>(request: Request): Promise<T> {
       }
       text += decoder.decode(value, { stream: true });
     }
+    // Some HTTP runtimes expose an empty stream for a bodyless request. Only
+    // callers with an optional-body contract may accept zero bytes as a default.
+    if (size === 0 && emptyValue !== undefined) return emptyValue;
     return JSON.parse(text + decoder.decode()) as T;
   } catch (error) {
     if (error instanceof HttpError) throw error;

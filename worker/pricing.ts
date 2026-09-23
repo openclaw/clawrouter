@@ -1,4 +1,5 @@
 import type { ModelPricing, ServiceTierPricing, TokenRates } from "./types";
+import { googleField, googleInt32 } from "./google-protocol.ts";
 
 export interface CostEstimate {
   reserveMicros: number;
@@ -35,16 +36,20 @@ export function requestHasHostedSearch(body: Record<string, unknown>, capability
     (capability === "llm.messages" ? /^web_search_\d{8}$/.test(tool.type) : /^web_search(?:_preview)?(?:_\d{4}_\d{2}_\d{2})?$/.test(tool.type)));
 }
 
-export function estimateModelCost(pricing: ModelPricing, body: Record<string, unknown>): CostEstimate {
+export function estimateModelCost(pricing: ModelPricing, body: Record<string, unknown>, requestFormat?: string): CostEstimate {
+  const google = requestFormat === "google.generate_content";
   const bytes = new TextEncoder().encode(JSON.stringify(body)).byteLength;
   const inputLimit = pricing.maxRequestInputTokens ?? pricing.maxInputTokens;
-  const inputTokens = requestHasUnboundedInput(body)
+  const inputTokens = (google ? googleHasUnboundedInput(body) : requestHasUnboundedInput(body))
     ? inputLimit
     : Math.min(inputLimit, saturatingAdd(bytes, pricing.inputTokenOverhead));
-  const requestedOutput = [body.max_output_tokens, body.max_completion_tokens, body.max_tokens]
+  const config = google ? googleField(body, "generationConfig", "generation_config") : undefined;
+  // Native maxOutputTokens includes both thoughts and visible candidate tokens.
+  // Only the selected wire format decides which caller limits are meaningful.
+  const requestedOutput = (google ? [googleInt32(googleField(config, "maxOutputTokens", "max_output_tokens"))] : [body.max_output_tokens, body.max_completion_tokens, body.max_tokens])
     .map(nonNegativeInteger)
     .filter((value): value is number => value != null);
-  const choices = Math.max(1, nonNegativeInteger(body.n) ?? 1);
+  const choices = Math.max(1, (google ? googleInt32(googleField(config, "candidateCount", "candidate_count")) : nonNegativeInteger(body.n)) ?? 1);
   const outputTokens = saturatingMultiply(requestedOutput.length ? Math.max(...requestedOutput) : pricing.defaultMaxOutputTokens, choices);
   const rates = resolveRates(pricing, inputTokens, body.service_tier, true);
   if (!rates) return { reserveMicros: 0, inputTokens, outputTokens, pricingAvailable: false };
@@ -130,6 +135,20 @@ function requestHasUnboundedInput(body: Record<string, unknown>): boolean {
   if (body.input != null && contentHasUnboundedInput(body.input)) return true;
   if (Array.isArray(body.messages) && body.messages.some((message) => isObject(message) && contentHasUnboundedInput(message.content))) return true;
   return Array.isArray(body.tools) && body.tools.some((tool) => isObject(tool) && providerAddedTool(tool.type));
+}
+
+function googleHasUnboundedInput(body: Record<string, unknown>): boolean {
+  if (googleField(body, "cachedContent", "cached_content")) return true;
+  return googleContentHasMedia(body.contents) || googleContentHasMedia(googleField(body, "systemInstruction", "system_instruction"));
+}
+
+function googleContentHasMedia(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(googleContentHasMedia);
+  if (!isObject(value) || !Array.isArray(value.parts)) return false;
+  return value.parts.some(part => isObject(part) && (
+    googleField(part, "fileData", "file_data") != null || googleField(part, "inlineData", "inline_data") != null
+    || googleContentHasMedia(googleField(part, "functionResponse", "function_response"))
+  ));
 }
 
 function contentHasUnboundedInput(value: unknown): boolean {

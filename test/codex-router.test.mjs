@@ -197,13 +197,14 @@ stream_idle_timeout_ms = 10000
 
       const authority = await mf.getDurableObjectNamespace("ACCESS_CONTROL", "router");
       const authorityObject = authority.get(authority.idFromName("policy-bindings"));
+      const actor = { auth: "admin_token", role: "admin", email: "token-admin" };
       const resolvePolicy = () => authorityObject.fetch("https://authority/policies/resolve", { method: "POST", body: JSON.stringify({ policyIds: ["fixture"] }) }).then((response) => response.json());
       const policyBeforeRotation = await resolvePolicy();
       assert.deepEqual(policyBeforeRotation.policies.map(({ policyId }) => policyId), ["fixture"]);
       assert.deepEqual(policyBeforeRotation.missingPolicyIds, []);
-      const rotatedCredential = { ...credential, secretSha256: createHash("sha256").update(rotatedSecret).digest("hex") };
-      const rotated = await authorityObject.fetch("https://authority/credentials/put", { method: "POST", body: JSON.stringify({ credentialId: "fixture", credential: rotatedCredential }) });
+      const rotated = await authorityObject.fetch("https://authority/credentials/mutate", { method: "POST", body: JSON.stringify({ credentialId: "fixture", operation: "rotate", secretSha256: createHash("sha256").update(rotatedSecret).digest("hex"), scope: "admin", actor }) });
       assert.equal(rotated.status, 200);
+      assert.equal((await rotated.json()).outcome, "updated");
       const oldProcess = await turn("This old credential must not reach upstream.");
       assert.equal(oldProcess.status, "failed");
       assert.match(JSON.stringify(oldProcess), /invalid_proxy_key|proxy key secret is invalid/);
@@ -217,8 +218,9 @@ stream_idle_timeout_ms = 10000
       await startClient(rotatedKey);
       assertComplete(await turn("Return fixture complete using the rotated credential."));
       const afterRotation = await assertSettled();
-      const revoked = await authorityObject.fetch("https://authority/credentials/put", { method: "POST", body: JSON.stringify({ credentialId: "fixture", credential: { ...rotatedCredential, enabled: false } }) });
+      const revoked = await authorityObject.fetch("https://authority/credentials/mutate", { method: "POST", body: JSON.stringify({ credentialId: "fixture", operation: "revoke", scope: "admin", actor }) });
       assert.equal(revoked.status, 200);
+      assert.equal((await revoked.json()).outcome, "updated");
       const rejected = await turn("This revoked turn must not reach upstream.");
       assert.equal(rejected.status, "failed");
       assert.match(JSON.stringify(rejected), /proxy_key_revoked|proxy key is revoked/);

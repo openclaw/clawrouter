@@ -30,6 +30,7 @@ capabilities:
     methods: [POST]
 endpoints:
   chat_completions:
+    modelPassthrough: {}
     path: /chat/completions
     requestFormat: openai.chat_completions
     responseFormat: openai.chat_completions

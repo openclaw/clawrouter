@@ -9,7 +9,7 @@ test("aggregation reads each tenant/policy shard once and never the retired glob
   const env = { USAGE_LEDGER: {
     idFromName: name => name,
     get: name => ({ fetch: async url => {
-      calls.push({ name, policy: new URL(url).searchParams.get("policy_id") });
+      calls.push({ name, policy: new URL(url).searchParams.get("policy_id"), events: new URL(url).searchParams.get("events") });
       const snapshot = emptyUsageSnapshot();
       snapshot.summary.requestCount = 1;
       return Response.json(snapshot);
@@ -19,14 +19,14 @@ test("aggregation reads each tenant/policy shard once and never the retired glob
     { tenantId: "one", policyId: "same" },
     { tenantId: "one", policyId: "same" },
     { tenantId: "two", policyId: "same" },
-  ]);
+  ], { kind: "admin" });
   assert.deepEqual(calls, [
-    { name: "policy:one:same", policy: "same" },
-    { name: "policy:two:same", policy: "same" },
+    { name: "policy:one:same", policy: "same", events: "admin" },
+    { name: "policy:two:same", policy: "same", events: "admin" },
   ]);
   assert.equal(summary.summary.requestCount, 2);
   calls.length = 0;
-  assert.deepEqual(await usageSnapshots(env, []), emptyUsageSnapshot());
+  assert.deepEqual(await usageSnapshots(env, [], { kind: "admin" }), emptyUsageSnapshot());
   assert.deepEqual(calls, []);
 });
 
@@ -35,7 +35,7 @@ test("a current shard failure fails the aggregate instead of returning partial t
     idFromName: name => name,
     get: () => ({ fetch: async () => new Response(null, { status: 503 }) }),
   } };
-  await assert.rejects(usageSnapshots(env, [{ tenantId: "one", policyId: "policy" }]), /503/);
+  await assert.rejects(usageSnapshots(env, [{ tenantId: "one", policyId: "policy" }], { kind: "admin" }), /503/);
 });
 
 test("unpriced SQL totals survive the recent-event limit and duplicate delivery on existing stores", async (t) => {
@@ -51,7 +51,7 @@ test("unpriced SQL totals survive the recent-event limit and duplicate delivery 
   await ingest({ ...unknown, id: "historical-denial", cost_basis: "unpriced_service_tier", status: "client_error", status_code: 400 });
   await ingest({ ...unknown, id: "other-policy", policy_id: "other" });
   for (let index = 0; index < 101; index++) await ingest({ ...base, id: `priced-${index}`, occurred_at_ms: now - index, actual_cost_micros: index ? 5 : 0, cost_basis: index ? "manifest_pricing" : "none" });
-  const snapshot = await (await ledger.fetch(new Request("https://ledger/snapshot?policy_id=policy&limit=100"))).json();
+  const snapshot = await (await ledger.fetch(new Request("https://ledger/snapshot?policy_id=policy&limit=100&events=admin"))).json();
   assert.equal(snapshot.events.length, 100);
   assert.equal(snapshot.events.some(event => event.id === unknown.id), false);
   assert.equal(snapshot.summary.requestCount, 103);

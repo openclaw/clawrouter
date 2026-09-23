@@ -10,6 +10,7 @@ import type {
   ProviderConnection, ProviderHealth, ProviderSnapshot, UpstreamGrant,
 } from "./types.ts";
 import { HttpError } from "./utils.ts";
+import { applyTemplateHeaders, optionalConfigKeys, resolveHeaderTemplate, resolveTemplate, templateCandidates } from "./provider-templates.ts";
 
 export const snapshot = snapshotJson as unknown as ProviderSnapshot;
 
@@ -53,32 +54,39 @@ export function providerById(id: string): CompiledProvider | undefined {
   return snapshot.providers.find((provider) => provider.id === id);
 }
 
-export function modelRoute(model: string): { provider: CompiledProvider; model: CompiledModel } | null {
+export function providerForModel(model: string): CompiledProvider | undefined {
   const exact = snapshot.model_index[model as keyof typeof snapshot.model_index];
-  if (exact) {
-    const provider = providerById(exact.provider);
-    const entry = provider?.models.find((candidate) => candidate.id === model);
-    return provider && entry ? { provider, model: entry } : null;
-  }
-  for (const provider of snapshot.providers) {
-    const prefix = provider.routing.modelPrefixes.find((candidate) => model.startsWith(candidate));
-    if (!prefix) continue;
-    const upstream = model.slice(prefix.length);
-    if (!upstream) continue;
-    const template = provider.models[0];
-    const inheritsTemplatePricing = provider.id === "local-openai";
-    return {
-      provider,
-      model: {
-        id: model,
-        upstream,
-        capabilities: template?.capabilities ?? provider.capabilities.map((item) => item.id),
-        pricing_ref: inheritsTemplatePricing ? template?.pricing_ref ?? null : null,
-        pricing: inheritsTemplatePricing ? template?.pricing ?? null : null,
-      },
-    };
-  }
-  return null;
+  return exact ? providerById(exact.provider) : snapshot.providers.find((provider) => provider.routing.modelPrefixes.some((prefix) => model.startsWith(prefix) && model.length > prefix.length));
+}
+
+export function modelRoute(model: string, capability?: string): { provider: CompiledProvider; model: CompiledModel } | null {
+  const provider = providerForModel(model);
+  if (!provider) return null;
+  const endpointId = provider.capabilities.find((item) => item.id === capability)?.endpoint;
+  const entry = providerModel(provider, model, provider.endpoints.find((endpoint) => endpoint.id === endpointId));
+  return entry ? { provider, model: entry } : null;
+}
+
+export function modelSupportsEndpoint(provider: CompiledProvider, model: CompiledModel, endpoint: CompiledEndpoint): boolean {
+  return provider.capabilities.some((capability) => capability.endpoint === endpoint.id && model.capabilities.includes(capability.id));
+}
+
+export function providerModel(provider: CompiledProvider, value: string, endpoint?: CompiledEndpoint, native = false): CompiledModel | null {
+  const prefix = provider.routing.modelPrefixes.find((candidate) => value.startsWith(candidate));
+  const upstream = prefix && !native ? value.slice(prefix.length) : value;
+  const known = provider.models.find((model) => model.id === value) ?? provider.models.find((model) => model.upstream === value || model.upstream === upstream);
+  if (known) return known;
+  if (!value || !endpoint?.modelPassthrough) return null;
+  if (!upstream) return null;
+  // Native opaque ids belong to the upstream namespace, even when they match
+  // a routing prefix. They cannot inherit another model's metadata or price.
+  return {
+    id: value,
+    upstream,
+    capabilities: provider.capabilities.filter((capability) => capability.endpoint === endpoint.id).map((capability) => capability.id),
+    pricing_ref: endpoint.modelPassthrough.pricing_ref,
+    pricing: endpoint.modelPassthrough.pricing,
+  };
 }
 
 export function endpointForPath(provider: CompiledProvider, path: string): CompiledEndpoint | undefined {
@@ -110,8 +118,8 @@ export function routeCatalog() {
     pathParams: endpoint.path_params,
     requestFormat: endpoint.request_format,
     responseFormat: endpoint.response_format,
-    sampleModel: provider.models.find((model) => model.capabilities.some((capability) => provider.capabilities.find((item) => item.id === capability)?.endpoint === endpoint.id))?.id ?? null,
-    models: provider.models.map((model) => ({ id: model.id, capabilities: model.capabilities })),
+    sampleModel: provider.models.find((model) => modelSupportsEndpoint(provider, model, endpoint))?.id ?? null,
+    models: provider.models.filter((model) => modelSupportsEndpoint(provider, model, endpoint)).map((model) => ({ id: model.id, capabilities: model.capabilities })),
     streaming: endpoint.streaming != null,
   })));
   return { openaiCompatible, manifestProxy };
@@ -140,8 +148,8 @@ async function readinessInputs(env: Env, suppliedConnections?: ProviderConnectio
 }
 
 function readinessFor(provider: CompiledProvider, env: Env, grants: GrantRecord[], connection: ProviderConnection, health?: ProviderHealth): Readiness {
-  const configuredOptional = new Set((envValue(env, "CLAWROUTER_OPTIONAL_CONFIG_KEYS") ?? "").split(",").map((key) => key.trim()).filter(Boolean));
-  const optionalConfig = provider.config_keys.filter((key) => provider.optional_config_keys.includes(key) || configuredOptional.has(key) || (provider.auth.schemes.every((scheme) => scheme.type === "bearer" && scheme.required === false) && secretConfigKey(key)));
+  const configuredOptional = optionalConfigKeys(provider, env);
+  const optionalConfig = provider.config_keys.filter((key) => configuredOptional.has(key) || (provider.auth.schemes.every((scheme) => scheme.type === "bearer" && scheme.required === false) && secretConfigKey(key)));
   const requiredConfig = provider.config_keys.filter((key) => !optionalConfig.includes(key));
   const providerGrants = grants.filter((entry) => entry.grant.enabled !== false && entry.grant.provider === provider.id && grantUsable(entry.grant));
   const hasGrant = providerGrants.length > 0;
@@ -199,7 +207,7 @@ export async function upstreamAuth(provider: CompiledProvider, auth: AuthorizedI
   const headers = new Headers();
   const query = new URLSearchParams();
   applyProviderCredential(provider, grant, env, headers, query);
-  for (const [name, value] of Object.entries(provider.adapter.injectHeaders)) headers.set(name, resolveTemplate(provider, value, env));
+  applyTemplateHeaders(provider, provider.adapter.injectHeaders, env, headers);
   for (const [name, value] of Object.entries(provider.adapter.injectQuery)) query.set(name, resolveTemplate(provider, value, env));
   const transport = transportForGrant(provider, grant);
   applyTransportHeaders(headers, transport, grant);
@@ -233,7 +241,7 @@ export function copyRequestHeaders(incoming: Headers, provider: CompiledProvider
     if (value) target.set(name, value);
   }
   target.set("content-type", incoming.get("content-type") ?? "application/json");
-  for (const [name, value] of Object.entries(endpoint.headers)) target.set(name, resolveTemplate(provider, value, env));
+  applyTemplateHeaders(provider, endpoint.headers, env, target);
 }
 
 export function transformRequestBody(provider: CompiledProvider, path: string, model: string, body: Record<string, unknown>, env: Env): Record<string, unknown> {
@@ -247,14 +255,6 @@ export function transformRequestBody(provider: CompiledProvider, path: string, m
     }
   }
   return transformed;
-}
-
-export function resolveTemplate(provider: CompiledProvider, value: string, env: Env): string {
-  return value.replace(/\$\{([^}]+)\}/g, (_, name: string) => {
-    const key = templateCandidates(provider, name).find((candidate) => envValue(env, candidate));
-    if (!key) throw new HttpError(503, "provider_not_configured", `missing Cloudflare config value ${name} for provider ${provider.id}`);
-    return envValue(env, key)!;
-  });
 }
 
 export async function signSigV4(provider: CompiledProvider, url: URL, method: string, body: string | undefined, headers: Headers, env: Env, grant: UpstreamGrant | null, now = new Date()): Promise<void> {
@@ -377,13 +377,15 @@ async function connectionFor(env: Env, providerId: string): Promise<ProviderConn
 }
 
 function endpointTemplatesConfigured(provider: CompiledProvider, endpoint: CompiledEndpoint, env: Env): boolean {
-  const values = [provider.base_urls.default, endpoint.path, ...Object.values(provider.adapter.injectHeaders), ...Object.values(provider.adapter.injectQuery), ...Object.values(endpoint.query), ...Object.values(endpoint.headers)];
-  return values.every((value) => [...value.matchAll(/\$\{([^}]+)\}/g)].every((match) => templateCandidates(provider, match[1]).some((key) => envValue(env, key)) || endpoint.path_params.includes(match[1])));
-}
-
-function templateCandidates(provider: CompiledProvider, name: string): string[] {
-  const normalized = name.replace(/[^A-Za-z0-9]/g, "_").toUpperCase();
-  return provider.config_keys.filter((key) => key === normalized || key.endsWith(`_${normalized}`));
+  const values = [provider.base_urls.default, endpoint.path, ...Object.values(provider.adapter.injectQuery), ...Object.values(endpoint.query)];
+  if (!values.every((value) => [...value.matchAll(/\$\{([^}]+)\}/g)].every((match) => templateCandidates(provider, match[1]).some((key) => envValue(env, key)) || endpoint.path_params.includes(match[1])))) return false;
+  try {
+    for (const value of [...Object.values(provider.adapter.injectHeaders), ...Object.values(endpoint.headers)]) resolveHeaderTemplate(provider, value, env);
+    return true;
+  } catch (error) {
+    if (error instanceof HttpError && error.code === "provider_not_configured") return false;
+    throw error;
+  }
 }
 
 function envValue(env: Env, key: string): string | null {

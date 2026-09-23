@@ -32,6 +32,7 @@
     "cf:smoke": "node scripts/smoke-deployed.mjs"
   },
   "devDependencies": {
+    "@cfworker/json-schema": "^4.1.1",
     "@cloudflare/workers-types": "^5.20260920.1",
     "typescript": "^7.0.2",
     "wrangler": "^4.135.0",

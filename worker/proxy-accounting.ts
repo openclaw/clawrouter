@@ -27,7 +27,7 @@ interface AccountingContext {
 
 export function createProxyAccounting(options: AccountingContext) {
   const { env, context, auth, selection, request, compound } = options;
-  const cost = options.cost ?? estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability);
+  const cost = options.cost ?? estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability, selection.endpoint.request_format);
   const unpricedSearch = cost.basis === "unpriced_hosted_search";
   const providerId = selection.provider.id, model = selection.model, capability = selection.capability;
   const requestedTier = extractServiceTier(selection.body) ?? null;
@@ -70,9 +70,9 @@ export function createProxyAccounting(options: AccountingContext) {
     settle,
     cost,
     requestId,
-    fail(statusCode: number, status: UsageEvent["status"], reservation?: BudgetReservation, contentRef: string | null = null, dispatched = false) {
-      const basis = unpricedSearch || cost.basis === "unpriced_service_tier" ? dispatched ? "unpriced_usage" : "none" : cost.basis;
-      context.waitUntil(finish(statusCode, status, reservation, 0, null, contentRef, basis));
+    fail(statusCode: number, status: UsageEvent["status"], reservation = emptyReservation(), contentRef: string | null = null, dispatched = false) {
+      // Missing response headers cannot prove that dispatched upstream work was free.
+      context.waitUntil(settle(statusCode, status, dispatched, null, reservation, contentRef));
     },
     complete(response: Response, observed: ObservedUsage, reservation: BudgetReservation, contentRef: string | null) {
       const status = !response.ok ? response.status < 500 ? "client_error" : "provider_error"
@@ -84,13 +84,13 @@ export function createProxyAccounting(options: AccountingContext) {
   };
 }
 
-export function estimateCost(model: CompiledModel | null, body: Record<string, unknown>, fixed: number | null | undefined, capability: string): EstimatedCost {
+export function estimateCost(model: CompiledModel | null, body: Record<string, unknown>, fixed: number | null | undefined, capability: string, requestFormat?: string): EstimatedCost {
   if (capability === "llm.count_tokens") return { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 };
   if (fixed != null) return { reserveMicros: fixed, basis: "policy_fixed", inputTokens: null, outputTokens: null };
   if (requestHasHostedSearch(body, capability)) return { reserveMicros: 0, basis: "unpriced_hosted_search", inputTokens: null, outputTokens: null };
   const pricing = model?.pricing;
   if (!pricing) return { reserveMicros: 1, basis: "flat_fallback", inputTokens: null, outputTokens: null };
-  const estimate = estimateModelCost(pricing, body);
+  const estimate = estimateModelCost(pricing, body, requestFormat);
   return { reserveMicros: estimate.reserveMicros, basis: estimate.pricingAvailable === false ? "unpriced_service_tier" : "manifest_pricing", inputTokens: estimate.inputTokens, outputTokens: estimate.outputTokens };
 }
 

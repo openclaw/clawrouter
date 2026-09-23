@@ -308,7 +308,16 @@ try {
     if (fault === "usage_recovered") await until(async () => (await (await dispatch("/v1/usage")).json()).usage.events.some(({ session_id }) => session_id === session));
   }
   // Mutate only fixture authority: queued/next creates must see revocation.
-  const revoke = await authorityObject.fetch("https://authority/credentials/put", { method: "POST", body: JSON.stringify({ credentialId: "fixture", credential: { ...credential, enabled: false } }) });
+  const owner = { email: "fixture@example.com", record: { enabled: false } };
+  assert.equal((await authorityObject.fetch("https://authority/users/put", { method: "POST", body: JSON.stringify(owner) })).status, 200);
+  assert.equal((await authorityObject.fetch("https://authority/credentials/mutate", { method: "POST", body: JSON.stringify({ credentialId: "fixture", operation: "put", scope: "admin", actor: { auth: "admin_token", role: "admin", email: "token-admin" }, credential: { ...credential, principalId: owner.email } }) })).status, 200);
+  const beforeOwnerDisable = (await (await upstream.fetch("https://fixture.example/state")).json()).frames.length;
+  const ownerTerminal = messages.filter((event) => ["response.completed", "response.incomplete", "response.failed", "error"].includes(event.type)).length + 1;
+  create({ input: "disabled owner must not reach upstream" });
+  assert.equal((await terminal(ownerTerminal)).error.code, "principal_disabled");
+  assert.equal((await (await upstream.fetch("https://fixture.example/state")).json()).frames.length, beforeOwnerDisable);
+  assert.equal((await dispatch("/v1/responses", { headers: { upgrade: "websocket" } })).status, 403);
+  const revoke = await authorityObject.fetch("https://authority/credentials/mutate", { method: "POST", body: JSON.stringify({ credentialId: "fixture", operation: "revoke", scope: "admin", actor: { auth: "admin_token", role: "admin", email: "token-admin" } }) });
   assert.equal(revoke.status, 200);
   const beforeRevocation = (await (await upstream.fetch("https://fixture.example/state")).json()).frames.length;
   const nextTerminal = messages.filter((event) => ["response.completed", "response.incomplete", "response.failed", "error"].includes(event.type)).length + 1;

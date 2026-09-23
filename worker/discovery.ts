@@ -1,3 +1,4 @@
+import { resolveTemplate } from "./provider-templates.ts";
 import { listConnections } from "./authority";
 import { resolveGrantCandidates } from "./grant-selection";
 import { grantSupports } from "./provider-auth";
@@ -7,7 +8,7 @@ import { contentRetentionDefault } from "./content-retention.ts";
 import { loadFusionConfig } from "./fusion-config";
 import { FUSION_MODEL_ID } from "./fusion";
 import { authenticateProxyKey } from "./proxy-auth";
-import { modelRoute, providerReadinessForPolicies, providerReadinessFromState, resolveTemplate, snapshot, type Readiness } from "./providers";
+import { modelRoute, providerReadinessForPolicies, providerReadinessFromState, snapshot, type Readiness } from "./providers";
 import type { AccessPolicyEntry, AccessSession, CompiledProvider, Env, ProviderConnection } from "./types";
 import { errorResponse, HttpError, privateJson, sha256Hex } from "./utils";
 
@@ -139,9 +140,9 @@ async function entitlementRowsForEntries(entries: AccessPolicyEntry[], tenantId:
 async function fusionEntitlement(rows: EntitlementRow[], inventory: ClientInventory, env: Env): Promise<EntitlementRow | null> {
   const config = await loadFusionConfig(env);
   if (!config.enabled) return null;
-  const aggregator = modelRoute(config.aggregatorModel);
+  const aggregator = modelRoute(config.aggregatorModel, "llm.chat");
   const aggregatorAccess = aggregator ? rows.find((row) => row.provider === aggregator.provider.id) : undefined;
-  const advisers = config.adviserModels.map((model) => modelRoute(model)).filter((route): route is NonNullable<ReturnType<typeof modelRoute>> => !!route);
+  const advisers = config.adviserModels.map((model) => modelRoute(model, "llm.chat")).filter((route): route is NonNullable<ReturnType<typeof modelRoute>> => !!route);
   const readyAdvisers = advisers.filter((route) => routeExecutable(route, inventory));
   const allowed = aggregatorAccess?.allowed === true;
   const executable = !!aggregator && routeExecutable(aggregator, inventory);

@@ -1,5 +1,6 @@
+import { resolveTemplate } from "./provider-templates.ts";
 import type { CompiledEndpoint, CompiledModel, CompiledProvider, Env } from "./types";
-import { capabilityForPath, endpointForPath, modelRoute, resolveTemplate, transformRequestBody } from "./providers";
+import { capabilityForPath, endpointForPath, modelRoute, modelSupportsEndpoint, providerForModel, providerModel, transformRequestBody } from "./providers";
 import { decodePathSegment, errorResponse, HttpError } from "./utils";
 
 export interface ProxySelection {
@@ -20,11 +21,13 @@ interface ProxySelectionFailure {
 
 export function concreteOpenAiSelection(path: string, body: Record<string, unknown>, env: Env, timeoutMs?: number): ProxySelection | ProxySelectionFailure {
   const modelId = typeof body.model === "string" ? body.model : "";
-  const route = modelRoute(modelId);
-  if (!route) return selectionFailure(errorResponse("model_not_found", `model ${modelId} is not registered`, 404));
   const capability = capabilityForPath(path);
+  const route = modelRoute(modelId, capability ?? undefined);
+  if (!route) return selectionFailure(errorResponse("model_not_found", `model ${modelId} is not registered`, 404));
   const endpoint = endpointForPath(route.provider, path);
   if (!capability || !endpoint || !route.model.capabilities.includes(capability)) return selectionFailure(errorResponse("model_capability_unsupported", `model ${modelId} does not support ${path}`, 400));
+  const format = path === "/v1/chat/completions" ? "openai.chat_completions" : path === "/v1/responses" ? "openai.responses" : "openai.embeddings";
+  if (endpoint.request_format !== format || endpoint.response_format !== format) return selectionFailure(errorResponse("model_capability_unsupported", `model ${modelId} requires its provider-native endpoint`, 400));
   try {
     const upstreamModel = resolvedUpstreamModel(route.provider, route.model, env);
     const transformed = transformRequestBody(route.provider, path, upstreamModel, { ...body, model: upstreamModel }, env);
@@ -47,22 +50,26 @@ export function isSelectionFailure(value: ProxySelection | ProxySelectionFailure
 
 export function prepareManifestRequest(provider: CompiledProvider, endpoint: CompiledEndpoint, body: Record<string, unknown>, inputPathParams: Record<string, string>, env: Env, native = false): { model: CompiledModel | null; body: Record<string, unknown>; pathParams: Record<string, string> } {
   const modelId = typeof body.model === "string" ? body.model : null;
-  const bodyRoute = modelId ? providerModelRoute(provider, modelId) : null;
-  const globalBodyRoute = modelId ? modelRoute(modelId) : null;
-  if (!native && globalBodyRoute && globalBodyRoute.provider.id !== provider.id) throw new HttpError(400, "model_provider_mismatch", `model ${modelId} does not belong to provider ${provider.id}`);
-
   const pathModelId = inputPathParams.model ?? inputPathParams.deployment ?? null;
-  const pathRoute = pathModelId ? providerModelRoute(provider, pathModelId) : null;
-  const globalPathRoute = pathModelId ? modelRoute(pathModelId) : null;
-  if (!native && globalPathRoute && globalPathRoute.provider.id !== provider.id) throw new HttpError(400, "model_provider_mismatch", `model ${pathModelId} does not belong to provider ${provider.id}`);
-
-  const bodyUpstream = bodyRoute ? resolvedUpstreamModel(provider, bodyRoute.model, env) : null;
-  const pathUpstream = pathRoute ? resolvedUpstreamModel(provider, pathRoute.model, env) : pathModelId;
+  const resolve = (value: string | null) => {
+    if (value === null) return null;
+    const owner = providerForModel(value);
+    if (!native && owner && owner.id !== provider.id) throw new HttpError(400, "model_provider_mismatch", `model ${value} does not belong to provider ${provider.id}`);
+    const model = providerModel(provider, value, endpoint, native);
+    if (!model || !modelSupportsEndpoint(provider, model, endpoint)) throw new HttpError(400, "model_capability_unsupported", `model ${value} does not support ${endpoint.id}`);
+    return model;
+  };
+  const bodyModel = resolve(modelId), pathModel = resolve(pathModelId);
+  const bodyUpstream = bodyModel ? resolvedUpstreamModel(provider, bodyModel, env) : null;
+  const pathUpstream = pathModel ? resolvedUpstreamModel(provider, pathModel, env) : null;
   if (bodyUpstream && pathUpstream && bodyUpstream !== pathUpstream) throw new HttpError(400, "model_path_mismatch", "body model and path model must resolve to the same upstream model");
 
-  const model = bodyRoute?.model ?? pathRoute?.model ?? (!modelId && !pathModelId ? provider.models[0] ?? null : null);
-  const upstreamModel = bodyUpstream ?? pathUpstream ?? (model && !model.upstream.includes("${") ? model.upstream : null);
-  const pathParams = normalizeModelPathParams(provider, endpoint, inputPathParams, bodyRoute, env, native);
+  const model = bodyModel ?? pathModel;
+  const upstreamModel = bodyUpstream ?? pathUpstream;
+  const pathParams = { ...inputPathParams };
+  for (const name of endpoint.path_params.filter((param) => param === "model" || param === "deployment")) {
+    if (upstreamModel) pathParams[name] = upstreamModel;
+  }
   const transformedInput = { ...body };
   if (endpoint.path_params.some((name) => name === "model" || name === "deployment")) delete transformedInput.model;
   else if (modelId && upstreamModel) transformedInput.model = upstreamModel;
@@ -114,38 +121,6 @@ export function searchParamsRecord(params: URLSearchParams): Record<string, stri
 
 function resolvedUpstreamModel(provider: CompiledProvider, model: CompiledModel, env: Env): string {
   return model.upstream.includes("${") ? resolveTemplate(provider, model.upstream, env) : model.upstream;
-}
-
-function normalizeModelPathParams(provider: CompiledProvider, endpoint: CompiledEndpoint, input: Record<string, string>, bodyModel: ReturnType<typeof modelRoute>, env: Env, native: boolean): Record<string, string> {
-  const output = { ...input };
-  for (const name of endpoint.path_params.filter((param) => param === "model" || param === "deployment")) {
-    const publicId = output[name];
-    const globalRoute = publicId ? modelRoute(publicId) : bodyModel;
-    if (!native && globalRoute && globalRoute.provider.id !== provider.id) throw new HttpError(400, "model_provider_mismatch", `model ${publicId} does not belong to provider ${provider.id}`);
-    const route = publicId ? providerModelRoute(provider, publicId) : bodyModel;
-    if (route) output[name] = resolvedUpstreamModel(provider, route.model, env);
-  }
-  return output;
-}
-
-function providerModelRoute(provider: CompiledProvider, value: string): { provider: CompiledProvider; model: CompiledModel } | null {
-  const global = modelRoute(value);
-  if (global?.provider.id === provider.id) return global;
-  const model = provider.models.find((candidate) => candidate.id === value || candidate.upstream === value);
-  if (model) return { provider, model };
-  const template = provider.models.find((candidate) => candidate.upstream.includes("${")) ?? provider.models[0];
-  if (!template || !value) return null;
-  const inheritsTemplatePricing = provider.id === "local-openai";
-  return {
-    provider,
-    model: {
-      ...template,
-      id: value,
-      upstream: value,
-      pricing_ref: inheritsTemplatePricing ? template.pricing_ref : null,
-      pricing: inheritsTemplatePricing ? template.pricing : null,
-    },
-  };
 }
 
 export function nativeMatch(endpoint: CompiledEndpoint, path: string): boolean {

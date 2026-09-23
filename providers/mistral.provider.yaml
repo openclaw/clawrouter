@@ -33,12 +33,14 @@ capabilities:
     methods: [POST]
 endpoints:
   chat_completions:
+    modelPassthrough: {}
     path: /v1/chat/completions
     requestFormat: openai.chat_completions
     responseFormat: openai.chat_completions
     streaming: sse
     timeoutMs: 600000
   embeddings:
+    modelPassthrough: {}
     path: /v1/embeddings
     requestFormat: openai.embeddings
     responseFormat: openai.embeddings

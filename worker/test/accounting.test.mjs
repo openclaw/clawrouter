@@ -81,7 +81,7 @@ test("rejected usage publication recovers the exact event in its policy shard an
   assert.equal(acknowledged, 2);
   assert.equal(db.prepare("SELECT COUNT(*) AS count FROM usage_events").get().count, 1);
   assert.deepEqual(JSON.parse(db.prepare("SELECT event_json FROM usage_events").get().event_json), body);
-  const snapshot = await usageSnapshot(env, "tenant", "policy");
+  const snapshot = await usageSnapshot(env, "tenant", "policy", { kind: "admin" });
   assert.equal(snapshot.summary.requestCount, 1);
   assert.equal(snapshot.summary.actualCostMicros, 42);
   assert.equal(snapshot.providers[0].requestCount, 1);

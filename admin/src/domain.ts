@@ -5,10 +5,12 @@ import type {
   AdminTenantSummary,
   AdminUsageRow,
   BindingForm,
+  OutcomeTone,
   PlaygroundForm,
   PolicyBinding,
   ProviderAccess,
   ProviderReadiness,
+  ProxyCredential,
   RouteCatalog,
   ServiceItem,
   ServiceOutcome,
@@ -19,6 +21,17 @@ export interface CredentialSummary {
   policyId: string;
   enabled: boolean;
   active?: boolean;
+}
+
+export function credentialOutcome(credential: ProxyCredential, policies: AccessPolicy[]): { label: string; tone: OutcomeTone; active: boolean } {
+  const policy = policies.find((item) => item.policyId === credential.policyId);
+  if (!credential.enabled) return { label: "revoked", tone: "revoked", active: false };
+  if (credential.principalEnabled === false) return { label: "owner disabled", tone: "revoked", active: false };
+  if (!policy) return { label: "policy missing", tone: "revoked", active: false };
+  if (credential.policyEnabled === false || !policy.enabled) return { label: "policy disabled", tone: "revoked", active: false };
+  if (credential.generationMatches === false) return { label: "stale", tone: "neutral", active: false };
+  if (credential.active === false) return { label: "inactive", tone: "neutral", active: false };
+  return { label: "active", tone: "active", active: true };
 }
 
 export interface PlaygroundMessage {

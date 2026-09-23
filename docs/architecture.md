@@ -108,8 +108,9 @@ Object bindings are unchanged.
 - Rejected, nonbillable work releases reservations to zero. Received billable
   responses can still incur cost when generation or stream delivery fails:
   authoritative usage settles the charge; missing usage retains the qualified
-  reservation. Pre-response HTTP fetch failures keep their existing zero-charge
-  policy. Audit outcome alone does not decide billability.
+  reservation. A dispatched HTTP fetch failure also retains that estimate because
+  missing response headers do not prove free upstream work. Pre-dispatch failures
+  remain zero. Audit outcome alone does not decide billability.
 - Failed budget settlement retries through `USAGE_QUEUE`; rejected usage
   publication recovers through the policy's usage ledger independently.
 - HTTP response delivery stays unchanged on accounting failure. A WebSocket

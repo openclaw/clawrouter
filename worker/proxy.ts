@@ -1,3 +1,4 @@
+import { resolveTemplate } from "./provider-templates.ts";
 import { createProxyAccounting, estimateCost, type CompoundRequestContext } from "./proxy-accounting";
 import { authenticateProxyKey } from "./proxy-auth";
 import {
@@ -17,7 +18,7 @@ import { observeGrantQuota, shouldFailoverGrant } from "./grant-quota";
 import { grantRoutingPolicy, recordGrantRuntime, type PinnedGrant } from "./grant-selection";
 import {
   assertProviderAccess, copyRequestHeaders, providerById,
-  resolveTemplate, signSigV4, upstreamAuth, upstreamPath,
+  signSigV4, upstreamAuth, upstreamPath,
 } from "./providers";
 import { applyTransportHeaders, transformTransportBody } from "./provider-auth.ts";
 import { normalizePreStreamError, observeUsage } from "./proxy-response";
@@ -179,7 +180,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     }
     return auth;
   }
-  const estimatedCost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability);
+  const estimatedCost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability, selection.endpoint.request_format);
   const accounting = createProxyAccounting({ context, env, auth, selection, request, cost: reservedBudget?.cost ?? estimatedCost, compound });
   const { cost, requestId } = accounting;
   if (reservedBudget && (reservedBudget.providerId !== selection.provider.id || reservedBudget.modelId !== selection.model?.id || reservedBudget.capability !== selection.capability || estimatedCost.reserveMicros > reservedBudget.cost.reserveMicros)) {
@@ -217,9 +218,13 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   const controller = new AbortController();
   const endpointTimeout = selection.endpoint.timeout_ms ?? 120_000;
   const timeout = setTimeout(() => controller.abort(), Math.min(selection.timeoutMs ?? endpointTimeout, endpointTimeout));
-  let response: Response;
+  let response: Response | undefined;
   let grantFailover = false;
+  let dispatched = false;
   try {
+    // A canceled preflight is known-unsent even if the ledger marks already landed.
+    request.signal.throwIfAborted();
+    dispatched = true;
     response = await fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal: AbortSignal.any([request.signal, controller.signal]) });
     captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response);
     if (shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
@@ -237,13 +242,14 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     response = await normalizePreStreamError(response, selection.body.stream === true);
   } catch (error) {
     clearTimeout(timeout);
-    // A failed dispatched request can have upstream cost even without a response.
-    accounting.fail(502, request.signal.aborted ? "client_error" : error instanceof DOMException && error.name === "AbortError" ? "timeout" : "provider_error", reservation, content, true);
+    // A fetch failure can incur cost; a received rejection stays nonbillable
+    // even if reading its SSE error body failed.
+    accounting.fail(502, request.signal.aborted ? "client_error" : error instanceof DOMException && error.name === "AbortError" ? "timeout" : "provider_error", reservation, content, dispatched && response?.ok !== false);
     return errorResponse("provider_unavailable", `upstream request to provider ${selection.provider.id} failed`, 502, undefined);
   }
   clearTimeout(timeout);
   const observed = observeUsage(response, request.signal);
-  context.waitUntil(observed.result.then(result => accounting.complete(response, result, reservation, content)));
+  context.waitUntil(observed.result.then(result => accounting.complete(observed.response, result, reservation, content)));
   response = observed.response;
   const outputHeaders = new Headers(response.headers);
   for (const name of ["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "set-cookie", "trailer", "transfer-encoding", "upgrade"]) outputHeaders.delete(name);

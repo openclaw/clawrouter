@@ -1,3 +1,5 @@
+import { googleField, googleInt32 } from "./google-protocol.ts";
+
 export interface UsageTokens {
   serviceTier?: string;
   input: number | null;
@@ -12,10 +14,11 @@ export interface UsageTokens {
 
 export function extractUsageTokens(value: unknown): UsageTokens | null {
   const root = record(value);
+  if (root && ("usageMetadata" in root || "usage_metadata" in root)) return googleUsageTokens(googleField(root, "usageMetadata", "usage_metadata"));
   const usage = usageRecord(root);
   if (!usage) return null;
-  const reportedInput = pickNumber(usage, "input_tokens", "prompt_tokens", "inputTokens", "promptTokenCount");
-  const output = pickNumber(usage, "output_tokens", "completion_tokens", "outputTokens", "candidatesTokenCount");
+  const reportedInput = pickNumber(usage, "input_tokens", "prompt_tokens", "inputTokens");
+  const output = pickNumber(usage, "output_tokens", "completion_tokens", "outputTokens");
   const details = record(usage.prompt_tokens_details ?? usage.input_tokens_details);
   const cached = details ? pickNumber(details, "cached_tokens", "cache_read_input_tokens") : pickNumber(usage, "cache_read_input_tokens");
   const cacheCreation = record(usage.cache_creation);
@@ -26,13 +29,25 @@ export function extractUsageTokens(value: unknown): UsageTokens | null {
   // Anthropic's top-level cache buckets exclude ordinary input; OpenAI's details
   // are already included. Pricing and usage ledgers both consume inclusive input.
   const input = reportedInput == null ? null : reportedInput + (details ? 0 : (cached ?? 0) + (cacheWrite ?? 0));
-  const total = pickNumber(usage, "total_tokens", "totalTokens", "totalTokenCount") ?? (input != null || output != null ? (input ?? 0) + (output ?? 0) : null);
+  const total = pickNumber(usage, "total_tokens", "totalTokens") ?? (input != null || output != null ? (input ?? 0) + (output ?? 0) : null);
   // Anthropic reports usage for classifier refusals before any output, but does
   // not bill it. Keep observed counts separate from the settlement decision.
   const unbilled = root?.type === "message" && root.stop_reason === "refusal"
     && Array.isArray(root.content) && root.content.length === 0 && output === 0;
   const serviceTier = extractServiceTier(record(root?.response) ?? root);
   return { input, output, total, cached, cacheWrite, cacheWrite5m, cacheWrite1h, ...(serviceTier ? { serviceTier } : {}), ...(unbilled ? { billable: false as const } : {}) };
+}
+
+function googleUsageTokens(value: unknown): UsageTokens | null {
+  if (!record(value)) return null;
+  // These implicit-presence int32 counters omit zeros. Prompt already includes
+  // cache hits; thinking is separately reported but billed as generated output.
+  const counter = (camel: string, proto: string) => googleInt32(googleField(value, camel, proto) ?? 0);
+  const input = counter("promptTokenCount", "prompt_token_count"), cached = counter("cachedContentTokenCount", "cached_content_token_count");
+  const candidates = counter("candidatesTokenCount", "candidates_token_count"), thoughts = counter("thoughtsTokenCount", "thoughts_token_count");
+  const total = counter("totalTokenCount", "total_token_count");
+  if (input == null || cached == null || candidates == null || thoughts == null || total == null) return null;
+  return { input, output: candidates + thoughts, total, cached, cacheWrite: null, cacheWrite5m: null, cacheWrite1h: null };
 }
 
 export type ResponseOutcome = "success" | "provider_error" | null;
@@ -114,7 +129,12 @@ export function createSseUsageInspector() {
     } else if (root.type === "message_stop") {
       outcome = "success";
       terminalTokens = messageUsage && messageDeltaSeen ? extractUsageTokens({ ...message, usage: messageUsage }) : null;
-    } else found = extractUsageTokens(root) ?? found;
+    } else {
+      const tokens = extractUsageTokens(root);
+      // A malformed final native snapshot invalidates an earlier partial one.
+      // Ordinary content-only chunks still retain the latest usage snapshot.
+      found = root && ("usageMetadata" in root || "usage_metadata" in root) ? tokens : tokens ?? found;
+    }
   }
   const frames = sseFrames(inspect);
   return {
@@ -170,7 +190,7 @@ export function extractServiceTier(root: Record<string, unknown> | null): string
 }
 
 function usageRecord(root: Record<string, unknown> | null): Record<string, unknown> | null {
-  return root ? record(root.usage ?? record(root.response)?.usage ?? record(root.message)?.usage ?? root.usageMetadata ?? root.meta) : null;
+  return root ? record(root.usage ?? record(root.response)?.usage ?? record(root.message)?.usage ?? root.meta) : null;
 }
 
 function record(value: unknown): Record<string, unknown> | null {
