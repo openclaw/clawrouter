@@ -52,6 +52,7 @@ if (requestCostMicros !== undefined) {
 if (!args.local) {
   await adminRequest(`/v1/admin/keys/${encodeURIComponent(kid)}`, {
     method: "PUT",
+    responseMode: "ack",
     body: request,
   });
   console.log(
