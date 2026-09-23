@@ -120,7 +120,7 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
       }
       if (demoMode) syncDemoAdmin(rows.current, credentials, providers, routes, true);
       committed = true;
-      setStatus(`${action === "save" ? "saved" : "disabled"} policy ${saved.policyId}`);
+      setStatus(action === "save" ? "saved policy" : "disabled policy");
     } catch (caught) {
       const message = errorMessage(caught);
       if (revision.current === submittedRevision) setError(message);

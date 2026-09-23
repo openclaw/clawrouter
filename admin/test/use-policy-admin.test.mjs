@@ -3,6 +3,7 @@ import { readFile } from "node:fs/promises";
 import { stripTypeScriptTypes } from "node:module";
 import test from "node:test";
 import { currencyInput, errorMessage, knownPolicyProviders, optionalCurrencyMicros, optionalNumber, parseEligibleGrants, unique } from "../src/domain.ts";
+import { consoleStatusPresentation } from "../src/status-display.ts";
 
 // Run the actual owner without installing React; browser journeys cover rendering and events.
 const hookSource = stripTypeScriptTypes(await readFile(new URL("../src/hooks/access/use-policy-admin.ts", import.meta.url), "utf8"))
@@ -136,6 +137,26 @@ test("synchronous admission sends one write and a failed save keeps its draft fo
   assert.equal(fixture.render().policies.error, "");
   assert.equal(fixture.render().policies.dirty, false);
 });
+
+for (const policyId of ["error_budget", "invalid_policy"]) {
+  for (const action of ["save", "disable"]) {
+    test(`${action} presents success for keyword policy ID ${policyId} before refresh settles`, async () => {
+      const fixture = mount();
+      hydrate(fixture, [policy(policyId)]);
+      const operation = action === "save" ? fixture.render().policies.save(event) : fixture.render().policies.revoke(policyId);
+      assert.equal(consoleStatusPresentation(fixture.statuses.at(-1), false).tone, "pending");
+      const committed = { ...policy(policyId), enabled: action === "save" };
+      fixture.requests[0].resolve(committed);
+      await operation;
+      assert.deepEqual(fixture.render().policies.selected, committed);
+      assert.equal(fixture.render().policies.busy, false);
+      assert.equal(fixture.render().policies.error, "");
+      assert.equal(fixture.refreshes, 1); // Refresh stays unresolved in this fixture.
+      assert.deepEqual(consoleStatusPresentation(fixture.statuses.at(-1), false), { tone: "success", label: "Connected", showBar: false });
+      assert.equal(fixture.statuses.at(-1), action === "save" ? "saved policy" : "disabled policy");
+    });
+  }
+}
 
 test("an old selection's failed save cannot attach its error to the new draft", async () => {
   const fixture = ready();
