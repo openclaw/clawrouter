@@ -50,12 +50,14 @@ capabilities:
     methods: [POST]
 endpoints:
   responses:
+    modelPassthrough: {}
     path: /openai/v1/responses
     requestFormat: openai.responses
     responseFormat: openai.responses
     streaming: sse
     timeoutMs: 600000
   chat_completions:
+    modelPassthrough: {}
     path: /openai/deployments/${deployment}/chat/completions
     pathParams: [deployment]
     query:
@@ -65,6 +67,7 @@ endpoints:
     streaming: sse
     timeoutMs: 600000
   embeddings:
+    modelPassthrough: {}
     path: /openai/deployments/${deployment}/embeddings
     pathParams: [deployment]
     query:

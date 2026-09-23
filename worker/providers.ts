@@ -54,32 +54,39 @@ export function providerById(id: string): CompiledProvider | undefined {
   return snapshot.providers.find((provider) => provider.id === id);
 }
 
-export function modelRoute(model: string): { provider: CompiledProvider; model: CompiledModel } | null {
+export function providerForModel(model: string): CompiledProvider | undefined {
   const exact = snapshot.model_index[model as keyof typeof snapshot.model_index];
-  if (exact) {
-    const provider = providerById(exact.provider);
-    const entry = provider?.models.find((candidate) => candidate.id === model);
-    return provider && entry ? { provider, model: entry } : null;
-  }
-  for (const provider of snapshot.providers) {
-    const prefix = provider.routing.modelPrefixes.find((candidate) => model.startsWith(candidate));
-    if (!prefix) continue;
-    const upstream = model.slice(prefix.length);
-    if (!upstream) continue;
-    const template = provider.models[0];
-    const inheritsTemplatePricing = provider.id === "local-openai";
-    return {
-      provider,
-      model: {
-        id: model,
-        upstream,
-        capabilities: template?.capabilities ?? provider.capabilities.map((item) => item.id),
-        pricing_ref: inheritsTemplatePricing ? template?.pricing_ref ?? null : null,
-        pricing: inheritsTemplatePricing ? template?.pricing ?? null : null,
-      },
-    };
-  }
-  return null;
+  return exact ? providerById(exact.provider) : snapshot.providers.find((provider) => provider.routing.modelPrefixes.some((prefix) => model.startsWith(prefix) && model.length > prefix.length));
+}
+
+export function modelRoute(model: string, capability?: string): { provider: CompiledProvider; model: CompiledModel } | null {
+  const provider = providerForModel(model);
+  if (!provider) return null;
+  const endpointId = provider.capabilities.find((item) => item.id === capability)?.endpoint;
+  const entry = providerModel(provider, model, provider.endpoints.find((endpoint) => endpoint.id === endpointId));
+  return entry ? { provider, model: entry } : null;
+}
+
+export function modelSupportsEndpoint(provider: CompiledProvider, model: CompiledModel, endpoint: CompiledEndpoint): boolean {
+  return provider.capabilities.some((capability) => capability.endpoint === endpoint.id && model.capabilities.includes(capability.id));
+}
+
+export function providerModel(provider: CompiledProvider, value: string, endpoint?: CompiledEndpoint, native = false): CompiledModel | null {
+  const prefix = provider.routing.modelPrefixes.find((candidate) => value.startsWith(candidate));
+  const upstream = prefix && !native ? value.slice(prefix.length) : value;
+  const known = provider.models.find((model) => model.id === value) ?? provider.models.find((model) => model.upstream === value || model.upstream === upstream);
+  if (known) return known;
+  if (!value || !endpoint?.modelPassthrough) return null;
+  if (!upstream) return null;
+  // Native opaque ids belong to the upstream namespace, even when they match
+  // a routing prefix. They cannot inherit another model's metadata or price.
+  return {
+    id: value,
+    upstream,
+    capabilities: provider.capabilities.filter((capability) => capability.endpoint === endpoint.id).map((capability) => capability.id),
+    pricing_ref: endpoint.modelPassthrough.pricing_ref,
+    pricing: endpoint.modelPassthrough.pricing,
+  };
 }
 
 export function endpointForPath(provider: CompiledProvider, path: string): CompiledEndpoint | undefined {
@@ -111,8 +118,8 @@ export function routeCatalog() {
     pathParams: endpoint.path_params,
     requestFormat: endpoint.request_format,
     responseFormat: endpoint.response_format,
-    sampleModel: provider.models.find((model) => model.capabilities.some((capability) => provider.capabilities.find((item) => item.id === capability)?.endpoint === endpoint.id))?.id ?? null,
-    models: provider.models.map((model) => ({ id: model.id, capabilities: model.capabilities })),
+    sampleModel: provider.models.find((model) => modelSupportsEndpoint(provider, model, endpoint))?.id ?? null,
+    models: provider.models.filter((model) => modelSupportsEndpoint(provider, model, endpoint)).map((model) => ({ id: model.id, capabilities: model.capabilities })),
     streaming: endpoint.streaming != null,
   })));
   return { openaiCompatible, manifestProxy };

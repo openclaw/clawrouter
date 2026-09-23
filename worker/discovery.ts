@@ -140,9 +140,9 @@ async function entitlementRowsForEntries(entries: AccessPolicyEntry[], tenantId:
 async function fusionEntitlement(rows: EntitlementRow[], inventory: ClientInventory, env: Env): Promise<EntitlementRow | null> {
   const config = await loadFusionConfig(env);
   if (!config.enabled) return null;
-  const aggregator = modelRoute(config.aggregatorModel);
+  const aggregator = modelRoute(config.aggregatorModel, "llm.chat");
   const aggregatorAccess = aggregator ? rows.find((row) => row.provider === aggregator.provider.id) : undefined;
-  const advisers = config.adviserModels.map((model) => modelRoute(model)).filter((route): route is NonNullable<ReturnType<typeof modelRoute>> => !!route);
+  const advisers = config.adviserModels.map((model) => modelRoute(model, "llm.chat")).filter((route): route is NonNullable<ReturnType<typeof modelRoute>> => !!route);
   const readyAdvisers = advisers.filter((route) => routeExecutable(route, inventory));
   const allowed = aggregatorAccess?.allowed === true;
   const executable = !!aggregator && routeExecutable(aggregator, inventory);

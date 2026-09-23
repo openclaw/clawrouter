@@ -60,7 +60,15 @@ Semantic identifier and path validation still applies after decoding.
 
 OpenAI-compatible requests select a provider-qualified model in the request body, for example `openai/gpt-4.1-mini`. Native and manifest routes resolve the provider and endpoint from the compiled snapshot instead of accepting arbitrary upstream URLs.
 
-Native routes preserve the selected provider's upstream model namespace. For example, `openai/gpt-6-astra` in an OpenRouter request remains an OpenRouter model identifier. Unknown models remain unpriced: either a policy or provider budget requires a declared model price or an explicit fixed request tariff before dispatch.
+Unified routes require matching OpenAI request and response formats. A provider's
+Chat or embeddings capability alone is insufficient: use its native route when
+the protocol differs, such as Cohere's `/v2/embed` with `texts` input.
+
+Native routes preserve the selected provider's upstream model namespace. For example, `openai/gpt-6-astra` in an OpenRouter request remains an OpenRouter model identifier. Known models must support the selected endpoint. Caller-supplied unknown models require that endpoint's explicit `modelPassthrough` declaration; this preserves opaque model selection on the bundled model-provider routes without claiming model availability or copying another model's capabilities. Such models remain absent from discovery and unpriced unless the endpoint declares an applicable pricing reference. The local Chat endpoint explicitly retains its zero API charge. Either a policy or provider budget requires declared pricing or an explicit fixed request tariff before dispatch.
+
+Opaque native IDs are preserved even when they begin with the provider's routing
+prefix. For example, use `openrouter/free` on the native OpenRouter Chat route;
+the same model on unified Chat is `openrouter/openrouter/free`.
 
 Native Responses JSON and SSE routes include:
 

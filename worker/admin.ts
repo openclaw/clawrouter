@@ -129,7 +129,7 @@ async function previewFusion(request: Request, env: Env): Promise<Response> {
   assertFusionModels(config);
   const [readiness, budget] = await Promise.all([providerReadinessForPolicies(env, [entry]), policyBudgetStatus(env, entry.policyId, entry.policy)]);
   const routes = [...config.adviserModels, config.aggregatorModel].map((modelId) => {
-    const route = modelRoute(modelId)!;
+    const route = modelRoute(modelId, "llm.chat")!;
     return {
       modelId,
       providerId: route.provider.id,

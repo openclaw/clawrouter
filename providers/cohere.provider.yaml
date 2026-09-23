@@ -33,12 +33,14 @@ capabilities:
     methods: [POST]
 endpoints:
   chat:
+    modelPassthrough: {}
     path: /v2/chat
     requestFormat: cohere.chat
     responseFormat: cohere.chat
     streaming: sse
     timeoutMs: 600000
   embed:
+    modelPassthrough: {}
     path: /v2/embed
     requestFormat: cohere.embed
     responseFormat: cohere.embed

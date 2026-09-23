@@ -77,6 +77,10 @@ function compileProvider(manifest, ids) {
     request_format: endpoint.requestFormat,
     response_format: endpoint.responseFormat,
     streaming: endpoint.streaming ?? null,
+    ...(endpoint.modelPassthrough ? { modelPassthrough: {
+      pricing_ref: endpoint.modelPassthrough.pricingRef ?? null,
+      pricing: endpoint.modelPassthrough.pricingRef ? normalizePricing(manifest.models.entries.find((model) => model.pricingRef === endpoint.modelPassthrough.pricingRef).pricing) : null,
+    } } : {}),
     ...(endpoint.websocket ? { websocket: endpoint.websocket } : {}),
     timeout_ms: endpoint.timeoutMs ?? null,
   }));
@@ -238,10 +242,20 @@ function validateManifest(manifest) {
     if (!Object.hasOwn(manifest.endpoints, capability.endpoint)) throw new Error(`provider ${manifest.id} capability ${capability.id} references missing endpoint ${capability.endpoint}`);
   }
   for (const model of manifest.models?.entries ?? []) {
+    for (const capability of model.capabilities ?? []) if (!manifest.capabilities.some((item) => item.id === capability)) throw new Error(`provider ${manifest.id} model ${model.id} references missing capability ${capability}`);
     if (model.codexModel !== undefined && (typeof model.codexModel !== "string" || !model.codexModel.trim())) throw new Error(`model ${model.id} codexModel must be a nonempty exact native slug`);
     validatePricing(model.pricing, model.id);
   }
   for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
+    if (endpoint.modelPassthrough) {
+      const capabilities = manifest.capabilities.filter((capability) => capability.endpoint === id).map((capability) => capability.id);
+      if (!capabilities.length) throw new Error(`provider ${manifest.id} endpoint ${id} modelPassthrough requires a declared capability`);
+      const ref = endpoint.modelPassthrough.pricingRef;
+      if (ref !== undefined) {
+        const models = (manifest.models?.entries ?? []).filter((model) => model.pricingRef === ref);
+        if (models.length !== 1 || !models[0].pricing || !models[0].capabilities?.some((capability) => capabilities.includes(capability))) throw new Error(`provider ${manifest.id} endpoint ${id} modelPassthrough pricingRef must resolve to one priced endpoint-compatible model`);
+      }
+    }
     if (endpoint.websocket !== undefined && (endpoint.websocket !== "openai.responses" || endpoint.requestFormat !== "openai.responses" || endpoint.responseFormat !== "openai.responses" || endpoint.streaming !== "sse" || (endpoint.method ?? "POST") !== "POST" || endpoint.nativeProxy === false)) throw new Error(`provider ${manifest.id} endpoint ${id} websocket requires a native POST Responses SSE endpoint`);
     for (const placeholder of endpoint.path.matchAll(/\$\{([^}]+)\}/g)) {
       if (!(endpoint.pathParams ?? []).includes(placeholder[1])) throw new Error(`provider ${manifest.id} endpoint ${id} path parameter ${placeholder[1]} is not declared`);

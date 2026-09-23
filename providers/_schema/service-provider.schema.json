@@ -476,6 +476,11 @@
         "requestFormat": { "type": "string" },
         "responseFormat": { "type": "string" },
         "streaming": { "type": "string" },
+        "modelPassthrough": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": { "pricingRef": { "type": "string", "minLength": 1 } }
+        },
         "websocket": { "enum": ["openai.responses"] },
         "timeoutMs": { "type": "integer", "minimum": 1 }
       }

@@ -32,12 +32,14 @@ capabilities:
     methods: [POST]
 endpoints:
   generate_content:
+    modelPassthrough: {}
     path: /v1beta/models/${model}:generateContent
     pathParams: [model]
     requestFormat: google.generate_content
     responseFormat: google.generate_content
     timeoutMs: 600000
   stream_generate_content:
+    modelPassthrough: {}
     path: /v1beta/models/${model}:streamGenerateContent
     pathParams: [model]
     requestFormat: google.generate_content
