@@ -148,7 +148,7 @@ try {
   for (const [toolCase, toolBody] of [
     ...[{ type: "web_search" }, { type: "file_search" }, { type: "code_interpreter" }, { type: "image_generation" }, { type: "shell", environment: { type: "container_reference", container_id: "cntr_fixture" } }].map(tool => [tool.type, { tools: [tool] }]),
     ["prompt", { prompt: { id: "pmpt_fixture", version: "1" } }],
-    ["additional_tools", { tools: [], input: [{ type: "additional_tools", role: "developer", tools: [{ type: "file_search" }] }] }],
+    ...["additional_tools", "tool_search_output"].map(type => [type, { tools: [], input: [{ type, ...(type === "additional_tools" ? { role: "developer" } : { call_id: "call_fixture", execution: "client" }), tools: [{ type: "file_search" }] }] }]),
   ]) for (const [name, policyLimit, providerLimit, fixed, servedInput] of [
     ["policy", policy.monthlyBudgetMicros, null, null, "known_served"],
     ["provider", null, policy.monthlyBudgetMicros, null, "known_served"],

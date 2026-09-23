@@ -115,15 +115,17 @@ test("opaque Responses prompt references cannot imply token-only pricing", () =>
   assert.equal(requestPricingGap(pricing, { prompt: null }, "openai.responses"), null);
 });
 
-test("Responses Lite classifies only declared additional_tools input items", () => {
-  for (const tool of [{ type: "web_search" }, { type: "file_search" }, { type: "code_interpreter" }, { type: "image_generation" }, { type: "shell", environment: { type: "container_auto" } }]) {
-    const body = { tools: [], input: [{ type: "additional_tools", role: "developer", tools: [tool] }] };
+test("Responses classifies only protocol-tagged input tool declarations", () => {
+  for (const type of ["additional_tools", "tool_search_output"]) for (const tool of [{ type: "web_search" }, { type: "file_search" }, { type: "code_interpreter" }, { type: "image_generation" }, { type: "shell", environment: { type: "container_auto" } }]) {
+    const body = { tools: [], input: [{ type, ...(type === "additional_tools" ? { role: "developer" } : { call_id: "call_fixture", execution: "client" }), tools: [tool] }] };
     assert.equal(requestPricingGap(pricing, body, "openai.responses"), "hosted_tool_fee");
     for (const format of ["openai.chat_completions", "anthropic.messages", "google.generate_content"]) assert.equal(requestPricingGap(pricing, body, format), null);
   }
   for (const body of [
     { input: [{ type: "message", tools: [{ type: "file_search" }] }] },
     { input: [{ type: "message", content: [{ type: "additional_tools", tools: [{ type: "file_search" }] }] }] },
+    { input: [{ type: "function_call_output", output: { type: "tool_search_output", tools: [{ type: "file_search" }] } }] },
+    { input: [{ type: "tool_search_output", tools: [{ type: "namespace", name: "fixture", tools: [{ type: "function", name: "file_search", parameters: { type: "object" } }] }] }] },
     { input: [{ type: "additional_tools", tools: [{ type: "function", name: "file_search", parameters: { tools: [{ type: "code_interpreter" }] } }] }] },
   ]) assert.equal(requestPricingGap(pricing, body, "openai.responses"), null);
 });
