@@ -9,6 +9,7 @@
     "worker:check": "tsc -p worker/tsconfig.json --noEmit && node --test worker/test/*.test.mjs",
     "worker:e2e": "node scripts/smoke-local-worker.mjs && node scripts/smoke-websocket-worker.mjs && node scripts/smoke-content-cleanup.mjs",
     "test:scripts": "node --test test/*.test.mjs",
+    "diagnostic:http-idle-disconnect": "node --test test/diagnostics/http-idle-disconnect.test.mjs",
     "provider:compile": "node scripts/compile-providers.mjs providers/*.provider.yaml",
     "provider:icons": "node scripts/sync-provider-icons.mjs",
     "provider:smoke-plan": "node scripts/provider-smoke-plan.mjs --strict",

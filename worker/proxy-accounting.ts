@@ -77,9 +77,8 @@ export function createProxyAccounting(options: AccountingContext) {
       // Missing response headers cannot prove that dispatched upstream work was free.
       context.waitUntil(settle(statusCode, status, dispatched, null, reservation, contentRef));
     },
-    complete(response: Response, observed: ObservedUsage, reservation: BudgetReservation, contentRef: string | null) {
-      const status = !response.ok ? response.status < 500 ? "client_error" : "provider_error"
-        : observed.delivery === "canceled" ? "client_error" : observed.delivery === "failed" ? "provider_error" : observed.outcome ?? "success";
+    complete(response: Response, observed: ObservedUsage, reservation: BudgetReservation, contentRef: string | null, termination?: UsageEvent["status"]) {
+      const status = termination ?? (!response.ok ? response.status < 500 ? "client_error" : "provider_error" : observed.outcome ?? "success");
       // Protocol/delivery failure does not undo dispatched billable work. Keep
       // the actual HTTP status and any authoritative terminal usage separately.
       return settle(response.status, status, response.ok, observed.tokens, reservation, contentRef);

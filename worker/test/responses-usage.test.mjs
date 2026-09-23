@@ -3,6 +3,7 @@ import test from "node:test";
 import { createResponsesUsageInspector } from "../responses-usage.ts";
 import { extractUsageTokens, responseOutcome } from "../token-usage.ts";
 import { observeUsage } from "../proxy-response.ts";
+import { HttpOperation } from "../http-operation.ts";
 
 const encode = value => new TextEncoder().encode(value);
 const usage = { input_tokens: 12, output_tokens: 3, input_tokens_details: { cached_tokens: 2, cache_write_tokens: 0 } };
@@ -151,7 +152,7 @@ test("cancel during an awaited feed cannot publish identities or late JSON facts
     pull(controller) { controller.enqueue(wire); },
     cancel() { canceled++; },
   }, { highWaterMark: 0 }), { headers: { "content-type": "application/json" } });
-  const observed = observeUsage(upstream, abort.signal, { async push() { published++; }, async end() { ended++; } }, "openai.responses");
+  const observed = observeUsage(upstream, new HttpOperation(abort.signal), { async push() { published++; }, async end() { ended++; } }, "openai.responses");
   await assert.rejects(observed.response.text(), /fixture parse abort/);
   assert.deepEqual(await observed.result, { delivery: "canceled", tokens: null, outcome: null });
   assert.equal(decoded, 2); assert.equal(published, 0); assert.equal(ended, 0);

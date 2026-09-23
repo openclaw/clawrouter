@@ -383,8 +383,16 @@ test("HTTP and native streaming outcomes settle each ledger once without rewriti
 test("dispatched pre-header HTTP and native failures retain estimates through independent ledger recovery", async (t) => {
   let now = Date.now();
   t.mock.method(Date, "now", () => now);
+  const { modelRoute } = await import("../providers.ts");
+  const endpointTimeout = modelRoute("openai/gpt-6-astra").provider.endpoints.find(endpoint => endpoint.id === "responses").timeout_ms;
+  const setTimer = globalThis.setTimeout;
+  let deadline;
+  t.mock.method(globalThis, "setTimeout", (callback, delay, ...args) => {
+    if (delay === endpointTimeout) deadline = callback;
+    return setTimer(callback, delay, ...args);
+  });
   const owners = ["tenant:maintainer_access:owner@example.com", "provider:openai"];
-  for (const route of ["/v1/responses", "/v1/native/openai/v1/responses"]) for (const scenario of ["transport", "timeout", "caller_abort"]) for (const failedOwner of [null, ...owners]) {
+  for (const route of ["/v1/responses", "/v1/native/openai/v1/responses"]) for (const scenario of ["transport", "upstream_abort", "first_event", "timeout", "caller_abort"]) for (const failedOwner of [null, ...owners]) {
     const messages = [], pending = [], abort = new AbortController(), limit = 1_000_000;
     const env = usageEnv([], { limit, fixedCost: null, retainContent: false });
     env.OPENAI_API_KEY = "fixture-openai-key";
@@ -398,7 +406,11 @@ test("dispatched pre-header HTTP and native failures retain estimates through in
     const upstream = t.mock.method(globalThis, "fetch", async () => {
       for (const owner of owners) assert.equal(ledger.get(owner).reservations()[0].dispatch_started, 1);
       if (scenario === "caller_abort") abort.abort();
+      if (scenario === "timeout") { assert.equal(typeof deadline, "function"); deadline(); }
       if (scenario === "transport") throw new Error("fixture connection lost before headers");
+      if (scenario === "first_event") return new Response(new ReadableStream({
+        pull() { throw new Error("fixture HTTP 200 first-event failure"); },
+      }, { highWaterMark: 0 }), { headers: { "content-type": "text/event-stream" } });
       throw new DOMException("fixture upstream abort", "AbortError");
     });
     const response = await handler.fetch(new Request(`https://clawrouter.example${route}`, {
@@ -479,27 +491,35 @@ test("cancellation before fetch stays zero after preflight, retention, or dispat
   }
 });
 
-test("known nonbillable responses stay zero across tariffs and complete or broken error bodies", async (t) => {
-  for (const route of ["/v1/responses", "/v1/native/openai/v1/responses"]) for (const status of [400, 500]) for (const fixedCost of [null, 0, 7]) for (const broken of [false, true]) {
+test("known nonbillable responses stay readable and zero across tariffs and broken JSON or SSE details", async (t) => {
+  for (const route of ["/v1/responses", "/v1/native/openai/v1/responses"]) for (const status of [400, 429, 503]) for (const fixedCost of [null, 0, 7]) for (const brokenType of [null, "application/json", "text/event-stream"]) {
     const env = usageEnv([], { limit: 1_000_000, fixedCost, retainContent: false });
     env.OPENAI_API_KEY = "fixture-openai-key";
     env.BUDGET_LEDGER = sqlBudgetNamespace(t);
     const events = [], pending = [];
     env.USAGE_QUEUE = { send: async event => events.push(event) };
-    const upstream = t.mock.method(globalThis, "fetch", async () => broken ? new Response(new ReadableStream({
-      pull(controller) { controller.error(new Error("fixture broken SSE error body")); },
-    }, { highWaterMark: 0 }), { status, headers: { "content-type": "text/event-stream" } }) : Response.json({ error: { message: "fixture rejection" }, usage: astraUsage }, { status }));
+    const upstream = t.mock.method(globalThis, "fetch", async () => brokenType ? new Response(new ReadableStream({
+      pull(controller) { controller.error(new Error("fixture broken error details")); },
+    }, { highWaterMark: 0 }), { status, headers: { "content-type": brokenType } }) : Response.json({ error: { message: "fixture rejection" }, usage: astraUsage }, { status }));
     const response = await handler.fetch(new Request(`https://clawrouter.example${route}`, {
       method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
       body: JSON.stringify({ model: "openai/gpt-6-astra", input: "fixture", max_output_tokens: 32, service_tier: "priority", stream: true }),
     }), env, { waitUntil: promise => pending.push(promise) });
-    assert.equal(response.status, broken ? 502 : status);
-    await response.text();
+    assert.equal(response.status, status);
+    if (brokenType) assert.deepEqual(await response.json(), { error: { message: "upstream request failed", type: "upstream_error", code: status } });
+    else await response.text();
     await Promise.all(pending);
     assert.equal(events.length, 1);
+    assert.equal(events[0].status_code, status);
+    assert.equal(events[0].status, status < 500 ? "client_error" : "provider_error");
     assert.equal(events[0].actual_cost_micros, 0);
     assert.equal(events[0].cost_basis, "none");
-    for (const name of ["tenant:maintainer_access:owner@example.com", "provider:openai"]) assert.equal(env.BUDGET_LEDGER.get(name).reservations()[0].reserved_micros, 0);
+    assert.equal(upstream.mock.callCount(), 1);
+    for (const name of ["tenant:maintainer_access:owner@example.com", "provider:openai"]) {
+      const rows = env.BUDGET_LEDGER.get(name).reservations();
+      assert.equal(rows.length, 1);
+      assert.equal(rows[0].settled, 1); assert.equal(rows[0].dispatch_started, 1); assert.equal(rows[0].reserved_micros, 0);
+    }
     upstream.mock.restore();
   }
 });

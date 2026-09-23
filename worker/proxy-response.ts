@@ -1,5 +1,6 @@
 import { createResponsesUsageInspector } from "./responses-usage.ts";
 import { createSseUsageInspector, extractUsageTokens, responseOutcome, usageInspectionLimit, type UsageInspection } from "./token-usage.ts";
+import { HttpOperation } from "./http-operation.ts";
 
 export interface ObservedUsage extends UsageInspection { delivery: "complete" | "failed" | "canceled" }
 export interface ResponseBodyInspection { push(bytes: Uint8Array): Promise<void>; end(): Promise<void> }
@@ -7,8 +8,9 @@ export interface ResponseBodyInspection { push(bytes: Uint8Array): Promise<void>
 // Accounting observes the delivered stream; a tee would drain upstream ahead of
 // the client and buffer arbitrary output. Responses retain only bounded scalar
 // metadata; other formats keep their existing bounded JSON/frame inspection.
-export function observeUsage(response: Response, signal?: AbortSignal, bodyInspection?: ResponseBodyInspection, responseFormat?: string): { response: Response; result: Promise<ObservedUsage> } {
-  if (!response.body) return { response, result: Promise.resolve({ tokens: null, outcome: null, delivery: "complete" }) };
+export function observeUsage(response: Response, operation = new HttpOperation(), bodyInspection?: ResponseBodyInspection, responseFormat?: string): { response: Response; result: Promise<ObservedUsage> } {
+  const signal = operation.signal;
+  if (!response.body) { operation.stop("complete"); return { response, result: Promise.resolve({ tokens: null, outcome: null, delivery: "complete" }) }; }
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
   const eventStream = contentType.includes("text/event-stream"), json = contentType.includes("json");
   const responses = responseFormat === "openai.responses" && (eventStream || json) ? createResponsesUsageInspector(eventStream) : null;
@@ -22,7 +24,10 @@ export function observeUsage(response: Response, signal?: AbortSignal, bodyInspe
   function finish(delivery: ObservedUsage["delivery"], reason?: unknown): Promise<void> {
     if (finished) return Promise.resolve();
     finished = true;
-    signal?.removeEventListener("abort", aborted);
+    signal.removeEventListener("abort", aborted);
+    if (delivery === "canceled") operation.cancel(reason);
+    else operation.stop(delivery === "complete" ? "complete" : "upstream", reason);
+    delivery = operation.delivery ?? delivery;
     let inspection: UsageInspection = responses?.result(delivery === "complete") ?? sse?.result(delivery === "complete") ?? { tokens: null, outcome: null };
     if (delivery === "complete" && inspect) {
       try {
@@ -35,15 +40,15 @@ export function observeUsage(response: Response, signal?: AbortSignal, bodyInspe
     resolve({ ...inspection, delivery });
     // Claim completion before cancellation can resolve/reject a pending read.
     // The result owns accounting even if the transport's cancellation rejects.
-    const cleanup = delivery !== "complete" ? reader.cancel(reason).catch(() => undefined) : Promise.resolve();
+    if (delivery !== "complete") void reader.cancel(reason).catch(() => undefined);
     reader.releaseLock();
-    return cleanup;
+    return Promise.resolve();
   }
   let downstream: ReadableStreamDefaultController<Uint8Array>;
   function aborted() {
     if (finished) return;
-    void finish("canceled", signal?.reason);
-    downstream.error(signal?.reason);
+    void finish("canceled", signal.reason);
+    downstream.error(signal.reason);
   }
   const body = new ReadableStream<Uint8Array>({
     start(controller) { downstream = controller; },
@@ -52,7 +57,7 @@ export function observeUsage(response: Response, signal?: AbortSignal, bodyInspe
         const next = await reader.read();
         if (finished) return; // A pending read can resolve after consumer cancellation.
         if (next.done) {
-          await bodyInspection?.end(); if (finished) return;
+          if (bodyInspection) await operation.wait(bodyInspection.end(), "publication"); if (finished) return;
           await responses?.end(); if (finished) return;
           finish("complete"); controller.close(); return;
         }
@@ -65,68 +70,81 @@ export function observeUsage(response: Response, signal?: AbortSignal, bodyInspe
         }
         // Identity registration owns publication; the same reader still owns
         // demand, cancellation, and usage when the durable write fails.
-        await bodyInspection?.push(next.value);
+        if (bodyInspection) await operation.wait(bodyInspection.push(next.value), "publication");
         if (!finished) controller.enqueue(next.value);
-      } catch (error) { if (!finished) { finish("failed"); controller.error(error); } }
+      } catch (error) { if (!finished) { finish("failed", error); controller.error(error); } }
     },
     cancel(reason) { return finish("canceled", reason); },
   }, { highWaterMark: 0 });
   // workerd can drop its response pump without calling the JS stream's cancel.
   // Ingress abort is the authoritative caller-lifecycle signal in that case.
-  if (signal?.aborted) aborted();
-  else signal?.addEventListener("abort", aborted, { once: true });
+  if (signal.aborted) aborted();
+  else signal.addEventListener("abort", aborted, { once: true });
   return { response: new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers }), result };
 }
 
-export async function normalizePreStreamError(response: Response, streamingRequested: boolean): Promise<Response> {
+export async function normalizePreStreamError(response: Response, streamingRequested: boolean, operation = new HttpOperation()): Promise<Response> {
   if (!streamingRequested) return response;
   const eventStream = response.headers.get("content-type")?.toLowerCase().includes("text/event-stream") === true;
   if (response.status >= 400) {
-    if (eventStream && response.body) return normalizeFirstSseEvent(response, response.status);
-    const body = await readLimited(response, 64 * 1024).catch(() => "");
-    return mappedUpstreamError(response, upstreamError(body), response.status);
+    try {
+      if (eventStream && response.body) return await normalizeFirstSseEvent(response, response.status, operation);
+      const body = await readLimited(response, 64 * 1024, operation);
+      return mappedUpstreamError(response, upstreamError(body), response.status);
+    } catch {
+      // Failure to read error details cannot replace an accepted HTTP status.
+      // The operation still owns cancellation and the accounting cause.
+      return mappedUpstreamError(response, {}, response.status);
+    }
   }
   if (!response.ok || !eventStream || !response.body) return response;
-  return normalizeFirstSseEvent(response, null);
+  return normalizeFirstSseEvent(response, null, operation);
 }
 
 const FIRST_SSE_EVENT_LIMIT = 8 * 1024;
 
-async function normalizeFirstSseEvent(response: Response, errorStatus: number | null): Promise<Response> {
+async function normalizeFirstSseEvent(response: Response, errorStatus: number | null, operation: HttpOperation): Promise<Response> {
   const reader = response.body!.getReader();
   const chunks: Uint8Array[] = [];
   const sniffed = new Uint8Array(FIRST_SSE_EVENT_LIMIT);
   let sniffedLength = 0;
   let eventStart = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (value?.byteLength) {
-      chunks.push(value);
-      const copyLength = Math.min(value.byteLength, FIRST_SSE_EVENT_LIMIT - sniffedLength);
-      if (copyLength > 0) {
-        sniffed.set(value.subarray(0, copyLength), sniffedLength);
-        sniffedLength += copyLength;
+  let transferred = false;
+  try {
+    while (true) {
+      // Missing details on a known rejection must leave its fallback body readable.
+      // A failed HTTP 200 sniff still owns the failure before reader cleanup.
+      const { done, value } = await operation.wait(reader.read(), errorStatus === null ? "upstream" : undefined);
+      if (value?.byteLength) {
+        chunks.push(value);
+        const copyLength = Math.min(value.byteLength, FIRST_SSE_EVENT_LIMIT - sniffedLength);
+        if (copyLength > 0) {
+          sniffed.set(value.subarray(0, copyLength), sniffedLength);
+          sniffedLength += copyLength;
+        }
+      }
+      while (eventStart < sniffedLength) {
+        const boundary = sseEventBoundary(sniffed, eventStart, sniffedLength);
+        if (!boundary) break;
+        const event = classifySseEvent(sniffed.subarray(eventStart, boundary.start));
+        eventStart = boundary.end;
+        if (event.kind === "empty") continue;
+        if (errorStatus !== null || event.kind === "error") {
+          const upstream = event.upstream;
+          const status = errorStatus ?? (typeof upstream.code === "number" && Number.isInteger(upstream.code) && upstream.code >= 400 && upstream.code <= 599 ? upstream.code : 502);
+          operation.acceptRejection(status);
+          return mappedUpstreamError(response, upstream, status);
+        }
+        transferred = true;
+        return replayResponse(response, reader, chunks, done);
+      }
+      if (done || sniffedLength === FIRST_SSE_EVENT_LIMIT) {
+        if (errorStatus === null) { transferred = true; return replayResponse(response, reader, chunks, done); }
+        return mappedUpstreamError(response, {}, errorStatus);
       }
     }
-    while (eventStart < sniffedLength) {
-      const boundary = sseEventBoundary(sniffed, eventStart, sniffedLength);
-      if (!boundary) break;
-      const event = classifySseEvent(sniffed.subarray(eventStart, boundary.start));
-      eventStart = boundary.end;
-      if (event.kind === "empty") continue;
-      if (errorStatus !== null || event.kind === "error") {
-        await reader.cancel().catch(() => undefined);
-        const upstream = event.upstream;
-        const status = errorStatus ?? (typeof upstream.code === "number" && Number.isInteger(upstream.code) && upstream.code >= 400 && upstream.code <= 599 ? upstream.code : 502);
-        return mappedUpstreamError(response, upstream, status);
-      }
-      return replayResponse(response, reader, chunks, done);
-    }
-    if (done || sniffedLength === FIRST_SSE_EVENT_LIMIT) {
-      if (errorStatus === null) return replayResponse(response, reader, chunks, done);
-      if (!done) await reader.cancel().catch(() => undefined);
-      return mappedUpstreamError(response, {}, errorStatus);
-    }
+  } finally {
+    if (!transferred) { void reader.cancel(operation.signal.reason).catch(() => undefined); reader.releaseLock(); }
   }
 }
 
@@ -139,16 +157,17 @@ function replayResponse(response: Response, reader: ReadableStreamDefaultReader<
         return;
       }
       if (readerDone) {
+        reader.releaseLock();
         controller.close();
         return;
       }
       try {
         const { done, value } = await reader.read();
-        if (done) controller.close();
+        if (done) { reader.releaseLock(); controller.close(); }
         else controller.enqueue(value);
-      } catch (error) { controller.error(error); }
+      } catch (error) { reader.releaseLock(); controller.error(error); }
     },
-    cancel(reason) { return reader.cancel(reason); },
+    cancel(reason) { void reader.cancel(reason).catch(() => undefined); reader.releaseLock(); },
   }, { highWaterMark: 0 });
   return new Response(body, { status: response.status, statusText: response.statusText, headers: response.headers });
 }
@@ -235,18 +254,18 @@ function firstSseData(body: string): string | null {
   return dataLines.length > 0 ? dataLines.join("\n") : null;
 }
 
-async function readLimited(response: Response, limit: number): Promise<string> {
+async function readLimited(response: Response, limit: number, operation: HttpOperation): Promise<string> {
   if (!response.body) return "";
   const reader = response.body.getReader(), decoder = new TextDecoder();
   let size = 0, text = "";
   try {
     while (true) {
-      const { done, value } = await reader.read();
+      const { done, value } = await operation.wait(reader.read());
       if (done) break;
       size += value.byteLength;
-      if (size > limit) throw new Error("usage payload exceeds inspection limit");
+      if (size > limit) return "";
       text += decoder.decode(value, { stream: true });
     }
     return text + decoder.decode();
-  } finally { if (size > limit) await reader.cancel(); }
+  } finally { void reader.cancel(operation.signal.reason).catch(() => undefined); reader.releaseLock(); }
 }
