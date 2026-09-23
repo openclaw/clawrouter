@@ -105,7 +105,7 @@ for (const [limit, providerLimit] of [[200_000, 300_000], [300_000, 200_000]]) {
     assert.deepEqual(await totals(), [87_036, 87_036], "the original outstanding receipt still owns its later settlement");
     for (const [index, store] of stores.entries()) {
       const original = originalRows[index], heldId = held.reservations[index].reservationId;
-      assert.deepEqual(store.reservations().filter(row => original.some(old => old.reservation_id === row.reservation_id)), original.map(row => row.reservation_id === heldId ? { ...row, reserved_micros: 7_000, settled: 1 } : row));
+      assert.deepEqual(store.reservations().filter(row => original.some(old => old.reservation_id === row.reservation_id)), original.map(row => row.reservation_id === heldId ? Object.assign(Object.create(Object.getPrototypeOf(row)), row, { reserved_micros: 7_000, settled: 1 }) : row));
     }
     assert.deepEqual({ auth: await authenticateProxyKey(headers, env), connection: await resolveConnection(env, "deepseek") }, authority);
   });
