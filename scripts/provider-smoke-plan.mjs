@@ -232,20 +232,23 @@ function smokeTarget(provider, env) {
   }
   const model = manifestSmokeModelOverride(provider, endpoint, env)
     ?? modelsForEndpoint(provider, endpoint).find((model) => !model.upstream.includes("${"))?.upstream;
-  if (["openai.chat_completions", "anthropic.messages", "cohere.chat", "google.generate_content", "aws_bedrock.invoke"].includes(endpoint.request_format) && !model) return null;
+  if (["openai.chat_completions", "openai.responses", "openai.embeddings", "anthropic.messages", "cohere.chat", "cohere.embed", "google.generate_content", "aws_bedrock.invoke"].includes(endpoint.request_format) && !model) return null;
   const pathParams = Object.fromEntries(
     endpoint.path_params.map((param) => [param, samplePathParam(provider, param, model, env)]),
   );
   const upstreamMethod = smokeMethod(endpoint);
   const body = sampleBody(provider, endpoint, upstreamMethod, model, env);
+  const unresolvedParams = endpoint.path_params.filter(param => !["model", "deployment"].includes(param)
+    && !(endpoint.request_format === "cloudflare_ai_gateway.universal" && ["account", "gateway"].includes(param)));
   return {
     kind: "manifest_proxy",
     route: `/v1/proxy/${provider.id}/${endpoint.id}`,
     method: "POST",
     upstreamMethod,
     endpoint: endpoint.id,
-    ...(body === null ? { unresolved: endpoint.request_format === "replicate.prediction_get"
+    ...(body === null || unresolvedParams.length ? { unresolved: endpoint.request_format === "replicate.prediction_get"
       ? "prediction lookup requires an existing prediction ID; no smoke fixture is declared"
+      : unresolvedParams.length ? `path parameters require a smoke fixture: ${unresolvedParams.join(", ")}`
       : `no smoke request template for ${endpoint.request_format}` } : {}),
     envelope: {
       method: upstreamMethod,
@@ -308,6 +311,10 @@ function smokeEndpoint(provider) {
     ["google.generate_content", "llm.generate"],
     ["aws_bedrock.invoke", "llm.invoke"],
     ["tavily.search", "web.search"],
+    ["openai.responses", "llm.responses"],
+    ["openai.embeddings", "llm.embeddings"],
+    ["cohere.embed", "llm.embeddings"],
+    ["tavily.extract", "web.extract"],
   ]) {
     const preferred = provider.endpoints.find(endpoint => endpoint.request_format === format
       && provider.capabilities.some(item => item.endpoint === endpoint.id && item.id === capability));
@@ -498,13 +505,7 @@ function pushUnique(values, value) {
 }
 
 function samplePathParam(provider, param, model, env) {
-  if (param === "path") {
-    return "status";
-  }
-  if (param === "method") {
-    return "status";
-  }
-  if (param === "model") {
+  if (param === "model" || param === "deployment") {
     return model;
   }
   if (param === "account") {
@@ -513,17 +514,21 @@ function samplePathParam(provider, param, model, env) {
   if (param === "gateway") {
     return provider.id === "cloudflare-ai-gateway" ? env.CLOUDFLARE_AI_GATEWAY_ID ?? "gateway" : "gateway";
   }
-  if (param.endsWith("_id")) {
-    return "smoke";
-  }
   return "smoke";
 }
 
 function sampleBody(provider, endpoint, method, model, env) {
   const format = endpoint.request_format;
-  if (!methodAllowsBody(method)) return null;
+  const graphql = format.includes("graphql") || provider.adapter.request.includes("graphql");
+  // GET/HEAD have no body. GraphQL GET still needs a schema-specific query
+  // fixture; the existing POST query below is retained without claiming that.
+  if (!methodAllowsBody(method)) return graphql ? null : {};
+  if (graphql) return { query: "{ viewer { id } }" };
   if (format === "tavily.search") {
     return { query: "OpenClaw", max_results: 1 };
+  }
+  if (format === "tavily.extract") {
+    return { urls: ["https://example.com"] };
   }
   if (format === "firecrawl.scrape") {
     return { url: "https://example.com", formats: ["markdown"] };
@@ -543,6 +548,15 @@ function sampleBody(provider, endpoint, method, model, env) {
   }
   if (format === "cohere.chat") {
     return { model, messages: [{ role: "user", content: "reply with ok" }] };
+  }
+  if (format === "openai.responses") {
+    return { model, input: "reply with ok", max_output_tokens: 16 };
+  }
+  if (format === "openai.embeddings") {
+    return { model, input: "OpenClaw" };
+  }
+  if (format === "cohere.embed") {
+    return { model, texts: ["OpenClaw"], input_type: "search_query", embedding_types: ["float"] };
   }
   if (format === "aws_bedrock.invoke") {
     const override = provider.id === "aws-bedrock" ? env.CLAWROUTER_SMOKE_BODY_AWS_BEDROCK : null;

@@ -236,12 +236,28 @@ candidate per provider, and fails if any provider lacks a route plan. Request
 templates and preferred operations follow the endpoint's request format and
 capabilities, so renamed provider and endpoint IDs keep the same request shape.
 Anthropic token counting omits the output limit required by Messages generation.
+Templates also cover OpenAI Responses and embeddings, Cohere embeddings, and
+Tavily Extract when those operations are selected. Model requests use an
+endpoint-compatible catalog model or the operator's explicit model override.
+Request contracts: [OpenAI Responses](https://developers.openai.com/api/reference/resources/responses/methods/create),
+[OpenAI embeddings](https://developers.openai.com/api/reference/resources/embeddings/methods/create),
+[Cohere Embed](https://docs.cohere.com/reference/embed), and
+[Tavily Extract](https://docs.tavily.com/documentation/api-reference/endpoint/extract).
+GET/HEAD targets without resource parameters keep an empty envelope body; the
+Worker sends no upstream body. The existing GraphQL POST query is preserved.
 
 A planned target is not upstream verification. Unknown formats and resource-bound
 requests without a fixture remain visible with `target.unresolved`; live smoke
 execution fails before dispatch and does not update provider health. Replicate
 prediction lookup still needs support for an operator-selected existing prediction
 ID. This remains a separate fixture follow-up, not a verified smoke target.
+Other named follow-ups are prediction creation/lifecycle fixtures, bounded
+Tavily Crawl requests, schema-specific GraphQL queries and response validation,
+and required query-parameter fixtures (including GraphQL GET). The generic
+GraphQL POST query assumes a `viewer.id` field and is not valid for every schema.
+Synthetic Worker tests prove request routing and authentication, not live
+provider availability or semantic success. For example, Tavily Extract can
+return HTTP 200 with per-URL failures in `failed_results`.
 
 Planning does not call upstream APIs; deployed live calls are opt-in through
 `CLAWROUTER_SMOKE_LIVE_PROVIDERS`. The bundled AWS body override and Cloudflare
