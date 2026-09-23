@@ -271,6 +271,9 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     accounting.fail(502, operation.status ?? "provider_error", reservation, content, dispatched && response?.ok !== false);
     return errorResponse("provider_unavailable", `upstream request to provider ${selection.provider.id} failed`, 502, undefined);
   }
+  // Endpoint timeouts cover fetch and first-event normalization, not delivery.
+  // Retire only the timer; the caller and first cause still own delivery through EOF.
+  operation.retireDeadline();
   if (continuation && response.ok) {
     try { await operation.wait(continuation.headers(response), "publication"); }
     catch (error) {

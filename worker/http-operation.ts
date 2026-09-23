@@ -34,8 +34,10 @@ export class HttpOperation {
   }
 
   // Accept only the final selected rejection. Recording its receipt cause must
-  // neither dispose its readable error body nor retire the delivery deadline.
+  // neither dispose its readable error body nor retire the endpoint deadline.
   acceptRejection(status: number): void { this.cause ??= status < 500 ? "client_rejection" : "provider_rejection"; }
+
+  retireDeadline(): void { clearTimeout(this.timer); this.timer = undefined; }
 
   cancel(reason?: unknown): void { this.stop(reason instanceof InternalHttpAbort ? reason.cause : "caller", reason); }
 
@@ -45,7 +47,7 @@ export class HttpOperation {
     // cannot rewrite it. A parsed protocol terminal alone is not delivery EOF.
     this.cause ??= cause;
     this.ending = cause;
-    clearTimeout(this.timer);
+    this.retireDeadline();
     this.caller?.removeEventListener("abort", this.canceled);
     if (cause !== "complete") this.controller.abort(reason);
   }

@@ -202,6 +202,34 @@ test("first-event normalization and accounting do not prefetch later SSE chunks"
   assert.equal((await observed.result).tokens.total, 15);
 });
 
+test("retiring the endpoint deadline leaves delivery and caller cancellation owned until EOF", async t => {
+  t.mock.timers.enable({ apis: ["setTimeout"] });
+  for (const cancel of [false, true]) {
+    const caller = new AbortController(), operation = new HttpOperation(caller.signal, 1000);
+    const gate = Promise.withResolvers();
+    let cancels = 0;
+    const observed = observeUsage(new Response(new ReadableStream({
+      async pull(controller) { await gate.promise; controller.close(); },
+      cancel() { cancels++; },
+    }, { highWaterMark: 0 })), operation);
+    const consumed = observed.response.text();
+    operation.retireDeadline();
+    t.mock.timers.tick(2000);
+    assert.equal(operation.signal.aborted, false);
+    assert.equal(operation.delivery, undefined);
+    assert.equal(getEventListeners(caller.signal, "abort").length, 1);
+    if (cancel) {
+      caller.abort(new Error("fixture caller after deadline retirement"));
+      await assert.rejects(consumed, /fixture caller/);
+    } else { gate.resolve(); assert.equal(await consumed, ""); }
+    assert.equal((await observed.result).delivery, cancel ? "canceled" : "complete");
+    assert.equal(operation.status, cancel ? "client_error" : undefined);
+    assert.equal(cancels, cancel ? 1 : 0);
+    assert.equal(getEventListeners(caller.signal, "abort").length, 0);
+    gate.resolve();
+  }
+});
+
 test("EOF wins over late caller and deadline signals, while a protocol terminal still permits cancellation", async t => {
   t.mock.timers.enable({ apis: ["setTimeout"] });
   for (const eof of [false, true]) {

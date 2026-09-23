@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Preserve the first HTTP cancellation or failure cause through response delivery. Endpoint deadlines now cover continuation registration and response bodies; internal Fusion deadlines no longer appear as caller cancellations.
+- Preserve the first HTTP cancellation or failure cause through response delivery without extending endpoint deadlines beyond response normalization. Internal Fusion deadlines no longer appear as caller cancellations.
 
 - Cancel discarded grant-rejection bodies before HTTP failover, and retain one conservative budget charge when an alternate request fails without response headers. Preserve the original rejection when no alternate can be selected.
 

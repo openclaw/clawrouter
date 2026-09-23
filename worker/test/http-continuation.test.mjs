@@ -431,13 +431,23 @@ test("caller abort during registration cancels the single owned reader and does 
 async function endpointDeadline(t) {
   const { modelRoute } = await import("../providers.ts");
   const timeout = modelRoute("openai/gpt-6-astra").provider.endpoints.find(endpoint => endpoint.id === "responses").timeout_ms;
-  const setTimer = globalThis.setTimeout;
-  let fire;
+  const setTimer = globalThis.setTimeout, clearTimer = globalThis.clearTimeout;
+  let timer;
   t.mock.method(globalThis, "setTimeout", (callback, delay, ...args) => {
-    if (delay === timeout) fire = callback;
-    return setTimer(callback, delay, ...args);
+    const handle = setTimer(callback, delay, ...args);
+    if (delay === timeout) timer = { handle, callback, active: true };
+    return handle;
   });
-  return () => { assert.equal(typeof fire, "function"); fire(); };
+  t.mock.method(globalThis, "clearTimeout", handle => {
+    if (timer?.handle === handle) timer.active = false;
+    return clearTimer(handle);
+  });
+  return () => {
+    assert.ok(timer);
+    const active = timer.active;
+    if (active) timer.callback();
+    return active;
+  };
 }
 
 test("pre-header first cause survives later aborts and late fetch rejection for zero, fixed and measured tariffs", async t => {
@@ -481,7 +491,7 @@ test("a response arriving after the deadline is retired without publication or a
 
 test("header registration keeps the first cause and never publishes a late ACK or settles twice", async t => {
   const deadline = await endpointDeadline(t);
-  for (const first of ["caller", "deadline", "publication"]) for (const late of ["resolve", "reject"]) {
+  for (const first of ["caller", "publication"]) for (const late of ["resolve", "reject"]) {
     const f = await fixture(t, false, { limit: 1_000_000, fixedCost: null }), caller = new AbortController();
     const entered = Promise.withResolvers(), gate = Promise.withResolvers();
     f.env.ACCESS_CONTROL.beforeFetch = async (name, request) => {
@@ -491,8 +501,8 @@ test("header registration keeps the first cause and never publishes a late ACK o
     f.response = () => new Response(new ReadableStream({ cancel() { cancels++; caller.abort(); return new Promise(() => {}); } }, { highWaterMark: 0 }), { headers: { "x-codex-turn-state": "held_turn" } });
     const pending = f.request({ max_output_tokens: 32 }, {}, "/v1/responses", caller.signal);
     await entered.promise;
+    assert.equal(deadline(), false, "endpoint timer retires before header registration");
     if (first === "caller") caller.abort(new Error("fixture caller"));
-    else if (first === "deadline") deadline();
     else gate.reject(new Error("fixture publication failure"));
     const response = await pending;
     assert.equal(response.status, 503); assert.equal(response.headers.has("x-codex-turn-state"), false);
@@ -500,17 +510,17 @@ test("header registration keeps the first cause and never publishes a late ACK o
     if (late === "resolve") gate.resolve(); else gate.reject(new Error("late publication failure"));
     await setImmediate(); await f.drain();
     assert.equal(cancels, 1); assert.equal(f.events.length, 1);
-    assert.equal(f.events[0].status, first === "caller" ? "client_error" : first === "deadline" ? "timeout" : "provider_error");
+    assert.equal(f.events[0].status, first === "caller" ? "client_error" : "provider_error");
     assert.equal(f.events[0].status_code, 503);
     assert.equal(f.events[0].actual_cost_micros, f.events[0].reserved_cost_micros);
     await assertBudgets(f, [f.events[0].actual_cost_micros]);
   }
 });
 
-test("the endpoint deadline owns stalled sniffing, JSON, SSE and body registration without waiting on cleanup", async t => {
+test("first-event sniffing keeps its deadline while delivered JSON, SSE and body registration keep caller cancellation", async t => {
   const deadline = await endpointDeadline(t);
   for (const phase of ["sniff", "json", "sse", "registration"]) {
-    const f = await fixture(t, false, { limit: 1_000_000, fixedCost: null });
+    const f = await fixture(t, false, { limit: 1_000_000, fixedCost: null }), caller = new AbortController();
     const entered = Promise.withResolvers(), gate = Promise.withResolvers();
     let pulls = 0, cancels = 0;
     if (phase === "registration") f.env.ACCESS_CONTROL.beforeFetch = async (name, request) => {
@@ -524,18 +534,20 @@ test("the endpoint deadline owns stalled sniffing, JSON, SSE and body registrati
       },
       cancel() { cancels++; return new Promise(() => {}); },
     }, { highWaterMark: 0 }), { headers: { "content-type": phase === "sniff" || phase === "sse" ? "text/event-stream" : "application/json" } });
-    const pending = f.request({ stream: true, max_output_tokens: 32 });
+    const pending = f.request({ stream: true, max_output_tokens: 32 }, {}, "/v1/responses", caller.signal);
     let response, consumed;
     if (phase !== "sniff") {
       response = await pending; assert.equal(response.status, 200);
-      consumed = assert.rejects(response.text(), /deadline/);
+      consumed = assert.rejects(response.text(), /fixture caller/);
     }
-    await entered.promise; deadline();
+    await entered.promise;
+    assert.equal(deadline(), phase === "sniff", "only first-event normalization retains the endpoint timer");
+    if (phase !== "sniff") caller.abort(new Error("fixture caller after endpoint deadline retirement"));
     if (phase === "sniff") { response = await pending; assert.equal(response.status, 502); await response.text(); }
     else await consumed;
     await f.drain(); gate.resolve(); await setImmediate();
     assert.equal(cancels, 1); assert.equal(f.events.length, 1);
-    assert.equal(f.events[0].status, "timeout"); assert.equal(f.events[0].status_code, phase === "sniff" ? 502 : 200);
+    assert.equal(f.events[0].status, phase === "sniff" ? "timeout" : "client_error"); assert.equal(f.events[0].status_code, phase === "sniff" ? 502 : 200);
     assert.equal(f.events[0].actual_cost_micros, f.events[0].reserved_cost_micros);
     await assertBudgets(f, [f.events[0].actual_cost_micros]);
   }
@@ -621,19 +633,22 @@ for (const format of ["sse", "json"]) test(`${format} rejections own reciprocal 
   }
 });
 
-test("an accepted rejection keeps its delivery deadline while an earlier selection deadline remains first", async t => {
+test("rejection delivery retires the endpoint deadline while an earlier selection deadline remains first", async t => {
   const deadline = await endpointDeadline(t);
   for (const phase of ["selection", "delivery"]) {
-    const f = await fixture(t, phase === "selection", { limit: 1_000_000, fixedCost: 7 });
+    const f = await fixture(t, phase === "selection", { limit: 1_000_000, fixedCost: 7 }), caller = new AbortController();
     let selects = 0, cancels = 0;
     if (phase === "selection") f.env.ACCESS_CONTROL.beforeFetch = (_name, request) => {
       if (new URL(request.url).pathname === "/grant-pools/select" && ++selects === 2) { deadline(); throw new Error("fixture selection rejected"); }
     };
     f.response = () => new Response(new ReadableStream({ cancel() { cancels++; } }, { highWaterMark: 0 }), { status: 429 });
-    const response = await f.request();
+    const response = await f.request({}, {}, "/v1/responses", caller.signal);
     assert.equal(response.status, 429);
-    const consumed = assert.rejects(response.text(), /deadline/);
-    if (phase === "delivery") deadline();
+    const consumed = assert.rejects(response.text(), phase === "selection" ? /deadline/ : /fixture caller/);
+    if (phase === "delivery") {
+      assert.equal(deadline(), false);
+      caller.abort(new Error("fixture caller after endpoint deadline retirement"));
+    }
     await consumed; await f.drain();
     assert.equal(cancels, 1); assert.equal(f.sent.length, 1); assert.equal(f.events.length, 1);
     assert.equal(f.events[0].status, phase === "selection" ? "timeout" : "client_error");
