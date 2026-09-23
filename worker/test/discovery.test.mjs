@@ -13,6 +13,33 @@ test("authorized model metadata preserves declared reasoning efforts without add
   assert.equal("supportedReasoningEfforts" in models.find(({ id }) => id === "openai/gpt-5.5"), false);
 });
 
+test("catalog and session preserve saved provider health independently of operation eligibility", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.config.enabled = false;
+  const fresh = { providerId: "openai", status: "verified", checkedAt: new Date(Date.now() - 1_000).toISOString(), latencyMs: 42 };
+  const stale = { ...fresh, checkedAt: new Date(Date.now() - 86_400_001).toISOString() };
+  const failed = { ...fresh, status: "failed", latencyMs: 75, error: "Fixture probe failed." };
+  for (const [health, verified] of [[fresh, true], [stale, false], [failed, false], [null, false]]) {
+    if (health) fixture.records.set("health/providers/openai", health);
+    else fixture.records.delete("health/providers/openai");
+    for (const enabled of [true, false]) {
+      fixture.connection.enabled = enabled;
+      for (const [handler, mode] of [[catalogResponse, "key"], [sessionResponse, "session"]]) {
+        fixture.calls.length = 0;
+        const body = await (await handler(fixture.request(mode), fixture.env)).json();
+        const catalog = body.entitlements?.catalog ?? body;
+        const view = catalog.providers.find(({ id }) => id === "openai");
+        assert.equal(view.readiness.verified, verified);
+        assert.equal(view.readiness.lastCheckedAt, health?.checkedAt ?? null);
+        assert.equal(view.readiness.latencyMs, health?.latencyMs ?? null);
+        assert.equal(view.offers.some(({ eligible }) => eligible), enabled);
+        if (body.entitlements) assert.deepEqual(body.entitlements.providers.find(({ provider }) => provider === "openai").readiness, view.readiness);
+        assert.equal(fixture.calls.filter(({ path }) => path === "kv-list").length, 1);
+      }
+    }
+  }
+});
+
 test("mandatory request fees have the same catalog admission for policy and provider budgets", async (t) => {
   const fixture = await fusionDiscoveryFixture(t);
   fixture.config.enabled = false;
@@ -418,7 +445,11 @@ async function fusionDiscoveryFixture(t) {
     OPENAI_API_KEY: "fixture-environment-key", CLAWROUTER_LOCAL_AUTH: "enabled",
     POLICY_KV: {
       async get(key) { return Array.isArray(key) ? new Map(key.map((item) => [item, records.get(item) ?? null])) : records.get(key) ?? null; },
-      async list() { throw new Error("client discovery must not scan KV"); },
+      async list({ prefix }) {
+        assert.equal(prefix, "health/providers/", "discovery only lists saved provider health, never grant credentials");
+        calls.push({ path: "kv-list", body: { prefix } });
+        return { keys: [...records.keys()].filter((key) => key.startsWith(prefix)).map((name) => ({ name })), list_complete: true };
+      },
     },
     BUDGET_LEDGER: { idFromName: (name) => name, get: () => ({ fetch: async (url) => {
       assert.equal(new URL(url).pathname, "/status", "discovery only observes balances");

@@ -11,7 +11,7 @@ import { contentRetentionDefault } from "./content-retention.ts";
 import { loadFusionConfig } from "./fusion-config";
 import { FUSION_MODEL_ID } from "./fusion";
 import { authenticateProxyKey } from "./proxy-auth";
-import { assertProviderAccess, modelRoute, modelSupportsEndpoint, providerReadinessForState, snapshot, unifiedPathForEndpoint, type Readiness } from "./providers";
+import { assertProviderAccess, listHealth, modelRoute, modelSupportsEndpoint, providerReadinessForState, snapshot, unifiedPathForEndpoint, type Readiness } from "./providers";
 import type { AccessSession, AuthorizedIdentity, CompiledModel, CompiledProvider, Env, ProviderConnection } from "./types";
 import { errorResponse, HttpError, privateJson, sha256Hex } from "./utils";
 
@@ -238,6 +238,7 @@ interface CatalogOffer {
 }
 
 async function clientInventory(identities: AuthorizedIdentity[], env: Env, connections: ProviderConnection[]) {
+  const health = await listHealth(env);
   const policyBalances = new Map<string, ReturnType<typeof budgetStatus>>();
   const views = await Promise.all(snapshot.providers.map(async (provider) => {
     const entries = identities.filter((entry) => entry.policy.enabled && (!entry.policy.providers.length || entry.policy.providers.includes(provider.id)));
@@ -309,7 +310,7 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env, conne
     const websockets = [...new Set(offers.filter((offer) => offer.eligible && offer.transport === "websocket").map((offer) => offer.endpoint))];
     const grants = [...new Map(pools.flatMap(({ candidates }) => candidates.available.map(({ key, grant }) => [key, { key, grant }] as const))).values()];
     const executable = offers.some((offer) => offer.eligible);
-    const readiness = { ...providerReadinessForState(provider, env, grants, connection), executableEndpoints: [...new Set([...endpoints, ...websockets])], executable, status: !connection.enabled ? "disabled" : executable ? "configured" : configured ? "unavailable" : "unconfigured", reasons: [...new Set(offers.flatMap((offer) => offer.reasonCode ? [offer.reasonCode] : []))] };
+    const readiness = { ...providerReadinessForState(provider, env, grants, connection, health.get(provider.id)), executableEndpoints: [...new Set([...endpoints, ...websockets])], executable, status: !connection.enabled ? "disabled" : executable ? "configured" : configured ? "unavailable" : "unconfigured", reasons: [...new Set(offers.flatMap((offer) => offer.reasonCode ? [offer.reasonCode] : []))] };
     return [provider.id, { configured: !!configured, endpoints, websockets, models: eligibleModels(), eligibleModels, offers, readiness }] as const;
   }));
   return new Map(views);
