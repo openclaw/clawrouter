@@ -287,8 +287,8 @@ export function CatalogScreen({ services, allServices, selected, policies, conne
         <div className="catalogControls">
           <div className="catalogMeta"><strong>{services.length} services</strong><span>{usableCount} usable · {grantedCount} granted · {blockedCount} blocked</span></div>
           <label><span>search catalog</span><div className="inputWithIcon"><Search aria-hidden="true" /><input name="catalog-search" value={query} onChange={(event) => setQuery(event.target.value)} placeholder="service, provider, model, route" /></div></label>
-          <div className="kindTabs" role="tablist" aria-label="service kind">
-            {kinds.map((item) => <button key={item} type="button" className={kind === item ? "active" : ""} onClick={() => setKind(item)}>{kindLabel(item)}<span>{kindCounts.get(item) ?? 0}</span></button>)}
+          <div className="kindTabs" role="group" aria-label="service kind">
+            {kinds.map((item) => <button key={item} type="button" aria-pressed={kind === item} className={kind === item ? "active" : ""} onClick={() => setKind(item)}>{kindLabel(item)}<span>{kindCounts.get(item) ?? 0}</span></button>)}
           </div>
         </div>
         <EntityTable

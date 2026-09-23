@@ -64,6 +64,10 @@ contrast in both themes. Mobile layouts must retain the information and actions
 available on desktop. Empty, loading, error, and disabled states need explicit
 explanations.
 
+Filters that change one result list use labeled groups of native buttons with
+`aria-pressed` for the active choice. Reserve tab semantics for controls that
+switch between associated panels.
+
 `pnpm --dir admin test:browser` builds the console and runs desktop/mobile
 screenshot, accessibility, keyboard-focus, and self-service credential checks.
 The committed screenshot baselines are for CI's Linux Chromium environment;
