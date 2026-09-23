@@ -2,7 +2,8 @@ import { Buffer } from "node:buffer";
 
 const MAX_RESPONSE_BYTES = 128 * 1024;
 // RFC 9110 media-type parameters: reject HTML, lists and malformed JSON lookalikes.
-const JSON_MEDIA_TYPE = /^application\/json(?:[ \t]*;[ \t]*(?:[!#$%&'*+.^_`|~\w-]+=(?:[!#$%&'*+.^_`|~\w-]+|"(?:[\t !#-\[\]-~\x80-\xff]|\\[\t -~\x80-\xff])*"))?)*[ \t]*$/i;
+// Optional parameters own their leading whitespace to keep empty slots unambiguous.
+const JSON_MEDIA_TYPE = /^application\/json(?:[ \t]*;(?:[ \t]*[!#$%&'*+.^_`|~\w-]+=(?:[!#$%&'*+.^_`|~\w-]+|"(?:[\t !#-\[\]-~\x80-\xff]|\\[\t -~\x80-\xff])*"))?)*[ \t]*$/i;
 
 export async function adminRequest(
   path,

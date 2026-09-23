@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import test from "node:test";
 import { adminRequest } from "../scripts/admin-api.mjs";
 
@@ -89,6 +90,22 @@ for (const contentType of ["application/json", "Application/JSON; Charset=UTF-8"
 
 test("acknowledgment accepts bodyless 204", async () => {
   assert.equal(await acknowledge(new Response(null, { status: 204 })), undefined);
+});
+
+test("acknowledgment rejects many empty MIME parameter slots without backtracking", () => {
+  // A child deadline bounds the regression even if synchronous regex work stalls.
+  const child = spawnSync(process.execPath, ["--input-type=module", "--eval", `
+    import assert from "node:assert/strict";
+    import { adminRequest } from "./scripts/admin-api.mjs";
+    await assert.rejects(adminRequest("/v1/admin/fixture", {
+      method: "PUT", env: ${JSON.stringify(env)}, responseMode: "ack",
+      fetchImpl: async () => new Response(null, { headers: {
+        "content-type": "application/json;" + "\\t;".repeat(1_000) + "!",
+      } }),
+    }), { message: "admin API returned non-JSON 200" });
+  `], { cwd: new URL("..", import.meta.url), encoding: "utf8", timeout: 5_000 });
+  assert.equal(child.error, undefined);
+  assert.equal(child.status, 0, child.stderr);
 });
 
 for (const contentType of [null, "text/html", "application/problem+json", "application/jsonp", "text/application/json", "application/json, text/html", "application/json garbage", "application/json; charset", "application/json; charset=", 'application/json; charset="unterminated', 'application/json; charset="utf-8"garbage']) {
