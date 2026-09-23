@@ -1,11 +1,13 @@
-import type { AccessPolicyEntry, ProxyCredential, ProxyCredentialEntry } from "./types";
+import type { AccessControlUser, AccessPolicyEntry, ProxyCredential, ProxyCredentialEntry } from "./types";
 import { cleanId, HttpError, normalizeEmail } from "./utils";
 
-export function credentialResponsesFrom(policyEntries: AccessPolicyEntry[], credentialEntries: ProxyCredentialEntry[]) {
+export function credentialResponsesFrom(policyEntries: AccessPolicyEntry[], credentialEntries: ProxyCredentialEntry[], users: AccessControlUser[] = []) {
   const policies = new Map(policyEntries.map((entry) => [entry.policyId, entry.policy]));
+  const disabled = new Set(users.filter((user) => user.record.enabled === false).map((user) => user.email));
   return credentialEntries.map((entry) => {
     const policy = policies.get(entry.credential.policyId), generationMatches = !!policy && entry.credential.policyGeneration === policy.generation;
-    return { credentialId: entry.credentialId, policyId: entry.credential.policyId, enabled: entry.credential.enabled, policyEnabled: policy?.enabled ?? false, generationMatches, active: entry.credential.enabled && !!policy?.enabled && generationMatches, principalId: entry.credential.principalId ?? null };
+    const principalEnabled = !entry.credential.principalId || !disabled.has(normalizeEmail(entry.credential.principalId) ?? "");
+    return { credentialId: entry.credentialId, policyId: entry.credential.policyId, enabled: entry.credential.enabled, policyEnabled: policy?.enabled ?? false, generationMatches, principalEnabled, active: entry.credential.enabled && !!policy?.enabled && generationMatches && principalEnabled, principalId: entry.credential.principalId ?? null };
   });
 }
 

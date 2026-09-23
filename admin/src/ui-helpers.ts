@@ -3,6 +3,7 @@ import providerIconManifest from "./provider-icons.json";
 import {
   catalogProviderIds,
   currencyInput,
+  credentialOutcome,
   errorMessage,
   optionalNumber,
   parseGroups,
@@ -275,15 +276,7 @@ export function usageEventTone(event: UsageAuditEvent): OutcomeTone {
   return "neutral";
 }
 
-export function credentialOutcome(credential: ProxyCredential, policies: AccessPolicy[]): { label: string; tone: OutcomeTone; active: boolean } {
-  const policy = policies.find((item) => item.policyId === credential.policyId);
-  if (!credential.enabled) return { label: "revoked", tone: "revoked", active: false };
-  if (!policy) return { label: "policy missing", tone: "revoked", active: false };
-  if (credential.policyEnabled === false || !policy.enabled) return { label: "policy disabled", tone: "revoked", active: false };
-  if (credential.generationMatches === false) return { label: "stale", tone: "neutral", active: false };
-  if (credential.active === false) return { label: "inactive", tone: "neutral", active: false };
-  return { label: "active", tone: "active", active: true };
-}
+export { credentialOutcome } from "./domain";
 
 export function usagePolicyId(row: AdminUsageRow) {
   return row.policyId ?? row.kid;

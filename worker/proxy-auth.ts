@@ -13,15 +13,17 @@ export async function authenticateProxyKey(headers: Headers, env: Env): Promise<
   if (!credentialEntry.credential.enabled) return errorResponse("proxy_key_revoked", "proxy key is revoked", 403);
   if (!policyEntry.policy.enabled) return errorResponse("policy_revoked", "access policy is revoked", 403);
   if (credentialEntry.credential.policyGeneration !== policyEntry.policy.generation) return errorResponse("credential_policy_stale", "proxy credential is not bound to the current access policy generation", 403);
-  let exempt = false;
-  if (credentialEntry.credential.principalId) exempt = (await resolveUsers(env, [credentialEntry.credential.principalId]))[0]?.record.contentRetentionDisabled ?? false;
+  const owner = credentialEntry.credential.principalId ? (await resolveUsers(env, [credentialEntry.credential.principalId]))[0] : undefined;
+  // Unowned and unmaterialized service keys remain valid; explicit owner disable
+  // blocks both new requests and subsequent admissions on existing WebSockets.
+  if (owner?.record.enabled === false) return errorResponse("principal_disabled", "proxy key owner is disabled", 403);
   return {
     credentialId: parsed.kid,
     principalId: credentialEntry.credential.principalId ?? null,
     authType: "proxy_key",
     policyId: credentialEntry.credential.policyId,
     policy: policyEntry.policy,
-    contentRetentionDisabled: exempt,
+    contentRetentionDisabled: owner?.record.contentRetentionDisabled ?? false,
   };
 }
 
