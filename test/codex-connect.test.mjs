@@ -320,7 +320,15 @@ for (const additions of ["empty", "comments", "provider"]) test(`native generate
   const f = await fixture(t);
   const env = { PATH: process.env.PATH, HOME: f.directory, CODEX_HOME: f.home, RUST_LOG: "warn", CLAWROUTER_API_KEY: secret };
   const origin = f.connect[2], requests = [];
+  const pluginList = "/control/plugins/featured?platform=codex";
   f.state.respond = async (request, response) => {
+    // Both native versions fetch this optional-auth control-plane list at
+    // startup, independently of the selected inference provider.
+    if (request.method === "GET" && request.url === pluginList) {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("[]");
+      return true;
+    }
     if (request.method !== "POST") return false;
     let text = "";
     for await (const chunk of request) text += chunk;
@@ -401,6 +409,7 @@ for (const additions of ["empty", "comments", "provider"]) test(`native generate
   } else assert.ok((await readFile(f.profile, "utf8")).endsWith(extra));
   await run(true, additions !== "empty", false);
   assert.equal(await readFile(join(f.home, "config.toml"), "utf8"), root);
-  const unexpected = f.state.requests.filter((request) => !((request.method === "GET" && request.url === "/v1/catalog") || (request.method === "POST" && ["/v1/native/fixture/v1/responses", "/v1/responses"].includes(request.url))));
-  assert.deepEqual(unexpected.map(({ method, url }) => ({ method, url })), [], "native proof must use only the isolated catalog and synthetic inference routes");
+  for (const request of f.state.requests.filter((request) => request.url === pluginList)) assert.equal(request.authorization, undefined, "router key must not reach the control plane");
+  const unexpected = f.state.requests.filter((request) => !((request.method === "GET" && ["/v1/catalog", pluginList].includes(request.url)) || (request.method === "POST" && ["/v1/native/fixture/v1/responses", "/v1/responses"].includes(request.url))));
+  assert.deepEqual(unexpected.map(({ method, url }) => ({ method, url })), [], "native proof must use only the isolated catalog, control, and synthetic inference routes");
 });
