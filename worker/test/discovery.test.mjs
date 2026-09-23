@@ -22,8 +22,6 @@ test("catalog models preserve declared reasoning efforts without adding sibling 
 
   assert.deepEqual(gpt56.supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh", "max"]);
   assert.deepEqual(gpt55.supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh"]);
-  assert.equal(gpt55.requestParameters.chat_completions.defaultReasoningEffort, "medium");
-  assert.equal(gpt55.requestParameters.chat_completions.temperature, undefined);
 });
 
 test("budgeted proxy-key catalogs omit unpriced models without fixed request pricing", () => {

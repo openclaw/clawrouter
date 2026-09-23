@@ -41,7 +41,10 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.deepEqual(gpt56.capabilities, ["llm.responses", "llm.chat"]);
   assert.deepEqual(gpt56.supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh", "max"]);
   assert.deepEqual(compiled.model_index["openai/gpt-5.6"].supportedReasoningEfforts, gpt56.supportedReasoningEfforts);
-  assert.deepEqual(openai.models.find((model) => model.id === "openai/gpt-5.5").supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh"]);
+  const gpt55 = openai.models.find((model) => model.id === "openai/gpt-5.5");
+  assert.deepEqual(gpt55.supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh"]);
+  assert.equal(gpt55.requestParameters.chat_completions.defaultReasoningEffort, "medium");
+  assert.equal(gpt55.requestParameters.chat_completions.temperature, undefined);
   assert.equal(astra.requestParameters.chat_completions.temperature, "unsupported");
   assert.equal(astra.requestParameters.responses.toolCalling, "supported");
   assert.equal(gpt56.requestParameters.chat_completions.defaultReasoningEffort, "medium");
