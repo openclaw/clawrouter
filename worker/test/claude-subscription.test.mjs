@@ -139,7 +139,7 @@ test("disabled Claude grants cancel maintenance and reject credential materializ
   const values = new Map();
   const env = attachGrantCredentialNamespace({
     POLICY_KV: {
-      async get(key) { return structuredClone(values.get(key) ?? null); },
+      async get(key, type) { const value = values.get(key) ?? null; return type === "text" && value !== null ? JSON.stringify(value) : structuredClone(value); },
       async put(key, value) { values.set(key, JSON.parse(value)); },
     },
     ACCESS_CONTROL: {

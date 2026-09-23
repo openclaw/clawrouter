@@ -330,10 +330,124 @@ test("transient refresh failures schedule one retry window instead of hammering 
   assert.ok(env.GRANT_CREDENTIALS.objects.get(key).alarm() > Date.now());
 });
 
+test("a pre-owner CLI tombstone migrates before an alarm can reuse secrets", async (context) => {
+  const key = "oauth/policy/openai", values = new Map(), env = credentialEnv(values);
+  const active = await putGrantCredentials(env, key, legacyGrant({ refresh: { tokenUrl: "https://token.example/token", extraParams: { audience: "fixture", client_secret: "nested-private" } } }));
+  const owner = env.GRANT_CREDENTIALS.objects.get(key), old = owner.values.get("credential");
+  delete old.metadata;
+  old.nextRefreshAttemptAt = "2020-01-01T00:00:00.000Z";
+  old.expiresAt = "2020-01-01T00:00:00.000Z";
+  values.set(key, { ...active, enabled: false, revokedAt: "2026-09-01T01:00:00.000Z", provider: "wrong-provider", accountId: "wrong-account" });
+  let calls = 0;
+  context.mock.method(globalThis, "fetch", async () => { calls += 1; throw new Error("revoked grant reached provider"); });
+
+  await owner.object.alarm();
+  const tombstone = owner.values.get("credential");
+  assert.equal(tombstone.enabled, false);
+  assert.equal(tombstone.generation, old.generation + 1);
+  assert.equal(tombstone.revokedAt, "2026-09-01T01:00:00.000Z");
+  assert.equal(tombstone.providerId, "openai");
+  assert.equal(tombstone.accountId, "account-test");
+  assert.deepEqual(tombstone.refresh.extraParams, { audience: "fixture" });
+  assert.doesNotMatch(JSON.stringify(tombstone), /access-old|refresh-old|nested-private/);
+  assert.equal(owner.alarm(), null);
+  assert.equal(values.get(key).enabled, false);
+  assert.equal(values.get(key).hasAccessToken, false);
+  await assert.rejects(() => materializeGrantCredentials(env, key, active, "openai", refreshConfig(), true), (error) => error.code === "grant_disabled");
+  assert.equal(calls, 0);
+});
+
+for (const failure of ["index", "storage"]) test(`negative upgrade migration retries a failed ${failure} before provider I/O`, async (context) => {
+  const key = "oauth/policy/openai", values = new Map(), env = credentialEnv(values);
+  const active = await putGrantCredentials(env, key, legacyGrant());
+  const owner = env.GRANT_CREDENTIALS.objects.get(key);
+  delete owner.values.get("credential").metadata;
+  values.set(key, { ...active, enabled: false, revokedAt: "2026-09-01T01:00:00.000Z" });
+  let syncs = 0, fail = true, providerCalls = 0;
+  env.ACCESS_CONTROL.get = () => ({ fetch: async () => {
+    syncs += 1;
+    if (failure === "index" && fail) { fail = false; throw new Error("fixture index unavailable"); }
+    return new Response("updated");
+  } });
+  const put = owner.state.storage.put;
+  owner.state.storage.put = async (...args) => {
+    if (failure === "storage" && fail) { fail = false; throw new Error("fixture storage unavailable"); }
+    return put(...args);
+  };
+  context.mock.method(globalThis, "fetch", async () => { providerCalls += 1; throw new Error("unexpected provider I/O"); });
+  await assert.rejects(() => owner.object.alarm());
+  assert.equal(owner.values.get("credential").metadata, undefined);
+  assert.equal(values.get(key).enabled, false);
+  await owner.object.alarm();
+  assert.equal(syncs, 2);
+  assert.equal(owner.values.get("credential").enabled, false);
+  assert.equal(owner.values.get("credential").accessToken, undefined);
+  assert.equal(owner.alarm(), null);
+  assert.equal(providerCalls, 0);
+});
+
+test("upgrade migration adopts a legacy pause and never adopts a legacy re-enable", async () => {
+  for (const [ownerEnabled, kvEnabled] of [[true, false], [false, true]]) {
+    const key = "oauth/policy/openai", values = new Map(), env = credentialEnv(values);
+    const active = await putGrantCredentials(env, key, legacyGrant());
+    const owner = env.GRANT_CREDENTIALS.objects.get(key), old = owner.values.get("credential");
+    delete old.metadata;
+    old.enabled = ownerEnabled;
+    values.set(key, { ...active, enabled: kvEnabled });
+    await owner.object.alarm();
+    assert.equal(owner.values.get("credential").enabled, false);
+    assert.equal(owner.values.get("credential").accessToken, "access-old", "pause retains secrets without allowing use");
+    assert.equal(owner.alarm(), null);
+  }
+});
+
+test("revocation ignores legacy hints for an existing owner even without KV metadata", async () => {
+  const key = "oauth/policy/openai", values = new Map(), env = credentialEnv(values);
+  await putGrantCredentials(env, key, legacyGrant({ label: "canonical label" }));
+  values.delete(key);
+  const tombstone = await revokeGrantCredentials(env, key, { provider: "retired-provider", kind: "api_key", label: "wrong label" });
+  assert.equal(tombstone.provider, "openai");
+  assert.equal(tombstone.kind, "subscription");
+  assert.equal(tombstone.label, "canonical label");
+  const repeated = await revokeGrantCredentials(env, key, { provider: "another-provider" });
+  assert.deepEqual(repeated, tombstone);
+});
+
+test("legacy raw tokens can be replaced or revoked through the owner", async () => {
+  const key = "oauth/policy/retired", values = new Map([[key, "raw-token-private"]]), env = credentialEnv(values);
+  const tombstone = await revokeGrantCredentials(env, key, { provider: "retired-provider", kind: "oauth", label: "retired account" });
+  assert.equal(tombstone.provider, "retired-provider");
+  assert.equal(tombstone.label, "retired account");
+  assert.equal(tombstone.enabled, false);
+  assert.doesNotMatch(JSON.stringify(values.get(key)), /raw-token-private/);
+  const replacementKey = "oauth/policy/replacement";
+  values.set(replacementKey, "raw-token-private");
+  const replacement = await putGrantCredentials(env, replacementKey, legacyGrant());
+  assert.equal(replacement.hasAccessToken, true);
+  await assert.rejects(() => revokeGrantCredentials(env, "oauth/policy/missing"), (error) => error.status === 404);
+});
+
+test("legacy revoke normalizes metadata and removes the previous provider from the pool", async () => {
+  const key = "oauth/policy/retired", values = new Map([[key, { provider: "old-provider", account_id: "legacy-account", created_at: "2026-09-01T00:00:00.000Z", access_token: "legacy-private", refresh: { extraParams: { client_secret: "nested-private", audience: "fixture" } } }]]), env = credentialEnv(values);
+  let sync;
+  env.ACCESS_CONTROL.get = () => ({ fetch: async (_url, init) => { sync = JSON.parse(init.body); return new Response("updated"); } });
+  const tombstone = await revokeGrantCredentials(env, key, { provider: "retired-provider", kind: "oauth" });
+  assert.equal(sync.previousProvider, "old-provider");
+  assert.equal(sync.provider, "retired-provider");
+  assert.equal(sync.enabled, false);
+  assert.equal(tombstone.accountId, "legacy-account");
+  assert.equal(tombstone.createdAt, "2026-09-01T00:00:00.000Z");
+  assert.deepEqual(tombstone.refresh.extraParams, { audience: "fixture" });
+  assert.doesNotMatch(JSON.stringify(tombstone), /legacy-private|nested-private/);
+});
+
 function credentialEnv(values) {
   return attachGrantCredentialNamespace({
     POLICY_KV: {
-      async get(key) { return structuredClone(values.get(key) ?? null); },
+      async get(key, type) {
+        const value = values.get(key) ?? null;
+        return value === null ? null : type === "text" ? typeof value === "string" ? value : JSON.stringify(value) : typeof value === "string" ? JSON.parse(value) : structuredClone(value);
+      },
       async put(key, value) { values.set(key, JSON.parse(value)); },
     },
   });

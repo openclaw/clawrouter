@@ -10,6 +10,7 @@ import { applyTemplateHeaders, resolveTemplate } from "./provider-templates.ts";
 const REFRESH_MARGIN_MS = 5 * 60_000;
 const MAX_SECRET_BYTES = 64 * 1024;
 const MAX_REFRESH_RESPONSE_BYTES = 128 * 1024;
+const MAX_LEGACY_GRANT_BYTES = 3 * 1024 * 1024;
 const MIN_ALARM_DELAY_MS = 1_000;
 const MAX_MAINTENANCE_FAILURES = 6;
 const snapshot = snapshotJson as unknown as ProviderSnapshot;
@@ -81,6 +82,8 @@ interface PutRequest {
   preserveUnspecifiedSecrets: boolean;
 }
 
+export type GrantRevokeMetadata = Pick<UpstreamGrant, "kind" | "provider" | "label">;
+
 class ReauthorizationRequired extends HttpError {
   projection: CredentialProjection;
 
@@ -119,7 +122,7 @@ export class GrantCredentialObject implements DurableObject {
       if (path === "/put") {
         const input = await readJson<PutRequest>(request);
         const current = await this.loadRecord(input.key);
-        const previous = current ? metadataGrant(current) : await this.env.POLICY_KV.get<UpstreamGrant>(input.key, "json");
+        const previous = current ? metadataGrant(current) : await legacyGrantMetadata(this.env, input.key);
         let record = current && !current.revokedAt && (input.preserveUnspecifiedSecrets || !hasPrimaryCredential(input.grant))
           ? updatedCredentialRecord(current, input.grant)
           : credentialRecord(input.grant, (current?.generation ?? previous?.credentialGeneration ?? 0) + 1);
@@ -136,10 +139,13 @@ export class GrantCredentialObject implements DurableObject {
       }
       if (path === "/materialize") return json(await this.materialize(await readJson<MaterializeRequest>(request)));
       if (path === "/revoke") {
-        const { key } = await readJson<{ key: string }>(request);
+        const { key, metadata } = await readJson<{ key: string; metadata?: GrantRevokeMetadata }>(request);
         const current = await this.loadRecord(key);
-        const previous = current ? metadataGrant(current) : await this.env.POLICY_KV.get<UpstreamGrant>(key, "json");
-        const record = current?.revokedAt ? current : revokedRecord(key, previous, current?.generation);
+        const previous = current ? metadataGrant(current) : await legacyGrantMetadata(this.env, key);
+        if (!previous) throw new HttpError(404, "unknown_upstream_grant", "upstream grant is not registered");
+        // Legacy CLI hints identify a record that has no owner. Once owned, its
+        // canonical identity and an existing tombstone cannot be overwritten.
+        const record = current?.revokedAt ? current : revokedRecord(key, current ? previous : { ...previous, ...metadata }, current?.generation);
         // Never erase the tombstone or restore secrets when a derived write fails.
         // Retrying revoke republishes this same generation after partial failure.
         await this.state.storage.put("credential", record);
@@ -279,9 +285,11 @@ export class GrantCredentialObject implements DurableObject {
   private async maintain(): Promise<void> {
     let record = await this.state.storage.get<CredentialRecord>("credential");
     if (!record) return;
+    const previous = record;
     record = await this.loadRecord(record.grantKey ?? "", record) ?? record;
     if (!record.enabled || !record.grantKey || !record.providerId || !record.kind || record.status === "reauth_required") {
       await this.state.storage.deleteAlarm();
+      if (record !== previous) await this.publishProjection(record);
       return;
     }
     const provider = snapshot.providers.find((candidate) => candidate.id === record!.providerId);
@@ -347,9 +355,18 @@ export class GrantCredentialObject implements DurableObject {
   private async loadRecord(key: string, stored?: CredentialRecord): Promise<CredentialRecord | undefined> {
     let record = stored ?? await this.state.storage.get<CredentialRecord>("credential");
     if (!record || record.metadata && record.enabled !== undefined) return record;
-    const metadata = key ? await this.env.POLICY_KV.get<UpstreamGrant>(key, "json") : null;
-    record = { ...record, grantKey: key || record.grantKey, metadata: secretlessGrant(metadata ?? {}), enabled: record.enabled ?? (metadata !== null && metadata.enabled !== false) };
+    const metadata = key ? await legacyGrantMetadata(this.env, key) : null;
+    const previous = metadataGrant(record);
+    record = { ...record, grantKey: key || record.grantKey, metadata: metadata ?? {}, enabled: record.enabled ?? (metadata !== null && metadata.enabled !== false) };
+    // Pre-owner CLI commands revoked only KV. Import negative lifecycle facts
+    // once, before any provider I/O; later KV reads never regain authority.
+    if (metadata?.revokedAt) record = revokedRecord(key, { ...metadataGrant(record), revokedAt: metadata.revokedAt }, record.generation);
+    else if (metadata?.enabled === false) record = { ...record, enabled: false, generation: record.generation + (record.enabled === false ? 0 : 1) };
+    // Keep the migration marker absent until index removal succeeds. A failed
+    // sync or owner write retries from the durable KV denial before dispatch.
+    if (metadata?.revokedAt || metadata?.enabled === false) await syncGrantPoolIndex(this.env, key, previous, metadataGrant(record));
     await this.state.storage.put("credential", record);
+    if (!record.enabled) await this.state.storage.deleteAlarm();
     return record;
   }
 }
@@ -387,6 +404,9 @@ function metadataGrant(record: CredentialRecord): UpstreamGrant {
 }
 
 function revokedRecord(key: string, metadata: UpstreamGrant | null, generation = metadata?.credentialGeneration ?? 0): CredentialRecord {
+  // Tagged CLI grants could contain nested secret fields in refresh metadata.
+  // A tombstone must discard these too, including when the owner predates it.
+  metadata = stripLegacySecrets(metadata) as UpstreamGrant | null;
   const revokedAt = metadata?.revokedAt ?? new Date().toISOString();
   return {
     version: 1, generation: generation + 1, enabled: false, status: "active",
@@ -502,8 +522,8 @@ export async function materializeGrantCredentials(
   })).grant;
 }
 
-export async function revokeGrantCredentials(env: Env, key: string): Promise<UpstreamGrant> {
-  return (await ownerCall<OwnerResponse>(env, key, "/revoke", { key })).grant;
+export async function revokeGrantCredentials(env: Env, key: string, metadata?: GrantRevokeMetadata): Promise<UpstreamGrant> {
+  return (await ownerCall<OwnerResponse>(env, key, "/revoke", { key, metadata })).grant;
 }
 
 export function secretlessGrant(grant: UpstreamGrant, projection?: CredentialProjection): UpstreamGrant {
@@ -614,8 +634,32 @@ async function ownerCall<T>(env: Env, key: string, path: string, body: unknown):
   return text && response.headers.get("content-type")?.includes("application/json") ? JSON.parse(text) as T : text as T;
 }
 
-function hasPrimaryCredential(grant: UpstreamGrant): boolean {
+export function hasPrimaryCredential(grant: UpstreamGrant): boolean {
   return [grant.credential, grant.accessToken, ...Object.values(grant.credentials ?? {})].some((value) => typeof value === "string" && value.length > 0);
+}
+
+async function legacyGrantMetadata(env: Env, key: string): Promise<UpstreamGrant | null> {
+  const raw = await env.POLICY_KV.get<string>(key, "text");
+  if (raw === null) return null;
+  if (new TextEncoder().encode(raw).byteLength > MAX_LEGACY_GRANT_BYTES) throw new HttpError(400, "invalid_upstream_grant", "legacy grant metadata exceeds the migration limit");
+  let value: unknown = {};
+  if (raw.trim().startsWith("{")) {
+    try { value = JSON.parse(raw); }
+    catch { throw new HttpError(400, "invalid_upstream_grant", "legacy grant metadata is invalid JSON"); }
+  }
+  const metadata = stripLegacySecrets(value) as Record<string, unknown>;
+  for (const [canonical, alias] of [["tokenType", "token_type"], ["expiresAt", "expires_at"], ["accountId", "account_id"], ["createdAt", "created_at"], ["updatedAt", "updated_at"], ["revokedAt", "revoked_at"]]) {
+    if (metadata[canonical] === undefined && metadata[alias] !== undefined) metadata[canonical] = metadata[alias];
+    delete metadata[alias];
+  }
+  return metadata as UpstreamGrant;
+}
+
+function stripLegacySecrets(value: unknown): unknown {
+  if (Array.isArray(value)) return value.map(stripLegacySecrets);
+  if (!value || typeof value !== "object") return value;
+  const secrets = new Set(["accessToken", "access_token", "refreshToken", "refresh_token", "credential", "credentials", "apiKey", "api_key", "token", "secret", "clientSecret", "client_secret", "password"]);
+  return Object.fromEntries(Object.entries(value).filter(([name]) => !secrets.has(name)).map(([name, item]) => [name, stripLegacySecrets(item)]));
 }
 
 function normalizedCredentials(value: Record<string, string>): Record<string, string> {

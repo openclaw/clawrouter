@@ -630,13 +630,12 @@ client-selected model IDs.
 
 ## Upstream Grants
 
-The compatibility `cf:oauth:*` helpers write version 1 upstream grants to
-`POLICY_KV`. The Worker imports a legacy grant into `GRANT_CREDENTIALS` on
-first use and then scrubs its KV secret fields. Prefer the admin API, console,
-or contributor-ticket flow for new grants so raw credentials go directly to
-their durable owner. Despite their legacy names, the helpers support
-`api_key`, `oauth`, and `subscription` grants. Register an OAuth grant for one
-access policy:
+The `cf:oauth:*` helpers use the authenticated admin API to update the grant's
+credential owner and pool index. Set `CLAWROUTER_BASE_URL` and
+`CLAWROUTER_ADMIN_TOKEN`; also set `CF_ACCESS_CLIENT_ID` and
+`CF_ACCESS_CLIENT_SECRET` together when Access protects the admin route.
+Despite their legacy names, these helpers support `api_key`, `oauth`, and
+`subscription` grants. Register an OAuth grant for one access policy:
 
 ```sh
 printf '%s' "$PROVIDER_ACCESS_TOKEN" | pnpm cf:oauth:put -- \
@@ -660,10 +659,10 @@ pnpm cf:oauth:put -- \
   --credential-env ANTHROPIC_API_KEY
 ```
 
-This stores a grant at `oauth/<policy-id>/<tokenRef>` or
-`oauth/tenants/<tenant>/<tokenRef>`. Canonical records contain `version: 1`,
-`enabled`, `kind`, `provider`, `label`, `tokenType`, `scopes`, timestamps, and
-the selected primary secret field. `api_key` grants require `credential` or a
+The grant key is `oauth/<policy-id>/<tokenRef>` or
+`oauth/tenants/<tenant>/<tokenRef>`. Secrets live in `GRANT_CREDENTIALS`;
+`POLICY_KV` contains routing metadata and credential-presence flags.
+`api_key` grants require `credential` or a
 non-empty `credentials` string map, `oauth` grants require `accessToken`, and
 `subscription` grants accept either a credential or access token.
 Use the provider id as `tokenRef` for the provider's default connection.
@@ -674,11 +673,22 @@ To create a same-provider pool, save multiple admin grants with distinct token
 references, the same `provider`, an integer `priority` from 0 through 1000000,
 and an optional positive `weight` up to 1000000. Lower priorities form the first
 active tier; routing never spills into a higher tier while a lower tier has an
-eligible grant. Admin writes and browser OAuth maintain the bounded pool index
-automatically.
-The direct `cf:oauth:*` compatibility helpers remain appropriate for the
-provider-id default grant; use the admin API or console for additional pool
-members so the control plane updates their indexes.
+eligible grant. CLI imports, admin writes, and browser OAuth maintain the
+bounded pool index automatically.
+
+`cf:oauth:put` replaces the entire grant at that key, including its credentials
+and account metadata. Omitted refresh tokens, credential bundles, and refresh
+configuration are cleared. Supply a fresh primary credential for each import.
+For a metadata edit that preserves credentials, use the console or the admin
+API's default PUT mode instead of the CLI replacement mode.
+
+`--local` now calls a running local Worker through the same authenticated API.
+It defaults to `http://127.0.0.1:8787` when `CLAWROUTER_BASE_URL` is unset, and
+rejects a configured non-loopback URL. Configure that Worker's admin token;
+the flag does not write offline Wrangler KV. `--binding` and `--config` are
+rejected before reading secrets. Replace those storage selectors with the
+target's `CLAWROUTER_BASE_URL` and `CLAWROUTER_ADMIN_TOKEN`. Do not use old CLI
+versions or raw KV writes to change a grant after it has a credential owner.
 
 Each access policy has a `grantRouting` object. Existing policies default to
 quota-aware `most_remaining` selection, failover enabled, stale state allowed
@@ -932,12 +942,16 @@ Revoke a grant without deleting audit history:
 pnpm cf:oauth:revoke -- --kid svc_docs --token-ref openai
 ```
 
-Revocation overwrites the grant with a canonical disabled tombstone. It retains
-the grant's metadata and timestamps, adds `revokedAt`, and recursively removes
+Revocation writes a disabled tombstone in the credential owner, cancels its
+maintenance alarm, and updates its pool and KV metadata. It retains the grant's
+non-secret metadata and creation timestamp, adds `revokedAt`, and removes
 stored access tokens, refresh tokens, single credentials, credential bundles,
 and other recognized secret fields. When revoking a raw legacy token, pass
 `--kind`, `--provider`, and `--label` to attach identifying metadata to its
-tombstone.
+tombstone. These hints apply only when the grant has no credential owner;
+they cannot change an existing owner's identity. Unknown grants return an error.
+Upgrades import existing KV revocation or disablement into pre-existing owners
+before provider requests or maintenance. Reconnecting requires a fresh credential.
 
 ## Proxy Routes
 

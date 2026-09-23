@@ -1,15 +1,12 @@
-import { spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
-import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { readFileSync } from "node:fs";
+import { adminRequest } from "./admin-api.mjs";
 import { parseArgs } from "./cli-args.mjs";
+import { grantTarget } from "./grant-target.mjs";
 
 const args = parseArgs(process.argv.slice(2));
-const kid = args.kid;
-const tenant = args.tenant;
-const tokenRef = required(args["token-ref"] ?? args.provider, "--token-ref or --provider");
+const target = grantTarget(args);
 const kind = parseKind(args.kind ?? "oauth");
-const provider = optionalValue(args, "provider");
+const provider = optionalValue(args, "provider") ?? target.tokenRef;
 const label = optionalValue(args, "label");
 assertSingleStdinSecret(args);
 const accessToken = readSecret(args, "access-token");
@@ -21,23 +18,11 @@ if (kind === "api_key" && refreshToken) {
   throw new Error("--refresh-token-* is only supported for oauth and subscription grants");
 }
 const tokenType = optionalValue(args, "token-type") ?? "Bearer";
-const binding = args.binding ?? "POLICY_KV";
-const config = args.config ?? ".wrangler.generated.toml";
-
-if (Boolean(kid) === Boolean(tenant)) {
-  throw new Error("exactly one of --kid or --tenant is required");
-}
-
-const key = kid ? `oauth/${kid}/${tokenRef}` : `oauth/tenants/${tenant}/${tokenRef}`;
-const now = new Date().toISOString();
 const grant = {
-  version: 1,
   enabled: true,
   kind,
   tokenType,
   scopes: parseList(optionalValue(args, "scopes")),
-  createdAt: now,
-  updatedAt: now,
 };
 setOptional(grant, "provider", provider);
 setOptional(grant, "label", label);
@@ -49,40 +34,14 @@ setOptional(grant, "expiresAt", parseTimestamp(optionalValue(args, "expires-at")
 setOptional(grant, "accountId", optionalValue(args, "account-id"));
 setOptional(grant, "subscription", subscriptionMetadata(args));
 setOptional(grant, "refresh", refreshMetadata(args));
-const grantPath = writeSecretJson(grant);
-
-try {
-  run("pnpm", [
-    "exec",
-    "wrangler",
-    "kv",
-    "key",
-    "put",
-    key,
-    "--path",
-    grantPath,
-    "--binding",
-    binding,
-    "--config",
-    config,
-    ...kvTargetArgs(args),
-  ]);
-} finally {
-  rmSync(grantPath, { force: true });
-  rmSync(join(grantPath, ".."), { force: true, recursive: true });
-}
-
-console.log(`stored canonical upstream grant ${key}; secrets were not printed`);
+await adminRequest(`${target.path}?mode=replace`, { method: "PUT", body: grant, env: target.env });
+console.log(`stored authoritative upstream grant ${target.key}; secrets were not printed`);
 
 function required(value, name) {
   if (typeof value !== "string" || !value.trim()) {
     throw new Error(`${name} is required`);
   }
   return value.trim();
-}
-
-function requiredOption(args, name) {
-  return required(optionalValue(args, name), `--${name}`);
 }
 
 function optionalValue(args, name) {
@@ -280,25 +239,4 @@ function setOptional(target, name, value) {
   if (value !== undefined) {
     target[name] = value;
   }
-}
-
-function run(command, args) {
-  const result = spawnSync(command, args, { encoding: "utf8", stdio: "inherit" });
-  if (result.status !== 0) {
-    throw new Error(`${command} failed`);
-  }
-}
-
-function writeSecretJson(value) {
-  const dir = mkdtempSync(join(tmpdir(), "clawrouter-oauth-"));
-  const path = join(dir, "grant.json");
-  writeFileSync(path, JSON.stringify(value), { encoding: "utf8", mode: 0o600 });
-  return path;
-}
-
-function kvTargetArgs(args) {
-  if (args.local) {
-    return ["--preview", "false"];
-  }
-  return ["--remote", "--preview", "false"];
 }
