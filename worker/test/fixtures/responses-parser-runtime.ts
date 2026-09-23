@@ -1,7 +1,8 @@
 import parser, { type Token } from "stream-json/core/parser.js";
 import { fun, none } from "stream-chain/core";
 
-export { PolicyBindingIndexObject, BudgetLedgerObject, GrantCredentialObject, UsageLedgerObject } from "../../index.ts";
+// Keep the fixture's classes aligned with every real Wrangler binding.
+export * from "../../index.ts";
 
 // This entry point qualifies the maintained parser under the real Worker flags.
 // Fixture inputs are small; the product's bounded metadata observer is separate.
