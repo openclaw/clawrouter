@@ -33,7 +33,7 @@ test("Google native path models use manifest pricing under a budgeted policy", (
     {},
   );
   const policy = { monthlyBudgetMicros: 1_000_000, requestCostMicros: null };
-  const cost = estimateCost(prepared.model, prepared.body, policy.requestCostMicros, "llm.stream");
+  const cost = estimateCost(prepared.model, prepared.body, policy.requestCostMicros, "llm.stream", streamGenerate.request_format);
 
   assert.equal(prepared.model?.id, "google/gemini-3.5-flash");
   assert.equal(prepared.body.model, undefined);

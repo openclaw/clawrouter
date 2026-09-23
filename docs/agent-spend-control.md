@@ -53,6 +53,28 @@ is configured. Every budgeted call fails closed until its route has versioned
 manifest pricing or a fixed policy price. A zero-cost route, such as Anthropic
 token counting, skips reservation.
 
+Gemini native requests containing `cachedContent`, `fileData`, or `inlineData`
+reserve the full declared input window, including media in system instructions
+or typed function-response parts. With the bundled Standard Gemini 3.5 Flash
+rate card, 1,048,576 input tokens reserve **$1.572864 before output**.
+`generationConfig.maxOutputTokens` [bounds thinking and visible output together](https://ai.google.dev/gemini-api/docs/generate-content/thinking#token-limits-and-max_output_tokens);
+`candidateCount` multiplies that bound. For example, 100 output tokens and one
+candidate add $0.000900, for a total reservation of **$1.573764**.
+
+Each configured policy and provider monthly budget must have enough unreserved
+headroom for the entire request. Otherwise ClawRouter returns HTTP 402 before
+dispatch, even for a small cached-content or media request. This corrected bound
+also applies to existing callers after upgrading. Increase the applicable budget
+headroom, or explicitly choose the fixed `requestCostMicros` policy tariff when
+that accounting model fits your deployment. A fixed tariff records the operator's
+chosen amount rather than measured provider charges.
+
+These amounts reserve budget capacity. Complete valid response usage settles
+the reported input, cache hits, visible output, and thinking tokens at the manifest
+rates and releases the unused reservation. Missing or malformed usage retains
+the reservation, as for other providers. The reservation is not an upstream
+invoice charge.
+
 Hosted web search adds fees and repeated model work that token pricing does not
 cover. Requests enabling Responses `web_search` or `web_search_preview` (including
 dated versions), Anthropic `web_search_*`, or Chat `web_search_options` now return
