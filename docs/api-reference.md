@@ -19,8 +19,8 @@ The optional `/private/v1/{models,catalog,responses}` facade has its own pinned 
 | `GET` | `/v1/health` | Service health, application version, and observability mode |
 | `GET` | `/v1/providers` | Compiled provider snapshot |
 | `GET` | `/v1/routes` | Compiled OpenAI-compatible, manifest, and native route catalog |
-| `GET` | `/v1/models` | OpenAI-style model list scoped to the proxy credential |
-| `GET` | `/v1/catalog` | Executable providers, models, formats, and transports scoped to the proxy credential |
+| `GET` | `/v1/models` | Model list scoped to the authenticated credential or session |
+| `GET` | `/v1/catalog` | Authorized configured providers and operation/model/transport offers |
 | `GET` | `/v1/me` | Proxy-credential identity and policy summary |
 | `GET` | `/v1/usage` | Caller policy or principal budget and usage summary |
 | `GET` | `/v1/key/inspect` | Proxy-credential verification and readiness status |
@@ -36,9 +36,38 @@ This tightens earlier releases' policy-wide recent-event visibility. Administrat
 use `/v1/admin/usage` for the complete audit; their personal session endpoint
 still returns only their own events. Retained request content remains admin-only.
 
-`GET /v1/catalog` is the client integration contract. Each provider row reports whether the unified OpenAI-compatible route is executable, its native proxy base URL, and the request and response formats for executable native routes.
+`GET /v1/catalog` is the client integration contract. It reports `scope`
+(auth type, credential, principal) and `observedAt`. Only authorized configured
+providers appear; configured but unavailable rows remain inspectable. Static
+`/v1/providers` and `/v1/routes` describe registration, not caller eligibility.
 
-`/v1/models` and `/v1/catalog` use the same executable model projection. It applies the selected policy, provider budget, grant eligibility and cooldown, and endpoint requirements without selecting or refreshing credentials. A configured but unavailable grant pool never falls back to an environment credential. Token counting retains its zero-cost exemption; Fusion discovery still uses its separate readiness projection.
+Each provider's `offers` identifies an endpoint, model (or an operation form
+without a selected model), route, transport, selected policy and generation, `eligible`, and an
+optional `reasonCode`. `affordability` is `exact-covered`, `exact-blocked`, or
+`request-dependent`: fixed tariffs can be compared with observed balances,
+while token-priced requests depend on their actual input and parameters. Free
+token counting and declared zero-price operations remain available at exhausted
+positive limits. A configured zero limit still blocks ordinary requests.
+
+The projection observes the actual principal's policy ledger and the provider
+ledger without reserving budget, selecting credentials, refreshing accounts, or
+probing upstream. Observations are advisory; HTTP dispatch and every WebSocket
+create authenticate, check current grants, and reserve budget independently.
+Policy order is chosen by grant/transport eligibility before price or budget;
+an exhausted selected policy never causes a switch to a richer policy.
+
+Session offers target HTTP playground routes only. A session catalog cannot
+certify an issued key's native or WebSocket access; fetch the catalog with that
+key. The same session projection appears in `/v1/session`'s
+`entitlements.catalog` and in `/v1/entitlements`'s `catalog`.
+Policies without `tenantId` now use the dispatch/ledger tenant `default`
+consistently during Access selection and discovery, instead of inheriting the
+session tenant only in those two views.
+
+`/v1/models` uses the same eligible model projection. Grant-pool ownership stays
+unchanged: when canonical selection reports a configured pool with no available
+candidate, discovery does not reopen environment authorization. Fusion's
+advertised model uses the same concrete aggregator eligibility.
 
 Proxy (including native), admin, and pool-submission route identifiers are
 decoded once. Invalid percent escapes or invalid percent-encoded UTF-8 return

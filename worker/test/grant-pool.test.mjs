@@ -28,7 +28,7 @@ test("revoked grants leave the pool and policy selection sees indexed grants", a
   const pooled = grant("openai", "pooled", 20);
   await putGrant(env, "oauth/policy_b/openai-backup", pooled);
   const entries = [policy("policy_a"), policy("policy_b")];
-  assert.equal((await selectProviderPolicy(entries, "openai", "tenant_a", env)).policyId, "policy_b");
+  assert.equal((await selectProviderPolicy(entries, "openai", env)).policyId, "policy_b");
 
   const revoked = { ...pooled, enabled: false };
   env.values.set("oauth/policy_b/openai-backup", revoked);
@@ -127,7 +127,7 @@ test("Access policy choice respects endpoint support and pinned grant revisions 
   await putGrant(env, "oauth/policy_a/subscription", { ...grant("openai", "subscription"), kind: "subscription" });
   await putGrant(env, "oauth/policy_b/api", grant("openai", "api"));
   const requirement = { provider, endpoint: provider.endpoints.find((endpoint) => endpoint.id === "chat_completions"), mode: "http" };
-  assert.equal((await selectProviderPolicy([policy("policy_a"), policy("policy_b")], "openai", "tenant_a", env, requirement)).policyId, "policy_b");
+  assert.equal((await selectProviderPolicy([policy("policy_a"), policy("policy_b")], "openai", env, requirement)).policyId, "policy_b");
   const auth = { policyId: "policy_b", policy: policy("policy_b").policy };
   env.GRANT_CREDENTIALS = { idFromName: (name) => name, get: () => ({ fetch: async (_url, init) => {
     const { grant } = JSON.parse(init.body);

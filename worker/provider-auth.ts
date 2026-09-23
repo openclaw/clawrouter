@@ -26,14 +26,34 @@ export function applyProviderCredential(
   headers: Headers,
   query: URLSearchParams,
 ): void {
-  const transport = transportForGrant(provider, grant);
-  const scheme = transport?.auth ?? provider.auth.schemes.find((candidate) => candidate.type !== "oauth") ?? provider.auth.schemes[0];
+  const scheme = credentialScheme(provider, grant);
   const secret = providerSecret(provider, scheme, grant, env);
   if (scheme.type === "bearer" && secret) headers.set(scheme.header, scheme.format.replace("${secret}", secret));
   else if (scheme.type === "api_key" && secret) headers.set(scheme.header, secret);
   else if (scheme.type === "query_api_key" && secret) query.set(scheme.param, secret);
   else if (scheme.type === "sig_v4") { /* signed after the final URL and request body are known */ }
   else if (!secret && !(scheme.type === "bearer" && "required" in scheme && scheme.required === false)) throw new HttpError(503, "provider_not_configured", `provider ${provider.id} has no usable upstream credential`);
+}
+
+export function assertProviderCredential(provider: CompiledProvider, grant: UpstreamGrant | null, env: Env): void {
+  const scheme = credentialScheme(provider, grant);
+  if (scheme.type === "sig_v4") {
+    const present = (field: string, key: string) => grant
+      ? !!grant.credentials?.[field] || (grant.credentialStore === "durable_object" && grant.credentialFields?.includes(field))
+      : !!envValue(env, key);
+    if (!present("accessKeyId", "AWS_ACCESS_KEY_ID") || !present("secretAccessKey", "AWS_SECRET_ACCESS_KEY") || !envValue(env, "AWS_REGION"))
+      throw new HttpError(503, "provider_not_configured", "AWS access key, secret key, and region are required");
+    return;
+  }
+  const available = grant?.credentialStore === "durable_object"
+    ? grant.credentialStatus !== "reauth_required" && (grant.hasCredential || grant.hasAccessToken)
+    : !!providerSecret(provider, scheme, grant, env);
+  if (!available && !(scheme.type === "bearer" && "required" in scheme && scheme.required === false))
+    throw new HttpError(503, "provider_not_configured", `provider ${provider.id} has no usable upstream credential`);
+}
+
+function credentialScheme(provider: CompiledProvider, grant: UpstreamGrant | null): AuthScheme | GrantTransportAuth {
+  return transportForGrant(provider, grant)?.auth ?? provider.auth.schemes.find((candidate) => candidate.type !== "oauth") ?? provider.auth.schemes[0];
 }
 
 export function resolvedTransportHeaders(transport: CompiledGrantTransport | null, grant: UpstreamGrant | null): Record<string, string> {

@@ -4,58 +4,15 @@ import test from "node:test";
 
 import { providerById } from "../providers.ts";
 
-const { catalogModels } = await import("../discovery.ts");
 const { catalogResponse, modelsResponse, sessionResponse, entitlementResponse } = await import("../discovery.ts");
 const { sha256Hex } = await import("../utils.ts");
 
-const fireworks = providerById("fireworks");
-assert.ok(fireworks);
-const endpoints = fireworks.endpoints.map((endpoint) => endpoint.id);
-const openai = providerById("openai");
-assert.ok(openai);
-const openaiEndpoints = openai.endpoints.map((endpoint) => endpoint.id);
-
-test("catalog models preserve declared reasoning efforts without adding sibling metadata", () => {
-  const models = catalogModels(openai, openaiEndpoints, null);
-  const gpt56 = models.find((model) => model.id === "openai/gpt-5.6");
-  const gpt55 = models.find((model) => model.id === "openai/gpt-5.5");
-
-  assert.deepEqual(gpt56.supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh", "max"]);
-  assert.equal("supportedReasoningEfforts" in gpt55, false);
-});
-
-test("budgeted proxy-key catalogs omit unpriced models without fixed request pricing", () => {
-  const models = catalogModels(fireworks, endpoints, {
-    enabled: true,
-    generation: "test",
-    providers: ["fireworks"],
-    monthlyBudgetMicros: 1_000_000,
-    requestCostMicros: null,
-  });
-
-  assert.ok(models.some((model) => model.id === "fireworks/glm-5.2"));
-  assert.ok(!models.some((model) => model.id === "fireworks/gpt-oss-120b"));
-});
-
-test("unpriced catalog models remain for unmetered, fixed-price, and Access scopes", () => {
-  const policies = [
-    { enabled: true, generation: "unmetered", providers: ["fireworks"], monthlyBudgetMicros: null, requestCostMicros: null },
-    { enabled: true, generation: "fixed", providers: ["fireworks"], monthlyBudgetMicros: 1_000_000, requestCostMicros: 25 },
-    null,
-  ];
-
-  for (const policy of policies) {
-    const models = catalogModels(fireworks, endpoints, policy);
-    assert.ok(models.some((model) => model.id === "fireworks/gpt-oss-120b"));
-  }
-});
-
-test("provider budgets and the selected endpoint policy govern the same model projection", () => {
-  const unmetered = { monthlyBudgetMicros: null, requestCostMicros: null };
-  assert.ok(!catalogModels(fireworks, endpoints, unmetered, 100).some((model) => model.id === "fireworks/gpt-oss-120b"));
-  assert.ok(catalogModels(fireworks, endpoints, { ...unmetered, requestCostMicros: 1 }, 100).some((model) => model.id === "fireworks/gpt-oss-120b"));
-  const endpointPolicies = new Map([["chat_completions", { monthlyBudgetMicros: 100, requestCostMicros: null }]]);
-  assert.ok(!catalogModels(fireworks, endpoints, unmetered, null, endpointPolicies).some((model) => model.id === "fireworks/gpt-oss-120b"));
+test("authorized model metadata preserves declared reasoning efforts without adding sibling metadata", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  const catalog = await (await catalogResponse(fixture.request("key"), fixture.env)).json();
+  const models = catalog.providers.find(({ id }) => id === "openai").models;
+  assert.deepEqual(models.find(({ id }) => id === "openai/gpt-5.6").supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh", "max"]);
+  assert.equal("supportedReasoningEfforts" in models.find(({ id }) => id === "openai/gpt-5.5"), false);
 });
 
 test("mandatory request fees have the same catalog admission for policy and provider budgets", () => {
@@ -107,6 +64,7 @@ test("models and catalog share read-only grant eligibility, transport support, a
     assert.deepEqual(models.data.map(({ id, capabilities }) => ({ id, capabilities })), view.models.map(({ id, capabilities }) => ({ id, capabilities })));
     assert.deepEqual(view.models.find((model) => model.id === "openai/gpt-6-astra")?.capabilities ?? [], expectedCapabilities);
     assert.equal(view.routes.some((route) => route.websocket === "openai.responses"), websocket);
+    assert.ok(view.offers.filter((offer) => offer.transport === "websocket").every((offer) => offer.modelId !== null && ["native", "unified"].includes(offer.routeKind)));
     assert.ok(!paths.includes("/grant-pools/select"));
     return view;
   }
@@ -127,8 +85,8 @@ test("models and catalog share read-only grant eligibility, transport support, a
   policy.grantRouting = { staleState: "deny" };
   await compare([], false);
 
-  // A session's first policy may own HTTP subscription auth while its second
-  // policy owns the API grant used by the independently selected WS transport.
+  // A session's first policy owns subscription Responses, while its second
+  // owns Chat/embedding API auth. Neither grants this session a WS route.
   delete policy.grantRouting;
   grants.delete("oauth/fixture/api");
   policies.push({ policyId: "api", policy: { ...policy } });
@@ -138,15 +96,27 @@ test("models and catalog share read-only grant eligibility, transport support, a
   env.CLAWROUTER_LOCAL_AUTH = "enabled";
   const catalog = await (await catalogResponse(new Request("https://router.example/v1/catalog", { headers: { cookie: `clawrouter_session=${session}` } }), env)).json();
   const view = catalog.providers.find(({ id }) => id === "openai");
-  assert.equal(view.routes.find(({ endpoint }) => endpoint === "responses").websocket, "openai.responses");
+  assert.equal(view.routes.find(({ endpoint }) => endpoint === "responses").websocket, undefined);
+  assert.equal(view.nativeBaseUrl, null);
+  assert.ok(view.offers.every((offer) => offer.transport === "http" && ["playground", "unified"].includes(offer.routeKind)));
+  assert.ok(view.offers.every((offer) => offer.route.startsWith("/v1/playground/")));
+  assert.deepEqual([...new Set(view.offers.filter((offer) => offer.routeKind === "unified").map((offer) => offer.route))].sort(), ["/v1/playground/v1/chat/completions", "/v1/playground/v1/embeddings", "/v1/playground/v1/responses"]);
   assert.deepEqual(view.models.find(({ id }) => id === "openai/gpt-6-astra").capabilities, ["llm.responses", "llm.chat"]);
   assert.ok(!paths.includes("/grant-pools/select"));
 });
 
-test("zero policy and provider budgets preserve canonical free token counting", () => {
-  const provider = providerById("anthropic");
+test("zero policy and provider budgets preserve canonical free token counting", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.policy.providers = ["anthropic"];
+  fixture.env.ANTHROPIC_API_KEY = "fixture-anthropic-key";
+  fixture.config.enabled = false;
+  const connection = { providerId: "anthropic", enabled: true };
+  fixture.connections.push(connection);
   for (const [policyLimit, providerLimit] of [[0, null], [null, 0]]) {
-    const models = catalogModels(provider, provider.endpoints.map(({ id }) => id), { monthlyBudgetMicros: policyLimit, requestCostMicros: null }, providerLimit);
+    fixture.policy.monthlyBudgetMicros = policyLimit;
+    connection.monthlyBudgetMicros = providerLimit;
+    const catalog = await (await catalogResponse(fixture.request("key"), fixture.env)).json();
+    const models = catalog.providers.find(({ id }) => id === "anthropic").models;
     assert.ok(models.length > 0);
     assert.ok(models.every((model) => model.capabilities.length === 1 && model.capabilities[0] === "llm.count_tokens"));
   }
@@ -267,10 +237,81 @@ test("Fusion shares selected-policy model eligibility across key and session dis
   await compare(true, ["session"]);
 });
 
+test("catalog balances are principal scoped, fresh, and use the dispatch default tenant", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  Object.assign(fixture.policy, { tenantId: null, budgetScope: "principal", requestCostMicros: 20 });
+  fixture.connection.monthlyBudgetMicros = 100;
+  fixture.config.enabled = false;
+  const observations = [];
+  const remaining = new Map([["default:fixture:alpha@example.com", 10], ["default:fixture:beta@example.com", 50], ["provider:openai", 100], ["default:fixture:fixture@example.com", 50]]);
+  fixture.env.BUDGET_LEDGER = { idFromName: (name) => name, get: (name) => ({ fetch: async (url) => {
+    assert.equal(new URL(url).pathname, "/status");
+    observations.push(name);
+    return Response.json({ spentMicros: 0, remainingMicros: remaining.get(name) ?? 100 });
+  } }) };
+  for (const [principalId, eligible] of [["alpha@example.com", false], ["beta@example.com", true], ["alpha@example.com", true]]) {
+    if (observations.length && principalId === "alpha@example.com") remaining.set("default:fixture:alpha@example.com", 25);
+    fixture.credential.principalId = principalId;
+    observations.length = 0;
+    const catalog = await (await catalogResponse(fixture.request("key"), fixture.env)).json();
+    assert.deepEqual(catalog.scope, { authType: "proxy_key", credentialId: "fixture", principalId });
+    const offer = catalog.providers.find(({ id }) => id === "openai").offers.find(({ modelId, routeKind, transport }) => modelId === "openai/gpt-6-astra" && routeKind === "unified" && transport === "http");
+    assert.equal(offer.eligible, eligible);
+    assert.equal(offer.affordability, eligible ? "exact-covered" : "exact-blocked");
+    assert.equal(observations.filter((name) => name === `default:fixture:${principalId}`).length, 1);
+    assert.equal(observations.filter((name) => name === "provider:openai").length, 1);
+  }
+  fixture.userRecord.tenantId = "organization";
+  delete fixture.env.OPENAI_API_KEY;
+  fixture.records.set("oauth/tenants/default/openai", { provider: "openai", kind: "api_key", credential: "fixture-default-tenant", enabled: true });
+  fixture.calls.length = 0;
+  const session = await (await catalogResponse(fixture.request("session"), fixture.env)).json();
+  assert.ok(session.providers.find(({ id }) => id === "openai").models.length > 0);
+  assert.ok(fixture.calls.filter(({ path }) => path === "/grant-pools/resolve").every(({ body }) => body.tenantId === "default"));
+  assert.ok(observations.includes("default:fixture:fixture@example.com"));
+});
+
+test("ordered policy selection does not shop for a richer budget", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.config.enabled = false;
+  fixture.policy.monthlyBudgetMicros = 0;
+  fixture.policies.push({ policyId: "second", policy: { ...fixture.policy, monthlyBudgetMicros: 100, requestCostMicros: 1 } });
+  for (const policyId of ["fixture", "second"]) fixture.records.set(`oauth/${policyId}/api`, { provider: "openai", kind: "api_key", credential: `fixture-${policyId}`, enabled: true });
+  for (const [cooldown, expectedPolicy, eligible] of [[false, "fixture", false], [true, "second", true]]) {
+    if (cooldown) fixture.states["oauth/fixture/api"] = { grantRevision: null, status: "cooldown", cooldownUntil: new Date(Date.now() + 60_000).toISOString(), windows: [] };
+    const catalog = await (await catalogResponse(fixture.request("session"), fixture.env)).json();
+    const offers = catalog.providers.find(({ id }) => id === "openai").offers;
+    assert.ok(offers.length > 0);
+    assert.ok(offers.every((offer) => offer.policyId === expectedPolicy));
+    assert.equal(offers.some((offer) => offer.eligible), eligible);
+  }
+});
+
+test("configured unavailable providers stay inspectable and revoked scopes never reuse prior offers", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.config.enabled = false;
+  fixture.connections.splice(1); // No saved connection or account for Fireworks.
+  let catalog = await (await catalogResponse(fixture.request("key"), fixture.env)).json();
+  assert.deepEqual(catalog.providers.map(({ id }) => id), ["openai"]);
+  fixture.connection.enabled = false;
+  catalog = await (await catalogResponse(fixture.request("key"), fixture.env)).json();
+  assert.deepEqual(catalog.providers.map(({ id }) => id), ["openai"]);
+  assert.ok(catalog.providers[0].offers.every((offer) => !offer.eligible && offer.reasonCode === "provider_disabled"));
+  fixture.credential.enabled = false;
+  assert.equal((await catalogResponse(fixture.request("key"), fixture.env)).status, 403);
+  fixture.credential.enabled = true;
+  fixture.policy.generation = "g2";
+  assert.equal((await catalogResponse(fixture.request("key"), fixture.env)).status, 403);
+  fixture.policy.enabled = false;
+  const session = await (await sessionResponse(fixture.request("session"), fixture.env)).json();
+  assert.deepEqual(session.entitlements.catalog.providers, []);
+});
+
 async function fusionDiscoveryFixture(t) {
   const secret = "fixture-fusion-discovery", session = "b".repeat(64);
   const policy = { enabled: true, generation: "g1", providers: ["openai", "fireworks"], tenantId: "default", monthlyBudgetMicros: 100, requestCostMicros: null, retainRequestContent: false };
   const policies = [{ policyId: "fixture", policy }], states = {}, calls = [];
+  const userRecord = { enabled: true, role: "user", tenantId: "default", groups: [] };
   const connections = policy.providers.map((providerId) => ({ providerId, enabled: true, monthlyBudgetMicros: null }));
   const config = { enabled: true, aggregatorModel: "openai/gpt-6-astra", adviserModels: ["local/fixture-unavailable"] };
   const credential = { enabled: true, secretSha256: await sha256Hex(secret), policyId: "fixture", policyGeneration: "g1" };
@@ -279,14 +320,17 @@ async function fusionDiscoveryFixture(t) {
     OPENAI_API_KEY: "fixture-environment-key", CLAWROUTER_LOCAL_AUTH: "enabled",
     POLICY_KV: {
       async get(key) { return Array.isArray(key) ? new Map(key.map((item) => [item, records.get(item) ?? null])) : records.get(key) ?? null; },
-      async list({ prefix }) { return { keys: [...records.keys()].filter((key) => key.startsWith(prefix)).map((name) => ({ name })), list_complete: true }; },
+      async list() { throw new Error("client discovery must not scan KV"); },
     },
-    BUDGET_LEDGER: { idFromName() { throw new Error("discovery must not inspect remaining budget"); } },
+    BUDGET_LEDGER: { idFromName: (name) => name, get: () => ({ fetch: async (url) => {
+      assert.equal(new URL(url).pathname, "/status", "discovery only observes balances");
+      return Response.json({ spentMicros: 0, remainingMicros: 100 });
+    } }) },
     ACCESS_CONTROL: { idFromName: (name) => name, get: () => ({ fetch: async (url, init) => {
       const path = new URL(url).pathname, body = JSON.parse(init.body); calls.push({ path, body });
       if (path === "/credentials/resolve") return Response.json({ initialized: true, credentials: [{ credentialId: "fixture", credential }], missingCredentialIds: [] });
       if (path === "/policies/resolve") return Response.json({ initialized: true, policies: policies.filter(({ policyId }) => body.policyIds.includes(policyId)), missingPolicyIds: [] });
-      if (path === "/users/resolve") return Response.json({ initialized: true, users: [{ email: "fixture@example.com", record: { enabled: true, role: "user", tenantId: "default", groups: [] } }], missingEmails: [] });
+      if (path === "/users/resolve") return Response.json({ initialized: true, users: [{ email: "fixture@example.com", record: userRecord }], missingEmails: [] });
       if (path === "/resolve") return Response.json({ initialized: true, bindings: policies.map(({ policyId }, priority) => ({ policyId, priority, enabled: true, principalType: "user", principalId: "fixture@example.com" })), missingPrincipals: [] });
       if (path === "/connections/resolve") return Response.json({ initialized: true, connections, missingProviderIds: [] });
       if (path === "/grant-pools/resolve") return Response.json({ keys: [...records.keys()].filter((key) => key.startsWith(`oauth/${body.policyId}/`) && records.get(key).provider === body.providerId), states });
@@ -294,5 +338,5 @@ async function fusionDiscoveryFixture(t) {
     } }) },
   };
   t.mock.method(globalThis, "fetch", () => { throw new Error("discovery must not refresh credentials or probe upstream"); });
-  return { env, policy, policies, connection: connections[0], connections, records, states, config, calls, request: (mode) => new Request("https://router.example/v1/catalog", { headers: mode === "key" ? { authorization: `Bearer clawrouter-live-fixture-${secret}` } : { cookie: `clawrouter_session=${session}` } }) };
+  return { env, credential, userRecord, policy, policies, connection: connections[0], connections, records, states, config, calls, request: (mode) => new Request("https://router.example/v1/catalog", { headers: mode === "key" ? { authorization: `Bearer clawrouter-live-fixture-${secret}` } : { cookie: `clawrouter_session=${session}` } }) };
 }

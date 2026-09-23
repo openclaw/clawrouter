@@ -64,10 +64,28 @@ export function validCredentialBundle(value: UpstreamGrant["credentials"]): bool
   return value == null || (!Array.isArray(value) && typeof value === "object" && Object.entries(value).every(([name, secret]) => /^[A-Za-z0-9_.-]{1,128}$/.test(name) && typeof secret === "string" && secret.trim().length > 0));
 }
 
-export async function selectProviderPolicy(entries: AccessPolicyEntry[], providerId: string, tenantId: string, env: Env, requirement?: GrantRequirement): Promise<AccessPolicyEntry> {
+export interface GrantCandidates { available: SelectedGrant[]; hasConfiguredGrant: boolean }
+
+export function selectPolicyCandidates<T extends AccessPolicyEntry>(pools: Array<{ entry: T; candidates: GrantCandidates }>, requirement?: GrantRequirement): { entry: T; candidates: GrantCandidates } | undefined {
+  const compatible = pools.map(({ entry, candidates }) => ({
+    entry,
+    candidates: { ...candidates, available: candidates.available.filter(({ grant }) => !requirement || grantSupports(requirement, grant)) },
+  }));
+  // Policy order is decided by grant/transport availability, never affordability.
+  return compatible.find(({ candidates }) => candidates.available.length > 0) ?? compatible[0];
+}
+
+export async function policyGrantCandidates<T extends AccessPolicyEntry>(entry: T, providerId: string, env: Env, tokenRef = providerId) {
+  // Dispatch and ledgers have always used default for a policy without a tenant.
+  const candidates = await resolveGrantCandidates(providerId, entry.policyId, entry.policy.tenantId ?? "default", tokenRef, env, new Set(), entry.policy.grantRouting);
+  return { entry, candidates };
+}
+
+export async function selectProviderPolicy(entries: AccessPolicyEntry[], providerId: string, env: Env, requirement?: GrantRequirement): Promise<AccessPolicyEntry> {
+  const tokenRef = requirement?.provider.auth.schemes.find((scheme) => scheme.type === "oauth")?.tokenRef ?? providerId;
   for (const entry of entries) {
-    const tenant = entry.policy.tenantId ?? tenantId;
-    if ((await resolveGrantSelection(providerId, entry.policyId, tenant, providerId, env, new Set(), entry.policy.grantRouting, null, false, undefined, requirement)).selected) return entry;
+    const pool = await policyGrantCandidates(entry, providerId, env, tokenRef);
+    if (selectPolicyCandidates([pool], requirement)!.candidates.available.length) return entry;
   }
   return entries[0];
 }
@@ -123,7 +141,7 @@ export async function resolveGrantCandidates(
   providerId: string, policyId: string, tenantId: string, defaultTokenRef: string, env: Env,
   excludedKeys: ReadonlySet<string> = new Set(), routing: GrantRoutingPolicy = DEFAULT_GRANT_ROUTING,
   pinnedKey?: string | null, requirement?: GrantRequirement,
-): Promise<{ available: SelectedGrant[]; hasConfiguredGrant: boolean }> {
+): Promise<GrantCandidates> {
   routing = grantRoutingPolicy(routing);
   const defaultKeys = [
     `oauth/${policyId}/${defaultTokenRef}`,

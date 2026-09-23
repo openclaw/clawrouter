@@ -107,6 +107,15 @@ export function estimateModelCost(pricing: ModelPricing, body: Record<string, un
   };
 }
 
+// Bounds without a request: inspect every declared tier/context, including cache
+// rates. A zero balance alone cannot exclude output-only or zero-price requests.
+export function modelReservationBounds(pricing: ModelPricing): { minimumMicros: number; zero: boolean } {
+  const cards = pricing.serviceTiers?.length ? pricing.serviceTiers : [pricing];
+  const rates = cards.flatMap((card) => [card, ...(card.longContext ? [card.longContext] : [])]).map(ratesFromPricing);
+  const zero = rates.every((rate) => Object.values(rate).every((value) => value == null || value === 0));
+  return { minimumMicros: rates.every((rate) => reservationInputRate({}, rate) > 0) ? 1 : 0, zero };
+}
+
 export function actualModelCost(pricing: ModelPricing, tokens: PricedTokens): number | null {
   if (tokens.billable === false) return 0;
   if (tokens.input == null) return null;

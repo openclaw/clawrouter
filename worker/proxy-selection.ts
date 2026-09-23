@@ -1,6 +1,6 @@
 import { resolveTemplate } from "./provider-templates.ts";
 import type { CompiledEndpoint, CompiledModel, CompiledProvider, Env, ProxyRequestBody } from "./types";
-import { capabilityForPath, endpointForPath, modelRoute, modelSupportsEndpoint, providerForModel, providerModel, transformRequestBody } from "./providers";
+import { capabilityForPath, endpointForPath, modelRoute, modelSupportsEndpoint, providerForModel, providerModel, transformRequestBody, unifiedPathForEndpoint } from "./providers";
 import { decodePathSegment, errorResponse, HttpError } from "./utils";
 
 export interface ProxySelection {
@@ -26,8 +26,7 @@ export function concreteOpenAiSelection(path: string, body: Record<string, unkno
   if (!route) return selectionFailure(errorResponse("model_not_found", `model ${modelId} is not registered`, 404));
   const endpoint = endpointForPath(route.provider, path);
   if (!capability || !endpoint || !route.model.capabilities.includes(capability)) return selectionFailure(errorResponse("model_capability_unsupported", `model ${modelId} does not support ${path}`, 400));
-  const format = path === "/v1/chat/completions" ? "openai.chat_completions" : path === "/v1/responses" ? "openai.responses" : "openai.embeddings";
-  if (endpoint.request_format !== format || endpoint.response_format !== format) return selectionFailure(errorResponse("model_capability_unsupported", `model ${modelId} requires its provider-native endpoint`, 400));
+  if (unifiedPathForEndpoint(route.provider, endpoint) !== path) return selectionFailure(errorResponse("model_capability_unsupported", `model ${modelId} requires its provider-native endpoint`, 400));
   try {
     const upstreamModel = resolvedUpstreamModel(route.provider, route.model, env);
     const transformed = transformRequestBody(route.provider, path, upstreamModel, { ...body, model: upstreamModel }, env);

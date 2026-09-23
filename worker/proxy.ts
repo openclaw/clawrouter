@@ -6,7 +6,7 @@ import {
   prepareManifestRequest, prepareNativeRequest, requestObject, searchParamsRecord, type ProxySelection,
 } from "./proxy-selection";
 import { accessIdentity } from "./access";
-import { markBudgetDispatched, reserveBudget, type BudgetReservation, type EstimatedCost } from "./accounting";
+import { markBudgetDispatched, reserveBudget, validateBudgetReservation, type BudgetReservation, type EstimatedCost } from "./accounting";
 import { retainRequestContent } from "./content-retention";
 import { correlationMetadata } from "./correlation.ts";
 import {
@@ -188,7 +188,11 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     return errorResponse("fusion_reservation_invalid", "fusion synthesizer reservation does not cover the final request", 500);
   }
   let prepared: PreparedUpstream;
-  try { prepared = await prepareSelected(request, env, selection, queryInput, auth, new Set(), true, reservedBudget?.connection); }
+  try {
+    // Monetary coverage alone cannot prove that the final request remains priced.
+    if (reservedBudget) validateBudgetReservation(selection.capability, estimatedCost, auth.policy.monthlyBudgetMicros, reservedBudget.connection);
+    prepared = await prepareSelected(request, env, selection, queryInput, auth, new Set(), true, reservedBudget?.connection);
+  }
   catch (error) {
     const failure = selectedFailure(error);
     const status = failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error";
