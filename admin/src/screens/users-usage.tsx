@@ -94,7 +94,7 @@ export function UsersScreen({ users, selected, policies, bindings, services, for
   );
 }
 
-export function UsageScreen({ keys, credentials, services, overview, tenants, usageRows, usage, usageLoaded }: { keys: AccessPolicy[]; credentials: ProxyCredential[]; services: ServiceItem[]; overview: AdminOverview | null; tenants: AdminTenantSummary[]; usageRows: AdminUsageRow[]; usage: UsageSnapshot; usageLoaded: boolean }) {
+export function UsageScreen({ keys, credentials, services, overview, tenants, usageRows, usage, usageLoaded, usageStale, usageError, usageUpdatedAt }: { keys: AccessPolicy[]; credentials: ProxyCredential[]; services: ServiceItem[]; overview: AdminOverview | null; tenants: AdminTenantSummary[]; usageRows: AdminUsageRow[]; usage: UsageSnapshot; usageLoaded: boolean; usageStale: boolean; usageError: string; usageUpdatedAt: number | null }) {
   const [retainedContent, setRetainedContent] = useState<RetainedRequestContent | null>(null);
   const [contentError, setContentError] = useState("");
   const [contentLoading, setContentLoading] = useState(false);
@@ -129,25 +129,26 @@ export function UsageScreen({ keys, credentials, services, overview, tenants, us
   const requestGroups = usageEventGroups(usage.events);
   return (
     <div className="usageCanvas">
+      <UsageFreshness loaded={usageLoaded} stale={usageStale} error={usageError} updatedAt={usageUpdatedAt} />
       <section className="usageSummaryGrid" aria-label="Usage summary">
-        <Metric label="requests" value={formatCount(usage.summary.requestCount)} meta={`${formatCount(usage.summary.totalTokens)} tokens`} />
-        <Metric label="success rate" value={successRate === null ? "—" : `${successRate}%`} meta={successRate === null ? "No requests in this period" : `${formatCount(usage.summary.successCount)} successful`} />
-        <Metric label="errors" value={formatCount(usage.summary.errorCount)} meta="upstream and policy outcomes" />
-        <Metric label={usage.summary.unpricedRequestCount ? "accounted spend" : "actual spend"} value={usageCostLabel(formatMicros(usage.summary.actualCostMicros), usage.summary.requestCount, usage.summary.unpricedRequestCount)} meta={`${usage.providers.length} active providers${usage.summary.unpricedRequestCount ? " · excludes unavailable prices" : ""}`} />
+        <Metric label="requests" value={usageLoaded ? formatCount(usage.summary.requestCount) : "—"} meta={usageLoaded ? `${formatCount(usage.summary.totalTokens)} tokens` : "Usage unavailable"} />
+        <Metric label="success rate" value={successRate === null ? "—" : `${successRate}%`} meta={!usageLoaded ? "Usage unavailable" : successRate === null ? "No requests in this period" : `${formatCount(usage.summary.successCount)} successful`} />
+        <Metric label="errors" value={usageLoaded ? formatCount(usage.summary.errorCount) : "—"} meta="upstream and policy outcomes" />
+        <Metric label={usage.summary.unpricedRequestCount ? "accounted spend" : "actual spend"} value={usageLoaded ? usageCostLabel(formatMicros(usage.summary.actualCostMicros), usage.summary.requestCount, usage.summary.unpricedRequestCount) : "—"} meta={usageLoaded ? `${usage.providers.length} active providers${usage.summary.unpricedRequestCount ? " · excludes unavailable prices" : ""}` : "Usage unavailable"} />
       </section>
 
       <section className="analyticsPanel usageTrafficPanel">
         <header className="analyticsPanelHeader">
           <div><span>Traffic</span><h2>Request activity</h2><p>Daily routed requests across every active policy.</p></div>
-          <div className="analyticsPanelControls"><span className={`ledgerBadge ${usageLoaded ? "ready" : "unavailable"}`}>{usageLoaded ? "Live ledger" : "Ledger unavailable"}</span><span className="periodBadge"><CalendarDays aria-hidden="true" />Last 30 days · UTC</span></div>
+          <div className="analyticsPanelControls"><span className={`ledgerBadge ${usageLoaded && !usageStale ? "ready" : "unavailable"}`}>{usageLoaded ? usageStale ? "Last known ledger" : "Live ledger" : "Ledger unavailable"}</span><span className="periodBadge"><CalendarDays aria-hidden="true" />Last 30 days · UTC</span></div>
         </header>
-        <TrafficAreaChart usage={usage} />
+        {usageLoaded ? <TrafficAreaChart usage={usage} /> : <InlineNote>Request activity unavailable.</InlineNote>}
       </section>
 
       <div className="usageInsightsGrid">
         <section className="analyticsPanel usageProviderPanel">
-          <header className="analyticsPanelHeader"><div><span>Provider mix</span><h2>Traffic distribution</h2><p>Request volume, success, tokens, and accounted spend.</p></div><small>{usage.providers.length} active</small></header>
-          <ProviderUsageChart providers={usage.providers} services={services} />
+          <header className="analyticsPanelHeader"><div><span>Provider mix</span><h2>Traffic distribution</h2><p>Request volume, success, tokens, and accounted spend.</p></div><small>{usageLoaded ? `${usage.providers.length} active` : "unavailable"}</small></header>
+          {usageLoaded ? <ProviderUsageChart providers={usage.providers} services={services} /> : <InlineNote>Provider usage unavailable.</InlineNote>}
         </section>
 
         <section className="analyticsPanel usageHealthPanel">
@@ -158,7 +159,7 @@ export function UsageScreen({ keys, credentials, services, overview, tenants, us
               <div className={untrackedRows.length ? "attentionMetric warning" : "attentionMetric healthy"}><strong>{untrackedRows.length}</strong><span>policies not reporting spend</span></div>
               <div className={ledgerFailureRows.length ? "attentionMetric danger" : "attentionMetric healthy"}><strong>{ledgerFailureRows.length}</strong><span>budget ledger failures</span></div>
             </> : <div className="attentionMetric danger"><strong>!</strong><span>live usage ledger unavailable</span></div>}
-            <div className={exhaustedRows.length ? "attentionMetric danger" : "attentionMetric healthy"}><strong>{exhaustedRows.length}</strong><span>policies out of budget</span></div>
+            <div className={exhaustedRows.length ? "attentionMetric danger" : usageLoaded ? "attentionMetric healthy" : "attentionMetric"}><strong>{usageLoaded ? exhaustedRows.length : "—"}</strong><span>policies out of budget</span></div>
           </div>
           <div className="usageHealthFooter">
             <div><span>Executable services</span><strong>{readyServices}/{services.length}</strong></div>
@@ -175,7 +176,7 @@ export function UsageScreen({ keys, credentials, services, overview, tenants, us
       </div> : null}
 
       <section className="analyticsPanel usageTablePanel">
-        <div className="tableSectionHeader"><div><strong>Recent requests</strong><span>{requestGroups.length} requests · {usage.events.length} billable calls</span></div><span>{usageLoaded ? usage.ledger : "unavailable"}</span></div>
+        <div className="tableSectionHeader"><div><strong>Recent requests</strong><span>{usageLoaded ? `${requestGroups.length} requests · ${usage.events.length} billable calls` : "Request history unavailable"}</span></div><span>{usageLoaded ? usageStale ? "last known" : usage.ledger : "unavailable"}</span></div>
         <EntityTable
           columns={["time", "identity", "service", "operation", "outcome", "content", "cost"]}
           columnTemplate="92px minmax(170px, 1.2fr) minmax(145px, 1fr) minmax(150px, 1fr) 104px 90px 74px"
@@ -204,15 +205,22 @@ export function UsageScreen({ keys, credentials, services, overview, tenants, us
             };
           })}
         />
-        {!usage.events.length ? <div className="emptyTable">No request audit events recorded yet.</div> : null}
+        {!usage.events.length ? <div className="emptyTable">{usageLoaded ? "No request audit events recorded yet." : "Request audit events unavailable."}</div> : null}
       </section>
 
       <section className="analyticsPanel usageTablePanel budgetTablePanel">
-        <div className="tableSectionHeader secondaryTableHeader"><div><strong>Policy budgets</strong><span>{rows.length} configured policies</span></div><span>{usageLoaded ? "live ledger" : "policy fallback"}</span></div>
+        <div className="tableSectionHeader secondaryTableHeader"><div><strong>Policy budgets</strong><span>{rows.length} configured policies</span></div><span>{usageLoaded ? usageStale ? "last known ledger" : "live ledger" : "policy limits only"}</span></div>
         <EntityTable columns={["policy", "tenant", "budget usage", "services", "health"]} columnTemplate="minmax(210px, 1.15fr) minmax(120px, 0.7fr) minmax(250px, 1.45fr) 96px 120px" rows={rows.map((row) => ({ id: usagePolicyId(row), cells: [<EntityName icon={KeyRound} title={usagePolicyId(row)} subtitle={row.tokenRole ?? "custom"} />, row.tenantId, <BudgetUsage row={row} />, effectiveProviderCount(row.providers, services), <UsageHealth row={row} />], detail: row.budget.ledger === "per_principal" ? <BudgetBreakdown row={row} /> : undefined }))} />
       </section>
     </div>
   );
+}
+
+export function UsageFreshness({ loaded, stale, error, updatedAt }: { loaded: boolean; stale: boolean; error: string; updatedAt: number | null }) {
+  if (loaded && !stale) return null;
+  return <div className="usageFreshness" role="status"><InlineNote>{loaded && updatedAt !== null
+    ? <>Showing last known usage from <time dateTime={new Date(updatedAt).toISOString()}>{formatTimestamp(updatedAt, true)}</time>. Balances may have changed.</>
+    : error ? "Usage unavailable. Spend and remaining balances are unknown." : "Loading usage…"}</InlineNote></div>;
 }
 
 function CompoundRequestCalls({ group, onInspect }: { group: UsageEventGroup; onInspect: (event: UsageAuditEvent) => Promise<void> }) {

@@ -9,11 +9,13 @@ export function useSession() {
   const allowDemo = isLocalDemoAllowed();
   const [view, setView] = useState<View>(initialViewFromPath);
   const [value, setValue] = useState<SessionResponse>(allowDemo ? demo.session : emptySession);
-  const [status, setStatus] = useState(allowDemo ? "local demo data loaded" : "loading");
+  const [status, setStatus] = useState(allowDemo ? "local demo data loaded" : "connected");
+  const [refreshing, setRefreshing] = useState(!allowDemo);
+  const [refreshError, setRefreshError] = useState("");
   const [lastUpdatedAt, setLastUpdatedAt] = useState<number | null>(allowDemo ? Date.now() : null);
   const [demoMode, setDemoMode] = useState(allowDemo);
   const [loginRequired, setLoginRequired] = useState(false);
-  const statusPresentation = useMemo(() => consoleStatusPresentation(status, demoMode), [demoMode, status]);
+  const statusPresentation = useMemo(() => consoleStatusPresentation(status, demoMode, false, refreshing), [demoMode, status, refreshing]);
   const busy = statusPresentation.tone === "pending";
 
   function navigateTo(nextView: View, replace = false) {
@@ -27,7 +29,7 @@ export function useSession() {
   }
 
   function enforceRoleView() {
-    if (status !== "loading" && value.role !== "admin" && adminViews.has(view)) navigateTo("catalog", true);
+    if (!refreshing && value.role !== "admin" && adminViews.has(view)) navigateTo("catalog", true);
   }
 
   function syncViewFromPath() {
@@ -43,14 +45,16 @@ export function useSession() {
     setValue,
     status,
     setStatus,
+    refreshing,
+    setRefreshing,
+    refreshError,
+    setRefreshError,
     lastUpdatedAt,
     setLastUpdatedAt,
     demoMode,
     setDemoMode,
     loginRequired,
     setLoginRequired,
-    statusPresentation,
-    statusTone: statusPresentation.tone,
     busy,
     navigateTo,
     enforceRoleView,

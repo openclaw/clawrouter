@@ -268,7 +268,7 @@ export function policyUsageFallback(policy: AccessPolicy): AdminUsageRow {
       ledger: unmetered ? "unmetered" : perPrincipal ? "per_principal" : blocked ? "blocked" : "untracked",
       limitMicros: limit,
       spentMicros: perPrincipal ? null : blocked ? 0 : null,
-      remainingMicros: perPrincipal ? null : blocked ? 0 : limit,
+      remainingMicros: !perPrincipal && blocked ? 0 : null,
       breakdown: perPrincipal ? [] : undefined,
     },
   };

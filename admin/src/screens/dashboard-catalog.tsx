@@ -45,7 +45,7 @@ import {
   matchesServiceQuery,
   usagePolicyId,
 } from "../ui-helpers";
-import { EntityTable } from "./users-usage";
+import { EntityTable, UsageFreshness } from "./users-usage";
 import type {
   AccessPolicy,
   AccessUser,
@@ -74,7 +74,7 @@ export function UserAvatar({ email }: { email?: string | null }) {
   );
 }
 
-export function DashboardScreen({ session, services, policies, credentials, users, tenants, overview, usageRows, usage, usageLoaded, myCredentials, myPolicyIds, myIssuedKey, myKeyError, myKeysBusy, onIssueMyKey, onRevokeMyKey, onOpenCatalog, onOpenPlayground, onOpenUsage, onOpenAccess }: {
+export function DashboardScreen({ session, services, policies, credentials, users, tenants, overview, usageRows, usage, usageLoaded, usageStale, usageError, usageUpdatedAt, myCredentials, myPolicyIds, myIssuedKey, myKeyError, myKeysBusy, onIssueMyKey, onRevokeMyKey, onOpenCatalog, onOpenPlayground, onOpenUsage, onOpenAccess }: {
   session: SessionResponse;
   services: ServiceItem[];
   policies: AccessPolicy[];
@@ -85,6 +85,9 @@ export function DashboardScreen({ session, services, policies, credentials, user
   usageRows: AdminUsageRow[];
   usage: UsageSnapshot;
   usageLoaded: boolean;
+  usageStale: boolean;
+  usageError: string;
+  usageUpdatedAt: number | null;
   myCredentials: ProxyCredential[];
   myPolicyIds: string[];
   myIssuedKey: string;
@@ -126,22 +129,23 @@ export function DashboardScreen({ session, services, policies, credentials, user
         </div>
       </header>
 
+      <UsageFreshness loaded={usageLoaded} stale={usageStale} error={usageError} updatedAt={usageUpdatedAt} />
       <section className="dashboardStats" aria-label="access overview">
         <DashboardStat label={isAdmin ? "catalog coverage" : "available services"} value={isAdmin ? `${configuredServices.length}/${services.length}` : String(grantedServices.length)} note={isAdmin ? `${services.length - configuredServices.length} need attention` : `${usableServices.length} ready to call`} />
-        <DashboardStat label="requests" value={formatCount(usage.summary.requestCount)} note={`${formatCount(usage.summary.totalTokens)} tokens in 30 days`} />
-        <DashboardStat label="success rate" value={successRate === null ? "—" : `${successRate}%`} note={successRate === null ? "No requests in this period" : `${formatCount(usage.summary.successCount)} successful`} />
+        <DashboardStat label="requests" value={usageLoaded ? formatCount(usage.summary.requestCount) : "—"} note={usageLoaded ? `${formatCount(usage.summary.totalTokens)} tokens in 30 days` : "Usage unavailable"} />
+        <DashboardStat label="success rate" value={successRate === null ? "—" : `${successRate}%`} note={!usageLoaded ? "Usage unavailable" : successRate === null ? "No requests in this period" : `${formatCount(usage.summary.successCount)} successful`} />
         <DashboardStat label={isAdmin ? "active policies" : "quota pools"} value={String(isAdmin ? overview?.policiesActive ?? activePolicies : rows.length)} note={isAdmin ? `${overview?.tenantsTotal ?? tenants.length} tenants` : usageLoaded ? "live policy ledgers" : "status unavailable"} />
-        <DashboardStat label={usage.summary.unpricedRequestCount ? "accounted spend" : "actual spend"} value={usageCostLabel(formatMicros(usage.summary.actualCostMicros), usage.summary.requestCount, usage.summary.unpricedRequestCount)} note={isAdmin ? `${usage.providers.length} active providers` : "across your policy pools"} />
+        <DashboardStat label={usage.summary.unpricedRequestCount ? "accounted spend" : "actual spend"} value={usageLoaded ? usageCostLabel(formatMicros(usage.summary.actualCostMicros), usage.summary.requestCount, usage.summary.unpricedRequestCount) : "—"} note={!usageLoaded ? "Usage unavailable" : isAdmin ? `${usage.providers.length} active providers` : "across your policy pools"} />
       </section>
 
       <div className="dashboardAnalyticsGrid">
         <section className="dashboardPanel dashboardTrafficPanel">
           <DashboardPanelHeader eyebrow="Last 30 days" title="Request activity" meta="UTC daily totals" action={isAdmin ? "Open usage" : undefined} onAction={isAdmin ? onOpenUsage : undefined} />
-          <div className="dashboardChartBody"><TrafficAreaChart usage={usage} compact /></div>
+          <div className="dashboardChartBody">{usageLoaded ? <TrafficAreaChart usage={usage} compact /> : <InlineNote>Request activity unavailable.</InlineNote>}</div>
         </section>
         <section className="dashboardPanel dashboardProviderPanel">
-          <DashboardPanelHeader eyebrow="Provider mix" title="Traffic distribution" meta={`${usage.providers.length} active`} />
-          <ProviderUsageChart providers={usage.providers} services={services} limit={5} />
+          <DashboardPanelHeader eyebrow="Provider mix" title="Traffic distribution" meta={usageLoaded ? `${usage.providers.length} active` : "unavailable"} />
+          {usageLoaded ? <ProviderUsageChart providers={usage.providers} services={services} limit={5} /> : <InlineNote>Provider usage unavailable.</InlineNote>}
         </section>
       </div>
 
@@ -170,7 +174,7 @@ export function DashboardScreen({ session, services, policies, credentials, user
         </section>
 
         <section className="dashboardPanel quotaPanel">
-          <DashboardPanelHeader eyebrow="policy budgets" title={isAdmin ? "Budget posture" : "Your shared quotas"} meta={usageLoaded ? "live ledger" : "policy fallback"} />
+          <DashboardPanelHeader eyebrow="policy budgets" title={isAdmin ? "Budget posture" : "Your shared quotas"} meta={usageStale && usageLoaded ? "last known ledger" : usageLoaded ? "live ledger" : "policy limits only"} />
           <p className="panelIntro">{isAdmin ? "Spend and remaining capacity across active policies." : "Your requests draw from these shared policy pools; totals may include activity from teammates on the same policy."}</p>
           <div className="quotaList">
             {rows.slice(0, 6).map((row) => {
@@ -186,7 +190,7 @@ export function DashboardScreen({ session, services, policies, credentials, user
                 </article>
               );
             })}
-            {!rows.length ? <div className="dashboardEmpty"><Activity aria-hidden="true" /><strong>No quota pools assigned</strong><p>Usage will appear when an access policy is bound to your account.</p></div> : null}
+            {!rows.length ? <div className="dashboardEmpty"><Activity aria-hidden="true" /><strong>{usageLoaded ? "No quota pools assigned" : "Quota status unavailable"}</strong><p>{usageLoaded ? "Usage will appear when an access policy is bound to your account." : "Wait for usage to load, or retry the refresh."}</p></div> : null}
           </div>
           {isAdmin ? <button className="dashboardTextAction" type="button" onClick={onOpenUsage}>Open full usage ledger <ChevronRight aria-hidden="true" /></button> : null}
         </section>

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep failed console refreshes visible after successful edits, label stale usage with its snapshot time, and show unavailable spend and balances as unknown.
+
 - Restrict personal usage audit events to the authenticated principal, or unattributed events for the authenticated service key, while preserving shared policy totals and administrator audit access.
 
 - Deny proxy requests and subsequent WebSocket turns for explicitly disabled key owners, and show their credentials as owner-disabled without changing unowned service keys or retained policy bindings.

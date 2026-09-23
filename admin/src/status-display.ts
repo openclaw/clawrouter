@@ -1,7 +1,7 @@
 export type ConsoleStatusTone = "error" | "neutral" | "pending" | "success";
 
-export function consoleStatusPresentation(status: string, demoMode: boolean) {
-  const tone = consoleStatusTone(status);
+export function consoleStatusPresentation(status: string, demoMode: boolean, refreshFailed = false, refreshing = false) {
+  const tone = refreshFailed ? "error" : refreshing ? "pending" : consoleStatusTone(status);
   return {
     tone,
     label: demoMode ? "Demo" : tone === "success" ? "Connected" : tone === "pending" ? "Working" : tone === "error" ? "Needs attention" : "Degraded",

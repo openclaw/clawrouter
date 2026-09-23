@@ -31,6 +31,7 @@ export function useConsoleController() {
   const refreshPromiseRef = useRef<Promise<void> | null>(null);
   const refreshBackgroundRef = useRef(false);
   const catalogLoadedRef = useRef(false);
+  const principalRef = useRef<string | null>(null);
   const refreshRef = useRef<(options?: RefreshOptions) => Promise<void>>(async () => undefined);
   const refreshCurrent = useCallback(() => refreshRef.current(), []);
   const access = useAccessAdmin({
@@ -84,13 +85,13 @@ export function useConsoleController() {
 
   useEffect(() => {
     session.enforceRoleView();
-  }, [session.value.role, session.status, session.view]);
+  }, [session.value.role, session.refreshing, session.view]);
 
   useEffect(() => {
-    if ((session.view === "home" || session.view === "usage") && session.value.role === "admin" && access.loaded && !session.demoMode && !usage.loaded) {
-      void usage.refreshLedger(session.gatewayOrigin, session.setStatus, session.view === "usage");
+    if ((session.view === "home" || session.view === "usage") && session.value.role === "admin" && access.loaded && !session.demoMode && (!usage.loaded || usage.stale) && !usage.error) {
+      void usage.refreshLedger(session.gatewayOrigin);
     }
-  }, [access.loaded, session.demoMode, session.value.role, session.view, usage.loaded, usage.refreshKey]);
+  }, [access.loaded, session.demoMode, session.value.role, session.view, usage.loaded, usage.stale, usage.error, usage.revision]);
 
   function refresh(options: RefreshOptions = {}): Promise<void> {
     if (refreshPromiseRef.current) {
@@ -109,11 +110,14 @@ export function useConsoleController() {
   }
 
   async function refreshData({ background = false }: RefreshOptions) {
+    if (!background) {
+      session.setRefreshing(true);
+      access.setLoaded(false);
+    }
+    // Invalidate before reads begin so later navigation keeps its new ledger read.
+    if (!background || (session.view !== "home" && session.view !== "usage" && !usage.error)) usage.invalidate();
+    let failUsageRefresh = usage.captureRefreshFailure();
     try {
-      if (!background) {
-        session.setStatus("loading");
-        access.setLoaded(false);
-      }
       const staticCatalog = catalogLoadedRef.current
         ? Promise.resolve({ providerData: { providers: catalog.providers }, routeData: catalog.routes })
         : Promise.all([
@@ -124,6 +128,15 @@ export function useConsoleController() {
         request<SessionResponse>(session.gatewayOrigin, "/v1/session"),
         staticCatalog,
       ]);
+      const principal = JSON.stringify([sessionData.email, sessionData.tenantId, sessionData.role, sessionData.authenticated]);
+      if (principalRef.current !== principal) {
+        principalRef.current = principal;
+        session.setRefreshError("");
+        session.setLastUpdatedAt(null);
+        usage.setPrincipal(principal);
+        // This refresh owns the reset; ordinary waits cannot adopt a newer read.
+        failUsageRefresh = usage.captureRefreshFailure();
+      }
       session.setValue(sessionData);
       session.setLoginRequired(false);
       selfServiceKeys.setPrincipal(sessionData.email ?? "");
@@ -147,24 +160,34 @@ export function useConsoleController() {
           warnings = [...warnings, `entitlements unavailable: ${entitlementResult.error}`];
         }
       }
-      if (sessionData.role === "admin") warnings = await loadAdminData(sessionData, providerData, background, warnings);
-      else warnings = await loadUserData(sessionData, warnings);
+      const result = sessionData.role === "admin"
+        ? await loadAdminData(sessionData, providerData, background, warnings)
+        : await loadUserData(sessionData, warnings);
       session.setDemoMode(false);
-      session.setLastUpdatedAt(Date.now());
-      if (!background) session.setStatus(warnings.length ? warnings.join("; ") : oauthCallbackStatus() ?? "connected");
+      session.setRefreshError(result.warnings.join("; "));
+      if (result.complete) session.setLastUpdatedAt(Date.now());
+      if (!background) session.setStatus(oauthCallbackStatus() ?? "connected");
     } catch (caught) {
       const message = errorMessage(caught);
       if (message.includes("access_session_required") && await localLoginAvailable(session.gatewayOrigin)) {
+        principalRef.current = null;
+        usage.setPrincipal("");
+        session.setLastUpdatedAt(null);
+        session.setRefreshError("Sign-in required to refresh console data.");
         session.setLoginRequired(true);
         if (!background) session.setStatus("sign-in required");
         return;
       }
-      if (session.allowDemo) {
+      if (session.allowDemo && principalRef.current === null) {
         loadAdminDemo();
         return;
       }
       session.setDemoMode(false);
-      if (!background) session.setStatus(`load error: ${message}`);
+      // Refresh health is separate from the mutation result that the caller reports.
+      session.setRefreshError(`Console data refresh failed: ${message}`);
+      failUsageRefresh(`Usage was not refreshed: ${message}`);
+    } finally {
+      if (!background) session.setRefreshing(false);
     }
   }
 
@@ -191,17 +214,9 @@ export function useConsoleController() {
     usage.setTenantSummaries(data.tenants);
     if (sessionUsageResult.ok && sessionCredentialsResult.ok) selfServiceKeys.hydrate(sessionUsageResult.value.policies.map(usagePolicyId), sessionCredentialsResult.value.credentials, keySnapshot);
     else warnings = [...warnings, "personal credentials unavailable"];
-    const usageResult = background && (session.view === "home" || session.view === "usage")
-      ? await settled(() => request<{ policies?: AdminUsageRow[]; keys?: AdminUsageRow[]; usage: UsageSnapshot }>(session.gatewayOrigin, "/v1/admin/usage"))
-      : null;
-    if (usageResult?.ok) {
-      usage.setRows(usageResult.value.policies ?? usageResult.value.keys ?? []);
-      usage.setSnapshot(usageResult.value.usage);
-      usage.setLoaded(true);
-    } else if (usageResult) warnings = [...warnings, `usage ledger unavailable: ${usageResult.error}`];
-    else if (!background) usage.resetLedger();
-    if (!background && session.view === "usage") usage.requestRefresh();
-    return warnings;
+    const includeUsage = session.view === "home" || session.view === "usage" || Boolean(usage.error);
+    const usageFresh = includeUsage ? await usage.refreshLedger(session.gatewayOrigin) : true;
+    return { warnings, complete: !warnings.length && usageFresh };
   }
 
   async function loadUserData(sessionData: SessionResponse, initialWarnings: string[]) {
@@ -223,16 +238,13 @@ export function useConsoleController() {
       settled(() => request<{ credentials: AdminBootstrapResponse["credentials"] }>(session.gatewayOrigin, "/v1/session/credentials")),
     ]);
     if (result.ok) {
-      usage.setRows(result.value.policies);
-      usage.setSnapshot(result.value.usage);
-      usage.setLoaded(true);
+      usage.hydrate(result.value.policies, result.value.usage);
       if (credentialResult.ok) selfServiceKeys.hydrate(result.value.policies.map(usagePolicyId), credentialResult.value.credentials, keySnapshot);
       else warnings = [...warnings, `personal credentials unavailable: ${credentialResult.error}`];
     } else {
-      usage.resetLedger();
-      warnings = [...warnings, `quota status unavailable: ${result.error}`];
+      usage.fail(`Quota status unavailable: ${result.error}`);
     }
-    return warnings;
+    return { warnings, complete: !warnings.length && result.ok };
   }
 
   function loadAdminDemo() {
@@ -244,10 +256,9 @@ export function useConsoleController() {
     access.hydrateDemo();
     usage.setAdminOverview(demo.overview);
     usage.setTenantSummaries(demo.tenants);
-    usage.setRows(demo.usageRows);
-    usage.setSnapshot(demo.usage);
+    usage.hydrate(demo.usageRows, demo.usage);
     selfServiceKeys.hydrate(demo.keys.map((policy) => policy.policyId), demo.credentials.filter((credential) => credential.principalId === demo.session.email));
-    usage.setLoaded(true);
+    session.setRefreshError("");
     session.setDemoMode(true);
     session.setLastUpdatedAt(Date.now());
     session.setStatus("local demo data loaded");
@@ -290,10 +301,9 @@ export function useConsoleController() {
     access.hydrateUser(user);
     usage.setAdminOverview(null);
     usage.setTenantSummaries([]);
-    usage.setRows(effective.policies.map(policyUsageFallback));
-    usage.setSnapshot({ ...demo.usage, summary, providers: providerUsage, daily: syntheticUsageTimeline(Date.now(), summary), events: [] });
+    usage.hydrate(effective.policies.map(policyUsageFallback), { ...demo.usage, summary, providers: providerUsage, daily: syntheticUsageTimeline(Date.now(), summary), events: [] });
     selfServiceKeys.hydrate(effective.policies.map((policy) => policy.policyId), demo.credentials.filter((credential) => credential.principalId === user.email));
-    usage.setLoaded(true);
+    session.setRefreshError("");
     session.setLastUpdatedAt(Date.now());
     session.setStatus("local user demo loaded");
     session.setDemoMode(true);

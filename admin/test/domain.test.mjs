@@ -272,6 +272,11 @@ test("budget parsing and fallback summaries keep blocked and wildcard states exp
   assert.equal(perMaintainer.budget.spentMicros, null);
   assert.deepEqual(perMaintainer.budget.breakdown, []);
 
+  const unknown = policyUsageFallback({ policyId: "team", enabled: true, providers: ["openai"], monthlyBudgetMicros: 10_000_000 });
+  assert.equal(unknown.budget.limitMicros, 10_000_000);
+  assert.equal(unknown.budget.spentMicros, null);
+  assert.equal(unknown.budget.remainingMicros, null);
+
   const summaries = tenantSummaryFallback(policies, [
     { credentialId: "models_a", policyId: "models", enabled: true },
     { credentialId: "models_b", policyId: "models", enabled: false },
