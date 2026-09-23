@@ -188,6 +188,10 @@ stream_idle_timeout_ms = 10000
 
       const authority = await mf.getDurableObjectNamespace("ACCESS_CONTROL", "router");
       const authorityObject = authority.get(authority.idFromName("policy-bindings"));
+      const resolvePolicy = () => authorityObject.fetch("https://authority/policies/resolve", { method: "POST", body: JSON.stringify({ policyIds: ["fixture"] }) }).then((response) => response.json());
+      const policyBeforeRotation = await resolvePolicy();
+      assert.deepEqual(policyBeforeRotation.policies.map(({ policyId }) => policyId), ["fixture"]);
+      assert.deepEqual(policyBeforeRotation.missingPolicyIds, []);
       const rotatedCredential = { ...credential, secretSha256: createHash("sha256").update(rotatedSecret).digest("hex") };
       const rotated = await authorityObject.fetch("https://authority/credentials/put", { method: "POST", body: JSON.stringify({ credentialId: "fixture", credential: rotatedCredential }) });
       assert.equal(rotated.status, 200);
@@ -198,9 +202,7 @@ stream_idle_timeout_ms = 10000
       assert.equal((await dispatch("/v1/catalog", key)).status, 401);
       currentKey = rotatedKey;
       assert.deepEqual((await (await dispatch("/v1/catalog")).json()).providers.map(({ id }) => id), catalog.providers.map(({ id }) => id));
-      const policies = await (await authorityObject.fetch("https://authority/policies/resolve", { method: "POST", body: JSON.stringify({ policyIds: ["fixture"] }) })).json();
-      assert.deepEqual(policies.policies, [{ policyId: "fixture", policy }]);
-      assert.deepEqual(policies.missingPolicyIds, []);
+      assert.deepEqual(await resolvePolicy(), policyBeforeRotation);
       assert.equal(/fallback model metadata|model metadata.*not found/i.test(client.stderr() + JSON.stringify(client.notifications)), false);
       await client.close();
       await startClient(rotatedKey);
