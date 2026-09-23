@@ -161,10 +161,8 @@ stream_idle_timeout_ms = 10000
       const newReceipts = usage.usage.events.filter(({ request_id }) => !priorReceiptIds.has(request_id));
       const canceled = newReceipts.filter(({ status }) => status !== "success");
       assert.equal(canceled.length, 1);
-      // R04 remains a product follow-up: WS currently calls caller disconnects
-      // provider_error/502, while HTTP records client_error with delivered 200.
-      assert.equal(canceled[0].status, transport === "http" ? "client_error" : "provider_error");
-      assert.equal(canceled[0].status_code, transport === "http" ? 200 : 502);
+      assert.equal(canceled[0].status, "client_error");
+      assert.equal(canceled[0].status_code, transport === "http" ? 200 : null);
       assert.equal(canceled[0].cost_basis, "manifest_reservation");
       assert.ok(canceled[0].actual_cost_micros > 0);
       assert.equal(canceled[0].actual_cost_micros, canceled[0].reserved_cost_micros);

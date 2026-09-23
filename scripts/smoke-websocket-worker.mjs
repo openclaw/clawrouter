@@ -227,6 +227,38 @@ try {
   assert.equal((await stateFrames()).length, beforeDispatchFrames);
   assert.deepEqual(await ledgerFacts(), beforeDispatchFailure);
 
+  // Delay retention after both real reservations exist. A late resolve and a
+  // late rejection must both preserve the socket owner's cancellation receipt.
+  await authorityObject.fetch("https://authority/policies/put", { method: "POST", body: JSON.stringify({ policyId: "fixture", policy: { ...policy, retainRequestContent: true } }) });
+  const admissionGate = budgets.get(budgets.idFromName("fixture:admission"));
+  for (const result of ["resolve", "reject"]) {
+    const before = await ledgerFacts(), beforeFrames = (await stateFrames()).length;
+    const session = `admission-cancel-${result}`;
+    const opened = await dispatch("/v1/responses", { headers: { upgrade: "websocket", "x-fixture-admission-result": result, "x-clawrouter-session-id": session } });
+    assert.equal(opened.status, 101);
+    const current = opened.webSocket; current.accept(); sockets.push(current);
+    let closed = false;
+    current.addEventListener("close", () => { closed = true; });
+    for (let index = 0; index < 2; index++) current.send(JSON.stringify({ type: "response.create", model: "openai/gpt-6-astra", input: "cancel before dispatch", max_output_tokens: 32 }));
+    await until(async () => (await (await admissionGate.fetch("https://fixture/fixture-admission")).json()).waiting);
+    assert.ok((await ledgerFacts()).every(({ unsettled }) => unsettled === 1));
+    current.close(1000, "cancel admission");
+    await until(() => closed);
+    assert.equal((await admissionGate.fetch("https://fixture/fixture-admission", { method: "POST" })).status, 200);
+    let receipt;
+    await until(async () => {
+      const receipts = (await (await dispatch("/v1/usage")).json()).usage.events.filter(({ session_id }) => session_id === session);
+      assert.ok(receipts.length <= 1); receipt = receipts[0]; return !!receipt;
+    });
+    assert.equal(receipt.status, "client_error");
+    assert.equal(receipt.status_code, null);
+    assert.ok(receipt.reserved_cost_micros > 0);
+    assert.equal(receipt.actual_cost_micros, 0);
+    assert.equal((await stateFrames()).length, beforeFrames);
+    assert.deepEqual(await ledgerFacts(), before);
+  }
+  await authorityObject.fetch("https://authority/policies/put", { method: "POST", body: JSON.stringify({ policyId: "fixture", policy }) });
+
   // HTTP status remains 200 while protocol and delivery outcomes drive receipts.
   for (const scenario of ["late-failed", "cancel-stream", "cancel-after-terminal"]) {
     const before = await ledgerFacts(), session = `sse-${scenario}`;
@@ -528,7 +560,19 @@ export * from "./worker/index.ts";
 export class BudgetLedgerObject extends RealBudgetLedger {
   constructor(state) { super(state); this.fixtureSql = state.storage.sql; }
   async fetch(request) {
-    if (new URL(request.url).pathname === "/fixture-unsettled") return Response.json([...this.fixtureSql.exec("SELECT COUNT(*) AS count FROM budget_reservations WHERE settled = 0")][0]);
+    const path = new URL(request.url).pathname;
+    if (path === "/fixture-unsettled") return Response.json([...this.fixtureSql.exec("SELECT COUNT(*) AS count FROM budget_reservations WHERE settled = 0")][0]);
+    // Actors may resolve another request's promise. The pending DO fetch also
+    // keeps the original admission's storage I/O alive after its socket closes.
+    if (path === "/fixture-admission/wait") {
+      if (this.releaseAdmission) return new Response(null, { status: 409 });
+      await new Promise((resolve) => { this.releaseAdmission = resolve; });
+      return new Response(null);
+    }
+    if (path === "/fixture-admission") {
+      if (request.method === "POST") { this.releaseAdmission?.(); this.releaseAdmission = undefined; }
+      return Response.json({ waiting: !!this.releaseAdmission });
+    }
     return super.fetch(request);
   }
 }
@@ -537,6 +581,13 @@ const ingressAborts = {};
 export default { ...handler, async fetch(request, env, context) {
   if (new URL(request.url).pathname === "/fixture-accounting") return Response.json(trace);
   if (new URL(request.url).pathname === "/fixture-ingress-aborts") return Response.json(ingressAborts);
+  const admissionResult = request.headers.get("x-fixture-admission-result");
+  if (admissionResult) env = { ...env, CONTENT_ARCHIVE: { async put() {
+    const gate = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName("fixture:admission"));
+    const released = await gate.fetch("https://fixture/fixture-admission/wait");
+    if (!released.ok) throw new Error("fixture admission already waiting");
+    if (admissionResult === "reject") throw new Error("fixture late retention failure");
+  } } };
   const session = request.headers.get("x-clawrouter-session-id");
   if (session?.startsWith("sse-")) request.signal.addEventListener("abort", () => { ingressAborts[session] = true; }, { once: true });
   if (request.headers.get("x-fixture-continuation-fault") === "register") {
