@@ -4,6 +4,76 @@ Use a policy-scoped ClawRouter key and an OpenAI Platform API grant. The shared
 router supports native Responses HTTP, SSE, and explicitly qualified WebSocket
 routes. This setup keeps normal Codex tools, approval settings, and model prompts.
 
+## Connect the CLI
+
+From a ClawRouter checkout with its dependencies installed, create a separate
+Codex CLI profile. Export the issued client key in the shell that will launch
+Codex; the setup command does not store it or edit shell startup files.
+
+```sh
+export CLAWROUTER_API_KEY="$(cat /path/to/client-key.txt)"
+pnpm codex:connect connect \
+  --router-url https://router.example.com \
+  --provider openai --model gpt-6-astra --service-tier priority \
+  --codex /path/to/codex --dry-run
+# Repeat without --dry-run to apply the displayed field changes.
+# Run the returned launch command; it preserves --codex and --codex-home.
+/path/to/codex --profile clawrouter
+```
+
+This creates `$CODEX_HOME/clawrouter.config.toml` and a complete native catalog
+beside it. The default home is `~/.codex`. Use `--profile NAME` or
+`--codex-home DIR` to choose another installation. Codex 0.153.0 and 0.155.0 load
+separate `<name>.config.toml` profile files over the base configuration;
+`[profiles.NAME]` is not the supported format. Existing profiles are never
+adopted or overwritten by `connect`. The base `config.toml`, `auth.json`, sandbox
+and approval settings, and key file stay unchanged. This command configures the
+CLI; Desktop uses the shared root configuration described below.
+
+The profile selects the requested upstream model and the router's native
+provider URL. It disables hosted web search and enables WebSockets only when
+the authorized catalog qualifies that route. `--service-tier` defaults to
+`default`; request `priority` explicitly for Fast. A missing native descriptor
+or unqualified priority tier fails before installation. Use a producer that
+contains the selected model, such as Codex 0.155.0 for Astra.
+
+```sh
+pnpm codex:connect verify --codex /path/to/codex
+pnpm codex:connect update --codex /path/to/codex --dry-run
+pnpm codex:connect update --codex /path/to/codex
+pnpm codex:connect remove --dry-run
+pnpm codex:connect remove
+```
+
+Pass the same profile/home options on each command when using non-default
+paths. `verify` checks catalog access with the issued key, native metadata
+freshness, and owned profile settings. It makes no inference requests and does
+not prove that an upstream account can serve the model. Managed requirements,
+project settings, and command-line overrides still apply when Codex starts.
+`--key-file PATH` can supply the key to a setup command without changing that
+file; subsequent Codex processes still need `CLAWROUTER_API_KEY` exported.
+
+`update` writes a complete nonempty catalog generation before atomically
+switching the profile and its ownership receipt. Failed preparation leaves
+the previous profile and catalog usable. Earlier catalog generations stay
+available until `remove`, so a concurrently starting client can finish loading
+the profile it already read. Restart Codex after an update; running
+clients do not reload the static catalog. Changes and dry-run summaries list
+field names and catalog hashes, never keys or model instructions.
+
+The profile's first comment is an ownership receipt; keep it intact. Updates
+preserve user-added fields and comments and refuse changed owned fields.
+To change connection settings, remove and reconnect. `remove` deletes only
+unchanged owned fields and catalog files; modified fields/files remain and
+are reported. If the user changes the catalog pointer, all published catalog
+generations remain available for that retained reference. It keeps unrelated
+additions and does not revoke the key. An empty generated provider table is
+removed; user-added provider settings retain the required provider name.
+Credential revocation is a separate operator action through the admin UI or
+`pnpm cf:key:revoke -- --kid <credential-id>`. If an interrupted process leaves
+a profile lock directory, check that no setup command is still running before
+removing that named lock.
+
 ## Export native model metadata
 
 Codex needs its complete model descriptor, including instructions and service
