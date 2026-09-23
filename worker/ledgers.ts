@@ -1,7 +1,9 @@
 import type { BudgetReserveRequest, BudgetSettleRequest, Env, QueueMessage, UsageEvent } from "./types";
 import { budgetLedgerAddress, providerBudgetLedgerAddress } from "./budget-scope.ts";
 import { mergeUsageSnapshots, usageCutoffs, usageDayMs, usageShardName, type UsageSnapshot } from "./usage-sharding.ts";
-import { errorResponse, json } from "./utils.ts";
+import { errorResponse, json, normalizeEmail } from "./utils.ts";
+
+export type UsageEventScope = { kind: "admin" } | { kind: "principal" | "credential"; id: string };
 
 const reservationLeaseMs = 15 * 60 * 1_000;
 const chargeRetentionMs = 45 * 86_400_000;
@@ -130,7 +132,11 @@ export class UsageLedgerObject implements DurableObject {
       if (!(await this.state.storage.getAlarm())) await this.state.storage.setAlarm(Date.now() + 86_400_000);
       return new Response("accepted");
     }
-    if (request.method === "GET" && url.pathname === "/snapshot") return json(this.snapshot(url.searchParams.getAll("policy_id"), Math.min(100, Number(url.searchParams.get("limit")) || 100)));
+    if (request.method === "GET" && url.pathname === "/snapshot") {
+      const kind = url.searchParams.get("events"), id = url.searchParams.get("event_owner");
+      if (kind !== "admin" && !(kind === "principal" && id !== null) && !(kind === "credential" && id)) return errorResponse("invalid_usage_scope", "an explicit usage event scope is required", 400);
+      return json(this.snapshot(url.searchParams.getAll("policy_id"), kind === "admin" ? { kind } : { kind, id: id! }, Math.min(100, Number(url.searchParams.get("limit")) || 100)));
+    }
     return errorResponse("route_not_found", "route not found", 404);
   }
 
@@ -150,20 +156,34 @@ export class UsageLedgerObject implements DurableObject {
     this.cleanup();
   }
 
-  private snapshot(policyIds: string[], limit: number) {
+  private snapshot(policyIds: string[], scope: UsageEventScope, limit: number) {
     this.cleanup();
     const cutoffs = usageCutoffs(Date.now(), usageWindowDays);
     const uniquePolicyIds = [...new Set(policyIds.filter(Boolean))];
     const where = uniquePolicyIds.length ? `policy_id IN (${uniquePolicyIds.map(() => "?").join(", ")}) AND occurred_at_ms >= ?` : "occurred_at_ms >= ?";
     const params = [...uniquePolicyIds, cutoffs.rolling];
     const dailyParams = [...uniquePolicyIds, cutoffs.daily];
-    const events = rows<{ event_json: string }>(this.sql.exec(`SELECT event_json FROM usage_events WHERE ${where} ORDER BY occurred_at_ms DESC LIMIT ?`, ...params, limit)).map((row) => JSON.parse(row.event_json));
+    const eventFilter = this.eventFilter(where, params, scope);
+    const events = rows<{ event_json: string }>(this.sql.exec(`SELECT event_json FROM usage_events WHERE ${eventFilter.where} ORDER BY occurred_at_ms DESC LIMIT ?`, ...eventFilter.params, limit)).map((row) => JSON.parse(row.event_json));
     // Count final unavailable outcomes, not historical unpriced-tier admission denials.
     const unpricedCount = "COALESCE(SUM(CASE WHEN json_extract(event_json, '$.cost_basis') = 'unpriced_usage' THEN 1 ELSE 0 END), 0) AS unpriced_request_count";
     const summary = first<SummaryRow>(this.sql.exec(`SELECT COUNT(*) AS request_count, COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count, COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) AS error_count, COALESCE(SUM(input_tokens), 0) AS input_tokens, COALESCE(SUM(output_tokens), 0) AS output_tokens, COALESCE(SUM(total_tokens), 0) AS total_tokens, COALESCE(SUM(actual_cost_micros), 0) AS actual_cost_micros, ${unpricedCount} FROM usage_events WHERE ${where}`, ...params) as unknown as Iterable<SummaryRow>) ?? emptySummary();
     const providers = rows<ProviderRow>(this.sql.exec(`SELECT provider, COUNT(*) AS request_count, COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count, COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) AS error_count, COALESCE(SUM(total_tokens), 0) AS total_tokens, COALESCE(SUM(actual_cost_micros), 0) AS actual_cost_micros, ${unpricedCount} FROM usage_events WHERE ${where} GROUP BY provider ORDER BY request_count DESC`, ...params) as unknown as Iterable<ProviderRow>);
     const daily = rows<DailyRow>(this.sql.exec(`SELECT CAST(occurred_at_ms / 86400000 AS INTEGER) * 86400000 AS day_start_ms, COUNT(*) AS request_count, COALESCE(SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END), 0) AS success_count, COALESCE(SUM(CASE WHEN status != 'success' THEN 1 ELSE 0 END), 0) AS error_count, COALESCE(SUM(total_tokens), 0) AS total_tokens, COALESCE(SUM(actual_cost_micros), 0) AS actual_cost_micros, ${unpricedCount} FROM usage_events WHERE ${where} GROUP BY CAST(occurred_at_ms / 86400000 AS INTEGER) ORDER BY day_start_ms`, ...dailyParams) as unknown as Iterable<DailyRow>);
     return { ledger: "durable_object", summary: camelSummary(summary), providers: providers.map(camelProvider), daily: daily.map(camelDaily), events };
+  }
+
+  private eventFilter(where: string, params: Array<string | number>, scope: UsageEventScope) {
+    if (scope.kind === "admin") return { where, params };
+    if (scope.kind === "credential") return { where: `${where} AND json_extract(event_json, '$.principal_id') IS NULL AND json_extract(event_json, '$.credential_id') = ?`, params: [...params, scope.id] };
+    const principal = normalizeEmail(scope.id);
+    if (!principal) return { where: "0", params: [] };
+    // SQLite lower/trim do not implement JS Unicode identity normalization.
+    // Match retained raw IDs with the authority's normalizer, then filter in SQL
+    // before LIMIT. Never derive historical ownership from today's credentials.
+    const candidates = rows<{ principal_id: string }>(this.sql.exec(`SELECT DISTINCT json_extract(event_json, '$.principal_id') AS principal_id FROM usage_events WHERE ${where} AND json_type(event_json, '$.principal_id') = 'text'`, ...params));
+    const aliases = candidates.map((row) => row.principal_id).filter((id) => normalizeEmail(id) === principal);
+    return { where: `${where} AND json_type(event_json, '$.principal_id') = 'text' AND json_extract(event_json, '$.principal_id') IN (SELECT value FROM json_each(?))`, params: [...params, JSON.stringify(aliases)] };
   }
 
   private cleanup(): void { this.sql.exec("DELETE FROM usage_events WHERE occurred_at_ms < ?", Date.now() - usageRetentionMs); }
@@ -199,20 +219,22 @@ export async function ingestUsage(env: Env, event: UsageEvent): Promise<void> {
   if (!response.ok) throw new Error(`usage ledger write returned ${response.status}`);
 }
 
-export async function usageSnapshot(env: Env, tenantId: string, policyId: string, limit = 100): Promise<UsageSnapshot> {
-  return usageSnapshots(env, [{ tenantId, policyId }], limit);
+export async function usageSnapshot(env: Env, tenantId: string, policyId: string, scope: UsageEventScope, limit = 100): Promise<UsageSnapshot> {
+  return usageSnapshots(env, [{ tenantId, policyId }], scope, limit);
 }
 
-export async function usageSnapshots(env: Env, policies: Array<{ policyId: string; tenantId: string }>, limit = 100): Promise<UsageSnapshot> {
+export async function usageSnapshots(env: Env, policies: Array<{ policyId: string; tenantId: string }>, scope: UsageEventScope, limit = 100): Promise<UsageSnapshot> {
   const shards = new Map(policies.map(policy => [usageShardName(policy.tenantId, policy.policyId), policy]));
-  const snapshots = await Promise.all([...shards.values()].map(policy => currentUsageSnapshot(env, policy.tenantId, policy.policyId, limit)));
+  const snapshots = await Promise.all([...shards.values()].map(policy => currentUsageSnapshot(env, policy.tenantId, policy.policyId, scope, limit)));
   return mergeUsageSnapshots(snapshots, limit);
 }
 
-async function currentUsageSnapshot(env: Env, tenantId: string, policyId: string, limit: number): Promise<UsageSnapshot> {
+async function currentUsageSnapshot(env: Env, tenantId: string, policyId: string, scope: UsageEventScope, limit: number): Promise<UsageSnapshot> {
   const url = new URL("https://clawrouter.internal/snapshot");
   url.searchParams.set("policy_id", policyId);
   url.searchParams.set("limit", String(limit));
+  url.searchParams.set("events", scope.kind);
+  if (scope.kind !== "admin") url.searchParams.set("event_owner", scope.id);
   const response = await usageStub(env, tenantId, policyId).fetch(url);
   if (!response.ok) throw new Error(`usage snapshot returned ${response.status}`);
   return response.json<UsageSnapshot>();

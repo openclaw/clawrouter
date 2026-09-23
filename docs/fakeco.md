@@ -213,7 +213,7 @@ The integration contract is:
 | `GET /v1/catalog` | FakeCo credential | Authoritative allowed provider/model catalog. Require `provider.executable=true`; inspect `provider.readiness.status`, `verified`, and `reasons`. |
 | `GET /v1/models` | FakeCo credential | OpenAI model-list view containing currently executable models. |
 | `POST /v1/chat/completions`, `/v1/responses`, `/v1/embeddings` | FakeCo credential | OpenAI-compatible inference. Model ids retain the provider namespace, such as `openai/gpt-4.1-mini`. |
-| `GET /v1/usage` | FakeCo credential | Policy budget status plus request, error, token, spend, provider, daily, and recent-event metadata. |
+| `GET /v1/usage` | FakeCo credential | Policy or principal budget status, shared policy request/error/token/spend/provider/daily totals, and caller-owned recent-event metadata. |
 
 Expected FakeCo health fields include:
 
