@@ -1,10 +1,11 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
-import { dirname, join } from "node:path";
+import { dirname, join, resolve } from "node:path";
 import test from "node:test";
+import { getStaticTOMLValue, parseTOML } from "toml-eslint-parser";
 import { startBundledWorkerdFixture } from "../../test/helpers/workerd.mjs";
 
 const require = createRequire(import.meta.url);
@@ -15,7 +16,19 @@ test("maintained parser imports and flushes in the unchanged Wrangler/workerd ru
   try {
     const wrangler = join(dirname(require.resolve("wrangler/package.json")), "bin/wrangler.js");
     const output = join(temporary, "bundle");
-    const built = spawnSync(process.execPath, [wrangler, "deploy", "worker/test/fixtures/responses-parser-runtime.ts", "--dry-run", "--outdir", output, "--config", "wrangler.toml"], {
+    const config = getStaticTOMLValue(parseTOML(await readFile("wrangler.toml", "utf8")));
+    assert.equal(config.compatibility_date, "2026-06-05");
+    assert.deepEqual(config.compatibility_flags, ["enable_request_signal"]);
+    // Keep runtime/bundler settings, but isolate assets and omit the custom build
+    // that would rewrite shared checkout files while sibling tests read them.
+    delete config.build;
+    config.main = resolve("worker/test/fixtures/responses-parser-runtime.ts");
+    config.assets.directory = join(temporary, "assets");
+    await mkdir(config.assets.directory);
+    await writeFile(join(config.assets.directory, "index.html"), "parser runtime fixture");
+    const configPath = join(temporary, "wrangler.json");
+    await writeFile(configPath, JSON.stringify(config));
+    const built = spawnSync(process.execPath, [wrangler, "deploy", "--dry-run", "--outdir", output, "--config", configPath], {
       encoding: "utf8", timeout: 120_000,
       env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
     });
