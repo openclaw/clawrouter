@@ -1,16 +1,16 @@
 import type { FusionConfig, FusionReadiness, FusionReadinessCall } from "../shared/contracts";
-import { buildAdviserBody, buildAggregatorBody, buildFusionReservationProposals } from "./fusion.ts";
+import { buildAdviserBody, buildAggregatorBody, buildFusionReservationProposals, prepareAdviserBody } from "./fusion.ts";
+import { assessModelRequest } from "../shared/model-request-parameters.ts";
 import { validateBudgetReservation } from "./accounting.ts";
 import { estimateCost } from "./proxy-accounting.ts";
-import type { AccessPolicyEntry, CompiledModel, ProviderConnection } from "./types.ts";
+import type { AccessPolicyEntry, CompiledEndpoint, CompiledModel, ProviderConnection } from "./types.ts";
 import { HttpError } from "./utils.ts";
 
 export interface FusionReadinessRoute {
   modelId: string;
   providerId: string;
   providerDisplayName: string;
-  endpointId: string;
-  requestFormat: string;
+  endpoint: Pick<CompiledEndpoint, "id" | "request_format">;
   connection?: ProviderConnection;
   model: CompiledModel;
 }
@@ -36,7 +36,7 @@ export function fusionReadiness(config: FusionConfig, entry: AccessPolicyEntry, 
     "adviser",
     index + 1,
     model,
-    buildAdviserBody(textEnvelope, model, config, index),
+    prepareAdviserBody(buildAdviserBody(textEnvelope, model, config, index), routesByModel.get(model)!.model, routesByModel.get(model)!.endpoint, config.temperature),
     entry,
     readiness,
     routesByModel.get(model)!,
@@ -109,14 +109,18 @@ function block(call: FusionReadinessCall, reason: string): void {
 function readinessCall(stage: FusionReadinessCall["stage"], index: number | null, modelId: string, body: Record<string, unknown>, entry: AccessPolicyEntry, readiness: FusionProviderReadiness[], route: FusionReadinessRoute): FusionReadinessCall {
   const providerReadiness = readiness.find((candidate) => candidate.id === route.providerId);
   const policyAllowed = entry.policy.enabled && (!entry.policy.providers.length || entry.policy.providers.includes(route.providerId));
-  const executable = policyAllowed && providerReadiness?.executableEndpoints.includes(route.endpointId) === true;
+  const parameters = assessModelRequest(route.model, route.endpoint, body);
+  const executable = policyAllowed && providerReadiness?.executableEndpoints.includes(route.endpoint.id) === true && parameters.conflicts.length === 0;
   const reasons = [
     ...(!entry.policy.enabled ? ["Policy is disabled."] : []),
     ...(entry.policy.enabled && !policyAllowed ? [`Policy does not allow ${route.providerDisplayName}.`] : []),
     ...(policyAllowed && !executable ? providerReadiness?.reasons.length ? providerReadiness.reasons : ["Chat completions are not executable for this provider."] : []),
     ...(executable && providerReadiness?.verified !== true ? ["Executable, but not verified by a recent live smoke test."] : []),
+    ...parameters.conflicts.map(({ message }) => message),
+    ...parameters.unknown.map(({ message }) => message),
+    ...(stage === "adviser" && !("temperature" in body) ? ["Adviser temperature preference omitted; using the provider default because support is unknown or restricted."] : []),
   ];
-  const cost = estimateCost(route.model, body, entry.policy.requestCostMicros, "llm.chat", route.requestFormat);
+  const cost = estimateCost(route.model, body, entry.policy.requestCostMicros, "llm.chat", route.endpoint.request_format);
   const call: FusionReadinessCall = {
     stage,
     index,

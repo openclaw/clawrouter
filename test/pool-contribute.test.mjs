@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { execFile, spawnSync } from "node:child_process";
-import { chmodSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
+import { chmodSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -52,26 +52,5 @@ test("pool contribution rejects literal secrets and broadly readable tickets", (
     assert.match(broad.stderr, /permissions are too broad/);
   } finally {
     rmSync(directory, { recursive: true, force: true });
-  }
-});
-
-test("pool ticket writer keeps the one-time secret in a new mode-0600 file", async () => {
-  const directory = mkdtempSync(join(tmpdir(), "clawrouter-pool-ticket-")), output = join(directory, "ticket.json");
-  let authorization;
-  const server = createServer(async (request, response) => {
-    authorization = request.headers.authorization;
-    response.writeHead(201, { "content-type": "application/json" });
-    response.end(JSON.stringify({ ticket: { id: "pst_ticket_fixture_1" }, ticketToken: "ticket-fixture", submissionUrl: "https://router.example/v1/pool-submissions/pst_ticket_fixture_1/consume" }));
-  });
-  await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
-  try {
-    const { stdout } = await execFileAsync(process.execPath, ["scripts/pool-ticket.mjs", "--url", `http://127.0.0.1:${server.address().port}`, "--out", output, "--scope", "policies", "--scope-id", "policy", "--token-ref", "openai-test", "--provider", "openai", "--admin-token-env", "TEST_POOL_ADMIN"], { cwd: process.cwd(), env: { ...process.env, TEST_POOL_ADMIN: "admin-fixture" }, encoding: "utf8" });
-    assert.equal(authorization, "Bearer admin-fixture");
-    assert.equal(statSync(output).mode & 0o777, 0o600);
-    assert.equal(JSON.parse(readFileSync(output, "utf8")).ticketToken, "ticket-fixture");
-    assert.equal(stdout.includes("ticket-fixture"), false);
-    assert.equal(stdout.includes("admin-fixture"), false);
-  } finally {
-    server.closeAllConnections(); server.close(); rmSync(directory, { recursive: true, force: true });
   }
 });

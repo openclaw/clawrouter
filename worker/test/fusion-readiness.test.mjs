@@ -33,9 +33,9 @@ const baseReadiness = {
 };
 
 const routes = [
-  { modelId: "local/qwen3:8b", providerId: "local-openai", providerDisplayName: "Local OpenAI-compatible", endpointId: "chat_completions", model: { id: "local/qwen3:8b", upstream: "qwen3:8b", capabilities: ["llm.chat"], pricing_ref: null, pricing: null } },
-  { modelId: "openai/gpt-4.1-mini", providerId: "openai", providerDisplayName: "OpenAI", endpointId: "chat_completions", model: { id: "openai/gpt-4.1-mini", upstream: "gpt-4.1-mini", capabilities: ["llm.chat"], pricing_ref: null, pricing: null } },
-].map((route) => ({ ...route, requestFormat: "openai.chat_completions" }));
+  { modelId: "local/qwen3:8b", providerId: "local-openai", providerDisplayName: "Local OpenAI-compatible", endpoint: { id: "chat_completions", request_format: "openai.chat_completions" }, model: { id: "local/qwen3:8b", upstream: "qwen3:8b", capabilities: ["llm.chat"], pricing_ref: null, pricing: null } },
+  { modelId: "openai/gpt-4.1-mini", providerId: "openai", providerDisplayName: "OpenAI", endpoint: { id: "chat_completions", request_format: "openai.chat_completions" }, model: { id: "openai/gpt-4.1-mini", upstream: "gpt-4.1-mini", capabilities: ["llm.chat"], pricing_ref: null, pricing: null } },
+];
 
 test("Fusion preflight uses request completeness for both budgets and preserves fixed zero", () => {
   const provider = providerById("perplexity");
@@ -49,7 +49,7 @@ test("Fusion preflight uses request completeness for both budgets and preserves 
     [100_000_000, 100_000_000, 0, true, "policy_fixed"],
   ]) {
     const entry = { policyId: "request-fees", policy: { enabled: true, providers: [], monthlyBudgetMicros: policyLimit, requestCostMicros: fixed } };
-    const route = { modelId: model.id, providerId: provider.id, providerDisplayName: provider.display_name, endpointId: endpoint.id, requestFormat: endpoint.request_format, model, connection: { providerId: provider.id, enabled: true, monthlyBudgetMicros: providerLimit } };
+    const route = { modelId: model.id, providerId: provider.id, providerDisplayName: provider.display_name, endpoint, model, connection: { providerId: provider.id, enabled: true, monthlyBudgetMicros: providerLimit } };
     const result = fusionReadiness(config, entry, [{ ...baseReadiness, id: provider.id }], [route], { configured: policyLimit != null, ledger: policyLimit == null ? "unmetered" : "durable_object", remainingMicros: policyLimit });
     assert.equal(result.executable, executable);
     assert.equal(result.advertisable, executable);
@@ -90,6 +90,7 @@ test("fusion readiness reports policy-scoped execution and exact fixed-price cal
   assert.equal(readiness.estimatedReservationMicros, 21);
   assert.deepEqual(readiness.calls.map((call) => call.stage), ["adviser", "adviser", "synthesizer"]);
   assert.ok(readiness.calls.every((call) => call.estimateBasis === "policy_fixed"));
+  assert.match(readiness.calls[0].reasons.join(" "), /temperature preference omitted/);
 });
 
 test("fusion readiness prevents adviser fan-out when the policy blocks its synthesizer", () => {

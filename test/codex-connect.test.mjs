@@ -1,0 +1,415 @@
+import assert from "node:assert/strict";
+import { execFile, spawn } from "node:child_process";
+import { once } from "node:events";
+import fs from "node:fs";
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
+import { tmpdir } from "node:os";
+import { syncBuiltinESMExports } from "node:module";
+import { join } from "node:path";
+import { promisify } from "node:util";
+import test from "node:test";
+import { getStaticTOMLValue, parseTOML } from "toml-eslint-parser";
+import { manageCodex } from "../scripts/codex-connect.mjs";
+
+const secret = "fixture-client-key-not-a-real-credential";
+const instructions = "Synthetic full native instructions.\nKeep these bytes.\n";
+const descriptor = { slug: "fixture-model", base_instructions: instructions,
+  model_messages: { instructions_template: "Synthetic {{ tools }}", future: { preserved: true } },
+  context_window: 1000, service_tiers: [{ id: "priority", name: "Fast" }], additional_speed_tiers: ["fast"], use_responses_lite: true };
+const route = { path: "/v1/responses", methods: ["POST"], requestFormat: "openai.responses", responseFormat: "openai.responses", streaming: "sse", websocket: "openai.responses" };
+const catalog = { providers: [{ id: "fixture", allowed: true, executable: true, nativeBaseUrl: "/v1/native/fixture", routes: [route], models: [
+  { id: "fixture/model", upstream: "fixture-model", capabilities: ["llm.responses"], pricing: { serviceTiers: [{ id: "priority", maxInputTokens: null }] } },
+] }] };
+const base = '# base stays byte-identical\r\nmodel = "original"\r\nsandbox_mode = "workspace-write"\r\napproval_policy = "on-request"\r\n[model_providers.original]\r\nenv_key = "OTHER_KEY"\r\n';
+
+async function fixture(t) {
+  const directory = await mkdtemp(join(tmpdir(), "clawrouter-connect-"));
+  t.after(() => rm(directory, { recursive: true, force: true }));
+  const home = join(directory, "codex-home"), bundle = join(directory, "bundle.json"), binary = join(directory, "codex-fixture");
+  await mkdir(home);
+  await writeFile(join(home, "config.toml"), base);
+  await writeFile(join(home, "auth.json"), '{"fixture":"unrelated-auth"}\n');
+  await writeFile(bundle, JSON.stringify({ models: [descriptor] }));
+  await writeFile(binary, `#!${process.execPath}\nconst fs = require("node:fs");
+if (process.env.CLAWROUTER_API_KEY) { process.stderr.write("credential leaked to producer"); process.exit(1); }
+if (process.argv.slice(2).join(" ") === "debug models --bundled") process.stdout.write(fs.readFileSync(process.env.FIXTURE_BUNDLE));
+else if (process.argv[2] === "--version") process.stdout.write("codex-cli 0.155.0\\n");
+else process.exit(2);\n`);
+  await chmod(binary, 0o700);
+  const state = { catalog: structuredClone(catalog), status: 200, requests: [], beforeResponse: null };
+  const server = createServer(async (request, response) => {
+    state.requests.push({ url: request.url, method: request.method, authorization: request.headers.authorization });
+    await state.beforeResponse?.();
+    if (await state.respond?.(request, response)) return;
+    response.writeHead(state.status, { "content-type": "application/json" });
+    response.end(typeof state.catalog === "string" ? state.catalog : JSON.stringify(state.catalog));
+  });
+  server.listen(0, "127.0.0.1");
+  await once(server, "listening");
+  t.after(() => new Promise((done) => { server.closeAllConnections(); server.close(done); }));
+  const origin = `http://127.0.0.1:${server.address().port}`;
+  const env = { ...process.env, HOME: directory, CODEX_HOME: home, CLAWROUTER_API_KEY: secret, FIXTURE_BUNDLE: bundle };
+  const common = ["--codex-home", home, "--codex", binary];
+  const connect = ["connect", "--router-url", origin, "--provider", "fixture", "--model", "fixture-model", "--service-tier", "priority", ...common];
+  const profile = join(home, "clawrouter.config.toml");
+  const read = async () => getStaticTOMLValue(parseTOML(await readFile(profile, "utf8")));
+  return { directory, home, bundle, binary, state, env, common, connect, profile, read,
+    run: (command, ...args) => manageCodex([command, ...common, ...args], env) };
+}
+
+test("connect dry-run, verify, update, and remove preserve base/auth/key and complete native metadata", async (t) => {
+  const f = await fixture(t);
+  const keyFile = join(f.directory, "client-key.txt");
+  await writeFile(keyFile, `${secret}\n`);
+  const args = [...f.connect, "--key-file", keyFile];
+  const dry = await manageCodex([...args, "--dry-run"], { ...f.env, CLAWROUTER_API_KEY: undefined });
+  assert.equal(dry.status, "planned");
+  assert.deepEqual(await readdir(f.home), ["auth.json", "config.toml"]);
+  const applied = await manageCodex(args, { ...f.env, CLAWROUTER_API_KEY: undefined });
+  assert.equal(applied.status, "applied");
+  assert.equal(applied.launch, `CODEX_HOME='${f.home}' '${f.binary}' --profile clawrouter`);
+  const config = await f.read();
+  assert.equal(config.model_provider, "clawrouter_clawrouter");
+  assert.equal(config.model_providers.clawrouter_clawrouter.env_key, "CLAWROUTER_API_KEY");
+  assert.equal(config.model_providers.clawrouter_clawrouter.supports_websockets, true);
+  assert.equal(config.service_tier, "priority");
+  assert.equal(config.web_search, "disabled");
+  assert.deepEqual(JSON.parse(await readFile(join(f.home, config.model_catalog_json), "utf8")).models, [descriptor]);
+  for (const path of [f.profile, join(f.home, config.model_catalog_json)]) assert.equal((await lstat(path)).mode & 0o777, 0o600);
+  const unchanged = await readFile(f.profile, "utf8");
+  assert.equal((await f.run("verify")).inferenceProbed, false);
+  assert.deepEqual((await f.run("update", "--dry-run")).changed, []);
+  await f.run("update");
+  assert.equal(await readFile(f.profile, "utf8"), unchanged);
+  await f.run("remove");
+  assert.equal((await f.run("remove")).status, "absent");
+  assert.deepEqual(await readdir(f.home), ["auth.json", "config.toml"]);
+  assert.equal(await readFile(join(f.home, "config.toml"), "utf8"), base);
+  assert.equal(await readFile(join(f.home, "auth.json"), "utf8"), '{"fixture":"unrelated-auth"}\n');
+  assert.equal(await readFile(keyFile, "utf8"), `${secret}\n`);
+  assert.ok(f.state.requests.every((request) => request.method === "GET" && request.url === "/v1/catalog" && request.authorization === `Bearer ${secret}`));
+  assert.ok(!JSON.stringify(applied).includes(secret) && !JSON.stringify(applied).includes(instructions));
+});
+
+test("refresh switches one complete generation and preserves user comments, fields, and empty tables", async (t) => {
+  const f = await fixture(t);
+  await manageCodex(f.connect, f.env);
+  const original = await f.read();
+  const extra = '\n# user comment stays\nstream_max_retries = 7\n[tools]\n[custom]\nmulti = """line one\nline two"""\n';
+  await writeFile(f.profile, `${await readFile(f.profile, "utf8")}${extra}`);
+  const nextDescriptor = { ...descriptor, unknown_future_metadata: { complete: true } };
+  await writeFile(f.bundle, JSON.stringify({ models: [nextDescriptor] }));
+  await assert.rejects(f.run("verify"), /run update/);
+  f.state.catalog.providers[0].routes[0].websocket = undefined;
+  const updated = await f.run("update");
+  assert.ok(updated.changed.includes("model_catalog_json"));
+  const config = await f.read();
+  assert.equal(config.model_providers.clawrouter_clawrouter.supports_websockets, false);
+  assert.ok((await readFile(f.profile, "utf8")).endsWith(extra));
+  assert.deepEqual(JSON.parse(await readFile(join(f.home, config.model_catalog_json), "utf8")).models, [nextDescriptor]);
+  // A process that read the previous profile before the switch can still open
+  // its catalog after the updater has finished.
+  assert.deepEqual(JSON.parse(await readFile(join(f.home, original.model_catalog_json), "utf8")).models, [descriptor]);
+  await f.run("remove");
+  await assert.rejects(readFile(join(f.home, original.model_catalog_json)), { code: "ENOENT" });
+  await assert.rejects(readFile(join(f.home, config.model_catalog_json)), { code: "ENOENT" });
+  assert.ok((await readFile(f.profile, "utf8")).endsWith(extra));
+  assert.deepEqual(await f.read(), { model_providers: { clawrouter_clawrouter: { name: "ClawRouter", stream_max_retries: 7 } }, tools: {}, custom: { multi: "line one\nline two" } });
+});
+
+test("update refuses changed owned fields; remove retains their user values and modified catalog", async (t) => {
+  const f = await fixture(t);
+  await manageCodex(f.connect, f.env);
+  const config = await f.read();
+  await writeFile(f.profile, (await readFile(f.profile, "utf8")).replace('"model" = "fixture-model"', '"model" = "user-selected" # keep'));
+  await writeFile(join(f.home, config.model_catalog_json), "user-owned catalog bytes\n");
+  const before = await readFile(f.profile, "utf8");
+  await assert.rejects(f.run("update"), /owned profile settings changed/);
+  assert.equal(await readFile(f.profile, "utf8"), before);
+  const removed = await f.run("remove");
+  assert.ok(removed.retained.includes("model"));
+  assert.ok(removed.retained.includes(`${config.model_catalog_json}: modified outside setup`));
+  assert.equal((await f.read()).model, "user-selected");
+  assert.ok((await readFile(f.profile, "utf8")).includes("# keep"));
+  assert.equal(await readFile(join(f.home, config.model_catalog_json), "utf8"), "user-owned catalog bytes\n");
+  assert.equal(removed.revoked, false);
+});
+
+for (const form of ["rollback", "absolute", "relative"]) test(`remove keeps published catalogs for a retained ${form} pointer`, async (t) => {
+  const f = await fixture(t);
+  await manageCodex(f.connect, f.env);
+  const original = await f.read();
+  await writeFile(f.bundle, JSON.stringify({ models: [{ ...descriptor, future_metadata: "new generation" }] }));
+  await f.run("update");
+  const current = await f.read();
+  const text = await readFile(f.profile, "utf8");
+  const pointer = form === "absolute" ? join(f.home, current.model_catalog_json) : form === "relative" ? `./${current.model_catalog_json}` : original.model_catalog_json;
+  await writeFile(f.profile, text.replace(`"model_catalog_json" = "${current.model_catalog_json}"`, `"model_catalog_json" = ${JSON.stringify(pointer)}`));
+  const result = await f.run("remove");
+  assert.equal((await f.read()).model_catalog_json, pointer);
+  assert.ok(result.retained.includes("model_catalog_json"));
+  assert.ok(result.retained.includes("model catalogs retained because the catalog pointer changed"));
+  assert.deepEqual(JSON.parse(await readFile(join(f.home, original.model_catalog_json), "utf8")).models, [descriptor]);
+  assert.ok(await readFile(join(f.home, current.model_catalog_json), "utf8"));
+});
+
+test("invalid/empty/unauthorized refreshes and unqualified priority keep previous files", async (t) => {
+  const f = await fixture(t);
+  await manageCodex(f.connect, f.env);
+  const before = await readFile(f.profile, "utf8"), names = await readdir(f.home);
+  for (const body of ["not JSON with a private response", { providers: [] }, { providers: [{ ...catalog.providers[0], models: [] }] },
+    { providers: [{ ...catalog.providers[0], models: [{ ...catalog.providers[0].models[0], pricing: { serviceTiers: [] } }] }] }]) {
+    f.state.catalog = body;
+    await assert.rejects(f.run("update"));
+    assert.equal(await readFile(f.profile, "utf8"), before);
+    assert.deepEqual(await readdir(f.home), names);
+  }
+  f.state.status = 401;
+  await assert.rejects(f.run("verify"), /HTTP 401/);
+  assert.equal(await readFile(f.profile, "utf8"), before);
+});
+
+test("collisions, symlinks, locks, and concurrent profile edits are not overwritten", async (t) => {
+  const f = await fixture(t);
+  await writeFile(f.profile, "# existing user profile\n");
+  await assert.rejects(manageCodex(f.connect, f.env), /profile already exists/);
+  await rm(f.profile);
+  await symlink(join(f.home, "config.toml"), f.profile);
+  await assert.rejects(manageCodex(f.connect, f.env), /not symlinks/);
+  await rm(f.profile);
+  await mkdir(join(f.home, ".clawrouter.clawrouter-connect.lock"));
+  await assert.rejects(manageCodex(f.connect, f.env), /profile lock/);
+  await rm(join(f.home, ".clawrouter.clawrouter-connect.lock"), { recursive: true });
+  f.state.beforeResponse = () => writeFile(f.profile, "# concurrent user edit\n");
+  await assert.rejects(manageCodex(f.connect, f.env), /profile changed/);
+  assert.equal(await readFile(f.profile, "utf8"), "# concurrent user edit\n");
+  assert.deepEqual((await readdir(f.home)).sort(), ["auth.json", "clawrouter.config.toml", "config.toml"]);
+  assert.equal(await readFile(join(f.home, "config.toml"), "utf8"), base);
+});
+
+test("base provider or legacy profile collisions fail before catalog access", async (t) => {
+  const f = await fixture(t);
+  for (const text of ['[model_providers.clawrouter_clawrouter]\nauth = { command = "existing" }\n', '[profiles.clawrouter]\nmodel = "existing"\n', '[profiles.clawrouter]\n', 'model_providers = { clawrouter_clawrouter = { name = "existing" } }\n', 'broken = [']) {
+    await writeFile(join(f.home, "config.toml"), text);
+    await assert.rejects(manageCodex(f.connect, f.env), /conflicting|valid TOML/);
+    assert.equal(await readFile(join(f.home, "config.toml"), "utf8"), text);
+  }
+  assert.equal(f.state.requests.length, 0);
+});
+
+test("unrelated explicit and inline provider containers do not collide with the selected provider", async (t) => {
+  const f = await fixture(t);
+  for (const text of ['[model_providers]\n[model_providers.other]\nname = "Other"\n', 'model_providers = {}\n', 'model_providers = { other = { name = "Other" } }\n', 'model_providers = { __proto__.clawrouter_probe = true }\n', '[profiles]\n[profiles.other]\nmodel = "other"\n', 'profiles = { other = { model = "other" } }\n']) {
+    await writeFile(join(f.home, "config.toml"), text);
+    await manageCodex(f.connect, f.env);
+    await f.run("remove");
+    assert.equal(await readFile(join(f.home, "config.toml"), "utf8"), text);
+    assert.equal(Object.hasOwn(Object.prototype, "clawrouter_probe"), false);
+  }
+});
+
+test("launch quotes the selected binary and home and selects the installed profile", async (t) => {
+  const f = await fixture(t);
+  const customHome = join(f.directory, "a home'with$dollars");
+  const customBinary = join(f.directory, "a codex'with$dollars");
+  await writeFile(customBinary, (await readFile(f.binary, "utf8")).replace('if (process.env.CLAWROUTER_API_KEY)', `if (process.argv[2] === "--profile") process.exit(process.env.CODEX_HOME === process.env.EXPECTED_HOME && process.argv[3] === "clawrouter" ? 0 : 3);\nif (process.env.CLAWROUTER_API_KEY)`));
+  await chmod(customBinary, 0o700);
+  const args = f.connect.map((value) => value === f.home ? customHome : value === f.binary ? customBinary : value);
+  const result = await manageCodex(args, { ...f.env, CODEX_HOME: undefined });
+  const child = spawn("/bin/sh", ["-c", result.launch], {
+    env: { ...f.env, EXPECTED_HOME: customHome, CODEX_HOME: undefined }, stdio: "ignore",
+  });
+  assert.equal((await once(child, "close"))[0], 0);
+  assert.ok(await readFile(join(customHome, "clawrouter.config.toml"), "utf8"));
+  assert.deepEqual(await readdir(f.home), ["auth.json", "config.toml"]);
+});
+
+test("remove deletes only the empty owned table, preserving comments and unrelated settings", async (t) => {
+  const f = await fixture(t);
+  await manageCodex(f.connect, f.env);
+  const before = await readFile(f.profile, "utf8");
+  await writeFile(f.profile, before.replace('"model" =', '# user root comment\nmodel_reasoning_effort = "high"\n"model" =') + "# user trailing comment\n");
+  await f.run("remove");
+  assert.deepEqual(await f.read(), { model_reasoning_effort: "high" });
+  const removed = await readFile(f.profile, "utf8");
+  assert.ok(removed.includes("# user root comment") && removed.includes("# user trailing comment"));
+});
+
+test("remove keeps the required provider name for user fields and subtables", async (t) => {
+  const f = await fixture(t);
+  await manageCodex(f.connect, f.env);
+  await writeFile(f.profile, `${await readFile(f.profile, "utf8")}\n[model_providers.clawrouter_clawrouter.http_headers]\n"x-user-setting" = "fixture"\n`);
+  const removed = await f.run("remove");
+  assert.ok(removed.retained.includes("model_providers.clawrouter_clawrouter.name"));
+  assert.deepEqual(await f.read(), { model_providers: { clawrouter_clawrouter: { name: "ClawRouter", http_headers: { "x-user-setting": "fixture" } } } });
+});
+
+test("remove preserves an editor save made during catalog cleanup", async (t) => {
+  const f = await fixture(t);
+  await manageCodex(f.connect, f.env);
+  const config = await f.read();
+  const remove = fs.promises.rm;
+  const edited = "# saved during removal\nmodel = 'user-selected'\n";
+  const mocked = t.mock.method(fs.promises, "rm", async (path, ...args) => {
+    if (path === join(f.home, config.model_catalog_json)) await writeFile(f.profile, edited);
+    return remove(path, ...args);
+  });
+  syncBuiltinESMExports();
+  let result;
+  try { result = await f.run("remove"); }
+  finally { mocked.mock.restore(); syncBuiltinESMExports(); }
+  assert.equal(await readFile(f.profile, "utf8"), edited);
+  assert.ok(result.retained.includes("profile changed during removal"));
+});
+
+test("failed profile commit cleans its new generation, temp files, and lock while retaining the old catalog", async (t) => {
+  const f = await fixture(t);
+  await manageCodex(f.connect, f.env);
+  const before = await readFile(f.profile, "utf8"), files = await readdir(f.home);
+  await writeFile(f.bundle, JSON.stringify({ models: [{ ...descriptor, future_metadata: "new generation" }] }));
+  const rename = fs.promises.rename;
+  const mocked = t.mock.method(fs.promises, "rename", async (from, to) => {
+    if (to === f.profile) throw Object.assign(new Error("synthetic profile commit failure"), { code: "EACCES" });
+    return rename(from, to);
+  });
+  syncBuiltinESMExports();
+  try { await assert.rejects(f.run("update"), { code: "EACCES" }); }
+  finally { mocked.mock.restore(); syncBuiltinESMExports(); }
+  assert.equal(await readFile(f.profile, "utf8"), before);
+  assert.deepEqual(await readdir(f.home), files);
+});
+
+test("concurrent edit between temporary profile write and rename is retained and unreferenced generation removed", async (t) => {
+  const f = await fixture(t);
+  await manageCodex(f.connect, f.env);
+  const before = await readFile(f.profile, "utf8"), files = await readdir(f.home);
+  await writeFile(f.bundle, JSON.stringify({ models: [{ ...descriptor, future_metadata: "new generation" }] }));
+  const write = fs.promises.writeFile;
+  const mocked = t.mock.method(fs.promises, "writeFile", async (path, ...args) => {
+    await write(path, ...args);
+    if (path.startsWith(`${f.profile}.`) && path.endsWith(".tmp")) await write(f.profile, `${before}# concurrent edit\n`);
+  });
+  syncBuiltinESMExports();
+  try { await assert.rejects(f.run("update"), /changed during the operation/); }
+  finally { mocked.mock.restore(); syncBuiltinESMExports(); }
+  assert.equal(await readFile(f.profile, "utf8"), `${before}# concurrent edit\n`);
+  assert.deepEqual(await readdir(f.home), files);
+});
+
+test("CLI failures never print a key, response body, or native producer stderr", async (t) => {
+  const f = await fixture(t);
+  f.state.catalog = `private response ${secret}`;
+  const child = spawn(process.execPath, ["scripts/codex-connect.mjs", ...f.connect], { env: f.env, stdio: ["ignore", "pipe", "pipe"] });
+  let output = "";
+  child.stdout.on("data", (data) => { output += data; });
+  child.stderr.on("data", (data) => { output += data; });
+  const [code] = await once(child, "close");
+  assert.equal(code, 1);
+  assert.match(output, /invalid JSON/);
+  assert.ok(!output.includes(secret) && !output.includes("private response"));
+  f.state.catalog = catalog;
+  await writeFile(f.binary, `#!${process.execPath}\nprocess.stderr.write(${JSON.stringify(instructions)}); process.exit(1);\n`);
+  await assert.rejects(f.run("verify"), /not owned/);
+  await assert.rejects(manageCodex(f.connect, f.env), (error) => /bundled export failed/.test(error.message) && !error.message.includes(instructions));
+});
+
+const nativeBinary = process.env.CLAWROUTER_CODEX_BINARY;
+const nativeProducer = process.env.CLAWROUTER_CODEX_CATALOG_BINARY ?? nativeBinary;
+for (const additions of ["empty", "comments", "provider"]) test(`native generated profile loads through connect/update/remove with ${additions}`, { skip: !nativeBinary, timeout: 180_000 }, async (t) => {
+  const f = await fixture(t);
+  const env = { PATH: process.env.PATH, HOME: f.directory, CODEX_HOME: f.home, RUST_LOG: "warn", CLAWROUTER_API_KEY: secret };
+  const origin = f.connect[2], requests = [];
+  const pluginList = "/control/plugins/featured?platform=codex";
+  f.state.respond = async (request, response) => {
+    // Both native versions fetch this optional-auth control-plane list at
+    // startup, independently of the selected inference provider.
+    if (request.method === "GET" && request.url === pluginList) {
+      response.writeHead(200, { "content-type": "application/json" });
+      response.end("[]");
+      return true;
+    }
+    if (request.method !== "POST") return false;
+    let text = "";
+    for await (const chunk of request) text += chunk;
+    const body = JSON.parse(text);
+    requests.push({ body, url: request.url, authorization: request.headers.authorization });
+    const item = { id: "fixture_message", type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "Synthetic profile complete.", annotations: [] }] };
+    const result = { id: "fixture_response", object: "response", status: "completed", model: body.model, output: [item], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } };
+    response.writeHead(200, { "content-type": "text/event-stream" });
+    for (const event of [{ type: "response.created", response: { ...result, status: "in_progress", output: [] } }, { type: "response.output_item.done", output_index: 0, item }, { type: "response.completed", response: result }]) response.write(`event: ${event.type}\ndata: ${JSON.stringify(event)}\n\n`);
+    response.end();
+    return true;
+  };
+  // Exercise profile loading over HTTP. Existing native fixtures qualify WS;
+  // its speculative startup prewarm is unnecessary for this lifecycle proof.
+  f.state.catalog.providers[0].routes[0].websocket = undefined;
+  const root = `model = "gpt-5.6-sol"\nmodel_provider = "original"\nsandbox_mode = "read-only"\napproval_policy = "on-request"\ndeveloper_instructions = "Synthetic base configuration marker."\ncli_auth_credentials_store = "file"\nchatgpt_base_url = "${origin}/control"\n[model_providers.original]\nname = "Original"\nbase_url = "${origin}/v1"\nenv_key = "CLAWROUTER_API_KEY"\nrequires_openai_auth = false\n`;
+  await writeFile(join(f.home, "config.toml"), root);
+  await rm(join(f.home, "auth.json"));
+  f.state.catalog.providers[0].models = ["gpt-6-astra", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"].map((slug) => ({
+    id: `fixture/${slug}`, upstream: slug, capabilities: ["llm.responses"], pricing: { serviceTiers: [{ id: "priority", maxInputTokens: null }] },
+  }));
+  const common = ["--codex-home", f.home, "--codex", nativeProducer];
+  await manageCodex(["connect", "--router-url", f.connect[2], "--provider", "fixture", "--model", "gpt-6-astra", ...common], env);
+  const generated = await f.read();
+  assert.equal(generated.model, "gpt-6-astra");
+  assert.equal(generated.model_provider, "clawrouter_clawrouter");
+  const run = async (valid = true, selectProfile = true, connected = true) => {
+    // Both engines reject --profile on app-server. Exec loads the real profile
+    // and sends a synthetic turn only to this isolated loopback responder.
+    const count = requests.length;
+    let result;
+    try {
+      const execution = promisify(execFile)(nativeBinary, [...(selectProfile ? ["--profile", "clawrouter"] : []), "exec", "--json", "--ephemeral", "--skip-git-repo-check", "Return synthetic profile complete without tools."], { cwd: f.home, env, timeout: 30_000, maxBuffer: 16 * 1024 * 1024 });
+      // Exec appends piped stdin to positional prompts and waits for its EOF.
+      execution.child.stdin.end();
+      result = await execution;
+    }
+    catch (error) { if (valid) assert.fail(`native profile load failed (${error.code})`); return { failed: true, stderr: error.stderr ?? "" }; }
+    if (valid) {
+      assert.ok(result.stdout.includes("Synthetic profile complete."), "native turn must consume the synthetic response");
+      assert.equal(requests.length, count + 1);
+      const request = requests.at(-1);
+      assert.equal(request.body.model, connected ? "gpt-6-astra" : "gpt-5.6-sol");
+      assert.equal(request.url, connected ? "/v1/native/fixture/v1/responses" : "/v1/responses");
+      assert.equal(request.authorization, `Bearer ${secret}`);
+      assert.ok(JSON.stringify(request.body).includes("Synthetic base configuration marker."), "base configuration must remain effective");
+      assert.equal(/fallback model metadata/i.test(result.stderr), false, "native profile must resolve official model metadata");
+    }
+    return result;
+  };
+  await run();
+  if (additions === "empty") {
+    // Negative controls prove this is the selected profile/provider/catalog,
+    // rather than a bundled-export bypass or a parse-only TOML assertion.
+    const original = await readFile(f.profile, "utf8");
+    await writeFile(f.profile, original.replace('[model_providers."clawrouter_clawrouter"]', '[model_providers."unselected_fixture"]'));
+    const providerFailure = await run(false);
+    assert.equal(providerFailure.failed, true);
+    assert.ok(providerFailure.stderr.includes("Model provider `clawrouter_clawrouter` not found"));
+    await writeFile(f.profile, original);
+    const path = join(f.home, generated.model_catalog_json), bytes = await readFile(path, "utf8");
+    await writeFile(path, '{"models":[]}');
+    const catalogFailure = await run(false);
+    assert.equal(catalogFailure.failed, true);
+    assert.ok(catalogFailure.stderr.includes(path) && catalogFailure.stderr.includes("must contain at least one model"));
+    await writeFile(path, bytes);
+    assert.equal(requests.length, 1, "invalid config must fail before inference");
+  }
+  const extra = additions === "comments" ? "\n# retained user comment\n[tools]\n" : additions === "provider" ? "\nstream_max_retries = 7\n[model_providers.clawrouter_clawrouter.http_headers]\n\"x-user-setting\" = \"fixture\"\n" : "";
+  await writeFile(f.profile, `${await readFile(f.profile, "utf8")}${extra}`);
+  for (const model of f.state.catalog.providers[0].models) model.pricing.serviceTiers = [];
+  await manageCodex(["update", ...common], env);
+  assert.notEqual((await f.read()).model_catalog_json, generated.model_catalog_json);
+  await run();
+  await manageCodex(["remove", ...common], env);
+  if (additions === "empty") {
+    await assert.rejects(readFile(f.profile), { code: "ENOENT" });
+  } else assert.ok((await readFile(f.profile, "utf8")).endsWith(extra));
+  await run(true, additions !== "empty", false);
+  assert.equal(await readFile(join(f.home, "config.toml"), "utf8"), root);
+  for (const request of f.state.requests.filter((request) => request.url === pluginList)) assert.equal(request.authorization, undefined, "router key must not reach the control plane");
+  const unexpected = f.state.requests.filter((request) => !((request.method === "GET" && ["/v1/catalog", pluginList].includes(request.url)) || (request.method === "POST" && ["/v1/native/fixture/v1/responses", "/v1/responses"].includes(request.url))));
+  assert.deepEqual(unexpected.map(({ method, url }) => ({ method, url })), [], "native proof must use only the isolated catalog, control, and synthetic inference routes");
+});

@@ -10,7 +10,8 @@ test("authorized model metadata preserves declared reasoning efforts without add
   const catalog = await (await catalogResponse(fixture.request("key"), fixture.env)).json();
   const models = catalog.providers.find(({ id }) => id === "openai").models;
   assert.deepEqual(models.find(({ id }) => id === "openai/gpt-5.6").supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh", "max"]);
-  assert.equal("supportedReasoningEfforts" in models.find(({ id }) => id === "openai/gpt-5.5"), false);
+  assert.deepEqual(models.find(({ id }) => id === "openai/gpt-5.5").supportedReasoningEfforts, ["none", "low", "medium", "high", "xhigh"]);
+  assert.equal("supportedReasoningEfforts" in models.find(({ id }) => id === "openai/gpt-4.1-mini"), false);
 });
 
 test("catalog and session preserve saved provider health independently of operation eligibility", async (t) => {
@@ -397,7 +398,7 @@ test("catalog and HTTP select only configured grants inside the already chosen p
   } });
   fixture.env.GRANT_CREDENTIALS = { idFromName: (name) => name, get: () => ({ fetch: async (_url, init) => {
     const { grant } = JSON.parse(init.body);
-    return Response.json({ grant, projection: { credentialGeneration: grant.credentialGeneration }, changed: false, migrated: false });
+    return Response.json({ grant: { ...grant, credentialLineage: "fixture-lineage" }, projection: { credentialGeneration: grant.credentialGeneration, credentialLineage: "fixture-lineage" }, changed: false, migrated: false });
   } }) };
   fixture.env.USAGE_QUEUE = { send: async () => {} };
   fixture.env.BUDGET_LEDGER.get = () => { throw new Error("unmetered HTTP must not read budget status"); };

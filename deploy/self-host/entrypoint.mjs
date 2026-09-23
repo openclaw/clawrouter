@@ -2,6 +2,7 @@ import { spawn } from "node:child_process";
 import { readFileSync, writeFileSync } from "node:fs";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { setTimeout as delay } from "node:timers/promises";
 
 const root = join(dirname(fileURLToPath(import.meta.url)), "../..");
 const configPath = join(root, ".wrangler.self-host.toml");
@@ -140,14 +141,46 @@ function main() {
     env: { ...process.env, WRANGLER_SEND_METRICS: "false" },
     stdio: "inherit",
   });
+  const stopCleanup = startContentCleanup(child);
 
   for (const signal of ["SIGINT", "SIGTERM"]) {
-    process.on(signal, () => child.kill(signal));
+    process.on(signal, () => { stopCleanup(); child.kill(signal); });
   }
   child.on("error", (error) => fail(`could not start Wrangler: ${error.message}`));
   child.on("exit", (code) => {
     process.exitCode = code ?? 1;
   });
+}
+
+export function startContentCleanup(child, baseUrl = "http://127.0.0.1:8787", { intervalMs = 60_000, fetchImpl = fetch } = {}) {
+  const controller = new AbortController();
+  const stop = () => controller.abort();
+  child.once("exit", stop);
+  child.once("error", stop);
+  void (async () => {
+    let ready = false;
+    while (!controller.signal.aborted) {
+      try {
+        const options = { redirect: "manual", signal: AbortSignal.any([controller.signal, AbortSignal.timeout(10_000)]) };
+        if (!ready) {
+          const health = await fetchImpl(`${baseUrl}/v1/health`, options);
+          if (!health.ok || (await health.json()).ok !== true) throw new Error("worker is not ready");
+          ready = true;
+        }
+        // Local Wrangler does not run cron itself. Its native trigger returns JSON
+        // only with format=json; a successful HTTP status alone is insufficient.
+        const response = await fetchImpl(`${baseUrl}/cdn-cgi/local/scheduled?format=json`, options);
+        if (!response.ok || (await response.json()).outcome !== "ok") throw new Error("cleanup did not complete");
+      } catch {
+        if (!controller.signal.aborted) console.error("clawrouter self-host: content cleanup retry; worker unavailable or sweep failed");
+      }
+      await delay(ready ? intervalMs : 1_000, undefined, { signal: controller.signal }).catch(() => undefined);
+    }
+  })().finally(() => {
+    child.removeListener("exit", stop);
+    child.removeListener("error", stop);
+  });
+  return stop;
 }
 
 function fail(message) {

@@ -25,6 +25,29 @@ test("legacy default grants without provider metadata retain their registered ro
   assert.equal((await materializeGrantCredentials(env, key, values.get(key), "openai", refreshConfig(), false)).accessToken, "access-old");
 });
 
+test("lineage is owner-issued, survives metadata updates and seeds old owner records once", async () => {
+  const key = "oauth/policy/openai", values = new Map(), env = credentialEnv(values);
+  const active = await putGrantCredentials(env, key, legacyGrant({ credentialLineage: "caller-supplied" }));
+  assert.match(active.credentialLineage, /^[0-9a-f-]{36}$/);
+  assert.notEqual(active.credentialLineage, "caller-supplied");
+  const updated = await putGrantCredentials(env, key, { ...active, label: "renamed", credentialLineage: "caller-forged", enabled: false }, true);
+  assert.equal(updated.credentialLineage, active.credentialLineage);
+  const enabled = await putGrantCredentials(env, key, { ...updated, enabled: true }, true);
+  assert.equal(enabled.credentialLineage, active.credentialLineage);
+  const owner = env.GRANT_CREDENTIALS.objects.get(key), record = owner.values.get("credential");
+  delete record.lineage;
+  owner.values.set("credential", record);
+  values.set(key, { ...enabled, credentialLineage: "kv-forged" });
+  const migrated = await materializeGrantCredentials(env, key, enabled, "openai", refreshConfig(), false);
+  assert.notEqual(migrated.credentialLineage, "kv-forged");
+  assert.notEqual(migrated.credentialLineage, active.credentialLineage);
+  const again = await materializeGrantCredentials(env, key, enabled, "openai", refreshConfig(), false);
+  assert.equal(again.credentialLineage, migrated.credentialLineage);
+  await revokeGrantCredentials(env, key);
+  const reconnected = await putGrantCredentials(env, key, legacyGrant({ credentialLineage: migrated.credentialLineage }));
+  assert.notEqual(reconnected.credentialLineage, migrated.credentialLineage);
+});
+
 test("materialization rejects changed provider and transport metadata before dispatch", async () => {
   const key = "oauth/policy/openai", values = new Map(), env = credentialEnv(values);
   const active = await putGrantCredentials(env, key, legacyGrant());

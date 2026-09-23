@@ -49,7 +49,7 @@ export function applyProviderCredential(
   headers: Headers,
   query: URLSearchParams,
 ): void {
-  const scheme = credentialScheme(provider, grant);
+  const scheme = providerCredentialScheme(provider, grant);
   const secret = providerSecret(provider, scheme, grant, env);
   if (scheme.type === "bearer" && secret) headers.set(scheme.header, scheme.format.replace("${secret}", secret));
   else if (scheme.type === "api_key" && secret) headers.set(scheme.header, secret);
@@ -59,7 +59,7 @@ export function applyProviderCredential(
 }
 
 function assertProviderCredential(provider: CompiledProvider, grant: UpstreamGrant | null, env: Env): void {
-  const scheme = credentialScheme(provider, grant);
+  const scheme = providerCredentialScheme(provider, grant);
   if (scheme.type === "sig_v4") {
     const present = (field: string, key: string) => grant
       ? !!grant.credentials?.[field] || (grant.credentialStore === "durable_object" && grant.credentialFields?.includes(field))
@@ -75,7 +75,7 @@ function assertProviderCredential(provider: CompiledProvider, grant: UpstreamGra
     throw new HttpError(503, "provider_not_configured", `provider ${provider.id} has no usable upstream credential`);
 }
 
-function credentialScheme(provider: CompiledProvider, grant: UpstreamGrant | null): AuthScheme | GrantTransportAuth {
+export function providerCredentialScheme(provider: CompiledProvider, grant: UpstreamGrant | null): AuthScheme | GrantTransportAuth {
   return transportForGrant(provider, grant)?.auth ?? provider.auth.schemes.find((candidate) => candidate.type !== "oauth") ?? provider.auth.schemes[0];
 }
 

@@ -21,12 +21,30 @@ metadata-only; request retention requires an explicit policy opt-in.
   unavailable, ClawRouter returns `503 content_retention_unavailable` and does not
   call the provider.
 - R2 encrypts objects at rest. The `request-content-v1-30-days` lifecycle rule
-  deletes objects under the dedicated `v1/` archive prefix after 30 days without
-  affecting unrelated bucket content. Usage metadata remains separate.
+  schedules deletion under the dedicated `v1/` archive prefix after 30 days without
+  affecting unrelated bucket content. Physical deletion is asynchronous. Usage
+  metadata remains separate.
 - Cloudflare AI Gateway universal requests retain their ordered provider queries
   and configuration, but omit each entry's entire `headers` map and `authorization` field.
   These fields can contain upstream credentials. The forwarded request is
   unchanged; the retention header still reports `on` when query content is stored.
+- Admin reads deny expired archives even while their objects still exist. The
+  upload time plus 30 days caps the archive deadline; a valid earlier `expiresAt`
+  metadata value shortens it. Missing or invalid metadata uses the upload deadline.
+- Self-hosting sweeps the `v1/` archive prefix after startup and once per minute.
+  Each tick scans at most 1,000 objects (local metadata pages can be shorter),
+  deletes expired objects, and checkpoints the cursor in a dedicated Durable
+  Object. It resumes after restart and scans from the start again at EOF, including
+  legacy archives and captures with no usage record. Large backlogs and outages
+  delay physical removal; this is not an exact-at-30-days deletion guarantee.
+- Cleanup logs report scanned/deleted counts for the current pass, backlog, and
+  last completion time without content or archive keys. Failed ticks are visible
+  and retry without advancing the cursor. Managed R2 uses its lifecycle rule;
+  no Cloudflare cron is configured.
+- Local R2 removes its object index before deleting backing blobs asynchronously.
+  A crash in that runtime window can leave unindexed blob bytes that archive
+  sweeps cannot find. This cleanup guarantees R2-visible removal after a successful
+  delete, not crash-proof erasure of every backing byte or backup copy.
 
 ## Disclosure
 
@@ -43,8 +61,12 @@ or `off`. Browsers may read this header through CORS.
 
 Admins configure retention in Access → Policies and exemptions in Users. The Usage
 screen marks events whose request content was retained and can load the archived
-body through its server-generated, collision-resistant content reference. Admin content reads require the existing Cloudflare Access admin
-authorization and are returned with `Cache-Control: private, no-store`.
+body through its server-generated, collision-resistant content reference. Admin
+content reads require administrator authorization and return `Cache-Control: no-store`.
+Only v1 records matching the requested tenant and reference with a finite, future
+expiry are readable. Missing, expired, malformed, or mismatched records return the
+same `404 content_not_found` response with no archived content and the same cache
+protection. Storage failures remain server errors.
 
 Do not copy archived bodies into logs, screenshots, issue reports, usage events, or
 other analytics systems.

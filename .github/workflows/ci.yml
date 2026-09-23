@@ -59,7 +59,7 @@ jobs:
           echo "CLAWROUTER_CODEX_BINARY=$RUNNER_TEMP/codex-$CODEX_VERSION/codex-x86_64-unknown-linux-musl" >> "$GITHUB_ENV"
           echo "CLAWROUTER_CODEX_CATALOG_BINARY=$RUNNER_TEMP/codex-0.155.0/codex-x86_64-unknown-linux-musl" >> "$GITHUB_ENV"
       - name: Native client through real router and ledgers
-        run: node --test test/codex-router.test.mjs test/codex-native.test.mjs
+        run: node --test test/codex-router.test.mjs test/codex-native.test.mjs test/codex-connect.test.mjs
 
   self-host:
     runs-on: ubuntu-latest

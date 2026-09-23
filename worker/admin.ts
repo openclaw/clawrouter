@@ -7,7 +7,7 @@ import {
   listAssignmentRules, normalizeAssignmentEvidence, reconcileUserAssignments,
   type AssignmentEvidence,
 } from "./assignments";
-import { contentKey, contentRetentionDefault } from "./content-retention.ts";
+import { contentRetentionDefault, readRetainedContent } from "./content-retention.ts";
 import { credentialMutationResponse, credentialResponsesFrom } from "./credentials";
 import { correlationRequestId, logCorrelationError } from "./correlation.ts";
 import { currentGrantRuntime, grantPriority, grantRoutingPolicy, grantRuntimeStates, grantSelectionStats, grantUsable, grantWeight, validCredentialBundle, validGrantSegment } from "./grant-selection";
@@ -137,8 +137,7 @@ async function previewFusion(request: Request, env: Env): Promise<Response> {
       modelId,
       providerId: route.provider.id,
       providerDisplayName: route.provider.display_name,
-      endpointId: endpoint.id,
-      requestFormat: endpoint.request_format,
+      endpoint,
       connection: connections.find((connection) => connection.providerId === route.provider.id),
       model: route.model,
     };
@@ -149,9 +148,9 @@ async function previewFusion(request: Request, env: Env): Promise<Response> {
 async function getContent(request: Request, env: Env): Promise<Response> {
   const url = new URL(request.url), tenant = url.searchParams.get("tenant"), ref = url.searchParams.get("ref");
   if (!tenant || !ref || tenant.length > 256 || ref.length > 256) throw new HttpError(400, "invalid_content_lookup", "tenant and ref query parameters are required");
-  const object = await env.CONTENT_ARCHIVE.get(contentKey(tenant, ref));
-  if (!object) throw new HttpError(404, "content_not_found", "retained request content was not found");
-  return privateJson(await object.json());
+  const record = await readRetainedContent(env, tenant, ref);
+  if (!record) return privateJson({ error: { code: "content_not_found", message: "retained request content was not found" } }, 404);
+  return privateJson(record);
 }
 
 async function overview(env: Env) {

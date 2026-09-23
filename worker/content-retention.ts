@@ -1,6 +1,8 @@
 import type { AuthorizedIdentity, CompiledEndpoint, CompiledModel, ContentRecord, Env, ProxyRequestBody } from "./types";
 import { randomId } from "./utils.ts";
 
+const retentionPeriodMs = 30 * 86_400_000;
+
 interface RetainedSelection {
   provider: { id: string };
   endpoint: Pick<CompiledEndpoint, "request_format">;
@@ -28,7 +30,7 @@ export async function retainRequestContent(env: Env, auth: AuthorizedIdentity, s
     contentRef,
     requestId,
     occurredAtMs,
-    expiresAtMs: occurredAtMs + 30 * 86_400_000,
+    expiresAtMs: occurredAtMs + retentionPeriodMs,
     tenantId: auth.policy.tenantId ?? "default",
     policyId: auth.policyId,
     credentialId: auth.credentialId,
@@ -47,6 +49,30 @@ export async function retainRequestContent(env: Env, auth: AuthorizedIdentity, s
     customMetadata: { expiresAt: String(record.expiresAtMs) },
   });
   return contentRef;
+}
+
+export async function readRetainedContent(env: Env, tenant: string, ref: string): Promise<Record<string, unknown> | null> {
+  const object = await env.CONTENT_ARCHIVE.get(contentKey(tenant, ref));
+  if (!object) return null;
+  const text = await object.text();
+  let value: unknown;
+  try { value = JSON.parse(text); }
+  catch { return null; }
+  if (!value || typeof value !== "object" || Array.isArray(value)) return null;
+  const record = value as Record<string, unknown>;
+  // Physical deletion can lag expiry. Check the archive identity and current time
+  // after reading the body so expired content cannot escape during a slow read.
+  if (record.version !== "clawrouter.retained-request.v1" || record.tenantId !== tenant || record.contentRef !== ref
+    || typeof record.expiresAtMs !== "number" || !Number.isFinite(record.expiresAtMs)
+    || Math.min(record.expiresAtMs, retainedContentDeadline(object)) <= Date.now()) return null;
+  return record;
+}
+
+export function retainedContentDeadline(object: Pick<R2Object, "uploaded" | "customMetadata">): number {
+  const maximum = object.uploaded.getTime() + retentionPeriodMs;
+  const declared = object.customMetadata?.expiresAt?.trim();
+  const expiry = declared ? Number(declared) : NaN;
+  return Number.isFinite(expiry) ? Math.min(expiry, maximum) : maximum;
 }
 
 export function contentKey(tenant: string, ref: string): string {

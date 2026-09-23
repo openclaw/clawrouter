@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { request as httpRequest } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import test from "node:test";
@@ -13,10 +14,14 @@ const producer = process.env.CLAWROUTER_CODEX_CATALOG_BINARY ?? binary;
 const model = "gpt-6-astra";
 const secret = "native-router-fixture-secret";
 const key = `clawrouter-live-fixture-${secret}`;
-const limit = 100_000_000;
+const rotatedSecret = "native-router-rotated-fixture-secret";
+const rotatedKey = `clawrouter-live-fixture-${rotatedSecret}`;
+// An interrupted response retains its conservative reservation. Leave room for
+// the following request's reservation as well as that already-settled charge.
+const limit = 1_000_000_000;
 
 for (const transport of ["http", "websocket"]) {
-  test(`native Codex through workerd: ${transport}, tool continuation, two turns and revocation`, { skip: !binary, timeout: 90_000 }, async (t) => {
+  test(`native Codex through workerd: ${transport}, active-stream cancellation and credential lifecycle`, { skip: !binary, timeout: 90_000 }, async (t) => {
     const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
     const home = await mkdtemp(join(tmpdir(), "clawrouter-native-router-"));
     let mf, client;
@@ -29,13 +34,15 @@ for (const transport of ["http", "websocket"]) {
       await kv.put("credentials/fixture", JSON.stringify(credential));
       await kv.put("connections/openai", JSON.stringify({ providerId: "openai", enabled: true, monthlyBudgetMicros: limit }));
       const origin = await mf.ready;
-      const dispatch = (path) => fetch(new URL(path, origin), { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(10_000) });
+      let currentKey = key;
+      const dispatch = (path, credentialKey = currentKey) => fetch(new URL(path, origin), { headers: { authorization: `Bearer ${credentialKey}` }, signal: AbortSignal.timeout(10_000) });
       const discovered = await dispatch("/v1/catalog");
       assert.equal(discovered.status, 200);
       const env = { PATH: process.env.PATH, HOME: home, CODEX_HOME: home, RUST_LOG: "warn", CLAWROUTER_API_KEY: key };
       const bundled = JSON.parse(execFileSync(producer, ["debug", "models", "--bundled"], { env, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: 20_000, stdio: ["ignore", "pipe", "pipe"] }));
       // Export the actual credential's discovery projection, never an admin union.
-      const exported = buildCodexCatalog(await discovered.json(), bundled, "openai");
+      const catalog = await discovered.json();
+      const exported = buildCodexCatalog(catalog, bundled, "openai");
       assert.ok(exported.catalog.models.some(({ slug }) => slug === model));
       await writeFile(join(home, "models.json"), JSON.stringify(exported.catalog));
       await writeFile(join(home, "config.toml"), `model = "${model}"
@@ -59,20 +66,24 @@ stream_max_retries = 0
 stream_idle_timeout_ms = 10000
 `);
       const toolCalls = [];
-      client = nativeCodexClient(t, binary, home, env, (request) => {
-        assert.equal(request.method, "item/tool/call");
-        assert.equal(request.params.tool, "fixture_echo");
-        assert.deepEqual(request.params.arguments, { message: "fixture" });
-        toolCalls.push(request.params);
-        return { success: true, contentItems: [{ type: "inputText", text: "fixture tool result" }] };
-      });
-      await client.rpc("initialize", { clientInfo: { name: "clawrouter_fixture", version: "1.0.0" }, capabilities: { experimentalApi: true } });
-      client.child.stdin.write('{"method":"initialized"}\n');
-      assert.equal((await client.rpc("account/read", { refreshToken: false })).requiresOpenaiAuth, false);
-      assert.ok((await client.rpc("model/list", {})).data.some((item) => item.model === model));
-      const thread = await client.rpc("thread/start", { model, modelProvider: "fixture", cwd: home, ephemeral: true, approvalPolicy: "never", sandbox: "read-only", dynamicTools: [{ type: "function", name: "fixture_echo", description: "Echo synthetic fixture text.", inputSchema: { type: "object", properties: { message: { type: "string" } }, required: ["message"], additionalProperties: false } }] });
-      async function turn(text) {
-        const started = await client.rpc("turn/start", { threadId: thread.thread.id, input: [{ type: "text", text }], serviceTier: "priority" });
+      let thread;
+      async function startClient(apiKey) {
+        client = nativeCodexClient(t, binary, home, { ...env, CLAWROUTER_API_KEY: apiKey }, (request) => {
+          assert.equal(request.method, "item/tool/call");
+          assert.equal(request.params.tool, "fixture_echo");
+          assert.deepEqual(request.params.arguments, { message: "fixture" });
+          toolCalls.push(request.params);
+          return { success: true, contentItems: [{ type: "inputText", text: "fixture tool result" }] };
+        });
+        await client.rpc("initialize", { clientInfo: { name: "clawrouter_fixture", version: "1.0.0" }, capabilities: { experimentalApi: true } });
+        client.child.stdin.write('{"method":"initialized"}\n');
+        assert.equal((await client.rpc("account/read", { refreshToken: false })).requiresOpenaiAuth, false);
+        assert.ok((await client.rpc("model/list", {})).data.some((item) => item.model === model));
+        thread = await client.rpc("thread/start", { model, modelProvider: "fixture", cwd: home, ephemeral: true, approvalPolicy: "never", sandbox: "read-only", dynamicTools: [{ type: "function", name: "fixture_echo", description: "Echo synthetic fixture text.", inputSchema: { type: "object", properties: { message: { type: "string" } }, required: ["message"], additionalProperties: false } }] });
+      }
+      await startClient(key);
+      const startTurn = (text) => client.rpc("turn/start", { threadId: thread.thread.id, input: [{ type: "text", text }], serviceTier: "priority" });
+      async function finishTurn(started) {
         let completed;
         await until(() => {
           assert.deepEqual(client.errors, []);
@@ -81,9 +92,10 @@ stream_idle_timeout_ms = 10000
         });
         return completed.params.turn;
       }
+      const turn = async (text) => finishTurn(await startTurn(text));
+      const assertComplete = (completed) => assert.equal(completed.status, "completed", completed.error?.message?.replaceAll(key, "[fixture credential]").replaceAll(rotatedKey, "[fixture credential]"));
       for (const input of ["Call fixture_echo once with message fixture.", "Return fixture complete for the second turn."]) {
-        const completed = await turn(input);
-        assert.equal(completed.status, "completed", completed.error?.message?.replaceAll(key, "[fixture credential]"));
+        assertComplete(await turn(input));
       }
       assert.equal(toolCalls.length, 1);
       const upstream = await mf.getWorker("upstream");
@@ -106,7 +118,7 @@ stream_idle_timeout_ms = 10000
       const receipts = usage.usage.events;
       assert.equal(new Set(receipts.map(({ request_id }) => request_id)).size, before.requests.length);
       assert.ok(receipts.every((receipt) => receipt.status === "success" && receipt.content_retained === false && receipt.requested_service_tier === "priority" && receipt.served_service_tier === "priority" && receipt.cost_basis === "manifest_pricing"));
-      const expected = before.requests.reduce((cost, { body }) => cost + (body.generate === false ? 60 : 1_080), 0);
+      let expected = before.requests.reduce((cost, { body }) => cost + (body.generate === false ? 60 : 1_080), 0);
       assert.equal(usage.usage.summary.actualCostMicros, expected);
       assert.equal(usage.budget.spentMicros, expected);
       const budgets = await mf.getDurableObjectNamespace("BUDGET_LEDGER", "router");
@@ -120,13 +132,99 @@ stream_idle_timeout_ms = 10000
         }));
       }
       assert.deepEqual(await ledgerFacts(), [{ spent: expected, unsettled: 0 }, { spent: expected, unsettled: 0 }]);
+
+      // A native output delta establishes body delivery before interruption.
+      // Keep HTTP output active: the 0.153 SSE reader notices consumer drop only
+      // on its next recognized event; an idle stream is a separate limitation.
+      assert.equal((await upstream.fetch("https://fixture.example/hold", { method: "POST" })).status, 200);
+      const interrupted = await startTurn("Stream a synthetic fixture response.");
+      await until(() => client.notifications.some(({ method, params }) => method === "item/agentMessage/delta" && params.turnId === interrupted.turn.id));
+      const held = (await state()).requests.find(({ held }) => held);
+      assert.ok(held);
+      await client.rpc("turn/interrupt", { threadId: thread.thread.id, turnId: interrupted.turn.id });
+      assert.equal((await finishTurn(interrupted)).status, "interrupted");
+      try {
+        await until(async () => (await state()).aborted.includes(held.responseId), 5_000);
+      } catch {
+        const observed = await state();
+        const ingress = await (await dispatch("/fixture-ingress")).json();
+        const receipts = (await (await dispatch("/v1/usage")).json()).usage.events.map(({ status, status_code, cost_basis, actual_cost_micros }) => ({ status, status_code, cost_basis, actual_cost_micros }));
+        throw new Error(`native interrupt did not abort upstream: ${JSON.stringify({ aborted: observed.aborted, canceled: observed.canceled, expired: observed.expired, ingress, receipts, ledgers: await ledgerFacts() })}`);
+      }
+      assert.deepEqual((await state()).expired, []);
+      const priorReceiptIds = new Set(receipts.map(({ request_id }) => request_id));
+      const interruptedState = await state();
+      await until(async () => {
+        usage = await (await dispatch("/v1/usage")).json();
+        return usage.usage.events.length === interruptedState.requests.length;
+      });
+      const newReceipts = usage.usage.events.filter(({ request_id }) => !priorReceiptIds.has(request_id));
+      const canceled = newReceipts.filter(({ status }) => status !== "success");
+      assert.equal(canceled.length, 1);
+      // R04 remains a product follow-up: WS currently calls caller disconnects
+      // provider_error/502, while HTTP records client_error with delivered 200.
+      assert.equal(canceled[0].status, transport === "http" ? "client_error" : "provider_error");
+      assert.equal(canceled[0].status_code, transport === "http" ? 200 : 502);
+      assert.equal(canceled[0].cost_basis, "manifest_reservation");
+      assert.ok(canceled[0].actual_cost_micros > 0);
+      assert.equal(canceled[0].actual_cost_micros, canceled[0].reserved_cost_micros);
+      const expectedCost = (requests) => requests.reduce((cost, request) => cost + (request.held ? canceled[0].actual_cost_micros : request.body.generate === false ? 60 : 1_080), 0);
+      async function assertSettled() {
+        const observed = await state();
+        await until(async () => {
+          usage = await (await dispatch("/v1/usage")).json();
+          return usage.usage.events.length === observed.requests.length;
+        });
+        assert.equal(new Set(usage.usage.events.map(({ request_id }) => request_id)).size, observed.requests.length);
+        assert.ok(usage.usage.events.every(({ credential_id, content_retained }) => credential_id === "fixture" && content_retained === false));
+        assert.ok(usage.usage.events.filter(({ request_id }) => request_id !== canceled[0].request_id).every((receipt) => receipt.status === "success" && receipt.cost_basis === "manifest_pricing" && receipt.requested_service_tier === "priority" && receipt.served_service_tier === "priority"));
+        expected = expectedCost(observed.requests);
+        assert.equal(usage.usage.summary.actualCostMicros, expected);
+        assert.equal(usage.budget.spentMicros, expected);
+        assert.deepEqual(await ledgerFacts(), [{ spent: expected, unsettled: 0 }, { spent: expected, unsettled: 0 }]);
+        return observed;
+      }
+      await assertSettled();
+      assertComplete(await turn("Return fixture complete after interruption."));
+      const resumed = await assertSettled();
+      if (transport === "websocket") {
+        assert.equal(resumed.connections, interruptedState.connections + 1);
+        const fresh = resumed.requests.filter(({ connection }) => connection === resumed.connections);
+        assert.ok(fresh.length > 0);
+        assert.equal(fresh[0].body.previous_response_id, undefined, "new socket must replay input without the interrupted response ID");
+        assert.ok(fresh.every(({ body }) => body.previous_response_id !== held.responseId));
+      }
+
       const authority = await mf.getDurableObjectNamespace("ACCESS_CONTROL", "router");
-      const revoked = await authority.get(authority.idFromName("policy-bindings")).fetch("https://authority/credentials/mutate", { method: "POST", body: JSON.stringify({ credentialId: "fixture", operation: "revoke", scope: "admin", actor: { auth: "admin_token", role: "admin", email: "token-admin" } }) });
+      const authorityObject = authority.get(authority.idFromName("policy-bindings"));
+      const actor = { auth: "admin_token", role: "admin", email: "token-admin" };
+      const resolvePolicy = () => authorityObject.fetch("https://authority/policies/resolve", { method: "POST", body: JSON.stringify({ policyIds: ["fixture"] }) }).then((response) => response.json());
+      const policyBeforeRotation = await resolvePolicy();
+      assert.deepEqual(policyBeforeRotation.policies.map(({ policyId }) => policyId), ["fixture"]);
+      assert.deepEqual(policyBeforeRotation.missingPolicyIds, []);
+      const rotated = await authorityObject.fetch("https://authority/credentials/mutate", { method: "POST", body: JSON.stringify({ credentialId: "fixture", operation: "rotate", secretSha256: createHash("sha256").update(rotatedSecret).digest("hex"), scope: "admin", actor }) });
+      assert.equal(rotated.status, 200);
+      assert.equal((await rotated.json()).outcome, "updated");
+      const oldProcess = await turn("This old credential must not reach upstream.");
+      assert.equal(oldProcess.status, "failed");
+      assert.match(JSON.stringify(oldProcess), /invalid_proxy_key|proxy key secret is invalid/);
+      assert.equal((await state()).requests.length, resumed.requests.length);
+      assert.equal((await dispatch("/v1/catalog", key)).status, 401);
+      currentKey = rotatedKey;
+      assert.deepEqual((await (await dispatch("/v1/catalog")).json()).providers.map(({ id }) => id), catalog.providers.map(({ id }) => id));
+      assert.deepEqual(await resolvePolicy(), policyBeforeRotation);
+      assert.equal(/fallback model metadata|model metadata.*not found/i.test(client.stderr() + JSON.stringify(client.notifications)), false);
+      await client.close();
+      await startClient(rotatedKey);
+      assertComplete(await turn("Return fixture complete using the rotated credential."));
+      const afterRotation = await assertSettled();
+      const revoked = await authorityObject.fetch("https://authority/credentials/mutate", { method: "POST", body: JSON.stringify({ credentialId: "fixture", operation: "revoke", scope: "admin", actor }) });
       assert.equal(revoked.status, 200);
+      assert.equal((await revoked.json()).outcome, "updated");
       const rejected = await turn("This revoked turn must not reach upstream.");
       assert.equal(rejected.status, "failed");
       assert.match(JSON.stringify(rejected), /proxy_key_revoked|proxy key is revoked/);
-      assert.equal((await state()).requests.length, before.requests.length);
+      assert.equal((await state()).requests.length, afterRotation.requests.length);
       assert.deepEqual(await ledgerFacts(), [{ spent: expected, unsettled: 0 }, { spent: expected, unsettled: 0 }]);
       assert.equal(/fallback model metadata|model metadata.*not found/i.test(client.stderr() + JSON.stringify(client.notifications)), false);
     } finally {
@@ -137,8 +235,61 @@ stream_idle_timeout_ms = 10000
   });
 }
 
-async function until(predicate) {
-  const deadline = Date.now() + 30_000;
+// A TCP reset is an explicit disconnect even with no further provider output.
+// Ordinary close of a stalled HTTP stream remains a separate qualification gap.
+test("idle HTTP TCP reset: upstream abort and one cancellation receipt", { skip: !binary, timeout: 30_000 }, async () => {
+  const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
+  const home = await mkdtemp(join(tmpdir(), "clawrouter-native-boundary-"));
+  let mf;
+  try {
+    mf = await startWorkerdFixture(home, routerFixture(), upstreamFixture());
+    const kv = await mf.getKVNamespace("POLICY_KV", "router");
+    await kv.put("policies/fixture", JSON.stringify({ enabled: true, generation: "g1", providers: ["openai"], tenantId: "default", monthlyBudgetMicros: limit, retainRequestContent: false }));
+    await kv.put("credentials/fixture", JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update(secret).digest("hex"), policyId: "fixture", policyGeneration: "g1" }));
+    await kv.put("connections/openai", JSON.stringify({ providerId: "openai", enabled: true, monthlyBudgetMicros: limit }));
+    const origin = await mf.ready;
+    const upstream = await mf.getWorker("upstream");
+    await upstream.fetch("https://fixture.example/hold?idle=1", { method: "POST" });
+    await new Promise((resolve, reject) => {
+      let destroyed = false, text = "";
+      const request = httpRequest(new URL("/v1/native/openai/v1/responses", origin), { method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json" } }, (response) => {
+        assert.equal(response.statusCode, 200);
+        response.on("data", (chunk) => {
+          text += chunk.toString();
+          if (!destroyed && text.includes("response.output_text.delta")) { destroyed = true; response.socket.resetAndDestroy(); }
+        });
+        response.on("close", () => { clearTimeout(timer); destroyed ? resolve() : reject(new Error("fixture stream ended before socket destruction")); });
+        response.on("error", (error) => { if (!destroyed) reject(error); });
+      });
+      const timer = setTimeout(() => { request.destroy(); reject(new Error("raw HTTP disconnect timed out")); }, 5_000);
+      request.on("error", (error) => { if (!destroyed) { clearTimeout(timer); reject(error); } });
+      request.end(JSON.stringify({ model, input: "synthetic boundary control", stream: true, service_tier: "priority", max_output_tokens: 32 }));
+    });
+    let observed, usage;
+    await until(async () => { observed = await (await upstream.fetch("https://fixture.example/state")).json(); return observed.aborted.length > 0; }, 5_000);
+    assert.equal(observed.requests.length, 1);
+    assert.deepEqual(observed.aborted, [observed.requests[0].responseId]);
+    assert.deepEqual(observed.expired, []);
+    assert.deepEqual(await (await fetch(new URL("/fixture-ingress", origin))).json(), [{ aborted: true }]);
+    await until(async () => {
+      usage = await (await fetch(new URL("/v1/usage", origin), { headers: { authorization: `Bearer ${key}` } })).json();
+      return usage.usage.events.length === 1;
+    });
+    const [receipt] = usage.usage.events;
+    assert.equal(receipt.status, "client_error");
+    assert.equal(receipt.status_code, 200);
+    assert.equal(receipt.cost_basis, "manifest_reservation");
+    assert.ok(receipt.actual_cost_micros > 0);
+    assert.equal(receipt.actual_cost_micros, receipt.reserved_cost_micros);
+    assert.equal(usage.budget.spentMicros, receipt.actual_cost_micros);
+  } finally {
+    await mf?.dispose();
+    await rm(home, { recursive: true, force: true });
+  }
+});
+
+async function until(predicate, timeoutMs = 30_000) {
+  const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (await predicate()) return;
     await new Promise((resolve) => setTimeout(resolve, 25));
@@ -156,35 +307,90 @@ export class BudgetLedgerObject extends RealBudgetLedger {
     return super.fetch(request);
   }
 }
-export default handler;
+const ingress = [];
+export default { ...handler, async fetch(request, env, context) {
+  if (new URL(request.url).pathname === "/fixture-ingress") return Response.json(ingress);
+  if (request.method === "POST" && new URL(request.url).pathname.endsWith("/responses")) {
+    const entry = { aborted: false }; ingress.push(entry);
+    request.signal.addEventListener("abort", () => { entry.aborted = true; }, { once: true });
+  }
+  return handler.fetch(request, env, context);
+} };
 `; }
 
 function upstreamFixture() { return `
-const requests = []; let connections = 0, generated = 0;
-function respond(body, request, transport) {
+const requests = [], aborted = [], canceled = [], expired = []; let connections = 0, generated = 0, holdNext = null;
+function respond(body, request, transport, connection = null) {
   const responseId = 'fixture_response_' + (requests.length + 1);
-  requests.push({ body, responseId, transport, authorized: request.headers.get('authorization') === 'Bearer fixture-upstream-key', lite: request.headers.get('x-openai-internal-codex-responses-lite') === 'true' });
   const warmup = body.generate === false;
-  const output = warmup ? [] : generated++ === 0
+  const held = !!holdNext && !warmup, active = holdNext === 'active';
+  if (held) holdNext = null;
+  requests.push({ body, responseId, transport, connection, held, authorized: request.headers.get('authorization') === 'Bearer fixture-upstream-key', lite: request.headers.get('x-openai-internal-codex-responses-lite') === 'true' });
+  const output = warmup ? [] : generated++ === 0 && !held
     ? [{ id: 'fixture_fc', type: 'function_call', call_id: 'fixture_call', name: 'fixture_echo', arguments: '{"message":"fixture"}' }]
     : [{ id: 'fixture_message_' + generated, type: 'message', role: 'assistant', status: 'completed', content: [{ type: 'output_text', text: 'fixture complete', annotations: [] }] }];
   const result = { id: responseId, object: 'response', status: 'completed', model: body.model, output, service_tier: 'priority', usage: { input_tokens: warmup ? 3 : 14, output_tokens: warmup ? 0 : 8, total_tokens: warmup ? 3 : 22, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } };
-  return [{ type: 'response.created', response: { ...result, status: 'in_progress', output: [] } }, ...output.map((item, output_index) => ({ type: 'response.output_item.done', output_index, item })), { type: 'response.completed', response: result }];
+  const events = [{ type: 'response.created', response: { ...result, status: 'in_progress', output: [] } }];
+  const delta = held ? { type: 'response.output_text.delta', item_id: output[0].id, output_index: 0, content_index: 0, delta: 'fixture ' } : null;
+  if (held) {
+    events.push({ type: 'response.output_item.added', output_index: 0, item: { ...output[0], status: 'in_progress', content: [] } });
+    events.push({ type: 'response.content_part.added', item_id: output[0].id, output_index: 0, content_index: 0, part: { type: 'output_text', text: '', annotations: [] } }, delta);
+  } else {
+    events.push(...output.map((item, output_index) => ({ type: 'response.output_item.done', output_index, item })), { type: 'response.completed', response: result });
+  }
+  return { events, heldId: held ? responseId : null, delta, active };
 }
 export default { async fetch(request) {
-  if (new URL(request.url).pathname === '/state') return Response.json({ requests, connections });
+  const path = new URL(request.url).pathname;
+  if (path === '/state') return Response.json({ requests, connections, aborted, canceled, expired });
+  if (path === '/hold' && request.method === 'POST') { holdNext = new URL(request.url).searchParams.has('idle') ? 'idle' : 'active'; return new Response('armed'); }
   if (request.url !== 'https://api.openai.com/v1/responses') return new Response('unexpected upstream route', { status: 400 });
   if (request.headers.get('upgrade') === 'websocket') {
-    connections++;
+    const connection = ++connections;
     const pair = new WebSocketPair(); pair[1].accept();
+    let heldId, timer;
+    pair[1].addEventListener('close', () => {
+      if (heldId) aborted.push(heldId);
+      clearTimeout(timer);
+      pair[1].close();
+    });
     pair[1].addEventListener('message', ({ data }) => {
       const body = JSON.parse(data);
-      for (const event of respond(body, request, 'websocket')) pair[1].send(JSON.stringify({ ...event, ...(body.stream_id ? { stream_id: body.stream_id } : {}) }));
+      const response = respond(body, request, 'websocket', connection);
+      for (const event of response.events) pair[1].send(JSON.stringify({ ...event, ...(body.stream_id ? { stream_id: body.stream_id } : {}) }));
+      if (response.heldId) {
+        heldId = response.heldId;
+        timer = setTimeout(() => { expired.push(heldId); pair[1].close(); }, 30_000);
+      }
     });
     return new Response(null, { status: 101, webSocket: pair[0] });
   }
   if (request.method !== 'POST') return new Response('unexpected upstream method', { status: 405 });
-  const events = respond(await request.json(), request, 'http');
-  return new Response(events.map(event => 'event: ' + event.type + '\\ndata: ' + JSON.stringify(event) + '\\n\\n').join(''), { headers: { 'content-type': 'text/event-stream' } });
+  const { events, heldId, delta, active } = respond(await request.json(), request, 'http');
+  const encode = event => 'event: ' + event.type + '\\ndata: ' + JSON.stringify(event) + '\\n\\n';
+  const prefix = events.map(encode).join('');
+  const headers = { 'content-type': 'text/event-stream' };
+  if (!heldId) return new Response(prefix, { headers });
+  let sent = false, timer, release, producer;
+  const deadline = Date.now() + 30_000;
+  const onAbort = () => { aborted.push(heldId); clearTimeout(timer); producer.error(request.signal.reason); release?.(); };
+  request.signal.addEventListener('abort', onAbort, { once: true });
+  return new Response(new ReadableStream({
+    start(controller) { producer = controller; },
+    pull(controller) {
+      if (!sent) { sent = true; controller.enqueue(new TextEncoder().encode(prefix)); return; }
+      // Only the upstream request signal proves abort; local stream cancellation
+      // and the bounded watchdog must not make a broken client lifecycle pass.
+      return new Promise((resolve) => {
+        release = resolve;
+        timer = setTimeout(() => {
+          if (Date.now() >= deadline) { expired.push(heldId); request.signal.removeEventListener('abort', onAbort); controller.close(); }
+          else controller.enqueue(new TextEncoder().encode(encode(delta)));
+          resolve();
+        }, active ? 100 : 30_000);
+      });
+    },
+    cancel() { canceled.push(heldId); clearTimeout(timer); release?.(); },
+  }, { highWaterMark: 0 }), { headers });
 } };
 `; }

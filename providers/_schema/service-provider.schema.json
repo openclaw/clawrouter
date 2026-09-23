@@ -501,8 +501,28 @@
           "maxItems": 7,
           "uniqueItems": true
         },
+        "requestParameters": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": { "$ref": "#/$defs/modelRequestParameters" }
+        },
         "pricingRef": { "type": "string" },
         "pricing": { "$ref": "#/$defs/modelPricing" }
+      }
+    },
+    "parameterSupport": { "enum": ["supported", "unsupported", "requires_reasoning_none"] },
+    "modelRequestParameters": {
+      "type": "object",
+      "required": ["sources", "checkedAt"],
+      "additionalProperties": false,
+      "properties": {
+        "sources": { "type": "array", "minItems": 1, "maxItems": 8, "uniqueItems": true, "items": { "type": "string", "pattern": "^https://" } },
+        "checkedAt": { "type": "string", "format": "date" },
+        "defaultReasoningEffort": { "enum": ["none", "minimal", "low", "medium", "high", "xhigh", "max"] },
+        "temperature": { "$ref": "#/$defs/parameterSupport" },
+        "topP": { "$ref": "#/$defs/parameterSupport" },
+        "logprobs": { "$ref": "#/$defs/parameterSupport" },
+        "toolCalling": { "$ref": "#/$defs/parameterSupport" }
       }
     },
     "modelPricing": {
