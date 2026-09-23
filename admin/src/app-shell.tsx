@@ -197,6 +197,7 @@ export function AppShell() {
             upstreamGrants={upstreamGrants}
             selectedUpstreamGrant={selectedUpstreamGrant}
             upstreamBusy={upstream.busy}
+            upstreamReady={upstream.ready}
             upstreamError={upstream.error}
             assignmentRules={assignmentRules}
             selectedAssignmentRule={selectedAssignmentRule}

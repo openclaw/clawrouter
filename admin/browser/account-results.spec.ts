@@ -1,6 +1,39 @@
 import { expect, test, type Page, type Route } from "@playwright/test";
 import type { AccessPolicy, AdminBootstrapResponse, UpstreamGrant } from "../src/ui-types";
 
+for (const firstReadFails of [false, true]) {
+  test(`initial account loading blocks writes and preserves early drafts${firstReadFails ? " through failure and retry" : ""}`, async ({ page }) => {
+    const state = await openAccounts(page, true);
+    await page.getByRole("button", { name: "New grant", exact: true }).click();
+    await page.getByLabel("scope", { exact: true }).selectOption("tenants");
+    await page.getByLabel("scope id", { exact: true }).fill("default");
+    await page.getByLabel("token reference", { exact: true }).fill("account_a");
+    await page.getByLabel("API key", { exact: true }).fill("synthetic-early-primary");
+    await page.getByLabel("label", { exact: true }).fill("early draft");
+    const save = page.getByRole("button", { name: "Save grant", exact: true });
+    await expect(save).toBeDisabled();
+    await expect(page.locator(".inspector")).toContainText("Upstream accounts have not loaded");
+    await page.locator(".inspector form").evaluate((form: HTMLFormElement) => form.requestSubmit());
+    await flush(page);
+    expect(state.writes).toHaveLength(0);
+    if (firstReadFails) {
+      await state.reads[0].route.fulfill({ status: 503, json: { error: { message: "reporting offline" } } });
+      await expect(page.locator(".statusBar")).toContainText("Console data refresh failed");
+      await expect(save).toBeDisabled();
+      await page.getByRole("button", { name: "Retry refresh", exact: true }).click();
+      await expect.poll(() => state.reads.length).toBe(2);
+    }
+    const read = state.reads.at(-1)!;
+    await read.route.fulfill({ json: read.body });
+    await expect(save).toBeEnabled();
+    await expect(page.getByLabel("label", { exact: true })).toHaveValue("early draft");
+    await expect(page.getByLabel("API key", { exact: true })).toHaveValue("synthetic-early-primary");
+    await expect(page.locator(".tableRow").filter({ hasText: "Account A" })).toBeVisible();
+    await expect(page.locator(".inspector")).toContainText("New upstream grant");
+    expect(state.writes).toHaveLength(0);
+  });
+}
+
 for (const [action, method, suffix] of [["Save grant", "PUT", ""], ["Revoke", "POST", "/revoke"], ["Refresh token", "POST", "/refresh"], ["Refresh quota", "POST", "/quota-refresh"]] as const) {
   test(`${action} shows its canonical result before a held, then failed bootstrap`, async ({ page }) => {
     const state = await openAccounts(page);
@@ -125,6 +158,28 @@ test("New save adopts its account for another save while metadata remains held",
   await expect(page.getByRole("button", { name: "Save grant", exact: true })).toBeEnabled();
 });
 
+test("returning to a pending pause adopts its state without discarding a replacement draft", async ({ page }) => {
+  const state = await openAccounts(page);
+  state.holdBootstrap = true;
+  await page.getByLabel("state", { exact: true }).selectOption("disabled");
+  await page.getByRole("button", { name: "Save grant", exact: true }).click();
+  await expect.poll(() => state.writes.length).toBe(1);
+  await page.locator(".tableRow").filter({ hasText: "Account B" }).click();
+  await page.locator(".tableRow").filter({ hasText: "Account A" }).click();
+  await page.getByLabel("label", { exact: true }).fill("replacement draft");
+  await state.writes[0].fulfill({ json: grant("account_a", { enabled: false, label: "confirmed pause" }) });
+  await expect(page.getByLabel("state", { exact: true })).toHaveValue("disabled");
+  await expect(page.getByLabel("label", { exact: true })).toHaveValue("replacement draft");
+  await expect(page.locator('.tableRow.selected [data-label="state"]')).toHaveText("paused");
+  await expect.poll(() => state.reads.length).toBe(1);
+  await page.getByLabel("label", { exact: true }).fill("next label");
+  await page.getByRole("button", { name: "Save grant", exact: true }).click();
+  await expect.poll(() => state.writes.length).toBe(2);
+  expect(state.writes[1].request().postDataJSON()).toMatchObject({ enabled: false, label: "next label" });
+  await state.writes[1].fulfill({ json: grant("account_a", { enabled: false, label: "next label" }) });
+  await expect(page.getByRole("button", { name: "Save grant", exact: true })).toBeEnabled();
+});
+
 test("an older bootstrap cannot replace a confirmed result, including a later edit back to baseline", async ({ page }) => {
   const state = await openAccounts(page);
   state.holdBootstrap = true;
@@ -173,8 +228,8 @@ function grant(tokenRef = "account_a", values: Partial<UpstreamGrant> = {}): Ups
 function revoked() { return grant("account_a", { enabled: false, usable: false, hasAccessToken: false, hasRefreshToken: false, revokedAt: "2026-09-01T00:00:00Z" }); }
 async function flush(page: Page) { await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve())))); }
 
-async function openAccounts(page: Page) {
-  const state = { writes: [] as Route[], reads: [] as { route: Route; body: AdminBootstrapResponse }[], sessions: [] as { route: Route; body: unknown }[], holdBootstrap: false, holdSession: false, email: "admin@example.com" };
+async function openAccounts(page: Page, holdInitialBootstrap = false) {
+  const state = { writes: [] as Route[], reads: [] as { route: Route; body: AdminBootstrapResponse }[], sessions: [] as { route: Route; body: unknown }[], holdBootstrap: holdInitialBootstrap, holdSession: false, email: "admin@example.com" };
   const mutations: Record<string, string> = {
     "/v1/admin/upstream-grants/policies/team_policy/account_a": "PUT",
     "/v1/admin/upstream-grants/policies/team_policy/account_a/revoke": "POST",
@@ -206,6 +261,11 @@ async function openAccounts(page: Page) {
     await route.fulfill({ status: responses[path] ? 200 : 404, json: responses[path] ?? {} });
   });
   await page.goto("/dashboard/access?resource=upstream");
+  if (holdInitialBootstrap) {
+    await expect(page.getByLabel("provider", { exact: true }).locator("option")).toHaveText(["Test Provider"]);
+    await expect.poll(() => state.reads.length).toBe(1);
+    return state;
+  }
   await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
   await expect(page.getByLabel("label", { exact: true })).toHaveValue("Account A");
   return state;

@@ -35,6 +35,8 @@ const messages: Record<Action, [string, string]> = {
 export function useUpstreamAdmin({ request, isCurrent, allowDemo, gatewayOrigin, demoMode, providers, policies, selectedPolicyId, setStatus, refresh }: Dependencies) {
   const [grants, setGrants] = useState<UpstreamGrant[]>(allowDemo ? demo.upstreamGrants : []);
   const rows = useRef(grants);
+  const [ready, setReady] = useState(demoMode);
+  const readyRef = useRef(ready);
   const [draft, setDraft] = useState<Draft>(() => ({ selection: grants[0]?.key ?? "", value: grants[0] ? upstreamGrantFormFromGrant(grants[0]) : defaultUpstreamGrant, initialized: allowDemo }));
   const currentDraft = useRef(draft);
   const baseline = useRef(draft.value);
@@ -54,6 +56,8 @@ export function useUpstreamAdmin({ request, isCurrent, allowDemo, gatewayOrigin,
     // It may refresh other resources but cannot undo this operation's acknowledged row.
     if (!isCurrent() || snapshot === null || snapshot !== recordsEpoch.current || operation.current) return;
     updateRows(nextGrants);
+    readyRef.current = true;
+    setReady(true);
     const current = currentDraft.current;
     if (current.initialized && !current.selection) return;
     const grant = current.initialized ? nextGrants.find((item) => item.key === current.selection) : nextGrants[0];
@@ -70,7 +74,8 @@ export function useUpstreamAdmin({ request, isCurrent, allowDemo, gatewayOrigin,
   async function refreshQuota(grant: UpstreamGrant) { await mutate("quota-refresh", grant); }
 
   async function mutate(action: Action, target?: UpstreamGrant) {
-    if (!isCurrent() || operation.current?.phase === "writing") return;
+    // An early submit must not overwrite an unseen account or retire its initial read.
+    if (!isCurrent() || !readyRef.current || operation.current?.phase === "writing") return;
     const op: Operation = { phase: "writing" };
     operation.current = op;
     recordsEpoch.current += 1;
@@ -101,9 +106,13 @@ export function useUpstreamAdmin({ request, isCurrent, allowDemo, gatewayOrigin,
       if (!saved || saved.key !== key || saved.scope !== identity.scope || saved.scopeId !== identity.scopeId || saved.tokenRef !== identity.tokenRef || typeof saved.enabled !== "boolean") throw new Error("invalid upstream grant response");
       updateRows([saved, ...rows.current.filter((grant) => grant.key !== key)]);
       // Rows belong to the request; the editor belongs to its current incarnation.
-      // Field revisions preserve edits back to old values and later secret replacements.
-      if (incarnation.current === submittedIncarnation && (submitted.selection === key || action === "save" && !submitted.selection)) {
-        const preserve = new Set(fields.filter((field) => (fieldRevisions.current[field] ?? 0) > submittedRevision
+      // A reselected row still adopts untouched fields; revisions protect replacement
+      // drafts, edit-back intent and secrets that this operation did not submit.
+      const sameEditor = incarnation.current === submittedIncarnation;
+      if (currentDraft.current.selection === key || sameEditor && action === "save" && !submitted.selection) {
+        const preserve = new Set(fields.filter((field) => !sameEditor
+          ? Boolean(fieldRevisions.current[field]) || secretFields.includes(field)
+          : (fieldRevisions.current[field] ?? 0) > submittedRevision
           || action === "save" && secretFields.includes(field) && !submittedSecrets[field]
           || action !== "save" && dirty.has(field) && !(action === "revoke" && (field === "enabled" || secretFields.includes(field)))));
         rebaseDraft(key, upstreamGrantFormFromGrant(saved), preserve);
@@ -202,5 +211,5 @@ export function useUpstreamAdmin({ request, isCurrent, allowDemo, gatewayOrigin,
   function edit(grant: UpstreamGrant) { resetDraft(grant.key, upstreamGrantFormFromGrant(rows.current.find((item) => item.key === grant.key) ?? grant)); setError(""); }
   function startNew() { const provider = providers[0]?.id ?? ""; resetDraft("", { ...defaultUpstreamGrant, scopeId: selectedPolicyId || policies[0]?.policyId || "default", provider, tokenRef: provider }); setError(""); }
 
-  return { upstream: { items: grants, selected, selectedKey: draft.selection, form: draft.value, setForm, busy, error, save, revoke, refresh: refreshGrant, refreshQuota, authorize, edit, startNew }, captureHydration, hydrate };
+  return { upstream: { items: grants, selected, selectedKey: draft.selection, form: draft.value, setForm, ready, busy, error, save, revoke, refresh: refreshGrant, refreshQuota, authorize, edit, startNew }, captureHydration, hydrate };
 }

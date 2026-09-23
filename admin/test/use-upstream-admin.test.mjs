@@ -21,6 +21,48 @@ const helperSource = helpers.slice(helpers.indexOf("export function upstreamGran
   + helpers.slice(helpers.indexOf("export function demoGrantFromForm"), helpers.indexOf("export function demoRuleFromForm"));
 const { upstreamGrantFormFromGrant, demoGrantFromForm, parseCredentialBundle } = evaluate(helperSource, "({ upstreamGrantFormFromGrant, demoGrantFromForm, parseCredentialBundle })");
 
+for (const initialRows of [[], [grant()]]) {
+  test(`initial ${initialRows.length ? "nonempty" : "empty"} hydration enables writes without losing an early draft`, async () => {
+    const fixture = mount(), owner = fixture.render(), snapshot = owner.captureHydration();
+    owner.upstream.startNew();
+    change(fixture, { scope: "tenants", scopeId: "default", tokenRef: "created", credential: "synthetic-primary", label: "early draft" });
+    const draft = fixture.render().upstream.form;
+    await owner.upstream.save(event);
+    assert.equal(fixture.requests.length, 0);
+    assert.equal(fixture.statuses.length, 0);
+    assert.equal(fixture.refreshes.length, 0);
+    assert.equal(fixture.render().captureHydration(), snapshot);
+    assert.equal(fixture.render().upstream.ready, false);
+    hydrate(fixture, initialRows, snapshot);
+    assert.equal(fixture.render().upstream.ready, true);
+    assert.deepEqual(fixture.render().upstream.form, draft);
+    assert.equal(fixture.render().upstream.selectedKey, "");
+    const write = owner.upstream.save(event);
+    assert.equal(fixture.requests.length, 1);
+    fixture.requests[0].resolve(grant("created", { key: "oauth/tenants/default/created", scope: "tenants", scopeId: "default", kind: "api_key", hasCredential: true }));
+    await write;
+  });
+}
+
+test("missing or rejected initial hydration stays unready, including live mode on a demo-capable host", async () => {
+  const fixture = mount(false, true), owner = fixture.render(), snapshot = owner.captureHydration();
+  assert.equal(owner.upstream.ready, false);
+  owner.upstream.startNew();
+  change(fixture, { credential: "synthetic-primary" });
+  hydrate(fixture, [], null);
+  hydrate(fixture, [], snapshot + 1);
+  fixture.current = false;
+  hydrate(fixture, [], snapshot);
+  fixture.current = true;
+  await owner.upstream.save(event);
+  assert.equal(fixture.render().upstream.ready, false);
+  assert.equal(fixture.requests.length, 0);
+  assert.equal(fixture.render().captureHydration(), snapshot);
+  hydrate(fixture, [], snapshot);
+  assert.equal(fixture.render().upstream.ready, true);
+  assert.equal(fixture.render().upstream.form.credential, "synthetic-primary");
+});
+
 for (const [action, method, suffix] of [["save", "PUT", ""], ["revoke", "POST", "/revoke"], ["refresh", "POST", "/refresh"], ["refreshQuota", "POST", "/quota-refresh"]]) {
   test(`${action} publishes canonical facts and releases buttons before dependent metadata`, async () => {
     const fixture = ready(), before = fixture.render().captureHydration();
@@ -217,6 +259,51 @@ for (const destination of ["other selection", "away and back", "new incarnation"
   });
 }
 
+for (const [action, dirtyLabel] of [["save", false], ["save", true], ["revoke", false], ["refresh", false], ["refreshQuota", false]]) {
+  test(`${action} reconciles untouched fields after reselection${dirtyLabel ? " with a dirty replacement label" : ""}`, async () => {
+    const fixture = ready();
+    if (action === "save") change(fixture, { enabled: false });
+    const write = act(fixture, action);
+    fixture.render().upstream.edit(grant("account_b"));
+    fixture.render().upstream.edit(grant());
+    if (dirtyLabel) {
+      change(fixture, { label: "intermediate" });
+      change(fixture, { label: "Account A" });
+    }
+    const canonical = { ...(action === "revoke" ? tombstone() : grant()), enabled: action === "save" || action === "revoke" ? false : true, expiresAt: "2030-01-01T00:00:00Z", label: "confirmed account" };
+    fixture.requests[0].resolve(canonical);
+    await write;
+    assert.equal(fixture.render().upstream.form.enabled, canonical.enabled);
+    assert.equal(fixture.render().upstream.form.expiresAt, canonical.expiresAt);
+    assert.equal(fixture.render().upstream.form.label, dirtyLabel ? "Account A" : canonical.label);
+    change(fixture, { label: "next label" });
+    const next = act(fixture, "save"), body = JSON.parse(fixture.requests[1].init.body);
+    assert.equal(body.enabled, canonical.enabled);
+    assert.equal(body.expiresAt, canonical.expiresAt);
+    fixture.requests[1].resolve({ ...canonical, label: "next label" });
+    await next;
+  });
+}
+
+test("reselected editor preserves explicit enabled roundtrips and replacement secrets", async () => {
+  const fixture = ready();
+  change(fixture, { enabled: false });
+  const write = act(fixture, "save");
+  fixture.render().upstream.edit(grant("account_b"));
+  fixture.render().upstream.edit(grant());
+  change(fixture, { enabled: false, accessToken: "synthetic-replacement" });
+  change(fixture, { enabled: true });
+  fixture.requests[0].resolve(grant("account_a", { enabled: false }));
+  await write;
+  assert.equal(fixture.render().upstream.form.enabled, true);
+  assert.equal(fixture.render().upstream.form.accessToken, "synthetic-replacement");
+  const next = act(fixture, "save"), body = JSON.parse(fixture.requests[1].init.body);
+  assert.equal(body.enabled, true);
+  assert.equal(body.accessToken, "synthetic-replacement");
+  fixture.requests[1].resolve(grant());
+  await next;
+});
+
 test("same-New save adopts its identity while preserving later edits for the next save", async () => {
   const fixture = ready();
   fixture.render().upstream.startNew();
@@ -358,7 +445,7 @@ function ready() { const fixture = mount(); hydrate(fixture, [grant(), grant("ac
 function act(fixture, action) { const owner = fixture.render().upstream; return owner[action](action === "save" ? event : owner.selected); }
 async function flush() { await new Promise((resolve) => setImmediate(resolve)); }
 
-function mount(demoMode = false) {
+function mount(demoMode = false, allowDemo = demoMode) {
   const slots = [], requests = [], statuses = [], refreshes = [];
   let cursor = 0;
   const useState = (initial) => {
@@ -372,7 +459,7 @@ function mount(demoMode = false) {
   const useUpstreamAdmin = new Function("useState", "useRef", "DashboardRequestError", "errorMessage", "defaultUpstreamGrant", "demo", "demoGrantFromForm", "parseCredentialBundle", "upstreamGrantFormFromGrant", `${source}\nreturn useUpstreamAdmin;`)(useState, useRef, DashboardRequestError, errorMessage, defaultUpstreamGrant, { upstreamGrants: [grant()] }, demoGrantFromForm, parseCredentialBundle, upstreamGrantFormFromGrant);
   fixture.render = () => {
     cursor = 0;
-    return useUpstreamAdmin({ request, isCurrent: () => fixture.current, allowDemo: demoMode, gatewayOrigin: "https://console.example", demoMode, providers, policies: [{ policyId: "team_policy" }], selectedPolicyId: "team_policy", setStatus: (value) => statuses.push(value), refresh: (owns) => new Promise((resolve) => refreshes.push({ owns, resolve })) });
+    return useUpstreamAdmin({ request, isCurrent: () => fixture.current, allowDemo, gatewayOrigin: "https://console.example", demoMode, providers, policies: [{ policyId: "team_policy" }], selectedPolicyId: "team_policy", setStatus: (value) => statuses.push(value), refresh: (owns) => new Promise((resolve) => refreshes.push({ owns, resolve })) });
   };
   return fixture;
 }
