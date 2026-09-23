@@ -157,7 +157,13 @@ is unavailable, not that the request was free. Summary, provider, and daily usag
 include `unpricedRequestCount`; spend totals exclude these unavailable prices.
 The console marks them as unavailable or reports the known subtotal with the
 unpriced count. Pre-dispatch denials and nonbillable responses do not increment this count.
-Dispatched requests whose transport fails still have unavailable upstream cost.
+Dispatched requests whose transport fails before response headers have no complete
+usage. Token-priced calls retain their qualified estimate with
+`cost_basis: manifest_reservation`; fixed tariffs remain `policy_fixed`, and
+unpriced calls remain `unpriced_usage`. An estimate is not measured upstream spend.
+This replaces the earlier zero-charge policy for pre-response transport failures:
+missing headers cannot prove that upstream work was free. Pre-dispatch failures
+still release reservations to zero; HTTP error and cancellation outcomes are unchanged.
 Historical admission denials marked `unpriced_service_tier` remain known zero. No policy migration or new setting is required.
 The bundled OpenAI route is pinned to the global `api.openai.com` endpoint.
 Regional data-residency endpoints are not exposed; a regional deployment needs

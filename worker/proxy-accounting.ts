@@ -70,9 +70,9 @@ export function createProxyAccounting(options: AccountingContext) {
     settle,
     cost,
     requestId,
-    fail(statusCode: number, status: UsageEvent["status"], reservation?: BudgetReservation, contentRef: string | null = null, dispatched = false) {
-      const basis = unpricedSearch || cost.basis === "unpriced_service_tier" ? dispatched ? "unpriced_usage" : "none" : cost.basis;
-      context.waitUntil(finish(statusCode, status, reservation, 0, null, contentRef, basis));
+    fail(statusCode: number, status: UsageEvent["status"], reservation = emptyReservation(), contentRef: string | null = null, dispatched = false) {
+      // Missing response headers cannot prove that dispatched upstream work was free.
+      context.waitUntil(settle(statusCode, status, dispatched, null, reservation, contentRef));
     },
     complete(response: Response, observed: ObservedUsage, reservation: BudgetReservation, contentRef: string | null) {
       const status = !response.ok ? response.status < 500 ? "client_error" : "provider_error"
