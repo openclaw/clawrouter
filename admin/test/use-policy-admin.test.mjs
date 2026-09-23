@@ -94,7 +94,7 @@ for (const outcome of ["save", "discard"]) {
     const form = fixture.render().policies.form;
     const refreshed = [policy("policy_a", "server"), policy("policy_b")];
     hydrate(fixture, refreshed);
-    assert.equal(fixture.render().policies.form, form);
+    assert.deepEqual(fixture.render().policies.form, form);
     change(fixture, { tenantId: "default" });
     assert.equal(fixture.render().policies.dirty, true);
     hydrate(fixture, refreshed);
@@ -114,12 +114,128 @@ for (const outcome of ["save", "discard"]) {
   });
 }
 
+for (const outcome of ["lost ACK", "successful ACK with later edit"]) {
+  test(`policy edit-back intent survives ${outcome}, equal and changed reads until its next Save ACK`, async () => {
+    const fixture = ready();
+    change(fixture, { tenantId: "submitted" });
+    const first = fixture.render().policies.save(event);
+    change(fixture, { tenantId: "default" });
+    const committed = { ...policy("policy_a", "submitted"), monthlyBudgetMicros: 25_000_000 };
+    if (outcome === "lost ACK") fixture.requests[0].reject(new Error("response lost"));
+    else fixture.requests[0].resolve(committed);
+    await first;
+    for (const tenantId of ["submitted", "default", "submitted"]) {
+      hydrate(fixture, [{ ...committed, tenantId, enabled: false }]);
+      assert.equal(fixture.render().policies.form.tenantId, "default");
+      assert.equal(fixture.render().policies.form.enabled, false);
+      assert.equal(fixture.render().policies.form.monthlyBudgetMicros, "25");
+      assert.equal(fixture.render().policies.dirty, tenantId !== "default");
+    }
+    const retry = fixture.render().policies.save(event);
+    const body = JSON.parse(fixture.requests[1].init.body);
+    assert.equal(body.tenantId, "default");
+    assert.equal(body.enabled, false);
+    assert.equal(body.monthlyBudgetMicros, 25_000_000);
+    fixture.requests[1].resolve({ ...committed, tenantId: "default", enabled: false });
+    await retry;
+    hydrate(fixture, [{ ...committed, tenantId: "later-server", monthlyBudgetMicros: 40_000_000 }]);
+    assert.equal(fixture.render().policies.form.tenantId, "later-server");
+    assert.equal(fixture.render().policies.form.monthlyBudgetMicros, "40");
+    assert.equal(fixture.render().policies.dirty, false);
+  });
+}
+
+test("Save retires only submitted fields and keeps later equal-valued intent through reporting", async () => {
+  const fixture = ready();
+  change(fixture, { tenantId: "submitted", monthlyBudgetMicros: "25" });
+  const save = fixture.render().policies.save(event);
+  change(fixture, { monthlyBudgetMicros: "25" });
+  const committed = { ...policy("policy_a", "submitted"), monthlyBudgetMicros: 25_000_000 };
+  fixture.requests[0].resolve(committed);
+  await save;
+  hydrate(fixture, [committed]);
+  assert.equal(fixture.render().policies.dirty, false);
+  hydrate(fixture, [{ ...committed, tenantId: "server-after-save", monthlyBudgetMicros: 40_000_000 }]);
+  assert.equal(fixture.render().policies.form.tenantId, "server-after-save");
+  assert.equal(fixture.render().policies.form.monthlyBudgetMicros, "25");
+  assert.equal(fixture.render().policies.dirty, true);
+});
+
+for (const outcome of ["success", "failure"]) {
+  test(`Disable ${outcome} retires only its acknowledged enabled intent`, async () => {
+    const fixture = ready();
+    change(fixture, { tenantId: "default", enabled: true });
+    const disable = fixture.render().policies.revoke("policy_a");
+    if (outcome === "success") fixture.requests[0].resolve({ ...policy("policy_a"), enabled: false });
+    else fixture.requests[0].reject(new Error("response lost"));
+    await disable;
+    hydrate(fixture, [{ ...policy("policy_a"), enabled: outcome !== "success" }]);
+    assert.equal(fixture.render().policies.dirty, false);
+    hydrate(fixture, [{ ...policy("policy_a", "server"), enabled: outcome === "success" }]);
+    assert.equal(fixture.render().policies.form.tenantId, "default");
+    assert.equal(fixture.render().policies.form.enabled, true);
+    const save = fixture.render().policies.save(event);
+    assert.equal(JSON.parse(fixture.requests[1].init.body).tenantId, "default");
+    assert.equal(JSON.parse(fixture.requests[1].init.body).enabled, true);
+    fixture.requests[1].resolve(policy("policy_a"));
+    await save;
+  });
+}
+
+test("replacement ACK retains its field marks through equal reads and Discard retires them", async () => {
+  const fixture = ready();
+  change(fixture, { tenantId: "submitted", monthlyBudgetMicros: "25" });
+  const save = fixture.render().policies.save(event);
+  fixture.render().policies.edit(policy("policy_b"));
+  fixture.render().policies.edit(policy("policy_a"));
+  change(fixture, { tenantId: "default" });
+  const committed = { ...policy("policy_a", "submitted"), monthlyBudgetMicros: 25_000_000 };
+  fixture.requests[0].resolve(committed);
+  await save;
+  hydrate(fixture, [{ ...committed, tenantId: "default" }]);
+  assert.equal(fixture.render().policies.dirty, false);
+  hydrate(fixture, [committed]);
+  assert.equal(fixture.render().policies.form.tenantId, "default");
+  assert.equal(fixture.render().policies.form.monthlyBudgetMicros, "25");
+  fixture.render().policies.discard();
+  hydrate(fixture, [{ ...committed, tenantId: "after-discard" }]);
+  assert.equal(fixture.render().policies.form.tenantId, "after-discard");
+  assert.equal(fixture.render().policies.dirty, false);
+});
+
+for (const wildcard of [false, true]) {
+  test(`coupled ${wildcard ? "wildcard" : "explicit"} provider intent survives equal reporting without freezing untouched fields`, async () => {
+    const fixture = mount();
+    fixture.providers = ["provider_a", "provider_b"].map((id) => ({ id }));
+    const original = { ...policy("policy_a"), providers: wildcard ? [] : ["provider_a"] };
+    hydrate(fixture, [original]);
+    fixture.render().policies.setProviderGroup(["provider_a"], true);
+    hydrate(fixture, [original]);
+    assert.equal(fixture.render().policies.dirty, false);
+    hydrate(fixture, [{ ...original, providers: ["provider_b"], enabled: false, monthlyBudgetMicros: 25_000_000 }]);
+    const form = fixture.render().policies.form;
+    assert.deepEqual(form.providers, original.providers);
+    assert.equal(form.allProviders, wildcard);
+    assert.equal(form.enabled, false);
+    assert.equal(form.monthlyBudgetMicros, "25");
+    const save = fixture.render().policies.save(event);
+    const body = JSON.parse(fixture.requests[0].init.body);
+    assert.deepEqual(body.providers, original.providers);
+    assert.equal(body.allProviders, wildcard);
+    fixture.requests[0].resolve({ ...original, enabled: false, monthlyBudgetMicros: 25_000_000 });
+    await save;
+    hydrate(fixture, [{ ...original, providers: ["provider_b"] }]);
+    assert.deepEqual(fixture.render().policies.form.providers, ["provider_b"]);
+    assert.equal(fixture.render().policies.form.allProviders, false);
+  });
+}
+
 test("a refreshed row matching the draft becomes clean, then typing its former value becomes dirty", () => {
   const fixture = ready();
   change(fixture, { tenantId: "server" });
   const form = fixture.render().policies.form;
   hydrate(fixture, [policy("policy_a", "server")]);
-  assert.equal(fixture.render().policies.form, form);
+  assert.deepEqual(fixture.render().policies.form, form);
   assert.equal(fixture.render().policies.dirty, false);
   change(fixture, { tenantId: "default" });
   assert.equal(fixture.render().policies.dirty, true);
@@ -139,7 +255,7 @@ for (const dirty of [false, true]) {
     if (dirty) change(fixture, { tenantId: "draft" });
     hydrate(fixture, [policy("policy_b", "unrelated"), policy("policy_a", "server")]);
     assert.equal(fixture.render().policies.selectedId, "policy_a");
-    assert.equal(fixture.render().policies.form.tenantId, dirty ? "draft" : "server");
+    assert.equal(fixture.render().policies.form.tenantId, dirty ? "draft" : "default");
     change(fixture, { tenantId: "default" });
     assert.equal(fixture.render().policies.dirty, true);
     hydrate(fixture, [policy("policy_a", "server")]);

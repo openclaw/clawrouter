@@ -9,6 +9,7 @@
 - Keep policy selection separate from existing binding edits, while new bindings still default to the selected policy.
 - Preserve unsaved policy drafts across refreshes and completed saves, provide explicit discard, and keep missing selections visible. Keep explicit disablement and later edits intact, attach edits made during creation to the created policy for the next save, and wait for the initial policy list before enabling saves. Keep newer action outcomes visible when an older console refresh completes.
 - Reconcile pending policy saves by field after reselection or discard, preserving explicit field, template, and provider edits without rolling back untouched disabled state or budget on the next save.
+- Preserve policy field intent through reporting refreshes and lost save responses, including equal-value reads. Apply untouched server fields and retire only edits covered by the matching Save or Disable acknowledgment.
 - Separate proxy-key creation from rotation in the console, serialize key actions across admin and personal screens, and keep one-time secrets, drafts, and action status owned by the operation's identity. Show uncertain outcomes and clipboard failures without replaying dismissed secrets, and preserve table action contrast in both themes.
 - Assess Fusion sampling, reasoning, and tool intent from source-linked model/endpoint facts. Reject documented synthesizer conflicts before adviser spend, preserve caller fields, and omit unqualified adviser temperature and local reasoning defaults.
 

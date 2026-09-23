@@ -205,6 +205,48 @@ test("an unchanged sandbox button keeps its budget through a held save, failed m
   await expect(page.getByText("Unsaved policy changes.", { exact: true })).toHaveCount(0);
 });
 
+test("a lost save response preserves edit-back through equal reads and the next keyboard Save", async ({ page }) => {
+  const state = await fixture(page);
+  await open(page);
+  await tenant(page).fill("submitted");
+  await save(page).click();
+  await expect.poll(() => state.writes.length).toBe(1);
+  await tenant(page).fill("default");
+  await expect(page.getByText("Unsaved policy changes.", { exact: true })).toHaveCount(0);
+  const { allProviders, ...committed } = state.writes[0].request().postDataJSON() as AccessPolicy & { allProviders: boolean };
+  expect(allProviders).toBe(true);
+  expect(committed.tenantId).toBe("submitted");
+  state.policies = [committed, ...state.policies.filter((policy) => policy.policyId !== committed.policyId)];
+  await state.writes[0].abort("failed"); // The server committed; only its response was lost.
+  await expect(page.locator(".statusBar")).toContainText("policy save failed");
+  await expect(save(page)).toBeEnabled();
+  for (const tenantId of ["submitted", "default", "submitted"]) {
+    state.policies[0] = { ...committed, tenantId, enabled: false, monthlyBudgetMicros: 25_000_000 };
+    await focus(page, state);
+    await expect(page.locator(".connectionMeta time")).toHaveAttribute("datetime", `2026-09-01T00:0${state.refreshes}:00.000Z`);
+    await expect(row(page, "policy_a").locator('[data-label="tenant"]')).toHaveText(tenantId);
+    await expect(tenant(page)).toHaveValue("default");
+    await expect(page.getByRole("combobox", { name: "status", exact: true })).toHaveValue("disabled");
+    await expect(page.getByRole("textbox", { name: "monthly budget ($)", exact: true })).toHaveValue("25");
+    await expect(page.getByText("Unsaved policy changes.", { exact: true })).toHaveCount(tenantId === "default" ? 0 : 1);
+  }
+  await save(page).focus();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => state.writes.length).toBe(2);
+  expect(state.writes[1].request().postDataJSON()).toEqual({ ...committed, allProviders: true, tenantId: "default", enabled: false, monthlyBudgetMicros: 25_000_000 });
+  state.holdBootstrap = true;
+  await state.commit(1);
+  await expect.poll(() => state.reads.length).toBe(1);
+  await expect(tenant(page)).toHaveValue("default");
+  await expect(page.getByText("Unsaved policy changes.", { exact: true })).toHaveCount(0);
+  state.reads[0].body.policies = state.reads[0].body.policies.map((policy) => policy.policyId === "policy_a" ? { ...policy, tenantId: "after-ack", monthlyBudgetMicros: 40_000_000 } : policy);
+  await state.reads[0].route.fulfill({ json: state.reads[0].body });
+  await expect(tenant(page)).toHaveValue("after-ack");
+  await expect(page.getByRole("textbox", { name: "monthly budget ($)", exact: true })).toHaveValue("40");
+  await expect(page.getByText("Unsaved policy changes.", { exact: true })).toHaveCount(0);
+  expect(state.writes).toHaveLength(2);
+});
+
 test("typing the original tenant after a server refresh stays unsaved through another refresh and keyboard Save", async ({ page }) => {
   const state = await fixture(page);
   await open(page);
