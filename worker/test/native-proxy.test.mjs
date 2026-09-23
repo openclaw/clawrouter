@@ -32,7 +32,7 @@ test("Google native path models use manifest pricing under a budgeted policy", (
     {},
   );
   const policy = { monthlyBudgetMicros: 1_000_000, requestCostMicros: null };
-  const cost = estimateCost(prepared.model, prepared.body, policy.requestCostMicros, "llm.stream", streamGenerate.request_format);
+  const cost = estimateCost(prepared.model, prepared.body, policy.requestCostMicros, "llm.stream", streamGenerate);
 
   assert.equal(prepared.model?.id, "google/gemini-3.5-flash");
   assert.equal(prepared.body.model, undefined);
@@ -58,7 +58,7 @@ test("current Anthropic native models retain routing and budget pricing", () => 
     assert.equal(prepared.model?.id, `anthropic/${model}`);
     assert.equal(prepared.body.model, model);
     assert.deepEqual(prepared.pathParams, {});
-    assert.equal(estimateCost(prepared.model, prepared.body, null, "llm.messages", "anthropic.messages").basis, "manifest_pricing");
+    assert.equal(estimateCost(prepared.model, prepared.body, null, "llm.messages", messages).basis, "manifest_pricing");
   }
 });
 
@@ -75,7 +75,7 @@ test("native namespaces preserve upstream identifiers while manifest envelopes r
   const routed = prepareNativeRequest(openrouter, responses, { model: "openai/gpt-6-astra", input: "fixture" }, responses.path, {});
   assert.equal(routed.body.model, "openai/gpt-6-astra");
   assert.equal(routed.model.pricing, null);
-  assert.equal(estimateCost(routed.model, routed.body, null, "llm.responses", "openai.responses").basis, "flat_fallback");
+  assert.equal(estimateCost(routed.model, routed.body, null, "llm.responses", responses).basis, "flat_fallback");
 });
 
 test("native path models reject body and path mismatches", () => {
@@ -95,14 +95,14 @@ test("pricing completeness retains known model metadata and assesses opaque requ
   const sonar = providerById("perplexity"), chat = sonar.endpoints.find(endpoint => endpoint.id === "chat_completions");
   for (const model of ["sonar-pro", "perplexity/sonar-pro"]) {
     const prepared = prepareNativeRequest(sonar, chat, { model, messages: [] }, chat.path, {});
-    assert.equal(estimateCost(prepared.model, prepared.body, null, "llm.chat", chat.request_format).pricingGap, "model_request_fee");
+    assert.equal(estimateCost(prepared.model, prepared.body, null, "llm.chat", chat).pricingGap, "model_request_fee");
   }
   const opaque = prepareNativeRequest(sonar, chat, { model: "sonar-unlisted", messages: [] }, chat.path, {});
   assert.equal(opaque.model.pricing, null);
-  assert.equal(estimateCost(opaque.model, opaque.body, null, "llm.chat", chat.request_format).basis, "flat_fallback");
+  assert.equal(estimateCost(opaque.model, opaque.body, null, "llm.chat", chat).basis, "flat_fallback");
   for (const model of ["gemini-3.5-flash", "google/gemini-3.5-flash", "gemini-unlisted"]) {
     const prepared = prepareManifestRequest(google, streamGenerate, { tools: [{ url_context: {} }] }, { model }, {});
-    const cost = estimateCost(prepared.model, prepared.body, null, "llm.stream", streamGenerate.request_format);
+    const cost = estimateCost(prepared.model, prepared.body, null, "llm.stream", streamGenerate);
     assert.equal(cost.pricingGap, "hosted_tool_usage");
     assert.equal(cost.reserveMicros, 0);
   }
@@ -324,7 +324,7 @@ test("local opaque Chat models retain explicitly declared zero pricing on unifie
   }
   const route = modelRoute("local/fixture-model", "llm.chat");
   assert.equal(route.model.pricing_ref, "local-compute-zero-api-charge-v1");
-  assert.equal(estimateCost(route.model, { messages: [] }, null, "llm.chat", "openai.chat_completions").reserveMicros, 0);
+  assert.equal(estimateCost(route.model, { messages: [] }, null, "llm.chat", route.provider.endpoints.find(endpoint => endpoint.id === "chat_completions")).reserveMicros, 0);
   assert.equal(modelRoute("local/fixture-model", "llm.embeddings"), null);
 });
 

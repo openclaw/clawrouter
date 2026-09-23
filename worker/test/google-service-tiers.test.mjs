@@ -32,14 +32,14 @@ test("native tier aliases are last-wins and never borrow OpenAI wire values", ()
 test("native reservation uses exact tier cards, including Flex without Standard fallback", () => {
   const body = { contents: [{ parts: [{ text: "x".repeat(1_100_000) }] }], generationConfig: { maxOutputTokens: 1_000 } };
   for (const [tier, expected] of [[undefined, 1_581_864], ["unspecified", 1_581_864], ["standard", 1_581_864], ["flex", 790_932], ["priority", 2_847_356]]) {
-    assert.equal(estimateModelCost(pricing, { ...body, serviceTier: tier }, format).reserveMicros, expected);
+    assert.equal(estimateModelCost(pricing, { ...body, serviceTier: tier }, { request_format: format }).reserveMicros, expected);
   }
   for (const serviceTier of ["auto", "default", "fast", "future", 0, {}]) {
-    assert.equal(estimateModelCost(pricing, { ...body, serviceTier }, format).pricingAvailable, false);
+    assert.equal(estimateModelCost(pricing, { ...body, serviceTier }, { request_format: format }).pricingAvailable, false);
   }
   const standardOnly = { ...pricing, serviceTiers: undefined };
-  assert.equal(estimateModelCost(standardOnly, body, format).reserveMicros, 1_581_864);
-  assert.equal(estimateModelCost(standardOnly, { ...body, serviceTier: "priority" }, format).pricingAvailable, false);
+  assert.equal(estimateModelCost(standardOnly, body, { request_format: format }).reserveMicros, 1_581_864);
+  assert.equal(estimateModelCost(standardOnly, { ...body, serviceTier: "priority" }, { request_format: format }).pricingAvailable, false);
   // The shared resolver still permits OpenAI defaults and Standard fallback.
   assert.equal(estimateModelCost(pricing, { previous_response_id: "fixture", max_output_tokens: 1_000 }).reserveMicros, 2_847_356);
   assert.equal(estimateModelCost(pricing, { previous_response_id: "fixture", max_output_tokens: 1_000, service_tier: "flex" }).reserveMicros, 1_581_864);

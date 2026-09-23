@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reserve DeepSeek's full declared output bound unless a valid native `max_tokens` lowers it, including Fusion readiness. Existing measured requests can newly return HTTP 402 under unchanged budgets; lower the native cap within the remaining balance. Preserve prior spend and outstanding reservations, and normalize inclusive Chat cache hits without double-counting input or discounting conflicting counters.
+
 - Price Gemini native Standard, Flex, and Priority tiers using their published cards, preserve Flex's lower reservation, and settle Priority downgrades from consistent returned tier evidence.
 
 - Keep retained-request inspection on the latest selection, cancel replaced or closed reads, and prevent late replies from reopening or overwriting the panel.

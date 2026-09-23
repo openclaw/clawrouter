@@ -219,7 +219,7 @@ export function catalogModels(provider: CompiledProvider, endpoints: string[], p
       const endpointId = provider.capabilities.find((candidate) => candidate.id === capability)!.endpoint;
       const endpoint = provider.endpoints.find((candidate) => candidate.id === endpointId)!;
       const policy = endpointPolicies?.get(endpointId) ?? proxyPolicy;
-      const cost = estimateCost(model, {}, policy?.requestCostMicros, capability, endpoint.request_format);
+      const cost = estimateCost(model, {}, policy?.requestCostMicros, capability, endpoint);
       try {
         validateBudgetReservation(capability, cost, policy?.monthlyBudgetMicros, { providerId: provider.id, enabled: true, monthlyBudgetMicros: providerBudget });
         return true;
