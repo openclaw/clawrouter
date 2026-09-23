@@ -20,6 +20,7 @@ try {
 
   await adminRequest(`/v1/admin/keys/${credentialId}`, {
     method: "PUT",
+    responseMode: "ack",
     body: {
       enabled: true,
       providers: ["firecrawl"],
@@ -72,10 +73,12 @@ async function waitForHealth() {
 async function revoke() {
   await adminRequest(`/v1/admin/keys/${credentialId}/revoke`, {
     method: "POST",
+    responseMode: "ack",
     signal: AbortSignal.timeout(10_000),
   });
   await adminRequest(`/v1/admin/policies/${credentialId}/revoke`, {
     method: "POST",
+    responseMode: "ack",
     signal: AbortSignal.timeout(10_000),
   });
 }
