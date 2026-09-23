@@ -64,6 +64,7 @@
 - Settle HTTP accounting on ingress cancellation through the Worker request signal, including external socket disconnects, without losing already reported terminal usage.
 
 - Recover rejected usage-queue publication through the existing policy usage ledger, retaining event IDs to deduplicate redelivery without masking budget-settlement failures.
+- Return explicit stored, duplicate, and retention-expired usage-ingest receipts, preserving the first retained event and its timestamp without hiding storage failures. Existing usage consumers remain status-based for producer-first rollout.
 
 - Export authorized native Codex model catalogs while preserving official agent metadata, add sourced Sol/Terra/Luna routes and tier prices, and document API-key and desktop hybrid setup.
 
