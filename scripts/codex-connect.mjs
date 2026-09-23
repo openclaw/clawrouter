@@ -218,7 +218,11 @@ export async function manageCodex(args, env = process.env) {
     // Codex reads the profile and catalog separately. Keep every published
     // generation until explicit disconnect so concurrent startup stays valid.
     if (command === "remove") {
-      for (const digest of state.catalogs) {
+      // A user can roll the pointer back to a published generation. Once that
+      // field is user-owned, retain all generations instead of breaking it.
+      const keepCatalogs = retained.includes("model_catalog_json");
+      if (keepCatalogs) summary.retained.push("model catalogs retained because the catalog pointer changed");
+      for (const digest of keepCatalogs ? [] : state.catalogs) {
         const name = catalogName(profile, digest);
         try {
           const current = await readRegular(join(home, name));

@@ -134,6 +134,23 @@ test("update refuses changed owned fields; remove retains their user values and 
   assert.equal(removed.revoked, false);
 });
 
+test("remove keeps published catalogs when the user rolls the retained pointer back", async (t) => {
+  const f = await fixture(t);
+  await manageCodex(f.connect, f.env);
+  const original = await f.read();
+  await writeFile(f.bundle, JSON.stringify({ models: [{ ...descriptor, future_metadata: "new generation" }] }));
+  await f.run("update");
+  const current = await f.read();
+  const text = await readFile(f.profile, "utf8");
+  await writeFile(f.profile, text.replace(`"model_catalog_json" = "${current.model_catalog_json}"`, `"model_catalog_json" = "${original.model_catalog_json}"`));
+  const result = await f.run("remove");
+  assert.equal((await f.read()).model_catalog_json, original.model_catalog_json);
+  assert.ok(result.retained.includes("model_catalog_json"));
+  assert.ok(result.retained.includes("model catalogs retained because the catalog pointer changed"));
+  assert.deepEqual(JSON.parse(await readFile(join(f.home, original.model_catalog_json), "utf8")).models, [descriptor]);
+  assert.ok(await readFile(join(f.home, current.model_catalog_json), "utf8"));
+});
+
 test("invalid/empty/unauthorized refreshes and unqualified priority keep previous files", async (t) => {
   const f = await fixture(t);
   await manageCodex(f.connect, f.env);

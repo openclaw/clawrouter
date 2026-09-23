@@ -64,7 +64,9 @@ The profile's first comment is an ownership receipt; keep it intact. Updates
 preserve user-added fields and comments and refuse changed owned fields.
 To change connection settings, remove and reconnect. `remove` deletes only
 unchanged owned fields and catalog files; modified fields/files remain and
-are reported. It keeps unrelated additions and does not revoke the key.
+are reported. If the user changes the catalog pointer, all published catalog
+generations remain available for that retained reference. It keeps unrelated
+additions and does not revoke the key.
 Credential revocation is a separate operator action through the admin UI or
 `pnpm cf:key:revoke -- --kid <credential-id>`. If an interrupted process leaves
 a profile lock directory, check that no setup command is still running before
