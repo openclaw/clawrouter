@@ -108,6 +108,30 @@ test("a clean reselected policy adopts its held save before a failed refresh and
   await expect(tenant(page)).toHaveValue("canonical-a");
 });
 
+test("typing the original tenant after a server refresh stays unsaved through another refresh and keyboard Save", async ({ page }) => {
+  const state = await fixture(page);
+  await open(page);
+  await tenant(page).fill("draft");
+  state.policies[0] = { ...state.policies[0], tenantId: "server" };
+  await focus(page, state);
+  await expect(row(page, "policy_a").locator('[data-label="tenant"]')).toHaveText("server");
+  await expect(page.locator(".connectionMeta time")).toHaveAttribute("datetime", "2026-09-01T00:01:00.000Z");
+  await expect(tenant(page)).toHaveValue("draft");
+  await tenant(page).fill("default");
+  await expect(page.getByText("Unsaved policy changes.", { exact: true })).toBeVisible();
+  await focus(page, state);
+  await expect(page.locator(".connectionMeta time")).toHaveAttribute("datetime", "2026-09-01T00:02:00.000Z");
+  await expect(tenant(page)).toHaveValue("default");
+  await expect(page.getByText("Unsaved policy changes.", { exact: true })).toBeVisible();
+  await save(page).focus();
+  await page.keyboard.press("Enter");
+  await expect.poll(() => state.writes.length).toBe(1);
+  expect(state.writes[0].request().postDataJSON()).toMatchObject({ policyId: "policy_a", tenantId: "default" });
+  await state.commit(0);
+  await expect(row(page, "policy_a").locator('[data-label="tenant"]')).toHaveText("default");
+  await expect(page.getByText("Unsaved policy changes.", { exact: true })).toHaveCount(0);
+});
+
 test("sibling saves, failures and refreshes preserve the policy draft and its own error", async ({ page }) => {
   const state = await fixture(page);
   await open(page);

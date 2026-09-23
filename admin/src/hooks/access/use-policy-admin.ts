@@ -48,10 +48,14 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
     readyRef.current = true;
     setReady(true);
     const current = currentDraft.current;
-    if (current.dirty || (current.initialized && !current.selection)) return;
+    if (current.initialized && !current.selection) return;
     const policy = current.initialized ? policies.find((item) => item.policyId === current.selection) : policies[0];
-    if (policy) resetDraft(policy.policyId, policyFormFromPolicy(policy));
-    else if (!current.initialized) resetDraft("", newPolicyForm(sessionData));
+    if (policy) {
+      const canonical = policyFormFromPolicy(policy);
+      // Preserve edits but compare future changes with the accepted row, not an obsolete baseline.
+      if (current.dirty) rebaseDraft(canonical, current);
+      else resetDraft(policy.policyId, canonical);
+    } else if (!current.initialized) resetDraft("", newPolicyForm(sessionData));
   }
 
   async function save(event: FormEvent) {
@@ -117,9 +121,8 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
       else if (current.selection === saved.policyId || (action === "save" && !submitted.selection && !current.selection && incarnation.current === submittedIncarnation)) {
         // A committed create owns this New draft's identity, but never a replacement draft.
         // Later edits stay dirty against the committed baseline, including a return to old values.
-        baseline.current = canonical;
         const value = action === "disable" && enabledEditRevision.current <= submittedRevision ? { ...current.value, enabled: canonical.enabled } : current.value;
-        publishDraft({ ...current, selection: saved.policyId, value, dirty: JSON.stringify(value) !== JSON.stringify(canonical) });
+        rebaseDraft(canonical, { ...current, selection: saved.policyId, value });
       }
       if (demoMode) syncDemoAdmin(rows.current, credentials, providers, routes, true);
       committed = true;
@@ -164,6 +167,11 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
     incarnation.current += 1;
     enabledEditRevision.current = 0;
     publishDraft({ selection, value, dirty: false, initialized: true });
+  }
+
+  function rebaseDraft(canonical: PolicyForm, next: PolicyDraft) {
+    baseline.current = canonical;
+    publishDraft({ ...next, dirty: JSON.stringify(next.value) !== JSON.stringify(canonical) });
   }
 
   function publishDraft(next: PolicyDraft) {

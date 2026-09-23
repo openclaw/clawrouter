@@ -83,6 +83,101 @@ test("dirty drafts survive repeated hydration and discard reads the latest serve
   assert.equal(fixture.render().policies.dirty, false);
 });
 
+for (const outcome of ["save", "discard"]) {
+  test(`typing the original value after dirty hydration remains unsaved until ${outcome}`, async () => {
+    const fixture = ready();
+    change(fixture, { tenantId: "draft" });
+    const form = fixture.render().policies.form;
+    const refreshed = [policy("policy_a", "server"), policy("policy_b")];
+    hydrate(fixture, refreshed);
+    assert.equal(fixture.render().policies.form, form);
+    change(fixture, { tenantId: "default" });
+    assert.equal(fixture.render().policies.dirty, true);
+    hydrate(fixture, refreshed);
+    assert.equal(fixture.render().policies.form.tenantId, "default");
+    assert.equal(fixture.render().policies.dirty, true);
+    if (outcome === "save") {
+      const save = fixture.render().policies.save(event);
+      assert.equal(JSON.parse(fixture.requests[0].init.body).tenantId, "default");
+      fixture.requests[0].resolve(policy("policy_a"));
+      await save;
+      assert.equal(fixture.render().policies.form.tenantId, "default");
+    } else {
+      fixture.render().policies.discard();
+      assert.equal(fixture.render().policies.form.tenantId, "server");
+    }
+    assert.equal(fixture.render().policies.dirty, false);
+  });
+}
+
+test("a refreshed row matching the draft becomes clean, then typing its former value becomes dirty", () => {
+  const fixture = ready();
+  change(fixture, { tenantId: "server" });
+  const form = fixture.render().policies.form;
+  hydrate(fixture, [policy("policy_a", "server")]);
+  assert.equal(fixture.render().policies.form, form);
+  assert.equal(fixture.render().policies.dirty, false);
+  change(fixture, { tenantId: "default" });
+  assert.equal(fixture.render().policies.dirty, true);
+  hydrate(fixture, [policy("policy_a", "server")]);
+  assert.equal(fixture.render().policies.form.tenantId, "default");
+  assert.equal(fixture.render().policies.dirty, true);
+});
+
+for (const dirty of [false, true]) {
+  test(`a missing selected row retains its comparison baseline and ${dirty ? "dirty" : "clean"} reappearance ownership`, () => {
+    const fixture = ready();
+    change(fixture, { tenantId: "draft" });
+    hydrate(fixture, [policy("policy_b", "unrelated")]);
+    assert.equal(fixture.render().policies.missing, true);
+    change(fixture, { tenantId: "default" });
+    assert.equal(fixture.render().policies.dirty, false);
+    if (dirty) change(fixture, { tenantId: "draft" });
+    hydrate(fixture, [policy("policy_b", "unrelated"), policy("policy_a", "server")]);
+    assert.equal(fixture.render().policies.selectedId, "policy_a");
+    assert.equal(fixture.render().policies.form.tenantId, dirty ? "draft" : "server");
+    change(fixture, { tenantId: "default" });
+    assert.equal(fixture.render().policies.dirty, true);
+    hydrate(fixture, [policy("policy_a", "server")]);
+    assert.equal(fixture.render().policies.form.tenantId, "default");
+  });
+}
+
+test("a New draft never adopts a refreshed row with the same typed policy ID", async () => {
+  const fixture = ready();
+  fixture.render().policies.startNew();
+  change(fixture, { policyId: "policy_new", tenantId: "new-draft", allProviders: true });
+  const form = fixture.render().policies.form;
+  hydrate(fixture, [policy("policy_new", "new-draft")]);
+  assert.equal(fixture.render().policies.form, form);
+  assert.equal(fixture.render().policies.selectedId, "");
+  assert.equal(fixture.render().policies.dirty, true);
+  await fixture.render().policies.save(event);
+  assert.match(fixture.render().policies.error, /already exists/);
+  assert.equal(fixture.requests.length, 0);
+});
+
+test("rejected pre-write and during-write snapshots cannot rebase a later draft", async () => {
+  const fixture = ready();
+  const before = fixture.render().captureHydration();
+  change(fixture, { tenantId: "submitted" });
+  const save = fixture.render().policies.save(event);
+  const during = fixture.render().captureHydration();
+  change(fixture, { tenantId: "later" });
+  for (const snapshot of [before, during]) fixture.render().hydrate([policy("policy_a", "later")], session, snapshot);
+  assert.equal(fixture.render().policies.dirty, true);
+  change(fixture, { tenantId: "default" });
+  assert.equal(fixture.render().policies.dirty, false);
+  fixture.requests[0].resolve(policy("policy_a", "committed"));
+  await save;
+  assert.equal(fixture.render().policies.dirty, true);
+  for (const snapshot of [before, during]) fixture.render().hydrate([policy("policy_a")], session, snapshot);
+  assert.equal(fixture.render().policies.dirty, true);
+  hydrate(fixture, [policy("policy_a", "committed")]);
+  assert.equal(fixture.render().policies.form.tenantId, "default");
+  assert.equal(fixture.render().policies.dirty, true);
+});
+
 for (const destination of ["policy_b", "new", "same"]) {
   test(`a held policy A save commits its server response without replacing the ${destination} draft`, async () => {
     const fixture = ready();
