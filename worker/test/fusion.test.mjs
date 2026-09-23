@@ -37,8 +37,8 @@ test("local adviser messages retain bounded text but never images or tool schema
   const body = buildAdviserBody({ messages, tools: [{ type: "function", function: { name: "shell" } }] }, "local/qwen3:8b", normalizeFusionConfig({}), 0);
   assert.equal(body.model, "local/qwen3:8b");
   assert.equal(body.stream, false);
-  assert.equal(body.reasoning_effort, "none");
-  assert.equal(body.temperature, 0.2);
+  assert.equal(body.reasoning_effort, undefined);
+  assert.equal(body.temperature, undefined);
   assert.equal(body.tools, undefined);
   assert.doesNotMatch(JSON.stringify(body), /base64|image_url|shell/);
   assert.match(JSON.stringify(body), /tool output/);
@@ -76,7 +76,7 @@ test("fusion runs advisers concurrently, tolerates failures, and injects untrust
   assert.match(instruction.content, /local proposal/);
 
   const reasoningConfig = normalizeFusionConfig({ aggregatorModel: "openai/gpt-5.4" });
-  assert.equal(buildAggregatorBody({ messages: [], temperature: 0.7 }, reasoningConfig, []).temperature, undefined);
+  assert.equal(buildAggregatorBody({ messages: [], temperature: 0.7 }, reasoningConfig, []).temperature, 0.7);
 });
 
 test("fusion fails open when adviser bodies stall or exceed their byte bound", async () => {

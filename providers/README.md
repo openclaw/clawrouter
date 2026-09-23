@@ -118,6 +118,19 @@ billing:
 - `models.entries[].supportedReasoningEfforts` advertises the model's exact
   provider-native OpenAI-compatible wire efforts. Values are unique and limited
   to `none`, `minimal`, `low`, `medium`, `high`, `xhigh`, and `max`.
+- `models.entries[].requestParameters.<endpoint>` records dated, source-linked
+  constructor facts for an exact OpenAI Chat or Responses endpoint: `temperature`,
+  `topP`, `logprobs`, and `toolCalling` can be `supported`, `unsupported`, or
+  `requires_reasoning_none`. Omitted facts are unknown. `defaultReasoningEffort`
+  must belong to the declared effort domain; it informs assessment without adding
+  a field to requests. Model-name prefixes and opaque models inherit no facts.
+  Fusion uses these facts before fan-out and to qualify its adviser preference.
+  They do not certify full requests, individual tool types, pricing, account
+  access, or Codex metadata, and do not restrict native protocol passthrough.
+  Sampling/logprob field-presence restrictions also apply to explicit false/null;
+  empty tools or `tool_choice: none` do not mean enabled tool calling and remain
+  unqualified when their wire acceptance is undocumented. Recommendations and
+  ignored parameters must not be published as prohibitions.
 - `models.entries[].codexModel` names an explicitly sourced native Codex model
   descriptor for a documented upstream alias. The export helper preserves that
   descriptor's prompts and context contract; it does not generate metadata.
