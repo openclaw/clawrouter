@@ -387,9 +387,12 @@ test("all selected providers run before smoke failures are reported", async () =
     ],
   };
   let calls = 0;
+  let requestId;
   await withFetch(
-    () => {
+    (url, init) => {
+      if (new URL(url).pathname === "/v1/usage") return Response.json({ usage: { events: [{ id: "usage_second", request_id: requestId, provider: "anthropic", status: "success", status_code: 200, occurred_at_ms: Date.now() }] } });
       calls += 1;
+      requestId = init.headers["x-request-id"];
       if (calls === 1) {
         return new Response(JSON.stringify({ error: { code: "provider_unavailable" } }), {
           status: 502,
@@ -456,12 +459,16 @@ test("provider response stream failures are recorded as provider health", async 
 });
 
 test("successful upstream responses verify and record provider health", async () => {
+  let requestId;
   await withFetch(
-    () =>
-      new Response("ok", {
+    (url, init) => {
+      if (new URL(url).pathname === "/v1/usage") return Response.json({ usage: { events: [{ id: "usage_success", request_id: requestId, provider: "openai", status: "success", status_code: 200, occurred_at_ms: Date.now() }] } });
+      requestId = init.headers["x-request-id"];
+      return new Response("ok", {
         status: 200,
         headers: { "x-clawrouter-upstream-provider": "openai" },
-      }),
+      });
+    },
     async () => {
       const recorded = [];
       const results = await runLiveProviderSmokes({
@@ -474,6 +481,7 @@ test("successful upstream responses verify and record provider health", async ()
       assert.equal(results.length, 1);
       assert.equal(recorded.length, 1);
       assert.equal(results[0].status, "verified");
+      assert.equal(results[0].usageEventId, "usage_success");
     },
   );
 });
