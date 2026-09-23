@@ -83,6 +83,14 @@ Filters that change one result list use labeled groups of native buttons with
 `aria-pressed` for the active choice. Reserve tab semantics for controls that
 switch between associated panels.
 
+Access resource tabs use manual activation: Left/Right wrap focus, Home/End move
+to the first/last tab, and Enter/Space opens the focused resource. Tab leaves the
+list for the active panel; returning to the list starts at the selected tab.
+Focus movement alone preserves one-time credentials. Activating another resource
+dismisses them through the existing credential lifecycle while retaining editor
+drafts. Every tab names its panel; inactive panels remain empty and hidden.
+Narrow layouts reveal the focused tab by scrolling only the tablist horizontally.
+
 Inspector list rows are buttons only when they have an available action. Policy
 links open a loaded policy for administrators after any dirty-draft discard is
 accepted; informational access summaries and unavailable references stay static.

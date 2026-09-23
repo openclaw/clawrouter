@@ -1,4 +1,4 @@
-import React, { type FormEvent, useEffect, useRef, useState } from "react";
+import React, { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import { CircleSlash2, KeyRound, LogIn, Plus, RefreshCw, Search, ServerCog, ShieldCheck, Users } from "lucide-react";
 import { bindingKey, type CatalogModel } from "../domain";
 import { EntityName, InlineError, InlineNote, InspectorHeader, Status, kindLabel } from "../components";
@@ -98,34 +98,63 @@ export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selec
   busy: boolean;
 }) {
   const resourceTabsRef = useRef<HTMLDivElement>(null);
+  const resourceId = useId();
+  const [focusedTab, setFocusedTab] = useState<AccessTab | null>(null);
+  const resources: { id: AccessTab; label: string; count: number | string }[] = [
+    { id: "policies", label: "Policies", count: keys.length },
+    { id: "credentials", label: "Credentials", count: credentials.length },
+    { id: "bindings", label: "Bindings", count: bindings.filter((binding) => binding.enabled).length },
+    { id: "upstream", label: "Upstream", count: upstreamGrants.filter((grant) => grant.enabled).length },
+    { id: "assignments", label: "Assignments", count: assignmentRules.filter((rule) => rule.enabled).length },
+    { id: "fusion", label: "Fusion", count: fusionConfig.enabled ? "on" : "off" },
+  ];
   useEffect(() => {
-    // Reveal the active tab by scrolling only the tablist horizontally;
-    // scrollIntoView also scrolls ancestors and yanked the page down on mount.
     const tabs = resourceTabsRef.current;
-    const active = tabs?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]');
-    if (!tabs || !active) return;
-    const left = active.offsetLeft, right = left + active.offsetWidth;
-    if (left < tabs.scrollLeft) tabs.scrollLeft = left;
-    else if (right > tabs.scrollLeft + tabs.clientWidth) tabs.scrollLeft = right - tabs.clientWidth;
+    revealResourceTab(tabs, tabs?.querySelector<HTMLElement>('[role="tab"][aria-selected="true"]') ?? null);
   }, [tab]);
+
+  function moveTabFocus(event: React.KeyboardEvent<HTMLDivElement>) {
+    const buttons = Array.from(event.currentTarget.querySelectorAll<HTMLButtonElement>('[role="tab"]'));
+    const index = buttons.indexOf(event.target as HTMLButtonElement);
+    if (index < 0) return;
+    const next = event.key === "ArrowRight" ? (index + 1) % buttons.length
+      : event.key === "ArrowLeft" ? (index + buttons.length - 1) % buttons.length
+      : event.key === "Home" ? 0 : event.key === "End" ? buttons.length - 1 : null;
+    if (next === null) return;
+    event.preventDefault();
+    buttons[next].focus({ preventScroll: true });
+  }
+
   return (
     <div className="accessWorkspace">
-      <div ref={resourceTabsRef} className="resourceTabs" role="tablist" aria-label="access resources">
-        <button type="button" role="tab" aria-selected={tab === "policies"} className={tab === "policies" ? "active" : ""} onClick={() => setTab("policies")}>Policies <span>{keys.length}</span></button>
-        <button type="button" role="tab" aria-selected={tab === "credentials"} className={tab === "credentials" ? "active" : ""} onClick={() => setTab("credentials")}>Credentials <span>{credentials.length}</span></button>
-        <button type="button" role="tab" aria-selected={tab === "bindings"} className={tab === "bindings" ? "active" : ""} onClick={() => setTab("bindings")}>Bindings <span>{bindings.filter((binding) => binding.enabled).length}</span></button>
-        <button type="button" role="tab" aria-selected={tab === "upstream"} className={tab === "upstream" ? "active" : ""} onClick={() => setTab("upstream")}>Upstream <span>{upstreamGrants.filter((grant) => grant.enabled).length}</span></button>
-        <button type="button" role="tab" aria-selected={tab === "assignments"} className={tab === "assignments" ? "active" : ""} onClick={() => setTab("assignments")}>Assignments <span>{assignmentRules.filter((rule) => rule.enabled).length}</span></button>
-        <button type="button" role="tab" aria-selected={tab === "fusion"} className={tab === "fusion" ? "active" : ""} onClick={() => setTab("fusion")}>Fusion <span>{fusionConfig.enabled ? "on" : "off"}</span></button>
+      <div ref={resourceTabsRef} className="resourceTabs" role="tablist" aria-label="access resources" onKeyDown={moveTabFocus} onBlur={(event) => {
+        // Keep the focused tab as the sole stop until focus leaves the list;
+        // resetting on Tab would revisit a selected tab later in DOM order.
+        if (!event.currentTarget.contains(event.relatedTarget)) setFocusedTab(null);
+      }}>
+        {resources.map(({ id, label, count }) => <button key={id} id={`${resourceId}-tab-${id}`} type="button" role="tab" aria-controls={`${resourceId}-panel-${id}`} aria-selected={tab === id} tabIndex={(focusedTab ?? tab) === id ? 0 : -1} className={tab === id ? "active" : ""} onFocus={(event) => { setFocusedTab(id); revealResourceTab(resourceTabsRef.current, event.currentTarget); }} onClick={() => setTab(id)}>{label} <span>{count}</span></button>)}
       </div>
-      {tab === "policies" ? <PolicyPanel keys={keys} selected={selected} providers={providers} form={form} setForm={setForm} error={policyError} dirty={policyDirty} missing={policyMissing} ready={policyReady} onDiscard={onDiscardPolicy} onSave={onSave} onNew={onNew} onEdit={onEdit} onRevoke={onRevoke} onPreset={onPreset} onToggleProvider={onToggleProvider} onSetProviderGroup={onSetProviderGroup} busy={policyBusy} /> : null}
-      {tab === "credentials" ? <CredentialPanel policies={keys} credentials={credentials} selected={selectedCredential} form={credentialForm} setForm={setCredentialForm} feedback={credentialFeedback} onIssue={onIssueCredential} onEdit={onEditCredential} onRevoke={onRevokeCredential} onRotate={onRotateCredential} onNew={onNewCredential} busy={busy || credentialFeedback.busy} /> : null}
-      {tab === "bindings" ? <BindingPanel policies={keys} bindings={bindings} selected={selectedBinding} form={bindingForm} setForm={setBindingForm} error={error} onSave={onSaveBinding} onEdit={onEditBinding} onNew={onNewBinding} busy={busy} /> : null}
-      {tab === "upstream" ? <UpstreamGrantPanel policies={keys} providers={providers} grants={upstreamGrants} selected={selectedUpstreamGrant} form={upstreamGrantForm} setForm={setUpstreamGrantForm} error={upstreamError} onSave={onSaveUpstreamGrant} onEdit={onEditUpstreamGrant} onNew={onNewUpstreamGrant} onRefresh={onRefreshUpstreamGrant} onRefreshQuota={onRefreshUpstreamGrantQuota} onAuthorize={onAuthorizeUpstreamGrant} onRevoke={onRevokeUpstreamGrant} ready={upstreamReady} busy={upstreamBusy} authorizationBusy={busy} /> : null}
-      {tab === "assignments" ? <AssignmentRulePanel policies={keys} rules={assignmentRules} selected={selectedAssignmentRule} form={assignmentRuleForm} setForm={setAssignmentRuleForm} error={error} onSave={onSaveAssignmentRule} onEdit={onEditAssignmentRule} onNew={onNewAssignmentRule} onReconcile={onReconcileAssignments} busy={busy} /> : null}
-      {tab === "fusion" ? <FusionPanel config={fusionConfig} readiness={fusionReadiness} policies={keys} policyId={fusionPolicyId} onSelectPolicy={onSelectFusionPolicy} setConfig={setFusionConfig} models={fusionModels} error={fusionError} onSave={onSaveFusion} onCheck={onCheckFusion} busy={busy} /> : null}
+      {resources.map(({ id }) => <div key={id} id={`${resourceId}-panel-${id}`} className="accessPanel" role="tabpanel" aria-labelledby={`${resourceId}-tab-${id}`} tabIndex={0} hidden={tab !== id}>
+        {tab === id ? <>
+          {id === "policies" ? <PolicyPanel keys={keys} selected={selected} providers={providers} form={form} setForm={setForm} error={policyError} dirty={policyDirty} missing={policyMissing} ready={policyReady} onDiscard={onDiscardPolicy} onSave={onSave} onNew={onNew} onEdit={onEdit} onRevoke={onRevoke} onPreset={onPreset} onToggleProvider={onToggleProvider} onSetProviderGroup={onSetProviderGroup} busy={policyBusy} /> : null}
+          {id === "credentials" ? <CredentialPanel policies={keys} credentials={credentials} selected={selectedCredential} form={credentialForm} setForm={setCredentialForm} feedback={credentialFeedback} onIssue={onIssueCredential} onEdit={onEditCredential} onRevoke={onRevokeCredential} onRotate={onRotateCredential} onNew={onNewCredential} busy={busy || credentialFeedback.busy} /> : null}
+          {id === "bindings" ? <BindingPanel policies={keys} bindings={bindings} selected={selectedBinding} form={bindingForm} setForm={setBindingForm} error={error} onSave={onSaveBinding} onEdit={onEditBinding} onNew={onNewBinding} busy={busy} /> : null}
+          {id === "upstream" ? <UpstreamGrantPanel policies={keys} providers={providers} grants={upstreamGrants} selected={selectedUpstreamGrant} form={upstreamGrantForm} setForm={setUpstreamGrantForm} error={upstreamError} onSave={onSaveUpstreamGrant} onEdit={onEditUpstreamGrant} onNew={onNewUpstreamGrant} onRefresh={onRefreshUpstreamGrant} onRefreshQuota={onRefreshUpstreamGrantQuota} onAuthorize={onAuthorizeUpstreamGrant} onRevoke={onRevokeUpstreamGrant} ready={upstreamReady} busy={upstreamBusy} authorizationBusy={busy} /> : null}
+          {id === "assignments" ? <AssignmentRulePanel policies={keys} rules={assignmentRules} selected={selectedAssignmentRule} form={assignmentRuleForm} setForm={setAssignmentRuleForm} error={error} onSave={onSaveAssignmentRule} onEdit={onEditAssignmentRule} onNew={onNewAssignmentRule} onReconcile={onReconcileAssignments} busy={busy} /> : null}
+          {id === "fusion" ? <FusionPanel config={fusionConfig} readiness={fusionReadiness} policies={keys} policyId={fusionPolicyId} onSelectPolicy={onSelectFusionPolicy} setConfig={setFusionConfig} models={fusionModels} error={fusionError} onSave={onSaveFusion} onCheck={onCheckFusion} busy={busy} /> : null}
+        </> : null}
+      </div>)}
     </div>
   );
+}
+
+function revealResourceTab(tabs: HTMLDivElement | null, active: HTMLElement | null) {
+  if (!tabs || !active) return;
+  // Scroll only the tablist horizontally; scrollIntoView also moves ancestors.
+  const left = tabs.getBoundingClientRect().left + tabs.clientLeft;
+  const right = left + tabs.clientWidth, bounds = active.getBoundingClientRect();
+  if (bounds.left < left) tabs.scrollLeft -= left - bounds.left;
+  else if (bounds.right > right) tabs.scrollLeft += bounds.right - right;
 }
 
 export function FusionPanel({ config, readiness, policies, policyId, onSelectPolicy, setConfig, models, error, onSave, onCheck, busy }: {

@@ -24,6 +24,10 @@ for (const surface of ["Catalog", "Users"] as const) {
     await policyLink(page, "policy_b").focus();
     await page.keyboard.press("Enter");
     await expect(page.getByRole("tab", { name: /^Policies/ })).toHaveAttribute("aria-selected", "true");
+    await page.getByRole("tabpanel", { name: /^Policies/ }).focus();
+    await page.keyboard.press("Shift+Tab");
+    await expect(page.getByRole("tab", { name: /^Policies/ })).toBeFocused();
+    await expect(page.getByRole("tablist").locator('[tabindex="0"]')).toHaveCount(1);
     await expect(policyId(page)).toHaveValue("policy_b");
     await expect(tenant(page)).toHaveValue("default");
 
