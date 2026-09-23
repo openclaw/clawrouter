@@ -1,4 +1,5 @@
-import { grantSupports, type GrantRequirement } from "./provider-auth.ts";
+import { HttpError } from "./utils.ts";
+import { assertOperationConfiguration, grantSupports, type GrantRequirement } from "./provider-auth.ts";
 import { authorityCall } from "./authority.ts";
 import { grantCoolingDown, grantQuotaRatio, grantRuntimeFresh } from "./grant-quota.ts";
 import type { AccessPolicyEntry, Env, GrantRoutingPolicy, GrantRuntimeState, UpstreamGrant } from "./types";
@@ -64,10 +65,28 @@ export function validCredentialBundle(value: UpstreamGrant["credentials"]): bool
   return value == null || (!Array.isArray(value) && typeof value === "object" && Object.entries(value).every(([name, secret]) => /^[A-Za-z0-9_.-]{1,128}$/.test(name) && typeof secret === "string" && secret.trim().length > 0));
 }
 
-export async function selectProviderPolicy(entries: AccessPolicyEntry[], providerId: string, tenantId: string, env: Env, requirement?: GrantRequirement): Promise<AccessPolicyEntry> {
+export interface GrantCandidates { available: SelectedGrant[]; hasConfiguredGrant: boolean }
+
+export function selectPolicyCandidates<T extends AccessPolicyEntry>(pools: Array<{ entry: T; candidates: GrantCandidates }>, requirement?: GrantRequirement): { entry: T; candidates: GrantCandidates } | undefined {
+  const compatible = pools.map(({ entry, candidates }) => ({
+    entry,
+    candidates: { ...candidates, available: candidates.available.filter(({ grant }) => !requirement || grantSupports(requirement, grant)) },
+  }));
+  // Policy order is decided by grant/transport availability, never affordability.
+  return compatible.find(({ candidates }) => candidates.available.length > 0) ?? compatible[0];
+}
+
+export async function policyGrantCandidates<T extends AccessPolicyEntry>(entry: T, providerId: string, env: Env, tokenRef = providerId) {
+  // Dispatch and ledgers have always used default for a policy without a tenant.
+  const candidates = await resolveGrantCandidates(providerId, entry.policyId, entry.policy.tenantId ?? "default", tokenRef, env, new Set(), entry.policy.grantRouting);
+  return { entry, candidates };
+}
+
+export async function selectProviderPolicy(entries: AccessPolicyEntry[], providerId: string, env: Env, requirement?: GrantRequirement): Promise<AccessPolicyEntry> {
+  const tokenRef = requirement?.provider.auth.schemes.find((scheme) => scheme.type === "oauth")?.tokenRef ?? providerId;
   for (const entry of entries) {
-    const tenant = entry.policy.tenantId ?? tenantId;
-    if ((await resolveGrantSelection(providerId, entry.policyId, tenant, providerId, env, new Set(), entry.policy.grantRouting, null, false, undefined, requirement)).selected) return entry;
+    const pool = await policyGrantCandidates(entry, providerId, env, tokenRef);
+    if (selectPolicyCandidates([pool], requirement)!.candidates.available.length) return entry;
   }
   return entries[0];
 }
@@ -83,6 +102,17 @@ export async function selectGrant(
   stickyHash: string | null = null,
 ): Promise<SelectedGrant | null> {
   return (await resolveGrantSelection(providerId, policyId, tenantId, defaultTokenRef, env, excludedKeys, routing, stickyHash)).selected;
+}
+
+export function activeOperationCandidates(available: SelectedGrant[], env: Env, requirement?: GrantRequirement): SelectedGrant[] {
+  // Qualification follows policy choice. Preserve the original pool-presence
+  // fact so an unusable configured pool cannot fall back to environment auth.
+  const configured = requirement ? available.filter(({ grant }) => {
+    try { assertOperationConfiguration(requirement, grant, env); return true; }
+    catch (error) { if (error instanceof HttpError) return false; throw error; }
+  }) : available;
+  const priority = configured.length ? Math.min(...configured.map(({ grant }) => grantPriority(grant))) : null;
+  return configured.filter(({ grant }) => grantPriority(grant) === priority);
 }
 
 export async function resolveGrantSelection(
@@ -101,8 +131,7 @@ export async function resolveGrantSelection(
   routing = grantRoutingPolicy(routing);
   const { available, hasConfiguredGrant } = await resolveGrantCandidates(providerId, policyId, tenantId, defaultTokenRef, env, excludedKeys, routing, pinnedKey, requirement);
   const nowMs = Date.now();
-  const activePriority = available.length ? Math.min(...available.map((entry) => grantPriority(entry.grant))) : null;
-  const active = activePriority === null ? [] : available.filter((entry) => grantPriority(entry.grant) === activePriority);
+  const active = activeOperationCandidates(available, env, requirement);
   let selected: SelectedGrant | null = null;
   if (active.length && !recordSelection) selected = active[0];
   else if (active.length) {
@@ -123,7 +152,7 @@ export async function resolveGrantCandidates(
   providerId: string, policyId: string, tenantId: string, defaultTokenRef: string, env: Env,
   excludedKeys: ReadonlySet<string> = new Set(), routing: GrantRoutingPolicy = DEFAULT_GRANT_ROUTING,
   pinnedKey?: string | null, requirement?: GrantRequirement,
-): Promise<{ available: SelectedGrant[]; hasConfiguredGrant: boolean }> {
+): Promise<GrantCandidates> {
   routing = grantRoutingPolicy(routing);
   const defaultKeys = [
     `oauth/${policyId}/${defaultTokenRef}`,

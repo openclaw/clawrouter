@@ -12,6 +12,7 @@ import type { CapturedSessionScope } from "./session-scope";
 import { installAutoRefresh } from "./auto-refresh";
 import { demo } from "./ui-config";
 import { oauthCallbackStatus, settled, usagePolicyId } from "./ui-helpers";
+import { demoClientCatalog } from "./demo-data";
 import { syntheticUsageTimeline } from "./usage-analytics";
 import type {
   AccessUser,
@@ -159,6 +160,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
         ? {
           session: sessionData,
           providers: sessionData.entitlements.providers,
+          catalog: sessionData.entitlements.catalog,
           contentRetention: sessionData.contentRetention ?? { enabled: false, retentionDays: 30, policyEnabled: false, userExempt: false },
         }
         : null;
@@ -282,6 +284,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
     };
     const entitlements: EntitlementsResponse = {
       session: { ...demo.session, ...user, auth: "demo", contentRetention },
+      catalog: demoClientCatalog(user.email),
       contentRetention,
       providers: demo.entitlements.providers.map((provider) => ({
         ...provider,

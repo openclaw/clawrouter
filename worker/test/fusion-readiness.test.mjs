@@ -1,8 +1,57 @@
+import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { fusionReadiness } from "../fusion-readiness.ts";
 import { buildAdviserBody, DEFAULT_FUSION_CONFIG } from "../fusion.ts";
 import { estimateModelCost } from "../pricing.ts";
+import { providerById } from "../providers.ts";
+import { fixture, policy } from "./credential-fixture.mjs";
+
+const { fusionReadiness, fusionCatalogReadiness } = await import("../fusion-readiness.ts");
+const { operationAffordability } = await import("../operation-budget.ts");
+
+test("Fusion catalog keeps adviser policy ledgers distinct while accounting for a shared provider", () => {
+  const config = { ...DEFAULT_FUSION_CONFIG, enabled: true, aggregatorModel: "fixture/final", adviserModels: ["fixture/adviser"] };
+  const auth = (policyId, principalId) => ({ authType: "access", credentialId: null, principalId, policyId, policy: { enabled: true, generation: "g1", tenantId: "default", budgetScope: "principal", monthlyBudgetMicros: 100, requestCostMicros: 7 } });
+  const endpoint = { id: "renamed_chat", request_format: "openai.chat_completions" };
+  const final = { auth: auth("first", "first@example.com"), providerId: "fixture", endpoint, model: { id: "fixture/final", pricing: null }, connection: { providerId: "fixture", monthlyBudgetMicros: null }, observation: { policyRemaining: 7, providerRemaining: null } };
+  const adviser = { ...final, auth: auth("second", "second@example.com"), model: { id: "fixture/adviser", pricing: null } };
+  const project = () => fusionCatalogReadiness(config, (body) => {
+    const selected = body.model === config.aggregatorModel ? final : adviser;
+    return { ...selected, body, availability: operationAffordability(selected.auth, selected.connection, selected.model, "llm.chat", endpoint.request_format, selected.observation) };
+  });
+  assert.equal(project().readyAdviserCount, 1);
+  assert.equal(project().offers[0].affordability, "exact-covered");
+  adviser.auth.policyId = "first";
+  assert.equal(project().readyAdviserCount, 1, "different principals retain separate policy balances");
+  adviser.auth.principalId = "first@example.com";
+  assert.equal(project().readyAdviserCount, 0, "same principal spends synthesis first");
+  adviser.auth = auth("second", "second@example.com");
+  for (const selected of [final, adviser]) {
+    selected.connection = { providerId: "fixture", monthlyBudgetMicros: 100 };
+    selected.observation = { policyRemaining: 7, providerRemaining: 7 };
+  }
+  assert.equal(project().readyAdviserCount, 0, "the provider ledger is shared across distinct policies");
+  assert.equal(project().offers[0].eligible, true, "adviser affordability never denies a funded synthesizer");
+});
+
+test("Fusion catalog applies canonical parameter assessment after exact selection", () => {
+  const config = { ...DEFAULT_FUSION_CONFIG, enabled: true, aggregatorModel: "fixture/final", adviserModels: ["fixture/adviser"] };
+  const endpoint = { id: "renamed_chat", request_format: "openai.chat_completions" };
+  let conflict = false;
+  const project = () => fusionCatalogReadiness(config, (body) => ({
+    providerId: "fixture", endpoint, model: { id: body.model, pricing: null, requestParameters: { renamed_chat: { temperature: "unsupported" } } },
+    auth: { authType: "proxy_key", credentialId: "fixture", principalId: null, policyId: "chosen", policy: { generation: "g2", requestCostMicros: 0 } },
+    connection: { providerId: "fixture" },
+    body: { ...body, ...(conflict && body.model === config.aggregatorModel ? { temperature: 1 } : {}) },
+    availability: { status: "exact-covered" },
+  }));
+  assert.equal(project().readyAdviserCount, 1);
+  conflict = true;
+  const blocked = project();
+  assert.equal(blocked.readyAdviserCount, 0);
+  assert.equal(blocked.offers[0].reasonCode, "model_parameter_unsupported");
+  assert.equal(blocked.offers[0].eligible, false);
+});
 
 const baseReadiness = {
   displayName: "Provider",
@@ -32,6 +81,44 @@ const routes = [
   { modelId: "local/qwen3:8b", providerId: "local-openai", providerDisplayName: "Local OpenAI-compatible", endpoint: { id: "chat_completions", request_format: "openai.chat_completions" }, model: { id: "local/qwen3:8b", upstream: "qwen3:8b", capabilities: ["llm.chat"], pricing_ref: null, pricing: null } },
   { modelId: "openai/gpt-4.1-mini", providerId: "openai", providerDisplayName: "OpenAI", endpoint: { id: "chat_completions", request_format: "openai.chat_completions" }, model: { id: "openai/gpt-4.1-mini", upstream: "gpt-4.1-mini", capabilities: ["llm.chat"], pricing_ref: null, pricing: null } },
 ];
+
+test("Fusion preflight uses request completeness for both budgets and preserves fixed zero", () => {
+  const provider = providerById("perplexity");
+  const model = provider.models.find((model) => model.id === "perplexity/sonar-pro");
+  const endpoint = provider.endpoints.find((endpoint) => endpoint.id === "chat_completions");
+  const config = { ...DEFAULT_FUSION_CONFIG, enabled: true, adviserModels: [model.id], aggregatorModel: model.id };
+  for (const [policyLimit, providerLimit, fixed, executable, basis] of [
+    [100_000_000, null, null, false, "unpriced_request"],
+    [null, 100_000_000, null, false, "unpriced_request"],
+    [null, null, null, true, "unpriced_request"],
+    [100_000_000, 100_000_000, 0, true, "policy_fixed"],
+  ]) {
+    const entry = { policyId: "request-fees", policy: { enabled: true, providers: [], monthlyBudgetMicros: policyLimit, requestCostMicros: fixed } };
+    const route = { modelId: model.id, providerId: provider.id, providerDisplayName: provider.display_name, endpoint, model, connection: { providerId: provider.id, enabled: true, monthlyBudgetMicros: providerLimit } };
+    const result = fusionReadiness(config, entry, [{ ...baseReadiness, id: provider.id }], [route], { configured: policyLimit != null, ledger: policyLimit == null ? "unmetered" : "durable_object", remainingMicros: policyLimit });
+    assert.equal(result.executable, executable);
+    assert.equal(result.advertisable, executable);
+    assert.ok(result.calls.every((call) => call.executable === executable && call.estimateBasis === basis));
+    if (!executable) assert.ok(result.calls.at(-1).reasons.some((reason) => /model request fees/.test(reason)));
+    if (executable && basis === "unpriced_request") assert.match(result.estimateNote, /unavailable/);
+  }
+});
+
+test("admin Fusion preview reads the stored provider limit and selected policy tariff", async (t) => {
+  const env = await fixture(t);
+  env.PERPLEXITY_API_KEY = "fixture-perplexity-key";
+  t.mock.method(globalThis, "fetch", () => { throw new Error("preview must not contact upstream"); });
+  const config = { ...DEFAULT_FUSION_CONFIG, enabled: true, adviserModels: ["perplexity/sonar-pro"], aggregatorModel: "perplexity/sonar-pro" };
+  for (const fixed of [null, 0]) {
+    assert.equal((await env.http("/v1/admin/policies/maintainer_access", "PUT", { ...policy, providers: ["perplexity"], monthlyBudgetMicros: null, requestCostMicros: fixed })).status, 200);
+    assert.equal((await env.http("/v1/admin/connections/perplexity", "PUT", { enabled: true, monthlyBudgetMicros: 100_000_000 })).status, 200);
+    const response = await env.http("/v1/admin/fusion/preview", "POST", { policyId: "maintainer_access", config });
+    assert.equal(response.status, 200);
+    const preview = await response.json();
+    assert.equal(preview.executable, fixed === 0);
+    assert.ok(preview.calls.every((call) => call.estimateBasis === (fixed === 0 ? "policy_fixed" : "unpriced_request")));
+  }
+});
 
 test("fusion readiness reports policy-scoped execution and exact fixed-price call envelope", () => {
   const config = { ...DEFAULT_FUSION_CONFIG, enabled: true, adviserModels: ["local/qwen3:8b", "openai/gpt-4.1-mini"] };
@@ -78,7 +165,8 @@ test("fusion readiness blocks deterministic pricing and budget failures before f
   assert.equal(readiness.executable, false);
   assert.equal(readiness.estimatedReservationMicros, 0);
   assert.ok(readiness.calls.at(-1).reasons.some((reason) => /manifest pricing/.test(reason)));
-  assert.ok(readiness.calls[0].reasons.some((reason) => /preflight prevents/.test(reason)));
+  assert.equal(readiness.calls[0].executable, false);
+  assert.ok(readiness.calls[0].reasons.some((reason) => /manifest pricing/.test(reason)));
 });
 
 test("fusion readiness allows zero-cost calls with an exhausted positive budget", () => {

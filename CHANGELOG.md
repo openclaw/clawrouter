@@ -14,6 +14,7 @@
 - Keep failed console refreshes visible after successful edits, label stale usage with its snapshot time, and show unavailable spend and balances as unknown.
 
 - Keep a grant's previous provider attachment until replacement credentials commit. Reserve active capacity as unselectable pending membership, allow paused imports into full active pools, retain inactive attachments, and recover partial publication through committed admission receipts and generation-checked owner reconciliation. Repeated revocation clears failed reconnect reservations. This storage upgrade requires forward recovery; environment-fallback activation and legacy attachment backfill remain separate work.
+- Reject incomplete prices for Sonar Pro mandatory request fees, hosted tools, remote MCP, multi-agent work, Claude compaction, and opaque prompt/cache configurations under measured budgets; cover Responses Lite and tool-search declarations, align catalog and Fusion preflight admission, preserve fixed tariffs and client tools, and mark unmetered costs unavailable.
 
 - Restrict personal usage audit events to the authenticated principal, or unattributed events for the authenticated service key, while preserving shared policy totals and administrator audit access.
 - Distinguish accounted cost estimates, fixed tariffs, unavailable prices, and budget reservations throughout the console; show zero amounts, budget scopes, and UTC monthly limits explicitly.
@@ -26,6 +27,10 @@
 - Add collision-safe proxy-key creation and active-key-only rotation. Serialize credential authorization, current-policy checks, and revocation in the authority so concurrent writes cannot restore an old secret or owner; preserve existing PUT and CLI upserts.
 
 - Preserve local administrator roles during user, policy-assignment, and automatic-assignment edits, including profile saves that race with an explicit role change.
+
+- Scope client model/operation offers to actual credentials and ordered session policies, with principal/provider budget observations, explicit unavailable reasons, and separate HTTP playground versus key-only native/WebSocket access. Match Access policy selection to the existing default dispatch tenant and reuse canonical runtime pricing and grant checks.
+- Emit a concrete HTTP Fusion catalog offer with the synthesizer's selected policy and generation, shared catalog types, and synthesis-first compound affordability while preserving fail-open advisers.
+- Reassess Fusion's final request against the retained budget limits and settle its current estimate without changing the original reservation receipts or held amount.
 
 - Publish a revision-bound provider snapshot from CI so code-only contributors can regenerate the catalog without a local dependency install.
 
