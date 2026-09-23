@@ -3,10 +3,11 @@ import type { AccessPolicy, AdminBootstrapResponse, UpstreamGrant } from "../src
 
 test("demo grants preserve credentials when paused and require a fresh secret after revoke", async ({ page }) => {
   await page.route("**/v1/**", (route) => route.fulfill({ status: 503, json: { error: { message: "Demo fixture" } } }));
-  const sessionRead = page.waitForResponse("**/v1/session");
   await page.goto("/dashboard/access?demo=1&resource=upstream");
-  await sessionRead;
-  await page.getByRole("button", { name: "New grant", exact: true }).click();
+  const newGrant = page.getByRole("button", { name: "New grant", exact: true });
+  await expect(newGrant).toBeVisible();
+  await expect(newGrant).toBeEnabled();
+  await newGrant.click();
   await page.getByRole("combobox", { name: "provider", exact: true }).selectOption("openai");
   await page.getByRole("textbox", { name: "token reference", exact: true }).fill("pause_fixture");
   await page.getByLabel("API key", { exact: true }).fill("demo-primary-fixture");
