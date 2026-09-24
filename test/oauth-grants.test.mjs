@@ -296,7 +296,6 @@ async function scriptFixture(context, active = true) {
     const pending = [];
     const response = await worker.fetch(request, env, { waitUntil: (promise) => pending.push(promise) });
     const body = await response.text();
-    responseBytes.push(Buffer.byteLength(body));
     await Promise.all(pending);
     return new Response(body, { status: response.status, headers: response.headers });
   }
@@ -315,8 +314,10 @@ async function scriptFixture(context, active = true) {
       const chunks = [];
       for await (const chunk of incoming) chunks.push(chunk);
       const response = await dispatch(new Request(`http://127.0.0.1${incoming.url}`, { method: incoming.method, headers: incoming.headers, ...(["GET", "HEAD"].includes(incoming.method) ? {} : { body: Buffer.concat(chunks) }) }));
+      const body = await response.text();
+      responseBytes.push(Buffer.byteLength(body));
       outgoing.writeHead(response.status, Object.fromEntries(response.headers));
-      outgoing.end(await response.text());
+      outgoing.end(body);
     } catch { outgoing.writeHead(500); outgoing.end('{"error":{"message":"fixture dispatch failed"}}'); }
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));
