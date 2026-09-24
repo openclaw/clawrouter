@@ -27,6 +27,7 @@ export function continuationAuthority(t) {
           async deleteAlarm() { fixture.scheduled = null; },
         };
         fixture.object = new PolicyBindingIndexObject({ storage });
+        fixture.restart = () => { fixture.object = new PolicyBindingIndexObject({ storage }); };
         objects.set(name, fixture);
       }
       return { async fetch(url, init) {

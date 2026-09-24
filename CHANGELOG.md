@@ -35,11 +35,13 @@
 
 - Correct Together GLM-5.2 input reservations to its published 1,048,575-token ceiling, preserving token rates and measured settlement while rejecting underfunded large requests before dispatch.
 - Verify durable usage visibility after each successful deployment smoke request with the same caller key and a bounded read-only poll. Preserve provider health and report ingestion visibility failures without repeating paid requests.
+- Allow the Cloudflare deploy workflow to select an OpenAI smoke model, including Astra, while an empty selection preserves the existing catalog default and single-request smoke.
 
 - Restrict personal usage audit events to the authenticated principal, or unattributed events for the authenticated service key, while preserving shared policy totals and administrator audit access.
 - Distinguish accounted cost estimates, fixed tariffs, unavailable prices, and budget reservations throughout the console; show zero amounts, budget scopes, and UTC monthly limits explicitly.
 - Keep public HTTP Responses continuations on the original credential owner across token refresh. Register response and Codex turn identities before publication, preserve ordinary pool failover, and require a visible restart when ownership changes or expires.
 - Preserve Codex turn state and response ownership across WebSocket reconnects and WebSocket-to-HTTP fallback. Register metadata before forwarding, retain per-create authorization, and bound pending publication without changing cancellation accounting.
+- Record bounded retained-tool evidence on Responses identities across HTTP and WebSockets, reject conflicting producers, and preserve unknown history without changing pricing or budget admission. Strict inherited-tool enforcement remains a separate rollout after producer deployment.
 
 - Preserve provider kill switches and budgets during concurrent connection edits, and show per-provider pending state in the console.
 
