@@ -13,6 +13,7 @@ export function presentCost(micros: number, basis: string | null | undefined, re
   switch (basis) {
     case "manifest_pricing": label = reservation ? "Token-based reservation estimate" : "Token-based estimate"; break;
     case "manifest_rate_upper_bound": label = "Token-based estimate (rate upper bound)"; break;
+    case "request_character_estimate": label = reservation ? "Input-byte reservation estimate" : "Request-character estimate"; break;
     case "policy_fixed": label = "Fixed policy tariff"; break;
     case "manifest_reservation": label = "Retained reservation estimate"; break;
     case "flat_fallback": label = "Fallback tariff"; break;

@@ -116,6 +116,9 @@ capabilities:
   - id: llm.embeddings
     endpoint: embeddings
     methods: [POST]
+  - id: audio.speech
+    endpoint: speech
+    methods: [POST]
 endpoints:
   responses:
     modelPassthrough: {}
@@ -138,6 +141,12 @@ endpoints:
     path: /v1/embeddings
     requestFormat: openai.embeddings
     responseFormat: openai.embeddings
+    timeoutMs: 120000
+  speech:
+    path: /v1/audio/speech
+    requestFormat: openai.audio_speech
+    responseFormat: audio.binary
+    streaming: audio
     timeoutMs: 120000
 models:
   entries:
@@ -666,6 +675,16 @@ models:
         maxInputTokens: 8192
         maxRequestInputTokens: 300000
         defaultMaxOutputTokens: 0
+    - id: openai/tts-1
+      upstream: tts-1
+      capabilities: [audio.speech]
+      pricingRef: openai-tts-1-characters-2026-09-24
+      pricing:
+        unit: character
+        effectiveAt: "2026-09-24"
+        source: https://developers.openai.com/api/docs/models/tts-1
+        inputMicrosPerMillionCharacters: 15000000
+        maxInputCharacters: 4096
 billing:
   meter: clawrouter.tokens
   dimensions: [provider, model, key, service, subject]

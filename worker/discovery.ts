@@ -56,7 +56,7 @@ export async function modelsResponse(request: Request, env: Env): Promise<Respon
   if (request.headers.has("anthropic-version")) {
     const data = snapshot.providers.flatMap((provider) => (inventory.get(provider.id)?.models ?? []).filter((model) => model.capabilities.includes("llm.messages")).map((model) => ({
       id: model.id, type: "model", display_name: `${provider.display_name} · ${model.id}`, created_at: "1970-01-01T00:00:00Z",
-      capabilities: null, max_input_tokens: model.pricing?.maxInputTokens ?? null, max_tokens: model.pricing?.defaultMaxOutputTokens ?? null,
+      capabilities: null, max_input_tokens: model.pricing?.unit === "character" ? null : model.pricing?.maxInputTokens ?? null, max_tokens: model.pricing?.unit === "character" ? null : model.pricing?.defaultMaxOutputTokens ?? null,
     })));
     return privateJson({ data, first_id: data[0]?.id ?? null, has_more: false, last_id: data.at(-1)?.id ?? null });
   }

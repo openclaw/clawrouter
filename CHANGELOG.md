@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add OpenAI `tts-1` speech through unified, native, and manifest routes. Reserve UTF-8 input bytes at the published character rate, settle completed binary audio from Unicode code points as a request estimate, and retain conservative reservations for incomplete or unqualified delivery. Request retention can include speech text; generated audio is never archived.
+
 - Update DeepSeek's dated peak-price cards, add canonical Flash and the documented vision alias, and retain exact upstream spellings and Pro. Label measured costs as published-rate upper bounds rather than invoice amounts; higher reservations can require a lower native `max_tokens` under unchanged budgets. Preserve fixed tariffs, missing-usage reservations, and prior ledger debt.
 
 - Reserve DeepSeek's full declared output bound unless a valid native `max_tokens` lowers it, including Fusion readiness. Existing measured requests can newly return HTTP 402 under unchanged budgets; lower the native cap within the remaining balance. Preserve prior spend and outstanding reservations, and normalize inclusive Chat cache hits without double-counting input or discounting conflicting counters.
