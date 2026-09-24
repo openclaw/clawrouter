@@ -1,4 +1,3 @@
-import React from "react";
 import type { GrantPoolRecoveryModel } from "../hooks/access/use-grant-pool-recovery";
 
 // Recovery must load independently: a corrupt legacy account can prevent the
