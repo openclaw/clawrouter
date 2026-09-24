@@ -25,7 +25,7 @@ export interface AdmittedResponse {
   payload: string;
   timeoutMs: number;
   connect(): Promise<ResponsesSocket>;
-  publish(identities: readonly ResponseIdentity[]): Promise<void>;
+  publish(identities: readonly ResponseIdentity[], frame: Frame): Promise<void>;
   settle(outcome: Outcome, terminal: Frame | null, sent: boolean, executionStarted: boolean): Promise<void>;
 }
 
@@ -235,11 +235,11 @@ export class ResponsesWebSocketSession {
       this.claim(op, outcome, event);
     }
     if (event.type === "error" && !lane && !op?.sent) { this.close("upstream_disconnect", 1000, data); return; }
-    this.publish(data, op?.sent ? op : undefined, identities);
+    this.publish(data, op?.sent ? op : undefined, identities, event);
     if (op?.ending) this.options.waitUntil(this.finish(op, op.ending.outcome, op.ending.terminal));
   }
 
-  private publish(data: string, op: Operation | undefined, identities: ResponseIdentity[]): void {
+  private publish(data: string, op: Operation | undefined, identities: ResponseIdentity[], event: Frame): void {
     const bytes = encoder.encode(data).byteLength;
     if (this.publishingCount >= this.limits.buffered || this.publishingBytes + bytes > this.limits.bufferedBytes || !this.reserveOutput(bytes)) {
       this.close("router_limit", 1009, OUTPUT_LIMIT_ERROR);
@@ -251,7 +251,7 @@ export class ResponsesWebSocketSession {
     // One bounded FIFO keeps metadata and every following wire frame ordered.
     const published = this.publication.then(async () => {
       if (this.ending) return;
-      if (op && identities.length) await op.admitted!.publish(identities);
+      if (op) await op.admitted!.publish(identities, event);
       if (!this.ending) this.send(data);
     }).catch(() => {
       this.close("router_error", 1011, { code: "continuation_unavailable", message: "Continuation ownership could not be recorded; restart with full input.", status: 503, lane: op?.lane });

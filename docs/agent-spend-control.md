@@ -101,6 +101,32 @@ rates and releases the unused reservation. Missing or malformed usage retains
 the reservation, as for other providers. The reservation is not an upstream
 invoice charge.
 
+Native Gemini `serviceTier` (or `service_tier`) selects Standard, Flex, or
+Priority pricing. Omitted, null, and `unspecified` select Standard; OpenAI's
+`default`, `auto`, and `fast` strings are not native Gemini aliases. Unknown or
+malformed tiers require a fixed tariff when either monthly budget is enabled;
+unmetered requests still forward.
+
+The September 23, 2026 [Gemini 3.5 Flash price snapshot](https://ai.google.dev/gemini-api/docs/pricing#gemini-3.5-flash)
+uses these USD rates per million tokens; the snapshot date does not claim an
+upstream price change:
+
+| Tier | Input | Cached input | Output, including thinking |
+| --- | ---: | ---: | ---: |
+| Standard | $1.50 | $0.15 | $9.00 |
+| Flex | $0.75 | $0.08 | $4.50 |
+| Priority | $2.70 | $0.27 | $16.20 |
+
+[Flex never upgrades automatically](https://ai.google.dev/gemini-api/docs/generate-content/flex-inference),
+so its reservation uses Flex rates. [Priority can downgrade to Standard](https://ai.google.dev/gemini-api/docs/generate-content/priority-inference),
+so its reservation covers both. Settlement uses the returned
+`usageMetadata.serviceTier` and `x-gemini-service-tier` header: one known source
+or matching sources establishes the tier; conflicting or invalid evidence
+retains the reservation. With neither source, Standard and Flex retain their
+documented service, while Priority retains its reservation. Tier headers do
+not supply missing token usage. Fixed tariffs and incomplete hosted-tool prices
+keep their existing accounting rules.
+
 Token rates alone do not always describe a complete request price. Sonar Pro has
 a [mandatory request fee](https://docs.perplexity.ai/docs/sonar/models/sonar-pro),
 including its default search mode. Its manifest retains the known token rates
@@ -238,7 +264,17 @@ Rates are integer micro-US-dollars per million tokens. Update `pricingRef` and
 the equivalent public API list price for governance; it is not an invoice for
 the subscription.
 
-Bundled dated pricing also covers Together Qwen 2.5 7B, DeepSeek V4 Flash,
+Together GLM-5.2 uses the [published 1,048,575-token context ceiling](https://docs.together.ai/docs/serverless/models)
+for input reservation and retains its [131,072-token output limit](https://www.together.ai/models/glm-52).
+The September 23, 2026 snapshot corrects the earlier 262,144-token ceiling;
+it does not mark a provider price change. Rates remain $1.40 input, $0.26 cached
+input, and $4.40 output per million tokens. A full-window input bound with a
+1,000-token output limit reserves **$1.472405** in each configured budget.
+Existing callers with less headroom receive HTTP 402 before dispatch. Complete
+reported usage settles at the same rates and releases unused capacity; this
+reservation is not an upstream invoice charge.
+
+Bundled dated pricing also covers Together GLM-5.2, DeepSeek V4 Flash,
 MiniMax M3, Google Gemini 2.5 Flash, Groq Llama 3.1 8B Instant, and xAI Grok
 4.3, including provider cache and long-context tiers where applicable.
 Dynamic catalogs such as OpenRouter and generic Hugging Face model routes stay

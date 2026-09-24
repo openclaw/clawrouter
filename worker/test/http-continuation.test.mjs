@@ -75,6 +75,44 @@ test("two-account HTTP requests pin response and turn identities while stateless
   assert.equal(f.sent[2].headers.get("chatgpt-account-id"), "synthetic-account-1");
 });
 
+async function toolEvidence(f, id) {
+  const key = await sha256Hex(JSON.stringify(["response", id]));
+  const row = f.bindings().flatMap(([, state]) => state.db.prepare("SELECT pricing_evidence_json FROM http_continuations WHERE binding_key = ?").all(key))[0];
+  return row?.pricing_evidence_json && JSON.parse(row.pricing_evidence_json);
+}
+
+for (const streaming of [false, true]) test(`${streaming ? "SSE" : "JSON"} response collision never publishes another producer's clean proof and retains both charges`, async t => {
+  const f = await fixture(t, false, { limit: 1_000_000, fixedCost: 7 });
+  const value = { object: "response", id: "collision", status: "completed", output: [], usage: { input_tokens: 1, output_tokens: 1 } };
+  f.response = () => streaming ? new Response(`data: ${JSON.stringify({ type: "response.created", response: { id: value.id } })}\n\ndata: ${JSON.stringify({ type: "response.completed", response: value })}\n\n`, { headers: { "content-type": "text/event-stream" } }) : Response.json(value);
+  await f.consume(await f.request({ stream: streaming }));
+  const before = await toolEvidence(f, "collision");
+  assert.equal(before.knowledge, "token_only");
+  const collision = await f.request({ stream: streaming, input: [{ type: "additional_tools", tools: [{ type: "web_search" }] }] });
+  const reader = collision.body.getReader();
+  await assert.rejects(reader.read(), error => error.code === "continuation_unavailable");
+  await f.drain();
+  assert.deepEqual(await toolEvidence(f, "collision"), before);
+  assert.equal(f.sent.length, 2); assert.equal(f.events.length, 2);
+  assert.equal(f.events[1].status, "provider_error"); assert.equal(f.events[1].actual_cost_micros, 7);
+  await assertBudgets(f, [7, 7]);
+});
+
+test("proof-only RPC failure preserves HTTP delivery, accounting and durable unknown ancestry", async t => {
+  const f = await fixture(t, false, { limit: 1_000_000, fixedCost: 7 });
+  f.env.ACCESS_CONTROL.beforeFetch = async (_name, request) => {
+    if (new URL(request.url).pathname === "/http-continuations" && (await request.clone().json()).action === "qualify") throw new Error("fixture qualification outage");
+  };
+  const first = await f.request();
+  assert.equal(first.status, 200); assert.equal(JSON.parse(await f.consume(first)).id, "resp_1");
+  assert.equal((await toolEvidence(f, "resp_1")).state, "pending");
+  f.env.ACCESS_CONTROL.beforeFetch = null;
+  await f.consume(await f.request({ previous_response_id: "resp_1" }));
+  assert.equal((await toolEvidence(f, "resp_2")).knowledge, "unknown");
+  assert.ok(f.events.every(event => event.status === "success" && event.actual_cost_micros === 7));
+  await assertBudgets(f, [7, 7]);
+});
+
 test("same-turn HTTP retries never fail over when the pinned upstream returns unavailable", async t => {
   const f = await fixture(t);
   f.response = () => Response.json({ object: "response", id: "resp_initial" }, { headers: { "x-codex-turn-state": "turn_initial" } });

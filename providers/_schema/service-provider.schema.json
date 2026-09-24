@@ -476,6 +476,16 @@
         "requestFormat": { "type": "string" },
         "responseFormat": { "type": "string" },
         "streaming": { "type": "string" },
+        "outputTokenLimit": {
+          "type": "object",
+          "required": ["field", "minimum", "maximum"],
+          "additionalProperties": false,
+          "properties": {
+            "field": { "enum": ["max_tokens", "max_completion_tokens", "max_output_tokens"] },
+            "minimum": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 },
+            "maximum": { "type": "integer", "minimum": 1, "maximum": 9007199254740991 }
+          }
+        },
         "modelPassthrough": {
           "type": "object",
           "additionalProperties": false,

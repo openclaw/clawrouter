@@ -275,6 +275,24 @@ export CLAWROUTER_SMOKE_LIVE_PROVIDERS=openai
 pnpm cf:smoke
 ```
 
+Each provider POST has a unique request ID. After recording its health result,
+the smoke uses the same key to poll `GET /v1/usage` for that request's successful
+event, matching provider and HTTP status. It reports the independent event ID
+only after observing the event in the caller's durable usage snapshot.
+Polling lasts at most 60 seconds **per successful provider**, with a two-second
+interval and a ten-second limit covering each fetch, body read, and disposal.
+This does not bound the existing provider POST or the entire smoke run.
+Authentication, redirects, unsupported endpoints, and malformed snapshots fail
+visibly; transient reads and missing events retry within that bound. A failed
+usage check preserves the provider health result and does not repeat the POST.
+All selected providers still run before failures are reported.
+
+The snapshot exposes only the latest 100 caller-visible events. A busy caller
+can evict a smoke event before inspection, so timeout means visibility is
+unconfirmed, not proof of data loss. Inspect usage and queue delivery before
+deciding on another paid request. This check proves event visibility, not budget
+settlement or the contents of the ingestion acknowledgment.
+
 Select more golden providers with a comma-separated list:
 
 ```sh
@@ -304,6 +322,20 @@ deploys remain possible. `all` runs every provider smoke target and requires a
 proxy smoke key with access to every selected provider. Readiness reports live
 checks as `verified`, `failed`, or `stale`; a configured provider without a live
 check is `unverified`.
+
+The deploy workflow's optional `openai_smoke_model` input selects the OpenAI
+smoke model. Leave it empty to use the first eligible catalog model, currently
+`openai/gpt-5.6`. Set `live_providers=openai` and
+`openai_smoke_model=openai/gpt-6-astra` to use Astra for that same single provider
+request. This does not reorder models or change keys or budgets. For a local
+smoke, the equivalent existing override is
+`CLAWROUTER_SMOKE_MODEL_OPENAI=openai/gpt-6-astra`.
+
+The Chat smoke keeps its small 16-token cap. The router maps it to
+`max_completion_tokens` for Astra, which includes reasoning tokens, so the
+request may produce no visible answer. A successful smoke proves the HTTP
+request and its durable usage-event visibility; it does not validate generated
+text, WebSockets, or native Codex behavior.
 
 ## Cloudflare Access Console
 

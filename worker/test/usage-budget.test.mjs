@@ -1,13 +1,12 @@
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
+import { proxyKey, sse, usageEnv } from "./usage-budget-fixture.mjs";
 import test from "node:test";
 
 
 const { default: handler } = await import("../index.ts");
 const { providerBudgetStatus, queue } = await import("../ledgers.ts");
-const keyMaterial = "abcdefgh";
-const keyDigest = await sha256(keyMaterial);
 
 for (const failure of ["retention", "provider"]) {
   test(`${failure} failure accounts the fixed tariff only after dispatch and preserves request attribution`, async (t) => {
@@ -85,30 +84,6 @@ test("failed dispatch confirmation never reaches upstream and releases both real
   }
 });
 
-function usageEnv(objectNames, { provider = "openai", limit = 100, providerLimit = limit, fixedCost = 1, retainContent = true, existingUnmetered = false } = {}) {
-  const policy = { enabled: true, generation: "policy_v1", providers: [provider], tenantId: "tenant", monthlyBudgetMicros: limit, requestCostMicros: fixedCost, budgetScope: "principal", retainRequestContent: retainContent };
-  // Existing stored policies can omit the optional limits; new policies use null.
-  if (existingUnmetered) { delete policy.monthlyBudgetMicros; delete policy.requestCostMicros; }
-  const credential = { enabled: true, ["sec" + "retSha256"]: keyDigest, policyId: "maintainer_access", policyGeneration: "policy_v1", principalId: "owner@example.com" };
-  const access = {
-    idFromName: (name) => name,
-    get: () => ({ fetch: async (url) => {
-      const path = new URL(url).pathname;
-      if (path === "/credentials/resolve") return Response.json({ initialized: true, credentials: [{ credentialId: "maintainer_key", credential }], missingCredentialIds: [] });
-      if (path === "/policies/resolve") return Response.json({ initialized: true, policies: [{ policyId: "maintainer_access", policy }], missingPolicyIds: [] });
-      if (path === "/users/resolve") return Response.json({ initialized: true, users: [], missingEmails: [] });
-      if (path === "/connections/resolve") return Response.json({ initialized: true, connections: [{ providerId: provider, enabled: true, monthlyBudgetMicros: providerLimit }], missingProviderIds: [] });
-      if (path === "/grant-pools/resolve") return Response.json({ keys: [], states: {} });
-      throw new Error(`unexpected authority path ${path}`);
-    } }),
-  };
-  const budget = { idFromName: (name) => name, get: (name) => ({ fetch: async () => { objectNames.push(name); return Response.json({ spentMicros: 10, remainingMicros: 90 }); } }) };
-  const emptyUsage = { ledger: "durable_object", summary: { requestCount: 0, successCount: 0, errorCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, actualCostMicros: 0 }, providers: [], daily: [], events: [] };
-  const usage = { idFromName: (name) => name, get: () => ({ fetch: async () => Response.json(emptyUsage) }) };
-  return { ACCESS_CONTROL: access, BUDGET_LEDGER: budget, USAGE_LEDGER: usage, POLICY_KV: { get: async (keys) => Array.isArray(keys) ? new Map() : null } };
-}
-
-function proxyKey() { return ["clawrouter", "live", `maintainer_key-${keyMaterial}`].join("-"); }
 
 test("Fusion settles the final body estimate while retaining both original reservation receipts", async (t) => {
   const { estimateCost } = await import("../proxy-accounting.ts");
@@ -119,7 +94,7 @@ test("Fusion settles the final body estimate while retaining both original reser
   const body = { model: "clawrouter/fusion", messages: [{ role: "user", content: "fixture" }], max_tokens: 32 };
   const route = modelRoute(config.aggregatorModel, "llm.chat");
   const prepared = concreteOpenAiSelection("/v1/chat/completions", buildAggregatorBody(body, config, buildFusionReservationProposals(config)), {});
-  const initial = estimateCost(route.model, prepared.body, null, "llm.chat", "openai.chat_completions");
+  const initial = estimateCost(route.model, prepared.body, null, "llm.chat", prepared.endpoint);
   const env = usageEnv([], { limit: 1_000_000, fixedCost: null, retainContent: false });
   env.OPENAI_API_KEY = "fixture-openai-key";
   env.POLICY_KV.get = async (key) => key === "config/fusion" ? config : Array.isArray(key) ? new Map() : null;
@@ -139,7 +114,7 @@ test("Fusion settles the final body estimate while retaining both original reser
   assert.equal(response.status, 200); await response.text();
   while (pending.length) await Promise.all(pending.splice(0));
   assert.deepEqual(bodies.map(({ model }) => model), ["gpt-4.1-mini", "gpt-6-astra"]);
-  const final = estimateCost(route.model, bodies[1], null, "llm.chat", "openai.chat_completions");
+  const final = estimateCost(route.model, bodies[1], null, "llm.chat", prepared.endpoint);
   assert.ok(final.reserveMicros < initial.reserveMicros);
   const event = events.find(({ compound_request_stage }) => compound_request_stage === "fusion_synthesizer");
   assert.equal(event.reserved_cost_micros, initial.reserveMicros);
@@ -167,13 +142,13 @@ test("reservation reuse reassesses a final pricing gap before admission and unme
     const events = [], pending = [], env = { BUDGET_LEDGER: sqlBudgetNamespace(t), USAGE_QUEUE: { send: async (event) => events.push(event) } };
     const auth = { policyId: "fixture", policy: { tenantId: "default", monthlyBudgetMicros: policyLimit }, credentialId: "fixture", authType: "proxy_key" };
     const connection = { providerId: "openai", monthlyBudgetMicros: providerLimit };
-    const initial = estimateCost(route.model, originalBody, null, "llm.chat", endpoint.request_format);
+    const initial = estimateCost(route.model, originalBody, null, "llm.chat", endpoint);
     const reservation = await reserveBudget(env, auth, "llm.chat", initial, connection);
     const originalReceipt = structuredClone(reservation);
     // Exercise the shared reuse boundary: monetary coverage cannot certify a
     // later request's completeness. Fusion's current builder preserves tools.
     const body = { ...originalBody, web_search_options: {} };
-    const final = estimateCost(route.model, body, null, "llm.chat", endpoint.request_format);
+    const final = estimateCost(route.model, body, null, "llm.chat", endpoint);
     assert.equal(final.basis, "unpriced_request");
     assert.equal(final.pricingGap, "hosted_tool_fee");
     assert.ok(final.reserveMicros <= initial.reserveMicros);
@@ -256,16 +231,11 @@ test(`${contentType} accounting preserves backpressure and settles on completion
 });
 }
 
-async function sha256(value) {
-  const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(value));
-  return [...new Uint8Array(digest)].map((byte) => byte.toString(16).padStart(2, "0")).join("");
-}
 
 const messageUsage = { input_tokens: 10, cache_read_input_tokens: 1_000, cache_creation_input_tokens: 3_000, cache_creation: { ephemeral_5m_input_tokens: 2_000, ephemeral_1h_input_tokens: 1_000 }, output_tokens: 20 };
 const messageStart = { type: "message_start", message: { type: "message", usage: { ...messageUsage, output_tokens: 1 } } };
 const messageDelta = { type: "message_delta", delta: { stop_reason: "end_turn" }, usage: { output_tokens: 20 } };
 const messageStop = { type: "message_stop" };
-const sse = (...events) => events.map((event) => `data: ${typeof event === "string" ? event : JSON.stringify(event)}\n\n`).join("");
 const earlyRefusal = { type: "message", content: [], stop_reason: "refusal", usage: { ...messageUsage, output_tokens: 0 } };
 
 for (const [name, body, contentType, measured, measuredCost = 4_710, outputTokens = 20] of [
@@ -319,6 +289,51 @@ for (const [name, body, contentType, measured, measuredCost = 4_710, outputToken
     assert.equal(upstream.mock.callCount(), expectedCost === 0 ? 2 : 1);
   });
 }
+
+test("Together full-context requests require headroom in both budgets and settle reported usage", async (t) => {
+  for (const [route, model] of [["/v1/chat/completions", "together/glm-5.2"], ["/v1/native/together/v1/chat/completions", "zai-org/GLM-5.2"]]) {
+    for (const [limit, providerLimit, denied] of [[500_000, 2_000_000, "budget_exhausted"], [2_000_000, 500_000, "provider_budget_exhausted"], [2_000_000, 2_000_000, null]]) {
+      const env = usageEnv([], { provider: "together", limit, providerLimit, fixedCost: null, retainContent: false });
+      env.TOGETHER_API_KEY = "fixture-together-key";
+      const ledger = sqlBudgetNamespace(t), events = [], pending = [];
+      env.BUDGET_LEDGER = ledger;
+      env.USAGE_QUEUE = { send: async event => events.push(event) };
+      // This fixture's reported usage fits the published window but exceeds the
+      // old 262,144-token reservation, which admitted it with only $0.50 left.
+      const usage = { prompt_tokens: 500_000, completion_tokens: 1_000, total_tokens: 501_000 };
+      const upstream = t.mock.method(globalThis, "fetch", async (url, init) => {
+        assert.equal(String(url), "https://api.together.xyz/v1/chat/completions");
+        assert.equal(JSON.parse(init.body).model, "zai-org/GLM-5.2");
+        if (!denied) for (const owner of ["tenant:maintainer_access:owner@example.com", "provider:together"]) {
+          const [reservation] = ledger.get(owner).reservations();
+          assert.equal(reservation.reserved_micros, 1_472_405);
+          assert.equal(reservation.dispatch_started, 1);
+        }
+        return Response.json({ usage });
+      });
+      const response = await handler.fetch(new Request(`https://clawrouter.example${route}`, {
+        method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
+        body: JSON.stringify({ model, messages: [{ role: "user", content: "x".repeat(1_100_000) }], max_tokens: 1_000 }),
+      }), env, { waitUntil: promise => pending.push(promise) });
+      assert.equal(response.status, denied ? 402 : 200);
+      if (denied) assert.equal((await response.json()).error.code, denied);
+      else assert.deepEqual(await response.json(), { usage });
+      await Promise.all(pending);
+      assert.equal(upstream.mock.callCount(), denied ? 0 : 1);
+      assert.equal(events.length, 1);
+      assert.equal(events[0].reserved_input_tokens, 1_048_575);
+      assert.equal(events[0].reserved_output_tokens, 1_000);
+      assert.equal(events[0].pricing_ref, "together-glm-5-2-standard-2026-09-23");
+      const cost = denied ? 0 : 704_400;
+      assert.equal(events[0].actual_cost_micros, cost);
+      if (!denied) assert.equal(events[0].cost_basis, "manifest_pricing");
+      const status = await handler.fetch(new Request("https://clawrouter.example/v1/usage", { headers: { authorization: `Bearer ${proxyKey()}` } }), env, {});
+      assert.equal((await status.json()).budget.spentMicros, cost);
+      assert.equal((await providerBudgetStatus(env, "together", providerLimit)).spentMicros, cost);
+      upstream.mock.restore();
+    }
+  }
+});
 
 const astraUsage = { input_tokens: 14, output_tokens: 8, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } };
 const largeResponsesOutput = [{ type: "message", content: [{ type: "output_text", text: "x".repeat(2 * 1024 * 1024 + 1024) }] }];
@@ -798,14 +813,14 @@ test("incomplete pricing preserves fixed tariffs, free counting, and known nonbi
   const { modelRoute } = await import("../providers.ts");
   const { correlateIngressRequest } = await import("../correlation.ts");
   const route = modelRoute("openai/gpt-6-astra"), body = { tools: [{ type: "web_search" }] };
-  assert.equal(estimateCost(route.model, body, 7, "llm.responses", "openai.responses").basis, "policy_fixed");
-  assert.equal(estimateCost(route.model, body, 0, "llm.responses", "openai.responses").basis, "policy_fixed");
-  assert.equal(estimateCost(route.model, body, null, "llm.count_tokens", "openai.responses").basis, "none");
+  assert.equal(estimateCost(route.model, body, 7, "llm.responses", { request_format: "openai.responses" }).basis, "policy_fixed");
+  assert.equal(estimateCost(route.model, body, 0, "llm.responses", { request_format: "openai.responses" }).basis, "policy_fixed");
+  assert.equal(estimateCost(route.model, body, null, "llm.count_tokens", { request_format: "openai.responses" }).basis, "none");
   for (const [format, request] of [["openai.responses", { multi_agent: { enabled: true } }], ["anthropic.messages", { compaction: { type: "summarize" } }], ["anthropic.messages", { context_management: { edits: [{ type: "compact_20260112" }] } }], ["google.generate_content", { tools: [{ mcpServers: [{}] }] }]]) {
-    assert.equal(estimateCost(route.model, request, 0, "llm.chat", format).basis, "policy_fixed");
-    assert.equal(estimateCost(route.model, request, 7, "llm.count_tokens", format).basis, "none");
+    assert.equal(estimateCost(route.model, request, 0, "llm.chat", { request_format: format }).basis, "policy_fixed");
+    assert.equal(estimateCost(route.model, request, 7, "llm.count_tokens", { request_format: format }).basis, "none");
   }
-  assert.equal(estimateCost(route.model, { tools: [{ type: "tool_search", execution: "client" }] }, null, "llm.responses", "openai.responses").basis, "manifest_pricing");
+  assert.equal(estimateCost(route.model, { tools: [{ type: "tool_search", execution: "client" }] }, null, "llm.responses", { request_format: "openai.responses" }).basis, "manifest_pricing");
   for (const [billable, tokens, dispatched, expected] of [[true, { billable: false }, null, "none"], [false, null, null, "none"], [true, null, null, "unpriced_usage"], [null, null, false, "none"], [null, null, true, "unpriced_usage"]]) {
     const events = [], pending = [];
     const owner = createProxyAccounting({ env: { USAGE_QUEUE: { send: async event => events.push(event) } }, context: { waitUntil: promise => pending.push(promise) }, auth: { policyId: "fixture", policy: {} }, selection: { ...route, endpoint: route.provider.endpoints.find(endpoint => endpoint.id === "responses"), body, capability: "llm.responses" }, request: correlateIngressRequest(new Request("https://router.example/v1/responses")).request });
@@ -832,16 +847,17 @@ test("Sonar mandatory fees and Gemini hosted work never settle at token-only pri
     env.BUDGET_LEDGER = sqlBudgetNamespace(t);
     env.USAGE_QUEUE = { send: async event => events.push(event) };
     const denied = fixedCost == null && (limit != null || providerLimit != null);
-    const result = google ? { candidates: [{ finishReason: "STOP" }], usageMetadata: { promptTokenCount: 27, toolUsePromptTokenCount: 10_309, candidatesTokenCount: 45, thoughtsTokenCount: 31, totalTokenCount: 10_412 } }
+    const result = google ? { candidates: [{ finishReason: "STOP" }], usageMetadata: { promptTokenCount: 27, toolUsePromptTokenCount: 10_309, candidatesTokenCount: 45, thoughtsTokenCount: 31, totalTokenCount: 10_412, serviceTier: "standard" } }
       : { choices: [{ finish_reason: "stop" }], usage: { prompt_tokens: 26, completion_tokens: 832, total_tokens: 858, cost: { total_cost: 0.019 } } };
     const wire = stream ? google ? sse(result) : sse(result, "[DONE]") : JSON.stringify(result);
     const upstream = t.mock.method(globalThis, "fetch", async (_url, init) => {
       for (const [key, value] of Object.entries(gapBody)) assert.deepEqual(JSON.parse(init.body)[key], value);
-      return new Response(wire, { headers: { "content-type": stream ? "text/event-stream" : "application/json" } });
+      if (google) assert.equal(JSON.parse(init.body).serviceTier, "priority");
+      return new Response(wire, { headers: { "content-type": stream ? "text/event-stream" : "application/json", ...(google ? { "x-gemini-service-tier": "standard" } : {}) } });
     });
     const endpoint = google ? stream ? "stream_generate_content" : "generate_content" : "chat_completions";
     const route = manifest ? `/v1/proxy/${provider}/${endpoint}` : google ? `/v1/native/google-gemini/v1beta/models/${model}:${stream ? "streamGenerateContent?alt=sse" : "generateContent"}` : "/v1/chat/completions";
-    const body = google ? { contents: [{ parts: [{ text: "fixture" }] }], generationConfig: { maxOutputTokens: 100 }, ...gapBody }
+    const body = google ? { contents: [{ parts: [{ text: "fixture" }] }], generationConfig: { maxOutputTokens: 100 }, serviceTier: "priority", ...gapBody }
       : { model: manifest ? model : `${provider}/${model}`, messages: [{ role: "user", content: "fixture" }], max_tokens: 1_000, stream };
     const response = await handler.fetch(new Request(`https://clawrouter.example${route}`, {
       method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
@@ -856,6 +872,11 @@ test("Sonar mandatory fees and Gemini hosted work never settle at token-only pri
     assert.equal(events[0].cost_basis, denied ? "none" : fixedCost == null ? "unpriced_usage" : "policy_fixed");
     assert.equal(events[0].actual_cost_micros, denied ? 0 : fixedCost ?? 0);
     if (!denied) assert.deepEqual([events[0].input_tokens, events[0].output_tokens, events[0].total_tokens], counts);
+    // A consistent Priority downgrade still cannot price hosted fees/work.
+    if (google) {
+      assert.equal(events[0].requested_service_tier, "priority");
+      assert.equal(events[0].served_service_tier, denied ? null : "standard");
+    }
     const usage = await handler.fetch(new Request("https://clawrouter.example/v1/usage", { headers: { authorization: `Bearer ${proxyKey()}` } }), env, {});
     assert.equal((await usage.json()).budget.spentMicros, limit == null ? null : denied ? 0 : fixedCost ?? 0);
     assert.equal((await providerBudgetStatus(env, provider, 100_000)).spentMicros, denied ? 0 : fixedCost ?? 0);
@@ -950,6 +971,69 @@ test("either budget rejects Gemini remote input before dispatch", async (t) => {
     assert.equal((await response.json()).error.code, limit == null ? "provider_budget_exhausted" : "budget_exhausted");
     await Promise.all(pending);
     assert.equal(upstream.mock.callCount(), 0);
+    upstream.mock.restore();
+  }
+});
+
+test("DeepSeek unified, native and manifest calls preserve wire limits and settle inclusive JSON/SSE cache usage in both budgets", async (t) => {
+  for (const route of ["/v1/chat/completions", "/v1/native/deepseek/chat/completions", "/v1/proxy/deepseek/chat_completions"]) for (const stream of [false, true]) {
+    const events = [], pending = [], limit = 1_000;
+    const env = usageEnv([], { provider: "deepseek", limit, fixedCost: null, retainContent: false });
+    env.DEEPSEEK_API_KEY = "fixture-deepseek-key";
+    env.BUDGET_LEDGER = sqlBudgetNamespace(t);
+    env.USAGE_QUEUE = { send: async event => events.push(event) };
+    const native = route.includes("/native/");
+    const body = { model: native ? "deepseek-v4-flash" : "deepseek/deepseek-v4-flash", messages: [{ role: "user", content: "fixture" }], max_tokens: 32, max_output_tokens: 1, stream };
+    const final = { object: stream ? "chat.completion.chunk" : "chat.completion", usage: { prompt_tokens: 1_000, completion_tokens: 20, prompt_cache_hit_tokens: 800, prompt_cache_miss_tokens: 200, prompt_tokens_details: {} } };
+    const wire = stream ? `${sse(final)}data: [DONE]\n\n` : JSON.stringify(final);
+    const upstream = t.mock.method(globalThis, "fetch", async (url, init) => {
+      assert.equal(new URL(url).pathname, "/chat/completions");
+      assert.deepEqual(JSON.parse(init.body), { ...body, model: "deepseek-v4-flash" });
+      return new Response(wire, { headers: { "content-type": stream ? "text/event-stream" : "application/json" } });
+    });
+    const response = await handler.fetch(new Request(`https://clawrouter.example${route}`, {
+      method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" },
+      body: JSON.stringify(route.includes("/proxy/") ? { body } : body),
+    }), env, { waitUntil: promise => pending.push(promise) });
+    assert.equal(response.status, 200);
+    assert.equal(await response.text(), wire);
+    await Promise.all(pending);
+    assert.equal(upstream.mock.callCount(), 1);
+    assert.equal(events.length, 1);
+    assert.equal(events[0].reserved_output_tokens, 32);
+    assert.deepEqual([events[0].input_tokens, events[0].output_tokens, events[0].cached_input_tokens], [1_000, 20, 800]);
+    assert.equal(events[0].actual_cost_micros, 36);
+    assert.equal(events[0].cost_basis, "manifest_pricing");
+    const usage = await handler.fetch(new Request("https://clawrouter.example/v1/usage", { headers: { authorization: `Bearer ${proxyKey()}` } }), env, {});
+    assert.equal((await usage.json()).budget.spentMicros, 36);
+    assert.equal((await providerBudgetStatus(env, "deepseek", limit)).spentMicros, 36);
+    upstream.mock.restore();
+  }
+});
+
+test("DeepSeek invalid limits reserve the full bound before either budget, while fixed zero preserves raw passthrough", async (t) => {
+  for (const [limit, providerLimit] of [[1_000, null], [null, 1_000]]) for (const fixedCost of [null, 0]) for (const max_tokens of [undefined, null, 0, -1, "32", 393_217]) {
+    const events = [], pending = [];
+    const env = usageEnv([], { provider: "deepseek", limit, providerLimit, fixedCost, retainContent: false });
+    env.DEEPSEEK_API_KEY = "fixture-deepseek-key";
+    env.BUDGET_LEDGER = sqlBudgetNamespace(t);
+    env.USAGE_QUEUE = { send: async event => events.push(event) };
+    const body = { model: "deepseek-v4-flash", messages: [], ...(max_tokens === undefined ? {} : { max_tokens }), max_output_tokens: 1 };
+    const upstream = t.mock.method(globalThis, "fetch", async (_url, init) => {
+      assert.deepEqual(JSON.parse(init.body), body);
+      return Response.json({ usage: { prompt_tokens: 10, completion_tokens: 1 } });
+    });
+    const response = await handler.fetch(new Request("https://clawrouter.example/v1/native/deepseek/chat/completions", {
+      method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" }, body: JSON.stringify(body),
+    }), env, { waitUntil: promise => pending.push(promise) });
+    assert.equal(response.status, fixedCost === 0 ? 200 : 402);
+    if (fixedCost == null) assert.equal((await response.json()).error.code, limit == null ? "provider_budget_exhausted" : "budget_exhausted");
+    else await response.text();
+    await Promise.all(pending);
+    assert.equal(upstream.mock.callCount(), fixedCost === 0 ? 1 : 0);
+    assert.equal(events[0].actual_cost_micros, 0);
+    if (fixedCost === 0) assert.equal(events[0].cost_basis, "policy_fixed");
+    else assert.equal(events[0].reserved_output_tokens, 393_216);
     upstream.mock.restore();
   }
 });

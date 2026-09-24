@@ -1,5 +1,5 @@
-import type { ModelPricing, ServiceTierPricing, TokenRates } from "./types";
-import { googleField, googleInt32 } from "./google-protocol.ts";
+import type { CompiledEndpoint, ModelPricing, ServiceTierPricing, TokenRates } from "./types";
+import { googleField, googleInt32, googleRequestServiceTier, googleServiceTier } from "./google-protocol.ts";
 
 export interface CostEstimate {
   reserveMicros: number;
@@ -9,7 +9,7 @@ export interface CostEstimate {
 }
 
 export interface PricedTokens {
-  serviceTier?: string;
+  serviceTier?: string | null;
   billable?: false;
   input: number | null;
   output: number | null;
@@ -82,8 +82,10 @@ export function hostedToolPricingGap(tools: readonly unknown[], requestFormat: s
   return usageGap ? "hosted_tool_usage" : null;
 }
 
-export function estimateModelCost(pricing: ModelPricing, body: Record<string, unknown>, requestFormat?: string): CostEstimate {
-  const google = requestFormat === "google.generate_content";
+export type PricingEndpoint = Pick<CompiledEndpoint, "request_format" | "outputTokenLimit">;
+
+export function estimateModelCost(pricing: ModelPricing, body: Record<string, unknown>, endpoint?: PricingEndpoint): CostEstimate {
+  const google = endpoint?.request_format === "google.generate_content";
   const bytes = new TextEncoder().encode(JSON.stringify(body)).byteLength;
   const inputLimit = pricing.maxRequestInputTokens ?? pricing.maxInputTokens;
   const inputTokens = (google ? googleHasUnboundedInput(body) : requestHasUnboundedInput(body))
@@ -96,8 +98,14 @@ export function estimateModelCost(pricing: ModelPricing, body: Record<string, un
     .map(nonNegativeInteger)
     .filter((value): value is number => value != null);
   const choices = Math.max(1, (google ? googleInt32(googleField(config, "candidateCount", "candidate_count")) : nonNegativeInteger(body.n)) ?? 1);
-  const outputTokens = saturatingMultiply(requestedOutput.length ? Math.max(...requestedOutput) : pricing.defaultMaxOutputTokens, choices);
-  const rates = resolveRates(pricing, inputTokens, body.service_tier, true);
+  const limit = endpoint?.outputTokenLimit;
+  const declaredOutput = limit ? nonNegativeInteger(body[limit.field]) : null;
+  // Undocumented aliases and malformed/omitted limits cannot lower a declared
+  // endpoint bound. This qualifies the estimate; the upstream body is unchanged.
+  const output = limit ? declaredOutput != null && declaredOutput >= limit.minimum && declaredOutput <= limit.maximum ? declaredOutput : limit.maximum
+    : requestedOutput.length ? Math.max(...requestedOutput) : pricing.defaultMaxOutputTokens;
+  const outputTokens = saturatingMultiply(output, choices);
+  const rates = resolveRates(pricing, inputTokens, google ? googleRequestServiceTier(body) : body.service_tier, true, google);
   if (!rates) return { reserveMicros: 0, inputTokens, outputTokens, pricingAvailable: false };
   const inputRate = reservationInputRate(body, rates);
   return {
@@ -116,10 +124,10 @@ export function modelReservationBounds(pricing: ModelPricing): { minimumMicros: 
   return { minimumMicros: rates.every((rate) => reservationInputRate({}, rate) > 0) ? 1 : 0, zero };
 }
 
-export function actualModelCost(pricing: ModelPricing, tokens: PricedTokens): number | null {
+export function actualModelCost(pricing: ModelPricing, tokens: PricedTokens, requestFormat?: string): number | null {
   if (tokens.billable === false) return 0;
   if (tokens.input == null) return null;
-  const rates = resolveRates(pricing, tokens.input, tokens.serviceTier, false);
+  const rates = resolveRates(pricing, tokens.input, tokens.serviceTier, false, requestFormat === "google.generate_content");
   if (!rates) return null;
   if (tokens.output == null && rates.output > 0) return null;
   if (rates.cacheWriteInput != null && tokens.cacheWrite == null) return null;
@@ -142,15 +150,20 @@ export function actualModelCost(pricing: ModelPricing, tokens: PricedTokens): nu
 }
 
 // Requested tiers choose admission bounds; only the served tier can choose a
-// settlement price. Omitted/auto requests can inherit an upstream paid default.
-function resolveRates(pricing: ModelPricing, inputTokens: number, tier: unknown, reserve: boolean): Rates | null {
+// settlement price. OpenAI omitted/auto requests can inherit a paid default;
+// native Gemini defaults to Standard and never upgrades Flex.
+function resolveRates(pricing: ModelPricing, inputTokens: number, tier: unknown, reserve: boolean, google = false): Rates | null {
+  if (google) {
+    tier = googleServiceTier(tier);
+    if (tier == null) return null;
+  }
   const tiers = pricing.serviceTiers;
-  if (!tiers?.length) return contextRates(pricing, inputTokens, reserve);
+  if (!tiers?.length) return !google || tier === "standard" ? contextRates(pricing, inputTokens, reserve) : null;
   const selected = tiers.find((card) => card.id === tier || card.aliases.includes(tier as string));
   if (!reserve) return selected && (selected.maxInputTokens == null || inputTokens <= selected.maxInputTokens)
     ? contextRates(selected, inputTokens, false) : null;
   if (tier != null && tier !== "auto" && !selected) return null;
-  const candidates = selected ? tiers.filter((card) => card === selected || card.id === "default") : tiers;
+  const candidates = selected ? tiers.filter((card) => card === selected || ((!google || tier === "priority") && card.id === "default")) : tiers;
   // A byte upper bound may cross a tier's published context limit while actual
   // tokens do not. Its short rates must remain in the admission envelope.
   return candidates.map((card) => contextRates(card, Math.min(inputTokens, card.maxInputTokens ?? inputTokens), true)).reduce(maxRates);

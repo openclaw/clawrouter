@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Reserve DeepSeek's full declared output bound unless a valid native `max_tokens` lowers it, including Fusion readiness. Existing measured requests can newly return HTTP 402 under unchanged budgets; lower the native cap within the remaining balance. Preserve prior spend and outstanding reservations, and normalize inclusive Chat cache hits without double-counting input or discounting conflicting counters.
+
+- Price Gemini native Standard, Flex, and Priority tiers using their published cards, preserve Flex's lower reservation, and settle Priority downgrades from consistent returned tier evidence.
+
 - Keep retained-request inspection on the latest selection, cancel replaced or closed reads, and prevent late replies from reopening or overwriting the panel.
 - Record known no-charge outcomes with an explicit usage basis across HTTP and WebSockets, while preserving fixed tariffs, retained estimates, unavailable prices, and all budget amounts.
 - Add explicit Codex Desktop root setup with coherent restoration of prior routing settings, preserved authentication and user preferences, and clear API-key Fast and environment-loading limits.
@@ -27,10 +31,15 @@
 
 - Reject incomplete prices for Sonar Pro mandatory request fees, hosted tools, remote MCP, multi-agent work, Claude compaction, and opaque prompt/cache configurations under measured budgets; cover Responses Lite and tool-search declarations, align catalog and Fusion preflight admission, preserve fixed tariffs and client tools, and mark unmetered costs unavailable.
 
+- Correct Together GLM-5.2 input reservations to its published 1,048,575-token ceiling, preserving token rates and measured settlement while rejecting underfunded large requests before dispatch.
+- Verify durable usage visibility after each successful deployment smoke request with the same caller key and a bounded read-only poll. Preserve provider health and report ingestion visibility failures without repeating paid requests.
+- Allow the Cloudflare deploy workflow to select an OpenAI smoke model, including Astra, while an empty selection preserves the existing catalog default and single-request smoke.
+
 - Restrict personal usage audit events to the authenticated principal, or unattributed events for the authenticated service key, while preserving shared policy totals and administrator audit access.
 - Distinguish accounted cost estimates, fixed tariffs, unavailable prices, and budget reservations throughout the console; show zero amounts, budget scopes, and UTC monthly limits explicitly.
 - Keep public HTTP Responses continuations on the original credential owner across token refresh. Register response and Codex turn identities before publication, preserve ordinary pool failover, and require a visible restart when ownership changes or expires.
 - Preserve Codex turn state and response ownership across WebSocket reconnects and WebSocket-to-HTTP fallback. Register metadata before forwarding, retain per-create authorization, and bound pending publication without changing cancellation accounting.
+- Record bounded retained-tool evidence on Responses identities across HTTP and WebSockets, reject conflicting producers, and preserve unknown history without changing pricing or budget admission. Strict inherited-tool enforcement remains a separate rollout after producer deployment.
 
 - Preserve provider kill switches and budgets during concurrent connection edits, and show per-provider pending state in the console.
 

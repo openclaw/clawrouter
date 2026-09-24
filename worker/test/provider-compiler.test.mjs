@@ -14,6 +14,20 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.deepEqual(compiled, generated);
   assert.equal(compiled.providers.length, 22);
   assert.equal(compiled.model_index["lanseq/qwen3.8-27b-int4"].provider, "lanseq");
+  const gemini = compiled.model_index["google/gemini-3.5-flash"];
+  assert.equal(gemini.pricing_ref, "google-gemini-3-5-flash-tiers-2026-09-23");
+  assert.equal(gemini.pricing.effectiveAt, "2026-09-23");
+  assert.deepEqual(gemini.pricing.serviceTiers.map(({ id, aliases, inputMicrosPerMillion, cachedInputMicrosPerMillion, outputMicrosPerMillion }) => [id, aliases, inputMicrosPerMillion, cachedInputMicrosPerMillion, outputMicrosPerMillion]), [
+    ["default", ["standard"], 1_500_000, 150_000, 9_000_000],
+    ["flex", [], 750_000, 80_000, 4_500_000],
+    ["priority", [], 2_700_000, 270_000, 16_200_000],
+  ]);
+  const together = compiled.model_index["together/glm-5.2"];
+  assert.equal(together.pricing_ref, "together-glm-5-2-standard-2026-09-23");
+  assert.equal(together.pricing.effectiveAt, "2026-09-23");
+  assert.equal(together.pricing.maxInputTokens, 1_048_575);
+  assert.equal(together.pricing.defaultMaxOutputTokens, 131_072);
+  assert.deepEqual([together.pricing.inputMicrosPerMillion, together.pricing.cachedInputMicrosPerMillion, together.pricing.outputMicrosPerMillion], [1_400_000, 260_000, 4_400_000]);
   assert.equal(compiled.model_index["openai/gpt-5.6"].provider, "openai");
   assert.equal(compiled.model_index["anthropic/claude-opus-4-8"].provider, "anthropic");
   assert.deepEqual(compiled.providers.find((provider) => provider.id === "aws-bedrock").optional_config_keys, ["AWS_SESSION_TOKEN"]);
@@ -109,6 +123,28 @@ test("provider schema bounds reasoning efforts to canonical wire values", () => 
     minItems: 1,
     maxItems: 7,
     uniqueItems: true,
+  });
+});
+
+test("endpoint output limits compile with closed, finite field and integer range contracts", () => {
+  const valid = parse(readFileSync("providers/deepseek.provider.yaml", "utf8"));
+  const expected = { field: "max_tokens", minimum: 1, maximum: 393_216 };
+  withManifest((path) => {
+    writeFileSync(path, JSON.stringify(valid));
+    const compiled = JSON.parse(compile(path)).providers[0];
+    assert.deepEqual(compiled.endpoints[0].outputTokenLimit, expected);
+    assert.ok(compiled.models.every(model => model.pricing.maxInputTokens === 1_048_576 && model.pricing.defaultMaxOutputTokens === expected.maximum));
+    for (const limit of [
+      {}, null, { ...expected, field: "custom_limit" }, { ...expected, path: "/max_tokens" },
+      { ...expected, minimum: 0 }, { ...expected, maximum: 0 },
+      { ...expected, minimum: 1.5 }, { ...expected, maximum: "393216" },
+      { ...expected, maximum: Number.MAX_SAFE_INTEGER + 1 }, { ...expected, minimum: expected.maximum + 1 },
+    ]) {
+      const manifest = structuredClone(valid);
+      manifest.endpoints.chat_completions.outputTokenLimit = limit;
+      writeFileSync(path, JSON.stringify(manifest));
+      assert.throws(() => compile(path), /outputTokenLimit/);
+    }
   });
 });
 

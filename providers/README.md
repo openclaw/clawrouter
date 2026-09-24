@@ -116,10 +116,14 @@ billing:
 - `pricing.serviceTiers` declares complete rate cards with unique wire `id`s,
   optional `aliases`, optional `longContext`, and an optional `maxInputTokens`
   price-applicability limit. Include a `default` card identical to the root
-  pricing; the compiler rejects drift. Omitted/auto requests reserve all known
+  pricing; the compiler rejects drift. OpenAI omitted/auto requests reserve all known
   possible rates, while settlement requires the served tier. Unpublished tiers
   or contexts never silently use Standard rates.
-  Models without this contract retain their provider's existing pricing behavior;
+  Native Gemini uses `standard` as an alias of the default card, defaults omitted
+  requests to Standard, reserves Flex without a Standard upgrade, and allows
+  Priority to downgrade to Standard. Undeclared native tiers are unpriced;
+  a root-only Gemini card prices Standard only.
+  Other models without this contract retain their provider's existing pricing behavior;
   the Worker does not reinterpret another provider's tier parameter as OpenAI's.
 - `models.entries[].supportedReasoningEfforts` advertises the model's exact
   provider-native OpenAI-compatible wire efforts. Values are unique and limited
@@ -148,6 +152,22 @@ billing:
 - `endpoints.*.websocket: openai.responses` explicitly qualifies a native
   POST Responses/SSE endpoint for the Worker WebSocket bridge. Other endpoints
   and alternate grant transports do not gain WebSocket support implicitly.
+- `endpoints.*.outputTokenLimit` qualifies budget estimates with a declared
+  `field` (`max_tokens`, `max_completion_tokens`, or `max_output_tokens`) and
+  positive integer `minimum`/`maximum`. Only an in-range integer in that field
+  lowers the output reservation; omitted, invalid, and alias-only limits reserve
+  the maximum. This neither rejects nor rewrites the forwarded request.
+  DeepSeek uses `max_tokens: 1..393216` and a 1,048,576-token input envelope,
+  following its [Chat contract](https://api-docs.deepseek.com/api/create-chat-completion/)
+  and [published context limit](https://api-docs.deepseek.com/quick_start/agent_integrations/crush/).
+  Existing measured DeepSeek requests can now return HTTP 402 under unchanged
+  policy or provider budgets: zero, invalid, and alias-only limits no longer
+  reduce reservations, and the larger default bound can exceed a near-limit
+  balance. This is an intentional hard-budget correction. Existing spend and
+  outstanding reservations remain charged. Set a valid native `max_tokens`
+  within `1..393216` to lower the reservation; the request still needs enough
+  remaining balance in both configured budgets. Input and output share the
+  context, so the input envelope does not guarantee upstream acceptance.
 
 ## Upgrading custom manifests
 

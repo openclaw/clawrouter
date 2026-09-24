@@ -10,7 +10,7 @@ export interface FusionReadinessRoute {
   modelId: string;
   providerId: string;
   providerDisplayName: string;
-  endpoint: Pick<CompiledEndpoint, "id" | "request_format">;
+  endpoint: Pick<CompiledEndpoint, "id" | "request_format" | "outputTokenLimit">;
   connection?: ProviderConnection;
   model: CompiledModel;
 }
@@ -120,7 +120,7 @@ function readinessCall(stage: FusionReadinessCall["stage"], index: number | null
     ...parameters.unknown.map(({ message }) => message),
     ...(stage === "adviser" && !("temperature" in body) ? ["Adviser temperature preference omitted; using the provider default because support is unknown or restricted."] : []),
   ];
-  const cost = estimateCost(route.model, body, entry.policy.requestCostMicros, "llm.chat", route.endpoint.request_format);
+  const cost = estimateCost(route.model, body, entry.policy.requestCostMicros, "llm.chat", route.endpoint);
   const call: FusionReadinessCall = {
     stage,
     index,

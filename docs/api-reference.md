@@ -152,6 +152,15 @@ are limited to 256 UTF-8 bytes and turn state to 8 KiB. Output/frame size is not
 limited by HTTP identity observation, and raw identities and model output are not
 stored in this index.
 
+The router records bounded retained-tool evidence on response identities for a
+future pricing consumer. This does not change current pricing or admission, and
+does not claim complete inherited-tool enforcement. Unknown, legacy, and opaque
+history remain unqualified. Reusing a response identity belonging to another
+producer fails publication with `continuation_unavailable`; resend full input.
+This also applies to older claim-less writers encountering qualified-producer
+rows. Transient proof-finalization failure after a confirmed identity claim can
+preserve delivery and accounting while leaving evidence unqualified.
+
 This contract covers `previous_response_id` and Codex turn state. Responses
 `conversation` selectors remain an unpinned, separate contract gap; do not rely on
 pooled account affinity for them. WebSockets also use the connection contract below.

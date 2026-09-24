@@ -1,6 +1,7 @@
 import { emptyReservation, finalizeAccounting, type BudgetReservation, type EstimatedCost } from "./accounting";
 import { correlationMetadata } from "./correlation";
-import { actualModelCost, estimateModelCost, requestPricingGap } from "./pricing";
+import { googleField, googleRequestServiceTier, googleResponseServiceTier, googleServiceTier } from "./google-protocol.ts";
+import { actualModelCost, estimateModelCost, requestPricingGap, type PricingEndpoint } from "./pricing";
 import type { ProxySelection } from "./proxy-selection";
 import type { ObservedUsage } from "./proxy-response";
 import { extractServiceTier, type UsageTokens } from "./token-usage";
@@ -27,10 +28,13 @@ interface AccountingContext {
 
 export function createProxyAccounting(options: AccountingContext) {
   const { env, context, auth, selection, request, compound } = options;
-  const cost = options.cost ?? estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability, selection.endpoint.request_format);
+  const cost = options.cost ?? estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability, selection.endpoint);
   const unpricedRequest = cost.pricingGap != null;
   const providerId = selection.provider.id, model = selection.model, capability = selection.capability;
-  const requestedTier = extractServiceTier(Array.isArray(selection.body) ? null : selection.body) ?? null;
+  const google = selection.endpoint.request_format === "google.generate_content";
+  const requestedTier = google ? googleServiceTier(googleField(selection.body, "serviceTier", "service_tier"))
+    : extractServiceTier(Array.isArray(selection.body) ? null : selection.body) ?? null;
+  let responseTier: string | null | undefined;
   const correlation = correlationMetadata(request);
   const requestId = correlation.requestId;
   const started = Date.now();
@@ -50,14 +54,14 @@ export function createProxyAccounting(options: AccountingContext) {
       reserved_cost_micros: reservation.reservedMicros, actual_cost_micros: actual, reserved_input_tokens: cost.inputTokens,
       reserved_output_tokens: cost.outputTokens, pricing_ref: model?.pricing_ref ?? null,
       pricing_effective_at: model?.pricing?.effectiveAt ?? null, cost_basis: basis, status_code: statusCode,
-      requested_service_tier: requestedTier, served_service_tier: tokens?.serviceTier ?? null,
+      requested_service_tier: requestedTier, served_service_tier: responseTier === undefined ? tokens?.serviceTier ?? null : responseTier,
       duration_ms: Date.now() - started, content_retained: !!contentRef, content_ref: contentRef, status,
     };
     return finalizeAccounting(env, reservation, actual, event);
   }
   function settle(statusCode: UsageEvent["status_code"], status: UsageEvent["status"], billable: boolean, tokens: UsageTokens | null, reservation: BudgetReservation, contentRef: string | null) {
     // Token totals and a served tier cannot resolve omitted fees or hosted work.
-    const measured = tokens && !unpricedRequest ? actualCost(model, tokens, auth.policy.requestCostMicros) : null;
+    const measured = tokens && !unpricedRequest ? actualCost(model, tokens, auth.policy.requestCostMicros, selection.endpoint.request_format) : null;
     const actual = billable ? measured ?? cost.reserveMicros : 0;
     // Proven nonbillable work is distinct from missing prices or zero tariffs.
     // Keep explicit fixed prices and the fallback's existing charged contract.
@@ -78,29 +82,31 @@ export function createProxyAccounting(options: AccountingContext) {
       context.waitUntil(settle(statusCode, status, dispatched, null, reservation, contentRef));
     },
     complete(response: Response, observed: ObservedUsage, reservation: BudgetReservation, contentRef: string | null, termination?: UsageEvent["status"]) {
+      if (google) responseTier = googleResponseServiceTier(googleRequestServiceTier(selection.body), observed.tokens?.serviceTier, response.headers.get("x-gemini-service-tier"));
+      const tokens = google && observed.tokens ? { ...observed.tokens, serviceTier: responseTier } : observed.tokens;
       const status = termination ?? (!response.ok ? response.status < 500 ? "client_error" : "provider_error" : observed.outcome ?? "success");
       // Protocol/delivery failure does not undo dispatched billable work. Keep
       // the actual HTTP status and any authoritative terminal usage separately.
-      return settle(response.status, status, response.ok, observed.tokens, reservation, contentRef);
+      return settle(response.status, status, response.ok, tokens, reservation, contentRef);
     },
   };
 }
 
-export function estimateCost(model: CompiledModel | null, body: ProxyRequestBody, fixed: number | null | undefined, capability: string, requestFormat: string): EstimatedCost {
+export function estimateCost(model: CompiledModel | null, body: ProxyRequestBody, fixed: number | null | undefined, capability: string, endpoint: PricingEndpoint): EstimatedCost {
   if (capability === "llm.count_tokens") return { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 };
   if (fixed != null) return { reserveMicros: fixed, basis: "policy_fixed", inputTokens: null, outputTokens: null };
   if (Array.isArray(body)) return { reserveMicros: 1, basis: "flat_fallback", inputTokens: null, outputTokens: null };
   const pricing = model?.pricing;
-  const pricingGap = requestPricingGap(pricing, body, requestFormat);
+  const pricingGap = requestPricingGap(pricing, body, endpoint.request_format);
   if (pricingGap) return { reserveMicros: 0, basis: "unpriced_request", pricingGap, inputTokens: null, outputTokens: null };
   if (!pricing) return { reserveMicros: 1, basis: "flat_fallback", inputTokens: null, outputTokens: null };
-  const estimate = estimateModelCost(pricing, body, requestFormat);
+  const estimate = estimateModelCost(pricing, body, endpoint);
   return { reserveMicros: estimate.reserveMicros, basis: estimate.pricingAvailable === false ? "unpriced_service_tier" : "manifest_pricing", inputTokens: estimate.inputTokens, outputTokens: estimate.outputTokens };
 }
 
-function actualCost(model: CompiledModel | null, tokens: UsageTokens, fixed: number | null | undefined): number | null {
+function actualCost(model: CompiledModel | null, tokens: UsageTokens, fixed: number | null | undefined, requestFormat?: string): number | null {
   if (fixed != null) return fixed;
   const pricing = model?.pricing;
   if (!pricing) return 1;
-  return actualModelCost(pricing, tokens);
+  return actualModelCost(pricing, tokens, requestFormat);
 }

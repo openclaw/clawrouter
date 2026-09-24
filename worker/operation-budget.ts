@@ -1,5 +1,5 @@
 import { validateBudgetReservation } from "./accounting";
-import { modelReservationBounds } from "./pricing";
+import { modelReservationBounds, type PricingEndpoint } from "./pricing";
 import { estimateCost } from "./proxy-accounting";
 import type { AuthorizedIdentity, CompiledModel, ProviderConnection } from "./types";
 import { HttpError } from "./utils";
@@ -10,10 +10,10 @@ export interface OperationAffordability {
   reasonCode?: string;
 }
 
-export function operationAffordability(auth: AuthorizedIdentity, connection: ProviderConnection, model: CompiledModel | null, capability: string, requestFormat: string, observation?: BudgetObservation): OperationAffordability {
+export function operationAffordability(auth: AuthorizedIdentity, connection: ProviderConnection, model: CompiledModel | null, capability: string, endpoint: PricingEndpoint, observation?: BudgetObservation): OperationAffordability {
   // Only the basis is used for variable prices; an empty body's default output
   // allowance is not a claim that every real request fits the observed balance.
-  const cost = estimateCost(model, {}, auth.policy.requestCostMicros, capability, requestFormat);
+  const cost = estimateCost(model, {}, auth.policy.requestCostMicros, capability, endpoint);
   try {
     if (!validateBudgetReservation(capability, cost, auth.policy.monthlyBudgetMicros, connection)) return { status: "exact-covered" };
   } catch (error) {

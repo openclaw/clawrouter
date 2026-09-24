@@ -284,7 +284,7 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env, conne
         try { resolveTemplate(provider, model.upstream, env); }
         catch (error) { if (error instanceof HttpError) return { status: "exact-blocked" as const, reasonCode: error.code }; throw error; }
       }
-      return operationAffordability(context.auth, connection, model, capability, context.endpoint.request_format, context.observation);
+      return operationAffordability(context.auth, connection, model, capability, context.endpoint, context.observation);
     };
     const eligibleModels = (models = provider.models) => models.flatMap((model) => {
       const capabilities = model.capabilities.filter((capability) => effective.some((context) => provider.capabilities.some((item) => item.id === capability && item.endpoint === context.endpoint.id) && eligibility(context, model, capability).status !== "exact-blocked"));
