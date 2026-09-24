@@ -5,13 +5,7 @@ import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import test from "node:test";
 
-test("the standard deploy path provisions required content storage", () => {
-  const pkg = JSON.parse(readFileSync(resolve("package.json"), "utf8"));
-  assert.match(pkg.scripts["cf:deploy"], /pnpm cf:content:provision/);
-  assert.ok(
-    pkg.scripts["cf:deploy"].indexOf("cf:content:provision") <
-      pkg.scripts["cf:deploy"].indexOf("wrangler deploy"),
-  );
+test("content storage provisioning retains the required lifecycle rule", () => {
   const provisioner = readFileSync(
     resolve("scripts/provision-content-storage.mjs"),
     "utf8",

@@ -263,11 +263,31 @@ GitHub deploys render Wrangler config with `CLAWROUTER_OMIT_ROUTES=1` so normal
 script updates do not require zone-level Worker route permissions after the
 custom domain route has already been provisioned.
 
+Before deploying, select at least one golden provider and supply a proxy key
+that can use it. Deployment runs that smoke after account recovery:
+
+```sh
+export CLAWROUTER_SMOKE_KEY=clawrouter-live-svc_docs-...
+export CLAWROUTER_SMOKE_LIVE_PROVIDERS=openai
+```
+
+Also set the raw `CLAWROUTER_ADMIN_TOKEN` matching the deployed SHA256 and the
+`CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` pair when Access requires it.
+The manual runner resolves the deployment URL once: an explicit
+`CLAWROUTER_BASE_URL`, otherwise the configured route hostname, otherwise the
+production default. It passes that URL to preflight, recovery, and smoke.
+FakeCo retains its locked target and confirmation requirements.
+
 Deploy:
 
 ```sh
 pnpm cf:deploy
 ```
+
+Missing smoke inputs or invalid recovery credentials stop before deployment
+permission probes and resource mutations. A failed account recovery after
+deployment stops smoke and leaves the running admin recovery surface available;
+it does not accept a baseline or roll back the Worker automatically.
 
 ## Smoke
 
@@ -280,8 +300,6 @@ to `health/providers/<provider-id>` in `POLICY_KV`:
 
 ```sh
 export CLAWROUTER_BASE_URL=https://...
-export CLAWROUTER_SMOKE_KEY=clawrouter-live-svc_docs-...
-export CLAWROUTER_SMOKE_LIVE_PROVIDERS=openai
 pnpm cf:smoke
 ```
 

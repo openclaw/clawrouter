@@ -98,7 +98,7 @@ if (liveProviders.length > 0) {
   if (!baseUrl) {
     errors.push("CLAWROUTER_BASE_URL is required when live provider smoke is enabled");
   }
-  if (!process.env.CLAWROUTER_SMOKE_KEY) {
+  if (!process.env.CLAWROUTER_SMOKE_KEY?.trim()) {
     errors.push("CLAWROUTER_SMOKE_KEY is required when live provider smoke is enabled");
   }
   try {
