@@ -148,7 +148,7 @@ The workflow's fail-closed order is:
 6. Idempotently register the policy-scoped smoke credential through the remote
    admin API, then run the authenticated account recovery driver. The configured
    namespace is reused, so the first deployment requires explicit baseline
-   acceptance in **Access → Upstream → Account routing readiness**, followed by
+   acceptance in **Access → Accounts → Account routing readiness**, followed by
    a complete unchanged scan and activation. Later deployments reuse that
    acceptance and repair indexed publication without another prompt.
 7. Run readiness, catalog, credential-inspection, and live inference smoke only

@@ -11,8 +11,8 @@ key or a promise of general-purpose gateway access.
 Create a key in [OpenAI Platform](https://platform.openai.com/api-keys), with
 API billing configured separately from your ChatGPT plan. Then either provision
 `OPENAI_API_KEY` as a Worker secret using the [deployment guide](deploy-cloudflare.md),
-or open **Access > Upstream > New grant**, choose **OpenAI**, set **kind** to
-**API key**, enter the key, and save the grant for the intended policy or tenant.
+or open **Access > Accounts > Add account**, choose **OpenAI**, set **kind** to
+**API key**, enter the fresh API key, choose the intended policy or tenant, and select **Create account**.
 Enable the OpenAI connection and grant the policy access to the intended models.
 Clients use their policy-scoped ClawRouter credential, not the upstream key.
 Verify discovery and inference using the [OpenClaw guide](openclaw.md).

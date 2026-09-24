@@ -118,7 +118,7 @@ for (const operation of ["fusion", "oauth"] as const) {
     state.waits.set("/v1/admin/bootstrap", auth.promise);
     await focus(page);
     await expect.poll(() => state.requests.filter((item) => item.path === "/v1/admin/bootstrap").length).toBe(2);
-    const path = operation === "fusion" ? "/v1/admin/fusion/preview" : "/v1/admin/upstream-grants/policies/team_policy/test-model/authorize";
+    const path = operation === "fusion" ? "/v1/admin/fusion/preview" : `/v1/admin/upstream-grants/policies/team_policy/${await page.getByLabel("account reference", { exact: true }).inputValue()}/authorize`;
     state.waits.set(path, operationReply.promise);
     await page.getByRole("button", { name: operation === "fusion" ? "Save fusion model" : "Connect with provider", exact: true }).click();
     await expect.poll(() => state.writes.length).toBe(1);
@@ -140,9 +140,10 @@ for (const replacement of ["same", "other"] as const) {
       const state = await fixture(page);
       await open(page);
       await page.getByRole("textbox", { name: "tenant", exact: true }).fill("private-policy-draft");
-      await page.getByRole("tab", { name: /^Upstream/ }).click();
+      await page.getByRole("tab", { name: /^Accounts/ }).click();
       await page.getByRole("combobox", { name: "kind", exact: true }).selectOption(kind);
-      const labels = kind === "api_key" ? ["API key", "credential bundle JSON"] : ["access token", "refresh token"];
+      if (kind === "api_key") await page.getByText("Advanced account settings", { exact: true }).click();
+      const labels = kind === "api_key" ? ["fresh API key", "fresh credential bundle JSON (instead of API key)"] : ["fresh access token", "new refresh token (optional)"];
       for (const label of labels) await page.getByLabel(label, { exact: true }).fill(`private-${label}`);
       state.replies.set("/v1/admin/bootstrap", authError("admin_unauthorized"));
       await focus(page);
@@ -153,8 +154,9 @@ for (const replacement of ["same", "other"] as const) {
       await expect(page.locator(".tenantSwitch strong")).toHaveText(state.email);
       await expect(page.locator(".statusBar")).toContainText("reporting unavailable");
       await expect(page.getByRole("textbox", { name: "tenant", exact: true })).not.toHaveValue("private-policy-draft");
-      await page.getByRole("tab", { name: /^Upstream/ }).click();
+      await page.getByRole("tab", { name: /^Accounts/ }).click();
       await page.getByRole("combobox", { name: "kind", exact: true }).selectOption(kind);
+      if (kind === "api_key") await page.getByText("Advanced account settings", { exact: true }).click();
       for (const label of labels) await expect(page.getByLabel(label, { exact: true })).toHaveValue("");
     });
   }
@@ -365,6 +367,7 @@ async function fixture(page: Page) {
       const body = request.postDataJSON();
       responses[path] = { credentialId: body.credentialId, policyId: body.policyId, principalId: body.principalId, enabled: true, active: true };
     }
+    if (method === "POST" && /^\/v1\/admin\/upstream-grants\/policies\/team_policy\/acct_[^/]+\/authorize$/.test(path)) responses[path] = { authorizationUrl: "https://provider.example/authorize" };
     // Each request captures its old identity/result before the test releases it.
     const response = structuredClone(state.replies.get(path) ?? { status: responses[path] ? 200 : 404, json: responses[path] ?? {} });
     const wait = state.waits.get(path);

@@ -4,13 +4,16 @@ import type { PlaygroundHttpResponse } from "./ui-types";
 export class DashboardRequestError extends Error {
   status: number;
   code: string | null;
+  detail: unknown;
   constructor(message: string, status: number) {
     super(message);
     this.status = status;
     this.code = null;
+    this.detail = null;
     try {
       const value = JSON.parse(message);
       if (typeof value?.error?.code === "string") this.code = value.error.code;
+      this.detail = value?.error?.detail ?? null;
     } catch { /* Non-JSON failures remain ordinary request errors. */ }
   }
 }

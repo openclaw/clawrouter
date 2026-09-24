@@ -2,158 +2,199 @@ import { type FormEvent, type SetStateAction, useRef, useState } from "react";
 import { DashboardRequestError, type ConsoleRequest } from "../../dashboard-fetch";
 import { errorMessage } from "../../domain";
 import { defaultUpstreamGrant, demo } from "../../ui-config";
-import { demoGrantFromForm, parseCredentialBundle, upstreamGrantFormFromGrant } from "../../ui-helpers";
+import { accountFromInventory, accountKey, accountMutationBody, accountPath, demoAccountMutation, demoAccountView, mergeAccountInventory, readAccountReceipt, readAccountView, readLegacyAccount, upstreamGrantFormFromGrant, type AccountField, type AccountIdentity, type AccountIntent, type AccountRow } from "../../account-credentials";
 import type { AccessPolicy, ProviderRow, UpstreamGrant, UpstreamGrantForm } from "../../ui-types";
 
 interface Dependencies {
-  request: ConsoleRequest;
-  isCurrent: () => boolean;
-  allowDemo: boolean;
-  gatewayOrigin: string;
-  demoMode: boolean;
-  providers: ProviderRow[];
-  policies: AccessPolicy[];
-  selectedPolicyId: string;
-  setStatus: (status: string) => void;
-  refresh: (ownsOperation: () => boolean) => Promise<void>;
+  request: ConsoleRequest; isCurrent: () => boolean; allowDemo: boolean; gatewayOrigin: string; demoMode: boolean;
+  providers: ProviderRow[]; policies: AccessPolicy[]; selectedPolicyId: string;
+  setStatus: (status: string) => void; refresh: (ownsOperation: () => boolean) => Promise<void>;
 }
-
-type Action = "save" | "revoke" | "refresh" | "quota-refresh";
-type Field = keyof UpstreamGrantForm;
-interface Draft { selection: string; value: UpstreamGrantForm; initialized: boolean }
-interface Operation { phase: "writing" | "refreshing" }
-const fields = Object.keys(defaultUpstreamGrant) as Field[];
-const identityFields: Field[] = ["scope", "scopeId", "tokenRef", "provider", "kind"];
-const secretFields: Field[] = ["credential", "credentialBundle", "accessToken", "refreshToken"];
+type Action = "save" | "pause" | "revoke" | "refresh" | "quota-refresh";
+interface Draft {
+  selection: string; value: UpstreamGrantForm; initialized: boolean; mode: AccountIntent;
+  generation: number | null; inspection: "unread" | "loading" | "ready" | "failed" | "legacy";
+  attempt: AccountIdentity | null; review: boolean; uncertain: boolean;
+}
+interface Operation { phase: "reading" | "writing" | "refreshing" }
+const fields = Object.keys(defaultUpstreamGrant) as AccountField[];
+const identityFields: AccountField[] = ["scope", "scopeId", "tokenRef", "provider", "kind"];
+const secretFields: AccountField[] = ["credential", "credentialBundle", "accessToken", "refreshToken", "removeRefreshToken"];
 const messages: Record<Action, [string, string]> = {
-  save: ["saving upstream grant", "saved upstream grant"],
-  revoke: ["revoking upstream grant", "revoked upstream grant"],
-  refresh: ["refreshing upstream grant", "refreshed upstream grant"],
+  save: ["saving account", "saved account"], pause: ["updating account state", "saved account state"],
+  revoke: ["revoking account", "revoked account"], refresh: ["refreshing account token", "refreshed account token"],
   "quota-refresh": ["refreshing provider quota", "refreshed provider quota"],
 };
 
 export function useUpstreamAdmin({ request, isCurrent, allowDemo, gatewayOrigin, demoMode, providers, policies, selectedPolicyId, setStatus, refresh }: Dependencies) {
-  const [grants, setGrants] = useState<UpstreamGrant[]>(allowDemo ? demo.upstreamGrants : []);
+  const [grants, setGrants] = useState<AccountRow[]>(allowDemo ? demo.upstreamGrants.map(accountFromInventory) : []);
   const rows = useRef(grants);
-  const [ready, setReady] = useState(demoMode);
-  const readyRef = useRef(ready);
-  const [draft, setDraft] = useState<Draft>(() => ({ selection: grants[0]?.key ?? "", value: grants[0] ? upstreamGrantFormFromGrant(grants[0]) : defaultUpstreamGrant, initialized: allowDemo }));
-  const currentDraft = useRef(draft);
-  const incarnation = useRef(0);
-  const revision = useRef(0);
-  // Revisions mark unacknowledged edits. Matching reporting values cannot consume
-  // them: a lost write response may still be followed by deliberate edit-back.
-  const fieldRevisions = useRef<Partial<Record<Field, number>>>({});
-  const recordsEpoch = useRef(0);
-  const operation = useRef<Operation | null>(null);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const selected = grants.find((grant) => grant.key === draft.selection);
+  const [ready, setReady] = useState(demoMode), readyRef = useRef(ready);
+  const [draft, setDraft] = useState<Draft>(() => ({ selection: grants[0]?.key ?? "", value: grants[0] ? upstreamGrantFormFromGrant(grants[0]) : newForm(), initialized: allowDemo,
+    mode: grants[0] ? "edit" : "create", generation: null, inspection: grants[0] ? "unread" : "ready", attempt: null, review: false, uncertain: false }));
+  const currentDraft = useRef(draft), incarnation = useRef(0), revision = useRef(0);
+  // Neither reporting nor pure GET acknowledges edit-back or a secret whose
+  // write reply was lost. Only its receipt or an explicit discard can do that.
+  const fieldRevisions = useRef<Partial<Record<AccountField, number>>>({});
+  const recordsEpoch = useRef(0), operation = useRef<Operation | null>(null);
+  const [busy, setBusy] = useState(false), [error, setError] = useState("");
+  const selected = grants.find(grant => grant.key === draft.selection);
+  const inspected = grants.find(grant => grant.key === accountKey(draft.attempt ?? draft.value));
+  const canReview = inspected?.source === "owner" && draft.inspection === "ready";
 
+  function newForm(): UpstreamGrantForm { return { ...defaultUpstreamGrant, tokenRef: `acct_${crypto.randomUUID()}` }; }
   function captureHydration() { return operation.current ? null : recordsEpoch.current; }
-
   function hydrate(nextGrants: UpstreamGrant[], policyId: string, providerRows: ProviderRow[], snapshot: number | null) {
-    // The dependent bootstrap reads projections, not a versioned owner receipt.
-    // It may refresh other resources but cannot undo this operation's acknowledged row.
     if (!isCurrent() || snapshot === null || snapshot !== recordsEpoch.current || operation.current) return;
     const firstAdmission = !readyRef.current;
-    updateRows(nextGrants);
-    readyRef.current = true;
-    setReady(true);
+    updateRows(mergeAccountInventory(rows.current, nextGrants));
+    readyRef.current = true; setReady(true);
     const current = currentDraft.current;
     if (current.initialized && !current.selection) {
-      // Only the first inventory supplies missing defaults. Later catalog changes
-      // must not retarget a New draft or acknowledge its explicit identity edits.
       if (firstAdmission) {
         const value = { ...current.value };
         if (value.scope === "policies" && !fieldRevisions.current.scopeId) value.scopeId = policyId;
         if (!fieldRevisions.current.provider) value.provider = providerRows[0]?.id ?? "";
-        if (!fieldRevisions.current.tokenRef) value.tokenRef = value.provider;
         publishDraft({ ...current, value });
       }
       return;
     }
-    const grant = current.initialized ? nextGrants.find((item) => item.key === current.selection) : nextGrants[0];
+    const grant = current.initialized ? rows.current.find(item => item.key === current.selection) : rows.current[0];
     if (grant) {
-      const canonical = upstreamGrantFormFromGrant(grant);
-      if (!current.initialized) resetDraft(grant.key, canonical);
-      else rebaseDraft(grant.key, canonical, new Set(fields.filter((field) => Boolean(fieldRevisions.current[field]))));
-    } else if (!current.initialized) resetDraft("", { ...defaultUpstreamGrant, scopeId: policyId, provider: providerRows[0]?.id ?? "", tokenRef: providerRows[0]?.id ?? "" });
+      if (!current.initialized) resetDraft(grant.key, upstreamGrantFormFromGrant(grant));
+      else if (current.mode === "edit") rebaseDraft(grant.key, upstreamGrantFormFromGrant(grant), markedFields());
+    } else if (!current.initialized) resetDraft("", { ...newForm(), scopeId: policyId, provider: providerRows[0]?.id ?? "" });
+    inspectIfNeeded();
+  }
+
+  function begin(phase: "reading" | "writing"): Operation | null {
+    if (!isCurrent() || phase === "writing" && !readyRef.current || operation.current && operation.current.phase !== "refreshing") return null;
+    const op: Operation = { phase };
+    operation.current = op; recordsEpoch.current += 1; setBusy(true); setError("");
+    return op;
+  }
+  function inspectIfNeeded() {
+    if (currentDraft.current.selection && currentDraft.current.inspection === "unread" && (!operation.current || operation.current.phase === "refreshing")) void inspect();
+  }
+  async function inspect() {
+    const submitted = currentDraft.current, identity = submitted.attempt ?? submitted.value;
+    if (!submitted.selection && !submitted.attempt) return;
+    const op = begin("reading"); if (!op) return;
+    const editor = incarnation.current;
+    publishDraft({ ...submitted, inspection: "loading" });
+    try {
+      const existing = rows.current.find(row => row.key === accountKey(identity));
+      const value = demoMode && existing ? demoAccountView(existing) : await request<unknown>(gatewayOrigin, accountPath(identity));
+      if (isCurrent() && operation.current === op && incarnation.current === editor) {
+        const view = readAccountView(value, identity);
+        putRow({ ...view, source: "owner", observations: existing?.observations });
+        const current = currentDraft.current, initial = current.generation === null && !current.uncertain && !current.review;
+        // The first owned read admits editing. Later reads may show a new version,
+        // but cannot silently move an existing edit's CAS baseline.
+        publishDraft({ ...current, inspection: "ready", generation: initial ? view.credentialGeneration : current.generation,
+          review: current.review || current.uncertain || !initial && current.generation !== view.credentialGeneration });
+        if (current.mode === "edit") rebaseDraft(current.selection, upstreamGrantFormFromGrant(view), markedFields());
+      }
+    } catch (caught) {
+      if (isCurrent() && operation.current === op && incarnation.current === editor) {
+        const legacy = caught instanceof DashboardRequestError && ["grant_credential_missing", "grant_owner_initialization_required"].includes(caught.code ?? "");
+        publishDraft({ ...currentDraft.current, inspection: legacy ? "legacy" : "failed" });
+        setError(legacy ? submitted.selection ? "No initialized account owner was found. Inspect publication recovery, or explicitly replace the legacy account with fresh credentials or revoke it."
+          : "No owner is currently readable for this account. Keep its reference, inspect publication recovery, then check again. Starting a new account is a separate intent; checking does not replay creation." : errorMessage(caught));
+      }
+    } finally { release(op); }
+    return isCurrent() && !operation.current ? recordsEpoch.current : null;
   }
 
   async function save(event: FormEvent) { event.preventDefault(); await mutate("save"); }
-  async function revoke(grant: UpstreamGrant) { await mutate("revoke", grant); }
-  async function refreshGrant(grant: UpstreamGrant) { await mutate("refresh", grant); }
-  async function refreshQuota(grant: UpstreamGrant) { await mutate("quota-refresh", grant); }
-
-  function beginWrite(): Operation | null {
-    // An early submit must not overwrite an unseen account or retire its initial read.
-    if (!isCurrent() || !readyRef.current || operation.current?.phase === "writing") return null;
-    const op: Operation = { phase: "writing" };
-    operation.current = op;
-    recordsEpoch.current += 1;
-    setBusy(true);
-    setError("");
-    return op;
-  }
-
-  async function mutate(action: Action, target?: UpstreamGrant) {
-    const op = beginWrite();
-    if (!op) return;
-    const submitted = currentDraft.current, submittedIncarnation = incarnation.current, submittedRevision = revision.current;
-    const intent = new Set(fields.filter((field) => Boolean(fieldRevisions.current[field])));
-    const form = submitted.value;
-    const identity = action === "save" ? { scope: form.scope, scopeId: form.scopeId.trim(), tokenRef: form.tokenRef.trim() } : target!;
-    const key = identity.scope === "tenants" ? `oauth/tenants/${identity.scopeId}/${identity.tokenRef}` : `oauth/${identity.scopeId}/${identity.tokenRef}`;
-    const existing = rows.current.find((grant) => grant.key === (action === "save" ? submitted.selection : key));
+  async function revoke(grant: AccountRow) { await mutate("revoke", grant); }
+  async function refreshGrant(grant: AccountRow) { await mutate("refresh", grant); }
+  async function refreshQuota(grant: AccountRow) { await mutate("quota-refresh", grant); }
+  async function pause(grant: AccountRow) { await mutate("pause", grant); }
+  async function mutate(action: Action, target?: AccountRow) {
+    const submitted = currentDraft.current;
+    const strictEdit = action === "pause" || action === "save" && ["edit", "replace"].includes(submitted.mode);
+    if ((strictEdit && (submitted.inspection !== "ready" || submitted.generation === null) || action === "save" && submitted.mode === "legacy-replace" && submitted.inspection !== "legacy")
+      || (action === "save" || action === "pause") && (submitted.review || submitted.uncertain)) {
+      setError("Check the account and review its current version before saving."); return;
+    }
+    if (target && submitted.selection !== target.key) return;
+    const op = begin("writing"); if (!op) return;
+    const submittedIncarnation = incarnation.current, submittedRevision = revision.current, intentFields = markedFields();
+    const form = action === "pause" && target ? { ...upstreamGrantFormFromGrant(target), enabled: !target.enabled } : submitted.value;
+    const identity: AccountIdentity = { scope: target?.scope ?? form.scope, scopeId: target?.scopeId ?? form.scopeId.trim(), tokenRef: target?.tokenRef ?? form.tokenRef };
+    const key = accountKey(identity), existing = rows.current.find(grant => grant.key === key), intent = action === "pause" ? "edit" : submitted.mode;
+    const strictMutation = (action === "save" || action === "pause") && intent !== "legacy-replace";
     let sent = false;
     setStatus(messages[action][0]);
     try {
-      const body = action === "save" ? saveBody(form, existing) : undefined;
-      const submittedSecrets: Partial<Record<Field, unknown>> = { credential: body?.credential, credentialBundle: body?.credentials, accessToken: body?.accessToken, refreshToken: body?.refreshToken };
-      let saved: UpstreamGrant;
+      const body = action === "save" || action === "pause" ? accountMutationBody(form, intent, action === "pause" ? new Set<AccountField>(["enabled"]) : intentFields, submitted.generation) : undefined;
+      if (action === "save" && intent === "create") publishDraft({ ...currentDraft.current, attempt: identity });
+      let saved: AccountRow;
       if (demoMode) {
-        saved = action === "save" ? demoGrantFromForm(form, existing)
-          : action === "revoke" ? { ...target!, enabled: false, usable: false, hasCredential: false, credentialFields: [], hasAccessToken: false, hasRefreshToken: false, revokedAt: new Date().toISOString() }
-          : target!;
+        saved = body ? { ...demoAccountMutation({ ...form, ...identity }, intent, body, existing), source: "owner" }
+          : action === "revoke" ? { ...demoAccountView(target!), source: "owner", credentialGeneration: demoAccountView(target!).credentialGeneration + 1, enabled: false, usable: false, hasCredential: false, credentialFields: [], hasAccessToken: false, hasRefreshToken: false, revokedAt: new Date().toISOString() }
+          : { ...demoAccountView(target!), source: "owner", observations: target?.observations };
       } else {
-        const path = `/v1/admin/upstream-grants/${identity.scope}/${encodeURIComponent(identity.scopeId)}/${encodeURIComponent(identity.tokenRef)}${action === "save" ? "" : `/${action}`}`;
+        const method = !body ? "POST" : intent === "edit" ? "PATCH" : intent === "legacy-replace" ? "PUT" : "POST";
+        const suffix = !body ? `/${action}` : intent === "replace" ? "/replace" : intent === "legacy-replace" ? "?mode=replace" : "";
         sent = true;
-        saved = await request<UpstreamGrant>(gatewayOrigin, path, { method: action === "save" ? "PUT" : "POST", ...(body ? { headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}) });
+        const result = await request<unknown>(gatewayOrigin, `${accountPath(identity)}${suffix}`, { method, ...(body ? { headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}) });
+        if (strictMutation) saved = { ...readAccountReceipt(result, identity), source: "owner" };
+        else saved = readLegacyAccount(result, identity);
       }
       if (!isCurrent()) { release(op); return; }
-      if (!saved || saved.key !== key || saved.scope !== identity.scope || saved.scopeId !== identity.scopeId || saved.tokenRef !== identity.tokenRef || typeof saved.enabled !== "boolean") throw new Error("invalid upstream grant response");
-      updateRows([saved, ...rows.current.filter((grant) => grant.key !== key)]);
-      // Rows belong to the request; the editor belongs to its current incarnation.
-      // A reselected row still adopts untouched fields; revisions protect replacement
-      // drafts, edit-back intent and secrets that this operation did not submit.
+      putRow(saved);
       const sameEditor = incarnation.current === submittedIncarnation;
       if (currentDraft.current.selection === key || sameEditor && action === "save" && !submitted.selection) {
-        const preserve = new Set(fields.filter((field) => !sameEditor
-          ? Boolean(fieldRevisions.current[field]) || secretFields.includes(field)
+        const assigned = new Set<AccountField>(body ? action === "pause" ? ["enabled"] : [...intentFields].filter(field => !secretFields.includes(field)) : []);
+        if (body) for (const field of secretFields) {
+          const sentField = field === "credentialBundle" ? "credentials" : field;
+          if (field === "removeRefreshToken" ? body.refreshToken === null : Object.hasOwn(body, sentField) && body[sentField] !== null) assigned.add(field);
+        }
+        const preserve = new Set(fields.filter(field => !sameEditor ? Boolean(fieldRevisions.current[field]) || secretFields.includes(field)
           : (fieldRevisions.current[field] ?? 0) > submittedRevision
-          || action === "save" && secretFields.includes(field) && !submittedSecrets[field]
-          || action !== "save" && intent.has(field) && !(action === "revoke" && (field === "enabled" || secretFields.includes(field)))));
+          || body && !assigned.has(field) && (intentFields.has(field) || secretFields.includes(field))
+          || !body && intentFields.has(field) && !(action === "revoke" && (field === "enabled" || secretFields.includes(field)))));
         rebaseDraft(key, upstreamGrantFormFromGrant(saved), preserve);
+        const remainingSecret = secretFields.some(field => field !== "removeRefreshToken" && Boolean(currentDraft.current.value[field]));
+        if (sameEditor) publishDraft({ ...currentDraft.current, mode: action === "save" ? remainingSecret ? "replace" : "edit" : currentDraft.current.mode,
+          generation: saved.source === "owner" ? saved.credentialGeneration : null, inspection: saved.source === "owner" ? "ready" : "unread",
+          attempt: null, review: false, uncertain: false });
       }
       setStatus(messages[action][1]);
-      // Keep the read fence through metadata refresh, but let the next write replace
-      // this token. Its predecessor's cleanup must never release that newer write.
-      op.phase = "refreshing";
-      setBusy(false);
+      op.phase = "refreshing"; setBusy(false);
       if (demoMode) release(op);
-      else void refresh(() => isCurrent() && operation.current === op).finally(() => release(op));
+      else if (currentDraft.current.selection && currentDraft.current.inspection === "unread") {
+        // Bare legacy responses do not admit a generation. Finish that owner
+        // read before scheduling metadata, whose predicate runs after old reads.
+        const epoch = await inspect();
+        if (typeof epoch === "number") void refresh(() => isCurrent() && !operation.current && recordsEpoch.current === epoch);
+      } else void refresh(() => isCurrent() && operation.current === op).finally(() => release(op));
     } catch (caught) {
+      if (!isCurrent()) { release(op); return; }
+      // Legacy adapters can return an attachment conflict after committing the
+      // credential. Only strict receipts distinguish that from rejected edits.
+      const rejected = caught instanceof DashboardRequestError && caught.status >= 400 && caught.status < 500 && (strictMutation || caught.status !== 409);
+      const conflict = caught instanceof DashboardRequestError && caught.status === 409;
+      const detail = caught instanceof DashboardRequestError ? caught.detail as { grant?: unknown } | null : null;
+      if (detail?.grant) {
+        try { putRow({ ...readAccountView(detail.grant, identity), source: "owner" }); } catch { /* A mismatched detail cannot change this account. */ }
+      }
+      const conflictMessage = caught instanceof DashboardRequestError && caught.code === "grant_reconnect_required"
+        ? "This account was revoked. Check and review its current version, then prepare a credential replacement with a fresh primary secret."
+        : caught instanceof DashboardRequestError && caught.code === "grant_generation_exhausted"
+          ? "This account cannot accept another credential version. Use a new account for fresh credentials and ask the router operator to retire this reference. Checking will not reset its version."
+          : "This account changed or already exists. Check its current version, then review it before saving again.";
+      const message = sent && !rejected ? "The change could not be confirmed. Check this account's status before choosing another action; it may have committed."
+        : conflict ? conflictMessage : errorMessage(caught);
+      if (incarnation.current === submittedIncarnation) {
+        publishDraft({ ...currentDraft.current, attempt: sent ? identity : currentDraft.current.attempt, review: conflict, uncertain: sent && !rejected,
+          inspection: conflict || sent && !rejected ? "failed" : currentDraft.current.inspection });
+        setError(message);
+      }
+      setStatus(`account ${action} failed: ${message}`);
       release(op);
-      if (!isCurrent()) return;
-      const rejected = caught instanceof DashboardRequestError && caught.status >= 400 && caught.status < 500;
-      const message = sent && !rejected
-        ? `Change to ${identity.tokenRef} could not be confirmed. Refresh and inspect the grant before trying again; the server may have applied it.`
-        : errorMessage(caught);
-      if (incarnation.current === submittedIncarnation) setError(message);
-      setStatus(`upstream grant ${action} failed (${identity.tokenRef}): ${message}`);
-      // Failed refreshes can still change credential/quota state. Reconcile without
-      // holding write admission or allowing this read to supersede another operation.
       const releasedEpoch = recordsEpoch.current;
       if (sent) void refresh(() => isCurrent() && !operation.current && recordsEpoch.current === releasedEpoch);
     }
@@ -161,78 +202,82 @@ export function useUpstreamAdmin({ request, isCurrent, allowDemo, gatewayOrigin,
 
   function release(op: Operation) {
     if (operation.current !== op) return;
-    recordsEpoch.current += 1;
-    operation.current = null;
-    if (isCurrent()) setBusy(false);
-  }
-
-  function saveBody(form: UpstreamGrantForm, existing?: UpstreamGrant) {
-    if (!form.scopeId.trim() || !form.tokenRef.trim() || !form.provider.trim()) throw new Error("scope, token reference, and provider are required");
-    const priority = Number(form.priority), weight = Number(form.weight);
-    if (!Number.isInteger(priority) || priority < 0 || priority > 1_000_000) throw new Error("priority must be an integer from 0 to 1000000");
-    if (!Number.isFinite(weight) || weight <= 0 || weight > 1_000_000) throw new Error("weight must be greater than 0 and at most 1000000");
-    const credentialBundle = parseCredentialBundle(form.credentialBundle);
-    const primarySecret = form.kind === "api_key" ? form.credential.trim() || Object.keys(credentialBundle).length : form.accessToken.trim();
-    if (!existing && !primarySecret) throw new Error("a new upstream grant requires its primary secret");
-    return {
-      version: 1, enabled: form.enabled, priority, weight, kind: form.kind, provider: form.provider.trim(), label: form.label.trim() || undefined,
-      tokenType: existing?.tokenType ?? "Bearer", expiresAt: form.expiresAt.trim() || undefined, scopes: existing?.scopes ?? [],
-      accountId: form.accountId.trim() || undefined, subscription: existing?.subscription ?? undefined,
-      maintenance: { keepWarm: form.kind === "subscription" && form.keepWarm },
-      ...(form.credential.trim() ? { credential: form.credential.trim() } : {}),
-      ...(Object.keys(credentialBundle).length ? { credentials: credentialBundle } : {}),
-      ...(form.accessToken.trim() ? { accessToken: form.accessToken.trim() } : {}),
-      ...(form.refreshToken.trim() ? { refreshToken: form.refreshToken.trim() } : {}),
-    };
+    recordsEpoch.current += 1; operation.current = null;
+    if (isCurrent()) { setBusy(false); inspectIfNeeded(); }
   }
   async function authorize() {
-    const op = beginWrite();
-    if (!op) return;
+    const op = begin("writing"); if (!op) return;
     const form = currentDraft.current.value;
     try {
-      const scopeId = form.scopeId.trim(), tokenRef = form.tokenRef.trim(), provider = form.provider.trim();
-      if (!scopeId || !tokenRef || !provider) throw new Error("scope, token reference, and provider are required");
-      const priority = Number(form.priority);
+      const scopeId = form.scopeId.trim(), tokenRef = form.tokenRef, provider = form.provider;
+      if (!scopeId || !tokenRef || !provider) throw new Error("scope and provider are required");
+      const priority = Number(form.priority), weight = Number(form.weight);
       if (!Number.isInteger(priority) || priority < 0 || priority > 1_000_000) throw new Error("priority must be an integer from 0 to 1000000");
-      const weight = Number(form.weight);
       if (!Number.isFinite(weight) || weight <= 0 || weight > 1_000_000) throw new Error("weight must be greater than 0 and at most 1000000");
-      if (!providers.find((item) => item.id === provider)?.auth?.authorization) throw new Error("selected provider does not support browser OAuth");
-      setStatus("connecting upstream grant");
+      if (!providers.find(item => item.id === provider)?.auth?.authorization) throw new Error("selected provider does not support browser OAuth");
+      setStatus("connecting account");
       if (demoMode) { release(op); setStatus("browser OAuth unavailable in local demo"); return; }
-      const result = await request<{ authorizationUrl: string }>(gatewayOrigin, `/v1/admin/upstream-grants/${form.scope}/${encodeURIComponent(scopeId)}/${encodeURIComponent(tokenRef)}/authorize`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider, priority, weight }) });
+      const result = await request<{ authorizationUrl: string }>(gatewayOrigin, `${accountPath({ scope: form.scope, scopeId, tokenRef })}/authorize`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify({ provider, priority, weight }) });
       if (!isCurrent()) { release(op); return; }
-      // assign() returns before unloading. Keep admission until navigation so a new
-      // write cannot lose its acknowledgement when this redirect takes effect.
+      // Navigation retains admission until unload. Inspection and sign-in
+      // recovery must not replay a sent authorization.
       window.location.assign(result.authorizationUrl);
-    } catch (caught) { release(op); if (isCurrent()) { const message = errorMessage(caught); setError(message); setStatus(message); } }
+    } catch (caught) { release(op); if (isCurrent()) { setError(errorMessage(caught)); setStatus(errorMessage(caught)); } }
   }
 
-  function updateRows(next: UpstreamGrant[]) { rows.current = next; setGrants(next); }
+  function updateRows(next: AccountRow[]) { rows.current = next; setGrants(next); }
+  function putRow(row: AccountRow) { updateRows([row, ...rows.current.filter(item => item.key !== row.key)]); }
   function publishDraft(next: Draft) { currentDraft.current = next; setDraft(next); }
-  function resetDraft(selection: string, value: UpstreamGrantForm) {
-    incarnation.current += 1;
-    fieldRevisions.current = {};
-    publishDraft({ selection, value, initialized: true });
+  function markedFields() { return new Set(fields.filter(field => Boolean(fieldRevisions.current[field]))); }
+  function resetDraft(selection: string, value: UpstreamGrantForm, mode: AccountIntent = selection ? "edit" : "create") {
+    incarnation.current += 1; fieldRevisions.current = {};
+    publishDraft({ selection, value, initialized: true, mode, generation: null, inspection: selection ? "unread" : "ready", attempt: null, review: false, uncertain: false });
+    setError("");
   }
-  function rebaseDraft(selection: string, canonical: UpstreamGrantForm, preserve: Set<Field>) {
+  function rebaseDraft(selection: string, canonical: UpstreamGrantForm, preserve: Set<AccountField>) {
     const value = { ...canonical };
     for (const field of fields) {
       if (preserve.has(field)) Object.assign(value, { [field]: currentDraft.current.value[field] });
       else delete fieldRevisions.current[field];
     }
-    publishDraft({ selection, value, initialized: true });
+    publishDraft({ ...currentDraft.current, selection, value, initialized: true });
   }
   function setForm(next: SetStateAction<UpstreamGrantForm>) {
     const current = currentDraft.current, value = typeof next === "function" ? next(current.value) : next;
-    const changed = fields.filter((field) => value[field] !== current.value[field]);
-    if (!changed.length) return;
+    const changed = fields.filter(field => value[field] !== current.value[field]);
+    // A sent create keeps its resource address through an uncertain reply.
+    // Retargeting is an explicit New action, never another POST by accident.
+    if (!changed.length || current.attempt && changed.some(field => identityFields.includes(field))) return;
     revision.current += 1;
-    if (!current.selection && changed.some((field) => identityFields.includes(field))) incarnation.current += 1;
+    if (!current.selection && changed.some(field => identityFields.includes(field))) incarnation.current += 1;
     for (const field of changed) fieldRevisions.current[field] = revision.current;
     publishDraft({ ...current, value, initialized: true });
   }
-  function edit(grant: UpstreamGrant) { resetDraft(grant.key, upstreamGrantFormFromGrant(rows.current.find((item) => item.key === grant.key) ?? grant)); setError(""); }
-  function startNew() { const provider = providers[0]?.id ?? ""; resetDraft("", { ...defaultUpstreamGrant, scopeId: policies.find((policy) => policy.policyId === selectedPolicyId)?.policyId ?? policies[0]?.policyId ?? "", provider, tokenRef: provider }); setError(""); }
+  function edit(grant: AccountRow) { resetDraft(grant.key, upstreamGrantFormFromGrant(rows.current.find(item => item.key === grant.key) ?? grant)); inspectIfNeeded(); }
+  function startNew() { const provider = providers[0]?.id ?? ""; resetDraft("", { ...newForm(), scopeId: policies.find(policy => policy.policyId === selectedPolicyId)?.policyId ?? policies[0]?.policyId ?? "", provider }); }
+  function startReplace(legacy = false) {
+    const current = currentDraft.current;
+    if (!current.selection || legacy && current.inspection !== "legacy" || !legacy && (current.generation === null || current.review || current.uncertain)) return;
+    incarnation.current += 1; revision.current += 1;
+    fieldRevisions.current = { ...fieldRevisions.current, ...Object.fromEntries([...secretFields, "accountId", "expiresAt"].map(field => [field, revision.current])) };
+    publishDraft({ ...current, mode: legacy ? "legacy-replace" : "replace", value: { ...current.value, credential: "", credentialBundle: "", accessToken: "", refreshToken: "", removeRefreshToken: false, accountId: "", expiresAt: "" } });
+    setError("");
+  }
+  function reviewCurrent(discard = false) {
+    const current = currentDraft.current, identity = current.attempt ?? current.value;
+    const row = rows.current.find(item => item.key === accountKey(identity));
+    if (!isCurrent() || operation.current && operation.current.phase !== "refreshing" || current.inspection !== "ready" || row?.source !== "owner") return;
+    if (!discard && (row.provider !== current.value.provider || row.kind !== current.value.kind)) { setError("The provider or credential kind changed. Use saved values to discard this draft, or start a new account."); return; }
+    rebaseDraft(row.key, upstreamGrantFormFromGrant(row), discard ? new Set<AccountField>() : new Set([...markedFields(), ...secretFields]));
+    incarnation.current += 1;
+    publishDraft({ ...currentDraft.current, generation: row.credentialGeneration, inspection: "ready", mode: discard ? "edit" : current.mode === "create" ? "replace" : current.mode,
+      review: false, uncertain: false, attempt: null });
+    setError("");
+  }
 
-  return { upstream: { items: grants, selected, selectedKey: draft.selection, form: draft.value, setForm, ready, busy, error, save, revoke, refresh: refreshGrant, refreshQuota, authorize, edit, startNew }, captureHydration, hydrate };
+  return { upstream: { items: grants, selected, selectedKey: draft.selection, form: draft.value, setForm, ready, busy, error, mode: draft.mode, inspection: draft.inspection,
+    generation: draft.generation, needsReview: draft.review || draft.uncertain, uncertain: draft.uncertain, identityLocked: Boolean(draft.selection || draft.attempt), inspected, canReview,
+    save, pause, revoke, refresh: refreshGrant, refreshQuota, authorize, edit, startNew, startReplace, inspect, reviewCurrent }, captureHydration, hydrate };
 }
+
+export type UpstreamAdminModel = ReturnType<typeof useUpstreamAdmin>["upstream"];

@@ -8,7 +8,7 @@ export function GrantPoolRecovery({ model }: { model: GrantPoolRecoveryModel }) 
   if (demoMode) return <section className="inspectorPanel"><h2>Account routing readiness</h2><p>Recovery is available on a connected router.</p></section>;
   const changed = state?.scanRevision !== null && state?.scanRevision !== state?.revision;
   const canActivate = state?.phase === "complete" && !changed && !state.issues.length && !state.overflow;
-  return <section className="inspectorPanel" aria-label="account routing recovery">
+  return <section id="account-publication-recovery" className="inspectorPanel" aria-label="account routing recovery" tabIndex={-1}>
     <h2>Account routing readiness</h2>
     <p>{!state ? "Read the router's current account routing status to continue." : state.activatedAt ? "Active. Paused and reauthorization-required accounts keep their provider attached and block environment fallback." : "Environment fallback is blocked until the account inventory is reconciled and activated. Existing scoped accounts and admin recovery remain available."}</p>
     <button type="button" disabled={busy} onClick={() => void refresh()}>Refresh readiness</button>

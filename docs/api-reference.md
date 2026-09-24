@@ -443,9 +443,17 @@ claimed commit based on another row. After any lost reply, inspect the retained
 identity with GET before deciding what to do next.
 
 GET does **not** repair a pending mutation. Use **Repair account publication** in
-the Upstream panel, POST `/v1/admin/grant-pools/repair` with its bounded resume cursor,
+Access **Accounts**, POST `/v1/admin/grant-pools/repair` with its bounded resume cursor,
 or `pnpm cf:accounts`. This also completes paused or revoked owners with no alarm.
 The existing PUT/CLI adapters retain their non-2xx outcome when publication is pending.
+
+The console uses create-only POST for **Add account**, PATCH for **Save details** or
+pause/resume, and POST `/replace` for explicit credential replacement. The selected
+account's GET supplies the edit generation; bootstrap reporting never does. After a
+conflict or lost reply, **Check account status** retains the old edit baseline and
+secret draft until the operator explicitly reviews or discards it. It never retries
+creation or replacement. An ownerless legacy account instead offers the deliberate
+PUT `?mode=replace` recovery operation with fresh primary credentials, or revocation.
 
 Grant revocation accepts an optional JSON object with `kind`, `provider`, and
 `label` hints for legacy grants that have no credential owner. Existing owners

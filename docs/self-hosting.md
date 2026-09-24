@@ -110,7 +110,7 @@ newly created. An empty scan, new container, or empty-looking volume is not
 evidence that old account storage is absent. Acceptance is recorded once;
 later upgrades run `pnpm cf:accounts` without another acceptance.
 
-With console sign-in enabled, Access → Upstream has the same baseline, paged
+With console sign-in enabled, Access → Accounts has the same baseline, paged
 scan, indexed account publication repair, and activation actions. It loads independently if
 a legacy account prevents the normal admin overview from loading. No recovery
 action calls a provider. Resolve reported raw legacy accounts through

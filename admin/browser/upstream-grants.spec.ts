@@ -1,46 +1,34 @@
 import { expect, test, type Route } from "@playwright/test";
 import type { AccessPolicy, AdminBootstrapResponse, UpstreamGrant } from "../src/ui-types";
 
-test("demo grants preserve credentials when paused and require a fresh secret after revoke", async ({ page }) => {
-  await page.route("**/v1/**", (route) => route.fulfill({ status: 503, json: { error: { message: "Demo fixture" } } }));
+test("demo accounts pause, revoke and explicitly replace with fresh material", async ({ page }) => {
+  await page.route("**/v1/**", route => route.fulfill({ status: 503, json: { error: { message: "Demo fixture" } } }));
   await page.goto("/dashboard/access?demo=1&resource=upstream");
-  const newGrant = page.getByRole("button", { name: "New grant", exact: true });
-  await expect(newGrant).toBeVisible();
-  await expect(newGrant).toBeEnabled();
-  await newGrant.click();
+  await page.getByRole("button", { name: "Add account", exact: true }).click();
   await page.getByRole("combobox", { name: "provider", exact: true }).selectOption("openai");
-  await page.getByRole("textbox", { name: "token reference", exact: true }).fill("pause_fixture");
-  await page.getByLabel("API key", { exact: true }).fill("demo-primary-fixture");
-  const save = page.getByRole("button", { name: "Save grant", exact: true });
+  await page.getByLabel("fresh API key", { exact: true }).fill("demo-primary-fixture");
+  await page.getByRole("button", { name: "Create account", exact: true }).click();
   const revoke = page.getByRole("button", { name: "Revoke", exact: true });
   const state = page.locator('.tableRow.selected [data-label="state"]');
   const facts = page.locator(".inspector .facts");
-  await save.click();
   await expect(state).toHaveText("usable");
-  await expect(page.getByLabel("replace API key", { exact: true })).toHaveValue("");
-
-  await page.getByRole("combobox", { name: "state", exact: true }).selectOption("disabled");
-  await save.click();
+  await expect(page.getByLabel("fresh API key", { exact: true })).toHaveCount(0);
+  await page.getByRole("button", { name: "Pause account", exact: true }).click();
   await expect(state).toHaveText("paused");
   await expect(facts.getByText("stored", { exact: true })).toBeVisible();
   await expect(revoke).toBeEnabled();
-  await revoke.focus();
-  await expect(revoke).toBeFocused();
-  await page.keyboard.press("Enter");
+  await revoke.focus(); await page.keyboard.press("Enter");
   await expect(state).toHaveText("revoked");
   await expect(facts.getByText("missing", { exact: true })).toBeVisible();
   await expect(revoke).toBeDisabled();
-
-  await save.click();
-  await expect(page.getByRole("alert")).toHaveText("revoked upstream grant requires a new primary credential");
-  await expect(state).toHaveText("revoked");
-  await page.getByLabel("API key", { exact: true }).fill("demo-replacement-fixture");
-  await save.click();
+  await page.getByRole("button", { name: "Prepare credential replacement", exact: true }).click();
+  await page.getByRole("button", { name: "Replace credentials", exact: true }).click();
+  await expect(page.getByRole("alert")).toContainText("fresh primary credential");
+  await page.getByLabel("fresh API key", { exact: true }).fill("demo-replacement-fixture");
+  await page.getByRole("button", { name: "Replace credentials", exact: true }).click();
   await expect(state).toHaveText("paused");
   await expect(revoke).toBeEnabled();
-  await expect(facts.getByText("stored", { exact: true })).toBeVisible();
-  await page.getByRole("combobox", { name: "state", exact: true }).selectOption("enabled");
-  await save.click();
+  await page.getByRole("button", { name: "Resume account", exact: true }).click();
   await expect(state).toHaveText("usable");
   await expect(page.getByRole("alert")).toHaveCount(0);
 });
@@ -73,7 +61,8 @@ test("an authenticated paused unusable grant can be revoked with the keyboard", 
   await page.route("**/v1/**", async (route) => {
     const path = new URL(route.request().url()).pathname;
     if (route.request().method() === "POST") { pending.push(route); return; }
-    const body = responses[path];
+    const { selectedCount: _count, quotaStatus: _quota, quotaWindows: _windows, ...safe } = bootstrap.grants[0];
+    const body = path === "/v1/admin/upstream-grants/policies/policy_fixture/paused" ? { ...safe, credentialGeneration: safe.revokedAt ? 2 : 1, publication: "ready", refreshTokenUrl: null, clientIdConfig: null, clientSecretConfig: null } : responses[path];
     await route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
   });
   await page.goto("/dashboard/access?resource=upstream");
