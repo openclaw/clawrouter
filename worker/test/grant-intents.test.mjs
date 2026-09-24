@@ -530,6 +530,70 @@ test("refresh changes the generation and defeats a previously read edit", async 
   assert.equal(edit.body.error.detail.grant.credentialGeneration, before.generation + 1);
 });
 
+
+for (const [label, patch] of [
+  ["label", { label: "changed" }],
+  ["explicit normalized nulls", { label: "changed", tokenType: null, scopes: null }],
+  ["refresh replacement", { refreshToken: "operator-refresh-fixture" }],
+  ["refresh clear", { refreshToken: null }],
+  ["primary replacement", { accessToken: "operator-access-fixture" }],
+  ["forged internal patch", { label: "changed", credentialInput: { accessToken: "forged-primary" } }],
+]) test(`legacy PUT ${label} keeps canonical intent after a rotated pair failed KV publication`, async context => {
+  const now = Date.parse("2026-09-24T12:00:00Z");
+  context.mock.method(Date, "now", () => now);
+  const env = fixture(), legacy = { provider: "openai", kind: "oauth", accessToken: "legacy-access-fixture", refreshToken: "legacy-refresh-fixture", tokenType: "Custom", scopes: ["retained"], expiresAt: new Date(now + 3_600_000).toISOString() };
+  env.values.set(key, JSON.stringify(legacy));
+  const fetch = context.mock.method(globalThis, "fetch", async () => Response.json({ access_token: "rotated-access-fixture", refresh_token: "rotated-refresh-fixture", expires_in: "bad" }));
+  const put = env.POLICY_KV.put;
+  env.POLICY_KV.put = async () => { throw new Error("fixture publication failure"); };
+  await assert.rejects(() => materializeGrantCredentials(env, key, legacy, "openai", { tokenUrl: "https://token.example/refresh" }, true));
+  const rotated = structuredClone(record(env));
+  assert.equal(rotated.tokenResponseError, "invalid_expiry");
+  assert.equal(rotated.poolSyncPending, true);
+  assert.deepEqual(JSON.parse(env.values.get(key)), legacy);
+  env.POLICY_KV.put = put;
+  const result = await env.request("PUT", patch);
+  assert.equal(result.status, 200);
+  const row = record(env), fresh = label === "primary replacement";
+  assert.equal(row.accessToken, fresh ? patch.accessToken : rotated.accessToken);
+  assert.equal(row.refreshToken, Object.hasOwn(patch, "refreshToken") ? patch.refreshToken : rotated.refreshToken);
+  assert.equal(row.tokenResponseError, fresh ? null : "invalid_expiry");
+  assert.equal(row.nextRefreshAttemptAt, fresh ? null : rotated.nextRefreshAttemptAt);
+  assert.equal(row.expiresAt, null);
+  assert.equal(row.tokenType, label === "explicit normalized nulls" ? "Bearer" : "Custom");
+  assert.deepEqual(row.scopes, label === "explicit normalized nulls" ? [] : ["retained"]);
+  assert.equal(row.generation, rotated.generation + 1);
+  if (!fresh && !Object.hasOwn(patch, "refreshToken")) assert.equal(row.lineage, rotated.lineage);
+  assert.equal(row.poolSyncPending, false);
+  assert.equal(fetch.mock.callCount(), 1);
+  assert.equal(result.body.usable, fresh);
+  assert.doesNotMatch(JSON.stringify(result.body), /legacy-access-fixture|legacy-refresh-fixture|rotated-access-fixture|rotated-refresh-fixture|forged-primary/);
+});
+
+test("legacy metadata PUT still initializes an unowned raw grant", async () => {
+  const env = fixture();
+  env.values.set(key, JSON.stringify({ provider: "openai", kind: "oauth", accessToken: "legacy-access-fixture", refreshToken: "legacy-refresh-fixture" }));
+  const result = await env.request("PUT", { label: "migrated" });
+  assert.equal(result.status, 200);
+  assert.equal(record(env).accessToken, "legacy-access-fixture");
+  assert.equal(record(env).refreshToken, "legacy-refresh-fixture");
+  assert.equal(record(env).metadata.label, "migrated");
+  assert.equal(record(env).tokenResponseError ?? null, null);
+  assert.equal(JSON.parse(env.values.get(key)).accessToken, undefined);
+});
+
+for (const credentials of [null, {}]) test(`legacy explicit credentials ${JSON.stringify(credentials)} retains the canonical bundle`, async () => {
+  const env = fixture(), old = { provider: "aws-bedrock", kind: "api_key", credentials: { accessKeyId: "old-id", secretAccessKey: "old-key" } };
+  env.values.set(key, JSON.stringify(old));
+  const put = env.POLICY_KV.put;
+  env.POLICY_KV.put = async () => { throw new Error("fixture publication failure"); };
+  await assert.rejects(() => putGrantCredentials(env, key, { ...old, credentials: { accessKeyId: "new-id", secretAccessKey: "new-key" } }));
+  env.POLICY_KV.put = put;
+  const result = await env.request("PUT", { kind: "api_key", credentials, label: "kept" });
+  assert.equal(result.status, 200);
+  assert.deepEqual(record(env).credentials, { accessKeyId: "new-id", secretAccessKey: "new-key" });
+});
+
 function fixture() {
   const values = new Map(), reads = [], writes = [];
   const env = attachGrantCredentialNamespace({

@@ -103,6 +103,15 @@ clear the marker or extend already-expired authority. A trusted successful
 exchange or fresh primary replacement clears the marker; revocation erases it.
 Older workers ignore this owner fact and are not a qualified rollback target.
 
+Legacy PUT normalization carries explicit credential-field intent separately
+from its captured KV metadata. Omitted fields retain the canonical owner after
+pending publication is repaired; only first initialization uses raw legacy
+credentials. OAuth response omission likewise retains the owner's current
+refresh token, including an explicit clear. Prepared requests carry only expiry
+facts past asynchronous admission. HTTP dispatch, WebSocket upgrades and each
+create frame check those facts at egress; rejected unsent work releases both
+budget holds, and continuation expiry retains the full-input recovery outcome.
+
 Pending rows retain their prior committed status, so failed account writes can
 restore membership without a later refresh or raw import adopting the proposal.
 Restoration and its new revision fence commit together, including no-op owner

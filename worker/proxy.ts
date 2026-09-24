@@ -17,6 +17,7 @@ import {
 import { loadFusionConfig } from "./fusion-config";
 import { observeGrantQuota, shouldFailoverGrant } from "./grant-quota";
 import { grantRoutingPolicy, recordGrantRuntime, type PinnedGrant } from "./grant-selection";
+import { assertTokenUsable, type TokenValidity } from "./grant-expiry.ts";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import { HttpContinuation, continuationRestart } from "./http-continuation.ts";
 import { HttpOperation } from "./http-operation.ts";
@@ -42,6 +43,7 @@ interface PreparedUpstream {
   grantRevision: string | null;
   connection: ProviderConnection;
   websocket: boolean;
+  validity: TokenValidity;
   continuation?: ContinuationOwner;
 }
 
@@ -252,18 +254,23 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   try {
     // A canceled preflight is known-unsent even if the ledger marks already landed.
     signal.throwIfAborted();
+    assertTokenUsable(prepared.validity);
     dispatched = true;
     response = await operation.wait(fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal }), "upstream", discard);
     captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response);
     if (!continuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
       let retry: PreparedUpstream | undefined;
       try {
-        retry = await prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]), true, prepared.connection);
+        const candidate = await prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]), true, prepared.connection);
+        // An expired alternate is still failed selection. Keep the original
+        // readable rejection and its nonbillable receipt until it can dispatch.
+        assertTokenUsable(candidate.validity);
+        retry = candidate;
       } catch {
         // Selection failure leaves the original rejection available to the caller.
       }
+      signal.throwIfAborted();
       if (retry) {
-        signal.throwIfAborted();
         void response.body?.cancel().catch(() => undefined);
         signal.throwIfAborted();
         // The alternate may execute without returning headers. Its uncertainty
@@ -282,12 +289,17 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       : selection.body.stream === true;
     response = await normalizePreStreamError(response, streaming && selection.endpoint.response_format !== "audio.binary", operation);
   } catch (error) {
+    // Capture the first cause before stop() aborts our own signal. A known-unsent
+    // expiry keeps its actionable recovery error; cancellation still wins.
+    const failure = !dispatched && !signal.aborted && error instanceof HttpError
+      ? continuation?.requested && error.code === "grant_refresh_failed" ? continuationRestart() : error
+      : new HttpError(502, "provider_unavailable", `upstream request to provider ${selection.provider.id} failed`);
     operation.stop("upstream", error);
     void response?.body?.cancel().catch(() => undefined);
     // A fetch failure can incur cost; a received rejection stays nonbillable
     // even if reading its SSE error body failed.
-    accounting.fail(502, operation.status ?? "provider_error", reservation, content, dispatched && response?.ok !== false);
-    return errorResponse("provider_unavailable", `upstream request to provider ${selection.provider.id} failed`, 502, undefined);
+    accounting.fail(failure.status, operation.status ?? "provider_error", reservation, content, dispatched && response?.ok !== false);
+    return errorResponse(failure.code, failure.message, failure.status);
   }
   // Endpoint timeouts cover fetch and first-event normalization, not delivery.
   // Retire only the timer; the caller and first cause still own delivery through EOF.
@@ -378,7 +390,8 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
         policyGeneration: auth.policy.generation,
       };
     }
-    return { headers, url, requestBody, grantKey: upstream.grantKey, grantRevision: upstream.grantRevision, connection, websocket: selection.endpoint.websocket === "openai.responses" && upstream.transport === null, continuation };
+    const validity = { expiresAt: upstream.grant?.expiresAt ?? null, tokenResponseError: upstream.grant?.tokenResponseError ?? null };
+    return { headers, url, requestBody, grantKey: upstream.grantKey, grantRevision: upstream.grantRevision, connection, websocket: selection.endpoint.websocket === "openai.responses" && upstream.transport === null, validity, continuation };
   } catch (error) {
     throw error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
   }

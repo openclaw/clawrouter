@@ -1,4 +1,5 @@
 import { grantResponse } from "./grant-credential-view.ts";
+import { CREDENTIAL_INPUT_FIELDS, type CredentialInput } from "./grant-credential-record.ts";
 import { authorizeAdmin } from "./access";
 import {
   authorityCall, listBindings, listConnections, listCredentials, listPolicies, listUsers, resolveConnection,
@@ -378,7 +379,11 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string): 
     const body = mutationObject(await readJson<unknown>(request), "invalid_upstream_grant", "upstream grant");
     if (mode === "replace" && !hasPrimaryCredential(body as UpstreamGrant)) throw new HttpError(400, "invalid_upstream_grant", "grant replacement requires a fresh primary credential");
     existing = mode === "replace" ? null : await env.POLICY_KV.get<UpstreamGrant>(key, "json");
-    grant = await putGrantCredentials(env, key, normalizeGrant(body, existing), mode !== "replace", mode === "replace" ? "replace" : undefined);
+    const normalized = normalizeGrant(body, existing);
+    const credentialInput = Object.fromEntries(CREDENTIAL_INPUT_FIELDS.filter(field => Object.hasOwn(body, field)).map(field => [field,
+      field === "tokenType" || field === "scopes" ? normalized[field] : body[field],
+    ])) as CredentialInput;
+    grant = await putGrantCredentials(env, key, normalized, mode !== "replace", mode === "replace" ? "replace" : undefined, credentialInput);
   }
   else throw new HttpError(405, "method_not_allowed", "admin method is not allowed");
   return privateJson(await upstreamGrantResponse(env, key, grant));
@@ -631,7 +636,9 @@ function normalizeGrant(value: unknown, existing: UpstreamGrant | null): Upstrea
   if (!Number.isInteger(priority) || (priority as number) < 0 || (priority as number) > 1_000_000) throw new HttpError(400, "invalid_upstream_grant", "grant priority must be an integer from 0 to 1000000");
   const weight = body.weight ?? existing?.weight ?? 1;
   if (typeof weight !== "number" || !Number.isFinite(weight) || weight <= 0 || weight > 1_000_000) throw new HttpError(400, "invalid_upstream_grant", "grant weight must be a number greater than 0 and at most 1000000");
-  const now = nowIso(), grant = { ...existing, ...body, version: 1, enabled: body.enabled ?? true, priority, weight, kind: body.kind ?? "oauth", tokenType: body.tokenType ?? "Bearer", scopes: body.scopes ?? [], credentials: body.credentials ?? existing?.credentials ?? {}, createdAt: existing?.createdAt ?? now, updatedAt: now, revokedAt: null } as UpstreamGrant;
+  if (!validCredentialBundle(body.credentials as UpstreamGrant["credentials"])) throw new HttpError(400, "invalid_upstream_grant", "grant credentials must use non-empty string values");
+  const credentials = body.credentials && Object.keys(body.credentials).length ? body.credentials : existing?.credentials ?? {};
+  const now = nowIso(), grant = { ...existing, ...body, version: 1, enabled: body.enabled ?? true, priority, weight, kind: body.kind ?? "oauth", tokenType: body.tokenType ?? "Bearer", scopes: body.scopes ?? [], credentials, createdAt: existing?.createdAt ?? now, updatedAt: now, revokedAt: null } as UpstreamGrant;
   if (!grant.provider) throw new HttpError(400, "invalid_upstream_grant", "provider is required");
   const provider = snapshot.providers.find((candidate) => candidate.id === grant.provider);
   if (!provider) throw new HttpError(400, "unknown_provider", "upstream grant provider is not registered");

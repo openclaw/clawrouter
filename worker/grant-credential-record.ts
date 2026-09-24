@@ -10,6 +10,9 @@ const MAX_SECRET_BYTES = 64 * 1024;
 const snapshot = snapshotJson as unknown as ProviderSnapshot;
 const secretFields = new Set(["accessToken", "access_token", "refreshToken", "refresh_token", "credential", "credentials", "apiKey", "api_key", "token", "secret", "clientSecret", "client_secret", "password"]);
 
+export const CREDENTIAL_INPUT_FIELDS = ["credential", "credentials", "accessToken", "refreshToken", "tokenType", "expiresAt", "scopes", "accountId", "subscription", "refresh"] as const;
+export type CredentialInput = Pick<UpstreamGrant, typeof CREDENTIAL_INPUT_FIELDS[number]>;
+
 export interface CredentialRecord {
   version: 1;
   generation: number;

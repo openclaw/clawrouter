@@ -68,7 +68,8 @@ export async function oauthCallback(request: Request, env: Env): Promise<Respons
   };
   grant.priority = Number.isInteger(state.priority) ? state.priority : existing?.priority ?? 100;
   grant.weight = typeof state.weight === "number" && Number.isFinite(state.weight) && state.weight > 0 ? state.weight : existing?.weight ?? 1;
-  try { await installOAuthTokenResponse(env, state.grantKey, grant, payload); }
+  const accountId = jsonPointer(idPayload, config.accountIdJsonPointer), plan = jsonPointer(idPayload, config.subscriptionPlanJsonPointer);
+  try { await installOAuthTokenResponse(env, state.grantKey, grant, payload, { ...(accountId === null ? {} : { accountId }), ...(plan === null ? {} : { subscription: { plan } }) }); }
   catch (error) {
     if (error instanceof HttpError && error.code === "grant_refresh_failed") return callbackPage(false, "Connection saved, but the provider token is unavailable. Renew the account before use.");
     throw error;

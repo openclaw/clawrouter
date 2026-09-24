@@ -4,7 +4,7 @@
 
 - Coalesce pending account publication with credential edits so recovery does not exceed KV's per-key write limit. Reject credentials and reserved authentication fields in strict refresh metadata, and keep refresh authentication under the credential owner's control.
 
-- Enforce account token expiry before routing, materialization and maintenance. Share OAuth callback and renewal lifetime handling: omission clears the old deadline, zero expires immediately, and malformed lifetimes retain rotated credentials under retryable denial. Reuse the existing five-minute renewal retry, preserve configured pool presence, and prevent metadata edits from healing expired or invalid authority.
+- Enforce account token expiry before routing, materialization, HTTP/WebSocket dispatch and maintenance. Share OAuth callback and renewal lifetime handling: omission clears the old deadline, zero expires immediately, and malformed lifetimes retain rotated credentials under retryable denial. Reuse the existing five-minute renewal retry, preserve configured pool presence, and prevent metadata edits or stale KV values from healing expired authority or restoring old credentials.
 
 - Add create-only account identities, canonical secret-free reads, generation-checked metadata edits and whole credential replacement. Preserve paused and revoked disablement unless replacement explicitly enables the account. Report committed but incomplete mutations as repair-pending, and finish scheduling, attachment and credential projection publication through the existing account recovery flow. Keep released PUT and CLI contracts.
 

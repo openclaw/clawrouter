@@ -1,7 +1,7 @@
 import { HttpError } from "./utils.ts";
 
 export const REFRESH_MARGIN_MS = 5 * 60_000;
-type TokenValidity = { expiresAt?: string | null; tokenResponseError?: "invalid_expiry" | null };
+export type TokenValidity = { expiresAt?: string | null; tokenResponseError?: "invalid_expiry" | null };
 
 // RFC 6749 permits omission. It describes the new token, never the previous
 // token's deadline; an explicit malformed value must not become unknown/valid.

@@ -10,7 +10,7 @@ import type { GrantPoolReadiness } from "../shared/contracts.ts";
 import { accountCredentialView, assertNewAccountRef, grantIntentBody, strictCredentialRecord, type GrantCredentialIntent } from "./grant-credential-intents.ts";
 import { assertTokenUsable, REFRESH_MARGIN_MS, tokenDenied, tokenExpired, tokenResponseExpiry } from "./grant-expiry.ts";
 
-import { secretlessGrant, canonicalRecord, nextCredentialGeneration, ownerMetadata, metadataGrant, attachmentStatus, revokedRecord, hasRawCredential, credentialRecord, updatedCredentialRecord, credentialProjection, materializedGrant, hasPrimaryCredential, stripLegacySecrets, isRefreshAuthenticationParameter, boundedSecret, type CredentialRecord, type CredentialProjection } from "./grant-credential-record.ts";
+import { CREDENTIAL_INPUT_FIELDS, secretlessGrant, canonicalRecord, nextCredentialGeneration, ownerMetadata, metadataGrant, attachmentStatus, revokedRecord, hasRawCredential, credentialRecord, updatedCredentialRecord, credentialProjection, materializedGrant, hasPrimaryCredential, stripLegacySecrets, isRefreshAuthenticationParameter, boundedSecret, type CredentialInput, type CredentialRecord, type CredentialProjection } from "./grant-credential-record.ts";
 export { secretlessGrant, hasRawCredential, hasPrimaryCredential, type CredentialProjection } from "./grant-credential-record.ts";
 
 const MAX_REFRESH_RESPONSE_BYTES = 128 * 1024;
@@ -37,6 +37,7 @@ interface PutRequest {
   key: string;
   grant: UpstreamGrant;
   preserveUnspecifiedSecrets: boolean;
+  credentialInput?: CredentialInput;
   // Contribution imports also replace secrets; only the explicit administrator
   // operation may discard corrupt legacy metadata.
   intent?: "replace";
@@ -114,9 +115,18 @@ export class GrantCredentialObject implements DurableObject {
         }
         const admissionGeneration = replace && (current || previous) ? attachment.generation : current?.generation ?? 0;
         const generation = nextCredentialGeneration(current?.generation ?? (replace && previous ? attachment.generation : previous?.credentialGeneration ?? 0));
-        let record = !replace && current && !current.revokedAt && (input.preserveUnspecifiedSecrets || !hasPrimaryCredential(input.grant))
-          ? updatedCredentialRecord(current, input.grant)
-          : credentialRecord(input.grant, generation);
+        let grantInput = input.grant;
+        if (current && input.credentialInput) {
+          // KV normalization can precede repair of a failed publication. Only
+          // explicitly submitted owner fields may overwrite the current record.
+          grantInput = { ...input.grant };
+          for (const field of CREDENTIAL_INPUT_FIELDS) delete grantInput[field];
+          Object.assign(grantInput, input.credentialInput);
+          if (path === "/token-exchange" && input.credentialInput.subscription) grantInput.subscription = { ...current.subscription, ...input.credentialInput.subscription };
+        }
+        let record = !replace && current && !current.revokedAt && (input.preserveUnspecifiedSecrets || !hasPrimaryCredential(grantInput))
+          ? updatedCredentialRecord(current, grantInput)
+          : credentialRecord(grantInput, generation);
         record = ownerMetadata(record, input.grant, input.key);
         // Only the authenticated callback adapter can install token-response
         // evidence. Editable metadata never establishes or clears this fact.
@@ -568,12 +578,14 @@ function assertCredentialEnabled(record: CredentialRecord): void {
   if (record.enabled !== true) throw new HttpError(409, "grant_disabled", "upstream grant is disabled");
 }
 
-export async function putGrantCredentials(env: Env, key: string, grant: UpstreamGrant, preserveUnspecifiedSecrets = false, intent?: "replace"): Promise<UpstreamGrant> {
-  return (await ownerCall<OwnerResponse>(env, key, "/put", { key, grant, preserveUnspecifiedSecrets, intent })).grant;
+export async function putGrantCredentials(env: Env, key: string, grant: UpstreamGrant, preserveUnspecifiedSecrets = false, intent?: "replace", credentialInput?: CredentialInput): Promise<UpstreamGrant> {
+  return (await ownerCall<OwnerResponse>(env, key, "/put", { key, grant, preserveUnspecifiedSecrets, intent, credentialInput })).grant;
 }
 
-export async function installOAuthTokenResponse(env: Env, key: string, grant: UpstreamGrant, tokenResponse: Record<string, unknown>): Promise<UpstreamGrant> {
-  return (await ownerCall<OwnerResponse>(env, key, "/token-exchange", { key, grant, tokenResponse, preserveUnspecifiedSecrets: true })).grant;
+export async function installOAuthTokenResponse(env: Env, key: string, grant: UpstreamGrant, tokenResponse: Record<string, unknown>, identity: Pick<CredentialInput, "accountId" | "subscription"> = {}): Promise<UpstreamGrant> {
+  const credentialInput: CredentialInput = { ...identity, accessToken: boundedSecret(tokenResponse.access_token, "access token") };
+  if (typeof tokenResponse.refresh_token === "string" && tokenResponse.refresh_token) credentialInput.refreshToken = tokenResponse.refresh_token;
+  return (await ownerCall<OwnerResponse>(env, key, "/token-exchange", { key, grant, credentialInput, tokenResponse, preserveUnspecifiedSecrets: true })).grant;
 }
 
 function tokenExchangeRecord(record: CredentialRecord, payload: Record<string, unknown>): CredentialRecord {

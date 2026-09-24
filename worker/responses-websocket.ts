@@ -1,6 +1,7 @@
 import { emptyReservation, markBudgetDispatched, reserveBudget, type BudgetReservation } from "./accounting";
 import { retainRequestContent } from "./content-retention";
 import { HttpContinuation } from "./http-continuation";
+import { assertTokenUsable } from "./grant-expiry.ts";
 import { authenticateProxyKey } from "./proxy-auth";
 import { createProxyAccounting } from "./proxy-accounting";
 import { concreteOpenAiSelection, isSelectionFailure, nativeMatch, prepareNativeRequest, searchParamsRecord, type ProxySelection } from "./proxy-selection";
@@ -60,11 +61,14 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
         await markBudgetDispatched(env, reservation);
         pinned ??= { providerId: selection.provider.id, endpointId: selection.endpoint.id, key: upstream.grantKey, revision: upstream.grantRevision };
         const observe = grantObserver(context, env, upstream.grantKey, upstream.grantRevision, selection.provider.quota);
+        const validity = upstream.validity;
+        const assertDispatch = () => assertTokenUsable(validity);
         return {
           pin: JSON.stringify([selection.provider.id, selection.endpoint.id, upstream.grantKey, upstream.grantRevision, upstream.continuation?.routeSha256]),
           payload: JSON.stringify({ type: "response.create", ...selection.body, ...(lane ? { stream_id: lane } : {}) }),
           timeoutMs: selection.endpoint.timeout_ms ?? 120_000,
-          connect: upstreamConnection(upstream.url, upstream.headers, signal, observe),
+          assertDispatch,
+          connect: upstreamConnection(upstream.url, upstream.headers, signal, observe, assertDispatch),
           publish: (identities, frame) => continuation?.publishFrame(identities, frame) ?? Promise.resolve(),
           settle: settlement(accounting, reservation, content, observe),
         };
@@ -84,10 +88,12 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
   return new Response(null, { status: 101, webSocket: pair[0] });
 }
 
-function upstreamConnection(url: URL, inputHeaders: Headers, signal: AbortSignal, observe: (response: Pick<Response, "status" | "headers">) => void): AdmittedResponse["connect"] {
+function upstreamConnection(url: URL, inputHeaders: Headers, signal: AbortSignal, observe: (response: Pick<Response, "status" | "headers">) => void, assertDispatch: () => void): AdmittedResponse["connect"] {
   return async () => {
     const headers = new Headers(inputHeaders);
     headers.set("upgrade", "websocket");
+    signal.throwIfAborted();
+    assertDispatch();
     const response = await fetch(url, { method: "GET", headers, signal, redirect: "manual" });
     observe(response);
     if (response.status !== 101 || !response.webSocket) {

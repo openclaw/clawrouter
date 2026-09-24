@@ -93,3 +93,41 @@ for (const [label, expiry] of [["omitted", undefined], ["positive", 3600], ["zer
   assert.equal(values.get(key).tokenResponseError, record.tokenResponseError);
   assert.doesNotMatch(JSON.stringify([page, values.get(key)]), /callback-access-fixture|retained-refresh-fixture/);
 });
+
+
+for (const current of ["rotated", "cleared", "unowned"]) for (const returned of [false, true]) test(`callback ${returned ? "explicit" : "omitted"} refresh retains ${current} owner provenance over raw KV`, async context => {
+  const now = Date.parse("2026-09-24T12:00:00Z"), key = "oauth/policy/openai";
+  context.mock.method(Date, "now", () => now);
+  const legacy = { provider: "openai", kind: "oauth", accessToken: "old-access-fixture", refreshToken: "old-refresh-fixture", tokenType: "Custom", scopes: ["kept"], expiresAt: new Date(now + 3_600_000).toISOString() };
+  const values = new Map([[key, legacy]]);
+  const env = attachGrantCredentialNamespace({ POLICY_KV: {
+    async get(key, type) { const value = values.get(key) ?? null; return type === "text" && value !== null ? JSON.stringify(value) : structuredClone(value); },
+    async put(key, value) { values.set(key, JSON.parse(value)); },
+  } });
+  const { materializeGrantCredentials, putGrantCredentials } = await import("../grant-credentials.ts");
+  let callback = false;
+  context.mock.method(globalThis, "fetch", async () => Response.json(callback
+    ? { access_token: "callback-access-fixture", ...(returned ? { refresh_token: "callback-refresh-fixture" } : {}) }
+    : { access_token: "rotated-access-fixture", refresh_token: "rotated-refresh-fixture", expires_in: "bad" }));
+  const put = env.POLICY_KV.put;
+  if (current !== "unowned") {
+    env.POLICY_KV.put = async () => { throw new Error("fixture KV publication failure"); };
+    await assert.rejects(() => current === "cleared"
+      ? putGrantCredentials(env, key, { ...legacy, accessToken: "rotated-access-fixture", refreshToken: null })
+      : materializeGrantCredentials(env, key, legacy, "openai", { tokenUrl: "https://token.example/refresh" }, true));
+    if (current === "cleared") assert.equal(env.GRANT_CREDENTIALS.objects.get(key).values.get("credential").refreshToken, null);
+    assert.deepEqual(values.get(key), legacy);
+    env.POLICY_KV.put = put;
+  }
+  callback = true;
+  const response = await oauthCallback(new Request("https://console.example/v1/oauth/callback?state=state-1&code=auth-code"), env);
+  assert.equal(response.status, 200);
+  assert.match(await response.text(), /Connected/);
+  const record = env.GRANT_CREDENTIALS.objects.get(key).values.get("credential");
+  assert.equal(record.accessToken, "callback-access-fixture");
+  assert.equal(record.refreshToken, returned ? "callback-refresh-fixture" : current === "unowned" ? "old-refresh-fixture" : current === "cleared" ? null : "rotated-refresh-fixture");
+  assert.equal(record.expiresAt, null);
+  assert.equal(record.tokenResponseError, null);
+  assert.equal(record.nextRefreshAttemptAt, null);
+  if (current !== "unowned") { assert.equal(record.tokenType, "Custom"); assert.deepEqual(record.scopes, ["kept"]); }
+});
