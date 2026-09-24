@@ -1,7 +1,7 @@
 import snapshotJson from "./generated/provider-snapshot.json" with { type: "json" };
 import {
   credentialIdentityChanged, credentialRecord, hasPrimaryCredential, metadataGrant,
-  isRefreshAuthenticationParameter, nextCredentialGeneration, normalizedScopes, ownerMetadata, validTimestamp, type CredentialRecord,
+  isRefreshAuthenticationParameter, nextCredentialGeneration, normalizedScopes, ownerMetadata, preserveExpiredAuthority, validTimestamp, type CredentialRecord,
 } from "./grant-credential-record.ts";
 import { grantResponse } from "./grant-credential-view.ts";
 import type { ProviderSnapshot, UpstreamGrant } from "./types";
@@ -48,7 +48,7 @@ export function strictCredentialRecord(key: string, intent: GrantCredentialInten
     updated = ownerMetadata(updated, merged, key);
     // Metadata never heals reauthorization or a tombstone. Keep/clear applies
     // only to explicitly supplied fields; cosmetic edits preserve continuity.
-    return { ...updated, status: current.status, revokedAt: current.revokedAt };
+    return preserveExpiredAuthority(current, { ...updated, status: current.status, revokedAt: current.revokedAt });
   }
   const fresh: UpstreamGrant = {
     version: 1, provider: current?.providerId, kind: current?.kind ?? "oauth",

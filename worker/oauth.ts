@@ -1,10 +1,10 @@
 import { fetchTimeoutSignal } from "../shared/fetch-timeout.ts";
 import { authorizeAdmin, verifiedAccessSession } from "./access";
 import { authorityCall } from "./authority";
-import { putGrantCredentials } from "./grant-credentials.ts";
+import { installOAuthTokenResponse } from "./grant-credentials.ts";
 import { providerById } from "./providers";
 import type { Env, OAuthState, UpstreamGrant } from "./types";
-import { errorResponse, nowIso, privateJson } from "./utils";
+import { errorResponse, HttpError, nowIso, privateJson } from "./utils";
 
 export async function startOAuth(request: Request, env: Env, grantKey: string, providerId: string, priority: number, weight: number): Promise<Response> {
   const actor = await authorizeAdmin(request, env);
@@ -55,12 +55,12 @@ export async function oauthCallback(request: Request, env: Env): Promise<Respons
   if (!tokenResponse.ok || typeof payload.access_token !== "string") return callbackPage(false, "Provider token exchange failed.");
   const existing = await env.POLICY_KV.get<UpstreamGrant>(state.grantKey, "json");
   const idPayload = typeof payload.id_token === "string" ? decodeJwtPayload(payload.id_token) : {};
-  const now = nowIso(), expires = typeof payload.expires_in === "number" ? new Date(Date.now() + payload.expires_in * 1000).toISOString() : null;
+  const now = nowIso();
   const grant: UpstreamGrant = {
     ...existing, version: 1, enabled: true, kind: config.grantKind as UpstreamGrant["kind"], provider: provider.id,
     label: existing?.label ?? `${provider.display_name} OAuth`, accessToken: payload.access_token as string,
     refreshToken: typeof payload.refresh_token === "string" ? payload.refresh_token : existing?.refreshToken,
-    tokenType: typeof payload.token_type === "string" ? payload.token_type : "Bearer", expiresAt: expires,
+    tokenType: typeof payload.token_type === "string" ? payload.token_type : "Bearer", expiresAt: null,
     scopes: typeof payload.scope === "string" ? payload.scope.split(/\s+/).filter(Boolean) : config.scopes,
     accountId: jsonPointer(idPayload, config.accountIdJsonPointer) ?? existing?.accountId,
     subscription: { ...existing?.subscription, plan: jsonPointer(idPayload, config.subscriptionPlanJsonPointer) ?? existing?.subscription?.plan },
@@ -68,7 +68,11 @@ export async function oauthCallback(request: Request, env: Env): Promise<Respons
   };
   grant.priority = Number.isInteger(state.priority) ? state.priority : existing?.priority ?? 100;
   grant.weight = typeof state.weight === "number" && Number.isFinite(state.weight) && state.weight > 0 ? state.weight : existing?.weight ?? 1;
-  await putGrantCredentials(env, state.grantKey, grant, true);
+  try { await installOAuthTokenResponse(env, state.grantKey, grant, payload); }
+  catch (error) {
+    if (error instanceof HttpError && error.code === "grant_refresh_failed") return callbackPage(false, "Connection saved, but the provider token is unavailable. Renew the account before use.");
+    throw error;
+  }
   return callbackPage(true, `${provider.display_name} connection saved.`);
 }
 

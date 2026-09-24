@@ -398,7 +398,7 @@ New account-management clients use the strict routes:
   Read and inspect that state before another mutation; do not retry automatically.
 - PATCH accepts `label`, `enabled`, `priority`, `weight`, `maintenance`, `expiresAt`,
   `scopes`, `accountId`, `subscription` and `refresh`. Omission keeps the existing
-  value. Null clears label, expiry, account, subscription or refresh override;
+  value. Null clears label, unexpired expiry, account, subscription or refresh override;
   `scopes: []` clears scopes. Booleans and numbers cannot be null. The sole secret
   operation is `refreshToken: null`, which clears that token and rotates credential
   lineage. Non-null refresh tokens, primary credentials, provider/kind changes and
@@ -407,6 +407,19 @@ New account-management clients use the strict routes:
   can still apply. Clear the refresh token to prevent its use. Refresh `extraParams`
   accepts public extensions such as `scope` and `audience`, not credential fields or
   overrides of the owner-controlled grant type and client authentication.
+- An already-expired deadline cannot be cleared or extended by metadata edits.
+  Renew the token or replace the primary credential. Expired accounts without a
+  refresh token require reauthorization. Safe account views include the fixed
+  `tokenResponseError` (`invalid_expiry` or null) and `nextRefreshAttemptAt` fields;
+  these are owner-produced and cannot be supplied in account mutations. The
+  existing `usable` field excludes denied tokens and expired tokens awaiting a
+  renewal retry. Unknown expiry after an omitted provider lifetime is not an
+  invented validity guarantee.
+- OAuth callback and refresh responses with zero lifetime are immediately
+  unusable. Malformed lifetimes retain the rotated credentials but deny use.
+  When a refresh token remains, the existing five-minute retry window controls
+  renewal; quota and keep-warm traffic remain blocked. A stored but unusable
+  callback does not report a successful connection.
 - POST `/replace` requires a fresh primary credential. It clears omitted or competing
   old credential forms and old token type, expiry, scopes, account, subscription and
   refresh material. Omitted token type defaults to `Bearer`. Routing identity, label,

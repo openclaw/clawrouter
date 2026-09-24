@@ -85,6 +85,24 @@ owner `/reconcile` accepts only the grant key, rereads the owner, and uses an
 exact index-revision comparison. A lost acknowledgement is recovered through a
 fresh read, not a stale write or caller-supplied previous provider.
 The explicit credential commit stores its admission revision as a receipt.
+
+The credential owner also owns token expiry. OAuth callbacks and renewals share
+one token-response classifier: omitted `expires_in` clears the previous deadline,
+zero is immediately expired, and an invalid or unrepresentable value records
+`tokenResponseError: invalid_expiry`. Rotation commits the bounded access/refresh
+pair before reporting denial, so a malformed lifetime cannot discard a rotated
+refresh token. This retryable denial preserves configured attachment presence;
+it never authorizes dispatch, quota probes or keep-warm traffic. Expired renewable
+tokens can re-enter selection when recovery is due. Expired nonrenewable tokens
+transition to the existing `reauth_required` state.
+
+Zero and malformed lifetimes use the existing five-minute renewal retry window,
+without extending token validity. While denied, alarms schedule only renewal;
+overdue maintenance cannot create a one-second retry loop. Metadata edits cannot
+clear the marker or extend already-expired authority. A trusted successful
+exchange or fresh primary replacement clears the marker; revocation erases it.
+Older workers ignore this owner fact and are not a qualified rollback target.
+
 Pending rows retain their prior committed status, so failed account writes can
 restore membership without a later refresh or raw import adopting the proposal.
 Restoration and its new revision fence commit together, including no-op owner

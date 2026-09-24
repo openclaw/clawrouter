@@ -68,3 +68,28 @@ test("OAuth token exchange cannot recover corrupt legacy metadata through ordina
   assert.equal(writes, 0);
   assert.equal(env.GRANT_CREDENTIALS.objects.get(key).values.has("credential"), false);
 });
+
+for (const [label, expiry] of [["omitted", undefined], ["positive", 3600], ["zero", 0], ["malformed", "bad"], ["unrepresentable", Number.MAX_VALUE]]) test(`callback installs canonical ${label} expiry before reporting connection outcome`, async context => {
+  const now = Date.parse("2026-09-24T12:00:00Z");
+  context.mock.method(Date, "now", () => now);
+  const key = "oauth/policy/openai", values = new Map();
+  const env = attachGrantCredentialNamespace({ POLICY_KV: {
+    async get(key, type) { const value = values.get(key) ?? null; return type === "text" && value !== null ? JSON.stringify(value) : structuredClone(value); },
+    async put(key, value) { values.set(key, JSON.parse(value)); },
+  } });
+  const { putGrantCredentials } = await import("../grant-credentials.ts");
+  await putGrantCredentials(env, key, { provider: "openai", kind: "oauth", accessToken: "old-fixture", refreshToken: "retained-refresh-fixture", expiresAt: "2020-01-01T00:00:00Z" });
+  context.mock.method(globalThis, "fetch", async () => Response.json({ access_token: "callback-access-fixture", ...(expiry === undefined ? {} : { expires_in: expiry }) }));
+  const response = await oauthCallback(new Request("https://console.example/v1/oauth/callback?state=state-1&code=auth-code"), env);
+  const page = await response.text(), own = env.GRANT_CREDENTIALS.objects.get(key), record = own.values.get("credential");
+  const denied = !["omitted", "positive"].includes(label);
+  assert.equal(response.status, denied ? 400 : 200);
+  assert.match(page, denied ? /Connection failed/ : /Connected/);
+  assert.equal(record.accessToken, "callback-access-fixture");
+  assert.equal(record.refreshToken, "retained-refresh-fixture");
+  assert.equal(record.expiresAt, label === "positive" ? new Date(now + 3_600_000).toISOString() : label === "zero" ? new Date(now).toISOString() : null);
+  assert.equal(record.tokenResponseError, ["malformed", "unrepresentable"].includes(label) ? "invalid_expiry" : null);
+  assert.equal(record.nextRefreshAttemptAt, denied ? new Date(now + 300_000).toISOString() : null);
+  assert.equal(values.get(key).tokenResponseError, record.tokenResponseError);
+  assert.doesNotMatch(JSON.stringify([page, values.get(key)]), /callback-access-fixture|retained-refresh-fixture/);
+});

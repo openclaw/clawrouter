@@ -56,6 +56,15 @@ test("a contribution cannot acquire explicit administrator recovery intent", asy
   assert.equal(env.released, 1);
 });
 
+for (const field of ["tokenResponseError", "nextRefreshAttemptAt"]) test(`contributions cannot inject owner expiry field ${field}`, async () => {
+  const values = new Map(), env = await submissionEnv(values, "submission-secret");
+  const response = await poolSubmissionApi(request("submission-secret", { accessToken: "access-fixture", [field]: null }), env, "/v1/pool-submissions/pst_submission_ticket_1/consume");
+  assert.equal(response.status, 400);
+  assert.equal((await response.json()).error.code, "invalid_pool_submission");
+  assert.equal(values.size, 0);
+  assert.equal(env.released, 1);
+});
+
 async function submissionEnv(values, ticketToken) {
   const expectedDigest = await sha256Hex(ticketToken);
   const env = {

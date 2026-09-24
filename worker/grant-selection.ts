@@ -1,4 +1,5 @@
 import { HttpError } from "./utils.ts";
+import { tokenExpired } from "./grant-expiry.ts";
 import { assertOperationConfiguration, grantSupports, type GrantRequirement } from "./provider-auth.ts";
 import { authorityCall } from "./authority.ts";
 import { grantCoolingDown, grantQuotaRatio, grantRuntimeFresh } from "./grant-quota.ts";
@@ -64,6 +65,12 @@ export function grantUsable(grant: UpstreamGrant): boolean {
 
 export function validCredentialBundle(value: UpstreamGrant["credentials"]): boolean {
   return value == null || (!Array.isArray(value) && typeof value === "object" && Object.entries(value).every(([name, secret]) => /^[A-Za-z0-9_.-]{1,128}$/.test(name) && typeof secret === "string" && secret.trim().length > 0));
+}
+
+export function grantAvailable(grant: UpstreamGrant, now = Date.now()): boolean {
+  return grant.enabled !== false && grantUsable(grant) && grant.tokenResponseError !== "invalid_expiry"
+    && (!tokenExpired(grant, now) || !!(grant.credentialStore === "durable_object" ? grant.hasRefreshToken : grant.refreshToken)
+      && !(grant.nextRefreshAttemptAt && Date.parse(grant.nextRefreshAttemptAt) > now));
 }
 
 export interface GrantCandidates { available: SelectedGrant[]; hasConfiguredGrant: boolean; environmentReady: boolean }
@@ -172,6 +179,7 @@ export async function resolveGrantCandidates(
   const eligibilityRestricted = Object.prototype.hasOwnProperty.call(routing.eligibleGrants, providerId);
   const eligibleRefs = routing.eligibleGrants[providerId] ?? [];
   const available = configured.filter((entry) => {
+    if (!grantAvailable(entry.grant, nowMs)) return false;
     if (requirement && !grantSupports(requirement, entry.grant)) return false;
     if (pinnedKey !== undefined && entry.key !== pinnedKey) return false;
     if (excludedKeys.has(entry.key) || grantCoolingDown(entry.runtimeState, nowMs)) return false;

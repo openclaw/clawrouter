@@ -8,11 +8,11 @@ import { errorResponse, HttpError, json, readJson } from "./utils.ts";
 import { applyTemplateHeaders, resolveTemplate } from "./provider-templates.ts";
 import type { GrantPoolReadiness } from "../shared/contracts.ts";
 import { accountCredentialView, assertNewAccountRef, grantIntentBody, strictCredentialRecord, type GrantCredentialIntent } from "./grant-credential-intents.ts";
+import { assertTokenUsable, REFRESH_MARGIN_MS, tokenDenied, tokenExpired, tokenResponseExpiry } from "./grant-expiry.ts";
 
-import { canonicalRecord, nextCredentialGeneration, ownerMetadata, metadataGrant, attachmentStatus, revokedRecord, hasRawCredential, credentialRecord, updatedCredentialRecord, credentialProjection, materializedGrant, hasPrimaryCredential, stripLegacySecrets, isRefreshAuthenticationParameter, boundedSecret, type CredentialRecord, type CredentialProjection } from "./grant-credential-record.ts";
+import { secretlessGrant, canonicalRecord, nextCredentialGeneration, ownerMetadata, metadataGrant, attachmentStatus, revokedRecord, hasRawCredential, credentialRecord, updatedCredentialRecord, credentialProjection, materializedGrant, hasPrimaryCredential, stripLegacySecrets, isRefreshAuthenticationParameter, boundedSecret, type CredentialRecord, type CredentialProjection } from "./grant-credential-record.ts";
 export { secretlessGrant, hasRawCredential, hasPrimaryCredential, type CredentialProjection } from "./grant-credential-record.ts";
 
-const REFRESH_MARGIN_MS = 5 * 60_000;
 const MAX_REFRESH_RESPONSE_BYTES = 128 * 1024;
 const MAX_LEGACY_GRANT_BYTES = 3 * 1024 * 1024;
 const MIN_ALARM_DELAY_MS = 1_000;
@@ -87,8 +87,8 @@ export class GrantCredentialObject implements DurableObject {
         return json(accountCredentialView(record));
       }
       if (path === "/mutate") return await this.mutate(await readJson<{ key: string; intent: GrantCredentialIntent; body: unknown }>(request));
-      if (path === "/put") {
-        const input = await readJson<PutRequest>(request);
+      if (path === "/put" || path === "/token-exchange") {
+        const input = await readJson<PutRequest & { tokenResponse?: Record<string, unknown> }>(request);
         const replace = input.intent === "replace";
         if (replace && !hasPrimaryCredential(input.grant)) throw new HttpError(400, "invalid_upstream_grant", "grant replacement requires a fresh primary credential");
         let current = await this.state.storage.get<CredentialRecord>("credential");
@@ -118,6 +118,9 @@ export class GrantCredentialObject implements DurableObject {
           ? updatedCredentialRecord(current, input.grant)
           : credentialRecord(input.grant, generation);
         record = ownerMetadata(record, input.grant, input.key);
+        // Only the authenticated callback adapter can install token-response
+        // evidence. Editable metadata never establishes or clears this fact.
+        if (path === "/token-exchange") record = tokenExchangeRecord(record, input.tokenResponse ?? {});
         const grant = metadataGrant(record);
         // Admission reserves capacity without removing the old attachment. A
         // failed store leaves indexed pending work for this owner to reconcile.
@@ -127,6 +130,7 @@ export class GrantCredentialObject implements DurableObject {
         record.poolAdmissionRevision = admitted.revision;
         await this.state.storage.put("credential", record);
         await this.finalize(record);
+        if (path === "/token-exchange") assertTokenUsable(record);
         return json({ grant });
       }
       if (path === "/materialize") return json(await this.materialize(await readJson<MaterializeRequest>(request)));
@@ -245,6 +249,7 @@ export class GrantCredentialObject implements DurableObject {
     try {
       assertCredentialEnabled(record);
       if (record.providerId && record.providerId !== input.providerId || record.kind !== input.grant.kind) throw new HttpError(409, "upstream_grant_changed", "upstream grant changed; retry discovery before dispatch");
+      record = await this.expireNonrenewable(record);
       if (record.status === "reauth_required") throw new ReauthorizationRequired("upstream grant requires reauthorization", credentialProjection(record));
 
       const expected = input.expectedGeneration;
@@ -252,7 +257,7 @@ export class GrantCredentialObject implements DurableObject {
       const expiresAtMs = record.expiresAt ? Date.parse(record.expiresAt) : NaN;
       const expiring = Number.isFinite(expiresAtMs) && expiresAtMs <= Date.now() + REFRESH_MARGIN_MS;
       const deferredRefresh = record.nextRefreshAttemptAt ? Date.parse(record.nextRefreshAttemptAt) > Date.now() : false;
-      if (mayForce || expiring) {
+      if (mayForce || expiring || record.tokenResponseError) {
         if (!record.refreshToken) {
           if (mayForce) throw new HttpError(400, "grant_refresh_unavailable", "upstream grant has no refresh token");
         } else if (!mayForce && deferredRefresh) {
@@ -273,12 +278,18 @@ export class GrantCredentialObject implements DurableObject {
           }
         }
       }
-      return { grant: materializedGrant(metadataGrant(record), record) };
+      record = await this.expireNonrenewable(record);
+      if (record.status === "reauth_required") throw new ReauthorizationRequired("upstream grant requires reauthorization", credentialProjection(record));
+      assertTokenUsable(record);
     } finally {
       // KV permits one write per key per second. Publish the final owner state
       // once, including failed refreshes and stale disabled/revoked reads.
       if (stale || changed || migrated || record.poolSyncPending) await this.finalize(record);
     }
+    // Publication can await storage/index/KV. Recheck at the actual release
+    // boundary so a deadline crossed during finalization never releases secrets.
+    assertTokenUsable(record);
+    return { grant: materializedGrant(metadataGrant(record), record) };
   }
 
   private async refresh(record: CredentialRecord, providerId: string, providerRefresh: RefreshConfig | null): Promise<CredentialRecord> {
@@ -324,25 +335,16 @@ export class GrantCredentialObject implements DurableObject {
       throw new HttpError(502, "grant_refresh_failed", `provider ${providerId} rejected the refresh request`);
     }
 
-    const updated: CredentialRecord = {
-      ...record,
-      status: "active",
-      generation: record.generation + 1,
-      poolSyncPending: true,
-      accessToken: boundedSecret(payload.access_token, "access token"),
-      refreshToken: typeof payload.refresh_token === "string" && payload.refresh_token
-        ? boundedSecret(payload.refresh_token, "refresh token")
-        : record.refreshToken,
-      tokenType: typeof payload.token_type === "string" && payload.token_type ? payload.token_type : record.tokenType,
-      scopes: typeof payload.scope === "string" ? payload.scope.split(/\s+/).filter(Boolean).slice(0, 128) : record.scopes,
-      expiresAt: typeof payload.expires_in === "number" && Number.isFinite(payload.expires_in) && payload.expires_in > 0
-        ? new Date(Date.now() + payload.expires_in * 1_000).toISOString()
-        : record.expiresAt,
-      nextRefreshAttemptAt: null,
-      updatedAt: new Date().toISOString(),
-    };
+    const updated = tokenExchangeRecord({ ...record, generation: nextCredentialGeneration(record.generation) }, payload);
     await this.state.storage.put("credential", updated);
     return updated;
+  }
+
+  private async expireNonrenewable(record: CredentialRecord): Promise<CredentialRecord> {
+    if (record.status === "reauth_required" || record.tokenResponseError || record.refreshToken || !tokenExpired(record)) return record;
+    const expired = { ...record, status: "reauth_required" as const, generation: nextCredentialGeneration(record.generation), poolSyncPending: true, updatedAt: new Date().toISOString() };
+    await this.state.storage.put("credential", expired);
+    return expired;
   }
 
   private async maintain(): Promise<void> {
@@ -354,18 +356,12 @@ export class GrantCredentialObject implements DurableObject {
       return;
     }
     if (record.poolSyncPending) await this.finalize(record, "prepare");
+    record = await this.expireNonrenewable(record);
     const provider = snapshot.providers.find((candidate) => candidate.id === record!.providerId);
-    const transport = provider ? transportForGrant(provider, materializedGrant({ provider: record.providerId, kind: record.kind }, record)) : null;
-    if (!provider || !transport) {
-      if (record.poolSyncPending) await this.finalize(record);
-      return;
-    }
     const now = Date.now();
-    const quotaProbe = quotaProbeForGrant(provider, materializedGrant({ provider: provider.id, kind: record.kind }, record));
-    if (!quotaProbe) record.nextQuotaProbeAt = null;
     const refreshAt = record.nextRefreshAttemptAt ? Date.parse(record.nextRefreshAttemptAt) : record.expiresAt ? Date.parse(record.expiresAt) - REFRESH_MARGIN_MS : NaN;
-    if (record.refreshToken && Number.isFinite(refreshAt) && refreshAt <= now) {
-      try { record = { ...await this.refresh(record, provider.id, provider.auth.refresh), nextRefreshAttemptAt: null }; }
+    if (record.status !== "reauth_required" && record.refreshToken && Number.isFinite(refreshAt) && refreshAt <= now) {
+      try { record = await this.refresh(record, record.providerId!, provider?.auth.refresh ?? null); }
       catch {
         record = await this.state.storage.get<CredentialRecord>("credential") ?? record;
         if (record.status !== "reauth_required") {
@@ -374,11 +370,17 @@ export class GrantCredentialObject implements DurableObject {
           await this.state.storage.put("credential", record);
         }
       }
-      if (record.status === "reauth_required") {
-        await this.finalize(record);
-        return;
-      }
     }
+    record = await this.expireNonrenewable(record);
+    const transport = provider ? transportForGrant(provider, materializedGrant({ provider: record.providerId, kind: record.kind }, record)) : null;
+    // Renewal and terminal expiry belong to the owner even without a transport.
+    // Denied tokens never participate in quota/keep-warm scheduling or egress.
+    if (record.status === "reauth_required" || tokenDenied(record) || !provider || !transport) {
+      await this.finalize(record);
+      return;
+    }
+    const quotaProbe = quotaProbeForGrant(provider, materializedGrant({ provider: provider.id, kind: record.kind }, record));
+    if (!quotaProbe) record.nextQuotaProbeAt = null;
     if (due(record.nextQuotaProbeAt, now) && transport.maintenance.quotaPoll && quotaProbe) {
       try {
         const state = await probeQuota(this.env, provider, record);
@@ -396,6 +398,7 @@ export class GrantCredentialObject implements DurableObject {
       record.nextKeepWarmAt = new Date(now + transport.maintenance.keepWarm.intervalSeconds * 1_000).toISOString();
     }
     record.poolSyncPending = true;
+    record = await this.expireNonrenewable(record);
     await this.state.storage.put("credential", record);
     await this.finalize(record);
   }
@@ -444,11 +447,14 @@ export class GrantCredentialObject implements DurableObject {
   }
 
   private async schedule(record: CredentialRecord): Promise<void> {
-    const next = [
-      record.refreshToken && record.nextRefreshAttemptAt ? Date.parse(record.nextRefreshAttemptAt) : record.refreshToken && record.expiresAt ? Date.parse(record.expiresAt) - REFRESH_MARGIN_MS : NaN,
+    const denied = tokenDenied(record);
+    const recovery = record.refreshToken ? record.nextRefreshAttemptAt ? Date.parse(record.nextRefreshAttemptAt)
+      : record.expiresAt ? Date.parse(record.expiresAt) - REFRESH_MARGIN_MS : NaN : NaN;
+    const next = (denied ? [record.refreshToken ? recovery : record.tokenResponseError ? NaN : timestamp(record.expiresAt)] : [
+      record.refreshToken ? recovery : timestamp(record.expiresAt),
       timestamp(record.nextQuotaProbeAt),
       record.maintenance?.keepWarm ? timestamp(record.nextKeepWarmAt) : NaN,
-    ].filter(Number.isFinite);
+    ]).filter(Number.isFinite);
     if (!record.enabled || !next.length || record.status === "reauth_required") {
       await this.state.storage.deleteAlarm();
       return;
@@ -462,7 +468,7 @@ export class GrantCredentialObject implements DurableObject {
     if (canonicalRecord(record)) return record;
     if (!record.metadata || record.enabled === undefined) {
       const metadata = key ? await legacyGrantMetadata(this.env, key) : null;
-      record = { ...record, grantKey: key || record.grantKey, metadata: metadata ?? {}, enabled: record.enabled ?? (metadata !== null && metadata.enabled !== false), poolSyncPending: true };
+      record = { ...record, grantKey: key || record.grantKey, metadata: secretlessGrant(metadata ?? {}), enabled: record.enabled ?? (metadata !== null && metadata.enabled !== false), poolSyncPending: true };
       // Pre-owner CLI commands revoked only KV. Import negative lifecycle facts
       // once, before any provider I/O; later KV reads never regain authority.
       if (metadata?.revokedAt) record = revokedRecord(key, { ...metadataGrant(record), revokedAt: metadata.revokedAt }, record.generation);
@@ -480,6 +486,7 @@ export class GrantCredentialObject implements DurableObject {
 
 async function probeQuota(env: Env, provider: CompiledProvider, record: CredentialRecord): Promise<GrantRuntimeState> {
   assertCredentialEnabled(record);
+  assertTokenUsable(record);
   const grant = materializedGrant({ provider: provider.id, kind: record.kind, maintenance: record.maintenance }, record);
   const probe = quotaProbeForGrant(provider, grant);
   if (!probe) throw new HttpError(400, "grant_quota_probe_unavailable", `provider ${provider.id} has no quota probe for this grant kind`);
@@ -488,6 +495,7 @@ async function probeQuota(env: Env, provider: CompiledProvider, record: Credenti
   applyProviderCredential(provider, grant, env, headers, url.searchParams);
   for (const [name, value] of Object.entries(probe.headers)) headers.set(name, requiredGrantTemplate(value, grant, "grant_quota_probe_unavailable"));
   let response: Response;
+  assertTokenUsable(record);
   try { response = await fetch(url, { method: probe.method, headers, signal: AbortSignal.timeout(10_000) }); }
   catch { throw new HttpError(502, "grant_quota_probe_failed", `provider ${provider.id} quota probe failed`); }
   if (!response.ok) {
@@ -506,6 +514,7 @@ async function probeQuota(env: Env, provider: CompiledProvider, record: Credenti
 
 async function keepWarm(env: Env, provider: CompiledProvider, transport: CompiledGrantTransport, record: CredentialRecord): Promise<void> {
   assertCredentialEnabled(record);
+  assertTokenUsable(record);
   const config = transport.maintenance.keepWarm;
   if (!config || !record.grantKey) return;
   const states = await authorityCall<{ states: Record<string, GrantRuntimeState> }>(env, "/grant-pools/states", { keys: [record.grantKey] });
@@ -525,6 +534,7 @@ async function keepWarm(env: Env, provider: CompiledProvider, transport: Compile
   query.forEach((value, name) => url.searchParams.set(name, value));
   const body = transformTransportBody(transport, structuredClone(config.body));
   let response: Response;
+  assertTokenUsable(record);
   try { response = await fetch(url, { method: endpoint.method, headers, body: JSON.stringify(body), signal: AbortSignal.timeout(30_000) }); }
   catch { throw new HttpError(502, "grant_keep_warm_failed", `provider ${provider.id} keep-warm request failed`); }
   const state = observeGrantQuota(response, provider.quota);
@@ -560,6 +570,24 @@ function assertCredentialEnabled(record: CredentialRecord): void {
 
 export async function putGrantCredentials(env: Env, key: string, grant: UpstreamGrant, preserveUnspecifiedSecrets = false, intent?: "replace"): Promise<UpstreamGrant> {
   return (await ownerCall<OwnerResponse>(env, key, "/put", { key, grant, preserveUnspecifiedSecrets, intent })).grant;
+}
+
+export async function installOAuthTokenResponse(env: Env, key: string, grant: UpstreamGrant, tokenResponse: Record<string, unknown>): Promise<UpstreamGrant> {
+  return (await ownerCall<OwnerResponse>(env, key, "/token-exchange", { key, grant, tokenResponse, preserveUnspecifiedSecrets: true })).grant;
+}
+
+function tokenExchangeRecord(record: CredentialRecord, payload: Record<string, unknown>): CredentialRecord {
+  const now = Date.now();
+  const refreshToken = typeof payload.refresh_token === "string" && payload.refresh_token ? boundedSecret(payload.refresh_token, "refresh token") : record.refreshToken;
+  const expiry = tokenResponseExpiry(payload, now);
+  return {
+    ...record, ...expiry, status: !refreshToken && tokenExpired(expiry, now) ? "reauth_required" : "active", poolSyncPending: true,
+    accessToken: boundedSecret(payload.access_token, "access token"), refreshToken,
+    tokenType: typeof payload.token_type === "string" && payload.token_type ? payload.token_type : record.tokenType,
+    scopes: typeof payload.scope === "string" ? payload.scope.split(/\s+/).filter(Boolean).slice(0, 128) : record.scopes,
+    nextRefreshAttemptAt: refreshToken && tokenDenied(expiry, now) ? new Date(now + REFRESH_MARGIN_MS).toISOString() : null,
+    updatedAt: new Date(now).toISOString(),
+  };
 }
 
 export async function accountCredentialResponse(env: Env, key: string, intent: GrantCredentialIntent | "read", body?: unknown): Promise<Response> {

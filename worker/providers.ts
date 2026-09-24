@@ -2,6 +2,7 @@ import snapshotJson from "./generated/provider-snapshot.json" with { type: "json
 import { listConnections, resolveConnection } from "./authority.ts";
 import { observeGrantQuota, observeGrantQuotaProbe } from "./grant-quota.ts";
 import { grantRevision, grantUsable as canonicalGrantUsable, recordGrantRuntime, resolveGrantSelection, type PinnedGrant } from "./grant-selection.ts";
+import { assertTokenUsable } from "./grant-expiry.ts";
 import { grantsVisibleToPolicies, type GrantRecord } from "./grant-scope.ts";
 import { materializeGrantCredentials } from "./grant-credentials.ts";
 import { applyProviderCredential, applyTransportHeaders, assertOperationConfiguration, quotaProbeForGrant, requiredGrantTemplate, transportForGrant, type GrantRequirement } from "./provider-auth.ts";
@@ -358,6 +359,7 @@ export async function refreshStoredGrantQuota(env: Env, key: string): Promise<vo
   applyProviderCredential(provider, grant, env, headers, url.searchParams);
   for (const [name, value] of Object.entries(probe.headers)) headers.set(name, requiredGrantTemplate(value, grant, "grant_quota_probe_unavailable"));
   let response: Response;
+  assertTokenUsable(grant);
   try { response = await fetch(url, { method: probe.method, headers, signal: AbortSignal.timeout(10_000) }); }
   catch { throw new HttpError(502, "grant_quota_probe_failed", `provider ${provider.id} quota probe failed`); }
   if (!response.ok) {

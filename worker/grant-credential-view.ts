@@ -1,5 +1,5 @@
 import snapshotJson from "./generated/provider-snapshot.json" with { type: "json" };
-import { grantPriority, grantUsable, grantWeight } from "./grant-selection.ts";
+import { grantAvailable, grantPriority, grantUsable, grantWeight } from "./grant-selection.ts";
 import type { ProviderSnapshot, UpstreamGrant } from "./types";
 
 const snapshot = snapshotJson as unknown as ProviderSnapshot;
@@ -24,9 +24,11 @@ export function grantResponse(key: string, grant: UpstreamGrant) {
     credentialFields: safeStrings(grant.credentialFields ?? Object.keys(grant.credentials ?? {}).sort()),
     hasAccessToken: grant.hasAccessToken ?? !!grant.accessToken, hasRefreshToken: grant.hasRefreshToken ?? !!grant.refreshToken,
     credentialStatus: grant.credentialStatus ?? (grantUsable(grant) ? "active" as const : undefined),
+    tokenResponseError: grant.tokenResponseError === "invalid_expiry" ? "invalid_expiry" as const : null,
+    nextRefreshAttemptAt: safeString(grant.nextRefreshAttemptAt),
     refreshConfigured: !!refresh, refreshTokenUrl: safeString(refresh?.tokenUrl),
     clientIdConfig: safeString(refresh?.clientIdConfig), clientSecretConfig: safeString(refresh?.clientSecretConfig),
-    usable: grant.enabled !== false && grantUsable(grant),
+    usable: grantAvailable(grant),
   };
 }
 

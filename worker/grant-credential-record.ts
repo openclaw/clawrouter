@@ -4,6 +4,7 @@ import { grantUsable } from "./grant-selection.ts";
 import { quotaProbeForGrant } from "./provider-auth.ts";
 import type { ProviderSnapshot, UpstreamGrant } from "./types";
 import { HttpError } from "./utils.ts";
+import { tokenExpired } from "./grant-expiry.ts";
 
 const MAX_SECRET_BYTES = 64 * 1024;
 const snapshot = snapshotJson as unknown as ProviderSnapshot;
@@ -21,6 +22,7 @@ export interface CredentialRecord {
   refreshToken?: string | null;
   tokenType?: string;
   expiresAt?: string | null;
+  tokenResponseError?: "invalid_expiry" | null;
   scopes?: string[];
   accountId?: string | null;
   subscription?: { plan?: string | null; subject?: string | null } | null;
@@ -52,6 +54,8 @@ export interface CredentialProjection {
   hasRefreshToken: boolean;
   tokenType?: string;
   expiresAt?: string | null;
+  tokenResponseError: "invalid_expiry" | null;
+  nextRefreshAttemptAt: string | null;
   scopes?: string[];
   accountId?: string | null;
   subscription?: { plan?: string | null; subject?: string | null } | null;
@@ -123,7 +127,7 @@ export function revokedRecord(key: string, metadata: UpstreamGrant | null, gener
 }
 
 export function secretlessGrant(grant: UpstreamGrant, projection?: CredentialProjection): UpstreamGrant {
-  const { credential: _credential, credentials: _credentials, accessToken: _accessToken, refreshToken: _refreshToken, ...safe } = grant;
+  const { credential: _credential, credentials: _credentials, accessToken: _accessToken, refreshToken: _refreshToken, tokenResponseError: _tokenResponseError, nextRefreshAttemptAt: _nextRefreshAttemptAt, ...safe } = grant;
   return projection ? { ...safe, ...projection } : safe;
 }
 
@@ -159,18 +163,21 @@ export function credentialRecord(grant: UpstreamGrant, generation: number): Cred
 
 export function updatedCredentialRecord(current: CredentialRecord | undefined, grant: UpstreamGrant): CredentialRecord {
   if (!current) throw new HttpError(400, "invalid_upstream_grant", "upstream grant requires a primary credential");
+  const fresh = hasPrimaryCredential(grant);
   const updated: CredentialRecord = {
     ...current,
     generation: current.generation + 1,
     poolSyncPending: true,
     enabled: grant.enabled ?? current.enabled ?? true,
-    status: "active",
+    status: fresh ? "active" : current.status,
+    tokenResponseError: fresh ? null : current.tokenResponseError,
+    nextRefreshAttemptAt: fresh ? null : current.nextRefreshAttemptAt,
     credential: grant.credential === undefined ? current.credential : optionalSecret(grant.credential, "credential"),
     credentials: grant.credentials && Object.keys(grant.credentials).length ? normalizedCredentials(grant.credentials) : current.credentials,
     accessToken: grant.accessToken === undefined ? current.accessToken : optionalSecret(grant.accessToken, "access token"),
     refreshToken: grant.refreshToken === undefined ? current.refreshToken : optionalSecret(grant.refreshToken, "refresh token"),
     tokenType: grant.tokenType ?? current.tokenType,
-    expiresAt: grant.expiresAt === undefined ? current.expiresAt : validTimestamp(grant.expiresAt),
+    expiresAt: grant.expiresAt === undefined ? fresh ? null : current.expiresAt : validTimestamp(grant.expiresAt),
     scopes: grant.scopes === undefined ? current.scopes : normalizedScopes(grant.scopes),
     accountId: grant.accountId === undefined ? current.accountId : grant.accountId,
     subscription: grant.subscription === undefined ? current.subscription : grant.subscription,
@@ -182,6 +189,14 @@ export function updatedCredentialRecord(current: CredentialRecord | undefined, g
   // operator keeps the same account label. Refresh-token replacement also can
   // change the next upstream account, so it invalidates continuation ownership.
   if (credentialIdentityChanged(current, updated, grant)) updated.lineage = crypto.randomUUID();
+  return fresh ? updated : preserveExpiredAuthority(current, updated);
+}
+
+export function preserveExpiredAuthority(current: CredentialRecord, updated: CredentialRecord): CredentialRecord {
+  // An accepted metadata edit cannot renew an already expired primary token.
+  // Fold its denial into the mutation generation, after the caller's CAS check.
+  if (tokenExpired(current)) updated.expiresAt = current.expiresAt;
+  if (!updated.tokenResponseError && !updated.refreshToken && tokenExpired(updated)) updated.status = "reauth_required";
   return updated;
 }
 
@@ -197,6 +212,8 @@ export function credentialProjection(record: CredentialRecord): CredentialProjec
     hasRefreshToken: !!record.refreshToken,
     tokenType: record.tokenType,
     expiresAt: record.expiresAt,
+    tokenResponseError: record.tokenResponseError ?? null,
+    nextRefreshAttemptAt: record.nextRefreshAttemptAt ?? null,
     scopes: record.scopes,
     accountId: record.accountId,
     subscription: record.subscription,
@@ -215,6 +232,8 @@ export function materializedGrant(metadata: UpstreamGrant, record: CredentialRec
     refreshToken: record.refreshToken,
     tokenType: record.tokenType,
     expiresAt: record.expiresAt,
+    tokenResponseError: record.tokenResponseError ?? null,
+    nextRefreshAttemptAt: record.nextRefreshAttemptAt ?? null,
     scopes: record.scopes,
     accountId: record.accountId,
     subscription: record.subscription,

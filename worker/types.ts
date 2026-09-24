@@ -238,6 +238,8 @@ export interface UpstreamGrant {
   credentialGeneration?: number;
   credentialLineage?: string;
   credentialStatus?: "active" | "reauth_required";
+  tokenResponseError?: "invalid_expiry" | null;
+  nextRefreshAttemptAt?: string | null;
   hasCredential?: boolean;
   credentialFields?: string[];
   hasAccessToken?: boolean;

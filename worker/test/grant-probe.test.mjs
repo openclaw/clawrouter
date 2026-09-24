@@ -68,3 +68,23 @@ test("quota probes fail before fetch when required grant metadata is absent", as
   await assert.rejects(() => refreshStoredGrantQuota(env, "oauth/policy/openai"), (error) => error?.code === "grant_quota_probe_unavailable");
   assert.equal(fetched, false);
 });
+
+test("manual quota refresh rejects expiry crossed after owner materialization", async context => {
+  let now = Date.parse("2026-09-24T12:00:00Z");
+  context.mock.method(Date, "now", () => now);
+  const key = "oauth/policy/openai", values = new Map();
+  const env = attachGrantCredentialNamespace({ POLICY_KV: {
+    async get(key, type) { const value = values.get(key) ?? null; return value !== null && type === "text" ? JSON.stringify(value) : structuredClone(value); },
+    async put(key, value) { values.set(key, JSON.parse(value)); },
+  } });
+  const { putGrantCredentials } = await import("../grant-credentials.ts");
+  await putGrantCredentials(env, key, { provider: "openai", kind: "subscription", accessToken: "quota-fixture", accountId: "account-fixture", expiresAt: new Date(now + 10).toISOString() });
+  const get = env.GRANT_CREDENTIALS.get;
+  env.GRANT_CREDENTIALS.get = id => ({ fetch: async (url, init) => {
+    const response = await get(id).fetch(url, init);
+    if (new URL(url).pathname === "/materialize") now += 11;
+    return response;
+  } });
+  context.mock.method(globalThis, "fetch", async () => assert.fail("expired manual quota egress"));
+  await assert.rejects(() => refreshStoredGrantQuota(env, key), error => error.code === "grant_refresh_failed");
+});

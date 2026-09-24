@@ -178,6 +178,8 @@ export interface UpstreamGrant {
   hasAccessToken: boolean;
   hasRefreshToken: boolean;
   credentialStatus?: "active" | "reauth_required";
+  tokenResponseError?: "invalid_expiry" | null;
+  nextRefreshAttemptAt?: string | null;
   refreshConfigured: boolean;
   usable: boolean;
   selectedCount: number;

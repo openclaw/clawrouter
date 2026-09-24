@@ -11,7 +11,7 @@ import {
 import { contentRetentionDefault, readRetainedContent } from "./content-retention.ts";
 import { credentialMutationResponse, credentialResponsesFrom } from "./credentials";
 import { correlationRequestId, logCorrelationError } from "./correlation.ts";
-import { currentGrantRuntime, grantPriority, grantRoutingPolicy, grantRuntimeStates, grantSelectionStats, grantUsable, grantWeight, validCredentialBundle, validGrantSegment } from "./grant-selection";
+import { currentGrantRuntime, grantAvailable, grantPriority, grantRoutingPolicy, grantRuntimeStates, grantSelectionStats, grantUsable, grantWeight, validCredentialBundle, validGrantSegment } from "./grant-selection";
 import { assertFusionModels, loadFusionConfig, storeFusionConfig } from "./fusion-config";
 import { fusionReadiness } from "./fusion-readiness";
 import { accountCredentialResponse, hasPrimaryCredential, putGrantCredentials, revokeGrantCredentials, type GrantRevokeMetadata } from "./grant-credentials.ts";
@@ -570,7 +570,7 @@ function validatedGrantResponse(key: string, grant: UpstreamGrant, runtime?: Gra
   const accessFlag = grant.hasAccessToken ?? (typeof grant.accessToken === "string" && grant.accessToken.trim().length > 0), refreshFlag = grant.hasRefreshToken ?? (typeof grant.refreshToken === "string" && grant.refreshToken.trim().length > 0);
   const coolingDown = !!runtime?.cooldownUntil && Date.parse(runtime.cooldownUntil) > Date.now();
   const quotaStatus: "unknown" | "available" | "limited" | "cooldown" = coolingDown ? "cooldown" : runtime?.status === "cooldown" ? "unknown" : runtime?.status ?? "unknown";
-  return { ...grantResponse(key, grant), priority: grantPriority(grant), weight: grantWeight(grant), hasCredential: grant.hasCredential ?? ((typeof grant.credential === "string" && grant.credential.trim().length > 0) || credentialFields.length > 0), credentialFields, ["hasAccess" + "Token"]: accessFlag, ["hasRefresh" + "Token"]: refreshFlag, usable: grant.enabled !== false && grantUsable(grant), selectedCount: stats?.selectedCount ?? 0, lastSelectedAt: stats?.lastSelectedAt ?? null, quotaStatus, quotaObservedAt: runtime?.observedAt ?? null, cooldownUntil: coolingDown ? runtime?.cooldownUntil ?? null : null, quotaSource: runtime?.source ?? null, lastProviderSignal: runtime?.lastSignal ?? null, quotaWindows: runtime?.windows ?? [] };
+  return { ...grantResponse(key, grant), priority: grantPriority(grant), weight: grantWeight(grant), hasCredential: grant.hasCredential ?? ((typeof grant.credential === "string" && grant.credential.trim().length > 0) || credentialFields.length > 0), credentialFields, ["hasAccess" + "Token"]: accessFlag, ["hasRefresh" + "Token"]: refreshFlag, usable: grantAvailable(grant), selectedCount: stats?.selectedCount ?? 0, lastSelectedAt: stats?.lastSelectedAt ?? null, quotaStatus, quotaObservedAt: runtime?.observedAt ?? null, cooldownUntil: coolingDown ? runtime?.cooldownUntil ?? null : null, quotaSource: runtime?.source ?? null, lastProviderSignal: runtime?.lastSignal ?? null, quotaWindows: runtime?.windows ?? [] };
 }
 
 function normalizeBinding(value: unknown): PolicyBinding {
