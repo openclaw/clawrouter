@@ -131,3 +131,30 @@ for (const current of ["rotated", "cleared", "unowned"]) for (const returned of 
   assert.equal(record.nextRefreshAttemptAt, null);
   if (current !== "unowned") { assert.equal(record.tokenType, "Custom"); assert.deepEqual(record.scopes, ["kept"]); }
 });
+
+test("callback trusted identity replaces stale provider metadata without adopting old routing defaults", async context => {
+  const key = "oauth/policy/openai", values = new Map();
+  const env = attachGrantCredentialNamespace({ POLICY_KV: {
+    async get(key, type) { const value = values.get(key) ?? null; return type === "text" && value !== null ? JSON.stringify(value) : structuredClone(value); },
+    async put(key, value) { values.set(key, JSON.parse(value)); },
+  } });
+  const { putGrantCredentials } = await import("../grant-credentials.ts");
+  await putGrantCredentials(env, key, { provider: "openai", kind: "oauth", accessToken: "old-primary", label: "old label", priority: 99, weight: 9 });
+  const oldKv = structuredClone(values.get(key)), put = env.POLICY_KV.put;
+  env.POLICY_KV.put = async () => { throw new Error("fixture publication failure"); };
+  await assert.rejects(() => putGrantCredentials(env, key, { provider: "anthropic", kind: "subscription", accessToken: "current-primary", refreshToken: "current-refresh", enabled: false, label: "canonical label", priority: 31, weight: 4, maintenance: { keepWarm: false } }, false, "replace"));
+  assert.deepEqual(values.get(key), oldKv);
+  env.POLICY_KV.put = put;
+  context.mock.method(globalThis, "fetch", async () => Response.json({ access_token: "callback-primary" }));
+  const response = await oauthCallback(new Request("https://console.example/v1/oauth/callback?state=state-1&code=auth-code"), env);
+  assert.equal(response.status, 200);
+  const row = env.GRANT_CREDENTIALS.objects.get(key).values.get("credential");
+  assert.equal(row.providerId, "openai");
+  assert.equal(row.kind, "oauth");
+  assert.equal(row.enabled, true);
+  assert.equal(row.accessToken, "callback-primary");
+  assert.equal(row.refreshToken, "current-refresh");
+  assert.equal(row.metadata.label, "canonical label");
+  assert.equal(row.metadata.priority, 100, "the consumed OAuth state owns its explicit routing values");
+  assert.equal(row.metadata.weight, 1);
+});

@@ -1,6 +1,6 @@
 import snapshotJson from "./generated/provider-snapshot.json" with { type: "json" };
 import type { GrantAttachmentStatus } from "./authority.ts";
-import { grantUsable } from "./grant-selection.ts";
+import { grantUsable, validCredentialBundle } from "./grant-selection.ts";
 import { quotaProbeForGrant } from "./provider-auth.ts";
 import type { ProviderSnapshot, UpstreamGrant } from "./types";
 import { HttpError } from "./utils.ts";
@@ -11,7 +11,6 @@ const snapshot = snapshotJson as unknown as ProviderSnapshot;
 const secretFields = new Set(["accessToken", "access_token", "refreshToken", "refresh_token", "credential", "credentials", "apiKey", "api_key", "token", "secret", "clientSecret", "client_secret", "password"]);
 
 export const CREDENTIAL_INPUT_FIELDS = ["credential", "credentials", "accessToken", "refreshToken", "tokenType", "expiresAt", "scopes", "accountId", "subscription", "refresh"] as const;
-export type CredentialInput = Pick<UpstreamGrant, typeof CREDENTIAL_INPUT_FIELDS[number]>;
 
 export interface CredentialRecord {
   version: 1;
@@ -130,9 +129,48 @@ export function revokedRecord(key: string, metadata: UpstreamGrant | null, gener
 }
 
 export function secretlessGrant(grant: UpstreamGrant, projection?: CredentialProjection): UpstreamGrant {
-  const { credential: _credential, credentials: _credentials, accessToken: _accessToken, refreshToken: _refreshToken, tokenResponseError: _tokenResponseError, nextRefreshAttemptAt: _nextRefreshAttemptAt, ...safe } = grant;
+  const { credential: _credential, credentials: _credentials, accessToken: _accessToken, refreshToken: _refreshToken, tokenResponseError: _tokenResponseError, nextRefreshAttemptAt: _nextRefreshAttemptAt, credentialInput: _credentialInput, ...safe } = grant as UpstreamGrant & { credentialInput?: unknown };
   return projection ? { ...safe, ...projection } : safe;
 }
+
+export function normalizeGrant(value: unknown, existing: UpstreamGrant | null): UpstreamGrant {
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new HttpError(400, "invalid_upstream_grant", "upstream grant must be an object");
+  const { credentialInput: _credentialInput, ...body } = value as Record<string, unknown>;
+  const priority = body.priority ?? existing?.priority ?? 100;
+  if (!Number.isInteger(priority) || (priority as number) < 0 || (priority as number) > 1_000_000) throw new HttpError(400, "invalid_upstream_grant", "grant priority must be an integer from 0 to 1000000");
+  const weight = body.weight ?? existing?.weight ?? 1;
+  if (typeof weight !== "number" || !Number.isFinite(weight) || weight <= 0 || weight > 1_000_000) throw new HttpError(400, "invalid_upstream_grant", "grant weight must be a number greater than 0 and at most 1000000");
+  if (!validCredentialBundle(body.credentials as UpstreamGrant["credentials"])) throw new HttpError(400, "invalid_upstream_grant", "grant credentials must use non-empty string values");
+  const credentials = body.credentials && Object.keys(body.credentials).length ? body.credentials : existing?.credentials ?? {};
+  const now = new Date().toISOString();
+  const grant = {
+    ...existing, ...body, version: 1, priority, weight, credentials,
+    enabled: body.enabled === undefined ? existing?.enabled ?? true : body.enabled ?? true,
+    kind: body.kind === undefined ? existing?.kind ?? "oauth" : body.kind ?? "oauth",
+    tokenType: body.tokenType === undefined ? existing?.tokenType ?? "Bearer" : body.tokenType ?? "Bearer",
+    scopes: body.scopes === undefined ? existing?.scopes ?? [] : body.scopes ?? [],
+    createdAt: existing?.createdAt ?? now, updatedAt: now, revokedAt: null,
+  } as UpstreamGrant;
+  if (!grant.provider) throw new HttpError(400, "invalid_upstream_grant", "provider is required");
+  const provider = snapshot.providers.find((candidate) => candidate.id === grant.provider);
+  if (!provider) throw new HttpError(400, "unknown_provider", "upstream grant provider is not registered");
+  const defaultKeepWarm = !existing && grant.kind === "subscription" && provider.auth.grantTransports.subscription?.maintenance.keepWarm?.defaultEnabled === true;
+  grant.maintenance = normalizeGrantMaintenance(body.maintenance, existing?.maintenance, defaultKeepWarm);
+  if (grant.maintenance?.keepWarm && (grant.kind !== "subscription" || !provider.auth.grantTransports.subscription?.maintenance.keepWarm)) throw new HttpError(400, "invalid_upstream_grant", "provider does not declare keep-warm maintenance for this subscription");
+  if (!validCredentialBundle(grant.credentials) || [grant.credential, grant.accessToken, grant.refreshToken].some((secret) => secret != null && (typeof secret !== "string" || !secret.trim().length))) throw new HttpError(400, "invalid_upstream_grant", "grant credentials must use non-empty string values");
+  // The owner supplies actual material for validation. A denied lifecycle can
+  // still receive metadata edits; only explicit primary input may heal it.
+  if (!hasPrimaryCredential(grant)) throw new HttpError(400, "invalid_upstream_grant", "grant credential is required");
+  return grant;
+}
+function normalizeGrantMaintenance(value: unknown, existing: UpstreamGrant["maintenance"], defaultKeepWarm: boolean): UpstreamGrant["maintenance"] {
+  if (value === undefined) return existing ?? { keepWarm: defaultKeepWarm };
+  if (!value || typeof value !== "object" || Array.isArray(value)) throw new HttpError(400, "invalid_upstream_grant", "grant maintenance must be an object");
+  const body = value as Record<string, unknown>;
+  if (Object.keys(body).some((key) => key !== "keepWarm") || body.keepWarm !== undefined && typeof body.keepWarm !== "boolean") throw new HttpError(400, "invalid_upstream_grant", "grant maintenance only accepts boolean keepWarm");
+  return { keepWarm: body.keepWarm === true };
+}
+
 
 export function hasRawCredential(grant: UpstreamGrant): boolean {
   return grant.credential != null || grant.accessToken != null || grant.refreshToken != null || Object.keys(grant.credentials ?? {}).length > 0;

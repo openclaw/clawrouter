@@ -890,6 +890,8 @@ for (const phase of ["reserve", "retention", "dispatch"]) for (const continuatio
   assert.equal(JSON.parse(await f.consume(response)).error.code, continuation ? "continuation_restart_required" : "grant_refresh_failed");
   assert.equal(f.sent.length, before);
   assert.equal(f.events.length, continuation ? 2 : 1);
+  assert.equal(f.events.at(-1).status_code, continuation ? 409 : 502);
+  assert.equal(f.events.at(-1).status, continuation ? "client_error" : "provider_error");
   assert.equal(f.events.at(-1).actual_cost_micros, 0);
   assert.equal(f.events.at(-1).cost_basis, "none");
   await assertBudgets(f, continuation ? [7, 0] : [0]);

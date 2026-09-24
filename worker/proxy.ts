@@ -294,11 +294,12 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     const failure = !dispatched && !signal.aborted && error instanceof HttpError
       ? continuation?.requested && error.code === "grant_refresh_failed" ? continuationRestart() : error
       : new HttpError(502, "provider_unavailable", `upstream request to provider ${selection.provider.id} failed`);
+    const status = operation.status ?? (failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error");
     operation.stop("upstream", error);
     void response?.body?.cancel().catch(() => undefined);
     // A fetch failure can incur cost; a received rejection stays nonbillable
     // even if reading its SSE error body failed.
-    accounting.fail(failure.status, operation.status ?? "provider_error", reservation, content, dispatched && response?.ok !== false);
+    accounting.fail(failure.status, status, reservation, content, dispatched && response?.ok !== false);
     return errorResponse(failure.code, failure.message, failure.status);
   }
   // Endpoint timeouts cover fetch and first-event normalization, not delivery.

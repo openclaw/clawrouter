@@ -10,7 +10,7 @@ import type { GrantPoolReadiness } from "../shared/contracts.ts";
 import { accountCredentialView, assertNewAccountRef, grantIntentBody, strictCredentialRecord, type GrantCredentialIntent } from "./grant-credential-intents.ts";
 import { assertTokenUsable, REFRESH_MARGIN_MS, tokenDenied, tokenExpired, tokenResponseExpiry } from "./grant-expiry.ts";
 
-import { CREDENTIAL_INPUT_FIELDS, secretlessGrant, canonicalRecord, nextCredentialGeneration, ownerMetadata, metadataGrant, attachmentStatus, revokedRecord, hasRawCredential, credentialRecord, updatedCredentialRecord, credentialProjection, materializedGrant, hasPrimaryCredential, stripLegacySecrets, isRefreshAuthenticationParameter, boundedSecret, type CredentialInput, type CredentialRecord, type CredentialProjection } from "./grant-credential-record.ts";
+import { CREDENTIAL_INPUT_FIELDS, normalizeGrant, secretlessGrant, canonicalRecord, nextCredentialGeneration, ownerMetadata, metadataGrant, attachmentStatus, revokedRecord, hasRawCredential, credentialRecord, updatedCredentialRecord, credentialProjection, materializedGrant, hasPrimaryCredential, stripLegacySecrets, isRefreshAuthenticationParameter, boundedSecret, type CredentialRecord, type CredentialProjection } from "./grant-credential-record.ts";
 export { secretlessGrant, hasRawCredential, hasPrimaryCredential, type CredentialProjection } from "./grant-credential-record.ts";
 
 const MAX_REFRESH_RESPONSE_BYTES = 128 * 1024;
@@ -37,7 +37,7 @@ interface PutRequest {
   key: string;
   grant: UpstreamGrant;
   preserveUnspecifiedSecrets: boolean;
-  credentialInput?: CredentialInput;
+  credentialInput?: UpstreamGrant;
   // Contribution imports also replace secrets; only the explicit administrator
   // operation may discard corrupt legacy metadata.
   intent?: "replace";
@@ -96,6 +96,7 @@ export class GrantCredentialObject implements DurableObject {
         if (current) nextCredentialGeneration(current.generation);
         let attachment: GrantAttachmentSnapshot;
         let previous: UpstreamGrant | null;
+        let legacy: UpstreamGrant | null = null;
         if (replace && (!current || !canonicalRecord(current))) {
           // Recover directly into the final mutation. An incomplete old owner
           // must not publish a synthetic migration or adopt newer index facts.
@@ -105,7 +106,8 @@ export class GrantCredentialObject implements DurableObject {
         } else {
           current = await this.loadRecord(input.key, current);
           attachment = current?.poolSyncPending ? (await this.finalize(current, "prepare")).result : (await this.reconcileAttachment(input.key)).result;
-          previous = current ? metadataGrant(current) : await legacyGrantMetadata(this.env, input.key);
+          legacy = current ? null : await readLegacyGrant(this.env, input.key);
+          previous = current ? metadataGrant(current) : legacyMetadata(legacy);
         }
         if (!current && !previous) {
           // A KV miss cannot erase legacy membership, including generation zero.
@@ -115,19 +117,27 @@ export class GrantCredentialObject implements DurableObject {
         }
         const admissionGeneration = replace && (current || previous) ? attachment.generation : current?.generation ?? 0;
         const generation = nextCredentialGeneration(current?.generation ?? (replace && previous ? attachment.generation : previous?.credentialGeneration ?? 0));
-        let grantInput = input.grant;
-        if (current && input.credentialInput) {
-          // KV normalization can precede repair of a failed publication. Only
-          // explicitly submitted owner fields may overwrite the current record.
-          grantInput = { ...input.grant };
-          for (const field of CREDENTIAL_INPUT_FIELDS) delete grantInput[field];
-          Object.assign(grantInput, input.credentialInput);
-          if (path === "/token-exchange" && input.credentialInput.subscription) grantInput.subscription = { ...current.subscription, ...input.credentialInput.subscription };
+        let grantInput = input.grant, metadataInput = input.grant;
+        if (input.credentialInput && path === "/put") {
+          // Normalize inside the owner: a stale KV projection cannot restore
+          // old identity, routing defaults or paused state during publication repair.
+          metadataInput = normalizeGrant(input.credentialInput, replace ? null : current ? materializedGrant(metadataGrant(current), current) : legacy);
+          grantInput = { ...metadataInput };
+          if (current && !replace) for (const field of CREDENTIAL_INPUT_FIELDS) {
+            delete grantInput[field];
+            if (Object.hasOwn(input.credentialInput, field)) Object.assign(grantInput, { [field]:
+              field === "tokenType" || field === "scopes" ? metadataInput[field] : input.credentialInput[field],
+            });
+          }
+        } else if (current && input.credentialInput) {
+          metadataInput = { ...metadataGrant(current), ...input.credentialInput, updatedAt: input.grant.updatedAt };
+          if (input.credentialInput.subscription) metadataInput.subscription = { ...current.subscription, ...input.credentialInput.subscription };
+          grantInput = metadataInput;
         }
         let record = !replace && current && !current.revokedAt && (input.preserveUnspecifiedSecrets || !hasPrimaryCredential(grantInput))
           ? updatedCredentialRecord(current, grantInput)
           : credentialRecord(grantInput, generation);
-        record = ownerMetadata(record, input.grant, input.key);
+        record = ownerMetadata(record, metadataInput, input.key);
         // Only the authenticated callback adapter can install token-response
         // evidence. Editable metadata never establishes or clears this fact.
         if (path === "/token-exchange") record = tokenExchangeRecord(record, input.tokenResponse ?? {});
@@ -578,12 +588,12 @@ function assertCredentialEnabled(record: CredentialRecord): void {
   if (record.enabled !== true) throw new HttpError(409, "grant_disabled", "upstream grant is disabled");
 }
 
-export async function putGrantCredentials(env: Env, key: string, grant: UpstreamGrant, preserveUnspecifiedSecrets = false, intent?: "replace", credentialInput?: CredentialInput): Promise<UpstreamGrant> {
+export async function putGrantCredentials(env: Env, key: string, grant: UpstreamGrant, preserveUnspecifiedSecrets = false, intent?: "replace", credentialInput?: UpstreamGrant): Promise<UpstreamGrant> {
   return (await ownerCall<OwnerResponse>(env, key, "/put", { key, grant, preserveUnspecifiedSecrets, intent, credentialInput })).grant;
 }
 
-export async function installOAuthTokenResponse(env: Env, key: string, grant: UpstreamGrant, tokenResponse: Record<string, unknown>, identity: Pick<CredentialInput, "accountId" | "subscription"> = {}): Promise<UpstreamGrant> {
-  const credentialInput: CredentialInput = { ...identity, accessToken: boundedSecret(tokenResponse.access_token, "access token") };
+export async function installOAuthTokenResponse(env: Env, key: string, grant: UpstreamGrant, tokenResponse: Record<string, unknown>, identity: Pick<UpstreamGrant, "provider" | "kind" | "enabled" | "priority" | "weight" | "accountId" | "subscription"> = {}): Promise<UpstreamGrant> {
+  const credentialInput: UpstreamGrant = { ...identity, accessToken: boundedSecret(tokenResponse.access_token, "access token") };
   if (typeof tokenResponse.refresh_token === "string" && tokenResponse.refresh_token) credentialInput.refreshToken = tokenResponse.refresh_token;
   return (await ownerCall<OwnerResponse>(env, key, "/token-exchange", { key, grant, credentialInput, tokenResponse, preserveUnspecifiedSecrets: true })).grant;
 }
@@ -658,6 +668,10 @@ function ownerFetch(env: Env, key: string, path: string, body: unknown): Promise
 }
 
 async function legacyGrantMetadata(env: Env, key: string, recover = false): Promise<UpstreamGrant | null> {
+  return readLegacyGrant(env, key, recover, true);
+}
+
+async function readLegacyGrant(env: Env, key: string, recover = false, metadataOnly = false): Promise<UpstreamGrant | null> {
   const raw = await env.POLICY_KV.get(key, "text");
   if (raw === null) return null;
   // Explicit replacement/revocation needs only proof that an old record exists.
@@ -674,8 +688,12 @@ async function legacyGrantMetadata(env: Env, key: string, recover = false): Prom
       throw new HttpError(400, "invalid_upstream_grant", "legacy grant metadata is invalid JSON");
     }
   }
-  const metadata = stripLegacySecrets(value) as Record<string, unknown>;
-  const legacy = value as UpstreamGrant;
+  return metadataOnly ? legacyMetadata(value as UpstreamGrant) : value as UpstreamGrant;
+}
+
+function legacyMetadata(legacy: UpstreamGrant | null): UpstreamGrant | null {
+  if (legacy === null) return null;
+  const metadata = stripLegacySecrets(legacy) as Record<string, unknown>;
   // Compensation needs the old grant's eligibility after its secrets are
   // stripped. Preserve existing owner status; never revive a denied projection.
   if (legacy.credentialStore !== "durable_object") Object.assign(metadata, {

@@ -568,6 +568,10 @@ for (const [label, patch] of [
   assert.equal(fetch.mock.callCount(), 1);
   assert.equal(result.body.usable, fresh);
   assert.doesNotMatch(JSON.stringify(result.body), /legacy-access-fixture|legacy-refresh-fixture|rotated-access-fixture|rotated-refresh-fixture|forged-primary/);
+  for (const value of [row.metadata, JSON.parse(env.values.get(key)), result.body]) {
+    assert.equal(Object.hasOwn(value, "credentialInput"), false);
+    assert.doesNotMatch(JSON.stringify(value), /forged-primary/);
+  }
 });
 
 test("legacy metadata PUT still initializes an unowned raw grant", async () => {
@@ -592,6 +596,77 @@ for (const credentials of [null, {}]) test(`legacy explicit credentials ${JSON.s
   const result = await env.request("PUT", { kind: "api_key", credentials, label: "kept" });
   assert.equal(result.status, 200);
   assert.deepEqual(record(env).credentials, { accessKeyId: "new-id", secretAccessKey: "new-key" });
+});
+
+
+for (const enabled of [false, true]) test(`legacy label PUT retains canonical provider, kind and ${enabled ? "active" : "paused"} routing after replacement publication fails`, async () => {
+  const env = fixture();
+  await env.request("POST", { ...primary, label: "old-A", priority: 99, weight: 1 });
+  const oldKv = env.values.get(key), put = env.POLICY_KV.put;
+  env.POLICY_KV.put = async () => { throw new Error("fixture KV publication failure"); };
+  const replaced = await env.request("POST", {
+    expectedCredentialGeneration: record(env).generation, provider: "anthropic", kind: "subscription",
+    accessToken: "provider-b-access", refreshToken: "provider-b-refresh", label: "canonical-B",
+    priority: 17, weight: 3, enabled, maintenance: { keepWarm: true },
+  }, { path: `${route}/replace` });
+  assert.equal(replaced.status, 202);
+  const before = structuredClone(record(env));
+  assert.equal(before.providerId, "anthropic");
+  assert.equal(before.kind, "subscription");
+  assert.equal(before.poolSyncPending, true);
+  assert.equal(env.values.get(key), oldKv);
+  env.POLICY_KV.put = put;
+  const result = await env.request("PUT", { label: "new label" });
+  assert.equal(result.status, 200);
+  const row = record(env), published = JSON.parse(env.values.get(key));
+  assert.equal(row.providerId, "anthropic");
+  assert.equal(row.kind, "subscription");
+  assert.equal(row.accessToken, "provider-b-access");
+  assert.equal(row.refreshToken, "provider-b-refresh");
+  assert.equal(row.credential, undefined);
+  assert.equal(row.enabled, enabled);
+  assert.equal(row.metadata.priority, 17);
+  assert.equal(row.metadata.weight, 3);
+  assert.equal(row.metadata.label, "new label");
+  assert.deepEqual(row.maintenance, { keepWarm: true });
+  assert.equal(row.createdAt, before.createdAt);
+  assert.equal(row.lineage, before.lineage);
+  assert.equal(row.generation, before.generation + 1);
+  assert.equal(published.provider, "anthropic");
+  assert.equal(published.kind, "subscription");
+  assert.equal(published.enabled, enabled);
+  assert.deepEqual(env.grantAuthority.sql.exec("SELECT provider_id, status FROM upstream_grant_pool_members WHERE scope_id = ? AND token_ref = ?", "policy", ref).map(row => ({ ...row })), [{ provider_id: "anthropic", status: enabled ? "active" : "paused" }]);
+  const explicit = await env.request("PUT", { provider: "openai", kind: "oauth", enabled: true, maintenance: { keepWarm: false }, priority: 8, weight: 2, tokenType: null, scopes: null });
+  assert.equal(explicit.status, 200);
+  assert.equal(record(env).providerId, "openai");
+  assert.equal(record(env).kind, "oauth");
+  assert.equal(record(env).enabled, true);
+  assert.deepEqual(record(env).maintenance, { keepWarm: false });
+  assert.equal(record(env).metadata.priority, 8);
+  assert.equal(record(env).metadata.weight, 2);
+  assert.equal(record(env).tokenType, "Bearer");
+  assert.deepEqual(record(env).scopes, []);
+});
+
+test("legacy replace keeps fresh defaults while ordinary PUT preserves first-import metadata", async () => {
+  const env = fixture();
+  env.values.set(key, JSON.stringify({ provider: "anthropic", kind: "subscription", enabled: false, priority: 27, weight: 4, maintenance: { keepWarm: true }, accessToken: "legacy-primary", refreshToken: "legacy-refresh" }));
+  const migrated = await env.request("PUT", { label: "imported" });
+  assert.equal(migrated.status, 200);
+  assert.equal(record(env).providerId, "anthropic");
+  assert.equal(record(env).kind, "subscription");
+  assert.equal(record(env).enabled, false);
+  assert.equal(record(env).metadata.priority, 27);
+  assert.deepEqual(record(env).maintenance, { keepWarm: true });
+  const replaced = await env.request("PUT", { provider: "openai", accessToken: "replacement-primary" }, { path: `${route}?mode=replace` });
+  assert.equal(replaced.status, 200);
+  assert.equal(record(env).providerId, "openai");
+  assert.equal(record(env).kind, "oauth");
+  assert.equal(record(env).enabled, true);
+  assert.equal(record(env).metadata.priority, 100);
+  assert.equal(record(env).metadata.weight, 1);
+  assert.deepEqual(record(env).maintenance, { keepWarm: false });
+  assert.equal(record(env).refreshToken, undefined);
 });
 
 function fixture() {

@@ -1,5 +1,4 @@
 import { grantResponse } from "./grant-credential-view.ts";
-import { CREDENTIAL_INPUT_FIELDS, type CredentialInput } from "./grant-credential-record.ts";
 import { authorizeAdmin } from "./access";
 import {
   authorityCall, listBindings, listConnections, listCredentials, listPolicies, listUsers, resolveConnection,
@@ -368,7 +367,6 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string): 
     return privateJson(await upstreamGrantResponse(env, key, grant));
   }
   let grant: UpstreamGrant;
-  let existing: UpstreamGrant | null;
   if (action === "revoke" && request.method === "POST") {
     const body = mutationObject(await readJson<unknown>(request, {}), "invalid_upstream_grant", "revocation metadata");
     grant = await revokeGrantCredentials(env, key, normalizeRevokeMetadata(body));
@@ -378,12 +376,7 @@ async function upstreamGrantMutation(request: Request, env: Env, rest: string): 
     if (mode !== null && mode !== "replace") throw new HttpError(400, "invalid_upstream_grant", "grant mutation mode must be replace when specified");
     const body = mutationObject(await readJson<unknown>(request), "invalid_upstream_grant", "upstream grant");
     if (mode === "replace" && !hasPrimaryCredential(body as UpstreamGrant)) throw new HttpError(400, "invalid_upstream_grant", "grant replacement requires a fresh primary credential");
-    existing = mode === "replace" ? null : await env.POLICY_KV.get<UpstreamGrant>(key, "json");
-    const normalized = normalizeGrant(body, existing);
-    const credentialInput = Object.fromEntries(CREDENTIAL_INPUT_FIELDS.filter(field => Object.hasOwn(body, field)).map(field => [field,
-      field === "tokenType" || field === "scopes" ? normalized[field] : body[field],
-    ])) as CredentialInput;
-    grant = await putGrantCredentials(env, key, normalized, mode !== "replace", mode === "replace" ? "replace" : undefined, credentialInput);
+    grant = await putGrantCredentials(env, key, body as UpstreamGrant, mode !== "replace", mode === "replace" ? "replace" : undefined, body);
   }
   else throw new HttpError(405, "method_not_allowed", "admin method is not allowed");
   return privateJson(await upstreamGrantResponse(env, key, grant));
@@ -629,32 +622,6 @@ function userBoolean(value: unknown, field: string, fallback: boolean, allowNull
 function userGroups(value: unknown): string[] {
   if (!Array.isArray(value) || value.some((group) => typeof group !== "string")) throw new HttpError(400, "invalid_access_user", "groups must be an array of strings");
   return normalizeGroups(value as string[]);
-}
-function normalizeGrant(value: unknown, existing: UpstreamGrant | null): UpstreamGrant {
-  const body = mutationObject(value, "invalid_upstream_grant", "upstream grant");
-  const priority = body.priority ?? existing?.priority ?? 100;
-  if (!Number.isInteger(priority) || (priority as number) < 0 || (priority as number) > 1_000_000) throw new HttpError(400, "invalid_upstream_grant", "grant priority must be an integer from 0 to 1000000");
-  const weight = body.weight ?? existing?.weight ?? 1;
-  if (typeof weight !== "number" || !Number.isFinite(weight) || weight <= 0 || weight > 1_000_000) throw new HttpError(400, "invalid_upstream_grant", "grant weight must be a number greater than 0 and at most 1000000");
-  if (!validCredentialBundle(body.credentials as UpstreamGrant["credentials"])) throw new HttpError(400, "invalid_upstream_grant", "grant credentials must use non-empty string values");
-  const credentials = body.credentials && Object.keys(body.credentials).length ? body.credentials : existing?.credentials ?? {};
-  const now = nowIso(), grant = { ...existing, ...body, version: 1, enabled: body.enabled ?? true, priority, weight, kind: body.kind ?? "oauth", tokenType: body.tokenType ?? "Bearer", scopes: body.scopes ?? [], credentials, createdAt: existing?.createdAt ?? now, updatedAt: now, revokedAt: null } as UpstreamGrant;
-  if (!grant.provider) throw new HttpError(400, "invalid_upstream_grant", "provider is required");
-  const provider = snapshot.providers.find((candidate) => candidate.id === grant.provider);
-  if (!provider) throw new HttpError(400, "unknown_provider", "upstream grant provider is not registered");
-  const defaultKeepWarm = !existing && grant.kind === "subscription" && provider.auth.grantTransports.subscription?.maintenance.keepWarm?.defaultEnabled === true;
-  grant.maintenance = normalizeGrantMaintenance(body.maintenance, existing?.maintenance, defaultKeepWarm);
-  if (grant.maintenance?.keepWarm && (grant.kind !== "subscription" || !provider.auth.grantTransports.subscription?.maintenance.keepWarm)) throw new HttpError(400, "invalid_upstream_grant", "provider does not declare keep-warm maintenance for this subscription");
-  if (!validCredentialBundle(grant.credentials) || [grant.credential, grant.accessToken, grant.refreshToken].some((secret) => secret != null && (typeof secret !== "string" || !secret.trim().length))) throw new HttpError(400, "invalid_upstream_grant", "grant credentials must use non-empty string values");
-  if (!grantUsable(grant)) throw new HttpError(400, "invalid_upstream_grant", "grant credential is required");
-  return grant;
-}
-function normalizeGrantMaintenance(value: unknown, existing: UpstreamGrant["maintenance"], defaultKeepWarm: boolean): UpstreamGrant["maintenance"] {
-  if (value === undefined) return existing ?? { keepWarm: defaultKeepWarm };
-  if (!value || typeof value !== "object" || Array.isArray(value)) throw new HttpError(400, "invalid_upstream_grant", "grant maintenance must be an object");
-  const body = value as Record<string, unknown>;
-  if (Object.keys(body).some((key) => key !== "keepWarm") || body.keepWarm !== undefined && typeof body.keepWarm !== "boolean") throw new HttpError(400, "invalid_upstream_grant", "grant maintenance only accepts boolean keepWarm");
-  return { keepWarm: body.keepWarm === true };
 }
 
 function policyResponse(entry: AccessPolicyEntry) { return { policyId: entry.policyId, enabled: entry.policy.enabled, providers: entry.policy.providers, tenantId: entry.policy.tenantId ?? null, tokenRole: entry.policy.tokenRole ?? null, monthlyBudgetMicros: entry.policy.monthlyBudgetMicros ?? null, requestCostMicros: entry.policy.requestCostMicros ?? null, budgetScope: entry.policy.budgetScope ?? "policy", retainRequestContent: entry.policy.retainRequestContent !== false, grantRouting: grantRoutingPolicy(entry.policy.grantRouting) }; }

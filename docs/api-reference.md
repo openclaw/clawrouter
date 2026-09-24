@@ -374,7 +374,10 @@ The Worker redirects `/` to `/dashboard`, and `/dashboard` to `/dashboard/home`.
 
 The legacy `GET|PUT /v1/admin/keys...`, `POST /v1/admin/keys/<kid>/revoke`, and `GET /v1/admin/users` routes remain compatibility aliases. New control-plane clients use policies, credentials, and tenants directly. Legacy top-level console and `/api/*` aliases redirect or normalize to their `/dashboard/*` and `/v1/*` equivalents.
 
-Upstream grant PUT preserves unspecified credentials by default. Add
+Upstream grant PUT preserves unspecified credentials and canonical metadata by
+default, including provider, kind, routing values and paused state. A label-only
+edit does not reconnect an account. Explicit fields retain their existing PUT
+normalization; token type null selects Bearer and scopes null selects an empty list. Add
 `?mode=replace` to replace the complete grant, clearing omitted credentials and
 account or refresh metadata. Replacement requires a fresh primary credential;
 credential-presence flags are insufficient. Other mode values return HTTP 400.
