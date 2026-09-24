@@ -7,6 +7,7 @@ import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, rm, symlink, writeFile
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { syncBuiltinESMExports } from "node:module";
+import { createConnection } from "node:net";
 import { join, resolve } from "node:path";
 import { promisify } from "node:util";
 import test from "node:test";
@@ -27,7 +28,22 @@ const base = '# base stays byte-identical\r\nmodel = "original"\r\nsandbox_mode 
 
 async function fixture(t) {
   const directory = await mkdtemp(join(tmpdir(), "clawrouter-connect-"));
-  t.after(() => rm(directory, { recursive: true, force: true }));
+  let server;
+  // A failed after hook prevents later hooks from running. Close live resources
+  // in this owner before removing files, including when setup only partly ran.
+  t.after(async () => {
+    const errors = [];
+    try {
+      if (server?.listening) await new Promise((done, reject) => {
+        server.close((error) => error ? reject(error) : done());
+        server.closeAllConnections();
+      });
+    } catch (error) { errors.push(error); }
+    try { await rm(directory, { recursive: true, force: true }); }
+    catch (error) { errors.push(error); }
+    if (errors.length === 1) throw errors[0];
+    if (errors.length > 1) throw new AggregateError(errors, "fixture cleanup failed");
+  });
   const home = join(directory, "codex-home"), bundle = join(directory, "bundle.json"), binary = join(directory, "codex-fixture");
   await mkdir(home);
   await writeFile(join(home, "config.toml"), base);
@@ -40,7 +56,7 @@ else if (process.argv[2] === "--version") process.stdout.write("codex-cli 0.155.
 else process.exit(2);\n`);
   await chmod(binary, 0o700);
   const state = { catalog: structuredClone(catalog), status: 200, requests: [], beforeResponse: null };
-  const server = createServer(async (request, response) => {
+  server = createServer(async (request, response) => {
     state.requests.push({ url: request.url, method: request.method, authorization: request.headers.authorization });
     await state.beforeResponse?.();
     if (await state.respond?.(request, response)) return;
@@ -49,16 +65,71 @@ else process.exit(2);\n`);
   });
   server.listen(0, "127.0.0.1");
   await once(server, "listening");
-  t.after(() => new Promise((done) => { server.closeAllConnections(); server.close(done); }));
   const origin = `http://127.0.0.1:${server.address().port}`;
   const env = { ...process.env, HOME: directory, CODEX_HOME: home, CLAWROUTER_API_KEY: secret, FIXTURE_BUNDLE: bundle };
   const common = ["--codex-home", home, "--codex", binary];
   const connect = ["connect", "--router-url", origin, "--provider", "fixture", "--model", "fixture-model", "--service-tier", "priority", ...common];
   const profile = join(home, "clawrouter.config.toml");
   const read = async () => getStaticTOMLValue(parseTOML(await readFile(profile, "utf8")));
-  return { directory, home, bundle, binary, state, env, common, connect, profile, read,
+  return { directory, home, bundle, binary, server, state, env, common, connect, profile, read,
     run: (command, ...args) => manageCodex([command, ...common, ...args], env) };
 }
+
+test("fixture cleanup closes the listener and active connection when directory removal fails", async (t) => {
+  const cleanups = [];
+  const f = await fixture({ after: (cleanup) => cleanups.push(cleanup) });
+  const remove = fs.promises.rm;
+  const failure = Object.assign(new Error("synthetic directory removal failure"), { code: "ENOTEMPTY" });
+  let socket, mocked;
+  try {
+    f.state.respond = () => true;
+    socket = createConnection({ host: "127.0.0.1", port: f.server.address().port });
+    await once(socket, "connect");
+    const received = once(f.server, "request");
+    socket.write("GET /v1/catalog HTTP/1.1\r\nHost: localhost\r\n\r\n");
+    await received;
+    // Destroying an active HTTP connection may reset it instead of sending EOF.
+    socket.on("error", () => {});
+    const closed = new Promise((done) => socket.once("close", done));
+    mocked = t.mock.method(fs.promises, "rm", async (path, ...args) => {
+      if (path === f.directory) throw failure;
+      return remove(path, ...args);
+    });
+    syncBuiltinESMExports();
+    await assert.rejects(async () => { for (const cleanup of cleanups) await cleanup(); }, (error) => error === failure);
+    assert.equal(f.server.listening, false);
+    await closed;
+    assert.equal(socket.destroyed, true);
+    assert.ok((await lstat(f.directory)).isDirectory());
+  } finally {
+    mocked?.mock.restore();
+    syncBuiltinESMExports();
+    socket?.destroy();
+    if (f.server.listening) await new Promise((done) => { f.server.close(done); f.server.closeAllConnections(); });
+    await remove(f.directory, { recursive: true, force: true });
+  }
+});
+
+test("fixture cleanup removes its directory after partial setup fails", async (t) => {
+  const cleanups = [];
+  const failure = new Error("synthetic setup failure");
+  let directory;
+  const mocked = t.mock.method(fs.promises, "writeFile", async (path) => {
+    directory = resolve(path, "..", "..");
+    assert.equal(path, join(directory, "codex-home", "config.toml"));
+    throw failure;
+  });
+  syncBuiltinESMExports();
+  try {
+    await assert.rejects(fixture({ after: (cleanup) => cleanups.push(cleanup) }), (error) => error === failure);
+    for (const cleanup of cleanups) await cleanup();
+    await assert.rejects(lstat(directory), { code: "ENOENT" });
+  } finally {
+    mocked.mock.restore();
+    syncBuiltinESMExports();
+    if (directory) await rm(directory, { recursive: true, force: true });
+  }
+});
 
 test("connect dry-run, verify, update, and remove preserve base/auth/key and complete native metadata", async (t) => {
   const f = await fixture(t);
