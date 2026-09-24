@@ -266,9 +266,14 @@ test("same-role identity replacement retires pending account secrets, reads and 
   const state = await openAccounts(page);
   await button(page, "Prepare credential replacement").click();
   await page.getByLabel("fresh access token", { exact: true }).fill("synthetic-old");
-  await button(page, "Replace credentials").click(); await expect.poll(() => state.writes.length).toBe(1);
-  state.email = "second@example.com";
+  // Focus refresh is intentionally suppressed during a write. Admit this
+  // session read first, then let its changed identity retire the held write.
+  state.holdSession = true;
   await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+  await expect.poll(() => state.sessionReads.length).toBe(1);
+  await button(page, "Replace credentials").click(); await expect.poll(() => state.writes.length).toBe(1);
+  state.holdSession = false; state.email = "second@example.com";
+  await state.sessionReads[0].fulfill({ json: sessionResponse(state.email) });
   await expect(page.locator(".tenantSwitch strong")).toHaveText("second@example.com");
   await expect(page.getByLabel("fresh access token", { exact: true })).toHaveCount(0);
   await state.writes[0].fulfill({ json: { outcome: "committed", grant: owner(grant("account_a", { label: "retired identity response" }), 2) } });
@@ -365,9 +370,9 @@ for (const destination of ["other account", "new draft"]) for (const reply of ["
     await expect(card).toContainText("creation unconfirmed");
     await assertGeometry(page, card);
     state.holdOwner = true;
-    const check = card.getByRole("button", { name: "Check this account", exact: true });
+    const check = card.getByRole("button", { name: /^(Check this account|Checking account…)$/ });
     await check.focus(); await page.keyboard.press("Enter");
-    await expect.poll(() => state.ownerReads.length).toBe(1);
+    await assertPendingCheck(page, check, state, 1);
     expect(new URL(state.ownerReads[0].route.request().url()).pathname).toBe("/v1/admin/upstream-grants/policies/team_policy/" + ref);
     await state.ownerReads[0].route.fulfill({ json: state.ownerReads[0].body });
     state.holdOwner = false;
@@ -378,6 +383,15 @@ for (const destination of ["other account", "new draft"]) for (const reply of ["
     await expect(page.getByLabel("label", { exact: true })).toHaveValue("newer draft");
     if (destination === "new draft") await expect(page.getByLabel("fresh API key", { exact: true })).toHaveValue("synthetic-next-draft");
     expect(state.writes).toHaveLength(1);
+    state.holdOwner = true;
+    await page.keyboard.press("Enter");
+    await expect.poll(() => state.ownerReads.length).toBe(2);
+    const movedFocus = await tabAway(page, check);
+    await state.ownerReads[1].route.fulfill({ json: state.ownerReads[1].body });
+    state.holdOwner = false;
+    await expect(check).toHaveText("Check this account");
+    await expect.poll(() => movedFocus.evaluate(element => document.activeElement === element)).toBe(true);
+    await movedFocus.dispose();
     await card.getByRole("button", { name: "Review this account", exact: true }).click();
     await expect(page.getByLabel("account reference", { exact: true })).toHaveValue(ref);
     await expect(page.getByLabel("label", { exact: true })).toHaveValue("Requested A");
@@ -420,17 +434,49 @@ test("repeated uncertain creates retain separate recovery cards and Check errors
   await expect(draftError).toContainText("priority must");
   for (const ref of refs) {
     const card = page.getByRole("region", { name: "Creation recovery " + ref, exact: true });
-    const check = card.getByRole("button", { name: "Check this account", exact: true });
+    const check = card.getByRole("button", { name: /^(Check this account|Checking account…)$/ });
+    state.holdOwner = true;
+    const beforeReads = state.ownerReads.length;
     await check.focus(); await page.keyboard.press("Enter");
+    await assertPendingCheck(page, check, state, beforeReads + 1);
+    await state.ownerReads[beforeReads].route.fulfill({ status: 404, json: { error: { code: "grant_credential_missing", message: "owner not initialized" } } });
     await expect(card.getByRole("alert")).toContainText("Account status could not be read");
     await expect(check).toBeFocused();
     await expect(draftError).toContainText("priority must");
     await expect(page.getByLabel("fresh API key", { exact: true })).toHaveValue("synthetic-active-draft");
     await expect(page.getByLabel("label", { exact: true })).toHaveValue("active draft");
     await assertGeometry(page, card);
+    await check.focus(); await page.keyboard.press("Enter");
+    await expect.poll(() => state.ownerReads.length).toBe(beforeReads + 2);
+    const movedFocus = await tabAway(page, check);
+    await state.ownerReads[beforeReads + 1].route.fulfill({ status: 404, json: { error: { code: "grant_credential_missing", message: "owner not initialized" } } });
+    await expect(card.getByRole("alert")).toContainText("Account status could not be read");
+    await expect.poll(() => movedFocus.evaluate(element => document.activeElement === element)).toBe(true);
+    await movedFocus.dispose();
   }
   expect(state.writes).toHaveLength(2);
 });
+
+async function assertPendingCheck(page: Page, check: Locator, state: State, count: number) {
+  await expect.poll(() => state.ownerReads.length).toBe(count);
+  await expect(check).toHaveText("Checking account…");
+  await expect(check).toBeFocused();
+  await expect(check).toHaveAttribute("aria-disabled", "true");
+  await expect(check).toHaveJSProperty("disabled", false);
+  await expect(check).toHaveCSS("outline-style", "solid");
+  await expect(check).toHaveCSS("cursor", "not-allowed");
+  await page.keyboard.press("Enter"); await page.keyboard.press("Space");
+  await flush(page);
+  expect(state.ownerReads).toHaveLength(count);
+}
+
+async function tabAway(page: Page, check: Locator) {
+  await page.keyboard.press("Tab");
+  await expect(check).not.toBeFocused();
+  const target = await page.evaluateHandle(() => document.activeElement);
+  expect(await target.evaluate(element => element !== document.body)).toBe(true);
+  return target;
+}
 
 async function assertGeometry(page: Page, panel: Locator) {
   await expect(panel).toBeVisible();
@@ -458,6 +504,7 @@ function grant(tokenRef = "account_a", values: Partial<UpstreamGrant> = {}): Ups
   return { key: `oauth/team_policy/${tokenRef}`, scope: "policies", scopeId: "team_policy", tokenRef, kind: "subscription", provider: "test-provider", label: tokenRef === "account_b" ? "Account B" : "Account A", version: 1, tokenType: "Bearer", scopes: [], enabled: true, priority: 100, weight: 1, hasCredential: false, credentialFields: [], hasAccessToken: true, hasRefreshToken: true, refreshConfigured: true, usable: true, selectedCount: 0, quotaStatus: "unknown", quotaWindows: [], revokedAt: null, ...values };
 }
 function revoked() { return grant("account_a", { enabled: false, usable: false, hasAccessToken: false, hasRefreshToken: false, revokedAt: "2026-09-01T00:00:00Z" }); }
+function sessionResponse(email: string) { return { authenticated: true, auth: "cloudflare_access", role: "admin", email, tenantId: "default", entitlements: { providers: [] } }; }
 function owner(row: UpstreamGrant, credentialGeneration = 1, publication: AccountCredentialView["publication"] = "ready"): AccountCredentialView {
   const { selectedCount: _selected, lastSelectedAt: _last, quotaStatus: _status, quotaObservedAt: _observed, cooldownUntil: _cooldown, quotaSource: _source, lastProviderSignal: _signal, quotaWindows: _windows, ...safe } = row;
   return { ...safe, credentialGeneration, publication, refreshTokenUrl: null, clientIdConfig: null, clientSecretConfig: null };
@@ -472,7 +519,7 @@ async function commit(state: State, index: number, saved: AccountCredentialView,
 
 async function openAccounts(page: Page, options: { holdBootstrap?: boolean; holdOwner?: boolean; ownerError?: string; authorization?: boolean; grants?: UpstreamGrant[] } = {}) {
   const grants = options.grants ?? [grant(), grant("account_b")];
-  const state = { writes: [] as Route[], reads: [] as { route: Route; body: AdminBootstrapResponse }[], ownerReads: [] as { route: Route; body: AccountCredentialView | undefined }[],
+  const state = { writes: [] as Route[], reads: [] as { route: Route; body: AdminBootstrapResponse }[], ownerReads: [] as { route: Route; body: AccountCredentialView | undefined }[], sessionReads: [] as Route[], holdSession: false,
     owners: new Map(grants.map(row => [row.key, owner(row)])), repairs: [] as unknown[], grants, holdBootstrap: options.holdBootstrap ?? false, holdOwner: options.holdOwner ?? false, ownerError: options.ownerError ?? null as string | null, email: "admin@example.com" };
   const policy: AccessPolicy = { policyId: "team_policy", enabled: true, providers: [], tenantId: "default", retainRequestContent: false, grantRouting: { strategy: "priority", stickiness: "none", failover: true, staleState: "allow", staleAfterSeconds: 300, switchAtUsedPercent: 90, hysteresisPercent: 10, eligibleGrants: {} } };
   const readiness: GrantPoolReadiness = { revision: 1, baseline: "existing", acceptedAt: "2026-09-23T00:00:00Z", phase: "complete", cursor: null, scanRevision: 1, scanned: grants.length, issues: [], overflow: false, activatedAt: "2026-09-23T00:00:00Z" };
@@ -497,10 +544,11 @@ async function openAccounts(page: Page, options: { holdBootstrap?: boolean; hold
       return route.fulfill({ json: body });
     }
     if (path === "/v1/admin/bootstrap" && state.holdBootstrap) { state.reads.push({ route, body: structuredClone(bootstrap) }); return; }
+    if (path === "/v1/session" && state.holdSession) { state.sessionReads.push(route); return; }
     const responses: Record<string, unknown> = {
       "/v1/providers": { providers: [{ id: "test-provider", display_name: "Test Provider", class: "test", service_kind: "model_provider", capabilities: [], ...(options.authorization ? { auth: { authorization: { grantKind: "subscription" } } } : {}), quota: { probes: [{ grantKinds: ["subscription"], requiresRefreshToken: false }] } }] },
       "/v1/routes": { openaiCompatible: [], manifestProxy: [] },
-      "/v1/session": { authenticated: true, auth: "cloudflare_access", role: "admin", email: state.email, tenantId: "default", entitlements: { providers: [] } },
+      "/v1/session": sessionResponse(state.email),
       "/v1/session/usage": { policies: [] }, "/v1/session/credentials": { credentials: [] }, "/v1/admin/bootstrap": bootstrap, "/v1/admin/grant-pools/readiness": readiness,
     };
     await route.fulfill({ status: responses[path] ? 200 : 404, json: responses[path] ?? {} });

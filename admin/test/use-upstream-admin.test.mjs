@@ -657,6 +657,22 @@ test("definitive create rejection removes only the attempt, preserving safe conf
   }
 });
 
+test("repeated recovery checks share the existing synchronous admission", async () => {
+  const f = await ready(); f.render().upstream.startNew(); change(f, { credential: "synthetic" });
+  const writing = act(f, "save"); f.writes[0].reject(new Error("reply lost")); await writing;
+  const entry = f.render().upstream.creations[0], beforeReads = f.reads.length;
+  f.holdReads = true;
+  const checking = f.render().upstream.checkCreation(entry);
+  await f.render().upstream.checkCreation(entry);
+  await f.render().upstream.checkCreation(entry);
+  assert.equal(f.reads.length, beforeReads + 1);
+  assert.equal(f.render().upstream.busy, true);
+  f.reads.at(-1).resolve(view(grant(entry.tokenRef))); await checking;
+  assert.equal(f.render().upstream.busy, false);
+  assert.equal(f.render().upstream.creations[0].creation.inspection, "ready");
+  assert.equal(f.writes.length, 1);
+});
+
 test("late recovery card reads cannot update a retired authenticated owner", async () => {
   const f = await ready(); f.render().upstream.startNew(); change(f, { credential: "synthetic" });
   const writing = act(f, "save"); f.writes[0].reject(new Error("reply lost")); await writing;
