@@ -107,6 +107,28 @@ billing:
   per million tokens. Change `pricingRef` whenever rates or effective dates
   change. Declare `longContext` when a model changes rates above an input-token
   threshold; omit `pricing` when a model cannot be priced safely.
+- `pricing.settlementBasis: published_upper_bound` marks a card whose rates
+  bound the published price without identifying the upstream invoice rate.
+  Admission keeps `manifest_pricing`; complete measured token settlement uses
+  `manifest_rate_upper_bound` (shown as "Token-based estimate (rate upper bound)").
+  Missing usage retains `manifest_reservation`; fixed tariffs, known no-charge
+  outcomes, and incomplete-price handling keep their existing precedence.
+  DeepSeek uses published peak rates: Flash input/cache-hit/output prices are
+  $0.30/$0.006/$1.20 per million tokens; Pro prices are $1.32/$0.044/$3.96.
+  [Off-peak prices are half](https://api-docs.deepseek.com/quick_start/pricing/).
+  ClawRouter does not infer billing periods from request time, response `created`,
+  or returned model names, and does not calculate holidays. These are budget
+  estimates, not invoice reconciliation. Higher reservations can return HTTP 402
+  under unchanged limits; a valid native `max_tokens` can reduce the bound.
+  The [maintained model contract](https://api-docs.deepseek.com/updates/) retains
+  `deepseek-v4-pro` and serves `deepseek-flash`, `deepseek-v4-flash`, and
+  `deepseek-v4-flash-vision-exp` at Flash prices. Each spelling forwards unchanged.
+  These cards use `effectiveAt: 2026-09-23` and `peak-upper-bound-2026-09-23`
+  pricing references as the observed snapshot date, not an asserted upstream
+  price-change date.
+  Unknown model IDs inherit no manifest price: existing unmetered passthrough
+  keeps its one-micro-dollar fallback; either measured budget requires a price
+  or an explicit fixed tariff. No new API route is implied by these model entries.
 - `pricing.unpricedCosts: [request_fee]` retains known token rates while marking
   additional mandatory request fees that ClawRouter does not yet meter. Such a
   model requires a fixed policy tariff when either monthly budget is enforced.

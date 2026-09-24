@@ -975,20 +975,21 @@ test("either budget rejects Gemini remote input before dispatch", async (t) => {
   }
 });
 
-test("DeepSeek unified, native and manifest calls preserve wire limits and settle inclusive JSON/SSE cache usage in both budgets", async (t) => {
-  for (const route of ["/v1/chat/completions", "/v1/native/deepseek/chat/completions", "/v1/proxy/deepseek/chat_completions"]) for (const stream of [false, true]) {
-    const events = [], pending = [], limit = 1_000;
+test("DeepSeek spellings preserve upstream identity and settle JSON/SSE peak-rate bounds through all routes and both budgets", async (t) => {
+  for (const model of ["deepseek-flash", "deepseek-v4-flash", "deepseek-v4-flash-vision-exp", "deepseek-v4-pro"]) for (const route of ["/v1/chat/completions", "/v1/native/deepseek/chat/completions", "/v1/proxy/deepseek/chat_completions"]) for (const stream of [false, true]) {
+    const events = [], pending = [], limit = 10_000, actual = model === "deepseek-v4-pro" ? 379 : 89;
     const env = usageEnv([], { provider: "deepseek", limit, fixedCost: null, retainContent: false });
     env.DEEPSEEK_API_KEY = "fixture-deepseek-key";
     env.BUDGET_LEDGER = sqlBudgetNamespace(t);
     env.USAGE_QUEUE = { send: async event => events.push(event) };
     const native = route.includes("/native/");
-    const body = { model: native ? "deepseek-v4-flash" : "deepseek/deepseek-v4-flash", messages: [{ role: "user", content: "fixture" }], max_tokens: 32, max_output_tokens: 1, stream };
-    const final = { object: stream ? "chat.completion.chunk" : "chat.completion", usage: { prompt_tokens: 1_000, completion_tokens: 20, prompt_cache_hit_tokens: 800, prompt_cache_miss_tokens: 200, prompt_tokens_details: {} } };
+    const body = { model: native ? model : `deepseek/${model}`, messages: [{ role: "user", content: "fixture" }], max_tokens: 32, max_output_tokens: 1, stream };
+    // Returned model/time are attribution data, not qualified invoice selectors.
+    const final = { object: stream ? "chat.completion.chunk" : "chat.completion", model: model === "deepseek-v4-pro" ? model : "deepseek-flash", created: 0, usage: { prompt_tokens: 1_000, completion_tokens: 20, prompt_cache_hit_tokens: 800, prompt_cache_miss_tokens: 200, prompt_tokens_details: {} } };
     const wire = stream ? `${sse(final)}data: [DONE]\n\n` : JSON.stringify(final);
     const upstream = t.mock.method(globalThis, "fetch", async (url, init) => {
       assert.equal(new URL(url).pathname, "/chat/completions");
-      assert.deepEqual(JSON.parse(init.body), { ...body, model: "deepseek-v4-flash" });
+      assert.deepEqual(JSON.parse(init.body), { ...body, model });
       return new Response(wire, { headers: { "content-type": stream ? "text/event-stream" : "application/json" } });
     });
     const response = await handler.fetch(new Request(`https://clawrouter.example${route}`, {
@@ -1002,11 +1003,39 @@ test("DeepSeek unified, native and manifest calls preserve wire limits and settl
     assert.equal(events.length, 1);
     assert.equal(events[0].reserved_output_tokens, 32);
     assert.deepEqual([events[0].input_tokens, events[0].output_tokens, events[0].cached_input_tokens], [1_000, 20, 800]);
-    assert.equal(events[0].actual_cost_micros, 36);
-    assert.equal(events[0].cost_basis, "manifest_pricing");
+    assert.equal(events[0].model, `deepseek/${model}`);
+    assert.equal(events[0].actual_cost_micros, actual);
+    assert.equal(events[0].cost_basis, "manifest_rate_upper_bound");
     const usage = await handler.fetch(new Request("https://clawrouter.example/v1/usage", { headers: { authorization: `Bearer ${proxyKey()}` } }), env, {});
-    assert.equal((await usage.json()).budget.spentMicros, 36);
-    assert.equal((await providerBudgetStatus(env, "deepseek", limit)).spentMicros, 36);
+    assert.equal((await usage.json()).budget.spentMicros, actual);
+    assert.equal((await providerBudgetStatus(env, "deepseek", limit)).spentMicros, actual);
+    upstream.mock.restore();
+  }
+});
+
+test("unknown DeepSeek models retain no-card passthrough and measured-budget denial", async (t) => {
+  for (const [limit, providerLimit, fixedCost] of [[null, null, null], [1_000, null, null], [null, 1_000, null], [1_000, 1_000, 0]]) {
+    const events = [], pending = [], denied = fixedCost == null && (limit != null || providerLimit != null);
+    const env = usageEnv([], { provider: "deepseek", limit, providerLimit, fixedCost, retainContent: false });
+    env.DEEPSEEK_API_KEY = "fixture-deepseek-key";
+    env.BUDGET_LEDGER = sqlBudgetNamespace(t);
+    env.USAGE_QUEUE = { send: async event => events.push(event) };
+    const body = { model: "future-opaque-model", messages: [], max_tokens: 32 };
+    const upstream = t.mock.method(globalThis, "fetch", async (_url, init) => {
+      assert.deepEqual(JSON.parse(init.body), body);
+      return Response.json({ usage: { prompt_tokens: 10, completion_tokens: 1 } });
+    });
+    const response = await handler.fetch(new Request("https://clawrouter.example/v1/native/deepseek/chat/completions", {
+      method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" }, body: JSON.stringify(body),
+    }), env, { waitUntil: promise => pending.push(promise) });
+    assert.equal(response.status, denied ? 400 : 200);
+    const result = await response.json();
+    if (denied) assert.equal(result.error.code, "pricing_required");
+    await Promise.all(pending);
+    assert.equal(upstream.mock.callCount(), denied ? 0 : 1);
+    assert.equal(events[0].pricing_ref, null);
+    assert.equal(events[0].cost_basis, denied ? "none" : fixedCost === 0 ? "policy_fixed" : "flat_fallback");
+    assert.equal(events[0].actual_cost_micros, denied || fixedCost === 0 ? 0 : 1);
     upstream.mock.restore();
   }
 });
