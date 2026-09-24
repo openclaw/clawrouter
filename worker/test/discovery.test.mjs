@@ -38,24 +38,45 @@ test("session catalog scope retains the verified caller after policies are disab
 test("catalog and session preserve saved provider health independently of operation eligibility", async (t) => {
   const fixture = await fusionDiscoveryFixture(t);
   fixture.config.enabled = false;
+  fixture.policy.requestCostMicros = 1;
   const fresh = { providerId: "openai", status: "verified", checkedAt: new Date(Date.now() - 1_000).toISOString(), latencyMs: 42 };
   const stale = { ...fresh, checkedAt: new Date(Date.now() - 86_400_001).toISOString() };
   const failed = { ...fresh, status: "failed", latencyMs: 75, error: "Fixture probe failed." };
-  for (const [health, verified] of [[fresh, true], [stale, false], [failed, false], [null, false]]) {
+  for (const [health, verified, probeStatus, failure] of [
+    [fresh, true, "verified", null], [stale, false, "unverified", null],
+    [failed, false, "failed", failed.error], [{ ...failed, error: null }, false, "failed", "Latest provider smoke failed."],
+    [null, false, "unverified", null],
+  ]) {
     if (health) fixture.records.set("health/providers/openai", health);
     else fixture.records.delete("health/providers/openai");
-    for (const enabled of [true, false]) {
+    for (const [enabled, limit, blockedStatus, reasonCode] of [
+      [true, 100, null, null], [false, 100, "disabled", "provider_disabled"],
+      [true, 0, "unavailable", "budget_exhausted"],
+    ]) {
       fixture.connection.enabled = enabled;
-      for (const [handler, mode] of [[catalogResponse, "key"], [sessionResponse, "session"]]) {
+      fixture.policy.monthlyBudgetMicros = limit;
+      // A disabled operation owns its blocker even when coarse config is missing.
+      fixture.env.OPENAI_API_KEY = enabled ? "fixture-environment-key" : "";
+      const executable = blockedStatus === null;
+      for (const [handler, mode] of [[catalogResponse, "key"], [catalogResponse, "session"], [sessionResponse, "session"], [entitlementResponse, "session"]]) {
         fixture.calls.length = 0;
         const body = await (await handler(fixture.request(mode), fixture.env)).json();
-        const catalog = body.entitlements?.catalog ?? body;
+        const catalog = body.entitlements?.catalog ?? body.catalog ?? body;
         const view = catalog.providers.find(({ id }) => id === "openai");
         assert.equal(view.readiness.verified, verified);
         assert.equal(view.readiness.lastCheckedAt, health?.checkedAt ?? null);
         assert.equal(view.readiness.latencyMs, health?.latencyMs ?? null);
-        assert.equal(view.offers.some(({ eligible }) => eligible), enabled);
+        assert.equal(view.readiness.status, blockedStatus ?? probeStatus);
+        assert.deepEqual(view.readiness.reasons, [
+          ...(reasonCode ? [reasonCode] : []),
+          ...(executable && !verified ? ["Configured but not recently verified by a live smoke test."] : []),
+          ...(failure ? [failure] : []),
+        ]);
+        assert.equal(view.readiness.executable, executable);
+        assert.equal(view.offers.some(({ eligible }) => eligible), executable);
+        if (reasonCode) assert.ok(view.offers.every((offer) => !offer.eligible && offer.reasonCode === reasonCode));
         if (body.entitlements) assert.deepEqual(body.entitlements.providers.find(({ provider }) => provider === "openai").readiness, view.readiness);
+        if (body.catalog) assert.deepEqual(body.providers.find(({ provider }) => provider === "openai").readiness, view.readiness);
         assert.equal(fixture.calls.filter(({ path }) => path === "kv-list").length, 1);
       }
     }

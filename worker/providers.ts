@@ -153,7 +153,7 @@ async function readinessInputs(env: Env, suppliedConnections?: ProviderConnectio
   return { grants, health, connections };
 }
 
-export function providerReadinessForState(provider: CompiledProvider, env: Env, grants: GrantRecord[], connection: ProviderConnection, health?: ProviderHealth): Readiness {
+export function providerReadinessForState(provider: CompiledProvider, env: Env, grants: GrantRecord[], connection: ProviderConnection, health?: ProviderHealth, operation?: Pick<Readiness, "executableEndpoints" | "executable" | "status" | "reasons">): Readiness {
   const configuredOptional = optionalConfigKeys(provider, env);
   const optionalConfig = provider.config_keys.filter((key) => configuredOptional.has(key) || (provider.auth.schemes.every((scheme) => scheme.type === "bearer" && scheme.required === false) && secretConfigKey(key)));
   const requiredConfig = provider.config_keys.filter((key) => !optionalConfig.includes(key));
@@ -161,16 +161,21 @@ export function providerReadinessForState(provider: CompiledProvider, env: Env, 
   const hasGrant = providerGrants.length > 0;
   const missingConfig = requiredConfig.filter((key) => !envValue(env, key) && !grantSatisfiesConfig(key, providerGrants));
   const configPresent = missingConfig.length === 0;
-  const executableEndpoints = configPresent && connection.enabled ? provider.endpoints.filter((endpoint) => endpointTemplatesConfigured(provider, endpoint, env)).map((endpoint) => endpoint.id) : [];
+  const executableEndpoints = operation?.executableEndpoints ?? (configPresent && connection.enabled ? provider.endpoints.filter((endpoint) => endpointTemplatesConfigured(provider, endpoint, env)).map((endpoint) => endpoint.id) : []);
   const checked = health?.checkedAt ? Date.parse(health.checkedAt) : NaN;
   const verified = health?.status === "verified" && Number.isFinite(checked) && Date.now() - checked < 86_400_000;
-  const executable = connection.enabled && executableEndpoints.length > 0;
-  const reasons: string[] = [];
-  if (!connection.enabled) reasons.push("Provider connection is disabled.");
-  if (!configPresent) reasons.push(`Missing ${missingConfig.join(", ")}.`);
+  const executable = operation?.executable ?? (connection.enabled && executableEndpoints.length > 0);
+  // Scoped operation facts replace coarse configuration blockers, while saved
+  // probe diagnostics remain advisory and never authorize or block an offer.
+  const reasons = operation ? [...operation.reasons] : [];
+  if (!operation) {
+    if (!connection.enabled) reasons.push("Provider connection is disabled.");
+    if (!configPresent) reasons.push(`Missing ${missingConfig.join(", ")}.`);
+  }
   if (executable && !verified) reasons.push("Configured but not recently verified by a live smoke test.");
   if (health?.status === "failed") reasons.push(health.error ?? "Latest provider smoke failed.");
-  const status = !connection.enabled ? "disabled" : !configPresent ? "missing_config" : health?.status === "failed" ? "failed" : verified ? "verified" : "unverified";
+  const blockedStatus = operation ? operation.executable ? null : operation.status : !connection.enabled ? "disabled" : !configPresent ? "missing_config" : null;
+  const status = blockedStatus ?? (health?.status === "failed" ? "failed" : verified ? "verified" : "unverified");
   return {
     id: provider.id,
     displayName: provider.display_name,
