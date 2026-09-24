@@ -483,12 +483,23 @@ async function assertGeometry(page: Page, panel: Locator) {
   const controls = panel.locator("button");
   const geometry = await panel.evaluate(element => {
     const rect = element.getBoundingClientRect();
-    const buttons = [...element.querySelectorAll("button")].filter(button => button.getClientRects().length > 0).map(button => button.getBoundingClientRect());
+    const bounds = (target: Element) => {
+      const { left, right, top, bottom } = target.getBoundingClientRect();
+      return { left, right, top, bottom };
+    };
+    const buttons = [...element.querySelectorAll("button")].filter(button => button.getClientRects().length > 0).map(button => ({ label: button.textContent, ...bounds(button) }));
+    const alerts = [...element.querySelectorAll<HTMLElement>(".inlineError")].map(alert => {
+      const message = alert.querySelector<HTMLElement>("span")!;
+      return { ...bounds(alert), message: { ...bounds(message), scrollWidth: message.scrollWidth, clientWidth: message.clientWidth } };
+    });
     const overlap = buttons.some((a, i) => buttons.slice(i + 1).some(b => Math.min(a.right, b.right) > Math.max(a.left, b.left) && Math.min(a.bottom, b.bottom) > Math.max(a.top, b.top)));
-    return { pageFits: document.documentElement.scrollWidth <= window.innerWidth, panelFits: rect.left >= 0 && rect.right <= window.innerWidth,
-      controlsFit: buttons.every(button => button.left >= rect.left && button.right <= rect.right), overlap };
+    return { checks: { pageFits: document.documentElement.scrollWidth <= window.innerWidth, panelFits: rect.left >= 0 && rect.right <= window.innerWidth,
+      controlsFit: buttons.every(button => button.left >= rect.left && button.right <= rect.right), overlap,
+      alertsFit: alerts.every(alert => alert.left >= rect.left && alert.right <= rect.right),
+      errorTextFits: alerts.every(alert => alert.message.left >= alert.left && alert.message.right <= alert.right && alert.message.scrollWidth <= alert.message.clientWidth) },
+      bounds: { panel: bounds(element), buttons, alerts } };
   });
-  expect(geometry).toEqual({ pageFits: true, panelFits: true, controlsFit: true, overlap: false });
+  expect(geometry.checks, JSON.stringify(geometry.bounds)).toEqual({ pageFits: true, panelFits: true, controlsFit: true, overlap: false, alertsFit: true, errorTextFits: true });
   for (const control of await controls.all()) {
     if (!await control.isVisible() || !await control.isEnabled()) continue;
     await control.scrollIntoViewIfNeeded();
