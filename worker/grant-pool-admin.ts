@@ -57,10 +57,9 @@ async function repairKey(env: Env, key: string, backfill: boolean): Promise<{ ke
   const valid = parts[0] === "oauth" && (parts[1] === "tenants" ? parts.length === 4 : parts.length === 3) && parts.slice(1).every(validGrantSegment);
   if (!valid) return { key, reason: "identity_unresolved" };
   try {
-    const result = backfill ? await backfillGrantAttachment(env, key) : await reconcileGrantAttachment(env, key);
-    const ownerPresent = "ownerPresent" in result ? result.ownerPresent : undefined;
+    const result: GrantAttachmentResult & { ownerPresent?: boolean } = backfill ? await backfillGrantAttachment(env, key) : await reconcileGrantAttachment(env, key);
     const reason = result.outcome === "unresolved" || result.outcome === "unattached" ? "identity_unresolved" : undefined;
-    return { key, outcome: result.outcome, ownerPresent, reason };
+    return { key, outcome: result.outcome, ownerPresent: result.ownerPresent, reason };
   } catch (error) {
     // Fixed diagnostics cannot echo provider errors, credential data or caller
     // metadata. An unavailable owner is unknown and blocks activation.
