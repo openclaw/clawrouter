@@ -258,7 +258,7 @@ function optionalSecret(value: string | null | undefined, name: string): string 
 }
 
 export function boundedSecret(value: unknown, name: string): string {
-  if (typeof value !== "string" || !value || new TextEncoder().encode(value).byteLength > MAX_SECRET_BYTES) throw new HttpError(400, "invalid_upstream_grant", `${name} must be a non-empty bounded string`);
+  if (typeof value !== "string" || !value.trim().length || new TextEncoder().encode(value).byteLength > MAX_SECRET_BYTES) throw new HttpError(400, "invalid_upstream_grant", `${name} must be a non-empty bounded string`);
   return value;
 }
 

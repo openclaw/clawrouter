@@ -230,6 +230,45 @@ for (const state of ["paused", "revoked"]) test(`whole replacement clears omitte
   assert.equal(enabled.body.grant.enabled, true);
 });
 
+for (const intent of ["create", "replace"]) for (const [name, material] of [
+  ["credential", { ...primary, credential: " \t\r\n " }],
+  ["accessToken", { provider: "openai", kind: "oauth", accessToken: " \t\r\n " }],
+  ["bundle member", { ...primary, credential: undefined, credentials: { api_key: "valid-fixture", auxiliary: " \t\r\n " } }],
+  ["refreshToken", { provider: "openai", kind: "oauth", accessToken: "valid-fixture", refreshToken: " \t\r\n " }],
+]) test(`${intent} refuses whitespace-only ${name} before admission or writes`, async context => {
+  const env = fixture();
+  if (intent === "replace") {
+    await env.request("POST", primary);
+    record(env).poolSyncPending = true;
+  }
+  const before = structuredClone(record(env)), index = await attachment(env), projection = env.values.get(key);
+  const reads = env.reads.length, writes = env.writes.length;
+  for (const method of ["put", "setAlarm", "deleteAlarm"]) context.mock.method(owner(env).state.storage, method, async () => assert.fail(`unexpected ${method}`));
+  context.mock.method(env.ACCESS_CONTROL, "get", () => assert.fail("invalid secrets must not reach attachment admission"));
+  const result = await env.request("POST", { ...material, ...(intent === "replace" ? { expectedCredentialGeneration: before.generation } : {}) }, { path: intent === "replace" ? `${route}/replace` : route });
+  assert.equal(result.status, 400);
+  assert.equal(result.body.error.code, "invalid_upstream_grant");
+  assert.deepEqual(record(env), before);
+  assert.equal(env.values.get(key), projection);
+  assert.equal(env.reads.length, reads);
+  assert.equal(env.writes.length, writes);
+  context.mock.restoreAll();
+  assert.deepEqual(await attachment(env), index);
+});
+
+for (const [name, material] of [
+  ["credential", { ...primary, credential: " \tprimary-fixture\r\n " }],
+  ["accessToken and refreshToken", { provider: "openai", kind: "oauth", accessToken: " \taccess-fixture\r\n ", refreshToken: " \trefresh-fixture\r\n " }],
+  ["bundle", { ...primary, credential: undefined, credentials: { api_key: " \tbundle-fixture\r\n " } }],
+]) test(`create and replace preserve nonblank ${name} bytes`, async () => {
+  const env = fixture();
+  for (const intent of ["create", "replace"]) {
+    const result = await env.request("POST", { ...material, ...(intent === "replace" ? { expectedCredentialGeneration: 1 } : {}) }, { path: intent === "replace" ? `${route}/replace` : route });
+    assert.equal(result.status, intent === "create" ? 201 : 200);
+    for (const field of ["credential", "credentials", "accessToken", "refreshToken"]) assert.deepEqual(record(env)[field], material[field], field);
+  }
+});
+
 test("bundle-to-scalar replacement never retains another primary form", async () => {
   const env = fixture();
   await env.request("POST", { ...primary, credential: undefined, credentials: { api_key: "bundle-fixture" } });
