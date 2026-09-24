@@ -188,7 +188,7 @@ async function environment() {
       if (path === "/users/resolve") return Response.json({ initialized: true, users: [{ email, record: { enabled: true, role: "user", tenantId: "default", groups: [] } }], missingEmails: [] });
       if (path === "/resolve") return Response.json({ initialized: true, bindings: [{ policyId: "fixture", priority: 0, enabled: true, principalType: "user", principalId: email }], missingPrincipals: [] });
       if (path === "/connections/resolve") return Response.json({ initialized: true, connections: body.providerIds.map(providerId => ({ providerId, enabled: true, monthlyBudgetMicros: null })), missingProviderIds: [] });
-      if (path === "/grant-pools/resolve") return Response.json({ keys: [], states: {} });
+      if (path === "/grant-pools/resolve") return Response.json({ keys: [], states: {}, ready: true });
       throw new Error(`unexpected authority call: ${path}`);
     } }) },
   };

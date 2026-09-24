@@ -56,6 +56,7 @@ Preview Access without Cloudflare writes:
 ```sh
 export CLOUDFLARE_ACCOUNT_ID=...
 export CLAWROUTER_ACCESS_GITHUB_ORGS=openclaw
+export CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS='service-token-uuid'
 pnpm cf:access -- --dry-run
 ```
 

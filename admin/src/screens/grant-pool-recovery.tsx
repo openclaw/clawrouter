@@ -1,44 +1,10 @@
-import React, { useEffect, useState } from "react";
-import type { GrantPoolReadiness } from "../../../shared/contracts";
-import { errorMessage } from "../domain";
-import { request } from "../ui-helpers";
-
-const prefix = "/v1/admin/grant-pools";
+import React from "react";
+import type { GrantPoolRecoveryModel } from "../hooks/access/use-grant-pool-recovery";
 
 // Recovery must load independently: a corrupt legacy account can prevent the
 // normal admin bootstrap from listing accounts, but must not hide this action.
-export function GrantPoolRecovery({ gatewayOrigin, demoMode }: { gatewayOrigin: string; demoMode: boolean }) {
-  const [state, setState] = useState<GrantPoolReadiness | null>(null);
-  const [baseline, setBaseline] = useState<"existing" | "fresh">("existing");
-  const [confirmed, setConfirmed] = useState(false);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState("");
-  const [outcomes, setOutcomes] = useState<Array<{ key: string; outcome?: string; reason?: string }>>([]);
-  const [repairCursor, setRepairCursor] = useState<string | null>(null);
-  useEffect(() => {
-    let current = true;
-    if (!demoMode) request<GrantPoolReadiness>(gatewayOrigin, `${prefix}/readiness`).then(value => { if (current) setState(value); }).catch(caught => { if (current) setError(errorMessage(caught)); });
-    return () => { current = false; };
-  }, [gatewayOrigin, demoMode]);
-
-  async function refresh() {
-    setBusy(true); setError("");
-    try { setState(await request<GrantPoolReadiness>(gatewayOrigin, `${prefix}/readiness`)); }
-    catch (caught) { setError(errorMessage(caught)); }
-    finally { setBusy(false); }
-  }
-
-  async function act(action: string, body: object) {
-    setBusy(true); setError("");
-    try {
-      const result = await request<GrantPoolReadiness | { readiness: GrantPoolReadiness; outcomes: typeof outcomes; cursor?: string | null }>(gatewayOrigin, `${prefix}/${action}`, { method: "POST", headers: { "content-type": "application/json" }, body: JSON.stringify(body) });
-      if ("readiness" in result) { setState(result.readiness); setOutcomes(result.outcomes); if (action === "repair") setRepairCursor(result.cursor ?? null); }
-      else { setState(result); setOutcomes([]); }
-    } catch (caught) {
-      setError(errorMessage(caught));
-      try { setState(await request<GrantPoolReadiness>(gatewayOrigin, `${prefix}/readiness`)); } catch { /* keep the failed action visible */ }
-    } finally { setBusy(false); }
-  }
+export function GrantPoolRecovery({ model }: { model: GrantPoolRecoveryModel }) {
+  const { state, baseline, confirmed, busy, error, outcomes, repairCursor, demoMode, refresh, act, setBaseline, setConfirmed } = model;
 
   if (demoMode) return <section className="inspectorPanel"><h2>Account routing readiness</h2><p>Recovery is available on a connected router.</p></section>;
   const changed = state?.scanRevision !== null && state?.scanRevision !== state?.revision;
@@ -50,7 +16,7 @@ export function GrantPoolRecovery({ gatewayOrigin, demoMode }: { gatewayOrigin: 
     {error ? <p role="alert">{error}</p> : null}
     {!state ? <p>Readiness has not loaded. The authenticated CLI can inspect it with <code>pnpm cf:accounts -- --status</code>.</p> : <>
       {!state.baseline ? <>
-        <label>Storage baseline <select value={baseline} onChange={event => { setBaseline(event.target.value as typeof baseline); setConfirmed(false); }} disabled={busy}>
+        <label>Storage baseline <select value={baseline} onChange={event => setBaseline(event.target.value as typeof baseline)} disabled={busy}>
           <option value="existing">Existing or unknown storage</option><option value="fresh">Newly provisioned storage</option>
         </select></label>
         <label><input type="checkbox" checked={confirmed} onChange={event => setConfirmed(event.target.checked)} disabled={busy} />{baseline === "fresh" ? "I confirm this matched storage set was newly provisioned and contains no earlier accounts." : "I stopped all legacy writers and checked the complete account inventory, including paused accounts and keys absent from the old index. An empty scan alone is not proof."}</label>

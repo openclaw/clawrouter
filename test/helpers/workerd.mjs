@@ -8,12 +8,12 @@ const require = createRequire(import.meta.resolve("wrangler/package.json"));
 const { Miniflare, convertV4MiniflareOptions } = require("miniflare");
 const { build } = require("esbuild");
 
-export async function startWorkerdFixture(temporary, routerScript, upstreamScript) {
+export async function startWorkerdFixture(temporary, routerScript, upstreamScript, options) {
   const bundle = await build({ stdin: { contents: routerScript, resolveDir: process.cwd(), sourcefile: "websocket-fixture.ts", loader: "ts" }, write: false, bundle: true, format: "esm", platform: "browser", target: "es2022", logLevel: "silent" });
-  return startBundledWorkerdFixture(temporary, bundle.outputFiles[0].text, upstreamScript);
+  return startBundledWorkerdFixture(temporary, bundle.outputFiles[0].text, upstreamScript, options);
 }
 
-export async function startBundledWorkerdFixture(temporary, routerScript, upstreamScript) {
+export async function startBundledWorkerdFixture(temporary, routerScript, upstreamScript, { activate = true } = {}) {
   const adminToken = "fixture-activation-admin";
   const mf = new Miniflare(convertV4MiniflareOptions({ resourceTmpPath: temporary, workers: [{
     name: "router", modules: true, script: routerScript, compatibilityDate: "2026-06-05", compatibilityFlags: ["enable_request_signal"],
@@ -27,9 +27,11 @@ export async function startBundledWorkerdFixture(temporary, routerScript, upstre
     await mf.ready;
     // This invocation created these isolated storage bindings. Exercise the
     // same authenticated activation driver before any fixture uses env auth.
-    const request = (path, options) => adminRequest(path, { ...options, env: { CLAWROUTER_BASE_URL: "http://fixture.example", CLAWROUTER_ADMIN_TOKEN: adminToken }, fetchImpl: (url, init) => mf.dispatchFetch(url, init) });
-    await acceptGrantPoolBaseline("fresh", { request });
-    await recoverGrantPools({ request });
+    if (activate) {
+      const request = (path, options) => adminRequest(path, { ...options, env: { CLAWROUTER_BASE_URL: "http://fixture.example", CLAWROUTER_ADMIN_TOKEN: adminToken }, fetchImpl: (url, init) => mf.dispatchFetch(url, init) });
+      await acceptGrantPoolBaseline("fresh", { request });
+      await recoverGrantPools({ request });
+    }
     return mf;
   } catch (error) {
     await mf.dispose();

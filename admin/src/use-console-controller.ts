@@ -1,3 +1,4 @@
+import { useGrantPoolRecovery } from "./hooks/access/use-grant-pool-recovery";
 import { useCallback, useEffect, useRef } from "react";
 import { effectiveAccess, errorMessage, policyCoversProvider, policyUsageFallback } from "./domain";
 import { useAccessAdmin } from "./hooks/use-access-admin";
@@ -68,6 +69,10 @@ export function useConsoleController({ session, credentialOwner, request, scope,
       await refreshMetadataAfterMutation(scope.isCurrent);
     },
     syncDemoAdmin: usage.syncDemoAdmin,
+  });
+  const grantPoolRecovery = useGrantPoolRecovery({
+    request, isCurrent: scope.isCurrent, gatewayOrigin: session.gatewayOrigin, demoMode: session.demoMode,
+    active: session.view === "policies" && session.value.role === "admin" && access.tab.value === "upstream",
   });
   credentialOwner.observePresentation(session.view === "home" ? "personal" : session.view === "policies" && access.tab.value === "credentials" && session.value.role === "admin" ? "admin" : null);
   const playground = usePlayground({
@@ -318,7 +323,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
     session.navigateTo(...args);
   }
 
-  return { session: { ...session, navigateTo }, catalog, access, usage, selfServiceKeys, credentialOwner, playground, request, refresh, refreshMetadataAfterMutation };
+  return { session: { ...session, navigateTo }, catalog, access, grantPoolRecovery, usage, selfServiceKeys, credentialOwner, playground, request, refresh, refreshMetadataAfterMutation };
 }
 
 export type ConsoleController = ReturnType<typeof useConsoleController>;

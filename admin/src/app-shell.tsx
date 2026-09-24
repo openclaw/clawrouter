@@ -5,7 +5,6 @@ import { ThemeToggle, viewIcon, viewSubtitle, viewTitle } from "./components";
 import { DashboardScreen, CatalogScreen, UserAvatar } from "./screens/dashboard-catalog";
 import { PlaygroundScreen } from "./screens/playground";
 import { PoliciesScreen } from "./screens/access";
-import { GrantPoolRecovery } from "./screens/grant-pool-recovery";
 import { UsageScreen, UsersScreen } from "./screens/users-usage";
 import { applyTheme, navItems, readTheme } from "./ui-config";
 import { formatTimestamp } from "./ui-helpers";
@@ -16,7 +15,7 @@ import type { AccessPolicy } from "./ui-types";
 export function AppShell() {
   const [theme, setTheme] = React.useState(readTheme);
   React.useEffect(() => { applyTheme(theme); }, [theme]);
-  const { session: shell, catalog, access, usage, selfServiceKeys, credentialOwner, playground: playgroundDomain, refresh } = useConsole();
+  const { session: shell, catalog, access, grantPoolRecovery, usage, selfServiceKeys, credentialOwner, playground: playgroundDomain, refresh } = useConsole();
   const { view, value: session, status, lastUpdatedAt, demoMode, busy, navigateTo } = shell;
   const refreshError = [shell.refreshError, usage.error].filter(Boolean).join("; ");
   const statusPresentation = consoleStatusPresentation(status, demoMode, Boolean(refreshError), shell.refreshing);
@@ -193,9 +192,9 @@ export function AppShell() {
           />
         ) : null}
 
-        {view === "policies" && session.role === "admin" && accessTab === "upstream" ? <GrantPoolRecovery key={shell.gatewayOrigin} gatewayOrigin={shell.gatewayOrigin} demoMode={demoMode} /> : null}
         {view === "policies" && session.role === "admin" ? (
           <PoliciesScreen
+            grantPoolRecovery={grantPoolRecovery}
             tab={accessTab}
             setTab={setAccessTab}
             keys={keys}

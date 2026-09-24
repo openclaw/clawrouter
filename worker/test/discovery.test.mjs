@@ -485,10 +485,40 @@ test("catalog and HTTP select only configured grants inside the already chosen p
   assert.equal(sent.length, 2, "the environment key never replaces the unusable selected pool");
 });
 
+test("cutover and attachment denial precede environment configuration and catalog budget observations", async t => {
+  const fixture = await fusionDiscoveryFixture(t), { env, attachment } = fixture;
+  attachment.ready = false;
+  const ledger = env.BUDGET_LEDGER;
+  let observations = 0;
+  env.BUDGET_LEDGER = { idFromName: name => name, get: () => ({ fetch: async () => { observations++; throw new Error("blocked offers cannot observe budgets"); } }) };
+  async function offers(reason) {
+    for (const mode of ["key", "session"]) {
+      const response = await catalogResponse(fixture.request(mode), env);
+      assert.equal(response.status, 200);
+      const provider = (await response.json()).providers.find(row => row.id === "openai");
+      const rows = provider.offers.filter(row => row.endpoint === "responses" && row.modelId === "openai/gpt-6-astra");
+      assert.ok(rows.length > 0);
+      assert.ok(rows.every(row => row.policyId === "fixture" && row.policyGeneration === "g1" && row.eligible === !reason && row.reasonCode === reason));
+      if (reason) assert.ok(rows.every(row => row.affordability === "exact-blocked"));
+      assert.equal(rows.some(row => row.transport === "websocket"), mode === "key");
+    }
+  }
+  await offers("grant_pool_not_ready");
+  assert.equal(observations, 0);
+  attachment.ready = true;
+  attachment.hasAttachment = true;
+  await offers("upstream_grant_pool_unavailable");
+  assert.equal(observations, 0);
+  env.BUDGET_LEDGER = ledger;
+  attachment.hasAttachment = false;
+  await offers(undefined);
+});
+
 async function fusionDiscoveryFixture(t) {
   const secret = "fixture-fusion-discovery", session = "b".repeat(64);
   const policy = { enabled: true, generation: "g1", providers: ["openai", "fireworks"], tenantId: "default", monthlyBudgetMicros: 100, requestCostMicros: null, retainRequestContent: false };
   const policies = [{ policyId: "fixture", policy }], states = {}, calls = [];
+  const attachment = { ready: true, hasAttachment: false };
   const userRecord = { enabled: true, role: "user", tenantId: "default", groups: [] };
   const connections = policy.providers.map((providerId) => ({ providerId, enabled: true, monthlyBudgetMicros: null }));
   const config = { enabled: true, aggregatorModel: "openai/gpt-6-astra", adviserModels: ["local/fixture-unavailable"] };
@@ -515,10 +545,10 @@ async function fusionDiscoveryFixture(t) {
       if (path === "/users/resolve") return Response.json({ initialized: true, users: [{ email: "fixture@example.com", record: userRecord }], missingEmails: [] });
       if (path === "/resolve") return Response.json({ initialized: true, bindings: policies.map(({ policyId }, priority) => ({ policyId, priority, enabled: true, principalType: "user", principalId: "fixture@example.com" })), missingPrincipals: [] });
       if (path === "/connections/resolve") return Response.json({ initialized: true, connections, missingProviderIds: [] });
-      if (path === "/grant-pools/resolve") return Response.json({ keys: [...records.keys()].filter((key) => key.startsWith(`oauth/${body.policyId}/`) && records.get(key).provider === body.providerId), states, ready: true });
+      if (path === "/grant-pools/resolve") return Response.json({ keys: [...records.keys()].filter((key) => key.startsWith(`oauth/${body.policyId}/`) && records.get(key).provider === body.providerId), states, ...attachment });
       throw new Error(`discovery unexpectedly mutated authority: ${path}`);
     } }) },
   };
   t.mock.method(globalThis, "fetch", () => { throw new Error("discovery must not refresh credentials or probe upstream"); });
-  return { env, credential, userRecord, policy, policies, connection: connections[0], connections, records, states, config, calls, request: (mode) => new Request("https://router.example/v1/catalog", { headers: mode === "key" ? { authorization: `Bearer clawrouter-live-fixture-${secret}` } : { cookie: `clawrouter_session=${session}` } }) };
+  return { env, credential, userRecord, policy, policies, attachment, connection: connections[0], connections, records, states, config, calls, request: (mode) => new Request("https://router.example/v1/catalog", { headers: mode === "key" ? { authorization: `Bearer clawrouter-live-fixture-${secret}` } : { cookie: `clawrouter_session=${session}` } }) };
 }
