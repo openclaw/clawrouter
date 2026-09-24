@@ -21,6 +21,10 @@ try {
   const authority = await mf.getDurableObjectNamespace("ACCESS_CONTROL", "router");
   const authorityObject = authority.get(authority.idFromName("policy-bindings"));
   const dispatch = (path, init = {}) => mf.dispatchFetch(`https://router.example${path}`, { ...init, headers: { authorization: `Bearer ${key}`, ...init.headers } });
+  const catalog = await (await dispatch("/v1/catalog")).json();
+  const offered = catalog.providers.find(({ id }) => id === "openai").offers;
+  assert.ok(offered.some((offer) => offer.modelId === "openai/gpt-6-astra" && offer.transport === "websocket" && offer.route === "/v1/responses" && offer.eligible));
+  assert.ok(offered.filter(({ transport }) => transport === "websocket").every(({ modelId }) => modelId !== null));
   const denied = await mf.dispatchFetch("https://router.example/v1/responses", { headers: { upgrade: "websocket" } });
   assert.equal(denied.status, 401);
   const response = await dispatch("/v1/native/openai/v1/responses", { headers: { upgrade: "websocket", "x-request-id": "fixture-handshake", "session-id": "fixture-session", "x-openai-internal-codex-responses-lite": "true" } });
@@ -94,6 +98,12 @@ try {
     const next = messages.filter((event) => ["response.completed", "response.incomplete", "response.failed", "error"].includes(event.type)).length + 1;
     create({ input: "must not be sent" });
     assert.equal((await terminal(next)).error.code, code);
+    if (code === "budget_exhausted") {
+      const view = await (await dispatch("/v1/catalog")).json();
+      const deniedOffers = view.providers.find(({ id }) => id === "openai").offers.filter(({ endpoint, modelId }) => endpoint === "responses" && modelId === "openai/gpt-6-astra");
+      assert.ok(deniedOffers.length > 0);
+      assert.ok(deniedOffers.every((offer) => !offer.eligible && offer.reasonCode === code && offer.affordability === "exact-blocked"));
+    }
     assert.equal((await (await upstream.fetch("https://fixture.example/state")).json()).frames.length, before);
     count++;
     await until(async () => { usage = await (await dispatch("/v1/usage")).json(); return usage.usage.summary.requestCount === count; });

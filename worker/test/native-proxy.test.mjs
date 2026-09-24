@@ -180,6 +180,28 @@ test("Azure readiness checks endpoint-specific configuration without requiring a
   assert.deepEqual(endpoints(), []);
 });
 
+test("provider readiness keeps control-plane configuration and probe precedence", () => {
+  const configured = { OPENAI_API_KEY: "fixture-openai-key" };
+  const fresh = { providerId: "openai", status: "verified", checkedAt: new Date(Date.now() - 1_000).toISOString(), latencyMs: 42 };
+  const stale = { ...fresh, checkedAt: new Date(Date.now() - 86_400_001).toISOString() };
+  const failed = { ...fresh, status: "failed", error: "Fixture probe failed." };
+  const unverified = "Configured but not recently verified by a live smoke test.";
+  for (const [env, enabled, health, status, executable, reasons] of [
+    [configured, true, fresh, "verified", true, []],
+    [configured, true, stale, "unverified", true, [unverified]],
+    [configured, true, failed, "failed", true, [unverified, failed.error]],
+    [{}, true, failed, "missing_config", false, ["Missing OPENAI_API_KEY.", failed.error]],
+    [configured, false, failed, "disabled", false, ["Provider connection is disabled.", failed.error]],
+  ]) {
+    const readiness = providerReadinessFromState(env, [], [{ providerId: "openai", enabled }], new Map([["openai", health]])).find(({ id }) => id === "openai");
+    assert.equal(readiness.status, status);
+    assert.equal(readiness.executable, executable);
+    assert.deepEqual(readiness.reasons, reasons);
+    assert.equal(readiness.lastCheckedAt, health.checkedAt);
+    assert.equal(readiness.latencyMs, health.latencyMs);
+  }
+});
+
 test("native OpenRouter Responses preserves provider namespaces and rejects unpriced budgeted calls", async (t) => {
   const fixture = await nativeFixture("openrouter");
   fixture.env.OPENROUTER_API_KEY = "fixture-openrouter-key";

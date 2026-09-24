@@ -352,7 +352,7 @@ try {
   assert.equal(legacyInspection.status, 200, "bootstrap imports genuine combined legacy keys before setting migration markers");
   const clientCatalog = await fetch(`${base}/v1/catalog`, { headers: { authorization: `Bearer ${proxyKey}` } });
   assert.equal(clientCatalog.status, 200);
-  assert.deepEqual((await clientCatalog.json()).providers.map((provider) => provider.id), ["firecrawl", "replicate"]);
+  assert.deepEqual((await clientCatalog.json()).providers.map((provider) => provider.id), ["firecrawl"], "authorized but unconfigured providers stay out of the client catalog");
   const mismatch = await fetch(`${base}/v1/proxy/firecrawl/scrape`, { method: "POST", headers: { authorization: `Bearer ${proxyKey}`, "content-type": "application/json" }, body: JSON.stringify({ body: { model: "openai/gpt-5.5", url: "https://example.com" } }) });
   assert.equal(mismatch.status, 400);
   assert.equal((await mismatch.json()).error.code, "model_provider_mismatch");
@@ -364,6 +364,9 @@ try {
   assert.equal((await directManifestGet.json()).error.code, "provider_not_configured", "GET manifest routes parse path params without a JSON envelope");
   const grant = await fetch(`${base}/v1/admin/upstream-grants/policies/migrate/replicate`, { method: "PUT", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" }, body: JSON.stringify({ provider: "replicate", kind: "api_key", credential: "local-e2e-token" }) });
   assert.equal(grant.status, 200);
+  const configuredCatalog = await fetch(`${base}/v1/catalog`, { headers: { authorization: `Bearer ${proxyKey}` } });
+  assert.equal(configuredCatalog.status, 200);
+  assert.deepEqual((await configuredCatalog.json()).providers.map((provider) => provider.id), ["firecrawl", "replicate"], "adding an account makes its authorized provider visible on the next catalog read");
   const bundledGrantUrl = `${base}/v1/admin/upstream-grants/policies/migrate/aws_bundle`;
   const credentials = Object.fromEntries([["access" + "KeyId", "local"], ["secret" + "AccessKey", "local"]]);
   const bundledGrant = await fetch(bundledGrantUrl, { method: "PUT", headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" }, body: JSON.stringify({ provider: "aws-bedrock", kind: "api_key", label: "original", credentials }) });

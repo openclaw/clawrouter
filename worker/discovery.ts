@@ -1,25 +1,29 @@
 import { resolveTemplate } from "./provider-templates.ts";
-import { validateBudgetReservation } from "./accounting.ts";
-import { estimateCost } from "./proxy-accounting.ts";
 import { listConnections } from "./authority";
-import { resolveGrantCandidates } from "./grant-selection";
-import { grantSupports } from "./provider-auth";
+import { activeOperationCandidates, policyGrantCandidates, selectPolicyCandidates } from "./grant-selection";
+import { assertOperationConfiguration, type GrantRequirement } from "./provider-auth";
+import { budgetPrincipal } from "./budget-scope";
+import { budgetStatus, providerBudgetStatus } from "./ledgers";
+import { operationAffordability, type OperationAffordability } from "./operation-budget";
 import { fetchTimeoutSignal } from "../shared/fetch-timeout.ts";
-import { publicSession, sessionPolicies, verifiedAccessSession } from "./access";
+import { publicSession, sessionPolicies, sessionPolicyIdentity, verifiedAccessSession } from "./access";
 import { contentRetentionDefault } from "./content-retention.ts";
 import { loadFusionConfig } from "./fusion-config";
 import { FUSION_MODEL_ID } from "./fusion";
 import { authenticateProxyKey } from "./proxy-auth";
-import { modelRoute, providerReadinessForPolicies, providerReadinessFromState, snapshot, type Readiness } from "./providers";
-import type { AccessPolicyEntry, AccessSession, CompiledProvider, Env, ProviderConnection } from "./types";
+import { assertProviderAccess, listHealth, modelRoute, modelSupportsEndpoint, providerReadinessForState, snapshot, unifiedPathForEndpoint, type Readiness } from "./providers";
+import type { AccessSession, AuthorizedIdentity, CompiledModel, CompiledProvider, Env, ProviderConnection } from "./types";
 import { errorResponse, HttpError, privateJson, sha256Hex } from "./utils";
 
 export async function sessionResponse(request: Request, env: Env): Promise<Response> {
   const session = await verifiedAccessSession(request, env);
   if (!session) return errorResponse("access_session_required", "a verified Cloudflare Access session is required", 401);
-  let entitlements: { providers: EntitlementRow[] } | undefined;
+  let entitlements: { providers: EntitlementRow[]; catalog: ReturnType<typeof catalogProjection> } | undefined;
   let entitlementsError: string | undefined;
-  try { entitlements = { providers: await entitlementRows(session, env) }; }
+  try {
+    const resolved = await sessionEntitlements(session, env);
+    entitlements = { providers: resolved.rows, catalog: catalogProjection(resolved) };
+  }
   catch (error) { entitlementsError = error instanceof Error ? error.message : "entitlements unavailable"; }
   return privateJson({ ...publicSession(session), entitlements, entitlementsError, contentRetention: await retentionView(session, env) });
 }
@@ -27,7 +31,8 @@ export async function sessionResponse(request: Request, env: Env): Promise<Respo
 export async function entitlementResponse(request: Request, env: Env): Promise<Response> {
   const session = await verifiedAccessSession(request, env);
   if (!session) return errorResponse("access_session_required", "entitlements require a verified Cloudflare Access session", 401);
-  return privateJson({ session: publicSession(session), providers: await entitlementRows(session, env), contentRetention: await retentionView(session, env) });
+  const resolved = await sessionEntitlements(session, env);
+  return privateJson({ session: publicSession(session), providers: resolved.rows, catalog: catalogProjection(resolved), contentRetention: await retentionView(session, env) });
 }
 
 export async function avatarResponse(request: Request, env: Env): Promise<Response> {
@@ -72,21 +77,26 @@ export async function modelsResponse(request: Request, env: Env): Promise<Respon
 
 export async function catalogResponse(request: Request, env: Env): Promise<Response> {
   const entitlements = await clientEntitlements(request, env);
-  if (entitlements instanceof Response) return entitlements;
+  return entitlements instanceof Response ? entitlements : privateJson(catalogProjection(entitlements));
+}
+
+function catalogProjection(entitlements: ClientEntitlements) {
   const rows = entitlements.rows;
   const inventory = entitlements.inventory;
+  // v1 keeps native route locations as metadata; scoped offers describe caller eligibility.
   const providers = rows.filter((row) => row.allowed && row.provider !== "clawrouter").flatMap((row) => {
     const provider = snapshot.providers.find((candidate) => candidate.id === row.provider);
     if (!provider) return [];
     const view = inventory.get(provider.id)!;
+    if (!view.configured) return [];
     const endpoints = view.endpoints;
-    const executable = endpoints.length > 0;
+    const executable = view.offers.some((offer) => offer.eligible);
     return [{
       id: provider.id, displayName: provider.display_name, allowed: true, executable,
       openaiCompatible: executable && provider.class === "openai_compatible", nativeBaseUrl: `/v1/native/${provider.id}`,
-      policies: row.policies, readiness: { ...row.readiness, executable, executableEndpoints: endpoints }, connectionTypes: connectionTypes(provider),
-      routes: provider.endpoints.filter((endpoint) => endpoint.native_proxy && endpoints.includes(endpoint.id)).map((endpoint) => ({ endpoint: endpoint.id, methods: endpoint.methods, path: endpoint.path, requestFormat: endpoint.request_format, responseFormat: endpoint.response_format, streaming: endpoint.streaming, ...(view.websockets.includes(endpoint.id) ? { websocket: endpoint.websocket } : {}) })),
-      models: view.models,
+      policies: row.policies, readiness: row.readiness, connectionTypes: connectionTypes(provider),
+      routes: provider.endpoints.filter((endpoint) => endpoint.native_proxy && (endpoints.includes(endpoint.id) || view.websockets.includes(endpoint.id))).map((endpoint) => ({ endpoint: endpoint.id, methods: endpoint.methods, path: endpoint.path, requestFormat: endpoint.request_format, responseFormat: endpoint.response_format, streaming: endpoint.streaming, ...(view.websockets.includes(endpoint.id) ? { websocket: endpoint.websocket } : {}) })),
+      models: view.models, offers: view.offers,
     }];
   });
   const fusion = rows.find((row) => row.provider === "clawrouter" && row.allowed);
@@ -101,9 +111,10 @@ export async function catalogResponse(request: Request, env: Env): Promise<Respo
     readiness: fusion.readiness,
     connectionTypes: ["compound"],
     routes: [],
+    offers: [],
     models: fusion.readiness.executable ? [{ id: FUSION_MODEL_ID, upstream: FUSION_MODEL_ID, capabilities: ["llm.chat"], pricing_ref: null, pricing: null }] : [],
   });
-  return privateJson({ version: "clawrouter.client-catalog.v1", providers });
+  return { version: "clawrouter.client-catalog.v1", observedAt: entitlements.observedAt, scope: entitlements.scope, providers };
 }
 
 export async function meResponse(request: Request, env: Env): Promise<Response> {
@@ -123,20 +134,22 @@ interface EntitlementRow {
   readiness: Readiness;
 }
 
-async function entitlementRows(session: AccessSession, env: Env): Promise<EntitlementRow[]> {
-  return (await entitlementRowsForEntries(await sessionPolicies(session, env), session.tenantId, env)).rows;
+async function sessionEntitlements(session: AccessSession, env: Env): Promise<ClientEntitlements> {
+  const identities = (await sessionPolicies(session, env)).map((entry) => sessionPolicyIdentity(session, entry));
+  return entitlementRowsForEntries(identities, env, { authType: "access", credentialId: null, principalId: session.email });
 }
 
-async function entitlementRowsForEntries(entries: AccessPolicyEntry[], tenantId: string, env: Env): Promise<ClientEntitlements> {
+async function entitlementRowsForEntries(identities: AuthorizedIdentity[], env: Env, scope: ClientEntitlements["scope"]): Promise<ClientEntitlements> {
+  const observedAt = new Date().toISOString();
   const connections = await listConnections(env, snapshot.providers.map((provider) => provider.id));
-  const readiness = await providerReadinessForPolicies(env, entries, connections);
+  const inventory = await clientInventory(identities, env, connections);
   const rows = snapshot.providers.map((provider) => {
-    const policies = entries.filter((entry) => entry.policy.enabled && (!entry.policy.providers.length || entry.policy.providers.includes(provider.id))).map((entry) => entry.policyId);
-    return { provider: provider.id, displayName: provider.display_name, serviceKind: provider.service_kind, allowed: policies.length > 0, policies, readiness: readiness.find((row) => row.id === provider.id)! };
+    const policies = identities.filter((entry) => entry.policy.enabled && (!entry.policy.providers.length || entry.policy.providers.includes(provider.id))).map((entry) => entry.policyId);
+    return { provider: provider.id, displayName: provider.display_name, serviceKind: provider.service_kind, allowed: policies.length > 0, policies, readiness: inventory.get(provider.id)!.readiness };
   });
-  const inventory = await clientInventory({ rows, entries, tenantId }, env, connections);
   const fusion = await fusionEntitlement(rows, inventory, env);
-  return { rows: fusion ? [...rows, fusion] : rows, inventory };
+  // Authentication still identifies the caller after the last policy is removed.
+  return { rows: fusion ? [...rows, fusion] : rows, inventory, observedAt, scope };
 }
 
 async function fusionEntitlement(rows: EntitlementRow[], inventory: ClientInventory, env: Env): Promise<EntitlementRow | null> {
@@ -197,6 +210,8 @@ type ClientInventory = Awaited<ReturnType<typeof clientInventory>>;
 interface ClientEntitlements {
   rows: EntitlementRow[];
   inventory: ClientInventory;
+  observedAt: string;
+  scope: Pick<AuthorizedIdentity, "authType" | "credentialId" | "principalId">;
 }
 
 async function clientEntitlements(request: Request, env: Env): Promise<ClientEntitlements | Response> {
@@ -204,74 +219,113 @@ async function clientEntitlements(request: Request, env: Env): Promise<ClientEnt
   if (hasKey) {
     const auth = await authenticateProxyKey(request.headers, env);
     if (auth instanceof Response) return auth;
-    const entries = [{ policyId: auth.policyId, policy: auth.policy }];
-    return entitlementRowsForEntries(entries, auth.policy.tenantId ?? "default", env);
+    return entitlementRowsForEntries([auth], env, { authType: auth.authType, credentialId: auth.credentialId, principalId: auth.principalId });
   }
   const session = await verifiedAccessSession(request, env);
   if (!session) return errorResponse("client_auth_required", "a valid ClawRouter proxy key or Cloudflare Access session is required", 401);
-  const entries = await sessionPolicies(session, env);
-  return entitlementRowsForEntries(entries, session.tenantId, env);
+  return sessionEntitlements(session, env);
 }
 
-export function catalogModels(provider: CompiledProvider, endpoints: string[], proxyPolicy: AccessPolicyEntry["policy"] | null, providerBudget: number | null = null, endpointPolicies?: Map<string, AccessPolicyEntry["policy"]>) {
-  return provider.models.flatMap((model) => {
-    const capabilities = executableCapabilities(provider, model.capabilities, endpoints).filter((capability) => {
-      const endpointId = provider.capabilities.find((candidate) => candidate.id === capability)!.endpoint;
-      const endpoint = provider.endpoints.find((candidate) => candidate.id === endpointId)!;
-      const policy = endpointPolicies?.get(endpointId) ?? proxyPolicy;
-      const cost = estimateCost(model, {}, policy?.requestCostMicros, capability, endpoint);
-      try {
-        validateBudgetReservation(capability, cost, policy?.monthlyBudgetMicros, { providerId: provider.id, enabled: true, monthlyBudgetMicros: providerBudget });
-        return true;
-      } catch (error) {
-        if (error instanceof HttpError) return false;
-        throw error;
-      }
-    });
-    return capabilities.length ? [{ id: model.id, upstream: model.upstream, ...(model.codexModel ? { codexModel: model.codexModel } : {}), capabilities, ...(model.supportedReasoningEfforts ? { supportedReasoningEfforts: model.supportedReasoningEfforts } : {}), pricing_ref: model.pricing_ref, pricing: model.pricing }] : [];
-  });
+interface CatalogOffer {
+  endpoint: string;
+  modelId: string | null;
+  transport: "http" | "websocket";
+  routeKind: "unified" | "native" | "manifest" | "playground";
+  route: string;
+  policyId: string;
+  policyGeneration: string;
+  eligible: boolean;
+  affordability: "exact-covered" | "exact-blocked" | "request-dependent";
+  reasonCode?: string;
 }
 
-async function clientInventory(entitlements: { rows: EntitlementRow[]; entries: AccessPolicyEntry[]; tenantId: string }, env: Env, connections: ProviderConnection[]) {
-  const environment = new Map(providerReadinessFromState(env, [], connections, new Map()).map((row) => [row.id, row.executableEndpoints]));
+async function clientInventory(identities: AuthorizedIdentity[], env: Env, connections: ProviderConnection[]) {
+  const health = await listHealth(env);
+  const policyBalances = new Map<string, ReturnType<typeof budgetStatus>>();
   const views = await Promise.all(snapshot.providers.map(async (provider) => {
-    const entries = entitlements.entries.filter((entry) => entry.policy.enabled && (!entry.policy.providers.length || entry.policy.providers.includes(provider.id)));
-    const pools = await Promise.all(entries.map(async (entry) => ({ entry, ...await resolveGrantCandidates(provider.id, entry.policyId, entry.policy.tenantId ?? entitlements.tenantId, provider.auth.schemes.find((scheme) => scheme.type === "oauth")?.tokenRef ?? provider.id, env, new Set(), entry.policy.grantRouting) })));
-    const readiness = entitlements.rows.find((row) => row.provider === provider.id)!;
-    const endpointPolicies = new Map<string, AccessPolicyEntry["policy"]>(), websockets: string[] = [];
-    for (const endpoint of provider.endpoints) {
-      if (!readiness.readiness.executableEndpoints.includes(endpoint.id)) continue;
-      for (const mode of ["http", "websocket"] as const) {
-        const requirement = { provider, endpoint, mode };
-        // Match selectProviderPolicy independently per transport: an HTTP-only
-        // subscription in the first policy must not mask another policy's WS grant.
-        const selected = pools.find((pool) => pool.available.some(({ grant }) => grantSupports(requirement, grant))) ?? pools[0];
-        if (!selected) continue;
-        const grantAllowed = selected.available.some(({ grant }) => grantSupports(requirement, grant));
-        const environmentAllowed = !selected.hasConfiguredGrant && (environment.get(provider.id) ?? []).includes(endpoint.id) && grantSupports(requirement, null);
-        if (!grantAllowed && !environmentAllowed) continue;
-        if (mode === "http") endpointPolicies.set(endpoint.id, selected.entry.policy);
-        else websockets.push(endpoint.id);
+    const entries = identities.filter((entry) => entry.policy.enabled && (!entry.policy.providers.length || entry.policy.providers.includes(provider.id)));
+    const pools = await Promise.all(entries.map((entry) => policyGrantCandidates(entry, provider.id, env, provider.auth.schemes.find((scheme) => scheme.type === "oauth")?.tokenRef ?? provider.id)));
+    const savedConnection = connections.find((connection) => connection.providerId === provider.id);
+    const connection = savedConnection ?? { providerId: provider.id, enabled: true };
+    const keyScope = entries[0]?.authType === "proxy_key";
+    let configured = !!savedConnection || pools.some((pool) => pool.candidates.hasConfiguredGrant)
+      || provider.config_keys.some((key) => typeof env[key] === "string" && (env[key] as string).trim());
+    let providerBalance: ReturnType<typeof providerBudgetStatus> | undefined;
+    const contexts = await Promise.all(provider.endpoints.flatMap((endpoint) => (keyScope && endpoint.websocket ? ["http", "websocket"] as const : ["http"] as const).map(async (mode) => {
+      const requirement: GrantRequirement = { provider, endpoint, mode };
+      const selected = selectPolicyCandidates(pools, requirement);
+      if (!selected) return null;
+      const auth = selected.entry;
+      let reasonCode: string | undefined;
+      try {
+        await assertProviderAccess(provider, auth, env, connection);
+        const available = activeOperationCandidates(selected.candidates.available, env, requirement);
+        if (!available.length) {
+          if (selected.candidates.hasConfiguredGrant) throw new HttpError(503, "upstream_grant_pool_unavailable", "no scoped grant supports this operation");
+          assertOperationConfiguration(requirement, null, env);
+        }
+        configured = true;
+      } catch (error) {
+        reasonCode = error instanceof HttpError ? error.code : "provider_not_configured";
       }
-    }
-    const endpoints = [...endpointPolicies.keys()];
-    const eligibleModels = (models = provider.models) => catalogModels({ ...provider, models }, endpoints, null, connections.find((connection) => connection.providerId === provider.id)?.monthlyBudgetMicros ?? null, endpointPolicies).filter((model) => {
-      // Native callers can supply path parameters even when a catalog model's default is absent.
-      try { resolveTemplate(provider, model.upstream, env); return true; }
-      catch (error) { if (error instanceof HttpError && error.code === "provider_not_configured") return false; throw error; }
+      let observation;
+      if (!reasonCode) {
+        // Request-local observations retain the selected identity. They never
+        // participate in policy choice or authorize a later dispatch.
+        if (!policyBalances.has(auth.policyId)) policyBalances.set(auth.policyId, budgetStatus(env, auth.policyId, auth.policy, budgetPrincipal(auth)));
+        if (connection.monthlyBudgetMicros != null) providerBalance ??= providerBudgetStatus(env, provider.id, connection.monthlyBudgetMicros);
+        const [policy, providerBudget] = await Promise.all([policyBalances.get(auth.policyId)!, providerBalance]);
+        observation = { policyRemaining: policy.remainingMicros, providerRemaining: providerBudget?.remainingMicros ?? null };
+      }
+      return { endpoint, mode, auth, reasonCode, observation };
+    })));
+    const effective = contexts.filter((context): context is NonNullable<typeof context> => context !== null);
+    const eligibility = (context: typeof effective[number], model: CompiledModel | null, capability: string) => {
+      if (context.reasonCode) return { status: "exact-blocked" as const, reasonCode: context.reasonCode };
+      if (model) {
+        try { resolveTemplate(provider, model.upstream, env); }
+        catch (error) { if (error instanceof HttpError) return { status: "exact-blocked" as const, reasonCode: error.code }; throw error; }
+      }
+      return operationAffordability(context.auth, connection, model, capability, context.endpoint, context.observation);
+    };
+    const eligibleModels = (models = provider.models) => models.flatMap((model) => {
+      const capabilities = model.capabilities.filter((capability) => effective.some((context) => provider.capabilities.some((item) => item.id === capability && item.endpoint === context.endpoint.id) && eligibility(context, model, capability).status !== "exact-blocked"));
+      return capabilities.length ? [{ ...model, capabilities }] : [];
     });
-    return [provider.id, { endpoints, websockets, models: eligibleModels(), eligibleModels }] as const;
+    const offers: CatalogOffer[] = effective.flatMap((context) => {
+      const { endpoint, mode, auth } = context;
+      const models = provider.models.filter((model) => modelSupportsEndpoint(provider, model, endpoint));
+      const capability = provider.capabilities.find((item) => item.endpoint === endpoint.id)?.id ?? endpoint.id;
+      const assessed = (mode === "websocket" ? models : [...models, null]).map((model) => ({ model, availability: eligibility(context, model, capability) }));
+      const selectableModel = assessed.some(({ model, availability }) => model && availability.status !== "exact-blocked");
+      return assessed.flatMap(({ model, availability: resolved }) => {
+        // A form can defer model selection without declaring a model-less
+        // request priced. Selected models still use their own admission facts.
+        const availability: OperationAffordability = !model && resolved.reasonCode === "pricing_required" && selectableModel ? { status: "request-dependent" } : resolved;
+        const common = { endpoint: endpoint.id, modelId: model?.id ?? null, transport: mode, policyId: auth.policyId, policyGeneration: auth.policy.generation, eligible: availability.status !== "exact-blocked", affordability: availability.status, ...(availability.reasonCode ? { reasonCode: availability.reasonCode } : {}) };
+        const native: CatalogOffer = { ...common, routeKind: keyScope ? endpoint.native_proxy ? "native" : "manifest" : "playground", route: keyScope && endpoint.native_proxy ? `/v1/native/${provider.id}${endpoint.path}` : `/v1/${keyScope ? "" : "playground/"}proxy/${provider.id}/${endpoint.id}` };
+        const unified = model && unifiedPathForEndpoint(provider, endpoint);
+        return [...(mode === "http" || endpoint.native_proxy ? [native] : []), ...(unified ? [{ ...common, routeKind: "unified" as const, route: keyScope ? unified : `/v1/playground${unified}` }] : [])];
+      });
+    });
+    const endpoints = [...new Set(offers.filter((offer) => offer.eligible && offer.transport === "http").map((offer) => offer.endpoint))];
+    const websockets = [...new Set(offers.filter((offer) => offer.eligible && offer.transport === "websocket").map((offer) => offer.endpoint))];
+    const grants = [...new Map(pools.flatMap(({ candidates }) => candidates.available.map(({ key, grant }) => [key, { key, grant }] as const))).values()];
+    const executable = offers.some((offer) => offer.eligible);
+    const readiness = providerReadinessForState(provider, env, grants, connection, health.get(provider.id), {
+      executableEndpoints: [...new Set([...endpoints, ...websockets])], executable,
+      status: !connection.enabled ? "disabled" : executable ? "configured" : configured ? "unavailable" : "unconfigured",
+      reasons: [...new Set(offers.flatMap((offer) => offer.reasonCode ? [offer.reasonCode] : []))],
+    });
+    return [provider.id, { configured: !!configured, endpoints, websockets, models: eligibleModels(), eligibleModels, offers, readiness }] as const;
   }));
   return new Map(views);
 }
 
+
 async function retentionView(session: AccessSession, env: Env) {
   const enabledByPolicy = (await sessionPolicies(session, env)).some((entry) => entry.policy.retainRequestContent !== false);
   return { enabled: enabledByPolicy && !session.contentRetentionDisabled, retentionDays: 30, policyEnabled: enabledByPolicy, userExempt: session.contentRetentionDisabled, defaultEnabled: contentRetentionDefault(env) };
-}
-
-function executableCapabilities(provider: CompiledProvider, capabilities: string[], endpoints: string[]): string[] {
-  return capabilities.filter((capability) => endpoints.includes(provider.capabilities.find((candidate) => candidate.id === capability)?.endpoint ?? ""));
 }
 
 function connectionTypes(provider: CompiledProvider): string[] {

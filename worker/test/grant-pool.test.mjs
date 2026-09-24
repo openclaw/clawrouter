@@ -30,7 +30,7 @@ test("revoked grants leave the pool and policy selection sees indexed grants", a
   const pooled = grant("openai", "pooled", 20);
   await putGrant(env, "oauth/policy_b/openai-backup", pooled);
   const entries = [policy("policy_a"), policy("policy_b")];
-  assert.equal((await selectProviderPolicy(entries, "openai", "tenant_a", env)).policyId, "policy_b");
+  assert.equal((await selectProviderPolicy(entries, "openai", env)).policyId, "policy_b");
 
   await revokeGrantCredentials(env, "oauth/policy_b/openai-backup");
   assert.equal(await selectGrant("openai", "policy_b", "tenant_a", "openai", env), null);
@@ -105,7 +105,7 @@ test("endpoint and transport eligibility precede priority selection and never re
   const env = mockEnv();
   const provider = providerById("openai");
   const requirement = (id, mode = "http") => ({ provider, endpoint: provider.endpoints.find((endpoint) => endpoint.id === id), mode });
-  await putGrant(env, "oauth/policy_a/subscription", { ...grant("openai", "subscription", 10), kind: "subscription" });
+  await putGrant(env, "oauth/policy_a/subscription", { ...grant("openai", "subscription", 10), kind: "subscription", accountId: "fixture-account" });
   await putGrant(env, "oauth/policy_a/api", grant("openai", "api", 100));
   for (const [endpoint, mode, expected] of [["responses", "http", "subscription"], ["chat_completions", "http", "api"], ["embeddings", "http", "api"], ["responses", "websocket", "api"]]) {
     const result = await resolveGrantSelection("openai", "policy_a", "tenant_a", "openai", env, new Set(), undefined, null, true, undefined, requirement(endpoint, mode));
@@ -124,16 +124,29 @@ test("endpoint and transport eligibility precede priority selection and never re
 test("Access policy choice respects endpoint support and pinned grant revisions cannot rotate", async () => {
   const env = mockEnv();
   const provider = providerById("openai");
-  await putGrant(env, "oauth/policy_a/subscription", { ...grant("openai", "subscription"), kind: "subscription" });
+  await putGrant(env, "oauth/policy_a/subscription", { ...grant("openai", "subscription"), kind: "subscription", accountId: "fixture-account" });
   await putGrant(env, "oauth/policy_b/api", grant("openai", "api"));
   const requirement = { provider, endpoint: provider.endpoints.find((endpoint) => endpoint.id === "chat_completions"), mode: "http" };
-  assert.equal((await selectProviderPolicy([policy("policy_a"), policy("policy_b")], "openai", "tenant_a", env, requirement)).policyId, "policy_b");
+  assert.equal((await selectProviderPolicy([policy("policy_a"), policy("policy_b")], "openai", env, requirement)).policyId, "policy_b");
   const auth = { policyId: "policy_b", policy: policy("policy_b").policy };
   env.GRANT_CREDENTIALS = { idFromName: (name) => name, get: () => ({ fetch: async (_url, init) => {
     const { grant } = JSON.parse(init.body);
     return Response.json({ grant, projection: { credentialGeneration: grant.credentialGeneration }, changed: false, migrated: false });
   } }) };
   await assert.rejects(upstreamAuth(provider, auth, env, new Set(), null, false, { key: "oauth/policy_b/api", revision: "old" }, requirement), (error) => error.code === "upstream_grant_changed");
+});
+
+test("configuration cannot move an Access request to another policy or reopen environment auth", async () => {
+  const env = mockEnv();
+  env.OPENAI_API_KEY = "fixture-environment-key";
+  const provider = providerById("openai");
+  const requirement = { provider, endpoint: provider.endpoints.find(({ id }) => id === "responses"), mode: "http" };
+  await putGrant(env, "oauth/policy_a/subscription", { ...grant("openai", "invalid"), kind: "subscription" });
+  await putGrant(env, "oauth/policy_b/api", grant("openai", "valid"));
+  const selected = await selectProviderPolicy([policy("policy_a"), policy("policy_b")], "openai", env, requirement);
+  assert.equal(selected.policyId, "policy_a", "configuration follows ordered grant/transport policy choice");
+  await assert.rejects(upstreamAuth(provider, selected, env, new Set(), null, false, undefined, requirement), (error) => error.code === "upstream_grant_pool_unavailable");
+  assert.equal(env.selections.length, 0);
 });
 
 function grant(provider, label, priority = 100) {

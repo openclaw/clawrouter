@@ -56,23 +56,14 @@ async function cloudflareAccessSession(request: Request, env: Env): Promise<Acce
 export async function accessIdentity(request: Request, env: Env, providerId?: string, requirement?: import("./provider-auth").GrantRequirement): Promise<AuthorizedIdentity | Response> {
   const session = await verifiedAccessSession(request, env);
   if (!session) return errorResponse("access_session_required", "a verified Cloudflare Access session is required", 401);
-  const principals = [
-    { principalType: "user" as const, principalId: session.email },
-    ...session.groups.map((group) => ({ principalType: "group" as const, principalId: group })),
-  ];
-  const bindings = (await resolveBindings(env, principals)).filter((binding) => binding.enabled);
-  const entries = await resolvePolicies(env, [...new Set(bindings.map((binding) => binding.policyId))]);
-  const matching = entries.filter((entry) => entry.policy.enabled && (!providerId || !entry.policy.providers.length || entry.policy.providers.includes(providerId)));
+  const matching = (await sessionPolicies(session, env)).filter((entry) => !providerId || !entry.policy.providers.length || entry.policy.providers.includes(providerId));
   if (!matching.length) return errorResponse("access_policy_required", "this identity has no active access policy", 403);
-  const selected = providerId ? await selectProviderPolicy(matching, providerId, session.tenantId, env, requirement) : matching[0];
-  return {
-    credentialId: null,
-    principalId: session.email,
-    authType: "access",
-    policyId: selected.policyId,
-    policy: selected.policy,
-    contentRetentionDisabled: session.contentRetentionDisabled,
-  };
+  const selected = providerId ? await selectProviderPolicy(matching, providerId, env, requirement) : matching[0];
+  return sessionPolicyIdentity(session, selected);
+}
+
+export function sessionPolicyIdentity(session: AccessSession, entry: AccessPolicyEntry): AuthorizedIdentity {
+  return { ...entry, credentialId: null, principalId: session.email, authType: "access", contentRetentionDisabled: session.contentRetentionDisabled };
 }
 
 export async function sessionPolicies(session: AccessSession, env: Env): Promise<AccessPolicyEntry[]> {
@@ -81,8 +72,11 @@ export async function sessionPolicies(session: AccessSession, env: Env): Promise
     ...session.groups.map((group) => ({ principalType: "group" as const, principalId: group })),
   ])).filter((binding) => binding.enabled).sort((a, b) => a.priority - b.priority);
   const entries = await resolvePolicies(env, [...new Set(bindings.map((binding) => binding.policyId))]);
-  const allowed = new Set(bindings.map((binding) => binding.policyId));
-  return entries.filter((entry) => allowed.has(entry.policyId) && entry.policy.enabled);
+  const byId = new Map(entries.map((entry) => [entry.policyId, entry]));
+  return [...new Set(bindings.map((binding) => binding.policyId))].flatMap((id) => {
+    const entry = byId.get(id);
+    return entry?.policy.enabled ? [entry] : [];
+  });
 }
 
 export async function authorizeAdmin(request: Request, env: Env): Promise<AccessSession | Response> {

@@ -4,7 +4,7 @@ import { observeGrantQuota, observeGrantQuotaProbe } from "./grant-quota.ts";
 import { grantRevision, grantUsable as canonicalGrantUsable, recordGrantRuntime, resolveGrantSelection, type PinnedGrant } from "./grant-selection.ts";
 import { grantsVisibleToPolicies, type GrantRecord } from "./grant-scope.ts";
 import { materializeGrantCredentials } from "./grant-credentials.ts";
-import { applyProviderCredential, applyTransportHeaders, quotaProbeForGrant, requiredGrantTemplate, transportForGrant, type GrantRequirement } from "./provider-auth.ts";
+import { applyProviderCredential, applyTransportHeaders, assertOperationConfiguration, quotaProbeForGrant, requiredGrantTemplate, transportForGrant, type GrantRequirement } from "./provider-auth.ts";
 import type {
   AccessPolicyEntry, AuthorizedIdentity, CompiledEndpoint, CompiledGrantTransport, CompiledModel, CompiledProvider, Env,
   ProviderConnection, ProviderHealth, ProviderSnapshot, UpstreamGrant,
@@ -99,6 +99,12 @@ export function capabilityForPath(path: string): string | null {
   return path === "/v1/chat/completions" ? "llm.chat" : path === "/v1/responses" ? "llm.responses" : path === "/v1/embeddings" ? "llm.embeddings" : null;
 }
 
+export function unifiedPathForEndpoint(provider: CompiledProvider, endpoint: CompiledEndpoint): string | null {
+  const format = endpoint.request_format;
+  const path = format === "openai.chat_completions" ? "/v1/chat/completions" : format === "openai.responses" ? "/v1/responses" : format === "openai.embeddings" ? "/v1/embeddings" : null;
+  return path && endpoint.response_format === format && endpointForPath(provider, path)?.id === endpoint.id ? path : null;
+}
+
 export function routeCatalog() {
   const openaiCompatible = snapshot.providers.filter((provider) => provider.class === "openai_compatible").map((provider) => ({
     provider: provider.id,
@@ -138,7 +144,7 @@ export async function providerReadinessForPolicies(env: Env, policies: AccessPol
 
 export function providerReadinessFromState(env: Env, grants: GrantRecord[], storedConnections: ProviderConnection[], health: Map<string, ProviderHealth>): Readiness[] {
   const connections = new Map(storedConnections.map((connection) => [connection.providerId, connection]));
-  return snapshot.providers.map((provider) => readinessFor(provider, env, grants, connections.get(provider.id) ?? { providerId: provider.id, enabled: true }, health.get(provider.id)));
+  return snapshot.providers.map((provider) => providerReadinessForState(provider, env, grants, connections.get(provider.id) ?? { providerId: provider.id, enabled: true }, health.get(provider.id)));
 }
 
 async function readinessInputs(env: Env, suppliedConnections?: ProviderConnection[]) {
@@ -147,7 +153,7 @@ async function readinessInputs(env: Env, suppliedConnections?: ProviderConnectio
   return { grants, health, connections };
 }
 
-function readinessFor(provider: CompiledProvider, env: Env, grants: GrantRecord[], connection: ProviderConnection, health?: ProviderHealth): Readiness {
+export function providerReadinessForState(provider: CompiledProvider, env: Env, grants: GrantRecord[], connection: ProviderConnection, health?: ProviderHealth, operation?: Pick<Readiness, "executableEndpoints" | "executable" | "status" | "reasons">): Readiness {
   const configuredOptional = optionalConfigKeys(provider, env);
   const optionalConfig = provider.config_keys.filter((key) => configuredOptional.has(key) || (provider.auth.schemes.every((scheme) => scheme.type === "bearer" && scheme.required === false) && secretConfigKey(key)));
   const requiredConfig = provider.config_keys.filter((key) => !optionalConfig.includes(key));
@@ -155,16 +161,21 @@ function readinessFor(provider: CompiledProvider, env: Env, grants: GrantRecord[
   const hasGrant = providerGrants.length > 0;
   const missingConfig = requiredConfig.filter((key) => !envValue(env, key) && !grantSatisfiesConfig(key, providerGrants));
   const configPresent = missingConfig.length === 0;
-  const executableEndpoints = configPresent && connection.enabled ? provider.endpoints.filter((endpoint) => endpointTemplatesConfigured(provider, endpoint, env)).map((endpoint) => endpoint.id) : [];
+  const executableEndpoints = operation?.executableEndpoints ?? (configPresent && connection.enabled ? provider.endpoints.filter((endpoint) => endpointTemplatesConfigured(provider, endpoint, env)).map((endpoint) => endpoint.id) : []);
   const checked = health?.checkedAt ? Date.parse(health.checkedAt) : NaN;
   const verified = health?.status === "verified" && Number.isFinite(checked) && Date.now() - checked < 86_400_000;
-  const executable = connection.enabled && executableEndpoints.length > 0;
-  const reasons: string[] = [];
-  if (!connection.enabled) reasons.push("Provider connection is disabled.");
-  if (!configPresent) reasons.push(`Missing ${missingConfig.join(", ")}.`);
+  const executable = operation?.executable ?? (connection.enabled && executableEndpoints.length > 0);
+  // Scoped operation facts replace coarse configuration blockers, while saved
+  // probe diagnostics remain advisory and never authorize or block an offer.
+  const reasons = operation ? [...operation.reasons] : [];
+  if (!operation) {
+    if (!connection.enabled) reasons.push("Provider connection is disabled.");
+    if (!configPresent) reasons.push(`Missing ${missingConfig.join(", ")}.`);
+  }
   if (executable && !verified) reasons.push("Configured but not recently verified by a live smoke test.");
   if (health?.status === "failed") reasons.push(health.error ?? "Latest provider smoke failed.");
-  const status = !connection.enabled ? "disabled" : !configPresent ? "missing_config" : health?.status === "failed" ? "failed" : verified ? "verified" : "unverified";
+  const blockedStatus = operation ? operation.executable ? null : operation.status : !connection.enabled ? "disabled" : !configPresent ? "missing_config" : null;
+  const status = blockedStatus ?? (health?.status === "failed" ? "failed" : verified ? "verified" : "unverified");
   return {
     id: provider.id,
     displayName: provider.display_name,
@@ -204,6 +215,7 @@ export async function upstreamAuth(provider: CompiledProvider, auth: AuthorizedI
   if (!selected && resolution.hasConfiguredGrant) throw new HttpError(503, "upstream_grant_pool_unavailable", `provider ${provider.id} has no available scoped upstream grant`);
   const grant = selected?.grant ?? null;
   if (pinned && ((selected?.key ?? null) !== pinned.key || ("lineage" in pinned ? grant?.credentialLineage !== pinned.lineage : (grant ? grantRevision(grant) : null) !== pinned.revision))) throw new HttpError(409, "upstream_grant_changed", "upstream authorization changed; open a new connection");
+  if (requirement) assertOperationConfiguration(requirement, grant, env);
   const headers = new Headers();
   const query = new URLSearchParams();
   applyProviderCredential(provider, grant, env, headers, query);

@@ -7,7 +7,7 @@ import {
   prepareManifestRequest, prepareNativeRequest, requestObject, searchParamsRecord, type ProxySelection,
 } from "./proxy-selection";
 import { accessIdentity } from "./access";
-import { markBudgetDispatched, reserveBudget, type BudgetReservation, type EstimatedCost } from "./accounting";
+import { markBudgetDispatched, reserveBudget, validateBudgetReservation, type BudgetReservation, type EstimatedCost } from "./accounting";
 import { retainRequestContent } from "./content-retention";
 import { correlationMetadata } from "./correlation.ts";
 import {
@@ -200,7 +200,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     return auth;
   }
   const estimatedCost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability, selection.endpoint);
-  const accounting = createProxyAccounting({ context, env, auth, selection, request, cost: reservedBudget?.cost ?? estimatedCost, compound });
+  const accounting = createProxyAccounting({ context, env, auth, selection, request, cost: estimatedCost, compound });
   const { cost, requestId } = accounting;
   if (reservedBudget && (reservedBudget.providerId !== selection.provider.id || reservedBudget.modelId !== selection.model?.id || reservedBudget.capability !== selection.capability || estimatedCost.reserveMicros > reservedBudget.cost.reserveMicros)) {
     accounting.fail(500, "provider_error", reservedBudget.reservation);
@@ -209,6 +209,8 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   let prepared: PreparedUpstream;
   let continuation: HttpContinuation | undefined;
   try {
+    // Monetary coverage alone cannot prove that the final request remains priced.
+    if (reservedBudget) validateBudgetReservation(selection.capability, estimatedCost, auth.policy.monthlyBudgetMicros, reservedBudget.connection);
     continuation = await HttpContinuation.resolve(request, selection, auth, env);
     prepared = await prepareSelected(request, env, selection, queryInput, auth, new Set(), true, reservedBudget?.connection, continuation?.pinned);
     if (prepared.continuation) continuation?.bind(prepared.continuation);

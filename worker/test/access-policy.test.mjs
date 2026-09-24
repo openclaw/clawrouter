@@ -22,6 +22,6 @@ test("provider policy selection skips stored malformed credential bundles", asyn
       POLICY_KV: { get: async (key) => Array.isArray(key) ? new Map(key.map((item) => [item, stored.get(item) ?? null])) : stored.get(key) ?? null },
       ACCESS_CONTROL: { idFromName: (name) => name, get: () => ({ fetch: async () => Response.json({ keys: [] }) }) },
     };
-    assert.equal((await selectProviderPolicy(entries, "openai", "default", env)).policyId, "valid");
+    assert.equal((await selectProviderPolicy(entries, "openai", env)).policyId, "valid");
   }
 });
