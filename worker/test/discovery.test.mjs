@@ -14,6 +14,27 @@ test("authorized model metadata preserves declared reasoning efforts without add
   assert.equal("supportedReasoningEfforts" in models.find(({ id }) => id === "openai/gpt-4.1-mini"), false);
 });
 
+test("session catalog scope retains the verified caller after policies are disabled or removed", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.config.enabled = false;
+  for (const state of ["enabled", "disabled", "empty"]) {
+    fixture.policy.enabled = state !== "disabled";
+    if (state === "empty") fixture.policies.length = 0;
+    for (const [handler, project] of [
+      [catalogResponse, (body) => body],
+      [sessionResponse, (body) => body.entitlements.catalog],
+      [entitlementResponse, (body) => body.catalog],
+    ]) {
+      const response = await handler(fixture.request("session"), fixture.env);
+      assert.equal(response.status, 200, `${handler.name}: ${state}`);
+      const catalog = project(await response.json());
+      assert.deepEqual(catalog.scope, { authType: "access", credentialId: null, principalId: "fixture@example.com" }, `${handler.name}: ${state}`);
+      if (state === "enabled") assert.ok(catalog.providers.some(({ id }) => id === "openai"));
+      else assert.deepEqual(catalog.providers, [], `${handler.name}: ${state}`);
+    }
+  }
+});
+
 test("catalog and session preserve saved provider health independently of operation eligibility", async (t) => {
   const fixture = await fusionDiscoveryFixture(t);
   fixture.config.enabled = false;

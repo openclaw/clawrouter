@@ -134,10 +134,11 @@ interface EntitlementRow {
 }
 
 async function sessionEntitlements(session: AccessSession, env: Env): Promise<ClientEntitlements> {
-  return entitlementRowsForEntries((await sessionPolicies(session, env)).map((entry) => sessionPolicyIdentity(session, entry)), env);
+  const identities = (await sessionPolicies(session, env)).map((entry) => sessionPolicyIdentity(session, entry));
+  return entitlementRowsForEntries(identities, env, { authType: "access", credentialId: null, principalId: session.email });
 }
 
-async function entitlementRowsForEntries(identities: AuthorizedIdentity[], env: Env): Promise<ClientEntitlements> {
+async function entitlementRowsForEntries(identities: AuthorizedIdentity[], env: Env, scope: ClientEntitlements["scope"]): Promise<ClientEntitlements> {
   const observedAt = new Date().toISOString();
   const connections = await listConnections(env, snapshot.providers.map((provider) => provider.id));
   const inventory = await clientInventory(identities, env, connections);
@@ -146,7 +147,8 @@ async function entitlementRowsForEntries(identities: AuthorizedIdentity[], env: 
     return { provider: provider.id, displayName: provider.display_name, serviceKind: provider.service_kind, allowed: policies.length > 0, policies, readiness: inventory.get(provider.id)!.readiness };
   });
   const fusion = await fusionEntitlement(rows, inventory, env);
-  return { rows: fusion ? [...rows, fusion] : rows, inventory, observedAt, scope: { authType: identities[0]?.authType ?? "access", credentialId: identities[0]?.credentialId ?? null, principalId: identities[0]?.principalId ?? null } };
+  // Authentication still identifies the caller after the last policy is removed.
+  return { rows: fusion ? [...rows, fusion] : rows, inventory, observedAt, scope };
 }
 
 async function fusionEntitlement(rows: EntitlementRow[], inventory: ClientInventory, env: Env): Promise<EntitlementRow | null> {
@@ -216,12 +218,11 @@ async function clientEntitlements(request: Request, env: Env): Promise<ClientEnt
   if (hasKey) {
     const auth = await authenticateProxyKey(request.headers, env);
     if (auth instanceof Response) return auth;
-    return entitlementRowsForEntries([auth], env);
+    return entitlementRowsForEntries([auth], env, { authType: auth.authType, credentialId: auth.credentialId, principalId: auth.principalId });
   }
   const session = await verifiedAccessSession(request, env);
   if (!session) return errorResponse("client_auth_required", "a valid ClawRouter proxy key or Cloudflare Access session is required", 401);
-  const entries = (await sessionPolicies(session, env)).map((entry) => sessionPolicyIdentity(session, entry));
-  return entitlementRowsForEntries(entries, env);
+  return sessionEntitlements(session, env);
 }
 
 interface CatalogOffer {
