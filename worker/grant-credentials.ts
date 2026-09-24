@@ -117,7 +117,7 @@ export class GrantCredentialObject implements DurableObject {
         }
         const admissionGeneration = replace && (current || previous) ? attachment.generation : current?.generation ?? 0;
         const generation = nextCredentialGeneration(current?.generation ?? (replace && previous ? attachment.generation : previous?.credentialGeneration ?? 0));
-        let grantInput = input.grant, metadataInput = input.grant;
+        let grantInput = input.grant, metadataInput = input.grant, inheritCurrent = true;
         if (input.credentialInput && path === "/put") {
           // Normalize inside the owner: a stale KV projection cannot restore
           // old identity, routing defaults or paused state during publication repair.
@@ -129,12 +129,21 @@ export class GrantCredentialObject implements DurableObject {
               field === "tokenType" || field === "scopes" ? metadataInput[field] : input.credentialInput[field],
             });
           }
-        } else if (current && input.credentialInput) {
-          metadataInput = { ...metadataGrant(current), ...input.credentialInput, updatedAt: input.grant.updatedAt };
-          if (input.credentialInput.subscription) metadataInput.subscription = { ...current.subscription, ...input.credentialInput.subscription };
+        } else if (path === "/token-exchange") {
+          const baseline = current ? metadataGrant(current) : legacy;
+          // A new provider/kind cannot inherit another context's refresh token,
+          // endpoint or account claims, even when the callback reuses its key.
+          inheritCurrent = !!baseline?.provider && !!baseline.kind && baseline.provider === input.grant.provider && baseline.kind === input.grant.kind;
+          metadataInput = inheritCurrent ? { ...baseline, ...input.credentialInput, updatedAt: input.grant.updatedAt } : {
+            version: 1, provider: input.grant.provider, kind: input.grant.kind, enabled: true,
+            label: baseline?.label ?? input.grant.label, createdAt: baseline?.createdAt ?? input.grant.createdAt, updatedAt: input.grant.updatedAt,
+            priority: input.grant.priority, weight: input.grant.weight, tokenType: input.grant.tokenType, scopes: input.grant.scopes,
+            ...input.credentialInput,
+          };
+          if (inheritCurrent && input.credentialInput?.subscription) metadataInput.subscription = { ...baseline?.subscription, ...input.credentialInput.subscription };
           grantInput = metadataInput;
         }
-        let record = !replace && current && !current.revokedAt && (input.preserveUnspecifiedSecrets || !hasPrimaryCredential(grantInput))
+        let record = !replace && inheritCurrent && current && !current.revokedAt && (input.preserveUnspecifiedSecrets || !hasPrimaryCredential(grantInput))
           ? updatedCredentialRecord(current, grantInput)
           : credentialRecord(grantInput, generation);
         record = ownerMetadata(record, metadataInput, input.key);

@@ -129,32 +129,93 @@ for (const current of ["rotated", "cleared", "unowned"]) for (const returned of 
   assert.equal(record.expiresAt, null);
   assert.equal(record.tokenResponseError, null);
   assert.equal(record.nextRefreshAttemptAt, null);
-  if (current !== "unowned") { assert.equal(record.tokenType, "Custom"); assert.deepEqual(record.scopes, ["kept"]); }
+  assert.equal(record.tokenType, "Custom");
+  assert.deepEqual(record.scopes, ["kept"]);
 });
 
-test("callback trusted identity replaces stale provider metadata without adopting old routing defaults", async context => {
-  const key = "oauth/policy/openai", values = new Map();
+for (const owner of ["current", "raw legacy"]) for (const [change, provider, kind] of [
+  ["provider", "anthropic", "oauth"], ["kind", "openai", "subscription"],
+  ["both", "anthropic", "subscription"], ["unproven kind", "openai", undefined],
+]) for (const returned of [false, true]) test(`callback resets ${owner} ${change} context with ${returned ? "new" : "no"} refresh`, async context => {
+  const now = Date.parse("2026-09-24T12:00:00Z"), key = "oauth/policy/openai", values = new Map();
+  context.mock.method(Date, "now", () => now);
   const env = attachGrantCredentialNamespace({ POLICY_KV: {
     async get(key, type) { const value = values.get(key) ?? null; return type === "text" && value !== null ? JSON.stringify(value) : structuredClone(value); },
     async put(key, value) { values.set(key, JSON.parse(value)); },
   } });
-  const { putGrantCredentials } = await import("../grant-credentials.ts");
-  await putGrantCredentials(env, key, { provider: "openai", kind: "oauth", accessToken: "old-primary", label: "old label", priority: 99, weight: 9 });
-  const oldKv = structuredClone(values.get(key)), put = env.POLICY_KV.put;
-  env.POLICY_KV.put = async () => { throw new Error("fixture publication failure"); };
-  await assert.rejects(() => putGrantCredentials(env, key, { provider: "anthropic", kind: "subscription", accessToken: "current-primary", refreshToken: "current-refresh", enabled: false, label: "canonical label", priority: 31, weight: 4, maintenance: { keepWarm: false } }, false, "replace"));
-  assert.deepEqual(values.get(key), oldKv);
-  env.POLICY_KV.put = put;
-  context.mock.method(globalThis, "fetch", async () => Response.json({ access_token: "callback-primary" }));
+  const { materializeGrantCredentials, putGrantCredentials } = await import("../grant-credentials.ts");
+  const previous = {
+    provider, kind, enabled: false, label: "canonical label", createdAt: "2020-01-01T00:00:00Z", priority: 31, weight: 4,
+    credential: "prior-context-primary", credentials: { key: "prior-context-bundle" },
+    accessToken: "prior-context-access", refreshToken: "prior-context-refresh", tokenType: "PriorContext", scopes: ["prior-context-scope"],
+    accountId: "prior-context-account", subscription: { plan: "prior-context-plan", subject: "prior-context-subject" },
+    refresh: { tokenUrl: "https://prior-context.example/refresh", clientId: "prior-context-client" },
+    maintenance: { keepWarm: true }, tokenResponseError: "invalid_expiry", nextRefreshAttemptAt: new Date(now + 300_000).toISOString(),
+  };
+  let phase = "rotation", requests = [];
+  context.mock.method(globalThis, "fetch", async (url, init) => {
+    requests.push({ url: String(url), body: new URLSearchParams(init.body) });
+    if (phase === "rotation") return Response.json({ access_token: "prior-context-rotated", refresh_token: "prior-context-rotated-refresh", expires_in: "bad" });
+    if (phase === "callback") {
+      assert.equal(String(url), "https://token.example/oauth/token");
+      return Response.json({ access_token: "callback-primary", ...(returned ? { refresh_token: "callback-refresh", token_type: "CallbackType", scope: "callback-scope" } : {}) });
+    }
+    assert.equal(String(url), "https://current-provider.example/refresh");
+    assert.equal(new URLSearchParams(init.body).get("refresh_token"), "callback-refresh");
+    return Response.json({ access_token: "renewed-primary", expires_in: 3_600 });
+  });
+  let generation = 0, lineage;
+  if (owner === "current") {
+    await putGrantCredentials(env, key, { provider: "openai", kind: "oauth", accessToken: "stale-projection-primary", label: "stale label" });
+    const stale = structuredClone(values.get(key)), put = env.POLICY_KV.put;
+    env.POLICY_KV.put = async () => { throw new Error("fixture publication failure"); };
+    await assert.rejects(() => putGrantCredentials(env, key, { ...previous, enabled: true }, false, "replace"));
+    const own = env.GRANT_CREDENTIALS.objects.get(key);
+    await assert.rejects(() => materializeGrantCredentials(env, key, {
+      provider, kind, enabled: true, credentialGeneration: own.values.get("credential").generation,
+    }, provider, null, true));
+    const before = own.values.get("credential");
+    assert.equal(before.tokenResponseError, "invalid_expiry");
+    assert.equal(before.nextRefreshAttemptAt, previous.nextRefreshAttemptAt);
+    generation = before.generation; lineage = before.lineage;
+    assert.deepEqual(values.get(key), stale);
+    env.POLICY_KV.put = put;
+  } else values.set(key, previous);
+  phase = "callback"; requests = [];
   const response = await oauthCallback(new Request("https://console.example/v1/oauth/callback?state=state-1&code=auth-code"), env);
   assert.equal(response.status, 200);
+  assert.match(await response.text(), /Connected/);
   const row = env.GRANT_CREDENTIALS.objects.get(key).values.get("credential");
   assert.equal(row.providerId, "openai");
   assert.equal(row.kind, "oauth");
   assert.equal(row.enabled, true);
+  assert.equal(row.generation, generation + 1);
+  assert.notEqual(row.lineage, lineage);
   assert.equal(row.accessToken, "callback-primary");
-  assert.equal(row.refreshToken, "current-refresh");
+  assert.equal(row.refreshToken, returned ? "callback-refresh" : undefined);
+  assert.equal(row.credential, undefined);
+  assert.equal(row.credentials, undefined);
+  assert.equal(row.refresh, undefined);
+  assert.equal(row.accountId, undefined);
+  assert.equal(row.subscription, undefined);
+  assert.equal(row.tokenType, returned ? "CallbackType" : "Bearer");
+  assert.deepEqual(row.scopes, returned ? ["callback-scope"] : ["openid"]);
+  assert.equal(row.expiresAt, null);
+  assert.equal(row.tokenResponseError, null);
+  assert.equal(row.nextRefreshAttemptAt, null);
+  assert.deepEqual(row.maintenance, { keepWarm: false });
+  assert.equal(row.nextKeepWarmAt, null);
+  assert.equal(row.createdAt, previous.createdAt);
   assert.equal(row.metadata.label, "canonical label");
   assert.equal(row.metadata.priority, 100, "the consumed OAuth state owns its explicit routing values");
   assert.equal(row.metadata.weight, 1);
+  assert.doesNotMatch(JSON.stringify(row), /prior-context/);
+  assert.equal(values.get(key).hasRefreshToken, returned);
+  assert.equal(values.get(key).hasCredential, false);
+  assert.equal(requests.length, 1);
+  phase = "renewal";
+  const renew = () => materializeGrantCredentials(env, key, values.get(key), "openai", { tokenUrl: "https://current-provider.example/refresh" }, true);
+  if (returned) assert.equal((await renew()).accessToken, "renewed-primary");
+  else await assert.rejects(renew, error => error.code === "grant_refresh_unavailable");
+  assert.equal(requests.length, returned ? 2 : 1, "no old-context token or endpoint may be used");
 });

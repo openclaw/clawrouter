@@ -423,6 +423,10 @@ New account-management clients use the strict routes:
   When a refresh token remains, the existing five-minute retry window controls
   renewal; quota and keep-warm traffic remain blocked. A stored but unusable
   callback does not report a successful connection.
+- A callback retains omitted token and account context only for the same provider
+  and grant kind. Changing either starts fresh context; an omitted refresh token
+  cannot retain the previous provider's token or refresh override. Labels and
+  creation time remain, and the authenticated OAuth state controls routing.
 - POST `/replace` requires a fresh primary credential. It clears omitted or competing
   old credential forms and old token type, expiry, scopes, account, subscription and
   refresh material. Omitted token type defaults to `Bearer`. Routing identity, label,

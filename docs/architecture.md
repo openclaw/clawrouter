@@ -108,10 +108,14 @@ canonical material and metadata. Original field presence distinguishes explicit
 credential changes from validation material; omitted identity, routing and paused
 state remain canonical after pending publication is repaired. Only first
 initialization uses raw legacy credentials. Internal mutation envelopes never
-become published metadata. OAuth response omission likewise retains the owner's
-current refresh token, including an explicit clear; its authenticated state owns
-the callback's explicit provider, kind and routing intent. Prepared requests carry only expiry
-facts past asynchronous admission. HTTP dispatch, WebSocket upgrades and each
+become published metadata. OAuth response omission retains the owner's current
+refresh token, including an explicit clear, only when provider and kind match.
+A changed or unknown tuple starts fresh credential context, excluding prior
+tokens, refresh overrides, account claims and maintenance state. The same rule
+qualifies first-owner raw legacy input. Safe labels and creation time survive;
+authenticated callback state owns its explicit identity and routing intent.
+Prepared requests carry only expiry facts past asynchronous admission.
+HTTP dispatch, WebSocket upgrades and each
 create frame check those facts at egress; rejected unsent work releases both
 budget holds, and continuation expiry retains the full-input recovery outcome.
 
