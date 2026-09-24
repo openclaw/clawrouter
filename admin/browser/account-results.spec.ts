@@ -1,4 +1,4 @@
-import { expect, test, type Page, type Route } from "@playwright/test";
+import { expect, test, type Locator, type Page, type Route } from "@playwright/test";
 import type { AccessPolicy, AdminBootstrapResponse, UpstreamGrant } from "../src/ui-types";
 import type { AccountCredentialView, GrantPoolReadiness } from "../../shared/contracts";
 
@@ -159,20 +159,20 @@ test("pending receipt survives stale/absent inventory; only existing repair and 
   await button(page, "Save details").click(); await expect.poll(() => state.writes.length).toBe(1);
   const pending = owner(grant("account_a", { label: "saved pending" }), 2, "pending");
   await commit(state, 0, pending, 202);
-  await expect(page.locator(".inspector")).toContainText("Saved; publication pending.");
+  await expect(page.locator(".inspector")).toContainText("Account publication pending.");
   await expect.poll(() => state.reads.length).toBe(1);
   state.reads[0].body.grants = [];
   await state.reads[0].route.fulfill({ json: state.reads[0].body });
   await expect(page.locator(".tableRow").filter({ hasText: "saved pending" })).toBeVisible();
   await button(page, "Check account status").click();
-  await expect(page.locator(".inspector")).toContainText("Saved; publication pending.");
+  await expect(page.locator(".inspector")).toContainText("Account publication pending.");
   expect(state.repairs).toHaveLength(0);
   await page.getByRole("region", { name: "account routing recovery" }).getByRole("button", { name: "Repair account publication" }).click();
   await expect.poll(() => state.repairs.length).toBe(1);
   expect(state.repairs[0]).toEqual({ cursor: null });
-  await expect(page.locator(".inspector")).toContainText("Saved; publication pending.");
+  await expect(page.locator(".inspector")).toContainText("Account publication pending.");
   await button(page, "Check account status").click();
-  await expect(page.locator(".inspector")).not.toContainText("Saved; publication pending.");
+  await expect(page.locator(".inspector")).not.toContainText("Account publication pending.");
   expect(state.writes).toHaveLength(1);
 });
 
@@ -290,6 +290,164 @@ test("an old owner GET authentication failure cannot clear a new identity's repl
   await expect(page.getByLabel("fresh access token", { exact: true })).toHaveValue("synthetic-second-draft");
   expect(state.writes).toHaveLength(0);
 });
+
+for (const action of ["Refresh token", "Refresh quota", "Revoke"]) for (const outcome of ["conflict", "lost reply"]) {
+  test(action + " preserves unresolved " + outcome + " metadata until explicit version review", async ({ page }) => {
+    const state = await openAccounts(page);
+    await button(page, "Prepare credential replacement").click();
+    await page.getByLabel("fresh access token", { exact: true }).fill("synthetic-original-intent");
+    await page.getByLabel("label", { exact: true }).fill("unresolved label");
+    await page.getByText("Advanced account settings", { exact: true }).click();
+    await page.getByLabel("routing weight", { exact: true }).fill("9");
+    await assertGeometry(page, page.locator(".inspector"));
+    await button(page, "Replace credentials").click();
+    await expect.poll(() => state.writes.length).toBe(1);
+    if (outcome === "conflict") await state.writes[0].fulfill({ status: 409, json: { error: { code: "grant_generation_changed", message: "changed", detail: { grant: owner(grant(), 2) } } } });
+    else await state.writes[0].abort("failed");
+    await expect(page.getByRole("region", { name: "account change review" })).toBeVisible();
+    await button(page, action).click();
+    await expect.poll(() => state.writes.length).toBe(2);
+    await commit(state, 1, owner(action === "Revoke" ? revoked() : grant(), 3));
+    await expect(button(page, "Keep edits and use current version")).toBeEnabled();
+    await expect(button(page, "Replace credentials")).toBeDisabled();
+    await expect(page.getByLabel("label", { exact: true })).toHaveValue("unresolved label");
+    await expect(page.getByLabel("routing weight", { exact: true })).toHaveValue("9");
+    await expect(page.getByLabel("fresh access token", { exact: true })).toHaveValue(action === "Revoke" ? "" : "synthetic-original-intent");
+    // The current owner facts are visible, but neither direct submit nor Pause
+    // may skip the earlier edit's explicit version decision.
+    await submit(page); expect(state.writes).toHaveLength(2);
+    await expect(button(page, action === "Revoke" ? "Resume account" : "Pause account")).toBeDisabled();
+    await assertGeometry(page, page.locator(".inspector"));
+    const adopt = button(page, "Keep edits and use current version");
+    await adopt.focus(); await page.keyboard.press("Enter");
+    await expect(adopt).toHaveCount(0);
+    if (action === "Revoke") await page.getByLabel("fresh access token", { exact: true }).fill("synthetic-after-revoke");
+    await button(page, "Replace credentials").click();
+    await expect.poll(() => state.writes.length).toBe(3);
+    expect(state.writes[2].request().postDataJSON()).toMatchObject({ expectedCredentialGeneration: 3, label: "unresolved label", weight: 9 });
+    await state.writes[2].fulfill({ status: 400, json: { error: { code: "invalid_upstream_grant", message: "synthetic stop" } } });
+  });
+}
+
+for (const destination of ["other account", "new draft"]) for (const reply of ["lost", "committed"]) {
+  test("Create A then " + destination + " preserves both identities after " + reply + " response", async ({ page }) => {
+    const state = await openAccounts(page);
+    state.holdBootstrap = true;
+    await button(page, "Add account").click();
+    const ref = await page.getByLabel("account reference", { exact: true }).inputValue();
+    await page.getByLabel("fresh API key", { exact: true }).fill("synthetic-request-a");
+    await page.getByLabel("label", { exact: true }).fill("Requested A");
+    await button(page, "Create account").click();
+    await expect.poll(() => state.writes.length).toBe(1);
+    const card = page.getByRole("region", { name: "Creation recovery " + ref, exact: true });
+    await expect(card).toContainText("creation in progress");
+    if (destination === "other account") await page.locator(".tableRow").filter({ hasText: "Account B" }).click();
+    else await button(page, "Add account").click();
+    await page.getByLabel("label", { exact: true }).fill("newer draft");
+    const nextRef = await page.getByLabel("account reference", { exact: true }).inputValue();
+    if (destination === "new draft") await page.getByLabel("fresh API key", { exact: true }).fill("synthetic-next-draft");
+    const saved = owner(grant(ref, { kind: "api_key", label: "Requested A", hasCredential: true, hasAccessToken: false, hasRefreshToken: false }), 2, "pending");
+    state.owners.set(saved.key, saved);
+    if (reply === "lost") await state.writes[0].abort("failed");
+    else await commit(state, 0, saved, 202);
+    await expect.poll(() => state.reads.length).toBe(1);
+    state.reads[0].body.grants = [];
+    await state.reads[0].route.fulfill({ json: state.reads[0].body });
+    await expect(page.getByLabel("account reference", { exact: true })).toHaveValue(nextRef);
+    await expect(page.getByLabel("label", { exact: true })).toHaveValue("newer draft");
+    if (reply === "committed") {
+      await expect(card).toHaveCount(0);
+      await expect(page.locator(".tableRow").filter({ hasText: "Requested A" })).toBeVisible();
+      return;
+    }
+    await expect(card).toContainText("creation unconfirmed");
+    await assertGeometry(page, card);
+    state.holdOwner = true;
+    const check = card.getByRole("button", { name: "Check this account", exact: true });
+    await check.focus(); await page.keyboard.press("Enter");
+    await expect.poll(() => state.ownerReads.length).toBe(1);
+    expect(new URL(state.ownerReads[0].route.request().url()).pathname).toBe("/v1/admin/upstream-grants/policies/team_policy/" + ref);
+    await state.ownerReads[0].route.fulfill({ json: state.ownerReads[0].body });
+    state.holdOwner = false;
+    await expect(check).toBeFocused();
+    await expect(card).toContainText("publication pending");
+    await expect(card).toContainText("creation unconfirmed");
+    await expect(page.getByLabel("account reference", { exact: true })).toHaveValue(nextRef);
+    await expect(page.getByLabel("label", { exact: true })).toHaveValue("newer draft");
+    if (destination === "new draft") await expect(page.getByLabel("fresh API key", { exact: true })).toHaveValue("synthetic-next-draft");
+    expect(state.writes).toHaveLength(1);
+    await card.getByRole("button", { name: "Review this account", exact: true }).click();
+    await expect(page.getByLabel("account reference", { exact: true })).toHaveValue(ref);
+    await expect(page.getByLabel("label", { exact: true })).toHaveValue("Requested A");
+    await expect(button(page, "Save details")).toBeDisabled();
+    await assertGeometry(page, page.locator(".inspector"));
+    // Ordinary table selection must preserve the request marker too.
+    await page.locator(".tableRow").filter({ hasText: "Account B" }).click();
+    await page.locator(".tableRow").filter({ hasText: "Requested A" }).click();
+    await expect(button(page, "Save details")).toBeDisabled();
+    await expect(page.getByRole("region", { name: "account change review" })).toBeVisible();
+    const discard = button(page, "Use saved values (discard draft)");
+    await discard.focus(); await page.keyboard.press("Enter");
+    await expect(card).toHaveCount(0);
+    await expect(button(page, "Save details")).toBeEnabled();
+    await expect(page.getByLabel("fresh API key", { exact: true })).toHaveCount(0);
+    expect(state.writes).toHaveLength(1);
+  });
+}
+
+test("repeated uncertain creates retain separate recovery cards and Check errors stay off the active draft", async ({ page }, testInfo) => {
+  if (testInfo.project.name === "mobile") await page.setViewportSize({ width: 320, height: 720 });
+  const state = await openAccounts(page), refs: string[] = [];
+  for (let index = 0; index < 2; index++) {
+    await button(page, "Add account").click();
+    refs.push(await page.getByLabel("account reference", { exact: true }).inputValue());
+    await page.getByLabel("fresh API key", { exact: true }).fill("synthetic-create-" + index);
+    await button(page, "Create account").click();
+    await expect.poll(() => state.writes.length).toBe(index + 1);
+    await button(page, "Add account").click();
+    await state.writes[index].abort("failed");
+    await expect(page.getByRole("region", { name: "Creation recovery " + refs[index], exact: true })).toContainText("creation unconfirmed");
+  }
+  expect(refs[0]).not.toBe(refs[1]);
+  await page.getByLabel("fresh API key", { exact: true }).fill("synthetic-active-draft");
+  await page.getByLabel("label", { exact: true }).fill("active draft");
+  await page.getByText("Advanced account settings", { exact: true }).click();
+  await page.getByLabel("pool priority", { exact: true }).fill("-1");
+  await button(page, "Create account").click();
+  const draftError = page.locator(".inspector").getByRole("alert");
+  await expect(draftError).toContainText("priority must");
+  for (const ref of refs) {
+    const card = page.getByRole("region", { name: "Creation recovery " + ref, exact: true });
+    const check = card.getByRole("button", { name: "Check this account", exact: true });
+    await check.focus(); await page.keyboard.press("Enter");
+    await expect(card.getByRole("alert")).toContainText("Account status could not be read");
+    await expect(check).toBeFocused();
+    await expect(draftError).toContainText("priority must");
+    await expect(page.getByLabel("fresh API key", { exact: true })).toHaveValue("synthetic-active-draft");
+    await expect(page.getByLabel("label", { exact: true })).toHaveValue("active draft");
+    await assertGeometry(page, card);
+  }
+  expect(state.writes).toHaveLength(2);
+});
+
+async function assertGeometry(page: Page, panel: Locator) {
+  await expect(panel).toBeVisible();
+  const controls = panel.locator("button");
+  const geometry = await panel.evaluate(element => {
+    const rect = element.getBoundingClientRect();
+    const buttons = [...element.querySelectorAll("button")].filter(button => button.getClientRects().length > 0).map(button => button.getBoundingClientRect());
+    const overlap = buttons.some((a, i) => buttons.slice(i + 1).some(b => Math.min(a.right, b.right) > Math.max(a.left, b.left) && Math.min(a.bottom, b.bottom) > Math.max(a.top, b.top)));
+    return { pageFits: document.documentElement.scrollWidth <= window.innerWidth, panelFits: rect.left >= 0 && rect.right <= window.innerWidth,
+      controlsFit: buttons.every(button => button.left >= rect.left && button.right <= rect.right), overlap };
+  });
+  expect(geometry).toEqual({ pageFits: true, panelFits: true, controlsFit: true, overlap: false });
+  for (const control of await controls.all()) {
+    if (!await control.isVisible() || !await control.isEnabled()) continue;
+    await control.scrollIntoViewIfNeeded();
+    await control.focus();
+    await expect(control).toBeFocused();
+  }
+}
 
 function button(page: Page, name: string) { return page.getByRole("button", { name, exact: true }); }
 async function submit(page: Page) { await page.locator(".inspector form").evaluate((form: HTMLFormElement) => form.requestSubmit()); }

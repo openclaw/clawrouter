@@ -76,3 +76,20 @@ test("malformed error detail never bypasses safe owner identity/generation parsi
   assert.equal(new DashboardRequestError("grant_generation_changed", 409).code, null);
   assert.equal(new DashboardRequestError("grant_generation_changed", 409).detail, null);
 });
+
+test("inventory never acknowledges an unknown creation or upgrades reporting into an owner read", () => {
+  const creation = { status: "unconfirmed", requested: { provider: "test-provider", label: "Requested" }, inspection: "unread", error: "" };
+  const attempt = { source: "attempt", key: row.key, scope: row.scope, scopeId: row.scopeId, tokenRef: row.tokenRef, creation };
+  assert.deepEqual(mergeAccountInventory([attempt], []), [attempt]);
+  const [reported] = mergeAccountInventory([attempt], [row]);
+  assert.equal(reported.source, "inventory");
+  assert.equal(reported.creation, creation);
+  assert.equal(reported.credentialGeneration, undefined);
+  assert.equal(reported.publication, undefined);
+  assert.deepEqual(mergeAccountInventory([reported], []), [reported]);
+  const known = { ...demoAccountView(accountFromInventory(row)), source: "owner", creation };
+  const [merged] = mergeAccountInventory([known], [{ ...row, selectedCount: 32 }]);
+  assert.equal(merged.creation, creation);
+  assert.equal(merged.observations.selectedCount, 32);
+  assert.equal("creation" in demoAccountView(known), false);
+});

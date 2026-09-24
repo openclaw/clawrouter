@@ -506,6 +506,167 @@ test("demo pause/revoke/reconnect uses the same explicit modes and keeps pause",
   assert.equal(f.writes.length, 0);
 });
 
+for (const action of ["refresh", "refreshQuota", "revoke"]) for (const outcome of ["conflict", "uncertain"]) {
+  test(action + " cannot acknowledge " + outcome + " metadata or silently advance its CAS", async () => {
+    const f = await ready();
+    f.render().upstream.startReplace();
+    change(f, { label: "unresolved label", weight: "9", accessToken: "synthetic-unconfirmed-primary" });
+    const pending = act(f, "save");
+    f.writes[0].reject(outcome === "conflict" ? failure(409, "grant_generation_conflict", { grant: view(grant(), 2) }) : new Error("reply lost"));
+    await pending;
+    assert.equal(f.render().upstream.generation, 1);
+    const next = act(f, action), saved = view(action === "revoke" ? tombstone() : grant(), 3);
+    respond(f, 1, saved); await next;
+    assert.equal(f.render().upstream.generation, 1);
+    assert.equal(f.render().upstream.needsReview, true);
+    assert.equal(f.render().upstream.uncertain, outcome === "uncertain");
+    assert.equal(f.render().upstream.form.label, "unresolved label");
+    assert.equal(f.render().upstream.form.weight, "9");
+    assert.equal(f.render().upstream.form.accessToken, action === "revoke" ? "" : "synthetic-unconfirmed-primary");
+    assert.equal(f.render().upstream.inspected.credentialGeneration, 3);
+    if (action === "revoke") assert.equal(f.render().upstream.selected.revokedAt, saved.revokedAt);
+    await act(f, "pause"); await act(f, "save");
+    assert.equal(f.writes.length, 2);
+    f.render().upstream.reviewCurrent();
+    assert.equal(f.render().upstream.generation, 3);
+    assert.equal(f.render().upstream.needsReview, false);
+    assert.equal(f.render().upstream.form.label, "unresolved label");
+    assert.equal(f.render().upstream.form.weight, "9");
+  });
+}
+
+test("an unrelated rejected refresh also retains unresolved edit ownership", async () => {
+  const f = await ready(); change(f, { label: "unresolved label" });
+  const save = act(f, "save"); f.writes[0].reject(new Error("reply lost")); await save;
+  const refresh = act(f, "refresh"); f.writes[1].reject(failure(400, "refresh_not_configured")); await refresh;
+  assert.equal(f.render().upstream.uncertain, true);
+  assert.equal(f.render().upstream.generation, 1);
+  assert.equal(f.render().upstream.form.label, "unresolved label");
+  await act(f, "pause"); assert.equal(f.writes.length, 2);
+});
+
+for (const destination of ["other", "new"]) for (const reply of ["lost", "committed"]) {
+  test("create request retains its identity across " + destination + " draft and " + reply + " reply", async () => {
+    const f = await ready(); f.render().upstream.startNew();
+    change(f, { credential: "synthetic-never-retained", label: "Requested A" });
+    const identity = { ...f.render().upstream.form }, writing = act(f, "save");
+    assert.equal(f.render().upstream.creations[0].creation.status, "pending");
+    assert.equal(f.render().upstream.creations[0].source, "attempt");
+    assert.equal(JSON.stringify(f.render().upstream.creations).includes("synthetic-never-retained"), false);
+    if (destination === "other") f.render().upstream.edit(accounts.accountFromInventory(grant("account_b")));
+    else f.render().upstream.startNew();
+    change(f, { label: "newer editor", accessToken: "synthetic-newer-draft", credential: "synthetic-newer-key" });
+    const next = f.render().upstream.form;
+    const saved = view(grant(identity.tokenRef, { label: "Requested A", kind: "api_key", hasCredential: true }), 2, "pending");
+    f.owners.set(saved.key, saved);
+    if (reply === "lost") f.writes[0].reject(new Error("reply lost"));
+    else respond(f, 0, saved);
+    await writing; await flush();
+    assert.deepEqual(f.render().upstream.form, next);
+    hydrate(f, []);
+    if (reply === "committed") {
+      assert.equal(f.render().upstream.creations.length, 0);
+      assert.equal(f.render().upstream.items.find(row => row.key === saved.key).publication, "pending");
+      return;
+    }
+    const entry = f.render().upstream.creations[0];
+    assert.equal(entry.tokenRef, identity.tokenRef);
+    assert.equal(entry.creation.status, "unconfirmed");
+    assert.equal(entry.source, "attempt");
+    for (const absent of ["enabled", "kind", "credentialGeneration", "publication", "observations"]) assert.equal(absent in entry, false);
+    const beforeReads = f.reads.length;
+    await f.render().upstream.checkCreation(entry);
+    assert.equal(f.reads[beforeReads].path, accounts.accountPath(identity));
+    assert.equal(f.writes.length, 1);
+    assert.deepEqual(f.render().upstream.form, next);
+    const checked = f.render().upstream.creations[0];
+    assert.equal(checked.source, "owner");
+    assert.equal(checked.creation.status, "unconfirmed");
+    assert.equal(checked.publication, "pending");
+    hydrate(f, []);
+    assert.equal(f.render().upstream.creations.length, 1);
+    // Ordinary table selection cannot bypass the unresolved request marker.
+    f.render().upstream.edit(checked);
+    assert.equal(f.render().upstream.needsReview, true);
+    assert.equal(f.render().upstream.generation, null);
+    assert.equal(f.render().upstream.form.credential, "");
+    assert.equal(f.render().upstream.form.accessToken, "");
+    await act(f, "save"); assert.equal(f.writes.length, 1);
+    f.render().upstream.reviewCreation(checked);
+    assert.equal(f.render().upstream.needsReview, true);
+    assert.equal(f.render().upstream.form.label, "Requested A");
+    f.render().upstream.reviewCurrent(true);
+    assert.equal(f.render().upstream.generation, 2);
+    assert.equal(f.render().upstream.creations.length, 0);
+    assert.equal(f.writes.length, 1);
+  });
+}
+
+test("distinct uncertain creates survive missing inventory and card failures do not alter another editor", async () => {
+  const f = await ready(), identities = [];
+  for (let i = 0; i < 2; i++) {
+    f.render().upstream.startNew(); change(f, { credential: "synthetic-" + i, label: "Requested " + i });
+    identities.push({ ...f.render().upstream.form });
+    const writing = act(f, "save");
+    f.render().upstream.startNew();
+    f.writes[i].reject(new Error("reply lost")); await writing;
+  }
+  hydrate(f, []);
+  assert.deepEqual(f.render().upstream.creations.map(row => row.tokenRef).sort(), identities.map(row => row.tokenRef).sort());
+  assert.notEqual(identities[0].tokenRef, identities[1].tokenRef);
+  change(f, { credential: "synthetic-active-secret", label: "new draft", priority: "-1" });
+  await act(f, "save");
+  const active = f.render().upstream.form, error = f.render().upstream.error;
+  assert.match(error, /priority/);
+  for (const identity of identities) {
+    const entry = f.render().upstream.creations.find(row => row.tokenRef === identity.tokenRef);
+    await f.render().upstream.checkCreation(entry);
+    assert.equal(f.reads.at(-1).path, accounts.accountPath(identity));
+    assert.deepEqual(f.render().upstream.form, active);
+    assert.equal(f.render().upstream.error, error);
+    assert.equal(f.render().upstream.creations.find(row => row.key === entry.key).creation.inspection, "failed");
+  }
+  assert.equal(f.writes.length, 2);
+  const entry = f.render().upstream.creations[0];
+  f.owners.set(entry.key, view(grant(entry.tokenRef, { kind: "api_key", label: "Recovered A" }), 4));
+  await f.render().upstream.checkCreation(entry);
+  const recovered = f.render().upstream.creations.find(row => row.key === entry.key);
+  f.render().upstream.reviewCreation(recovered);
+  assert.equal(f.render().upstream.form.label, "Recovered A");
+  assert.equal(f.render().upstream.form.priority, "100");
+  assert.equal(f.render().upstream.form.credential, "");
+  assert.equal(f.render().upstream.form.accessToken, "");
+  assert.equal(f.render().upstream.generation, null);
+  assert.equal(f.render().upstream.needsReview, true);
+  f.render().upstream.reviewCurrent();
+  assert.equal(f.render().upstream.generation, 4);
+  assert.equal(f.render().upstream.creations.length, 1);
+  assert.equal(f.writes.length, 2);
+});
+
+test("definitive create rejection removes only the attempt, preserving safe conflict evidence", async () => {
+  for (const conflict of [false, true]) {
+    const f = await ready(); f.render().upstream.startNew(); change(f, { credential: "synthetic" });
+    const identity = f.render().upstream.form, writing = act(f, "save");
+    f.render().upstream.startNew(); const next = f.render().upstream.form;
+    f.writes[0].reject(failure(conflict ? 409 : 400, conflict ? "grant_already_exists" : "invalid_upstream_grant", conflict ? { grant: view(grant(identity.tokenRef)) } : undefined));
+    await writing;
+    assert.deepEqual(f.render().upstream.form, next);
+    assert.equal(f.render().upstream.creations.length, 0);
+    assert.equal(f.render().upstream.items.some(row => row.tokenRef === identity.tokenRef), conflict);
+  }
+});
+
+test("late recovery card reads cannot update a retired authenticated owner", async () => {
+  const f = await ready(); f.render().upstream.startNew(); change(f, { credential: "synthetic" });
+  const writing = act(f, "save"); f.writes[0].reject(new Error("reply lost")); await writing;
+  const entry = f.render().upstream.creations[0]; f.holdReads = true;
+  const reading = f.render().upstream.checkCreation(entry);
+  const before = f.render().upstream.creations;
+  f.current = false; f.reads.at(-1).resolve(view(grant(entry.tokenRef))); await reading;
+  assert.deepEqual(f.render().upstream.creations, before);
+});
+
 const event = { preventDefault() {} }, providers = [{ id: "test-provider" }];
 function grant(tokenRef = "account_a", values = {}) {
   return { key: `oauth/team_policy/${tokenRef}`, scope: "policies", scopeId: "team_policy", tokenRef, version: 1, kind: "subscription", provider: "test-provider", label: "Account A", tokenType: "Bearer", scopes: [],

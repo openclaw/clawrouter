@@ -454,6 +454,12 @@ conflict or lost reply, **Check account status** retains the old edit baseline a
 secret draft until the operator explicitly reviews or discards it. It never retries
 creation or replacement. An ownerless legacy account instead offers the deliberate
 PUT `?mode=replace` recovery operation with fresh primary credentials, or revocation.
+Refresh actions cannot acknowledge earlier unresolved edits or advance their edit
+generation. An unconfirmed creation keeps its exact reference in an account
+recovery card even after navigation or another Add. Checking it uses only GET and
+leaves the active draft intact; reviewing it opens saved facts with blank secrets.
+An explicit operator decision resolves the card without claiming the old POST
+succeeded.
 
 Grant revocation accepts an optional JSON object with `kind`, `provider`, and
 `label` hints for legacy grants that have no credential owner. Existing owners

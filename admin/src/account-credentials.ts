@@ -4,7 +4,14 @@ import type { UpstreamGrantForm } from "./ui-types";
 type ObservationField = "selectedCount" | "lastSelectedAt" | "quotaStatus" | "quotaObservedAt" | "cooldownUntil" | "quotaSource" | "lastProviderSignal" | "quotaWindows";
 type AccountFacts = Omit<UpstreamGrant, ObservationField>;
 export type AccountIdentity = Pick<UpstreamGrant, "scope" | "scopeId" | "tokenRef">;
-export type AccountRow = ({ source: "owner" } & AccountCredentialView | { source: "inventory" | "mutation" } & Omit<UpstreamGrant, ObservationField>) & { observations?: Pick<UpstreamGrant, ObservationField> };
+export interface AccountCreation {
+  status: "pending" | "unconfirmed";
+  requested: { provider: string; label: string };
+  inspection: "unread" | "loading" | "ready" | "failed";
+  error: string;
+}
+export type AccountRow = ({ source: "owner" } & AccountCredentialView | { source: "inventory" | "mutation" } & Omit<UpstreamGrant, ObservationField>) & { observations?: Pick<UpstreamGrant, ObservationField>; creation?: AccountCreation };
+export type AccountEntry = AccountRow | AccountIdentity & { source: "attempt"; key: string; creation: AccountCreation };
 export type AccountIntent = "create" | "edit" | "replace" | "legacy-replace";
 export type AccountField = keyof UpstreamGrantForm;
 
@@ -21,14 +28,17 @@ export function accountFromInventory(grant: UpstreamGrant): AccountRow {
   return { ...credential, source: "inventory", observations: { selectedCount, lastSelectedAt, quotaStatus, quotaObservedAt, cooldownUntil, quotaSource, lastProviderSignal, quotaWindows } };
 }
 
-export function mergeAccountInventory(previous: AccountRow[], inventory: UpstreamGrant[]): AccountRow[] {
+export function isAccountRow(entry: AccountEntry): entry is AccountRow { return entry.source !== "attempt"; }
+
+export function mergeAccountInventory(previous: AccountEntry[], inventory: UpstreamGrant[]): AccountEntry[] {
   const next = inventory.map(grant => {
-    const report = accountFromInventory(grant), owner = previous.find(row => row.key === grant.key && row.source !== "inventory");
+    const report = accountFromInventory(grant), previousEntry = previous.find(row => row.key === grant.key);
+    const owner = previousEntry && isAccountRow(previousEntry) && previousEntry.source !== "inventory" ? previousEntry : null;
     // Bootstrap can lag a committed owner indefinitely. It owns reporting, not
     // credential generations or publication (which can change at one generation).
-    return owner ? { ...owner, observations: report.observations } : report;
+    return { ...(owner ?? report), observations: report.observations, ...(previousEntry?.creation ? { creation: previousEntry.creation } : {}) };
   });
-  return [...next, ...previous.filter(row => row.source !== "inventory" && !next.some(item => item.key === row.key))];
+  return [...next, ...previous.filter(row => (row.source !== "inventory" || row.creation) && !next.some(item => item.key === row.key))];
 }
 
 export function sameAccount(value: unknown, identity: AccountIdentity): value is AccountFacts {
@@ -126,7 +136,7 @@ export function parseCredentialBundle(raw: string): Record<string, string> {
 }
 
 export function demoAccountView(row: AccountRow): AccountCredentialView {
-  const { source: _source, observations: _observations, ...grant } = row;
+  const { source: _source, observations: _observations, creation: _creation, ...grant } = row;
   return { ...grant, credentialGeneration: row.source === "owner" ? row.credentialGeneration : 1, publication: "ready", refreshTokenUrl: null, clientIdConfig: null, clientSecretConfig: null };
 }
 

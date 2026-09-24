@@ -67,6 +67,13 @@ accounts with no initialized owner expose explicit fresh-credential replacement 
 revocation; they never silently fall back to an upsert. Reporting observations remain
 separate from owner state and may describe earlier credentials.
 
+Token and quota refreshes never resolve an earlier conflicted edit. Revoke clears
+its submitted credential intent but leaves unrelated metadata review in place.
+If creation's reply is lost after opening another draft, its reference remains in
+a recovery card. Checking that card changes only its facts and feedback. Review
+opens that account's saved values with blank secrets; explicitly adopting them
+resolves the operator's decision, not the original request's unknown outcome.
+
 Access **Policies** keeps edits made after returning to a policy while its earlier
 save is pending. When that save finishes, untouched fields adopt the saved values,
 including disabled status and budget. Each action owns the fields it assigns,
