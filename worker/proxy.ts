@@ -269,8 +269,8 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       } catch {
         // Selection failure leaves the original rejection available to the caller.
       }
-      signal.throwIfAborted();
       if (retry) {
+        signal.throwIfAborted();
         void response.body?.cancel().catch(() => undefined);
         signal.throwIfAborted();
         // The alternate may execute without returning headers. Its uncertainty

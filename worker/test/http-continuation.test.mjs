@@ -933,30 +933,35 @@ for (const firstCause of ["expiry", "caller", "deadline"]) test(`alternate expir
       const response = await owner.fetch(url, init);
       if (name === grantKeys[1] && new URL(url).pathname === "/materialize") {
         clock = expires;
-        if (firstCause === "caller") caller.abort();
+        if (firstCause === "caller") caller.abort(new Error("fixture caller during expired alternate selection"));
         if (firstCause === "deadline") deadline();
       }
       return response;
     } };
   };
-  let canceled = false;
+  let cancels = 0;
   const rejected = '{"error":{"code":"fixture_original_rejection"}}';
   f.response = () => new Response(new ReadableStream({
     pull(controller) { controller.enqueue(new TextEncoder().encode(rejected)); controller.close(); },
-    cancel() { canceled = true; },
+    cancel() { cancels++; },
   }, { highWaterMark: 0 }), { status: 429, headers: { "content-type": "application/json", "retry-after": "17" } });
   const response = await f.request({}, {}, "/v1/responses", caller.signal);
-  assert.equal(response.status, firstCause === "expiry" ? 429 : 502);
-  const body = await f.consume(response);
+  assert.equal(response.status, 429);
+  assert.equal(response.headers.get("retry-after"), "17");
   if (firstCause === "expiry") {
-    assert.equal(body, rejected);
-    assert.equal(response.headers.get("retry-after"), "17");
-    assert.equal(canceled, false);
+    assert.equal(await f.consume(response), rejected);
+    assert.equal(cancels, 0);
+  } else {
+    await assert.rejects(response.text(), firstCause === "caller" ? /fixture caller/ : /deadline/);
+    await f.drain();
+    assert.equal(cancels, 1);
   }
   assert.equal(f.sent.length, 1);
   assert.equal(f.events.length, 1);
   assert.equal(f.events[0].status, firstCause === "deadline" ? "timeout" : "client_error");
+  assert.equal(f.events[0].status_code, 429);
   assert.equal(f.events[0].actual_cost_micros, 0);
+  assert.equal(f.events[0].cost_basis, "none");
   await assertBudgets(f, [0]);
 });
 
