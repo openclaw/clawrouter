@@ -333,6 +333,8 @@ for (const destination of ["other account", "new draft"]) for (const reply of ["
   test("Create A then " + destination + " preserves both identities after " + reply + " response", async ({ page }) => {
     const state = await openAccounts(page);
     state.holdBootstrap = true;
+    await page.evaluate(() => window.dispatchEvent(new Event("focus")));
+    await expect.poll(() => state.reads.length).toBe(1);
     await button(page, "Add account").click();
     const ref = await page.getByLabel("account reference", { exact: true }).inputValue();
     await page.getByLabel("fresh API key", { exact: true }).fill("synthetic-request-a");
