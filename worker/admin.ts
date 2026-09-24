@@ -11,7 +11,7 @@ import {
 import { contentRetentionDefault, readRetainedContent } from "./content-retention.ts";
 import { credentialMutationResponse, credentialResponsesFrom } from "./credentials";
 import { correlationRequestId, logCorrelationError } from "./correlation.ts";
-import { currentGrantRuntime, grantAvailable, grantPriority, grantRoutingPolicy, grantRuntimeStates, grantSelectionStats, grantUsable, grantWeight, validCredentialBundle, validGrantSegment } from "./grant-selection";
+import { currentGrantRuntime, grantAvailable, grantPriority, grantRoutingPolicy, grantRuntimeStates, grantSelectionStats, grantWeight, validCredentialBundle, validGrantSegment } from "./grant-selection";
 import { assertFusionModels, loadFusionConfig, storeFusionConfig } from "./fusion-config";
 import { fusionReadiness } from "./fusion-readiness";
 import { accountCredentialResponse, hasPrimaryCredential, putGrantCredentials, revokeGrantCredentials, type GrantRevokeMetadata } from "./grant-credentials.ts";
