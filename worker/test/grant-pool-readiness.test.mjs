@@ -225,7 +225,7 @@ test("permanent refresh rejection preserves presence on both the first and subse
   assert.equal(calls, 1);
 });
 
-for (const failure of ["before-write", "after-write"]) test(`backfill ${failure} failure preserves authoritative commit and recovers without rotating lineage`, async () => {
+for (const failure of ["before-write", "after-write"]) test(`backfill admission ${failure} failure preserves authoritative commit and recovers without rotating lineage`, async () => {
   const env = fixture();
   env.values.set(key, primary);
   await materializeGrantCredentials(env, key, primary, "openai", null, false);
@@ -233,19 +233,57 @@ for (const failure of ["before-write", "after-write"]) test(`backfill ${failure}
   await env.request("/v1/admin/grant-pools/scan", { method: "POST", body: { revision: (await status(env)).revision } });
   const owner = env.GRANT_CREDENTIALS.objects.get(key), before = owner.values.get("credential"), put = owner.state.storage.put;
   let fail = true;
-  owner.state.storage.put = async (...args) => {
-    if (!fail) return put(...args);
+  owner.state.storage.put = async (name, row) => {
+    if (!fail || row.generation !== before.generation + 1 || !Number.isSafeInteger(row.poolAdmissionRevision)) return put(name, row);
+    const indexed = await env.grantAuthority.call("attachment", { key });
+    assert.equal(indexed.pending, true);
+    assert.equal(row.poolAdmissionRevision, indexed.revision);
     fail = false;
-    if (failure === "after-write") await put(...args);
+    if (failure === "after-write") await put(name, row);
     throw new Error("fixture failed acknowledgement");
   };
   await assert.rejects(() => backfillGrantAttachment(env, key));
+  assert.equal(fail, false, "failure targets the admission-bearing owner commit");
   owner.object = new GrantCredentialObject(owner.state, env);
   const repaired = await reconcileGrantAttachment(env, key);
   assert.equal(repaired.outcome, failure === "before-write" ? "unattached" : "attached");
   assert.equal((await backfillGrantAttachment(env, key)).outcome, "attached");
   assert.equal(owner.values.get("credential").lineage, before.lineage);
   assert.equal(owner.values.get("credential").generation, before.generation + 1);
+});
+
+for (const failure of ["before-write", "after-write"]) test(`backfill dirty-obligation ${failure} failure never invents admission`, async () => {
+  const env = fixture();
+  env.values.set(key, primary);
+  await materializeGrantCredentials(env, key, primary, "openai", null, false);
+  await acceptGrantPoolBaseline("existing", { request: env.request });
+  await env.request("/v1/admin/grant-pools/scan", { method: "POST", body: { revision: (await status(env)).revision } });
+  const owner = env.GRANT_CREDENTIALS.objects.get(key), before = structuredClone(owner.values.get("credential")), put = owner.state.storage.put;
+  const indexed = await env.grantAuthority.call("attachment", { key });
+  assert.equal(before.poolAdmissionRevision, undefined);
+  let fail = true;
+  owner.state.storage.put = async (name, row) => {
+    if (!fail || row.generation !== before.generation || !row.poolSyncPending || row.poolAdmissionRevision !== undefined) return put(name, row);
+    assert.deepEqual(row, { ...before, poolSyncPending: true });
+    fail = false;
+    if (failure === "after-write") await put(name, row);
+    throw new Error("fixture dirty obligation acknowledgement failed");
+  };
+  await assert.rejects(() => backfillGrantAttachment(env, key));
+  assert.equal(fail, false, "failure targets only the dirty-obligation write");
+  assert.deepEqual(owner.values.get("credential"), { ...before, poolSyncPending: failure === "after-write" });
+  assert.deepEqual(await env.grantAuthority.call("attachment", { key }), indexed);
+  owner.object = new GrantCredentialObject(owner.state, env);
+  assert.equal((await reconcileGrantAttachment(env, key)).outcome, "unattached");
+  assert.deepEqual(owner.values.get("credential"), before);
+  assert.equal((await backfillGrantAttachment(env, key)).outcome, "attached");
+  const committed = structuredClone(owner.values.get("credential"));
+  assert.equal(committed.generation, before.generation + 1);
+  assert.equal(committed.lineage, before.lineage);
+  assert.equal(committed.credential, before.credential);
+  assert.equal(typeof committed.poolAdmissionRevision, "number");
+  assert.equal((await backfillGrantAttachment(env, key)).outcome, "attached");
+  assert.deepEqual(owner.values.get("credential"), committed, "completed backfill never commits another generation");
 });
 
 test("unknown readiness denies only environment fallback while admin auth, health and scoped grants work", async context => {
