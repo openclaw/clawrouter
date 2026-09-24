@@ -66,11 +66,13 @@ export function createProxyAccounting(options: AccountingContext) {
     // Proven nonbillable work is distinct from missing prices or zero tariffs.
     // Keep explicit fixed prices and the fallback's existing charged contract.
     const knownNoCharge = !billable || (tokens?.billable === false && actual === 0 && cost.basis !== "policy_fixed");
-    // Zero accounted micros with an unpriced basis means unavailable, not free.
-    // A known served tier can supply a price even for an undeclared request tier.
+    // Unavailable prices are not free; a known served tier can recover a price.
+    // Measured tokens do not establish an invoice-time rate. Preserve declared
+    // upper-bound provenance without relabeling retained reservations.
+    const measuredBasis = model?.pricing?.settlementBasis === "published_upper_bound" ? "manifest_rate_upper_bound" : "manifest_pricing";
     const basis = knownNoCharge ? "none" : unpricedRequest ? "unpriced_usage" : cost.basis === "unpriced_service_tier"
-      ? measured == null ? "unpriced_usage" : "manifest_pricing"
-      : measured == null && cost.basis === "manifest_pricing" ? "manifest_reservation" : cost.basis;
+      ? measured == null ? "unpriced_usage" : measuredBasis
+      : cost.basis === "manifest_pricing" ? measured == null ? "manifest_reservation" : measuredBasis : cost.basis;
     return finish(statusCode, status, reservation, actual, tokens, contentRef, basis);
   }
   return {

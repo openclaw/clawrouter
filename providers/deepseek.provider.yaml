@@ -42,25 +42,53 @@ models:
     - id: deepseek/deepseek-v4-pro
       upstream: deepseek-v4-pro
       capabilities: [llm.chat]
-      pricingRef: deepseek-v4-pro-standard-2026-06-22
+      pricingRef: deepseek-v4-pro-peak-upper-bound-2026-09-23
       pricing:
-        effectiveAt: "2026-06-22"
+        effectiveAt: "2026-09-23"
         source: https://api-docs.deepseek.com/quick_start/pricing
-        inputMicrosPerMillion: 435000
-        cachedInputMicrosPerMillion: 3625
-        outputMicrosPerMillion: 870000
+        settlementBasis: published_upper_bound
+        inputMicrosPerMillion: 1320000
+        cachedInputMicrosPerMillion: 44000
+        outputMicrosPerMillion: 3960000
         maxInputTokens: 1048576
         defaultMaxOutputTokens: 393216
     - id: deepseek/deepseek-v4-flash
       upstream: deepseek-v4-flash
       capabilities: [llm.chat]
-      pricingRef: deepseek-v4-flash-standard-2026-06-22
+      pricingRef: deepseek-flash-peak-upper-bound-2026-09-23
       pricing:
-        effectiveAt: "2026-06-22"
+        effectiveAt: "2026-09-23"
         source: https://api-docs.deepseek.com/quick_start/pricing
-        inputMicrosPerMillion: 140000
-        cachedInputMicrosPerMillion: 2800
-        outputMicrosPerMillion: 280000
+        settlementBasis: published_upper_bound
+        inputMicrosPerMillion: 300000
+        cachedInputMicrosPerMillion: 6000
+        outputMicrosPerMillion: 1200000
+        maxInputTokens: 1048576
+        defaultMaxOutputTokens: 393216
+    - id: deepseek/deepseek-flash
+      upstream: deepseek-flash
+      capabilities: [llm.chat]
+      pricingRef: deepseek-flash-peak-upper-bound-2026-09-23
+      pricing:
+        effectiveAt: "2026-09-23"
+        source: https://api-docs.deepseek.com/quick_start/pricing
+        settlementBasis: published_upper_bound
+        inputMicrosPerMillion: 300000
+        cachedInputMicrosPerMillion: 6000
+        outputMicrosPerMillion: 1200000
+        maxInputTokens: 1048576
+        defaultMaxOutputTokens: 393216
+    - id: deepseek/deepseek-v4-flash-vision-exp
+      upstream: deepseek-v4-flash-vision-exp
+      capabilities: [llm.chat]
+      pricingRef: deepseek-flash-peak-upper-bound-2026-09-23
+      pricing:
+        effectiveAt: "2026-09-23"
+        source: https://api-docs.deepseek.com/quick_start/pricing
+        settlementBasis: published_upper_bound
+        inputMicrosPerMillion: 300000
+        cachedInputMicrosPerMillion: 6000
+        outputMicrosPerMillion: 1200000
         maxInputTokens: 1048576
         defaultMaxOutputTokens: 393216
 billing:

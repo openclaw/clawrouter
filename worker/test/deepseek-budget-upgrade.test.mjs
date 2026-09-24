@@ -22,7 +22,7 @@ const historicalPricing = {
 };
 const historicalEndpoint = { request_format: "openai.chat_completions" };
 
-for (const [limit, providerLimit] of [[200_000, 300_000], [300_000, 200_000]]) {
+for (const [limit, providerLimit] of [[200_000, 1_000_000], [1_000_000, 200_000]]) {
   test(`DeepSeek upgrade preserves existing debt when the ${limit < providerLimit ? "policy" : "provider"} budget rejects and recovers`, async (t) => {
     const env = usageEnv([], { provider: "deepseek", limit, providerLimit, fixedCost: null, retainContent: false });
     env.DEEPSEEK_API_KEY = "fixture-deepseek-key";
@@ -78,7 +78,10 @@ for (const [limit, providerLimit] of [[200_000, 300_000], [300_000, 200_000]]) {
       method: "POST", headers, body: JSON.stringify(value),
     }), env, { waitUntil: promise => pending.push(promise) });
     for (const output of [{ max_tokens: 0 }, { max_output_tokens: 1 }, {}]) {
-      const response = await request({ ...body, ...output });
+      const rejectedBody = { ...body, ...output };
+      const cost = estimateCost(selected.model, rejectedBody, null, "llm.chat", endpoint);
+      assert.ok(cost.reserveMicros <= Math.max(limit, providerLimit) - 91_000, "the nonlimiting sibling must admit the bound so each denial reaches its intended owner");
+      const response = await request(rejectedBody);
       assert.equal(response.status, 402);
       assert.equal((await response.json()).error.code, limit < providerLimit ? "budget_exhausted" : "provider_budget_exhausted");
       await Promise.all(pending);
@@ -93,16 +96,16 @@ for (const [limit, providerLimit] of [[200_000, 300_000], [300_000, 200_000]]) {
     await response.text();
     await Promise.all(pending);
     assert.equal(upstream.mock.callCount(), 1);
-    assert.equal(events.at(-1).actual_cost_micros, 36);
-    assert.equal(events.at(-1).cost_basis, "manifest_pricing");
+    assert.equal(events.at(-1).actual_cost_micros, 89);
+    assert.equal(events.at(-1).cost_basis, "manifest_rate_upper_bound");
     assert.deepEqual([events.at(-1).input_tokens, events.at(-1).output_tokens, events.at(-1).cached_input_tokens], [1_000, 20, 800]);
     assert.equal(events.at(-1).reserved_output_tokens, 32);
-    assert.deepEqual(await totals(), [91_036, 91_036]);
+    assert.deepEqual(await totals(), [91_089, 91_089]);
     for (const [index, store] of stores.entries()) {
       assert.deepEqual(store.reservations().filter(row => originalRows[index].some(old => old.reservation_id === row.reservation_id)), originalRows[index]);
     }
     await settleBudget(env, held, 7_000);
-    assert.deepEqual(await totals(), [87_036, 87_036], "the original outstanding receipt still owns its later settlement");
+    assert.deepEqual(await totals(), [87_089, 87_089], "the original outstanding receipt still owns its later settlement");
     for (const [index, store] of stores.entries()) {
       const original = originalRows[index], heldId = held.reservations[index].reservationId;
       assert.deepEqual(store.reservations().filter(row => original.some(old => old.reservation_id === row.reservation_id)), original.map(row => row.reservation_id === heldId ? Object.assign(Object.create(Object.getPrototypeOf(row)), row, { reserved_micros: 7_000, settled: 1 }) : row));

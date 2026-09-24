@@ -202,6 +202,7 @@ function normalizePricing(pricing) {
     defaultMaxOutputTokens: pricing.defaultMaxOutputTokens,
     inputTokenOverhead: pricing.inputTokenOverhead ?? 1024,
     ...(pricing.unpricedCosts ? { unpricedCosts: pricing.unpricedCosts } : {}),
+    ...(pricing.settlementBasis ? { settlementBasis: pricing.settlementBasis } : {}),
     longContext: normalizeLongContext(pricing.longContext),
     ...(pricing.serviceTiers ? { serviceTiers: pricing.serviceTiers.map((tier) => ({ id: tier.id, aliases: tier.aliases ?? [], ...normalizeRates(tier), maxInputTokens: tier.maxInputTokens ?? null, longContext: normalizeLongContext(tier.longContext) })) } : {}),
   };
