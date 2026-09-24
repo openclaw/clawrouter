@@ -198,6 +198,21 @@ export interface UpstreamGrant {
   }>;
 }
 
+export type AccountCredentialView = Omit<UpstreamGrant,
+  "selectedCount" | "lastSelectedAt" | "quotaStatus" | "quotaObservedAt" | "cooldownUntil" | "quotaSource" | "lastProviderSignal" | "quotaWindows"
+> & {
+  credentialGeneration: number;
+  publication: "ready" | "pending";
+  refreshTokenUrl: string | null;
+  clientIdConfig: string | null;
+  clientSecretConfig: string | null;
+};
+
+export interface AccountCredentialMutationReceipt {
+  outcome: "committed";
+  grant: AccountCredentialView;
+}
+
 export interface AssignmentRule {
   ruleId: string;
   version: number;
