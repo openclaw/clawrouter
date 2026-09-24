@@ -83,6 +83,7 @@ export async function catalogResponse(request: Request, env: Env): Promise<Respo
 function catalogProjection(entitlements: ClientEntitlements) {
   const rows = entitlements.rows;
   const inventory = entitlements.inventory;
+  // v1 keeps native route locations as metadata; scoped offers describe caller eligibility.
   const providers = rows.filter((row) => row.allowed && row.provider !== "clawrouter").flatMap((row) => {
     const provider = snapshot.providers.find((candidate) => candidate.id === row.provider);
     if (!provider) return [];
@@ -92,7 +93,7 @@ function catalogProjection(entitlements: ClientEntitlements) {
     const executable = view.offers.some((offer) => offer.eligible);
     return [{
       id: provider.id, displayName: provider.display_name, allowed: true, executable,
-      openaiCompatible: executable && provider.class === "openai_compatible", nativeBaseUrl: entitlements.scope.authType === "proxy_key" ? `/v1/native/${provider.id}` : null,
+      openaiCompatible: executable && provider.class === "openai_compatible", nativeBaseUrl: `/v1/native/${provider.id}`,
       policies: row.policies, readiness: row.readiness, connectionTypes: connectionTypes(provider),
       routes: provider.endpoints.filter((endpoint) => endpoint.native_proxy && (endpoints.includes(endpoint.id) || view.websockets.includes(endpoint.id))).map((endpoint) => ({ endpoint: endpoint.id, methods: endpoint.methods, path: endpoint.path, requestFormat: endpoint.request_format, responseFormat: endpoint.response_format, streaming: endpoint.streaming, ...(view.websockets.includes(endpoint.id) ? { websocket: endpoint.websocket } : {}) })),
       models: view.models, offers: view.offers,
@@ -105,7 +106,7 @@ function catalogProjection(entitlements: ClientEntitlements) {
     allowed: true,
     executable: fusion.readiness.executable,
     openaiCompatible: true,
-    nativeBaseUrl: entitlements.scope.authType === "proxy_key" ? "/v1" : null,
+    nativeBaseUrl: "/v1",
     policies: fusion.policies,
     readiness: fusion.readiness,
     connectionTypes: ["compound"],

@@ -40,6 +40,14 @@ still returns only their own events. Retained request content remains admin-only
 (auth type, credential, principal) and `observedAt`. Only authorized configured
 providers appear; configured but unavailable rows remain inspectable. Static
 `/v1/providers` and `/v1/routes` describe registration, not caller eligibility.
+Use those endpoints for setup inventory; client catalogs can omit unconfigured
+providers.
+
+`nativeBaseUrl` preserves the v1 route-location string: `/v1/native/<provider>`,
+or `/v1` for Fusion, including in session catalogs. It is legacy location
+metadata, not authorization or transport eligibility. Consumers should select a
+matching eligible `offer` under the returned `scope`, rather than infer access
+from `nativeBaseUrl`, `routes`, or provider-wide readiness.
 
 Each provider's `offers` identifies an endpoint, model (or an operation form
 without a selected model), route, transport, selected policy and generation,

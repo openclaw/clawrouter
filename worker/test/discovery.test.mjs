@@ -146,6 +146,7 @@ test("models and catalog share read-only grant eligibility, transport support, a
     const models = await (await modelsResponse(request(), env)).json();
     assert.deepEqual(models.data.map(({ id, capabilities }) => ({ id, capabilities })), view.models.map(({ id, capabilities }) => ({ id, capabilities })));
     assert.deepEqual(view.models.find((model) => model.id === "openai/gpt-6-astra")?.capabilities ?? [], expectedCapabilities);
+    assert.equal(view.nativeBaseUrl, "/v1/native/openai");
     assert.equal(view.routes.some((route) => route.websocket === "openai.responses"), websocket);
     assert.ok(view.offers.filter((offer) => offer.transport === "websocket").every((offer) => offer.modelId !== null && ["native", "unified"].includes(offer.routeKind)));
     assert.ok(!paths.includes("/grant-pools/select"));
@@ -183,15 +184,19 @@ test("models and catalog share read-only grant eligibility, transport support, a
   const session = "a".repeat(64);
   grants.set(`local/sessions/${await sha256Hex(session)}`, { email: "fixture@example.com", role: "user", expiresAtMs: Date.now() + 60000 });
   env.CLAWROUTER_LOCAL_AUTH = "enabled";
-  const catalog = await (await catalogResponse(new Request("https://router.example/v1/catalog", { headers: { cookie: `clawrouter_session=${session}` } }), env)).json();
-  const view = catalog.providers.find(({ id }) => id === "openai");
-  assert.equal(view.routes.find(({ endpoint }) => endpoint === "responses").websocket, undefined);
-  assert.equal(view.nativeBaseUrl, null);
-  assert.ok(view.offers.every((offer) => offer.transport === "http" && ["playground", "unified"].includes(offer.routeKind)));
-  assert.ok(view.offers.every((offer) => offer.route.startsWith("/v1/playground/")));
-  assert.deepEqual([...new Set(view.offers.filter((offer) => offer.routeKind === "unified").map((offer) => offer.route))].sort(), ["/v1/playground/v1/chat/completions", "/v1/playground/v1/embeddings", "/v1/playground/v1/responses"]);
-  assert.deepEqual(view.models.find(({ id }) => id === "openai/gpt-6-astra").capabilities, ["llm.responses", "llm.chat"]);
-  assert.ok(!paths.includes("/grant-pools/select"));
+  for (const handler of [catalogResponse, sessionResponse, entitlementResponse]) {
+    const body = await (await handler(new Request("https://router.example/v1/catalog", { headers: { cookie: `clawrouter_session=${session}` } }), env)).json();
+    const catalog = body.entitlements?.catalog ?? body.catalog ?? body;
+    const view = catalog.providers.find(({ id }) => id === "openai");
+    assert.equal(catalog.scope.authType, "access");
+    assert.equal(view.routes.find(({ endpoint }) => endpoint === "responses").websocket, undefined);
+    assert.equal(view.nativeBaseUrl, "/v1/native/openai");
+    assert.ok(view.offers.every((offer) => offer.transport === "http" && ["playground", "unified"].includes(offer.routeKind)));
+    assert.ok(view.offers.every((offer) => offer.route.startsWith("/v1/playground/")));
+    assert.deepEqual([...new Set(view.offers.filter((offer) => offer.routeKind === "unified").map((offer) => offer.route))].sort(), ["/v1/playground/v1/chat/completions", "/v1/playground/v1/embeddings", "/v1/playground/v1/responses"]);
+    assert.deepEqual(view.models.find(({ id }) => id === "openai/gpt-6-astra").capabilities, ["llm.responses", "llm.chat"]);
+    assert.ok(!paths.includes("/grant-pools/select"));
+  }
 });
 
 test("zero policy and provider budgets preserve canonical free token counting", async (t) => {
@@ -279,10 +284,12 @@ test("Fusion shares selected-policy model eligibility across key and session dis
         assert.equal(visible, expected, `${mode} ${surface}: ${config.aggregatorModel}`);
         if (fusion) {
           assert.equal(fusion.readiness.reasons.some((reason) => reason.includes("0/1 advisers")), readyAdvisers === 0);
-          if (surface === "catalog") {
-            assert.equal(fusion.models.length, expected ? 1 : 0);
-            assert.equal(fusion.nativeBaseUrl, mode === "key" ? "/v1" : null);
-          }
+          const catalog = body.entitlements?.catalog ?? body.catalog ?? body;
+          const projection = catalog.providers.find(({ id }) => id === "clawrouter");
+          assert.equal(catalog.scope.authType, mode === "key" ? "proxy_key" : "access");
+          assert.equal(projection.models.length, expected ? 1 : 0);
+          assert.equal(projection.nativeBaseUrl, "/v1");
+          if (mode === "session") assert.equal(projection.offers.some((offer) => offer.transport === "websocket" || offer.routeKind === "native"), false);
         }
         // One connection snapshot and one read-only pool resolution per eligible
         // provider/policy serve both concrete rows and every Fusion participant.
