@@ -256,6 +256,7 @@ export function upstreamPath(provider: CompiledProvider, endpoint: CompiledEndpo
 
 export function copyRequestHeaders(incoming: Headers, provider: CompiledProvider, endpoint: CompiledEndpoint, target: Headers, env: Env): void {
   for (const name of [...provider.adapter.passthroughHeaders, ...endpoint.request_headers]) {
+    if (name.toLowerCase() === "x-clawrouter-background-recovery") continue;
     const value = incoming.get(name);
     if (value) target.set(name, value);
   }

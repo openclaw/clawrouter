@@ -27,6 +27,7 @@ export class HttpContinuation {
   private readonly tools: ReturnType<typeof createResponsesToolEvidence>;
   private claim: "owned" | "legacy_unknown" | undefined;
   private qualificationAttempted = false;
+  private backgroundJobId?: string;
 
   private constructor(env: Env, scope: string, requested: boolean, owner: ContinuationOwner | null, parentTools: ToolKnowledge, base: ToolKnowledge, signal: AbortSignal) {
     this.env = env; this.scope = scope; this.requested = requested; this.previous = owner;
@@ -50,7 +51,7 @@ export class HttpContinuation {
     const metadataTurn = responseIdentity("turn", metadata && typeof metadata === "object" && !Array.isArray(metadata) ? (metadata as Record<string, unknown>)["x-codex-turn-state"] : null);
     if (headerTurn && metadataTurn && headerTurn.value !== metadataTurn.value) throw continuationRestart();
     const identities = [responseIdentity("response", selection.body.previous_response_id), headerTurn ?? metadataTurn].filter((value): value is ResponseIdentity => !!value);
-    const scope = `http-continuations:${await sha256Hex(JSON.stringify([auth.authType, auth.policy.tenantId ?? "default", auth.policyId, auth.credentialId, auth.principalId]))}`;
+    const scope = await continuationScope(auth);
     let owner: ContinuationOwner | null = null;
     let inherited: ToolKnowledge = identities.some(identity => identity.kind === "response") ? "unknown" : "token_only";
     if (identities.length) {
@@ -68,6 +69,8 @@ export class HttpContinuation {
     if (this.previous && JSON.stringify(this.previous) !== JSON.stringify(owner)) throw continuationRestart();
     this.owner = owner;
   }
+
+  background(id: string): void { this.backgroundJobId = id; }
 
   preflightError(error: unknown): unknown {
     // Both transports must explain how to restart when a resolved owner can no
@@ -117,7 +120,7 @@ export class HttpContinuation {
     if (!this.owner || this.evidence.size === this.publishedCount) return;
     const keys = await Promise.all([...this.evidence].map(([kind, value]) => identityKey({ kind, value })));
     const response = this.evidence.get("response"), responseClaim = response ? { key: await identityKey({ kind: "response", value: response }), producerId: this.producerId } : undefined;
-    const { outcome, claim } = await call<{ outcome: string; claim?: "owned" | "legacy_unknown" }>(this.env, this.scope, { action: "register", keys, owner: this.owner, responseClaim });
+    const { outcome, claim } = await call<{ outcome: string; claim?: "owned" | "legacy_unknown" }>(this.env, this.scope, { action: "register", keys, owner: this.owner, responseClaim, ...(this.backgroundJobId && responseClaim ? { backgroundJobId: this.backgroundJobId, backgroundResponseId: response } : {}) });
     if (outcome !== "stored" || responseClaim && claim !== "owned" && claim !== "legacy_unknown") throw unavailable();
     if (responseClaim) this.claim = claim;
     this.publishedCount = this.evidence.size;
@@ -147,7 +150,10 @@ export class HttpContinuation {
 
 function unavailable(): HttpError { return new HttpError(503, "continuation_unavailable", "upstream continuation ownership could not be recorded; restart with full input"); }
 
-async function identityKey(identity: ResponseIdentity): Promise<string> { return sha256Hex(JSON.stringify([identity.kind, identity.value])); }
+export async function continuationScope(auth: AuthorizedIdentity): Promise<string> {
+  return `http-continuations:${await sha256Hex(JSON.stringify([auth.authType, auth.policy.tenantId ?? "default", auth.policyId, auth.credentialId, auth.principalId]))}`;
+}
+export async function identityKey(identity: ResponseIdentity): Promise<string> { return sha256Hex(JSON.stringify([identity.kind, identity.value])); }
 async function call<T>(env: Env, scope: string, body: unknown): Promise<T> {
   try { return await authorityCall<T>(env, "/http-continuations", body, scope, AbortSignal.timeout(5000)); }
   catch { throw new HttpError(503, "continuation_unavailable", "continuation authority is unavailable; retry later with full input"); }

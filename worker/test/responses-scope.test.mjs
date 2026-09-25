@@ -6,6 +6,7 @@ import { continuationAuthority } from "./continuation-authority.mjs";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 import { planBudgetReservation } from "../accounting.ts";
 import { UsageLedgerObject } from "../ledgers.ts";
+import { identityKey } from "../http-continuation.ts";
 const { createProxyAccounting } = await import("../proxy-accounting.ts");
 
 const owner = { providerId: "fixture", endpointId: "create", grantKey: "oauth/fixture/key", lineage: "lineage", routeSha256: "a".repeat(64), policyGeneration: "generation" };
@@ -38,9 +39,14 @@ function fixture(t) {
   return { call, input, state, calls, controls, budgets, usageDb, env, advance(ms) { now += ms; }, restart() { state.restart(); usage = new UsageLedgerObject(usageState); },
     async admit(admission) { assert.equal((await call("admit", { admission })).status, 200); },
     async dispatch(id) { assert.equal((await call("dispatch", { id })).status, 200); },
-    async bind(admission, key = "b".repeat(64)) {
-      const response = await stub.fetch("https://clawrouter.internal/http-continuations", { method: "POST", body: JSON.stringify({ action: "register", keys: [key], owner, responseClaim: { key, producerId: "c".repeat(64) }, backgroundJobId: admission.id }) });
+    async bind(admission, responseId = "response-fixture") {
+      const key = await identityKey({ kind: "response", value: responseId });
+      const response = await stub.fetch("https://clawrouter.internal/http-continuations", { method: "POST", body: JSON.stringify({ action: "register", keys: [key], owner, responseClaim: { key, producerId: "c".repeat(64) }, backgroundJobId: admission.id, backgroundResponseId: responseId }) });
       assert.equal(response.status, 200); assert.equal((await response.json()).outcome, "stored");
+    },
+    async binding(responseId) {
+      const key = await identityKey({ kind: "response", value: responseId });
+      return (await stub.fetch("https://clawrouter.internal/http-continuations", { method: "POST", body: JSON.stringify({ action: "resolve", keys: [key] }) })).json();
     },
   };
 }
@@ -171,4 +177,36 @@ test("an observation claim held in alarm scheduling cannot start a control after
   await f.state.object.alarm();
   const closed = (await f.call("get", { id: input.id })).body;
   assert.equal(closed.amount, 100); assert.equal(closed.basis, "manifest_reservation");
+});
+
+test("identity publication commits the collector ID with the binding before terminal compaction", async t => {
+  const f = fixture(t), input = f.input(); await f.admit(input); await f.dispatch(input.id);
+  await f.bind(input);
+  const active = (await f.call("get", { id: input.id })).body;
+  assert.equal(active.responseId, "response-fixture"); assert.equal(active.event, null);
+  assert.deepEqual((await f.binding("response-fixture")).background, [{ id: input.id, closed: false, stream: true }]);
+  await f.call("observe", { id: input.id, statusCode: 200, fact: { id: "response-fixture", status: "completed", terminal: true, tokens: terminal().tokens } });
+  await f.state.object.alarm();
+  assert.equal((await f.call("get", { id: input.id })).body.phase, "complete");
+  assert.deepEqual((await f.binding("response-fixture")).background, [{ id: input.id, closed: true, stream: true }]);
+});
+
+test("closed bindings preserve original resume permission after completed summaries are evicted", async t => {
+  const f = fixture(t), originals = [];
+  for (const stream of [false, true]) {
+    const input = { ...f.input(), stream }, responseId = `response-${stream}`;
+    await f.admit(input); await f.dispatch(input.id); await f.bind(input, responseId);
+    await f.call("freeze", { id: input.id, outcome: terminal() }); await f.state.object.alarm();
+    originals.push({ input, responseId, row: f.state.db.prepare("SELECT * FROM http_continuations WHERE background_job_id = ?").get(input.id) });
+  }
+  for (let index = 0; index < 64; index++) {
+    const input = f.input(); await f.admit(input);
+    await f.call("freeze", { id: input.id, outcome: { ...terminal(), billable: false } }); await f.state.object.alarm();
+  }
+  assert.equal(f.state.db.prepare("SELECT count(*) AS count FROM responses_background").get().count, 64);
+  for (const { input, responseId, row } of originals) {
+    assert.equal((await f.call("get", { id: input.id })).body, null);
+    assert.deepEqual((await f.binding(responseId)).background, [{ id: input.id, closed: true, stream: input.stream }]);
+    assert.deepEqual(f.state.db.prepare("SELECT * FROM http_continuations WHERE background_job_id = ?").get(input.id), row);
+  }
 });

@@ -1,5 +1,5 @@
 import { createResponsesUsageInspector } from "./responses-usage.ts";
-import { createSseUsageInspector, extractUsageTokens, responseOutcome, usageInspectionLimit, type UsageInspection } from "./token-usage.ts";
+import { createSseUsageInspector, extractUsageTokens, responseOutcome, usageInspectionLimit, type ResponsesObservation, type UsageInspection } from "./token-usage.ts";
 import { HttpOperation } from "./http-operation.ts";
 import type { createResponsesToolEvidence } from "./responses-tool-evidence.ts";
 
@@ -8,6 +8,14 @@ export interface ResponseBodyInspection {
   push(bytes: Uint8Array): Promise<void>; end(): Promise<void>;
   tools?: Pick<ReturnType<typeof createResponsesToolEvidence>, "accept" | "invalid">;
   qualify?(): Promise<void>;
+  observe?(fact: ResponsesObservation): Promise<void>;
+}
+
+export function proxyResponseHeaders(response: Response, providerId: string): Headers {
+  const headers = new Headers(response.headers);
+  for (const name of ["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "set-cookie", "trailer", "transfer-encoding", "upgrade", "x-clawrouter-grant-failover"]) headers.delete(name);
+  headers.set("x-clawrouter-upstream-provider", providerId);
+  return headers;
 }
 
 // Accounting observes the delivered stream; a tee would drain upstream ahead of
@@ -21,7 +29,7 @@ export function observeUsage(response: Response, operation = new HttpOperation()
   const mime = contentType.split(";")[0].trim();
   const audio = /^audio\/[!#$%&'*+.^_`|~0-9a-z-]+$/.test(mime) || mime === "application/octet-stream";
   const eventStream = !speech && contentType.includes("text/event-stream"), json = !speech && contentType.includes("json");
-  const responses = responseFormat === "openai.responses" && (eventStream || json) ? createResponsesUsageInspector(eventStream, bodyInspection?.tools) : null;
+  const responses = responseFormat === "openai.responses" && (eventStream || json) ? createResponsesUsageInspector(eventStream, bodyInspection?.tools, bodyInspection?.observe) : null;
   const sse = !responses && eventStream ? createSseUsageInspector() : null;
   let inspect = !responses && !sse && json;
   const decoder = new TextDecoder();
@@ -70,12 +78,14 @@ export function observeUsage(response: Response, operation = new HttpOperation()
         if (finished) return; // A pending read can resolve after consumer cancellation.
         if (next.done) {
           if (bodyInspection) await operation.wait(bodyInspection.end(), "publication"); if (finished) return;
-          await responses?.end(); if (finished) return;
+          if (responses) await (bodyInspection?.observe ? operation.wait(responses.end(), "publication") : responses.end()); if (finished) return;
           if (responses && bodyInspection?.qualify) await operation.wait(bodyInspection.qualify(), "publication"); if (finished) return;
           finish("complete"); controller.close(); return;
         }
         nonempty ||= next.value.byteLength > 0;
-        if (responses) { await responses.push(next.value); if (finished) return; }
+        if (bodyInspection?.observe) await operation.wait(bodyInspection.push(next.value), "publication");
+        if (finished) return;
+        if (responses) { await (bodyInspection?.observe ? operation.wait(responses.push(next.value), "publication") : responses.push(next.value)); if (finished) return; }
         sse?.push(next.value);
         if (inspect) {
           bytes += next.value.byteLength;
@@ -84,7 +94,7 @@ export function observeUsage(response: Response, operation = new HttpOperation()
         }
         // Identity registration owns publication; the same reader still owns
         // demand, cancellation, and usage when the durable write fails.
-        if (bodyInspection) await operation.wait(bodyInspection.push(next.value), "publication");
+        if (bodyInspection && !bodyInspection.observe) await operation.wait(bodyInspection.push(next.value), "publication");
         if (finished) return;
         if (responses && bodyInspection?.qualify) await operation.wait(bodyInspection.qualify(), "publication");
         if (!finished) controller.enqueue(next.value);

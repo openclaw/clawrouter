@@ -1,4 +1,5 @@
 import { authorizeAdmin } from "./access";
+import { backgroundRecovery } from "./background-recovery.ts";
 import {
   authorityCall, listBindings, listConnections, listCredentials, listPolicies, listUsers, resolveConnection,
   type PoolSubmissionTicket, type PoolSubmissionTicketView,
@@ -30,6 +31,7 @@ export async function adminApi(request: Request, env: Env, path: string): Promis
   const authorization = await authorizeAdmin(request, env);
   if (authorization instanceof Response) return authorization;
   try {
+    if (request.method === "POST" && path === "/v1/admin/usage/recovery") return await backgroundRecovery(request, env);
     if (request.method === "GET" && path === "/v1/admin/content") return getContent(request, env);
     if (request.method === "GET" && path === "/v1/admin/bootstrap") return privateJson(await adminBootstrap(env));
     if (request.method === "GET" && path === "/v1/admin/overview") return privateJson(await overview(env));

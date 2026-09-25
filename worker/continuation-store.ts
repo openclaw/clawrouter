@@ -13,8 +13,8 @@ export const continuationRetentionMs = 30 * 24 * 60 * 60_000;
 export const continuationCapacity = 1_000_000;
 export type PricingEvidence = { version: 1; producerId: string } & ({ state: "pending" } | { state: "final"; knowledge: ToolKnowledge });
 export type EvidenceFinalization = { outcome: "qualified" | "producer_conflict" | "conflict" | "unavailable" };
-export type ContinuationInput = { action: "resolve" | "register" | "qualify"; keys: string[]; owner?: ContinuationOwner; responseClaim?: { key: string; producerId: string }; knowledge?: ToolKnowledge; backgroundJobId?: string };
-type Row = { owner_json: string; pricing_evidence_json: string | null; background_job_id: string | null; background_closed: number };
+export type ContinuationInput = { action: "resolve" | "register" | "qualify"; keys: string[]; owner?: ContinuationOwner; responseClaim?: { key: string; producerId: string }; knowledge?: ToolKnowledge; backgroundJobId?: string; backgroundResponseId?: string };
+type Row = { owner_json: string; pricing_evidence_json: string | null; background_job_id: string | null; background_closed: number; background_stream: number };
 
 // Each instance lives in an authorization-scoped ACCESS_CONTROL object. Only
 // digests, routing ownership and bounded tool knowledge are stored; opaque
@@ -28,19 +28,20 @@ export class HttpContinuationStore {
     const columns = new Set([...storage.sql.exec<{ name: string }>("PRAGMA table_info(http_continuations)")].map(column => column.name));
     if (!columns.has("background_job_id")) storage.sql.exec("ALTER TABLE http_continuations ADD COLUMN background_job_id TEXT");
     if (!columns.has("background_closed")) storage.sql.exec("ALTER TABLE http_continuations ADD COLUMN background_closed INTEGER NOT NULL DEFAULT 0");
+    if (!columns.has("background_stream")) storage.sql.exec("ALTER TABLE http_continuations ADD COLUMN background_stream INTEGER NOT NULL DEFAULT 0");
     storage.sql.exec("CREATE INDEX IF NOT EXISTS http_continuations_expiry ON http_continuations(expires_at_ms)");
     storage.sql.exec("CREATE INDEX IF NOT EXISTS http_continuations_background ON http_continuations(background_job_id) WHERE background_job_id IS NOT NULL");
     storage.sql.exec("CREATE TABLE IF NOT EXISTS http_continuation_count (id INTEGER PRIMARY KEY CHECK(id = 1), count INTEGER NOT NULL)");
     storage.sql.exec("INSERT OR IGNORE INTO http_continuation_count (id, count) VALUES (1, 0)");
   }
 
-  handle(input: ContinuationInput, backgroundClosed = false, backgroundRetired = false): Response {
+  handle(input: ContinuationInput, backgroundClosed = false, backgroundRetired = false, backgroundStream = false, registered?: () => void): Response {
     if (!Array.isArray(input.keys) || input.keys.length < 1 || input.keys.length > 2 || input.keys.some(key => !digest(key))) invalid();
     const keys = [...new Set(input.keys)], now = Date.now();
     if (input.action === "resolve") {
       const rows = keys.map(key => this.get(key, now));
       return json({ owners: rows.map(row => row ? JSON.parse(row.owner_json) : null), evidence: rows.map(row => parseEvidence(row?.pricing_evidence_json)),
-        ...(rows.some(row => row?.background_job_id) ? { background: rows.map(row => row?.background_job_id ? { id: row.background_job_id, closed: row.background_closed === 1 } : null) } : {}) });
+        ...(rows.some(row => row?.background_job_id) ? { background: rows.map(row => row?.background_job_id ? { id: row.background_job_id, closed: row.background_closed === 1, stream: row.background_stream === 1 } : null) } : {}) });
     }
     if (!["register", "qualify"].includes(input.action) || !validOwner(input.owner)) invalid();
     const claim = input.responseClaim;
@@ -77,9 +78,10 @@ export class HttpContinuationStore {
       const missing = keys.filter((_, index) => !existing[index]);
       const count = [...this.storage.sql.exec<{ count: number }>("SELECT count FROM http_continuation_count WHERE id = 1")][0].count;
       if (count + missing.length > continuationCapacity) return "capacity";
-      for (const key of missing) this.storage.sql.exec("INSERT INTO http_continuations (binding_key, owner_json, expires_at_ms, pricing_evidence_json, background_job_id, background_closed) VALUES (?, ?, ?, ?, ?, ?)", key, owner, now + continuationRetentionMs, key === claim?.key ? JSON.stringify({ version: 1, producerId: claim.producerId, state: "pending" }) : null, key === claim?.key ? input.backgroundJobId ?? null : null, backgroundClosed && key === claim?.key ? 1 : 0);
+      for (const key of missing) this.storage.sql.exec("INSERT INTO http_continuations (binding_key, owner_json, expires_at_ms, pricing_evidence_json, background_job_id, background_closed, background_stream) VALUES (?, ?, ?, ?, ?, ?, ?)", key, owner, now + continuationRetentionMs, key === claim?.key ? JSON.stringify({ version: 1, producerId: claim.producerId, state: "pending" }) : null, key === claim?.key ? input.backgroundJobId ?? null : null, backgroundClosed && key === claim?.key ? 1 : 0, backgroundStream && key === claim?.key ? 1 : 0);
       if (backgroundClosed && input.backgroundJobId) this.closeBackground(input.backgroundJobId);
       if (missing.length) this.storage.sql.exec("UPDATE http_continuation_count SET count = count + ? WHERE id = 1", missing.length);
+      registered?.();
       return "stored";
     });
     return json({ outcome, ...(outcome === "stored" && claim ? { claim: this.get(claim.key, now)?.pricing_evidence_json === null ? "legacy_unknown" : "owned" } : {}) });
@@ -90,7 +92,7 @@ export class HttpContinuationStore {
   }
 
   private get(key: string, now: number): Row | null {
-    return [...this.storage.sql.exec<Row>("SELECT owner_json, pricing_evidence_json, background_job_id, background_closed FROM http_continuations WHERE binding_key = ? AND expires_at_ms > ?", key, now)][0] ?? null;
+    return [...this.storage.sql.exec<Row>("SELECT owner_json, pricing_evidence_json, background_job_id, background_closed, background_stream FROM http_continuations WHERE binding_key = ? AND expires_at_ms > ?", key, now)][0] ?? null;
   }
 
   expire(now: number): void {

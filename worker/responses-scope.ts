@@ -3,13 +3,15 @@ import { collectBackground } from "./background-collection.ts";
 import { BackgroundStore, liveBackground, type BackgroundAdmission, type BackgroundJob, type SettlementDisposition } from "./background-store.ts";
 import { HttpContinuationStore, type ContinuationInput } from "./continuation-store.ts";
 import { HttpOperation } from "./http-operation.ts";
+import { identityKey } from "./http-continuation.ts";
+import { responseIdentity } from "./response-identities.ts";
 import { BudgetSettlementError, ingestUsage, settleLedger } from "./ledgers.ts";
 import type { AccountingOutcome } from "./proxy-accounting.ts";
 import type { ResponsesObservation } from "./token-usage.ts";
 import type { Env } from "./types.ts";
 import { HttpError, json, readJson } from "./utils.ts";
 
-type Input = { action: "get" | "list" | "admit" | "dispatch" | "identity" | "freeze" | "replay"; id: string; admission?: BackgroundAdmission; responseId?: string; contentRef?: string | null; outcome?: Omit<AccountingOutcome, "reservation">; after?: string };
+type Input = { action: "get" | "list" | "admit" | "dispatch" | "identity" | "observe" | "freeze" | "replay"; id: string; admission?: BackgroundAdmission; responseId?: string; contentRef?: string | null; outcome?: Omit<AccountingOutcome, "reservation">; after?: string; fact?: ResponsesObservation; statusCode?: number };
 
 // Continuation cleanup, collection and financial recovery share the object's
 // only alarm and serialized mutation tail. Network waits never hold that tail.
@@ -28,12 +30,19 @@ export class ResponsesScopeStore {
 
   async continuation(request: Request): Promise<Response> {
     const input = await readJson<ContinuationInput>(request);
+    const response = input.backgroundJobId ? responseIdentity("response", input.backgroundResponseId) : null;
+    if (input.backgroundJobId && (!response || await identityKey(response) !== input.responseClaim?.key)) {
+      throw new HttpError(400, "background_identity_invalid", "background publication must carry its exact response identity claim");
+    }
     return this.serial(() => {
       const job = input.backgroundJobId ? this.jobs.get(input.backgroundJobId) : null;
       if (input.backgroundJobId && (!job || liveBackground(job) && JSON.stringify(job.owner) !== JSON.stringify(input.owner))) {
         throw new HttpError(409, "background_owner_conflict", "response publication does not belong to this admitted job");
       }
-      return this.continuations.handle(input, !!job && (!liveBackground(job) || !!job.event), !!job && !liveBackground(job));
+      // The binding and temporary collector ID commit together before the
+      // publisher exposes identity bytes or terminal accounting can compact it.
+      return this.continuations.handle(input, !!job && (!liveBackground(job) || !!job.event), !!job && !liveBackground(job), !!job && liveBackground(job) && job.stream,
+        job && liveBackground(job) && response ? () => this.jobs.identity(job.id, response.value) : undefined);
     }, input.action !== "resolve");
   }
 
@@ -43,6 +52,9 @@ export class ResponsesScopeStore {
     if (input.action === "list") return this.serial(() => json({ records: this.jobs.list(input.after) }), false);
     if (input.action === "admit" && input.admission) return json(await this.admit(input.admission));
     if (input.action === "dispatch") { await this.dispatch(input.id, input.contentRef ?? null); return json({ dispatched: true }); }
+    if (input.action === "observe" && input.fact && Number.isInteger(input.statusCode)) {
+      await this.observe(input.id, input.fact, input.statusCode!); return json({ observed: true });
+    }
     if (input.action === "replay") {
       const work = await this.mutate(() => this.jobs.claim(Date.now(), input.id));
       await Promise.all(work.map(job => this.process(job, false)));
@@ -104,12 +116,12 @@ export class ResponsesScopeStore {
     return this.jobs.freeze(id, outcome);
   }
 
-  private async observe(job: BackgroundJob, fact: ResponsesObservation, status: number): Promise<void> {
+  private async observe(id: string, fact: ResponsesObservation, status: number, attempt?: number): Promise<void> {
     await this.mutate(() => {
-      const current = this.jobs.get(job.id);
-      if (!current || !liveBackground(current) || current.event || current.attempts !== job.attempts || Date.now() >= current.observeUntil) return;
-      this.jobs.identity(job.id, fact.id);
-      if (fact.terminal) this.freeze(job.id, { occurredAtMs: Date.now(), statusCode: status, status: fact.status === "completed" || fact.status === "incomplete" ? "success" : "provider_error", billable: true, tokens: fact.tokens, contentRef: current.contentRef });
+      const current = this.jobs.get(id);
+      if (!current || !liveBackground(current) || current.event || attempt !== undefined && current.attempts !== attempt || Date.now() >= current.observeUntil) return;
+      this.jobs.identity(id, fact.id);
+      if (fact.terminal) this.freeze(id, { occurredAtMs: Date.now(), statusCode: status, status: fact.status === "completed" || fact.status === "incomplete" ? "success" : "provider_error", billable: true, tokens: fact.tokens, contentRef: current.contentRef });
     });
   }
 
@@ -117,7 +129,7 @@ export class ResponsesScopeStore {
     const until = automatic ? Math.min(claimed.autoRetryUntil, claimed.replayUntil) : claimed.replayUntil;
     if (Date.now() >= until) return;
     try {
-      if (!claimed.event) await collectBackground(this.env, claimed, (fact, status) => this.observe(claimed, fact, status));
+      if (!claimed.event) await collectBackground(this.env, claimed, (fact, status) => this.observe(claimed.id, fact, status, claimed.attempts));
       const current = await this.mutate(() => this.jobs.get(claimed.id));
       if (!current || !liveBackground(current) || current.attempts !== claimed.attempts || Date.now() >= current.replayUntil) return;
       if (!current.event) { await this.mutate(() => this.jobs.retry(current.id, null, claimed.attempts)); return; }

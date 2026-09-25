@@ -3,10 +3,10 @@ import { assessModelRequest } from "../shared/model-request-parameters.ts";
 import { createProxyAccounting, estimateCost, type CompoundRequestContext } from "./proxy-accounting";
 import { authenticateProxyKey } from "./proxy-auth";
 import {
-  concreteOpenAiSelection, directManifestEnvelope, isSelectionFailure, manifestEnvelope, nativeMatch,
+  concreteOpenAiSelection, directManifestEnvelope, isSelectionFailure, manifestEnvelope, nativeMatch, nativeParams,
   prepareManifestRequest, prepareNativeRequest, requestObject, searchParamsRecord, validateSelectedInput, type ProxySelection,
 } from "./proxy-selection";
-import { accessIdentity } from "./access";
+import { accessIdentity, accessSessionIdentity, verifiedAccessSession } from "./access";
 import { markBudgetDispatched, reserveBudget, validateBudgetReservation, type BudgetReservation, type EstimatedCost } from "./accounting";
 import { retainRequestContent, retentionRequired } from "./content-retention";
 import { correlationMetadata } from "./correlation.ts";
@@ -19,15 +19,17 @@ import { observeGrantQuota, shouldFailoverGrant } from "./grant-quota";
 import { grantRoutingPolicy, recordGrantRuntime, type PinnedGrant } from "./grant-selection";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import { HttpContinuation } from "./http-continuation.ts";
+import { HttpBackground } from "./http-background.ts";
 import { HttpOperation } from "./http-operation.ts";
-import { backgroundResponse } from "./responses-lifecycle.ts";
+import { backgroundResponse, responsesControl } from "./responses-lifecycle.ts";
+import { proxyResponseControl } from "./response-controls.ts";
 import { responseRouteDigest } from "./responses-control-dispatch.ts";
 import {
   assertProviderAccess, copyRequestHeaders, providerById,
   signSigV4, upstreamAuth, upstreamPath,
 } from "./providers";
 import { applyTransportHeaders, transformTransportBody } from "./provider-auth.ts";
-import { normalizePreStreamError, observeUsage } from "./proxy-response";
+import { normalizePreStreamError, observeUsage, proxyResponseHeaders } from "./proxy-response";
 import type { AuthorizedIdentity, CompiledQuotaConfig, Env, ProviderConnection } from "./types";
 import {
   decodePathSegment,
@@ -163,14 +165,34 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
   const provider = providerById(decodePathSegment(match[1]));
   const endpoint = provider?.endpoints.find((candidate) => candidate.id === decodePathSegment(match[2]));
   if (!provider || !endpoint) return errorResponse("route_not_found", "manifest proxy route not found", 404);
-  const preauthenticated = await preauthenticate(request, env, mode, provider.id, { provider, endpoint, mode: "http" });
+  const session = mode === "access" ? await verifiedAccessSession(request, env) : null;
+  if (mode === "access" && !session) return errorResponse("access_session_required", "a verified session is required", 401);
+  let preauthenticated = mode === "access" ? null : await preauthenticate(request, env, mode, provider.id, { provider, endpoint, mode: "http" });
   if (preauthenticated instanceof Response) return preauthenticated;
+  const control = responsesControl(provider, endpoint);
+  if (control) {
+    if (request.method === "GET") {
+      if (endpoint.method !== "GET") return errorResponse("method_not_allowed", "control method is not allowed", 405);
+      const query = new URL(request.url).searchParams, ids = query.getAll("response_id");
+      if (ids.length !== 1) throw new HttpError(400, "response_id_required", "one response_id path parameter is required");
+      query.delete("response_id");
+      return proxyResponseControl(request, env, control.action, ids[0], query, mode, provider.id, control.create.id, preauthenticated ?? undefined, session ?? undefined);
+    }
+    if (request.method !== "POST") return errorResponse("method_not_allowed", "control method is not allowed", 405);
+    const envelope = manifestEnvelope(await readJson<unknown>(request));
+    if ((envelope.method ?? endpoint.method).toUpperCase() !== endpoint.method || Object.keys(requestObject(envelope.body)).length || new URL(request.url).search) throw new HttpError(400, "invalid_response_control", "manifest controls accept a bodyless declared method and envelope query only");
+    return proxyResponseControl(request, env, control.action, envelope.pathParams.response_id, envelope.query, mode, provider.id, control.create.id, preauthenticated ?? undefined, session ?? undefined);
+  }
+  // Verify the browser before reading its body, then select a policy with the
+  // actual background transport requirement rather than a create-only guess.
   const envelope = request.method === "GET" || request.method === "HEAD"
     ? directManifestEnvelope(request, endpoint)
     : manifestEnvelope(await readJson<unknown>(request));
   const method = (envelope.method ?? endpoint.method).toUpperCase();
   if (!endpoint.methods.includes(method)) return errorResponse("method_not_allowed", `endpoint does not allow ${method}`, 405);
   const prepared = prepareManifestRequest(provider, endpoint, envelope.body, envelope.pathParams, env);
+  if (session) preauthenticated = await accessSessionIdentity(session, env, provider.id, { provider, endpoint, mode: "http", background: backgroundResponse(endpoint, prepared.body) });
+  if (preauthenticated instanceof Response) return preauthenticated;
   const capability = provider.capabilities.find((item) => item.endpoint === endpoint.id)?.id ?? endpoint.id;
   return proxySelected(request, env, context, mode, { provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method }, envelope.query, preauthenticated);
 }
@@ -186,6 +208,11 @@ export async function proxyNative(request: Request, env: Env, context: Execution
   if (!endpoint || !endpoint.native_proxy) return errorResponse("route_not_found", "native provider route not found", 404);
   const method = request.method.toUpperCase();
   if (!endpoint.methods.includes(method)) return errorResponse("method_not_allowed", `endpoint does not allow ${method}`, 405);
+  const control = responsesControl(provider, endpoint);
+  if (control) {
+    if (request.body) throw new HttpError(400, "invalid_response_control", "native response controls are bodyless");
+    return proxyResponseControl(request, env, control.action, nativeParams(endpoint, match[2]).response_id, new URL(request.url).searchParams, "proxy_key", provider.id, control.create.id, preauthenticated);
+  }
   const body = request.method === "GET" || request.method === "HEAD" ? {} : await readJson<unknown>(request);
   const prepared = prepareNativeRequest(provider, endpoint, body, match[2], env);
   const capability = provider.capabilities.find((item) => item.endpoint === endpoint.id)?.id ?? endpoint.id;
@@ -204,9 +231,13 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   validateSelectedInput(selection);
   const accountingContext = { context, env, auth, selection, request, compound, startedAtMs: Date.now() };
   let accounting: ReturnType<typeof createProxyAccounting> | undefined;
+  let background: HttpBackground | undefined;
   let prepared: PreparedUpstream;
   let continuation: HttpContinuation | undefined;
   try {
+    if (backgroundResponse(selection.endpoint, selection.body) && (Object.keys(queryInput).length || new URL(request.url).search)) {
+      throw new HttpError(400, "background_query_unsupported", "background create options must be in JSON; caller query parameters are unsupported");
+    }
     continuation = await HttpContinuation.resolve(request, selection, auth, env);
     prepared = await prepareSelected(request, env, selection, queryInput, auth, new Set(), true, reservedBudget?.connection, continuation?.pinned);
     if (prepared.continuation) continuation?.bind(prepared.continuation);
@@ -227,7 +258,20 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   }
   const { cost, requestId } = accounting;
   let reservation = reservedBudget?.reservation;
-  if (!reservation) {
+  if (backgroundResponse(selection.endpoint, selection.body)) {
+    try {
+      if (!prepared.continuation || !continuation || reservedBudget) throw new HttpError(400, "background_unsupported", "this route cannot own background recovery");
+      const pathParams = Object.fromEntries(selection.endpoint.path_params.map(name => [name, selection.pathParams[name]]));
+      background = await HttpBackground.prepare(request, env, auth, prepared.continuation, accounting.facts, prepared.connection, pathParams, prepared.headers, !Array.isArray(selection.body) && selection.body.stream === true);
+      await background.admit();
+      continuation.background(background.admission.id);
+    } catch (error) {
+      const failure = selectedFailure(error);
+      // Once a durable admission was attempted, only that owner may account it.
+      if (!background) accounting.fail(failure.status, failure.status === 402 ? "denied" : "provider_error");
+      return errorResponse(failure.code, failure.message, failure.status);
+    }
+  } else if (!reservation) {
     try { reservation = await reserveBudget(env, auth, selection.capability, cost, prepared.connection); }
     catch (error) {
       const failure = error instanceof HttpError ? error : new HttpError(503, "budget_store_unavailable", "budget ledger is unavailable");
@@ -238,12 +282,17 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   let content: string | null;
   try { content = await retainRequestContent(env, auth, selection, requestId); }
   catch {
-    accounting.fail(503, "provider_error", reservation);
+    if (background) context.waitUntil(background.unsent(503, "provider_error", null));
+    else accounting.fail(503, "provider_error", reservation);
     return errorResponse("content_retention_unavailable", "required request-content retention is temporarily unavailable", 503);
   }
-  try { await markBudgetDispatched(env, reservation); }
+  try {
+    if (background) await background.dispatch(content);
+    else await markBudgetDispatched(env, reservation!);
+  }
   catch {
-    accounting.fail(503, "provider_error", reservation, content);
+    if (background) context.waitUntil(background.unsent(503, "provider_error", content));
+    else accounting.fail(503, "provider_error", reservation, content);
     return errorResponse("accounting_unavailable", "Budget dispatch could not be recorded; no upstream request was sent.", 503);
   }
   const endpointTimeout = selection.endpoint.timeout_ms ?? 120_000;
@@ -259,7 +308,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     dispatched = true;
     response = await operation.wait(fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal }), "upstream", discard);
     captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response);
-    if (!continuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
+    if (!background && !continuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
       let retry: PreparedUpstream | undefined;
       try {
         retry = await prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]), true, prepared.connection);
@@ -290,7 +339,10 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     void response?.body?.cancel().catch(() => undefined);
     // A fetch failure can incur cost; a received rejection stays nonbillable
     // even if reading its SSE error body failed.
-    accounting.fail(502, operation.status ?? "provider_error", reservation, content, dispatched && response?.ok !== false);
+    if (background) {
+      if (!dispatched || response?.ok === false) context.waitUntil(background.unsent(response?.status ?? 502, operation.status ?? "provider_error", content));
+      // Unknown dispatched delivery remains collectible; it is not a terminal.
+    } else accounting.fail(502, operation.status ?? "provider_error", reservation, content, dispatched && response?.ok !== false);
     return errorResponse("provider_unavailable", `upstream request to provider ${selection.provider.id} failed`, 502, undefined);
   }
   // Endpoint timeouts cover fetch and first-event normalization, not delivery.
@@ -302,17 +354,21 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       operation.stop("publication", error);
       discard(response);
       const failure = selectedFailure(error);
-      context.waitUntil(accounting.settle(failure.status, operation.status ?? "provider_error", true, null, reservation, content));
+      if (!background) context.waitUntil(accounting.settle(failure.status, operation.status ?? "provider_error", true, null, reservation!, content));
       return errorResponse(failure.code, failure.message, failure.status);
     }
   }
-  const observed = observeUsage(response, operation, response.ok ? continuation?.inspect(response) : undefined, selection.endpoint.response_format);
-  context.waitUntil(observed.result.then(result => accounting.complete(observed.response, result, reservation, content, operation.status)));
+  const inspection = response.ok ? continuation?.inspect(response) : undefined;
+  if (inspection && background) {
+    const job = background;
+    Object.assign(inspection, { observe: async (fact: import("./token-usage.ts").ResponsesObservation) => { await job.observe(fact, response!.status); } });
+  }
+  const observed = observeUsage(response, operation, inspection, selection.endpoint.response_format);
+  if (background) {
+    if (!response.ok) context.waitUntil(background.unsent(response.status, operation.status ?? "provider_error", content));
+  } else context.waitUntil(observed.result.then(result => accounting.complete(observed.response, result, reservation!, content, operation.status)));
   response = observed.response;
-  const outputHeaders = new Headers(response.headers);
-  for (const name of ["connection", "keep-alive", "proxy-authenticate", "proxy-authorization", "set-cookie", "trailer", "transfer-encoding", "upgrade"]) outputHeaders.delete(name);
-  outputHeaders.set("x-clawrouter-upstream-provider", selection.provider.id);
-  outputHeaders.delete("x-clawrouter-grant-failover");
+  const outputHeaders = proxyResponseHeaders(response, selection.provider.id);
   if (grantFailover) outputHeaders.set("x-clawrouter-grant-failover", "1");
   outputHeaders.set("x-clawrouter-content-retention", retentionRequired(auth, selection.capability) ? "on; retention-days=30" : "off");
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers: outputHeaders });
@@ -343,7 +399,7 @@ async function reserveSelected(request: Request, env: Env, context: ExecutionCon
 }
 
 async function selectedAuth(request: Request, env: Env, mode: AuthMode, selection: ProxySelection, preauthenticated: AuthorizedIdentity | null): Promise<AuthorizedIdentity | Response> {
-  return preauthenticated ?? (mode === "access" ? accessIdentity(request, env, selection.provider.id, { provider: selection.provider, endpoint: selection.endpoint, mode: "http" }) : authenticateProxyKey(request.headers, env));
+  return preauthenticated ?? (mode === "access" ? accessIdentity(request, env, selection.provider.id, { provider: selection.provider, endpoint: selection.endpoint, mode: "http", background: backgroundResponse(selection.endpoint, selection.body) }) : authenticateProxyKey(request.headers, env));
 }
 
 export async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: Record<string, unknown>, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http"): Promise<PreparedUpstream> {
