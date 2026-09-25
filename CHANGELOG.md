@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Return the same full-input restart guidance for HTTP and WebSocket continuations when their recorded upstream account becomes unavailable during request preparation. Preserve unrelated authorization errors and zero-charge rejection accounting.
+
 - Correct the architecture and API reference to describe retained-tool pricing enforcement for HTTP/SSE and WebSocket response-ID continuations, including fixed tariffs, unmetered requests, and rollout limits.
 
 - Add an operator-run account-inventory read using credentials injected from the operator secret manager. Print versioned API-visible counts and digests without account identities, credentials or raw server errors; keep raw credentials out of GitHub Actions and the operation independent of account-readiness APIs.

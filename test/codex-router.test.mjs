@@ -212,6 +212,113 @@ for (const transport of ["http", "websocket"]) {
   });
 }
 
+for (const mutation of ["revoke", "replace", "refresh-reject"]) test(`WebSocket continuation preflight preserves restart guidance after ${mutation}`, { timeout: 30_000 }, async () => {
+  const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
+  const home = await mkdtemp(join(tmpdir(), "clawrouter-continuation-preflight-"));
+  const sockets = [];
+  let mf;
+  try {
+    mf = await startWorkerdFixture(home, routerFixture(), fallbackUpstreamFixture({ rejectRefresh: true }));
+    const kv = await mf.getKVNamespace("POLICY_KV", "router"), origin = await mf.ready;
+    await kv.put("policies/fixture", JSON.stringify({ enabled: true, generation: "g1", providers: ["openai"], tenantId: "default", monthlyBudgetMicros: limit, requestCostMicros: 7, retainRequestContent: false, grantRouting: { strategy: "round_robin", stickiness: "none", failover: true } }));
+    await kv.put("credentials/fixture", JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update(secret).digest("hex"), policyId: "fixture", policyGeneration: "g1" }));
+    await kv.put("connections/openai", JSON.stringify({ providerId: "openai", enabled: true, monthlyBudgetMicros: limit }));
+    const grants = await mf.getDurableObjectNamespace("GRANT_CREDENTIALS", "router");
+    const grantKey = name => `oauth/fixture/account-${name}`;
+    const callGrant = (name, action, body = {}) => grants.get(grants.idFromName(grantKey(name))).fetch(`https://credential/${action}`, { method: "POST", body: JSON.stringify({ key: grantKey(name), ...body }) });
+    const put = async (name, accessToken = `fixture-account-${name}`) => {
+      const response = await callGrant(name, "put", { grant: { provider: "openai", kind: "oauth", enabled: true, accessToken, refreshToken: `fixture-refresh-${name}`, expiresAt: "2099-01-01T00:00:00.000Z" }, preserveUnspecifiedSecrets: false });
+      assert.equal(response.status, 200, await response.clone().text());
+    };
+    await put("a"); await put("b");
+    const open = async (headers = {}) => {
+      const response = await mf.dispatchFetch("https://router.example/v1/responses", { headers: { authorization: `Bearer ${key}`, upgrade: "websocket", ...headers } });
+      assert.equal(response.status, 101);
+      const socket = response.webSocket, messages = [];
+      socket.accept(); sockets.push(socket);
+      socket.addEventListener("message", ({ data }) => messages.push(JSON.parse(data)));
+      return { socket, messages, send(body = {}) { socket.send(JSON.stringify({ type: "response.create", model: "openai/gpt-6-astra", input: "fixture scope", generate: false, max_output_tokens: 32, ...body })); } };
+    };
+    const upstream = await mf.getWorker("upstream"), state = () => upstream.fetch("https://fixture.example/state").then(response => response.json());
+    const seed = await open(); seed.send();
+    await until(() => seed.messages.some(({ type }) => type === "response.completed"));
+    const previous = seed.messages.find(({ type }) => type === "response.completed").response.id;
+    const turn = seed.messages.find(({ type }) => type === "response.metadata").headers["x-codex-turn-state"][0];
+    assert.equal((await state()).requests[0].account, "a");
+    seed.socket.close();
+    if (mutation === "replace") await put("a", "fixture-replaced-account-a");
+    else if (mutation === "revoke") assert.equal((await callGrant("a", "revoke")).status, 200);
+    else {
+      // Reject refresh through the real serialized owner, before continuation
+      // admission. This tests reauthorization without an expiry/dispatch race.
+      const grant = JSON.parse(await kv.get(grantKey("a")));
+      const rejected = await callGrant("a", "materialize", { grant, providerId: "openai", force: true, expectedGeneration: grant.credentialGeneration, refresh: { tokenUrl: "https://refresh.example/oauth/token", extraParams: {} } });
+      assert.equal(rejected.status, 401);
+      assert.equal((await rejected.json()).error.code, "grant_reauthorization_required");
+      assert.equal(JSON.parse(await kv.get(grantKey("a"))).credentialStatus, "reauth_required");
+      assert.equal((await state()).refreshes, 1);
+    }
+    const carriers = [
+      [{ previous_response_id: previous }, {}],
+      [{ client_metadata: { "x-codex-turn-state": turn } }, {}],
+      [{}, { "x-codex-turn-state": turn }],
+    ];
+    const restart = frame => {
+      assert.equal(frame.status, 409); assert.equal(frame.error.code, "continuation_restart_required");
+      assert.match(frame.error.message, /restart with full input and omit previous_response_id and x-codex-turn-state/);
+    };
+    for (const [body, headers] of carriers) {
+      const continued = await open(headers); continued.send(body);
+      await until(() => continued.messages.some(({ type }) => type === "error"));
+      assert.equal(continued.messages.length, 1); restart(continued.messages[0]); continued.socket.close();
+    }
+    // HTTP already promises the same recovery for response and header carriers.
+    for (const [body, headers] of [carriers[0], carriers[2]]) {
+      const response = await fetch(new URL("/v1/responses", origin), { method: "POST", headers: { authorization: `Bearer ${key}`, "content-type": "application/json", ...headers }, body: JSON.stringify({ model: "openai/gpt-6-astra", input: "fixture", ...body }), signal: AbortSignal.timeout(10_000) });
+      restart({ status: response.status, ...await response.json() });
+    }
+    const deniedState = await state();
+    assert.equal(deniedState.requests.length, 1); assert.equal(deniedState.connections, 1, "no rejected continuation upgrades or uses another account");
+    const dispatchUsage = () => fetch(new URL("/v1/usage", origin), { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(10_000) }).then(response => response.json());
+    let usage;
+    await until(async () => { usage = await dispatchUsage(); return usage.usage.events.length === 6; });
+    const denied = usage.usage.events.filter(({ status }) => status !== "success");
+    assert.equal(denied.length, 5); assert.equal(new Set(usage.usage.events.map(({ request_id }) => request_id)).size, 6);
+    assert.ok(denied.every(event => event.status === "client_error" && event.status_code === 409 && event.actual_cost_micros === 0 && event.reserved_cost_micros === 0 && event.cost_basis === "none"));
+    const budgets = await mf.getDurableObjectNamespace("BUDGET_LEDGER", "router"), month = new Date().toISOString().slice(0, 7);
+    const assertLedgers = async count => {
+      for (const [name, policyId] of [["default:fixture", "default/fixture"], ["provider:openai", "provider/openai"]]) {
+        const ledger = budgets.get(budgets.idFromName(name));
+        let rows;
+        await until(async () => {
+          const status = await (await ledger.fetch(`https://budget/status?policy_id=${policyId}&window_key=${policyId}/${month}&limit_micros=${limit}`)).json();
+          rows = await (await ledger.fetch("https://budget/fixture-unsettled")).json();
+          return status.spentMicros === count * 7 && rows.count === 0;
+        });
+        assert.deepEqual(rows, { total: count, count: 0 });
+      }
+    };
+    await assertLedgers(1);
+    const independent = await open(); independent.send();
+    await until(() => independent.messages.some(({ type }) => type === "response.completed"));
+    await until(async () => (await dispatchUsage()).usage.events.length === 7);
+    await assertLedgers(2);
+    assert.equal((await state()).requests.at(-1).account, "b", "stateless work can use the other available account");
+    const authority = await mf.getDurableObjectNamespace("ACCESS_CONTROL", "router");
+    const revoked = await authority.get(authority.idFromName("policy-bindings")).fetch("https://authority/credentials/mutate", { method: "POST", body: JSON.stringify({ operation: "revoke", credentialId: "fixture", scope: "admin", actor: { auth: "admin_token", role: "admin", email: "token-admin" } }) });
+    assert.equal(revoked.status, 200); assert.equal((await revoked.json()).outcome, "updated");
+    independent.send({ previous_response_id: previous });
+    await until(() => independent.messages.some(({ type }) => type === "error"));
+    const error = independent.messages.at(-1);
+    assert.equal(error.status, 403); assert.equal(error.error.code, "proxy_key_revoked");
+    assert.equal((await state()).requests.length, 2);
+    await assertLedgers(2);
+  } finally {
+    for (const socket of sockets) { try { socket.close(); } catch {} }
+    await mf?.dispose(); await rm(home, { recursive: true, force: true });
+  }
+});
+
 for (const recovery of ["HTTP fallback", "WebSocket reconnect"]) test(`native Codex metadata survives ${recovery} on its original pooled account`, { skip: !binary, timeout: 90_000 }, async t => {
   const forceHttp = recovery === "HTTP fallback";
   const { startWorkerdFixture } = await import("./helpers/workerd.mjs");
@@ -611,8 +718,8 @@ export default { ...handler, async fetch(request, env, context) {
 } };
 `; }
 
-function fallbackUpstreamFixture() { return `
-const requests = []; let connections = 0, disconnectRequested = false, disconnected = false, expired = false;
+function fallbackUpstreamFixture({ rejectRefresh = false } = {}) { return `
+const requests = []; let connections = 0, refreshes = 0, disconnectRequested = false, disconnected = false, expired = false;
 function respond(body, request, transport) {
   const responseId = 'fallback_response_' + (requests.length + 1);
   const warmup = body.generate === false, held = transport === 'websocket' && !warmup && !requests.some(request => request.held);
@@ -634,7 +741,11 @@ function respond(body, request, transport) {
 }
 export default { async fetch(request) {
   const path = new URL(request.url).pathname;
-  if (path === '/state') return Response.json({ requests, connections, disconnected, expired });
+  if (path === '/state') return Response.json({ requests, connections, refreshes, disconnected, expired });
+  if (${rejectRefresh} && request.url === 'https://refresh.example/oauth/token' && request.method === 'POST') {
+    refreshes++;
+    return Response.json({ error: 'invalid_grant' }, { status: 400 });
+  }
   if (path === '/disconnect' && request.method === 'POST') { disconnectRequested = true; return new Response('disconnect requested'); }
   if (request.url !== 'https://api.openai.com/v1/responses') return new Response('unexpected upstream route', { status: 400 });
   if (request.headers.get('upgrade') === 'websocket') {

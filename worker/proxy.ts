@@ -18,7 +18,7 @@ import { loadFusionConfig } from "./fusion-config";
 import { observeGrantQuota, shouldFailoverGrant } from "./grant-quota";
 import { grantRoutingPolicy, recordGrantRuntime, type PinnedGrant } from "./grant-selection";
 import type { ContinuationOwner } from "./continuation-store.ts";
-import { HttpContinuation, continuationRestart } from "./http-continuation.ts";
+import { HttpContinuation } from "./http-continuation.ts";
 import { HttpOperation } from "./http-operation.ts";
 import {
   assertProviderAccess, copyRequestHeaders, providerById,
@@ -218,7 +218,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     if (reservedBudget) validateBudgetReservation(selection.capability, cost, auth.policy.monthlyBudgetMicros, reservedBudget.connection);
   }
   catch (error) {
-    const failure = continuation?.requested && error instanceof HttpError && ["upstream_grant_pool_unavailable", "upstream_grant_changed", "grant_reauthorization_required", "grant_refresh_failed", "grant_disabled", "grant_credential_missing", "provider_not_configured", "grant_transport_unavailable"].includes(error.code) ? continuationRestart() : selectedFailure(error);
+    const failure = selectedFailure(continuation?.preflightError(error) ?? error);
     const status = failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error";
     (accounting ?? createProxyAccounting(accountingContext)).fail(failure.status, status, reservedBudget?.reservation);
     return errorResponse(failure.code, failure.message, failure.status);

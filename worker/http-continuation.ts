@@ -69,6 +69,13 @@ export class HttpContinuation {
     this.owner = owner;
   }
 
+  preflightError(error: unknown): unknown {
+    // Both transports must explain how to restart when a resolved owner can no
+    // longer prepare the request. Other authorization and budget errors retain their cause.
+    return this.requested && error instanceof HttpError && ["upstream_grant_pool_unavailable", "upstream_grant_changed", "grant_reauthorization_required", "grant_refresh_failed", "grant_disabled", "grant_credential_missing", "provider_not_configured", "grant_transport_unavailable"].includes(error.code)
+      ? continuationRestart() : error;
+  }
+
   async headers(response: Response): Promise<void> {
     const identity = responseIdentity("turn", response.headers.get("x-codex-turn-state"));
     if (identity) this.remember(identity);
