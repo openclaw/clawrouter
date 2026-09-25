@@ -87,7 +87,7 @@ test("account discovery retains the last complete snapshot and failed attempt th
     await createAccount(mf);
     assert.deepEqual((await upstream(mf)).calls, []);
     const first = await refresh(mf);
-    assert.equal(first.status, 200);
+    assert.equal(first.status, 200, JSON.stringify({ body: first.body, calls: (await upstream(mf)).calls }));
     assert.equal(first.body.stale, false);
     assert.equal(first.body.sourceMatches, true);
     assert.deepEqual(first.body.snapshot.models.map(model => model.id), ["kept", "removed"]);
@@ -137,7 +137,7 @@ test("the native discovery deadline aborts a body read after headers and retains
     mf = await start(temporary);
     await createAccount(mf);
     const first = await refresh(mf);
-    assert.equal(first.status, 200);
+    assert.equal(first.status, 200, JSON.stringify({ body: first.body, calls: (await upstream(mf)).calls }));
     await upstream(mf, "partial");
     const started = Date.now();
     const failed = await refresh(mf);
@@ -166,12 +166,12 @@ test("native model-list fetch refuses redirects without forwarding the account c
     mf = await start(temporary);
     await createAccount(mf);
     const first = await refresh(mf);
-    assert.equal(first.status, 200);
+    assert.equal(first.status, 200, JSON.stringify({ body: first.body, calls: (await upstream(mf)).calls }));
     await upstream(mf, "redirect");
     const failed = await refresh(mf);
     assert.equal(failed.status, 502);
     assert.equal(failed.body.attempt.status, "failed");
-    assert.equal(failed.body.attempt.error, "transport_error");
+    assert.equal(failed.body.attempt.error, "upstream_rejected");
     assert.equal(failed.body.stale, true);
     assert.deepEqual(failed.body.snapshot, first.body.snapshot);
     assert.deepEqual((await upstream(mf)).calls, [expectedCall, expectedCall], "the redirect destination is never requested");

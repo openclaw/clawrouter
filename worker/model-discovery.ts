@@ -25,7 +25,9 @@ export async function discoverModels(adapter: ModelDiscoveryAdapter, headers: He
         url.searchParams.set("pageSize", "1000");
         if (pageToken) url.searchParams.set("pageToken", pageToken);
       }
-      const response = await fetch(url, { method: "GET", headers, redirect: "error", signal: controller.signal });
+      // Workerd rejects redirect:"error" during request construction; manual
+      // returns 3xx to the rejection below without forwarding the account secret.
+      const response = await fetch(url, { method: "GET", headers, redirect: "manual", signal: controller.signal });
       if (!response.ok) { void response.body?.cancel().catch(() => {}); throw new DiscoveryError("upstream_rejected"); }
       const parsed = parseModelPage(adapter, await responseJson(response, budget));
       for (const model of parsed.models) {

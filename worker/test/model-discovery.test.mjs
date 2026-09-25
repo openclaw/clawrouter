@@ -17,9 +17,23 @@ test("OpenAI retains only reported identity facts, never executable model metada
   assert.equal(requests.length, 1);
   assert.equal(requests[0][0], "https://api.openai.com/v1/models");
   assert.equal(requests[0][1].method, "GET");
-  assert.equal(requests[0][1].redirect, "error");
+  assert.equal(requests[0][1].redirect, "manual");
   assert.equal(requests[0][1].body, undefined);
   assert.equal(requests[0][1].headers.get("authorization"), "Bearer synthetic-list-key");
+});
+
+for (const adapter of ["openai.models", "google.models"]) test(`${adapter} rejects redirects and cancels the response body`, async context => {
+  let calls = 0, cancelled = 0;
+  context.mock.method(globalThis, "fetch", async (_url, init) => {
+    calls++;
+    assert.equal(init.redirect, "manual");
+    return new Response(new ReadableStream({ cancel() { cancelled++; } }), {
+      status: 302, headers: { location: "https://redirect.example/not-a-model-list" },
+    });
+  });
+  assert.deepEqual(await discoverModels(adapter, new Headers()), { models: null, error: "upstream_rejected" });
+  assert.equal(calls, 1);
+  assert.equal(cancelled, 1);
 });
 
 test("Google paginates opaque tokens with constant parameters and preserves provider method names", async context => {
