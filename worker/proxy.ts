@@ -4,11 +4,11 @@ import { createProxyAccounting, estimateCost, type CompoundRequestContext } from
 import { authenticateProxyKey } from "./proxy-auth";
 import {
   concreteOpenAiSelection, directManifestEnvelope, isSelectionFailure, manifestEnvelope, nativeMatch,
-  prepareManifestRequest, prepareNativeRequest, requestObject, searchParamsRecord, type ProxySelection,
+  prepareManifestRequest, prepareNativeRequest, requestObject, searchParamsRecord, validateSelectedInput, type ProxySelection,
 } from "./proxy-selection";
 import { accessIdentity } from "./access";
 import { markBudgetDispatched, reserveBudget, validateBudgetReservation, type BudgetReservation, type EstimatedCost } from "./accounting";
-import { retainRequestContent } from "./content-retention";
+import { retainRequestContent, retentionRequired } from "./content-retention";
 import { correlationMetadata } from "./correlation.ts";
 import {
   FUSION_MODEL_ID, buildAggregatorBody, buildFusionReservationProposals, collectFusionProposals,
@@ -199,6 +199,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     }
     return auth;
   }
+  validateSelectedInput(selection);
   const estimatedCost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability, selection.endpoint);
   const accounting = createProxyAccounting({ context, env, auth, selection, request, cost: estimatedCost, compound });
   const { cost, requestId } = accounting;
@@ -279,7 +280,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     const streaming = Array.isArray(selection.body)
       ? selection.body.some(({ query }) => !!query && typeof query === "object" && "stream" in query && query.stream === true)
       : selection.body.stream === true;
-    response = await normalizePreStreamError(response, streaming, operation);
+    response = await normalizePreStreamError(response, streaming && selection.endpoint.response_format !== "audio.binary", operation);
   } catch (error) {
     operation.stop("upstream", error);
     void response?.body?.cancel().catch(() => undefined);
@@ -309,7 +310,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   outputHeaders.set("x-clawrouter-upstream-provider", selection.provider.id);
   outputHeaders.delete("x-clawrouter-grant-failover");
   if (grantFailover) outputHeaders.set("x-clawrouter-grant-failover", "1");
-  outputHeaders.set("x-clawrouter-content-retention", auth.policy.retainRequestContent !== false && !auth.contentRetentionDisabled ? "on; retention-days=30" : "off");
+  outputHeaders.set("x-clawrouter-content-retention", retentionRequired(auth, selection.capability) ? "on; retention-days=30" : "off");
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers: outputHeaders });
 }
 

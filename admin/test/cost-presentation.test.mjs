@@ -22,6 +22,8 @@ test("estimates, published upper bounds and fixed tariffs are not invoice claims
   assert.equal(presentCost(2_000_000, "manifest_pricing").label, "Token-based estimate");
   assert.equal(presentCost(2_000_000, "manifest_pricing", true).label, "Token-based reservation estimate");
   assert.equal(presentCost(2_000_000, "manifest_rate_upper_bound").label, "Token-based estimate (rate upper bound)");
+  assert.equal(presentCost(15, "request_character_estimate").label, "Request-character estimate");
+  assert.equal(presentCost(60, "request_character_estimate", true).label, "Input-byte reservation estimate");
   assert.deepEqual(presentCost(2_000_000, "policy_fixed"), { value: "$2.00", label: "Fixed policy tariff", unavailable: false });
 });
 

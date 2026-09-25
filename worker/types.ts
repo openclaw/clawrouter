@@ -83,7 +83,7 @@ export type AuthScheme =
 
 export interface AuthorizationConfig { authorizeUrl: string; tokenUrl: string; clientId: string | null; clientIdConfig: string | null; clientSecretConfig: string | null; scopes: string[]; grantKind: string; extraAuthorizeParams: Record<string, string>; extraTokenParams: Record<string, string>; accountIdJsonPointer: string | null; subscriptionPlanJsonPointer: string | null }
 export interface RefreshConfig { tokenUrl: string; clientId: string | null; clientIdConfig: string | null; clientSecretConfig: string | null; requestFormat: "form" | "json"; extraParams: Record<string, string> }
-export type { TokenRates, LongContextPricing, ServiceTierPricing, ModelPricing } from "../shared/contracts";
+export type { TokenRates, LongContextPricing, ServiceTierPricing, TokenPricing, CharacterPricing, ModelPricing } from "../shared/contracts";
 export type CompiledModel = ClientCatalogModel;
 export interface OutputTokenLimit { field: "max_tokens" | "max_completion_tokens" | "max_output_tokens"; minimum: number; maximum: number }
 export interface CompiledEndpoint { id: string; method: string; methods: string[]; path: string; native_proxy: boolean; auth: string | null; headers: Record<string, string>; request_headers: string[]; response_headers: string[]; query: Record<string, string>; path_params: string[]; path_param_styles: Record<string, string>; request_format: string; response_format: string; streaming: string | null; outputTokenLimit?: OutputTokenLimit; modelPassthrough?: { pricing_ref: string | null; pricing: ModelPricing | null }; websocket?: "openai.responses"; timeout_ms: number | null }

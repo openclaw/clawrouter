@@ -1,8 +1,9 @@
 # Request content retention
 
-ClawRouter access policies retain authorized LLM request bodies for 30 days by
-default. This is an access condition for administrator-funded credentials, not
-application logging. Provider completions are not retained.
+ClawRouter access policies retain authorized LLM request bodies and speech input
+JSON for 30 days by default. This is an access condition for administrator-funded
+credentials, not application logging. Provider completions, including generated
+audio, are not retained.
 
 The locked FakeCo staging profile overrides the environment default to off.
 New or migrated FakeCo policies without an explicit setting therefore remain
@@ -16,10 +17,10 @@ metadata-only; request retention requires an explicit policy opt-in.
   user's email.
 - Credentials should identify their owner with `principalId`. Legacy unowned
   credentials follow the policy setting and cannot use a per-user exemption.
-- Authorized LLM request content is written to `CONTENT_ARCHIVE` after access and
-  budget checks, immediately before the upstream request. If required storage is
-  unavailable, ClawRouter returns `503 content_retention_unavailable` and does not
-  call the provider.
+- Authorized LLM request content and speech input JSON are written to
+  `CONTENT_ARCHIVE` after access and budget checks, immediately before the upstream
+  request. If required storage is unavailable, ClawRouter returns
+  `503 content_retention_unavailable` and does not call the provider.
 - R2 encrypts objects at rest. The `request-content-v1-30-days` lifecycle rule
   schedules deletion under the dedicated `v1/` archive prefix after 30 days without
   affecting unrelated bucket content. Physical deletion is asynchronous. Usage

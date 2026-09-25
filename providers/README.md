@@ -135,6 +135,13 @@ billing:
   With both budgets disabled, requests forward and report an unavailable price.
   Request-specific hosted tools are assessed from the selected endpoint's wire
   format; do not mark every model merely because it supports optional tools.
+- `pricing.unit: character` is a separate closed card for `audio.speech` with
+  `openai.audio_speech` JSON requests and `audio.binary` responses. It requires dated source
+  provenance, `inputMicrosPerMillionCharacters`, and `maxInputCharacters: 4096`;
+  token rates, token limits, and token defaults do not apply. The initial model
+  is `openai/tts-1`, at $15 per million input characters. Its binary endpoint
+  has no opaque model passthrough, SSE, or WebSocket contract. Existing OpenAI
+  subscription transports remain restricted to Responses.
 - `pricing.serviceTiers` declares complete rate cards with unique wire `id`s,
   optional `aliases`, optional `longContext`, and an optional `maxInputTokens`
   price-applicability limit. Include a `default` card identical to the root

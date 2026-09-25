@@ -7,6 +7,117 @@ const { sha256Hex } = await import("../utils.ts");
 const { default: worker } = await import("../index.ts");
 const { snapshot } = await import("../providers.ts");
 
+for (const mode of ["local", "cloudflare_access"]) test(`empty ${mode} discovery preserves authenticated scope without grants or budget activity`, async (t) => {
+  const bindings = [], fixture = await fusionDiscoveryFixture(t, { bindings });
+  let headers = fixture.request("session").headers, certificateUrl;
+  if (mode === "cloudflare_access") {
+    const domain = "fixture.cloudflareaccess.com", audience = "fixture-audience", kid = "fixture-key";
+    Object.assign(fixture.env, { CLAWROUTER_ACCESS_TEAM_DOMAIN: domain, CLAWROUTER_ACCESS_AUD: audience });
+    fixture.userRecord.assignmentState = { version: 1, revision: "[]", assignments: {}, updatedAt: null };
+    const list = fixture.env.POLICY_KV.list;
+    fixture.env.POLICY_KV.list = (options) => options.prefix === "access/assignment-rules/" ? { keys: [], list_complete: true } : list(options);
+    const keys = await crypto.subtle.generateKey({ name: "RSASSA-PKCS1-v1_5", modulusLength: 2048, publicExponent: new Uint8Array([1, 0, 1]), hash: "SHA-256" }, true, ["sign", "verify"]);
+    const jwk = { ...await crypto.subtle.exportKey("jwk", keys.publicKey), kid };
+    const encode = (value) => Buffer.from(JSON.stringify(value)).toString("base64url");
+    const unsigned = `${encode({ alg: "RS256", kid })}.${encode({ aud: audience, iss: `https://${domain}`, email: "Fixture@Example.COM", exp: Math.floor(Date.now() / 1000) + 300 })}`;
+    const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", keys.privateKey, new TextEncoder().encode(unsigned));
+    headers = new Headers({ "cf-access-jwt-assertion": `${unsigned}.${Buffer.from(signature).toString("base64url")}` });
+    certificateUrl = `https://${domain}/cdn-cgi/access/certs`;
+    t.mock.method(globalThis, "fetch", async (url) => {
+      assert.equal(String(url), certificateUrl, "only signature verification may fetch");
+      return Response.json({ keys: [jwk] });
+    });
+  }
+  const upstreamFetch = globalThis.fetch;
+  const budgetGet = t.mock.method(fixture.env.BUDGET_LEDGER, "get", () => { throw new Error("empty discovery must not observe or reserve a budget"); });
+  const binding = { policyId: "fixture", priority: 0, enabled: true, principalType: "user", principalId: "fixture@example.com" };
+  for (const [scenario, entries, enabled] of [
+    ["no bindings", [], true], ["disabled binding", [{ ...binding, enabled: false }], true],
+    ["missing policy", [{ ...binding, policyId: "missing" }], true], ["disabled policy", [binding], false],
+    ["missing and disabled policies", [binding, { ...binding, policyId: "missing" }], false],
+  ]) {
+    bindings.splice(0, bindings.length, ...entries);
+    fixture.policy.enabled = enabled;
+    fixture.calls.length = 0;
+    budgetGet.mock.resetCalls();
+    upstreamFetch.mock.resetCalls();
+    for (const path of ["/v1/catalog", "/v1/session", "/v1/entitlements", "/v1/models"]) {
+      const response = await worker.fetch(new Request(`https://router.example${path}`, { headers }), fixture.env, {});
+      assert.equal(response.status, 200, `${scenario}: ${path}`);
+      const body = await response.json();
+      if (path === "/v1/models") { assert.deepEqual(body.data, []); continue; }
+      const catalog = body.entitlements?.catalog ?? body.catalog ?? body;
+      assert.deepEqual(catalog.scope, { authType: "access", credentialId: null, principalId: "fixture@example.com" }, `${scenario}: ${path}`);
+      assert.deepEqual(catalog.providers, []);
+      if (path !== "/v1/catalog") {
+        const session = body.session ?? body;
+        assert.equal(session.auth, mode);
+        assert.equal(session.email, catalog.scope.principalId);
+        assert.ok((body.entitlements?.providers ?? body.providers).every((row) => !row.allowed));
+      }
+    }
+    assert.equal(fixture.calls.some(({ path }) => path === "/grant-pools/resolve"), false);
+    assert.equal(budgetGet.mock.callCount(), 0, `${scenario}: no budget access`);
+    const fetchUrls = upstreamFetch.mock.calls.map(({ arguments: [url] }) => String(url));
+    if (certificateUrl) {
+      assert.ok(fetchUrls.length > 0, `${scenario}: JWT signature keys were fetched`);
+      assert.ok(fetchUrls.every((url) => url === certificateUrl), `${scenario}: only signature verification may fetch`);
+    } else assert.deepEqual(fetchUrls, [], `${scenario}: no upstream fetch`);
+  }
+});
+
+test("session catalog scope is independent of ordered multi-policy operation selection", async (t) => {
+  const bindings = [
+    { policyId: "fixture", priority: 20, enabled: true, principalType: "user", principalId: "fixture@example.com" },
+    { policyId: "second", priority: 10, enabled: true, principalType: "user", principalId: "fixture@example.com" },
+  ];
+  const fixture = await fusionDiscoveryFixture(t, { bindings });
+  fixture.policies.push({ policyId: "second", policy: { ...fixture.policy, generation: "second-generation", requestCostMicros: 0 } });
+  for (const path of ["/v1/catalog", "/v1/session", "/v1/entitlements"]) {
+    const response = await worker.fetch(new Request(`https://router.example${path}`, fixture.request("session")), fixture.env, {});
+    assert.equal(response.status, 200);
+    const body = await response.json(), catalog = body.entitlements?.catalog ?? body.catalog ?? body;
+    assert.deepEqual(catalog.scope, { authType: "access", credentialId: null, principalId: "fixture@example.com" });
+    const provider = catalog.providers.find(({ id }) => id === "openai");
+    assert.deepEqual(provider.policies, ["second", "fixture"]);
+    assert.ok(provider.offers.length > 0);
+    assert.ok(provider.offers.every((offer) => offer.policyId === "second" && offer.policyGeneration === "second-generation" && offer.transport === "http" && offer.route.startsWith("/v1/playground/")));
+    assert.equal(catalog.providers.find(({ id }) => id === "clawrouter").offers[0].policyId, "second");
+  }
+});
+
+test("key catalog scope and rejection retain precedence over browser cookies", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  const headers = new Headers(fixture.request("key").headers);
+  headers.set("cookie", fixture.request("session").headers.get("cookie"));
+  for (const principalId of [null, "fixture@example.com"]) {
+    fixture.credential.principalId = principalId;
+    const response = await worker.fetch(new Request("https://router.example/v1/catalog", { headers }), fixture.env, {});
+    assert.equal(response.status, 200);
+    const catalog = await response.json(), provider = catalog.providers.find(({ id }) => id === "openai");
+    assert.deepEqual(catalog.scope, { authType: "proxy_key", credentialId: "fixture", principalId });
+    assert.equal(provider.nativeBaseUrl, "/v1/native/openai");
+    assert.ok(provider.offers.some((offer) => offer.transport === "websocket"));
+  }
+  for (const [state, status, code] of [["invalid", 401, "invalid_proxy_key"], ["revoked", 403, "proxy_key_revoked"], ["stale", 403, "credential_policy_stale"]]) {
+    fixture.credential.enabled = state !== "revoked";
+    fixture.credential.policyGeneration = state === "stale" ? "old-generation" : "g1";
+    headers.set("authorization", state === "invalid" ? "Bearer clawrouter-live-fixture-wrong" : fixture.request("key").headers.get("authorization"));
+    for (const path of ["/v1/catalog", "/v1/models"]) {
+      const response = await worker.fetch(new Request(`https://router.example${path}`, { headers }), fixture.env, {});
+      assert.equal(response.status, status);
+      assert.equal((await response.json()).error.code, code);
+    }
+    for (const path of ["/v1/session", "/v1/entitlements"]) {
+      const response = await worker.fetch(new Request(`https://router.example${path}`, { headers }), fixture.env, {});
+      assert.equal(response.status, 200, "browser-only ingress ignores the proxy credential");
+      const body = await response.json();
+      assert.deepEqual((body.entitlements?.catalog ?? body.catalog).scope, { authType: "access", credentialId: null, principalId: "fixture@example.com" });
+      assert.equal((await worker.fetch(new Request(`https://router.example${path}`, fixture.request("key")), fixture.env, {})).status, 401);
+    }
+  }
+});
+
 test("Worker catalog and session expose one exact HTTP Fusion offer and refresh its policy generation", async (t) => {
   const fixture = await fusionDiscoveryFixture(t);
   fixture.policy.requestCostMicros = 0;
@@ -287,6 +398,8 @@ test("models and catalog share read-only grant eligibility, transport support, a
   assert.deepEqual(subscribed.readiness.missingConfig, []);
   assert.equal(subscribed.readiness.upstreamGrantCount, 1);
   assert.equal(subscribed.readiness.oauthGrantRequired, false);
+  assert.equal(subscribed.models.some(({ id }) => id === "openai/tts-1"), false);
+  assert.equal(subscribed.offers.some(({ modelId, eligible }) => modelId === "openai/tts-1" && eligible), false);
   env.OPENAI_API_KEY = "fixture-environment-key";
   grants.set("oauth/fixture/api", { provider: "openai", kind: "api_key", enabled: true, credential: "fixture-api" });
   await compare(["llm.responses", "llm.chat"], true);
@@ -302,7 +415,7 @@ test("models and catalog share read-only grant eligibility, transport support, a
   await compare([], false);
 
   // A session's first policy owns subscription Responses, while its second
-  // owns Chat/embedding API auth. Neither grants this session a WS route.
+  // owns Chat/embedding/speech API auth. Neither grants this session a WS route.
   delete policy.grantRouting;
   grants.delete("oauth/fixture/api");
   policies.push({ policyId: "api", policy: { ...policy } });
@@ -319,7 +432,10 @@ test("models and catalog share read-only grant eligibility, transport support, a
     assert.equal(view.nativeBaseUrl, "/v1/native/openai");
     assert.ok(view.offers.every((offer) => offer.transport === "http" && ["playground", "unified"].includes(offer.routeKind)));
     assert.ok(view.offers.every((offer) => offer.route.startsWith("/v1/playground/")));
-    assert.deepEqual([...new Set(view.offers.filter((offer) => offer.routeKind === "unified").map((offer) => offer.route))].sort(), ["/v1/playground/v1/chat/completions", "/v1/playground/v1/embeddings", "/v1/playground/v1/responses"]);
+    assert.deepEqual([...new Set(view.offers.filter((offer) => offer.routeKind === "unified").map((offer) => offer.route))].sort(), ["/v1/playground/v1/audio/speech", "/v1/playground/v1/chat/completions", "/v1/playground/v1/embeddings", "/v1/playground/v1/responses"]);
+    const speechOffers = view.offers.filter(({ modelId }) => modelId === "openai/tts-1");
+    assert.ok(speechOffers.length > 0);
+    assert.ok(speechOffers.every(({ eligible, policyId, transport }) => eligible && policyId === "api" && transport === "http"));
     assert.deepEqual(view.models.find(({ id }) => id === "openai/gpt-6-astra").capabilities, ["llm.responses", "llm.chat"]);
     assert.ok(!paths.includes("/grant-pools/select"));
   }
@@ -613,7 +729,7 @@ test("catalog and HTTP select only configured grants inside the already chosen p
   assert.equal(sent.length, 2, "the environment key never replaces the unusable selected pool");
 });
 
-async function fusionDiscoveryFixture(t) {
+async function fusionDiscoveryFixture(t, { bindings } = {}) {
   const secret = "fixture-fusion-discovery", session = "b".repeat(64);
   const policy = { enabled: true, generation: "g1", providers: ["openai", "fireworks"], tenantId: "default", monthlyBudgetMicros: 100, requestCostMicros: null, retainRequestContent: false };
   const policies = [{ policyId: "fixture", policy }], states = {}, calls = [];
@@ -639,9 +755,9 @@ async function fusionDiscoveryFixture(t) {
     ACCESS_CONTROL: { idFromName: (name) => name, get: () => ({ fetch: async (url, init) => {
       const path = new URL(url).pathname, body = JSON.parse(init.body); calls.push({ path, body });
       if (path === "/credentials/resolve") return Response.json({ initialized: true, credentials: [{ credentialId: "fixture", credential }], missingCredentialIds: [] });
-      if (path === "/policies/resolve") return Response.json({ initialized: true, policies: policies.filter(({ policyId }) => body.policyIds.includes(policyId)), missingPolicyIds: [] });
+      if (path === "/policies/resolve") return Response.json({ initialized: true, policies: policies.filter(({ policyId }) => body.policyIds.includes(policyId)), missingPolicyIds: body.policyIds.filter((id) => !policies.some(({ policyId }) => policyId === id)) });
       if (path === "/users/resolve") return Response.json({ initialized: true, users: [{ email: "fixture@example.com", record: userRecord }], missingEmails: [] });
-      if (path === "/resolve") return Response.json({ initialized: true, bindings: policies.map(({ policyId }, priority) => ({ policyId, priority, enabled: true, principalType: "user", principalId: "fixture@example.com" })), missingPrincipals: [] });
+      if (path === "/resolve") return Response.json({ initialized: true, bindings: bindings ?? policies.map(({ policyId }, priority) => ({ policyId, priority, enabled: true, principalType: "user", principalId: "fixture@example.com" })), missingPrincipals: [] });
       if (path === "/connections/resolve") return Response.json({ initialized: true, connections, missingProviderIds: [] });
       if (path === "/grant-pools/resolve") return Response.json({ keys: [...records.keys()].filter((key) => key.startsWith(`oauth/${body.policyId}/`) && records.get(key).provider === body.providerId), states });
       throw new Error(`discovery unexpectedly mutated authority: ${path}`);
