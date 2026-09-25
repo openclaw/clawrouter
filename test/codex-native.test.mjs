@@ -63,7 +63,10 @@ for (const mode of ["key-only", "hybrid", "hybrid-missing-key"]) {
       const bundled = JSON.parse(execFileSync(producer, ["debug", "models", "--bundled"], { encoding: "utf8", env, maxBuffer: 16 * 1024 * 1024, timeout: 20_000 }));
       const provider = providerById("openai");
       const catalog = nativeFixtureCatalog(provider, bundled);
-      for (const slug of [model, "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) assert.ok(catalog.models.some((entry) => entry.slug === slug), `compiled native catalog must include ${slug}`);
+      const official = new Set(bundled.models.map((entry) => entry.slug));
+      const expected = provider.models.filter((entry) => entry.capabilities.includes("llm.responses") && official.has(entry.codexModel ?? entry.upstream)).map((entry) => entry.upstream);
+      assert.deepEqual(catalog.models.map((entry) => entry.slug), expected);
+      assert.ok(catalog.models.some((entry) => entry.slug === model), `compiled native catalog must include ${model}`);
       await writeFile(join(home, "models.json"), JSON.stringify(catalog));
       await writeFile(join(home, "config.toml"), `model = "${model}"\nmodel_provider = "fixture"\nmodel_catalog_json = ${JSON.stringify(join(home, "models.json"))}\nservice_tier = "priority"\nweb_search = "disabled"\napproval_policy = "never"\nsandbox_mode = "read-only"\ncli_auth_credentials_store = "file"\nchatgpt_base_url = "${origin}/control"\n[model_providers.fixture]\nname = "Fixture"\nbase_url = "${origin}/v1/native/openai/v1"\nenv_key = "CLAWROUTER_API_KEY"\nwire_api = "responses"\nrequires_openai_auth = ${mode !== "key-only"}\nsupports_websockets = false\n`);
       if (mode !== "key-only") {
