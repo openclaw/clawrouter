@@ -169,10 +169,22 @@ are limited to 256 UTF-8 bytes and turn state to 8 KiB. Output/frame size is not
 limited by HTTP identity observation, and raw identities and model output are not
 stored in this index.
 
-The router records bounded retained-tool evidence on response identities for a
-future pricing consumer. This does not change current pricing or admission, and
-does not claim complete inherited-tool enforcement. Unknown, legacy, and opaque
-history remain unqualified. Reusing a response identity belonging to another
+HTTP/SSE and WebSocket requests with `previous_response_id` consume the parent's
+durable tool-pricing evidence before budget reservation. Only a final `token_only`
+fact allows ordinary token pricing, subject to the current request. Retained
+hosted fees or server work and unknown ancestry return `pricing_required` under
+either policy or provider monthly budgets unless a fixed policy tariff applies.
+Fixed tariffs and unmetered requests retain their existing behavior.
+
+Deploy the proof producer before the consumer; upgrading does not establish that
+old writers have drained. Legacy, pending, corrupt, future-version, and opaque
+history remain unqualified, and a later proof cannot clear the unknown fact already
+captured by a request. Turn-state aliases establish routing affinity, not tool
+pricing. Full-input conversation and `item_reference` state, encrypted compaction
+witnesses, and complete compaction metering remain separate work; no compact route
+is added. See [spend control](agent-spend-control.md).
+
+Reusing a response identity belonging to another
 producer fails publication with `continuation_unavailable`; resend full input.
 This also applies to older claim-less writers encountering qualified-producer
 rows. Transient proof-finalization failure after a confirmed identity claim can
