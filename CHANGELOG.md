@@ -35,6 +35,7 @@
 - Keep failed console refreshes visible after successful edits, label stale usage with its snapshot time, and show unavailable spend and balances as unknown.
 - Expose Catalog service-kind filters as a labeled button group with an explicit pressed choice, preserving keyboard operation, search, and result counts.
 - Make Access resource tabs keyboard navigable with manual activation, associated panels, and visible focus at narrow widths. Preserve one-time secrets during focus-only movement and editor drafts across resource changes.
+- Keep Fusion flow connectors between their model stages on narrow screens by rotating only the arrow glyphs.
 - Open loaded policies from Catalog and Users only after accepting any unsaved-draft discard; keep informational access rows and unavailable policy references noninteractive.
 - Open the Policies tab when adding a Catalog service to the current or New policy draft, preserving unsaved edits and avoiding duplicate service selections.
 
