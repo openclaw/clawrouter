@@ -2,7 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { registerHooks } from "node:module";
 import { extname } from "node:path";
-import { accountFromInventory, accountKey, accountMutationBody, accountPath, demoAccountView, mergeAccountInventory, readAccountReceipt, readAccountView, upstreamGrantFormFromGrant } from "../src/account-credentials.ts";
+import { accountCredentialPresentation, accountFromInventory, accountKey, accountMutationBody, accountPath, demoAccountMutation, demoAccountView, mergeAccountInventory, readAccountReceipt, readAccountView, upstreamGrantFormFromGrant } from "../src/account-credentials.ts";
 
 registerHooks({ resolve(specifier, context, nextResolve) {
   return nextResolve(specifier.startsWith(".") && context.parentURL && !extname(new URL(specifier, context.parentURL).pathname) ? `${specifier}.ts` : specifier, context);
@@ -92,4 +92,54 @@ test("inventory never acknowledges an unknown creation or upgrades reporting int
   assert.equal(merged.creation, creation);
   assert.equal(merged.observations.selectedCount, 32);
   assert.equal("creation" in demoAccountView(known), false);
+});
+
+test("expiry explanations preserve server availability and paused/revoked precedence", () => {
+  const now = Date.parse("2026-09-25T00:00:00Z"), expired = "2025-01-01T00:00:00Z";
+  const present = patch => accountCredentialPresentation(accountFromInventory({ ...row, enabled: true, usable: true, ...patch }), now);
+  const renewable = present({ expiresAt: expired });
+  assert.equal(renewable.label, "usable"); assert.equal(renewable.tone, "active");
+  assert.match(renewable.expiry, /deadline passed/); assert.match(renewable.guidance, /Use Refresh token/);
+  assert.equal(present({ usable: false, expiresAt: expired }).label, "expired");
+  assert.equal(present({ usable: false, expiresAt: null }).label, "blocked");
+  assert.equal(present({ expiresAt: null }).expiry, "not reported · freshness unknown");
+  const malformed = { usable: false, tokenResponseError: "invalid_expiry", nextRefreshAttemptAt: "2030-01-01T00:00:00Z" };
+  assert.equal(present(malformed).label, "invalid expiry");
+  assert.match(present(malformed).guidance, /invalid token lifetime.*Use Refresh token/);
+  assert.equal(present({ ...malformed, enabled: false }).label, "paused");
+  assert.match(present({ ...malformed, enabled: false }).guidance, /keeping the account paused/);
+  assert.equal(present({ ...malformed, enabled: false, revokedAt: expired }).label, "revoked");
+  assert.match(present({ expiresAt: expired, hasRefreshToken: false }).guidance, /Prepare credential replacement/);
+  const reauth = present({ ...malformed, credentialStatus: "reauth_required" });
+  assert.equal(reauth.label, "reconnect required"); assert.match(reauth.guidance, /Refresh token cannot reconnect/);
+});
+
+test("demo metadata cannot heal expiry denial or retry facts; fresh replacement clears them", context => {
+  context.mock.method(Date, "now", () => Date.parse("2026-09-25T00:00:00Z"));
+  for (const values of [
+    { tokenResponseError: "invalid_expiry", expiresAt: null, nextRefreshAttemptAt: "2030-01-01T00:00:00Z" },
+    { tokenResponseError: null, expiresAt: "2025-01-01T00:00:00Z", nextRefreshAttemptAt: "2030-01-01T00:00:00Z" },
+    { tokenResponseError: null, expiresAt: "2025-01-01T00:00:00Z", nextRefreshAttemptAt: null, hasRefreshToken: false },
+  ]) {
+    const existing = accountFromInventory({ ...row, enabled: true, ...values });
+    for (const expiresAt of ["", "2031-01-01T00:00:00Z"]) {
+      const edit = { ...upstreamGrantFormFromGrant(existing), label: "Edited", expiresAt };
+      const body = accountMutationBody(edit, "edit", new Set(["label", "expiresAt"]), 1);
+      const saved = demoAccountMutation(edit, "edit", body, existing);
+      assert.equal(saved.label, "Edited"); assert.equal(saved.tokenResponseError, values.tokenResponseError);
+      assert.equal(saved.nextRefreshAttemptAt, values.nextRefreshAttemptAt); assert.equal(saved.usable, false);
+      if (values.expiresAt) assert.equal(saved.expiresAt, values.expiresAt);
+      if (values.hasRefreshToken === false) assert.equal(saved.credentialStatus, "reauth_required");
+      const replace = { ...edit, enabled: false, expiresAt: "", accessToken: "synthetic-new" };
+      const replaced = demoAccountMutation(replace, "replace", accountMutationBody(replace, "replace", new Set(), 2), { ...saved, source: "owner" });
+      assert.equal(replaced.enabled, false); assert.equal(replaced.usable, false);
+      assert.equal(replaced.tokenResponseError, null); assert.equal(replaced.nextRefreshAttemptAt, null);
+      assert.equal(replaced.expiresAt, null); assert.equal(replaced.credentialStatus, "active");
+    }
+  }
+  const renewable = accountFromInventory({ ...row, enabled: true, expiresAt: "2025-01-01T00:00:00Z", nextRefreshAttemptAt: null });
+  const edit = { ...upstreamGrantFormFromGrant(renewable), label: "Edited" };
+  assert.equal(demoAccountMutation(edit, "edit", { label: "Edited" }, renewable).usable, true);
+  const reauth = { ...renewable, credentialStatus: "reauth_required" };
+  assert.equal(demoAccountMutation(edit, "edit", { label: "Edited" }, reauth).credentialStatus, "reauth_required");
 });

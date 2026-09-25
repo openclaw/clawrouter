@@ -12,6 +12,7 @@
 
 - Read session usage from the policy's accounting tenant, including the default for policies without a tenant, so changing a user's tenant does not hide their charged requests.
 - Separate account creation, detail edits and credential replacement in Access. Keep each new account's unique reference through lost replies and navigation, require an owner read and explicit conflict review before strict edits, preserve unresolved edits through refresh or unrelated actions, and expose publication and legacy recovery without replaying writes. Keep recovery checks keyboard focused while pending without admitting duplicate reads or pulling focus back after navigation, and wrap long errors so recovery controls fit narrow screens.
+- Explain stored account expiry, retryable renewal errors and recorded retry times without replacing server availability. Direct reauthorization to fresh credential replacement, preserve pause and publication state, and keep demo metadata edits from clearing expiry denial.
 
 - Update DeepSeek's dated peak-price cards, add canonical Flash and the documented vision alias, and retain exact upstream spellings and Pro. Label measured costs as published-rate upper bounds rather than invoice amounts; higher reservations can require a lower native `max_tokens` under unchanged budgets. Preserve fixed tariffs, missing-usage reservations, and prior ledger debt.
 

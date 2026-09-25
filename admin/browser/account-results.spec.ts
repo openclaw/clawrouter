@@ -80,7 +80,10 @@ for (const action of ["Save details", "Revoke", "Refresh token", "Refresh quota"
 }
 
 test("whole replacement starts empty, preserves pause and never carries previous account material", async ({ page }) => {
-  const state = await openAccounts(page, { grants: [grant("account_a", { enabled: false, accountId: "old-account", expiresAt: "2030-01-01T00:00:00Z" })] });
+  const state = await openAccounts(page, { grants: [grant("account_a", { enabled: false, usable: false, accountId: "old-account", expiresAt: "2000-01-01T00:00:00Z",
+    tokenResponseError: "invalid_expiry", nextRefreshAttemptAt: "2030-01-01T00:00:00Z" })] });
+  const facts = page.getByRole("region", { name: "account credential facts" });
+  await expect(facts).toContainText("keeping the account paused");
   await button(page, "Prepare credential replacement").click();
   await expect(page.getByLabel("fresh access token", { exact: true })).toHaveValue("");
   await expect(page.getByLabel("new refresh token (optional)", { exact: true })).toHaveValue("");
@@ -97,11 +100,74 @@ test("whole replacement starts empty, preserves pause and never carries previous
   expect(sent).toMatchObject({ expectedCredentialGeneration: 1, accessToken: "synthetic-new", enabled: false, accountId: null, expiresAt: null });
   for (const field of ["refreshToken", "scopes", "subscription", "refresh"]) expect(sent[field]).toBeUndefined();
   await page.getByLabel("fresh access token", { exact: true }).fill("synthetic-next");
-  await commit(state, 0, owner(grant("account_a", { enabled: false, hasRefreshToken: false }), 2));
+  await expect(facts).toContainText("invalid token expiry");
+  await commit(state, 0, owner(grant("account_a", { enabled: false, usable: false, hasRefreshToken: false, expiresAt: null, tokenResponseError: null, nextRefreshAttemptAt: null }), 2, "pending"), 202);
   await expect(page.getByLabel("fresh access token", { exact: true })).toHaveValue("synthetic-next");
   await expect(button(page, "Replace credentials")).toBeVisible();
   await expect(page.locator('.tableRow.selected [data-label="state"]')).toHaveText("paused");
+  await expect(facts).not.toContainText("invalid token expiry");
+  await expect(facts).toContainText("not reported · freshness unknown");
+  await expect(page.locator(".inspector")).toContainText("Account publication pending.");
 });
+
+test("expired renewable accounts keep server availability and quota actions; unknown expiry is explicit", async ({ page }) => {
+  const state = await openAccounts(page, { grants: [grant("account_a", { expiresAt: "2000-01-01T00:00:00Z", usable: true })] });
+  const facts = page.getByRole("region", { name: "account credential facts" });
+  await expect(page.locator('.tableRow.selected [data-label="state"]')).toHaveText("usable");
+  await expect(facts).toContainText("deadline passed");
+  await expect(facts).toContainText("usable · request-time checks apply");
+  await expect(button(page, "Refresh token")).toBeEnabled();
+  await expect(button(page, "Refresh quota")).toBeEnabled();
+  await expect(page.locator(".inspector")).toContainText("Metadata edits cannot restore expired credentials");
+  await button(page, "Refresh quota").click(); await expect.poll(() => state.writes.length).toBe(1);
+  expect(new URL(state.writes[0].request().url()).pathname).toMatch(/\/account_a\/quota-refresh$/);
+  await commit(state, 0, owner(grant("account_a", { expiresAt: null }), 2));
+  await expect(facts).toContainText("not reported · freshness unknown");
+  await expect(facts).not.toContainText("deadline passed");
+  expect(state.writes).toHaveLength(1);
+});
+
+for (const [status, code] of [[502, "grant_refresh_failed"], [401, "grant_reauthorization_required"]] as const) {
+  test(`${code} keeps console authentication and requires deliberate account recovery`, async ({ page }, testInfo) => {
+    if (testInfo.project.name === "mobile") await page.setViewportSize({ width: 320, height: 720 });
+    const state = await openAccounts(page);
+    await button(page, "Prepare credential replacement").click();
+    await page.getByLabel("fresh access token", { exact: true }).fill("synthetic-preserved");
+    await page.getByLabel("label", { exact: true }).fill("unsaved recovery");
+    await button(page, "Refresh token").click(); await expect.poll(() => state.writes.length).toBe(1);
+    const current = owner(grant("account_a", { usable: false, credentialStatus: status === 401 ? "reauth_required" : "active",
+      tokenResponseError: status === 502 ? "invalid_expiry" : null, nextRefreshAttemptAt: status === 502 ? "2030-01-01T00:00:00Z" : null }), 2);
+    state.owners.set(current.key, current);
+    await state.writes[0].fulfill({ status, json: { error: { code, message: status === 502 ? "provider returned invalid token expiry" : "account requires reauthorization" } } });
+    await expect(page.locator(".inspector")).toContainText(status === 502 ? "could not be confirmed" : "account requires reauthorization");
+    await button(page, "Check account status").click();
+    const facts = page.getByRole("region", { name: "account credential facts" });
+    await expect(button(page, "Keep edits and use current version")).toBeEnabled();
+    await expect(page.locator(".tenantSwitch strong")).toHaveText("admin@example.com");
+    await expect(page.getByLabel("fresh access token", { exact: true })).toHaveValue("synthetic-preserved");
+    await expect(page.getByLabel("label", { exact: true })).toHaveValue("unsaved recovery");
+    if (status === 502) {
+      await expect(facts).toContainText("invalid token expiry");
+      await expect(facts).toContainText("2030-01-01T00:00:00Z");
+      await expect(facts).toContainText("does not mean renewal is running or will succeed");
+      await expect(button(page, "Refresh token")).toBeEnabled();
+    } else {
+      await expect(facts).toContainText("Fresh credentials are required");
+      await expect(button(page, "Refresh token")).toBeDisabled();
+      await expect(facts).toContainText("Refresh token cannot reconnect this account");
+    }
+    await expect(button(page, "Replace credentials")).toBeDisabled();
+    await submit(page); expect(state.writes).toHaveLength(1);
+    await assertGeometry(page, page.locator(".inspector"));
+    const review = button(page, "Keep edits and use current version");
+    await review.focus(); await page.keyboard.press("Enter");
+    await button(page, "Replace credentials").click(); await expect.poll(() => state.writes.length).toBe(2);
+    expect(state.writes[1].request().postDataJSON()).toMatchObject({ expectedCredentialGeneration: 2, accessToken: "synthetic-preserved", label: "unsaved recovery" });
+    await state.writes[1].fulfill({ status: 400, json: { error: { code: "invalid_upstream_grant", message: "synthetic stop" } } });
+    await expect(page.locator(".inspector")).toContainText("synthetic stop");
+    expect(state.writes).toHaveLength(2);
+  });
+}
 
 test("explicit refresh-token clear uses PATCH null and retains unedited metadata", async ({ page }) => {
   const state = await openAccounts(page);

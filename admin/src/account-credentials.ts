@@ -1,5 +1,5 @@
 import type { AccountCredentialMutationReceipt, AccountCredentialView, UpstreamGrant } from "../../shared/contracts";
-import type { UpstreamGrantForm } from "./ui-types";
+import type { OutcomeTone, UpstreamGrantForm } from "./ui-types";
 
 type ObservationField = "selectedCount" | "lastSelectedAt" | "quotaStatus" | "quotaObservedAt" | "cooldownUntil" | "quotaSource" | "lastProviderSignal" | "quotaWindows";
 type AccountFacts = Omit<UpstreamGrant, ObservationField>;
@@ -14,6 +14,28 @@ export type AccountRow = ({ source: "owner" } & AccountCredentialView | { source
 export type AccountEntry = AccountRow | AccountIdentity & { source: "attempt"; key: string; creation: AccountCreation };
 export type AccountIntent = "create" | "edit" | "replace" | "legacy-replace";
 export type AccountField = keyof UpstreamGrantForm;
+
+export function accountCredentialPresentation(grant: AccountRow, now = Date.now()): { label: string; tone: OutcomeTone; expiry: string; guidance: string } {
+  const expired = Boolean(grant.expiresAt && Date.parse(grant.expiresAt) <= now);
+  const invalidExpiry = grant.tokenResponseError === "invalid_expiry";
+  // The clock explains the stored deadline, never overrides server availability
+  // or disables an action. An expired refreshable grant can still be usable.
+  const state: { label: string; tone: OutcomeTone } = grant.revokedAt ? { label: "revoked", tone: "revoked" }
+    : !grant.enabled ? { label: "paused", tone: "neutral" }
+    : grant.credentialStatus === "reauth_required" ? { label: "reconnect required", tone: "revoked" }
+    : !grant.usable ? { label: invalidExpiry ? "invalid expiry" : expired ? "expired" : "blocked", tone: "revoked" }
+    : { label: "usable", tone: "active" };
+  let guidance = "";
+  if (grant.revokedAt || grant.credentialStatus === "reauth_required") guidance = "Fresh credentials are required. Prepare credential replacement, or reconnect with the provider if available. Refresh token cannot reconnect this account.";
+  else if (invalidExpiry || expired) {
+    const reason = invalidExpiry ? "The provider returned an invalid token lifetime." : "The stored token deadline has passed.";
+    const recovery = grant.hasRefreshToken && grant.refreshConfigured
+      ? grant.enabled ? "Use Refresh token to request renewal, or prepare credential replacement." : "Resume before refreshing, or replace credentials while keeping the account paused."
+      : "Prepare credential replacement, or reconnect with the provider if available; no usable refresh setup is reported.";
+    guidance = `${reason} ${recovery}`;
+  }
+  return { ...state, expiry: grant.expiresAt ? `${grant.expiresAt}${expired ? " · deadline passed" : ""}` : "not reported · freshness unknown", guidance };
+}
 
 export function accountKey(identity: AccountIdentity): string {
   return identity.scope === "tenants" ? `oauth/tenants/${identity.scopeId}/${identity.tokenRef}` : `oauth/${identity.scopeId}/${identity.tokenRef}`;
@@ -143,19 +165,27 @@ export function demoAccountView(row: AccountRow): AccountCredentialView {
 export function demoAccountMutation(form: UpstreamGrantForm, intent: AccountIntent, body: Record<string, unknown>, existing?: AccountRow): AccountCredentialView {
   const old = existing ? demoAccountView(existing) : null;
   if (intent === "edit" && old?.revokedAt && body.enabled === true) throw new Error("revoked accounts require fresh replacement credentials before enabling");
-  const replacing = intent !== "edit", now = new Date().toISOString();
+  const replacing = intent !== "edit", nowMs = Date.now(), now = new Date(nowMs).toISOString();
   const credentialFields = replacing ? Object.keys((body.credentials ?? {}) as object) : old?.credentialFields ?? [];
   const hasCredential = replacing ? Boolean(body.credential) || credentialFields.length > 0 : old?.hasCredential ?? false;
   const hasAccessToken = replacing ? Boolean(body.accessToken) : old?.hasAccessToken ?? false;
   const hasRefreshToken = replacing ? Boolean(body.refreshToken) : body.refreshToken === null ? false : old?.hasRefreshToken ?? false;
+  // Match the credential owner's metadata rule: only fresh primary material
+  // clears expiry errors/backoff; an expired deadline cannot be edited away.
+  const expiresAt = !replacing && old?.expiresAt && Date.parse(old.expiresAt) <= nowMs ? old.expiresAt : form.expiresAt || null;
+  const tokenResponseError = replacing ? null : old?.tokenResponseError ?? null;
+  const nextRefreshAttemptAt = replacing ? null : old?.nextRefreshAttemptAt ?? null;
+  const expired = Boolean(expiresAt && Date.parse(expiresAt) <= nowMs);
+  const credentialStatus = replacing ? "active" : !tokenResponseError && !hasRefreshToken && expired ? "reauth_required" : old?.credentialStatus ?? "active";
+  const expiryAvailable = !tokenResponseError && (!expired || hasRefreshToken && !(nextRefreshAttemptAt && Date.parse(nextRefreshAttemptAt) > nowMs));
   return {
     key: accountKey(form), scope: form.scope, scopeId: form.scopeId, tokenRef: form.tokenRef, version: 1, provider: form.provider, kind: form.kind,
     enabled: form.enabled, label: form.label || null, priority: Number(form.priority), weight: Number(form.weight), maintenance: { keepWarm: form.keepWarm },
     tokenType: replacing ? "Bearer" : old?.tokenType ?? "Bearer", scopes: replacing ? [] : old?.scopes ?? [],
-    expiresAt: form.expiresAt || null, accountId: form.accountId || null, subscription: replacing ? null : old?.subscription ?? null,
+    expiresAt, tokenResponseError, nextRefreshAttemptAt, accountId: form.accountId || null, subscription: replacing ? null : old?.subscription ?? null,
     createdAt: old?.createdAt ?? now, updatedAt: now, revokedAt: replacing ? null : old?.revokedAt ?? null,
-    hasCredential, credentialFields, hasAccessToken, hasRefreshToken, credentialStatus: replacing ? "active" : old?.credentialStatus ?? "active",
-    refreshConfigured: old?.refreshConfigured ?? false, usable: form.enabled && (hasCredential || hasAccessToken) && (replacing || old?.credentialStatus !== "reauth_required") && (replacing || !old?.revokedAt),
+    hasCredential, credentialFields, hasAccessToken, hasRefreshToken, credentialStatus,
+    refreshConfigured: old?.refreshConfigured ?? false, usable: form.enabled && (hasCredential || hasAccessToken) && credentialStatus !== "reauth_required" && (replacing || !old?.revokedAt) && expiryAvailable,
     credentialGeneration: (old?.credentialGeneration ?? 0) + 1, publication: "ready", refreshTokenUrl: null, clientIdConfig: null, clientSecretConfig: null,
   };
 }

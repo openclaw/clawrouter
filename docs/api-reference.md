@@ -461,6 +461,17 @@ leaves the active draft intact; reviewing it opens saved facts with blank secret
 An explicit operator decision resolves the card without claiming the old POST
 succeeded.
 
+Account details show the stored expiry, fixed renewal-error reason and recorded
+retry time separately from publication and quota observations. Server availability
+remains authoritative: a renewable expired token can still be available for a
+request-time renewal. An unreported expiry does not verify freshness, and a retry
+time does not promise renewal. Paused accounts do not renew automatically.
+Use **Refresh token** for a retryable renewal error with a configured refresh token.
+An account requiring reauthorization instead needs **Prepare credential replacement**
+or provider reconnect when offered. Clearing an expired deadline or editing metadata
+cannot restore credentials. A failed renewal may already have rotated credentials;
+check the exact account and deliberately review its current version before saving.
+
 Grant revocation accepts an optional JSON object with `kind`, `provider`, and
 `label` hints for legacy grants that have no credential owner. Existing owners
 ignore these hints and retain their canonical identity. Revocation stores a

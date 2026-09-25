@@ -162,6 +162,52 @@ test("a newer owner read shows facts but does not advance an unreviewed CAS base
   respond(f, 0, view(grant(), 10)); await write;
 });
 
+test("renewal facts survive stale inventories without adopting CAS or clearing a replacement draft", async () => {
+  const initial = grant("account_a", { enabled: false, usable: false }), f = await ready(false, [initial]);
+  f.render().upstream.startReplace(); change(f, { label: "dirty", accessToken: "synthetic-next" });
+  const renewed = view({ ...initial, expiresAt: null, tokenResponseError: "invalid_expiry", nextRefreshAttemptAt: "2030-01-01T00:00:00Z" }, 7, "pending");
+  f.owners.set(initial.key, renewed); await f.render().upstream.inspect();
+  hydrate(f, [initial]); hydrate(f, []);
+  assert.equal(f.render().upstream.selected.tokenResponseError, "invalid_expiry");
+  assert.equal(f.render().upstream.selected.nextRefreshAttemptAt, renewed.nextRefreshAttemptAt);
+  assert.equal(f.render().upstream.selected.publication, "pending");
+  assert.equal(f.render().upstream.generation, 1);
+  assert.equal(f.render().upstream.form.label, "dirty"); assert.equal(f.render().upstream.form.accessToken, "synthetic-next");
+  await act(f, "save"); await act(f, "pause"); assert.equal(f.writes.length, 0);
+  f.render().upstream.reviewCurrent();
+  const writing = act(f, "save");
+  assert.equal(body(f, 0).expectedCredentialGeneration, 7); assert.equal(body(f, 0).enabled, false);
+  for (const field of ["tokenResponseError", "nextRefreshAttemptAt", "credentialStatus", "usable"]) assert.equal(Object.hasOwn(body(f, 0), field), false);
+  assert.equal(f.render().upstream.selected.tokenResponseError, "invalid_expiry");
+  respond(f, 0, view({ ...initial, label: "dirty", tokenResponseError: null, nextRefreshAttemptAt: null }, 8, "pending")); await writing;
+  assert.equal(f.render().upstream.selected.tokenResponseError, null);
+  assert.equal(f.render().upstream.selected.nextRefreshAttemptAt, null);
+  assert.equal(f.render().upstream.selected.enabled, false); assert.equal(f.render().upstream.selected.publication, "pending");
+  assert.equal(f.render().upstream.form.accessToken, "");
+  finishMetadata(f); await flush(); hydrate(f, [initial]);
+  assert.equal(f.render().upstream.selected.credentialGeneration, 8);
+});
+
+for (const [status, code] of [[502, "grant_refresh_failed"], [401, "grant_reauthorization_required"]]) {
+  test(`${code} keeps the old edit until an exact read and deliberate review`, async () => {
+    const f = await ready(); f.render().upstream.startReplace(); change(f, { label: "dirty", accessToken: "synthetic-draft" });
+    const writing = act(f, "refresh");
+    const current = view(grant("account_a", { usable: false, credentialStatus: status === 401 ? "reauth_required" : "active",
+      tokenResponseError: status === 502 ? "invalid_expiry" : null, nextRefreshAttemptAt: "2030-01-01T00:00:00Z" }), 2);
+    f.owners.set(current.key, current); f.writes[0].reject(failure(status, code)); await writing;
+    assert.equal(f.render().upstream.uncertain, status === 502);
+    await f.render().upstream.inspect();
+    assert.equal(f.render().upstream.generation, 1); assert.equal(f.render().upstream.needsReview, true);
+    assert.equal(f.render().upstream.form.label, "dirty"); assert.equal(f.render().upstream.form.accessToken, "synthetic-draft");
+    assert.equal(f.render().upstream.selected.credentialStatus, current.credentialStatus);
+    assert.equal(f.render().upstream.selected.tokenResponseError, current.tokenResponseError);
+    await act(f, "save"); assert.equal(f.writes.length, 1);
+    f.render().upstream.reviewCurrent();
+    assert.equal(f.render().upstream.generation, 2); assert.equal(f.writes.length, 1);
+    assert.equal(f.render().upstream.form.accessToken, "synthetic-draft");
+  });
+}
+
 test("a second write supersedes metadata; predecessor cleanup cannot release it", async () => {
   const f = await ready(), first = act(f, "save");
   respond(f, 0, view(grant(), 2)); await first;

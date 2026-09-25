@@ -1,4 +1,4 @@
-import type { AccountRow } from "../account-credentials";
+import { accountCredentialPresentation } from "../account-credentials";
 import type { UpstreamAdminModel } from "../hooks/access/use-upstream-admin";
 import { GrantPoolRecovery } from "./grant-pool-recovery";
 import type { GrantPoolRecoveryModel } from "../hooks/access/use-grant-pool-recovery";
@@ -20,7 +20,6 @@ import type {
   CredentialForm,
   FusionConfig,
   FusionReadiness,
-  OutcomeTone,
   PolicyBinding,
   PolicyForm,
   ProviderRow,
@@ -256,6 +255,7 @@ export function UpstreamGrantPanel({ policies, providers, model, authorizationBu
   const quotaProbe = Boolean(selectedProvider?.quota?.probes?.some((probe) => probe.grantKinds?.includes(form.kind) && (!probe.requiresRefreshToken || selected?.hasRefreshToken)));
   const keepWarmDefault = (provider: ProviderRow | undefined, kind: UpstreamGrant["kind"]) => kind === "subscription" && provider?.auth?.grantTransports?.subscription?.maintenance?.keepWarm?.defaultEnabled === true;
   const facts = inspected ?? selected, observations = facts?.observations;
+  const credential = facts ? accountCredentialPresentation(facts) : null;
   const title = editing ? "Edit account details" : replacing ? "Replace account credentials" : "Add account";
   const saveLabel = editing ? "Save details" : mode === "legacy-replace" ? "Replace legacy account" : replacing ? "Replace credentials" : "Create account";
   return (
@@ -276,7 +276,7 @@ export function UpstreamGrantPanel({ policies, providers, model, authorizationBu
         </section>)}
         {!grants.length ? <InlineNote>Add an account with fresh provider credentials. Each account gets its own reference, so adding another account never replaces the first.</InlineNote> : null}
         <EntityTable columns={["account", "scope", "provider", "priority", "state"]} columnTemplate="minmax(220px, 1.4fr) minmax(150px, 1fr) minmax(130px, .8fr) 90px 110px"
-          rows={grants.map(grant => { const state = grantRoutingState(grant); return { id: grant.key, active: selected?.key === grant.key, onClick: () => model.edit(grant), cells: [<EntityName icon={ServerCog} title={grant.label || grant.tokenRef} subtitle={grant.kind.replace("_", " ")} />, `${grant.scope === "policies" ? "policy" : "tenant"} · ${grant.scopeId}`, grant.provider ?? "legacy", String(grant.priority), <Status label={state.label} tone={state.tone} />] }; })}
+          rows={grants.map(grant => { const state = accountCredentialPresentation(grant); return { id: grant.key, active: selected?.key === grant.key, onClick: () => model.edit(grant), cells: [<EntityName icon={ServerCog} title={grant.label || grant.tokenRef} subtitle={grant.kind.replace("_", " ")} />, `${grant.scope === "policies" ? "policy" : "tenant"} · ${grant.scopeId}`, grant.provider ?? "legacy", String(grant.priority), <Status label={state.label} tone={state.tone} />] }; })}
         />
       </section>
       <aside className="inspector">
@@ -290,14 +290,14 @@ export function UpstreamGrantPanel({ policies, providers, model, authorizationBu
             <strong>{model.uncertain ? "The last write has no confirmed receipt." : "Review the current account before another write."}</strong>
             <p>Your draft is preserved. Check status to read this exact account. A read cannot prove which attempt committed or acknowledge submitted secrets.</p>
             {model.canReview && facts?.source === "owner" ? <>
-              <dl className="facts"><dt>saved label</dt><dd>{facts.label || "none"}</dd><dt>saved state</dt><dd>{grantRoutingState(facts).label}</dd><dt>version</dt><dd>{facts.credentialGeneration} · {facts.publication}</dd></dl>
+              <dl className="facts"><dt>saved label</dt><dd>{facts.label || "none"}</dd><dt>saved state</dt><dd>{credential?.label}</dd><dt>version</dt><dd>{facts.credentialGeneration} · {facts.publication}</dd></dl>
               <button type="button" disabled={busy} onClick={() => model.reviewCurrent()}>Keep edits and use current version</button>
               <button type="button" className="buttonSecondary" disabled={busy} onClick={() => model.reviewCurrent(true)}>Use saved values (discard draft)</button>
               <p>Keeping a new-account draft switches it to explicit credential replacement; it does not replay creation.</p>
             </> : null}
           </section> : null}
           {inspection === "legacy" && selected ? <InlineNote>This legacy account has no readable initialized owner. You can explicitly replace it with fresh primary credentials using the legacy recovery operation, or revoke it. No automatic fallback will run.</InlineNote> : null}
-          {replacing ? <InlineNote><strong>Whole credential replacement.</strong> Supply a fresh primary secret. An omitted refresh token, expiry, account id, scopes, subscription metadata, or refresh override is cleared. Routing settings stay as shown. A paused account stays paused unless you enable it.</InlineNote> : editing ? <InlineNote>Save details keeps stored credentials and unchanged fields. Clearing an editable text field explicitly removes that value. Use Replace credentials to reconnect with a fresh secret.</InlineNote> : null}
+          {replacing ? <InlineNote><strong>Whole credential replacement.</strong> Supply a fresh primary secret. An omitted refresh token, expiry, account id, scopes, subscription metadata, or refresh override is cleared. Routing settings stay as shown. A paused account stays paused unless you enable it.</InlineNote> : editing ? <InlineNote>Save details keeps stored credentials and unchanged fields. Clearing text removes its value, except an already expired deadline. Metadata edits cannot restore expired credentials or clear a renewal error. Use Replace credentials to reconnect with a fresh secret.</InlineNote> : null}
           {selectedProvider?.id === "openai" && !authorizationKind ? <InlineNote><strong>OpenAI subscription Connect is unavailable in the bundled provider.</strong> Use an OpenAI Platform API key, or sign in to Codex directly for subscription access. A stored token is not provider approval. <a href="https://github.com/openclaw/clawrouter/blob/main/docs/openai-subscriptions.md" target="_blank" rel="noreferrer">OpenAI setup and subscription limits</a></InlineNote> : null}
           <div className="formGrid compact">
             <label><span>provider</span><select value={form.provider} disabled={model.identityLocked} onChange={event => { const provider = providers.find(item => item.id === event.target.value); const kind = provider?.auth?.authorization?.grantKind ?? form.kind; setForm({ ...form, provider: event.target.value, kind, credential: "", credentialBundle: "", accessToken: "", refreshToken: "", keepWarm: keepWarmDefault(provider, kind) }); }}>{!selectedProvider ? <option value={form.provider}>{form.provider ? `${form.provider} (unavailable)` : "Select a provider"}</option> : null}{providers.map(provider => <option key={provider.id} value={provider.id}>{provider.display_name}</option>)}</select></label>
@@ -320,7 +320,11 @@ export function UpstreamGrantPanel({ policies, providers, model, authorizationBu
             <label><span>expires at</span><input value={form.expiresAt} onChange={event => setForm({ ...form, expiresAt: event.target.value })} placeholder="ISO-8601 or blank" /></label>
             {form.kind === "subscription" ? <label className="full"><span>keep warm</span><select value={form.keepWarm ? "enabled" : "disabled"} onChange={event => setForm({ ...form, keepWarm: event.target.value === "enabled" })}><option value="enabled">enabled · consumes provider capacity</option><option value="disabled">disabled · quota polling only</option></select></label> : null}
           </div><InlineNote>Lower priority numbers are preferred. Weight applies within the chosen tier. Secrets are write-only; setup tokens use the access-token field with no refresh token. Keep-warm may consume provider capacity.</InlineNote></details>
-          {facts ? <dl className="facts"><dt>primary secret</dt><dd>{facts.hasCredential || facts.hasAccessToken || facts.credentialFields.length ? "stored" : "missing"}</dd><dt>refresh token</dt><dd>{facts.hasRefreshToken ? "stored" : "none"}</dd><dt>credential state</dt><dd>{grantRoutingState(facts).label}</dd><dt>publication</dt><dd>{facts.source === "owner" ? facts.publication : "not checked"}</dd><dt>owner version</dt><dd>{facts.source === "owner" ? facts.credentialGeneration : "not checked"}</dd></dl> : null}
+          {facts && credential ? <section aria-label="account credential facts">
+            <dl className="facts"><dt>primary secret</dt><dd>{facts.hasCredential || facts.hasAccessToken || facts.credentialFields.length ? "stored" : "missing"}</dd><dt>refresh token</dt><dd>{facts.hasRefreshToken ? "stored" : "none"}</dd><dt>credential state</dt><dd>{credential.label}</dd><dt>server availability</dt><dd>{facts.usable ? "usable · request-time checks apply" : "unavailable"}</dd><dt>stored expiry</dt><dd>{credential.expiry}</dd><dt>renewal response</dt><dd>{facts.tokenResponseError === "invalid_expiry" ? "invalid token expiry" : "no expiry error reported"}</dd><dt>recorded retry time</dt><dd>{facts.nextRefreshAttemptAt || "not reported"}</dd><dt>publication</dt><dd>{facts.source === "owner" ? facts.publication : "not checked"}</dd><dt>owner version</dt><dd>{facts.source === "owner" ? facts.credentialGeneration : "not checked"}</dd></dl>
+            {credential.guidance ? <InlineNote>{credential.guidance}</InlineNote> : null}
+            {facts.nextRefreshAttemptAt ? <InlineNote>The recorded retry time does not mean renewal is running or will succeed. Paused accounts do not renew automatically. Check account status for current facts.</InlineNote> : null}
+          </section> : null}
           {observations ? <details><summary>Last reported observations</summary><InlineNote>Reporting may lag and may describe earlier credentials. It does not verify this replacement or its current quota.</InlineNote><dl className="facts"><dt>selections</dt><dd>{observations.selectedCount ?? "unknown"}{observations.lastSelectedAt ? ` · last ${quotaTimestamp(observations.lastSelectedAt)}` : ""}</dd><dt>provider signal</dt><dd>{observations.lastProviderSignal ? `${observations.lastProviderSignal.replace("_", " ")} · ${quotaTimestamp(observations.quotaObservedAt)}` : "not observed"}</dd><dt>quota windows</dt><dd>{observations.quotaWindows?.length ? observations.quotaWindows.map(quotaWindowLabel).join("; ") : "not reported"}</dd></dl></details> : null}
           <div className="inspectorActions">
             {model.identityLocked ? <button type="button" className="buttonSecondary" disabled={busy} onClick={() => void model.inspect()}>Check account status</button> : null}
@@ -329,7 +333,7 @@ export function UpstreamGrantPanel({ policies, providers, model, authorizationBu
             <button type="submit" disabled={saveDisabled || !form.scopeId || !form.provider}><ShieldCheck className="buttonIcon" aria-hidden="true" /><span>{saveLabel}</span></button>
             {selected ? <button type="button" className="buttonSecondary" disabled={mutationDisabled || !strictReady || Boolean(selected.revokedAt)} onClick={() => void model.pause(selected)}>{selected.enabled ? "Pause account" : "Resume account"}</button> : null}
             {authorizationKind ? <button type="button" className="buttonSecondary" disabled={mutationDisabled || authorizationBusy || model.needsReview || !form.scopeId || !form.provider} onClick={() => void model.authorize()}><LogIn className="buttonIcon" aria-hidden="true" /><span>{selected ? "Reconnect" : "Connect"} with provider</span></button> : null}
-            {selected?.refreshConfigured && selected.hasRefreshToken ? <button type="button" className="buttonSecondary" disabled={mutationDisabled || !selected.enabled} onClick={() => void model.refresh(selected)}><RefreshCw className="buttonIcon" aria-hidden="true" /><span>Refresh token</span></button> : null}
+            {selected?.refreshConfigured && selected.hasRefreshToken ? <button type="button" className="buttonSecondary" disabled={mutationDisabled || !selected.enabled || selected.credentialStatus === "reauth_required"} onClick={() => void model.refresh(selected)}><RefreshCw className="buttonIcon" aria-hidden="true" /><span>Refresh token</span></button> : null}
             {selected && quotaProbe ? <button type="button" className="buttonSecondary" disabled={mutationDisabled || !selected.enabled} onClick={() => void model.refreshQuota(selected)}><RefreshCw className="buttonIcon" aria-hidden="true" /><span>Refresh quota</span></button> : null}
             {selected ? <button type="button" className="buttonDanger" disabled={mutationDisabled || Boolean(selected.revokedAt)} onClick={() => void model.revoke(selected)}><CircleSlash2 className="buttonIcon" aria-hidden="true" /><span>Revoke</span></button> : null}
           </div>
@@ -337,14 +341,6 @@ export function UpstreamGrantPanel({ policies, providers, model, authorizationBu
       </aside>
     </div>
   );
-}
-
-function grantRoutingState(grant: AccountRow): { label: string; tone: OutcomeTone } {
-  if (grant.revokedAt) return { label: "revoked", tone: "revoked" };
-  if (!grant.enabled) return { label: "paused", tone: "neutral" };
-  if (grant.credentialStatus === "reauth_required") return { label: "reconnect required", tone: "revoked" };
-  if (!grant.usable) return { label: "blocked", tone: "revoked" };
-  return { label: "usable", tone: "active" };
 }
 
 function quotaTimestamp(value: string | null | undefined): string {
