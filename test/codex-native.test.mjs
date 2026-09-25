@@ -12,28 +12,46 @@ import { buildCodexCatalog } from "../scripts/codex-catalog.mjs";
 
 const { providerById } = await import("../worker/providers.ts");
 
+function nativeFixtureCatalog(provider, bundled) {
+  const nativeBaseUrl = `/v1/native/${provider.id}`;
+  const routes = provider.endpoints.filter((endpoint) => endpoint.native_proxy).map((endpoint) => ({ endpoint: endpoint.id, path: endpoint.path, methods: endpoint.methods, requestFormat: endpoint.request_format, responseFormat: endpoint.response_format, streaming: endpoint.streaming }));
+  // These responders implement HTTP Responses only. Real Worker eligibility is
+  // exercised separately through its issued-key catalog in codex-router.test.
+  const offers = routes.filter((route) => route.requestFormat === "openai.responses").flatMap((route) => provider.models.filter((model) => model.capabilities.includes("llm.responses")).map((model) => ({ endpoint: route.endpoint, modelId: model.id, transport: "http", routeKind: "native", route: `${nativeBaseUrl}${route.path}`, policyId: "fixture-policy", policyGeneration: "fixture-generation", eligible: true, affordability: "request-dependent" })));
+  return buildCodexCatalog({ version: "clawrouter.client-catalog.v1", scope: { authType: "proxy_key", credentialId: "fixture-credential", principalId: null }, providers: [{ id: provider.id, allowed: true, nativeBaseUrl, policies: ["fixture-policy"], routes, models: provider.models, offers }] }, bundled, provider.id).catalog;
+}
+
 // Opt-in proof uses installed official binaries; normal CI needs no Codex account.
 // These isolated metadata/auth fixtures use manifest rows. The workerd fixture
 // separately exercises the router's authenticated catalog and dispatch.
 const binary = process.env.CLAWROUTER_CODEX_BINARY;
 const producer = process.env.CLAWROUTER_CODEX_CATALOG_BINARY ?? binary;
+const nativeVersion = binary ? execFileSync(binary, ["--version"], { env: { PATH: process.env.PATH }, encoding: "utf8", timeout: 20_000, maxBuffer: 1024 }).trim() : null;
+// The pinned 0.156.1 protocol adds workspace discovery to account/read.
+const hasWorkspaceRouting = nativeVersion === "codex-cli 0.156.1";
 const routerKey = "synthetic-router-key";
 const model = "gpt-6-astra";
 
 for (const mode of ["key-only", "hybrid", "hybrid-missing-key"]) {
   test(`native Codex ${mode}: official metadata and provider-scoped Fast auth`, { skip: !binary, timeout: 60_000 }, async (t) => {
     const home = await mkdtemp(join(tmpdir(), "clawrouter-codex-native-"));
-    const requests = [];
+    const requests = [], discoveries = [];
     const server = createServer(async (request, response) => {
       let text = "";
       for await (const chunk of request) text += chunk;
+      if (request.method === "GET" && request.url === "/control/api/codex/accounts/check") {
+        discoveries.push({ authorization: request.headers.authorization, account: request.headers["chatgpt-account-id"] });
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ accounts: [{ id: "fixture-account", workspace_backend_origin: "https://workspace.example", account_routing_override: "NO_CONSTRAINT" }] }));
+        return;
+      }
       if (request.url !== "/v1/native/openai/v1/responses") {
         response.writeHead(404, { "content-type": "application/json" });
         response.end('{"error":{"message":"fixture route not found"}}');
         return;
       }
       const body = JSON.parse(text);
-      requests.push({ body, authorization: request.headers.authorization, account: request.headers["chatgpt-account-id"], lite: request.headers["x-openai-internal-codex-responses-lite"] });
+      requests.push({ body, url: request.url, authorization: request.headers.authorization, account: request.headers["chatgpt-account-id"], lite: request.headers["x-openai-internal-codex-responses-lite"] });
       const message = { id: "fixture_message", type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "fixture complete", annotations: [] }] };
       const result = { id: "fixture_response", object: "response", status: "completed", model, service_tier: "priority", output: [message], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } };
       response.writeHead(200, { "content-type": "text/event-stream" });
@@ -53,9 +71,11 @@ for (const mode of ["key-only", "hybrid", "hybrid-missing-key"]) {
       if (mode !== "hybrid-missing-key") env.CLAWROUTER_API_KEY = routerKey;
       const bundled = JSON.parse(execFileSync(producer, ["debug", "models", "--bundled"], { encoding: "utf8", env, maxBuffer: 16 * 1024 * 1024, timeout: 20_000 }));
       const provider = providerById("openai");
-      const routes = provider.endpoints.filter((endpoint) => endpoint.native_proxy).map((endpoint) => ({ path: endpoint.path, methods: endpoint.methods, requestFormat: endpoint.request_format, responseFormat: endpoint.response_format, streaming: endpoint.streaming }));
-      const catalog = buildCodexCatalog({ providers: [{ id: provider.id, allowed: true, executable: true, nativeBaseUrl: "/v1/native/openai", routes, models: provider.models }] }, bundled, provider.id).catalog;
-      for (const slug of [model, "gpt-5.6", "gpt-5.6-sol", "gpt-5.6-terra", "gpt-5.6-luna"]) assert.ok(catalog.models.some((entry) => entry.slug === slug), `compiled native catalog must include ${slug}`);
+      const catalog = nativeFixtureCatalog(provider, bundled);
+      const official = new Set(bundled.models.map((entry) => entry.slug));
+      const expected = provider.models.filter((entry) => entry.capabilities.includes("llm.responses") && official.has(entry.codexModel ?? entry.upstream)).map((entry) => entry.upstream);
+      assert.deepEqual(catalog.models.map((entry) => entry.slug), expected);
+      assert.ok(catalog.models.some((entry) => entry.slug === model), `compiled native catalog must include ${model}`);
       await writeFile(join(home, "models.json"), JSON.stringify(catalog));
       await writeFile(join(home, "config.toml"), `model = "${model}"\nmodel_provider = "fixture"\nmodel_catalog_json = ${JSON.stringify(join(home, "models.json"))}\nservice_tier = "priority"\nweb_search = "disabled"\napproval_policy = "never"\nsandbox_mode = "read-only"\ncli_auth_credentials_store = "file"\nchatgpt_base_url = "${origin}/control"\n[model_providers.fixture]\nname = "Fixture"\nbase_url = "${origin}/v1/native/openai/v1"\nenv_key = "CLAWROUTER_API_KEY"\nwire_api = "responses"\nrequires_openai_auth = ${mode !== "key-only"}\nsupports_websockets = false\n`);
       if (mode !== "key-only") {
@@ -69,6 +89,9 @@ for (const mode of ["key-only", "hybrid", "hybrid-missing-key"]) {
       const account = await client.rpc("account/read", { refreshToken: false });
       assert.equal(account.requiresOpenaiAuth, mode !== "key-only");
       assert.equal(account.account?.type ?? null, mode === "key-only" ? null : "chatgpt");
+      if (hasWorkspaceRouting) {
+        assert.deepEqual(account.workspaceRouting, mode === "key-only" ? null : { chatgptAccountId: "fixture-account", backendOrigin: "https://workspace.example", accountRoutingOverride: "NO_CONSTRAINT" });
+      } else assert.equal(Object.hasOwn(account, "workspaceRouting"), false);
       const models = await client.rpc("model/list", {});
       assert.ok(models.data.some((item) => item.model === model));
       const thread = await client.rpc("thread/start", { model, modelProvider: "fixture", cwd: home, ephemeral: true, approvalPolicy: "never", sandbox: "read-only" });
@@ -84,6 +107,7 @@ for (const mode of ["key-only", "hybrid", "hybrid-missing-key"]) {
       } else {
         assert.equal(completed.params.turn.status, "completed");
         assert.equal(requests.length, 1);
+        assert.equal(requests[0].url, "/v1/native/openai/v1/responses");
         assert.equal(requests[0].authorization, `Bearer ${routerKey}`);
         assert.equal(requests[0].account, undefined);
         assert.equal(requests[0].body.model, model);
@@ -93,6 +117,8 @@ for (const mode of ["key-only", "hybrid", "hybrid-missing-key"]) {
         assert.equal(requests[0].body.instructions, undefined);
         assert.equal(requests[0].body.input[0].type, "additional_tools");
       }
+      assert.equal(discoveries.length > 0, hasWorkspaceRouting && mode !== "key-only");
+      assert.ok(discoveries.every(({ authorization, account }) => authorization === "Bearer synthetic-chatgpt-token" && account === "fixture-account"));
       assert.equal(/fallback model metadata|model metadata.*not found/i.test(client.stderr() + JSON.stringify(client.notifications)), false, "native client used fallback model metadata");
     } finally {
       await client?.close();
@@ -162,9 +188,7 @@ for (const decision of ["allow", "deny"]) {
       const origin = `http://127.0.0.1:${server.address().port}`;
       const env = { PATH: process.env.PATH, HOME: home, CODEX_HOME: home, RUST_LOG: "warn", CLAWROUTER_API_KEY: routerKey };
       const bundled = JSON.parse(execFileSync(producer, ["debug", "models", "--bundled"], { encoding: "utf8", env, maxBuffer: 16 * 1024 * 1024, timeout: 20_000 }));
-      const provider = providerById("openai");
-      const routes = provider.endpoints.filter(({ native_proxy }) => native_proxy).map(endpoint => ({ path: endpoint.path, methods: endpoint.methods, requestFormat: endpoint.request_format, responseFormat: endpoint.response_format, streaming: endpoint.streaming }));
-      const catalog = buildCodexCatalog({ providers: [{ id: provider.id, allowed: true, executable: true, nativeBaseUrl: "/v1/native/openai", routes, models: provider.models }] }, bundled, provider.id).catalog;
+      const catalog = nativeFixtureCatalog(providerById("openai"), bundled);
       await writeFile(join(home, "models.json"), JSON.stringify(catalog));
       await writeFile(join(home, "config.toml"), `model = "${model}"
 model_provider = "fixture"

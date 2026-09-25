@@ -12,6 +12,8 @@
 
 - Keep retained-request inspection on the latest selection, cancel replaced or closed reads, and prevent late replies from reopening or overwriting the panel.
 - Record known no-charge outcomes with an explicit usage basis across HTTP and WebSockets, while preserving fixed tariffs, retained estimates, unavailable prices, and all budget amounts.
+- Qualify Codex catalog models with the issued key's exact native HTTP Responses offers, and enable provider-wide WebSockets only when every exported model has a matching eligible offer. Preserve the selected model and previous configuration when eligibility changes.
+
 - Add explicit Codex Desktop root setup with coherent restoration of prior routing settings, preserved authentication and user preferences, and clear API-key Fast and environment-loading limits.
 
 - Keep policy selection separate from existing binding edits, while new bindings still default to the selected policy.

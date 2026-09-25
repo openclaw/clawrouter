@@ -39,7 +39,7 @@ for (const transport of ["http", "websocket"]) {
       const discovered = await dispatch("/v1/catalog");
       assert.equal(discovered.status, 200);
       const catalog = await discovered.json();
-      const env = await configureNativeClient(home, origin, catalog, transport);
+      const { env, supportsWebsockets } = await configureNativeClient(home, origin, catalog, transport);
       const toolCalls = [];
       let thread;
       async function startClient(apiKey) {
@@ -52,6 +52,10 @@ for (const transport of ["http", "websocket"]) {
         });
         await client.rpc("initialize", { clientInfo: { name: "clawrouter_fixture", version: "1.0.0" }, capabilities: { experimentalApi: true } });
         client.child.stdin.write('{"method":"initialized"}\n');
+        const config = (await client.rpc("config/read", { includeLayers: false })).config;
+        assert.equal(config.model, model);
+        assert.equal(config.model_provider, "fixture");
+        assert.equal(config.model_providers.fixture.supports_websockets, supportsWebsockets);
         assert.equal((await client.rpc("account/read", { refreshToken: false })).requiresOpenaiAuth, false);
         assert.ok((await client.rpc("model/list", {})).data.some((item) => item.model === model));
         thread = await client.rpc("thread/start", { model, modelProvider: "fixture", cwd: home, ephemeral: true, approvalPolicy: "never", sandbox: "read-only", dynamicTools: [{ type: "function", name: "fixture_echo", description: "Echo synthetic fixture text.", inputSchema: { type: "object", properties: { message: { type: "string" } }, required: ["message"], additionalProperties: false } }] });
@@ -396,7 +400,7 @@ for (const scenario of ["request_retry", "stream_retry", "interrupt"]) {
       const origin = await mf.ready;
       const dispatch = path => fetch(new URL(path, origin), { headers: { authorization: `Bearer ${key}` }, signal: AbortSignal.timeout(10_000) });
       const discovered = await dispatch("/v1/catalog"); assert.equal(discovered.status, 200);
-      const env = await configureNativeClient(home, origin, await discovered.json(), "http", true);
+      const { env } = await configureNativeClient(home, origin, await discovered.json(), "http", true);
       client = nativeCodexClient(t, binary, home, env);
       await client.rpc("initialize", { clientInfo: { name: "clawrouter_fixture", version: "1.0.0" }, capabilities: { experimentalApi: true } });
       client.child.stdin.write('{"method":"initialized"}\n');
@@ -532,8 +536,18 @@ async function configureNativeClient(home, origin, catalog, transport, useDefaul
   const env = { PATH: process.env.PATH, HOME: home, CODEX_HOME: home, RUST_LOG: "warn", CLAWROUTER_API_KEY: key };
   const bundled = JSON.parse(execFileSync(producer, ["debug", "models", "--bundled"], { env, encoding: "utf8", maxBuffer: 16 * 1024 * 1024, timeout: 20_000, stdio: ["ignore", "pipe", "pipe"] }));
   // Export the actual credential's discovery projection, never an admin union.
+  assert.deepEqual(catalog.scope, { authType: "proxy_key", credentialId: "fixture", principalId: null });
   const exported = buildCodexCatalog(catalog, bundled, "openai");
   assert.ok(exported.catalog.models.some(({ slug }) => slug === model));
+  const offers = catalog.providers.find(({ id }) => id === "openai").offers;
+  for (const { route } of exported.mappings) for (const mode of ["http", "websocket"]) {
+    assert.ok(offers.some((offer) => offer.modelId === route && offer.endpoint === "responses" && offer.transport === mode && offer.routeKind === "native" && offer.route === "/v1/native/openai/v1/responses" && offer.policyId === "fixture" && offer.policyGeneration === "g1" && offer.eligible));
+  }
+  assert.equal(exported.supportsWebsockets, true);
+  // The HTTP run explicitly disables an available transport as a control.
+  // The WS run loads the real key catalog's derived provider-wide flag;
+  // synthetic per-model offer loss is covered by connect/Desktop tests.
+  const supportsWebsockets = transport === "websocket" && exported.supportsWebsockets;
   await writeFile(join(home, "models.json"), JSON.stringify(exported.catalog));
   await writeFile(join(home, "config.toml"), `model = "${model}"
 model_provider = "fixture"
@@ -550,9 +564,9 @@ base_url = "${new URL(exported.nativeBasePath, origin)}"
 env_key = "CLAWROUTER_API_KEY"
 wire_api = "responses"
 requires_openai_auth = false
-supports_websockets = ${transport === "websocket"}
+supports_websockets = ${supportsWebsockets}
 ${useDefaultRetries ? "" : "request_max_retries = 0\nstream_max_retries = 0\nstream_idle_timeout_ms = 10000\n"}`);
-  return env;
+  return { env, supportsWebsockets };
 }
 
 async function until(predicate, timeoutMs = 30_000) {
