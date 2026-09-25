@@ -3,6 +3,8 @@ id: google-gemini
 displayName: Google Gemini
 status: stable
 class: rest_json
+modelDiscovery:
+  adapter: google.models
 service:
   platform: google
   kind: model_provider

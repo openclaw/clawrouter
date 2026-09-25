@@ -71,6 +71,12 @@
       "required": ["default"],
       "additionalProperties": { "type": "string" }
     },
+    "modelDiscovery": {
+      "type": "object",
+      "required": ["adapter"],
+      "additionalProperties": false,
+      "properties": { "adapter": { "enum": ["openai.models", "google.models"] } }
+    },
     "routing": {
       "type": "object",
       "additionalProperties": false,

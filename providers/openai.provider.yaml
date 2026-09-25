@@ -3,6 +3,8 @@ id: openai
 displayName: OpenAI
 status: stable
 class: openai_compatible
+modelDiscovery:
+  adapter: openai.models
 service:
   platform: openai
   kind: model_provider

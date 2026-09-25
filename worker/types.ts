@@ -1,4 +1,4 @@
-import type { ClientCatalogModel, ModelPricing } from "../shared/contracts";
+import type { ClientCatalogModel, ModelDiscoveryAdapter, ModelPricing } from "../shared/contracts";
 export type { ModelRequestParameters, ProviderReasoningEffort } from "../shared/model-request-parameters";
 
 export type ProxyRequestBody = Record<string, unknown> | Record<string, unknown>[];
@@ -18,6 +18,7 @@ export interface CompiledProvider {
   capabilities: Array<{ id: string; endpoint: string; methods: string[] }>;
   endpoints: CompiledEndpoint[]; models: CompiledModel[]; billing: { meter: string | null; dimensions: string[]; counters: Array<{ name: string; source: string; unit?: string | null }> }; meter: string | null;
   quota: CompiledQuotaConfig;
+  modelDiscovery?: { adapter: ModelDiscoveryAdapter };
 }
 
 export type GrantQuotaKind = "requests" | "tokens" | "input_tokens" | "output_tokens" | "credits" | "subscription" | "generic";

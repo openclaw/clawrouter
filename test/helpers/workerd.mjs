@@ -13,7 +13,7 @@ export async function startWorkerdFixture(temporary, routerScript, upstreamScrip
   return startBundledWorkerdFixture(temporary, bundle.outputFiles[0].text, upstreamScript, options);
 }
 
-export async function startBundledWorkerdFixture(temporary, routerScript, upstreamScript, { activate = true, persistencePath } = {}) {
+export async function startBundledWorkerdFixture(temporary, routerScript, upstreamScript, { activate = true, persistencePath, upstreamDurableObjects } = {}) {
   const adminToken = "fixture-activation-admin";
   const mf = new Miniflare(convertV4MiniflareOptions({ resourceTmpPath: temporary, resourcePersistencePath: persistencePath, workers: [{
     name: "router", modules: true, script: routerScript, compatibilityDate: "2026-06-05", compatibilityFlags: ["enable_request_signal"],
@@ -22,7 +22,7 @@ export async function startBundledWorkerdFixture(temporary, routerScript, upstre
     durableObjects: Object.fromEntries([["ACCESS_CONTROL", "PolicyBindingIndexObject"], ["BUDGET_LEDGER", "BudgetLedgerObject"], ["USAGE_LEDGER", "UsageLedgerObject"], ["GRANT_CREDENTIALS", "GrantCredentialObject"]].map(([binding, className]) => [binding, { className, useSQLite: true }])),
     queueProducers: { USAGE_QUEUE: "usage" }, queueConsumers: { usage: { maxBatchSize: 1, maxBatchTimeout: 0 } },
     outboundService: "upstream",
-  }, { name: "upstream", modules: true, script: upstreamScript, compatibilityDate: "2026-06-05", compatibilityFlags: ["enable_request_signal"] }] }));
+  }, { name: "upstream", modules: true, script: upstreamScript, durableObjects: upstreamDurableObjects, compatibilityDate: "2026-06-05", compatibilityFlags: ["enable_request_signal"] }] }));
   try {
     await mf.ready;
     // This invocation created these isolated storage bindings. Exercise the

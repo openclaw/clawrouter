@@ -14,7 +14,7 @@ import { correlationRequestId, logCorrelationError } from "./correlation.ts";
 import { currentGrantRuntime, grantAvailable, grantPriority, grantRoutingPolicy, grantRuntimeStates, grantSelectionStats, grantWeight, validCredentialBundle, validGrantSegment } from "./grant-selection";
 import { assertFusionModels, loadFusionConfig, storeFusionConfig } from "./fusion-config";
 import { fusionReadiness } from "./fusion-readiness";
-import { accountCredentialResponse, hasPrimaryCredential, putGrantCredentials, revokeGrantCredentials, type GrantRevokeMetadata } from "./grant-credentials.ts";
+import { accountCredentialResponse, accountModelInventoryResponse, hasPrimaryCredential, putGrantCredentials, revokeGrantCredentials, type GrantRevokeMetadata } from "./grant-credentials.ts";
 import { normalizeFusionConfig } from "./fusion";
 import { budgetStatus as policyBudgetStatus, providerBudgetStatus, usageSnapshots } from "./ledgers";
 import { startOAuth } from "./oauth";
@@ -342,10 +342,11 @@ async function putConnection(request: Request, env: Env, encodedId: string): Pro
 }
 
 async function upstreamGrantMutation(request: Request, env: Env, rest: string): Promise<Response> {
-  const parts = rest.split("/").map(decodePathSegment), action = parts.length === 4 && ["replace", "revoke", "refresh", "quota-refresh", "authorize"].includes(parts.at(-1) ?? "") ? parts.pop() : null;
+  const parts = rest.split("/").map(decodePathSegment), action = parts.length === 4 && ["replace", "revoke", "refresh", "quota-refresh", "authorize", "models"].includes(parts.at(-1) ?? "") ? parts.pop() : null;
   if (parts.length !== 3 || !["policies", "tenants"].includes(parts[0])) throw new HttpError(400, "invalid_upstream_grant_route", "invalid upstream grant route");
   const [scope, scopeId, tokenRef] = parts, key = scope === "policies" ? `oauth/${scopeId}/${tokenRef}` : `oauth/tenants/${scopeId}/${tokenRef}`;
   if (!validGrantSegment(scopeId) || !validGrantSegment(tokenRef) || scope === "policies" && scopeId === "tenants") throw new HttpError(400, "invalid_upstream_grant_route", "scope id and token reference must be valid single key segments");
+  if (action === "models" && ["GET", "POST"].includes(request.method)) return accountModelInventoryResponse(env, key, request.method === "POST", request.method === "POST" ? await readJson<unknown>(request) : undefined);
   if (!action && request.method === "GET") return accountCredentialResponse(env, key, "read");
   if (!action && ["POST", "PATCH"].includes(request.method) || action === "replace" && request.method === "POST") {
     return accountCredentialResponse(env, key, action === "replace" ? "replace" : request.method === "POST" ? "create" : "patch", await readJson<unknown>(request));

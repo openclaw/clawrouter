@@ -9,6 +9,8 @@ import { applyTemplateHeaders, resolveTemplate } from "./provider-templates.ts";
 import type { GrantPoolReadiness } from "../shared/contracts.ts";
 import { accountCredentialView, assertNewAccountRef, grantIntentBody, strictCredentialRecord, type GrantCredentialIntent } from "./grant-credential-intents.ts";
 import { assertTokenUsable, REFRESH_MARGIN_MS, tokenDenied, tokenExpired, tokenResponseExpiry } from "./grant-expiry.ts";
+import { captureModelDiscovery, completeModelDiscovery, inspectModelInventory, modelDiscoveryAuthority } from "./grant-model-inventory.ts";
+import { discoverModels } from "./model-discovery.ts";
 
 import { CREDENTIAL_INPUT_FIELDS, normalizeGrant, secretlessGrant, canonicalRecord, nextCredentialGeneration, ownerMetadata, metadataGrant, attachmentStatus, revokedRecord, hasRawCredential, credentialRecord, updatedCredentialRecord, credentialProjection, materializedGrant, hasPrimaryCredential, stripLegacySecrets, isRefreshAuthenticationParameter, boundedSecret, type CredentialRecord, type CredentialProjection } from "./grant-credential-record.ts";
 export { secretlessGrant, hasRawCredential, hasPrimaryCredential, type CredentialProjection } from "./grant-credential-record.ts";
@@ -65,26 +67,68 @@ export class GrantCredentialObject implements DurableObject {
   }
 
   fetch(request: Request): Promise<Response> {
-    const operation = this.tail.then(() => this.handle(request));
+    if (request.method === "POST" && new URL(request.url).pathname === "/models/refresh") return this.refreshModels(request);
+    return this.serialize(() => this.handle(request));
+  }
+
+  alarm(): Promise<void> {
+    return this.serialize(() => this.maintain());
+  }
+
+  private serialize<T>(action: () => Promise<T>): Promise<T> {
+    const operation = this.tail.then(action);
     this.tail = operation.then(() => undefined, () => undefined);
     return operation;
   }
 
-  alarm(): Promise<void> {
-    const operation = this.tail.then(() => this.maintain());
-    this.tail = operation.then(() => undefined, () => undefined);
-    return operation;
+  private async readCanonical(key: string): Promise<CredentialRecord> {
+    const record = await this.state.storage.get<CredentialRecord>("credential");
+    if (!record) throw new HttpError(404, "grant_credential_missing", "account owner is not initialized; use explicit replacement or revocation for legacy grants");
+    if (!canonicalRecord(record) || record.grantKey !== key) throw new HttpError(409, "grant_owner_initialization_required", "account owner requires explicit replacement or revocation before strict mutations");
+    return record;
+  }
+
+  private async refreshModels(request: Request): Promise<Response> {
+    try {
+      const { key, body } = await readJson<{ key: string; body: unknown }>(request);
+      const capture = await this.serialize(async () => {
+        const record = await this.readCanonical(key);
+        return captureModelDiscovery(this.state.storage, record, snapshot.providers.find(provider => provider.id === record.providerId), this.env, body);
+      });
+      const result = await discoverModels(capture.attempt.adapter, async (url, init) => {
+        const { response } = await this.serialize(async () => {
+          const record = await this.state.storage.get<CredentialRecord>("credential");
+          const provider = snapshot.providers.find(provider => provider.id === record?.providerId);
+          const { sourceChanged } = modelDiscoveryAuthority(this.state.storage, capture, record, provider);
+          if (sourceChanged || init.signal?.aborted) return { response: null };
+          // Admission and fetch initiation share the owner queue. Wrap the
+          // promise so revocation never waits for provider headers or bodies.
+          return { response: fetch(url, { ...init, headers: capture.headers }) };
+        });
+        return response;
+      });
+      return await this.serialize(async () => {
+        const record = await this.state.storage.get<CredentialRecord>("credential");
+        const provider = snapshot.providers.find(provider => provider.id === record?.providerId);
+        completeModelDiscovery(this.state.storage, capture, record, provider, result);
+        if (!record || !canonicalRecord(record) || record.grantKey !== key) throw new HttpError(409, "grant_owner_initialization_required", "account owner changed during discovery");
+        const view = inspectModelInventory(this.state.storage, record, provider);
+        return json(view, view.attempt?.error === "source_changed" ? 409 : view.attempt?.status === "failed" ? 502 : 200);
+      });
+    } catch (error) {
+      if (error instanceof HttpError) return errorResponse(error.code, error.message, error.status);
+      return errorResponse("model_discovery_failed", "model discovery failed", 500);
+    }
   }
 
   private async handle(request: Request): Promise<Response> {
     const path = new URL(request.url).pathname;
     if (request.method !== "POST") return errorResponse("route_not_found", "route not found", 404);
     try {
-      if (path === "/read") {
+      if (path === "/read" || path === "/models/read") {
         const { key } = await readJson<{ key: string }>(request);
-        const record = await this.state.storage.get<CredentialRecord>("credential");
-        if (!record) throw new HttpError(404, "grant_credential_missing", "account owner is not initialized; use explicit replacement or revocation for legacy grants");
-        if (!canonicalRecord(record) || record.grantKey !== key) throw new HttpError(409, "grant_owner_initialization_required", "account owner requires explicit replacement or revocation before strict mutations");
+        const record = await this.readCanonical(key);
+        if (path === "/models/read") return json(inspectModelInventory(this.state.storage, record, snapshot.providers.find(provider => provider.id === record.providerId)));
         return json(accountCredentialView(record));
       }
       if (path === "/mutate") return await this.mutate(await readJson<{ key: string; intent: GrantCredentialIntent; body: unknown }>(request));
@@ -209,7 +253,7 @@ export class GrantCredentialObject implements DurableObject {
         let record: CredentialRecord | undefined;
         try { record = await this.state.storage.get<CredentialRecord>("credential"); }
         catch { /* An unavailable read cannot supply a canonical conflict view. */ }
-        const detail = record && (path === "/read" || path === "/mutate")
+        const detail = record && (path === "/read" || path === "/models/read" || path === "/mutate")
           ? canonicalRecord(record) ? { grant: accountCredentialView(record) } : undefined
           : record ? { projection: credentialProjection(record) } : undefined;
         return errorResponse(error.code, error.message, error.status, detail);
@@ -648,6 +692,11 @@ export async function accountCredentialResponse(env: Env, key: string, intent: G
   // Carry the owner's exact safe receipt and HTTP status through the adapter.
   // Runtime/quota enrichment after commit could fail or observe a later account.
   const response = await ownerFetch(env, key, intent === "read" ? "/read" : "/mutate", { key, intent, body });
+  return new Response(response.body, { status: response.status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" } });
+}
+
+export async function accountModelInventoryResponse(env: Env, key: string, refresh: boolean, body?: unknown): Promise<Response> {
+  const response = await ownerFetch(env, key, refresh ? "/models/refresh" : "/models/read", { key, body });
   return new Response(response.body, { status: response.status, headers: { "content-type": "application/json; charset=utf-8", "cache-control": "no-store", "x-content-type-options": "nosniff" } });
 }
 

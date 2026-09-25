@@ -215,6 +215,51 @@ export interface AccountCredentialMutationReceipt {
   grant: AccountCredentialView;
 }
 
+export type ModelDiscoveryAdapter = "openai.models" | "google.models";
+export interface ObservedModel {
+  id: string;
+  // Provider-reported facts only; these are not executable model contracts.
+  created?: number;
+  ownedBy?: string;
+  baseModelId?: string;
+  version?: string;
+  displayName?: string;
+  inputTokenLimit?: number;
+  outputTokenLimit?: number;
+  supportedGenerationMethods?: string[];
+}
+export type ModelDiscoveryFailure = "timeout" | "transport_error" | "upstream_rejected" | "invalid_response" | "limit_exceeded" | "source_changed";
+export interface ModelInventorySource {
+  providerId: string;
+  credentialGeneration: number;
+  adapter: ModelDiscoveryAdapter;
+}
+export interface ModelDiscoveryAttempt extends ModelInventorySource {
+  attemptGeneration: number;
+  startedAt: string;
+  completedAt: string | null;
+  status: "running" | "succeeded" | "failed";
+  error: ModelDiscoveryFailure | null;
+}
+export interface ModelInventorySnapshot extends ModelInventorySource {
+  snapshotGeneration: number;
+  attemptGeneration: number;
+  observedAt: string;
+  models: ObservedModel[];
+  // Only the last complete, same-source comparison; no removal history.
+  removedIds: string[];
+}
+export interface AccountModelInventory {
+  key: string;
+  providerId: string | null;
+  credentialGeneration: number;
+  adapter: ModelDiscoveryAdapter | null;
+  attempt: ModelDiscoveryAttempt | null;
+  snapshot: ModelInventorySnapshot | null;
+  sourceMatches: boolean;
+  stale: boolean;
+}
+
 export interface AssignmentRule {
   ruleId: string;
   version: number;
