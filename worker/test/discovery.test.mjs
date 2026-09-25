@@ -9,7 +9,7 @@ const { snapshot } = await import("../providers.ts");
 
 for (const mode of ["local", "cloudflare_access"]) test(`empty ${mode} discovery preserves authenticated scope without grants or budget activity`, async (t) => {
   const bindings = [], fixture = await fusionDiscoveryFixture(t, { bindings });
-  let headers = fixture.request("session").headers;
+  let headers = fixture.request("session").headers, certificateUrl;
   if (mode === "cloudflare_access") {
     const domain = "fixture.cloudflareaccess.com", audience = "fixture-audience", kid = "fixture-key";
     Object.assign(fixture.env, { CLAWROUTER_ACCESS_TEAM_DOMAIN: domain, CLAWROUTER_ACCESS_AUD: audience });
@@ -22,12 +22,14 @@ for (const mode of ["local", "cloudflare_access"]) test(`empty ${mode} discovery
     const unsigned = `${encode({ alg: "RS256", kid })}.${encode({ aud: audience, iss: `https://${domain}`, email: "Fixture@Example.COM", exp: Math.floor(Date.now() / 1000) + 300 })}`;
     const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", keys.privateKey, new TextEncoder().encode(unsigned));
     headers = new Headers({ "cf-access-jwt-assertion": `${unsigned}.${Buffer.from(signature).toString("base64url")}` });
+    certificateUrl = `https://${domain}/cdn-cgi/access/certs`;
     t.mock.method(globalThis, "fetch", async (url) => {
-      assert.equal(String(url), `https://${domain}/cdn-cgi/access/certs`, "only signature verification may fetch");
+      assert.equal(String(url), certificateUrl, "only signature verification may fetch");
       return Response.json({ keys: [jwk] });
     });
   }
-  fixture.env.BUDGET_LEDGER.get = () => { throw new Error("empty discovery must not observe or reserve a budget"); };
+  const upstreamFetch = globalThis.fetch;
+  const budgetGet = t.mock.method(fixture.env.BUDGET_LEDGER, "get", () => { throw new Error("empty discovery must not observe or reserve a budget"); });
   const binding = { policyId: "fixture", priority: 0, enabled: true, principalType: "user", principalId: "fixture@example.com" };
   for (const [scenario, entries, enabled] of [
     ["no bindings", [], true], ["disabled binding", [{ ...binding, enabled: false }], true],
@@ -37,6 +39,8 @@ for (const mode of ["local", "cloudflare_access"]) test(`empty ${mode} discovery
     bindings.splice(0, bindings.length, ...entries);
     fixture.policy.enabled = enabled;
     fixture.calls.length = 0;
+    budgetGet.mock.resetCalls();
+    upstreamFetch.mock.resetCalls();
     for (const path of ["/v1/catalog", "/v1/session", "/v1/entitlements", "/v1/models"]) {
       const response = await worker.fetch(new Request(`https://router.example${path}`, { headers }), fixture.env, {});
       assert.equal(response.status, 200, `${scenario}: ${path}`);
@@ -53,6 +57,12 @@ for (const mode of ["local", "cloudflare_access"]) test(`empty ${mode} discovery
       }
     }
     assert.equal(fixture.calls.some(({ path }) => path === "/grant-pools/resolve"), false);
+    assert.equal(budgetGet.mock.callCount(), 0, `${scenario}: no budget access`);
+    const fetchUrls = upstreamFetch.mock.calls.map(({ arguments: [url] }) => String(url));
+    if (certificateUrl) {
+      assert.ok(fetchUrls.length > 0, `${scenario}: JWT signature keys were fetched`);
+      assert.ok(fetchUrls.every((url) => url === certificateUrl), `${scenario}: only signature verification may fetch`);
+    } else assert.deepEqual(fetchUrls, [], `${scenario}: no upstream fetch`);
   }
 });
 
