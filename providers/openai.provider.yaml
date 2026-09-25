@@ -311,9 +311,9 @@ models:
           topP: requires_reasoning_none
           logprobs: requires_reasoning_none
           toolCalling: requires_reasoning_none
-      pricingRef: openai-gpt-6-sol-tiers-2026-09-22
+      pricingRef: openai-gpt-6-sol-tiers-2026-09-25
       pricing:
-        effectiveAt: "2026-09-22"
+        effectiveAt: "2026-09-25"
         source: https://developers.openai.com/api/docs/pricing
         inputMicrosPerMillion: 2000000
         cachedInputMicrosPerMillion: 200000
@@ -387,9 +387,9 @@ models:
           topP: requires_reasoning_none
           logprobs: requires_reasoning_none
           toolCalling: requires_reasoning_none
-      pricingRef: openai-gpt-6-luna-tiers-2026-09-22
+      pricingRef: openai-gpt-6-luna-tiers-2026-09-25
       pricing:
-        effectiveAt: "2026-09-22"
+        effectiveAt: "2026-09-25"
         source: https://developers.openai.com/api/docs/pricing
         inputMicrosPerMillion: 100000
         cachedInputMicrosPerMillion: 10000
