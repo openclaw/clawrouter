@@ -5,7 +5,7 @@ import { setImmediate } from "node:timers/promises";
 const { authenticateProxyKey } = await import("../proxy-auth.ts");
 const { concreteOpenAiSelection } = await import("../proxy-selection.ts");
 import { materializeGrantCredentials, putGrantCredentials, revokeGrantCredentials } from "../grant-credentials.ts";
-import { sha256Hex } from "../utils.ts";
+import { HttpError, sha256Hex } from "../utils.ts";
 import { HttpContinuation } from "../http-continuation.ts";
 import { fixture, grantKeys } from "./http-continuation-fixture.mjs";
 
@@ -104,6 +104,27 @@ test("WebSocket metadata-only reconnect resolves its owner and all supplied iden
   await f.mutateCredential({ operation: "put", credentialId: "fixture", credential: { ...f.credential, principalId: "other@example.com" } });
   await assert.rejects(resolve(metadata), restart);
   assert.equal(f.sent.length, 2, "resolution never dispatches upstream");
+});
+
+test("only requested continuations translate preparation owner errors", async t => {
+  const f = await fixture(t);
+  await f.consume(await f.request());
+  const request = new Request("https://router.example/v1/responses", { headers: { authorization: "Bearer clawrouter-live-fixture-fixture-secret" } });
+  const auth = await authenticateProxyKey(request.headers, f.env);
+  const resolve = body => HttpContinuation.resolve(request, concreteOpenAiSelection("/v1/responses", { model: "openai/gpt-6-astra", input: "fixture", ...body }, f.env), auth, f.env);
+  const requested = await resolve({ previous_response_id: "resp_1" }), stateless = await resolve({});
+  for (const code of ["upstream_grant_pool_unavailable", "upstream_grant_changed", "grant_reauthorization_required", "grant_refresh_failed", "grant_disabled", "grant_credential_missing", "provider_not_configured", "grant_transport_unavailable"]) {
+    const original = new HttpError(503, code, "fixture owner failure");
+    const failure = requested.preflightError(original);
+    assert.equal(failure.status, 409); assert.equal(failure.code, "continuation_restart_required");
+    assert.match(failure.message, /restart with full input and omit previous_response_id and x-codex-turn-state/);
+    assert.equal(stateless.preflightError(original), original);
+  }
+  for (const original of [new HttpError(403, "provider_not_allowed", "fixture denial"), new HttpError(402, "budget_exceeded", "fixture budget"), new HttpError(503, "continuation_unavailable", "fixture authority outage"), new Error("fixture failure"), null]) {
+    assert.equal(requested.preflightError(original), original);
+    assert.equal(stateless.preflightError(original), original);
+  }
+  assert.equal(f.sent.length, 1);
 });
 
 test("the successful stateless failover grant owns the response it actually produced", async t => {

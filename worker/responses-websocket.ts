@@ -49,8 +49,9 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
       const accountingContext = { env, context, auth, selection, request: operationRequest, startedAtMs: Date.now() };
       let accounting: ReturnType<typeof createProxyAccounting> | undefined;
       let reservation = emptyReservation(), content: string | null = null;
+      let continuation: HttpContinuation | undefined;
       try {
-        const continuation = await HttpContinuation.resolve(operationRequest, selection, auth, env, "websocket");
+        continuation = await HttpContinuation.resolve(operationRequest, selection, auth, env, "websocket");
         const upstream = await prepareSelected(operationRequest, env, selection, searchParamsRecord(new URL(request.url).searchParams), auth, new Set(), true, undefined, continuation?.pinned ?? pinned, "websocket");
         if (upstream.continuation) continuation?.bind(upstream.continuation);
         const cost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability, selection.endpoint, continuation?.parentTools);
@@ -72,7 +73,8 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
           settle: settlement(accounting, reservation, content, observe),
         };
       } catch (error) {
-        const failure = error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "Responses request preflight failed");
+        const preflightError = continuation?.preflightError(error) ?? error;
+        const failure = preflightError instanceof HttpError ? preflightError : new HttpError(503, "provider_unavailable", "Responses request preflight failed");
         const aborted = signal.aborted && signal.reason instanceof ResponsesOperationAborted ? signal.reason : null;
         const outcome = aborted ? closeStatus(aborted.cause) : {
           statusCode: failure.status,
