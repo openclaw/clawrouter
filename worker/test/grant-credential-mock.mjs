@@ -36,3 +36,14 @@ export function attachGrantCredentialNamespace(env, { useExistingAuthority = fal
   };
   return env;
 }
+
+export function rateLimitKv(env) {
+  const put = env.POLICY_KV.put;
+  let now = 0, lastWrite = -Infinity, writes = 0;
+  env.POLICY_KV.put = async (...args) => {
+    if (now - lastWrite < 1_000) throw new Error("KV PUT failed: 429 Too Many Requests");
+    await put(...args);
+    lastWrite = now; writes += 1;
+  };
+  return { advance() { now += 1_000; }, writes: () => writes };
+}

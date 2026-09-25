@@ -339,6 +339,7 @@ The Worker redirects `/` to `/dashboard`, and `/dashboard` to `/dashboard/home`.
 | `GET` | `/v1/admin/provider-status` | Policy-aware provider readiness |
 | `GET` | `/v1/admin/provider-health` | Persisted provider smoke status |
 | `GET` | `/v1/admin/upstream-grants` | Sanitized policy- and tenant-scoped upstream grants |
+| `GET` | `/v1/admin/upstream-grants/<policies\|tenants>/<scope-id>/<token-ref>` | Pure canonical credential-owner view, generation and publication state |
 | `GET` | `/v1/admin/assignment-rules` | Access identity assignment rules |
 | `GET` | `/v1/admin/fusion` | Fusion configuration |
 
@@ -358,6 +359,9 @@ The Worker redirects `/` to `/dashboard`, and `/dashboard` to `/dashboard/home`.
 | `PUT` | `/v1/admin/connections/<provider-id>` | Update a global provider connection |
 | `PATCH` | `/v1/admin/connections/<provider-id>` | Update only supplied connection fields |
 | `PUT` | `/v1/admin/upstream-grants/<policies\|tenants>/<scope-id>/<token-ref>` | Create or update a scoped upstream grant |
+| `POST` | `/v1/admin/upstream-grants/<policies\|tenants>/<scope-id>/<token-ref>` | Create only, using a caller-retained `acct_UUIDv4` reference |
+| `PATCH` | `/v1/admin/upstream-grants/<policies\|tenants>/<scope-id>/<token-ref>` | Update supplied metadata against the current credential generation |
+| `POST` | `/v1/admin/upstream-grants/<policies\|tenants>/<scope-id>/<token-ref>/replace` | Replace credential material against the current generation |
 | `POST` | `/v1/admin/upstream-grants/<policies\|tenants>/<scope-id>/<token-ref>/revoke` | Revoke a scoped upstream grant and remove its secrets |
 | `POST` | `/v1/admin/upstream-grants/<policies\|tenants>/<scope-id>/<token-ref>/refresh` | Refresh an OAuth grant |
 | `POST` | `/v1/admin/upstream-grants/<policies\|tenants>/<scope-id>/<token-ref>/quota-refresh` | Refresh provider-reported grant quota state |
@@ -375,6 +379,53 @@ Upstream grant PUT preserves unspecified credentials by default. Add
 account or refresh metadata. Replacement requires a fresh primary credential;
 credential-presence flags are insufficient. Other mode values return HTTP 400.
 The `cf:oauth:put` CLI uses replacement mode.
+
+New account-management clients use the strict routes:
+
+- Generate and retain `acct_` plus a lowercase UUIDv4 **before** create-only POST.
+  The reference is the final path segment. The server echoes it and rejects an
+  existing owner, tombstone, legacy KV record or retained attachment evidence with
+  HTTP 409. A duplicate POST never becomes an update. The UUID restriction applies
+  to creation only; canonical older references still support GET, PATCH and replace.
+- GET reads the strong owner without refreshing, importing or repairing it. It
+  returns a secret-free view with `credentialGeneration` and `publication`
+  (`ready` or `pending`). It omits raw credentials, refresh extra parameters,
+  credential lineage and internal admission receipts. An uninitialized legacy
+  account needs the existing explicit PUT replacement or revocation flow.
+- PATCH and POST `/replace` require `expectedCredentialGeneration`. A mismatch,
+  including one caused by automatic refresh, returns HTTP 409
+  `grant_generation_changed` with the safe current view in `error.detail.grant`.
+  Read and inspect that state before another mutation; do not retry automatically.
+- PATCH accepts `label`, `enabled`, `priority`, `weight`, `maintenance`, `expiresAt`,
+  `scopes`, `accountId`, `subscription` and `refresh`. Omission keeps the existing
+  value. Null clears label, expiry, account, subscription or refresh override;
+  `scopes: []` clears scopes. Booleans and numbers cannot be null. The sole secret
+  operation is `refreshToken: null`, which clears that token and rotates credential
+  lineage. Non-null refresh tokens, primary credentials, provider/kind changes and
+  owner status fields are rejected. Metadata edits never heal reauthorization or
+  revocation. Clearing `refresh` removes the override; provider refresh configuration
+  can still apply. Clear the refresh token to prevent its use. Refresh `extraParams`
+  accepts public extensions such as `scope` and `audience`, not credential fields or
+  overrides of the owner-controlled grant type and client authentication.
+- POST `/replace` requires a fresh primary credential. It clears omitted or competing
+  old credential forms and old token type, expiry, scopes, account, subscription and
+  refresh material. Omitted token type defaults to `Bearer`. Routing identity, label,
+  priority, weight, maintenance and creation time remain unless explicitly editable
+  fields are supplied. An inactive account, including a revoked one, stays inactive
+  unless the replacement explicitly supplies `enabled: true`.
+
+Strict mutations return `{ "outcome": "committed", "grant": <safe owner view> }`.
+Creation returns HTTP 201 and edits return HTTP 200 when finalization completes.
+HTTP 202 means the exact credential write committed, but scheduling, attachment or
+KV publication still needs acknowledgement; its view has `publication: "pending"`.
+An uncertain owner write returns HTTP 503 `grant_mutation_unconfirmed`, never a
+claimed commit based on another row. After any lost reply, inspect the retained
+identity with GET before deciding what to do next.
+
+GET does **not** repair a pending mutation. Use **Repair account publication** in
+the Upstream panel, POST `/v1/admin/grant-pools/repair` with its bounded resume cursor,
+or `pnpm cf:accounts`. This also completes paused or revoked owners with no alarm.
+The existing PUT/CLI adapters retain their non-2xx outcome when publication is pending.
 
 Grant revocation accepts an optional JSON object with `kind`, `provider`, and
 `label` hints for legacy grants that have no credential owner. Existing owners

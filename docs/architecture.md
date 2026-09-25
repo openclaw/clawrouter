@@ -73,9 +73,12 @@ Paused and reauthorization-required rows retain attachment presence and free an
 active slot. Revocation commits a secretless tombstone before detaching all of
 that key's provider rows. Existing pool rows remain `legacy` and selectable.
 
-Each credential generation records whether index publication is still pending.
-The owner repairs that fact before materialization or maintenance can contact a
-provider. The index retains a generation/revision fence after detachment; its
+Each credential generation records one pending finalization obligation: schedule,
+attachment index, KV projection, then durable acknowledgement. Materialization or
+maintenance prepares schedule/index before provider work and leaves the obligation
+open until the final refreshed projection is published. Pure account GET reports
+this state without performing recovery; the existing explicit repair action also
+finishes inactive owners whose alarms have been removed. The index retains a generation/revision fence after detachment; its
 revision also identifies pre-commit admission and repair while owner generation
 is unchanged. Index commits use synchronous SQLite transactions. An internal
 owner `/reconcile` accepts only the grant key, rereads the owner, and uses an
