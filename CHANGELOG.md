@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Add a manual hosted account-inventory read using the existing administrator and Access credentials. Publish versioned API-visible counts and digests without account identities, credentials or raw server errors; keep the operation read-only and independent of account-readiness APIs.
+- Add an operator-run account-inventory read using credentials injected from the operator secret manager. Print versioned API-visible counts and digests without account identities, credentials or raw server errors; keep raw credentials out of GitHub Actions and the operation independent of account-readiness APIs.
 
 - Validate usage ingestion receipts before acknowledging queue delivery or direct fallback. Reject unrelated or malformed success responses while preserving independent budget settlement and retention-expiry outcomes. Deploy the receipt producer before this consumer; prolonged version skew or rollback can send messages to the existing dead-letter queue.
 

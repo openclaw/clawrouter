@@ -5,8 +5,7 @@ import { adminRequest } from "./admin-api.mjs";
 
 const TARGET = "https://clawrouter.openclaw.ai";
 const DIAGNOSTICS = {
-  invalid_input: "Check the hosted invocation identity.",
-  invalid_target: "Account inventory requires the fixed production HTTPS target and main source.",
+  invalid_target: "Account inventory requires the fixed production HTTPS target.",
   invalid_inventory: "The API-visible inventory is malformed; inspect it in the private console.",
   inventory_failed: "Inventory requires working administrator access; inspect the private console.",
 };
@@ -52,20 +51,16 @@ export function inventorySummary(value) {
 export async function runGrantPoolOperation({ env = process.env, request } = {}) {
   try {
     // Validate the destination before adminRequest can attach any credentials.
-    if (env.CLAWROUTER_BASE_URL !== TARGET || env.GITHUB_REF !== "refs/heads/main") fail("invalid_target");
-    if (!/^[a-z\d](?:[a-z\d-]{0,38})$/i.test(env.GITHUB_ACTOR ?? "")
-      || !/^[1-9]\d{0,19}$/.test(env.GITHUB_RUN_ID ?? "")
-      || !/^[a-f\d]{40}$/.test(env.GITHUB_SHA ?? "")) fail("invalid_input");
+    if (env.CLAWROUTER_BASE_URL !== TARGET) fail("invalid_target");
     const call = request ?? ((path, options) => adminRequest(path, { ...options, env, signal: AbortSignal.timeout(30_000) }));
     const inventory = inventorySummary(await call("/v1/admin/upstream-grants", { method: "GET" }));
     return {
-      schema: "clawrouter.account-routing-operation.v1", operation: "inventory", target: TARGET,
-      actor: env.GITHUB_ACTOR, runId: env.GITHUB_RUN_ID, sourceSha: env.GITHUB_SHA,
+      schema: "clawrouter.account-routing-operation.v1", operation: "inventory", execution: "operator", target: TARGET,
       inventory, result: "inventory_read",
     };
   } catch (error) {
     // Admin errors can contain private server details. Never surface their
-    // message, cause or stack in public Actions logs.
+    // message, cause or stack in the operator receipt.
     if (error instanceof OperationFailure) throw error;
     fail("inventory_failed");
   }
@@ -76,7 +71,7 @@ export async function grantPoolOperationsMain({ env = process.env, request, writ
     write(JSON.stringify(await runGrantPoolOperation({ env, request })));
     return 0;
   } catch (error) {
-    const code = error instanceof OperationFailure ? error.code : "invalid_input";
+    const code = error instanceof OperationFailure ? error.code : "inventory_failed";
     write(JSON.stringify({ result: "failed", code, hint: DIAGNOSTICS[code] }));
     return 1;
   }

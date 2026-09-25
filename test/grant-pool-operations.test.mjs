@@ -1,6 +1,5 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { readFileSync } from "node:fs";
 import test from "node:test";
 import { adminRequest } from "../scripts/admin-api.mjs";
 import { grantPoolOperationsMain, inventorySummary } from "../scripts/grant-pool-operations.mjs";
@@ -10,8 +9,7 @@ const stamp = "2026-09-01T00:00:00.000Z";
 const grant = { key: `oauth/policy/${privateValue}`, provider: "openai", kind: "oauth", enabled: false, updatedAt: stamp, revokedAt: null, credentialStatus: "reauth_required", label: privateValue, accountId: privateValue, credential: privateValue, refreshToken: privateValue, quotaWindows: [{ note: privateValue }], refreshTokenUrl: `https://${privateValue}.example` };
 const inventory = { grants: [grant] };
 const baseEnv = {
-  CLAWROUTER_BASE_URL: "https://clawrouter.openclaw.ai", GITHUB_REF: "refs/heads/main",
-  GITHUB_ACTOR: "fixture-operator", GITHUB_RUN_ID: "123456", GITHUB_SHA: "a".repeat(40),
+  CLAWROUTER_BASE_URL: "https://clawrouter.openclaw.ai",
   CLAWROUTER_ADMIN_TOKEN: privateValue, CF_ACCESS_CLIENT_ID: privateValue, CF_ACCESS_CLIENT_SECRET: privateValue,
 };
 
@@ -25,7 +23,7 @@ async function invoke(request, extra = {}) {
   return { exitCode, output, receipt: JSON.parse(output) };
 }
 
-test("inventory makes exactly one GET and needs no readiness endpoint", async () => {
+test("operator inventory makes exactly one GET without hosted identity or a readiness endpoint", async () => {
   const calls = [];
   const result = await invoke(async (path, options) => {
     calls.push({ path, ...options });
@@ -35,8 +33,9 @@ test("inventory makes exactly one GET and needs no readiness endpoint", async ()
   assert.deepEqual(calls, [{ path: "/v1/admin/upstream-grants", method: "GET" }]);
   assert.equal(result.receipt.inventory.disabled, 1);
   assert.equal(result.receipt.operation, "inventory");
+  assert.equal(result.receipt.execution, "operator");
   assert.equal(result.receipt.result, "inventory_read");
-  assert.deepEqual(Object.keys(result.receipt), ["schema", "operation", "target", "actor", "runId", "sourceSha", "inventory", "result"]);
+  assert.deepEqual(Object.keys(result.receipt), ["schema", "operation", "execution", "target", "inventory", "result"]);
 });
 
 test("versioned inventory digest is sorted, stable and binds only the specified projection", () => {
@@ -83,16 +82,17 @@ test("revoked count matches owner truthiness while the digest retains empty time
   assert.notEqual(inventorySummary({ grants: [{ ...grant, revokedAt: "" }] }).sha256, inventorySummary({ grants: [{ ...grant, revokedAt: null }] }).sha256);
 });
 
-test("fixed destination, main and invocation identity are validated before any request", async () => {
-  for (const change of [{ CLAWROUTER_BASE_URL: "https://other.example" }, { CLAWROUTER_BASE_URL: "http://clawrouter.openclaw.ai" }, { CLAWROUTER_BASE_URL: "https://clawrouter.openclaw.ai/extra" }, { GITHUB_REF: "refs/heads/fixture" }, { GITHUB_ACTOR: privateValue + "/" }, { GITHUB_RUN_ID: privateValue }, { GITHUB_SHA: privateValue }]) {
+test("the fixed destination is validated before any request", async () => {
+  for (const change of [{ CLAWROUTER_BASE_URL: undefined }, { CLAWROUTER_BASE_URL: "https://other.example" }, { CLAWROUTER_BASE_URL: "http://clawrouter.openclaw.ai" }, { CLAWROUTER_BASE_URL: "https://clawrouter.openclaw.ai/extra" }]) {
     let calls = 0;
     const result = await invoke(async () => { calls++; return inventory; }, change);
     assert.equal(result.exitCode, 1);
+    assert.equal(result.receipt.code, "invalid_target");
     assert.equal(calls, 0);
   }
 });
 
-test("the shared admin transport carries the existing actor on a GET with no body", async () => {
+test("the shared admin transport carries operator credentials on a GET with no body", async () => {
   let count = 0;
   const result = await invoke((path, options) => adminRequest(path, { ...options, env: baseEnv, fetchImpl: async (url, init) => {
     count++;
@@ -124,28 +124,15 @@ test("admin redirects, auth errors, malformed and oversized bodies fail without 
     assert.equal(result.receipt.code, "inventory_failed");
     assert.equal(count, 1);
   }
-  for (const env of [{ ...baseEnv, CLAWROUTER_ADMIN_TOKEN: "" }, { ...baseEnv, CF_ACCESS_CLIENT_SECRET: "" }]) {
-    const result = await invoke((path, options) => adminRequest(path, { ...options, env, fetchImpl: () => assert.fail("invalid credentials must not send a request") }));
-    assert.equal(result.exitCode, 1);
-  }
   assert.equal((await invoke(async () => { throw new Error(privateValue, { cause: new Error(privateValue) }); })).receipt.code, "inventory_failed");
 });
 
-test("hosted workflow permits only the inventory GET from immutable main source", () => {
-  const workflow = readFileSync(new URL("../.github/workflows/account-routing.yml", import.meta.url), "utf8");
-  const adapter = readFileSync(new URL("../scripts/grant-pool-operations.mjs", import.meta.url), "utf8");
-  assert.match(workflow, /workflow_dispatch:/);
-  assert.doesNotMatch(workflow, /inputs:|inputs\.|^  (push|pull_request|schedule):/m);
-  assert.match(workflow, /permissions:\n  contents: read/);
-  assert.match(workflow, /group: account-routing-production\n  cancel-in-progress: false/);
-  assert.match(workflow, /timeout-minutes: 5/);
-  assert.ok(workflow.indexOf('run: test "$SOURCE_REF" = refs/heads/main') < workflow.indexOf("uses: actions/checkout@"));
-  assert.match(workflow, /ref: \$\{\{ github\.sha \}\}\n          persist-credentials: false/);
-  assert.match(workflow, /node-version: 24/);
-  assert.match(workflow, /CLAWROUTER_BASE_URL: https:\/\/clawrouter\.openclaw\.ai/);
-  const invocation = workflow.slice(workflow.indexOf("      - name: Read account inventory"));
-  assert.doesNotMatch(workflow.slice(0, workflow.indexOf("      - name: Read account inventory")), /secrets\./);
-  assert.deepEqual([...invocation.matchAll(/secrets\.([A-Z_]+)/g)].map(match => match[1]), ["CLAWROUTER_ADMIN_TOKEN", "CLAWROUTER_ACCESS_CLIENT_ID", "CLAWROUTER_ACCESS_CLIENT_SECRET"]);
-  assert.deepEqual([...workflow.matchAll(/^\s+run: (.+)$/gm)].map(match => match[1]), ['test "$SOURCE_REF" = refs/heads/main', "node scripts/grant-pool-operations.mjs"]);
-  assert.doesNotMatch(workflow + adapter, /pnpm|wrangler|cf:deploy|cf:smoke|grant-pool-recovery|accept-existing|expectedRevision|legacy_writers_stopped|method: "(?:POST|PUT|DELETE|PATCH)"/);
+test("missing operator credentials fail before the default transport sends any request", async t => {
+  const fetchMock = t.mock.method(globalThis, "fetch", () => assert.fail("missing credentials must not send a request"));
+  for (const change of [{ CLAWROUTER_ADMIN_TOKEN: undefined }, { CF_ACCESS_CLIENT_SECRET: undefined }, { CF_ACCESS_CLIENT_ID: undefined }]) {
+    const result = await invoke(undefined, change);
+    assert.equal(result.exitCode, 1);
+    assert.equal(result.receipt.code, "inventory_failed");
+  }
+  assert.equal(fetchMock.mock.callCount(), 0);
 });

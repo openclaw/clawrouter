@@ -946,23 +946,33 @@ or at 10% remaining capacity, sends one fixed one-token Claude request with no
 user content, and discards the response. Neither contributors nor submitted
 payloads can alter its endpoint, model, headers, prompt, or interval.
 
-### Hosted account inventory
+### Operator account inventory
 
-Run the manual **Account routing** workflow from `main` to read the production
-account inventory. The workflow checks out the dispatch's exact commit and makes
-one authenticated `GET /v1/admin/upstream-grants` against
+Run the inventory command from a reviewed, pinned checkout to make one
+authenticated `GET /v1/admin/upstream-grants` against
 `https://clawrouter.openclaw.ai`. It works without an account-readiness endpoint.
-It uses the existing `CLAWROUTER_ADMIN_TOKEN`, `CLAWROUTER_ACCESS_CLIENT_ID` and
-`CLAWROUTER_ACCESS_CLIENT_SECRET` repository secrets only in that read step.
-The workflow does not create credentials, install packages, deploy a Worker, or
-run provider smoke. Check that the existing administrator credentials work.
-Exclude overlapping deployments yourself: its concurrency group serializes only
-account-operation runs.
+Before running, obtain a working administrator credential reference from its
+owner. Use the operator secret manager to inject `CLAWROUTER_ADMIN_TOKEN` into
+the command's environment. When Cloudflare Access requires service credentials,
+inject both `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` through the same
+operator route. Keep raw credentials out of GitHub Actions, command arguments,
+and logs. The command does not provision credentials; without that prerequisite,
+authenticated inventory remains unverified.
 
-Public receipts contain only source/run identity, API-visible counts and digests,
-or fixed diagnostics. Raw account identities, labels, URLs, credential data and
-server errors stay out of logs. Redirects, failed authentication, malformed or
-oversized responses fail without retrying the request.
+```sh
+git rev-parse HEAD
+CLAWROUTER_BASE_URL=https://clawrouter.openclaw.ai node scripts/grant-pool-operations.mjs
+```
+
+Record the pinned commit and invoking operator alongside the receipt. The
+receipt labels execution as `operator`; it does not attest source or caller
+identity. Exclude overlapping deployments and account mutations before running.
+The command does not install packages, deploy a Worker, or run provider smoke.
+
+Receipts contain only the fixed target, API-visible counts and digests, or fixed
+diagnostics. Raw account identities, labels, URLs, credential data and server
+errors stay out of logs. Redirects, failed authentication, malformed or oversized
+responses fail without retrying the request.
 
 The `clawrouter.api-visible-grants.v1` digest hashes JSON containing that `schema`
 and `grants` sorted by key. Each projected grant contains only `key`, `provider`,
@@ -977,7 +987,7 @@ this exact versioned algorithm; a digest from another format is not comparable.
 This receipt covers the API-visible projection only. Null KV values and
 index-only owners are outside it; an empty projection never proves empty storage,
 stopped writers, or matched storage lineage. Review the full inventory privately.
-The workflow changes no account state and provides no baseline acceptance or
+The command changes no account state and provides no baseline acceptance or
 routing activation action.
 
 ### Contributor intake
