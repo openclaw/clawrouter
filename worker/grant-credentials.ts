@@ -244,7 +244,7 @@ export class GrantCredentialObject implements DurableObject {
         let record: CredentialRecord | undefined;
         try { record = await this.state.storage.get<CredentialRecord>("credential"); }
         catch { /* An unavailable read cannot supply a canonical conflict view. */ }
-        const detail = record && (path === "/read" || path === "/mutate")
+        const detail = record && (path === "/read" || path === "/models/read" || path === "/mutate")
           ? canonicalRecord(record) ? { grant: accountCredentialView(record) } : undefined
           : record ? { projection: credentialProjection(record) } : undefined;
         return errorResponse(error.code, error.message, error.status, detail);

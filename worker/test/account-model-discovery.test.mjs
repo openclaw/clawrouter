@@ -34,6 +34,32 @@ test("account model inspection is pure, bounded to the exact owner and admin-onl
   assert.equal((await env.request("GET", { path: route.replace("account/models", "neighbor/models") })).status, 404);
 });
 
+test("model GET rejects an incomplete legacy owner without returning raw refresh material or repairing it", async context => {
+  const env = fixture(context);
+  await putGrantCredentials(env, key, { ...primary, refreshToken: "legacy-refresh-fixture", refresh: {
+    tokenUrl: "https://token.example/token", extraParams: { client_secret: "legacy-client-secret-fixture", body: "legacy-body-secret-fixture" },
+  } });
+  const instance = owner(env), row = instance.values.get("credential");
+  assert.equal(row.refresh.extraParams.client_secret, "legacy-client-secret-fixture");
+  delete row.metadata; // Supported pre-metadata owner state, also exercised by legacy migration tests.
+  const before = structuredClone(row), kv = [...env.values];
+  const forbidden = [
+    context.mock.method(globalThis, "fetch", async () => assert.fail("provider I/O")),
+    context.mock.method(env.ACCESS_CONTROL, "get", () => assert.fail("attachment read")),
+    ...["get", "put"].map(name => context.mock.method(env.POLICY_KV, name, async () => assert.fail(`KV ${name}`))),
+    ...["put", "delete", "setAlarm", "deleteAlarm"].map(name => context.mock.method(instance.state.storage, name, async () => assert.fail(`owner ${name}`))),
+    context.mock.method(instance.state.storage.sql, "exec", () => assert.fail("inventory SQL")),
+  ];
+  const response = await env.request("GET");
+  assert.equal(response.status, 409);
+  assert.equal(response.body.error.code, "grant_owner_initialization_required");
+  assert.equal(response.body.error.detail, undefined);
+  assert.doesNotMatch(JSON.stringify(response.body), /synthetic-account-key|legacy-refresh-fixture|legacy-client-secret-fixture|legacy-body-secret-fixture|client_secret|token\.example|extraParams/);
+  assert.deepEqual(instance.values.get("credential"), before);
+  assert.deepEqual([...env.values], kv);
+  for (const method of forbidden) assert.equal(method.mock.callCount(), 0);
+});
+
 test("complete-only snapshots retain failures and only the latest same-source removals", async context => {
   const env = fixture(context);
   await putGrantCredentials(env, key, primary);
