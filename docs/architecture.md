@@ -197,8 +197,10 @@ additive JSON fields are allowed. Empty, malformed or unrelated 2xx responses
 fail ingestion and queue delivery retries. Retention expiry acknowledges only
 usage disposition, never a financial settlement.
 
-The receipt producer from `8c25f81` was deployed and verified before enabling this
-consumer. [Worker and Durable Object code updates can overlap](https://developers.cloudflare.com/durable-objects/platform/known-issues/#code-updates).
+Existing installations, including self-hosted deployments, must deploy and verify
+the receipt producer from `8c25f81` or later before enabling this strict consumer.
+Fresh installations include the producer and consumer together.
+[Worker and Durable Object code updates can overlap](https://developers.cloudflare.com/durable-objects/platform/known-issues/#code-updates).
 Rollback below that producer or prolonged version skew can exhaust the configured
 five retries and send usage messages to the DLQ; follow the [DLQ recovery procedure](deploy-cloudflare.md).
 Deployment completion does not prove old writers drained or guarantee eventual
