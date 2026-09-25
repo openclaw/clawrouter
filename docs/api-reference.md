@@ -365,6 +365,8 @@ The Worker redirects `/` to `/dashboard`, and `/dashboard` to `/dashboard/home`.
 | `POST` | `/v1/admin/upstream-grants/<policies\|tenants>/<scope-id>/<token-ref>/revoke` | Revoke a scoped upstream grant and remove its secrets |
 | `POST` | `/v1/admin/upstream-grants/<policies\|tenants>/<scope-id>/<token-ref>/refresh` | Refresh an OAuth grant |
 | `POST` | `/v1/admin/upstream-grants/<policies\|tenants>/<scope-id>/<token-ref>/quota-refresh` | Refresh provider-reported grant quota state |
+| `GET` | `/v1/admin/upstream-grants/<policies\|tenants>/<scope-id>/<token-ref>/models` | Inspect the last model-list attempt and complete account snapshot without upstream I/O |
+| `POST` | `/v1/admin/upstream-grants/<policies\|tenants>/<scope-id>/<token-ref>/models` | Explicitly refresh observed models for this stored API-key account |
 | `POST` | `/v1/admin/upstream-grants/<policies\|tenants>/<scope-id>/<token-ref>/authorize` | Begin a browser OAuth authorization |
 | `POST` | `/v1/admin/pool-submission-tickets` | Issue a short-lived, one-time credential contribution ticket for one pool slot |
 | `PUT` | `/v1/admin/assignment-rules/<rule-id>` | Create or update an identity assignment rule |
@@ -373,6 +375,54 @@ The Worker redirects `/` to `/dashboard`, and `/dashboard` to `/dashboard/home`.
 | `POST` | `/v1/admin/fusion/preview` | Evaluate Fusion readiness and estimated reservations for a policy |
 
 The legacy `GET|PUT /v1/admin/keys...`, `POST /v1/admin/keys/<kid>/revoke`, and `GET /v1/admin/users` routes remain compatibility aliases. New control-plane clients use policies, credentials, and tenants directly. Legacy top-level console and `/api/*` aliases redirect or normalize to their `/dashboard/*` and `/v1/*` equivalents.
+
+### Account model discovery
+
+Model discovery is an administrator diagnostic for one exact account. Read the
+account first, then POST its `/models` route with
+`{"expectedCredentialGeneration": 1}` using that view's generation. A stale
+generation returns HTTP 409 before contacting the provider. Only active stored
+`api_key` grants with a declared `modelDiscovery.adapter` are supported. The
+bundled declarations are OpenAI (`openai.models`) and Google Gemini
+(`google.models`). There is no environment-key, pooled-account, subscription or
+OAuth fallback. GET neither imports legacy credentials nor repairs publication.
+
+The closed adapters issue GET requests to the official
+[OpenAI model list](https://developers.openai.com/api/reference/resources/models/methods/list)
+and [Google model list](https://ai.google.dev/api/models#method:-models.list).
+OpenAI uses the key's default organization/project context; callers cannot supply
+organization headers, a URL or credentials. Google page tokens remain opaque.
+One refresh is bounded by 10 seconds, 1 MiB across all pages, 1,000 distinct IDs
+and 10 pages. Redirects, malformed responses and exceeded bounds fail the whole
+attempt; partial lists are never published.
+
+The response separates `attempt` (attempt generation, source credential
+generation/provider/adapter, start/completion time, status and safe error code)
+from `snapshot` (snapshot generation, producing attempt, source, observation time,
+models and latest removed IDs). A running attempt means no completion has been
+recorded, not a liveness promise. Failed attempts return HTTP 502 with the same
+inspectable response and retain the previous complete snapshot. A source change
+returns HTTP 409 with `source_changed`; a superseded attempt returns
+`model_discovery_superseded` without modifying the newer attempt. Network work
+does not hold the account mutation queue. Revocation or replacement invalidates
+late completion.
+
+`sourceMatches` compares the snapshot's provider, adapter and credential
+generation with the current owner. `stale` is true when there is no matching
+snapshot, the account is unusable, or a newer attempt is unfinished or failed.
+There is no automatic polling or freshness TTL: use `observedAt` to assess age
+and explicitly refresh. `removedIds` compares only the latest two complete
+snapshots of the same credential generation; an empty complete list is valid.
+Two additive singleton SQLite tables in the existing credential owner retain
+only the latest attempt and last complete snapshot, without a schema-version bump.
+
+Observed IDs and provider-reported fields are **annotations**, not executable
+models or evidence of inference permission. Google generation-method names and
+token limits do not establish ClawRouter capabilities, prices or request limits.
+List failures do not change quota, cooldown, account state or offers. Unknown IDs
+need a reviewed manifest contract; disappearance does not disable a compiled
+model. `/v1/catalog` remains the sole scoped offer source. This backend API does
+not add an account-discovery UI or establish live-provider qualification.
 
 Upstream grant PUT preserves unspecified credentials and canonical metadata by
 default, including provider, kind, routing values and paused state. A label-only

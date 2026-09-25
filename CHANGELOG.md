@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add explicit account-scoped OpenAI and Google API-key model discovery. Retain only bounded complete observations with separate attempt and snapshot provenance; keep failed or source-changed observations inspectable without changing routing, pricing or quota. Revocation and replacement remain available while a provider list request is in flight.
+
 - Coalesce pending account publication with credential edits so recovery does not exceed KV's per-key write limit. Reject credentials and reserved authentication fields in strict refresh metadata, and keep refresh authentication under the credential owner's control.
 
 - Enforce account token expiry before routing, materialization, HTTP/WebSocket dispatch and maintenance. Share OAuth callback and renewal lifetime handling from token-response arrival: omission clears the old deadline, zero expires immediately, and malformed lifetimes retain rotated credentials under retryable denial. Reuse the existing five-minute renewal retry, preserve configured pool presence, and prevent metadata edits, alternate credential forms or stale KV values from healing inherited expired authority, restoring old credentials or replacing canonical account identity and paused state. Bind callback credential inheritance to the same provider and grant kind. Preserve canonical generations after lost expiry-write acknowledgements, expire legacy accounts without routing identity, and schedule only executable maintenance. Late WebSocket continuation expiry retains full-input restart guidance and an uncharged client-error receipt.

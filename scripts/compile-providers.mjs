@@ -153,6 +153,7 @@ function compileProvider(manifest, ids) {
     billing,
     meter: billing.meter,
     quota,
+    ...(manifest.modelDiscovery ? { modelDiscovery: manifest.modelDiscovery } : {}),
   };
 }
 

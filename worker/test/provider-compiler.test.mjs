@@ -13,6 +13,9 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   const generated = JSON.parse(readFileSync("worker/generated/provider-snapshot.json", "utf8"));
   assert.deepEqual(compiled, generated);
   assert.equal(compiled.providers.length, 22);
+  assert.deepEqual(compiled.providers.filter(provider => provider.modelDiscovery).map(provider => [provider.id, provider.modelDiscovery]), [
+    ["google-gemini", { adapter: "google.models" }], ["openai", { adapter: "openai.models" }],
+  ]);
   const deepseek = compiled.providers.find(provider => provider.id === "deepseek");
   assert.deepEqual(deepseek.models.map(model => model.upstream), ["deepseek-v4-pro", "deepseek-v4-flash", "deepseek-flash", "deepseek-v4-flash-vision-exp"]);
   for (const model of deepseek.models) {
@@ -447,6 +450,19 @@ function withManifest(run) {
   try { run(join(directory, "provider.yaml")); }
   finally { rmSync(directory, { recursive: true, force: true }); }
 }
+
+test("model discovery metadata accepts only closed adapters and cannot declare a credential destination", () => {
+  const valid = parse(readFileSync("providers/openai.provider.yaml", "utf8"));
+  withManifest(path => {
+    for (const modelDiscovery of [{ adapter: "custom.models" }, { adapter: "openai.models", url: "https://other.example/models" }, {}, { adapter: "openai.models", headers: {} }]) {
+      writeFileSync(path, JSON.stringify({ ...valid, modelDiscovery }));
+      assert.throws(() => compile(path), /invalid manifest/);
+    }
+    delete valid.modelDiscovery;
+    writeFileSync(path, JSON.stringify(valid));
+    assert.equal(Object.hasOwn(JSON.parse(compile(path)).providers[0], "modelDiscovery"), false);
+  });
+});
 
 test("request parameter facts validate endpoint compatibility, provenance, and reasoning defaults", () => {
   const valid = parse(readFileSync("providers/openai.provider.yaml", "utf8"));
