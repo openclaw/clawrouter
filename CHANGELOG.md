@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Validate usage ingestion receipts before acknowledging queue delivery or direct fallback. Reject unrelated or malformed success responses while preserving independent budget settlement and retention-expiry outcomes. Deploy the receipt producer before this consumer; prolonged version skew or rollback can send messages to the existing dead-letter queue.
+
 - Add OpenAI GPT-6 Sol and Luna with published Standard, Fast/Priority, and Flex prices, cache and long-context rates, reasoning controls, and Chat token-limit normalization.
 
 - Add OpenAI `tts-1` speech through unified, native, and manifest routes. Reserve UTF-8 input bytes at the published character rate, settle completed binary audio from Unicode code points as a request estimate, and retain conservative reservations for incomplete or unqualified delivery. Request retention can include speech text; generated audio is never archived.

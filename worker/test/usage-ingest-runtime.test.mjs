@@ -5,14 +5,23 @@ import { join } from "node:path";
 import test from "node:test";
 import { startWorkerdFixture } from "../../test/helpers/workerd.mjs";
 
-test("workerd usage producer confirms stored, duplicate and retention-expired events", { timeout: 60_000 }, async () => {
+test("workerd ingest client validates stored, duplicate and retention-expired producer receipts", { timeout: 60_000 }, async () => {
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-usage-ingest-"));
   let worker;
   try {
     worker = await startWorkerdFixture(temporary, `
       export * from "./worker/index.ts";
-      export default { fetch(request, env) {
-        return env.USAGE_LEDGER.get(env.USAGE_LEDGER.idFromName("receipt-proof")).fetch(request);
+      import { ingestUsage, usageStub } from "./worker/ledgers.ts";
+      export default { async fetch(request, env) {
+        if (new URL(request.url).pathname === "/producer-ingest") return usageStub(env, "tenant", "").fetch(new Request("https://ledger/ingest", request));
+        if (request.method === "POST") {
+          const target = new URL(request.url).pathname === "/unconfirmed"
+            ? { ...env, USAGE_LEDGER: { idFromName: name => name, get: () => ({ fetch: async () => new Response("accepted") }) } }
+            : env;
+          try { return Response.json(await ingestUsage(target, await request.json())); }
+          catch { return Response.json({ error: "unconfirmed usage ingestion" }, { status: 503 }); }
+        }
+        return usageStub(env, "tenant", "").fetch(request);
       } };
     `, 'export default { fetch() { throw new Error("unexpected upstream request"); } };');
     const ingest = body => worker.dispatchFetch("https://router.example/ingest", { method: "POST", body: JSON.stringify(body) });
@@ -28,8 +37,14 @@ test("workerd usage producer confirms stored, duplicate and retention-expired ev
     assert.equal(expired.status, 200);
     assert.deepEqual(await expired.json(), { eventId: "expired", outcome: "expired_by_retention" });
     const invalid = await ingest({ ...original, id: "invalid", occurred_at_ms: undefined });
-    assert.equal(invalid.status, 400);
-    assert.equal((await invalid.json()).error.code, "invalid_usage_event");
+    assert.equal(invalid.status, 503);
+    assert.deepEqual(await invalid.json(), { error: "unconfirmed usage ingestion" });
+    const invalidProducer = await worker.dispatchFetch("https://router.example/producer-ingest", { method: "POST", body: JSON.stringify({ ...original, id: "invalid", occurred_at_ms: undefined }) });
+    assert.equal(invalidProducer.status, 400);
+    assert.equal((await invalidProducer.json()).error.code, "invalid_usage_event");
+    const unconfirmed = await worker.dispatchFetch("https://router.example/unconfirmed", { method: "POST", body: JSON.stringify({ ...original, id: "unconfirmed" }) });
+    assert.equal(unconfirmed.status, 503);
+    assert.deepEqual(await unconfirmed.json(), { error: "unconfirmed usage ingestion" });
     const snapshotResponse = await worker.dispatchFetch("https://router.example/snapshot?events=admin");
     assert.equal(snapshotResponse.status, 200);
     const snapshot = await snapshotResponse.json();
