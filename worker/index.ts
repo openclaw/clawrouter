@@ -121,8 +121,8 @@ async function sessionUsage(request: Request, env: Env): Promise<Response> {
   const session = await verifiedAccessSession(request, env);
   if (!session) return errorResponse("access_session_required", "a verified Cloudflare Access session is required", 401);
   const policies = await sessionPolicies(session, env);
-  const usage = await usageSnapshots(env, policies.map((entry) => ({ policyId: entry.policyId, tenantId: entry.policy.tenantId ?? session.tenantId })), { kind: "principal", id: session.email });
-  const policyRows = await Promise.all(policies.map(async (entry) => ({ policyId: entry.policyId, kid: entry.policyId, tenantId: entry.policy.tenantId ?? session.tenantId, enabled: entry.policy.enabled, providers: entry.policy.providers, tokenRole: entry.policy.tokenRole ?? null, monthlyBudgetMicros: entry.policy.monthlyBudgetMicros ?? null, requestCostMicros: entry.policy.requestCostMicros ?? null, budgetScope: entry.policy.budgetScope ?? "policy", budget: await budgetStatus(env, entry.policyId, entry.policy, budgetPrincipal({ credentialId: null, principalId: session.email, policy: entry.policy })) })));
+  const usage = await usageSnapshots(env, policies.map((entry) => ({ policyId: entry.policyId, tenantId: entry.policy.tenantId ?? "default" })), { kind: "principal", id: session.email });
+  const policyRows = await Promise.all(policies.map(async (entry) => ({ policyId: entry.policyId, kid: entry.policyId, tenantId: entry.policy.tenantId ?? "default", enabled: entry.policy.enabled, providers: entry.policy.providers, tokenRole: entry.policy.tokenRole ?? null, monthlyBudgetMicros: entry.policy.monthlyBudgetMicros ?? null, requestCostMicros: entry.policy.requestCostMicros ?? null, budgetScope: entry.policy.budgetScope ?? "policy", budget: await budgetStatus(env, entry.policyId, entry.policy, budgetPrincipal({ credentialId: null, principalId: session.email, policy: entry.policy })) })));
   return privateJson({ session: publicSession(session), policies: policyRows, usage });
 }
 

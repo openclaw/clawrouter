@@ -4,7 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 const { default: worker } = await import("../index.ts");
 const { PolicyBindingIndexObject, authorityCall } = await import("../authority.ts");
-const { BudgetLedgerObject, UsageLedgerObject, ingestUsage } = await import("../ledgers.ts");
+const { BudgetLedgerObject, UsageLedgerObject, ingestUsage, providerBudgetStatus } = await import("../ledgers.ts");
 const { normalizeEmail, sha256Hex } = await import("../utils.ts");
 
 for (const budgetScope of ["policy", "principal"]) {
@@ -31,6 +31,78 @@ for (const budgetScope of ["policy", "principal"]) {
     const cookie = await f.login("alice@example.com");
     assert.equal((await f.read("/v1/admin/usage", cookie)).status, 403);
     assert.equal((await f.read("/v1/admin/content?tenant=tenant&ref=bob-content", cookie)).status, 403);
+  });
+}
+
+for (const [name, tenantField, tenant] of [["omitted", {}, "default"], ["null", { tenantId: null }, "default"], ["explicit", { tenantId: "policy-team" }, "policy-team"]]) {
+  test(`${name} policy tenant keeps charged session usage visible across a user tenant change`, async (t) => {
+    let dispatched = 0;
+    const f = await fixture(t, "principal", (url, init) => {
+      assert.equal(String(url), "https://api.openai.com/v1/chat/completions");
+      assert.equal(new Headers(init.headers).get("authorization"), "Bearer fixture-upstream-key");
+      assert.equal(JSON.parse(init.body).model, "gpt-4.1-mini");
+      dispatched++;
+      return Promise.resolve(Response.json({ choices: [{ message: { role: "assistant", content: "ok" } }], usage: { prompt_tokens: 2, completion_tokens: 1, total_tokens: 3 } }));
+    });
+    await authorityCall(f.env, "/policies/put", { policyId: "shared", policy: { enabled: true, generation: "g1", providers: ["openai"], monthlyBudgetMicros: 100, requestCostMicros: 7, budgetScope: "principal", retainRequestContent: false, ...tenantField } });
+    await authorityCall(f.env, "/connections/put", { providerId: "openai", enabled: true, monthlyBudgetMicros: 100 });
+    f.env.OPENAI_API_KEY = "fixture-upstream-key";
+    const emitted = [];
+    f.env.USAGE_QUEUE = { async send(event) { emitted.push(event); } };
+    const cookies = [];
+    for (const who of ["alice", "bob"]) {
+      await f.setUser(`${who}@example.com`, { tenantId: "organization" });
+      const cookie = await f.login(`${who}@example.com`);
+      cookies.push(cookie);
+      const pending = [];
+      const response = await worker.fetch(new Request("https://router.example/v1/playground/v1/chat/completions", {
+        method: "POST", headers: { ...cookie, origin: "https://router.example", "content-type": "application/json" },
+        body: JSON.stringify({ model: "openai/gpt-4.1-mini", messages: [{ role: "user", content: "hello" }], max_tokens: 16 }),
+      }), f.env, { waitUntil(promise) { pending.push(promise); } });
+      assert.equal(response.status, 200);
+      assert.equal((await response.json()).choices[0].message.content, "ok");
+      await Promise.all(pending);
+    }
+    assert.equal(dispatched, 2);
+    assert.equal(emitted.length, 2);
+    assert.equal(new Set(emitted.map(event => event.id)).size, 2);
+    for (const [index, event] of emitted.entries()) {
+      assert.equal(event.tenant_id, tenant);
+      assert.equal(event.policy_id, "shared");
+      assert.equal(event.principal_id, `${index === 0 ? "alice" : "bob"}@example.com`);
+      assert.equal(event.credential_id, null);
+      assert.equal(event.auth_type, "access");
+      assert.equal(event.status, "success");
+      assert.equal(event.cost_basis, "policy_fixed");
+      assert.equal(event.actual_cost_micros, 7);
+      assert.equal(event.reserved_cost_micros, 7);
+    }
+    let acknowledged = 0;
+    await worker.queue({ messages: emitted.map(body => ({ body, ack() { acknowledged++; }, retry() { assert.fail("emitted usage must persist"); } })) }, f.env);
+    assert.equal(acknowledged, 2);
+    for (const [index, cookie] of cookies.entries()) {
+      const { status, body } = await f.read("/v1/session/usage", cookie);
+      assert.equal(status, 200);
+      assert.equal(body.session.tenantId, "organization");
+      assert.equal(body.policies[0].tenantId, tenant);
+      assert.equal(body.policies[0].budget.spentMicros, 7);
+      assert.equal(body.policies[0].budget.windowKey.startsWith(`${tenant}/shared/${emitted[index].principal_id}/`), true);
+      assert.equal(body.usage.summary.requestCount, 2);
+      assert.equal(body.usage.summary.actualCostMicros, 14);
+      assert.deepEqual(body.usage.events, [emitted[index]]);
+    }
+    const providerBudget = await providerBudgetStatus(f.env, "openai", 100);
+    assert.equal(providerBudget.spentMicros, 14);
+    assert.equal(providerBudget.remainingMicros, 86);
+    const before = (await f.read("/v1/session/usage", cookies[0])).body;
+    assert.deepEqual((await f.read("/v1/usage", f.key("alice"))).body.usage, before.usage);
+    await f.setUser("alice@example.com", { tenantId: "moved-organization" });
+    const after = await f.read("/v1/session/usage", cookies[0]);
+    assert.equal(after.status, 200);
+    assert.equal(after.body.session.tenantId, "moved-organization");
+    assert.deepEqual(after.body.policies, before.policies);
+    assert.deepEqual(after.body.usage, before.usage);
+    assert.equal(dispatched, 2);
   });
 }
 
@@ -132,8 +204,8 @@ test("the usage owner requires explicit event scope and does not change historic
 function ids(snapshot) { return snapshot.events.map(event => event.id).sort(); }
 function totals({ summary, providers, daily }) { return { summary, providers, daily }; }
 
-async function fixture(t, budgetScope = "policy") {
-  t.mock.method(globalThis, "fetch", () => assert.fail("usage reads must not contact an upstream"));
+async function fixture(t, budgetScope = "policy", upstream = () => assert.fail("usage reads must not contact an upstream")) {
+  t.mock.method(globalThis, "fetch", upstream);
   function namespace(ObjectClass) {
     const objects = new Map();
     return { idFromName: name => name, get(name) {
@@ -150,7 +222,7 @@ async function fixture(t, budgetScope = "policy") {
   const env = {
     CLAWROUTER_LOCAL_AUTH: "enabled", CLAWROUTER_ADMIN_TOKEN_SHA256: await sha256Hex(adminToken),
     ACCESS_CONTROL: namespace(PolicyBindingIndexObject), USAGE_LEDGER: namespace(UsageLedgerObject), BUDGET_LEDGER: namespace(BudgetLedgerObject),
-    POLICY_KV: { async get(key) { return kv.has(key) ? JSON.parse(kv.get(key)) : null; }, async put(key, value) { kv.set(key, value); }, async list() { return { keys: [], list_complete: true }; } },
+    POLICY_KV: { async get(key) { const read = key => kv.has(key) ? JSON.parse(kv.get(key)) : null; return Array.isArray(key) ? new Map(key.map(item => [item, read(item)])) : read(key); }, async put(key, value) { kv.set(key, value); }, async list() { return { keys: [], list_complete: true }; } },
     CONTENT_ARCHIVE: { get() { assert.fail("personal usage must not expose archived content"); } },
   };
   const setPolicy = (policyId, tenantId = "tenant") => authorityCall(env, "/policies/put", { policyId, policy: { enabled: true, generation: "g1", providers: ["openai"], tenantId, monthlyBudgetMicros: 1000000, budgetScope } });
