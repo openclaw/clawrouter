@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import { GrantCredentialObject, materializeGrantCredentials, putGrantCredentials, reconcileGrantAttachment, revokeGrantCredentials } from "../grant-credentials.ts";
-import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
+import { attachGrantCredentialNamespace, rateLimitKv } from "./grant-credential-mock.mjs";
 import { acceptGrantPoolBaseline, recoverGrantPools } from "../../scripts/grant-pool-recovery.mjs";
 const { adminApi } = await import("../admin.ts");
 
@@ -11,6 +11,12 @@ const ref = "acct_12345678-1234-4123-8123-123456789abc";
 const key = `oauth/policy/${ref}`;
 const route = `/v1/admin/upstream-grants/policies/policy/${ref}`;
 const primary = { provider: "openai", kind: "api_key", credential: "synthetic-primary" };
+const edits = [
+  { name: "legacy PUT", method: "PUT", path: route, body: { provider: "openai", kind: "api_key", enabled: false, label: "edited" } },
+  { name: "legacy replace", method: "PUT", path: `${route}?mode=replace`, body: { ...primary, credential: "replacement-fixture", enabled: false, label: "edited" } },
+  { name: "PATCH", method: "PATCH", path: route, body: { label: "edited" }, strict: true },
+  { name: "replace", method: "POST", path: `${route}/replace`, body: { credential: "replacement-fixture", label: "edited" }, strict: true },
+];
 
 test("authenticated create echoes the pre-known identity and duplicate POST never upserts", async () => {
   const env = fixture();
@@ -206,6 +212,67 @@ test("PATCH clear-only refresh token rotates lineage without clearing refresh ov
   }
 });
 
+for (const intent of ["create", "patch", "replace"]) for (const parameter of ["refresh_token", "client_secret", "accessToken", "credentials", "grant_type", "client_id"]) test(`${intent} refuses refresh authentication parameter ${parameter} before writes`, async context => {
+  const env = fixture();
+  if (intent !== "create") {
+    await env.request("POST", primary);
+    record(env).poolSyncPending = true;
+  }
+  const before = structuredClone(record(env)), indexed = await attachment(env), projection = env.values.get(key);
+  const reads = env.reads.length, writes = env.writes.length;
+  for (const name of ["put", "setAlarm", "deleteAlarm"]) context.mock.method(owner(env).state.storage, name, async () => assert.fail(`unexpected ${name}`));
+  context.mock.method(env.ACCESS_CONTROL, "get", () => assert.fail("invalid refresh metadata reached the index"));
+  const result = await env.request(intent === "patch" ? "PATCH" : "POST", {
+    ...(intent === "patch" ? {} : primary),
+    ...(intent === "create" ? {} : { expectedCredentialGeneration: before.generation }),
+    refresh: { tokenUrl: "https://token.example/refresh", extraParams: { [parameter]: "blocked-auth-fixture" } },
+  }, { path: intent === "replace" ? `${route}/replace` : route });
+  assert.equal(result.status, 400);
+  assert.equal(result.body.error.code, "invalid_upstream_grant");
+  assert.deepEqual(record(env), before);
+  assert.equal(env.values.get(key), projection);
+  assert.equal(env.reads.length, reads);
+  assert.equal(env.writes.length, writes);
+  assert.doesNotMatch(JSON.stringify([record(env), projection, result.body]), /blocked-auth-fixture/);
+  context.mock.restoreAll();
+  assert.deepEqual(await attachment(env), indexed);
+});
+
+for (const requestFormat of ["form", "json"]) for (const clientConfigured of [true, false]) test(`${requestFormat} refresh preserves owner authentication with client configuration ${clientConfigured}`, async context => {
+  const env = fixture();
+  env.FIXTURE_OAUTH_SECRET = "configured-client-secret-fixture";
+  const refresh = {
+    tokenUrl: "https://token.example/refresh", requestFormat,
+    ...(clientConfigured ? { clientId: "public-client-fixture", clientSecretConfig: "FIXTURE_OAUTH_SECRET" } : {}),
+    extraParams: { scope: "inference", audience: "provider-api" },
+  };
+  await env.request("POST", { provider: "openai", kind: "oauth", accessToken: "access-fixture", refreshToken: "refresh-fixture" });
+  assert.equal((await env.request("PATCH", { expectedCredentialGeneration: 1, refresh })).status, 200);
+  let calls = 0;
+  context.mock.method(globalThis, "fetch", async (url, init) => {
+    calls += 1;
+    assert.equal(url, refresh.tokenUrl);
+    assert.equal(new Headers(init.headers).get("content-type"), requestFormat === "json" ? "application/json" : "application/x-www-form-urlencoded");
+    const body = requestFormat === "json" ? JSON.parse(init.body) : Object.fromEntries(new URLSearchParams(init.body));
+    assert.deepEqual(body, {
+      grant_type: "refresh_token", refresh_token: record(env).refreshToken,
+      ...(clientConfigured ? { client_id: "public-client-fixture", client_secret: env.FIXTURE_OAUTH_SECRET } : {}),
+      scope: "inference", audience: "provider-api",
+    });
+    return Response.json({ access_token: `rotated-access-${calls}`, refresh_token: `rotated-refresh-${calls}`, expires_in: 3600 });
+  });
+  await materializeGrantCredentials(env, key, JSON.parse(env.values.get(key)), "openai", null, true);
+  assert.equal((await env.request("PATCH", { expectedCredentialGeneration: record(env).generation, refresh: null })).status, 200);
+  // Provider/legacy refresh configuration reaches the same form builder without
+  // strict metadata admission; it still cannot replace canonical authentication.
+  const legacyConfig = { ...refresh, extraParams: { ...refresh.extraParams, grant_type: "forged-grant", refresh_token: "forged-refresh", client_id: "forged-client", client_secret: "forged-secret", accessToken: "forged-access" } };
+  await materializeGrantCredentials(env, key, JSON.parse(env.values.get(key)), "openai", legacyConfig, true);
+  assert.equal(calls, 2);
+  const view = await env.request("GET");
+  assert.doesNotMatch(JSON.stringify([record(env), env.values.get(key), view.body]), /forged-|configured-client-secret-fixture/);
+  assert.doesNotMatch(JSON.stringify(view.body), /rotated-access|rotated-refresh|extraParams/);
+});
+
 for (const state of ["paused", "revoked"]) test(`whole replacement clears omitted material and preserves ${state} disablement`, async () => {
   const env = fixture();
   await env.request("POST", { provider: "openai", kind: "oauth", accessToken: "access-fixture", refreshToken: "refresh-fixture", tokenType: "old-type", accountId: "old-account", scopes: ["old-scope"], subscription: { subject: "old-subject" }, expiresAt: "2099-01-01T00:00:00.000Z", refresh: { tokenUrl: "https://token.example/old" }, label: "retained", priority: 7, weight: 3, enabled: false });
@@ -335,6 +402,60 @@ for (const stage of ["schedule", "index", "kv-before", "kv-after", "ack"]) test(
   assert.equal(env.writes.length, puts, "unchanged projection verification makes no duplicate KV put");
 });
 
+for (const edit of edits) for (const state of edit.strict ? ["pending"] : ["pending", "missing-lineage"]) test(`${edit.name} coalesces ${state} publication into its final generation`, async () => {
+  const env = fixture();
+  if (state === "pending") await pendingEdit(env);
+  else {
+    await env.request("POST", { ...primary, enabled: false });
+    delete record(env).lineage;
+  }
+  const before = structuredClone(record(env)), limit = rateLimitKv(env);
+  const result = await editAccount(env, edit, before.generation);
+  assert.equal(result.status, 200);
+  assert.equal(limit.writes(), 1, "no intermediate projection consumes the per-key write interval");
+  const after = record(env), projected = JSON.parse(env.values.get(key));
+  assert.equal(after.generation, before.generation + 1);
+  assert.equal(after.poolSyncPending, false);
+  assert.equal(after.enabled, false);
+  assert.equal(after.metadata.label, "edited");
+  assert.equal(projected.credentialGeneration, after.generation);
+  assert.equal(projected.credentialLineage, after.lineage);
+  assert.equal(after.credential, edit.name.includes("replace") ? "replacement-fixture" : before.credential);
+  if (state === "missing-lineage") assert.match(after.lineage, /^[0-9a-f-]{36}$/);
+  else if (!edit.name.includes("replace")) assert.equal(after.lineage, before.lineage);
+  assert.equal((await attachment(env)).generation, after.generation);
+  assert.equal((await attachment(env)).pending, false);
+});
+
+for (const edit of edits) for (const failure of ["admission", "store"]) test(`${edit.name} preserves pending obligations after a subsequent ${failure} failure`, async () => {
+  const env = fixture();
+  await pendingEdit(env);
+  const before = structuredClone(record(env)), limit = rateLimitKv(env);
+  const storage = owner(env).state.storage, put = storage.put, authority = env.ACCESS_CONTROL.get;
+  if (failure === "admission") env.ACCESS_CONTROL.get = id => ({ fetch: (url, init) => new URL(url).pathname === "/grant-pools/admit"
+    ? Promise.resolve(Response.json({ error: { code: "fixture_admission_failure", message: "fixture admission unavailable" } }, { status: 503 })) : authority(id).fetch(url, init) });
+  else storage.put = async (name, row) => {
+    if (row.generation === before.generation + 1 && row.poolAdmissionRevision !== before.poolAdmissionRevision) throw new Error("fixture mutation store unavailable");
+    return put(name, row);
+  };
+  if (edit.strict) {
+    const result = await editAccount(env, edit, before.generation);
+    assert.equal(result.status, 503);
+    assert.equal(result.body.error.code, failure === "admission" ? "fixture_admission_failure" : "grant_mutation_unconfirmed");
+  } else await assert.rejects(() => editAccount(env, edit, before.generation), error => error.status === (failure === "admission" ? 503 : 500));
+  assert.deepEqual(record(env), before, "preparation never acknowledges or replaces the pending owner");
+  assert.equal(limit.writes(), 0);
+  assert.equal((await env.request("GET")).body.publication, "pending");
+  storage.put = put; env.ACCESS_CONTROL.get = authority;
+  await reconcileGrantAttachment(env, key);
+  assert.deepEqual(record(env), { ...before, poolSyncPending: false });
+  assert.equal(limit.writes(), 1);
+  assert.equal(JSON.parse(env.values.get(key)).credentialGeneration, before.generation);
+  assert.equal((await attachment(env)).generation, before.generation);
+  assert.equal((await attachment(env)).attached, true);
+  assert.equal((await attachment(env)).pending, false);
+});
+
 test("released PUT and erase-first revoke keep non-2xx pending outcomes", async () => {
   const env = fixture();
   await env.request("POST", primary);
@@ -425,7 +546,8 @@ function fixture() {
     },
   });
   env.request = async (method, body, { path = route, auth = true } = {}) => {
-    const response = await adminApi(new Request(`https://router.example${path}`, { method, headers: { "content-type": "application/json", ...(auth ? { authorization: "Bearer admin-fixture" } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), env, path);
+    const request = new Request(`https://router.example${path}`, { method, headers: { "content-type": "application/json", ...(auth ? { authorization: "Bearer admin-fixture" } : {}) }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
+    const response = await adminApi(request, env, new URL(request.url).pathname);
     return { status: response.status, headers: response.headers, body: await response.json() };
   };
   env.recoveryRequest = async (path, { method = "GET", body } = {}) => {
@@ -439,6 +561,18 @@ function fixture() {
 function owner(env) { env.GRANT_CREDENTIALS.get(key); return env.GRANT_CREDENTIALS.objects.get(key); }
 function record(env) { return owner(env).values.get("credential"); }
 function attachment(env) { return env.grantAuthority.call("attachment", { key }); }
+function editAccount(env, edit, generation) {
+  return env.request(edit.method, { ...edit.body, ...(edit.strict ? { expectedCredentialGeneration: generation } : {}) }, { path: edit.path });
+}
+async function pendingEdit(env) {
+  await env.request("POST", { ...primary, enabled: false });
+  const projection = env.values.get(key), restore = failFinalization(env, "kv-before");
+  const result = await env.request("PATCH", { expectedCredentialGeneration: 1, label: "pending" });
+  assert.equal(result.status, 202);
+  assert.equal(record(env).poolSyncPending, true);
+  assert.equal(env.values.get(key), projection);
+  restore();
+}
 function failFinalization(env, stage) {
   const storage = owner(env).state.storage, put = storage.put, removeAlarm = storage.deleteAlarm, kvPut = env.POLICY_KV.put, authority = env.ACCESS_CONTROL.get;
   if (stage === "schedule") storage.deleteAlarm = async () => { throw new Error("fixture schedule failure"); };

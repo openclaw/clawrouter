@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { materializeGrantCredentials, putGrantCredentials, revokeGrantCredentials } from "../grant-credentials.ts";
-import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
+import { attachGrantCredentialNamespace, rateLimitKv } from "./grant-credential-mock.mjs";
 
 test("legacy grants migrate to the credential owner before KV secrets are scrubbed", async () => {
   const key = "oauth/policy/openai";
@@ -537,17 +537,6 @@ function credentialEnv(values) {
       async put(key, value) { values.set(key, JSON.parse(value)); },
     },
   });
-}
-
-function rateLimitKv(env) {
-  const put = env.POLICY_KV.put;
-  let now = 0, lastWrite = -Infinity, writes = 0;
-  env.POLICY_KV.put = async (...args) => {
-    if (now - lastWrite < 1_000) throw new Error("KV PUT failed: 429 Too Many Requests");
-    await put(...args);
-    lastWrite = now; writes += 1;
-  };
-  return { advance() { now += 1_000; }, writes: () => writes };
 }
 
 function legacyGrant(overrides = {}) {

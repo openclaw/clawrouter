@@ -7,6 +7,7 @@ import { HttpError } from "./utils.ts";
 
 const MAX_SECRET_BYTES = 64 * 1024;
 const snapshot = snapshotJson as unknown as ProviderSnapshot;
+const secretFields = new Set(["accessToken", "access_token", "refreshToken", "refresh_token", "credential", "credentials", "apiKey", "api_key", "token", "secret", "clientSecret", "client_secret", "password"]);
 
 export interface CredentialRecord {
   version: 1;
@@ -233,8 +234,11 @@ export function hasPrimaryCredential(grant: UpstreamGrant): boolean {
 export function stripLegacySecrets(value: unknown): unknown {
   if (Array.isArray(value)) return value.map(stripLegacySecrets);
   if (!value || typeof value !== "object") return value;
-  const secrets = new Set(["accessToken", "access_token", "refreshToken", "refresh_token", "credential", "credentials", "apiKey", "api_key", "token", "secret", "clientSecret", "client_secret", "password"]);
-  return Object.fromEntries(Object.entries(value).filter(([name]) => !secrets.has(name)).map(([name, item]) => [name, stripLegacySecrets(item)]));
+  return Object.fromEntries(Object.entries(value).filter(([name]) => !secretFields.has(name)).map(([name, item]) => [name, stripLegacySecrets(item)]));
+}
+
+export function isRefreshAuthenticationParameter(name: string): boolean {
+  return name === "grant_type" || name === "client_id" || secretFields.has(name);
 }
 
 function normalizedCredentials(value: Record<string, string>): Record<string, string> {

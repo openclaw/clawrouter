@@ -404,7 +404,9 @@ New account-management clients use the strict routes:
   lineage. Non-null refresh tokens, primary credentials, provider/kind changes and
   owner status fields are rejected. Metadata edits never heal reauthorization or
   revocation. Clearing `refresh` removes the override; provider refresh configuration
-  can still apply. Clear the refresh token to prevent its use.
+  can still apply. Clear the refresh token to prevent its use. Refresh `extraParams`
+  accepts public extensions such as `scope` and `audience`, not credential fields or
+  overrides of the owner-controlled grant type and client authentication.
 - POST `/replace` requires a fresh primary credential. It clears omitted or competing
   old credential forms and old token type, expiry, scopes, account, subscription and
   refresh material. Omitted token type defaults to `Bearer`. Routing identity, label,

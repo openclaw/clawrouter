@@ -1,7 +1,7 @@
 import snapshotJson from "./generated/provider-snapshot.json" with { type: "json" };
 import {
   credentialIdentityChanged, credentialRecord, hasPrimaryCredential, metadataGrant,
-  nextCredentialGeneration, normalizedScopes, ownerMetadata, validTimestamp, type CredentialRecord,
+  isRefreshAuthenticationParameter, nextCredentialGeneration, normalizedScopes, ownerMetadata, validTimestamp, type CredentialRecord,
 } from "./grant-credential-record.ts";
 import { grantResponse } from "./grant-credential-view.ts";
 import type { ProviderSnapshot, UpstreamGrant } from "./types";
@@ -98,6 +98,7 @@ function normalizeFields(body: Record<string, unknown>): UpstreamGrant {
     if (refresh.extraParams !== undefined) {
       const params = object(refresh.extraParams, "refresh extraParams");
       if (Object.keys(params).length > 32 || Object.values(params).some(value => typeof value !== "string" || value.length > 2048)) invalid("refresh extraParams must contain at most 32 bounded strings");
+      if (Object.keys(params).some(isRefreshAuthenticationParameter)) invalid("refresh extraParams must not contain credentials or override authentication fields");
     }
   }
   if (body.tokenType !== undefined && (typeof body.tokenType !== "string" || !body.tokenType || body.tokenType.length > 128)) invalid("tokenType must be a bounded non-empty string");

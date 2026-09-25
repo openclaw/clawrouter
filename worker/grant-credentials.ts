@@ -9,7 +9,7 @@ import { applyTemplateHeaders, resolveTemplate } from "./provider-templates.ts";
 import type { GrantPoolReadiness } from "../shared/contracts.ts";
 import { accountCredentialView, assertNewAccountRef, grantIntentBody, strictCredentialRecord, type GrantCredentialIntent } from "./grant-credential-intents.ts";
 
-import { canonicalRecord, nextCredentialGeneration, ownerMetadata, metadataGrant, attachmentStatus, revokedRecord, hasRawCredential, credentialRecord, updatedCredentialRecord, credentialProjection, materializedGrant, hasPrimaryCredential, stripLegacySecrets, boundedSecret, type CredentialRecord, type CredentialProjection } from "./grant-credential-record.ts";
+import { canonicalRecord, nextCredentialGeneration, ownerMetadata, metadataGrant, attachmentStatus, revokedRecord, hasRawCredential, credentialRecord, updatedCredentialRecord, credentialProjection, materializedGrant, hasPrimaryCredential, stripLegacySecrets, isRefreshAuthenticationParameter, boundedSecret, type CredentialRecord, type CredentialProjection } from "./grant-credential-record.ts";
 export { secretlessGrant, hasRawCredential, hasPrimaryCredential, type CredentialProjection } from "./grant-credential-record.ts";
 
 const REFRESH_MARGIN_MS = 5 * 60_000;
@@ -103,7 +103,7 @@ export class GrantCredentialObject implements DurableObject {
           if (current && attachment.generation > current.generation) throw new HttpError(409, "grant_attachment_changed", "attachment is newer than the credential owner; operator recovery is required");
         } else {
           current = await this.loadRecord(input.key, current);
-          attachment = current?.poolSyncPending ? (await this.finalize(current)).result : (await this.reconcileAttachment(input.key)).result;
+          attachment = current?.poolSyncPending ? (await this.finalize(current, "prepare")).result : (await this.reconcileAttachment(input.key)).result;
           previous = current ? metadataGrant(current) : await legacyGrantMetadata(this.env, input.key);
         }
         if (!current && !previous) {
@@ -205,7 +205,7 @@ export class GrantCredentialObject implements DurableObject {
       indexed = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/attachment", { key });
       if (indexed.generation || indexed.revision || indexed.attached || indexed.pending) throw new HttpError(409, "grant_already_exists", "account identity has retained attachment evidence; repair it before choosing another identity");
     } else {
-      if (current!.poolSyncPending) await this.finalize(current!);
+      if (current!.poolSyncPending) await this.finalize(current!, "prepare");
       indexed = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/attachment", { key });
     }
     const admitted = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/admit", { key, generation: current?.generation ?? 0, revision: indexed.revision, provider: record.providerId ?? null, status: attachmentStatus(record) });
@@ -293,7 +293,9 @@ export class GrantCredentialObject implements DurableObject {
       if (!secret) throw new HttpError(503, "provider_not_configured", `missing refresh client secret ${config.clientSecretConfig}`);
       form.set("client_secret", secret);
     }
-    for (const [name, value] of Object.entries(config.extraParams ?? {})) form.set(name, value);
+    // Legacy extra parameters cannot replace owner credentials or configured
+    // client authentication. Public scope/audience extensions remain available.
+    for (const [name, value] of Object.entries(config.extraParams ?? {})) if (!isRefreshAuthenticationParameter(name)) form.set(name, value);
 
     const requestFormat = config.requestFormat ?? "form";
     let response: Response;
@@ -408,8 +410,8 @@ export class GrantCredentialObject implements DurableObject {
     }
     await this.schedule(record);
     let { result } = await this.reconcileAttachment(record.grantKey);
-    // Migration must establish its schedule/index before any provider I/O.
-    // Keep the obligation open so refresh publishes only its final KV state.
+    // Establish schedule/index before provider I/O or another owner mutation.
+    // Keep the obligation open and publish only the operation's final KV state.
     if (mode === "prepare") return { record, result };
     if (mode === "backfill" && !record.revokedAt && result.outcome === "unattached" && record.providerId) {
       const generation = nextCredentialGeneration(record.generation);
