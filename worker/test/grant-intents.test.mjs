@@ -586,6 +586,118 @@ test("legacy metadata PUT still initializes an unowned raw grant", async () => {
   assert.equal(JSON.parse(env.values.get(key)).accessToken, undefined);
 });
 
+for (const state of ["expired", "invalid"]) for (const kind of ["oauth", "api_key"]) for (const form of ["credential", "credentials"]) test(`legacy ${form} PUT preserves ${state} inherited access authority for ${kind}`, async context => {
+  let clock = Date.parse("2026-09-24T12:00:00Z");
+  context.mock.method(Date, "now", () => clock);
+  const env = fixture();
+  await env.request("POST", {
+    provider: "openai", kind, accessToken: "retained-access-fixture", expiresAt: new Date(clock + 1_000).toISOString(),
+    ...(state === "invalid" ? { refreshToken: "refresh-fixture", refresh: { tokenUrl: "https://token.example/refresh" } } : {}),
+  });
+  if (state === "invalid") {
+    context.mock.method(globalThis, "fetch", async () => Response.json({ access_token: "rotated-access-fixture", refresh_token: "rotated-refresh-fixture", expires_in: "bad" }));
+    await assert.rejects(() => materializeGrantCredentials(env, key, JSON.parse(env.values.get(key)), "openai", null, true), error => error.code === "grant_refresh_failed");
+  } else clock += 1_001;
+  const before = structuredClone(record(env));
+  context.mock.method(globalThis, "fetch", async () => assert.fail("inherited denied token egress"));
+  const result = await env.request("PUT", form === "credential" ? { credential: "new-scalar-fixture" } : { credentials: { api_key: "new-bundle-fixture" } });
+  assert.equal(result.status, 200);
+  assert.equal(record(env).accessToken, before.accessToken);
+  assert.equal(record(env).expiresAt, before.expiresAt);
+  assert.equal(record(env).tokenResponseError, before.tokenResponseError);
+  assert.equal(record(env).nextRefreshAttemptAt, before.nextRefreshAttemptAt);
+  assert.equal(record(env).status, state === "expired" ? "reauth_required" : "active");
+  assert.equal(record(env).generation, before.generation + 1);
+  assert.equal(result.body.usable, false);
+  // Even when api_key dispatch prefers the new scalar, changing the kind later
+  // must not revive the still-retained access token.
+  assert.equal((await env.request("PUT", { kind: "oauth" })).status, 200);
+  assert.equal(record(env).expiresAt, before.expiresAt);
+  assert.equal(record(env).tokenResponseError, before.tokenResponseError);
+  await assert.rejects(() => materializeGrantCredentials(env, key, JSON.parse(env.values.get(key)), "openai", null), error => error.code === (state === "expired" ? "grant_reauthorization_required" : "grant_refresh_failed"));
+});
+
+for (const origin of ["current", "raw"]) for (const renewal of ["access", "clear-and-scalar", "replace"]) test(`${origin} legacy explicit ${renewal} establishes fresh authority instead of inheriting an expired token`, async context => {
+  const clock = Date.parse("2026-09-24T12:00:00Z");
+  context.mock.method(Date, "now", () => clock);
+  const env = fixture();
+  const expired = { provider: "openai", kind: "oauth", accessToken: "expired-fixture", expiresAt: new Date(clock - 1).toISOString() };
+  if (origin === "raw") env.values.set(key, JSON.stringify(expired));
+  else await env.request("POST", expired);
+  const result = await env.request("PUT", renewal === "access" ? { accessToken: "fresh-access-fixture" }
+    : renewal === "replace" ? { ...primary, credential: "fresh-scalar-fixture" }
+      : { accessToken: null, credential: "fresh-scalar-fixture" }, { path: renewal === "replace" ? `${route}?mode=replace` : route });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.usable, true);
+  assert.equal(record(env).status, "active");
+  assert.equal(record(env).expiresAt == null, true);
+  assert.equal(record(env).accessToken, renewal === "access" ? "fresh-access-fixture" : renewal === "replace" ? undefined : null);
+});
+
+for (const expiresAt of [null, "2099-01-01T00:00:00.000Z"]) test(`first raw legacy metadata PUT cannot renew expired authority with ${expiresAt}`, async context => {
+  const clock = Date.parse("2026-09-24T12:00:00Z");
+  context.mock.method(Date, "now", () => clock);
+  const env = fixture(), expired = new Date(clock - 1).toISOString();
+  env.values.set(key, JSON.stringify({ provider: "openai", kind: "oauth", accessToken: "raw-expired-fixture", expiresAt: expired }));
+  const storage = owner(env).state.storage, put = storage.put, committed = [];
+  storage.put = async (name, value) => { committed.push(structuredClone(value)); return put(name, value); };
+  context.mock.method(globalThis, "fetch", async () => assert.fail("expired raw import egress"));
+  const result = await env.request("PUT", { label: "imported expired account", expiresAt });
+  assert.equal(result.status, 200);
+  assert.equal(result.body.usable, false);
+  assert.equal(record(env).accessToken, "raw-expired-fixture");
+  assert.equal(record(env).expiresAt, expired);
+  assert.equal(record(env).status, "reauth_required");
+  assert.deepEqual(committed.map(value => [value.generation, value.status, value.poolSyncPending]), [[1, "reauth_required", true], [1, "reauth_required", false]], "no intermediate legacy owner commit");
+  assert.equal(env.writes.length, 1);
+  assert.equal((await attachment(env)).generation, 1);
+  await assert.rejects(() => materializeGrantCredentials(env, key, JSON.parse(env.values.get(key)), "openai", null), error => error.code === "grant_reauthorization_required");
+});
+
+for (const failure of ["admission", "kv-before", "kv-after"]) test(`first raw legacy PUT preserves expired authority across ${failure} failure and owner restart`, async context => {
+  const clock = Date.parse("2026-09-24T12:00:00Z"), expiresAt = new Date(clock - 1).toISOString();
+  context.mock.method(Date, "now", () => clock);
+  const env = fixture(), legacy = JSON.stringify({ provider: "openai", kind: "subscription", accessToken: "raw-expired-fixture", expiresAt });
+  env.values.set(key, legacy);
+  const own = owner(env), storage = own.state.storage, put = storage.put, kvPut = env.POLICY_KV.put, authority = env.ACCESS_CONTROL.get, committed = [];
+  storage.put = async (name, value) => { committed.push(structuredClone(value)); return put(name, value); };
+  context.mock.method(globalThis, "fetch", async () => assert.fail("unconfirmed raw import must not dispatch"));
+  if (failure === "admission") env.ACCESS_CONTROL.get = id => ({ fetch: (url, init) => new URL(url).pathname === "/grant-pools/admit"
+    ? Promise.resolve(Response.json({ error: { code: "fixture_admission_failure", message: "fixture admission unavailable" } }, { status: 503 })) : authority(id).fetch(url, init) });
+  else env.POLICY_KV.put = async (...args) => { if (failure === "kv-after") await kvPut(...args); throw new Error("fixture projection acknowledgement unavailable"); };
+  await assert.rejects(() => env.request("PUT", { label: "imported expired account", expiresAt: null }), error => error.code === (failure === "admission" ? "fixture_admission_failure" : "credential_owner_error"));
+  const before = structuredClone(record(env));
+  if (failure === "admission") {
+    assert.equal(before, undefined);
+    assert.deepEqual(committed, []);
+    assert.deepEqual(await attachment(env), { generation: 0, revision: 0, attached: false, pending: false });
+  } else {
+    assert.equal(before.generation, 1);
+    assert.equal(before.poolSyncPending, true);
+    assert.equal(before.status, "reauth_required");
+    assert.equal(before.expiresAt, expiresAt);
+    assert.deepEqual(committed.map(value => [value.generation, value.status]), [[1, "reauth_required"]]);
+    assert.equal((await attachment(env)).generation, 1);
+  }
+  if (failure !== "kv-after") assert.equal(env.values.get(key), legacy);
+  env.ACCESS_CONTROL.get = authority; env.POLICY_KV.put = kvPut;
+  own.object = new GrantCredentialObject(own.state, env);
+  if (failure === "admission") assert.equal((await env.request("PUT", { label: "imported expired account", expiresAt: null })).status, 200);
+  else await reconcileGrantAttachment(env, key);
+  assert.equal(record(env).generation, 1);
+  assert.equal(record(env).poolSyncPending, false);
+  assert.equal(record(env).status, "reauth_required");
+  assert.equal(record(env).expiresAt, expiresAt);
+  assert.equal(record(env).accessToken, "raw-expired-fixture");
+  if (before) {
+    assert.equal(record(env).lineage, before.lineage);
+    assert.equal(record(env).poolAdmissionRevision, before.poolAdmissionRevision);
+  }
+  assert.deepEqual(committed.map(value => [value.generation, value.status, value.poolSyncPending]), [[1, "reauth_required", true], [1, "reauth_required", false]], "only the final denied mutation and its acknowledgement are stored");
+  assert.equal(env.writes.length, 1, "lost KV acknowledgements do not republish matching bytes");
+  await assert.rejects(() => materializeGrantCredentials(env, key, JSON.parse(env.values.get(key)), "openai", null), error => error.code === "grant_reauthorization_required");
+});
+
 for (const credentials of [null, {}]) test(`legacy explicit credentials ${JSON.stringify(credentials)} retains the canonical bundle`, async () => {
   const env = fixture(), old = { provider: "aws-bedrock", kind: "api_key", credentials: { accessKeyId: "old-id", secretAccessKey: "old-key" } };
   env.values.set(key, JSON.stringify(old));

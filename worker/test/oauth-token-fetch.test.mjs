@@ -54,6 +54,56 @@ test("OAuth token timeout returns the connection-failed page instead of throwing
   assert.match(await response.text(), /Provider token exchange failed/);
 });
 
+test("callback lifetime is consumed while an earlier owner publication holds its queue", async context => {
+  const observed = Date.parse("2026-09-24T12:00:00Z");
+  let clock = observed;
+  context.mock.method(Date, "now", () => clock);
+  const key = "oauth/policy/openai", values = new Map();
+  const blocked = Promise.withResolvers(), release = Promise.withResolvers(), queued = Promise.withResolvers();
+  const env = attachGrantCredentialNamespace({ POLICY_KV: {
+    async get(key, type) { const value = values.get(key) ?? null; return type === "text" && value !== null ? JSON.stringify(value) : structuredClone(value); },
+    async put(key, value) {
+      const grant = JSON.parse(value);
+      if (grant.label === "held publication") { blocked.resolve(); await release.promise; }
+      values.set(key, grant);
+    },
+  } });
+  const { putGrantCredentials, materializeGrantCredentials } = await import("../grant-credentials.ts");
+  const active = await putGrantCredentials(env, key, { provider: "openai", kind: "oauth", accessToken: "old-fixture", expiresAt: new Date(observed + 3_600_000).toISOString() });
+  const earlier = putGrantCredentials(env, key, { ...active, label: "held publication" }, true);
+  await blocked.promise;
+  const get = env.GRANT_CREDENTIALS.get;
+  env.GRANT_CREDENTIALS.get = name => {
+    const stub = get(name);
+    return { fetch: (url, init) => {
+      if (new URL(url).pathname === "/token-exchange") queued.resolve();
+      return stub.fetch(url, init);
+    } };
+  };
+  const fetch = context.mock.method(globalThis, "fetch", async () => Response.json({ access_token: "callback-short-fixture", expires_in: 10 }));
+  const callback = oauthCallback(new Request("https://console.example/v1/oauth/callback?state=state-1&code=auth-code"), env);
+  try {
+    await queued.promise;
+    clock = observed + 20_000;
+    release.resolve();
+    await earlier;
+    const response = await callback;
+    assert.equal(response.status, 400);
+    assert.match(await response.text(), /Connection saved, but the provider token is unavailable/);
+    const own = env.GRANT_CREDENTIALS.objects.get(key), record = own.values.get("credential");
+    assert.equal(record.expiresAt, new Date(observed + 10_000).toISOString());
+    assert.equal(record.updatedAt, new Date(clock).toISOString());
+    assert.equal(record.status, "reauth_required");
+    assert.equal(record.accessToken, "callback-short-fixture");
+    assert.equal(own.alarm(), null);
+    await assert.rejects(() => materializeGrantCredentials(env, key, values.get(key), "openai", null), error => error.code === "grant_reauthorization_required");
+    assert.equal(fetch.mock.callCount(), 1);
+  } finally {
+    release.resolve();
+    await Promise.allSettled([earlier, callback]);
+  }
+});
+
 test("OAuth token exchange cannot recover corrupt legacy metadata through ordinary owner PUT", async (context) => {
   const key = "oauth/policy/openai", raw = '{"accessToken":"legacy-private",';
   let writes = 0;

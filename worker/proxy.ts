@@ -202,28 +202,30 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     return auth;
   }
   validateSelectedInput(selection);
-  const estimatedCost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability, selection.endpoint);
-  const accounting = createProxyAccounting({ context, env, auth, selection, request, cost: estimatedCost, compound });
-  const { cost, requestId } = accounting;
-  if (reservedBudget && (reservedBudget.providerId !== selection.provider.id || reservedBudget.modelId !== selection.model?.id || reservedBudget.capability !== selection.capability || estimatedCost.reserveMicros > reservedBudget.cost.reserveMicros)) {
-    accounting.fail(500, "provider_error", reservedBudget.reservation);
-    return errorResponse("fusion_reservation_invalid", "fusion synthesizer reservation does not cover the final request", 500);
-  }
+  const accountingContext = { context, env, auth, selection, request, compound, startedAtMs: Date.now() };
+  let accounting: ReturnType<typeof createProxyAccounting> | undefined;
   let prepared: PreparedUpstream;
   let continuation: HttpContinuation | undefined;
   try {
-    // Monetary coverage alone cannot prove that the final request remains priced.
-    if (reservedBudget) validateBudgetReservation(selection.capability, estimatedCost, auth.policy.monthlyBudgetMicros, reservedBudget.connection);
     continuation = await HttpContinuation.resolve(request, selection, auth, env);
     prepared = await prepareSelected(request, env, selection, queryInput, auth, new Set(), true, reservedBudget?.connection, continuation?.pinned);
     if (prepared.continuation) continuation?.bind(prepared.continuation);
+    const cost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability, selection.endpoint, continuation?.parentTools);
+    accounting = createProxyAccounting({ ...accountingContext, cost });
+    if (reservedBudget && (reservedBudget.providerId !== selection.provider.id || reservedBudget.modelId !== selection.model?.id || reservedBudget.capability !== selection.capability || cost.reserveMicros > reservedBudget.cost.reserveMicros)) {
+      accounting.fail(500, "provider_error", reservedBudget.reservation);
+      return errorResponse("fusion_reservation_invalid", "fusion synthesizer reservation does not cover the final request", 500);
+    }
+    // Monetary coverage alone cannot prove that the final request remains priced.
+    if (reservedBudget) validateBudgetReservation(selection.capability, cost, auth.policy.monthlyBudgetMicros, reservedBudget.connection);
   }
   catch (error) {
     const failure = continuation?.requested && error instanceof HttpError && ["upstream_grant_pool_unavailable", "upstream_grant_changed", "grant_reauthorization_required", "grant_refresh_failed", "grant_disabled", "grant_credential_missing", "provider_not_configured", "grant_transport_unavailable"].includes(error.code) ? continuationRestart() : selectedFailure(error);
     const status = failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error";
-    accounting.fail(failure.status, status, reservedBudget?.reservation);
+    (accounting ?? createProxyAccounting(accountingContext)).fail(failure.status, status, reservedBudget?.reservation);
     return errorResponse(failure.code, failure.message, failure.status);
   }
+  const { cost, requestId } = accounting;
   let reservation = reservedBudget?.reservation;
   if (!reservation) {
     try { reservation = await reserveBudget(env, auth, selection.capability, cost, prepared.connection); }

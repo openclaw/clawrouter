@@ -91,14 +91,20 @@ one token-response classifier: omitted `expires_in` clears the previous deadline
 zero is immediately expired, and an invalid or unrepresentable value records
 `tokenResponseError: invalid_expiry`. Rotation commits the bounded access/refresh
 pair before reporting denial, so a malformed lifetime cannot discard a rotated
-refresh token. This retryable denial preserves configured attachment presence;
+refresh token. Lifetime starts when the trusted token response arrives; body
+delivery and waiting for the owner queue consume that lifetime. This retryable
+denial preserves configured attachment presence;
 it never authorizes dispatch, quota probes or keep-warm traffic. Expired renewable
 tokens can re-enter selection when recovery is due. Expired nonrenewable tokens
-transition to the existing `reauth_required` state.
+transition to the existing `reauth_required` state, even for legacy records with
+missing routing identity. Materialization finalization rereads the stored owner
+after an uncertain write; it cannot republish an older generation.
 
 Zero and malformed lifetimes use the existing five-minute renewal retry window,
 without extending token validity. While denied, alarms schedule only renewal;
-overdue maintenance cannot create a one-second retry loop. Metadata edits cannot
+overdue maintenance cannot create a one-second retry loop. Alarms include quota
+and keep-warm work only when the current provider transport can execute it.
+Metadata edits cannot
 clear the marker or extend already-expired authority. A trusted successful
 exchange or fresh primary replacement clears the marker; revocation erases it.
 Older workers ignore this owner fact and are not a qualified rollback target.
@@ -107,7 +113,10 @@ Legacy PUT normalization runs inside the serialized credential owner against
 canonical material and metadata. Original field presence distinguishes explicit
 credential changes from validation material; omitted identity, routing and paused
 state remain canonical after pending publication is repaired. Only first
-initialization uses raw legacy credentials. Internal mutation envelopes never
+initialization uses raw legacy credentials, as a transient baseline for the same
+explicit-field update before the single final commit. Adding another primary
+credential form does not renew a retained access token; explicitly replace or
+clear that token, or use whole replacement. Internal mutation envelopes never
 become published metadata. OAuth response omission retains the owner's current
 refresh token, including an explicit clear, only when provider and kind match.
 A changed or unknown tuple starts fresh credential context, excluding prior
@@ -237,8 +246,9 @@ Usage events are queued into a Durable Object shard named by tenant and policy.
 If queue publication rejects, the Worker writes the same event directly to that
 shard through the queue consumer's ingest path. The event ID remains unchanged:
 an ID-targeted SQL conflict deduplicates a later delivery if the rejected send
-was actually accepted. Successful queue acceptance or direct ingestion completes
-publication; failure of both remains an accounting failure.
+was actually accepted. Successful queue acceptance or a validated direct-ingest
+receipt completes publication; queue acceptance alone does not prove ingestion.
+Failure of both remains an accounting failure, with no automatic direct retry.
 
 The usage ledger's internal `/ingest` returns JSON `{ eventId, outcome }`, with
 `stored`, `duplicate`, or `expired_by_retention`. It requires a nonempty event ID
@@ -246,10 +256,20 @@ and the supplied nonnegative safe-integer `occurred_at_ms`; it never replaces a
 missing timestamp with the current time. Cleanup and admission share one captured
 30-day cutoff: timestamps strictly before it expire, while a retained duplicate
 keeps its first payload and timestamp. A new expired event is not inserted.
-SQL and alarm scheduling must succeed before a receipt is returned. This is a
-producer-first rollout: current direct and queue consumers still check HTTP
-status only. A strict receipt consumer requires verified deployment of this
-producer first; background accounting is not enabled by this change.
+SQL and alarm scheduling must succeed before a receipt is returned. Direct and
+queue consumers require the exact event ID and one of these three outcomes;
+additive JSON fields are allowed. Empty, malformed or unrelated 2xx responses
+fail ingestion and queue delivery retries. Retention expiry acknowledges only
+usage disposition, never a financial settlement.
+
+Existing installations, including self-hosted deployments, must deploy and verify
+the receipt producer from `8c25f81` or later before enabling this strict consumer.
+Fresh installations include the producer and consumer together.
+[Worker and Durable Object code updates can overlap](https://developers.cloudflare.com/durable-objects/platform/known-issues/#code-updates).
+Rollback below that producer or prolonged version skew can exhaust the configured
+five retries and send usage messages to the DLQ; follow the [DLQ recovery procedure](deploy-cloudflare.md).
+Deployment completion does not prove old writers drained or guarantee eventual
+delivery. This change does not enable background accounting.
 
 Session/admin reads aggregate each relevant tenant/policy shard once, even when
 the input policy list repeats a scope. The former global ledger's migration

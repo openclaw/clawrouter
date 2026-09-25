@@ -13,6 +13,39 @@ registerHooks({
 });
 
 const { DashboardRequestError, authenticationRequired, localLogin, playgroundRequest, request } = await import("../src/dashboard-fetch.ts");
+const { consoleStatusPresentation } = await import("../src/status-display.ts");
+
+test("request errors display the envelope message without changing detail, status or exact code", () => {
+  const error = new DashboardRequestError(JSON.stringify({ error: { code: " policy_conflict ", message: "  review the saved policy  ", detail: { revision: 3 } } }), 409);
+  assert.deepEqual(
+    { message: error.message, detail: error.detail, code: error.code, status: error.status },
+    { message: "Request failed (409): review the saved policy", detail: { revision: 3 }, code: " policy_conflict ", status: 409 },
+  );
+  assert.ok(error instanceof Error);
+  assert.equal(new DashboardRequestError('{"error":{"message":"try again","code":7}}', 503).code, null);
+});
+
+test("unrecognized error messages retain the original diagnostics", () => {
+  for (const raw of [
+    "upstream unavailable", "{broken JSON", "null", "[]", '"ready"', '{"message":"not an error envelope"}',
+    ...[undefined, null, 0, [], {}, "", "  \n  "].map((message) => JSON.stringify({ error: { code: "unavailable", message } })),
+  ]) {
+    const error = new DashboardRequestError(raw, 503);
+    assert.equal(error.message, `Request failed (503): ${raw}`);
+    assert.equal(error.status, 503);
+    assert.equal(error.code, raw.startsWith('{"error":') ? "unavailable" : null);
+  }
+});
+
+test("success-looking structured and plain HTTP failures remain actionable errors", () => {
+  for (const message of ["ready", "already saved", "connected", "saving profile"]) {
+    for (const raw of [message, JSON.stringify({ error: { code: "conflict", message } })]) {
+      const error = new DashboardRequestError(raw, 409);
+      assert.equal(error.message, `Request failed (409): ${message}`);
+      assert.deepEqual(consoleStatusPresentation(error.message, false), { tone: "error", label: "Needs attention", showBar: true });
+    }
+  }
+});
 
 test("only exact console authentication envelopes invalidate a browser session", async (context) => {
   for (const [path, status, body, expected] of [
@@ -32,7 +65,7 @@ test("only exact console authentication envelopes invalidate a browser session",
     const raw = typeof body === "string" ? body : JSON.stringify(body);
     context.mock.method(globalThis, "fetch", async () => new Response(raw, { status }));
     await assert.rejects(request("https://console.example", path), (error) => {
-      assert.equal(error.message, raw);
+      assert.equal(error.message, `Request failed (${status}): ${raw}`);
       assert.equal(authenticationRequired(error, path), expected);
       return true;
     });
@@ -41,9 +74,28 @@ test("only exact console authentication envelopes invalidate a browser session",
 
 test("JSON requests distinguish confirmed HTTP rejection from an uncertain transport outcome", async (context) => {
   context.mock.method(globalThis, "fetch", async () => new Response("credential_exists", { status: 409 }));
-  await assert.rejects(request("https://console.example", "/v1/session/credentials"), (error) => error instanceof DashboardRequestError && error.status === 409 && error.message === "credential_exists");
+  await assert.rejects(request("https://console.example", "/v1/session/credentials"), (error) => error instanceof DashboardRequestError && error.status === 409 && error.message === "Request failed (409): credential_exists");
   context.mock.method(globalThis, "fetch", async () => { throw new TypeError("network failed"); });
   await assert.rejects(request("https://console.example", "/v1/session/credentials"), (error) => !(error instanceof DashboardRequestError));
+});
+
+test("empty HTTP failures keep the request path and status fallback", async (context) => {
+  context.mock.method(globalThis, "fetch", async () => new Response("", { status: 502 }));
+  await assert.rejects(request("https://console.example", "/v1/admin/fusion"), (error) => {
+    assert.ok(error instanceof DashboardRequestError);
+    assert.equal(error.message, "Request failed (502): /v1/admin/fusion failed with 502");
+    assert.equal(error.code, null);
+    return true;
+  });
+});
+
+test("Playground preserves structured failure bodies and HTTP status", async (context) => {
+  const body = { error: { code: "model_unavailable", message: "Model is not ready", detail: { model: "test/model" } } };
+  context.mock.method(globalThis, "fetch", async () => Response.json(body, { status: 400 }));
+  const response = await playgroundRequest("https://console.example", "/v1/playground/responses");
+  assert.equal(response.ok, false);
+  assert.equal(response.status, 400);
+  assert.equal(response.raw, JSON.stringify(body, null, 2));
 });
 
 test("dashboard JSON request leaves headroom for a typed 30s Worker timeout and keeps a caller signal", async (context) => {

@@ -4,6 +4,10 @@ import { mergeUsageSnapshots, usageCutoffs, usageDayMs, usageShardName, type Usa
 import { errorResponse, json, normalizeEmail } from "./utils.ts";
 
 export type UsageEventScope = { kind: "admin" } | { kind: "principal" | "credential"; id: string };
+export interface UsageIngestReceipt {
+  eventId: string;
+  outcome: "stored" | "duplicate" | "expired_by_retention";
+}
 
 const reservationLeaseMs = 15 * 60 * 1_000;
 const chargeRetentionMs = 45 * 86_400_000;
@@ -150,7 +154,7 @@ export class UsageLedgerObject implements DurableObject {
     if (first(this.sql.exec("SELECT id FROM usage_events LIMIT 1"))) await this.state.storage.setAlarm(Date.now() + 86_400_000);
   }
 
-  private ingest(event: UsageEvent): { eventId: string; outcome: "stored" | "duplicate" | "expired_by_retention" } {
+  private ingest(event: UsageEvent): UsageIngestReceipt {
     const cutoff = Date.now() - usageRetentionMs;
     this.cleanup(cutoff);
     // A retained ID owns its first payload and time, even if a replay carries an
@@ -225,9 +229,18 @@ export async function settleLedger(env: Env, objectName: string, request: Budget
   if (!response.ok || (await response.json<{ settled: boolean }>()).settled !== true) throw new Error("budget ledger did not acknowledge settlement");
 }
 
-export async function ingestUsage(env: Env, event: UsageEvent): Promise<void> {
+export async function ingestUsage(env: Env, event: UsageEvent): Promise<UsageIngestReceipt> {
   const response = await usageStub(env, event.tenant_id, event.policy_id).fetch("https://clawrouter.internal/ingest", { method: "POST", body: JSON.stringify(event) });
   if (!response.ok) throw new Error(`usage ledger write returned ${response.status}`);
+  const receipt = await response.json<unknown>().catch(() => null);
+  // A 2xx from an older producer does not confirm this event's disposition.
+  // Queue retry and direct-fallback failure keep their existing owners.
+  if (!receipt || typeof receipt !== "object" || Array.isArray(receipt)
+    || !("eventId" in receipt) || typeof receipt.eventId !== "string" || receipt.eventId !== event.id
+    || !("outcome" in receipt) || (receipt.outcome !== "stored" && receipt.outcome !== "duplicate" && receipt.outcome !== "expired_by_retention")) {
+    throw new Error("usage ledger did not acknowledge ingestion");
+  }
+  return { eventId: receipt.eventId, outcome: receipt.outcome };
 }
 
 export async function usageSnapshot(env: Env, tenantId: string, policyId: string, scope: UsageEventScope, limit = 100): Promise<UsageSnapshot> {

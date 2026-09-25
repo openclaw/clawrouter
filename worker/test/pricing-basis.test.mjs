@@ -73,3 +73,30 @@ test("no-card passthrough stays unmetered-only unless an explicit tariff supplie
   }
   assert.equal(validateBudgetReservation("llm.chat", estimateCost(model, {}, null, "llm.chat", endpoint), null, { monthlyBudgetMicros: null }), false);
 });
+
+test("inherited response gaps preserve tariffs, free counts, budget precedence and unmetered settlement", async () => {
+  const endpoint = { request_format: "openai.responses" }, body = { previous_response_id: "parent", input: [] };
+  for (const knowledge of [undefined, "unknown", "hosted_tool_fee", "hosted_tool_usage"]) {
+    const model = { id: "fixture/model", pricing: tiered }, cost = estimateCost(model, body, null, "llm.responses", endpoint, knowledge);
+    assert.equal(cost.pricingGap, knowledge === undefined || knowledge === "unknown" ? "retained_tool_unknown" : knowledge);
+    for (const [policy, provider] of [[1_000, null], [null, 1_000], [1_000, 1_000]]) {
+      assert.throws(() => validateBudgetReservation("llm.responses", cost, policy, { monthlyBudgetMicros: provider }), error => error.code === "pricing_required");
+      for (const fixed of [0, 7]) assert.equal(validateBudgetReservation("llm.responses", estimateCost(model, body, fixed, "llm.responses", endpoint, knowledge), policy, { monthlyBudgetMicros: provider }), true);
+    }
+    assert.throws(() => validateBudgetReservation("llm.responses", cost, 0), error => error.code === "budget_exhausted");
+    assert.throws(() => validateBudgetReservation("llm.responses", cost, null, { monthlyBudgetMicros: 0 }), error => error.code === "provider_budget_exhausted");
+    assert.equal(validateBudgetReservation("llm.responses", cost, null), false);
+    assert.equal(estimateCost(model, body, 7, "llm.count_tokens", endpoint, knowledge).basis, "none");
+    for (const billable of [true, false]) {
+      const events = [];
+      const owner = createProxyAccounting({ env: { USAGE_QUEUE: { send: async event => events.push(event) } }, context: { waitUntil() {} }, auth: { policyId: "fixture", policy: {} },
+        selection: { provider: { id: "fixture" }, model, endpoint, body, capability: "llm.responses" }, cost,
+        request: correlateIngressRequest(new Request("https://router.example/v1/responses")).request });
+      await owner.settle(billable ? 200 : 400, "success", billable, { ...tokens, serviceTier: "default" }, { reservations: [], reservedMicros: 0 }, null);
+      assert.equal(events.length, 1); assert.equal(events[0].actual_cost_micros, 0);
+      assert.equal(events[0].cost_basis, billable ? "unpriced_usage" : "none", "known tokens and tier cannot clear inherited incompleteness");
+    }
+  }
+  assert.equal(estimateCost({ pricing: null }, {}, null, "llm.responses", endpoint).basis, "flat_fallback");
+  assert.equal(estimateCost({ pricing }, body, null, "llm.responses", endpoint, "token_only").basis, "manifest_pricing");
+});

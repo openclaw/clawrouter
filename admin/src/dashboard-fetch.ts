@@ -6,7 +6,8 @@ export class DashboardRequestError extends Error {
   code: string | null;
   detail: unknown;
   constructor(message: string, status: number) {
-    super(message);
+    // Callers publish this text as action status; even success-looking server text is a failure.
+    super(`Request failed (${status}): ${message}`);
     this.status = status;
     this.code = null;
     this.detail = null;
@@ -14,6 +15,9 @@ export class DashboardRequestError extends Error {
       const value = JSON.parse(message);
       if (typeof value?.error?.code === "string") this.code = value.error.code;
       this.detail = value?.error?.detail ?? null;
+      if (typeof value?.error?.message === "string" && value.error.message.trim()) {
+        this.message = `Request failed (${status}): ${value.error.message.trim()}`;
+      }
     } catch { /* Non-JSON failures remain ordinary request errors. */ }
   }
 }

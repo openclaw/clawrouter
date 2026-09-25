@@ -85,11 +85,11 @@ test("320px tab focus reveals horizontally without moving the page and leaves ve
     await expect(tab(page, "Policies")).toHaveAttribute("aria-selected", "true");
   }
   expect(await tab(page, "Policies").evaluate((element) => getComputedStyle(element).outlineStyle)).not.toBe("none");
-  await page.keyboard.press("ArrowDown");
-  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeGreaterThan(scrollY);
-  const down = await page.evaluate(() => window.scrollY);
-  await page.keyboard.press("ArrowUp");
-  await expect.poll(() => page.evaluate(() => window.scrollY)).toBeLessThan(down);
+  // Finish native scrolling before reversing direction; first movement is not completion.
+  const down = await pressVerticalKeyAndWaitForScrollEnd(page, "ArrowDown");
+  expect(down).toBeGreaterThan(scrollY);
+  const up = await pressVerticalKeyAndWaitForScrollEnd(page, "ArrowUp");
+  expect(up).toBeLessThan(down);
   await expect(tab(page, "Policies")).toBeFocused();
   await expect(tab(page, "Policies")).toHaveAttribute("aria-selected", "true");
 });
@@ -124,4 +124,28 @@ async function openDemo(page: Page, resource = "policies") {
   await page.goto(`/dashboard/access?demo=1&resource=${resource}`);
   await expect(page.getByRole("tab", { selected: true })).toHaveText(new RegExp(`^${resource === "upstream" ? "Accounts" : resource}`, "i"));
   await expect(page.getByRole("tabpanel")).toBeVisible();
+}
+
+async function pressVerticalKeyAndWaitForScrollEnd(page: Page, key: "ArrowDown" | "ArrowUp"): Promise<number> {
+  const scroll = await page.evaluateHandle(() => {
+    const controller = new AbortController();
+    const state = { y: null as number | null, stop: () => controller.abort() };
+    document.addEventListener("scrollend", (event) => {
+      if (event.target === document) state.y = window.scrollY;
+    }, { signal: controller.signal });
+    return state;
+  });
+  let succeeded = false;
+  try {
+    await page.keyboard.press(key);
+    await expect.poll(() => scroll.evaluate((state) => state.y)).not.toBeNull();
+    const y = await scroll.evaluate((state) => state.y!);
+    succeeded = true;
+    return y;
+  } finally {
+    const cleanup = scroll.evaluate((state) => state.stop()).finally(() => scroll.dispose());
+    // A closed page during failure must not replace the original assertion or action error.
+    if (succeeded) await cleanup;
+    else await cleanup.catch(() => {});
+  }
 }

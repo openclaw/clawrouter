@@ -173,12 +173,12 @@ export function FusionPanel({ config, readiness, policies, policyId, onSelectPol
         <div className="tableSectionHeader"><div><strong>On-demand intelligence route</strong><span>Select <code>{config.modelId}</code> only when a turn deserves the ensemble.</span></div><Status label={config.enabled ? "active" : "disabled"} tone={config.enabled ? "active" : "neutral"} /></div>
         <div className="fusionTopology" aria-label="Fusion request flow">
           <div className="fusionInput"><span>01</span><strong>{config.modelId}</strong><small>explicit model selection</small></div>
-          <div className="fusionArrow" aria-hidden="true">→</div>
+          <div className="fusionArrow" aria-hidden="true"><span>→</span></div>
           <div className="fusionAdvisers">
             {config.adviserModels.map((model, index) => <div key={`${model}-${index}`}><span>{String(index + 1).padStart(2, "0")}</span><strong>{model}</strong><small>private, bounded proposal</small></div>)}
             {!config.adviserModels.length ? <div><span>—</span><strong>No advisers</strong><small>Add at least one model</small></div> : null}
           </div>
-          <div className="fusionArrow" aria-hidden="true">→</div>
+          <div className="fusionArrow" aria-hidden="true"><span>→</span></div>
           <div className="fusionOutput"><span>FINAL</span><strong>{config.aggregatorModel}</strong><small>verify, resolve, synthesize</small></div>
         </div>
         <div className="fusionPrinciples">

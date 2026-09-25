@@ -411,7 +411,10 @@ New account-management clients use the strict routes:
   accepts public extensions such as `scope` and `audience`, not credential fields or
   overrides of the owner-controlled grant type and client authentication.
 - An already-expired deadline cannot be cleared or extended by metadata edits.
-  Renew the token or replace the primary credential. Expired accounts without a
+  Renew or explicitly replace the access token, clear it while supplying a new
+  primary credential, or use whole replacement. Adding a scalar or bundle while
+  retaining the old access token does not renew it. This also applies to the
+  first ordinary PUT of raw legacy credentials. Expired accounts without a
   refresh token require reauthorization. Safe account views include the fixed
   `tokenResponseError` (`invalid_expiry` or null) and `nextRefreshAttemptAt` fields;
   these are owner-produced and cannot be supplied in account mutations. The
@@ -420,6 +423,7 @@ New account-management clients use the strict routes:
   invented validity guarantee.
 - OAuth callback and refresh responses with zero lifetime are immediately
   unusable. Malformed lifetimes retain the rotated credentials but deny use.
+  Lifetime starts at token-response arrival, before body parsing or owner queueing.
   When a refresh token remains, the existing five-minute retry window controls
   renewal; quota and keep-warm traffic remain blocked. A stored but unusable
   callback does not report a successful connection.

@@ -1,6 +1,6 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, test, type Page } from "@playwright/test";
-import type { AccessPolicy } from "../src/ui-types";
+import type { AccessPolicy, FusionConfig, FusionReadiness } from "../src/ui-types";
 
 test.beforeEach(async ({ page }) => {
   await page.clock.setFixedTime(new Date("2026-07-06T12:00:00.000Z"));
@@ -66,21 +66,22 @@ test("Fusion preflight is WCAG AA clean and visually stable", async ({ page }) =
   await expectA11yClean(page);
 });
 
+for (const adviserCount of [0, 4]) {
+  test(`Fusion connectors stay between stages with ${adviserCount} advisers`, async ({ page, isMobile }) => {
+    await openDemo(page);
+    await page.getByRole("button", { name: "Access", exact: true }).click();
+    await page.getByRole("tab", { name: /Fusion/ }).click();
+    const advisers = ["local/adviser-one", "local/adviser-two", "local/adviser-three", "local/adviser-four"].slice(0, adviserCount);
+    await page.getByRole("textbox", { name: "adviser models · one per line, maximum four" }).fill(advisers.join("\n"));
+    await expect(page.locator(".fusionAdvisers strong")).toHaveText(advisers.length ? advisers : ["No advisers"]);
+    await expectFusionConnectorsContained(page, isMobile ? "vertical" : "horizontal");
+    await page.setViewportSize({ width: 320, height: 800 });
+    await expectFusionConnectorsContained(page, "vertical");
+  });
+}
+
 test("Fusion distinguishes unavailable request prices from an explicit zero tariff", async ({ page }) => {
-  const policy: AccessPolicy = {
-    policyId: "fixture", enabled: true, providers: [], monthlyBudgetMicros: null, requestCostMicros: null, retainRequestContent: false,
-    grantRouting: { strategy: "most_remaining", stickiness: "none", failover: true, staleState: "allow", staleAfterSeconds: 300, switchAtUsedPercent: 90, hysteresisPercent: 10, eligibleGrants: {} },
-  };
-  const fusion = { version: 1, modelId: "clawrouter/fusion", enabled: true, adviserModels: [], aggregatorModel: "perplexity/sonar-pro", adviserTimeoutMs: 1000, maxOutputTokens: 100, maxInputChars: 1000, maxProposalChars: 1000, temperature: 0.7 };
-  const call = { stage: "synthesizer", index: null, model: fusion.aggregatorModel, provider: "perplexity", policyAllowed: true, executable: true, verified: false, status: "unverified", reasons: [], estimatedReservationMicros: 0, estimateBasis: "unpriced_request" };
-  const preview = { policyId: policy.policyId, policyEnabled: true, configEnabled: true, executable: true, advertisable: true, readyAdviserCount: 0, adviserCount: 0, callCount: 1, estimatedReservationMicros: 0, budgetConfigured: false, budgetLedger: "unmetered", remainingBudgetMicros: null, budgetSufficientForAll: null, estimateNote: "Complete price unavailable.", calls: [call] };
-  const responses: Record<string, unknown> = {
-    "/v1/providers": { providers: [] }, "/v1/routes": { openaiCompatible: [], manifestProxy: [] },
-    "/v1/session": { authenticated: true, auth: "cloudflare_access", role: "admin", email: "admin@example.com", entitlements: { providers: [] } },
-    "/v1/session/credentials": { credentials: [] },
-    "/v1/admin/bootstrap": { policies: [policy], credentials: [], connections: [], users: [], bindings: [], grants: [], rules: [], providers: [], tenants: [], overview: {}, fusion },
-    "/v1/admin/fusion/preview": preview,
-  };
+  const { policy, fusion, call, responses } = fusionFixture();
   await page.route("**/v1/**", async (route) => {
     const body = responses[new URL(route.request().url()).pathname];
     await route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
@@ -92,13 +93,58 @@ test("Fusion distinguishes unavailable request prices from an explicit zero tari
   const checkReadiness = page.getByRole("button", { name: "Check readiness" });
   await expect(checkReadiness).toBeEnabled();
   const panel = page.getByRole("region", { name: "Fusion readiness" });
-  for (const [basis, label] of [["unpriced_request", "Price unavailable"], ["policy_fixed", "$0.00"]]) {
+  for (const [basis, label] of [["unpriced_request", "Price unavailable"], ["policy_fixed", "$0.00"]] as const) {
     call.estimateBasis = basis;
     await checkReadiness.click();
     await expect(panel.locator(".fusionReadinessCalls b")).toHaveText(label);
     await expect(panel.locator(".fusionReadinessEstimate strong")).toHaveText(label);
   }
 });
+
+for (const action of ["preview", "save"] as const) {
+  test(`Fusion ${action} failures show readable errors and preserve the draft without replay`, async ({ page }) => {
+    const { policy, fusion, responses } = fusionFixture(["openai/gpt-4.1-mini"]);
+    const writes: Array<{ path: string; method: string; body: unknown }> = [];
+    const failurePath = action === "preview" ? "/v1/admin/fusion/preview" : "/v1/admin/fusion";
+    const status = action === "preview" ? 409 : 503;
+    const message = action === "preview" ? "The saved policy is ready for review." : "A connected profile is already saved.";
+    await page.route("**/v1/**", async (route) => {
+      const request = route.request(), path = new URL(request.url()).pathname;
+      if (request.method() !== "GET") writes.push({ path, method: request.method(), body: request.postDataJSON() });
+      if (path === failurePath) {
+        await route.fulfill({ status, json: { error: { code: "fusion_fixture_rejected", message } } });
+        return;
+      }
+      const body = responses[path];
+      await route.fulfill({ status: body ? 200 : 404, json: body ?? {} });
+    });
+    await page.goto("/dashboard/access?resource=fusion");
+    const panel = page.locator(".fusionInspector");
+    await expect(page.locator(".connectionMeta strong")).toHaveText("Connected");
+    await expect(panel.getByRole("combobox", { name: "readiness policy", exact: true })).toHaveValue(policy.policyId);
+    const temperature = panel.getByRole("spinbutton", { name: "adviser temperature", exact: true });
+    await temperature.fill("0.4");
+    const draft = { ...fusion, temperature: 0.4 };
+    const button = panel.getByRole("button", { name: action === "preview" ? "Check readiness" : "Save fusion model", exact: true });
+    await expect(button).toBeEnabled();
+    await button.click();
+    const expectedMessage = `Request failed (${status}): ${message}`;
+    await expect(panel.getByRole("alert")).toHaveText(expectedMessage);
+    await expect(page.locator(".connectionMeta strong")).toHaveText("Needs attention");
+    await expect(page.locator(".statusBar-error")).toContainText(expectedMessage);
+    await expect(button).toBeEnabled();
+    await expect(temperature).toHaveValue("0.4");
+    await expect(panel.getByRole("combobox", { name: "final synthesizer", exact: true })).toHaveValue(draft.aggregatorModel);
+    await expect(panel.getByRole("textbox", { name: "adviser models · one per line, maximum four", exact: true })).toHaveValue(draft.adviserModels.join("\n"));
+    // A later local edit remains possible without replaying the rejected request.
+    await temperature.fill("0.6");
+    await expect(temperature).toHaveValue("0.6");
+    expect(writes).toEqual([
+      { path: "/v1/admin/fusion/preview", method: "POST", body: { policyId: policy.policyId, config: draft } },
+      ...(action === "save" ? [{ path: "/v1/admin/fusion", method: "PUT", body: draft }] : []),
+    ]);
+  });
+}
 
 test("keyboard focus remains visible", async ({ page }) => {
   await openDemo(page);
@@ -143,6 +189,64 @@ async function openDemo(page: Page) {
   await page.goto("/?demo=1");
   await expect(page.locator(".appShell")).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
+}
+
+async function expectFusionConnectorsContained(page: Page, direction: "horizontal" | "vertical") {
+  const geometry = await page.locator(".fusionTopology").evaluate((topology) => {
+    const bounds = (element: Element | Range) => {
+      const { left, top, right, bottom } = element.getBoundingClientRect();
+      return { left, top, right, bottom };
+    };
+    return {
+      topology: bounds(topology),
+      stages: [".fusionInput", ".fusionAdvisers", ".fusionOutput"].map((selector) => bounds(topology.querySelector(selector)!)),
+      connectors: Array.from(topology.querySelectorAll(".fusionArrow"), (connector) => {
+        const glyph = document.createRange();
+        glyph.selectNodeContents(connector);
+        return { cell: bounds(connector), glyph: bounds(glyph) };
+      }),
+      viewportWidth: window.innerWidth,
+    };
+  });
+  expect(geometry.topology.left).toBeGreaterThanOrEqual(0);
+  expect(geometry.topology.right).toBeLessThanOrEqual(geometry.viewportWidth);
+  expect(geometry.connectors).toHaveLength(2);
+  for (const [index, { cell, glyph }] of geometry.connectors.entries()) {
+    // Measure the painted rectangles: layout dimensions alone miss a rotated cell.
+    for (const [inner, outer] of [[cell, geometry.topology], [glyph, cell]]) {
+      expect(inner.left).toBeGreaterThanOrEqual(outer.left - 1);
+      expect(inner.top).toBeGreaterThanOrEqual(outer.top - 1);
+      expect(inner.right).toBeLessThanOrEqual(outer.right + 1);
+      expect(inner.bottom).toBeLessThanOrEqual(outer.bottom + 1);
+    }
+    const before = geometry.stages[index], after = geometry.stages[index + 1];
+    if (direction === "vertical") {
+      expect(cell.top).toBeGreaterThanOrEqual(before.bottom - 1);
+      expect(cell.bottom).toBeLessThanOrEqual(after.top + 1);
+    } else {
+      expect(cell.left).toBeGreaterThanOrEqual(before.right - 1);
+      expect(cell.right).toBeLessThanOrEqual(after.left + 1);
+    }
+  }
+}
+
+function fusionFixture(adviserModels: string[] = []) {
+  const policy: AccessPolicy = {
+    policyId: "fixture", enabled: true, providers: [], monthlyBudgetMicros: null, requestCostMicros: null, retainRequestContent: false,
+    grantRouting: { strategy: "most_remaining", stickiness: "none", failover: true, staleState: "allow", staleAfterSeconds: 300, switchAtUsedPercent: 90, hysteresisPercent: 10, eligibleGrants: {} },
+  };
+  const fusion: FusionConfig = { version: 1, modelId: "clawrouter/fusion", enabled: true, adviserModels, aggregatorModel: "perplexity/sonar-pro", adviserTimeoutMs: 1000, maxOutputTokens: 100, maxInputChars: 1000, maxProposalChars: 1000, temperature: 0.7 };
+  const call: FusionReadiness["calls"][number] = { stage: "synthesizer", index: null, model: fusion.aggregatorModel, provider: "perplexity", policyAllowed: true, executable: true, verified: false, status: "unverified", reasons: [], estimatedReservationMicros: 0, estimateBasis: "unpriced_request" };
+  const calls: FusionReadiness["calls"] = [...adviserModels.map((model, index) => ({ ...call, stage: "adviser" as const, index: index + 1, model, provider: model.split("/")[0] })), call];
+  const preview: FusionReadiness = { policyId: policy.policyId, policyEnabled: true, configEnabled: true, executable: true, advertisable: true, readyAdviserCount: adviserModels.length, adviserCount: adviserModels.length, callCount: calls.length, estimatedReservationMicros: 0, budgetConfigured: false, budgetLedger: "unmetered", remainingBudgetMicros: null, budgetSufficientForAll: null, estimateNote: "Complete price unavailable.", calls };
+  const responses: Record<string, unknown> = {
+    "/v1/providers": { providers: [] }, "/v1/routes": { openaiCompatible: [], manifestProxy: [] },
+    "/v1/session": { authenticated: true, auth: "cloudflare_access", role: "admin", email: "admin@example.com", entitlements: { providers: [], catalog: { version: "clawrouter.client-catalog.v1", observedAt: "2026-07-06T12:00:00.000Z", scope: { authType: "access", credentialId: null, principalId: "admin@example.com" }, providers: [] } } },
+    "/v1/session/credentials": { credentials: [] }, "/v1/session/usage": { policies: [] },
+    "/v1/admin/bootstrap": { policies: [policy], credentials: [], connections: [], users: [], bindings: [], grants: [], rules: [], providers: [], tenants: [], overview: {}, fusion },
+    "/v1/admin/fusion/preview": preview,
+  };
+  return { policy, fusion, call, responses };
 }
 
 async function expectA11yClean(page: Page) {

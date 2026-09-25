@@ -1,9 +1,9 @@
 import { emptyReservation, markBudgetDispatched, reserveBudget, type BudgetReservation } from "./accounting";
 import { retainRequestContent } from "./content-retention";
-import { HttpContinuation } from "./http-continuation";
+import { continuationRestart, HttpContinuation } from "./http-continuation";
 import { assertTokenUsable } from "./grant-expiry.ts";
 import { authenticateProxyKey } from "./proxy-auth";
-import { createProxyAccounting } from "./proxy-accounting";
+import { createProxyAccounting, estimateCost } from "./proxy-accounting";
 import { concreteOpenAiSelection, isSelectionFailure, nativeMatch, prepareNativeRequest, searchParamsRecord, type ProxySelection } from "./proxy-selection";
 import { captureGrantRuntime, prepareSelected } from "./proxy";
 import { assertProviderAccess, providerById } from "./providers";
@@ -47,12 +47,15 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
       const headers = new Headers(request.headers);
       headers.set("x-request-id", requestId);
       const operationRequest = new Request(request.url, { method: "POST", headers, signal });
-      const accounting = createProxyAccounting({ env, context, auth, selection, request: operationRequest });
+      const accountingContext = { env, context, auth, selection, request: operationRequest, startedAtMs: Date.now() };
+      let accounting: ReturnType<typeof createProxyAccounting> | undefined;
       let reservation = emptyReservation(), content: string | null = null;
       try {
         const continuation = await HttpContinuation.resolve(operationRequest, selection, auth, env, "websocket");
         const upstream = await prepareSelected(operationRequest, env, selection, searchParamsRecord(new URL(request.url).searchParams), auth, new Set(), true, undefined, continuation?.pinned ?? pinned, "websocket");
         if (upstream.continuation) continuation?.bind(upstream.continuation);
+        const cost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability, selection.endpoint, continuation?.parentTools);
+        accounting = createProxyAccounting({ ...accountingContext, cost });
         if (!upstream.websocket) throw new HttpError(400, "websocket_transport_unsupported", "selected upstream grant transport is not qualified for Responses WebSockets");
         signal.throwIfAborted();
         reservation = await reserveBudget(env, auth, selection.capability, accounting.cost, upstream.connection);
@@ -62,7 +65,15 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
         pinned ??= { providerId: selection.provider.id, endpointId: selection.endpoint.id, key: upstream.grantKey, revision: upstream.grantRevision };
         const observe = grantObserver(context, env, upstream.grantKey, upstream.grantRevision, selection.provider.quota);
         const validity = upstream.validity;
-        const assertDispatch = () => assertTokenUsable(validity);
+        let dispatchFailure: ReturnType<typeof failureStatus> | null = null;
+        const assertDispatch = () => {
+          try { assertTokenUsable(validity); }
+          catch (error) {
+            const failure = continuation?.requested && error instanceof HttpError && error.code === "grant_refresh_failed" ? continuationRestart() : error;
+            if (failure instanceof HttpError) dispatchFailure = failureStatus(failure.status);
+            throw failure;
+          }
+        };
         return {
           pin: JSON.stringify([selection.provider.id, selection.endpoint.id, upstream.grantKey, upstream.grantRevision, upstream.continuation?.routeSha256]),
           payload: JSON.stringify({ type: "response.create", ...selection.body, ...(lane ? { stream_id: lane } : {}) }),
@@ -70,16 +81,13 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
           assertDispatch,
           connect: upstreamConnection(upstream.url, upstream.headers, signal, observe, assertDispatch),
           publish: (identities, frame) => continuation?.publishFrame(identities, frame) ?? Promise.resolve(),
-          settle: settlement(accounting, reservation, content, observe),
+          settle: settlement(accounting, reservation, content, observe, () => dispatchFailure),
         };
       } catch (error) {
         const failure = error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "Responses request preflight failed");
         const aborted = signal.aborted && signal.reason instanceof ResponsesOperationAborted ? signal.reason : null;
-        const outcome = aborted ? closeStatus(aborted.cause) : {
-          statusCode: failure.status,
-          status: failure.status === 402 || failure.status === 403 ? "denied" as const : failure.status < 500 ? "client_error" as const : "provider_error" as const,
-        };
-        await requireAccounting(accounting.settle(outcome.statusCode, outcome.status, false, null, reservation, content));
+        const outcome = aborted ? closeStatus(aborted.cause) : failureStatus(failure.status);
+        await requireAccounting((accounting ?? createProxyAccounting(accountingContext)).settle(outcome.statusCode, outcome.status, false, null, reservation, content));
         if (aborted) throw aborted;
         throw failure;
       }
@@ -105,7 +113,7 @@ function upstreamConnection(url: URL, inputHeaders: Headers, signal: AbortSignal
   };
 }
 
-function settlement(accounting: ReturnType<typeof createProxyAccounting>, reservation: BudgetReservation, content: string | null, observe: (response: Pick<Response, "status" | "headers">) => void): AdmittedResponse["settle"] {
+function settlement(accounting: ReturnType<typeof createProxyAccounting>, reservation: BudgetReservation, content: string | null, observe: (response: Pick<Response, "status" | "headers">) => void, dispatchFailure: () => ReturnType<typeof failureStatus> | null): AdmittedResponse["settle"] {
   return (outcome, terminal, sent, executionStarted) => {
     // The upgrade response already owns its HTTP quota observation. Only sent
     // creates can report a later WebSocket error with new quota evidence.
@@ -117,14 +125,21 @@ function settlement(accounting: ReturnType<typeof createProxyAccounting>, reserv
       observe({ status: terminal.status, headers });
     }
     const tokens = terminal ? extractUsageTokens(terminal) : null;
-    const { status, statusCode } = outcome === "completed" || outcome === "incomplete" ? { status: "success" as const, statusCode: 200 }
+    // Only the local guard owns this classification. Upstream rejections and
+    // an earlier close cause keep their existing settlement, even before send.
+    const failure = outcome === "error" && !sent ? dispatchFailure() : null;
+    const { status, statusCode } = failure ?? (outcome === "completed" || outcome === "incomplete" ? { status: "success" as const, statusCode: 200 }
       : outcome === "failed" || outcome === "error" ? { status: "provider_error" as const, statusCode: typeof terminal?.status === "number" ? terminal.status : 502 }
-      : closeStatus(outcome);
+      : closeStatus(outcome));
     // A request-scoped error before a response is rejected work. Once upstream
     // execution starts, missing usage must retain the estimate, including on close.
     const billable = sent && (outcome !== "error" || executionStarted || tokens !== null);
     return requireAccounting(accounting.settle(statusCode, status, billable, tokens, reservation, content));
   };
+}
+
+function failureStatus(statusCode: number): { status: UsageEvent["status"]; statusCode: number } {
+  return { statusCode, status: statusCode === 402 || statusCode === 403 ? "denied" : statusCode < 500 ? "client_error" : "provider_error" };
 }
 
 function closeStatus(cause: ResponsesCloseCause): { status: UsageEvent["status"]; statusCode: UsageEvent["status_code"] } {

@@ -8,67 +8,8 @@ const { concreteOpenAiSelection } = await import("../proxy-selection.ts");
 const { proxyResponsesWebSocket } = await import("../responses-websocket.ts");
 import { materializeGrantCredentials, putGrantCredentials, revokeGrantCredentials } from "../grant-credentials.ts";
 import { sha256Hex } from "../utils.ts";
-import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
-import { continuationAuthority } from "./continuation-authority.mjs";
 import { HttpContinuation } from "../http-continuation.ts";
-import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
-import { acceptGrantPoolBaseline, recoverGrantPools } from "../../scripts/grant-pool-recovery.mjs";
-
-const grantKeys = ["oauth/fixture/account-a", "oauth/fixture/account-b"];
-async function fixture(t, pooled = true, { limit = null, fixedCost = 7, retainContent = false } = {}) {
-  const pending = [], events = [], values = new Map(), sent = [];
-  const policy = { enabled: true, generation: "g1", providers: ["openai"], tenantId: "default", monthlyBudgetMicros: limit, requestCostMicros: fixedCost, retainRequestContent: retainContent, grantRouting: { strategy: "round_robin", stickiness: "none", failover: true } };
-  const credential = { enabled: true, secretSha256: await sha256Hex("fixture-secret"), policyId: "fixture" };
-  const env = attachGrantCredentialNamespace({
-    CLAWROUTER_ADMIN_TOKEN_SHA256: await sha256Hex("fixture-admin"),
-    ACCESS_CONTROL: continuationAuthority(t),
-    BUDGET_LEDGER: sqlBudgetNamespace(t),
-    POLICY_KV: {
-      async get(key) { return Array.isArray(key) ? new Map(key.map(key => [key, structuredClone(values.get(key) ?? null)])) : structuredClone(values.get(key) ?? null); },
-      async put(key, value) { values.set(key, JSON.parse(value)); },
-      async list({ prefix }) { return { keys: [...values.keys()].filter(key => key.startsWith(prefix)).map(name => ({ name })), list_complete: true }; },
-    },
-    OPENAI_API_KEY: "synthetic-environment-key",
-    USAGE_QUEUE: { async send(event) { events.push(event); } },
-  }, { useExistingAuthority: true });
-  const admin = async (path, { method = "GET", body } = {}) => {
-    const response = await handler.fetch(new Request(`https://router.example${path}`, { method, headers: { authorization: "Bearer fixture-admin", "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), env, { waitUntil() {} });
-    assert.equal(response.status, 200, await response.clone().text());
-    return response.json();
-  };
-  await acceptGrantPoolBaseline("fresh", { request: admin });
-  await recoverGrantPools({ request: admin });
-  async function authority(path, value) {
-    const response = await env.ACCESS_CONTROL.get("policy-bindings").fetch(`https://clawrouter.internal${path}`, { method: "POST", body: JSON.stringify(value) });
-    assert.equal(response.status, 200, await response.clone().text());
-    return response;
-  }
-  async function mutateCredential(value) {
-    const response = await authority("/credentials/mutate", { scope: "admin", actor: { auth: "admin_token", email: "fixture@example.com", role: "admin" }, ...value });
-    assert.equal((await response.json()).outcome, "updated");
-  }
-  await authority("/policies/put", { policyId: "fixture", policy });
-  await mutateCredential({ operation: "create", credentialId: "fixture", credential });
-  await authority("/connections/put", { providerId: "openai", enabled: true, monthlyBudgetMicros: limit });
-  if (pooled) for (const [index, key] of grantKeys.entries()) {
-    await putGrantCredentials(env, key, { provider: "openai", kind: "subscription", enabled: true, accessToken: `synthetic-access-${index}`, refreshToken: `synthetic-refresh-${index}`, accountId: `synthetic-account-${index}`, expiresAt: "2099-01-01T00:00:00.000Z" });
-  }
-  const f = {
-    env, values, sent, events, policy, credential, authority, mutateCredential,
-    response: (request, index) => Response.json({ object: "response", id: `resp_${index}`, status: "completed", output: [], usage: { input_tokens: 1, output_tokens: 1 } }),
-    async request(body = {}, headers = {}, path = "/v1/responses", signal) {
-      return handler.fetch(new Request(`https://router.example${path}`, { method: "POST", signal, headers: { authorization: "Bearer clawrouter-live-fixture-fixture-secret", "content-type": "application/json", ...headers }, body: JSON.stringify({ model: "openai/gpt-6-astra", input: "fixture", ...body }) }), env, { waitUntil: promise => pending.push(promise) });
-    },
-    async consume(response) { const text = await response.text(); await f.drain(); return text; },
-    async drain() { while (pending.length) await Promise.all(pending.splice(0)); },
-    bindings() { return [...env.ACCESS_CONTROL.objects].filter(([name]) => name.startsWith("http-continuations:")); },
-  };
-  t.mock.method(globalThis, "fetch", async (url, init) => {
-    const request = { url: String(url), body: init.body === undefined ? undefined : JSON.parse(init.body), method: init.method, headers: new Headers(init.headers), signal: init.signal };
-    sent.push(request); return f.response(request, sent.length);
-  });
-  return f;
-}
+import { fixture, grantKeys } from "./http-continuation-fixture.mjs";
 
 test("two-account HTTP requests pin response and turn identities while stateless calls keep rotating", async t => {
   const f = await fixture(t);
@@ -867,6 +808,47 @@ async function setExpiry(f, expiresAt, websocket = false) {
   }, true);
 }
 
+test("authenticated subscription PUT cannot revive inherited expiry and fresh token recovery authorizes actual HTTP dispatch", async t => {
+  let clock = Date.now();
+  t.mock.method(Date, "now", () => clock);
+  const expiresAt = new Date(clock + 1_000).toISOString(), f = await fixture(t, true, { limit: 1_000_000 });
+  await setExpiry(f, expiresAt);
+  await revokeGrantCredentials(f.env, grantKeys[1]);
+  clock += 1_001;
+  const put = async body => {
+    const response = await handler.fetch(new Request("https://router.example/v1/admin/upstream-grants/policies/fixture/account-a", {
+      method: "PUT", headers: { authorization: "Bearer fixture-admin", "content-type": "application/json" }, body: JSON.stringify(body),
+    }), f.env, { waitUntil() {} });
+    assert.equal(response.status, 200, await response.clone().text());
+    return response.json();
+  };
+  const edited = await put({ credential: "alternate-primary-fixture", label: "retained subscription" });
+  const own = f.env.GRANT_CREDENTIALS.objects.get(grantKeys[0]);
+  assert.equal(edited.usable, false);
+  assert.equal(own.values.get("credential").kind, "subscription");
+  assert.equal(own.values.get("credential").accessToken, "synthetic-access-0");
+  assert.equal(own.values.get("credential").expiresAt, expiresAt);
+  const denied = await f.request();
+  assert.equal(denied.status, 503);
+  assert.equal(JSON.parse(await f.consume(denied)).error.code, "upstream_grant_pool_unavailable");
+  assert.equal(f.sent.length, 0, "neither the retained token, alternate form nor environment fallback may leave the router");
+  assert.equal(f.events.length, 1);
+  assert.equal(f.events[0].actual_cost_micros, 0);
+  for (const owner of ["default:fixture", "provider:openai"]) assert.equal(f.env.BUDGET_LEDGER.get(owner).reservations().length, 0);
+  const recovered = await put({ accessToken: "operator-fresh-access-fixture" });
+  assert.equal(recovered.usable, true);
+  assert.equal(own.values.get("credential").credential, "alternate-primary-fixture", "merge-form retention and dispatch precedence are unchanged");
+  const accepted = await f.request();
+  assert.equal(accepted.status, 200);
+  await f.consume(accepted);
+  assert.equal(f.sent.length, 1);
+  assert.equal(f.sent[0].headers.get("authorization"), "Bearer operator-fresh-access-fixture");
+  assert.equal(f.sent[0].headers.get("chatgpt-account-id"), "synthetic-account-0");
+  assert.equal(f.events.length, 2);
+  assert.equal(f.events[1].status, "success");
+  await assertBudgets(f, [7]);
+});
+
 for (const phase of ["reserve", "retention", "dispatch"]) for (const continuation of [false, true]) test(`HTTP ${phase} expiry remains unsent with ${continuation ? "continuation recovery" : "actionable denial"} and zero held budgets`, async t => {
   let clock = Date.now();
   t.mock.method(Date, "now", () => clock);
@@ -974,7 +956,7 @@ class UpgradeSocket extends EventTarget {
   close() { if (!this.closed) { this.closed = true; this.dispatchEvent(new Event("close")); } }
 }
 
-async function websocketFixture(t, f) {
+async function websocketFixture(t, f, headers = {}) {
   const NativeResponse = globalThis.Response, previousPair = Object.getOwnPropertyDescriptor(globalThis, "WebSocketPair");
   let server;
   // Node lacks Workers' 101 constructor and socket pair. Keep the real router,
@@ -992,11 +974,37 @@ async function websocketFixture(t, f) {
   });
   const pending = [];
   const response = await proxyResponsesWebSocket(new Request("https://router.example/v1/responses", {
-    headers: { authorization: "Bearer clawrouter-live-fixture-fixture-secret", upgrade: "websocket" },
+    headers: { authorization: "Bearer clawrouter-live-fixture-fixture-secret", upgrade: "websocket", ...headers },
   }), f.env, { waitUntil: promise => pending.push(promise) }, "/v1/responses");
   assert.equal(response.status, 101);
   return { server, async drain() { while (pending.length) await Promise.all(pending.splice(0)); await f.drain(); } };
 }
+
+for (const status of [401, 403, 429]) test(`upstream WebSocket upgrade ${status} remains an uncharged provider failure`, async t => {
+  const f = await fixture(t, true, { limit: 1_000_000 });
+  await setExpiry(f, "2099-01-01T00:00:00.000Z", true);
+  let cancels = 0;
+  f.response = () => new Response(new ReadableStream({ cancel() { cancels++; } }), { status });
+  const ws = await websocketFixture(t, f);
+  try {
+    ws.server.receive({ type: "response.create", model: "openai/gpt-6-astra", input: "fixture" });
+    await ws.drain();
+    assert.equal(f.sent.length, 1);
+    assert.equal(f.sent[0].method, "GET");
+    assert.equal(cancels, 1);
+    assert.equal(ws.server.sent.at(-1).status, status);
+    assert.equal(ws.server.sent.at(-1).error.code, "upstream_upgrade_failed");
+    assert.equal(f.events.length, 1);
+    assert.equal(f.events[0].status, "provider_error");
+    assert.equal(f.events[0].status_code, status);
+    assert.equal(f.events[0].actual_cost_micros, 0);
+    assert.equal(f.events[0].cost_basis, "none");
+    await assertBudgets(f, [0]);
+  } finally {
+    ws.server.close();
+    await ws.drain();
+  }
+});
 
 for (const phase of ["before upgrade", "connecting", "reused"]) test(`actual WebSocket ${phase} expiry sends no expired create and releases both budgets`, async t => {
   let clock = Date.now();
@@ -1035,11 +1043,72 @@ for (const phase of ["before upgrade", "connecting", "reused"]) test(`actual Web
     }
     assert.equal(f.sent.length, phase === "before upgrade" ? 0 : 1);
     assert.equal(upstream.sent.length, phase === "reused" ? 1 : 0);
+    assert.equal(ws.server.sent.at(-1).status, 502);
     assert.equal(ws.server.sent.at(-1).error.code, "grant_refresh_failed");
     assert.equal(f.events.length, phase === "reused" ? 2 : 1);
+    assert.equal(f.events.at(-1).status, "provider_error");
+    assert.equal(f.events.at(-1).status_code, 502);
     assert.equal(f.events.at(-1).actual_cost_micros, 0);
     assert.equal(f.events.at(-1).cost_basis, "none");
     await assertBudgets(f, phase === "reused" ? [7, 0] : [0]);
+  } finally {
+    connection.resolve();
+    ws.server.close();
+    await ws.drain();
+  }
+});
+
+for (const carrier of ["response", "metadata", "header"]) for (const phase of ["before upgrade", "connecting", "reused"]) test(`WebSocket ${carrier} continuation crossing expiry ${phase} requests full-input restart without dispatch`, async t => {
+  let clock = Date.now();
+  t.mock.method(Date, "now", () => clock);
+  const expires = clock + 1_000, f = await fixture(t, true, { limit: 1_000_000 });
+  await setExpiry(f, new Date(expires).toISOString(), true);
+  f.response = () => Response.json({ object: "response", id: "resp_http_seed", status: "completed", output: [] }, { headers: { "x-codex-turn-state": "turn_seed" } });
+  await f.consume(await f.request());
+  const upstream = new UpgradeSocket(), entered = Promise.withResolvers(), connection = Promise.withResolvers();
+  f.response = async () => {
+    entered.resolve();
+    if (phase === "connecting") await connection.promise;
+    return new Response(null, { status: 101, webSocket: upstream });
+  };
+  let dispatches = 0;
+  const get = f.env.BUDGET_LEDGER.get;
+  f.env.BUDGET_LEDGER.get = name => {
+    const ledger = get(name);
+    return { ...ledger, fetch: async (url, init) => {
+      const response = await ledger.fetch(url, init);
+      if (name === "provider:openai" && new URL(url).pathname === "/dispatch" && ++dispatches === (phase === "reused" ? 2 : 1) && phase !== "connecting") clock = expires;
+      return response;
+    } };
+  };
+  const ws = await websocketFixture(t, f, carrier === "header" ? { "x-codex-turn-state": "turn_seed" } : {});
+  const create = previous => ws.server.receive({ type: "response.create", model: "openai/gpt-6-astra", input: "fixture",
+    ...(carrier === "response" ? { previous_response_id: previous } : carrier === "metadata" ? { client_metadata: { "x-codex-turn-state": "turn_seed" } } : {}),
+  });
+  try {
+    create("resp_http_seed");
+    if (phase === "connecting") { await entered.promise; clock = expires; connection.resolve(); }
+    await ws.drain();
+    if (phase === "reused") {
+      assert.equal(upstream.sent.length, 1);
+      upstream.receive({ type: "response.created", response: { id: "resp_ws_first" } });
+      upstream.receive({ type: "response.completed", response: { id: "resp_ws_first", status: "completed", output: [], usage: { input_tokens: 1, output_tokens: 1 } } });
+      await ws.drain();
+      create("resp_ws_first");
+      await ws.drain();
+    }
+    assert.equal(f.sent.length, phase === "before upgrade" ? 1 : 2, "only the successful seed and permitted handshake may leave the router");
+    assert.equal(upstream.sent.length, phase === "reused" ? 1 : 0);
+    const notice = ws.server.sent.at(-1);
+    assert.equal(notice.status, 409);
+    assert.equal(notice.error.code, "continuation_restart_required");
+    assert.match(notice.error.message, /restart with full input and omit previous_response_id and x-codex-turn-state/);
+    assert.equal(f.events.length, phase === "reused" ? 3 : 2);
+    assert.equal(f.events.at(-1).status, "client_error");
+    assert.equal(f.events.at(-1).status_code, 409);
+    assert.equal(f.events.at(-1).actual_cost_micros, 0);
+    assert.equal(f.events.at(-1).cost_basis, "none");
+    await assertBudgets(f, phase === "reused" ? [7, 7, 0] : [7, 0]);
   } finally {
     connection.resolve();
     ws.server.close();
