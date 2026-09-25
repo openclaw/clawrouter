@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Correct the architecture and API reference to describe retained-tool pricing enforcement for HTTP/SSE and WebSocket response-ID continuations, including fixed tariffs, unmetered requests, and rollout limits.
+
 - Add an operator-run account-inventory read using credentials injected from the operator secret manager. Print versioned API-visible counts and digests without account identities, credentials or raw server errors; keep raw credentials out of GitHub Actions and the operation independent of account-readiness APIs.
 
 - Require a reviewed `expected_sha` input for production and FakeCo deployment workflows. Reject a different dispatch source before checkout and verify actual `HEAD` before setup, installation, or preflight writes. Existing dispatch callers must supply the new field.

@@ -59,10 +59,19 @@ final-proof failure after an acknowledged claim leaves pending/unknown or that
 producer's committed proof, while delivery and accounting continue; semantic CAS
 conflicts still fail publication.
 
-This is a producer-only rollout. Pricing, budget admission, and receipts do not
-consume these facts yet. A strict consumer requires separately reviewed handling
-of opaque history and verified deployment of this producer; recording evidence
-alone does not repair inherited-tool pricing enforcement or add compact routes.
+HTTP/SSE and WebSocket response-ID continuations consume the parent's durable
+tool-pricing evidence before budget reservation. A final `token_only` fact permits
+ordinary token pricing, subject to the current request. Retained hosted fees or
+server work and unknown ancestry return `pricing_required` under either policy
+or provider monthly budgets unless a fixed policy tariff applies. Unmetered
+requests retain their existing behavior; see [spend control](agent-spend-control.md).
+
+Deploy the proof producer before the consumer. The upgrade does not establish
+that old writers have drained or promote pending evidence; each request uses the
+authoritative parent fact captured at resolution. Turn-state aliases provide
+routing affinity only. This response-ID boundary does not qualify full-input
+conversation or `item_reference` state, encrypted compaction witnesses, or complete
+compaction metering, and adds no compact route.
 
 The credential owner also sequences attachment changes in `ACCESS_CONTROL`.
 An explicit grant write records a pending pool proposal before storing credentials;
