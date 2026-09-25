@@ -6,6 +6,7 @@ import { applyProviderCredential, applyTransportHeaders, quotaProbeForGrant, req
 import type { CompiledGrantTransport, CompiledProvider, Env, GrantRuntimeState, ProviderSnapshot, RefreshConfig, UpstreamGrant } from "./types";
 import { errorResponse, HttpError, json, readJson } from "./utils.ts";
 import { applyTemplateHeaders, resolveTemplate } from "./provider-templates.ts";
+import type { GrantPoolReadiness } from "../shared/contracts.ts";
 
 const REFRESH_MARGIN_MS = 5 * 60_000;
 const MAX_SECRET_BYTES = 64 * 1024;
@@ -42,7 +43,7 @@ interface CredentialRecord {
   nextRefreshAttemptAt?: string | null;
   quotaFailureCount?: number;
   revokedAt?: string | null;
-  poolSyncPending?: boolean;
+  poolSyncPending?: boolean; // Cleared only after index and KV publication complete.
   poolAdmissionRevision?: number;
   metadata?: UpstreamGrant;
 }
@@ -170,6 +171,26 @@ export class GrantCredentialObject implements DurableObject {
         return json({ grant });
       }
       if (path === "/materialize") return json(await this.materialize(await readJson<MaterializeRequest>(request)));
+      if (path === "/backfill") {
+        const { key } = await readJson<{ key: string }>(request);
+        const readiness = await authorityCall<GrantPoolReadiness>(this.env, "/grant-pools/readiness", {});
+        if (!readiness.baseline || readiness.activatedAt || !["kv", "index"].includes(readiness.phase)) throw new HttpError(409, "grant_pool_migration_required", "backfill requires an accepted baseline and an active migration scan");
+        await this.loadRecord(key, undefined, false);
+        let { record, result } = await this.reconcileAttachment(key);
+        if (record && !record.revokedAt && result.outcome === "unattached" && record.providerId) {
+          if (record.generation >= Number.MAX_SAFE_INTEGER - 1) throw new HttpError(409, "grant_generation_exhausted", "account generation is exhausted; operator recovery is required");
+          // Only explicit migration may attach a canonical legacy owner. It
+          // commits real admission provenance without replacing its account.
+          const admitted = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/admit", { key, generation: record.generation, revision: result.revision, provider: record.providerId, status: attachmentStatus(record) });
+          record = { ...record, generation: record.generation + 1, poolAdmissionRevision: admitted.revision, poolSyncPending: true };
+          await this.state.storage.put("credential", record);
+          ({ record, result } = await this.reconcileAttachment(key));
+        }
+        // A verification pass does not rewrite unchanged KV projections. The
+        // same key can appear in both the legacy inventory and indexed pages.
+        if (record) await this.publishProjection(record);
+        return json({ ...result, ownerPresent: !!record });
+      }
       if (path === "/reconcile") {
         const { key } = await readJson<{ key: string }>(request);
         await this.loadRecord(key, undefined, false);
@@ -265,7 +286,7 @@ export class GrantCredentialObject implements DurableObject {
     } finally {
       // KV permits one write per key per second. Publish the final owner state
       // once, including failed refreshes and stale disabled/revoked reads.
-      if (stale || changed || migrated) await this.publishProjection(record);
+      if (stale || changed || migrated || record.poolSyncPending) await this.publishProjection(record);
     }
   }
 
@@ -338,12 +359,15 @@ export class GrantCredentialObject implements DurableObject {
     record = await this.loadRecord(record.grantKey ?? "", record) ?? record;
     if (!record.enabled || !record.grantKey || !record.providerId || !record.kind || record.status === "reauth_required") {
       await this.state.storage.deleteAlarm();
-      if (record !== previous) await this.publishProjection(record);
+      if (record !== previous || record.poolSyncPending) await this.publishProjection(record);
       return;
     }
     const provider = snapshot.providers.find((candidate) => candidate.id === record!.providerId);
     const transport = provider ? transportForGrant(provider, materializedGrant({ provider: record.providerId, kind: record.kind }, record)) : null;
-    if (!provider || !transport) return;
+    if (!provider || !transport) {
+      if (record.poolSyncPending) await this.publishProjection(record);
+      return;
+    }
     const now = Date.now();
     const quotaProbe = quotaProbeForGrant(provider, materializedGrant({ provider: provider.id, kind: record.kind }, record));
     if (!quotaProbe) record.nextQuotaProbeAt = null;
@@ -381,15 +405,28 @@ export class GrantCredentialObject implements DurableObject {
     }
     await this.state.storage.put("credential", record);
     await this.schedule(record);
+    if (record.poolSyncPending) await this.publishProjection(record);
   }
 
   private async publishProjection(record: CredentialRecord): Promise<void> {
     if (!record.grantKey) return;
+    if (record.poolSyncPending) await this.reconcileAttachment(record.grantKey);
+    const projection = JSON.stringify(metadataGrant(record));
+    // Recovery also verifies older owners whose index acknowledgement cleared
+    // the flag before a failed KV put. KV bytes never supply canonical metadata.
+    if (await this.env.POLICY_KV.get(record.grantKey, "text") !== projection) {
+      if (!record.poolSyncPending) {
+        await this.state.storage.put("credential", { ...record, poolSyncPending: true });
+        record.poolSyncPending = true;
+      }
+      await this.env.POLICY_KV.put(record.grantKey, projection);
+    }
+    // Matching bytes recover a lost KV acknowledgement without another put.
+    // An unsuccessful acknowledgement leaves the durable obligation retryable.
     if (record.poolSyncPending) {
-      await this.reconcileAttachment(record.grantKey);
+      await this.state.storage.put("credential", { ...record, poolSyncPending: false });
       record.poolSyncPending = false;
     }
-    await this.env.POLICY_KV.put(record.grantKey, JSON.stringify(metadataGrant(record)));
   }
 
   private async reconcileAttachment(key: string): Promise<{ record: CredentialRecord | undefined; result: GrantAttachmentResult }> {
@@ -400,10 +437,6 @@ export class GrantCredentialObject implements DurableObject {
     const result = record
       ? await authorityCall<GrantAttachmentResult>(this.env, "/grant-pools/publish", { key, generation: record.generation, revision: indexed.revision, admissionRevision: record.poolAdmissionRevision, provider: record.providerId ?? null, status: attachmentStatus(record) })
       : await authorityCall<GrantAttachmentResult>(this.env, "/grant-pools/cancel-pending", { key, revision: indexed.revision });
-    if (record?.poolSyncPending) {
-      record.poolSyncPending = false;
-      await this.state.storage.put("credential", record);
-    }
     return { record, result };
   }
 
@@ -591,6 +624,10 @@ export async function putGrantCredentials(env: Env, key: string, grant: Upstream
 
 export async function reconcileGrantAttachment(env: Env, key: string): Promise<GrantAttachmentResult> {
   return ownerCall<GrantAttachmentResult>(env, key, "/reconcile", { key });
+}
+
+export async function backfillGrantAttachment(env: Env, key: string): Promise<GrantAttachmentResult & { ownerPresent: boolean }> {
+  return ownerCall(env, key, "/backfill", { key });
 }
 
 export async function materializeGrantCredentials(

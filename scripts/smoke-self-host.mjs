@@ -3,9 +3,12 @@ import packageMetadata from "../package.json" with { type: "json" };
 import { createHash, randomBytes } from "node:crypto";
 import { adminRequest } from "./admin-api.mjs";
 import { waitForSelfHostHealth } from "./smoke-readiness.mjs";
+import { acceptGrantPoolBaseline, recoverGrantPools } from "./grant-pool-recovery.mjs";
 
 const baseUrl = requiredEnv("CLAWROUTER_BASE_URL").replace(/\/$/, "");
 requiredEnv("CLAWROUTER_ADMIN_TOKEN");
+const freshStorage = process.argv.slice(2).includes("--fresh-storage");
+if (process.argv.slice(2).some(arg => arg !== "--fresh-storage")) throw new Error("unknown self-host smoke argument");
 
 const suffix = randomBytes(6).toString("hex");
 const credentialId = `self_host_smoke_${suffix}`;
@@ -17,6 +20,10 @@ try {
   const health = await waitForSelfHostHealth(baseUrl);
   assert.equal(health.ok, true, "health response must report ok");
   assert.equal(health.version, packageMetadata.version, "health must report the built release version");
+  // The CI caller has just created an isolated container with a new anonymous
+  // volume. Ordinary persisted self-host deployments must accept their baseline.
+  if (freshStorage) await acceptGrantPoolBaseline("fresh");
+  assert.ok((await recoverGrantPools()).activatedAt, "self-host account routing must be active");
 
   await adminRequest(`/v1/admin/keys/${credentialId}`, {
     method: "PUT",
@@ -46,7 +53,7 @@ try {
 
   await revoke();
   created = false;
-  console.log("self-host smoke ok: health, admin mutation, scoped catalog, revocation");
+  console.log("self-host smoke ok: health, account activation, admin mutation, scoped catalog, revocation");
 } finally {
   if (created) await revoke();
 }

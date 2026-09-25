@@ -6,7 +6,7 @@ import { assertAccessGateResponse } from "./smoke-access-gate.mjs";
 import {
   assertDeploymentMutation,
   deploymentTarget,
-  fakecoAccessServiceTokenIds,
+  accessServiceTokenIds,
   verifyPolicyKvNamespaceTarget,
 } from "./deployment-profile.mjs";
 import {
@@ -36,7 +36,7 @@ export function validateFakecoBootstrapInputs(
   ]) {
     requiredValue(env, name);
   }
-  fakecoAccessServiceTokenIds(target, env);
+  accessServiceTokenIds(target, env);
 
   const adminToken = requiredValue(env, "CLAWROUTER_ADMIN_TOKEN");
   const adminTokenSha256 = requiredValue(

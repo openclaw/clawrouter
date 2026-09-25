@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import packageMetadata from "../package.json" with { type: "json" };
+import { grantPoolStatus } from "./grant-pool-recovery.mjs";
 import {
   buildProviderSmokePlan,
   inspectSmokeKeyProviderAccess,
@@ -24,6 +25,7 @@ await waitForHealth({
   probeImpl: (health) => assert.equal(health.version, packageMetadata.version, "serving release version"),
 });
 console.log(`deployed version verified: ${packageMetadata.version}`);
+assert.ok((await grantPoolStatus()).activatedAt, "account routing must be activated; health alone is not deployment readiness");
 await expectRedirect(`${baseUrl}/`, "root redirect", "/dashboard");
 await expectRedirectOrAccessGate(`${baseUrl}/dashboard`, "dashboard redirect", "/dashboard/home");
 await expectAccessGate(`${baseUrl}/dashboard/home`, "dashboard access gate");

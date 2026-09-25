@@ -256,7 +256,7 @@ async function smokeEnvironment(provider, t) {
       if (path === "/credentials/resolve") return Response.json({ initialized: true, credentials: JSON.parse(init.body).credentialIds.filter(id => ["fixture", "observer"].includes(id)).map(credentialId => ({ credentialId, credential })), missingCredentialIds: [] });
       if (path === "/policies/resolve") return Response.json({ initialized: true, policies: [{ policyId: "fixture", policy }], missingPolicyIds: [] });
       if (path === "/connections/resolve") return Response.json({ initialized: true, connections: [{ providerId: provider.id, enabled: true }], missingProviderIds: [] });
-      if (path === "/grant-pools/resolve") return Response.json({ keys: [], states: {} });
+      if (path === "/grant-pools/resolve") return Response.json({ keys: [], states: {}, ready: true });
       throw new Error(`unexpected authority call: ${path}`);
     } }) },
   };

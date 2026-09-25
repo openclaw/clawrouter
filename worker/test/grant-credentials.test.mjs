@@ -414,7 +414,9 @@ for (const failure of ["index", "storage"]) test(`negative upgrade migration ret
   }
   assert.equal(values.get(key).enabled, false);
   await owner.object.alarm();
-  assert.equal(syncs, failure === "index" ? 2 : 1);
+  // Denial is reconciled before maintenance, then publication acknowledges
+  // the same index state only after the KV projection succeeds.
+  assert.equal(syncs, failure === "index" ? 3 : 2);
   assert.equal(owner.values.get("credential").enabled, false);
   assert.equal(owner.values.get("credential").accessToken, undefined);
   assert.equal(owner.alarm(), null);

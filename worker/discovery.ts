@@ -252,6 +252,7 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env, conne
         const available = activeOperationCandidates(selected.candidates.available, env, requirement);
         if (!available.length) {
           if (selected.candidates.hasConfiguredGrant) throw new HttpError(503, "upstream_grant_pool_unavailable", "no scoped grant supports this operation");
+          if (!selected.candidates.environmentReady) throw new HttpError(503, "grant_pool_not_ready", "account inventory must be reconciled and activated before environment fallback");
           assertOperationConfiguration(requirement, null, env);
         }
         configured = true;

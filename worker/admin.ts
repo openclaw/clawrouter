@@ -17,6 +17,7 @@ import { hasPrimaryCredential, putGrantCredentials, revokeGrantCredentials, type
 import { normalizeFusionConfig } from "./fusion";
 import { budgetStatus as policyBudgetStatus, providerBudgetStatus, usageSnapshots } from "./ledgers";
 import { startOAuth } from "./oauth";
+import { grantPoolAdmin, grantPoolReadiness } from "./grant-pool-admin.ts";
 import { normalizeConnectionMutation } from "./provider-connections.ts";
 import { endpointForPath, listGrantRecords, listHealth, modelRoute, providerReadiness, providerReadinessForPolicies, providerReadinessFromState, refreshStoredGrant, refreshStoredGrantQuota, snapshot } from "./providers";
 import type { AdminBootstrapResponse } from "../shared/contracts";
@@ -30,6 +31,7 @@ export async function adminApi(request: Request, env: Env, path: string): Promis
   const authorization = await authorizeAdmin(request, env);
   if (authorization instanceof Response) return authorization;
   try {
+    if (path.startsWith("/v1/admin/grant-pools/")) return await grantPoolAdmin(request, env, path);
     if (request.method === "GET" && path === "/v1/admin/content") return getContent(request, env);
     if (request.method === "GET" && path === "/v1/admin/bootstrap") return privateJson(await adminBootstrap(env));
     if (request.method === "GET" && path === "/v1/admin/overview") return privateJson(await overview(env));
@@ -254,7 +256,7 @@ async function connectionResponses(env: Env, connections: ProviderConnection[]):
 }
 
 async function adminBootstrap(env: Env): Promise<AdminBootstrapResponse> {
-  const [policies, credentials, users, bindings, storedConnections, grants, rules, health, fusion] = await Promise.all([
+  const [policies, credentials, users, bindings, storedConnections, grants, rules, health, fusion, poolReadiness] = await Promise.all([
     listPolicies(env),
     listCredentials(env),
     listUsers(env),
@@ -264,10 +266,12 @@ async function adminBootstrap(env: Env): Promise<AdminBootstrapResponse> {
     assignmentRules(env),
     listHealth(env),
     loadFusionConfig(env),
+    grantPoolReadiness(env),
   ]);
   const connectionRows = connectionsFrom(storedConnections);
   const connectionResponseRows = await connectionResponses(env, connectionRows);
   return {
+    grantPoolReadiness: poolReadiness,
     policies: policies.map(policyResponse),
     credentials: credentialResponsesFrom(policies, credentials, users),
     connections: connectionResponseRows,

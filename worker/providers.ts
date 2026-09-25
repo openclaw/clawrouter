@@ -214,6 +214,7 @@ export async function upstreamAuth(provider: CompiledProvider, auth: AuthorizedI
   const resolution = await grantFor(provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, requirement);
   const selected = resolution.selected;
   if (!selected && resolution.hasConfiguredGrant) throw new HttpError(503, "upstream_grant_pool_unavailable", `provider ${provider.id} has no available scoped upstream grant`);
+  if (!selected && !resolution.environmentReady) throw new HttpError(503, "grant_pool_not_ready", "environment fallback is waiting for account migration; an administrator can recover and activate it in Access → Upstream");
   const grant = selected?.grant ?? null;
   if (pinned && ((selected?.key ?? null) !== pinned.key || ("lineage" in pinned ? grant?.credentialLineage !== pinned.lineage : (grant ? grantRevision(grant) : null) !== pinned.revision))) throw new HttpError(409, "upstream_grant_changed", "upstream authorization changed; open a new connection");
   if (requirement) assertOperationConfiguration(requirement, grant, env);
@@ -329,11 +330,11 @@ export async function listHealth(env: Env): Promise<Map<string, ProviderHealth>>
   return result;
 }
 
-async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedKeys: ReadonlySet<string>, stickyHash: string | null, recordSelection: boolean, pinned?: PinnedGrant, requirement?: GrantRequirement): Promise<{ selected: { key: string; grant: UpstreamGrant } | null; hasConfiguredGrant: boolean }> {
+async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedKeys: ReadonlySet<string>, stickyHash: string | null, recordSelection: boolean, pinned?: PinnedGrant, requirement?: GrantRequirement): Promise<{ selected: { key: string; grant: UpstreamGrant } | null; hasConfiguredGrant: boolean; environmentReady: boolean }> {
   const tokenRef = provider.auth.schemes.find((scheme) => scheme.type === "oauth")?.tokenRef ?? provider.id;
   const tenant = auth.policy.tenantId ?? "default";
   const resolution = await resolveGrantSelection(provider.id, auth.policyId, tenant, tokenRef, env, excludedKeys, auth.policy.grantRouting, stickyHash, recordSelection, pinned?.key, requirement);
-  return { selected: resolution.selected ? { key: resolution.selected.key, grant: await refreshGrant(resolution.selected.key, resolution.selected.grant, provider, env, false) } : null, hasConfiguredGrant: resolution.hasConfiguredGrant };
+  return { selected: resolution.selected ? { key: resolution.selected.key, grant: await refreshGrant(resolution.selected.key, resolution.selected.grant, provider, env, false) } : null, hasConfiguredGrant: resolution.hasConfiguredGrant, environmentReady: resolution.environmentReady };
 }
 
 export async function refreshStoredGrant(env: Env, key: string): Promise<UpstreamGrant> {

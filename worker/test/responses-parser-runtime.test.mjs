@@ -34,7 +34,8 @@ test("maintained parser imports and flushes in the unchanged Wrangler/workerd ru
     });
     assert.equal(built.status, 0, built.error?.message ?? `${built.stdout}\n${built.stderr}`);
     const bundle = await readFile(join(output, "responses-parser-runtime.js"), "utf8");
-    worker = await startBundledWorkerdFixture(temporary, bundle, 'export default { fetch() { throw new Error("unexpected upstream request"); } };');
+    // This worker exposes only the parser, without admin or proxy routes.
+    worker = await startBundledWorkerdFixture(temporary, bundle, 'export default { fetch() { throw new Error("unexpected upstream request"); } };', { activate: false });
     const parse = chunks => worker.dispatchFetch("https://router.example/parser", { method: "POST", body: JSON.stringify({ chunks }) });
 
     const number = await parse(["1", "2"]);

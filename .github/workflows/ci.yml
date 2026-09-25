@@ -94,7 +94,7 @@ jobs:
           node -p 'JSON.stringify({ node: process.version, undici: process.versions.undici, platform: process.platform, arch: process.arch })'
           CLAWROUTER_BASE_URL=http://127.0.0.1:8787 \
             CLAWROUTER_ADMIN_TOKEN="$admin_token" \
-            node scripts/smoke-self-host.mjs
+            node scripts/smoke-self-host.mjs --fresh-storage
 
   admin:
     runs-on: ubuntu-latest

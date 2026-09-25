@@ -144,6 +144,10 @@ jobs:
           CLAWROUTER_ACCESS_ADMIN_DOMAINS: ${{ inputs.access_admin_domains || vars.CLAWROUTER_FAKECO_ACCESS_ADMIN_DOMAINS }}
         run: pnpm cf:access -- --write-github-env
       - run: pnpm cf:preflight
+        env:
+          CLAWROUTER_ADMIN_TOKEN: ${{ secrets.CLAWROUTER_FAKECO_ADMIN_TOKEN }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CLAWROUTER_FAKECO_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CLAWROUTER_FAKECO_ACCESS_CLIENT_SECRET }}
       - run: pnpm cf:content:provision
       - run: pnpm cf:config
       - run: pnpm exec wrangler deploy --config .wrangler.generated.toml
@@ -184,6 +188,15 @@ jobs:
           CF_ACCESS_CLIENT_ID: ${{ secrets.CLAWROUTER_FAKECO_ACCESS_CLIENT_ID }}
           CF_ACCESS_CLIENT_SECRET: ${{ secrets.CLAWROUTER_FAKECO_ACCESS_CLIENT_SECRET }}
         run: pnpm cf:bootstrap
+      - name: Reconcile and activate account routing
+        env:
+          CLAWROUTER_ADMIN_TOKEN: ${{ secrets.CLAWROUTER_FAKECO_ADMIN_TOKEN }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CLAWROUTER_FAKECO_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CLAWROUTER_FAKECO_ACCESS_CLIENT_SECRET }}
+        run: pnpm cf:accounts
       - env:
+          CLAWROUTER_ADMIN_TOKEN: ${{ secrets.CLAWROUTER_FAKECO_ADMIN_TOKEN }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CLAWROUTER_FAKECO_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CLAWROUTER_FAKECO_ACCESS_CLIENT_SECRET }}
           CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY: ${{ secrets.CLAWROUTER_FAKECO_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY }}
         run: pnpm cf:smoke

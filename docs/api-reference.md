@@ -92,6 +92,23 @@ advisers may fit, the usable offer remains `request-dependent`. Unavailable
 advisers fail open. These observations do not replace request-time admission or
 the separate administrator preview of an unsaved Fusion configuration.
 
+Environment credentials become eligible only after account-inventory activation.
+After activation, paused and reauthorization-required accounts retain attachment
+presence and prevent environment fallback even when none is selectable. Before
+activation, would-be environment fallback returns `503 grant_pool_not_ready`;
+scoped accounts and administrator recovery remain available.
+
+Account recovery uses the existing administrator authentication and browser CSRF checks:
+
+- `GET /v1/admin/grant-pools/readiness`: baseline, revision, scan cursor, bounded unresolved keys, and activation time. It is independent of account listing.
+- `POST /v1/admin/grant-pools/baseline`: `{revision, baseline: "existing" | "fresh", confirmed: true}`. This records an explicit storage/inventory attestation; an empty scan never accepts it automatically.
+- `POST /v1/admin/grant-pools/scan`: `{revision}` starts or restarts a bounded inventory scan.
+- `POST /v1/admin/grant-pools/advance`: `{scanRevision, phase, cursor}` processes the next page of at most 32 keys. The server owns the next cursor and repair outcomes.
+- `POST /v1/admin/grant-pools/activate`: `{revision}` activates only a complete unchanged scan with no unresolved evidence. Stale commands return `409 grant_pool_readiness_changed`.
+- `POST /v1/admin/grant-pools/repair`: `{cursor: null | string}` reconciles up to 32 indexed account keys without contacting providers, including committed owners with missing or stale KV projections. The returned cursor advances past unresolved keys; matching projections are not rewritten.
+
+Bootstrap also includes `grantPoolReadiness`. The status endpoint and recovery screen remain reachable when bootstrap cannot list a malformed legacy account. An `attached`, `detached`, `unattached`, `pending_cancelled`, or unresolved repair outcome describes storage reconciliation, not credential verification. See [deployment activation and forward recovery](deploy-cloudflare.md#account-routing-activation-and-recovery).
+
 Proxy (including native), admin, and pool-submission route identifiers are
 decoded once. Invalid percent escapes or invalid percent-encoded UTF-8 return
 HTTP 400 with `invalid_path_encoding`, after applicable authentication checks.
