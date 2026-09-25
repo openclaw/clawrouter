@@ -5,7 +5,7 @@ import type {
 import { evaluateUserAssignments, withLegacyAssignmentState, type AssignmentEvidence, type AssignmentRuleEntry } from "./assignment-evaluator.ts";
 import { contentRetentionDefault } from "./content-retention.ts";
 import { normalizeConnectionMutation, type ProviderConnectionMutation } from "./provider-connections.ts";
-import { HttpContinuationStore } from "./continuation-store.ts";
+import type { ResponsesScopeStore } from "./responses-scope.ts";
 import { boundedPercent, selectThresholdGrantKey, stickyScore, weightedRandom } from "./grant-selection-strategies.ts";
 import { errorResponse, HttpError, json, normalizeEmail, readJson, safeEqual } from "./utils.ts";
 
@@ -29,9 +29,11 @@ const selfServiceCredentialRetentionLimit = 100;
 export class PolicyBindingIndexObject implements DurableObject {
   private sql: SqlStorage;
   private storage: DurableObjectStorage;
-  private continuations?: HttpContinuationStore;
+  private responses?: Promise<ResponsesScopeStore>;
+  private env: Env;
 
-  constructor(state: DurableObjectState) {
+  constructor(state: DurableObjectState, env: Env) {
+    this.env = env;
     this.storage = state.storage;
     this.sql = state.storage.sql;
     this.ensureSchema();
@@ -41,7 +43,8 @@ export class PolicyBindingIndexObject implements DurableObject {
     const path = new URL(request.url).pathname;
     if (request.method !== "POST") return errorResponse("route_not_found", "route not found", 404);
     try {
-      if (path === "/http-continuations") return await (this.continuations ??= new HttpContinuationStore(this.storage)).fetch(request);
+      if (path === "/http-continuations") return await (await this.responseStore()).continuation(request);
+      if (path === "/responses-background") return await (await this.responseStore()).fetch(request);
       if (path === "/resolve") return json({ initialized: this.hasMeta("bindings_global_initialized"), ...this.resolveBindings((await readJson<{ principals: Principal[] }>(request)).principals) });
       if (path === "/initialize") { this.initializeBindings(await readJson<Seed[]>(request)); return new Response("initialized"); }
       if (path === "/initialize-all") { this.initializeAllBindings(await readJson<PolicyBinding[]>(request)); return new Response("initialized"); }
@@ -93,7 +96,10 @@ export class PolicyBindingIndexObject implements DurableObject {
     }
   }
 
-  alarm(): Promise<void> { return (this.continuations ??= new HttpContinuationStore(this.storage)).alarm(); }
+  async alarm(): Promise<void> { return (await this.responseStore()).alarm(); }
+  private responseStore(): Promise<ResponsesScopeStore> {
+    return this.responses ??= import("./responses-scope.ts").then(({ ResponsesScopeStore }) => new ResponsesScopeStore(this.storage, this.env));
+  }
 
   private ensureSchema(): void {
     this.sql.exec("CREATE TABLE IF NOT EXISTS policy_binding_principals (principal_key TEXT PRIMARY KEY)");

@@ -217,6 +217,12 @@ export async function upstreamAuth(provider: CompiledProvider, auth: AuthorizedI
   const grant = selected?.grant ?? null;
   if (pinned && ((selected?.key ?? null) !== pinned.key || ("lineage" in pinned ? grant?.credentialLineage !== pinned.lineage : (grant ? grantRevision(grant) : null) !== pinned.revision))) throw new HttpError(409, "upstream_grant_changed", "upstream authorization changed; open a new connection");
   if (requirement) assertOperationConfiguration(requirement, grant, env);
+  return { ...configuredUpstream(provider, grant, env), grantKey: selected?.key ?? null, grantRevision: grant ? grantRevision(grant) : null };
+}
+
+// Selection and credential ownership stay with their callers. Both generation
+// and pinned controls use this same configuration-to-wire preparation.
+export function configuredUpstream(provider: CompiledProvider, grant: UpstreamGrant | null, env: Env): UpstreamAuth {
   const headers = new Headers();
   const query = new URLSearchParams();
   applyProviderCredential(provider, grant, env, headers, query);
@@ -226,7 +232,7 @@ export async function upstreamAuth(provider: CompiledProvider, auth: AuthorizedI
   applyTransportHeaders(headers, transport, grant);
   return {
     grant,
-    grantKey: selected?.key ?? null,
+    grantKey: null,
     grantRevision: grant ? grantRevision(grant) : null,
     baseUrl: transport?.baseUrl ?? resolveTemplate(provider, provider.base_urls.default, env),
     headers,

@@ -77,10 +77,32 @@ export const usageInspectionLimit = 2 * 1024 * 1024;
 export function responseOutcome(value: unknown): ResponseOutcome {
   const root = record(value);
   if (!root) return null;
-  if (root.error || root.type === "error" || root.type === "response.failed") return "provider_error";
+  if (root.error || root.type === "error" || root.type === "response.failed" || root.type === "response.cancelled") return "provider_error";
   if (root.type === "response.completed" || root.type === "response.incomplete") return "success";
   const response = record(root.response) ?? (root.object === "response" ? root : null);
-  return response?.status === "failed" ? "provider_error" : response?.status === "completed" || response?.status === "incomplete" ? "success" : null;
+  return response?.status === "failed" || response?.status === "cancelled" ? "provider_error" : response?.status === "completed" || response?.status === "incomplete" ? "success" : null;
+}
+
+export interface ResponsesObservation {
+  id: string;
+  status: "queued" | "in_progress" | "completed" | "incomplete" | "failed" | "cancelled";
+  terminal: boolean;
+  tokens: UsageTokens | null;
+}
+
+// Delivery EOF/error is not a generation status. Only a validated protocol
+// document can supply these facts; the streaming projector calls this at its
+// complete JSON/document or delimited SSE boundary.
+export function responsesObservation(value: unknown): ResponsesObservation | null {
+  const root = record(value);
+  if (!root) return null;
+  const event = typeof root.type === "string" && root.type.startsWith("response.") ? root.type.slice(9) : null;
+  const response = event ? record(root.response) : root.object === "response" ? root : null;
+  const id = response?.id, status = response?.status;
+  const statuses = ["queued", "in_progress", "completed", "incomplete", "failed", "cancelled"];
+  if (!response || typeof id !== "string" || !id || new TextEncoder().encode(id).length > 256 || !statuses.includes(status as string)) return null;
+  if (event && statuses.includes(event) && event !== status) return null;
+  return { id, status: status as ResponsesObservation["status"], terminal: status !== "queued" && status !== "in_progress", tokens: extractUsageTokens(root) };
 }
 
 export function extractSseUsageTokens(text: string): UsageTokens | null {

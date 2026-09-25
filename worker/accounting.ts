@@ -86,9 +86,9 @@ export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capabili
   return reservation;
 }
 
-export async function reserveLedgerIntent(env: Env, intent: BudgetReservationIntent): Promise<LedgerBudgetReservation> {
+export async function reserveLedgerIntent(env: Env, intent: BudgetReservationIntent, signal?: AbortSignal): Promise<LedgerBudgetReservation> {
   const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(intent.objectName));
-  const response = await stub.fetch("https://clawrouter.internal/reserve", { method: "POST", body: JSON.stringify(intent.request) });
+  const response = await stub.fetch("https://clawrouter.internal/reserve", { method: "POST", body: JSON.stringify(intent.request), signal });
   if (!response.ok) throw new Error(`budget reserve returned ${response.status}`);
   const result = await response.json<{ allowed: boolean; chargedMicros: number }>();
   if (typeof result?.allowed !== "boolean") throw new Error("budget reserve was not acknowledged");
@@ -110,10 +110,10 @@ export async function finalizeAccounting(env: Env, reservation: BudgetReservatio
   return results.every((result) => result.status === "fulfilled");
 }
 
-export async function markBudgetDispatched(env: Env, reservation: BudgetReservation): Promise<void> {
+export async function markBudgetDispatched(env: Env, reservation: BudgetReservation, signal?: AbortSignal): Promise<void> {
   const results = await Promise.allSettled(reservation.reservations.map(async (item) => {
     const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(item.objectName));
-    const response = await stub.fetch("https://clawrouter.internal/dispatch", { method: "POST", body: JSON.stringify({ reservationId: item.reservationId }) });
+    const response = await stub.fetch("https://clawrouter.internal/dispatch", { method: "POST", body: JSON.stringify({ reservationId: item.reservationId }), signal });
     if (!response.ok || (await response.json<{ dispatched: boolean }>()).dispatched !== true) throw new Error("budget dispatch was not acknowledged");
   }));
   const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");

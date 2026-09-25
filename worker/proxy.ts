@@ -21,11 +21,12 @@ import type { ContinuationOwner } from "./continuation-store.ts";
 import { HttpContinuation } from "./http-continuation.ts";
 import { HttpOperation } from "./http-operation.ts";
 import { backgroundResponse } from "./responses-lifecycle.ts";
+import { responseRouteDigest } from "./responses-control-dispatch.ts";
 import {
   assertProviderAccess, copyRequestHeaders, providerById,
   signSigV4, upstreamAuth, upstreamPath,
 } from "./providers";
-import { applyTransportHeaders, providerCredentialScheme, transformTransportBody } from "./provider-auth.ts";
+import { applyTransportHeaders, transformTransportBody } from "./provider-auth.ts";
 import { normalizePreStreamError, observeUsage } from "./proxy-response";
 import type { AuthorizedIdentity, CompiledQuotaConfig, Env, ProviderConnection } from "./types";
 import {
@@ -367,17 +368,12 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
     let continuation: ContinuationOwner | undefined;
     if (selection.capability === "llm.responses") {
       if (upstream.grantKey && !upstream.grant?.credentialLineage) throw new HttpError(503, "continuation_unavailable", "upstream credential ownership is unavailable");
-      const routeUrl = new URL(url);
-      const scheme = providerCredentialScheme(selection.provider, upstream.grant);
-      if (upstream.grantKey && scheme.type === "query_api_key") routeUrl.searchParams.delete(scheme.param);
-      const identity = upstream.grant?.credentialLineage ?? await sha256Hex(JSON.stringify([[...upstream.headers], [...upstream.query]]));
-      const passthrough = selection.provider.adapter.passthroughHeaders.map(name => [name.toLowerCase(), headers.get(name)]).sort();
       continuation = {
         providerId: selection.provider.id, endpointId: selection.endpoint.id, grantKey: upstream.grantKey,
         lineage: upstream.grant?.credentialLineage ?? null,
         // A WebSocket GET is only the handshake; both transports execute the
         // same logical Responses POST and must share continuation ownership.
-        routeSha256: await sha256Hex(JSON.stringify(["POST", routeUrl.href, identity, passthrough])),
+        routeSha256: await responseRouteDigest(selection.provider, upstream, url, headers, upstream.grantKey),
         policyGeneration: auth.policy.generation,
       };
     }

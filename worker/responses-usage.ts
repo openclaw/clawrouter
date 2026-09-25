@@ -1,6 +1,6 @@
 import parser, { type Token } from "stream-json/core/parser.js";
 import { fun, none } from "stream-chain/core";
-import { createSseUsageAccumulator, extractUsageTokens, responseOutcome, type SseUsageEvidence, type UsageInspection } from "./token-usage.ts";
+import { createSseUsageAccumulator, extractUsageTokens, responseOutcome, responsesObservation, type ResponsesObservation, type SseUsageEvidence, type UsageInspection } from "./token-usage.ts";
 import { createToolEvidenceProjection, type createResponsesToolEvidence } from "./responses-tool-evidence.ts";
 
 const feedLimit = 4096, depthLimit = 128, scalarLimit = 64;
@@ -8,10 +8,10 @@ const empty = (): UsageInspection => ({ tokens: null, outcome: null });
 
 // Observe the declared Responses format without assembling output. Identity
 // publication and complete output/tool-history evidence have different owners.
-export function createResponsesUsageInspector(sse: boolean, tools?: Pick<ReturnType<typeof createResponsesToolEvidence>, "accept" | "invalid">) {
+export function createResponsesUsageInspector(sse: boolean, tools?: Pick<ReturnType<typeof createResponsesToolEvidence>, "accept" | "invalid">, observe?: (fact: ResponsesObservation) => Promise<void>) {
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const accumulator = createSseUsageAccumulator();
-  let document = metadataParser(!!tools), json = empty(), stopped = false;
+  let document = metadataParser(!!tools, !!observe), json = empty(), stopped = false;
   let prefix = "", mode: "prefix" | "data" | "event" | "ignored" = "prefix";
   let lineNonempty = false, optionalSpace = false, skipLf = false;
   let hasData = false, hasContent = false, eventError = false;
@@ -56,11 +56,13 @@ export function createResponsesUsageInspector(sse: boolean, tools?: Pick<ReturnT
         if (evidence.kind === "data") {
           if (responseOutcome(evidence.value) === "provider_error") tools?.invalid();
           tools?.accept(document.tools(), true);
+          const fact = responsesObservation(evidence.value);
+          if (fact) await observe?.(fact);
         }
         else if (evidence.kind !== "done") tools?.invalid();
       }
       document.stop();
-      document = metadataParser(!!tools); hasData = false; hasContent = false; eventError = false; done = literal("[DONE]", true);
+      document = metadataParser(!!tools, !!observe); hasData = false; hasContent = false; eventError = false; done = literal("[DONE]", true);
     } else if (mode === "prefix" && prefix === "data") await beginData();
     else if (mode === "event" || mode === "prefix" && prefix === "event") eventError = mode === "event" && eventName.matches();
     prefix = ""; mode = "prefix"; lineNonempty = false; optionalSpace = false;
@@ -108,6 +110,8 @@ export function createResponsesUsageInspector(sse: boolean, tools?: Pick<ReturnT
       if (evidence.kind === "data") {
         if (responseOutcome(evidence.value) === "provider_error") tools?.invalid();
         tools?.accept(document.tools(), false);
+        const fact = responsesObservation(evidence.value);
+        if (fact) await observe?.(fact);
       }
       else tools?.invalid();
       json = evidence.kind === "data" ? { tokens: extractUsageTokens(evidence.value), outcome: responseOutcome(evidence.value) }
@@ -138,8 +142,8 @@ function literal(expected: string, trim = false) {
 class InspectionLimit extends Error {}
 type MetadataEvidence = Extract<SseUsageEvidence, { kind: "data" }> | { kind: "invalid" | "unavailable" };
 
-function metadataParser(inspectTools: boolean) {
-  const projection = metadataProjection();
+function metadataParser(inspectTools: boolean, inspectIdentity: boolean) {
+  const projection = metadataProjection(inspectIdentity);
   const tools = inspectTools ? createToolEvidenceProjection() : null;
   let failure: "invalid" | "unavailable" | null = null;
   const compose = () => fun(
@@ -171,15 +175,15 @@ function metadataParser(inspectTools: boolean) {
 }
 
 type Context = "root" | "response" | "usage" | "details" | "creation";
-type Field = Context | "text" | "number" | "error" | null;
+type Field = Context | "text" | "identity" | "number" | "error" | null;
 type Frame = { context: Context | null; value: Record<string, unknown> | null; key: string | null };
 const counters = new Set(["input_tokens", "prompt_tokens", "inputTokens", "output_tokens", "completion_tokens", "outputTokens", "total_tokens", "totalTokens", "cache_read_input_tokens", "cache_creation_input_tokens", "cache_creation_ephemeral_5m_input_tokens", "cache_creation_ephemeral_1h_input_tokens"]);
 const detailCounters = new Set(["cached_tokens", "cache_read_input_tokens", "cache_write_tokens"]);
 const creationCounters = new Set(["ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"]);
 
-function metadataProjection() {
+function metadataProjection(inspectIdentity: boolean) {
   const frames: Frame[] = [];
-  let value: unknown, capture: "key" | "text" | "number" | "error" | null = null, scalar = "";
+  let value: unknown, capture: "key" | "text" | "identity" | "number" | "error" | null = null, scalar = "";
   const current = () => frames[frames.length - 1];
   function field(): Field {
     if (!frames.length) return "root";
@@ -187,6 +191,7 @@ function metadataProjection() {
     if (!key || !frame.context) return null;
     if (frame.context === "root" || frame.context === "response") {
       if (["type", "object", "status", "service_tier"].includes(key)) return "text";
+      if (inspectIdentity && key === "id") return "identity";
       if (frame.context === "root" && key === "error") return "error";
       if (frame.context === "root" && key === "response") return "response";
       return key === "usage" ? "usage" : null;
@@ -216,7 +221,7 @@ function metadataProjection() {
           // primitive/array must still block the normalizer's nullish fallback.
           const next = selected ? object ? {} : [] : undefined;
           assign(next);
-          const context = object && selected && !["text", "number", "error"].includes(selected) ? selected as Context : null;
+          const context = object && selected && !["text", "identity", "number", "error"].includes(selected) ? selected as Context : null;
           frames.push({ context, value: context ? next as Record<string, unknown> : null, key: null });
           break;
         }
@@ -226,18 +231,18 @@ function metadataProjection() {
         case "endKey": if (capture === "key") current().key = scalar; scalar = ""; capture = null; break;
         case "startString":
           assign(""); scalar = "";
-          capture = selected === "text" ? "text" : selected === "error" ? "error" : null;
+          capture = selected === "text" || selected === "identity" ? selected : selected === "error" ? "error" : null;
           break;
         case "stringChunk":
           if (capture === "error") { if (token.value.length) assign(true); }
-          else if (capture === "key" || capture === "text") {
-            if (scalar.length + token.value.length > scalarLimit) {
-              if (capture === "text") throw new InspectionLimit();
+          else if (capture === "key" || capture === "text" || capture === "identity") {
+            if (scalar.length + token.value.length > (capture === "identity" ? 256 : scalarLimit)) {
+              if (capture !== "key") throw new InspectionLimit();
               capture = null; scalar = ""; // An overlong key cannot name a selected field.
             } else scalar += token.value;
           }
           break;
-        case "endString": if (capture === "text") assign(scalar); scalar = ""; capture = null; break;
+        case "endString": if (capture === "text" || capture === "identity") assign(scalar); scalar = ""; capture = null; break;
         case "startNumber": assign(0); scalar = ""; capture = selected === "number" || selected === "error" ? "number" : null; break;
         case "numberChunk":
           if (capture === "number") {

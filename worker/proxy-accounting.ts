@@ -34,7 +34,7 @@ interface AccountingContext {
 // before delivery to any accounting sink.
 export interface AccountingFacts {
   event: UsageEvent;
-  model: CompiledModel | null;
+  model: Pick<CompiledModel, "pricing"> | null;
   fixed: number | null;
   cost: EstimatedCost;
   requestFormat: string;
@@ -86,7 +86,7 @@ export function createProxyAccounting(options: AccountingContext) {
   const requestId = correlation.requestId;
   const started = options.startedAtMs ?? Date.now();
   const facts: AccountingFacts = {
-    model, fixed: auth.policy.requestCostMicros ?? null, cost, requestFormat: selection.endpoint.request_format, startedAtMs: started,
+    model: model ? { pricing: model.pricing } : null, fixed: auth.policy.requestCostMicros ?? null, cost, requestFormat: selection.endpoint.request_format, startedAtMs: started,
     event: {
       id: randomId("usage"), type: "clawrouter.usage.v1", occurred_at_ms: started, tenant_id: auth.policy.tenantId ?? "default",
       policy_id: auth.policyId, credential_id: auth.credentialId, principal_id: auth.principalId, auth_type: auth.authType,
@@ -145,7 +145,7 @@ export function estimateCost(model: CompiledModel | null, body: ProxyRequestBody
   return { reserveMicros: estimate.reserveMicros, basis: estimate.pricingAvailable === false ? "unpriced_service_tier" : "manifest_pricing", inputTokens: estimate.inputTokens, outputTokens: estimate.outputTokens };
 }
 
-function actualCost(model: CompiledModel | null, tokens: UsageTokens, fixed: number | null | undefined, requestFormat?: string): number | null {
+function actualCost(model: Pick<CompiledModel, "pricing"> | null, tokens: UsageTokens, fixed: number | null | undefined, requestFormat?: string): number | null {
   if (fixed != null) return fixed;
   const pricing = model?.pricing;
   if (!pricing) return 1;

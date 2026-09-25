@@ -1,7 +1,7 @@
 import { DatabaseSync } from "node:sqlite";
 import { PolicyBindingIndexObject } from "../authority.ts";
 
-export function continuationAuthority(t) {
+export function continuationAuthority(t, env = {}) {
   const objects = new Map();
   const namespace = {
     objects, beforeFetch: null,
@@ -26,8 +26,8 @@ export function continuationAuthority(t) {
           async getAlarm() { return fixture.scheduled; },
           async deleteAlarm() { fixture.scheduled = null; },
         };
-        fixture.object = new PolicyBindingIndexObject({ storage });
-        fixture.restart = () => { fixture.object = new PolicyBindingIndexObject({ storage }); };
+        fixture.object = new PolicyBindingIndexObject({ storage }, env);
+        fixture.restart = () => { fixture.object = new PolicyBindingIndexObject({ storage }, env); };
         objects.set(name, fixture);
       }
       return { async fetch(url, init) {
