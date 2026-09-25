@@ -3,9 +3,9 @@ import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
-import { adminApi } from "../admin.ts";
 import { GrantCredentialObject, putGrantCredentials, revokeGrantCredentials } from "../grant-credentials.ts";
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
+const { adminApi } = await import("../admin.ts");
 
 const key = "oauth/policy/account", route = "/v1/admin/upstream-grants/policies/policy/account/models";
 const primary = { provider: "openai", kind: "api_key", credential: "synthetic-account-key" };
