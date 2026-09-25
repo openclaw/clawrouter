@@ -10,23 +10,37 @@ const inventoryPath = `${accountPath}/models`;
 const routerScript = 'export { default } from "./worker/index.ts"; export * from "./worker/index.ts";';
 const upstreamScript = `
   let mode = "complete", calls = [], partialBodies = 0, completedBodies = 0;
-  let releasePage, pageStarted = Promise.resolve(), markPageStarted;
-  export default { async fetch(request) {
+  // The actor owns cross-request gates; the ordinary upstream Worker keeps
+  // real pending DO I/O while the test commits an account mutation.
+  export class DiscoveryPageGate {
+    async fetch(request) {
+      const path = new URL(request.url).pathname;
+      if (path === "/reset") {
+        this.started = new Promise(resolve => { this.markStarted = resolve; });
+        this.released = new Promise(resolve => { this.release = resolve; });
+      } else if (path === "/wait") {
+        this.markStarted();
+        await this.released;
+      } else if (path === "/started") await this.started;
+      else if (path === "/release") this.release();
+      else return new Response(null, { status: 404 });
+      return new Response(null, { status: 204 });
+    }
+  }
+  export default { async fetch(request, env) {
     const url = new URL(request.url);
+    const gate = env.PAGE_GATE.get(env.PAGE_GATE.idFromName("discovery"));
     if (url.origin === "https://fixture.example") {
       if (url.pathname === "/state" && request.method === "GET") return Response.json({ calls, partialBodies, completedBodies });
       if (url.pathname === "/mode" && request.method === "POST") {
         const next = await request.json();
         if (!["complete", "reduced", "rejected", "partial", "redirect", "google-hold", "google-pages"].includes(next)) throw new Error("invalid fixture mode");
         mode = next;
-        if (mode === "google-hold") pageStarted = new Promise(resolve => { markPageStarted = resolve; });
+        if (mode === "google-hold") await gate.fetch("https://gate.example/reset");
         return new Response(null, { status: 204 });
       }
-      if (url.pathname === "/page-started" && request.method === "GET") { await pageStarted; return new Response(null, { status: 204 }); }
-      if (url.pathname === "/release-page" && request.method === "POST" && releasePage) {
-        releasePage(); releasePage = undefined;
-        return new Response(null, { status: 204 });
-      }
+      if (url.pathname === "/page-started" && request.method === "GET") return gate.fetch("https://gate.example/started");
+      if (url.pathname === "/release-page" && request.method === "POST") return gate.fetch("https://gate.example/release");
     }
     if (url.origin === "https://generativelanguage.googleapis.com") {
       const credential = request.headers.get("x-goog-api-key");
@@ -35,8 +49,8 @@ const upstreamScript = `
       const second = url.searchParams.get("pageToken") === "second-page";
       const page = () => Response.json({ models: [{ name: second ? "models/second" : "models/first" }], ...(!second ? { nextPageToken: "second-page" } : {}) });
       if (mode === "google-hold" && !second) {
-        markPageStarted();
-        return new Promise(resolve => { releasePage = () => resolve(page()); });
+        await gate.fetch("https://gate.example/wait");
+        return page();
       }
       return mode === "google-pages" || second ? page() : Response.json({ models: [{ name: "models/prior" }] });
     }
@@ -63,7 +77,7 @@ const upstreamScript = `
   } };
 `;
 
-const start = temporary => startWorkerdFixture(temporary, routerScript, upstreamScript, { activate: false, persistencePath: join(temporary, "resources") });
+const start = temporary => startWorkerdFixture(temporary, routerScript, upstreamScript, { activate: false, persistencePath: join(temporary, "resources"), upstreamDurableObjects: { PAGE_GATE: { className: "DiscoveryPageGate", useSQLite: true } } });
 
 async function request(mf, method, path = inventoryPath, body) {
   // This is only a failing client guard. It cannot complete discovery or
