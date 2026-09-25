@@ -26,23 +26,32 @@ function nativeFixtureCatalog(provider, bundled) {
 // separately exercises the router's authenticated catalog and dispatch.
 const binary = process.env.CLAWROUTER_CODEX_BINARY;
 const producer = process.env.CLAWROUTER_CODEX_CATALOG_BINARY ?? binary;
+const nativeVersion = binary ? execFileSync(binary, ["--version"], { env: { PATH: process.env.PATH }, encoding: "utf8", timeout: 20_000, maxBuffer: 1024 }).trim() : null;
+// The pinned 0.156.1 protocol adds workspace discovery to account/read.
+const hasWorkspaceRouting = nativeVersion === "codex-cli 0.156.1";
 const routerKey = "synthetic-router-key";
 const model = "gpt-6-astra";
 
 for (const mode of ["key-only", "hybrid", "hybrid-missing-key"]) {
   test(`native Codex ${mode}: official metadata and provider-scoped Fast auth`, { skip: !binary, timeout: 60_000 }, async (t) => {
     const home = await mkdtemp(join(tmpdir(), "clawrouter-codex-native-"));
-    const requests = [];
+    const requests = [], discoveries = [];
     const server = createServer(async (request, response) => {
       let text = "";
       for await (const chunk of request) text += chunk;
+      if (request.method === "GET" && request.url === "/control/api/codex/accounts/check") {
+        discoveries.push({ authorization: request.headers.authorization, account: request.headers["chatgpt-account-id"] });
+        response.writeHead(200, { "content-type": "application/json" });
+        response.end(JSON.stringify({ accounts: [{ id: "fixture-account", workspace_backend_origin: "https://workspace.example", account_routing_override: "NO_CONSTRAINT" }] }));
+        return;
+      }
       if (request.url !== "/v1/native/openai/v1/responses") {
         response.writeHead(404, { "content-type": "application/json" });
         response.end('{"error":{"message":"fixture route not found"}}');
         return;
       }
       const body = JSON.parse(text);
-      requests.push({ body, authorization: request.headers.authorization, account: request.headers["chatgpt-account-id"], lite: request.headers["x-openai-internal-codex-responses-lite"] });
+      requests.push({ body, url: request.url, authorization: request.headers.authorization, account: request.headers["chatgpt-account-id"], lite: request.headers["x-openai-internal-codex-responses-lite"] });
       const message = { id: "fixture_message", type: "message", role: "assistant", status: "completed", content: [{ type: "output_text", text: "fixture complete", annotations: [] }] };
       const result = { id: "fixture_response", object: "response", status: "completed", model, service_tier: "priority", output: [message], usage: { input_tokens: 1, output_tokens: 1, total_tokens: 2 } };
       response.writeHead(200, { "content-type": "text/event-stream" });
@@ -80,6 +89,9 @@ for (const mode of ["key-only", "hybrid", "hybrid-missing-key"]) {
       const account = await client.rpc("account/read", { refreshToken: false });
       assert.equal(account.requiresOpenaiAuth, mode !== "key-only");
       assert.equal(account.account?.type ?? null, mode === "key-only" ? null : "chatgpt");
+      if (hasWorkspaceRouting) {
+        assert.deepEqual(account.workspaceRouting, mode === "key-only" ? null : { chatgptAccountId: "fixture-account", backendOrigin: "https://workspace.example", accountRoutingOverride: "NO_CONSTRAINT" });
+      } else assert.equal(Object.hasOwn(account, "workspaceRouting"), false);
       const models = await client.rpc("model/list", {});
       assert.ok(models.data.some((item) => item.model === model));
       const thread = await client.rpc("thread/start", { model, modelProvider: "fixture", cwd: home, ephemeral: true, approvalPolicy: "never", sandbox: "read-only" });
@@ -95,6 +107,7 @@ for (const mode of ["key-only", "hybrid", "hybrid-missing-key"]) {
       } else {
         assert.equal(completed.params.turn.status, "completed");
         assert.equal(requests.length, 1);
+        assert.equal(requests[0].url, "/v1/native/openai/v1/responses");
         assert.equal(requests[0].authorization, `Bearer ${routerKey}`);
         assert.equal(requests[0].account, undefined);
         assert.equal(requests[0].body.model, model);
@@ -104,6 +117,8 @@ for (const mode of ["key-only", "hybrid", "hybrid-missing-key"]) {
         assert.equal(requests[0].body.instructions, undefined);
         assert.equal(requests[0].body.input[0].type, "additional_tools");
       }
+      assert.equal(discoveries.length > 0, hasWorkspaceRouting && mode !== "key-only");
+      assert.ok(discoveries.every(({ authorization, account }) => authorization === "Bearer synthetic-chatgpt-token" && account === "fixture-account"));
       assert.equal(/fallback model metadata|model metadata.*not found/i.test(client.stderr() + JSON.stringify(client.notifications)), false, "native client used fallback model metadata");
     } finally {
       await client?.close();
