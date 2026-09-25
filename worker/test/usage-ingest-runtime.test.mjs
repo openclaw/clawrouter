@@ -9,12 +9,13 @@ test("workerd usage producer confirms stored, duplicate and retention-expired ev
   const temporary = await mkdtemp(join(tmpdir(), "clawrouter-usage-ingest-"));
   let worker;
   try {
+    // This worker exposes only the usage ledger, without admin or proxy routes.
     worker = await startWorkerdFixture(temporary, `
       export * from "./worker/index.ts";
       export default { fetch(request, env) {
         return env.USAGE_LEDGER.get(env.USAGE_LEDGER.idFromName("receipt-proof")).fetch(request);
       } };
-    `, 'export default { fetch() { throw new Error("unexpected upstream request"); } };');
+    `, 'export default { fetch() { throw new Error("unexpected upstream request"); } };', { activate: false });
     const ingest = body => worker.dispatchFetch("https://router.example/ingest", { method: "POST", body: JSON.stringify(body) });
     const original = { id: "runtime-event", type: "clawrouter.usage.v1", occurred_at_ms: Date.now(), tenant_id: "tenant", policy_id: "", key_id: "legacy-policy", provider: "openai", status: "success", status_code: 200, input_tokens: 3, output_tokens: 2, total_tokens: 5, actual_cost_micros: 7 };
     const stored = await ingest(original);
