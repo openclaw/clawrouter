@@ -78,6 +78,7 @@ function compileProvider(manifest, ids) {
     request_format: endpoint.requestFormat,
     response_format: endpoint.responseFormat,
     streaming: endpoint.streaming ?? null,
+    ...(endpoint.responsesLifecycle ? { responsesLifecycle: endpoint.responsesLifecycle } : {}),
     ...(endpoint.outputTokenLimit ? { outputTokenLimit: endpoint.outputTokenLimit } : {}),
     ...(endpoint.modelPassthrough ? { modelPassthrough: {
       pricing_ref: endpoint.modelPassthrough.pricingRef ?? null,
@@ -262,7 +263,21 @@ function validateManifest(manifest) {
       return id !== "audio.speech" || endpoint?.requestFormat !== "openai.audio_speech" || endpoint.responseFormat !== "audio.binary";
     }))) throw new Error(`model ${model.id} character pricing requires the binary speech contract`);
   }
+  const responseControls = new Set();
   for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
+    if (endpoint.responsesLifecycle) {
+      const fail = () => { throw new Error(`provider ${manifest.id} endpoint ${id} responsesLifecycle requires distinct bodyless Responses retrieve/cancel endpoints`); };
+      if ((endpoint.method ?? "POST") !== "POST" || endpoint.requestFormat !== "openai.responses" || endpoint.responseFormat !== "openai.responses") fail();
+      for (const [action, controlId] of Object.entries(endpoint.responsesLifecycle)) {
+        const control = Object.hasOwn(manifest.endpoints, controlId) ? manifest.endpoints[controlId] : null;
+        if (!control || controlId === id || responseControls.has(controlId) || control.responsesLifecycle || control.modelPassthrough || control.websocket
+          || (control.method ?? "POST") !== (action === "retrieve" ? "GET" : "POST")
+          || control.requestFormat !== "openai.responses" || control.responseFormat !== "openai.responses"
+          || JSON.stringify(control.pathParams) !== '["response_id"]' || !control.path.includes("${response_id}")
+          || manifest.capabilities.some((capability) => capability.endpoint === controlId)) fail();
+        responseControls.add(controlId);
+      }
+    }
     if (endpoint.outputTokenLimit && endpoint.outputTokenLimit.minimum > endpoint.outputTokenLimit.maximum) throw new Error(`provider ${manifest.id} endpoint ${id} outputTokenLimit minimum exceeds maximum`);
     if (endpoint.modelPassthrough) {
       const capabilities = manifest.capabilities.filter((capability) => capability.endpoint === id).map((capability) => capability.id);

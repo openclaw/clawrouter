@@ -128,6 +128,24 @@ endpoints:
     responseFormat: openai.responses
     streaming: sse
     websocket: openai.responses
+    responsesLifecycle:
+      retrieve: responses_retrieve
+      cancel: responses_cancel
+    timeoutMs: 600000
+  responses_retrieve:
+    method: GET
+    path: /v1/responses/${response_id}
+    pathParams: [response_id]
+    requestFormat: openai.responses
+    responseFormat: openai.responses
+    streaming: sse
+    timeoutMs: 600000
+  responses_cancel:
+    method: POST
+    path: /v1/responses/${response_id}/cancel
+    pathParams: [response_id]
+    requestFormat: openai.responses
+    responseFormat: openai.responses
     timeoutMs: 600000
   chat_completions:
     modelPassthrough: {}

@@ -20,6 +20,7 @@ import { grantRoutingPolicy, recordGrantRuntime, type PinnedGrant } from "./gran
 import type { ContinuationOwner } from "./continuation-store.ts";
 import { HttpContinuation } from "./http-continuation.ts";
 import { HttpOperation } from "./http-operation.ts";
+import { backgroundResponse } from "./responses-lifecycle.ts";
 import {
   assertProviderAccess, copyRequestHeaders, providerById,
   signSigV4, upstreamAuth, upstreamPath,
@@ -350,7 +351,7 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "provider authorization failed"); }
   let upstream;
   const stickyHash = await grantStickyHash(request, auth);
-  try { upstream = await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, { provider: selection.provider, endpoint: selection.endpoint, mode: transport }); }
+  try { upstream = await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, { provider: selection.provider, endpoint: selection.endpoint, mode: transport, background: backgroundResponse(selection.endpoint, selection.body) }); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_not_configured", "provider is not configured"); }
   try {
     const headers = new Headers(upstream.headers);
