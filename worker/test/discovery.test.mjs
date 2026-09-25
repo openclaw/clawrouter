@@ -4,6 +4,132 @@ import test from "node:test";
 
 const { catalogResponse, modelsResponse, sessionResponse, entitlementResponse } = await import("../discovery.ts");
 const { sha256Hex } = await import("../utils.ts");
+const { default: worker } = await import("../index.ts");
+const { snapshot } = await import("../providers.ts");
+
+test("Worker catalog and session expose one exact HTTP Fusion offer and refresh its policy generation", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.policy.requestCostMicros = 0;
+  for (const generation of ["g1", "g2"]) {
+    fixture.policy.generation = generation;
+    fixture.credential.policyGeneration = generation;
+    for (const mode of ["key", "session"]) {
+      for (const path of mode === "key" ? ["/v1/catalog"] : ["/v1/catalog", "/v1/session", "/v1/entitlements"]) {
+        const request = new Request(`https://router.example${path}`, fixture.request(mode));
+        const response = await worker.fetch(request, fixture.env, {});
+        assert.equal(response.status, 200);
+        const body = await response.json(), catalog = body.entitlements?.catalog ?? body.catalog ?? body;
+        const fusion = catalog.providers.find(({ id }) => id === "clawrouter");
+        assert.deepEqual(fusion.policies, ["fixture"]);
+        assert.deepEqual(fusion.offers, [{
+          endpoint: "chat_completions", modelId: "clawrouter/fusion", transport: "http", routeKind: "unified",
+          route: mode === "key" ? "/v1/chat/completions" : "/v1/playground/v1/chat/completions",
+          policyId: "fixture", policyGeneration: generation, eligible: true, affordability: "exact-covered",
+        }]);
+        assert.equal(catalog.scope.authType, mode === "key" ? "proxy_key" : "access");
+      }
+    }
+  }
+  fixture.userRecord.enabled = false;
+  assert.equal((await worker.fetch(fixture.request("session"), fixture.env, {})).status, 401);
+});
+
+test("Fusion cannot borrow Chat eligibility from a sibling Responses or native-only operation", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  const index = snapshot.providers.findIndex(({ id }) => id === "openai"), original = snapshot.providers[index];
+  const provider = structuredClone(original);
+  snapshot.providers[index] = provider;
+  t.after(() => { snapshot.providers[index] = original; });
+  fixture.policy.requestCostMicros = 0;
+  provider.capabilities.push({ id: "llm.chat", endpoint: "responses" });
+  fixture.records.set("oauth/fixture/subscription", { provider: "openai", kind: "subscription", enabled: true, accessToken: "fixture-subscription", accountId: "fixture-account" });
+  const view = async () => {
+    const response = await worker.fetch(fixture.request("key"), fixture.env, {});
+    assert.equal(response.status, 200);
+    return (await response.json()).providers;
+  };
+  let providers = await view();
+  assert.ok(providers.find(({ id }) => id === "openai").offers.some(({ endpoint, eligible }) => endpoint === "responses" && eligible));
+  let fusion = providers.find(({ id }) => id === "clawrouter");
+  assert.equal(fusion.executable, false);
+  assert.equal(fusion.offers[0].eligible, false);
+  assert.equal(fusion.offers[0].endpoint, "chat_completions");
+
+  fixture.records.delete("oauth/fixture/subscription");
+  provider.endpoints.find(({ id }) => id === "chat_completions").request_format = "fixture.native_chat";
+  providers = await view();
+  assert.ok(providers.find(({ id }) => id === "openai").offers.some(({ endpoint, eligible }) => endpoint === "chat_completions" && eligible));
+  fusion = providers.find(({ id }) => id === "clawrouter");
+  assert.equal(fusion, undefined, "the existing Fusion config validator rejects native-only Chat");
+});
+
+test("Fusion observes synthesis first without promising all fail-open advisers fit a shared balance", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.policy.requestCostMicros = 7;
+  fixture.config.adviserModels = ["openai/gpt-4.1-mini", "openai/gpt-4.1"];
+  fixture.connection.monthlyBudgetMicros = 100;
+  let policyRemaining = 100, providerRemaining = 100;
+  fixture.env.BUDGET_LEDGER = { idFromName: (name) => name, get: (name) => ({ fetch: async (url) => {
+    assert.equal(new URL(url).pathname, "/status", "catalog must never reserve");
+    return Response.json({ spentMicros: 0, remainingMicros: name.startsWith("provider:") ? providerRemaining : policyRemaining });
+  } }) };
+  for (const [policy, provider, eligible, affordability, ready] of [
+    [21, 21, true, "exact-covered", 2], [14, 21, true, "request-dependent", 2],
+    [21, 14, true, "request-dependent", 2], [7, 7, true, "exact-covered", 0],
+    [6, 100, false, "exact-blocked", 0], [100, 6, false, "exact-blocked", 0],
+  ]) {
+    policyRemaining = policy; providerRemaining = provider;
+    const response = await worker.fetch(fixture.request("key"), fixture.env, {});
+    assert.equal(response.status, 200);
+    const fusion = (await response.json()).providers.find(({ id }) => id === "clawrouter");
+    assert.equal(fusion.offers[0].eligible, eligible);
+    assert.equal(fusion.offers[0].affordability, affordability);
+    assert.equal(fusion.readiness.reasons.some((reason) => reason.startsWith(`${ready}/2 advisers`)), ready !== 2);
+  }
+  fixture.policy.requestCostMicros = 0; policyRemaining = 0; providerRemaining = 0;
+  let catalog = await (await worker.fetch(fixture.request("key"), fixture.env, {})).json();
+  assert.equal(catalog.providers.find(({ id }) => id === "clawrouter").offers[0].affordability, "exact-covered");
+  fixture.policy.requestCostMicros = null; policyRemaining = 100; providerRemaining = 100;
+  catalog = await (await worker.fetch(fixture.request("key"), fixture.env, {})).json();
+  assert.equal(catalog.providers.find(({ id }) => id === "clawrouter").offers[0].affordability, "request-dependent");
+});
+
+test("zero-cost Fusion offers stay exact with unavailable observations but configured zero limits still block", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.config.adviserModels = ["openai/gpt-4.1-mini"];
+  fixture.connection.monthlyBudgetMicros = 100;
+  let unavailable = "both";
+  fixture.env.BUDGET_LEDGER = { idFromName: (name) => name, get: (name) => ({ fetch: async (url) => {
+    assert.equal(new URL(url).pathname, "/status");
+    const owner = name.startsWith("provider:") ? "provider" : "policy";
+    return unavailable === "both" || unavailable === owner ? new Response(null, { status: 503 }) : Response.json({ spentMicros: 100, remainingMicros: 0 });
+  } }) };
+  for (const kind of ["fixed-zero", "zero-card"]) {
+    fixture.policy.requestCostMicros = kind === "fixed-zero" ? 0 : null;
+    if (kind === "zero-card") {
+      fixture.policy.providers = ["local-openai"];
+      fixture.connection.providerId = "local-openai";
+      fixture.env.LOCAL_OPENAI_BASE_URL = "https://local-model.example";
+      fixture.config.aggregatorModel = "local/final";
+      fixture.config.adviserModels = ["local/adviser"];
+    }
+    for (const failure of ["policy", "provider", "both"]) {
+      unavailable = failure;
+      const catalog = await (await worker.fetch(fixture.request("key"), fixture.env, {})).json();
+      const offer = catalog.providers.find(({ id }) => id === "clawrouter").offers[0];
+      assert.equal(offer.eligible, true, `${kind}/${failure}`);
+      assert.equal(offer.affordability, "exact-covered", `${kind}/${failure}`);
+    }
+    for (const owner of [fixture.policy, fixture.connection]) {
+      owner.monthlyBudgetMicros = 0;
+      const catalog = await (await worker.fetch(fixture.request("key"), fixture.env, {})).json();
+      const offer = catalog.providers.find(({ id }) => id === "clawrouter").offers[0];
+      assert.equal(offer.eligible, false, kind);
+      assert.equal(offer.affordability, "exact-blocked", kind);
+      owner.monthlyBudgetMicros = 100;
+    }
+  }
+});
 
 test("authorized model metadata preserves declared reasoning efforts without adding sibling metadata", async (t) => {
   const fixture = await fusionDiscoveryFixture(t);
@@ -161,6 +287,8 @@ test("models and catalog share read-only grant eligibility, transport support, a
   assert.deepEqual(subscribed.readiness.missingConfig, []);
   assert.equal(subscribed.readiness.upstreamGrantCount, 1);
   assert.equal(subscribed.readiness.oauthGrantRequired, false);
+  assert.equal(subscribed.models.some(({ id }) => id === "openai/tts-1"), false);
+  assert.equal(subscribed.offers.some(({ modelId, eligible }) => modelId === "openai/tts-1" && eligible), false);
   env.OPENAI_API_KEY = "fixture-environment-key";
   grants.set("oauth/fixture/api", { provider: "openai", kind: "api_key", enabled: true, credential: "fixture-api" });
   await compare(["llm.responses", "llm.chat"], true);
@@ -176,7 +304,7 @@ test("models and catalog share read-only grant eligibility, transport support, a
   await compare([], false);
 
   // A session's first policy owns subscription Responses, while its second
-  // owns Chat/embedding API auth. Neither grants this session a WS route.
+  // owns Chat/embedding/speech API auth. Neither grants this session a WS route.
   delete policy.grantRouting;
   grants.delete("oauth/fixture/api");
   policies.push({ policyId: "api", policy: { ...policy } });
@@ -193,7 +321,10 @@ test("models and catalog share read-only grant eligibility, transport support, a
     assert.equal(view.nativeBaseUrl, "/v1/native/openai");
     assert.ok(view.offers.every((offer) => offer.transport === "http" && ["playground", "unified"].includes(offer.routeKind)));
     assert.ok(view.offers.every((offer) => offer.route.startsWith("/v1/playground/")));
-    assert.deepEqual([...new Set(view.offers.filter((offer) => offer.routeKind === "unified").map((offer) => offer.route))].sort(), ["/v1/playground/v1/chat/completions", "/v1/playground/v1/embeddings", "/v1/playground/v1/responses"]);
+    assert.deepEqual([...new Set(view.offers.filter((offer) => offer.routeKind === "unified").map((offer) => offer.route))].sort(), ["/v1/playground/v1/audio/speech", "/v1/playground/v1/chat/completions", "/v1/playground/v1/embeddings", "/v1/playground/v1/responses"]);
+    const speechOffers = view.offers.filter(({ modelId }) => modelId === "openai/tts-1");
+    assert.ok(speechOffers.length > 0);
+    assert.ok(speechOffers.every(({ eligible, policyId, transport }) => eligible && policyId === "api" && transport === "http"));
     assert.deepEqual(view.models.find(({ id }) => id === "openai/gpt-6-astra").capabilities, ["llm.responses", "llm.chat"]);
     assert.ok(!paths.includes("/grant-pools/select"));
   }
@@ -358,6 +489,11 @@ test("Fusion shares selected-policy model eligibility across key and session dis
   records.set("oauth/second/api", { provider: "openai", kind: "api_key", enabled: true, credential: "fixture-second-api" });
   await compare(false, ["key"]);
   await compare(true, ["session"]);
+  const catalog = await (await catalogResponse(fixture.request("session"), env)).json();
+  const offer = catalog.providers.find(({ id }) => id === "clawrouter").offers[0];
+  assert.equal(offer.policyId, "second");
+  assert.equal(offer.policyGeneration, policies[1].policy.generation);
+  assert.equal(offer.transport, "http");
 });
 
 test("catalog balances are principal scoped, fresh, and use the dispatch default tenant", async (t) => {

@@ -234,6 +234,39 @@ pricing:
     outputMicrosPerMillion: 22500000
 ```
 
+## Speech character estimates
+
+OpenAI [`tts-1`](https://developers.openai.com/api/docs/models/tts-1) has a
+published rate of $15 per million input characters. Send a JSON speech request
+to `/v1/audio/speech` with `model: "openai/tts-1"`, `input`, and `voice`, or use
+`/v1/native/openai/v1/audio/speech` with the native `tts-1` model spelling.
+The manifest route `/v1/proxy/openai/speech` accepts the same request inside
+its `body` envelope. API-key grants and configured API keys are supported;
+subscription grants remain Responses-only.
+
+The [speech API](https://developers.openai.com/api/reference/resources/audio/subresources/speech/methods/create)
+accepts at most 4096 input characters. ClawRouter validates 1–4096 Unicode code
+points before reserving either budget. Other speech fields pass through;
+`response_format` selects MP3, Opus, AAC, FLAC, WAV, or PCM, and `speed` retains
+its upstream meaning. ClawRouter rejects `instructions` and SSE for `tts-1`;
+`stream_format`, when supplied, must be `audio`. The manifest declares separate
+`openai.audio_speech` JSON request and `audio.binary` response formats.
+
+Admission reserves UTF-8 input bytes at 15 micros each, up to 245,760 micros.
+Only nonempty successful `audio/*` or `application/octet-stream` delivery through
+EOF settles to input code points at 15 micros each, up to 61,440 micros. The
+usage basis is `request_character_estimate`, not an invoice or token usage.
+Empty audio, wrong MIME, cancellation, and unknown dispatched outcomes retain
+the reservation; known HTTP rejection and known-unsent failures remain no-charge.
+Explicit fixed tariffs, including zero, keep their existing precedence. Catalog
+availability remains request-dependent rather than promising that every input
+fits the remaining balance.
+
+When existing content-retention policy requires it, the request JSON includes
+the speech input text. Generated audio is streamed without buffering or archiving;
+all token fields stay null. Transcription, multipart requests, Realtime, and
+other speech models are outside this contract.
+
 ## Per-provider budgets
 
 Provider connections can set a monthly budget that applies tenant-wide to all

@@ -1,10 +1,10 @@
-import type { CompiledEndpoint, ModelPricing, ServiceTierPricing, TokenRates } from "./types";
+import type { CharacterPricing, CompiledEndpoint, ModelPricing, ServiceTierPricing, TokenPricing, TokenRates } from "./types";
 import { googleField, googleInt32, googleRequestServiceTier, googleServiceTier } from "./google-protocol.ts";
 
 export interface CostEstimate {
   reserveMicros: number;
-  inputTokens: number;
-  outputTokens: number;
+  inputTokens: number | null;
+  outputTokens: number | null;
   pricingAvailable?: false;
 }
 
@@ -31,7 +31,7 @@ interface Rates {
 export type PricingGap = "model_request_fee" | "hosted_tool_fee" | "hosted_tool_usage";
 
 export function requestPricingGap(pricing: ModelPricing | null | undefined, body: Record<string, unknown>, requestFormat: string): PricingGap | null {
-  if (pricing?.unpricedCosts?.includes("request_fee")) return "model_request_fee";
+  if (pricing?.unit !== "character" && pricing?.unpricedCosts?.includes("request_fee")) return "model_request_fee";
   if (requestFormat === "openai.chat_completions" && isObject(body.web_search_options)) return "hosted_tool_fee";
   // Saved Responses prompts retain tools; an opaque reference cannot prove
   // that the effective request has only the declared token charges.
@@ -85,6 +85,12 @@ export function hostedToolPricingGap(tools: readonly unknown[], requestFormat: s
 export type PricingEndpoint = Pick<CompiledEndpoint, "request_format" | "outputTokenLimit">;
 
 export function estimateModelCost(pricing: ModelPricing, body: Record<string, unknown>, endpoint?: PricingEndpoint): CostEstimate {
+  if (pricing.unit === "character") {
+    // UTF-8 bytes bound code points without assuming an upstream tokenizer.
+    // Empty catalog probes retain the full bounded envelope; dispatch validates input.
+    const bytes = typeof body.input === "string" ? new TextEncoder().encode(body.input).byteLength : pricing.maxInputCharacters * 4;
+    return { reserveMicros: characterCost(bytes, pricing), inputTokens: null, outputTokens: null };
+  }
   const google = endpoint?.request_format === "google.generate_content";
   const bytes = new TextEncoder().encode(JSON.stringify(body)).byteLength;
   const inputLimit = pricing.maxRequestInputTokens ?? pricing.maxInputTokens;
@@ -118,6 +124,7 @@ export function estimateModelCost(pricing: ModelPricing, body: Record<string, un
 // Bounds without a request: inspect every declared tier/context, including cache
 // rates. A zero balance alone cannot exclude output-only or zero-price requests.
 export function modelReservationBounds(pricing: ModelPricing): { minimumMicros: number; zero: boolean } {
+  if (pricing.unit === "character") return { minimumMicros: characterCost(1, pricing), zero: pricing.inputMicrosPerMillionCharacters === 0 };
   const cards = pricing.serviceTiers?.length ? pricing.serviceTiers : [pricing];
   const rates = cards.flatMap((card) => [card, ...(card.longContext ? [card.longContext] : [])]).map(ratesFromPricing);
   const zero = rates.every((rate) => Object.values(rate).every((value) => value == null || value === 0));
@@ -125,6 +132,7 @@ export function modelReservationBounds(pricing: ModelPricing): { minimumMicros: 
 }
 
 export function actualModelCost(pricing: ModelPricing, tokens: PricedTokens, requestFormat?: string): number | null {
+  if (pricing.unit === "character") return null;
   if (tokens.billable === false) return 0;
   if (tokens.input == null) return null;
   const rates = resolveRates(pricing, tokens.input, tokens.serviceTier, false, requestFormat === "google.generate_content");
@@ -149,10 +157,19 @@ export function actualModelCost(pricing: ModelPricing, tokens: PricedTokens, req
   ]);
 }
 
+export function actualCharacterCost(pricing: ModelPricing | null | undefined, input: unknown): number | null {
+  return pricing?.unit === "character" && typeof input === "string"
+    ? characterCost([...input].length, pricing) : null;
+}
+
+function characterCost(characters: number, pricing: CharacterPricing): number {
+  return Math.min(Number.MAX_SAFE_INTEGER, Math.ceil(characters * pricing.inputMicrosPerMillionCharacters / 1_000_000));
+}
+
 // Requested tiers choose admission bounds; only the served tier can choose a
 // settlement price. OpenAI omitted/auto requests can inherit a paid default;
 // native Gemini defaults to Standard and never upgrades Flex.
-function resolveRates(pricing: ModelPricing, inputTokens: number, tier: unknown, reserve: boolean, google = false): Rates | null {
+function resolveRates(pricing: TokenPricing, inputTokens: number, tier: unknown, reserve: boolean, google = false): Rates | null {
   if (google) {
     tier = googleServiceTier(tier);
     if (tier == null) return null;
@@ -169,7 +186,7 @@ function resolveRates(pricing: ModelPricing, inputTokens: number, tier: unknown,
   return candidates.map((card) => contextRates(card, Math.min(inputTokens, card.maxInputTokens ?? inputTokens), true)).reduce(maxRates);
 }
 
-function contextRates(pricing: Pick<ModelPricing, keyof TokenRates | "longContext"> | ServiceTierPricing, inputTokens: number, reserve: boolean): Rates {
+function contextRates(pricing: Pick<TokenPricing, keyof TokenRates | "longContext"> | ServiceTierPricing, inputTokens: number, reserve: boolean): Rates {
   const base = ratesFromPricing(pricing), long = pricing.longContext;
   if (!long || inputTokens <= long.thresholdInputTokens) return base;
   const extended = ratesFromPricing(long);

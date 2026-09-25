@@ -193,6 +193,7 @@ function normalizeQuotaWindow(window, probe) {
 }
 
 function normalizePricing(pricing) {
+  if (pricing.unit === "character") return { unit: pricing.unit, effectiveAt: pricing.effectiveAt, source: pricing.source, inputMicrosPerMillionCharacters: pricing.inputMicrosPerMillionCharacters, maxInputCharacters: pricing.maxInputCharacters };
   return {
     effectiveAt: pricing.effectiveAt,
     source: pricing.source,
@@ -256,6 +257,10 @@ function validateManifest(manifest) {
       if (parameters.defaultReasoningEffort !== undefined && !model.supportedReasoningEfforts?.includes(parameters.defaultReasoningEffort)) throw new Error(`model ${model.id} requestParameters default effort must belong to supportedReasoningEfforts`);
     }
     validatePricing(model.pricing, model.id);
+    if (model.pricing?.unit === "character" && (!model.capabilities?.length || model.capabilities.some((id) => {
+      const endpoint = manifest.endpoints[manifest.capabilities.find((capability) => capability.id === id)?.endpoint];
+      return id !== "audio.speech" || endpoint?.requestFormat !== "openai.audio_speech" || endpoint.responseFormat !== "audio.binary";
+    }))) throw new Error(`model ${model.id} character pricing requires the binary speech contract`);
   }
   for (const [id, endpoint] of Object.entries(manifest.endpoints)) {
     if (endpoint.outputTokenLimit && endpoint.outputTokenLimit.minimum > endpoint.outputTokenLimit.maximum) throw new Error(`provider ${manifest.id} endpoint ${id} outputTokenLimit minimum exceeds maximum`);

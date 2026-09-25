@@ -1,4 +1,4 @@
-import type { ModelRequestParameters, ProviderReasoningEffort } from "../shared/model-request-parameters";
+import type { ClientCatalogModel, ModelPricing } from "../shared/contracts";
 export type { ModelRequestParameters, ProviderReasoningEffort } from "../shared/model-request-parameters";
 
 export type ProxyRequestBody = Record<string, unknown> | Record<string, unknown>[];
@@ -83,11 +83,8 @@ export type AuthScheme =
 
 export interface AuthorizationConfig { authorizeUrl: string; tokenUrl: string; clientId: string | null; clientIdConfig: string | null; clientSecretConfig: string | null; scopes: string[]; grantKind: string; extraAuthorizeParams: Record<string, string>; extraTokenParams: Record<string, string>; accountIdJsonPointer: string | null; subscriptionPlanJsonPointer: string | null }
 export interface RefreshConfig { tokenUrl: string; clientId: string | null; clientIdConfig: string | null; clientSecretConfig: string | null; requestFormat: "form" | "json"; extraParams: Record<string, string> }
-export interface TokenRates { inputMicrosPerMillion: number; outputMicrosPerMillion: number; cachedInputMicrosPerMillion: number | null; cacheWriteInputMicrosPerMillion: number | null; cacheWrite5mInputMicrosPerMillion: number | null; cacheWrite1hInputMicrosPerMillion: number | null }
-export interface LongContextPricing extends TokenRates { thresholdInputTokens: number }
-export interface ServiceTierPricing extends TokenRates { id: string; aliases: string[]; maxInputTokens: number | null; longContext: LongContextPricing | null }
-export interface ModelPricing extends TokenRates { effectiveAt: string; source: string; maxInputTokens: number; maxRequestInputTokens: number | null; defaultMaxOutputTokens: number; inputTokenOverhead: number; longContext: LongContextPricing | null; serviceTiers?: ServiceTierPricing[]; unpricedCosts?: Array<"request_fee">; settlementBasis?: "published_upper_bound" }
-export interface CompiledModel { id: string; upstream: string; codexModel?: string; capabilities: string[]; supportedReasoningEfforts?: ProviderReasoningEffort[]; requestParameters?: Record<string, ModelRequestParameters>; pricing_ref: string | null; pricing: ModelPricing | null }
+export type { TokenRates, LongContextPricing, ServiceTierPricing, TokenPricing, CharacterPricing, ModelPricing } from "../shared/contracts";
+export type CompiledModel = ClientCatalogModel;
 export interface OutputTokenLimit { field: "max_tokens" | "max_completion_tokens" | "max_output_tokens"; minimum: number; maximum: number }
 export interface CompiledEndpoint { id: string; method: string; methods: string[]; path: string; native_proxy: boolean; auth: string | null; headers: Record<string, string>; request_headers: string[]; response_headers: string[]; query: Record<string, string>; path_params: string[]; path_param_styles: Record<string, string>; request_format: string; response_format: string; streaming: string | null; outputTokenLimit?: OutputTokenLimit; modelPassthrough?: { pricing_ref: string | null; pricing: ModelPricing | null }; websocket?: "openai.responses"; timeout_ms: number | null }
 
