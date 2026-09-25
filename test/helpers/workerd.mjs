@@ -13,9 +13,9 @@ export async function startWorkerdFixture(temporary, routerScript, upstreamScrip
   return startBundledWorkerdFixture(temporary, bundle.outputFiles[0].text, upstreamScript, options);
 }
 
-export async function startBundledWorkerdFixture(temporary, routerScript, upstreamScript, { activate = true } = {}) {
+export async function startBundledWorkerdFixture(temporary, routerScript, upstreamScript, { activate = true, persistencePath } = {}) {
   const adminToken = "fixture-activation-admin";
-  const mf = new Miniflare(convertV4MiniflareOptions({ resourceTmpPath: temporary, workers: [{
+  const mf = new Miniflare(convertV4MiniflareOptions({ resourceTmpPath: temporary, resourcePersistencePath: persistencePath, workers: [{
     name: "router", modules: true, script: routerScript, compatibilityDate: "2026-06-05", compatibilityFlags: ["enable_request_signal"],
     bindings: { OPENAI_API_KEY: "fixture-upstream-key", CLAWROUTER_ADMIN_TOKEN_SHA256: createHash("sha256").update(adminToken).digest("hex") },
     kvNamespaces: ["POLICY_KV"],
