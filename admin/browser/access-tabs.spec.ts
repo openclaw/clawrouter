@@ -25,7 +25,7 @@ test("Access tabs wrap focus and activate associated panels only with Enter or S
   await page.keyboard.press("Home");
   await expect(policies).toBeFocused();
 
-  for (const [index, name] of ["Policies", "Credentials", "Bindings", "Upstream", "Assignments", "Fusion"].entries()) {
+  for (const [index, name] of ["Policies", "Credentials", "Bindings", "Accounts", "Assignments", "Fusion"].entries()) {
     if (index) await page.keyboard.press("ArrowRight");
     await expect(tab(page, name)).toBeFocused();
     await page.keyboard.press(index % 2 ? "Space" : "Enter");
@@ -98,23 +98,23 @@ test("keyboard resource activation preserves an upstream draft without sending i
   const writes: string[] = [];
   page.on("request", (request) => { if (new URL(request.url()).pathname.startsWith("/v1/") && request.method() !== "GET") writes.push(request.method()); });
   await openDemo(page, "upstream");
-  await page.getByRole("button", { name: "New grant", exact: true }).click();
+  await page.getByRole("button", { name: "Add account", exact: true }).click();
   await page.getByRole("combobox", { name: "provider", exact: true }).selectOption("openai");
-  await page.getByRole("textbox", { name: "token reference", exact: true }).fill("keyboard_draft");
+  const reference = await page.getByLabel("account reference", { exact: true }).inputValue();
   await page.getByRole("textbox", { name: "label", exact: true }).fill("Unsent keyboard draft");
-  await page.getByLabel("API key", { exact: true }).fill("demo-primary-fixture");
-  await tab(page, "Upstream").focus();
+  await page.getByLabel("fresh API key", { exact: true }).fill("demo-primary-fixture");
+  await tab(page, "Accounts").focus();
   await page.keyboard.press("End");
   await page.keyboard.press("Enter");
   await expect(page.getByRole("tabpanel", { name: /^Fusion/ })).toBeVisible();
-  await expect(page.getByRole("textbox", { name: "token reference", exact: true })).toHaveCount(0);
+  await expect(page.getByLabel("account reference", { exact: true })).toHaveCount(0);
   await page.keyboard.press("ArrowLeft");
   await page.keyboard.press("ArrowLeft");
   await page.keyboard.press("Space");
-  await expect(tab(page, "Upstream")).toHaveAttribute("aria-selected", "true");
-  await expect(page.getByRole("textbox", { name: "token reference", exact: true })).toHaveValue("keyboard_draft");
+  await expect(tab(page, "Accounts")).toHaveAttribute("aria-selected", "true");
+  await expect(page.getByLabel("account reference", { exact: true })).toHaveValue(reference);
   await expect(page.getByRole("textbox", { name: "label", exact: true })).toHaveValue("Unsent keyboard draft");
-  await expect(page.getByLabel("API key", { exact: true })).toHaveValue("demo-primary-fixture");
+  await expect(page.getByLabel("fresh API key", { exact: true })).toHaveValue("demo-primary-fixture");
   expect(writes).toEqual([]);
 });
 
@@ -122,7 +122,7 @@ function tab(page: Page, name: string) { return page.getByRole("tab", { name: ne
 async function openDemo(page: Page, resource = "policies") {
   await page.route("**/v1/**", (route) => route.fulfill({ status: 503, body: "Demo fixture" }));
   await page.goto(`/dashboard/access?demo=1&resource=${resource}`);
-  await expect(page.getByRole("tab", { selected: true })).toHaveText(new RegExp(`^${resource}`, "i"));
+  await expect(page.getByRole("tab", { selected: true })).toHaveText(new RegExp(`^${resource === "upstream" ? "Accounts" : resource}`, "i"));
   await expect(page.getByRole("tabpanel")).toBeVisible();
 }
 

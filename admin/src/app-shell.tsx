@@ -26,7 +26,6 @@ export function AppShell() {
   const { items: credentials, selected: selectedCredential, form: credentialForm, setForm: setCredentialForm, issue: issueCredential, rotate: rotateCredential, revoke: revokeCredential, edit: editCredential, startNew: startNewCredential } = credentialState;
   const { items: connections, pendingProviderIds, setEnabled: setProviderConnection, setBudget: setProviderBudget } = connectionState;
   const { items: bindings, selected: selectedBinding, form: bindingForm, setForm: setBindingForm, save: saveBinding, edit: editBinding, startNew: startNewBinding } = bindingState;
-  const { items: upstreamGrants, selected: selectedUpstreamGrant, form: upstreamGrantForm, setForm: setUpstreamGrantForm, save: saveUpstreamGrant, revoke: revokeUpstreamGrant, refresh: refreshUpstreamGrant, refreshQuota: refreshUpstreamGrantQuota, authorize: authorizeUpstreamGrant, edit: editUpstreamGrant, startNew: startNewUpstreamGrant } = upstream;
   const { items: assignmentRules, selected: selectedAssignmentRule, form: assignmentRuleForm, setForm: setAssignmentRuleForm, save: saveAssignmentRule, reconcile: reconcileAssignments, edit: editAssignmentRule, startNew: startNewAssignmentRule } = assignments;
   const { config: fusionConfig, setConfig: setFusionConfig, policyId: fusionPolicyId, setPolicyId: setFusionPolicyId, readiness: fusionReadiness, error: fusionError, save: saveFusion, check: checkFusion } = fusion;
   const { items: users, selected: selectedUser, setSelectedEmail: setSelectedUserEmail, form: accessForm, setForm: setAccessForm, error: userError, save: saveUser, startNew: startNewUser } = userState;
@@ -195,6 +194,7 @@ export function AppShell() {
         {view === "policies" && session.role === "admin" ? (
           <PoliciesScreen
             grantPoolRecovery={grantPoolRecovery}
+            upstream={upstream}
             tab={accessTab}
             setTab={setAccessTab}
             keys={keys}
@@ -203,11 +203,6 @@ export function AppShell() {
             selectedCredential={selectedCredential}
             bindings={bindings}
             selectedBinding={selectedBinding}
-            upstreamGrants={upstreamGrants}
-            selectedUpstreamGrant={selectedUpstreamGrant}
-            upstreamBusy={upstream.busy}
-            upstreamReady={upstream.ready}
-            upstreamError={upstream.error}
             assignmentRules={assignmentRules}
             selectedAssignmentRule={selectedAssignmentRule}
             fusionConfig={fusionConfig}
@@ -223,8 +218,6 @@ export function AppShell() {
             setCredentialForm={setCredentialForm}
             bindingForm={bindingForm}
             setBindingForm={setBindingForm}
-            upstreamGrantForm={upstreamGrantForm}
-            setUpstreamGrantForm={setUpstreamGrantForm}
             assignmentRuleForm={assignmentRuleForm}
             setAssignmentRuleForm={setAssignmentRuleForm}
             credentialFeedback={credentialOwner.forSurface("admin")}
@@ -242,11 +235,6 @@ export function AppShell() {
             onRotateCredential={rotateCredential}
             onNewCredential={startNewCredential}
             onSaveBinding={saveBinding}
-            onSaveUpstreamGrant={saveUpstreamGrant}
-            onRevokeUpstreamGrant={revokeUpstreamGrant}
-            onRefreshUpstreamGrant={refreshUpstreamGrant}
-            onRefreshUpstreamGrantQuota={refreshUpstreamGrantQuota}
-            onAuthorizeUpstreamGrant={authorizeUpstreamGrant}
             onSaveAssignmentRule={saveAssignmentRule}
             onReconcileAssignments={reconcileAssignments}
             onSaveFusion={saveFusion}
@@ -256,8 +244,6 @@ export function AppShell() {
             onEditCredential={editCredential}
             onEditBinding={editBinding}
             onNewBinding={startNewBinding}
-            onEditUpstreamGrant={editUpstreamGrant}
-            onNewUpstreamGrant={startNewUpstreamGrant}
             onEditAssignmentRule={editAssignmentRule}
             onNewAssignmentRule={startNewAssignmentRule}
             onRevoke={revoke}

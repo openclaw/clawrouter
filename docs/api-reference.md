@@ -447,9 +447,34 @@ claimed commit based on another row. After any lost reply, inspect the retained
 identity with GET before deciding what to do next.
 
 GET does **not** repair a pending mutation. Use **Repair account publication** in
-the Upstream panel, POST `/v1/admin/grant-pools/repair` with its bounded resume cursor,
+Access **Accounts**, POST `/v1/admin/grant-pools/repair` with its bounded resume cursor,
 or `pnpm cf:accounts`. This also completes paused or revoked owners with no alarm.
 The existing PUT/CLI adapters retain their non-2xx outcome when publication is pending.
+
+The console uses create-only POST for **Add account**, PATCH for **Save details** or
+pause/resume, and POST `/replace` for explicit credential replacement. The selected
+account's GET supplies the edit generation; bootstrap reporting never does. After a
+conflict or lost reply, **Check account status** retains the old edit baseline and
+secret draft until the operator explicitly reviews or discards it. It never retries
+creation or replacement. An ownerless legacy account instead offers the deliberate
+PUT `?mode=replace` recovery operation with fresh primary credentials, or revocation.
+Refresh actions cannot acknowledge earlier unresolved edits or advance their edit
+generation. An unconfirmed creation keeps its exact reference in an account
+recovery card even after navigation or another Add. Checking it uses only GET and
+leaves the active draft intact; reviewing it opens saved facts with blank secrets.
+An explicit operator decision resolves the card without claiming the old POST
+succeeded.
+
+Account details show the stored expiry, fixed renewal-error reason and recorded
+retry time separately from publication and quota observations. Server availability
+remains authoritative: a renewable expired token can still be available for a
+request-time renewal. An unreported expiry does not verify freshness, and a retry
+time does not promise renewal. Paused accounts do not renew automatically.
+Use **Refresh token** for a retryable renewal error with a configured refresh token.
+An account requiring reauthorization instead needs **Prepare credential replacement**
+or provider reconnect when offered. Clearing an expired deadline or editing metadata
+cannot restore credentials. A failed renewal may already have rotated credentials;
+check the exact account and deliberately review its current version before saving.
 
 Grant revocation accepts an optional JSON object with `kind`, `provider`, and
 `label` hints for legacy grants that have no credential owner. Existing owners

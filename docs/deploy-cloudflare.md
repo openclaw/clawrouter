@@ -809,7 +809,7 @@ Do not delete the index fences or restore an older index over current owners.
 
 ### Account routing activation and recovery
 
-After upgrading, sign in as an administrator and open **Access → Upstream →
+After upgrading, sign in as an administrator and open **Access → Accounts →
 Account routing readiness**. This panel reads its own status endpoint, so a
 failed account-listing refresh does not prevent recovery. Existing scoped
 accounts keep their checks; admin login and recovery stay available. Health

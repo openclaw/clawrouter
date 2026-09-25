@@ -32,8 +32,6 @@ import type {
   ProxyCredential,
   RouteCatalog,
   ServiceItem,
-  UpstreamGrant,
-  UpstreamGrantForm,
   UsageAuditEvent,
 } from "./ui-types";
 
@@ -99,27 +97,6 @@ export async function sha256Hex(value: string) {
   return Array.from(new Uint8Array(digest), (byte) => byte.toString(16).padStart(2, "0")).join("");
 }
 
-export function upstreamGrantFormFromGrant(grant: UpstreamGrant): UpstreamGrantForm {
-  return {
-    scope: grant.scope,
-    scopeId: grant.scopeId,
-    tokenRef: grant.tokenRef,
-    kind: grant.kind,
-    provider: grant.provider ?? "",
-    label: grant.label ?? "",
-    enabled: grant.enabled,
-    priority: String(grant.priority),
-    weight: String(grant.weight),
-    credential: "",
-    credentialBundle: "",
-    accessToken: "",
-    refreshToken: "",
-    accountId: grant.accountId ?? "",
-    expiresAt: grant.expiresAt ?? "",
-    keepWarm: grant.maintenance?.keepWarm === true,
-  };
-}
-
 export function assignmentRuleFormFromRule(rule: AssignmentRule): AssignmentRuleForm {
   return {
     ruleId: rule.ruleId,
@@ -132,69 +109,6 @@ export function assignmentRuleFormFromRule(rule: AssignmentRule): AssignmentRule
     revokeOnLoss: rule.revokeOnLoss,
     provenance: rule.provenance,
   };
-}
-
-export function demoGrantFromForm(form: UpstreamGrantForm, existing?: UpstreamGrant): UpstreamGrant {
-  const key = form.scope === "tenants"
-    ? `oauth/tenants/${form.scopeId.trim()}/${form.tokenRef.trim()}`
-    : `oauth/${form.scopeId.trim()}/${form.tokenRef.trim()}`;
-  const now = new Date().toISOString();
-  const hasCredential = Boolean(form.credential.trim()) || Boolean(existing?.hasCredential);
-  const credentialFields = Object.keys(parseCredentialBundle(form.credentialBundle)).sort();
-  // Pausing retains credentials; reconnecting a tombstone requires a supplied replacement.
-  const freshPrimary = form.kind === "api_key" ? form.credential.trim() || credentialFields.length : form.accessToken.trim();
-  if (existing?.revokedAt && !freshPrimary) throw new Error("revoked upstream grant requires a new primary credential");
-  const effectiveCredentialFields = credentialFields.length ? credentialFields : existing?.credentialFields ?? [];
-  const hasAccessToken = Boolean(form.accessToken.trim()) || Boolean(existing?.hasAccessToken);
-  const hasRefreshToken = Boolean(form.refreshToken.trim()) || Boolean(existing?.hasRefreshToken);
-  return {
-    key,
-    scope: form.scope,
-    scopeId: form.scopeId.trim(),
-    tokenRef: form.tokenRef.trim(),
-    version: 1,
-    enabled: form.enabled,
-    priority: Number(form.priority),
-    weight: Number(form.weight),
-    kind: form.kind,
-    provider: form.provider.trim(),
-    label: form.label.trim() || null,
-    tokenType: existing?.tokenType ?? "Bearer",
-    expiresAt: form.expiresAt.trim() || null,
-    scopes: existing?.scopes ?? [],
-    accountId: form.accountId.trim() || null,
-    subscription: existing?.subscription ?? null,
-    maintenance: { keepWarm: form.keepWarm },
-    createdAt: existing?.createdAt ?? now,
-    updatedAt: now,
-    revokedAt: null,
-    hasCredential,
-    credentialFields: effectiveCredentialFields,
-    hasAccessToken,
-    hasRefreshToken,
-    refreshConfigured: existing?.refreshConfigured ?? hasRefreshToken,
-    usable: form.enabled && (form.kind === "api_key" ? hasCredential || effectiveCredentialFields.length > 0 : hasAccessToken || form.kind === "subscription" && hasCredential),
-    selectedCount: existing?.selectedCount ?? 0,
-    lastSelectedAt: existing?.lastSelectedAt ?? null,
-    quotaStatus: existing?.quotaStatus ?? "unknown",
-    quotaObservedAt: existing?.quotaObservedAt ?? null,
-    cooldownUntil: existing?.cooldownUntil ?? null,
-    quotaSource: existing?.quotaSource ?? null,
-    lastProviderSignal: existing?.lastProviderSignal ?? null,
-    quotaWindows: existing?.quotaWindows ?? [],
-  };
-}
-
-export function parseCredentialBundle(raw: string): Record<string, string> {
-  if (!raw.trim()) return {};
-  const value = JSON.parse(raw) as unknown;
-  if (!value || Array.isArray(value) || typeof value !== "object") throw new Error("credential bundle must be a JSON object");
-  const credentials: Record<string, string> = {};
-  for (const [name, secret] of Object.entries(value)) {
-    if (!/^[A-Za-z0-9_.-]{1,128}$/.test(name) || typeof secret !== "string" || !secret) throw new Error("credential bundle fields must use non-empty string secrets");
-    credentials[name] = secret;
-  }
-  return credentials;
 }
 
 export function demoRuleFromForm(form: AssignmentRuleForm): AssignmentRule {

@@ -106,7 +106,8 @@ button {
     box-shadow 120ms ease-out;
 }
 
-button:hover:not(:disabled) {
+/* Exclude unavailable checks without outranking specialized button colors. */
+button:hover:not(:disabled):where(:not(.accountRecoveryCheck[aria-disabled="true"])) {
   border-color: var(--action-hover);
   background: var(--action-hover);
 }
@@ -124,12 +125,18 @@ button:disabled {
   color: var(--ink);
 }
 
-.buttonSecondary:hover:not(:disabled),
+.buttonSecondary:hover:not(:disabled):where(:not(.accountRecoveryCheck[aria-disabled="true"])),
 .segmented button:hover:not(:disabled),
 .presetRow button:hover:not(:disabled) {
   border-color: var(--line-strong);
   background: var(--surface-hover);
   color: var(--ink);
+}
+
+/* Keep a pending account check focusable; its hook owns request admission. */
+.accountRecoveryCheck[aria-disabled="true"] {
+  color: var(--muted);
+  cursor: not-allowed;
 }
 
 .buttonDanger {

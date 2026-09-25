@@ -26,7 +26,7 @@ for (const draft of ["selected policy", "New policy"] as const) {
     await expect(page.getByRole("checkbox", { name: /^Test provider/ })).not.toBeChecked();
     await expect(page.getByRole("checkbox", { name: /^Other provider/ })).toBeChecked();
 
-    for (const resource of ["Bindings", "Upstream"]) {
+    for (const resource of ["Bindings", "Accounts"]) {
       await page.getByRole("tab", { name: new RegExp(`^${resource}`) }).click();
       await expect(page.getByRole("tab", { name: new RegExp(`^${resource}`) })).toHaveAttribute("aria-selected", "true");
       await page.getByRole("button", { name: "Catalog", exact: true }).click();

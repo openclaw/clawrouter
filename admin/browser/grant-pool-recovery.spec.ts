@@ -52,7 +52,7 @@ test("actual Upstream activation owns the first read and navigation cannot relea
   fixture.readiness.phase = "idle";
   fixture.waits.set("readiness", held.promise);
   await page.goto("/dashboard/access");
-  const upstream = page.getByRole("tab", { name: /^Upstream/ });
+  const upstream = page.getByRole("tab", { name: /^Accounts/ });
   await upstream.focus();
   await flush(page);
   expect(fixture.requests).toHaveLength(0);
@@ -70,7 +70,7 @@ test("actual Upstream activation owns the first read and navigation cannot relea
   await recoveryPanel(page).getByRole("button", { name: "Start account scan" }).click();
   await expect(recoveryPanel(page)).toContainText("Scan: kv");
   expect(fixture.requests.map(item => item.action)).toEqual(["readiness", "scan"]);
-  await expect(page.getByRole("tabpanel", { name: /^Upstream/ })).toContainText("Account routing readiness");
+  await expect(page.getByRole("tabpanel", { name: /^Accounts/ })).toContainText("Account routing readiness");
 });
 
 test("a sent repair retains admission and its resume cursor across navigation", async ({ page }) => {

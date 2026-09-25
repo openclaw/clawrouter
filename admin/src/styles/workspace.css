@@ -125,6 +125,11 @@
   margin-top: 1px;
 }
 
+.inlineError > span {
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
 .inlineNote {
   min-width: 0;
   border-left: 3px solid var(--warn);

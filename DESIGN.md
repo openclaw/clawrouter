@@ -28,7 +28,7 @@ and workflows.
 The shell keeps navigation and session posture visible. Dashboard presents
 scoped traffic, budgets, readiness, and personal credentials. Catalog groups
 models under their provider service and pairs the service table with an
-inspector. Access owns policies, credentials, upstream grants, connections,
+inspector. Access owns policies, credentials, provider accounts, connections,
 assignment rules, and Fusion configuration. Users manages identity and direct
 policy bindings. Usage combines aggregate charts with request-level audit.
 
@@ -48,6 +48,31 @@ changes only the secret of an active key. A key whose policy is no longer held
 can still be revoked. Copy a new secret before dismissing it or leaving the panel;
 the console cannot retrieve it later. If a request outcome is uncertain, refresh
 the key list before choosing another action. Creation drafts survive refreshes.
+
+Access **Accounts** adds a separate provider account with a unique reference before
+submission. **Save details** keeps unchanged fields and stored primary secrets;
+blank editable text explicitly clears that field. **Prepare credential replacement**
+opens empty secret and account-material inputs. Replacement requires a fresh primary
+secret and clears omitted refresh tokens, expiry, scopes, account, subscription and
+refresh overrides. Paused accounts remain paused unless explicitly enabled. Revoke
+also works on paused accounts and keeps a visible tombstone.
+
+Selecting an account reads its owner before enabling strict edits. A changed version
+or lost reply preserves the draft. **Check account status** reads the retained
+identity without acknowledging the write, clearing secrets or repairing publication.
+Review the current facts, then explicitly keep edits with that version or discard the
+draft. A committed pending receipt stays visible across delayed reporting. Use the
+existing **Repair account publication** action and check status afterward. Legacy
+accounts with no initialized owner expose explicit fresh-credential replacement or
+revocation; they never silently fall back to an upsert. Reporting observations remain
+separate from owner state and may describe earlier credentials.
+
+Token and quota refreshes never resolve an earlier conflicted edit. Revoke clears
+its submitted credential intent but leaves unrelated metadata review in place.
+If creation's reply is lost after opening another draft, its reference remains in
+a recovery card. Checking that card changes only its facts and feedback. Review
+opens that account's saved values with blank secrets; explicitly adopting them
+resolves the operator's decision, not the original request's unknown outcome.
 
 Access **Policies** keeps edits made after returning to a policy while its earlier
 save is pending. When that save finishes, untouched fields adopt the saved values,

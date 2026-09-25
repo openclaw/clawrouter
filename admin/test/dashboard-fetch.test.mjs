@@ -15,11 +15,12 @@ registerHooks({
 const { DashboardRequestError, authenticationRequired, localLogin, playgroundRequest, request } = await import("../src/dashboard-fetch.ts");
 const { consoleStatusPresentation } = await import("../src/status-display.ts");
 
-test("request errors display the envelope message without changing status or exact code", () => {
+test("request errors display the envelope message without changing detail, status or exact code", () => {
   const error = new DashboardRequestError(JSON.stringify({ error: { code: " policy_conflict ", message: "  review the saved policy  ", detail: { revision: 3 } } }), 409);
-  assert.equal(error.message, "Request failed (409): review the saved policy");
-  assert.equal(error.status, 409);
-  assert.equal(error.code, " policy_conflict ");
+  assert.deepEqual(
+    { message: error.message, detail: error.detail, code: error.code, status: error.status },
+    { message: "Request failed (409): review the saved policy", detail: { revision: 3 }, code: " policy_conflict ", status: 409 },
+  );
   assert.ok(error instanceof Error);
   assert.equal(new DashboardRequestError('{"error":{"message":"try again","code":7}}', 503).code, null);
 });
