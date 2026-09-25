@@ -3,7 +3,7 @@ import { retainRequestContent } from "./content-retention";
 import { continuationRestart, HttpContinuation } from "./http-continuation";
 import { assertTokenUsable } from "./grant-expiry.ts";
 import { authenticateProxyKey } from "./proxy-auth";
-import { createProxyAccounting } from "./proxy-accounting";
+import { createProxyAccounting, estimateCost } from "./proxy-accounting";
 import { concreteOpenAiSelection, isSelectionFailure, nativeMatch, prepareNativeRequest, searchParamsRecord, type ProxySelection } from "./proxy-selection";
 import { captureGrantRuntime, prepareSelected } from "./proxy";
 import { assertProviderAccess, providerById } from "./providers";
@@ -47,12 +47,15 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
       const headers = new Headers(request.headers);
       headers.set("x-request-id", requestId);
       const operationRequest = new Request(request.url, { method: "POST", headers, signal });
-      const accounting = createProxyAccounting({ env, context, auth, selection, request: operationRequest });
+      const accountingContext = { env, context, auth, selection, request: operationRequest, startedAtMs: Date.now() };
+      let accounting: ReturnType<typeof createProxyAccounting> | undefined;
       let reservation = emptyReservation(), content: string | null = null;
       try {
         const continuation = await HttpContinuation.resolve(operationRequest, selection, auth, env, "websocket");
         const upstream = await prepareSelected(operationRequest, env, selection, searchParamsRecord(new URL(request.url).searchParams), auth, new Set(), true, undefined, continuation?.pinned ?? pinned, "websocket");
         if (upstream.continuation) continuation?.bind(upstream.continuation);
+        const cost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability, selection.endpoint, continuation?.parentTools);
+        accounting = createProxyAccounting({ ...accountingContext, cost });
         if (!upstream.websocket) throw new HttpError(400, "websocket_transport_unsupported", "selected upstream grant transport is not qualified for Responses WebSockets");
         signal.throwIfAborted();
         reservation = await reserveBudget(env, auth, selection.capability, accounting.cost, upstream.connection);
@@ -84,7 +87,7 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
         const failure = error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "Responses request preflight failed");
         const aborted = signal.aborted && signal.reason instanceof ResponsesOperationAborted ? signal.reason : null;
         const outcome = aborted ? closeStatus(aborted.cause) : failureStatus(failure.status);
-        await requireAccounting(accounting.settle(outcome.statusCode, outcome.status, false, null, reservation, content));
+        await requireAccounting((accounting ?? createProxyAccounting(accountingContext)).settle(outcome.statusCode, outcome.status, false, null, reservation, content));
         if (aborted) throw aborted;
         throw failure;
       }

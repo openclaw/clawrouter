@@ -8,67 +8,8 @@ const { concreteOpenAiSelection } = await import("../proxy-selection.ts");
 const { proxyResponsesWebSocket } = await import("../responses-websocket.ts");
 import { materializeGrantCredentials, putGrantCredentials, revokeGrantCredentials } from "../grant-credentials.ts";
 import { sha256Hex } from "../utils.ts";
-import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
-import { continuationAuthority } from "./continuation-authority.mjs";
 import { HttpContinuation } from "../http-continuation.ts";
-import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
-import { acceptGrantPoolBaseline, recoverGrantPools } from "../../scripts/grant-pool-recovery.mjs";
-
-const grantKeys = ["oauth/fixture/account-a", "oauth/fixture/account-b"];
-async function fixture(t, pooled = true, { limit = null, fixedCost = 7, retainContent = false } = {}) {
-  const pending = [], events = [], values = new Map(), sent = [];
-  const policy = { enabled: true, generation: "g1", providers: ["openai"], tenantId: "default", monthlyBudgetMicros: limit, requestCostMicros: fixedCost, retainRequestContent: retainContent, grantRouting: { strategy: "round_robin", stickiness: "none", failover: true } };
-  const credential = { enabled: true, secretSha256: await sha256Hex("fixture-secret"), policyId: "fixture" };
-  const env = attachGrantCredentialNamespace({
-    CLAWROUTER_ADMIN_TOKEN_SHA256: await sha256Hex("fixture-admin"),
-    ACCESS_CONTROL: continuationAuthority(t),
-    BUDGET_LEDGER: sqlBudgetNamespace(t),
-    POLICY_KV: {
-      async get(key) { return Array.isArray(key) ? new Map(key.map(key => [key, structuredClone(values.get(key) ?? null)])) : structuredClone(values.get(key) ?? null); },
-      async put(key, value) { values.set(key, JSON.parse(value)); },
-      async list({ prefix }) { return { keys: [...values.keys()].filter(key => key.startsWith(prefix)).map(name => ({ name })), list_complete: true }; },
-    },
-    OPENAI_API_KEY: "synthetic-environment-key",
-    USAGE_QUEUE: { async send(event) { events.push(event); } },
-  }, { useExistingAuthority: true });
-  const admin = async (path, { method = "GET", body } = {}) => {
-    const response = await handler.fetch(new Request(`https://router.example${path}`, { method, headers: { authorization: "Bearer fixture-admin", "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), env, { waitUntil() {} });
-    assert.equal(response.status, 200, await response.clone().text());
-    return response.json();
-  };
-  await acceptGrantPoolBaseline("fresh", { request: admin });
-  await recoverGrantPools({ request: admin });
-  async function authority(path, value) {
-    const response = await env.ACCESS_CONTROL.get("policy-bindings").fetch(`https://clawrouter.internal${path}`, { method: "POST", body: JSON.stringify(value) });
-    assert.equal(response.status, 200, await response.clone().text());
-    return response;
-  }
-  async function mutateCredential(value) {
-    const response = await authority("/credentials/mutate", { scope: "admin", actor: { auth: "admin_token", email: "fixture@example.com", role: "admin" }, ...value });
-    assert.equal((await response.json()).outcome, "updated");
-  }
-  await authority("/policies/put", { policyId: "fixture", policy });
-  await mutateCredential({ operation: "create", credentialId: "fixture", credential });
-  await authority("/connections/put", { providerId: "openai", enabled: true, monthlyBudgetMicros: limit });
-  if (pooled) for (const [index, key] of grantKeys.entries()) {
-    await putGrantCredentials(env, key, { provider: "openai", kind: "subscription", enabled: true, accessToken: `synthetic-access-${index}`, refreshToken: `synthetic-refresh-${index}`, accountId: `synthetic-account-${index}`, expiresAt: "2099-01-01T00:00:00.000Z" });
-  }
-  const f = {
-    env, values, sent, events, policy, credential, authority, mutateCredential,
-    response: (request, index) => Response.json({ object: "response", id: `resp_${index}`, status: "completed", output: [], usage: { input_tokens: 1, output_tokens: 1 } }),
-    async request(body = {}, headers = {}, path = "/v1/responses", signal) {
-      return handler.fetch(new Request(`https://router.example${path}`, { method: "POST", signal, headers: { authorization: "Bearer clawrouter-live-fixture-fixture-secret", "content-type": "application/json", ...headers }, body: JSON.stringify({ model: "openai/gpt-6-astra", input: "fixture", ...body }) }), env, { waitUntil: promise => pending.push(promise) });
-    },
-    async consume(response) { const text = await response.text(); await f.drain(); return text; },
-    async drain() { while (pending.length) await Promise.all(pending.splice(0)); },
-    bindings() { return [...env.ACCESS_CONTROL.objects].filter(([name]) => name.startsWith("http-continuations:")); },
-  };
-  t.mock.method(globalThis, "fetch", async (url, init) => {
-    const request = { url: String(url), body: init.body === undefined ? undefined : JSON.parse(init.body), method: init.method, headers: new Headers(init.headers), signal: init.signal };
-    sent.push(request); return f.response(request, sent.length);
-  });
-  return f;
-}
+import { fixture, grantKeys } from "./http-continuation-fixture.mjs";
 
 test("two-account HTTP requests pin response and turn identities while stateless calls keep rotating", async t => {
   const f = await fixture(t);

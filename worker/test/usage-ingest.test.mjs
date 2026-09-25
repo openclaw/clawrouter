@@ -6,6 +6,90 @@ import { ingestUsage, queue, UsageLedgerObject } from "../ledgers.ts";
 
 const day = 86_400_000, retention = 30 * day, now = Date.parse("2026-09-23T00:00:00Z");
 
+for (const outcome of ["stored", "duplicate", "expired_by_retention"]) {
+  test(`ingest client returns a matching ${outcome} receipt and accepts additive fields`, async () => {
+    const body = event("receipt"), calls = [];
+    const env = { USAGE_LEDGER: { idFromName: name => name, get: name => ({ fetch: async (url, init) => {
+      calls.push({ name, url, init });
+      return Response.json({ eventId: body.id, outcome, futureField: true });
+    } }) } };
+    assert.deepEqual(await ingestUsage(env, body), { eventId: body.id, outcome });
+    assert.equal(calls.length, 1);
+    assert.equal(calls[0].name, "policy:tenant:policy");
+    assert.equal(calls[0].url, "https://clawrouter.internal/ingest");
+    assert.equal(calls[0].init.method, "POST");
+    assert.deepEqual(JSON.parse(calls[0].init.body), body);
+  });
+}
+
+for (const [label, responseBody, status = 200] of [
+  ["empty", null], ["empty 204", null, 204], ["old text acknowledgment", "accepted"], ["malformed JSON", "{"],
+  ["null", "null"], ["array", "[]"], ["string", '"accepted"'], ["number", "1"], ["boolean", "true"],
+  ["missing identity", JSON.stringify({ outcome: "stored" })],
+  ["numeric identity", JSON.stringify({ eventId: 1, outcome: "stored" })],
+  ["different identity", JSON.stringify({ eventId: "other", outcome: "stored" })],
+  ["missing outcome", JSON.stringify({ eventId: "receipt" })],
+  ["unknown outcome", JSON.stringify({ eventId: "receipt", outcome: "accepted" })],
+  ["null outcome", JSON.stringify({ eventId: "receipt", outcome: null })],
+  ["financial receipt", JSON.stringify({ settled: true })],
+]) {
+  test(`unconfirmed ${label} success rejects direct ingestion and retries queue delivery`, async () => {
+    let writes = 0, acks = 0, retries = 0;
+    const body = event("receipt");
+    const env = { USAGE_LEDGER: { idFromName: name => name, get: () => ({ fetch: async () => {
+      writes++;
+      return new Response(responseBody, { status });
+    } }) } };
+    await assert.rejects(ingestUsage(env, body), { message: "usage ledger did not acknowledge ingestion" });
+    assert.equal(writes, 1, "direct ingestion does not retry automatically");
+    await queue({ messages: [{ body, ack() { acks++; }, retry() { retries++; } }] }, env);
+    assert.equal(writes, 2);
+    assert.equal(acks, 0);
+    assert.equal(retries, 1);
+  });
+}
+
+test("an older producer can commit without a receipt; reconstructed redelivery confirms the duplicate", async (t) => {
+  const f = fixture(t), original = event("old-producer", now - day);
+  let oldProducer = true, acks = 0, retries = 0, writes = 0;
+  const outcomes = [];
+  const env = { USAGE_LEDGER: { idFromName: name => name, get: () => ({ fetch: async (url, init) => {
+    writes++;
+    if (oldProducer) {
+      // The pre-8c25f81 producer committed with INSERT OR IGNORE before
+      // returning bare "accepted". Exercise that write, not a success-only mock.
+      const body = JSON.parse(init.body);
+      body.occurred_at_ms ||= Date.now();
+      body.policy_id ||= body.key_id;
+      f.sql.exec("INSERT OR IGNORE INTO usage_events (id, occurred_at_ms, tenant_id, policy_id, provider, status, status_code, input_tokens, output_tokens, total_tokens, actual_cost_micros, event_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        body.id, body.occurred_at_ms, body.tenant_id, body.policy_id, body.provider, body.status, body.status_code,
+        body.input_tokens, body.output_tokens, body.total_tokens, body.actual_cost_micros, JSON.stringify(body));
+      f.sql.exec("DELETE FROM usage_events WHERE occurred_at_ms < ?", Date.now() - retention);
+      if (!(await f.storage.getAlarm())) await f.storage.setAlarm(Date.now() + day);
+      return new Response("accepted");
+    }
+    const response = await f.ledger.fetch(new Request(url, init));
+    outcomes.push((await response.clone().json()).outcome);
+    return response;
+  } }) } };
+  const message = { body: original, ack() { acks++; }, retry() { retries++; } };
+  await queue({ messages: [message] }, env);
+  assert.equal(writes, 1);
+  assert.equal(acks, 0);
+  assert.equal(retries, 1);
+  const stored = f.rows()[0];
+  assert.deepEqual(JSON.parse(stored.event_json), original);
+  oldProducer = false;
+  f.reconstruct();
+  message.body = { ...original, occurred_at_ms: now, actual_cost_micros: 999 };
+  await queue({ messages: [message] }, env);
+  assert.deepEqual(outcomes, ["duplicate"]);
+  assert.equal(writes, 2);
+  assert.equal(acks, 1);
+  assert.equal(retries, 1);
+  assert.deepEqual(f.rows(), [stored]);
+});
+
 test("stored receipts survive lost acknowledgment and reconstruction without replacing the first event", async (t) => {
   const f = fixture(t), original = event("first", now - day);
   let loseAck = true;
@@ -22,7 +106,7 @@ test("stored receipts survive lost acknowledgment and reconstruction without rep
   const replay = { ...original, occurred_at_ms: now, actual_cost_micros: 999, status: "provider_error" };
   assert.deepEqual(await receipt(f, replay), { eventId: original.id, outcome: "duplicate" });
   assert.deepEqual(f.rows(), [stored]);
-  await ingestUsage(env, replay);
+  assert.deepEqual(await ingestUsage(env, replay), { eventId: original.id, outcome: "duplicate" });
   assert.deepEqual(f.rows(), [stored]);
 });
 
@@ -150,21 +234,30 @@ test("receipt publication waits for alarm completion", async (t) => {
   assert.deepEqual(await (await pending).json(), { eventId: "held", outcome: "stored" });
 });
 
-test("existing status-only direct and queue callers accept all producer receipts", async (t) => {
+test("direct and queue callers validate producer receipts without acknowledging failed financial settlement", async (t) => {
   const f = fixture(t), outcomes = [];
   const env = { USAGE_LEDGER: { idFromName: name => name, get: () => ({ fetch: async (url, init) => {
     const response = await f.ledger.fetch(new Request(url, init));
     outcomes.push((await response.clone().json()).outcome);
     return response;
   } }) } };
-  await ingestUsage(env, event("same"));
+  assert.deepEqual(await ingestUsage(env, event("same")), { eventId: "same", outcome: "stored" });
+  let budgetWrites = 0, budgetAcks = 0, budgetRetries = 0;
+  env.BUDGET_LEDGER = { idFromName: name => name, get: () => ({ fetch: async () => {
+    budgetWrites++;
+    return new Response("unavailable", { status: 503 });
+  } }) };
+  const budget = { body: { kind: "budget_settlement", ledger: { objectName: "tenant:policy" }, request: { reservationId: "retained-charge", actualCostMicros: 7 } }, ack() { budgetAcks++; }, retry() { budgetRetries++; } };
   let acks = 0, retries = 0;
   for (const body of [event("same"), event("expired", now - retention - 1), { ...event("invalid"), occurred_at_ms: null }]) {
-    await queue({ messages: [{ body, ack() { acks++; }, retry() { retries++; } }] }, env);
+    await queue({ messages: [{ body, ack() { acks++; }, retry() { retries++; } }, budget] }, env);
   }
   assert.deepEqual(outcomes, ["stored", "duplicate", "expired_by_retention", undefined]);
   assert.equal(acks, 2);
   assert.equal(retries, 1);
+  assert.equal(budgetWrites, 3);
+  assert.equal(budgetAcks, 0);
+  assert.equal(budgetRetries, 3);
   assert.deepEqual(f.rows().map(row => row.id), ["same"]);
 });
 

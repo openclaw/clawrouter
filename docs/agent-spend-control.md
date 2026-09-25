@@ -189,10 +189,31 @@ a function.
 A fixed `requestCostMicros` is an operator-defined
 tariff, not a measurement of provider tool charges.
 
-This classification inspects the current request. Inherited executable tool
-declarations through Responses continuation or conversation state require
-separate qualification; response-ID routing alone does not establish pricing
-completeness.
+Responses requests with a nonempty `previous_response_id` also consume the
+parent response's durable tool-pricing evidence before reservation. Only a
+final `token_only` proof allows ordinary token pricing. Retained hosted
+fees or server work remain unpriced even when the delta omits their declarations.
+Legacy, pending, corrupt, future-version, and otherwise unknown evidence returns
+`pricing_required` under either measured budget; fixed tariffs and unmetered
+requests keep the behavior above. A served tier or token total cannot clear this
+captured gap. Enabling a provider budget can therefore reject an existing chain
+without changing the policy generation. Missing, expired, or changed routing
+ownership still returns `continuation_restart_required` instead.
+
+Deploy the durable proof producer before this consumer. The upgrade does not
+drain old writers, promote pending rows, or infer proof from a lost publication
+acknowledgment: each request uses the authoritative evidence present when it
+resolves its parent. An already-captured unknown remains unknown for that request.
+Start a supported token-priced request without the response ID, or configure an
+explicit fixed tariff, when an older chain has no qualified proof. Turn-state
+aliases remain routing affinity and never certify inherited tool prices.
+
+This boundary covers response-ID ancestry only. Full-input conversation and
+`item_reference` state, encrypted compaction witnesses, and complete compaction
+metering remain separate work. A producer-observed opaque compaction can leave
+a response row unknown; this change does not certify it or disable all full-input
+sessions. Root `tools` remain current-request configuration, not automatically
+inherited declarations.
 
 Complete hosted-tool metering remains unqualified. The published
 [OpenAI tool prices](https://developers.openai.com/api/docs/pricing) and

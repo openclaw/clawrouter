@@ -250,6 +250,9 @@
     min-height: 28px;
     border-block: 1px solid var(--line);
     border-inline: 0;
+  }
+
+  .fusionArrow > span {
     transform: rotate(90deg);
   }
 
