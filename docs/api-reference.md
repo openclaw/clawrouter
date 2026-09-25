@@ -83,6 +83,15 @@ unchanged: when canonical selection reports a configured pool with no available
 candidate, discovery does not reopen environment authorization. Fusion's
 advertised model uses the same concrete aggregator eligibility.
 
+Fusion emits one HTTP `clawrouter/fusion` offer for the synthesizer's selected
+policy and generation. Its route is `/v1/chat/completions` for a key or
+`/v1/playground/v1/chat/completions` for a session. A sibling native or WebSocket
+operation cannot make that Chat offer eligible. Fixed-price observations account
+for the synthesizer first and shared adviser budgets; if only a subset of
+advisers may fit, the usable offer remains `request-dependent`. Unavailable
+advisers fail open. These observations do not replace request-time admission or
+the separate administrator preview of an unsaved Fusion configuration.
+
 Environment credentials become eligible only after account-inventory activation.
 After activation, paused and reauthorization-required accounts retain attachment
 presence and prevent environment fallback even when none is selectable. Before
