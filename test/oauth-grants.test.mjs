@@ -198,9 +198,21 @@ test("corrupt grant recovery retains admin authentication, browser CSRF and expl
     }
   }
   for (const suffix of ["?mode=replace", "?mode=unknown"]) assert.equal((await fixture.admin(grantPath + suffix, "PUT", { provider: "anthropic", hasAccessToken: true })).status, 400);
-  assert.equal((await fixture.admin(grantPath, "PUT", { provider: "anthropic", kind: "oauth", accessToken: "access-fixture" })).status, 500, "default merge still rejects corrupt legacy JSON");
-  assert.equal((await fixture.admin(grantPath + "/refresh", "POST", {})).status, 500, "refresh cannot acquire replacement intent");
   assert.equal(fixture.env.GRANT_CREDENTIALS.objects.size, 0);
+  const attachment = await fixture.env.grantAuthority.call("attachment", { key });
+  const merge = await fixture.admin(grantPath, "PUT", { provider: "anthropic", kind: "oauth", accessToken: "access-fixture" });
+  const mergeBody = await merge.text();
+  assert.equal(merge.status, 400, "default merge still rejects corrupt legacy JSON");
+  assert.deepEqual(JSON.parse(mergeBody), { error: { code: "invalid_upstream_grant", message: "legacy grant metadata is invalid JSON" } });
+  const refresh = await fixture.admin(grantPath + "/refresh", "POST", {});
+  const refreshBody = await refresh.text();
+  assert.equal(refresh.status, 500, "refresh cannot acquire replacement intent");
+  assert.deepEqual(JSON.parse(refreshBody), { error: { code: "internal_error", message: "internal server error" } });
+  assert.doesNotMatch(mergeBody + refreshBody, /legacy-private|access-fixture/);
+  const owner = fixture.env.GRANT_CREDENTIALS.objects.get(key);
+  assert.equal(owner.values.size, 0);
+  assert.equal(owner.alarm(), null);
+  assert.deepEqual(await fixture.env.grantAuthority.call("attachment", { key }), attachment);
   assert.equal(fixture.values.get(key), raw);
 });
 
