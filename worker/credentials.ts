@@ -1,4 +1,5 @@
-import { authorityCall, listBindings, listCredentials, listPolicies, listUsers, selfServiceCredentialLimit, type CredentialMutation, type CredentialMutationResult } from "./authority";
+import { authorityCall, listBindings, listCredentials, listPolicies, listUsers, selfServiceCredentialLimit } from "./authority";
+import type { CredentialMutation, CredentialMutationResult } from "./authority-contracts.ts";
 import type { AccessControlUser, AccessPolicyEntry, AccessSession, Env, ProxyCredential, ProxyCredentialEntry } from "./types";
 import { cleanId, decodePathSegment, HttpError, normalizeEmail, privateJson, readJson } from "./utils";
 

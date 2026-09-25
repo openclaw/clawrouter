@@ -1,8 +1,9 @@
 import type {
-  AccessControlUser, AccessPolicyEntry, AccessSession, AccessUserRecord, Env, OAuthState, PolicyBinding,
-  AssignmentState, GrantRoutingPolicy, GrantRuntimeState, ProviderConnection, ProxyCredential, ProxyCredentialEntry,
+  AccessControlUser, AccessPolicyEntry, AccessUserRecord, Env, OAuthState, PolicyBinding,
+  AssignmentState, GrantRoutingPolicy, GrantRuntimeState, ProviderConnection, ProxyCredentialEntry,
 } from "./types";
 import { evaluateUserAssignments, withLegacyAssignmentState, type AssignmentEvidence, type AssignmentRuleEntry } from "./assignment-evaluator.ts";
+import type { AuthorizationSnapshot, AuthorizationSnapshotRequest, CredentialMutation, CredentialMutationResult } from "./authority-contracts.ts";
 import { contentRetentionDefault } from "./content-retention.ts";
 import { normalizeConnectionMutation, type ProviderConnectionMutation } from "./provider-connections.ts";
 import type { ResponsesScopeStore } from "./responses-scope.ts";
@@ -11,27 +12,8 @@ import { errorResponse, HttpError, json, normalizeEmail, readJson, safeEqual } f
 
 type Principal = { principalType: "user" | "group"; principalId: string };
 type Seed = { principal: Principal; bindings: PolicyBinding[] };
-export type CredentialMutation = {
-  credentialId: string;
-  scope: "admin" | "personal";
-  actor: Pick<AccessSession, "auth" | "email" | "role">;
-} & (
-  | { operation: "create" | "put"; credential: Omit<ProxyCredential, "policyGeneration"> }
-  | { operation: "rotate"; secretSha256: string }
-  | { operation: "revoke" }
-);
-export type CredentialMutationResult =
-  | { outcome: "updated"; entry: ProxyCredentialEntry; policy: AccessPolicyEntry | null; principalEnabled: boolean }
-  | { outcome: "exists" | "missing" | "owned_elsewhere" | "limit_reached" | "policy_not_held" | "unknown_policy" | "inactive" | "actor_disabled" | "admin_required" };
 export const selfServiceCredentialLimit = 10;
 const selfServiceCredentialRetentionLimit = 100;
-export interface AuthorizationSnapshotRequest { credentialId: string | null; principalId: string | null; policyId: string }
-export interface AuthorizationSnapshot {
-  credential: ProxyCredential | null;
-  policy: AccessPolicyEntry | null;
-  principalEnabled: boolean | null;
-  policyHeld: boolean;
-}
 
 export class PolicyBindingIndexObject implements DurableObject {
   private sql: SqlStorage;

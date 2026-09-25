@@ -1,5 +1,6 @@
 import { accessIdentityVerification, type AccessVerification } from "./access.ts";
-import { authorityCall, type AuthorizationSnapshot } from "./authority.ts";
+import { authorityCall } from "./authority.ts";
+import type { AuthorizationSnapshot } from "./authority-contracts.ts";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import { currentLocalSession } from "./local-auth.ts";
 import { proxyCredentialFailure, proxyKeyVerification, type ProxyKeyVerification } from "./proxy-auth.ts";
