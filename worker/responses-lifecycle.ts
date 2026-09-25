@@ -1,4 +1,5 @@
 import type { CompiledEndpoint, CompiledProvider, ProxyRequestBody } from "./types.ts";
+import { HttpOperation } from "./http-operation.ts";
 import { HttpError } from "./utils.ts";
 
 export type ResponsesControlAction = "retrieve" | "cancel";
@@ -15,6 +16,26 @@ export function responsesControl(provider: CompiledProvider, endpoint: CompiledE
 
 export function backgroundResponse(endpoint: CompiledEndpoint, body: ProxyRequestBody): boolean {
   return endpoint.request_format === "openai.responses" && !Array.isArray(body) && body.background === true;
+}
+
+// Incoming workerd requests can carry an empty stream for Content-Length: 0,
+// and GET can carry bytes. Only observed EOF proves the bodyless contract.
+export async function requireEmptyResponseControlBody(request: Request): Promise<void> {
+  if (!request.body) { request.signal.throwIfAborted(); return; }
+  const reader = request.body.getReader(), operation = new HttpOperation(request.signal, 10_000);
+  let ended = false;
+  try {
+    for (let chunks = 0; chunks < 32; chunks++) {
+      const result = await operation.wait(reader.read());
+      if (result.done) { ended = true; return; }
+      if (result.value.byteLength) break;
+    }
+    throw new HttpError(400, "invalid_response_control", "response controls require an empty body");
+  } finally {
+    operation.stop("complete");
+    if (!ended) void reader.cancel().catch(() => undefined);
+    reader.releaseLock();
+  }
 }
 
 // Retrieval has a finite bodyless contract. Keep include[] multiplicity; the

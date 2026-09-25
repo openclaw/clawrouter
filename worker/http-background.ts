@@ -31,8 +31,14 @@ export class HttpBackground {
     return new HttpBackground(env, scope, admission);
   }
 
-  admit(): Promise<unknown> { return backgroundCall(this.env, this.scope, { action: "admit", admission: this.admission }); }
-  dispatch(contentRef: string | null): Promise<unknown> { return backgroundCall(this.env, this.scope, { action: "dispatch", id: this.admission.id, contentRef }); }
+  async admit(): Promise<void> {
+    const ack = await backgroundCall<{ admitted?: boolean } | null>(this.env, this.scope, { action: "admit", admission: this.admission });
+    if (ack?.admitted !== true) throw new HttpError(503, "background_unavailable", "background admission was not acknowledged");
+  }
+  async dispatch(contentRef: string | null): Promise<void> {
+    const ack = await backgroundCall<{ dispatched?: boolean } | null>(this.env, this.scope, { action: "dispatch", id: this.admission.id, contentRef });
+    if (ack?.dispatched !== true) throw new HttpError(503, "background_unavailable", "background dispatch was not acknowledged");
+  }
   observe(fact: ResponsesObservation, statusCode: number): Promise<unknown> {
     return backgroundCall(this.env, this.scope, { action: "observe", id: this.admission.id, fact, statusCode });
   }

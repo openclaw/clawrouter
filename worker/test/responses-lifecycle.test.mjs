@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { grantSupports, assertOperationConfiguration } from "../provider-auth.ts";
-import { backgroundResponse, responsesControl, responsesControlQuery } from "../responses-lifecycle.ts";
+import { backgroundResponse, requireEmptyResponseControlBody, responsesControl, responsesControlQuery } from "../responses-lifecycle.ts";
 
 const endpoint = (id, path, method = "POST") => ({ id, path, method, path_params: method === "GET" ? ["response_id"] : [], headers: {}, query: {}, request_format: "openai.responses", response_format: "openai.responses" });
 const create = { ...endpoint("generate", "/v1/responses"), responsesLifecycle: { retrieve: "inspect", cancel: "stop" } };
@@ -48,4 +48,24 @@ test("bodyless control query rejects ambiguous, unbounded and unsupported fields
     assert.throws(() => responsesControlQuery("retrieve", query), error => error.code === "invalid_response_query");
   }
   assert.throws(() => responsesControlQuery("cancel", { stream: true }), error => error.code === "invalid_response_query");
+});
+
+test("control bodies accept observed empty EOF and reject the first byte without draining", async () => {
+  await requireEmptyResponseControlBody(new Request("https://router.example", { method: "POST", body: "" }));
+  let canceled = 0, reads = 0;
+  const body = new ReadableStream({ pull(controller) { reads++; controller.enqueue(new Uint8Array([1])); }, cancel() { canceled++; } }, { highWaterMark: 0 });
+  await assert.rejects(requireEmptyResponseControlBody(new Request("https://router.example", { method: "POST", body, duplex: "half" })), error => error.code === "invalid_response_control");
+  assert.equal(reads, 1); assert.equal(canceled, 1); assert.equal(body.locked, false);
+});
+
+test("stalled or canceled control bodies release their reader and cannot authorize dispatch", { timeout: 2000 }, async t => {
+  for (const cause of ["caller", "deadline"]) {
+    if (cause === "deadline") t.mock.timers.enable({ apis: ["setTimeout"] });
+    let canceled = 0;
+    const body = new ReadableStream({ cancel() { canceled++; } }), controller = new AbortController();
+    const pending = requireEmptyResponseControlBody(new Request("https://router.example", { method: "POST", body, duplex: "half", signal: controller.signal }));
+    const rejected = assert.rejects(pending);
+    if (cause === "caller") controller.abort(); else t.mock.timers.tick(10_000);
+    await rejected; assert.equal(canceled, 1); assert.equal(body.locked, false);
+  }
 });

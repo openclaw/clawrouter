@@ -2,6 +2,7 @@ import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
 const { backgroundRecovery } = await import("../background-recovery.ts");
+const { HttpBackground } = await import("../http-background.ts");
 const { correlateIngressRequest, setBackgroundRecovery, withBackgroundRecovery, withRequestId } = await import("../correlation.ts");
 
 const scope = "a".repeat(64), id = `bg_${"b".repeat(32)}`, locator = `${scope}.${id}`;
@@ -64,4 +65,18 @@ test("the ingress-owned recovery locator overrides upstream spoofing without mod
   setBackgroundRecovery(request, locator);
   assert.equal(withBackgroundRecovery(response(), request).headers.get("x-clawrouter-background-recovery"), locator);
   assert.equal(request.headers.get("x-clawrouter-background-recovery"), "caller-spoof");
+});
+
+for (const action of ["admit", "dispatch"]) test(`${action} requires its own affirmative durable-owner acknowledgement`, async () => {
+  let reply, calls = 0;
+  const env = { ACCESS_CONTROL: { idFromName: name => name, get: () => ({ fetch: async () => { calls++; return Response.json(reply); } }) } };
+  const background = await HttpBackground.prepare(new Request("https://router.example/v1/responses"), env,
+    { authType: "proxy_key", credentialId: "fixture", principalId: null, policyId: "fixture", policy: { generation: "g1" } },
+    {}, { event: { capability: "llm.responses" }, cost: { reserveMicros: 100, basis: "manifest_pricing" } }, {}, {}, new Headers(), false);
+  const invoke = () => action === "admit" ? background.admit() : background.dispatch(null);
+  for (reply of [null, {}, { admitted: false, dispatched: false }, { [action === "admit" ? "dispatched" : "admitted"]: true }]) {
+    await assert.rejects(invoke(), error => error.status === 503 && error.code === "background_unavailable");
+  }
+  reply = { [action === "admit" ? "admitted" : "dispatched"]: true };
+  await invoke(); assert.equal(calls, 5);
 });

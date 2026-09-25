@@ -22,6 +22,7 @@ import { authenticateProxyKey, inspectKey } from "./proxy-auth";
 import { proxyManifest, proxyNative, proxyOpenAi } from "./proxy";
 import { proxyResponsesWebSocket } from "./responses-websocket";
 import { proxyResponseControl } from "./response-controls.ts";
+import { requireEmptyResponseControlBody } from "./responses-lifecycle.ts";
 import type { Env, QueueMessage } from "./types";
 import {
   canonicalPath, caughtResponse, corsEnabled, corsPreflight, decodePathSegment, errorResponse, legacyRedirect,
@@ -90,7 +91,7 @@ async function route(request: Request, env: Env, context: ExecutionContext): Pro
     const suffix = path.slice("/v1/playground".length);
     const control = responseControlPath(suffix, request.method);
     if (control) {
-      if (request.body) return errorResponse("invalid_response_control", "response controls are bodyless", 400);
+      await requireEmptyResponseControlBody(request);
       return proxyResponseControl(request, env, control.action, control.id, url.searchParams, "access");
     }
     if (request.method === "POST" && openAiPath(suffix)) return proxyOpenAi(request, env, context, suffix, "access");
@@ -98,7 +99,7 @@ async function route(request: Request, env: Env, context: ExecutionContext): Pro
   }
   const control = responseControlPath(path, request.method);
   if (control) {
-    if (request.body) return errorResponse("invalid_response_control", "response controls are bodyless", 400);
+    await requireEmptyResponseControlBody(request);
     return proxyResponseControl(request, env, control.action, control.id, url.searchParams, "proxy_key");
   }
   if (request.method === "GET" && request.headers.get("upgrade")?.toLowerCase() === "websocket" && (path === "/v1/responses" || path.startsWith("/v1/native/"))) return proxyResponsesWebSocket(request, env, context, path);

@@ -21,7 +21,7 @@ import type { ContinuationOwner } from "./continuation-store.ts";
 import { HttpContinuation } from "./http-continuation.ts";
 import { HttpBackground } from "./http-background.ts";
 import { HttpOperation } from "./http-operation.ts";
-import { backgroundResponse, responsesControl } from "./responses-lifecycle.ts";
+import { backgroundResponse, requireEmptyResponseControlBody, responsesControl } from "./responses-lifecycle.ts";
 import { proxyResponseControl } from "./response-controls.ts";
 import { responseRouteDigest } from "./responses-control-dispatch.ts";
 import {
@@ -173,6 +173,7 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
   if (control) {
     if (request.method === "GET") {
       if (endpoint.method !== "GET") return errorResponse("method_not_allowed", "control method is not allowed", 405);
+      await requireEmptyResponseControlBody(request);
       const query = new URL(request.url).searchParams, ids = query.getAll("response_id");
       if (ids.length !== 1) throw new HttpError(400, "response_id_required", "one response_id path parameter is required");
       query.delete("response_id");
@@ -210,7 +211,7 @@ export async function proxyNative(request: Request, env: Env, context: Execution
   if (!endpoint.methods.includes(method)) return errorResponse("method_not_allowed", `endpoint does not allow ${method}`, 405);
   const control = responsesControl(provider, endpoint);
   if (control) {
-    if (request.body) throw new HttpError(400, "invalid_response_control", "native response controls are bodyless");
+    await requireEmptyResponseControlBody(request);
     return proxyResponseControl(request, env, control.action, nativeParams(endpoint, match[2]).response_id, new URL(request.url).searchParams, "proxy_key", provider.id, control.create.id, preauthenticated);
   }
   const body = request.method === "GET" || request.method === "HEAD" ? {} : await readJson<unknown>(request);
