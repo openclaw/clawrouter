@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add OpenAI `tts-1` speech through unified, native, and manifest routes. Reserve UTF-8 input bytes at the published character rate, settle completed binary audio from Unicode code points as a request estimate, and retain conservative reservations for incomplete or unqualified delivery. Request retention can include speech text; generated audio is never archived.
+
 - Read session usage from the policy's accounting tenant, including the default for policies without a tenant, so changing a user's tenant does not hide their charged requests.
 
 - Update DeepSeek's dated peak-price cards, add canonical Flash and the documented vision alias, and retain exact upstream spellings and Pro. Label measured costs as published-rate upper bounds rather than invoice amounts; higher reservations can require a lower native `max_tokens` under unchanged budgets. Preserve fixed tariffs, missing-usage reservations, and prior ledger debt.

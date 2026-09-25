@@ -1,7 +1,7 @@
 import { emptyReservation, finalizeAccounting, type BudgetReservation, type EstimatedCost } from "./accounting";
 import { correlationMetadata } from "./correlation";
 import { googleField, googleRequestServiceTier, googleResponseServiceTier, googleServiceTier } from "./google-protocol.ts";
-import { actualModelCost, estimateModelCost, requestPricingGap, type PricingEndpoint } from "./pricing";
+import { actualCharacterCost, actualModelCost, estimateModelCost, requestPricingGap, type PricingEndpoint } from "./pricing";
 import type { ProxySelection } from "./proxy-selection";
 import type { ObservedUsage } from "./proxy-response";
 import { extractServiceTier, type UsageTokens } from "./token-usage";
@@ -59,9 +59,10 @@ export function createProxyAccounting(options: AccountingContext) {
     };
     return finalizeAccounting(env, reservation, actual, event);
   }
-  function settle(statusCode: UsageEvent["status_code"], status: UsageEvent["status"], billable: boolean, tokens: UsageTokens | null, reservation: BudgetReservation, contentRef: string | null) {
+  function settle(statusCode: UsageEvent["status_code"], status: UsageEvent["status"], billable: boolean, tokens: UsageTokens | null, reservation: BudgetReservation, contentRef: string | null, characterEstimate: number | null = null) {
     // Token totals and a served tier cannot resolve omitted fees or hosted work.
-    const measured = tokens && !unpricedRequest ? actualCost(model, tokens, auth.policy.requestCostMicros, selection.endpoint.request_format) : null;
+    const measured = unpricedRequest ? null : tokens ? actualCost(model, tokens, auth.policy.requestCostMicros, selection.endpoint.request_format)
+      : characterEstimate === null ? null : auth.policy.requestCostMicros ?? characterEstimate;
     const actual = billable ? measured ?? cost.reserveMicros : 0;
     // Proven nonbillable work is distinct from missing prices or zero tariffs.
     // Keep explicit fixed prices and the fallback's existing charged contract.
@@ -69,7 +70,8 @@ export function createProxyAccounting(options: AccountingContext) {
     // Unavailable prices are not free; a known served tier can recover a price.
     // Measured tokens do not establish an invoice-time rate. Preserve declared
     // upper-bound provenance without relabeling retained reservations.
-    const measuredBasis = model?.pricing?.settlementBasis === "published_upper_bound" ? "manifest_rate_upper_bound" : "manifest_pricing";
+    const measuredBasis = characterEstimate !== null ? "request_character_estimate"
+      : model?.pricing?.unit !== "character" && model?.pricing?.settlementBasis === "published_upper_bound" ? "manifest_rate_upper_bound" : "manifest_pricing";
     const basis = knownNoCharge ? "none" : unpricedRequest ? "unpriced_usage" : cost.basis === "unpriced_service_tier"
       ? measured == null ? "unpriced_usage" : measuredBasis
       : cost.basis === "manifest_pricing" ? measured == null ? "manifest_reservation" : measuredBasis : cost.basis;
@@ -89,7 +91,10 @@ export function createProxyAccounting(options: AccountingContext) {
       const status = termination ?? (!response.ok ? response.status < 500 ? "client_error" : "provider_error" : observed.outcome ?? "success");
       // Protocol/delivery failure does not undo dispatched billable work. Keep
       // the actual HTTP status and any authoritative terminal usage separately.
-      return settle(response.status, status, response.ok, tokens, reservation, contentRef);
+      const characterEstimate = observed.binaryComplete && observed.delivery === "complete" && response.ok && !termination
+        && selection.endpoint.request_format === "openai.audio_speech" && selection.endpoint.response_format === "audio.binary" && !Array.isArray(selection.body)
+        ? actualCharacterCost(model?.pricing, selection.body.input) : null;
+      return settle(response.status, status, response.ok, tokens, reservation, contentRef, characterEstimate);
     },
   };
 }
