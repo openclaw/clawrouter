@@ -867,6 +867,47 @@ async function setExpiry(f, expiresAt, websocket = false) {
   }, true);
 }
 
+test("authenticated subscription PUT cannot revive inherited expiry and fresh token recovery authorizes actual HTTP dispatch", async t => {
+  let clock = Date.now();
+  t.mock.method(Date, "now", () => clock);
+  const expiresAt = new Date(clock + 1_000).toISOString(), f = await fixture(t, true, { limit: 1_000_000 });
+  await setExpiry(f, expiresAt);
+  await revokeGrantCredentials(f.env, grantKeys[1]);
+  clock += 1_001;
+  const put = async body => {
+    const response = await handler.fetch(new Request("https://router.example/v1/admin/upstream-grants/policies/fixture/account-a", {
+      method: "PUT", headers: { authorization: "Bearer fixture-admin", "content-type": "application/json" }, body: JSON.stringify(body),
+    }), f.env, { waitUntil() {} });
+    assert.equal(response.status, 200, await response.clone().text());
+    return response.json();
+  };
+  const edited = await put({ credential: "alternate-primary-fixture", label: "retained subscription" });
+  const own = f.env.GRANT_CREDENTIALS.objects.get(grantKeys[0]);
+  assert.equal(edited.usable, false);
+  assert.equal(own.values.get("credential").kind, "subscription");
+  assert.equal(own.values.get("credential").accessToken, "synthetic-access-0");
+  assert.equal(own.values.get("credential").expiresAt, expiresAt);
+  const denied = await f.request();
+  assert.equal(denied.status, 503);
+  assert.equal(JSON.parse(await f.consume(denied)).error.code, "upstream_grant_pool_unavailable");
+  assert.equal(f.sent.length, 0, "neither the retained token, alternate form nor environment fallback may leave the router");
+  assert.equal(f.events.length, 1);
+  assert.equal(f.events[0].actual_cost_micros, 0);
+  for (const owner of ["default:fixture", "provider:openai"]) assert.equal(f.env.BUDGET_LEDGER.get(owner).reservations().length, 0);
+  const recovered = await put({ accessToken: "operator-fresh-access-fixture" });
+  assert.equal(recovered.usable, true);
+  assert.equal(own.values.get("credential").credential, "alternate-primary-fixture", "merge-form retention and dispatch precedence are unchanged");
+  const accepted = await f.request();
+  assert.equal(accepted.status, 200);
+  await f.consume(accepted);
+  assert.equal(f.sent.length, 1);
+  assert.equal(f.sent[0].headers.get("authorization"), "Bearer operator-fresh-access-fixture");
+  assert.equal(f.sent[0].headers.get("chatgpt-account-id"), "synthetic-account-0");
+  assert.equal(f.events.length, 2);
+  assert.equal(f.events[1].status, "success");
+  await assertBudgets(f, [7]);
+});
+
 for (const phase of ["reserve", "retention", "dispatch"]) for (const continuation of [false, true]) test(`HTTP ${phase} expiry remains unsent with ${continuation ? "continuation recovery" : "actionable denial"} and zero held budgets`, async t => {
   let clock = Date.now();
   t.mock.method(Date, "now", () => clock);
