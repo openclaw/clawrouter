@@ -63,3 +63,36 @@ export async function fixture(t, pooled = true, { limit = null, fixedCost = 7, r
   });
   return f;
 }
+
+export async function assertBudgets(f, charges) {
+  for (const owner of ["default:fixture", "provider:openai"]) {
+    const ledger = f.env.BUDGET_LEDGER.get(owner), rows = ledger.reservations();
+    assert.deepEqual(rows.map(row => row.reserved_micros), charges);
+    assert.ok(rows.every(row => row.settled === 1 && row.dispatch_started === 1));
+    const policyId = owner.replace(":", "/"), month = new Date().toISOString().slice(0, 7);
+    const status = await (await ledger.fetch(`https://budget/status?policy_id=${policyId}&window_key=${policyId}/${month}&limit_micros=1000000`)).json();
+    assert.equal(status.spentMicros, charges.reduce((sum, cost) => sum + cost, 0));
+  }
+}
+
+export async function endpointDeadline(t) {
+  const { modelRoute } = await import("../providers.ts");
+  const timeout = modelRoute("openai/gpt-6-astra").provider.endpoints.find(endpoint => endpoint.id === "responses").timeout_ms;
+  const setTimer = globalThis.setTimeout, clearTimer = globalThis.clearTimeout;
+  let timer;
+  t.mock.method(globalThis, "setTimeout", (callback, delay, ...args) => {
+    const handle = setTimer(callback, delay, ...args);
+    if (delay === timeout) timer = { handle, callback, active: true };
+    return handle;
+  });
+  t.mock.method(globalThis, "clearTimeout", handle => {
+    if (timer?.handle === handle) timer.active = false;
+    return clearTimer(handle);
+  });
+  return () => {
+    assert.ok(timer);
+    const active = timer.active;
+    if (active) timer.callback();
+    return active;
+  };
+}
