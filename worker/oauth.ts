@@ -51,6 +51,7 @@ export async function oauthCallback(request: Request, env: Env): Promise<Respons
   } catch {
     return callbackPage(false, "Provider token exchange failed.");
   }
+  const observedAt = Date.now();
   const payload: Record<string, unknown> = await tokenResponse.json<Record<string, unknown>>().catch(() => ({}));
   if (!tokenResponse.ok || typeof payload.access_token !== "string") return callbackPage(false, "Provider token exchange failed.");
   const idPayload = typeof payload.id_token === "string" ? decodeJwtPayload(payload.id_token) : {};
@@ -70,7 +71,7 @@ export async function oauthCallback(request: Request, env: Env): Promise<Respons
     ...(Number.isInteger(state.priority) ? { priority: state.priority } : {}),
     ...(typeof state.weight === "number" && Number.isFinite(state.weight) && state.weight > 0 ? { weight: state.weight } : {}),
     ...(accountId === null ? {} : { accountId }), ...(plan === null ? {} : { subscription: { plan } }),
-  }); }
+  }, observedAt); }
   catch (error) {
     if (error instanceof HttpError && error.code === "grant_refresh_failed") return callbackPage(false, "Connection saved, but the provider token is unavailable. Renew the account before use.");
     throw error;

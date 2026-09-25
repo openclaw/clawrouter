@@ -204,7 +204,9 @@ export function credentialRecord(grant: UpstreamGrant, generation: number): Cred
 
 export function updatedCredentialRecord(current: CredentialRecord | undefined, grant: UpstreamGrant): CredentialRecord {
   if (!current) throw new HttpError(400, "invalid_upstream_grant", "upstream grant requires a primary credential");
-  const fresh = hasPrimaryCredential(grant);
+  // Another primary form does not renew an inherited access token. Preserve its
+  // lifecycle even when dispatch currently prefers that other credential form.
+  const fresh = hasPrimaryCredential(grant) && (!current.accessToken || grant.accessToken !== undefined);
   const updated: CredentialRecord = {
     ...current,
     generation: current.generation + 1,

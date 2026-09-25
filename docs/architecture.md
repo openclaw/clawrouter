@@ -91,14 +91,20 @@ one token-response classifier: omitted `expires_in` clears the previous deadline
 zero is immediately expired, and an invalid or unrepresentable value records
 `tokenResponseError: invalid_expiry`. Rotation commits the bounded access/refresh
 pair before reporting denial, so a malformed lifetime cannot discard a rotated
-refresh token. This retryable denial preserves configured attachment presence;
+refresh token. Lifetime starts when the trusted token response arrives; body
+delivery and waiting for the owner queue consume that lifetime. This retryable
+denial preserves configured attachment presence;
 it never authorizes dispatch, quota probes or keep-warm traffic. Expired renewable
 tokens can re-enter selection when recovery is due. Expired nonrenewable tokens
-transition to the existing `reauth_required` state.
+transition to the existing `reauth_required` state, even for legacy records with
+missing routing identity. Materialization finalization rereads the stored owner
+after an uncertain write; it cannot republish an older generation.
 
 Zero and malformed lifetimes use the existing five-minute renewal retry window,
 without extending token validity. While denied, alarms schedule only renewal;
-overdue maintenance cannot create a one-second retry loop. Metadata edits cannot
+overdue maintenance cannot create a one-second retry loop. Alarms include quota
+and keep-warm work only when the current provider transport can execute it.
+Metadata edits cannot
 clear the marker or extend already-expired authority. A trusted successful
 exchange or fresh primary replacement clears the marker; revocation erases it.
 Older workers ignore this owner fact and are not a qualified rollback target.
@@ -107,7 +113,10 @@ Legacy PUT normalization runs inside the serialized credential owner against
 canonical material and metadata. Original field presence distinguishes explicit
 credential changes from validation material; omitted identity, routing and paused
 state remain canonical after pending publication is repaired. Only first
-initialization uses raw legacy credentials. Internal mutation envelopes never
+initialization uses raw legacy credentials, as a transient baseline for the same
+explicit-field update before the single final commit. Adding another primary
+credential form does not renew a retained access token; explicitly replace or
+clear that token, or use whole replacement. Internal mutation envelopes never
 become published metadata. OAuth response omission retains the owner's current
 refresh token, including an explicit clear, only when provider and kind match.
 A changed or unknown tuple starts fresh credential context, excluding prior

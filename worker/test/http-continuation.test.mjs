@@ -974,7 +974,7 @@ class UpgradeSocket extends EventTarget {
   close() { if (!this.closed) { this.closed = true; this.dispatchEvent(new Event("close")); } }
 }
 
-async function websocketFixture(t, f) {
+async function websocketFixture(t, f, headers = {}) {
   const NativeResponse = globalThis.Response, previousPair = Object.getOwnPropertyDescriptor(globalThis, "WebSocketPair");
   let server;
   // Node lacks Workers' 101 constructor and socket pair. Keep the real router,
@@ -992,7 +992,7 @@ async function websocketFixture(t, f) {
   });
   const pending = [];
   const response = await proxyResponsesWebSocket(new Request("https://router.example/v1/responses", {
-    headers: { authorization: "Bearer clawrouter-live-fixture-fixture-secret", upgrade: "websocket" },
+    headers: { authorization: "Bearer clawrouter-live-fixture-fixture-secret", upgrade: "websocket", ...headers },
   }), f.env, { waitUntil: promise => pending.push(promise) }, "/v1/responses");
   assert.equal(response.status, 101);
   return { server, async drain() { while (pending.length) await Promise.all(pending.splice(0)); await f.drain(); } };
@@ -1040,6 +1040,63 @@ for (const phase of ["before upgrade", "connecting", "reused"]) test(`actual Web
     assert.equal(f.events.at(-1).actual_cost_micros, 0);
     assert.equal(f.events.at(-1).cost_basis, "none");
     await assertBudgets(f, phase === "reused" ? [7, 0] : [0]);
+  } finally {
+    connection.resolve();
+    ws.server.close();
+    await ws.drain();
+  }
+});
+
+for (const carrier of ["response", "metadata", "header"]) for (const phase of ["before upgrade", "connecting", "reused"]) test(`WebSocket ${carrier} continuation crossing expiry ${phase} requests full-input restart without dispatch`, async t => {
+  let clock = Date.now();
+  t.mock.method(Date, "now", () => clock);
+  const expires = clock + 1_000, f = await fixture(t, true, { limit: 1_000_000 });
+  await setExpiry(f, new Date(expires).toISOString(), true);
+  f.response = () => Response.json({ object: "response", id: "resp_http_seed", status: "completed", output: [] }, { headers: { "x-codex-turn-state": "turn_seed" } });
+  await f.consume(await f.request());
+  const upstream = new UpgradeSocket(), entered = Promise.withResolvers(), connection = Promise.withResolvers();
+  f.response = async () => {
+    entered.resolve();
+    if (phase === "connecting") await connection.promise;
+    return new Response(null, { status: 101, webSocket: upstream });
+  };
+  let dispatches = 0;
+  const get = f.env.BUDGET_LEDGER.get;
+  f.env.BUDGET_LEDGER.get = name => {
+    const ledger = get(name);
+    return { ...ledger, fetch: async (url, init) => {
+      const response = await ledger.fetch(url, init);
+      if (name === "provider:openai" && new URL(url).pathname === "/dispatch" && ++dispatches === (phase === "reused" ? 2 : 1) && phase !== "connecting") clock = expires;
+      return response;
+    } };
+  };
+  const ws = await websocketFixture(t, f, carrier === "header" ? { "x-codex-turn-state": "turn_seed" } : {});
+  const create = previous => ws.server.receive({ type: "response.create", model: "openai/gpt-6-astra", input: "fixture",
+    ...(carrier === "response" ? { previous_response_id: previous } : carrier === "metadata" ? { client_metadata: { "x-codex-turn-state": "turn_seed" } } : {}),
+  });
+  try {
+    create("resp_http_seed");
+    if (phase === "connecting") { await entered.promise; clock = expires; connection.resolve(); }
+    await ws.drain();
+    if (phase === "reused") {
+      assert.equal(upstream.sent.length, 1);
+      upstream.receive({ type: "response.created", response: { id: "resp_ws_first" } });
+      upstream.receive({ type: "response.completed", response: { id: "resp_ws_first", status: "completed", output: [], usage: { input_tokens: 1, output_tokens: 1 } } });
+      await ws.drain();
+      create("resp_ws_first");
+      await ws.drain();
+    }
+    assert.equal(f.sent.length, phase === "before upgrade" ? 1 : 2, "only the successful seed and permitted handshake may leave the router");
+    assert.equal(upstream.sent.length, phase === "reused" ? 1 : 0);
+    const notice = ws.server.sent.at(-1);
+    assert.equal(notice.status, 409);
+    assert.equal(notice.error.code, "continuation_restart_required");
+    assert.match(notice.error.message, /restart with full input and omit previous_response_id and x-codex-turn-state/);
+    assert.equal(f.events.length, phase === "reused" ? 3 : 2);
+    assert.equal(f.events.at(-1).status_code, 409);
+    assert.equal(f.events.at(-1).actual_cost_micros, 0);
+    assert.equal(f.events.at(-1).cost_basis, "none");
+    await assertBudgets(f, phase === "reused" ? [7, 7, 0] : [7, 0]);
   } finally {
     connection.resolve();
     ws.server.close();

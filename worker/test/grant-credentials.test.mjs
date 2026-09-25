@@ -119,8 +119,9 @@ for (const outcome of ["success", "permanent", "transient"]) test(`legacy migrat
   assert.equal(metadata.refreshToken, undefined);
 });
 
-for (const action of ["disable", "revoke"]) test(`consecutive explicit ${action} remains authoritative when KV rate limits publication`, async () => {
+for (const action of ["disable", "revoke"]) test(`consecutive explicit ${action} remains authoritative when KV rate limits publication`, async context => {
   const key = "oauth/policy/openai", values = new Map(), env = credentialEnv(values), limit = rateLimitKv(env);
+  context.mock.method(globalThis, "fetch", async () => assert.fail("disabled owner must not dispatch"));
   const active = await putGrantCredentials(env, key, legacyGrant());
   await assert.rejects(() => action === "revoke" ? revokeGrantCredentials(env, key) : putGrantCredentials(env, key, { ...active, enabled: false }, true), (error) => error.code === "credential_owner_error");
   const owner = env.GRANT_CREDENTIALS.objects.get(key), record = owner.values.get("credential");
@@ -128,7 +129,10 @@ for (const action of ["disable", "revoke"]) test(`consecutive explicit ${action}
   assert.equal(owner.alarm(), null);
   assert.equal(values.get(key).enabled, true, "the rejected projection remains visibly stale");
   if (action === "revoke") { assert.ok(record.revokedAt); assert.equal(record.accessToken, undefined); assert.equal(record.refreshToken, undefined); }
-  await assert.rejects(() => materializeGrantCredentials(env, key, active, "openai", refreshConfig(), false), (error) => error.code === "credential_owner_error");
+  await assert.rejects(() => materializeGrantCredentials(env, key, active, "openai", refreshConfig(), false), (error) => error.code === "grant_disabled");
+  assert.equal(owner.values.get("credential").poolSyncPending, true, "the original denial does not acknowledge failed cleanup");
+  assert.equal(owner.values.get("credential").generation, record.generation);
+  assert.equal(values.get(key).enabled, true);
   limit.advance();
   await assert.rejects(() => materializeGrantCredentials(env, key, active, "openai", refreshConfig(), false), (error) => error.code === "grant_disabled");
   assert.equal(values.get(key).enabled, false);

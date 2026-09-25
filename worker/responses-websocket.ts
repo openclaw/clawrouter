@@ -1,6 +1,6 @@
 import { emptyReservation, markBudgetDispatched, reserveBudget, type BudgetReservation } from "./accounting";
 import { retainRequestContent } from "./content-retention";
-import { HttpContinuation } from "./http-continuation";
+import { continuationRestart, HttpContinuation } from "./http-continuation";
 import { assertTokenUsable } from "./grant-expiry.ts";
 import { authenticateProxyKey } from "./proxy-auth";
 import { createProxyAccounting } from "./proxy-accounting";
@@ -62,7 +62,13 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
         pinned ??= { providerId: selection.provider.id, endpointId: selection.endpoint.id, key: upstream.grantKey, revision: upstream.grantRevision };
         const observe = grantObserver(context, env, upstream.grantKey, upstream.grantRevision, selection.provider.quota);
         const validity = upstream.validity;
-        const assertDispatch = () => assertTokenUsable(validity);
+        const assertDispatch = () => {
+          try { assertTokenUsable(validity); }
+          catch (error) {
+            if (continuation?.requested && error instanceof HttpError && error.code === "grant_refresh_failed") throw continuationRestart();
+            throw error;
+          }
+        };
         return {
           pin: JSON.stringify([selection.provider.id, selection.endpoint.id, upstream.grantKey, upstream.grantRevision, upstream.continuation?.routeSha256]),
           payload: JSON.stringify({ type: "response.create", ...selection.body, ...(lane ? { stream_id: lane } : {}) }),

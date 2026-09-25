@@ -1,11 +1,12 @@
 import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import test from "node:test";
-import { GrantCredentialObject, accountCredentialResponse, installOAuthTokenResponse, materializeGrantCredentials, putGrantCredentials, revokeGrantCredentials } from "../grant-credentials.ts";
+import { GrantCredentialObject, accountCredentialResponse, installOAuthTokenResponse, materializeGrantCredentials, putGrantCredentials, reconcileGrantAttachment, revokeGrantCredentials } from "../grant-credentials.ts";
 import { tokenResponseExpiry, REFRESH_MARGIN_MS } from "../grant-expiry.ts";
 import { grantAvailable, grantUsable, resolveGrantCandidates, selectPolicyCandidates } from "../grant-selection.ts";
 import { grantResponse } from "../grant-credential-view.ts";
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
+import { HttpError } from "../utils.ts";
 
 const key = "oauth/policy/expiry";
 const now = Date.parse("2026-09-24T12:00:00Z");
@@ -127,6 +128,26 @@ test("ordinary refresh omission discards the old deadline and retry state", asyn
   assert.equal(result.expiresAt, null);
   assert.equal(result.nextRefreshAttemptAt, null);
   assert.equal(row(env).expiresAt, null);
+});
+
+test("refresh body delivery consumes the lifetime observed at the token response", async context => {
+  let clock = now;
+  context.mock.method(Date, "now", () => clock);
+  const env = fixture(), active = await putGrantCredentials(env, key, grant());
+  const fetch = context.mock.method(globalThis, "fetch", async () => new Response(new ReadableStream({
+    pull(controller) {
+      clock = now + 20_000;
+      controller.enqueue(new TextEncoder().encode(JSON.stringify({ ...token, expires_in: 10 })));
+      controller.close();
+    },
+  }, { highWaterMark: 0 }), { headers: { "content-type": "application/json" } }));
+  await assert.rejects(() => materialize(env, active, true), invalid);
+  assert.equal(fetch.mock.callCount(), 1);
+  assert.equal(row(env).expiresAt, new Date(now + 10_000).toISOString());
+  assert.equal(row(env).updatedAt, new Date(clock).toISOString());
+  assert.equal(row(env).nextRefreshAttemptAt, new Date(clock + REFRESH_MARGIN_MS).toISOString());
+  assert.equal(row(env).accessToken, token.access_token);
+  assert.equal(grantResponse(key, env.values.get(key)).usable, false);
 });
 
 for (const edit of [{ label: "renamed" }, { enabled: false }, { expiresAt: "2099-01-01T00:00:00Z" }, { expiresAt: null }, { refreshToken: null }, { refreshToken: "different-refresh" }, { accountId: "different-account" }]) test(`legacy metadata ${Object.keys(edit)[0]} cannot heal token-response denial`, async () => {
@@ -260,6 +281,120 @@ for (const renewable of [false, true]) test(`missing transport still processes $
   assert.equal(row(env).generation, active.credentialGeneration + 1);
   assert.equal(row(env).status, renewable ? "active" : "reauth_required");
   assert.equal(owner(env).alarm(), renewable ? now + REFRESH_MARGIN_MS : null);
+});
+
+for (const missing of ["provider", "kind"]) for (const publicationFailure of [false, true]) test(`legacy missing ${missing} expires once despite publication failure ${publicationFailure}`, async context => {
+  let clock = now;
+  context.mock.method(Date, "now", () => clock);
+  const env = fixture(), legacy = grant({ refreshToken: null, expiresAt: new Date(now + 10_000).toISOString() });
+  delete legacy[missing];
+  env.values.set(key, legacy);
+  await materialize(env, legacy);
+  const before = structuredClone(row(env)), own = owner(env), put = env.POLICY_KV.put;
+  assert.equal(own.alarm(), now + 10_000);
+  context.mock.method(globalThis, "fetch", async () => assert.fail("legacy expiry must not contact a provider"));
+  clock += 10_001;
+  if (publicationFailure) env.POLICY_KV.put = async () => { throw new Error("fixture terminal publication unavailable"); };
+  if (publicationFailure) await assert.rejects(() => own.object.alarm(), /terminal publication unavailable/);
+  else await own.object.alarm();
+  assert.equal(row(env).status, "reauth_required");
+  assert.equal(row(env).generation, before.generation + 1);
+  assert.equal(row(env).lineage, before.lineage);
+  assert.equal(row(env).accessToken, before.accessToken);
+  assert.equal(own.alarm(), null);
+  assert.equal(row(env).poolSyncPending, publicationFailure);
+  env.POLICY_KV.put = put;
+  await own.object.alarm();
+  await own.object.alarm();
+  assert.equal(row(env).generation, before.generation + 1);
+  assert.equal(row(env).poolSyncPending, false);
+  assert.equal(env.values.get(key).credentialStatus, "reauth_required");
+  assert.equal(own.alarm(), null);
+});
+
+for (const provider of ["retired-provider", "openai"]) test(`${provider} successful renewal schedules no unsupported overdue maintenance`, async context => {
+  let clock = now;
+  context.mock.method(Date, "now", () => clock);
+  const env = fixture();
+  await putGrantCredentials(env, key, grant({ provider, kind: "api_key", maintenance: { keepWarm: true }, expiresAt: new Date(now - 1).toISOString() }));
+  row(env).nextQuotaProbeAt = row(env).nextKeepWarmAt = new Date(now - 1).toISOString();
+  const fetch = context.mock.method(globalThis, "fetch", async url => {
+    assert.equal(String(url), refresh.tokenUrl);
+    return Response.json({ ...token, expires_in: 3600 });
+  });
+  await owner(env).object.alarm();
+  const next = now + 3_600_000 - REFRESH_MARGIN_MS;
+  assert.equal(fetch.mock.callCount(), 1);
+  assert.equal(owner(env).alarm(), next);
+  clock += 1_000;
+  await owner(env).object.alarm();
+  await reconcileGrantAttachment(env, key);
+  assert.equal(fetch.mock.callCount(), 1);
+  assert.equal(owner(env).alarm(), next, "all finalizers exclude non-executable maintenance deadlines");
+});
+
+test("supported quota and keep-warm deadlines remain eligible in the canonical scheduler", async context => {
+  context.mock.method(Date, "now", () => now);
+  const env = fixture();
+  await putGrantCredentials(env, key, grant({ provider: "anthropic", maintenance: { keepWarm: true } }));
+  row(env).nextQuotaProbeAt = new Date(now + 10_000).toISOString();
+  row(env).nextKeepWarmAt = new Date(now + 20_000).toISOString();
+  await reconcileGrantAttachment(env, key);
+  assert.equal(owner(env).alarm(), now + 10_000);
+  row(env).nextQuotaProbeAt = new Date(now + 30_000).toISOString();
+  await reconcileGrantAttachment(env, key);
+  assert.equal(owner(env).alarm(), now + 20_000);
+});
+
+for (const fault of ["before-write", "lost-ack", "read-unavailable", "read-missing"]) test(`expiry ${fault} finalizes only the authoritative generation and preserves the first error`, async context => {
+  let clock = now;
+  context.mock.method(Date, "now", () => clock);
+  const env = fixture(), active = await putGrantCredentials(env, key, grant({ refreshToken: null, expiresAt: new Date(now + 10_000).toISOString() }));
+  const kvPut = env.POLICY_KV.put;
+  env.POLICY_KV.put = async () => { throw new Error("fixture pending KV publication"); };
+  await assert.rejects(() => putGrantCredentials(env, key, { ...active, label: "pending" }, true));
+  const before = structuredClone(row(env)), projection = structuredClone(env.values.get(key));
+  assert.equal(before.poolSyncPending, true);
+  env.POLICY_KV.put = kvPut;
+  const own = owner(env), storage = own.state.storage, put = storage.put, get = storage.get;
+  let attempted = false, writes = 0;
+  storage.put = async (name, value) => {
+    if (!attempted && value.generation === before.generation + 1 && value.status === "reauth_required") {
+      attempted = true;
+      if (fault !== "before-write") await put(name, value);
+      throw new HttpError(503, "fixture_expiry_ack", "fixture expiry write acknowledgement");
+    }
+    return put(name, value);
+  };
+  storage.get = async name => {
+    if (attempted && fault === "read-unavailable") throw new Error("fixture cleanup read unavailable");
+    if (attempted && fault === "read-missing") return undefined;
+    return get(name);
+  };
+  env.POLICY_KV.put = async (...args) => { writes++; return kvPut(...args); };
+  clock += 10_001;
+  context.mock.method(globalThis, "fetch", async () => assert.fail("expired token egress"));
+  await assert.rejects(() => materialize(env, active), error => error.code === "fixture_expiry_ack" && error.status === 503);
+  assert.equal(attempted, true);
+  const generation = before.generation + (fault === "before-write" ? 0 : 1);
+  assert.equal(row(env).generation, generation);
+  assert.equal(row(env).lineage, before.lineage);
+  if (fault.startsWith("read-")) {
+    assert.equal(writes, 0, "an unconfirmed reread cannot publish the stale local row");
+    assert.deepEqual(env.values.get(key), projection);
+    assert.equal(row(env).poolSyncPending, true);
+  } else {
+    assert.equal(env.values.get(key).credentialGeneration, generation);
+    assert.equal((await env.grantAuthority.call("attachment", { key })).generation, generation);
+    assert.equal(row(env).poolSyncPending, false);
+  }
+  storage.get = get; storage.put = put;
+  await revokeGrantCredentials(env, key);
+  assert.equal(row(env).generation, generation + 1);
+  assert.equal(env.values.get(key).credentialGeneration, generation + 1);
+  const indexed = await env.grantAuthority.call("attachment", { key });
+  assert.equal(indexed.generation, generation + 1);
+  assert.equal(indexed.attached, false);
 });
 
 for (const expiry of [null, 0]) test(`denied ${expiry} renewal blocks overdue quota and keep-warm traffic`, async context => {

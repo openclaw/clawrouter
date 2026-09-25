@@ -89,7 +89,7 @@ export class GrantCredentialObject implements DurableObject {
       }
       if (path === "/mutate") return await this.mutate(await readJson<{ key: string; intent: GrantCredentialIntent; body: unknown }>(request));
       if (path === "/put" || path === "/token-exchange") {
-        const input = await readJson<PutRequest & { tokenResponse?: Record<string, unknown> }>(request);
+        const input = await readJson<PutRequest & { tokenResponse?: Record<string, unknown>; tokenResponseObservedAt: number }>(request);
         const replace = input.intent === "replace";
         if (replace && !hasPrimaryCredential(input.grant)) throw new HttpError(400, "invalid_upstream_grant", "grant replacement requires a fresh primary credential");
         let current = await this.state.storage.get<CredentialRecord>("credential");
@@ -117,13 +117,16 @@ export class GrantCredentialObject implements DurableObject {
         }
         const admissionGeneration = replace && (current || previous) ? attachment.generation : current?.generation ?? 0;
         const generation = nextCredentialGeneration(current?.generation ?? (replace && previous ? attachment.generation : previous?.credentialGeneration ?? 0));
-        let grantInput = input.grant, metadataInput = input.grant, inheritCurrent = true;
+        let grantInput = input.grant, metadataInput = input.grant, inheritCurrent = true, updateBaseline = current;
         if (input.credentialInput && path === "/put") {
           // Normalize inside the owner: a stale KV projection cannot restore
           // old identity, routing defaults or paused state during publication repair.
           metadataInput = normalizeGrant(input.credentialInput, replace ? null : current ? materializedGrant(metadataGrant(current), current) : legacy);
           grantInput = { ...metadataInput };
-          if (current && !replace) for (const field of CREDENTIAL_INPUT_FIELDS) {
+          // A first legacy merge has the same credential intent as an existing
+          // owner. Keep its baseline transient so only the final mutation commits.
+          if (!replace && !current && legacy && hasPrimaryCredential(legacy)) updateBaseline = ownerMetadata(credentialRecord(legacy, generation - 1), legacy, input.key);
+          if (updateBaseline && !replace) for (const field of CREDENTIAL_INPUT_FIELDS) {
             delete grantInput[field];
             if (Object.hasOwn(input.credentialInput, field)) Object.assign(grantInput, { [field]:
               field === "tokenType" || field === "scopes" ? metadataInput[field] : input.credentialInput[field],
@@ -143,13 +146,13 @@ export class GrantCredentialObject implements DurableObject {
           if (inheritCurrent && input.credentialInput?.subscription) metadataInput.subscription = { ...baseline?.subscription, ...input.credentialInput.subscription };
           grantInput = metadataInput;
         }
-        let record = !replace && inheritCurrent && current && !current.revokedAt && (input.preserveUnspecifiedSecrets || !hasPrimaryCredential(grantInput))
-          ? updatedCredentialRecord(current, grantInput)
+        let record = !replace && inheritCurrent && updateBaseline && !updateBaseline.revokedAt && (input.preserveUnspecifiedSecrets || !hasPrimaryCredential(grantInput))
+          ? updatedCredentialRecord(updateBaseline, grantInput)
           : credentialRecord(grantInput, generation);
         record = ownerMetadata(record, metadataInput, input.key);
         // Only the authenticated callback adapter can install token-response
         // evidence. Editable metadata never establishes or clears this fact.
-        if (path === "/token-exchange") record = tokenExchangeRecord(record, input.tokenResponse ?? {});
+        if (path === "/token-exchange") record = tokenExchangeRecord(record, input.tokenResponse ?? {}, input.tokenResponseObservedAt);
         const grant = metadataGrant(record);
         // Admission reserves capacity without removing the old attachment. A
         // failed store leaves indexed pending work for this owner to reconcile.
@@ -274,7 +277,7 @@ export class GrantCredentialObject implements DurableObject {
     // Materialization may rotate tokens, but cannot adopt lifecycle state from a
     // stale KV read. Only explicit owner mutations can re-enable or reconnect.
     const stale = input.grant.credentialGeneration !== record.generation || input.grant.enabled !== record.enabled;
-    let changed = false;
+    let changed = false, failed = false;
     try {
       assertCredentialEnabled(record);
       if (record.providerId && record.providerId !== input.providerId || record.kind !== input.grant.kind) throw new HttpError(409, "upstream_grant_changed", "upstream grant changed; retry discovery before dispatch");
@@ -310,10 +313,20 @@ export class GrantCredentialObject implements DurableObject {
       record = await this.expireNonrenewable(record);
       if (record.status === "reauth_required") throw new ReauthorizationRequired("upstream grant requires reauthorization", credentialProjection(record));
       assertTokenUsable(record);
+    } catch (error) {
+      failed = true;
+      throw error;
     } finally {
       // KV permits one write per key per second. Publish the final owner state
-      // once, including failed refreshes and stale disabled/revoked reads.
-      if (stale || changed || migrated || record.poolSyncPending) await this.finalize(record);
+      // once. A lost write ACK cannot make the pre-write row authoritative again.
+      if (stale || changed || migrated || record.poolSyncPending) try {
+        const stored = await this.state.storage.get<CredentialRecord>("credential");
+        if (!stored) throw new HttpError(503, "grant_mutation_unconfirmed", "account state is unavailable; inspect the retained identity before another mutation");
+        record = stored;
+        await this.finalize(record);
+      } catch (error) {
+        if (!failed) throw error;
+      }
     }
     // Publication can await storage/index/KV. Recheck at the actual release
     // boundary so a deadline crossed during finalization never releases secrets.
@@ -349,6 +362,7 @@ export class GrantCredentialObject implements DurableObject {
     } catch {
       throw new HttpError(502, "grant_refresh_failed", `provider ${providerId} rejected the refresh request`);
     }
+    const observedAt = Date.now();
     let payload: Record<string, unknown>;
     try { payload = await boundedRefreshJson(response); }
     catch (error) {
@@ -364,7 +378,7 @@ export class GrantCredentialObject implements DurableObject {
       throw new HttpError(502, "grant_refresh_failed", `provider ${providerId} rejected the refresh request`);
     }
 
-    const updated = tokenExchangeRecord({ ...record, generation: nextCredentialGeneration(record.generation) }, payload);
+    const updated = tokenExchangeRecord({ ...record, generation: nextCredentialGeneration(record.generation) }, payload, observedAt);
     await this.state.storage.put("credential", updated);
     return updated;
   }
@@ -380,12 +394,16 @@ export class GrantCredentialObject implements DurableObject {
     let record = await this.state.storage.get<CredentialRecord>("credential");
     if (!record) return;
     record = await this.loadRecord(record.grantKey ?? "", record) ?? record;
-    if (!record.enabled || !record.grantKey || !record.providerId || !record.kind || record.status === "reauth_required") {
+    if (!record.enabled || !record.grantKey || record.status === "reauth_required") {
       await this.finalize(record);
       return;
     }
     if (record.poolSyncPending) await this.finalize(record, "prepare");
     record = await this.expireNonrenewable(record);
+    if (!record.providerId || !record.kind) {
+      await this.finalize(record);
+      return;
+    }
     const provider = snapshot.providers.find((candidate) => candidate.id === record!.providerId);
     const now = Date.now();
     const refreshAt = record.nextRefreshAttemptAt ? Date.parse(record.nextRefreshAttemptAt) : record.expiresAt ? Date.parse(record.expiresAt) - REFRESH_MARGIN_MS : NaN;
@@ -477,12 +495,15 @@ export class GrantCredentialObject implements DurableObject {
 
   private async schedule(record: CredentialRecord): Promise<void> {
     const denied = tokenDenied(record);
+    const provider = snapshot.providers.find((candidate) => candidate.id === record.providerId);
+    const grant = materializedGrant({ provider: record.providerId, kind: record.kind }, record);
+    const transport = provider ? transportForGrant(provider, grant) : null;
     const recovery = record.refreshToken ? record.nextRefreshAttemptAt ? Date.parse(record.nextRefreshAttemptAt)
       : record.expiresAt ? Date.parse(record.expiresAt) - REFRESH_MARGIN_MS : NaN : NaN;
     const next = (denied ? [record.refreshToken ? recovery : record.tokenResponseError ? NaN : timestamp(record.expiresAt)] : [
       record.refreshToken ? recovery : timestamp(record.expiresAt),
-      timestamp(record.nextQuotaProbeAt),
-      record.maintenance?.keepWarm ? timestamp(record.nextKeepWarmAt) : NaN,
+      transport?.maintenance.quotaPoll && provider && quotaProbeForGrant(provider, grant) ? timestamp(record.nextQuotaProbeAt) : NaN,
+      record.maintenance?.keepWarm && transport?.maintenance.keepWarm ? timestamp(record.nextKeepWarmAt) : NaN,
     ]).filter(Number.isFinite);
     if (!record.enabled || !next.length || record.status === "reauth_required") {
       await this.state.storage.deleteAlarm();
@@ -601,16 +622,18 @@ export async function putGrantCredentials(env: Env, key: string, grant: Upstream
   return (await ownerCall<OwnerResponse>(env, key, "/put", { key, grant, preserveUnspecifiedSecrets, intent, credentialInput })).grant;
 }
 
-export async function installOAuthTokenResponse(env: Env, key: string, grant: UpstreamGrant, tokenResponse: Record<string, unknown>, identity: Pick<UpstreamGrant, "provider" | "kind" | "enabled" | "priority" | "weight" | "accountId" | "subscription"> = {}): Promise<UpstreamGrant> {
+export async function installOAuthTokenResponse(env: Env, key: string, grant: UpstreamGrant, tokenResponse: Record<string, unknown>, identity: Pick<UpstreamGrant, "provider" | "kind" | "enabled" | "priority" | "weight" | "accountId" | "subscription"> = {}, observedAt = Date.now()): Promise<UpstreamGrant> {
   const credentialInput: UpstreamGrant = { ...identity, accessToken: boundedSecret(tokenResponse.access_token, "access token") };
   if (typeof tokenResponse.refresh_token === "string" && tokenResponse.refresh_token) credentialInput.refreshToken = tokenResponse.refresh_token;
-  return (await ownerCall<OwnerResponse>(env, key, "/token-exchange", { key, grant, credentialInput, tokenResponse, preserveUnspecifiedSecrets: true })).grant;
+  return (await ownerCall<OwnerResponse>(env, key, "/token-exchange", { key, grant, credentialInput, tokenResponse, tokenResponseObservedAt: observedAt, preserveUnspecifiedSecrets: true })).grant;
 }
 
-function tokenExchangeRecord(record: CredentialRecord, payload: Record<string, unknown>): CredentialRecord {
+function tokenExchangeRecord(record: CredentialRecord, payload: Record<string, unknown>, observedAt: number): CredentialRecord {
   const now = Date.now();
   const refreshToken = typeof payload.refresh_token === "string" && payload.refresh_token ? boundedSecret(payload.refresh_token, "refresh token") : record.refreshToken;
-  const expiry = tokenResponseExpiry(payload, now);
+  // Body parsing and the serialized owner queue consume token lifetime; neither
+  // may restart the provider's expires_in clock at the eventual storage write.
+  const expiry = tokenResponseExpiry(payload, observedAt);
   return {
     ...record, ...expiry, status: !refreshToken && tokenExpired(expiry, now) ? "reauth_required" : "active", poolSyncPending: true,
     accessToken: boundedSecret(payload.access_token, "access token"), refreshToken,
