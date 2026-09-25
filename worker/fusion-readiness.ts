@@ -1,10 +1,77 @@
-import type { FusionConfig, FusionReadiness, FusionReadinessCall } from "../shared/contracts";
+import type { CatalogOffer, FusionConfig, FusionReadiness, FusionReadinessCall } from "../shared/contracts";
 import { buildAdviserBody, buildAggregatorBody, buildFusionReservationProposals, prepareAdviserBody } from "./fusion.ts";
 import { assessModelRequest } from "../shared/model-request-parameters.ts";
 import { validateBudgetReservation } from "./accounting.ts";
 import { estimateCost } from "./proxy-accounting.ts";
-import type { AccessPolicyEntry, CompiledEndpoint, CompiledModel, ProviderConnection } from "./types.ts";
+import type { AccessPolicyEntry, AuthorizedIdentity, CompiledEndpoint, CompiledModel, ProviderConnection } from "./types.ts";
+import { operationAffordability, type BudgetObservation, type OperationAffordability } from "./operation-budget";
+import { budgetLedgerAddress, budgetPrincipal } from "./budget-scope";
 import { HttpError } from "./utils.ts";
+
+export interface FusionCatalogSelection {
+  auth: AuthorizedIdentity;
+  providerId: string;
+  endpoint: CompiledEndpoint;
+  model: CompiledModel;
+  body: Record<string, unknown>;
+  connection: ProviderConnection;
+  observation?: BudgetObservation;
+  availability: OperationAffordability;
+}
+
+export function fusionCatalogReadiness(config: FusionConfig, resolve: (body: Record<string, unknown>) => FusionCatalogSelection | null) {
+  const synthesizer = resolve(buildAggregatorBody({ messages: [] }, config, buildFusionReservationProposals(config)));
+  const assess = (selection: FusionCatalogSelection | null): OperationAffordability => {
+    if (!selection) return { status: "exact-blocked", reasonCode: "model_capability_unsupported" };
+    if (selection.availability.status === "exact-blocked") return selection.availability;
+    if (assessModelRequest(selection.model, selection.endpoint, selection.body).conflicts.length)
+      return { status: "exact-blocked", reasonCode: "model_parameter_unsupported" };
+    return selection.availability;
+  };
+  const synthesis = assess(synthesizer);
+  const advisers = config.adviserModels.map((model, index) => {
+    const selected = resolve(buildAdviserBody({}, model, config, index));
+    if (!selected) return { selection: null, availability: assess(null) };
+    const selection = { ...selected, body: prepareAdviserBody(selected.body, selected.model, selected.endpoint, config.temperature) };
+    // Dispatch reserves synthesis first. Only an exact fixed reservation can be
+    // subtracted from a request-free observation; variable calls remain conditional.
+    if (synthesizer && synthesis.status !== "exact-blocked" && selection.availability.status !== "exact-blocked" && selection.observation) {
+      const reserved = synthesizer.auth.policy.requestCostMicros ?? 0;
+      const observation = {
+        policyRemaining: remainingAfter(selection.observation.policyRemaining, samePolicyLedger(selection, synthesizer) ? reserved : 0),
+        providerRemaining: remainingAfter(selection.observation.providerRemaining, selection.providerId === synthesizer.providerId ? reserved : 0),
+      };
+      selection.availability = operationAffordability(selection.auth, selection.connection, selection.model, "llm.chat", selection.endpoint, observation);
+    }
+    return { selection, availability: synthesis.status === "exact-blocked" ? synthesis : assess(selection) };
+  });
+  let availability = synthesis;
+  const eligible = advisers.filter(({ availability }) => availability.status !== "exact-blocked");
+  if (synthesizer && synthesis.status === "exact-covered") {
+    const calls = [synthesizer, ...eligible.flatMap(({ selection }) => selection ? [selection] : [])];
+    const compoundCovered = eligible.every(({ availability }) => availability.status === "exact-covered") && calls.every((call) => {
+      const policyCost = calls.filter((other) => samePolicyLedger(call, other)).reduce((total, other) => total + (other.auth.policy.requestCostMicros ?? 0), 0);
+      const providerCost = calls.filter((other) => call.providerId === other.providerId).reduce((total, other) => total + (other.auth.policy.requestCostMicros ?? 0), 0);
+      return (policyCost === 0 || call.auth.policy.monthlyBudgetMicros == null || (call.observation?.policyRemaining ?? -1) >= policyCost)
+        && (providerCost === 0 || call.connection.monthlyBudgetMicros == null || (call.observation?.providerRemaining ?? -1) >= providerCost);
+    });
+    if (!compoundCovered) availability = { status: "request-dependent" };
+  }
+  const offers: CatalogOffer[] = synthesizer ? [{
+    endpoint: "chat_completions", modelId: config.modelId, transport: "http", routeKind: "unified",
+    route: synthesizer.auth.authType === "proxy_key" ? "/v1/chat/completions" : "/v1/playground/v1/chat/completions",
+    policyId: synthesizer.auth.policyId, policyGeneration: synthesizer.auth.policy.generation,
+    eligible: availability.status !== "exact-blocked", affordability: availability.status,
+    ...(availability.reasonCode ? { reasonCode: availability.reasonCode } : {}),
+  }] : [];
+  return { synthesizer, offers, readyAdviserCount: eligible.length };
+}
+
+function remainingAfter(remaining: number | null, reserved: number): number | null { return remaining === null ? null : remaining - reserved; }
+function samePolicyLedger(left: FusionCatalogSelection, right: FusionCatalogSelection): boolean {
+  const scope = ({ auth }: FusionCatalogSelection) => budgetLedgerAddress(auth.policyId, auth.policy, budgetPrincipal(auth)).scopeKey;
+  return scope(left) === scope(right);
+}
 
 export interface FusionReadinessRoute {
   modelId: string;
