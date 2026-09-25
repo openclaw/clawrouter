@@ -1039,6 +1039,32 @@ async function websocketFixture(t, f, headers = {}) {
   return { server, async drain() { while (pending.length) await Promise.all(pending.splice(0)); await f.drain(); } };
 }
 
+for (const status of [401, 403, 429]) test(`upstream WebSocket upgrade ${status} remains an uncharged provider failure`, async t => {
+  const f = await fixture(t, true, { limit: 1_000_000 });
+  await setExpiry(f, "2099-01-01T00:00:00.000Z", true);
+  let cancels = 0;
+  f.response = () => new Response(new ReadableStream({ cancel() { cancels++; } }), { status });
+  const ws = await websocketFixture(t, f);
+  try {
+    ws.server.receive({ type: "response.create", model: "openai/gpt-6-astra", input: "fixture" });
+    await ws.drain();
+    assert.equal(f.sent.length, 1);
+    assert.equal(f.sent[0].method, "GET");
+    assert.equal(cancels, 1);
+    assert.equal(ws.server.sent.at(-1).status, status);
+    assert.equal(ws.server.sent.at(-1).error.code, "upstream_upgrade_failed");
+    assert.equal(f.events.length, 1);
+    assert.equal(f.events[0].status, "provider_error");
+    assert.equal(f.events[0].status_code, status);
+    assert.equal(f.events[0].actual_cost_micros, 0);
+    assert.equal(f.events[0].cost_basis, "none");
+    await assertBudgets(f, [0]);
+  } finally {
+    ws.server.close();
+    await ws.drain();
+  }
+});
+
 for (const phase of ["before upgrade", "connecting", "reused"]) test(`actual WebSocket ${phase} expiry sends no expired create and releases both budgets`, async t => {
   let clock = Date.now();
   t.mock.method(Date, "now", () => clock);
@@ -1076,8 +1102,11 @@ for (const phase of ["before upgrade", "connecting", "reused"]) test(`actual Web
     }
     assert.equal(f.sent.length, phase === "before upgrade" ? 0 : 1);
     assert.equal(upstream.sent.length, phase === "reused" ? 1 : 0);
+    assert.equal(ws.server.sent.at(-1).status, 502);
     assert.equal(ws.server.sent.at(-1).error.code, "grant_refresh_failed");
     assert.equal(f.events.length, phase === "reused" ? 2 : 1);
+    assert.equal(f.events.at(-1).status, "provider_error");
+    assert.equal(f.events.at(-1).status_code, 502);
     assert.equal(f.events.at(-1).actual_cost_micros, 0);
     assert.equal(f.events.at(-1).cost_basis, "none");
     await assertBudgets(f, phase === "reused" ? [7, 0] : [0]);
@@ -1134,6 +1163,7 @@ for (const carrier of ["response", "metadata", "header"]) for (const phase of ["
     assert.equal(notice.error.code, "continuation_restart_required");
     assert.match(notice.error.message, /restart with full input and omit previous_response_id and x-codex-turn-state/);
     assert.equal(f.events.length, phase === "reused" ? 3 : 2);
+    assert.equal(f.events.at(-1).status, "client_error");
     assert.equal(f.events.at(-1).status_code, 409);
     assert.equal(f.events.at(-1).actual_cost_micros, 0);
     assert.equal(f.events.at(-1).cost_basis, "none");

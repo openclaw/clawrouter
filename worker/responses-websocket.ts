@@ -62,11 +62,13 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
         pinned ??= { providerId: selection.provider.id, endpointId: selection.endpoint.id, key: upstream.grantKey, revision: upstream.grantRevision };
         const observe = grantObserver(context, env, upstream.grantKey, upstream.grantRevision, selection.provider.quota);
         const validity = upstream.validity;
+        let dispatchFailure: ReturnType<typeof failureStatus> | null = null;
         const assertDispatch = () => {
           try { assertTokenUsable(validity); }
           catch (error) {
-            if (continuation?.requested && error instanceof HttpError && error.code === "grant_refresh_failed") throw continuationRestart();
-            throw error;
+            const failure = continuation?.requested && error instanceof HttpError && error.code === "grant_refresh_failed" ? continuationRestart() : error;
+            if (failure instanceof HttpError) dispatchFailure = failureStatus(failure.status);
+            throw failure;
           }
         };
         return {
@@ -76,15 +78,12 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
           assertDispatch,
           connect: upstreamConnection(upstream.url, upstream.headers, signal, observe, assertDispatch),
           publish: (identities, frame) => continuation?.publishFrame(identities, frame) ?? Promise.resolve(),
-          settle: settlement(accounting, reservation, content, observe),
+          settle: settlement(accounting, reservation, content, observe, () => dispatchFailure),
         };
       } catch (error) {
         const failure = error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "Responses request preflight failed");
         const aborted = signal.aborted && signal.reason instanceof ResponsesOperationAborted ? signal.reason : null;
-        const outcome = aborted ? closeStatus(aborted.cause) : {
-          statusCode: failure.status,
-          status: failure.status === 402 || failure.status === 403 ? "denied" as const : failure.status < 500 ? "client_error" as const : "provider_error" as const,
-        };
+        const outcome = aborted ? closeStatus(aborted.cause) : failureStatus(failure.status);
         await requireAccounting(accounting.settle(outcome.statusCode, outcome.status, false, null, reservation, content));
         if (aborted) throw aborted;
         throw failure;
@@ -111,7 +110,7 @@ function upstreamConnection(url: URL, inputHeaders: Headers, signal: AbortSignal
   };
 }
 
-function settlement(accounting: ReturnType<typeof createProxyAccounting>, reservation: BudgetReservation, content: string | null, observe: (response: Pick<Response, "status" | "headers">) => void): AdmittedResponse["settle"] {
+function settlement(accounting: ReturnType<typeof createProxyAccounting>, reservation: BudgetReservation, content: string | null, observe: (response: Pick<Response, "status" | "headers">) => void, dispatchFailure: () => ReturnType<typeof failureStatus> | null): AdmittedResponse["settle"] {
   return (outcome, terminal, sent, executionStarted) => {
     // The upgrade response already owns its HTTP quota observation. Only sent
     // creates can report a later WebSocket error with new quota evidence.
@@ -123,14 +122,21 @@ function settlement(accounting: ReturnType<typeof createProxyAccounting>, reserv
       observe({ status: terminal.status, headers });
     }
     const tokens = terminal ? extractUsageTokens(terminal) : null;
-    const { status, statusCode } = outcome === "completed" || outcome === "incomplete" ? { status: "success" as const, statusCode: 200 }
+    // Only the local guard owns this classification. Upstream rejections and
+    // an earlier close cause keep their existing settlement, even before send.
+    const failure = outcome === "error" && !sent ? dispatchFailure() : null;
+    const { status, statusCode } = failure ?? (outcome === "completed" || outcome === "incomplete" ? { status: "success" as const, statusCode: 200 }
       : outcome === "failed" || outcome === "error" ? { status: "provider_error" as const, statusCode: typeof terminal?.status === "number" ? terminal.status : 502 }
-      : closeStatus(outcome);
+      : closeStatus(outcome));
     // A request-scoped error before a response is rejected work. Once upstream
     // execution starts, missing usage must retain the estimate, including on close.
     const billable = sent && (outcome !== "error" || executionStarted || tokens !== null);
     return requireAccounting(accounting.settle(statusCode, status, billable, tokens, reservation, content));
   };
+}
+
+function failureStatus(statusCode: number): { status: UsageEvent["status"]; statusCode: number } {
+  return { statusCode, status: statusCode === 402 || statusCode === 403 ? "denied" : statusCode < 500 ? "client_error" : "provider_error" };
 }
 
 function closeStatus(cause: ResponsesCloseCause): { status: UsageEvent["status"]; statusCode: UsageEvent["status_code"] } {
