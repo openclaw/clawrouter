@@ -29,6 +29,8 @@ jobs:
             sha256: "35a82c153d83959de09c2cb84ac70ba69d05788aeeb08d4a95ca68e39f86680e"
           - version: "0.155.0"
             sha256: "e415cc3adb94ade16e8d44b4dd58a9201cc34b2ee51a5d6eddf2a3a00aecb6c0"
+          - version: "0.156.1"
+            sha256: "aff46539a83aff86e3c62c592bce2c50d95391f9df289afaf03a50c01d14533d"
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
@@ -53,11 +55,13 @@ jobs:
           }
           install_codex "$CODEX_VERSION" "$CODEX_SHA256"
           # The 0.153 engine accepts Astra metadata but its own bundle predates it.
-          if [ "$CODEX_VERSION" != 0.155.0 ]; then
+          producer_version="$CODEX_VERSION"
+          if [ "$CODEX_VERSION" = 0.153.0 ]; then
             install_codex 0.155.0 e415cc3adb94ade16e8d44b4dd58a9201cc34b2ee51a5d6eddf2a3a00aecb6c0
+            producer_version=0.155.0
           fi
           echo "CLAWROUTER_CODEX_BINARY=$RUNNER_TEMP/codex-$CODEX_VERSION/codex-x86_64-unknown-linux-musl" >> "$GITHUB_ENV"
-          echo "CLAWROUTER_CODEX_CATALOG_BINARY=$RUNNER_TEMP/codex-0.155.0/codex-x86_64-unknown-linux-musl" >> "$GITHUB_ENV"
+          echo "CLAWROUTER_CODEX_CATALOG_BINARY=$RUNNER_TEMP/codex-$producer_version/codex-x86_64-unknown-linux-musl" >> "$GITHUB_ENV"
           if [ "$CODEX_VERSION" = 0.155.0 ]; then
             echo "CLAWROUTER_DESKTOP_FIXTURE_OUTPUT=$RUNNER_TEMP/codex-desktop-fixture" >> "$GITHUB_ENV"
           fi

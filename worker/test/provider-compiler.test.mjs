@@ -359,6 +359,42 @@ function compile(path) {
   return execFileSync(process.execPath, ["scripts/compile-providers.mjs", path], { encoding: "utf8", stdio: "pipe" });
 }
 
+test("speech character cards round-trip without token defaults and reject incompatible contracts", () => {
+  const valid = parse(readFileSync("providers/openai.provider.yaml", "utf8"));
+  const index = valid.models.entries.findIndex(model => model.id === "openai/tts-1");
+  assert.ok(index >= 0);
+  withManifest(path => {
+    writeFileSync(path, JSON.stringify(valid));
+    const compiled = JSON.parse(compile(path)), provider = compiled.providers[0];
+    const model = provider.models.find(model => model.id === "openai/tts-1");
+    assert.deepEqual(model.pricing, valid.models.entries[index].pricing);
+    assert.deepEqual(compiled.model_index[model.id], { provider: "openai", ...Object.fromEntries(Object.entries(model).filter(([key]) => key !== "id")) });
+    assert.deepEqual(model.capabilities, ["audio.speech"]);
+    assert.deepEqual(provider.auth.grantTransports.subscription.allowedEndpoints, ["responses"]);
+    const endpoint = provider.endpoints.find(endpoint => endpoint.id === "speech");
+    assert.equal(endpoint.request_format, "openai.audio_speech"); assert.equal(endpoint.response_format, "audio.binary");
+    assert.equal(endpoint.path, "/v1/audio/speech"); assert.equal(endpoint.streaming, "audio");
+    assert.equal(endpoint.modelPassthrough, undefined); assert.equal(endpoint.websocket, undefined);
+    for (const [name, change] of [
+      ["negative rate", model => { model.pricing.inputMicrosPerMillionCharacters = -1; }],
+      ["unsafe rate", model => { model.pricing.inputMicrosPerMillionCharacters = Number.MAX_SAFE_INTEGER + 1; }],
+      ["missing rate", model => { delete model.pricing.inputMicrosPerMillionCharacters; }],
+      ["token field", model => { model.pricing.outputMicrosPerMillion = 0; }],
+      ["wrong bound", model => { model.pricing.maxInputCharacters = 4097; }],
+      ["wrong unit", model => { model.pricing.unit = "token"; }],
+      ["missing provenance", model => { delete model.pricing.source; }],
+      ["wrong operation", model => { model.capabilities = ["llm.chat"]; }],
+    ]) {
+      const manifest = structuredClone(valid); change(manifest.models.entries[index]);
+      writeFileSync(path, JSON.stringify(manifest));
+      assert.throws(() => compile(path), /invalid manifest|character pricing requires/, name);
+    }
+    valid.endpoints.speech.responseFormat = "openai.audio_speech";
+    writeFileSync(path, JSON.stringify(valid));
+    assert.throws(() => compile(path), /character pricing requires/, "JSON speech requests require a distinct binary response contract");
+  });
+});
+
 test("opaque model contracts validate endpoint-compatible pricing without template inheritance", () => {
   const valid = parse(readFileSync("providers/local-openai.provider.yaml", "utf8"));
   withManifest((path) => {

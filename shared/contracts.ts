@@ -3,7 +3,9 @@ import type { ModelRequestParameters, ProviderReasoningEffort } from "./model-re
 export interface TokenRates { inputMicrosPerMillion: number; outputMicrosPerMillion: number; cachedInputMicrosPerMillion: number | null; cacheWriteInputMicrosPerMillion: number | null; cacheWrite5mInputMicrosPerMillion: number | null; cacheWrite1hInputMicrosPerMillion: number | null }
 export interface LongContextPricing extends TokenRates { thresholdInputTokens: number }
 export interface ServiceTierPricing extends TokenRates { id: string; aliases: string[]; maxInputTokens: number | null; longContext: LongContextPricing | null }
-export interface ModelPricing extends TokenRates { effectiveAt: string; source: string; maxInputTokens: number; maxRequestInputTokens: number | null; defaultMaxOutputTokens: number; inputTokenOverhead: number; longContext: LongContextPricing | null; serviceTiers?: ServiceTierPricing[]; unpricedCosts?: Array<"request_fee">; settlementBasis?: "published_upper_bound" }
+export interface TokenPricing extends TokenRates { unit?: never; effectiveAt: string; source: string; maxInputTokens: number; maxRequestInputTokens: number | null; defaultMaxOutputTokens: number; inputTokenOverhead: number; longContext: LongContextPricing | null; serviceTiers?: ServiceTierPricing[]; unpricedCosts?: Array<"request_fee">; settlementBasis?: "published_upper_bound" }
+export interface CharacterPricing { unit: "character"; effectiveAt: string; source: string; inputMicrosPerMillionCharacters: number; maxInputCharacters: number }
+export type ModelPricing = TokenPricing | CharacterPricing;
 export interface ClientCatalogModel { id: string; upstream: string; codexModel?: string; capabilities: string[]; supportedReasoningEfforts?: ProviderReasoningEffort[]; requestParameters?: Record<string, ModelRequestParameters>; pricing_ref: string | null; pricing: ModelPricing | null }
 export interface CatalogOffer {
   endpoint: string;

@@ -109,6 +109,64 @@ for (const [name, tenantField, tenant] of [["omitted", {}, "default"], ["null", 
   });
 }
 
+test("Access speech delivery with an omitted policy tenant remains visible in session usage", async (t) => {
+  const input = "A😀é", audio = new Uint8Array([0, 255, 128, 1]); // 7 UTF-8 bytes, 3 code points.
+  let dispatched = 0;
+  const f = await fixture(t, "principal", (url, init) => {
+    assert.equal(String(url), "https://api.openai.com/v1/audio/speech");
+    assert.equal(new Headers(init.headers).get("authorization"), "Bearer fixture-upstream-key");
+    assert.deepEqual(JSON.parse(init.body), { model: "tts-1", voice: "alloy", input });
+    dispatched++;
+    return Promise.resolve(new Response(audio, { headers: { "content-type": "audio/mpeg" } }));
+  });
+  await authorityCall(f.env, "/policies/put", { policyId: "shared", policy: { enabled: true, generation: "g1", providers: ["openai"], monthlyBudgetMicros: 1000, budgetScope: "principal", retainRequestContent: false } });
+  await authorityCall(f.env, "/connections/put", { providerId: "openai", enabled: true, monthlyBudgetMicros: 1000 });
+  f.env.OPENAI_API_KEY = "fixture-upstream-key";
+  await f.activateAccounts();
+  await f.setUser("alice@example.com", { tenantId: "organization" });
+  const cookie = await f.login("alice@example.com"), emitted = [], pending = [];
+  f.env.USAGE_QUEUE = { async send(event) { emitted.push(event); } };
+  const response = await worker.fetch(new Request("https://router.example/v1/playground/v1/audio/speech", {
+    method: "POST", headers: { ...cookie, origin: "https://router.example", "content-type": "application/json" },
+    body: JSON.stringify({ model: "openai/tts-1", voice: "alloy", input }),
+  }), f.env, { waitUntil(promise) { pending.push(promise); } });
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("content-type"), "audio/mpeg");
+  assert.equal(emitted.length, 0, "headers alone do not complete speech delivery");
+  assert.deepEqual(new Uint8Array(await response.arrayBuffer()), audio);
+  await Promise.all(pending);
+  assert.equal(dispatched, 1);
+  assert.equal(emitted.length, 1);
+  const [event] = emitted;
+  assert.equal(event.tenant_id, "default");
+  assert.equal(event.policy_id, "shared");
+  assert.equal(event.principal_id, "alice@example.com");
+  assert.equal(event.credential_id, null);
+  assert.equal(event.auth_type, "access");
+  assert.equal(event.status, "success");
+  assert.equal(event.cost_basis, "request_character_estimate");
+  assert.equal(event.actual_cost_micros, 45);
+  assert.equal(event.reserved_cost_micros, 105);
+  assert.equal(event.total_tokens, null);
+  assert.equal(event.content_retained, false);
+  let acknowledged = 0;
+  await worker.queue({ messages: [{ body: event, ack() { acknowledged++; }, retry() { assert.fail("delivered speech usage must persist"); } }] }, f.env);
+  assert.equal(acknowledged, 1);
+  const { status, body } = await f.read("/v1/session/usage", cookie);
+  assert.equal(status, 200);
+  assert.equal(body.session.tenantId, "organization");
+  assert.equal(body.policies[0].tenantId, "default");
+  assert.equal(body.policies[0].budget.spentMicros, 45);
+  assert.equal(body.policies[0].budget.windowKey.startsWith("default/shared/alice@example.com/"), true);
+  assert.equal(body.usage.summary.requestCount, 1);
+  assert.equal(body.usage.summary.actualCostMicros, 45);
+  assert.deepEqual(body.usage.events, [event]);
+  const providerBudget = await providerBudgetStatus(f.env, "openai", 1000);
+  assert.equal(providerBudget.spentMicros, 45);
+  assert.equal(providerBudget.remainingMicros, 955);
+  assert.equal(dispatched, 1, "session usage readback does not contact the provider");
+});
+
 test("service keys see only exact credential events with no attributed principal", async (t) => {
   const f = await fixture(t);
   await f.setCredential("service", null);

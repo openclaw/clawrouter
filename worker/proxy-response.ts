@@ -3,7 +3,7 @@ import { createSseUsageInspector, extractUsageTokens, responseOutcome, usageInsp
 import { HttpOperation } from "./http-operation.ts";
 import type { createResponsesToolEvidence } from "./responses-tool-evidence.ts";
 
-export interface ObservedUsage extends UsageInspection { delivery: "complete" | "failed" | "canceled" }
+export interface ObservedUsage extends UsageInspection { delivery: "complete" | "failed" | "canceled"; binaryComplete?: true }
 export interface ResponseBodyInspection {
   push(bytes: Uint8Array): Promise<void>; end(): Promise<void>;
   tools?: Pick<ReturnType<typeof createResponsesToolEvidence>, "accept" | "invalid">;
@@ -15,15 +15,18 @@ export interface ResponseBodyInspection {
 // metadata; other formats keep their existing bounded JSON/frame inspection.
 export function observeUsage(response: Response, operation = new HttpOperation(), bodyInspection?: ResponseBodyInspection, responseFormat?: string): { response: Response; result: Promise<ObservedUsage> } {
   const signal = operation.signal;
-  if (!response.body) { operation.stop("complete"); return { response, result: Promise.resolve({ tokens: null, outcome: null, delivery: "complete" }) }; }
+  const speech = responseFormat === "audio.binary";
+  if (!response.body) { operation.stop("complete"); return { response, result: Promise.resolve({ tokens: null, outcome: speech ? "provider_error" : null, delivery: "complete" }) }; }
   const contentType = response.headers.get("content-type")?.toLowerCase() ?? "";
-  const eventStream = contentType.includes("text/event-stream"), json = contentType.includes("json");
+  const mime = contentType.split(";")[0].trim();
+  const audio = /^audio\/[!#$%&'*+.^_`|~0-9a-z-]+$/.test(mime) || mime === "application/octet-stream";
+  const eventStream = !speech && contentType.includes("text/event-stream"), json = !speech && contentType.includes("json");
   const responses = responseFormat === "openai.responses" && (eventStream || json) ? createResponsesUsageInspector(eventStream, bodyInspection?.tools) : null;
   const sse = !responses && eventStream ? createSseUsageInspector() : null;
   let inspect = !responses && !sse && json;
   const decoder = new TextDecoder();
   const reader = response.body.getReader();
-  let text = "", bytes = 0, finished = false;
+  let text = "", bytes = 0, nonempty = false, finished = false;
   let resolve!: (result: ObservedUsage) => void;
   const result = new Promise<ObservedUsage>(done => { resolve = done; });
   function finish(delivery: ObservedUsage["delivery"], reason?: unknown): Promise<void> {
@@ -42,7 +45,11 @@ export function observeUsage(response: Response, operation = new HttpOperation()
       } catch { inspection.outcome = "provider_error"; }
     }
     responses?.stop(); text = "";
-    resolve({ ...inspection, delivery });
+    // Binary delivery supplies completion only, never synthetic token usage.
+    // A partial, empty, or wrong-MIME response cannot discount the reservation.
+    const binaryComplete = speech && response.ok && delivery === "complete" && audio && nonempty;
+    if (speech && !binaryComplete) inspection.outcome = "provider_error";
+    resolve({ ...inspection, delivery, ...(binaryComplete ? { binaryComplete: true as const } : {}) });
     // Claim completion before cancellation can resolve/reject a pending read.
     // The result owns accounting even if the transport's cancellation rejects.
     if (delivery !== "complete") void reader.cancel(reason).catch(() => undefined);
@@ -67,6 +74,7 @@ export function observeUsage(response: Response, operation = new HttpOperation()
           if (responses && bodyInspection?.qualify) await operation.wait(bodyInspection.qualify(), "publication"); if (finished) return;
           finish("complete"); controller.close(); return;
         }
+        nonempty ||= next.value.byteLength > 0;
         if (responses) { await responses.push(next.value); if (finished) return; }
         sse?.push(next.value);
         if (inspect) {
