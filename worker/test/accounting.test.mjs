@@ -93,12 +93,17 @@ test("rejected usage publication recovers the exact event in its policy shard an
 
 test("usage recovery cannot conceal failed budget settlement or exhausted publication", async (t) => {
   t.mock.method(console, "error", () => {});
-  for (const settlementFails of [false, true]) for (const direct of ["success", "throw", "non-2xx"]) {
+  for (const settlementFails of [false, true]) for (const direct of ["stored", "duplicate", "expired_by_retention", "throw", "non-2xx", "unconfirmed"]) {
     let writes = 0, settlements = 0;
     const env = mockEnv(async () => { throw new Error("queue unavailable"); });
     env.BUDGET_LEDGER.get = () => ({ fetch: async () => { settlements++; if (settlementFails) throw new Error("settlement unavailable"); return Response.json({ settled: true }); } });
-    env.USAGE_LEDGER.get = () => ({ fetch: async () => { writes++; if (direct === "throw") throw new Error("ingest unavailable"); return new Response("fixture", { status: direct === "success" ? 200 : 503 }); } });
-    assert.equal(await finalizeAccounting(env, reservation, 42, event), !settlementFails && direct === "success");
+    env.USAGE_LEDGER.get = () => ({ fetch: async () => {
+      writes++;
+      if (direct === "throw") throw new Error("ingest unavailable");
+      if (direct === "non-2xx" || direct === "unconfirmed") return new Response("accepted", { status: direct === "non-2xx" ? 503 : 200 });
+      return Response.json({ eventId: event.id, outcome: direct });
+    } });
+    assert.equal(await finalizeAccounting(env, reservation, 42, event), !settlementFails && ["stored", "duplicate", "expired_by_retention"].includes(direct));
     assert.equal(writes, 1);
     assert.equal(settlements, 1);
   }

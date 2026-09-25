@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Validate usage ingestion receipts before acknowledging queue delivery or direct fallback. Reject unrelated or malformed success responses while preserving independent budget settlement and retention-expiry outcomes. Deploy the receipt producer before this consumer; prolonged version skew or rollback can send messages to the existing dead-letter queue.
+
 - Read session usage from the policy's accounting tenant, including the default for policies without a tenant, so changing a user's tenant does not hide their charged requests.
 
 - Update DeepSeek's dated peak-price cards, add canonical Flash and the documented vision alias, and retain exact upstream spellings and Pro. Label measured costs as published-rate upper bounds rather than invoice amounts; higher reservations can require a lower native `max_tokens` under unchanged budgets. Preserve fixed tariffs, missing-usage reservations, and prior ledger debt.
