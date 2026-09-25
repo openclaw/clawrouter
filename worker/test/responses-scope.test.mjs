@@ -210,3 +210,16 @@ test("closed bindings preserve original resume permission after completed summar
     assert.deepEqual(f.state.db.prepare("SELECT * FROM http_continuations WHERE background_job_id = ?").get(input.id), row);
   }
 });
+
+test("conflicting collector identity rolls back a new binding and count in the publication transaction", async t => {
+  const f = fixture(t), input = f.input(); await f.admit(input); await f.dispatch(input.id); await f.bind(input, "response-original");
+  const before = f.state.db.prepare("SELECT * FROM http_continuations").all(), count = f.state.db.prepare("SELECT * FROM http_continuation_count").get();
+  const original = (await f.call("get", { id: input.id })).body, key = await identityKey({ kind: "response", value: "response-conflict" });
+  const response = await f.state.object.fetch(new Request("https://owner/http-continuations", { method: "POST", body: JSON.stringify({ action: "register", keys: [key], owner,
+    responseClaim: { key, producerId: "d".repeat(64) }, backgroundJobId: input.id, backgroundResponseId: "response-conflict" }) }));
+  assert.equal(response.status, 502); assert.equal((await response.json()).error.code, "background_identity_conflict");
+  assert.deepEqual(f.state.db.prepare("SELECT * FROM http_continuations").all(), before);
+  assert.deepEqual(f.state.db.prepare("SELECT * FROM http_continuation_count").get(), count);
+  assert.deepEqual((await f.call("get", { id: input.id })).body, original);
+  assert.deepEqual((await f.binding("response-conflict")).owners, [null]);
+});

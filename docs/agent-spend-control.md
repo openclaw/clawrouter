@@ -384,9 +384,28 @@ a separate versioned price with OpenAI's 10% uplift or a fixed policy price.
 Request `stream_options.include_usage=true` for Chat Completions streams
 so successful terminal events can release unused reservation. Known model IDs
 retain the same pricing when called through native or manifest proxy routes.
-Background Responses do not provide final usage in their initial response;
-ClawRouter does not poll them for deferred settlement. Their reservation remains
-charged when complete billable usage is unavailable.
+Declared background Responses retain the original reservation while the router
+collects terminal usage for up to one hour from admission. This is a router
+collection limit, not an upstream storage guarantee; `store: false` does not
+promise results remain retrievable for that hour. Missing usage, upstream 404,
+or a disconnected caller does not establish a refund. A known-unsent creation
+releases its original holds, while uncertain dispatched work retains the
+conservative amount. JSON/SSE create, retrieve, cancel and collection share one
+immutable accounting event; repeated controls do not create new charges.
+
+Financial recovery retries that frozen receipt automatically until seven days
+after admission. Authenticated operator replay remains available until 44 days
+after admission. Neither path repeats the generation request or resets the
+deadlines. Policy, provider and usage acknowledgements are independent; an absent
+or conflicting budget receipt remains unresolved. Usage retention expiry is not
+a financial acknowledgement. At day 44, unresolved recovery is marked expired,
+not paid. Each authorization scope admits at most 16 active admissions/collections
+and 64 total recovery records, including evictable completed summaries. Serialized
+job metadata is capped at 64 KiB at admission and subsequent transitions; this is
+not a bound on the SQLite file's physical size. Raw response IDs and collection
+headers are erased when collection ends; the original 30-day continuation binding
+can still authorize caller-supplied response IDs without reopening accounting.
+See the [background API and recovery operator contract](api-reference.md#background-responses).
 The bundled Anthropic catalog includes Claude Opus 5, Sonnet 5, and Fable 5 with a 1M
 context window and 128K output limit, alongside the existing model routes.
 Fable 5 always uses adaptive thinking and requires

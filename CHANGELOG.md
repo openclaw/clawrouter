@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add background Responses creation, retrieval, streamed resumption and cancellation for declared OpenAI API routes. Keep controls on the original authorized credential route without new reservations; add bounded usage collection, durable financial recovery and authenticated operator inspection/replay. Recovery locators remain distinct from authentication and settlement receipts.
+
 - Return the same full-input restart guidance for HTTP and WebSocket continuations when their recorded upstream account becomes unavailable during request preparation. Preserve unrelated authorization errors and zero-charge rejection accounting.
 
 - Correct the architecture and API reference to describe retained-tool pricing enforcement for HTTP/SSE and WebSocket response-ID continuations, including fixed tariffs, unmetered requests, and rollout limits.

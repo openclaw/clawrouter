@@ -103,6 +103,8 @@ Semantic identifier and path validation still applies after decoding.
 | --- | --- | --- |
 | `POST` | `/v1/chat/completions` | OpenAI-compatible chat routing |
 | `POST` | `/v1/responses` | OpenAI Responses routing |
+| `GET` | `/v1/responses/<response-id>` | Retrieve or resume an originally authorized response |
+| `POST` | `/v1/responses/<response-id>/cancel` | Bodyless cancellation on the original response owner |
 | `GET` upgrade | `/v1/responses`, qualified native Responses paths | Authenticated, bounded [Responses WebSocket sessions](#websocket-contract) |
 | `POST` | `/v1/embeddings` | OpenAI-compatible embeddings routing |
 | `POST` | `/v1/messages` | Anthropic Messages routing |
@@ -251,6 +253,76 @@ whose [ordinary-close path is distinct from reset](https://github.com/nodejs/nod
 The fixture does not establish physical FIN/RST behavior, compression causality,
 or deployed HTTP/2 behavior. No idle or total-delivery timeout is added.
 
+## Background Responses
+
+Declared OpenAI API Responses routes accept `background: true` with JSON or SSE
+creation. Retrieve with `GET /v1/responses/<response-id>`; resume SSE with
+`stream=true&starting_after=<last-sequence-number>`. Resumption requires an
+originally streamed background create. Cancel with bodyless
+`POST /v1/responses/<response-id>/cancel`. These controls also use the native
+`/v1/native/openai/v1/responses/...` routes. Manifest controls use
+`responses_retrieve` and `responses_cancel`: provide `pathParams.response_id`
+and an empty `body` in a POST envelope, or `response_id` in the retrieval URL.
+Repeated `include[]` values are preserved; manifest query arrays are supported.
+
+Controls reauthenticate the original policy scope and credential route. They do
+not select another account or reserve new budget. If creation used
+`OpenAI-Organization` or `OpenAI-Project`, public controls must resupply the same
+headers to reconstruct the original route pin. Each is limited to 256 printable
+ASCII bytes. The collector alone temporarily retains these headers. The initial
+declared create path has no caller path parameters; create options belong in
+JSON, and caller-supplied create query parameters are rejected before reservation
+or provider dispatch. Foreground create query behavior is unchanged.
+
+Verified browser sessions use the corresponding `/v1/playground/v1/responses/...`
+or `/v1/playground/proxy/openai/<endpoint>` controls. Existing response ownership
+must match exactly one currently authorized policy scope. Ambiguous, revoked or
+replaced ownership is rejected rather than falling back to another policy.
+
+```sh
+curl "$CLAWROUTER_BASE_URL/v1/responses" \
+  -H "authorization: Bearer $CLAWROUTER_KEY" \
+  -H "content-type: application/json" \
+  --data '{"model":"openai/gpt-6-astra","input":"Explain durable accounting.","background":true,"store":false}'
+curl "$CLAWROUTER_BASE_URL/v1/responses/$RESPONSE_ID" \
+  -H "authorization: Bearer $CLAWROUTER_KEY"
+curl -X POST "$CLAWROUTER_BASE_URL/v1/responses/$RESPONSE_ID/cancel" \
+  -H "authorization: Bearer $CLAWROUTER_KEY"
+```
+
+Keep `response.id` for controls; for streaming resumption, also keep the last
+observed `sequence_number`. The [upstream background contract](https://developers.openai.com/api/docs/guides/background)
+permits `store: false` with temporary polling retention of roughly ten minutes.
+The router's one-hour collection limit is not an upstream retention guarantee.
+Cancellation is idempotent upstream; accepting a cancellation request is not
+proof of final usage or a refund. ChatGPT subscription transports that support
+only creation cannot execute this lifecycle. This feature does not establish
+native Codex background adoption; WebSocket behavior remains separate below.
+
+Creation responses carry `x-clawrouter-background-recovery` after a durable
+admission is attempted, including when its acknowledgement is lost. Its value is
+`<64-hex-scope-digest>.bg_<32-hex-job-id>`. It is a locator, not authentication,
+completion proof or a settlement receipt. It is never forwarded upstream. An
+absent record after an admission failure does not prove settlement.
+
+Administrators use `POST /v1/admin/usage/recovery` behind the existing admin and
+same-origin boundary. The JSON envelope is closed:
+
+| Action | Exact fields | Result |
+| --- | --- | --- |
+| Inspect | `action: "inspect"`, `locator` | Sanitized record and independent sink dispositions |
+| List | `action: "list"`, `scope`, optional `after` job ID | At most 16 records from one scope, with `nextAfter` |
+| Replay | `action: "replay"`, `locator` | Retry only an unresolved, frozen financial receipt before its original deadline |
+
+Replay never recreates the upstream generation. The API exposes original
+deadlines, event/request IDs, amount/basis and independent financial/usage
+acknowledgements; it omits credentials, raw response IDs and retained route
+headers. `expired_by_retention` closes only usage delivery after the 30-day
+history window. It does not establish a financial acknowledgement or an
+available history row. HTTP 404 means absent/retired, HTTP 503 means unavailable,
+and neither means paid. See [spend control](agent-spend-control.md) for recovery
+bounds and conservative accounting.
+
 ## WebSocket contract
 
 Send authenticated upgrades to `/v1/responses` or
@@ -313,6 +385,7 @@ See the upstream [Responses WebSocket contract](https://developers.openai.com/ap
 | `POST` | `/v1/session/credentials/<credential-id>/rotate` | Replace only an active credential's secret hash |
 | `POST` | `/v1/session/credentials/<credential-id>/revoke` | Revoke a caller-owned credential |
 | `POST` | `/v1/playground/<route>` | Run a console playground request through an allowed route |
+| `GET` | `/v1/playground/v1/responses/<response-id>` | Retrieve/resume the session's original response |
 | `GET` | `/v1/oauth/callback` | Complete a provider-approved browser OAuth flow |
 
 The Worker redirects `/` to `/dashboard`, and `/dashboard` to `/dashboard/home`. A production Cloudflare Access application protects `/dashboard/*`, `/v1/session*`, `/v1/playground/*`, `/v1/admin/*`, and `/v1/oauth/callback` before the request reaches the Worker.
@@ -362,6 +435,7 @@ The Worker redirects `/` to `/dashboard`, and `/dashboard` to `/dashboard/home`.
 | `POST` | `/v1/admin/assignment-rules/reconcile` | Reconcile materialized users against assignment rules |
 | `PUT` | `/v1/admin/fusion` | Update Fusion routing configuration |
 | `POST` | `/v1/admin/fusion/preview` | Evaluate Fusion readiness and estimated reservations for a policy |
+| `POST` | `/v1/admin/usage/recovery` | Inspect/list one recovery scope or replay one immutable financial receipt |
 
 The legacy `GET|PUT /v1/admin/keys...`, `POST /v1/admin/keys/<kid>/revoke`, and `GET /v1/admin/users` routes remain compatibility aliases. New control-plane clients use policies, credentials, and tenants directly. Legacy top-level console and `/api/*` aliases redirect or normalize to their `/dashboard/*` and `/v1/*` equivalents.
 
