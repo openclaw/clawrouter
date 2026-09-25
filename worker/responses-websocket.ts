@@ -105,7 +105,8 @@ function upstreamConnection(url: URL, inputHeaders: Headers, signal: AbortSignal
     const response = await fetch(url, { method: "GET", headers, signal, redirect: "manual" });
     observe(response);
     if (response.status !== 101 || !response.webSocket) {
-      await response.body?.cancel();
+      // Best-effort cleanup must not replace or delay the known upgrade rejection.
+      void response.body?.cancel().catch(() => undefined);
       throw new HttpError(response.status >= 400 ? response.status : 502, "upstream_upgrade_failed", `upstream rejected the WebSocket upgrade with HTTP ${response.status}`);
     }
     response.webSocket.accept();

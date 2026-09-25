@@ -980,18 +980,34 @@ async function websocketFixture(t, f, headers = {}) {
   return { server, async drain() { while (pending.length) await Promise.all(pending.splice(0)); await f.drain(); } };
 }
 
-for (const status of [401, 403, 429]) test(`upstream WebSocket upgrade ${status} remains an uncharged provider failure`, async t => {
+for (const status of [401, 403, 429]) for (const cleanup of ["normal", "errored", "rejecting", "deferred"]) test(`upstream WebSocket upgrade ${status} remains an uncharged provider failure with ${cleanup} cleanup`, async t => {
   const f = await fixture(t, true, { limit: 1_000_000 });
   await setExpiry(f, "2099-01-01T00:00:00.000Z", true);
+  const entered = Promise.withResolvers(), disposal = Promise.withResolvers();
   let cancels = 0;
-  f.response = () => new Response(new ReadableStream({ cancel() { cancels++; } }), { status });
+  f.response = () => new Response(new ReadableStream({
+    start(controller) { if (cleanup === "errored") controller.error(new Error("fixture body already failed")); },
+    cancel() {
+      cancels++; entered.resolve();
+      if (cleanup === "rejecting") return Promise.reject(new Error("fixture cleanup rejection"));
+      if (cleanup === "deferred") return disposal.promise;
+    },
+  }), { status });
   const ws = await websocketFixture(t, f);
+  let finished = false, settling;
   try {
     ws.server.receive({ type: "response.create", model: "openai/gpt-6-astra", input: "fixture" });
-    await ws.drain();
+    settling = ws.drain().then(() => { finished = true; });
+    if (cleanup === "deferred") {
+      await entered.promise;
+      await setImmediate();
+      assert.equal(finished, true, "known rejection settles before body cleanup is released");
+    }
+    await settling;
     assert.equal(f.sent.length, 1);
     assert.equal(f.sent[0].method, "GET");
-    assert.equal(cancels, 1);
+    assert.equal(cancels, cleanup === "errored" ? 0 : 1);
+    assert.equal(ws.server.sent.length, 1);
     assert.equal(ws.server.sent.at(-1).status, status);
     assert.equal(ws.server.sent.at(-1).error.code, "upstream_upgrade_failed");
     assert.equal(f.events.length, 1);
@@ -1001,9 +1017,13 @@ for (const status of [401, 403, 429]) test(`upstream WebSocket upgrade ${status}
     assert.equal(f.events[0].cost_basis, "none");
     await assertBudgets(f, [0]);
   } finally {
+    disposal.resolve();
     ws.server.close();
+    await settling;
     await ws.drain();
   }
+  await setImmediate();
+  assert.equal(f.events.length, 1, "late cleanup never publishes a second receipt");
 });
 
 for (const phase of ["before upgrade", "connecting", "reused"]) test(`actual WebSocket ${phase} expiry sends no expired create and releases both budgets`, async t => {
