@@ -66,6 +66,20 @@ test("Fusion preflight is WCAG AA clean and visually stable", async ({ page }) =
   await expectA11yClean(page);
 });
 
+for (const adviserCount of [0, 4]) {
+  test(`Fusion connectors stay between stages with ${adviserCount} advisers`, async ({ page, isMobile }) => {
+    await openDemo(page);
+    await page.getByRole("button", { name: "Access", exact: true }).click();
+    await page.getByRole("tab", { name: /Fusion/ }).click();
+    const advisers = ["local/adviser-one", "local/adviser-two", "local/adviser-three", "local/adviser-four"].slice(0, adviserCount);
+    await page.getByRole("textbox", { name: "adviser models · one per line, maximum four" }).fill(advisers.join("\n"));
+    await expect(page.locator(".fusionAdvisers strong")).toHaveText(advisers.length ? advisers : ["No advisers"]);
+    await expectFusionConnectorsContained(page, isMobile ? "vertical" : "horizontal");
+    await page.setViewportSize({ width: 320, height: 800 });
+    await expectFusionConnectorsContained(page, "vertical");
+  });
+}
+
 test("Fusion distinguishes unavailable request prices from an explicit zero tariff", async ({ page }) => {
   const policy: AccessPolicy = {
     policyId: "fixture", enabled: true, providers: [], monthlyBudgetMicros: null, requestCostMicros: null, retainRequestContent: false,
@@ -143,6 +157,45 @@ async function openDemo(page: Page) {
   await page.goto("/?demo=1");
   await expect(page.locator(".appShell")).toBeVisible();
   await page.evaluate(() => document.fonts.ready);
+}
+
+async function expectFusionConnectorsContained(page: Page, direction: "horizontal" | "vertical") {
+  const geometry = await page.locator(".fusionTopology").evaluate((topology) => {
+    const bounds = (element: Element | Range) => {
+      const { left, top, right, bottom } = element.getBoundingClientRect();
+      return { left, top, right, bottom };
+    };
+    return {
+      topology: bounds(topology),
+      stages: [".fusionInput", ".fusionAdvisers", ".fusionOutput"].map((selector) => bounds(topology.querySelector(selector)!)),
+      connectors: Array.from(topology.querySelectorAll(".fusionArrow"), (connector) => {
+        const glyph = document.createRange();
+        glyph.selectNodeContents(connector);
+        return { cell: bounds(connector), glyph: bounds(glyph) };
+      }),
+      viewportWidth: window.innerWidth,
+    };
+  });
+  expect(geometry.topology.left).toBeGreaterThanOrEqual(0);
+  expect(geometry.topology.right).toBeLessThanOrEqual(geometry.viewportWidth);
+  expect(geometry.connectors).toHaveLength(2);
+  for (const [index, { cell, glyph }] of geometry.connectors.entries()) {
+    // Measure the painted rectangles: layout dimensions alone miss a rotated cell.
+    for (const [inner, outer] of [[cell, geometry.topology], [glyph, cell]]) {
+      expect(inner.left).toBeGreaterThanOrEqual(outer.left - 1);
+      expect(inner.top).toBeGreaterThanOrEqual(outer.top - 1);
+      expect(inner.right).toBeLessThanOrEqual(outer.right + 1);
+      expect(inner.bottom).toBeLessThanOrEqual(outer.bottom + 1);
+    }
+    const before = geometry.stages[index], after = geometry.stages[index + 1];
+    if (direction === "vertical") {
+      expect(cell.top).toBeGreaterThanOrEqual(before.bottom - 1);
+      expect(cell.bottom).toBeLessThanOrEqual(after.top + 1);
+    } else {
+      expect(cell.left).toBeGreaterThanOrEqual(before.right - 1);
+      expect(cell.right).toBeLessThanOrEqual(after.left + 1);
+    }
+  }
 }
 
 async function expectA11yClean(page: Page) {
