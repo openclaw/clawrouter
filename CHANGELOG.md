@@ -56,6 +56,7 @@
 - Preserve local administrator roles during user, policy-assignment, and automatic-assignment edits, including profile saves that race with an explicit role change.
 
 - Scope client model/operation offers to actual credentials and ordered session policies, preserving the authenticated caller when no active policies remain, with principal/provider budget observations, explicit unavailable reasons, and separate HTTP playground versus key-only native/WebSocket access. Match Access policy selection to the existing default dispatch tenant and reuse canonical runtime pricing and grant checks. Preserve saved provider probe diagnostics independently of operation eligibility. Keep v1 native base URLs as route-location metadata; scoped offers, not those strings, describe caller eligibility.
+- Emit a concrete HTTP Fusion catalog offer with the synthesizer's selected policy and generation, shared catalog types, and synthesis-first compound affordability while preserving fail-open advisers.
 - Reassess Fusion's final request against the retained budget limits and settle its current estimate without changing the original reservation receipts or held amount.
 
 - Publish a revision-bound provider snapshot from CI so code-only contributors can regenerate the catalog without a local dependency install.
