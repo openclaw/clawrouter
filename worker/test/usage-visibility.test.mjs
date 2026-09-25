@@ -3,8 +3,9 @@ import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
 import { acceptGrantPoolBaseline, recoverGrantPools } from "../../scripts/grant-pool-recovery.mjs";
+import { createGrantAuthority } from "./grant-authority-fixture.mjs";
 const { default: worker } = await import("../index.ts");
-const { PolicyBindingIndexObject, authorityCall } = await import("../authority.ts");
+const { authorityCall } = await import("../authority.ts");
 const { BudgetLedgerObject, UsageLedgerObject, ingestUsage, providerBudgetStatus } = await import("../ledgers.ts");
 const { normalizeEmail, sha256Hex } = await import("../utils.ts");
 
@@ -220,10 +221,10 @@ async function fixture(t, budgetScope = "policy", upstream = () => assert.fail("
       return objects.get(name);
     } };
   }
-  const kv = new Map(), adminToken = "fixture-admin-token";
+  const kv = new Map(), adminToken = "fixture-admin-token", authority = createGrantAuthority();
   const env = {
     CLAWROUTER_LOCAL_AUTH: "enabled", CLAWROUTER_ADMIN_TOKEN_SHA256: await sha256Hex(adminToken),
-    ACCESS_CONTROL: namespace(PolicyBindingIndexObject), USAGE_LEDGER: namespace(UsageLedgerObject), BUDGET_LEDGER: namespace(BudgetLedgerObject),
+    ACCESS_CONTROL: { idFromName: name => name, get: () => authority }, USAGE_LEDGER: namespace(UsageLedgerObject), BUDGET_LEDGER: namespace(BudgetLedgerObject),
     POLICY_KV: { async get(key) { const read = key => kv.has(key) ? JSON.parse(kv.get(key)) : null; return Array.isArray(key) ? new Map(key.map(item => [item, read(item)])) : read(key); }, async put(key, value) { kv.set(key, value); }, async list() { return { keys: [], list_complete: true }; } },
     CONTENT_ARCHIVE: { get() { assert.fail("personal usage must not expose archived content"); } },
   };
