@@ -232,6 +232,89 @@ test("tenant-scoped Google key uses the same owner flow and accepts an empty com
   assert.equal((await env.request("GET")).status, 404, "a sibling policy account is not implicitly selected");
 });
 
+for (const change of ["revoked", "replaced", "provider", "paused", "expired", "superseded"]) test(`Google pagination stops when account authority is ${change} between pages`, async context => {
+  if (change === "expired") context.mock.timers.enable({ apis: ["Date"], now: 1_700_000_000_000 });
+  const env = fixture(context), google = { ...primary, provider: "google-gemini", ...(change === "expired" ? { expiresAt: new Date(Date.now() + 1000).toISOString() } : {}) };
+  await putGrantCredentials(env, key, google);
+  let hold = false, release, started;
+  const seen = new Promise(resolve => { started = resolve; }), calls = [];
+  context.mock.method(globalThis, "fetch", async (url, init) => {
+    calls.push({ page: url.searchParams.get("pageToken"), credential: init.headers.get("x-goog-api-key") });
+    if (hold) {
+      hold = false;
+      started();
+      return new Promise(resolve => { release = resolve; });
+    }
+    return Response.json({ models: [{ name: "models/retained" }] });
+  });
+  const previous = await env.request("POST");
+  assert.equal(previous.status, 200);
+  calls.length = 0;
+  hold = true;
+  const pending = env.request("POST");
+  await seen;
+  let latest;
+  if (change === "revoked") await revokeGrantCredentials(env, key);
+  else if (change === "replaced" || change === "provider") await putGrantCredentials(env, key, { ...google, provider: change === "provider" ? "openai" : google.provider, credential: "synthetic-new-key" }, false, "replace");
+  else if (change === "paused") assert.equal((await env.request("PATCH", { path: route.replace(/\/models$/, ""), body: { expectedCredentialGeneration: 1, enabled: false } })).status, 200);
+  else if (change === "expired") context.mock.timers.tick(1000);
+  else latest = await env.request("POST");
+  release(Response.json({ models: [{ name: "models/late-first-page" }], nextPageToken: "second-page" }));
+  const rejected = await pending;
+  assert.equal(rejected.status, 409);
+  assert.deepEqual(calls, Array.from({ length: change === "superseded" ? 2 : 1 }, () => ({ page: null, credential: "synthetic-account-key" })), "no captured credential reaches another page after invalidation");
+  const retained = await env.request("GET");
+  if (change === "superseded") {
+    assert.equal(latest.status, 200);
+    assert.equal(rejected.body.error.code, "model_discovery_superseded");
+    assert.deepEqual(retained.body, latest.body, "old completion cannot rewrite the newer attempt or snapshot");
+  } else {
+    assert.equal(rejected.body.attempt.error, "source_changed");
+    assert.deepEqual(retained.body.snapshot, previous.body.snapshot);
+  }
+});
+
+test("a revocation queued by capture completes before the first provider dispatch", async context => {
+  const env = fixture(context);
+  await putGrantCredentials(env, key, primary);
+  const sql = owner(env).state.storage.sql, exec = sql.exec;
+  let revoked;
+  context.mock.method(sql, "exec", (query, ...bindings) => {
+    const result = exec(query, ...bindings);
+    if (!revoked && query.startsWith("INSERT INTO model_discovery_attempt")) revoked = revokeGrantCredentials(env, key);
+    return result;
+  });
+  context.mock.method(globalThis, "fetch", async () => assert.fail("revoked first-page dispatch"));
+  const response = await env.request("POST");
+  await revoked;
+  assert.equal(response.status, 409);
+  assert.equal(response.body.attempt.error, "source_changed");
+  assert.equal(response.body.snapshot, null);
+});
+
+test("a discovery deadline reached during owner admission prevents the first fetch", async context => {
+  context.mock.timers.enable({ apis: ["setTimeout"] });
+  const env = fixture(context);
+  await putGrantCredentials(env, key, primary);
+  const storage = owner(env).state.storage, get = storage.get.bind(storage);
+  let reads = 0, started, release;
+  const seen = new Promise(resolve => { started = resolve; }), blocked = new Promise(resolve => { release = resolve; });
+  context.mock.method(storage, "get", async name => {
+    const value = await get(name);
+    if (name === "credential" && ++reads === 2) { started(); await blocked; }
+    return value;
+  });
+  context.mock.method(globalThis, "fetch", async () => assert.fail("dispatch after discovery deadline"));
+  const pending = env.request("POST");
+  await seen;
+  context.mock.timers.tick(10_000);
+  release();
+  const response = await pending;
+  assert.equal(response.status, 502);
+  assert.equal(response.body.attempt.error, "timeout");
+  assert.equal(response.body.snapshot, null);
+});
+
 function fixture(context) {
   const values = new Map();
   const env = attachGrantCredentialNamespace({ values,

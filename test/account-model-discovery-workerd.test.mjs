@@ -10,16 +10,35 @@ const inventoryPath = `${accountPath}/models`;
 const routerScript = 'export { default } from "./worker/index.ts"; export * from "./worker/index.ts";';
 const upstreamScript = `
   let mode = "complete", calls = [], partialBodies = 0, completedBodies = 0;
+  let releasePage, pageStarted = Promise.resolve(), markPageStarted;
   export default { async fetch(request) {
     const url = new URL(request.url);
     if (url.origin === "https://fixture.example") {
       if (url.pathname === "/state" && request.method === "GET") return Response.json({ calls, partialBodies, completedBodies });
       if (url.pathname === "/mode" && request.method === "POST") {
         const next = await request.json();
-        if (!["complete", "reduced", "rejected", "partial", "redirect"].includes(next)) throw new Error("invalid fixture mode");
+        if (!["complete", "reduced", "rejected", "partial", "redirect", "google-hold", "google-pages"].includes(next)) throw new Error("invalid fixture mode");
         mode = next;
+        if (mode === "google-hold") pageStarted = new Promise(resolve => { markPageStarted = resolve; });
         return new Response(null, { status: 204 });
       }
+      if (url.pathname === "/page-started" && request.method === "GET") { await pageStarted; return new Response(null, { status: 204 }); }
+      if (url.pathname === "/release-page" && request.method === "POST" && releasePage) {
+        releasePage(); releasePage = undefined;
+        return new Response(null, { status: 204 });
+      }
+    }
+    if (url.origin === "https://generativelanguage.googleapis.com") {
+      const credential = request.headers.get("x-goog-api-key");
+      calls.push({ url: request.url, method: request.method, originalKey: credential === "synthetic-discovery-key", replacementKey: credential === "synthetic-replacement-key" });
+      if (url.pathname !== "/v1beta/models" || request.method !== "GET" || url.searchParams.get("pageSize") !== "1000" || !calls.at(-1).originalKey && !calls.at(-1).replacementKey) return new Response("unexpected fixture request", { status: 500 });
+      const second = url.searchParams.get("pageToken") === "second-page";
+      const page = () => Response.json({ models: [{ name: second ? "models/second" : "models/first" }], ...(!second ? { nextPageToken: "second-page" } : {}) });
+      if (mode === "google-hold" && !second) {
+        markPageStarted();
+        return new Promise(resolve => { releasePage = () => resolve(page()); });
+      }
+      return mode === "google-pages" || second ? page() : Response.json({ models: [{ name: "models/prior" }] });
     }
     calls.push({ url: request.url, method: request.method, authorized: request.headers.get("authorization") === "Bearer synthetic-discovery-key" });
     if (request.url !== "https://api.openai.com/v1/models" || request.method !== "GET" || !calls.at(-1).authorized) return new Response("unexpected fixture request", { status: 500 });
@@ -55,12 +74,12 @@ async function request(mf, method, path = inventoryPath, body) {
   });
   assert.equal(response.headers.get("cache-control"), "no-store");
   const result = await response.json();
-  assert.doesNotMatch(JSON.stringify(result), /synthetic-discovery-key|synthetic-provider-error|synthetic-redirect-error|redirect\.example/);
+  assert.doesNotMatch(JSON.stringify(result), /synthetic-discovery-key|synthetic-replacement-key|synthetic-provider-error|synthetic-redirect-error|redirect\.example/);
   return { status: response.status, body: result };
 }
 
-async function createAccount(mf) {
-  const created = await request(mf, "POST", accountPath, { provider: "openai", kind: "api_key", credential: "synthetic-discovery-key", enabled: true });
+async function createAccount(mf, provider = "openai") {
+  const created = await request(mf, "POST", accountPath, { provider, kind: "api_key", credential: "synthetic-discovery-key", enabled: true });
   assert.equal(created.status, 201);
   assert.equal(created.body.outcome, "committed");
   assert.equal(created.body.grant.credentialGeneration, 1);
@@ -176,6 +195,62 @@ test("native model-list fetch refuses redirects without forwarding the account c
     assert.deepEqual(failed.body.snapshot, first.body.snapshot);
     assert.deepEqual((await upstream(mf)).calls, [expectedCall, expectedCall], "the redirect destination is never requested");
     assert.deepEqual((await request(mf, "GET")).body, failed.body);
+  } finally {
+    await mf?.dispose();
+    await rm(temporary, { recursive: true, force: true });
+  }
+});
+
+for (const change of ["allowed", "revoke", "replace"]) test(`native Google pagination: ${change} between admitted first page and later dispatch`, { timeout: 30_000 }, async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "clawrouter-model-authority-"));
+  let mf;
+  try {
+    mf = await start(temporary);
+    await createAccount(mf, "google-gemini");
+    const previous = await refresh(mf);
+    assert.equal(previous.status, 200);
+    assert.deepEqual(previous.body.snapshot.models.map(model => model.id), ["models/prior"]);
+    await upstream(mf, "google-hold");
+    const pending = refresh(mf), worker = await mf.getWorker("upstream");
+    const entered = await Promise.race([
+      worker.fetch("https://fixture.example/page-started").then(response => ({ status: response.status })),
+      pending.then(result => ({ completedBeforeFirstPage: result })),
+    ]);
+    assert.equal(entered.status, 204, JSON.stringify(entered));
+    if (change === "revoke") assert.equal((await request(mf, "POST", `${accountPath}/revoke`, {})).status, 200);
+    else if (change === "replace") {
+      const replaced = await request(mf, "POST", `${accountPath}/replace`, { expectedCredentialGeneration: 1, provider: "google-gemini", kind: "api_key", credential: "synthetic-replacement-key", enabled: true });
+      assert.equal(replaced.status, 200);
+      assert.equal(replaced.body.outcome, "committed");
+    }
+    if (change !== "allowed") {
+      const account = await request(mf, "GET", accountPath);
+      assert.equal(account.status, 200);
+      assert.equal(account.body.credentialGeneration, 2, "the invalidation committed while page one was still pending");
+      if (change === "revoke") assert.equal(account.body.enabled, false);
+    }
+    assert.equal((await worker.fetch("https://fixture.example/release-page", { method: "POST" })).status, 204);
+    const result = await pending;
+    const calls = (await upstream(mf)).calls.slice(1);
+    assert.deepEqual(calls.map(call => ({ page: new URL(call.url).searchParams.get("pageToken"), method: call.method, originalKey: call.originalKey, replacementKey: call.replacementKey })),
+      (change === "allowed" ? [null, "second-page"] : [null]).map(page => ({ page, method: "GET", originalKey: true, replacementKey: false })));
+    if (change === "allowed") {
+      assert.equal(result.status, 200);
+      assert.deepEqual(result.body.snapshot.models.map(model => model.id), ["models/first", "models/second"]);
+      assert.deepEqual(result.body.snapshot.removedIds, ["models/prior"]);
+    } else {
+      assert.equal(result.status, 409);
+      assert.equal(result.body.attempt.error, "source_changed");
+      assert.deepEqual(result.body.snapshot, previous.body.snapshot);
+      assert.deepEqual((await request(mf, "GET")).body, result.body);
+    }
+    if (change === "replace") {
+      await upstream(mf, "google-pages");
+      const current = await request(mf, "POST", inventoryPath, { expectedCredentialGeneration: 2 });
+      assert.equal(current.status, 200);
+      assert.equal(current.body.snapshot.credentialGeneration, 2);
+      assert.deepEqual((await upstream(mf)).calls.slice(-2).map(call => [call.originalKey, call.replacementKey]), [[false, true], [false, true]]);
+    }
   } finally {
     await mf?.dispose();
     await rm(temporary, { recursive: true, force: true });

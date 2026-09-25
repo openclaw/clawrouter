@@ -13,7 +13,7 @@ class DiscoveryError extends Error {
 
 // Fixed list-only origins and no redirects: a manifest never supplies a URL
 // that can receive the account secret. No quota or inference feedback is emitted.
-export async function discoverModels(adapter: ModelDiscoveryAdapter, headers: Headers): Promise<ModelDiscoveryResult> {
+export async function discoverModels(adapter: ModelDiscoveryAdapter, dispatch: (url: URL, init: RequestInit) => Promise<Response | null>): Promise<ModelDiscoveryResult> {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), MODEL_DISCOVERY_TIMEOUT_MS);
   const budget = { bytes: 0 }, models = new Map<string, ObservedModel>(), tokens = new Set<string>();
@@ -27,7 +27,8 @@ export async function discoverModels(adapter: ModelDiscoveryAdapter, headers: He
       }
       // Workerd rejects redirect:"error" during request construction; manual
       // returns 3xx to the rejection below without forwarding the account secret.
-      const response = await fetch(url, { method: "GET", headers, redirect: "manual", signal: controller.signal });
+      const response = await dispatch(url, { method: "GET", redirect: "manual", signal: controller.signal });
+      if (!response) throw new DiscoveryError("source_changed");
       if (!response.ok) { void response.body?.cancel().catch(() => {}); throw new DiscoveryError("upstream_rejected"); }
       const parsed = parseModelPage(adapter, await responseJson(response, budget));
       for (const model of parsed.models) {

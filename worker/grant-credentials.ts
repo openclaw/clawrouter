@@ -9,7 +9,7 @@ import { applyTemplateHeaders, resolveTemplate } from "./provider-templates.ts";
 import type { GrantPoolReadiness } from "../shared/contracts.ts";
 import { accountCredentialView, assertNewAccountRef, grantIntentBody, strictCredentialRecord, type GrantCredentialIntent } from "./grant-credential-intents.ts";
 import { assertTokenUsable, REFRESH_MARGIN_MS, tokenDenied, tokenExpired, tokenResponseExpiry } from "./grant-expiry.ts";
-import { captureModelDiscovery, completeModelDiscovery, inspectModelInventory } from "./grant-model-inventory.ts";
+import { captureModelDiscovery, completeModelDiscovery, inspectModelInventory, modelDiscoveryAuthority } from "./grant-model-inventory.ts";
 import { discoverModels } from "./model-discovery.ts";
 
 import { CREDENTIAL_INPUT_FIELDS, normalizeGrant, secretlessGrant, canonicalRecord, nextCredentialGeneration, ownerMetadata, metadataGrant, attachmentStatus, revokedRecord, hasRawCredential, credentialRecord, updatedCredentialRecord, credentialProjection, materializedGrant, hasPrimaryCredential, stripLegacySecrets, isRefreshAuthenticationParameter, boundedSecret, type CredentialRecord, type CredentialProjection } from "./grant-credential-record.ts";
@@ -95,9 +95,18 @@ export class GrantCredentialObject implements DurableObject {
         const record = await this.readCanonical(key);
         return captureModelDiscovery(this.state.storage, record, snapshot.providers.find(provider => provider.id === record.providerId), this.env, body);
       });
-      // Do not hold the credential queue across network I/O: revocation and
-      // replacement must commit promptly, then invalidate completion by CAS.
-      const result = await discoverModels(capture.attempt.adapter, capture.headers);
+      const result = await discoverModels(capture.attempt.adapter, async (url, init) => {
+        const { response } = await this.serialize(async () => {
+          const record = await this.state.storage.get<CredentialRecord>("credential");
+          const provider = snapshot.providers.find(provider => provider.id === record?.providerId);
+          const { sourceChanged } = modelDiscoveryAuthority(this.state.storage, capture, record, provider);
+          if (sourceChanged || init.signal?.aborted) return { response: null };
+          // Admission and fetch initiation share the owner queue. Wrap the
+          // promise so revocation never waits for provider headers or bodies.
+          return { response: fetch(url, { ...init, headers: capture.headers }) };
+        });
+        return response;
+      });
       return await this.serialize(async () => {
         const record = await this.state.storage.get<CredentialRecord>("credential");
         const provider = snapshot.providers.find(provider => provider.id === record?.providerId);

@@ -67,11 +67,16 @@ export function captureModelDiscovery(storage: DurableObjectStorage, record: Cre
   return { attempt, key: record.grantKey!, lineage: record.lineage!, headers: new Headers({ [header]: credential }) };
 }
 
+export function modelDiscoveryAuthority(storage: DurableObjectStorage, capture: Capture, record: CredentialRecord | undefined, provider: CompiledProvider | undefined): { current: InventoryState; sourceChanged: boolean } {
+  const current = read(storage);
+  if (current.attempt?.attemptGeneration !== capture.attempt.attemptGeneration || current.attempt.status !== "running") throw new HttpError(409, "model_discovery_superseded", "a newer model refresh owns this result; inspect the current attempt");
+  const sourceChanged = !record || !canonicalRecord(record) || capture.key !== record.grantKey || capture.lineage !== record.lineage || !sameSource(capture.attempt, record, provider) || !usable(record);
+  return { current, sourceChanged };
+}
+
 export function completeModelDiscovery(storage: DurableObjectStorage, capture: Capture, record: CredentialRecord | undefined, provider: CompiledProvider | undefined, result: ModelDiscoveryResult): void {
   storage.transactionSync(() => {
-    const current = read(storage);
-    if (current.attempt?.attemptGeneration !== capture.attempt.attemptGeneration) throw new HttpError(409, "model_discovery_superseded", "a newer model refresh owns this result; inspect the current attempt");
-    const sourceChanged = !record || !canonicalRecord(record) || capture.key !== record.grantKey || capture.lineage !== record.lineage || !sameSource(capture.attempt, record, provider) || !usable(record);
+    const { current, sourceChanged } = modelDiscoveryAuthority(storage, capture, record, provider);
     const error = sourceChanged ? "source_changed" : result.error;
     const completedAt = new Date().toISOString();
     if (!error && result.models) {

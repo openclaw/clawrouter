@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Add explicit account-scoped OpenAI and Google API-key model discovery. Retain only bounded complete observations with separate attempt and snapshot provenance; keep failed or source-changed observations inspectable without changing routing, pricing or quota. Revocation and replacement remain available while a provider list request is in flight.
+- Add explicit account-scoped OpenAI and Google API-key model discovery. Retain only bounded complete observations with separate attempt and snapshot provenance; keep failed or source-changed observations inspectable without changing routing, pricing or quota. Revocation and replacement remain available while a provider list request is in flight and prevent later page requests from using the old credential.
 
 - Coalesce pending account publication with credential edits so recovery does not exceed KV's per-key write limit. Reject credentials and reserved authentication fields in strict refresh metadata, and keep refresh authentication under the credential owner's control.
 

@@ -4,6 +4,7 @@ import test from "node:test";
 import { discoverModels, MODEL_DISCOVERY_TIMEOUT_MS, parseModelPage } from "../model-discovery.ts";
 
 const openai = (ids = ["private-model"]) => ({ object: "list", data: ids.map(id => ({ id, object: "model", created: 1_700_000_000, owned_by: "organization-fixture", unknown: "ignored" })) });
+const dispatch = (headers = new Headers()) => (url, init) => fetch(url, { ...init, headers });
 
 test("OpenAI retains only reported identity facts, never executable model metadata", async context => {
   const requests = [];
@@ -11,7 +12,7 @@ test("OpenAI retains only reported identity facts, never executable model metada
     requests.push([String(url), init]);
     return Response.json(openai(["z", "a", "a"]));
   });
-  const result = await discoverModels("openai.models", new Headers({ authorization: "Bearer synthetic-list-key" }));
+  const result = await discoverModels("openai.models", dispatch(new Headers({ authorization: "Bearer synthetic-list-key" })));
   assert.equal(result.error, null);
   assert.deepEqual(result.models, ["a", "z"].map(id => ({ id, created: 1_700_000_000, ownedBy: "organization-fixture" })));
   assert.equal(requests.length, 1);
@@ -31,7 +32,7 @@ for (const adapter of ["openai.models", "google.models"]) test(`${adapter} rejec
       status: 302, headers: { location: "https://redirect.example/not-a-model-list" },
     });
   });
-  assert.deepEqual(await discoverModels(adapter, new Headers()), { models: null, error: "upstream_rejected" });
+  assert.deepEqual(await discoverModels(adapter, dispatch()), { models: null, error: "upstream_rejected" });
   assert.equal(calls, 1);
   assert.equal(cancelled, 1);
 });
@@ -46,7 +47,7 @@ test("Google paginates opaque tokens with constant parameters and preserves prov
       models: [{ name: "models/z", baseModelId: "z", version: "001", displayName: "Z", inputTokenLimit: "1.2e4", outputTokenLimit: 100, supportedGenerationMethods: ["generateContent", "embedContent", "generateContent"], description: "discarded", pricing: "discarded" }], nextPageToken: token,
     } : { models: [{ name: "models/a", supportedGenerationMethods: null }] });
   });
-  const result = await discoverModels("google.models", new Headers({ "x-goog-api-key": "synthetic-google-key" }));
+  const result = await discoverModels("google.models", dispatch(new Headers({ "x-goog-api-key": "synthetic-google-key" })));
   assert.equal(result.error, null);
   assert.equal(urls.length, 2);
   assert.equal(urls[0].searchParams.get("pageToken"), null);
@@ -86,7 +87,7 @@ for (const scenario of ["status", "malformed", "bytes", "stream-bytes", "ids", "
     if (scenario === "conflicting-duplicate") return Response.json({ models: [{ name: "models/a", version: String(calls) }], nextPageToken: calls === 1 ? "more" : undefined });
     return Response.json({ models: [{ name: `models/m${calls}` }], nextPageToken: scenario === "loop" ? "same" : `page${calls}` });
   });
-  const result = await discoverModels("google.models", new Headers());
+  const result = await discoverModels("google.models", dispatch());
   assert.equal(result.models, null);
   assert.equal(result.error, scenario === "status" ? "upstream_rejected" : scenario === "transport" ? "transport_error" : ["bytes", "stream-bytes", "ids", "pages"].includes(scenario) ? "limit_exceeded" : "invalid_response");
   assert.doesNotMatch(JSON.stringify(result), /private-provider-error/);
@@ -95,7 +96,7 @@ for (const scenario of ["status", "malformed", "bytes", "stream-bytes", "ids", "
 
 test("byte budget covers all pages, not one page at a time", async context => {
   context.mock.method(globalThis, "fetch", async () => Response.json({ models: [], nextPageToken: "more", ignored: "x".repeat(600_000) }));
-  assert.equal((await discoverModels("google.models", new Headers())).error, "limit_exceeded");
+  assert.equal((await discoverModels("google.models", dispatch())).error, "limit_exceeded");
 });
 
 test("one ten-second deadline aborts discovery and is cleared", async context => {
@@ -105,8 +106,15 @@ test("one ten-second deadline aborts discovery and is cleared", async context =>
     signal = init.signal;
     return new Promise((_resolve, reject) => signal.addEventListener("abort", () => reject(signal.reason), { once: true }));
   });
-  const pending = discoverModels("openai.models", new Headers());
+  const pending = discoverModels("openai.models", dispatch());
   context.mock.timers.tick(MODEL_DISCOVERY_TIMEOUT_MS);
   assert.equal(signal.aborted, true);
   assert.deepEqual(await pending, { models: null, error: "timeout" });
+});
+
+test("owner denial stops discovery without an unguarded fetch fallback", async context => {
+  context.mock.method(globalThis, "fetch", async () => assert.fail("owner-denied provider request"));
+  let admissions = 0;
+  assert.deepEqual(await discoverModels("google.models", async () => { admissions++; return null; }), { models: null, error: "source_changed" });
+  assert.equal(admissions, 1);
 });

@@ -404,8 +404,10 @@ recorded, not a liveness promise. Failed attempts return HTTP 502 with the same
 inspectable response and retain the previous complete snapshot. A source change
 returns HTTP 409 with `source_changed`; a superseded attempt returns
 `model_discovery_superseded` without modifying the newer attempt. Network work
-does not hold the account mutation queue. Revocation or replacement invalidates
-late completion.
+does not hold the account mutation queue. Each page request starts only while
+its captured account and attempt remain current. A committed revocation,
+replacement or newer refresh prevents later page requests; an already admitted
+request may finish, but invalidated completion cannot replace the snapshot.
 
 `sourceMatches` compares the snapshot's provider, adapter and credential
 generation with the current owner. `stale` is true when there is no matching
