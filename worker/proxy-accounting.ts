@@ -7,6 +7,7 @@ import type { ObservedUsage } from "./proxy-response";
 import { extractServiceTier, type UsageTokens } from "./token-usage";
 import type { AuthorizedIdentity, CompiledModel, Env, ProxyRequestBody, UsageEvent } from "./types";
 import { randomId } from "./utils";
+import type { ToolKnowledge } from "./responses-tool-evidence.ts";
 
 export interface CompoundRequestContext {
   id: string;
@@ -24,6 +25,8 @@ interface AccountingContext {
   request: Request;
   cost?: EstimatedCost;
   compound?: CompoundRequestContext;
+  // Cost is captured after preflight; duration still includes those awaits.
+  startedAtMs?: number;
 }
 
 export function createProxyAccounting(options: AccountingContext) {
@@ -37,7 +40,7 @@ export function createProxyAccounting(options: AccountingContext) {
   let responseTier: string | null | undefined;
   const correlation = correlationMetadata(request);
   const requestId = correlation.requestId;
-  const started = Date.now();
+  const started = options.startedAtMs ?? Date.now();
   function finish(statusCode: UsageEvent["status_code"], status: UsageEvent["status"], reservation = emptyReservation(), actual = 0, tokens: UsageTokens | null = null, contentRef: string | null = null, basis = cost.basis) {
     const event: UsageEvent = {
       id: randomId("usage"), type: "clawrouter.usage.v1", occurred_at_ms: Date.now(), tenant_id: auth.policy.tenantId ?? "default",
@@ -99,12 +102,12 @@ export function createProxyAccounting(options: AccountingContext) {
   };
 }
 
-export function estimateCost(model: CompiledModel | null, body: ProxyRequestBody, fixed: number | null | undefined, capability: string, endpoint: PricingEndpoint): EstimatedCost {
+export function estimateCost(model: CompiledModel | null, body: ProxyRequestBody, fixed: number | null | undefined, capability: string, endpoint: PricingEndpoint, parentTools?: ToolKnowledge): EstimatedCost {
   if (capability === "llm.count_tokens") return { reserveMicros: 0, basis: "none", inputTokens: 0, outputTokens: 0 };
   if (fixed != null) return { reserveMicros: fixed, basis: "policy_fixed", inputTokens: null, outputTokens: null };
   if (Array.isArray(body)) return { reserveMicros: 1, basis: "flat_fallback", inputTokens: null, outputTokens: null };
   const pricing = model?.pricing;
-  const pricingGap = requestPricingGap(pricing, body, endpoint.request_format);
+  const pricingGap = requestPricingGap(pricing, body, endpoint.request_format, parentTools);
   if (pricingGap) return { reserveMicros: 0, basis: "unpriced_request", pricingGap, inputTokens: null, outputTokens: null };
   if (!pricing) return { reserveMicros: 1, basis: "flat_fallback", inputTokens: null, outputTokens: null };
   const estimate = estimateModelCost(pricing, body, endpoint);
