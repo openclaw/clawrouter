@@ -39,6 +39,7 @@
 - Preserve the initiating cause when Responses WebSockets close. Client disconnects record `client_error` without an invented HTTP status; unsent requests release reservations, while sent requests without final usage retain their estimate.
 
 - Keep failed console refreshes visible after successful edits, label stale usage with its snapshot time, and show unavailable spend and balances as unknown.
+- Show readable server error messages in console actions while preserving HTTP failure status and authentication codes; success-looking error text no longer appears connected. Keep Playground response bodies intact.
 - Expose Catalog service-kind filters as a labeled button group with an explicit pressed choice, preserving keyboard operation, search, and result counts.
 - Make Access resource tabs keyboard navigable with manual activation, associated panels, and visible focus at narrow widths. Preserve one-time secrets during focus-only movement and editor drafts across resource changes.
 - Keep Fusion flow connectors between their model stages on narrow screens by rotating only the arrow glyphs.
