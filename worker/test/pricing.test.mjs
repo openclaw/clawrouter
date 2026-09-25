@@ -12,6 +12,21 @@ const pricing = {
   inputTokenOverhead: 1_024, longContext: null,
 };
 
+test("response-ID pricing requires final parent knowledge only on the selected Responses wire", () => {
+  for (const previous_response_id of [undefined, null, ""]) {
+    assert.equal(requestPricingGap(pricing, { previous_response_id }, "openai.responses", "hosted_tool_fee"), null);
+  }
+  const body = { previous_response_id: "response", input: [] };
+  for (const [knowledge, expected] of [[undefined, "retained_tool_unknown"], ["unknown", "retained_tool_unknown"], ["token_only", null], ["hosted_tool_fee", "hosted_tool_fee"], ["hosted_tool_usage", "hosted_tool_usage"]]) {
+    assert.equal(requestPricingGap(pricing, body, "openai.responses", knowledge), expected);
+    for (const format of ["openai.chat_completions", "anthropic.messages", "google.generate_content"]) assert.equal(requestPricingGap(pricing, body, format, knowledge), null);
+  }
+  assert.equal(requestPricingGap(pricing, { ...body, tools: [{ type: "web_search" }] }, "openai.responses", "token_only"), "hosted_tool_fee");
+  assert.equal(requestPricingGap(pricing, { ...body, input: [{ type: "tool_search_output", tools: [{ type: "mcp" }] }] }, "openai.responses", "token_only"), "hosted_tool_usage");
+  assert.equal(requestPricingGap({ ...pricing, unpricedCosts: ["request_fee"] }, body, "openai.responses", "hosted_tool_fee"), "model_request_fee");
+  assert.equal(requestPricingGap(pricing, { input: "full input", client_metadata: { "x-codex-turn-state": "turn" } }, "openai.responses"), null);
+});
+
 test("pricing reserves serialized text plus overhead and every requested choice", () => {
   const body = { messages: [{ role: "user", content: "hello" }], max_completion_tokens: 1_000, n: 4 };
   const estimate = estimateModelCost(pricing, body);
