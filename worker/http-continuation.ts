@@ -15,6 +15,7 @@ export function continuationRestart(): HttpError {
 export class HttpContinuation {
   readonly requested: boolean;
   readonly pinned?: PinnedGrant;
+  readonly parentTools: ToolKnowledge;
   private readonly env: Env;
   private readonly scope: string;
   private readonly signal: AbortSignal;
@@ -27,9 +28,12 @@ export class HttpContinuation {
   private claim: "owned" | "legacy_unknown" | undefined;
   private qualificationAttempted = false;
 
-  private constructor(env: Env, scope: string, requested: boolean, owner: ContinuationOwner | null, base: ToolKnowledge, signal: AbortSignal) {
+  private constructor(env: Env, scope: string, requested: boolean, owner: ContinuationOwner | null, parentTools: ToolKnowledge, base: ToolKnowledge, signal: AbortSignal) {
     this.env = env; this.scope = scope; this.requested = requested; this.previous = owner;
     this.signal = signal;
+    // Admission consumes only the resolved parent, never this response's later
+    // output or the current input folded into the next producer's proof.
+    this.parentTools = parentTools;
     this.tools = createResponsesToolEvidence(base);
     // Environment routes are pinned too: current pool availability cannot prove
     // which credential produced an earlier response.
@@ -57,7 +61,7 @@ export class HttpContinuation {
       const previous = evidence?.[identities.findIndex(identity => identity.kind === "response")];
       if (previous?.state === "final") inherited = previous.knowledge;
     }
-    return new HttpContinuation(env, scope, identities.length > 0, owner, retainedToolBase(selection.body, inherited), request.signal);
+    return new HttpContinuation(env, scope, identities.length > 0, owner, inherited, retainedToolBase(selection.body, inherited), request.signal);
   }
 
   bind(owner: ContinuationOwner): void {
