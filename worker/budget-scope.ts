@@ -9,7 +9,7 @@ export function budgetPrincipal(auth: BudgetIdentity): string | null {
   return principal;
 }
 
-export function budgetLedgerAddress(policyId: string, policy: Pick<AccessPolicy, "tenantId" | "budgetScope">, principal?: string | null) {
+export function budgetLedgerAddress(policyId: string, policy: Pick<AccessPolicy, "tenantId" | "budgetScope">, principal?: string | null, at = Date.now()) {
   const tenant = policy.tenantId ?? "default";
   const scopedPrincipal = policy.budgetScope === "principal" ? principal ?? null : null;
   const suffix = scopedPrincipal ? `:${scopedPrincipal}` : "";
@@ -20,12 +20,12 @@ export function budgetLedgerAddress(policyId: string, policy: Pick<AccessPolicy,
     // Keep the physical shard and window stable for existing balances and receipts.
     objectName: `${tenant}:${policyId}${suffix}`,
     policyId: `${tenant}/${policyId}${path}`,
-    windowKey: `${tenant}/${policyId}${path}/${new Date().toISOString().slice(0, 7)}`,
+    windowKey: `${tenant}/${policyId}${path}/${new Date(at).toISOString().slice(0, 7)}`,
   };
 }
 
-export function providerBudgetLedgerAddress(providerId: string) {
-  const month = new Date().toISOString().slice(0, 7);
+export function providerBudgetLedgerAddress(providerId: string, at = Date.now()) {
+  const month = new Date(at).toISOString().slice(0, 7);
   return {
     tenant: "default",
     scopeKey: JSON.stringify(["provider", providerId]),
