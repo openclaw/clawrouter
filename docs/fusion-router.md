@@ -69,8 +69,12 @@ eligibility as concrete models, including policy and provider budget caps,
 available pricing, grant restrictions, cooldowns, and transport support. This
 also applies to configured prefix-routed models: an unpriced model requires
 unmetered policy and provider limits, or a fixed per-request policy price.
-Session entitlements and key-based model catalogs share this projection;
-discovery does not select credentials or read remaining budget balances.
+Session entitlements and key-based model catalogs share this projection and
+emit an exact HTTP Chat offer with the synthesizer's selected policy and
+generation. Discovery observes current scoped balances without reserving budget,
+selecting credentials, or calling providers. Fixed-price observations account
+for synthesis before advisers; variable prices and uncertain compound admission
+remain request-dependent.
 ClawRouter preflights that final route before it
 starts advisers, so a denied or unavailable synthesizer cannot spend adviser
 budget. It also reserves the final model's worst-case configured proposal input
