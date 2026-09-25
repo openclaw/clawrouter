@@ -10,8 +10,9 @@ const env = {
   CLAWROUTER_ADMIN_TOKEN_SHA256: createHash("sha256").update("fixture-admin").digest("hex"),
 };
 
-function preflight(overrides = {}) {
+function preflight(overrides = {}, args = []) {
   const source = `
+    process.argv = [process.execPath, "deploy-preflight.mjs", ...${JSON.stringify(args)}];
     globalThis.fetch = async (url, init = {}) => {
       if (new URL(url).origin !== "https://api.cloudflare.com") throw new Error("unexpected fixture target");
       console.log("fixture fetch " + (init.method ?? "GET"));
@@ -47,6 +48,43 @@ test("valid trimmed inputs retain the Worker read and KV permission probe", () =
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(result.stdout.match(/fixture fetch \w+/g), ["fixture fetch GET", "fixture fetch PUT", "fixture fetch DELETE"]);
   assert.match(result.stdout, /deploy preflight passed/);
+});
+
+for (const [name, value] of [
+  ["CLAWROUTER_PREFLIGHT_REQUIRE_ACCESS", "1"],
+  ["CLAWROUTER_ACCESS_TEAM_DOMAIN", "fixture.cloudflareaccess.com"],
+  ["CLAWROUTER_ACCESS_AUD", "fixture-audience"],
+]) for (const blank of ["", "   "]) test(`Access marker ${name} rejects ${JSON.stringify(blank)} recovery credentials before remote probes`, () => {
+  const result = preflight({ [name]: value, CF_ACCESS_CLIENT_ID: blank, CF_ACCESS_CLIENT_SECRET: blank });
+  assert.equal(result.status, 1, result.stderr);
+  assert.match(result.stderr, /CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET are required/);
+  assert.doesNotMatch(result.stdout, /fixture fetch/);
+});
+
+test("production Access provisioning validates recovery inputs before the new audience exists", () => {
+  const required = { CLAWROUTER_PREFLIGHT_REQUIRE_ACCESS: "1" };
+  const credentials = { CF_ACCESS_CLIENT_ID: "fixture-client", CF_ACCESS_CLIENT_SECRET: "fixture-secret" };
+  const missing = preflight(required, ["--before-access"]);
+  assert.equal(missing.status, 1, missing.stderr);
+  assert.match(missing.stderr, /CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET are required/);
+  assert.doesNotMatch(missing.stdout, /fixture fetch/);
+  const before = preflight({ ...required, ...credentials }, ["--before-access"]);
+  assert.equal(before.status, 0, before.stderr);
+  assert.match(before.stdout, /mode=before-access-read-only/);
+  assert.doesNotMatch(before.stdout, /fixture fetch/);
+  const incomplete = preflight({ ...required, ...credentials });
+  assert.equal(incomplete.status, 1, incomplete.stderr);
+  assert.match(incomplete.stderr, /missing required Access deploy env: CLAWROUTER_ACCESS_AUD/);
+  assert.doesNotMatch(incomplete.stdout, /fixture fetch/);
+  const after = preflight({ ...required, ...credentials, CLAWROUTER_ACCESS_TEAM_DOMAIN: "fixture.cloudflareaccess.com", CLAWROUTER_ACCESS_AUD: "fixture-audience" });
+  assert.equal(after.status, 0, after.stderr);
+  assert.deepEqual(after.stdout.match(/fixture fetch \w+/g), ["fixture fetch GET", "fixture fetch PUT", "fixture fetch DELETE"]);
+});
+
+test("deployments without Access retain their credential-free Access transport", () => {
+  const result = preflight();
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.stdout.match(/fixture fetch \w+/g), ["fixture fetch GET", "fixture fetch PUT", "fixture fetch DELETE"]);
 });
 
 const deployCommands = [
@@ -131,6 +169,7 @@ for (const [label, overrides, error] of [
   ["missing smoke key", { CLAWROUTER_SMOKE_KEY: "" }, /CLAWROUTER_SMOKE_KEY is required/],
   ["blank smoke key", { CLAWROUTER_SMOKE_KEY: "   " }, /CLAWROUTER_SMOKE_KEY is required/],
   ["mismatched admin token", { CLAWROUTER_ADMIN_TOKEN: "wrong-fixture" }, /must match CLAWROUTER_ADMIN_TOKEN_SHA256/],
+  ["missing protected-route Access credentials", { CLAWROUTER_ACCESS_AUD: "fixture-audience" }, /CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET are required/],
 ]) test(`manual deployment rejects ${label} before any permission mutation or deploy child`, () => {
   const result = manualDeploy(overrides);
   assert.equal(result.status, 1, result.stderr);

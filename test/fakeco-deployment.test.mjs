@@ -354,6 +354,16 @@ test("FakeCo before-Access preflight uses only locked Cloudflare reads", () => {
     assert.match(result.stdout, /no KV or Access writes/);
     assert.doesNotMatch(result.stdout, /mutation attempted/);
 
+    const missingRecovery = runPreflight({
+      CLAWROUTER_PROVIDER_CREDENTIAL_MODE: "upload",
+      OPENAI_API_KEY: "openai123",
+      CF_ACCESS_CLIENT_ID: "",
+      CF_ACCESS_CLIENT_SECRET: "",
+    });
+    assert.equal(missingRecovery.status, 1);
+    assert.match(missingRecovery.stderr, /CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET are required/);
+    assert.doesNotMatch(missingRecovery.stdout, /mock Cloudflare fetch:/);
+
     const freshRefusal = runPreflight({
       CLAWROUTER_PROVIDER_CREDENTIAL_MODE: "upload",
       OPENAI_API_KEY: "",

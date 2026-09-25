@@ -273,6 +273,12 @@ export CLAWROUTER_SMOKE_LIVE_PROVIDERS=openai
 
 Also set the raw `CLAWROUTER_ADMIN_TOKEN` matching the deployed SHA256 and the
 `CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` pair when Access requires it.
+Preflight requires both Access values when an Access team domain or audience is
+configured, or `CLAWROUTER_PREFLIGHT_REQUIRE_ACCESS=1`. A deployment without
+Access does not need the pair. For hosted `provision_access=true`, the first
+preflight validates recovery credentials without requiring the new app's
+audience. After provisioning, a second preflight requires the generated Access
+configuration before rendering and deploying the Worker.
 The manual runner resolves the deployment URL once: an explicit
 `CLAWROUTER_BASE_URL`, otherwise the configured route hostname, otherwise the
 production default. It passes that URL to preflight, recovery, and smoke.
@@ -817,6 +823,10 @@ means the process is running, not that environment fallback is activated.
    These commands require `CLAWROUTER_BASE_URL`, `CLAWROUTER_ADMIN_TOKEN`, and the
    Access service-token pair when the admin route is protected. They never need
    direct KV edits. Owner/index failures remain unresolved until repaired.
+   An `identity_unresolved` key with neither its credential owner nor KV metadata
+   is a partial-storage recovery case. Restore the matched storage set or complete
+   a reviewed storage migration; replacement and revocation cannot establish the
+   missing identity. The retained index evidence stays intact until that recovery.
 5. Start a new verification scan after repairs or concurrent account changes.
    Activate only when the complete scan is unchanged and has no unresolved
    outcomes. A page limit or more than 64 unresolved keys blocks activation;
@@ -851,8 +861,8 @@ explicit baseline acceptance. A failed activation fails deploy qualification,
 but leaves the running admin recovery surface accessible. `cf:doctor` reports
 activation independently of provider configuration and always queries the
 resolved deployment URL, even when `CLAWROUTER_BASE_URL` is omitted. Missing or
-invalid local admin credentials and incomplete Access credential pairs fail
-preflight before any remote permission probe.
+invalid local admin credentials and missing required or incomplete Access
+credential pairs fail preflight before any remote permission probe.
 
 Treat POLICY_KV, ACCESS_CONTROL and GRANT_CREDENTIALS as one matched storage set.
 Partial binding swaps or partial restores are not routine deployments and

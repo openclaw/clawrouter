@@ -256,3 +256,19 @@ test("production Access keeps the recovery service policy with configured UUIDs"
   const workflow = readFileSync(new URL("../.github/workflows/deploy-cloudflare.yml", import.meta.url), "utf8");
   assert.match(workflow, /^\s+CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS: \$\{\{ vars\.CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS \}\}$/m);
 });
+
+test("production Access provisioning brackets mutation with both preflight phases", () => {
+  const workflow = readFileSync(new URL("../.github/workflows/deploy-cloudflare.yml", import.meta.url), "utf8");
+  const before = workflow.indexOf("run: pnpm cf:preflight ${{ inputs.provision_access && '-- --before-access' || '' }}");
+  const content = workflow.indexOf("run: pnpm cf:content:provision");
+  const provision = workflow.indexOf("run: pnpm cf:access -- --write-github-env");
+  const after = workflow.indexOf("run: pnpm cf:preflight\n", provision);
+  const config = workflow.indexOf("run: pnpm cf:config");
+  assert.ok(before >= 0 && before < content && content < provision && provision < after && after < config);
+  assert.match(workflow.slice(before, content), /CLAWROUTER_PREFLIGHT_REQUIRE_ACCESS: \$\{\{ inputs\.provision_access && '1' \|\| '0' \}\}/);
+  assert.match(workflow.slice(provision, after), /if: \$\{\{ inputs\.provision_access \}\}[\s\S]*CLAWROUTER_PREFLIGHT_REQUIRE_ACCESS: "1"/);
+  for (const phase of [workflow.slice(before, content), workflow.slice(provision, after)]) {
+    assert.match(phase, /CF_ACCESS_CLIENT_ID: \$\{\{ secrets\.CLAWROUTER_ACCESS_CLIENT_ID \}\}/);
+    assert.match(phase, /CF_ACCESS_CLIENT_SECRET: \$\{\{ secrets\.CLAWROUTER_ACCESS_CLIENT_SECRET \}\}/);
+  }
+});

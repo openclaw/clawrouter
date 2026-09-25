@@ -91,9 +91,53 @@ test("a missing KV value never clears ambiguous indexed legacy evidence", async 
   const env = fixture();
   env.grantAuthority.seedLegacy(key, "openai");
   await acceptGrantPoolBaseline("existing", { request: env.request });
-  await assert.rejects(() => recoverGrantPools({ request: env.request }), /unresolved/);
+  await assert.rejects(() => recoverGrantPools({ request: env.request }), error => {
+    assert.match(error.message, /identity_unresolved requires reviewed recovery of the matched POLICY_KV, ACCESS_CONTROL and GRANT_CREDENTIALS storage set/);
+    assert.doesNotMatch(error.message, /cf:oauth:put|cf:oauth:revoke/);
+    return true;
+  });
   assert.deepEqual((await status(env)).issues, [{ key, reason: "identity_unresolved" }]);
+  const attachment = await env.grantAuthority.call("attachment", { key });
+  await assert.rejects(() => env.request("/v1/admin/upstream-grants/policies/policy/account?mode=replace", { method: "PUT", body: primary }), error => error.status === 409 && error.code === "grant_attachment_changed");
+  await assert.rejects(() => env.request("/v1/admin/upstream-grants/policies/policy/account/revoke", { method: "POST" }), error => error.status === 404);
+  assert.deepEqual(await env.grantAuthority.call("attachment", { key }), attachment);
+  assert.equal(env.values.has(key), false);
+  assert.equal(env.GRANT_CREDENTIALS.objects.get(key).values.has("credential"), false);
   assert.equal((await pool(env)).hasAttachment, true);
+});
+
+for (const prefix of ["/v1/admin/grant-pools", "/api/admin/grant-pools"]) test(`${prefix} preserves the recovery lifecycle, authorization and revision fences`, async context => {
+  const env = fixture();
+  context.mock.method(globalThis, "fetch", async () => assert.fail("account recovery contacted an upstream"));
+  const request = (path, options) => env.request(path.replace("/v1/admin/grant-pools", prefix), options);
+  const initial = await status(env);
+  const routes = [["GET", "/readiness"], ...["baseline", "scan", "advance", "activate", "repair"].map(action => ["POST", `/${action}`])];
+  for (const [method, action] of routes) assert.equal((await env.dispatch(`${prefix}${action}`, { method, ...(method === "POST" ? { body: "{}" } : {}) })).status, 401);
+  const login = await env.dispatch("/v1/session/login", { method: "POST", headers: { origin: "http://router.example", "content-type": "application/json" }, body: JSON.stringify({ token: "admin-fixture" }) });
+  assert.equal(login.status, 200);
+  const cookie = login.headers.get("set-cookie").split(";")[0];
+  assert.equal((await env.dispatch(`${prefix}/readiness`, { headers: { cookie } })).status, 200);
+  for (const [method, action] of routes.filter(([method]) => method === "POST")) assert.equal((await env.dispatch(`${prefix}${action}`, { method, headers: { cookie, origin: "https://other.example", "content-type": "application/json" }, body: "{}" })).status, 403);
+  assert.deepEqual(await status(env), initial);
+
+  await acceptGrantPoolBaseline("fresh", { request });
+  let state = await request("/v1/admin/grant-pools/scan", { method: "POST", body: { revision: (await status(env)).revision } });
+  const firstPage = { scanRevision: state.scanRevision, phase: state.phase, cursor: state.cursor };
+  state = (await request("/v1/admin/grant-pools/advance", { method: "POST", body: firstPage })).readiness;
+  await assert.rejects(() => request("/v1/admin/grant-pools/advance", { method: "POST", body: firstPage }), error => error.status === 409 && error.code === "grant_pool_readiness_changed");
+  for (let page = 0; page < 10 && state.phase !== "complete"; page++) state = (await request("/v1/admin/grant-pools/advance", { method: "POST", body: { scanRevision: state.scanRevision, phase: state.phase, cursor: state.cursor } })).readiness;
+  assert.equal(state.phase, "complete");
+  await assert.rejects(() => request("/v1/admin/grant-pools/activate", { method: "POST", body: { revision: state.revision + 1 } }), error => error.status === 409);
+  assert.ok((await request("/v1/admin/grant-pools/activate", { method: "POST", body: { revision: state.revision } })).activatedAt);
+  await putGrantCredentials(env, key, primary);
+  env.values.delete(key);
+  assert.ok((await recoverGrantPools({ request })).activatedAt);
+  assert.equal(env.values.get(key).hasCredential, true, "activated alias repair restores the committed projection");
+
+  const ready = await status(env);
+  await authorityCall(env, "/users/put", { email: "admin@local", record: { role: "user", enabled: true } });
+  for (const [method, action] of routes) assert.equal((await env.dispatch(`${prefix}${action}`, { method, headers: { cookie, origin: "http://router.example", "content-type": "application/json" }, ...(method === "POST" ? { body: "{}" } : {}) })).status, 403);
+  assert.deepEqual(await status(env), ready);
 });
 
 test("indexed first-admission repair cancels only its proven proposal, without provider I/O", async context => {

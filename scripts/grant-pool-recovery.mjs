@@ -46,7 +46,14 @@ export async function recoverGrantPools({ request = recoveryRequest, maxPages = 
       onPage(result);
     }
     if (state.phase !== "complete") continue;
-    if (state.issues.length || state.overflow) throw new Error("account migration remains unresolved; use cf:oauth:put with secret stdin/file to replace the reported legacy account, or cf:oauth:revoke to remove it, then restart recovery");
+    if (state.issues.length || state.overflow) {
+      const advice = state.issues.some(issue => issue.reason === "identity_unresolved")
+        ? "identity_unresolved requires reviewed recovery of the matched POLICY_KV, ACCESS_CONTROL and GRANT_CREDENTIALS storage set; restore matching storage or complete a reviewed storage migration, then restart recovery"
+        : !state.overflow && state.issues.every(issue => issue.reason === "owner_missing")
+          ? "use cf:oauth:put with secret stdin/file to replace the reported legacy account, or cf:oauth:revoke to remove it, then restart recovery"
+          : "inspect the reported keys in Access → Upstream, resolve their owner or publication failures, then restart recovery";
+      throw new Error(`account migration remains unresolved; ${advice}`);
+    }
     if (state.revision !== state.scanRevision) {
       // Owner backfill changes the source revision. One new verification scan
       // is justified by those writes; concurrent changes never silently pass.

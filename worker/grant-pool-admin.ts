@@ -14,8 +14,9 @@ export function grantPoolReadiness(env: Env): Promise<GrantPoolReadiness> {
 
 // Called only after the existing admin/CSRF authorization boundary. Migration
 // reads KV names, never credentials or caller-authored attachment metadata.
-export async function grantPoolAdmin(request: Request, env: Env): Promise<Response> {
-  const action = new URL(request.url).pathname.slice(PREFIX.length);
+export async function grantPoolAdmin(request: Request, env: Env, path: string): Promise<Response> {
+  // The router owns canonicalization, including the supported /api/admin alias.
+  const action = path.slice(PREFIX.length);
   if (action === "/readiness" && request.method === "GET") return privateJson(await grantPoolReadiness(env));
   if (request.method !== "POST") throw new HttpError(405, "method_not_allowed", "account recovery requires POST");
   const body = await readJson<Record<string, unknown>>(request);

@@ -31,7 +31,7 @@ export async function adminApi(request: Request, env: Env, path: string): Promis
   const authorization = await authorizeAdmin(request, env);
   if (authorization instanceof Response) return authorization;
   try {
-    if (path.startsWith("/v1/admin/grant-pools/")) return await grantPoolAdmin(request, env);
+    if (path.startsWith("/v1/admin/grant-pools/")) return await grantPoolAdmin(request, env, path);
     if (request.method === "GET" && path === "/v1/admin/content") return getContent(request, env);
     if (request.method === "GET" && path === "/v1/admin/bootstrap") return privateJson(await adminBootstrap(env));
     if (request.method === "GET" && path === "/v1/admin/overview") return privateJson(await overview(env));
