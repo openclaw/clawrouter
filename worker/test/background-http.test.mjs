@@ -162,11 +162,19 @@ for (const revoked of [false, true]) test(`environment control rechecks caller a
   const f = await fixture(t), response = await f.call("/v1/responses", { model: "openai/gpt-6-astra", background: true });
   assert.equal(response.status, 200); await response.json(); const state = f.state(response), original = state.job(), before = f.budgetCalls.length;
   const entered = Promise.withResolvers(), release = Promise.withResolvers();
-  f.scopes.beforeFetch = async (_name, request) => { if (new URL(request.url).pathname === "/connections/resolve") { entered.resolve(); await release.promise; } };
+  let connectionReads = 0;
+  f.scopes.beforeFetch = async (_name, request) => {
+    if (new URL(request.url).pathname === "/connections/resolve" && ++connectionReads === 2) {
+      // First is assertProviderAccess; second is the dispatcher's preparation.
+      entered.resolve(); await release.promise;
+    }
+  };
   const pending = f.call(`/v1/responses/${queued.id}`); await entered.promise;
+  assert.equal(connectionReads, 2); assert.equal(f.sent.length, 1);
   if (revoked) await adminMutation(f, "/v1/admin/credentials/maintainer_key/revoke", {});
   release.resolve(); const control = await pending;
   assert.equal(control.status, revoked ? 403 : 200); await control.text();
+  assert.equal(connectionReads, 2);
   assert.equal(f.sent.length, revoked ? 1 : 2); assert.equal(f.budgetCalls.length, before);
   if (revoked) assert.deepEqual(state.job(), original);
 });
