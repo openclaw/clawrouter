@@ -100,3 +100,23 @@ test("upstream response wait is outside the credential tail and redirects remain
   assert.equal((await pending).status, 302); assert.equal(f.calls.length, 1); assert.equal(f.calls[0].request.redirect, "manual");
   assert.equal((await f.dispatch()).status, 409); assert.equal(f.calls.length, 1);
 });
+
+for (const environment of [false, true]) test(`automatic deadline crossed during ${environment ? "environment" : "credential-owner"} preparation prevents egress; public controls remain available`, async t => {
+  const f = await fixture(t);
+  if (environment) {
+    f.env.OPENAI_API_KEY = "environment-fixture";
+    const upstream = configuredUpstream(f.provider, null, f.env), headers = new Headers(upstream.headers);
+    const create = f.provider.endpoints[0];
+    copyRequestHeaders(new Headers({ "openai-organization": "org-fixture", "openai-project": "project-fixture" }), f.provider, create, headers, f.env);
+    f.input.owner = { ...f.input.owner, grantKey: null, lineage: null, routeSha256: await responseRouteDigest(f.provider, upstream, new URL(`${upstream.baseUrl}${upstreamPath(f.provider, create, {}, f.env, upstream)}`), headers, null) };
+  }
+  const gate = f.gateConnection(), deadline = Date.now() + 1000;
+  const pending = f.dispatch(undefined, { deadline });
+  const result = pending.catch(error => error);
+  await gate.entered; f.advance(1000); gate.release();
+  const rejected = await result;
+  if (environment) assert.equal(rejected.code, "response_observation_expired");
+  else { assert.equal(rejected.status, 409); assert.equal((await rejected.json()).error.code, "response_observation_expired"); }
+  assert.equal(f.calls.length, 0);
+  assert.equal((await f.dispatch()).status, 200); assert.equal(f.calls.length, 1);
+});

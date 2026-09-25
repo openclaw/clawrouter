@@ -16,6 +16,7 @@ export interface ResponseControlDispatch {
   action: ResponsesControlAction;
   query: string;
   stream: boolean;
+  deadline?: number;
 }
 
 export async function responseRouteDigest(provider: CompiledProvider, upstream: UpstreamAuth, url: URL, headers: Headers, grantKey: string | null): Promise<string> {
@@ -34,6 +35,7 @@ export function retainedResponseRoute(pathParams: Record<string, string>, header
 // The credential owner invokes fetch immediately after this preparation while
 // still holding its mutation tail. No credential leaves that owner for a poll.
 export async function prepareResponseControl(env: Env, input: ResponseControlDispatch, grant: UpstreamGrant | null): Promise<Request> {
+  assertControlDeadline(input);
   const provider = providerById(input.owner.providerId), create = provider?.endpoints.find(endpoint => endpoint.id === input.owner.endpointId);
   const id = responseIdentity("response", input.responseId);
   if (!provider || !create?.responsesLifecycle || !id || !["retrieve", "cancel"].includes(input.action)) unavailable();
@@ -76,7 +78,14 @@ export async function dispatchResponseControl(env: Env, input: ResponseControlDi
   }
   const request = await prepareResponseControl(env, input, null);
   signal.throwIfAborted();
+  assertControlDeadline(input);
   return fetch(request, { signal });
+}
+
+export function assertControlDeadline(input: ResponseControlDispatch): void {
+  if (input.deadline !== undefined && (!Number.isSafeInteger(input.deadline) || Date.now() >= input.deadline)) {
+    throw new HttpError(409, "response_observation_expired", "automatic response observation has ended; authenticated controls remain available");
+  }
 }
 
 function validateRoute(route: BackgroundAdmission["route"]): void {

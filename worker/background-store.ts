@@ -53,6 +53,7 @@ export interface BackgroundJob extends BackgroundSummary {
   stream: boolean;
   responseId: string | null;
   egress: boolean;
+  dispatchClaimed: boolean;
   event: UsageEvent | null;
   nextAttemptAt: number;
   attempts: number;
@@ -84,7 +85,7 @@ export class BackgroundStore {
       amount: null, basis: null, usage: "pending", settlements: input.plan.legs.map(() => "pending"), lastError: null,
       phase: "admitting", owner: input.owner, facts: input.facts, reservedMicros: input.plan.reservedMicros,
       legs: input.plan.legs.map(intent => ({ intent, reserve: "never", uncertainReserve: false, dispatched: false, settlement: "pending" })),
-      route: input.route, stream: input.stream, responseId: null, egress: false, event: null,
+      route: input.route, stream: input.stream, responseId: null, egress: false, dispatchClaimed: false, event: null,
       nextAttemptAt: input.admittedAt + 60_000, attempts: 0, contentRef: null,
     };
     encode(job);
@@ -144,9 +145,10 @@ export class BackgroundStore {
     job.responseId = responseId; job.nextAttemptAt = Math.min(job.nextAttemptAt, Date.now() + 5_000); this.save(job);
   }
 
-  retained(id: string, contentRef: string | null): void {
+  beginDispatch(id: string, contentRef: string | null): BackgroundJob {
     const job = this.admitting(id);
-    job.contentRef = contentRef; this.save(job);
+    if (job.dispatchClaimed) throw new HttpError(409, "background_dispatch_claimed", "background dispatch was already claimed; never repeat generation");
+    job.dispatchClaimed = true; job.contentRef = contentRef; this.save(job); return job;
   }
 
   freeze(id: string, outcome: Omit<AccountingOutcome, "reservation">): BackgroundRecord {

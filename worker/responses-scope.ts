@@ -45,7 +45,7 @@ export class ResponsesScopeStore {
     if (input.action === "dispatch") { await this.dispatch(input.id, input.contentRef ?? null); return json({ dispatched: true }); }
     if (input.action === "replay") {
       const work = await this.mutate(() => this.jobs.claim(Date.now(), input.id));
-      await Promise.all(work.map(job => this.process(job)));
+      await Promise.all(work.map(job => this.process(job, false)));
       return json(await this.mutate(() => this.jobs.get(input.id)));
     }
     return this.mutate(() => {
@@ -84,7 +84,9 @@ export class ResponsesScopeStore {
   }
 
   private async dispatch(id: string, contentRef: string | null): Promise<void> {
-    const job = await this.mutate(() => { this.jobs.retained(id, contentRef); return this.jobs.get(id) as BackgroundJob; });
+    // A duplicate loses before any RPC or rollback handler. It must not turn
+    // another caller's already authorized generation into a known-unsent refund.
+    const job = await this.mutate(() => this.jobs.beginDispatch(id, contentRef));
     try {
       for (let index = 0; index < job.legs.length; index++) {
         const leg = job.legs[index];
@@ -111,7 +113,9 @@ export class ResponsesScopeStore {
     });
   }
 
-  private async process(claimed: BackgroundJob): Promise<void> {
+  private async process(claimed: BackgroundJob, automatic = true): Promise<void> {
+    const until = automatic ? Math.min(claimed.autoRetryUntil, claimed.replayUntil) : claimed.replayUntil;
+    if (Date.now() >= until) return;
     try {
       if (!claimed.event) await collectBackground(this.env, claimed, (fact, status) => this.observe(claimed, fact, status));
       const current = await this.mutate(() => this.jobs.get(claimed.id));
@@ -122,14 +126,14 @@ export class ResponsesScopeStore {
         ...current.legs.map(async (leg, index) => {
           if (leg.settlement === "settled") return;
           let disposition: SettlementDisposition = "settled";
-          try { await bounded(signal => settleLedger(this.env, leg.intent.objectName, { reservationId: leg.intent.request.reservationId, actualCostMicros: event.actual_cost_micros }, signal), current.replayUntil); }
+          try { await bounded(signal => settleLedger(this.env, leg.intent.objectName, { reservationId: leg.intent.request.reservationId, actualCostMicros: event.actual_cost_micros }, signal), until); }
           catch (error) { disposition = error instanceof BudgetSettlementError ? error.disposition : "unavailable"; }
           await this.mutate(() => this.jobs.acknowledge(current.id, event.id, index, disposition));
         }),
         (async () => {
           if (["stored", "duplicate", "expired_by_retention"].includes(current.usage)) return;
           let disposition: "stored" | "duplicate" | "expired_by_retention" | "unavailable";
-          try { disposition = (await bounded(signal => ingestUsage(this.env, event, signal), current.replayUntil)).outcome; }
+          try { disposition = (await bounded(signal => ingestUsage(this.env, event, signal), until)).outcome; }
           catch { disposition = "unavailable"; }
           await this.mutate(() => this.jobs.acknowledge(current.id, event.id, "usage", disposition));
         })(),

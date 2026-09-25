@@ -115,9 +115,15 @@ export class GrantCredentialObject implements DurableObject {
   fetch(request: Request): Promise<Response> {
     if (request.method === "POST" && new URL(request.url).pathname === "/responses/control") {
       const operation = this.tail.then(async () => {
-        const preparation = new HttpOperation(request.signal, 10_000);
+        let preparation = new HttpOperation(request.signal, 10_000);
         try {
           const input = await preparation.wait(readJson<ResponseControlDispatch>(request));
+          const { prepareResponseControl, assertControlDeadline } = await import("./responses-control-dispatch.ts");
+          assertControlDeadline(input);
+          if (input.deadline !== undefined) {
+            preparation.stop("complete");
+            preparation = new HttpOperation(request.signal, Math.min(10_000, input.deadline - Date.now()));
+          }
           const record = await preparation.wait(this.state.storage.get<CredentialRecord>("credential"));
           // Jobs are admitted only after materialization. Polling never imports
           // legacy KV, adopts another lineage, or reselects a pool account.
@@ -126,9 +132,9 @@ export class GrantCredentialObject implements DurableObject {
             || record.enabled !== true || record.revokedAt || record.status !== "active" || !record.kind) {
             throw new HttpError(409, "response_owner_unavailable", "the original response credential is unavailable or changed");
           }
-          const { prepareResponseControl } = await import("./responses-control-dispatch.ts");
           const outbound = await preparation.wait(prepareResponseControl(this.env, input, materializedGrant(metadataGrant(record), record)));
           preparation.signal.throwIfAborted();
+          assertControlDeadline(input);
           if (record.expiresAt && Date.parse(record.expiresAt) <= Date.now()) {
             throw new HttpError(409, "response_owner_unavailable", "the original response credential has expired");
           }

@@ -35,7 +35,7 @@ function fixture(t) {
     const facts = createProxyAccounting({ env, context: {}, auth, cost, selection: { provider: { id: "fixture" }, model: { id: "fixture/model", pricing }, capability: "llm.responses", endpoint: { request_format: "openai.responses" }, body: {} }, request: new Request("https://router.example/v1/responses", { headers: { "x-request-id": "fixture-request" } }) }).facts;
     return { id: `bg_${(++sequence).toString(16).padStart(32, "0")}`, admittedAt: now, owner, facts, plan: planBudgetReservation(auth, "llm.responses", cost, { providerId: "fixture", monthlyBudgetMicros: 5000 }, now), route: { pathParams: {}, organization: null, project: null }, stream: true };
   };
-  return { call, input, state, calls, controls, budgets, usageDb, advance(ms) { now += ms; }, restart() { state.restart(); usage = new UsageLedgerObject(usageState); },
+  return { call, input, state, calls, controls, budgets, usageDb, env, advance(ms) { now += ms; }, restart() { state.restart(); usage = new UsageLedgerObject(usageState); },
     async admit(admission) { assert.equal((await call("admit", { admission })).status, 200); },
     async dispatch(id) { assert.equal((await call("dispatch", { id })).status, 200); },
     async bind(admission, key = "b".repeat(64)) {
@@ -121,4 +121,54 @@ test("outbox network waits release serialization and cannot overwrite a newly ea
   gate.resolve(); await running;
   assert.equal(f.state.scheduled, Date.now() + 5_000);
   assert.equal((await f.call("get", { id: first.id })).body.phase, "complete");
+});
+
+test("one persisted dispatch claim prevents a duplicate from refunding the winning generation", { timeout: 2000 }, async t => {
+  const f = fixture(t), input = f.input(); await f.admit(input);
+  const entered = Promise.withResolvers(), release = Promise.withResolvers();
+  f.controls.budget = async (name, url, _init, dispatch) => {
+    const response = await dispatch();
+    if (name === input.plan.legs[0].objectName && new URL(url).pathname === "/dispatch") { entered.resolve(); await release.promise; }
+    return response;
+  };
+  const first = f.call("dispatch", { id: input.id }); await entered.promise;
+  const second = await f.call("dispatch", { id: input.id });
+  assert.equal(second.status, 409); assert.equal(second.body.error.code, "background_dispatch_claimed");
+  assert.equal(f.calls.filter(call => call.path === "/dispatch").length, 1);
+  assert.equal((await f.call("get", { id: input.id })).body.event, null);
+  release.resolve(); assert.equal((await first).status, 200);
+  const active = (await f.call("get", { id: input.id })).body;
+  assert.equal(active.egress, true); assert.equal(active.phase, "observing"); assert.equal(active.event, null);
+  await f.call("freeze", { id: input.id, outcome: terminal() }); await f.state.object.alarm();
+  assert.equal((await f.call("get", { id: input.id })).body.amount, 25);
+  for (const leg of input.plan.legs) assert.equal(f.budgets.get(leg.objectName).reservations()[0].reserved_micros, 25);
+});
+
+test("automatic claims held across seven days cannot start sinks; manual replay keeps its original deadline", { timeout: 2000 }, async t => {
+  const f = fixture(t), input = f.input(); await f.admit(input); await f.dispatch(input.id);
+  const event = (await f.call("freeze", { id: input.id, outcome: terminal() })).body.event;
+  f.advance(7 * 86_400_000 - 1);
+  const entered = Promise.withResolvers(), release = Promise.withResolvers();
+  f.state.beforeSchedule = async () => { entered.resolve(); await release.promise; };
+  const running = f.state.object.alarm(); await entered.promise; f.advance(2); release.resolve(); await running;
+  assert.equal(f.calls.filter(call => ["/settle", "/ingest"].includes(call.path)).length, 0);
+  assert.deepEqual((await f.call("get", { id: input.id })).body.event, event);
+  assert.equal((await f.call("replay", { id: input.id })).body.phase, "complete");
+  assert.equal(f.calls.filter(call => call.path === "/settle").length, 2);
+  assert.deepEqual(f.calls.filter(call => call.path === "/ingest").map(call => call.body), [event]);
+});
+
+test("an observation claim held in alarm scheduling cannot start a control after one hour", { timeout: 2000 }, async t => {
+  const f = fixture(t), input = f.input(); await f.admit(input); await f.dispatch(input.id);
+  await f.call("identity", { id: input.id, responseId: "response-fixture" });
+  let controls = 0;
+  f.env.GRANT_CREDENTIALS = { idFromName: name => name, get: () => ({ fetch: async () => { controls++; return Response.json({ id: "response-fixture", object: "response", status: "queued" }); } }) };
+  f.advance(3_600_000 - 1);
+  const entered = Promise.withResolvers(), release = Promise.withResolvers();
+  f.state.beforeSchedule = async () => { entered.resolve(); await release.promise; };
+  const running = f.state.object.alarm(); await entered.promise; f.advance(2); release.resolve(); await running;
+  assert.equal(controls, 0);
+  await f.state.object.alarm();
+  const closed = (await f.call("get", { id: input.id })).body;
+  assert.equal(closed.amount, 100); assert.equal(closed.basis, "manifest_reservation");
 });

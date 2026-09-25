@@ -7,12 +7,12 @@ import type { Env } from "./types.ts";
 // Collection consumes one bounded JSON body, independently of caller delivery.
 // Exhaustion/404/disconnect supplies no generation terminal and no refund.
 export async function collectBackground(env: Env, job: BackgroundJob, accept: (fact: ResponsesObservation, status: number) => Promise<void>): Promise<void> {
-  if (!job.responseId || !job.route) return;
-  const operation = new HttpOperation(undefined, 10_000);
+  if (!job.responseId || !job.route || Date.now() >= job.observeUntil) return;
+  const operation = new HttpOperation(undefined, Math.min(10_000, job.observeUntil - Date.now()));
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let inspector: Awaited<ReturnType<typeof import("./responses-usage.ts")["createResponsesUsageInspector"]>> | undefined;
   try {
-    const response = await operation.wait(dispatchResponseControl(env, { owner: job.owner, route: job.route, responseId: job.responseId, action: "retrieve", query: "", stream: job.stream }, operation.signal), "upstream", response => { void response.body?.cancel().catch(() => undefined); });
+    const response = await operation.wait(dispatchResponseControl(env, { owner: job.owner, route: job.route, responseId: job.responseId, action: "retrieve", query: "", stream: job.stream, deadline: job.observeUntil }, operation.signal), "upstream", response => { void response.body?.cancel().catch(() => undefined); });
     if (!response.ok || !response.body || !/^application\/json(?:\s*;|$)/i.test(response.headers.get("content-type") ?? "")) {
       void response.body?.cancel().catch(() => undefined); throw new Error("background observation unavailable");
     }
