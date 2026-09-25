@@ -29,7 +29,7 @@ test("account model inspection is pure, bounded to the exact owner and admin-onl
   assert.equal(view.headers.get("cache-control"), "no-store");
   assert.deepEqual(view.body, { key, providerId: "openai", credentialGeneration: 1, adapter: "openai.models", attempt: null, snapshot: null, sourceMatches: false, stale: true });
   assert.deepEqual(owner(env).values.get("credential"), before);
-  assert.equal((await env.request("PUT")).status, 405);
+  await assert.rejects(env.request("PUT"), { status: 405, code: "method_not_allowed" });
   assert.deepEqual(owner(env).state.storage.sql.exec("SELECT name FROM sqlite_master WHERE type = 'table'"), [], "GET creates no tables");
   assert.equal((await env.request("GET", { path: route.replace("account/models", "neighbor/models") })).status, 404);
 });
