@@ -28,6 +28,24 @@ function dispatch(f, id) {
 }
 const outcome = () => ({ occurredAtMs: Date.now(), statusCode: 200, status: "success", billable: true, tokens: null, contentRef: null });
 
+test("collection cadence preserves monotonic claims and stale retries cannot shorten a reconstructed outbox", t => {
+  const f = fixture(t), input = f.admission(); f.store.admit(input); dispatch(f, input.id); f.store.identity(input.id, "response-fixture");
+  for (let n = 1; n <= 12; n++) {
+    f.advance(5_000); const [claim] = f.store.claim(Date.now()); assert.equal(claim.attempts, n);
+    f.store.retry(input.id, null, n); assert.equal(f.store.nextDeadline(), Date.now() + 5_000);
+  }
+  f.restart(); f.advance(5_000); const [old] = f.store.claim(Date.now());
+  f.store.retry(input.id, "observation_unavailable", old.attempts);
+  assert.equal(f.store.nextDeadline(), Date.now() + 30_000);
+  f.advance(30_000); const [fresh] = f.store.claim(Date.now());
+  const frozen = f.store.freeze(input.id, outcome()); f.store.retry(input.id, "accounting_unavailable", fresh.attempts);
+  f.restart(); const current = f.store.get(input.id);
+  assert.equal(current.nextAttemptAt, Date.now() + 3_600_000);
+  f.store.retry(input.id, null, old.attempts);
+  assert.deepEqual(f.store.get(input.id), current); assert.deepEqual(current.event, frozen.event);
+  assert.deepEqual(current.legs.map(leg => leg.intent), input.plan.legs);
+});
+
 test("original intent and each acknowledgement survive reconstruction before any egress permission", t => {
   const f = fixture(t), input = f.admission(); f.store.admit(input);
   assert.deepEqual(f.store.beginReserve(input.id, 0), input.plan.legs[0]); f.restart();

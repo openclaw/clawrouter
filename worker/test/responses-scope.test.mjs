@@ -223,3 +223,76 @@ test("conflicting collector identity rolls back a new binding and count in the p
   assert.deepEqual((await f.call("get", { id: input.id })).body, original);
   assert.deepEqual((await f.binding("response-conflict")).owners, [null]);
 });
+
+test("sustained successful collection survives reconstruction and freezes once inside a finite fixture availability window", async t => {
+  const f = fixture(t), input = f.input(), gets = [];
+  await f.admit(input); await f.dispatch(input.id); await f.bind(input);
+  // This window is fixture policy, not an asserted provider retention clock.
+  f.env.GRANT_CREDENTIALS = { idFromName: name => name, get: () => ({ fetch: async () => {
+    const elapsed = Date.now() - input.admittedAt; gets.push(elapsed);
+    if (elapsed >= 120_000) return new Response(null, { status: 404 });
+    return Response.json({ id: "response-fixture", object: "response", status: elapsed >= 105_000 ? "completed" : "in_progress",
+      usage: elapsed >= 105_000 ? { input_tokens: 10, output_tokens: 15, total_tokens: 25 } : null });
+  } }) };
+  let sinkUnavailable = true;
+  f.controls.budget = (name, url, _init, dispatch) => new URL(url).pathname === "/settle" && name === input.plan.legs[1].objectName && sinkUnavailable
+    ? new Response(null, { status: 503 }) : dispatch();
+  for (let poll = 1; poll <= 21; poll++) {
+    if (poll === 11) f.restart();
+    f.advance(5_000); await f.state.object.alarm();
+    const current = (await f.call("get", { id: input.id })).body;
+    assert.equal(current.attempts, poll);
+    if (poll < 21) { assert.equal(current.event, null); assert.equal(current.nextAttemptAt, Date.now() + 5_000); }
+  }
+  assert.deepEqual(gets, Array.from({ length: 21 }, (_, i) => (i+1)*5_000));
+  const frozen = (await f.call("get", { id: input.id })).body;
+  assert.equal(frozen.phase, "outbox"); assert.equal(frozen.event.actual_cost_micros, 25);
+  assert.equal(frozen.event.id, input.facts.event.id); assert.equal(frozen.event.cost_basis, "manifest_pricing");
+  assert.deepEqual(frozen.legs.map(leg => leg.intent), input.plan.legs);
+  assert.equal(frozen.nextAttemptAt, Date.now() + 3_600_000, "financial retry keeps its original cap");
+  f.restart(); sinkUnavailable = false; f.advance(3_600_000); await f.state.object.alarm();
+  const closed = (await f.call("get", { id: input.id })).body;
+  assert.equal(closed.phase, "complete"); assert.equal(closed.eventId, frozen.event.id); assert.equal(gets.length, 21);
+  assert.deepEqual(f.calls.filter(call => call.path === "/ingest").map(call => call.body), [frozen.event]);
+  for (const leg of input.plan.legs) {
+    const [row] = f.budgets.get(leg.objectName).reservations();
+    assert.equal(row.reservation_id, leg.request.reservationId); assert.equal(row.reserved_micros, 25); assert.equal(row.settled, 1);
+  }
+});
+
+test("a transient collection error after many healthy polls has a bounded delay and returns to five seconds", async t => {
+  const f = fixture(t), input = f.input(), gets = [];
+  await f.admit(input); await f.dispatch(input.id); await f.bind(input);
+  f.env.GRANT_CREDENTIALS = { idFromName: name => name, get: () => ({ fetch: async () => {
+    gets.push(Date.now() - input.admittedAt);
+    return gets.length === 13 ? new Response(null, { status: 503 })
+      : Response.json({ id: "response-fixture", object: "response", status: "queued", usage: null });
+  } }) };
+  for (let poll = 1; poll <= 13; poll++) { f.advance(5_000); await f.state.object.alarm(); }
+  let current = (await f.call("get", { id: input.id })).body;
+  assert.equal(current.event, null); assert.equal(current.attempts, 13);
+  assert.equal(current.nextAttemptAt, Date.now() + 30_000);
+  f.restart(); f.advance(30_000); await f.state.object.alarm();
+  current = (await f.call("get", { id: input.id })).body;
+  assert.equal(current.attempts, 14); assert.equal(current.event, null); assert.equal(current.nextAttemptAt, Date.now() + 5_000);
+  f.advance(5_000); await f.state.object.alarm();
+  assert.deepEqual(gets, [...Array.from({ length: 13 }, (_, i) => (i+1)*5_000), 95_000, 100_000]);
+  assert.equal(f.calls.some(call => call.path === "/settle" || call.path === "/ingest"), false);
+});
+
+test("a late collection attempt cannot replace a newer pending observation after reconstruction", { timeout: 2000 }, async t => {
+  const f = fixture(t), input = f.input(), entered = Promise.withResolvers(), release = Promise.withResolvers(), gets = [];
+  await f.admit(input); await f.dispatch(input.id); await f.bind(input);
+  f.env.GRANT_CREDENTIALS = { idFromName: name => name, get: () => ({ fetch: async () => {
+    gets.push(Date.now() - input.admittedAt);
+    if (gets.length === 1) { entered.resolve(); await release.promise; return Response.json({ id: "response-fixture", object: "response", status: "completed", usage: { input_tokens: 999, output_tokens: 1, total_tokens: 1000 } }); }
+    return Response.json({ id: "response-fixture", object: "response", status: "queued", usage: null });
+  } }) };
+  f.advance(5_000); const earlier = f.state.object.alarm(); await entered.promise;
+  f.restart(); f.advance(30_000); await f.state.object.alarm();
+  const newer = (await f.call("get", { id: input.id })).body;
+  assert.equal(newer.attempts, 2); assert.equal(newer.event, null); assert.equal(newer.responseId, "response-fixture");
+  release.resolve(); await earlier;
+  assert.deepEqual((await f.call("get", { id: input.id })).body, newer);
+  assert.deepEqual(gets, [5_000, 35_000]); assert.equal(f.calls.some(call => call.path === "/settle"), false);
+});

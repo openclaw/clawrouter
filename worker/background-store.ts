@@ -209,7 +209,11 @@ export class BackgroundStore {
     const record = this.get(id);
     if (!record || !liveBackground(record) || record.attempts !== attempt) return;
     record.lastError = error;
-    record.nextAttemptAt = Date.now() + Math.min(60 * 60_000, 5_000 * 2 ** Math.min(record.attempts, 10));
+    // Healthy collection must not inherit financial backoff and miss temporary
+    // provider retention. Attempts remain monotonic for the late-result fence.
+    const backoff = 5_000 * 2 ** Math.min(record.attempts, 10);
+    const delay = record.event ? Math.min(60 * 60_000, backoff) : error ? Math.min(30_000, backoff) : 5_000;
+    record.nextAttemptAt = Date.now() + delay;
     this.save(record);
   }
 

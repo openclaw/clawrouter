@@ -392,6 +392,9 @@ or a disconnected caller does not establish a refund. A known-unsent creation
 releases its original holds, while uncertain dispatched work retains the
 conservative amount. JSON/SSE create, retrieve, cancel and collection share one
 immutable accounting event; repeated controls do not create new charges.
+Successful pending observations poll again after five seconds. Observation errors
+back off to at most 30 seconds; these are router scheduling policies, not a
+provider retention guarantee. Financial retries keep their separate backoff.
 
 Financial recovery retries that frozen receipt automatically until seven days
 after admission. Authenticated operator replay remains available until 44 days
