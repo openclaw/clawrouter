@@ -946,6 +946,40 @@ or at 10% remaining capacity, sends one fixed one-token Claude request with no
 user content, and discards the response. Neither contributors nor submitted
 payloads can alter its endpoint, model, headers, prompt, or interval.
 
+### Hosted account inventory
+
+Run the manual **Account routing** workflow from `main` to read the production
+account inventory. The workflow checks out the dispatch's exact commit and makes
+one authenticated `GET /v1/admin/upstream-grants` against
+`https://clawrouter.openclaw.ai`. It works without an account-readiness endpoint.
+It uses the existing `CLAWROUTER_ADMIN_TOKEN`, `CLAWROUTER_ACCESS_CLIENT_ID` and
+`CLAWROUTER_ACCESS_CLIENT_SECRET` repository secrets only in that read step.
+The workflow does not create credentials, install packages, deploy a Worker, or
+run provider smoke. Check that the existing administrator credentials work.
+Exclude overlapping deployments yourself: its concurrency group serializes only
+account-operation runs.
+
+Public receipts contain only source/run identity, API-visible counts and digests,
+or fixed diagnostics. Raw account identities, labels, URLs, credential data and
+server errors stay out of logs. Redirects, failed authentication, malformed or
+oversized responses fail without retrying the request.
+
+The `clawrouter.api-visible-grants.v1` digest hashes JSON containing that `schema`
+and `grants` sorted by key. Each projected grant contains only `key`, `provider`,
+`kind`, `enabled`, `updatedAt`, `revokedAt`, `credentialStatus` in that order;
+missing optional values become `null`, and legacy strings retain their exact
+bytes without timestamp or enum normalization. The separate `keyNamesSha256` hashes
+`{schema: "clawrouter.api-visible-grant-keys.v1", keys}` with the same sorted key
+names. Labels and mutable quota observations do not affect these digests.
+Compare an earlier private key-name inventory only after recomputing it with
+this exact versioned algorithm; a digest from another format is not comparable.
+
+This receipt covers the API-visible projection only. Null KV values and
+index-only owners are outside it; an empty projection never proves empty storage,
+stopped writers, or matched storage lineage. Review the full inventory privately.
+The workflow changes no account state and provides no baseline acceptance or
+routing activation action.
+
 ### Contributor intake
 
 An administrator can authorize one credential contribution without sharing an

@@ -1,0 +1,38 @@
+name: Account routing
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: account-routing-production
+  cancel-in-progress: false
+
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: "true"
+
+jobs:
+  inventory:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Require main
+        env:
+          SOURCE_REF: ${{ github.ref }}
+        run: test "$SOURCE_REF" = refs/heads/main
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+      - name: Read account inventory
+        env:
+          CLAWROUTER_BASE_URL: https://clawrouter.openclaw.ai
+          CLAWROUTER_ADMIN_TOKEN: ${{ secrets.CLAWROUTER_ADMIN_TOKEN }}
+          CF_ACCESS_CLIENT_ID: ${{ secrets.CLAWROUTER_ACCESS_CLIENT_ID }}
+          CF_ACCESS_CLIENT_SECRET: ${{ secrets.CLAWROUTER_ACCESS_CLIENT_SECRET }}
+        run: node scripts/grant-pool-operations.mjs
