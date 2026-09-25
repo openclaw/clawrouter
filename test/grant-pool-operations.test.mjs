@@ -76,6 +76,13 @@ test("legacy metadata strings remain observable without imposing current write f
   assert.equal(inventorySummary({ grants: [legacy] }).keyNamesSha256, inventorySummary(inventory).keyNamesSha256);
 });
 
+test("revoked count matches owner truthiness while the digest retains empty timestamp bytes", () => {
+  for (const [revokedAt, expected] of [[null, 0], ["", 0], [stamp, 1]]) {
+    assert.equal(inventorySummary({ grants: [{ ...grant, revokedAt }] }).revoked, expected);
+  }
+  assert.notEqual(inventorySummary({ grants: [{ ...grant, revokedAt: "" }] }).sha256, inventorySummary({ grants: [{ ...grant, revokedAt: null }] }).sha256);
+});
+
 test("fixed destination, main and invocation identity are validated before any request", async () => {
   for (const change of [{ CLAWROUTER_BASE_URL: "https://other.example" }, { CLAWROUTER_BASE_URL: "http://clawrouter.openclaw.ai" }, { CLAWROUTER_BASE_URL: "https://clawrouter.openclaw.ai/extra" }, { GITHUB_REF: "refs/heads/fixture" }, { GITHUB_ACTOR: privateValue + "/" }, { GITHUB_RUN_ID: privateValue }, { GITHUB_SHA: privateValue }]) {
     let calls = 0;

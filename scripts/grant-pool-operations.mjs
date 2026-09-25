@@ -43,7 +43,7 @@ export function inventorySummary(value) {
     schema, count: grants.length,
     enabled: grants.filter(grant => grant.enabled).length,
     disabled: grants.filter(grant => !grant.enabled).length,
-    revoked: grants.filter(grant => grant.revokedAt !== null).length,
+    revoked: grants.filter(grant => Boolean(grant.revokedAt)).length,
     sha256: digest({ schema, grants }),
     keyNamesSha256: digest({ schema: "clawrouter.api-visible-grant-keys.v1", keys: grants.map(grant => grant.key) }),
   };
