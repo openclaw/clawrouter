@@ -181,8 +181,9 @@ Usage events are queued into a Durable Object shard named by tenant and policy.
 If queue publication rejects, the Worker writes the same event directly to that
 shard through the queue consumer's ingest path. The event ID remains unchanged:
 an ID-targeted SQL conflict deduplicates a later delivery if the rejected send
-was actually accepted. Successful queue acceptance or direct ingestion completes
-publication; failure of both remains an accounting failure.
+was actually accepted. Successful queue acceptance or a validated direct-ingest
+receipt completes publication; queue acceptance alone does not prove ingestion.
+Failure of both remains an accounting failure, with no automatic direct retry.
 
 The usage ledger's internal `/ingest` returns JSON `{ eventId, outcome }`, with
 `stored`, `duplicate`, or `expired_by_retention`. It requires a nonempty event ID
@@ -190,10 +191,20 @@ and the supplied nonnegative safe-integer `occurred_at_ms`; it never replaces a
 missing timestamp with the current time. Cleanup and admission share one captured
 30-day cutoff: timestamps strictly before it expire, while a retained duplicate
 keeps its first payload and timestamp. A new expired event is not inserted.
-SQL and alarm scheduling must succeed before a receipt is returned. This is a
-producer-first rollout: current direct and queue consumers still check HTTP
-status only. A strict receipt consumer requires verified deployment of this
-producer first; background accounting is not enabled by this change.
+SQL and alarm scheduling must succeed before a receipt is returned. Direct and
+queue consumers require the exact event ID and one of these three outcomes;
+additive JSON fields are allowed. Empty, malformed or unrelated 2xx responses
+fail ingestion and queue delivery retries. Retention expiry acknowledges only
+usage disposition, never a financial settlement.
+
+Existing installations, including self-hosted deployments, must deploy and verify
+the receipt producer from `8c25f81` or later before enabling this strict consumer.
+Fresh installations include the producer and consumer together.
+[Worker and Durable Object code updates can overlap](https://developers.cloudflare.com/durable-objects/platform/known-issues/#code-updates).
+Rollback below that producer or prolonged version skew can exhaust the configured
+five retries and send usage messages to the DLQ; follow the [DLQ recovery procedure](deploy-cloudflare.md).
+Deployment completion does not prove old writers drained or guarantee eventual
+delivery. This change does not enable background accounting.
 
 Session/admin reads aggregate each relevant tenant/policy shard once, even when
 the input policy list repeats a scope. The former global ledger's migration
