@@ -24,6 +24,7 @@ export interface AdmittedResponse {
   pin: string;
   payload: string;
   timeoutMs: number;
+  assertDispatch(): void;
   connect(): Promise<ResponsesSocket>;
   publish(identities: readonly ResponseIdentity[], frame: Frame): Promise<void>;
   settle(outcome: Outcome, terminal: Frame | null, sent: boolean, executionStarted: boolean): Promise<void>;
@@ -181,6 +182,7 @@ export class ResponsesWebSocketSession {
       const socket = await this.connecting;
       establishing = false;
       if (this.ending || op.ending) { await this.finish(op, this.ending ?? "router_error", null); return; }
+      op.admitted.assertDispatch();
       socket.send(op.admitted.payload);
       op.sent = true;
       // Settlement captures only immutable accounting facts, never a request body.

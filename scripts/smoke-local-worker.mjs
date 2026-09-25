@@ -8,6 +8,8 @@ import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "
 import { createServer as createHttpServer } from "node:http";
 import { createServer as createTcpServer } from "node:net";
 import { fileURLToPath } from "node:url";
+import { adminRequest } from "./admin-api.mjs";
+import { acceptGrantPoolBaseline, recoverGrantPools } from "./grant-pool-recovery.mjs";
 
 // Signal Wrangler directly; a package-manager launcher may leave its child alive.
 const wrangler = fileURLToPath(new URL(wranglerMetadata.bin.wrangler, import.meta.resolve("wrangler/package.json")));
@@ -189,6 +191,19 @@ try {
   assert.equal(bootstrapBody.fusion.modelId, "clawrouter/fusion");
   assert.equal(bootstrapBody.fusion.enabled, false);
   const adminHeaders = { authorization: `Bearer ${adminToken}`, "content-type": "application/json" };
+  const recoveryRequest = (path, options) => adminRequest(path, { ...options, env: { CLAWROUTER_BASE_URL: base, CLAWROUTER_ADMIN_TOKEN: adminToken } });
+  const beforeActivation = await fetch(`${base}/v1/chat/completions`, { method: "POST", headers: { authorization: `Bearer ${fusionReadyKey}`, "content-type": "application/json" }, body: JSON.stringify({ model: "local/default", messages: [{ role: "user", content: "readiness fixture" }] }) });
+  assert.equal(beforeActivation.status, 503);
+  const readinessRequestId = beforeActivation.headers.get("x-request-id");
+  assert.ok(readinessRequestId);
+  assert.equal((await beforeActivation.json()).error.code, "grant_pool_not_ready");
+  assert.equal(upstreamCalls.length, 0);
+  // The fixture knows its complete legacy inventory and has stopped seeding.
+  // An unresolved raw account must be explicitly removed before activation.
+  await acceptGrantPoolBaseline("existing", { request: recoveryRequest });
+  await assert.rejects(() => recoverGrantPools({ request: recoveryRequest }), /migration remains unresolved/);
+  assert.equal((await fetch(`${base}/v1/admin/upstream-grants/policies/migrate/legacy_invalid/revoke`, { method: "POST", headers: adminHeaders })).status, 200);
+  assert.ok((await recoverGrantPools({ request: recoveryRequest })).activatedAt);
   for (const [method, path] of [
     ["POST", "/v1/proxy/%ZZ/search"],
     ["POST", "/v1/proxy/tavily/%ZZ"],
@@ -331,19 +346,31 @@ try {
   assert.equal(unavailableFusionResponse.status, 200);
   await unavailableFusionResponse.text();
   assert.equal(unavailableFusionResponse.headers.get("x-clawrouter-fusion-failed-count"), "1");
-  let unavailableUsage;
+  let unavailableUsage, unavailableEvents = [];
   await waitUntil(async () => {
     const response = await fetch(`${base}/v1/usage`, { headers: { authorization: `Bearer ${fusionReadyKey}` } });
     assert.equal(response.status, 200);
     unavailableUsage = await response.json();
-    return unavailableUsage.usage.events.length === 2 && unavailableUsage.budget.spentMicros === 1;
+    const readinessEvent = unavailableUsage.usage.events.find(event => event.request_id === readinessRequestId);
+    const synthesizer = unavailableUsage.usage.events.find(event => event.request_id === "fusion-e2e-http-error" && event.compound_request_stage === "fusion_synthesizer");
+    unavailableEvents = synthesizer?.compound_request_id ? unavailableUsage.usage.events.filter(event => event.compound_request_id === synthesizer.compound_request_id) : [];
+    return !!readinessEvent && unavailableEvents.length === 2 && unavailableUsage.budget.spentMicros === 1;
   }, "HTTP-error adviser accounting was not delivered");
-  const unavailableAdviser = unavailableUsage.usage.events.find(event => event.compound_request_stage === "fusion_adviser");
+  const readinessEvent = unavailableUsage.usage.events.find(event => event.request_id === readinessRequestId);
+  assert.equal(readinessEvent.status_code, 503);
+  assert.equal(readinessEvent.reserved_cost_micros, 0);
+  assert.equal(readinessEvent.actual_cost_micros, 0);
+  assert.equal(readinessEvent.compound_request_id, null);
+  assert.deepEqual(unavailableEvents.map(event => event.compound_request_stage).sort(), ["fusion_adviser", "fusion_synthesizer"]);
+  const unavailableAdviser = unavailableEvents.find(event => event.compound_request_stage === "fusion_adviser");
   assert.equal(unavailableAdviser.status_code, 503);
   assert.equal(unavailableAdviser.reserved_cost_micros, 1);
   assert.equal(unavailableAdviser.actual_cost_micros, 0);
+  const unavailableSynthesizer = unavailableEvents.find(event => event.compound_request_stage === "fusion_synthesizer");
+  assert.equal(unavailableSynthesizer.status_code, 200);
+  assert.equal(unavailableSynthesizer.actual_cost_micros, 1);
   assert.equal(unavailableUsage.budget.spentMicros, 1, "only the successful synthesizer is charged; the failed adviser reservation is released");
-  assert.equal(new Set(unavailableUsage.usage.events.map(event => event.compound_request_id)).size, 1);
+  assert.equal(new Set(unavailableEvents.map(event => event.compound_request_id)).size, 1);
   const legacyInvalidGrant = bootstrapBody.grants.find((entry) => entry.tokenRef === "legacy_invalid");
   assert.equal(legacyInvalidGrant.hasCredential, false, "stored empty credential bundles are not reported as configured");
   assert.deepEqual(legacyInvalidGrant.credentialFields, []);

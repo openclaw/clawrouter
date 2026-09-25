@@ -219,7 +219,7 @@ async function gatewayFixture(t) {
       if (path === "/credentials/resolve") return Response.json({ initialized: true, credentials: [{ credentialId: "fixture", credential }], missingCredentialIds: [] });
       if (path === "/policies/resolve") return Response.json({ initialized: true, policies: [{ policyId: "fixture", policy }], missingPolicyIds: [] });
       if (path === "/connections/resolve") return Response.json({ initialized: true, connections: [connection], missingProviderIds: [] });
-      if (path === "/grant-pools/resolve") return Response.json({ keys: [], states: {} });
+      if (path === "/grant-pools/resolve") return Response.json({ keys: [], states: {}, ready: true });
       throw new Error(`unexpected authority call ${path}`);
     } }) },
   };

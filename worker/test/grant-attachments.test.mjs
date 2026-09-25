@@ -288,10 +288,16 @@ test("raw migration and ordinary refresh remain unattached after a lost publicat
     if (new URL(url).pathname === "/grant-pools/publish" && fail) { fail = false; throw new Error("publication acknowledgement lost"); }
     return response;
   };
-  context.mock.method(globalThis, "fetch", async () => Response.json({ access_token: "rotated-fixture", expires_in: 3600 }));
-  await assert.rejects(() => materializeGrantCredentials(env, key, raw, "openai", null, false));
+  let refreshes = 0;
+  context.mock.method(globalThis, "fetch", async () => { refreshes++; return Response.json({ access_token: "rotated-fixture", expires_in: 3600 }); });
+  await assert.rejects(() => materializeGrantCredentials(env, key, raw, "openai", null, false), error => error.code === "credential_owner_error");
+  const pending = env.GRANT_CREDENTIALS.objects.get(key).values.get("credential");
+  assert.equal(pending.poolSyncPending, true);
+  assert.equal(pending.nextRefreshAttemptAt, null, "index ACK failure is not a provider refresh failure");
+  assert.equal(refreshes, 0);
   const migrated = await materializeGrantCredentials(env, key, raw, "openai", { tokenUrl: "https://token.example/refresh", extraParams: {} }, false);
   assert.equal(migrated.accessToken, "rotated-fixture");
+  assert.equal(refreshes, 1);
   assert.equal((await pool(env, "openai")).hasAttachment, false);
   const first = await reconcileGrantAttachment(env, key), replay = await reconcileGrantAttachment(env, key);
   assert.equal(first.outcome, "unattached");

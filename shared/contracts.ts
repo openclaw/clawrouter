@@ -178,6 +178,8 @@ export interface UpstreamGrant {
   hasAccessToken: boolean;
   hasRefreshToken: boolean;
   credentialStatus?: "active" | "reauth_required";
+  tokenResponseError?: "invalid_expiry" | null;
+  nextRefreshAttemptAt?: string | null;
   refreshConfigured: boolean;
   usable: boolean;
   selectedCount: number;
@@ -196,6 +198,21 @@ export interface UpstreamGrant {
     limit: number | null;
     resetAt: string | null;
   }>;
+}
+
+export type AccountCredentialView = Omit<UpstreamGrant,
+  "selectedCount" | "lastSelectedAt" | "quotaStatus" | "quotaObservedAt" | "cooldownUntil" | "quotaSource" | "lastProviderSignal" | "quotaWindows"
+> & {
+  credentialGeneration: number;
+  publication: "ready" | "pending";
+  refreshTokenUrl: string | null;
+  clientIdConfig: string | null;
+  clientSecretConfig: string | null;
+};
+
+export interface AccountCredentialMutationReceipt {
+  outcome: "committed";
+  grant: AccountCredentialView;
 }
 
 export interface AssignmentRule {
@@ -337,7 +354,26 @@ export interface UsageAuditEvent {
 export interface UsageSnapshot { ledger: string; summary: UsageSummary; providers: ProviderUsageSummary[]; daily?: UsageDailySummary[]; events: UsageAuditEvent[] }
 export interface RetainedRequestContent { requestId: string; occurredAtMs: number; expiresAtMs: number; principalId?: string | null; provider: string; capability: string; model?: string | null; body: unknown }
 
+export interface GrantPoolRepairIssue {
+  key: string;
+  reason: "owner_unavailable" | "owner_missing" | "identity_unresolved" | "repair_failed";
+}
+
+export interface GrantPoolReadiness {
+  revision: number;
+  baseline: "fresh" | "existing" | null;
+  acceptedAt: string | null;
+  phase: "idle" | "kv" | "index" | "complete";
+  cursor: string | null;
+  scanRevision: number | null;
+  scanned: number;
+  issues: GrantPoolRepairIssue[];
+  overflow: boolean;
+  activatedAt: string | null;
+}
+
 export interface AdminBootstrapResponse {
+  grantPoolReadiness: GrantPoolReadiness;
   policies: AccessPolicy[];
   credentials: ProxyCredential[];
   connections: ProviderConnection[];

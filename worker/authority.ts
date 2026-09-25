@@ -6,6 +6,7 @@ import { evaluateUserAssignments, withLegacyAssignmentState, type AssignmentEvid
 import { contentRetentionDefault } from "./content-retention.ts";
 import { normalizeConnectionMutation, type ProviderConnectionMutation } from "./provider-connections.ts";
 import { HttpContinuationStore } from "./continuation-store.ts";
+import { GrantPoolReadinessStore, type GrantPoolScanPage } from "./grant-pool-readiness.ts";
 import { boundedPercent, selectThresholdGrantKey, stickyScore, weightedRandom } from "./grant-selection-strategies.ts";
 import { errorResponse, HttpError, json, normalizeEmail, readJson, safeEqual } from "./utils.ts";
 
@@ -30,11 +31,13 @@ export class PolicyBindingIndexObject implements DurableObject {
   private sql: SqlStorage;
   private storage: DurableObjectStorage;
   private continuations?: HttpContinuationStore;
+  private grantReadiness: GrantPoolReadinessStore;
 
   constructor(state: DurableObjectState) {
     this.storage = state.storage;
     this.sql = state.storage.sql;
     this.ensureSchema();
+    this.grantReadiness = new GrantPoolReadinessStore(this.storage);
   }
 
   async fetch(request: Request): Promise<Response> {
@@ -71,6 +74,12 @@ export class PolicyBindingIndexObject implements DurableObject {
       if (path === "/connections/initialize-all") { this.initializeConnections(await readJson<ProviderConnection[]>(request)); this.putMeta("connections_global_initialized"); return new Response("initialized"); }
       if (path === "/connections/put") return json(this.putConnection(await readJson<ProviderConnectionMutation>(request)));
       if (path === "/grant-pools/resolve") return json(this.resolveGrantPool(await readJson<GrantPoolResolveRequest>(request)));
+      if (path === "/grant-pools/readiness") return json(this.grantReadiness.status());
+      if (path === "/grant-pools/readiness/baseline") return json(this.grantReadiness.baseline(await readJson(request)));
+      if (path === "/grant-pools/readiness/begin") return json(this.grantReadiness.begin(await readJson(request)));
+      if (path === "/grant-pools/readiness/advance") return json(this.grantReadiness.advance(await readJson<GrantPoolScanPage>(request)));
+      if (path === "/grant-pools/readiness/activate") return json(this.grantReadiness.activate(await readJson(request)));
+      if (path === "/grant-pools/readiness/keys") return json(this.grantReadiness.keys(await readJson(request)));
       if (path === "/grant-pools/attachment") return json(this.grantAttachment((await readJson<{ key: string }>(request)).key));
       if (path === "/grant-pools/admit") return json(this.admitGrantAttachment(await readJson<GrantAttachmentMutation>(request)));
       if (path === "/grant-pools/publish") return json(this.publishGrantAttachment(await readJson<GrantAttachmentMutation>(request)));
@@ -349,7 +358,7 @@ export class PolicyBindingIndexObject implements DurableObject {
     return { initialized: this.hasMeta("connections_global_initialized"), connections, missingProviderIds };
   }
 
-  private resolveGrantPool(input: GrantPoolResolveRequest): { keys: string[]; states: Record<string, GrantRuntimeState>; hasAttachment: boolean } {
+  private resolveGrantPool(input: GrantPoolResolveRequest): { keys: string[]; states: Record<string, GrantRuntimeState>; hasAttachment: boolean; ready: boolean } {
     const providerId = grantSegment(input.providerId, "providerId");
     const policyId = grantPoolScopeId(input.policyId);
     const tenantId = grantPoolScopeId(input.tenantId);
@@ -359,7 +368,7 @@ export class PolicyBindingIndexObject implements DurableObject {
       ...(tenantId ? this.poolTokenRefs("tenants", tenantId, providerId).map((tokenRef) => `oauth/tenants/${tenantId}/${tokenRef}`) : []),
     ])];
     const hasAttachment = [policyId && ["policies", policyId], tenantId && ["tenants", tenantId]].some((scope) => scope && rows(this.sql.exec("SELECT 1 FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND provider_id = ? LIMIT 1", ...scope, providerId)).length > 0);
-    return { keys, states: this.grantRuntimeStates(keys), hasAttachment };
+    return { keys, states: this.grantRuntimeStates(keys), hasAttachment, ready: this.grantReadiness.status().activatedAt !== null };
   }
 
   private grantAttachment(key: string): GrantAttachmentSnapshot {
@@ -474,6 +483,7 @@ export class PolicyBindingIndexObject implements DurableObject {
 
   private storeAttachmentVersion(key: string, generation: number, revision: number): void {
     this.sql.exec("INSERT INTO upstream_grant_pool_versions (grant_key, generation, revision) VALUES (?, ?, ?) ON CONFLICT (grant_key) DO UPDATE SET generation = excluded.generation, revision = excluded.revision", key, generation, revision);
+    this.grantReadiness.mutation();
   }
 
   private putGrantRuntime(input: GrantRuntimeFeedbackRequest): void {
@@ -760,7 +770,11 @@ export async function authorityCall<T>(env: Env, path: string, body: unknown, ob
   const stub = env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName(objectName));
   const response = await stub.fetch(`https://clawrouter.internal${path}`, { method: "POST", body: JSON.stringify(body), signal });
   const text = await response.text();
-  if (!response.ok) throw new Error(`authority ${path} failed (${response.status}): ${text}`);
+  if (!response.ok) {
+    let error: { code?: string; message?: string } = {};
+    try { error = JSON.parse(text)?.error ?? {}; } catch { /* never expose an unstructured authority body */ }
+    throw new HttpError(response.status, typeof error.code === "string" ? error.code : "authority_error", typeof error.message === "string" ? error.message : "authority request failed");
+  }
   return text && response.headers.get("content-type")?.includes("application/json") ? JSON.parse(text) as T : text as T;
 }
 

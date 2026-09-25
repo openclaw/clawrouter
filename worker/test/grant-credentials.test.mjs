@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { materializeGrantCredentials, putGrantCredentials, revokeGrantCredentials } from "../grant-credentials.ts";
-import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
+import { attachGrantCredentialNamespace, rateLimitKv } from "./grant-credential-mock.mjs";
 
 test("legacy grants migrate to the credential owner before KV secrets are scrubbed", async () => {
   const key = "oauth/policy/openai";
@@ -119,8 +119,9 @@ for (const outcome of ["success", "permanent", "transient"]) test(`legacy migrat
   assert.equal(metadata.refreshToken, undefined);
 });
 
-for (const action of ["disable", "revoke"]) test(`consecutive explicit ${action} remains authoritative when KV rate limits publication`, async () => {
+for (const action of ["disable", "revoke"]) test(`consecutive explicit ${action} remains authoritative when KV rate limits publication`, async context => {
   const key = "oauth/policy/openai", values = new Map(), env = credentialEnv(values), limit = rateLimitKv(env);
+  context.mock.method(globalThis, "fetch", async () => assert.fail("disabled owner must not dispatch"));
   const active = await putGrantCredentials(env, key, legacyGrant());
   await assert.rejects(() => action === "revoke" ? revokeGrantCredentials(env, key) : putGrantCredentials(env, key, { ...active, enabled: false }, true), (error) => error.code === "credential_owner_error");
   const owner = env.GRANT_CREDENTIALS.objects.get(key), record = owner.values.get("credential");
@@ -128,7 +129,10 @@ for (const action of ["disable", "revoke"]) test(`consecutive explicit ${action}
   assert.equal(owner.alarm(), null);
   assert.equal(values.get(key).enabled, true, "the rejected projection remains visibly stale");
   if (action === "revoke") { assert.ok(record.revokedAt); assert.equal(record.accessToken, undefined); assert.equal(record.refreshToken, undefined); }
-  await assert.rejects(() => materializeGrantCredentials(env, key, active, "openai", refreshConfig(), false), (error) => error.code === "credential_owner_error");
+  await assert.rejects(() => materializeGrantCredentials(env, key, active, "openai", refreshConfig(), false), (error) => error.code === "grant_disabled");
+  assert.equal(owner.values.get("credential").poolSyncPending, true, "the original denial does not acknowledge failed cleanup");
+  assert.equal(owner.values.get("credential").generation, record.generation);
+  assert.equal(values.get(key).enabled, true);
   limit.advance();
   await assert.rejects(() => materializeGrantCredentials(env, key, active, "openai", refreshConfig(), false), (error) => error.code === "grant_disabled");
   assert.equal(values.get(key).enabled, false);
@@ -414,6 +418,8 @@ for (const failure of ["index", "storage"]) test(`negative upgrade migration ret
   }
   assert.equal(values.get(key).enabled, false);
   await owner.object.alarm();
+  // An inactive owner has no provider work: one complete finalizer retries
+  // the failed index once, without a second no-op publication on the same alarm.
   assert.equal(syncs, failure === "index" ? 2 : 1);
   assert.equal(owner.values.get("credential").enabled, false);
   assert.equal(owner.values.get("credential").accessToken, undefined);
@@ -535,17 +541,6 @@ function credentialEnv(values) {
       async put(key, value) { values.set(key, JSON.parse(value)); },
     },
   });
-}
-
-function rateLimitKv(env) {
-  const put = env.POLICY_KV.put;
-  let now = 0, lastWrite = -Infinity, writes = 0;
-  env.POLICY_KV.put = async (...args) => {
-    if (now - lastWrite < 1_000) throw new Error("KV PUT failed: 429 Too Many Requests");
-    await put(...args);
-    lastWrite = now; writes += 1;
-  };
-  return { advance() { now += 1_000; }, writes: () => writes };
 }
 
 function legacyGrant(overrides = {}) {

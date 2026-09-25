@@ -113,15 +113,14 @@ export async function verifyPolicyKvPreviewNamespaceTarget(
   );
 }
 
-export function fakecoAccessServiceTokenIds(target, env = process.env) {
+export function accessServiceTokenIds(target, env = process.env) {
   const ids = (env.CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS || "")
     .split(",")
     .map((value) => value.trim())
     .filter(Boolean);
-  if (target.environment !== "fakeco") return ids;
   if (ids.length === 0) {
     throw new Error(
-      "FakeCo Access requires CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS before any Access mutation",
+      `${target.environment === "fakeco" ? "FakeCo" : "Managed"} Access requires CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS before any Access mutation`,
     );
   }
   if (new Set(ids).size !== ids.length) {

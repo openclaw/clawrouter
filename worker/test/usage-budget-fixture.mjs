@@ -14,7 +14,7 @@ export function usageEnv(objectNames, { provider = "openai", limit = 100, provid
       if (path === "/policies/resolve") return Response.json({ initialized: true, policies: [{ policyId: "maintainer_access", policy }], missingPolicyIds: [] });
       if (path === "/users/resolve") return Response.json({ initialized: true, users: [], missingEmails: [] });
       if (path === "/connections/resolve") return Response.json({ initialized: true, connections: [{ providerId: provider, enabled: true, monthlyBudgetMicros: providerLimit }], missingProviderIds: [] });
-      if (path === "/grant-pools/resolve") return Response.json({ keys: [], states: {} });
+      if (path === "/grant-pools/resolve") return Response.json({ keys: [], states: {}, ready: true });
       throw new Error(`unexpected authority path ${path}`);
     } }),
   };

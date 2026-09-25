@@ -187,8 +187,8 @@ function mockEnv(initial = {}) {
         return { async fetch(url, init) {
           const path = new URL(url).pathname, body = JSON.parse(init.body);
           if (path === "/grant-pools/resolve") {
-            const { keys } = await env.grantAuthority.call("resolve", body);
-            return Response.json({ keys, states: Object.fromEntries(keys.flatMap((key) => runtime.has(key) ? [[key, runtime.get(key)]] : [])) });
+            const resolved = await env.grantAuthority.call("resolve", body), { keys } = resolved;
+            return Response.json({ ...resolved, states: Object.fromEntries(keys.flatMap((key) => runtime.has(key) ? [[key, runtime.get(key)]] : [])) });
           }
           if (path === "/grant-pools/feedback") { runtime.set(body.key, body.state); return new Response("updated"); }
           if (path === "/grant-pools/states") return Response.json({ states: Object.fromEntries(body.keys.flatMap((key) => runtime.has(key) ? [[key, runtime.get(key)]] : [])) });

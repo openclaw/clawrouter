@@ -380,6 +380,7 @@ async function fixture(page: Page) {
       "/v1/session/usage": state.usage,
       "/v1/session/credentials": { credentials: [] },
       "/v1/admin/bootstrap": {
+        grantPoolReadiness: { revision: 1, baseline: "fresh", acceptedAt: "2026-07-06T12:00:00.000Z", phase: "complete", cursor: null, scanRevision: 0, scanned: 0, issues: [], overflow: false, activatedAt: "2026-07-06T12:00:00.000Z" },
         policies: [policy], credentials: [], connections: [], users: [user], bindings: [], grants: [], rules: [], providers: [], tenants: [],
         overview: { policiesTotal: 1, policiesActive: 1, tenantsTotal: 1, keysTotal: 0, keysActive: 0, providerCount: 0, openaiCompatibleProviders: 0, manifestRoutes: 0, monthlyBudgetMicros: 10_000_000, requestCostMicros: 0 },
         fusion: { version: 1, modelId: "clawrouter/fusion", enabled: false, adviserModels: [], aggregatorModel: "", adviserTimeoutMs: 10_000, maxOutputTokens: 100, maxInputChars: 1000, maxProposalChars: 1000, temperature: 0.7 },

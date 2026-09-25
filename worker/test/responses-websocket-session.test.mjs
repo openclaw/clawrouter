@@ -21,7 +21,7 @@ function fixture(t, options = {}) {
       const index = admitted.length;
       admitted.push({ body, lane, requestId, pin, signal });
       if (options.admit) await options.admit(index, body, signal);
-      return { pin: "fixture-route:grant-1", payload: JSON.stringify({ type: "response.create", ...body, ...(lane ? { stream_id: lane } : {}) }), timeoutMs: 600_000, connect: options.connect ?? (async () => upstream), publish: async (identities, frame) => { await options.publish?.(index, identities, frame); }, settle: async (outcome, terminal, sent, executionStarted) => { settled.push({ index, outcome, terminal, sent, executionStarted }); await options.settle?.(); } };
+      return { pin: "fixture-route:grant-1", payload: JSON.stringify({ type: "response.create", ...body, ...(lane ? { stream_id: lane } : {}) }), timeoutMs: 600_000, assertDispatch: () => options.assertDispatch?.(index), connect: options.connect ?? (async () => upstream), publish: async (identities, frame) => { await options.publish?.(index, identities, frame); }, settle: async (outcome, terminal, sent, executionStarted) => { settled.push({ index, outcome, terminal, sent, executionStarted }); await options.settle?.(); } };
     },
   });
   t.after(async () => { session.close(); await Promise.all(pending); });
@@ -515,4 +515,48 @@ test("pending output count and bytes are bounded even while one identity write i
     assert.equal(f.client.sent.length, 1);
     assert.equal(JSON.parse(f.client.sent[0]).error.code, "websocket_connection_limit_reached");
   }
+});
+
+
+for (const reuse of [false, true]) test(`dispatch guard denies ${reuse ? "reused" : "initial"} creates after connection await without marking sent`, async t => {
+  const gate = Promise.withResolvers();
+  let checks = 0;
+  const f = fixture(t, {
+    connect: () => gate.promise,
+    assertDispatch(index) { checks++; if (index === (reuse ? 1 : 0)) throw Object.assign(new Error("expired fixture"), { code: "grant_refresh_failed", status: 502 }); },
+  });
+  f.client.receive(create("lane"));
+  await tick();
+  assert.equal(checks, 0);
+  gate.resolve(f.upstream);
+  await tick();
+  if (reuse) {
+    respond(f, "lane");
+    await tick();
+    f.client.receive(create("lane"));
+    await tick();
+  }
+  assert.equal(f.upstream.sent.length, reuse ? 1 : 0);
+  assert.equal(f.settled.length, reuse ? 2 : 1);
+  assert.equal(f.settled.at(-1).sent, false);
+  assert.equal(f.settled.at(-1).executionStarted, false);
+  assert.equal(f.settled.at(-1).outcome, "error");
+  assert.match(f.client.sent.at(-1), /grant_refresh_failed/);
+  f.session.close();
+  await tick();
+  assert.equal(f.settled.length, reuse ? 2 : 1);
+});
+
+test("owned close wins before a late dispatch guard", async t => {
+  const gate = Promise.withResolvers();
+  let checks = 0;
+  const f = fixture(t, { connect: () => gate.promise, assertDispatch() { checks++; throw new Error("must not run"); } });
+  f.client.receive(create());
+  await tick();
+  f.session.close("client_disconnect");
+  gate.resolve(f.upstream);
+  await tick();
+  assert.equal(checks, 0);
+  assert.equal(f.upstream.sent.length, 0);
+  assert.deepEqual(f.settled.map(({ outcome, sent }) => ({ outcome, sent })), [{ outcome: "client_disconnect", sent: false }]);
 });

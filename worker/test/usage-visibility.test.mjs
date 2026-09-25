@@ -2,8 +2,10 @@ import "./typescript-setup.mjs";
 import assert from "node:assert/strict";
 import { DatabaseSync } from "node:sqlite";
 import test from "node:test";
+import { acceptGrantPoolBaseline, recoverGrantPools } from "../../scripts/grant-pool-recovery.mjs";
+import { createGrantAuthority } from "./grant-authority-fixture.mjs";
 const { default: worker } = await import("../index.ts");
-const { PolicyBindingIndexObject, authorityCall } = await import("../authority.ts");
+const { authorityCall } = await import("../authority.ts");
 const { BudgetLedgerObject, UsageLedgerObject, ingestUsage, providerBudgetStatus } = await import("../ledgers.ts");
 const { normalizeEmail, sha256Hex } = await import("../utils.ts");
 
@@ -47,6 +49,7 @@ for (const [name, tenantField, tenant] of [["omitted", {}, "default"], ["null", 
     await authorityCall(f.env, "/policies/put", { policyId: "shared", policy: { enabled: true, generation: "g1", providers: ["openai"], monthlyBudgetMicros: 100, requestCostMicros: 7, budgetScope: "principal", retainRequestContent: false, ...tenantField } });
     await authorityCall(f.env, "/connections/put", { providerId: "openai", enabled: true, monthlyBudgetMicros: 100 });
     f.env.OPENAI_API_KEY = "fixture-upstream-key";
+    await f.activateAccounts();
     const emitted = [];
     f.env.USAGE_QUEUE = { async send(event) { emitted.push(event); } };
     const cookies = [];
@@ -119,6 +122,7 @@ test("Access speech delivery with an omitted policy tenant remains visible in se
   await authorityCall(f.env, "/policies/put", { policyId: "shared", policy: { enabled: true, generation: "g1", providers: ["openai"], monthlyBudgetMicros: 1000, budgetScope: "principal", retainRequestContent: false } });
   await authorityCall(f.env, "/connections/put", { providerId: "openai", enabled: true, monthlyBudgetMicros: 1000 });
   f.env.OPENAI_API_KEY = "fixture-upstream-key";
+  await f.activateAccounts();
   await f.setUser("alice@example.com", { tenantId: "organization" });
   const cookie = await f.login("alice@example.com"), emitted = [], pending = [];
   f.env.USAGE_QUEUE = { async send(event) { emitted.push(event); } };
@@ -275,10 +279,10 @@ async function fixture(t, budgetScope = "policy", upstream = () => assert.fail("
       return objects.get(name);
     } };
   }
-  const kv = new Map(), adminToken = "fixture-admin-token";
+  const kv = new Map(), adminToken = "fixture-admin-token", authority = createGrantAuthority();
   const env = {
     CLAWROUTER_LOCAL_AUTH: "enabled", CLAWROUTER_ADMIN_TOKEN_SHA256: await sha256Hex(adminToken),
-    ACCESS_CONTROL: namespace(PolicyBindingIndexObject), USAGE_LEDGER: namespace(UsageLedgerObject), BUDGET_LEDGER: namespace(BudgetLedgerObject),
+    ACCESS_CONTROL: { idFromName: name => name, get: () => authority }, USAGE_LEDGER: namespace(UsageLedgerObject), BUDGET_LEDGER: namespace(BudgetLedgerObject),
     POLICY_KV: { async get(key) { const read = key => kv.has(key) ? JSON.parse(kv.get(key)) : null; return Array.isArray(key) ? new Map(key.map(item => [item, read(item)])) : read(key); }, async put(key, value) { kv.set(key, value); }, async list() { return { keys: [], list_complete: true }; } },
     CONTENT_ARCHIVE: { get() { assert.fail("personal usage must not expose archived content"); } },
   };
@@ -298,6 +302,20 @@ async function fixture(t, budgetScope = "policy", upstream = () => assert.fail("
     const response = await worker.fetch(new Request(`https://router.example${path}`, { headers }), env, {});
     return { status: response.status, body: await response.json() };
   }
+  async function activateAccounts() {
+    const request = async (path, { method = "GET", body } = {}) => {
+      const response = await worker.fetch(new Request(`https://router.example${path}`, {
+        method, headers: { authorization: `Bearer ${adminToken}`, "content-type": "application/json" },
+        ...(body === undefined ? {} : { body: JSON.stringify(body) }),
+      }), env, {});
+      assert.equal(response.status, 200);
+      return response.json();
+    };
+    // Only dispatch fixtures activate their new storage; usage reads remain
+    // available without accepting an account inventory baseline.
+    await acceptGrantPoolBaseline("fresh", { request });
+    assert.ok((await recoverGrantPools({ request, maxPages: 4 })).activatedAt);
+  }
   async function login(email) {
     env.CLAWROUTER_LOCAL_ADMIN_EMAIL = email;
     const response = await worker.fetch(new Request("https://router.example/v1/session/login", { method: "POST", headers: { origin: "https://router.example", "content-type": "application/json" }, body: JSON.stringify({ token: adminToken }) }), env, {});
@@ -306,5 +324,5 @@ async function fixture(t, budgetScope = "policy", upstream = () => assert.fail("
   }
   await setPolicy("shared");
   for (const who of ["alice", "bob"]) { await setUser(`${who}@example.com`); await setCredential(who, `${who}@example.com`); await bind(`${who}@example.com`, ["shared"]); }
-  return { env, setPolicy, setUser, setCredential, bind, ingest, read, login, admin: { authorization: `Bearer ${adminToken}` }, key: id => ({ authorization: `Bearer clawrouter-live-${id}-fixture-secret-${id}` }) };
+  return { env, setPolicy, setUser, setCredential, bind, ingest, read, login, activateAccounts, admin: { authorization: `Bearer ${adminToken}` }, key: id => ({ authorization: `Bearer clawrouter-live-${id}-fixture-secret-${id}` }) };
 }

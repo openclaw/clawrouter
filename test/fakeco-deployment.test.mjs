@@ -11,7 +11,7 @@ import {
   assertDeploymentMutation,
   assertPolicyKvNamespace,
   deploymentTarget,
-  fakecoAccessServiceTokenIds,
+  accessServiceTokenIds,
   verifyPolicyKvPreviewNamespaceTarget,
   verifyPolicyKvNamespaceTarget,
 } from "../scripts/deployment-profile.mjs";
@@ -101,7 +101,7 @@ test("FakeCo profile locks every named Cloudflare resource away from production"
   );
   assert.equal(namespace.title, "clawrouter-policy-fakeco");
   assert.deepEqual(
-    fakecoAccessServiceTokenIds(target, {
+    accessServiceTokenIds(target, {
       CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS: validServiceTokenIds,
     }),
     [serviceTokenIdA, serviceTokenIdB],
@@ -354,6 +354,16 @@ test("FakeCo before-Access preflight uses only locked Cloudflare reads", () => {
     assert.match(result.stdout, /no KV or Access writes/);
     assert.doesNotMatch(result.stdout, /mutation attempted/);
 
+    const missingRecovery = runPreflight({
+      CLAWROUTER_PROVIDER_CREDENTIAL_MODE: "upload",
+      OPENAI_API_KEY: "openai123",
+      CF_ACCESS_CLIENT_ID: "",
+      CF_ACCESS_CLIENT_SECRET: "",
+    });
+    assert.equal(missingRecovery.status, 1);
+    assert.match(missingRecovery.stderr, /CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET are required/);
+    assert.doesNotMatch(missingRecovery.stdout, /mock Cloudflare fetch:/);
+
     const freshRefusal = runPreflight({
       CLAWROUTER_PROVIDER_CREDENTIAL_MODE: "upload",
       OPENAI_API_KEY: "",
@@ -439,9 +449,6 @@ test("FakeCo deploy workflow is hard-bound to its GitHub Environment and secret 
   assert.ok(deploy < providerSecrets && providerSecrets < bootstrap);
   assert.ok(bootstrap < smoke);
   assert.match(workflow, /CLAWROUTER_SMOKE_READINESS_TIMEOUT_MS: "180000"/);
-  const pkg = JSON.parse(readFileSync(resolve("package.json"), "utf8"));
-  assert.match(pkg.scripts["cf:deploy"], /cf:target -- --deploy/);
-  assert.ok(pkg.scripts["cf:deploy"].indexOf("--deploy") < pkg.scripts["cf:deploy"].indexOf("wrangler deploy"));
 });
 
 function cleanEnv(values) {

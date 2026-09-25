@@ -73,15 +73,61 @@ Paused and reauthorization-required rows retain attachment presence and free an
 active slot. Revocation commits a secretless tombstone before detaching all of
 that key's provider rows. Existing pool rows remain `legacy` and selectable.
 
-Each credential generation records whether index publication is still pending.
-The owner repairs that fact before materialization or maintenance can contact a
-provider. The index retains a generation/revision fence after detachment; its
+Each credential generation records one pending finalization obligation: schedule,
+attachment index, KV projection, then durable acknowledgement. Materialization or
+maintenance prepares schedule/index before provider work and leaves the obligation
+open until the final refreshed projection is published. Pure account GET reports
+this state without performing recovery; the existing explicit repair action also
+finishes inactive owners whose alarms have been removed. The index retains a generation/revision fence after detachment; its
 revision also identifies pre-commit admission and repair while owner generation
 is unchanged. Index commits use synchronous SQLite transactions. An internal
 owner `/reconcile` accepts only the grant key, rereads the owner, and uses an
 exact index-revision comparison. A lost acknowledgement is recovered through a
 fresh read, not a stale write or caller-supplied previous provider.
 The explicit credential commit stores its admission revision as a receipt.
+
+The credential owner also owns token expiry. OAuth callbacks and renewals share
+one token-response classifier: omitted `expires_in` clears the previous deadline,
+zero is immediately expired, and an invalid or unrepresentable value records
+`tokenResponseError: invalid_expiry`. Rotation commits the bounded access/refresh
+pair before reporting denial, so a malformed lifetime cannot discard a rotated
+refresh token. Lifetime starts when the trusted token response arrives; body
+delivery and waiting for the owner queue consume that lifetime. This retryable
+denial preserves configured attachment presence;
+it never authorizes dispatch, quota probes or keep-warm traffic. Expired renewable
+tokens can re-enter selection when recovery is due. Expired nonrenewable tokens
+transition to the existing `reauth_required` state, even for legacy records with
+missing routing identity. Materialization finalization rereads the stored owner
+after an uncertain write; it cannot republish an older generation.
+
+Zero and malformed lifetimes use the existing five-minute renewal retry window,
+without extending token validity. While denied, alarms schedule only renewal;
+overdue maintenance cannot create a one-second retry loop. Alarms include quota
+and keep-warm work only when the current provider transport can execute it.
+Metadata edits cannot
+clear the marker or extend already-expired authority. A trusted successful
+exchange or fresh primary replacement clears the marker; revocation erases it.
+Older workers ignore this owner fact and are not a qualified rollback target.
+
+Legacy PUT normalization runs inside the serialized credential owner against
+canonical material and metadata. Original field presence distinguishes explicit
+credential changes from validation material; omitted identity, routing and paused
+state remain canonical after pending publication is repaired. Only first
+initialization uses raw legacy credentials, as a transient baseline for the same
+explicit-field update before the single final commit. Adding another primary
+credential form does not renew a retained access token; explicitly replace or
+clear that token, or use whole replacement. Internal mutation envelopes never
+become published metadata. OAuth response omission retains the owner's current
+refresh token, including an explicit clear, only when provider and kind match.
+A changed or unknown tuple starts fresh credential context, excluding prior
+tokens, refresh overrides, account claims and maintenance state. The same rule
+qualifies first-owner raw legacy input. Safe labels and creation time survive;
+authenticated callback state owns its explicit identity and routing intent.
+Prepared requests carry only expiry facts past asynchronous admission.
+HTTP dispatch, WebSocket upgrades and each
+create frame check those facts at egress; rejected unsent work releases both
+budget holds, and continuation expiry retains the full-input recovery outcome.
+
 Pending rows retain their prior committed status, so failed account writes can
 restore membership without a later refresh or raw import adopting the proposal.
 Restoration and its new revision fence commit together, including no-op owner
@@ -95,8 +141,27 @@ is zero; it removes only pending rows. Legacy evidence remains unresolved, and
 a failed owner read or missing KV record never establishes absence. Raw-KV
 import and ordinary refresh may update an existing attachment but cannot create
 one without admission; they can return an explicit `unattached` result. Legacy
-backfill, readiness, authenticated recovery controls, and consuming attachment
-presence to suppress environment fallback are separate activation work.
+backfill is an explicit key-only command in the same credential-owner tail,
+gated by an accepted baseline scan. It can admit only an existing canonical
+owner, commits a new generation and admission receipt without changing secrets
+or credential lineage, and leaves ordinary reconciliation semantics unchanged.
+KV inventory contributes key names only; it cannot create an owner or receipt.
+
+One fixed readiness row in the existing authority owns baseline acceptance,
+bounded scan progress, unresolved outcomes and activation. Its global revision
+fences a complete inventory against concurrent attachment changes; per-account
+generation/revision still fence membership. Backfill changes that revision, so
+the driver performs a subsequent unchanged verification scan. Cursor plus scan
+revision rejects stale page acknowledgements. Overflow or unresolved owner
+reads prevent activation. Neither a new readiness row nor an empty KV listing
+proves storage is fresh: baseline acceptance is an explicit administrator act.
+
+Before activation, only would-be environment fallback is denied. After it,
+selection consumes attachment presence independently of available candidates:
+paused and reauthorization-required owners block environment fallback, while a
+final explicit revoke can permit it subject to policy and continuation rules.
+Administrator authentication, recovery, health and existing scoped grant checks
+do not depend on the activation gate.
 
 This storage upgrade is forward-only. Reconstructing the current authority
 preserves populated legacy rows, and the current credential owner retries dirty

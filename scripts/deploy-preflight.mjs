@@ -12,6 +12,7 @@ import {
   deploymentTarget,
 } from "./deployment-profile.mjs";
 import { validateFakecoBootstrapInputs } from "./bootstrap-fakeco.mjs";
+import { createHash } from "node:crypto";
 import {
   fakecoProviderCredentialPlan,
   verifyExistingFakecoProviderCredentials,
@@ -33,18 +34,23 @@ const requiredDeployEnv = [
   "CLOUDFLARE_API_TOKEN",
   "CLOUDFLARE_ACCOUNT_ID",
   "CLAWROUTER_ADMIN_TOKEN_SHA256",
+  "CLAWROUTER_ADMIN_TOKEN",
   "CLAWROUTER_POLICY_KV_ID",
 ];
 
 const errors = [];
+const accessRequired = process.env.CLAWROUTER_PREFLIGHT_REQUIRE_ACCESS === "1" || Boolean(process.env.CLAWROUTER_ACCESS_TEAM_DOMAIN?.trim() || process.env.CLAWROUTER_ACCESS_AUD?.trim());
+if (Boolean(process.env.CF_ACCESS_CLIENT_ID?.trim()) !== Boolean(process.env.CF_ACCESS_CLIENT_SECRET?.trim())) errors.push("CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET must be configured together for account recovery");
+else if (accessRequired && !process.env.CF_ACCESS_CLIENT_ID?.trim()) errors.push("CF_ACCESS_CLIENT_ID and CF_ACCESS_CLIENT_SECRET are required for Access-protected account recovery");
+if (process.env.CLAWROUTER_ADMIN_TOKEN?.trim() && process.env.CLAWROUTER_ADMIN_TOKEN_SHA256?.trim() && createHash("sha256").update(process.env.CLAWROUTER_ADMIN_TOKEN.trim()).digest("hex") !== process.env.CLAWROUTER_ADMIN_TOKEN_SHA256.trim().toLowerCase()) errors.push("CLAWROUTER_ADMIN_TOKEN must match CLAWROUTER_ADMIN_TOKEN_SHA256 for post-deploy account recovery");
 for (const name of requiredDeployEnv) {
-  if (!process.env[name]) {
+  if (!process.env[name]?.trim()) {
     errors.push(`missing required deploy env: ${name}`);
   }
 }
 if (
-  process.env.CLAWROUTER_ADMIN_TOKEN_SHA256 &&
-  !/^[a-fA-F0-9]{64}$/.test(process.env.CLAWROUTER_ADMIN_TOKEN_SHA256)
+  process.env.CLAWROUTER_ADMIN_TOKEN_SHA256?.trim() &&
+  !/^[a-fA-F0-9]{64}$/.test(process.env.CLAWROUTER_ADMIN_TOKEN_SHA256.trim())
 ) {
   errors.push("CLAWROUTER_ADMIN_TOKEN_SHA256 must be a 64-character hex string");
 }
@@ -54,7 +60,7 @@ if (plan.targetCount !== plan.providerCount) {
   errors.push(`provider smoke plan is incomplete: ${plan.targetCount}/${plan.providerCount}`);
 }
 let providerCredentialPlan = null;
-if (beforeAccess) {
+if (beforeAccess && deployment.environment === "fakeco") {
   try {
     validateFakecoBootstrapInputs(deployment, process.env, { plan });
   } catch (error) {
@@ -94,7 +100,7 @@ if (liveProviders.length > 0) {
   if (!baseUrl) {
     errors.push("CLAWROUTER_BASE_URL is required when live provider smoke is enabled");
   }
-  if (!process.env.CLAWROUTER_SMOKE_KEY) {
+  if (!process.env.CLAWROUTER_SMOKE_KEY?.trim()) {
     errors.push("CLAWROUTER_SMOKE_KEY is required when live provider smoke is enabled");
   }
   try {
@@ -116,6 +122,7 @@ if (
     "smoke key policy inspection deferred to guarded post-deploy FakeCo bootstrap",
   );
 } else if (
+  errors.length === 0 &&
   !beforeAccess &&
   selectedProviders.length > 0 &&
   baseUrl &&
@@ -137,7 +144,8 @@ if (
   }
 }
 
-await checkCloudflarePermissions();
+// Invalid local credentials must not trigger the KV write/delete probe.
+if (errors.length === 0) await checkCloudflarePermissions();
 
 if (errors.length > 0) {
   console.error("clawrouter deploy preflight failed:");

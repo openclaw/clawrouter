@@ -15,7 +15,7 @@ import type { AccessPolicy } from "./ui-types";
 export function AppShell() {
   const [theme, setTheme] = React.useState(readTheme);
   React.useEffect(() => { applyTheme(theme); }, [theme]);
-  const { session: shell, catalog, access, usage, selfServiceKeys, credentialOwner, playground: playgroundDomain, refresh } = useConsole();
+  const { session: shell, catalog, access, grantPoolRecovery, usage, selfServiceKeys, credentialOwner, playground: playgroundDomain, refresh } = useConsole();
   const { view, value: session, status, lastUpdatedAt, demoMode, busy, navigateTo } = shell;
   const refreshError = [shell.refreshError, usage.error].filter(Boolean).join("; ");
   const statusPresentation = consoleStatusPresentation(status, demoMode, Boolean(refreshError), shell.refreshing);
@@ -194,6 +194,7 @@ export function AppShell() {
 
         {view === "policies" && session.role === "admin" ? (
           <PoliciesScreen
+            grantPoolRecovery={grantPoolRecovery}
             tab={accessTab}
             setTab={setAccessTab}
             keys={keys}

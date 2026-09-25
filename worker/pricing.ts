@@ -1,5 +1,6 @@
 import type { CharacterPricing, CompiledEndpoint, ModelPricing, ServiceTierPricing, TokenPricing, TokenRates } from "./types";
 import { googleField, googleInt32, googleRequestServiceTier, googleServiceTier } from "./google-protocol.ts";
+import type { ToolKnowledge } from "./responses-tool-evidence.ts";
 
 export interface CostEstimate {
   reserveMicros: number;
@@ -28,9 +29,9 @@ interface Rates {
   cacheWrite1hInput: number | null;
 }
 
-export type PricingGap = "model_request_fee" | "hosted_tool_fee" | "hosted_tool_usage";
+export type PricingGap = "model_request_fee" | "hosted_tool_fee" | "hosted_tool_usage" | "retained_tool_unknown";
 
-export function requestPricingGap(pricing: ModelPricing | null | undefined, body: Record<string, unknown>, requestFormat: string): PricingGap | null {
+export function requestPricingGap(pricing: ModelPricing | null | undefined, body: Record<string, unknown>, requestFormat: string, parentTools?: ToolKnowledge): PricingGap | null {
   if (pricing?.unit !== "character" && pricing?.unpricedCosts?.includes("request_fee")) return "model_request_fee";
   if (requestFormat === "openai.chat_completions" && isObject(body.web_search_options)) return "hosted_tool_fee";
   // Saved Responses prompts retain tools; an opaque reference cannot prove
@@ -48,12 +49,17 @@ export function requestPricingGap(pricing: ModelPricing | null | undefined, body
   // input items. Do not search ordinary output data, content, or function schemas.
   const inputTools = requestFormat === "openai.responses" && Array.isArray(body.input)
     ? body.input.flatMap((item) => isObject(item) && (item.type === "additional_tools" || item.type === "tool_search_output") && Array.isArray(item.tools) ? item.tools : []) : [];
-  return hostedToolPricingGap((Array.isArray(body.tools) ? body.tools : []).concat(inputTools), requestFormat);
+  const current = hostedToolPricingGap((Array.isArray(body.tools) ? body.tools : []).concat(inputTools), requestFormat);
+  if (current) return current;
+  if (requestFormat !== "openai.responses" || typeof body.previous_response_id !== "string" || body.previous_response_id === "") return null;
+  // A response ID can retain executable declarations omitted from this delta.
+  // Only final parent knowledge proves ordinary token pricing; omission is unknown.
+  return parentTools === "token_only" ? null : parentTools === "hosted_tool_fee" || parentTools === "hosted_tool_usage" ? parentTools : "retained_tool_unknown";
 }
 
 // Classify known executable declarations only. A null result does not attest
 // that an unknown or partially observed tool inventory is complete.
-export function hostedToolPricingGap(tools: readonly unknown[], requestFormat: string): Exclude<PricingGap, "model_request_fee"> | null {
+export function hostedToolPricingGap(tools: readonly unknown[], requestFormat: string): "hosted_tool_fee" | "hosted_tool_usage" | null {
   let usageGap = false;
   for (const tool of tools) {
     if (!isObject(tool)) continue;

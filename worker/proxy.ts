@@ -17,6 +17,7 @@ import {
 import { loadFusionConfig } from "./fusion-config";
 import { observeGrantQuota, shouldFailoverGrant } from "./grant-quota";
 import { grantRoutingPolicy, recordGrantRuntime, type PinnedGrant } from "./grant-selection";
+import { assertTokenUsable, type TokenValidity } from "./grant-expiry.ts";
 import type { ContinuationOwner } from "./continuation-store.ts";
 import { HttpContinuation, continuationRestart } from "./http-continuation.ts";
 import { HttpOperation } from "./http-operation.ts";
@@ -42,6 +43,7 @@ interface PreparedUpstream {
   grantRevision: string | null;
   connection: ProviderConnection;
   websocket: boolean;
+  validity: TokenValidity;
   continuation?: ContinuationOwner;
 }
 
@@ -200,28 +202,30 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     return auth;
   }
   validateSelectedInput(selection);
-  const estimatedCost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability, selection.endpoint);
-  const accounting = createProxyAccounting({ context, env, auth, selection, request, cost: estimatedCost, compound });
-  const { cost, requestId } = accounting;
-  if (reservedBudget && (reservedBudget.providerId !== selection.provider.id || reservedBudget.modelId !== selection.model?.id || reservedBudget.capability !== selection.capability || estimatedCost.reserveMicros > reservedBudget.cost.reserveMicros)) {
-    accounting.fail(500, "provider_error", reservedBudget.reservation);
-    return errorResponse("fusion_reservation_invalid", "fusion synthesizer reservation does not cover the final request", 500);
-  }
+  const accountingContext = { context, env, auth, selection, request, compound, startedAtMs: Date.now() };
+  let accounting: ReturnType<typeof createProxyAccounting> | undefined;
   let prepared: PreparedUpstream;
   let continuation: HttpContinuation | undefined;
   try {
-    // Monetary coverage alone cannot prove that the final request remains priced.
-    if (reservedBudget) validateBudgetReservation(selection.capability, estimatedCost, auth.policy.monthlyBudgetMicros, reservedBudget.connection);
     continuation = await HttpContinuation.resolve(request, selection, auth, env);
     prepared = await prepareSelected(request, env, selection, queryInput, auth, new Set(), true, reservedBudget?.connection, continuation?.pinned);
     if (prepared.continuation) continuation?.bind(prepared.continuation);
+    const cost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability, selection.endpoint, continuation?.parentTools);
+    accounting = createProxyAccounting({ ...accountingContext, cost });
+    if (reservedBudget && (reservedBudget.providerId !== selection.provider.id || reservedBudget.modelId !== selection.model?.id || reservedBudget.capability !== selection.capability || cost.reserveMicros > reservedBudget.cost.reserveMicros)) {
+      accounting.fail(500, "provider_error", reservedBudget.reservation);
+      return errorResponse("fusion_reservation_invalid", "fusion synthesizer reservation does not cover the final request", 500);
+    }
+    // Monetary coverage alone cannot prove that the final request remains priced.
+    if (reservedBudget) validateBudgetReservation(selection.capability, cost, auth.policy.monthlyBudgetMicros, reservedBudget.connection);
   }
   catch (error) {
     const failure = continuation?.requested && error instanceof HttpError && ["upstream_grant_pool_unavailable", "upstream_grant_changed", "grant_reauthorization_required", "grant_refresh_failed", "grant_disabled", "grant_credential_missing", "provider_not_configured", "grant_transport_unavailable"].includes(error.code) ? continuationRestart() : selectedFailure(error);
     const status = failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error";
-    accounting.fail(failure.status, status, reservedBudget?.reservation);
+    (accounting ?? createProxyAccounting(accountingContext)).fail(failure.status, status, reservedBudget?.reservation);
     return errorResponse(failure.code, failure.message, failure.status);
   }
+  const { cost, requestId } = accounting;
   let reservation = reservedBudget?.reservation;
   if (!reservation) {
     try { reservation = await reserveBudget(env, auth, selection.capability, cost, prepared.connection); }
@@ -252,13 +256,18 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   try {
     // A canceled preflight is known-unsent even if the ledger marks already landed.
     signal.throwIfAborted();
+    assertTokenUsable(prepared.validity);
     dispatched = true;
     response = await operation.wait(fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal }), "upstream", discard);
     captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response);
     if (!continuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
       let retry: PreparedUpstream | undefined;
       try {
-        retry = await prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]), true, prepared.connection);
+        const candidate = await prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]), true, prepared.connection);
+        // An expired alternate is still failed selection. Keep the original
+        // readable rejection and its nonbillable receipt until it can dispatch.
+        assertTokenUsable(candidate.validity);
+        retry = candidate;
       } catch {
         // Selection failure leaves the original rejection available to the caller.
       }
@@ -282,12 +291,18 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       : selection.body.stream === true;
     response = await normalizePreStreamError(response, streaming && selection.endpoint.response_format !== "audio.binary", operation);
   } catch (error) {
+    // Capture the first cause before stop() aborts our own signal. A known-unsent
+    // expiry keeps its actionable recovery error; cancellation still wins.
+    const failure = !dispatched && !signal.aborted && error instanceof HttpError
+      ? continuation?.requested && error.code === "grant_refresh_failed" ? continuationRestart() : error
+      : new HttpError(502, "provider_unavailable", `upstream request to provider ${selection.provider.id} failed`);
+    const status = operation.status ?? (failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error");
     operation.stop("upstream", error);
     void response?.body?.cancel().catch(() => undefined);
     // A fetch failure can incur cost; a received rejection stays nonbillable
     // even if reading its SSE error body failed.
-    accounting.fail(502, operation.status ?? "provider_error", reservation, content, dispatched && response?.ok !== false);
-    return errorResponse("provider_unavailable", `upstream request to provider ${selection.provider.id} failed`, 502, undefined);
+    accounting.fail(failure.status, status, reservation, content, dispatched && response?.ok !== false);
+    return errorResponse(failure.code, failure.message, failure.status);
   }
   // Endpoint timeouts cover fetch and first-event normalization, not delivery.
   // Retire only the timer; the caller and first cause still own delivery through EOF.
@@ -378,7 +393,8 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
         policyGeneration: auth.policy.generation,
       };
     }
-    return { headers, url, requestBody, grantKey: upstream.grantKey, grantRevision: upstream.grantRevision, connection, websocket: selection.endpoint.websocket === "openai.responses" && upstream.transport === null, continuation };
+    const validity = { expiresAt: upstream.grant?.expiresAt ?? null, tokenResponseError: upstream.grant?.tokenResponseError ?? null };
+    return { headers, url, requestBody, grantKey: upstream.grantKey, grantRevision: upstream.grantRevision, connection, websocket: selection.endpoint.websocket === "openai.responses" && upstream.transport === null, validity, continuation };
   } catch (error) {
     throw error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
   }

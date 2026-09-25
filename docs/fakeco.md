@@ -56,6 +56,7 @@ Preview Access without Cloudflare writes:
 ```sh
 export CLOUDFLARE_ACCOUNT_ID=...
 export CLAWROUTER_ACCESS_GITHUB_ORGS=openclaw
+export CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS='service-token-uuid'
 pnpm cf:access -- --dry-run
 ```
 
@@ -131,9 +132,16 @@ ambiguity:
   binding fails with instructions to use `upload`; secret values are never
   returned, logged, or placed in process arguments.
 
+Dispatch with the required `expected_sha` input set to the reviewed full
+40-character commit SHA of the selected branch or tag. Existing dispatch
+callers must add this field; it verifies the event and checkout, without
+changing checkout selection. See [deployment source checks](deploy-cloudflare.md#provision).
+
 The workflow's fail-closed order is:
 
-1. Run the non-mutating required-input and locked-KV preflight.
+1. Validate `expected_sha` against the dispatch event before checkout, then
+   verify actual `HEAD` before dependency setup or execution. Run the
+   non-mutating required-input and locked-KV preflight.
 2. Converge the FakeCo Access app and its required service-token policy.
 3. Run the normal Worker/KV permission preflight, provision content storage,
    render the locked config, and perform the initial Worker deploy.
@@ -145,8 +153,14 @@ The workflow's fail-closed order is:
    prove the same admin path first receives an unauthenticated Access challenge
    and then succeeds with the service-token headers and admin bearer token.
 6. Idempotently register the policy-scoped smoke credential through the remote
-   admin API, then run readiness, catalog, credential-inspection, and live
-   inference smoke.
+   admin API, then run the authenticated account recovery driver. The configured
+   namespace is reused, so the first deployment requires explicit baseline
+   acceptance in **Access → Upstream → Account routing readiness**, followed by
+   a complete unchanged scan and activation. Later deployments reuse that
+   acceptance and repair indexed publication without another prompt.
+7. Run readiness, catalog, credential-inspection, and live inference smoke only
+   after account recovery succeeds. A health response alone cannot pass this
+   gate; failed activation leaves the admin recovery screen reachable.
 
 ClawRouter owns this deployment gate because it installs the Worker secret and
 authoritative proxy credential. Crabhelm may run a later integration check, but

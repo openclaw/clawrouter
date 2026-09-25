@@ -112,9 +112,30 @@ for (const action of [replace, revoke]) test(`complete owner ${action.name} igno
   const env = fixture({ generation: 0, providers: [], raw: null });
   const initial = await putGrantCredentials(env, key, { provider: "openai", kind: "api_key", credential: "owned-private", accountId: "owned-account", label: "owned label" });
   env.values.set(key, corrupt);
-  env.POLICY_KV.get = async () => { throw new Error("canonical owner must not read KV"); };
+  const reads = [], get = env.POLICY_KV.get;
+  env.POLICY_KV.get = async (name, type) => {
+    const committed = owner(env).values.get("credential");
+    assert.equal(committed.generation, initial.credentialGeneration + 1, "no KV read may precede the authoritative mutation");
+    assert.equal(name, key);
+    assert.equal(type, "text", "the postcommit read only compares projection bytes");
+    assert.equal(env.values.get(key), corrupt, "keep corrupt bytes detectable at the publication boundary");
+    assert.doesNotMatch(JSON.stringify(committed), /old-private|owned-private/);
+    if (action === revoke) {
+      assert.equal(committed.enabled, false);
+      assert.ok(committed.revokedAt);
+      assert.equal(committed.providerId, "openai");
+      assert.equal(committed.accountId, "owned-account");
+    } else {
+      assert.equal(committed.providerId, "anthropic");
+      assert.equal(committed.credential, grant.credential);
+      assert.equal(committed.accountId, undefined);
+    }
+    reads.push({ name, type, generation: committed.generation });
+    return get(name, type);
+  };
   const result = await action(env);
   assert.equal(result.credentialGeneration, initial.credentialGeneration + 1);
+  assert.deepEqual(reads, [{ name: key, type: "text", generation: result.credentialGeneration }]);
   if (action === revoke) {
     assert.equal(result.provider, "openai");
     assert.equal(result.accountId, "owned-account");
@@ -163,12 +184,12 @@ for (const raw of [corrupt, { provider: "wrong-provider", account_id: "wrong-acc
 test("an existing owner revokes locally even when the index is newer, retaining the dirty tombstone", async () => {
   const env = fixture({ generation: 10 });
   seedOldOwner(env);
-  await assert.rejects(() => revoke(env), error => error.status === 500 && error.code === "credential_owner_error");
+  await assert.rejects(() => revoke(env), error => error.status === 409 && error.code === "grant_attachment_changed");
   const tombstone = structuredClone(owner(env).values.get("credential"));
   assert.equal(tombstone.generation, 8);
   assert.equal(tombstone.poolSyncPending, true);
   assert.equal(tombstone.credential, undefined);
-  await assert.rejects(() => revoke(env), error => error.status === 500 && error.code === "credential_owner_error");
+  await assert.rejects(() => revoke(env), error => error.status === 409 && error.code === "grant_attachment_changed");
   assert.deepEqual(owner(env).values.get("credential"), tombstone);
   assert.equal((await attachment(env)).generation, 10);
 });

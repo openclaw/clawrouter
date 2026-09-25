@@ -8,6 +8,7 @@ import { spawn } from "node:child_process";
 import { createHash } from "node:crypto";
 import test from "node:test";
 import { localAdminEnvironment } from "../scripts/grant-target.mjs";
+import { acceptGrantPoolBaseline, recoverGrantPools } from "../scripts/grant-pool-recovery.mjs";
 
 const { default: worker } = await import("../worker/index.ts");
 const { attachGrantCredentialNamespace } = await import("../worker/test/grant-credential-mock.mjs");
@@ -244,7 +245,23 @@ test("CLI rejects retired KV selectors, unsafe local targets and argv secrets be
   assert.equal(localAdminEnvironment({ local: true }, { CLAWROUTER_BASE_URL: "http://[::1]:8787" }).CLAWROUTER_BASE_URL, "http://[::1]:8787");
 });
 
-async function scriptFixture(context) {
+test("actual recovery CLI requires explicit baseline and activates through the authenticated Worker", async context => {
+  const fixture = await scriptFixture(context, false);
+  const initial = await fixture.run("grant-pool-recovery.mjs", ["--status"]);
+  assert.equal(initial.status, 0, initial.stderr);
+  assert.equal(JSON.parse(initial.stdout).baseline, null);
+  const denied = await fixture.run("grant-pool-recovery.mjs", []);
+  assert.notEqual(denied.status, 0);
+  assert.match(denied.stderr, /baseline is not accepted/);
+  assertSuccess(await fixture.run("grant-pool-recovery.mjs", ["--accept-existing"]));
+  assertSuccess(await fixture.run("grant-pool-recovery.mjs", []));
+  const active = await fixture.run("grant-pool-recovery.mjs", ["--status"]);
+  assert.ok(JSON.parse(active.stdout).activatedAt);
+  assertSuccess(await fixture.run("grant-pool-recovery.mjs", []));
+  assert.equal(fixture.requests.filter(path => path.endsWith("/baseline")).length, 1);
+});
+
+async function scriptFixture(context, active = true) {
   const dir = mkdtempSync(join(tmpdir(), "clawrouter-grant-test-"));
   // Prevent a regression to Wrangler from ever reaching operator credentials.
   writeFileSync(join(dir, "pnpm"), "#!/bin/sh\necho 'unexpected Wrangler invocation' >&2\nexit 99\n", { mode: 0o755 });
@@ -259,6 +276,7 @@ async function scriptFixture(context) {
         return value === null ? null : type === "text" ? typeof value === "string" ? value : JSON.stringify(value) : typeof value === "string" ? JSON.parse(value) : structuredClone(value);
       },
       async put(key, value) { values.set(key, JSON.parse(value)); },
+      async list({ prefix }) { return { keys: [...values.keys()].filter(key => key.startsWith(prefix)).map(name => ({ name })), list_complete: true }; },
     },
     USAGE_QUEUE: { async send() {} },
     ACCESS_CONTROL: { idFromName: (name) => name, get: () => ({ fetch: async (url, init) => {
@@ -278,18 +296,28 @@ async function scriptFixture(context) {
     const pending = [];
     const response = await worker.fetch(request, env, { waitUntil: (promise) => pending.push(promise) });
     const body = await response.text();
-    responseBytes.push(Buffer.byteLength(body));
     await Promise.all(pending);
     return new Response(body, { status: response.status, headers: response.headers });
+  }
+  if (active) {
+    const request = async (path, { method = "GET", body } = {}) => {
+      const response = await dispatch(new Request(`http://127.0.0.1${path}`, { method, headers: { authorization: "Bearer admin-fixture", "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }));
+      assert.equal(response.status, 200, await response.clone().text());
+      return response.json();
+    };
+    await acceptGrantPoolBaseline("fresh", { request });
+    await recoverGrantPools({ request });
   }
   const server = createServer(async (incoming, outgoing) => {
     try {
       requests.push(`${incoming.method} ${incoming.url}`);
       const chunks = [];
       for await (const chunk of incoming) chunks.push(chunk);
-      const response = await dispatch(new Request(`http://127.0.0.1${incoming.url}`, { method: incoming.method, headers: incoming.headers, body: Buffer.concat(chunks) }));
+      const response = await dispatch(new Request(`http://127.0.0.1${incoming.url}`, { method: incoming.method, headers: incoming.headers, ...(["GET", "HEAD"].includes(incoming.method) ? {} : { body: Buffer.concat(chunks) }) }));
+      const body = await response.text();
+      responseBytes.push(Buffer.byteLength(body));
       outgoing.writeHead(response.status, Object.fromEntries(response.headers));
-      outgoing.end(await response.text());
+      outgoing.end(body);
     } catch { outgoing.writeHead(500); outgoing.end('{"error":{"message":"fixture dispatch failed"}}'); }
   });
   await new Promise((resolve) => server.listen(0, "127.0.0.1", resolve));

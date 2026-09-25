@@ -70,6 +70,7 @@ export CLOUDFLARE_ACCOUNT_ID=...
 export CLOUDFLARE_API_TOKEN=... # must be able to manage Zero Trust Access apps/policies
 export CLAWROUTER_ACCESS_GITHUB_ORGS=openclaw
 export CLAWROUTER_ACCESS_ADMIN_EMAILS=you@example.com
+export CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS=... # Cloudflare service-token UUIDs, not client IDs
 pnpm cf:access
 ```
 
@@ -90,8 +91,13 @@ cannot list identity providers. `CLAWROUTER_ACCESS_ALLOWED_*` remains available 
 email-domain exceptions; multiple include rules are ORed by Cloudflare Access.
 These settings control who can pass Cloudflare Access;
 `CLAWROUTER_ACCESS_ADMIN_*` controls who is an admin inside ClawRouter.
-`CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS` creates a separate Service Auth
-(`non_identity`) policy for automation. The default path-scoped Access
+`CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS` is required for managed Access provisioning
+and creates a separate Service Auth (`non_identity`) policy for automation.
+Missing, duplicate, or malformed UUIDs fail before any Cloudflare request, so
+omitting the variable cannot delete the recovery service policy. Use the matching
+client ID and secret as the request headers; the UUID belongs in the policy.
+See [Cloudflare service tokens](https://developers.cloudflare.com/cloudflare-one/access-controls/service-credentials/service-tokens/).
+The default path-scoped Access
 destinations are `/dashboard/*`, `/v1/session*`, `/v1/playground/*`,
 `/v1/admin/*`, and `/v1/oauth/callback`. This stays within Cloudflare's
 five-destination per-application limit while still protecting the console
@@ -118,9 +124,12 @@ Set these GitHub Actions secrets for workflow deploys:
 CLOUDFLARE_API_TOKEN
 CLOUDFLARE_ACCOUNT_ID
 CLAWROUTER_ADMIN_TOKEN_SHA256
+CLAWROUTER_ADMIN_TOKEN                  # raw token matching the digest, for authenticated recovery
 CLAWROUTER_POLICY_KV_ID
 CLAWROUTER_POLICY_KV_PREVIEW_ID
 CLAWROUTER_SMOKE_KEY
+CLAWROUTER_ACCESS_CLIENT_ID             # required when Access protects the admin route
+CLAWROUTER_ACCESS_CLIENT_SECRET         # configure together with the client ID
 CLAWROUTER_CLOUDFLARE_AI_GATEWAY_OPENAI_API_KEY # optional smoke-only upstream key
 ```
 
@@ -134,6 +143,7 @@ CLAWROUTER_USAGE_DLQ                   # optional, defaults to clawrouter-usage-
 CLAWROUTER_CONTENT_BUCKET              # optional, defaults to clawrouter-content
 CLAWROUTER_ACCESS_TEAM_DOMAIN
 CLAWROUTER_ACCESS_AUD
+CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS   # comma-separated service-token UUIDs; required for cf:access
 CLAWROUTER_ACCESS_ADMIN_EMAILS        # comma-separated admin emails
 CLAWROUTER_ACCESS_ADMIN_DOMAINS       # optional comma-separated admin domains
 CLAWROUTER_ACCESS_DEFAULT_TENANT      # optional, defaults to default
@@ -142,7 +152,20 @@ CLAWROUTER_PROVIDER_AWS_REGION        # non-secret Bedrock Region, for example u
 
 The `Deploy Cloudflare` workflow can provision Access and deploy in one run
 when `CLOUDFLARE_API_TOKEN` has Zero Trust Access application/policy
-permissions. Dispatch it with `provision_access=true`; the repository default
+permissions. Both deployment workflows require `expected_sha`, the reviewed
+full 40-character commit SHA. Existing UI, CLI, and API dispatch callers must
+supply this new field. Select the branch or tag pointing to that exact commit;
+the first step refuses a different event SHA before checkout, setup, install,
+or preflight. A second check verifies actual checkout `HEAD` before dependency
+execution. The input does not select a custom checkout ref or fall back to the
+latest commit. If the selected ref advances, review the new source before
+dispatching again with its SHA.
+
+Only refs containing the revised workflows carry these checks; older workflow
+refs retain their earlier behavior. Controlled deployments use guarded `main`
+with a frozen, reviewed `expected_sha`.
+
+Dispatch production with `provision_access=true` to provision Access; the repository default
 uses `access_github_orgs=openclaw` and no email-domain exception. Set
 `access_domain` if the console
 host is not `clawrouter.openclaw.ai`, and optionally set `access_admin_emails`
@@ -253,11 +276,37 @@ GitHub deploys render Wrangler config with `CLAWROUTER_OMIT_ROUTES=1` so normal
 script updates do not require zone-level Worker route permissions after the
 custom domain route has already been provisioned.
 
+Before deploying, select at least one golden provider and supply a proxy key
+that can use it. Deployment runs that smoke after account recovery:
+
+```sh
+export CLAWROUTER_SMOKE_KEY=clawrouter-live-svc_docs-...
+export CLAWROUTER_SMOKE_LIVE_PROVIDERS=openai
+```
+
+Also set the raw `CLAWROUTER_ADMIN_TOKEN` matching the deployed SHA256 and the
+`CF_ACCESS_CLIENT_ID` / `CF_ACCESS_CLIENT_SECRET` pair when Access requires it.
+Preflight requires both Access values when an Access team domain or audience is
+configured, or `CLAWROUTER_PREFLIGHT_REQUIRE_ACCESS=1`. A deployment without
+Access does not need the pair. For hosted `provision_access=true`, the first
+preflight validates recovery credentials without requiring the new app's
+audience. After provisioning, a second preflight requires the generated Access
+configuration before rendering and deploying the Worker.
+The manual runner resolves the deployment URL once: an explicit
+`CLAWROUTER_BASE_URL`, otherwise the configured route hostname, otherwise the
+production default. It passes that URL to preflight, recovery, and smoke.
+FakeCo retains its locked target and confirmation requirements.
+
 Deploy:
 
 ```sh
 pnpm cf:deploy
 ```
+
+Missing smoke inputs or invalid recovery credentials stop before deployment
+permission probes and resource mutations. A failed account recovery after
+deployment stops smoke and leaves the running admin recovery surface available;
+it does not accept a baseline or roll back the Worker automatically.
 
 ## Smoke
 
@@ -270,8 +319,6 @@ to `health/providers/<provider-id>` in `POLICY_KV`:
 
 ```sh
 export CLAWROUTER_BASE_URL=https://...
-export CLAWROUTER_SMOKE_KEY=clawrouter-live-svc_docs-...
-export CLAWROUTER_SMOKE_LIVE_PROVIDERS=openai
 pnpm cf:smoke
 ```
 
@@ -750,15 +797,91 @@ proposal can receive requests, and the previous provider remains attached until
 the store commits.
 Paused and reauthorization-required accounts remain attached while freeing an
 active slot. Revocation removes the attachment after deleting its secrets.
-These attachment facts do not yet change environment-credential fallback;
-legacy backfill and fallback activation require the subsequent control-plane
-migration.
+After the account-inventory activation below, these attachment facts prevent
+environment-credential fallback from paused or reauthorization-required pools.
+Before activation, would-be environment fallback returns `503 grant_pool_not_ready`.
 
 The attachment storage upgrade is forward-only. Recovery must use the current
 Worker or a forward fix so the owner can reconcile unfinished publication.
 Do not roll back to a Worker that predates attachment statuses: its pool query
 ignores those statuses and does not safely handle retained inactive accounts.
 Do not delete the index fences or restore an older index over current owners.
+
+### Account routing activation and recovery
+
+After upgrading, sign in as an administrator and open **Access → Upstream →
+Account routing readiness**. This panel reads its own status endpoint, so a
+failed account-listing refresh does not prevent recovery. Existing scoped
+accounts keep their checks; admin login and recovery stay available. Health
+means the process is running, not that environment fallback is activated.
+
+1. Stop old Worker deployments and CLI tools that write grants directly to KV.
+   Check the complete account inventory, including paused named accounts that
+   were omitted from the old active index. Wait for old writes to become visible
+   before scanning; [KV listings can lag](https://developers.cloudflare.com/kv/api/list-keys/).
+2. Accept **Existing or unknown storage** and its inventory confirmation. Choose
+   **Newly provisioned storage** only when the matched storage set was actually
+   created for this deployment. Empty KV, a new readiness row, matching namespace
+   titles, and an existing namespace ID do not establish freshness.
+3. Start the scan and reconcile each bounded page. Existing credential owners
+   backfill their own attachments; scans never adopt raw KV secrets or metadata.
+   A failed first admission may report `pending_cancelled`; ambiguous legacy
+   membership and unavailable owners remain unresolved.
+4. Resolve reported keys. To retain a raw-only account, use the existing
+   authenticated replacement command with a fresh primary secret, for example
+   `pnpm cf:oauth:put -- --kid POLICY --token-ref REF --provider PROVIDER --kind oauth --access-token-stdin`.
+   Use `--tenant` instead of `--kid` for tenant scope; API keys use
+   `--credential-stdin` or `--credentials-json-stdin`. To remove an account, use
+   `pnpm cf:oauth:revoke -- --kid POLICY --token-ref REF --provider PROVIDER`.
+   These commands require `CLAWROUTER_BASE_URL`, `CLAWROUTER_ADMIN_TOKEN`, and the
+   Access service-token pair when the admin route is protected. They never need
+   direct KV edits. Owner/index failures remain unresolved until repaired.
+   An `identity_unresolved` key with neither its credential owner nor KV metadata
+   is a partial-storage recovery case. Restore the matched storage set or complete
+   a reviewed storage migration; replacement and revocation cannot establish the
+   missing identity. The retained index evidence stays intact until that recovery.
+5. Start a new verification scan after repairs or concurrent account changes.
+   Activate only when the complete scan is unchanged and has no unresolved
+   outcomes. A page limit or more than 64 unresolved keys blocks activation;
+   resolve the displayed set, then rescan. A stale revision returns 409 and the
+   panel rereads the canonical status.
+
+The CLI uses the same actions: `pnpm cf:accounts -- --status`, one-time explicit
+`--accept-existing` (or `--accept-fresh` after actual provisioning), then
+`pnpm cf:accounts`. The driver saves bounded progress and performs at most one
+additional verification scan after backfill changes. It does not accept a
+baseline automatically or retry an unresolved owner. Routine later deployments
+reuse accepted activation and inspect every indexed key, including active
+accounts and detached tombstones whose KV projection may be missing. Repair
+keeps the owner's publication obligation until both the index and canonical KV
+projection are acknowledged. Matching projections are not rewritten. A failure
+remains visible; the driver does not retry writes or switch to environment
+credentials to hide it.
+
+Activated repair uses pages of 32 keys. If the CLI reaches its page limit, use
+the exact `--repair-cursor KEY` command it prints to continue after that page;
+restarting without the cursor starts at the first indexed key. This cursor is
+only for activated repair and cannot skip the initial migration scan. The
+console's **Repair next indexed page** action uses the same cursor.
+
+Manual `cf:deploy` and both hosted deploy workflows run this driver before
+golden provider smoke. Production now needs the raw `CLAWROUTER_ADMIN_TOKEN`
+secret in addition to its SHA256; recovery and smoke receive it only in their
+steps, with `CLAWROUTER_ACCESS_CLIENT_ID` and `CLAWROUTER_ACCESS_CLIENT_SECRET`
+when needed. FakeCo installs and proves its existing admin access before
+recovery. Its workflow reuses a configured namespace, so first deployment needs
+explicit baseline acceptance. A failed activation fails deploy qualification,
+but leaves the running admin recovery surface accessible. `cf:doctor` reports
+activation independently of provider configuration and always queries the
+resolved deployment URL, even when `CLAWROUTER_BASE_URL` is omitted. Missing or
+invalid local admin credentials and missing required or incomplete Access
+credential pairs fail preflight before any remote permission probe.
+
+Treat POLICY_KV, ACCESS_CONTROL and GRANT_CREDENTIALS as one matched storage set.
+Partial binding swaps or partial restores are not routine deployments and
+require a reviewed storage migration; the runtime cannot infer namespace lineage
+from a KV read. Keep forward recovery available. Never downgrade to a build that
+ignores attachment statuses or deletes retained generation fences.
 
 `cf:oauth:put` replaces the entire grant at that key, including its credentials
 and account metadata. Omitted refresh tokens, credential bundles, and refresh
@@ -945,6 +1068,50 @@ The manifest-owned job runs every 4 hours 55 minutes, skips grants in cooldown
 or at 10% remaining capacity, sends one fixed one-token Claude request with no
 user content, and discards the response. Neither contributors nor submitted
 payloads can alter its endpoint, model, headers, prompt, or interval.
+
+### Operator account inventory
+
+Run the inventory command from a reviewed, pinned checkout to make one
+authenticated `GET /v1/admin/upstream-grants` against
+`https://clawrouter.openclaw.ai`. It works without an account-readiness endpoint.
+Before running, obtain a working administrator credential reference from its
+owner. Use the operator secret manager to inject `CLAWROUTER_ADMIN_TOKEN` into
+the command's environment. When Cloudflare Access requires service credentials,
+inject both `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` through the same
+operator route. Keep raw credentials out of GitHub Actions, command arguments,
+and logs. The command does not provision credentials; without that prerequisite,
+authenticated inventory remains unverified.
+
+```sh
+git rev-parse HEAD
+CLAWROUTER_BASE_URL=https://clawrouter.openclaw.ai node scripts/grant-pool-operations.mjs
+```
+
+Record the pinned commit and invoking operator alongside the receipt. The
+receipt labels execution as `operator`; it does not attest source or caller
+identity. Exclude overlapping deployments and account mutations before running.
+The command does not install packages, deploy a Worker, or run provider smoke.
+
+Receipts contain only the fixed target, API-visible counts and digests, or fixed
+diagnostics. Raw account identities, labels, URLs, credential data and server
+errors stay out of logs. Redirects, failed authentication, malformed or oversized
+responses fail without retrying the request.
+
+The `clawrouter.api-visible-grants.v1` digest hashes JSON containing that `schema`
+and `grants` sorted by key. Each projected grant contains only `key`, `provider`,
+`kind`, `enabled`, `updatedAt`, `revokedAt`, `credentialStatus` in that order;
+missing optional values become `null`, and legacy strings retain their exact
+bytes without timestamp or enum normalization. The separate `keyNamesSha256` hashes
+`{schema: "clawrouter.api-visible-grant-keys.v1", keys}` with the same sorted key
+names. Labels and mutable quota observations do not affect these digests.
+Compare an earlier private key-name inventory only after recomputing it with
+this exact versioned algorithm; a digest from another format is not comparable.
+
+This receipt covers the API-visible projection only. Null KV values and
+index-only owners are outside it; an empty projection never proves empty storage,
+stopped writers, or matched storage lineage. Review the full inventory privately.
+The command changes no account state and provides no baseline acceptance or
+routing activation action.
 
 ### Contributor intake
 

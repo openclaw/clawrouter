@@ -2,6 +2,7 @@ import snapshotJson from "./generated/provider-snapshot.json" with { type: "json
 import { listConnections, resolveConnection } from "./authority.ts";
 import { observeGrantQuota, observeGrantQuotaProbe } from "./grant-quota.ts";
 import { grantRevision, grantUsable as canonicalGrantUsable, recordGrantRuntime, resolveGrantSelection, type PinnedGrant } from "./grant-selection.ts";
+import { assertTokenUsable } from "./grant-expiry.ts";
 import { grantsVisibleToPolicies, type GrantRecord } from "./grant-scope.ts";
 import { materializeGrantCredentials } from "./grant-credentials.ts";
 import { applyProviderCredential, applyTransportHeaders, assertOperationConfiguration, quotaProbeForGrant, requiredGrantTemplate, transportForGrant, type GrantRequirement } from "./provider-auth.ts";
@@ -214,6 +215,7 @@ export async function upstreamAuth(provider: CompiledProvider, auth: AuthorizedI
   const resolution = await grantFor(provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, requirement);
   const selected = resolution.selected;
   if (!selected && resolution.hasConfiguredGrant) throw new HttpError(503, "upstream_grant_pool_unavailable", `provider ${provider.id} has no available scoped upstream grant`);
+  if (!selected && !resolution.environmentReady) throw new HttpError(503, "grant_pool_not_ready", "environment fallback is waiting for account migration; an administrator can recover and activate it in Access → Upstream");
   const grant = selected?.grant ?? null;
   if (pinned && ((selected?.key ?? null) !== pinned.key || ("lineage" in pinned ? grant?.credentialLineage !== pinned.lineage : (grant ? grantRevision(grant) : null) !== pinned.revision))) throw new HttpError(409, "upstream_grant_changed", "upstream authorization changed; open a new connection");
   if (requirement) assertOperationConfiguration(requirement, grant, env);
@@ -329,11 +331,11 @@ export async function listHealth(env: Env): Promise<Map<string, ProviderHealth>>
   return result;
 }
 
-async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedKeys: ReadonlySet<string>, stickyHash: string | null, recordSelection: boolean, pinned?: PinnedGrant, requirement?: GrantRequirement): Promise<{ selected: { key: string; grant: UpstreamGrant } | null; hasConfiguredGrant: boolean }> {
+async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedKeys: ReadonlySet<string>, stickyHash: string | null, recordSelection: boolean, pinned?: PinnedGrant, requirement?: GrantRequirement): Promise<{ selected: { key: string; grant: UpstreamGrant } | null; hasConfiguredGrant: boolean; environmentReady: boolean }> {
   const tokenRef = provider.auth.schemes.find((scheme) => scheme.type === "oauth")?.tokenRef ?? provider.id;
   const tenant = auth.policy.tenantId ?? "default";
   const resolution = await resolveGrantSelection(provider.id, auth.policyId, tenant, tokenRef, env, excludedKeys, auth.policy.grantRouting, stickyHash, recordSelection, pinned?.key, requirement);
-  return { selected: resolution.selected ? { key: resolution.selected.key, grant: await refreshGrant(resolution.selected.key, resolution.selected.grant, provider, env, false) } : null, hasConfiguredGrant: resolution.hasConfiguredGrant };
+  return { selected: resolution.selected ? { key: resolution.selected.key, grant: await refreshGrant(resolution.selected.key, resolution.selected.grant, provider, env, false) } : null, hasConfiguredGrant: resolution.hasConfiguredGrant, environmentReady: resolution.environmentReady };
 }
 
 export async function refreshStoredGrant(env: Env, key: string): Promise<UpstreamGrant> {
@@ -357,6 +359,7 @@ export async function refreshStoredGrantQuota(env: Env, key: string): Promise<vo
   applyProviderCredential(provider, grant, env, headers, url.searchParams);
   for (const [name, value] of Object.entries(probe.headers)) headers.set(name, requiredGrantTemplate(value, grant, "grant_quota_probe_unavailable"));
   let response: Response;
+  assertTokenUsable(grant);
   try { response = await fetch(url, { method: probe.method, headers, signal: AbortSignal.timeout(10_000) }); }
   catch { throw new HttpError(502, "grant_quota_probe_failed", `provider ${provider.id} quota probe failed`); }
   if (!response.ok) {

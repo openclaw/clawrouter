@@ -4,6 +4,8 @@ import test from "node:test";
 import { continuationCapacity, continuationRetentionMs } from "../continuation-store.ts";
 import { continuationAuthority } from "./continuation-authority.mjs";
 import { HttpContinuation } from "../http-continuation.ts";
+const { estimateCost } = await import("../proxy-accounting.ts");
+const { validateBudgetReservation } = await import("../accounting.ts");
 
 const owner = { providerId: "openai", endpointId: "responses", grantKey: "oauth/fixture/account-a", lineage: "lineage-a", routeSha256: "f".repeat(64), policyGeneration: "g1" };
 const keys = ["a".repeat(64), "b".repeat(64)];
@@ -184,8 +186,8 @@ function producerFixture(t, intercept = (_action, dispatch) => dispatch()) {
     return { fetch(url, init) { return intercept(JSON.parse(init.body).action, () => stub.fetch(url, init)); } };
   } } };
   return {
-    async create(body = {}, signal) {
-      const continuation = await HttpContinuation.resolve(new Request("https://router.example/v1/responses", { signal }), { capability: "llm.responses", provider: { id: "openai" }, endpoint: { id: "responses" }, body }, { authType: "proxy_key", policyId: "fixture", credentialId: "fixture", principalId: null, policy: { generation: "g1", tenantId: "default" } }, env);
+    async create(body = {}, signal, transport = "http") {
+      const continuation = await HttpContinuation.resolve(new Request("https://router.example/v1/responses", { signal }), { capability: "llm.responses", provider: { id: "openai" }, endpoint: { id: "responses" }, body }, { authType: "proxy_key", policyId: "fixture", credentialId: "fixture", principalId: null, policy: { generation: "g1", tenantId: "default" } }, env, transport);
       continuation.bind(owner); return continuation;
     },
     rows() { return [...namespace.objects.values()].flatMap(value => value.db.prepare("SELECT pricing_evidence_json FROM http_continuations").all()).map(row => row.pricing_evidence_json && JSON.parse(row.pricing_evidence_json)); },
@@ -194,13 +196,20 @@ function producerFixture(t, intercept = (_action, dispatch) => dispatch()) {
 const created = id => ({ type: "response.created", response: { id } });
 const completed = id => ({ type: "response.completed", response: { id } });
 const identities = id => [{ kind: "response", value: id }];
+const parentCost = (id, continuation) => estimateCost(null, { previous_response_id: id }, null, "llm.responses", { request_format: "openai.responses" }, continuation.parentTools);
 
 test("request producers freeze inherited facts and preserve repeated routing-only turn carriers", async t => {
   const f = producerFixture(t), parent = await f.create({ input: [{ type: "additional_tools", tools: [{ type: "web_search" }] }] });
   await parent.publishFrame([...identities("parent"), { kind: "turn", value: "turn" }], created("parent"));
   const early = await f.create({ previous_response_id: "parent", input: [] });
+  assert.equal(early.parentTools, "unknown");
   await parent.publishFrame(identities("parent"), completed("parent"));
   const late = await f.create({ previous_response_id: "parent", input: [] });
+  assert.equal(early.parentTools, "unknown", "later finalization cannot revise this request's admission fact");
+  assert.equal(late.parentTools, "hosted_tool_fee");
+  assert.equal(parentCost("parent", early).pricingGap, "retained_tool_unknown");
+  assert.equal(parentCost("parent", late).pricingGap, "hosted_tool_fee");
+  for (const child of [early, late]) assert.throws(() => validateBudgetReservation("llm.responses", parentCost("parent", child), 100), error => error.code === "pricing_required");
   for (const [id, producer] of [["early", early], ["late", late]]) {
     await producer.publishFrame([...identities(id), { kind: "turn", value: "turn" }], created(id));
     await producer.publishFrame(identities(id), completed(id));
@@ -222,11 +231,24 @@ for (const failure of ["transient", "lost_ack", "semantic"]) test(`${failure} fi
   else await finish;
   assert.equal(f.rows()[0].state, failure === "lost_ack" ? "final" : "pending");
   const child = await f.create({ previous_response_id: "response" });
+  assert.equal(child.parentTools, failure === "lost_ack" ? "token_only" : "unknown");
+  assert.equal(parentCost("response", child).pricingGap, failure === "lost_ack" ? undefined : "retained_tool_unknown");
   await child.publishFrame(identities("child"), created("child"));
   // The same injected outage affects child finalization; its pending producer
   // still cannot adopt the parent's completed receipt or another producer.
   await assert.rejects((await f.create()).publishFrame(identities("response"), created("response")), error => error.code === "continuation_unavailable");
   assert.equal(f.rows().length, 2);
+});
+
+test("resolved parent knowledge stays separate from current declarations and routing-only aliases", async t => {
+  const f = producerFixture(t), parent = await f.create();
+  await parent.publishFrame([...identities("parent"), { kind: "turn", value: "turn" }], completed("parent"));
+  const child = await f.create({ previous_response_id: "parent", input: [{ type: "additional_tools", tools: [{ type: "web_search" }] }] });
+  assert.equal(child.parentTools, "token_only");
+  await child.publishFrame(identities("child"), completed("child"));
+  assert.equal(f.rows().at(-1).knowledge, "hosted_tool_fee");
+  const turnOnly = await f.create({ client_metadata: { "x-codex-turn-state": "turn" }, input: [] }, undefined, "websocket");
+  assert.equal(turnOnly.parentTools, "token_only");
 });
 
 test("a lost claim ACK is hard even if its pending insert committed", async t => {

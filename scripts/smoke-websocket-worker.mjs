@@ -372,8 +372,8 @@ try {
   await until(async () => (await (await dispatch("/v1/usage")).json()).usage.events.filter(event => event.session_id === "http-affinity").length === 3);
   assert.ok((await ledgerFacts()).every(fact => fact.unsettled === 0));
 
-  // Producer-only rollout: a zero-tariff parent still records declarations, and
-  // the measured WebSocket child inherits them without changing admission/cost.
+  // A zero-tariff parent still records declarations. A measured delta cannot
+  // omit those retained fees and obtain token-only admission.
   const scope = "http-continuations:" + createHash("sha256").update(JSON.stringify(["proxy_key", "default", "fixture", "fixture", null])).digest("hex");
   const evidenceOwner = authority.get(authority.idFromName(scope));
   async function evidenceFor(id) {
@@ -388,14 +388,16 @@ try {
   const evidenceParentId = (await evidenceParent.json()).id;
   assert.equal((await evidenceFor(evidenceParentId)).knowledge, "hosted_tool_fee");
   await authorityObject.fetch("https://authority/policies/put", { method: "POST", body: JSON.stringify({ policyId: "fixture", policy }) });
+  const beforeEvidenceFrames = (await stateFrames()).length;
   const evidenceSocketResponse = await dispatch("/v1/responses", { headers: { upgrade: "websocket", "x-clawrouter-session-id": "evidence-child" } });
   assert.equal(evidenceSocketResponse.status, 101);
   const evidenceSocket = evidenceSocketResponse.webSocket; evidenceSocket.accept(); sockets.push(evidenceSocket);
   let evidenceTerminal;
-  evidenceSocket.addEventListener("message", event => { const frame = JSON.parse(event.data); if (frame.type === "response.completed") evidenceTerminal = frame; });
+  evidenceSocket.addEventListener("message", event => { const frame = JSON.parse(event.data); if (["response.completed", "error"].includes(frame.type)) evidenceTerminal = frame; });
   evidenceSocket.send(JSON.stringify({ type: "response.create", model: "openai/gpt-6-astra", previous_response_id: evidenceParentId, input: [], service_tier: "priority", max_output_tokens: 32 }));
   await until(() => !!evidenceTerminal);
-  assert.equal((await evidenceFor(evidenceTerminal.response.id)).knowledge, "hosted_tool_fee");
+  assert.equal(evidenceTerminal.error.code, "pricing_required");
+  assert.equal((await stateFrames()).length, beforeEvidenceFrames);
   let evidenceReceipts;
   await until(async () => {
     evidenceReceipts = (await (await dispatch("/v1/usage")).json()).usage.events.filter(event => ["evidence-parent", "evidence-child"].includes(event.session_id));
@@ -403,10 +405,48 @@ try {
   });
   assert.equal(evidenceReceipts.find(event => event.session_id === "evidence-parent").actual_cost_micros, 0);
   assert.equal(evidenceReceipts.find(event => event.session_id === "evidence-parent").cost_basis, "policy_fixed");
-  assert.equal(evidenceReceipts.find(event => event.session_id === "evidence-child").actual_cost_micros, 1_080);
-  assert.equal(evidenceReceipts.find(event => event.session_id === "evidence-child").cost_basis, "manifest_pricing");
-  assert.deepEqual(await ledgerFacts(), beforeEvidence.map(({ spent }) => ({ spent: spent + 1_080, unsettled: 0 })));
+  assert.equal(evidenceReceipts.find(event => event.session_id === "evidence-child").actual_cost_micros, 0);
+  assert.equal(evidenceReceipts.find(event => event.session_id === "evidence-child").cost_basis, "none");
+  assert.equal(evidenceReceipts.find(event => event.session_id === "evidence-child").status_code, 400);
+  assert.deepEqual(await ledgerFacts(), beforeEvidence);
   evidenceSocket.close(1000, "evidence fixture complete");
+
+  // Enabling only the provider budget preserves policy generation and route
+  // ownership. Both child transports must consume the already-retained proof.
+  await authorityObject.fetch("https://authority/policies/put", { method: "POST", body: JSON.stringify({ policyId: "fixture", policy: { ...policy, monthlyBudgetMicros: null } }) });
+  await authorityObject.fetch("https://authority/connections/put", { method: "POST", body: JSON.stringify({ providerId: "openai", enabled: true, monthlyBudgetMicros: null }) });
+  const unmeteredParent = await httpContinuation({ input: [{ type: "tool_search_output", execution: "client", call_id: "call_fixture", tools: [{ type: "mcp" }] }] }, { "x-clawrouter-session-id": "provider-limit-parent" });
+  assert.equal(unmeteredParent.status, 200);
+  const unmeteredParentId = (await unmeteredParent.json()).id;
+  assert.equal((await evidenceFor(unmeteredParentId)).knowledge, "hosted_tool_usage");
+  const policyBeforeLimit = await (await authorityObject.fetch("https://authority/policies/resolve", { method: "POST", body: JSON.stringify({ policyIds: ["fixture"] }) })).json();
+  await authorityObject.fetch("https://authority/connections/put", { method: "POST", body: JSON.stringify({ providerId: "openai", enabled: true, monthlyBudgetMicros: policy.monthlyBudgetMicros }) });
+  assert.deepEqual(await (await authorityObject.fetch("https://authority/policies/resolve", { method: "POST", body: JSON.stringify({ policyIds: ["fixture"] }) })).json(), policyBeforeLimit);
+  const beforeProviderLimit = await ledgerFacts(), beforeProviderHttp = (await httpFrames()).length, beforeProviderWs = (await stateFrames()).length;
+  const deniedHttp = await httpContinuation({ previous_response_id: unmeteredParentId, input: [] }, { "x-clawrouter-session-id": "provider-limit-http" });
+  assert.equal(deniedHttp.status, 400); assert.equal((await deniedHttp.json()).error.code, "pricing_required");
+  const deniedWs = await dispatch("/v1/responses", { headers: { upgrade: "websocket", "x-clawrouter-session-id": "provider-limit-ws" } });
+  assert.equal(deniedWs.status, 101);
+  const deniedChild = deniedWs.webSocket; deniedChild.accept(); sockets.push(deniedChild);
+  const deniedChildEvents = []; deniedChild.addEventListener("message", ({ data }) => deniedChildEvents.push(JSON.parse(data)));
+  deniedChild.send(JSON.stringify({ type: "response.create", model: "openai/gpt-6-astra", previous_response_id: unmeteredParentId, input: [], max_output_tokens: 32 }));
+  await until(() => deniedChildEvents.some(({ type }) => type === "error"));
+  assert.equal(deniedChildEvents.find(({ type }) => type === "error").error.code, "pricing_required");
+  let providerLimitReceipts;
+  await until(async () => {
+    providerLimitReceipts = (await (await dispatch("/v1/usage")).json()).usage.events.filter(({ session_id }) => ["provider-limit-parent", "provider-limit-http", "provider-limit-ws"].includes(session_id));
+    return providerLimitReceipts.length === 3;
+  });
+  assert.equal(providerLimitReceipts.find(({ session_id }) => session_id === "provider-limit-parent").cost_basis, "unpriced_usage");
+  for (const session of ["provider-limit-http", "provider-limit-ws"]) {
+    const receipts = providerLimitReceipts.filter(({ session_id }) => session_id === session);
+    assert.equal(receipts.length, 1);
+    assert.deepEqual([receipts[0].status_code, receipts[0].actual_cost_micros, receipts[0].cost_basis], [400, 0, "none"]);
+  }
+  assert.equal((await httpFrames()).length, beforeProviderHttp); assert.equal((await stateFrames()).length, beforeProviderWs);
+  assert.deepEqual(await ledgerFacts(), beforeProviderLimit);
+  deniedChild.close(1000, "provider limit fixture complete");
+  await authorityObject.fetch("https://authority/policies/put", { method: "POST", body: JSON.stringify({ policyId: "fixture", policy }) });
 
   // Real credential owners and the real pool index must agree with affinity;
   // neither another pool member nor the configured environment may adopt state.

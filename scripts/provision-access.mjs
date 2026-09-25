@@ -4,7 +4,7 @@ import { appendFileSync } from "node:fs";
 import {
   assertDeploymentMutation,
   deploymentTarget,
-  fakecoAccessServiceTokenIds,
+  accessServiceTokenIds,
   githubScopedName,
   githubScopeArgs,
 } from "./deployment-profile.mjs";
@@ -45,7 +45,7 @@ const allowedDomains =
     : githubOrganizations.length > 0
       ? []
       : adminDomains;
-const serviceTokenIds = fakecoAccessServiceTokenIds(deployment, process.env);
+const serviceTokenIds = accessServiceTokenIds(deployment, process.env);
 const allowedIdps = csv(process.env.CLAWROUTER_ACCESS_IDP_IDS);
 const configuredGithubIdpId =
   process.env.CLAWROUTER_ACCESS_GITHUB_IDP_ID?.trim() ||
@@ -60,23 +60,6 @@ const keepExtraPolicies = process.env.CLAWROUTER_ACCESS_KEEP_EXTRA_POLICIES === 
 const serviceInclude = serviceTokenIds.map((tokenId) => ({
   service_token: { token_id: tokenId },
 }));
-
-if (
-  allowedEmails.length === 0 &&
-  allowedDomains.length === 0 &&
-  githubOrganizations.length === 0 &&
-  process.env.CLAWROUTER_ACCESS_ALLOW_EVERYONE !== "1" &&
-  serviceInclude.length === 0
-) {
-  throw new Error(
-    [
-      "refusing to create an Access policy with no include rules",
-      "set CLAWROUTER_ACCESS_ALLOWED_EMAILS, CLAWROUTER_ACCESS_ALLOWED_DOMAINS,",
-      "CLAWROUTER_ACCESS_GITHUB_ORGS, CLAWROUTER_ACCESS_SERVICE_TOKEN_IDS,",
-      "or CLAWROUTER_ACCESS_ALLOW_EVERYONE=1",
-    ].join(" "),
-  );
-}
 
 if (!dryRun && !token) {
   throw new Error("CLOUDFLARE_API_TOKEN is required unless --dry-run is set");

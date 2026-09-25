@@ -1,4 +1,5 @@
 import { HttpError } from "./utils.ts";
+import { tokenExpired } from "./grant-expiry.ts";
 import { assertOperationConfiguration, grantSupports, type GrantRequirement } from "./provider-auth.ts";
 import { authorityCall } from "./authority.ts";
 import { grantCoolingDown, grantQuotaRatio, grantRuntimeFresh } from "./grant-quota.ts";
@@ -48,6 +49,7 @@ export interface SelectedGrant {
 export interface GrantSelectionResult {
   selected: SelectedGrant | null;
   hasConfiguredGrant: boolean;
+  environmentReady: boolean;
 }
 export type PinnedGrant = { key: string | null; revision: string | null } | { key: string; lineage: string };
 
@@ -65,7 +67,13 @@ export function validCredentialBundle(value: UpstreamGrant["credentials"]): bool
   return value == null || (!Array.isArray(value) && typeof value === "object" && Object.entries(value).every(([name, secret]) => /^[A-Za-z0-9_.-]{1,128}$/.test(name) && typeof secret === "string" && secret.trim().length > 0));
 }
 
-export interface GrantCandidates { available: SelectedGrant[]; hasConfiguredGrant: boolean }
+export function grantAvailable(grant: UpstreamGrant, now = Date.now()): boolean {
+  return grant.enabled !== false && grantUsable(grant) && grant.tokenResponseError !== "invalid_expiry"
+    && (!tokenExpired(grant, now) || !!(grant.credentialStore === "durable_object" ? grant.hasRefreshToken : grant.refreshToken)
+      && !(grant.nextRefreshAttemptAt && Date.parse(grant.nextRefreshAttemptAt) > now));
+}
+
+export interface GrantCandidates { available: SelectedGrant[]; hasConfiguredGrant: boolean; environmentReady: boolean }
 
 export function selectPolicyCandidates<T extends AccessPolicyEntry>(pools: Array<{ entry: T; candidates: GrantCandidates }>, requirement?: GrantRequirement): { entry: T; candidates: GrantCandidates } | undefined {
   const compatible = pools.map(({ entry, candidates }) => ({
@@ -129,7 +137,7 @@ export async function resolveGrantSelection(
   requirement?: GrantRequirement,
 ): Promise<GrantSelectionResult> {
   routing = grantRoutingPolicy(routing);
-  const { available, hasConfiguredGrant } = await resolveGrantCandidates(providerId, policyId, tenantId, defaultTokenRef, env, excludedKeys, routing, pinnedKey, requirement);
+  const { available, hasConfiguredGrant, environmentReady } = await resolveGrantCandidates(providerId, policyId, tenantId, defaultTokenRef, env, excludedKeys, routing, pinnedKey, requirement);
   const nowMs = Date.now();
   const active = activeOperationCandidates(available, env, requirement);
   let selected: SelectedGrant | null = null;
@@ -145,7 +153,7 @@ export async function resolveGrantSelection(
     });
     selected = active.find((entry) => entry.key === choice.selectedKey) ?? null;
   }
-  return { selected, hasConfiguredGrant };
+  return { selected, hasConfiguredGrant, environmentReady };
 }
 
 export async function resolveGrantCandidates(
@@ -158,7 +166,7 @@ export async function resolveGrantCandidates(
     `oauth/${policyId}/${defaultTokenRef}`,
     `oauth/tenants/${tenantId}/${defaultTokenRef}`,
   ];
-  const pool = await authorityCall<{ keys: string[]; states?: Record<string, GrantRuntimeState> }>(env, "/grant-pools/resolve", { providerId, policyId, tenantId, defaultKeys });
+  const pool = await authorityCall<{ keys: string[]; states?: Record<string, GrantRuntimeState>; hasAttachment: boolean; ready: boolean }>(env, "/grant-pools/resolve", { providerId, policyId, tenantId, defaultKeys });
   const keys = [...new Set([...defaultKeys, ...pool.keys])];
   const grants = keys.length ? await env.POLICY_KV.get<UpstreamGrant>(keys, "json") : new Map<string, UpstreamGrant | null>();
   const nowMs = Date.now();
@@ -171,6 +179,7 @@ export async function resolveGrantCandidates(
   const eligibilityRestricted = Object.prototype.hasOwnProperty.call(routing.eligibleGrants, providerId);
   const eligibleRefs = routing.eligibleGrants[providerId] ?? [];
   const available = configured.filter((entry) => {
+    if (!grantAvailable(entry.grant, nowMs)) return false;
     if (requirement && !grantSupports(requirement, entry.grant)) return false;
     if (pinnedKey !== undefined && entry.key !== pinnedKey) return false;
     if (excludedKeys.has(entry.key) || grantCoolingDown(entry.runtimeState, nowMs)) return false;
@@ -178,8 +187,9 @@ export async function resolveGrantCandidates(
     if (eligibilityRestricted && (!scope || !eligibleRefs.includes(scope.tokenRef))) return false;
     return routing.staleState !== "deny" || grantRuntimeFresh(entry.runtimeState, routing.staleAfterSeconds * 1_000, nowMs);
   });
-  // Transport filtering must not reopen environment auth for a configured pool.
-  return { available, hasConfiguredGrant: configured.length > 0 || eligibilityRestricted || routing.staleState === "deny" || typeof pinnedKey === "string" };
+  // Attachment presence survives pause and permanent refresh rejection. Only
+  // the completed authority cutover can establish absence for environment auth.
+  return { available, hasConfiguredGrant: pool.ready && pool.hasAttachment || configured.length > 0 || eligibilityRestricted || routing.staleState === "deny" || typeof pinnedKey === "string", environmentReady: pool.ready === true };
 }
 
 function finitePercent(value: unknown, fallback: number): number {
