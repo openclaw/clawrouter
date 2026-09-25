@@ -46,7 +46,7 @@ adapter:
       - from: max_tokens
         to: max_completion_tokens
         paths: [/v1/chat/completions]
-        upstreams: [gpt-6-astra, gpt-5.6, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5, gpt-5.4]
+        upstreams: [gpt-6-astra, gpt-6-sol, gpt-6-luna, gpt-5.6, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5, gpt-5.4]
 quota:
   responseHeaders:
     - id: rpm
@@ -295,6 +295,158 @@ models:
               cachedInputMicrosPerMillion: 1000000
               cacheWriteInputMicrosPerMillion: 12500000
               outputMicrosPerMillion: 37500000
+    - id: openai/gpt-6-sol
+      upstream: gpt-6-sol
+      capabilities: [llm.responses, llm.chat]
+      supportedReasoningEfforts: [none, low, medium, high, xhigh, max]
+      requestParameters:
+        responses:
+          sources:
+            - https://developers.openai.com/api/docs/models/gpt-6-sol
+            - https://developers.openai.com/api/docs/guides/latest-model
+          checkedAt: "2026-09-25"
+          defaultReasoningEffort: medium
+          temperature: requires_reasoning_none
+          topP: requires_reasoning_none
+          logprobs: requires_reasoning_none
+          toolCalling: supported
+        chat_completions:
+          sources:
+            - https://developers.openai.com/api/docs/models/gpt-6-sol
+            - https://developers.openai.com/api/docs/guides/latest-model
+          checkedAt: "2026-09-25"
+          defaultReasoningEffort: medium
+          temperature: requires_reasoning_none
+          topP: requires_reasoning_none
+          logprobs: requires_reasoning_none
+          toolCalling: requires_reasoning_none
+      pricingRef: openai-gpt-6-sol-tiers-2026-09-25
+      pricing:
+        effectiveAt: "2026-09-25"
+        source: https://developers.openai.com/api/docs/pricing
+        inputMicrosPerMillion: 2000000
+        cachedInputMicrosPerMillion: 200000
+        cacheWriteInputMicrosPerMillion: 2500000
+        outputMicrosPerMillion: 10000000
+        maxInputTokens: 922000
+        defaultMaxOutputTokens: 128000
+        longContext:
+          thresholdInputTokens: 272000
+          inputMicrosPerMillion: 4000000
+          cachedInputMicrosPerMillion: 400000
+          cacheWriteInputMicrosPerMillion: 5000000
+          outputMicrosPerMillion: 15000000
+        serviceTiers:
+          - id: default
+            inputMicrosPerMillion: 2000000
+            cachedInputMicrosPerMillion: 200000
+            cacheWriteInputMicrosPerMillion: 2500000
+            outputMicrosPerMillion: 10000000
+            longContext:
+              thresholdInputTokens: 272000
+              inputMicrosPerMillion: 4000000
+              cachedInputMicrosPerMillion: 400000
+              cacheWriteInputMicrosPerMillion: 5000000
+              outputMicrosPerMillion: 15000000
+          - id: priority
+            aliases: [fast]
+            inputMicrosPerMillion: 4000000
+            cachedInputMicrosPerMillion: 400000
+            cacheWriteInputMicrosPerMillion: 5000000
+            outputMicrosPerMillion: 20000000
+            longContext:
+              thresholdInputTokens: 272000
+              inputMicrosPerMillion: 8000000
+              cachedInputMicrosPerMillion: 800000
+              cacheWriteInputMicrosPerMillion: 10000000
+              outputMicrosPerMillion: 30000000
+          - id: flex
+            inputMicrosPerMillion: 1000000
+            cachedInputMicrosPerMillion: 100000
+            cacheWriteInputMicrosPerMillion: 1250000
+            outputMicrosPerMillion: 5000000
+            longContext:
+              thresholdInputTokens: 272000
+              inputMicrosPerMillion: 2000000
+              cachedInputMicrosPerMillion: 200000
+              cacheWriteInputMicrosPerMillion: 2500000
+              outputMicrosPerMillion: 7500000
+    - id: openai/gpt-6-luna
+      upstream: gpt-6-luna
+      capabilities: [llm.responses, llm.chat]
+      supportedReasoningEfforts: [none, low, medium, high, xhigh, max]
+      requestParameters:
+        responses:
+          sources:
+            - https://developers.openai.com/api/docs/models/gpt-6-luna
+            - https://developers.openai.com/api/docs/guides/latest-model
+          checkedAt: "2026-09-25"
+          defaultReasoningEffort: medium
+          temperature: requires_reasoning_none
+          topP: requires_reasoning_none
+          logprobs: requires_reasoning_none
+          toolCalling: supported
+        chat_completions:
+          sources:
+            - https://developers.openai.com/api/docs/models/gpt-6-luna
+            - https://developers.openai.com/api/docs/guides/latest-model
+          checkedAt: "2026-09-25"
+          defaultReasoningEffort: medium
+          temperature: requires_reasoning_none
+          topP: requires_reasoning_none
+          logprobs: requires_reasoning_none
+          toolCalling: requires_reasoning_none
+      pricingRef: openai-gpt-6-luna-tiers-2026-09-25
+      pricing:
+        effectiveAt: "2026-09-25"
+        source: https://developers.openai.com/api/docs/pricing
+        inputMicrosPerMillion: 100000
+        cachedInputMicrosPerMillion: 10000
+        cacheWriteInputMicrosPerMillion: 125000
+        outputMicrosPerMillion: 500000
+        maxInputTokens: 922000
+        defaultMaxOutputTokens: 128000
+        longContext:
+          thresholdInputTokens: 272000
+          inputMicrosPerMillion: 200000
+          cachedInputMicrosPerMillion: 20000
+          cacheWriteInputMicrosPerMillion: 250000
+          outputMicrosPerMillion: 750000
+        serviceTiers:
+          - id: default
+            inputMicrosPerMillion: 100000
+            cachedInputMicrosPerMillion: 10000
+            cacheWriteInputMicrosPerMillion: 125000
+            outputMicrosPerMillion: 500000
+            longContext:
+              thresholdInputTokens: 272000
+              inputMicrosPerMillion: 200000
+              cachedInputMicrosPerMillion: 20000
+              cacheWriteInputMicrosPerMillion: 250000
+              outputMicrosPerMillion: 750000
+          - id: priority
+            aliases: [fast]
+            inputMicrosPerMillion: 200000
+            cachedInputMicrosPerMillion: 20000
+            cacheWriteInputMicrosPerMillion: 250000
+            outputMicrosPerMillion: 1000000
+            longContext:
+              thresholdInputTokens: 272000
+              inputMicrosPerMillion: 400000
+              cachedInputMicrosPerMillion: 40000
+              cacheWriteInputMicrosPerMillion: 500000
+              outputMicrosPerMillion: 1500000
+          - id: flex
+            inputMicrosPerMillion: 50000
+            cachedInputMicrosPerMillion: 5000
+            cacheWriteInputMicrosPerMillion: 62500
+            outputMicrosPerMillion: 250000
+            longContext:
+              thresholdInputTokens: 272000
+              inputMicrosPerMillion: 100000
+              cachedInputMicrosPerMillion: 10000
+              cacheWriteInputMicrosPerMillion: 125000
+              outputMicrosPerMillion: 375000
     - id: openai/gpt-5.6-sol
       upstream: gpt-5.6-sol
       capabilities: [llm.responses, llm.chat]
