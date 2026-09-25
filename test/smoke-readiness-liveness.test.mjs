@@ -85,7 +85,10 @@ for (const mode of [
   "redirect", "invalid JSON", "invalid health", "wrong version", "catalog failure",
 ]) {
   test(`self-host CLI preserves its outcome after ${mode} in a separate process`, async (t) => {
-    const mutations = [];
+    const adminCalls = [];
+    // Health liveness is exercised against an already activated installation;
+    // the ordinary CLI must still verify and repair account publication first.
+    const readiness = { revision: 1, baseline: "existing", activatedAt: "2026-09-25T00:00:00Z" };
     let healthCalls = 0;
     let catalogCalls = 0;
     let stalledBodyClosed = false;
@@ -125,8 +128,14 @@ for (const mode of [
         if (mode === "catalog failure") response.statusCode = 500;
         response.end(JSON.stringify({ providers: [{ id: "firecrawl" }] }));
       } else if (request.url.startsWith("/v1/admin/")) {
-        mutations.push(`${request.method} ${request.url.replace(/self_host_smoke_[a-f0-9]+/g, "fixture")}`);
-        response.end('{"ok":true}');
+        adminCalls.push(`${request.method} ${request.url.replace(/self_host_smoke_[a-f0-9]+/g, "fixture")}`);
+        if (request.method === "GET" && request.url === "/v1/admin/grant-pools/readiness") {
+          response.end(JSON.stringify(readiness));
+        } else if (request.method === "POST" && request.url === "/v1/admin/grant-pools/repair") {
+          response.end(JSON.stringify({ readiness, outcomes: [], cursor: null }));
+        } else {
+          response.end('{"ok":true}');
+        }
       } else {
         response.writeHead(404).end();
       }
@@ -149,10 +158,12 @@ for (const mode of [
       assert.equal(result.code, 1, result.stderr);
       assert.match(result.stderr, /health (response must report ok|must report the built release version)/);
       assert.equal(healthCalls, 1, "preserve immediate outer assertions");
-      assert.deepEqual(mutations, []);
+      assert.deepEqual(adminCalls, []);
       return;
     }
-    assert.deepEqual(mutations, [
+    assert.deepEqual(adminCalls, [
+      "GET /v1/admin/grant-pools/readiness",
+      "POST /v1/admin/grant-pools/repair",
       "PUT /v1/admin/keys/fixture",
       "POST /v1/admin/keys/fixture/revoke",
       "POST /v1/admin/policies/fixture/revoke",
