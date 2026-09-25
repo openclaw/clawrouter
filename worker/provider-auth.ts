@@ -7,12 +7,12 @@ export function transportForGrant(provider: CompiledProvider, grant: UpstreamGra
   return provider.auth.grantTransports[grant.kind] ?? null;
 }
 
-export interface GrantRequirement { provider: CompiledProvider; endpoint: CompiledEndpoint; mode: "http" | "websocket"; background?: boolean }
+export interface GrantRequirement { provider: CompiledProvider; endpoint: CompiledEndpoint; mode: "http" | "websocket"; responsesLifecycle?: boolean }
 
 export function grantSupports(requirement: GrantRequirement, grant: UpstreamGrant | null): boolean {
   const transport = transportForGrant(requirement.provider, grant);
   if (transport?.allowedEndpoints && !transport.allowedEndpoints.includes(requirement.endpoint.id)) return false;
-  if (requirement.background) {
+  if (requirement.responsesLifecycle) {
     const lifecycle = requirement.endpoint.responsesLifecycle;
     if (requirement.mode !== "http" || !lifecycle || ![lifecycle.retrieve, lifecycle.cancel].every(id =>
       requirement.provider.endpoints.some(endpoint => endpoint.id === id) && (!transport?.allowedEndpoints || transport.allowedEndpoints.includes(id)))) return false;
@@ -25,7 +25,7 @@ export function grantSupports(requirement: GrantRequirement, grant: UpstreamGran
 export function assertOperationConfiguration(requirement: GrantRequirement, grant: UpstreamGrant | null, env: Env): void {
   const { provider, endpoint } = requirement;
   if (!grantSupports(requirement, grant)) throw new HttpError(400, "grant_transport_unavailable", "upstream authorization does not support this operation");
-  if (requirement.background) {
+  if (requirement.responsesLifecycle) {
     for (const id of Object.values(endpoint.responsesLifecycle!)) {
       assertOperationConfiguration({ provider, endpoint: provider.endpoints.find(endpoint => endpoint.id === id)!, mode: "http" }, grant, env);
     }

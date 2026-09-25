@@ -9,6 +9,7 @@ const { default: worker } = await import("../index.ts");
 const { UsageLedgerObject } = await import("../ledgers.ts");
 const { sha256Hex } = await import("../utils.ts");
 const { putGrantCredentials } = await import("../grant-credentials.ts");
+const { providerById } = await import("../providers.ts");
 import { attachGrantCredentialNamespace } from "./grant-credential-mock.mjs";
 
 const queued = { object: "response", id: "response-fixture", status: "queued", usage: null };
@@ -30,9 +31,10 @@ async function fixture(t) {
   const usageState = { storage: { sql: { exec(query, ...bindings) { const statement = usageDb.prepare(query); if (statement.columns().length) return statement.all(...bindings); statement.run(...bindings); return []; } }, getAlarm: async () => 1 } };
   let usage = new UsageLedgerObject(usageState);
   env.USAGE_LEDGER = { idFromName: name => name, get: () => ({ fetch: (url, init) => usage.fetch(new Request(url, init)) }) };
-  const scopes = continuationAuthority(t, env), authorityCalls = [], hooks = { owner: async (_body, dispatch) => dispatch(), upstream: request => Response.json(request.method === "POST" ? queued : completed) };
+  const scopes = continuationAuthority(t, env), authorityCalls = [], scopeCalls = [], hooks = { owner: async (_body, dispatch) => dispatch(), upstream: request => Response.json(request.method === "POST" ? queued : completed) };
   env.ACCESS_CONTROL = { idFromName: name => name, get: name => name.startsWith("http-continuations:") ? { fetch: async (url, init) => {
     const body = JSON.parse(init.body);
+    scopeCalls.push(body.action);
     return hooks.owner(body, () => scopes.get(name).fetch(url, init));
   } } : { fetch: (url, init) => { authorityCalls.push({ path: new URL(url).pathname, body: JSON.parse(init.body) }); return scopes.get(name).fetch(url, init); } } };
   attachGrantCredentialNamespace(env, { useExistingAuthority: true });
@@ -49,7 +51,7 @@ async function fixture(t) {
   const session = "a".repeat(64);
   records.set(`local/sessions/${await sha256Hex(session)}`, { email: "owner@example.com", role: "user", expiresAtMs: now + 60_000 });
   t.mock.method(globalThis, "fetch", async (input, init) => { const request = new Request(input, init); sent.push(request); return hooks.upstream(request); });
-  return { env, hooks, sent, budgets, budgetCalls, queue, scopes, usageDb, authority, authorityCalls, policy, records, credential, cookie: `clawrouter_session=${session}`,
+  return { env, hooks, sent, budgets, budgetCalls, queue, scopes, scopeCalls, usageDb, authority, authorityCalls, policy, records, credential, cookie: `clawrouter_session=${session}`,
     call(path, body, extra = {}) {
       const headers = { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json", ...extra.headers };
       return worker.fetch(new Request(`https://router.example${path}`, { method: body === undefined ? "GET" : "POST", ...extra, headers, ...(body === undefined ? {} : { body: JSON.stringify(body) }) }), env, { waitUntil: promise => pending.push(promise) });
@@ -91,6 +93,31 @@ async function adminMutation(f, path, body, method = "POST") {
   const response = await f.call(path, body, { method, headers: { authorization: "Bearer fixture-admin-token" } });
   assert.ok(response.status === 200 || response.status === 201, await response.clone().text());
   return response;
+}
+
+function assertNoRecovery(f, response) {
+  assert.equal(response.headers.get("x-clawrouter-background-recovery"), null);
+  assert.equal(f.scopeCalls.some(action => ["admit", "dispatch", "observe", "freeze"].includes(action)), false);
+  for (const [name, state] of f.scopes.objects) if (name.startsWith("http-continuations:")) {
+    assert.equal(state.db.prepare("SELECT COUNT(*) AS count FROM responses_background").get().count, 0);
+    const bindings = state.db.prepare("SELECT * FROM http_continuations").all();
+    assert.ok(bindings.every(row => row.background_job_id === null));
+    assert.equal(state.scheduled, bindings.length ? Math.min(...bindings.map(row => row.expires_at_ms)) : null);
+  }
+}
+
+async function assertRequestSettlement(f, response, expected) {
+  await f.drain(); assertNoRecovery(f, response);
+  assert.equal(f.queue.length, 1);
+  const event = f.queue[0], reserves = f.budgetCalls.filter(call => call.path === "/reserve");
+  assert.equal(event.type, "clawrouter.usage.v1"); assert.equal(event.actual_cost_micros, expected);
+  assert.equal(reserves.length, 2);
+  for (const call of reserves) {
+    const rows = f.budgets.get(call.name).reservations(); assert.equal(rows.length, 1);
+    assert.equal(rows[0].reservation_id, call.body.reservationId);
+    assert.equal(rows[0].dispatch_started, 1); assert.equal(rows[0].settled, 1); assert.equal(rows[0].reserved_micros, expected);
+  }
+  return event;
 }
 
 test("another independently valid key with the same policy and principal cannot control the original response", async t => {
@@ -267,17 +294,18 @@ for (const action of ["admit", "dispatch"]) test(`${action} requires its affirma
   }
 });
 
-test("Access background selection skips a subscription-only first policy; controls retain the original policy without pool selection", async t => {
+test("Access durable controls retain the original policy when another policy becomes first", async t => {
   const f = await fixture(t), headers = { cookie: f.cookie, origin: "https://router.example" };
   await f.authority("/policies/put", { policyId: "subscription", policy: { ...f.policy, generation: "subscription_v1" } });
   const principal = { principalType: "user", principalId: "owner@example.com" };
-  await f.authority("/mutate", { seed: { principal, bindings: [] }, binding: { ...principal, policyId: "subscription", priority: 0, enabled: true } });
+  await f.authority("/mutate", { seed: { principal, bindings: [] }, binding: { ...principal, policyId: "subscription", priority: 20, enabled: true } });
   await putGrantCredentials(f.env, "oauth/subscription/openai", { provider: "openai", kind: "subscription", enabled: true, accessToken: "fixture-subscription", accountId: "fixture-account" });
   await putGrantCredentials(f.env, "oauth/maintainer_access/openai", { provider: "openai", kind: "api_key", enabled: true, credential: "fixture-api" });
   const response = await f.call("/v1/playground/v1/responses", { model: "openai/gpt-6-astra", background: true }, { headers });
   assert.equal(response.status, 200); await response.json();
   const state = f.state(response); assert.equal(state.job().owner.grantKey, "oauth/maintainer_access/openai");
   assert.equal(f.sent[0].headers.get("authorization"), "Bearer fixture-api");
+  await f.authority("/mutate", { seed: { principal, bindings: [] }, binding: { ...principal, policyId: "subscription", priority: 0, enabled: true } });
   f.authorityCalls.length = 0;
   const control = await f.call(`/v1/playground/v1/responses/${queued.id}`, undefined, { headers });
   assert.equal(control.status, 200); await control.json();
@@ -290,11 +318,108 @@ test("Access background selection skips a subscription-only first policy; contro
   assert.equal(denied.status, 409); assert.equal(f.sent.length, before);
 });
 
-test("a proxy key cannot background-dispatch through its subscription-only policy or borrow a browser scope", async t => {
+for (const carrier of ["unified", "native", "manifest"]) test(`${carrier} creation-only background retains wire input and request-bound accounting`, async t => {
   const f = await fixture(t);
   await putGrantCredentials(f.env, "oauth/maintainer_access/openai", { provider: "openai", kind: "subscription", enabled: true, accessToken: "fixture-subscription", accountId: "fixture-account" });
-  const response = await f.call("/v1/responses", { model: "openai/gpt-6-astra", background: true }, { headers: { cookie: f.cookie } });
-  assert.equal(response.status, 503); assert.equal((await response.json()).error.code, "upstream_grant_pool_unavailable"); assert.equal(f.sent.length, 0); assert.equal(f.budgetCalls.length, 0);
+  const body = { model: "openai/gpt-6-astra", background: true, input: "fixture", store: false };
+  const path = carrier === "unified" ? "/v1/responses" : carrier === "native" ? "/v1/native/openai/v1/responses?fixture=value" : "/v1/proxy/openai/responses";
+  const response = await f.call(path, carrier === "manifest" ? { body, query: { fixture: "value" } } : body, { headers: { cookie: f.cookie } });
+  assert.equal(response.status, 200); assert.deepEqual(await response.json(), queued);
+  const event = await assertRequestSettlement(f, response, 100);
+  assert.equal(event.auth_type, "proxy_key"); assert.equal(event.credential_id, "maintainer_key"); assert.equal(event.policy_id, "maintainer_access");
+  assert.equal(event.cost_basis, "policy_fixed"); assert.equal(event.input_tokens, null);
+  assert.equal(f.sent.length, 1); assert.equal(f.sent[0].url, `https://chatgpt.com/backend-api/codex/responses${carrier === "unified" ? "" : "?fixture=value"}`);
+  assert.equal(f.sent[0].headers.get("authorization"), "Bearer fixture-subscription"); assert.equal(f.sent[0].headers.get("chatgpt-account-id"), "fixture-account");
+  assert.deepEqual(await f.sent[0].json(), { ...body, model: "gpt-6-astra" });
+  const before = f.budgetCalls.length;
+  for (const [suffix, method] of [["", "GET"], ["/cancel", "POST"]]) {
+    const denied = await f.call(`/v1/responses/${queued.id}${suffix}`, undefined, { method });
+    assert.equal(denied.status, 400); assert.equal((await denied.json()).error.code, "grant_transport_unavailable");
+  }
+  assert.equal(f.sent.length, 1); assert.equal(f.budgetCalls.length, before);
+});
+
+for (const carrier of ["unified", "manifest"]) test(`Access ${carrier} creation keeps the first create-compatible policy without borrowing recovery`, async t => {
+  const f = await fixture(t), principal = { principalType: "user", principalId: "owner@example.com" };
+  await f.authority("/policies/put", { policyId: "subscription", policy: { ...f.policy, generation: "subscription_v1" } });
+  await f.authority("/mutate", { seed: { principal, bindings: [] }, binding: { ...principal, policyId: "subscription", priority: 0, enabled: true } });
+  await putGrantCredentials(f.env, "oauth/subscription/openai", { provider: "openai", kind: "subscription", enabled: true, accessToken: "fixture-subscription", accountId: "fixture-account" });
+  await putGrantCredentials(f.env, "oauth/maintainer_access/openai", { provider: "openai", kind: "api_key", enabled: true, credential: "fixture-api" });
+  const body = { model: "openai/gpt-6-astra", background: true };
+  const response = await f.call(carrier === "unified" ? "/v1/playground/v1/responses" : "/v1/playground/proxy/openai/responses", carrier === "manifest" ? { body } : body,
+    { headers: { cookie: f.cookie, origin: "https://router.example" } });
+  assert.equal(response.status, 200); await response.json();
+  const event = await assertRequestSettlement(f, response, 100);
+  assert.equal(event.policy_id, "subscription"); assert.equal(event.auth_type, "access"); assert.equal(event.credential_id, null);
+  assert.equal(f.sent.length, 1); assert.equal(f.sent[0].headers.get("authorization"), "Bearer fixture-subscription");
+});
+
+for (const outcome of ["queued", "completed", "rejected", "unknown", "timeout", "queued-disconnect", "terminal-disconnect"]) test(`creation-only ${outcome} settles the original request once`, { timeout: 5000 }, async t => {
+  const f = await fixture(t), endpoint = providerById("openai").endpoints.find(value => value.id === "responses");
+  await f.authority("/policies/put", { policyId: "maintainer_access", policy: { ...f.policy, requestCostMicros: null, monthlyBudgetMicros: 1_000_000 } });
+  await f.authority("/connections/put", { providerId: "openai", monthlyBudgetMicros: 1_000_000 });
+  await putGrantCredentials(f.env, "oauth/maintainer_access/openai", { provider: "openai", kind: "subscription", enabled: true, accessToken: "fixture-subscription", accountId: "fixture-account" });
+  const terminal = { ...completed, service_tier: "default", usage: { ...completed.usage, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } };
+  const streaming = outcome.endsWith("disconnect"), entered = Promise.withResolvers();
+  let canceled = 0;
+  if (outcome === "timeout") {
+    const previous = endpoint.timeout_ms; endpoint.timeout_ms = 10; t.after(() => { endpoint.timeout_ms = previous; });
+    t.mock.timers.enable({ apis: ["setTimeout"] });
+  }
+  f.hooks.upstream = () => {
+    entered.resolve();
+    if (outcome === "unknown") throw new Error("fixture lost response headers");
+    if (outcome === "timeout") return new Promise(() => {});
+    if (outcome === "rejected") return Response.json({ error: "fixture rejection" }, { status: 429 });
+    if (streaming) return new Response(new ReadableStream({
+      start(controller) { controller.enqueue(new TextEncoder().encode(sse({ type: outcome === "terminal-disconnect" ? "response.completed" : "response.queued", response: outcome === "terminal-disconnect" ? terminal : queued }))); },
+      cancel() { canceled++; },
+    }), { headers: { "content-type": "text/event-stream" } });
+    return Response.json(outcome === "completed" ? terminal : queued);
+  };
+  const pending = f.call("/v1/responses", { model: "openai/gpt-6-astra", background: true, input: "fixture", max_output_tokens: 32, stream: streaming });
+  await entered.promise; if (outcome === "timeout") t.mock.timers.tick(10);
+  const response = await pending;
+  assert.equal(response.status, outcome === "rejected" ? 429 : ["unknown", "timeout"].includes(outcome) ? 502 : 200);
+  if (streaming) { const reader = response.body.getReader(); assert.equal((await reader.read()).done, false); await reader.cancel(); assert.equal(canceled, 1); }
+  else await response.text();
+  const measured = ["completed", "terminal-disconnect"].includes(outcome);
+  const reserved = f.budgetCalls.find(call => call.path === "/reserve").body.costMicros;
+  assert.ok(reserved > 850);
+  // Frozen card: 10 input at $10/M plus 15 output at $50/M = 850 microdollars.
+  const event = await assertRequestSettlement(f, response, outcome === "rejected" ? 0 : measured ? 850 : reserved);
+  assert.equal(event.cost_basis, outcome === "rejected" ? "none" : measured ? "manifest_pricing" : "manifest_reservation");
+  assert.equal(event.status, streaming ? "client_error" : outcome === "rejected" ? "client_error" : outcome === "unknown" ? "provider_error" : outcome === "timeout" ? "timeout" : "success");
+  assert.equal(event.input_tokens, measured ? 10 : null); assert.equal(event.output_tokens, measured ? 15 : null);
+  assert.equal(f.sent.length, 1); assert.equal(f.sent[0].headers.get("authorization"), "Bearer fixture-subscription");
+});
+
+test("creation-only failover stays request-bound even when the alternate declares invalid recovery controls", async t => {
+  const f = await fixture(t), retrieve = providerById("openai").endpoints.find(value => value.id === "responses_retrieve"), headers = retrieve.headers;
+  retrieve.headers = { "bad header": "invalid" }; t.after(() => { retrieve.headers = headers; });
+  await putGrantCredentials(f.env, "oauth/maintainer_access/openai", { provider: "openai", kind: "subscription", enabled: true, priority: 0, accessToken: "fixture-subscription", accountId: "fixture-account" });
+  await putGrantCredentials(f.env, "oauth/maintainer_access/openai-alternate", { provider: "openai", kind: "api_key", enabled: true, priority: 10, credential: "fixture-alternate" });
+  f.hooks.upstream = request => request.headers.get("authorization") === "Bearer fixture-subscription" ? Response.json({ error: "fixture rejection" }, { status: 429 }) : Response.json(queued);
+  const response = await f.call("/v1/native/openai/v1/responses?fixture=value", { model: "gpt-6-astra", background: true, input: "fixture" });
+  assert.equal(response.status, 200); assert.deepEqual(await response.json(), queued);
+  await assertRequestSettlement(f, response, 100);
+  assert.deepEqual(f.sent.map(request => request.headers.get("authorization")), ["Bearer fixture-subscription", "Bearer fixture-alternate"]);
+  assert.deepEqual(f.sent.map(request => request.url), ["https://chatgpt.com/backend-api/codex/responses?fixture=value", "https://api.openai.com/v1/responses?fixture=value"]);
+  for (const request of f.sent) assert.equal((await request.json()).background, true);
+  const state = [...f.scopes.objects.entries()].find(([name]) => name.startsWith("http-continuations:"))[1];
+  const binding = state.db.prepare("SELECT owner_json FROM http_continuations").get();
+  assert.equal(JSON.parse(binding.owner_json).grantKey, "oauth/maintainer_access/openai-alternate");
+});
+
+test("invalid controls on the initially selected full-capable transport cannot downgrade recovery", async t => {
+  const f = await fixture(t), retrieve = providerById("openai").endpoints.find(value => value.id === "responses_retrieve"), headers = retrieve.headers;
+  retrieve.headers = { "bad header": "invalid" }; t.after(() => { retrieve.headers = headers; });
+  await putGrantCredentials(f.env, "oauth/maintainer_access/openai", { provider: "openai", kind: "api_key", enabled: true, credential: "fixture-api" });
+  const response = await f.call("/v1/responses", { model: "openai/gpt-6-astra", background: true });
+  assert.equal(response.status, 503); assert.equal((await response.json()).error.code, "provider_request_invalid");
+  await f.drain(); assertNoRecovery(f, response);
+  assert.equal(f.sent.length, 0); assert.equal(f.budgetCalls.length, 0);
+  assert.equal(f.queue.length, 1); assert.equal(f.queue[0].actual_cost_micros, 0);
 });
 
 test("public controls require the original key scope and unchanged effective organization/project", async t => {

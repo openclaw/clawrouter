@@ -19,11 +19,12 @@ test("linked controls belong to their create operation without provider or endpo
   assert.equal(backgroundResponse({ ...create, request_format: "other" }, { background: true }), false);
 });
 
-test("background admission requires one selected transport to support create and both controls", () => {
-  const ordinary = { provider, endpoint: create, mode: "http" }, background = { ...ordinary, background: true };
+test("creation eligibility is separate from selected transport recovery capability", () => {
+  const ordinary = { provider, endpoint: create, mode: "http" }, background = { ...ordinary, responsesLifecycle: true };
   assert.equal(grantSupports(ordinary, { kind: "subscription" }), true);
   assert.equal(grantSupports(background, { kind: "subscription" }), false);
   assert.equal(grantSupports(background, { kind: "api_key" }), true);
+  assert.equal(grantSupports({ ...ordinary, endpoint: { ...create, responsesLifecycle: undefined } }, null), true);
   assert.equal(grantSupports({ ...background, mode: "websocket" }, null), false);
   assert.equal(grantSupports({ ...background, endpoint: { ...create, responsesLifecycle: undefined } }, null), false);
   for (const allowedEndpoints of [["generate", "inspect"], ["generate", "stop"], ["inspect", "stop"]]) {
@@ -31,6 +32,7 @@ test("background admission requires one selected transport to support create and
     assert.equal(grantSupports({ ...background, provider: changed }, { kind: "subscription" }), false);
   }
   assert.doesNotThrow(() => assertOperationConfiguration(background, null, { FIXTURE_API_KEY: "synthetic-key" }));
+  assert.doesNotThrow(() => assertOperationConfiguration(ordinary, { kind: "subscription", accessToken: "synthetic-key" }, {}));
   assert.throws(() => assertOperationConfiguration(background, { kind: "subscription", accessToken: "synthetic-key" }, {}), error => error.code === "grant_transport_unavailable");
   const broken = { ...provider, endpoints: [create, { ...retrieve, headers: { "bad header": "invalid" } }, cancel] };
   assert.throws(() => assertOperationConfiguration({ ...background, provider: broken }, null, { FIXTURE_API_KEY: "synthetic-key" }), error => error.code === "provider_request_invalid");

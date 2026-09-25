@@ -15,6 +15,7 @@ const router = `
   import { BudgetLedgerObject as Budget, UsageLedgerObject as Usage, usageStub } from "./worker/ledgers.ts";
   import { authenticateProxyKey } from "./worker/proxy-auth.ts";
   import { continuationScope } from "./worker/http-continuation.ts";
+  import { putGrantCredentials } from "./worker/grant-credentials.ts";
   import { sha256Hex } from "./worker/utils.ts";
   export { GrantCredentialObject } from "./worker/grant-credentials.ts";
   export class PolicyBindingIndexObject extends Authority {
@@ -70,6 +71,10 @@ const router = `
       ]) { const result = await call("policy-bindings", path, body); if (!result.ok) return result; }
       return Response.json({ ok: true });
     }
+    if (url.pathname === "/fixture/subscription") {
+      await putGrantCredentials(env, "oauth/fixture/openai", { provider: "openai", kind: "subscription", enabled: true, accessToken: "fixture-subscription", accountId: "fixture-account" });
+      return Response.json({ ok: true });
+    }
     if (url.pathname.startsWith("/fixture/upstream/")) return fetch("https://fixture.example" + url.pathname, { method: request.method, body: request.body, duplex: "half" });
     if (url.pathname.startsWith("/fixture/")) {
       const auth = await authenticateProxyKey(request.headers, env);
@@ -95,7 +100,7 @@ const upstream = `
       if (path === "/fixture/upstream/complete") { await this.storage.put("complete", true); return new Response("ok"); }
       const calls = await this.storage.get("calls") ?? [];
       if (path === "/fixture/upstream/calls") return Response.json(calls);
-      calls.push({ method: request.method, url: request.url, body: await request.text() }); await this.storage.put("calls", calls);
+      calls.push({ method: request.method, url: request.url, accountId: request.headers.get("chatgpt-account-id"), body: await request.text() }); await this.storage.put("calls", calls);
       const terminal = request.method === "GET" && await this.storage.get("complete");
       return Response.json({ id: "runtime-response", object: "response", status: terminal ? "completed" : "queued", usage: terminal ? { input_tokens: 10, output_tokens: 15, total_tokens: 25 } : null });
     }
@@ -120,6 +125,27 @@ async function until(read, predicate, timeout = 20_000) {
   do { value = await read(); if (predicate(value)) return value; await delay(50); } while (Date.now() < deadline);
   assert.fail(`fixture condition timed out: ${JSON.stringify(value)}`);
 }
+
+test("real workerd creation-only admission keeps ordinary settlement without a recovery job", { timeout: 60_000 }, async t => {
+  const f = await fixture(t);
+  assert.equal((await f.call("/fixture/subscription", {})).status, 200);
+  const body = { model: "gpt-6-astra", input: "fixture", background: true, store: false };
+  const response = await f.call("/v1/native/openai/v1/responses?fixture=value", body);
+  assert.equal(response.status, 200); assert.equal((await response.json()).status, "queued");
+  assert.equal(response.headers.get("x-clawrouter-background-recovery"), null);
+  const usage = await until(async () => (await f.call("/fixture/usage")).json(), value => value.events.length === 1);
+  assert.equal(usage.events[0].actual_cost_micros, 100); assert.equal(usage.events[0].cost_basis, "policy_fixed");
+  for (const name of ["tenant:fixture", "provider:openai"]) {
+    const rows = await until(async () => (await f.call(`/fixture/budget/rows?name=${encodeURIComponent(name)}`)).json(), value => value.length === 1 && value[0].settled === 1);
+    assert.equal(rows.length, 1); assert.equal(rows[0].dispatch_started, 1); assert.equal(rows[0].settled, 1); assert.equal(rows[0].reserved_micros, 100);
+  }
+  const state = await f.inspect(); assert.deepEqual(state.jobs, []); assert.equal(state.bindings.length, 1);
+  assert.equal(state.bindings[0].background_job_id, null); assert.equal(state.nextAlarm, state.bindings[0].expires_at_ms);
+  assert.equal(state.alarms, 0, "ordinary continuation expiry does not introduce collection alarms");
+  const calls = await (await f.call("/fixture/upstream/calls")).json(); assert.equal(calls.length, 1);
+  assert.equal(calls[0].method, "POST"); assert.equal(calls[0].url, "https://chatgpt.com/backend-api/codex/responses?fixture=value");
+  assert.equal(calls[0].accountId, "fixture-account"); assert.deepEqual(JSON.parse(calls[0].body), body);
+});
 
 for (const expiryFirst of [true, false]) test(`persistent workerd alarm owns cleanup and collection with expiry registered ${expiryFirst ? "first" : "last"}`, { timeout: 60_000 }, async t => {
   const f = await fixture(t);

@@ -384,7 +384,8 @@ a separate versioned price with OpenAI's 10% uplift or a fixed policy price.
 Request `stream_options.include_usage=true` for Chat Completions streams
 so successful terminal events can release unused reservation. Known model IDs
 retain the same pricing when called through native or manifest proxy routes.
-Declared background Responses retain the original reservation while the router
+Background Responses on a selected transport with declared creation, retrieval
+and cancellation support retain the original reservation while the router
 collects terminal usage for up to one hour from admission. This is a router
 collection limit, not an upstream storage guarantee; `store: false` does not
 promise results remain retrievable for that hour. Missing usage, upstream 404,
@@ -395,6 +396,12 @@ immutable accounting event; repeated controls do not create new charges.
 Successful pending observations poll again after five seconds. Observation errors
 back off to at most 30 seconds; these are router scheduling policies, not a
 provider retention guarantee. Financial retries keep their separate backoff.
+
+Creation-only transports retain ordinary request-bound accounting. Complete
+observed usage settles the request; missing usage or uncertain delivery retains
+its conservative amount. They have no deferred collection or recovery locator.
+An allowed creation retry on another grant cannot switch accounting modes after
+reservation. Synthetic transport tests do not prove upstream acceptance.
 
 Financial recovery retries that frozen receipt automatically until seven days
 after admission. Authenticated operator replay remains available until 44 days
@@ -409,6 +416,26 @@ not a bound on the SQLite file's physical size. Raw response IDs and collection
 headers are erased when collection ends; the original 30-day continuation binding
 can still authorize caller-supplied response IDs without reopening accounting.
 See the [background API and recovery operator contract](api-reference.md#background-responses).
+
+After any durable background admission, retain a recovery-aware Worker and
+`ACCESS_CONTROL` owner until outstanding observation and accounting obligations
+are resolved. Do not roll back to code without background recovery while
+obligations or inventory completeness are unknown. Roll forward to compatible
+code, preserving owner SQL, alarms, ledger identities and the original provider
+credential route. The 44-day replay deadline is not a drain period or settlement
+guarantee. An expired, absent or evicted record, usage-only acknowledgement, or
+cancel acknowledgement is not proof of settlement; completion requires all financial
+legs settled and a terminal usage-delivery disposition.
+
+To pause new traffic for an explicitly identified affected policy set, an
+administrator can use `POST /v1/admin/policies/{id}/revoke` and verify each policy
+is disabled. This pauses all requests on those policies and cannot retract
+already authorized or in-flight admissions. Do not disable, rotate or revoke the
+original upstream connection/credential as a drain switch: collection still needs
+that route. Inspect known locators/scopes and replay only frozen receipts; scoped
+lists are not a global inventory. If bounded inspection leaves obligations or
+inventory completeness unknown, retain or repair the recovery-aware runtime.
+
 The bundled Anthropic catalog includes Claude Opus 5, Sonnet 5, and Fable 5 with a 1M
 context window and 128K output limit, alongside the existing model routes.
 Fable 5 always uses adaptive thinking and requires

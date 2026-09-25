@@ -255,8 +255,9 @@ or deployed HTTP/2 behavior. No idle or total-delivery timeout is added.
 
 ## Background Responses
 
-Declared OpenAI API Responses routes accept `background: true` with JSON or SSE
-creation. Retrieve with `GET /v1/responses/<response-id>`; resume SSE with
+Declared OpenAI API Responses routes support durable recovery for `background: true`
+JSON or SSE creation when the selected transport supports creation, retrieval and
+cancellation. Retrieve with `GET /v1/responses/<response-id>`; resume SSE with
 `stream=true&starting_after=<last-sequence-number>`. Resumption requires an
 originally streamed background create. Cancel with bodyless
 `POST /v1/responses/<response-id>/cancel`. These controls also use the native
@@ -272,7 +273,16 @@ headers to reconstruct the original route pin. Each is limited to 256 printable
 ASCII bytes. The collector alone temporarily retains these headers. The initial
 declared create path has no caller path parameters; create options belong in
 JSON, and caller-supplied create query parameters are rejected before reservation
-or provider dispatch. Foreground create query behavior is unchanged.
+or generation dispatch when durable recovery applies. Foreground and creation-only
+transport query behavior is unchanged.
+
+Creation keeps the ordinary policy and grant selection. A transport that supports
+only creation retains request-bound accounting: observed usage settles that request,
+and missing usage retains its conservative estimate. It receives no recovery
+locator, job or collection polling. Permitted creation failover keeps that accounting
+mode even if an alternate supports the full lifecycle. A full-capable initial
+transport with invalid control configuration fails before reservation; configuration
+failure does not downgrade it to request-bound accounting.
 
 Verified browser sessions use the corresponding `/v1/playground/v1/responses/...`
 or `/v1/playground/proxy/openai/<endpoint>` controls. Existing response ownership
@@ -302,8 +312,9 @@ observed `sequence_number`. The [upstream background contract](https://developer
 permits `store: false` with temporary polling retention of roughly ten minutes.
 The router's one-hour collection limit is not an upstream retention guarantee.
 Cancellation is idempotent upstream; accepting a cancellation request is not
-proof of final usage or a refund. ChatGPT subscription transports that support
-only creation cannot execute this lifecycle. This feature does not establish
+proof of final usage or a refund. Existing creation-only ChatGPT subscription
+transport admission is preserved; this does not prove upstream acceptance or add
+retrieval/cancellation capabilities to that transport. This feature does not establish
 native Codex background adoption; WebSocket behavior remains separate below.
 
 Creation responses carry `x-clawrouter-background-recovery` after a durable
@@ -327,8 +338,10 @@ acknowledgements; it omits credentials, raw response IDs and retained route
 headers. `expired_by_retention` closes only usage delivery after the 30-day
 history window. It does not establish a financial acknowledgement or an
 available history row. HTTP 404 means absent/retired, HTTP 503 means unavailable,
-and neither means paid. See [spend control](agent-spend-control.md) for recovery
-bounds and conservative accounting.
+and neither means paid. After a durable admission, retain a recovery-aware Worker
+and owner while obligations or inventory completeness are unknown. See
+[spend control](agent-spend-control.md) for recovery bounds, the rollback floor
+and conservative accounting.
 
 ## WebSocket contract
 

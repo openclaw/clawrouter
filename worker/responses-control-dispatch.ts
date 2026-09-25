@@ -47,7 +47,7 @@ export async function prepareResponseControl(env: Env, input: ResponseControlDis
   const query = responsesControlQuery(input.action, new URLSearchParams(input.query));
   if (query.get("stream") === "true" && !input.stream) throw new HttpError(409, "response_resume_unavailable", "stream resumption requires an originally streamed response");
   if (Object.keys(input.route.pathParams).some(name => !create.path_params.includes(name))) unavailable();
-  assertOperationConfiguration({ provider, endpoint: create, mode: "http", background: true }, grant, env);
+  assertOperationConfiguration({ provider, endpoint: create, mode: "http", responsesLifecycle: true }, grant, env);
   const connection = await resolveConnection(env, provider.id);
   if (connection?.enabled === false) throw new HttpError(503, "provider_disabled", "response provider is disabled");
   const upstream = configuredUpstream(provider, grant, env), incoming = new Headers();

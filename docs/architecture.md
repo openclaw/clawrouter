@@ -215,8 +215,12 @@ five retries and send usage messages to the DLQ; follow the [DLQ recovery proced
 Deployment completion does not prove old writers drained or guarantee eventual
 delivery.
 
-Background Responses use the same authorization-scoped owner as continuation
-bindings. Its serialized store owns admission/dispatch intent, bounded collection
+Background Responses use durable recovery only when the selected materialized
+transport supports the declared full lifecycle. Other transports retain ordinary
+creation selection and request-bound accounting, including permitted failover;
+an already reserved request cannot switch owners. Durable recovery uses the same
+authorization-scoped owner as continuation bindings. Its serialized store owns
+admission/dispatch intent, bounded collection
 and one frozen financial outcome; settlement and usage acknowledgements remain
 independent. One alarm schedules continuation expiry, observation and financial
 retries. Network waits run outside synchronous SQL transactions and the mutation

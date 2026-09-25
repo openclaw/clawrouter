@@ -61,6 +61,12 @@ CLI token into that grant is not a supported workaround for failed onboarding.
 An HTTP 403 alone cannot identify an originator or fingerprint mismatch. Do not
 fabricate a Codex client identity or installation ID to evade an upstream denial.
 
+Creation-only transports retain existing `background: true` forwarding and
+request-bound accounting. They do not gain router polling, retrieval/cancellation
+support or a recovery locator. This preserves the router contract without claiming
+that a subscription backend accepts the request. See [Background Responses](api-reference.md#background-responses)
+for the separately supported full-lifecycle API path.
+
 The [private Responses facade](private-codex.md) is **not a turnkey subscription
 workaround or the only supported OpenAI path**. It requires a separately isolated,
 owner-only runtime, trusted upstream provisioning, verified entitlement and

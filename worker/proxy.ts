@@ -28,7 +28,7 @@ import {
   assertProviderAccess, copyRequestHeaders, providerById,
   signSigV4, upstreamAuth, upstreamPath,
 } from "./providers";
-import { applyTransportHeaders, transformTransportBody } from "./provider-auth.ts";
+import { applyTransportHeaders, assertOperationConfiguration, grantSupports, transformTransportBody } from "./provider-auth.ts";
 import { normalizePreStreamError, observeUsage, proxyResponseHeaders } from "./proxy-response";
 import type { AuthorizedIdentity, CompiledQuotaConfig, Env, ProviderConnection } from "./types";
 import {
@@ -46,6 +46,7 @@ interface PreparedUpstream {
   grantRevision: string | null;
   connection: ProviderConnection;
   websocket: boolean;
+  backgroundRecovery: boolean;
   continuation?: ContinuationOwner;
 }
 
@@ -184,15 +185,15 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
     if ((envelope.method ?? endpoint.method).toUpperCase() !== endpoint.method || Object.keys(requestObject(envelope.body)).length || new URL(request.url).search) throw new HttpError(400, "invalid_response_control", "manifest controls accept a bodyless declared method and envelope query only");
     return proxyResponseControl(request, env, control.action, envelope.pathParams.response_id, envelope.query, mode, provider.id, control.create.id, preauthenticated ?? undefined, session ?? undefined);
   }
-  // Verify the browser before reading its body, then select a policy with the
-  // actual background transport requirement rather than a create-only guess.
+  // Controls resolve their original owner; creation keeps ordinary policy
+  // selection, including transports that cannot provide durable recovery.
   const envelope = request.method === "GET" || request.method === "HEAD"
     ? directManifestEnvelope(request, endpoint)
     : manifestEnvelope(await readJson<unknown>(request));
   const method = (envelope.method ?? endpoint.method).toUpperCase();
   if (!endpoint.methods.includes(method)) return errorResponse("method_not_allowed", `endpoint does not allow ${method}`, 405);
   const prepared = prepareManifestRequest(provider, endpoint, envelope.body, envelope.pathParams, env);
-  if (session) preauthenticated = await accessSessionIdentity(session, env, provider.id, { provider, endpoint, mode: "http", background: backgroundResponse(endpoint, prepared.body) });
+  if (session) preauthenticated = await accessSessionIdentity(session, env, provider.id, { provider, endpoint, mode: "http" });
   if (preauthenticated instanceof Response) return preauthenticated;
   const capability = provider.capabilities.find((item) => item.endpoint === endpoint.id)?.id ?? endpoint.id;
   return proxySelected(request, env, context, mode, { provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method }, envelope.query, preauthenticated);
@@ -236,11 +237,8 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   let prepared: PreparedUpstream;
   let continuation: HttpContinuation | undefined;
   try {
-    if (backgroundResponse(selection.endpoint, selection.body) && (Object.keys(queryInput).length || new URL(request.url).search)) {
-      throw new HttpError(400, "background_query_unsupported", "background create options must be in JSON; caller query parameters are unsupported");
-    }
     continuation = await HttpContinuation.resolve(request, selection, auth, env);
-    prepared = await prepareSelected(request, env, selection, queryInput, auth, new Set(), true, reservedBudget?.connection, continuation?.pinned);
+    prepared = await prepareSelected(request, env, selection, queryInput, auth, new Set(), true, reservedBudget?.connection, continuation?.pinned, "http", true);
     if (prepared.continuation) continuation?.bind(prepared.continuation);
     const cost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability, selection.endpoint, continuation?.parentTools);
     accounting = createProxyAccounting({ ...accountingContext, cost });
@@ -259,7 +257,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   }
   const { cost, requestId } = accounting;
   let reservation = reservedBudget?.reservation;
-  if (backgroundResponse(selection.endpoint, selection.body)) {
+  if (prepared.backgroundRecovery) {
     try {
       if (!prepared.continuation || !continuation || reservedBudget) throw new HttpError(400, "background_unsupported", "this route cannot own background recovery");
       const pathParams = Object.fromEntries(selection.endpoint.path_params.map(name => [name, selection.pathParams[name]]));
@@ -400,18 +398,26 @@ async function reserveSelected(request: Request, env: Env, context: ExecutionCon
 }
 
 async function selectedAuth(request: Request, env: Env, mode: AuthMode, selection: ProxySelection, preauthenticated: AuthorizedIdentity | null): Promise<AuthorizedIdentity | Response> {
-  return preauthenticated ?? (mode === "access" ? accessIdentity(request, env, selection.provider.id, { provider: selection.provider, endpoint: selection.endpoint, mode: "http", background: backgroundResponse(selection.endpoint, selection.body) }) : authenticateProxyKey(request.headers, env));
+  return preauthenticated ?? (mode === "access" ? accessIdentity(request, env, selection.provider.id, { provider: selection.provider, endpoint: selection.endpoint, mode: "http" }) : authenticateProxyKey(request.headers, env));
 }
 
-export async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: Record<string, unknown>, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http"): Promise<PreparedUpstream> {
+export async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: Record<string, unknown>, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false): Promise<PreparedUpstream> {
   let connection: ProviderConnection;
   try { connection = await assertProviderAccess(selection.provider, auth, env, resolvedConnection); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "provider authorization failed"); }
   let upstream;
   const stickyHash = await grantStickyHash(request, auth);
-  try { upstream = await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, { provider: selection.provider, endpoint: selection.endpoint, mode: transport, background: backgroundResponse(selection.endpoint, selection.body) }); }
+  try { upstream = await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, { provider: selection.provider, endpoint: selection.endpoint, mode: transport }); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_not_configured", "provider is not configured"); }
   try {
+    const lifecycle = { provider: selection.provider, endpoint: selection.endpoint, mode: transport, responsesLifecycle: true };
+    // Decide once from the materialized transport, before reservation. An
+    // ordinary failover cannot promote an already reserved request into a job.
+    const backgroundRecovery = recoverBackground && backgroundResponse(selection.endpoint, selection.body) && grantSupports(lifecycle, upstream.grant);
+    if (backgroundRecovery) {
+      assertOperationConfiguration(lifecycle, upstream.grant, env);
+      if (Object.keys(queryInput).length || new URL(request.url).search) throw new HttpError(400, "background_query_unsupported", "background create options must be in JSON; caller query parameters are unsupported");
+    }
     const headers = new Headers(upstream.headers);
     copyRequestHeaders(request.headers, selection.provider, selection.endpoint, headers, env);
     applyTransportHeaders(headers, upstream.transport, upstream.grant);
@@ -434,7 +440,7 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
         policyGeneration: auth.policy.generation,
       };
     }
-    return { headers, url, requestBody, grantKey: upstream.grantKey, grantRevision: upstream.grantRevision, connection, websocket: selection.endpoint.websocket === "openai.responses" && upstream.transport === null, continuation };
+    return { headers, url, requestBody, grantKey: upstream.grantKey, grantRevision: upstream.grantRevision, connection, websocket: selection.endpoint.websocket === "openai.responses" && upstream.transport === null, backgroundRecovery, continuation };
   } catch (error) {
     throw error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
   }
