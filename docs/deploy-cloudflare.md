@@ -151,6 +151,10 @@ execution. The input does not select a custom checkout ref or fall back to the
 latest commit. If the selected ref advances, review the new source before
 dispatching again with its SHA.
 
+Only refs containing the revised workflows carry these checks; older workflow
+refs retain their earlier behavior. Controlled deployments use guarded `main`
+with a frozen, reviewed `expected_sha`.
+
 Dispatch production with `provision_access=true` to provision Access; the repository default
 uses `access_github_orgs=openclaw` and no email-domain exception. Set
 `access_domain` if the console

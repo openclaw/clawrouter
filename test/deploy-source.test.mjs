@@ -7,6 +7,7 @@ import test from "node:test";
 
 const sha = "0123456789abcdef0123456789abcdef01234567";
 const otherSha = "f".repeat(40);
+const spellings = (value) => [value, value.toUpperCase(), value.replace(/[ace]/g, (letter) => letter.toUpperCase())];
 
 for (const name of ["deploy-cloudflare", "deploy-cloudflare-fakeco"]) {
   const workflow = readFileSync(new URL(`../.github/workflows/${name}.yml`, import.meta.url), "utf8");
@@ -36,9 +37,11 @@ for (const name of ["deploy-cloudflare", "deploy-cloudflare-fakeco"]) {
   });
 
   test(`${name} admits only the exact full dispatch SHA`, () => {
-    const result = run(script(steps[0]));
-    assert.equal(result.status, 0, result.stderr);
-    assert.equal(result.stdout, "admitted\n");
+    for (const expected of spellings(sha)) {
+      const result = run(script(steps[0]), expected);
+      assert.equal(result.status, 0, result.stderr);
+      assert.equal(result.stdout, "admitted\n");
+    }
     for (const expected of ["", "main", sha.slice(0, 7), `${sha}0`, "g".repeat(40), ` ${sha}`, `${sha}\n`, "$(printf injected)", otherSha]) {
       const refused = run(script(steps[0]), expected);
       assert.equal(refused.status, 1, expected);
@@ -62,9 +65,11 @@ for (const name of ["deploy-cloudflare", "deploy-cloudflare-fakeco"]) {
     git("init", "--quiet");
     git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.com", "-c", "core.hooksPath=/dev/null", "-c", "commit.gpgsign=false", "commit", "--quiet", "--allow-empty", "-m", "fixture");
     const actual = git("rev-parse", "HEAD");
-    const accepted = run(script(steps[2]), actual, actual, directory);
-    assert.equal(accepted.status, 0, accepted.stderr);
-    assert.equal(accepted.stdout, "admitted\n");
+    for (const expected of spellings(actual)) {
+      const accepted = run(script(steps[2]), expected, actual, directory);
+      assert.equal(accepted.status, 0, accepted.stderr);
+      assert.equal(accepted.stdout, "admitted\n");
+    }
     const refused = run(script(steps[2]), otherSha, otherSha, directory);
     assert.equal(refused.status, 1);
     assert.match(refused.stdout, /Checkout differs/);

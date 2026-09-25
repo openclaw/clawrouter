@@ -99,6 +99,7 @@ jobs:
             echo "::error::expected_sha must be a full 40-character hexadecimal commit SHA."
             exit 1
           fi
+          EXPECTED_SHA="$(printf '%s' "$EXPECTED_SHA" | tr 'A-F' 'a-f')"
           if [[ "$EXPECTED_SHA" != "$GITHUB_SHA" ]]; then
             echo "::error::Dispatched source differs from expected_sha; review the selected ref before dispatching again."
             exit 1
@@ -109,6 +110,7 @@ jobs:
         env:
           EXPECTED_SHA: ${{ inputs.expected_sha }}
         run: |
+          EXPECTED_SHA="$(printf '%s' "$EXPECTED_SHA" | tr 'A-F' 'a-f')"
           actual_sha="$(git rev-parse HEAD)"
           if [[ "$actual_sha" != "$EXPECTED_SHA" ]]; then
             echo "::error::Checkout differs from expected_sha; refusing deployment."
