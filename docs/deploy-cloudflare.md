@@ -142,7 +142,16 @@ CLAWROUTER_PROVIDER_AWS_REGION        # non-secret Bedrock Region, for example u
 
 The `Deploy Cloudflare` workflow can provision Access and deploy in one run
 when `CLOUDFLARE_API_TOKEN` has Zero Trust Access application/policy
-permissions. Dispatch it with `provision_access=true`; the repository default
+permissions. Both deployment workflows require `expected_sha`, the reviewed
+full 40-character commit SHA. Existing UI, CLI, and API dispatch callers must
+supply this new field. Select the branch or tag pointing to that exact commit;
+the first step refuses a different event SHA before checkout, setup, install,
+or preflight. A second check verifies actual checkout `HEAD` before dependency
+execution. The input does not select a custom checkout ref or fall back to the
+latest commit. If the selected ref advances, review the new source before
+dispatching again with its SHA.
+
+Dispatch production with `provision_access=true` to provision Access; the repository default
 uses `access_github_orgs=openclaw` and no email-domain exception. Set
 `access_domain` if the console
 host is not `clawrouter.openclaw.ai`, and optionally set `access_admin_emails`

@@ -131,9 +131,16 @@ ambiguity:
   binding fails with instructions to use `upload`; secret values are never
   returned, logged, or placed in process arguments.
 
+Dispatch with the required `expected_sha` input set to the reviewed full
+40-character commit SHA of the selected branch or tag. Existing dispatch
+callers must add this field; it verifies the event and checkout, without
+changing checkout selection. See [deployment source checks](deploy-cloudflare.md#provision).
+
 The workflow's fail-closed order is:
 
-1. Run the non-mutating required-input and locked-KV preflight.
+1. Validate `expected_sha` against the dispatch event before checkout, then
+   verify actual `HEAD` before dependency setup or execution. Run the
+   non-mutating required-input and locked-KV preflight.
 2. Converge the FakeCo Access app and its required service-token policy.
 3. Run the normal Worker/KV permission preflight, provision content storage,
    render the locked config, and perform the initial Worker deploy.
