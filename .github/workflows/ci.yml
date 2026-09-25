@@ -122,6 +122,40 @@ jobs:
           if-no-files-found: error
           retention-days: 3
 
+  admin-fusion-macos:
+    runs-on: macos-15
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24
+          architecture: arm64
+      - uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
+      - name: Verify macOS runtime
+        run: |
+          node -e 'if (process.platform !== "darwin" || process.arch !== "arm64") throw new Error("Expected Darwin ARM64"); console.log(JSON.stringify({ node: process.version, platform: process.platform, arch: process.arch }))'
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm --dir admin build
+      - run: pnpm --dir admin exec playwright install chromium
+      - name: Check Fusion mobile screenshot and accessibility
+        id: browser
+        run: >-
+          pnpm --dir admin exec playwright test dashboard.spec.ts
+          --project mobile --workers 1 --retries 0
+          --grep 'Fusion preflight is WCAG AA clean and visually stable$'
+      - name: Upload Fusion screenshot differences
+        if: failure() && steps.browser.outcome == 'failure' && hashFiles('admin/test-results/**/fusion-readiness-actual.png') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: admin-fusion-macos-failure-${{ github.sha }}-${{ github.run_attempt }}
+          path: |
+            admin/test-results/**/fusion-readiness-actual.png
+            admin/test-results/**/fusion-readiness-expected.png
+            admin/test-results/**/fusion-readiness-diff.png
+          if-no-files-found: error
+          retention-days: 3
+
   worker-package:
     runs-on: ubuntu-latest
     timeout-minutes: 20
