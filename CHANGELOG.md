@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add an operator-run account-inventory read using credentials injected from the operator secret manager. Print versioned API-visible counts and digests without account identities, credentials or raw server errors; keep raw credentials out of GitHub Actions and the operation independent of account-readiness APIs.
+
 - Require a reviewed `expected_sha` input for production and FakeCo deployment workflows. Reject a different dispatch source before checkout and verify actual `HEAD` before setup, installation, or preflight writes. Existing dispatch callers must supply the new field.
 
 - Require durable parent tool-pricing evidence before measured Responses continuations. Retained hosted fees/work and unknown response-ID ancestry now return `pricing_required` before HTTP or WebSocket dispatch, including when a provider budget is enabled mid-chain. Preserve explicit fixed tariffs, unmetered requests, clean continuations, and routing errors; deploy the proof producer first without assuming old writers have drained.

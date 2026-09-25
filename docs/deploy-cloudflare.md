@@ -955,6 +955,50 @@ or at 10% remaining capacity, sends one fixed one-token Claude request with no
 user content, and discards the response. Neither contributors nor submitted
 payloads can alter its endpoint, model, headers, prompt, or interval.
 
+### Operator account inventory
+
+Run the inventory command from a reviewed, pinned checkout to make one
+authenticated `GET /v1/admin/upstream-grants` against
+`https://clawrouter.openclaw.ai`. It works without an account-readiness endpoint.
+Before running, obtain a working administrator credential reference from its
+owner. Use the operator secret manager to inject `CLAWROUTER_ADMIN_TOKEN` into
+the command's environment. When Cloudflare Access requires service credentials,
+inject both `CF_ACCESS_CLIENT_ID` and `CF_ACCESS_CLIENT_SECRET` through the same
+operator route. Keep raw credentials out of GitHub Actions, command arguments,
+and logs. The command does not provision credentials; without that prerequisite,
+authenticated inventory remains unverified.
+
+```sh
+git rev-parse HEAD
+CLAWROUTER_BASE_URL=https://clawrouter.openclaw.ai node scripts/grant-pool-operations.mjs
+```
+
+Record the pinned commit and invoking operator alongside the receipt. The
+receipt labels execution as `operator`; it does not attest source or caller
+identity. Exclude overlapping deployments and account mutations before running.
+The command does not install packages, deploy a Worker, or run provider smoke.
+
+Receipts contain only the fixed target, API-visible counts and digests, or fixed
+diagnostics. Raw account identities, labels, URLs, credential data and server
+errors stay out of logs. Redirects, failed authentication, malformed or oversized
+responses fail without retrying the request.
+
+The `clawrouter.api-visible-grants.v1` digest hashes JSON containing that `schema`
+and `grants` sorted by key. Each projected grant contains only `key`, `provider`,
+`kind`, `enabled`, `updatedAt`, `revokedAt`, `credentialStatus` in that order;
+missing optional values become `null`, and legacy strings retain their exact
+bytes without timestamp or enum normalization. The separate `keyNamesSha256` hashes
+`{schema: "clawrouter.api-visible-grant-keys.v1", keys}` with the same sorted key
+names. Labels and mutable quota observations do not affect these digests.
+Compare an earlier private key-name inventory only after recomputing it with
+this exact versioned algorithm; a digest from another format is not comparable.
+
+This receipt covers the API-visible projection only. Null KV values and
+index-only owners are outside it; an empty projection never proves empty storage,
+stopped writers, or matched storage lineage. Review the full inventory privately.
+The command changes no account state and provides no baseline acceptance or
+routing activation action.
+
 ### Contributor intake
 
 An administrator can authorize one credential contribution without sharing an
