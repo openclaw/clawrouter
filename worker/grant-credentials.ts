@@ -6,6 +6,8 @@ import { applyProviderCredential, applyTransportHeaders, quotaProbeForGrant, req
 import type { CompiledGrantTransport, CompiledProvider, Env, GrantRuntimeState, ProviderSnapshot, RefreshConfig, UpstreamGrant } from "./types";
 import { errorResponse, HttpError, json, readJson } from "./utils.ts";
 import { applyTemplateHeaders, resolveTemplate } from "./provider-templates.ts";
+import type { ResponseControlDispatch } from "./responses-control-dispatch.ts";
+import { HttpOperation } from "./http-operation.ts";
 
 const REFRESH_MARGIN_MS = 5 * 60_000;
 const MAX_SECRET_BYTES = 64 * 1024;
@@ -111,6 +113,45 @@ export class GrantCredentialObject implements DurableObject {
   }
 
   fetch(request: Request): Promise<Response> {
+    if (request.method === "POST" && new URL(request.url).pathname === "/responses/control") {
+      const operation = this.tail.then(async () => {
+        let preparation = new HttpOperation(request.signal, 10_000);
+        try {
+          const input = await preparation.wait(readJson<ResponseControlDispatch>(request));
+          const { prepareResponseControl, assertControlDeadline } = await import("./responses-control-dispatch.ts");
+          const { assertControlCallerLive, authorizeResponseControl } = await import("./response-control-authorization.ts");
+          assertControlDeadline(input);
+          if (input.deadline !== undefined) {
+            preparation.stop("complete");
+            preparation = new HttpOperation(request.signal, Math.min(10_000, input.deadline - Date.now()));
+          }
+          const record = await preparation.wait(this.state.storage.get<CredentialRecord>("credential"));
+          // Jobs are admitted only after materialization. Polling never imports
+          // legacy KV, adopts another lineage, or reselects a pool account.
+          if (!record || !canonicalRecord(record) || record.grantKey !== input.owner.grantKey
+            || record.providerId !== input.owner.providerId || record.lineage !== input.owner.lineage
+            || record.enabled !== true || record.revokedAt || record.status !== "active" || !record.kind) {
+            throw new HttpError(409, "response_owner_unavailable", "the original response credential is unavailable or changed");
+          }
+          const outbound = await preparation.wait(prepareResponseControl(this.env, input, materializedGrant(metadataGrant(record), record)));
+          await preparation.wait(authorizeResponseControl(this.env, input.authorization, input.owner, preparation.signal));
+          preparation.signal.throwIfAborted();
+          assertControlDeadline(input);
+          assertControlCallerLive(input.authorization);
+          if (record.expiresAt && Date.parse(record.expiresAt) <= Date.now()) {
+            throw new HttpError(409, "response_owner_unavailable", "the original response credential has expired");
+          }
+          // Start egress before releasing the serialized credential check, but
+          // never make revocation wait for the remote response or stream.
+          return { response: fetch(outbound, { signal: request.signal }) };
+        } catch (error) {
+          return { response: Promise.resolve(error instanceof HttpError ? errorResponse(error.code, error.message, error.status)
+            : errorResponse("response_owner_unavailable", "response control dispatch failed", 503)) };
+        } finally { preparation.stop("complete"); }
+      });
+      this.tail = operation.then(() => undefined, () => undefined);
+      return operation.then(result => result.response);
+    }
     const operation = this.tail.then(() => this.handle(request));
     this.tail = operation.then(() => undefined, () => undefined);
     return operation;

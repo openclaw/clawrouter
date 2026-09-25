@@ -10,7 +10,7 @@ import { budgetPrincipal } from "./budget-scope.ts";
 import { dashboardSecurityHeaders } from "./dashboard-security";
 import { contentRetentionDefault } from "./content-retention.ts";
 import { scheduledContentCleanup } from "./content-cleanup.ts";
-import { correlateIngressRequest, withRequestId } from "./correlation.ts";
+import { correlateIngressRequest, withBackgroundRecovery, withRequestId } from "./correlation.ts";
 import { localAuthEnabled, localLogin, localLogout } from "./local-auth";
 import { oauthCallback } from "./oauth";
 import { poolSubmissionApi } from "./pool-submissions.ts";
@@ -21,9 +21,11 @@ import { sessionCredentialsApi } from "./session-credentials";
 import { authenticateProxyKey, inspectKey } from "./proxy-auth";
 import { proxyManifest, proxyNative, proxyOpenAi } from "./proxy";
 import { proxyResponsesWebSocket } from "./responses-websocket";
+import { proxyResponseControl } from "./response-controls.ts";
+import { requireEmptyResponseControlBody } from "./responses-lifecycle.ts";
 import type { Env, QueueMessage } from "./types";
 import {
-  canonicalPath, caughtResponse, corsEnabled, corsPreflight, errorResponse, legacyRedirect,
+  canonicalPath, caughtResponse, corsEnabled, corsPreflight, decodePathSegment, errorResponse, legacyRedirect,
   privateJson, redirect, withCors,
 } from "./utils";
 
@@ -45,7 +47,7 @@ const handler: ExportedHandler<Env, QueueMessage> = {
     } catch (error) {
       response = caughtResponse(error, correlated.requestId);
     }
-    response = withRequestId(response, correlated.requestId);
+    response = withBackgroundRecovery(withRequestId(response, correlated.requestId), request);
     return corsEnabled(path) ? withCors(response) : response;
   },
   queue,
@@ -84,11 +86,21 @@ async function route(request: Request, env: Env, context: ExecutionContext): Pro
   if (path.startsWith("/v1/admin/")) return adminApi(request, env, path);
   if (request.method === "GET" && path === "/v1/key/inspect") return inspectKey(request.headers, env);
 
-  if (request.method === "POST" && path.startsWith("/v1/playground/")) {
+  if (["GET", "POST"].includes(request.method) && path.startsWith("/v1/playground/")) {
     if (!sameOrigin(request, env)) return errorResponse("access_csrf_required", "same-origin playground request required", 403);
     const suffix = path.slice("/v1/playground".length);
-    if (openAiPath(suffix)) return proxyOpenAi(request, env, context, suffix, "access");
+    const control = responseControlPath(suffix, request.method);
+    if (control) {
+      await requireEmptyResponseControlBody(request);
+      return proxyResponseControl(request, env, control.action, control.id, url.searchParams, "access");
+    }
+    if (request.method === "POST" && openAiPath(suffix)) return proxyOpenAi(request, env, context, suffix, "access");
     if (suffix.startsWith("/proxy/")) return proxyManifest(request, env, context, `/v1${suffix}`, "access");
+  }
+  const control = responseControlPath(path, request.method);
+  if (control) {
+    await requireEmptyResponseControlBody(request);
+    return proxyResponseControl(request, env, control.action, control.id, url.searchParams, "proxy_key");
   }
   if (request.method === "GET" && request.headers.get("upgrade")?.toLowerCase() === "websocket" && (path === "/v1/responses" || path.startsWith("/v1/native/"))) return proxyResponsesWebSocket(request, env, context, path);
   if (request.method === "POST" && openAiPath(path)) return proxyOpenAi(request, env, context, path, "proxy_key");
@@ -127,6 +139,12 @@ async function sessionUsage(request: Request, env: Env): Promise<Response> {
 }
 
 function openAiPath(path: string): boolean { return ["/v1/chat/completions", "/v1/responses", "/v1/embeddings", "/v1/audio/speech"].includes(path); }
+
+function responseControlPath(path: string, method: string): { id: string; action: "retrieve" | "cancel" } | null {
+  const match = path.match(/^\/v1\/responses\/([^/]+)(\/cancel)?$/);
+  if (!match || method !== (match[2] ? "POST" : "GET")) return null;
+  return { id: decodePathSegment(match[1]), action: match[2] ? "cancel" : "retrieve" };
+}
 
 function serviceIndex(env: Env) {
   const index = {

@@ -42,6 +42,17 @@ export interface CorrelatedRequest {
 // Preserve the ingress Request/body stream. Reconstructing it solely to add headers can
 // retain an unconsumed body tee across a long-lived Worker process.
 const ingressMetadata = new WeakMap<Request, CorrelationMetadata>();
+const backgroundRecovery = new WeakMap<Request, string>();
+export const backgroundRecoveryHeader = "x-clawrouter-background-recovery";
+
+// This locator is response-only metadata, never caller authority or a usage ACK.
+export function setBackgroundRecovery(request: Request, locator: string): void { backgroundRecovery.set(request, locator); }
+export function withBackgroundRecovery(response: Response, request: Request): Response {
+  response.headers.delete(backgroundRecoveryHeader);
+  const locator = backgroundRecovery.get(request);
+  if (locator) response.headers.set(backgroundRecoveryHeader, locator);
+  return response;
+}
 
 export function correlateIngressRequest(input: Request): CorrelatedRequest {
   const suppliedRequestId = input.headers.get("x-request-id");

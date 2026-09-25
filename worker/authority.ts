@@ -1,37 +1,28 @@
 import type {
-  AccessControlUser, AccessPolicyEntry, AccessSession, AccessUserRecord, Env, OAuthState, PolicyBinding,
-  AssignmentState, GrantRoutingPolicy, GrantRuntimeState, ProviderConnection, ProxyCredential, ProxyCredentialEntry,
+  AccessControlUser, AccessPolicyEntry, AccessUserRecord, Env, OAuthState, PolicyBinding,
+  AssignmentState, GrantRoutingPolicy, GrantRuntimeState, ProviderConnection, ProxyCredentialEntry,
 } from "./types";
 import { evaluateUserAssignments, withLegacyAssignmentState, type AssignmentEvidence, type AssignmentRuleEntry } from "./assignment-evaluator.ts";
+import type { AuthorizationSnapshot, AuthorizationSnapshotRequest, CredentialMutation, CredentialMutationResult } from "./authority-contracts.ts";
 import { contentRetentionDefault } from "./content-retention.ts";
 import { normalizeConnectionMutation, type ProviderConnectionMutation } from "./provider-connections.ts";
-import { HttpContinuationStore } from "./continuation-store.ts";
+import type { ResponsesScopeStore } from "./responses-scope.ts";
 import { boundedPercent, selectThresholdGrantKey, stickyScore, weightedRandom } from "./grant-selection-strategies.ts";
 import { errorResponse, HttpError, json, normalizeEmail, readJson, safeEqual } from "./utils.ts";
 
 type Principal = { principalType: "user" | "group"; principalId: string };
 type Seed = { principal: Principal; bindings: PolicyBinding[] };
-export type CredentialMutation = {
-  credentialId: string;
-  scope: "admin" | "personal";
-  actor: Pick<AccessSession, "auth" | "email" | "role">;
-} & (
-  | { operation: "create" | "put"; credential: Omit<ProxyCredential, "policyGeneration"> }
-  | { operation: "rotate"; secretSha256: string }
-  | { operation: "revoke" }
-);
-export type CredentialMutationResult =
-  | { outcome: "updated"; entry: ProxyCredentialEntry; policy: AccessPolicyEntry | null; principalEnabled: boolean }
-  | { outcome: "exists" | "missing" | "owned_elsewhere" | "limit_reached" | "policy_not_held" | "unknown_policy" | "inactive" | "actor_disabled" | "admin_required" };
 export const selfServiceCredentialLimit = 10;
 const selfServiceCredentialRetentionLimit = 100;
 
 export class PolicyBindingIndexObject implements DurableObject {
   private sql: SqlStorage;
   private storage: DurableObjectStorage;
-  private continuations?: HttpContinuationStore;
+  private responses?: Promise<ResponsesScopeStore>;
+  private env: Env;
 
-  constructor(state: DurableObjectState) {
+  constructor(state: DurableObjectState, env: Env) {
+    this.env = env;
     this.storage = state.storage;
     this.sql = state.storage.sql;
     this.ensureSchema();
@@ -41,7 +32,9 @@ export class PolicyBindingIndexObject implements DurableObject {
     const path = new URL(request.url).pathname;
     if (request.method !== "POST") return errorResponse("route_not_found", "route not found", 404);
     try {
-      if (path === "/http-continuations") return await (this.continuations ??= new HttpContinuationStore(this.storage)).fetch(request);
+      if (path === "/http-continuations") return await (await this.responseStore()).continuation(request);
+      if (path === "/responses-background") return await (await this.responseStore()).fetch(request);
+      if (path === "/authorization/snapshot") return json(this.authorizationSnapshot(await readJson<AuthorizationSnapshotRequest>(request)));
       if (path === "/resolve") return json({ initialized: this.hasMeta("bindings_global_initialized"), ...this.resolveBindings((await readJson<{ principals: Principal[] }>(request)).principals) });
       if (path === "/initialize") { this.initializeBindings(await readJson<Seed[]>(request)); return new Response("initialized"); }
       if (path === "/initialize-all") { this.initializeAllBindings(await readJson<PolicyBinding[]>(request)); return new Response("initialized"); }
@@ -93,7 +86,10 @@ export class PolicyBindingIndexObject implements DurableObject {
     }
   }
 
-  alarm(): Promise<void> { return (this.continuations ??= new HttpContinuationStore(this.storage)).alarm(); }
+  async alarm(): Promise<void> { return (await this.responseStore()).alarm(); }
+  private responseStore(): Promise<ResponsesScopeStore> {
+    return this.responses ??= import("./responses-scope.ts").then(({ ResponsesScopeStore }) => new ResponsesScopeStore(this.storage, this.env));
+  }
 
   private ensureSchema(): void {
     this.sql.exec("CREATE TABLE IF NOT EXISTS policy_binding_principals (principal_key TEXT PRIMARY KEY)");
@@ -285,8 +281,7 @@ export class PolicyBindingIndexObject implements DurableObject {
     if (operation === "rotate" && (!existing!.credential.enabled || !policy?.policy.enabled || existing!.credential.policyGeneration !== policy.policy.generation || !ownerEnabled)) return { outcome: "inactive" };
     if (operation !== "revoke") {
       if (scope === "personal") {
-        const principals: Principal[] = [{ principalType: "user", principalId: principalId! }, ...(user?.record.groups ?? []).map((group) => ({ principalType: "group" as const, principalId: group }))];
-        if (!policy?.policy.enabled || !this.resolveBindings(principals).bindings.some((binding) => binding.enabled && binding.policyId === policyId)) return { outcome: "policy_not_held" };
+        if (!this.holdsPolicy(user, policy)) return { outcome: "policy_not_held" };
       } else if (!policy) return { outcome: "unknown_policy" };
     }
     // Rotate and revoke mutate the latest row, never a caller's earlier snapshot.
@@ -317,6 +312,19 @@ export class PolicyBindingIndexObject implements DurableObject {
   private getCredential(id: string): ProxyCredentialEntry | null {
     const row = rows<{ credential_json: string }>(this.sql.exec("SELECT credential_json FROM proxy_credentials WHERE credential_id = ?", id))[0];
     return row ? { credentialId: id, credential: JSON.parse(row.credential_json) } : null;
+  }
+  private authorizationSnapshot(input: AuthorizationSnapshotRequest): AuthorizationSnapshot {
+    // No KV import or await: this is the authority admission point after a
+    // queued control's preparation, using current stored groups and bindings.
+    const credential = input.credentialId ? this.getCredential(input.credentialId)?.credential ?? null : null;
+    const policy = this.getPolicy(input.policyId), user = input.principalId ? this.getUser(input.principalId) : null;
+    return { credential, policy, principalEnabled: user ? user.record.enabled !== false : null, policyHeld: this.holdsPolicy(user, policy) };
+  }
+  private holdsPolicy(user: AccessControlUser | null, policy: AccessPolicyEntry | null): boolean {
+    if (!user || user.record.enabled === false || !policy?.policy.enabled) return false;
+    const principals: Principal[] = [{ principalType: "user", principalId: user.email },
+      ...(user.record.groups ?? []).map(principalId => ({ principalType: "group" as const, principalId }))];
+    return this.resolveBindings(principals).bindings.some(binding => binding.enabled && binding.policyId === policy.policyId);
   }
   private resolveCredentials(ids: string[]): { initialized: boolean; credentials: ProxyCredentialEntry[]; missingCredentialIds: string[] } {
     const credentials: ProxyCredentialEntry[] = [], missingCredentialIds: string[] = [];

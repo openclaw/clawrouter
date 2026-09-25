@@ -17,6 +17,7 @@ import { authenticateProxyKey } from "./proxy-auth";
 import { assertProviderAccess, listHealth, modelRoute, modelSupportsEndpoint, providerReadinessForState, snapshot, unifiedPathForEndpoint, type Readiness } from "./providers";
 import type { AccessSession, AuthorizedIdentity, CompiledModel, CompiledProvider, Env, ProviderConnection } from "./types";
 import { errorResponse, HttpError, privateJson, sha256Hex } from "./utils";
+import { responsesControl } from "./responses-lifecycle.ts";
 
 export async function sessionResponse(request: Request, env: Env): Promise<Response> {
   const session = await verifiedAccessSession(request, env);
@@ -241,7 +242,7 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env, conne
     let configured = !!savedConnection || pools.some((pool) => pool.candidates.hasConfiguredGrant)
       || provider.config_keys.some((key) => typeof env[key] === "string" && (env[key] as string).trim());
     let providerBalance: ReturnType<typeof providerBudgetStatus> | undefined;
-    const contexts = await Promise.all(provider.endpoints.flatMap((endpoint) => (keyScope && endpoint.websocket ? ["http", "websocket"] as const : ["http"] as const).map(async (mode) => {
+    const contexts = await Promise.all(provider.endpoints.filter((endpoint) => !responsesControl(provider, endpoint)).flatMap((endpoint) => (keyScope && endpoint.websocket ? ["http", "websocket"] as const : ["http"] as const).map(async (mode) => {
       const requirement: GrantRequirement = { provider, endpoint, mode };
       const selected = selectPolicyCandidates(pools, requirement);
       if (!selected) return null;

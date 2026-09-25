@@ -15,6 +15,15 @@ const loginGlobalLimit = 50;
 const loginAttempts = new Map<string, { count: number; resetAtMs: number }>();
 
 interface LocalSessionRecord { email: string; role: "admin" | "user"; createdAt: string; expiresAtMs: number }
+export interface LocalSessionVerification { readonly kind: "local"; readonly email: string; readonly sessionSha256: string; readonly expiresAtMs: number }
+const verifiedSessions = new WeakMap<AccessSession, LocalSessionVerification>();
+export function localSessionVerification(session: AccessSession): LocalSessionVerification | undefined { return verifiedSessions.get(session); }
+
+export async function currentLocalSession(proof: LocalSessionVerification, env: Env): Promise<boolean> {
+  if (!localAuthEnabled(env) || proof.expiresAtMs <= Date.now()) return false;
+  const record = await env.POLICY_KV.get<LocalSessionRecord>(sessionKey(proof.sessionSha256), "json");
+  return !!record && record.email === proof.email && record.expiresAtMs === proof.expiresAtMs && record.expiresAtMs > Date.now();
+}
 
 export function localAuthEnabled(env: Env): boolean {
   // Cloudflare Access configuration always wins so a stray flag cannot open a login form on a managed deployment.
@@ -26,13 +35,16 @@ export async function localSession(request: Request, env: Env): Promise<AccessSe
   if (!localAuthEnabled(env)) return null;
   const token = sessionCookieValue(request);
   if (!token) return null;
-  const record = await env.POLICY_KV.get<LocalSessionRecord>(sessionKey(await sha256Hex(token)), "json");
+  const sessionSha256 = await sha256Hex(token);
+  const record = await env.POLICY_KV.get<LocalSessionRecord>(sessionKey(sessionSha256), "json");
   // KV TTL eviction can lag; the stored expiry keeps the 12h boundary exact.
   if (!record?.email || record.expiresAtMs <= Date.now()) return null;
   const user = (await resolveUsers(env, [record.email]))[0];
   // Deleting or disabling the user record revokes live sessions; role edits apply on the next request.
   if (!user || user.record.enabled === false) return null;
-  return localAccessSession(record, user, env);
+  const session = localAccessSession(record, user, env);
+  verifiedSessions.set(session, Object.freeze({ kind: "local", email: record.email, sessionSha256, expiresAtMs: record.expiresAtMs }));
+  return session;
 }
 
 export async function localLogin(request: Request, env: Env): Promise<Response> {

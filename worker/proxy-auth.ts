@@ -1,30 +1,47 @@
-import type { AuthorizedIdentity, Env } from "./types";
+import type { AccessPolicyEntry, AuthorizedIdentity, Env, ProxyCredential } from "./types";
 import { resolveCredentials, resolvePolicies, resolveUsers } from "./authority";
-import { errorResponse, parseProxyKey, safeEqual, sha256Hex } from "./utils";
+import { errorResponse, HttpError, parseProxyKey, safeEqual, sha256Hex } from "./utils";
+
+export interface ProxyKeyVerification { readonly kind: "proxy_key"; readonly credentialId: string; readonly principalId: string | null; readonly secretSha256: string }
+const verifiedKeys = new WeakMap<AuthorizedIdentity, ProxyKeyVerification>();
+export function proxyKeyVerification(identity: AuthorizedIdentity): ProxyKeyVerification | undefined { return verifiedKeys.get(identity); }
 
 export async function authenticateProxyKey(headers: Headers, env: Env): Promise<AuthorizedIdentity | Response> {
   const parsed = proxyKeyFromHeaders(headers);
   if (!parsed) return errorResponse("invalid_proxy_key", "a valid ClawRouter proxy key is required", 401);
   const credentialEntry = (await resolveCredentials(env, [parsed.kid]))[0];
   if (!credentialEntry) return errorResponse("unknown_proxy_key", "proxy key is not registered", 401);
-  if (!safeEqual(await sha256Hex(parsed.secret), credentialEntry.credential.secretSha256.toLowerCase())) return errorResponse("invalid_proxy_key", "proxy key secret is invalid", 401);
+  const secretSha256 = await sha256Hex(parsed.secret);
+  if (!safeEqual(secretSha256, credentialEntry.credential.secretSha256.toLowerCase())) return errorResponse("invalid_proxy_key", "proxy key secret is invalid", 401);
   const policyEntry = (await resolvePolicies(env, [credentialEntry.credential.policyId]))[0];
-  if (!policyEntry) return errorResponse("credential_policy_missing", "proxy credential references an unknown access policy", 403);
-  if (!credentialEntry.credential.enabled) return errorResponse("proxy_key_revoked", "proxy key is revoked", 403);
-  if (!policyEntry.policy.enabled) return errorResponse("policy_revoked", "access policy is revoked", 403);
-  if (credentialEntry.credential.policyGeneration !== policyEntry.policy.generation) return errorResponse("credential_policy_stale", "proxy credential is not bound to the current access policy generation", 403);
+  const failure = proxyCredentialFailure(credentialEntry.credential, policyEntry);
+  if (failure) return errorResponse(failure.code, failure.message, failure.status);
   const owner = credentialEntry.credential.principalId ? (await resolveUsers(env, [credentialEntry.credential.principalId]))[0] : undefined;
   // Unowned and unmaterialized service keys remain valid; explicit owner disable
   // blocks both new requests and subsequent admissions on existing WebSockets.
-  if (owner?.record.enabled === false) return errorResponse("principal_disabled", "proxy key owner is disabled", 403);
-  return {
+  const ownerFailure = proxyCredentialFailure(credentialEntry.credential, policyEntry, owner?.record.enabled);
+  if (ownerFailure) return errorResponse(ownerFailure.code, ownerFailure.message, ownerFailure.status);
+  const identity: AuthorizedIdentity = {
     credentialId: parsed.kid,
     principalId: credentialEntry.credential.principalId ?? null,
     authType: "proxy_key",
     policyId: credentialEntry.credential.policyId,
-    policy: policyEntry.policy,
+    policy: policyEntry!.policy,
     contentRetentionDisabled: owner?.record.contentRetentionDisabled ?? false,
   };
+  verifiedKeys.set(identity, Object.freeze({ kind: "proxy_key", credentialId: parsed.kid, principalId: identity.principalId, secretSha256 }));
+  return identity;
+}
+
+// Entry authentication and delayed control admission share these canonical
+// lifecycle rules, including unowned/unmaterialized service-key semantics.
+export function proxyCredentialFailure(credential: ProxyCredential, entry: AccessPolicyEntry | null | undefined, principalEnabled?: boolean | null): HttpError | null {
+  if (!entry) return new HttpError(403, "credential_policy_missing", "proxy credential references an unknown access policy");
+  if (!credential.enabled) return new HttpError(403, "proxy_key_revoked", "proxy key is revoked");
+  if (!entry.policy.enabled) return new HttpError(403, "policy_revoked", "access policy is revoked");
+  if (credential.policyGeneration !== entry.policy.generation) return new HttpError(403, "credential_policy_stale", "proxy credential is not bound to the current access policy generation");
+  if (principalEnabled === false) return new HttpError(403, "principal_disabled", "proxy key owner is disabled");
+  return null;
 }
 
 export async function inspectKey(headers: Headers, env: Env): Promise<Response> {

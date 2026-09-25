@@ -3,7 +3,7 @@ import { authorityCall, resolveBindings, resolvePolicies, resolveUsers } from ".
 import { assignmentEvidenceFromAccessIdentity } from "./assignment-evaluator";
 import { listAssignmentRules, reconcileUserAssignments } from "./assignments";
 import { selectProviderPolicy } from "./grant-selection";
-import { localSession } from "./local-auth";
+import { localSession, localSessionVerification, type LocalSessionVerification } from "./local-auth";
 import { sameOrigin } from "./request-origin";
 import type { AccessControlUser, AccessPolicyEntry, AccessSession, AuthorizedIdentity, Env } from "./types";
 import { commaSet, errorResponse, normalizeEmail, parseBearer, safeEqual, sha256Hex } from "./utils";
@@ -19,6 +19,10 @@ interface AccessJwtPayload {
 }
 
 interface Jwk { kid?: string; kty?: string; n?: string; e?: string; alg?: string; use?: string }
+export type AccessVerification = LocalSessionVerification | { readonly kind: "cloudflare_access"; readonly email: string; readonly expiresAtMs: number };
+const verifiedSessions = new WeakMap<AccessSession, AccessVerification>();
+const verifiedIdentities = new WeakMap<AuthorizedIdentity, AccessVerification>();
+export function accessIdentityVerification(identity: AuthorizedIdentity): AccessVerification | undefined { return verifiedIdentities.get(identity); }
 
 export async function verifiedAccessSession(request: Request, env: Env): Promise<AccessSession | null> {
   return (await cloudflareAccessSession(request, env)) ?? localSession(request, env);
@@ -41,7 +45,7 @@ async function cloudflareAccessSession(request: Request, env: Env): Promise<Acce
   const evidence = hasGithubRules ? await verifiedGithubEvidence(request, email) : undefined;
   if (!user.record.assignmentState || evidence) user = (await reconcileUserAssignments(user, rules, env, evidence, !!evidence)).user;
   if (user.record.enabled === false) return null;
-  return {
+  const session: AccessSession = {
     authenticated: true,
     auth: "cloudflare_access",
     role,
@@ -51,11 +55,17 @@ async function cloudflareAccessSession(request: Request, env: Env): Promise<Acce
     groups: [...new Set(user.record.groups ?? [])].sort(),
     contentRetentionDisabled: user.record.contentRetentionDisabled ?? false,
   };
+  verifiedSessions.set(session, Object.freeze({ kind: "cloudflare_access", email, expiresAtMs: payload.exp! * 1000 }));
+  return session;
 }
 
 export async function accessIdentity(request: Request, env: Env, providerId?: string, requirement?: import("./provider-auth").GrantRequirement): Promise<AuthorizedIdentity | Response> {
   const session = await verifiedAccessSession(request, env);
   if (!session) return errorResponse("access_session_required", "a verified Cloudflare Access session is required", 401);
+  return accessSessionIdentity(session, env, providerId, requirement);
+}
+
+export async function accessSessionIdentity(session: AccessSession, env: Env, providerId?: string, requirement?: import("./provider-auth").GrantRequirement): Promise<AuthorizedIdentity | Response> {
   const matching = (await sessionPolicies(session, env)).filter((entry) => !providerId || !entry.policy.providers.length || entry.policy.providers.includes(providerId));
   if (!matching.length) return errorResponse("access_policy_required", "this identity has no active access policy", 403);
   const selected = providerId ? await selectProviderPolicy(matching, providerId, env, requirement) : matching[0];
@@ -63,7 +73,10 @@ export async function accessIdentity(request: Request, env: Env, providerId?: st
 }
 
 export function sessionPolicyIdentity(session: AccessSession, entry: AccessPolicyEntry): AuthorizedIdentity {
-  return { ...entry, credentialId: null, principalId: session.email, authType: "access", contentRetentionDisabled: session.contentRetentionDisabled };
+  const identity: AuthorizedIdentity = { ...entry, credentialId: null, principalId: session.email, authType: "access", contentRetentionDisabled: session.contentRetentionDisabled };
+  const proof = verifiedSessions.get(session) ?? localSessionVerification(session);
+  if (proof) verifiedIdentities.set(identity, proof);
+  return identity;
 }
 
 export async function sessionPolicies(session: AccessSession, env: Env): Promise<AccessPolicyEntry[]> {

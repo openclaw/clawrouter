@@ -15,6 +15,16 @@ interface LedgerBudgetReservation {
   objectName: string;
 }
 
+export interface BudgetReservationIntent {
+  kind: "policy" | "provider";
+  objectName: string;
+  request: BudgetReserveRequest;
+}
+export interface BudgetReservationPlan {
+  reservedMicros: number;
+  legs: BudgetReservationIntent[];
+}
+
 export interface EstimatedCost {
   reserveMicros: number;
   basis: string;
@@ -40,54 +50,51 @@ export function validateBudgetReservation(capability: string, cost: EstimatedCos
   return true;
 }
 
-export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capability: string, cost: EstimatedCost, connection?: ProviderConnection): Promise<BudgetReservation> {
-  if (!validateBudgetReservation(capability, cost, auth.policy.monthlyBudgetMicros, connection)) return emptyReservation();
+// Construct before I/O so a durable caller can record the exact IDs, scopes and
+// month before an acknowledgment is lost. Physical shard aliases remain two legs.
+export function planBudgetReservation(auth: AuthorizedIdentity, capability: string, cost: EstimatedCost, connection?: ProviderConnection, at = Date.now()): BudgetReservationPlan {
+  if (!validateBudgetReservation(capability, cost, auth.policy.monthlyBudgetMicros, connection)) return { reservedMicros: 0, legs: [] };
   const policyLimit = auth.policy.monthlyBudgetMicros;
   const providerLimit = connection?.monthlyBudgetMicros;
-  const reservation: BudgetReservation = { reservations: [], reservedMicros: cost.reserveMicros };
+  const legs: BudgetReservationIntent[] = [];
+  const add = (kind: BudgetReservationIntent["kind"], address: ReturnType<typeof budgetLedgerAddress>, limitMicros: number) => legs.push({
+    kind, objectName: address.objectName,
+    request: { policyId: address.policyId, windowKey: address.windowKey, scopeKey: address.scopeKey, limitMicros,
+      costMicros: cost.reserveMicros, reservationId: randomId("budget"), capability },
+  });
   if (policyLimit != null) {
-    const principal = budgetPrincipal(auth);
-    const address = budgetLedgerAddress(auth.policyId, auth.policy, principal);
-    reservation.reservations.push(await reserveLedger(env, address, policyLimit, cost, capability, "budget_exhausted", "proxy key budget is exhausted"));
+    add("policy", budgetLedgerAddress(auth.policyId, auth.policy, budgetPrincipal(auth), at), policyLimit);
   }
-  if (providerLimit != null && connection) {
-    const address = providerBudgetLedgerAddress(connection.providerId);
+  if (providerLimit != null && connection) add("provider", providerBudgetLedgerAddress(connection.providerId, at), providerLimit);
+  return { reservedMicros: cost.reserveMicros, legs };
+}
+
+export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capability: string, cost: EstimatedCost, connection?: ProviderConnection): Promise<BudgetReservation> {
+  const plan = planBudgetReservation(auth, capability, cost, connection);
+  const reservation: BudgetReservation = { reservations: [], reservedMicros: plan.reservedMicros };
+  for (const leg of plan.legs) {
     try {
-      reservation.reservations.push(await reserveLedger(env, address, providerLimit, cost, capability, "provider_budget_exhausted", `provider ${connection.providerId} monthly budget is exhausted`));
+      reservation.reservations.push(await reserveLedgerIntent(env, leg));
     } catch (error) {
-      try { await settleBudget(env, reservation, 0); }
-      catch { throw new HttpError(503, "accounting_unavailable", "Budget reservation rollback could not finish; retry after accounting recovers."); }
+      if (leg.kind === "provider") {
+        try { await settleBudget(env, reservation, 0); }
+        catch { throw new HttpError(503, "accounting_unavailable", "Budget reservation rollback could not finish; retry after accounting recovers."); }
+      }
       throw error;
     }
   }
   return reservation;
 }
 
-async function reserveLedger(
-  env: Env,
-  address: ReturnType<typeof budgetLedgerAddress>,
-  limitMicros: number,
-  cost: EstimatedCost,
-  capability: string,
-  exhaustedCode: string,
-  exhaustedMessage: string,
-): Promise<LedgerBudgetReservation> {
-  const reservationId = randomId("budget");
-  const request: BudgetReserveRequest = {
-    policyId: address.policyId,
-    windowKey: address.windowKey,
-    scopeKey: address.scopeKey,
-    limitMicros,
-    costMicros: cost.reserveMicros,
-    reservationId,
-    capability,
-  };
-  const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(address.objectName));
-  const response = await stub.fetch("https://clawrouter.internal/reserve", { method: "POST", body: JSON.stringify(request) });
+export async function reserveLedgerIntent(env: Env, intent: BudgetReservationIntent, signal?: AbortSignal): Promise<LedgerBudgetReservation> {
+  const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(intent.objectName));
+  const response = await stub.fetch("https://clawrouter.internal/reserve", { method: "POST", body: JSON.stringify(intent.request), signal });
   if (!response.ok) throw new Error(`budget reserve returned ${response.status}`);
   const result = await response.json<{ allowed: boolean; chargedMicros: number }>();
-  if (!result.allowed) throw new HttpError(402, exhaustedCode, exhaustedMessage);
-  return { reservationId, objectName: address.objectName };
+  if (typeof result?.allowed !== "boolean") throw new Error("budget reserve was not acknowledged");
+  if (!result.allowed) throw new HttpError(402, intent.kind === "policy" ? "budget_exhausted" : "provider_budget_exhausted",
+    intent.kind === "policy" ? "proxy key budget is exhausted" : `provider ${intent.request.policyId.slice("provider/".length)} monthly budget is exhausted`);
+  return { reservationId: intent.request.reservationId, objectName: intent.objectName };
 }
 
 export async function finalizeAccounting(env: Env, reservation: BudgetReservation, actualCostMicros: number, event: UsageEvent): Promise<boolean> {
@@ -103,10 +110,10 @@ export async function finalizeAccounting(env: Env, reservation: BudgetReservatio
   return results.every((result) => result.status === "fulfilled");
 }
 
-export async function markBudgetDispatched(env: Env, reservation: BudgetReservation): Promise<void> {
+export async function markBudgetDispatched(env: Env, reservation: BudgetReservation, signal?: AbortSignal): Promise<void> {
   const results = await Promise.allSettled(reservation.reservations.map(async (item) => {
     const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(item.objectName));
-    const response = await stub.fetch("https://clawrouter.internal/dispatch", { method: "POST", body: JSON.stringify({ reservationId: item.reservationId }) });
+    const response = await stub.fetch("https://clawrouter.internal/dispatch", { method: "POST", body: JSON.stringify({ reservationId: item.reservationId }), signal });
     if (!response.ok || (await response.json<{ dispatched: boolean }>()).dispatched !== true) throw new Error("budget dispatch was not acknowledged");
   }));
   const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");

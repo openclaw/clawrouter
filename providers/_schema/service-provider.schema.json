@@ -476,6 +476,15 @@
         "requestFormat": { "type": "string" },
         "responseFormat": { "type": "string" },
         "streaming": { "type": "string" },
+        "responsesLifecycle": {
+          "type": "object",
+          "required": ["retrieve", "cancel"],
+          "additionalProperties": false,
+          "properties": {
+            "retrieve": { "type": "string", "minLength": 1, "maxLength": 64 },
+            "cancel": { "type": "string", "minLength": 1, "maxLength": 64 }
+          }
+        },
         "outputTokenLimit": {
           "type": "object",
           "required": ["field", "minimum", "maximum"],

@@ -86,7 +86,7 @@ export interface RefreshConfig { tokenUrl: string; clientId: string | null; clie
 export type { TokenRates, LongContextPricing, ServiceTierPricing, TokenPricing, CharacterPricing, ModelPricing } from "../shared/contracts";
 export type CompiledModel = ClientCatalogModel;
 export interface OutputTokenLimit { field: "max_tokens" | "max_completion_tokens" | "max_output_tokens"; minimum: number; maximum: number }
-export interface CompiledEndpoint { id: string; method: string; methods: string[]; path: string; native_proxy: boolean; auth: string | null; headers: Record<string, string>; request_headers: string[]; response_headers: string[]; query: Record<string, string>; path_params: string[]; path_param_styles: Record<string, string>; request_format: string; response_format: string; streaming: string | null; outputTokenLimit?: OutputTokenLimit; modelPassthrough?: { pricing_ref: string | null; pricing: ModelPricing | null }; websocket?: "openai.responses"; timeout_ms: number | null }
+export interface CompiledEndpoint { id: string; method: string; methods: string[]; path: string; native_proxy: boolean; auth: string | null; headers: Record<string, string>; request_headers: string[]; response_headers: string[]; query: Record<string, string>; path_params: string[]; path_param_styles: Record<string, string>; request_format: string; response_format: string; streaming: string | null; responsesLifecycle?: { retrieve: string; cancel: string }; outputTokenLimit?: OutputTokenLimit; modelPassthrough?: { pricing_ref: string | null; pricing: ModelPricing | null }; websocket?: "openai.responses"; timeout_ms: number | null }
 
 export interface Env {
   // Object bindings, never generic provider environment strings or grant-pool entries.

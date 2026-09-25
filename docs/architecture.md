@@ -173,7 +173,7 @@ a provider error; Responses `incomplete` remains successful. Delivery failure an
 consumer cancellation are recorded independently, without rewriting HTTP status
 or bytes. Authoritative terminal usage remains billable even after delivery fails
 or is canceled; otherwise accounting retains the conservative reservation.
-Settlement starts when delivery completes, fails, or is canceled. The canonical
+Foreground settlement starts when delivery completes, fails, or is canceled. The canonical
 Worker config enables `enable_request_signal`, preserved by Cloudflare and
 self-host config rendering. A runtime-reported ingress abort settles the same
 observer once even when workerd drops its response pump without invoking the
@@ -213,7 +213,22 @@ Fresh installations include the producer and consumer together.
 Rollback below that producer or prolonged version skew can exhaust the configured
 five retries and send usage messages to the DLQ; follow the [DLQ recovery procedure](deploy-cloudflare.md).
 Deployment completion does not prove old writers drained or guarantee eventual
-delivery. This change does not enable background accounting.
+delivery.
+
+Background Responses use durable recovery only when the selected materialized
+transport supports the declared full lifecycle. Other transports retain ordinary
+creation selection and request-bound accounting, including permitted failover;
+an already reserved request cannot switch owners. Durable recovery uses the same
+authorization-scoped owner as continuation bindings. Its serialized store owns
+admission/dispatch intent, bounded collection
+and one frozen financial outcome; settlement and usage acknowledgements remain
+independent. One alarm schedules continuation expiry, observation and financial
+retries. Network waits run outside synchronous SQL transactions and the mutation
+tail. Identity publication atomically binds the original owner and temporary
+collector ID before exposing bytes. Recovery replays the immutable outcome,
+never the generation POST; completed summary eviction cannot reopen accounting.
+See [background Responses](api-reference.md#background-responses) and
+[spend control](agent-spend-control.md).
 
 Session/admin reads aggregate each relevant tenant/policy shard once, even when
 the input policy list repeats a scope. The former global ledger's migration

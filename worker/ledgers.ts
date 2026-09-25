@@ -223,14 +223,20 @@ export async function queue(batch: MessageBatch<QueueMessage>, env: Env): Promis
   }
 }
 
-export async function settleLedger(env: Env, objectName: string, request: BudgetSettleRequest): Promise<void> {
-  const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(objectName));
-  const response = await stub.fetch("https://clawrouter.internal/settle", { method: "POST", body: JSON.stringify(request) });
-  if (!response.ok || (await response.json<{ settled: boolean }>()).settled !== true) throw new Error("budget ledger did not acknowledge settlement");
+export class BudgetSettlementError extends Error {
+  readonly disposition: "missing" | "conflict" | "unavailable";
+  constructor(disposition: BudgetSettlementError["disposition"]) { super("budget ledger did not acknowledge settlement"); this.disposition = disposition; }
 }
 
-export async function ingestUsage(env: Env, event: UsageEvent): Promise<UsageIngestReceipt> {
-  const response = await usageStub(env, event.tenant_id, event.policy_id).fetch("https://clawrouter.internal/ingest", { method: "POST", body: JSON.stringify(event) });
+export async function settleLedger(env: Env, objectName: string, request: BudgetSettleRequest, signal?: AbortSignal): Promise<void> {
+  const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(objectName));
+  const response = await stub.fetch("https://clawrouter.internal/settle", { method: "POST", body: JSON.stringify(request), signal });
+  if (!response.ok) throw new BudgetSettlementError(response.status === 404 ? "missing" : response.status === 409 ? "conflict" : "unavailable");
+  if ((await response.json<{ settled: boolean }>().catch(() => null))?.settled !== true) throw new BudgetSettlementError("unavailable");
+}
+
+export async function ingestUsage(env: Env, event: UsageEvent, signal?: AbortSignal): Promise<UsageIngestReceipt> {
+  const response = await usageStub(env, event.tenant_id, event.policy_id).fetch("https://clawrouter.internal/ingest", { method: "POST", body: JSON.stringify(event), signal });
   if (!response.ok) throw new Error(`usage ledger write returned ${response.status}`);
   const receipt = await response.json<unknown>().catch(() => null);
   // A 2xx from an older producer does not confirm this event's disposition.

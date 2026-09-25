@@ -144,7 +144,7 @@ export function nativeMatch(endpoint: CompiledEndpoint, path: string): boolean {
   const pattern = endpoint.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\\$\\\{[^}]+\\\}/g, "[^/]+");
   return new RegExp(`^${pattern}$`).test(path);
 }
-function nativeParams(endpoint: CompiledEndpoint, path: string): Record<string, string> {
+export function nativeParams(endpoint: CompiledEndpoint, path: string): Record<string, string> {
   const names = [...endpoint.path.matchAll(/\$\{([^}]+)\}/g)].map((match) => match[1]);
   const pattern = endpoint.path.replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace(/\\\$\\\{[^}]+\\\}/g, "([^/]+)");
   const match = path.match(new RegExp(`^${pattern}$`));

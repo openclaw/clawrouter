@@ -4,7 +4,7 @@ const corsHeaders = {
   "access-control-allow-origin": "*",
   "access-control-allow-methods": "GET,POST,PUT,PATCH,OPTIONS",
   "access-control-allow-headers": [
-    "authorization", "content-type", "x-api-key", "anthropic-beta", "anthropic-version",
+    "authorization", "content-type", "x-api-key", "anthropic-beta", "anthropic-version", "openai-organization", "openai-project",
     "x-request-id", "traceparent", "session-id", "thread-id", "session_id", "x-clawrouter-session-id",
     "x-clawrouter-agent-id", "x-clawrouter-parent-agent-id", "x-clawrouter-project-id",
     "x-clawrouter-client", "x-claude-code-session-id", "x-claude-code-agent-id",
@@ -17,7 +17,7 @@ const corsHeaders = {
   "access-control-expose-headers": [
     "x-request-id", "x-clawrouter-content-retention", "x-clawrouter-upstream-provider", "x-clawrouter-fusion",
     "x-clawrouter-fusion-aggregator", "x-clawrouter-fusion-adviser-count", "x-clawrouter-fusion-failed-count",
-    "x-clawrouter-fusion-latency-ms", "x-clawrouter-fusion-advisers",
+    "x-clawrouter-fusion-latency-ms", "x-clawrouter-fusion-advisers", "x-clawrouter-background-recovery",
   ].join(","),
   "access-control-max-age": "600",
 };
