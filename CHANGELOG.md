@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add OpenAI GPT-6 Sol and Luna with published Standard, Fast/Priority, and Flex prices, cache and long-context rates, reasoning controls, and Chat token-limit normalization.
+
 - Read session usage from the policy's accounting tenant, including the default for policies without a tenant, so changing a user's tenant does not hide their charged requests.
 
 - Update DeepSeek's dated peak-price cards, add canonical Flash and the documented vision alias, and retain exact upstream spellings and Pro. Label measured costs as published-rate upper bounds rather than invoice amounts; higher reservations can require a lower native `max_tokens` under unchanged budgets. Preserve fixed tariffs, missing-usage reservations, and prior ledger debt.
