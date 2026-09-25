@@ -10,6 +10,8 @@ import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import wranglerMetadata from "wrangler/package.json" with { type: "json" };
 import { renderSelfHostConfig, startContentCleanup } from "../deploy/self-host/entrypoint.mjs";
+import { adminRequest } from "./admin-api.mjs";
+import { acceptGrantPoolBaseline, recoverGrantPools } from "./grant-pool-recovery.mjs";
 
 const wrangler = fileURLToPath(new URL(wranglerMetadata.bin.wrangler, import.meta.resolve("wrangler/package.json")));
 const scratch = mkdtempSync(join(tmpdir(), "clawrouter-content-cleanup-"));
@@ -35,6 +37,11 @@ const fresh = "synthetic-cleanup-fresh-body", expired = "synthetic-cleanup-expir
 
 try {
   await start();
+  // This invocation created the isolated storage set. Activate it once;
+  // every restart below must retain the same inventory and authority state.
+  const request = (path, options) => adminRequest(path, { ...options, env: { CLAWROUTER_BASE_URL: base, CLAWROUTER_ADMIN_TOKEN: adminToken } });
+  await acceptGrantPoolBaseline("fresh", { request });
+  assert.ok((await recoverGrantPools({ request })).activatedAt);
   await json("/v1/admin/keys/cleanup_fixture", { method: "PUT", headers: adminHeaders, body: JSON.stringify({
     enabled: true, providers: ["firecrawl"], allProviders: false, tenantId: "cleanup-fixture",
     secretSha256: sha256(proxySecret), requestCostMicros: 1,
