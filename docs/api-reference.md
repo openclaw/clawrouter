@@ -278,6 +278,13 @@ Verified browser sessions use the corresponding `/v1/playground/v1/responses/...
 or `/v1/playground/proxy/openai/<endpoint>` controls. Existing response ownership
 must match exactly one currently authorized policy scope. Ambiguous, revoked or
 replaced ownership is rejected rather than falling back to another policy.
+After route preparation, controls recheck the original key, policy generation,
+policy tenant and current user bindings before upstream admission. Key rotation
+invalidates an already queued control. Access checks use current stored groups;
+local logout is checked separately against the session store. Cloudflare Access
+retains the verified assertion's expiry, without claiming live IdP revocation.
+A revocation after admission does not cancel an already dispatched control or
+the router's accounting collection for an admitted generation.
 
 ```sh
 curl "$CLAWROUTER_BASE_URL/v1/responses" \

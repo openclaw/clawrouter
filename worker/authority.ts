@@ -25,6 +25,13 @@ export type CredentialMutationResult =
   | { outcome: "exists" | "missing" | "owned_elsewhere" | "limit_reached" | "policy_not_held" | "unknown_policy" | "inactive" | "actor_disabled" | "admin_required" };
 export const selfServiceCredentialLimit = 10;
 const selfServiceCredentialRetentionLimit = 100;
+export interface AuthorizationSnapshotRequest { credentialId: string | null; principalId: string | null; policyId: string }
+export interface AuthorizationSnapshot {
+  credential: ProxyCredential | null;
+  policy: AccessPolicyEntry | null;
+  principalEnabled: boolean | null;
+  policyHeld: boolean;
+}
 
 export class PolicyBindingIndexObject implements DurableObject {
   private sql: SqlStorage;
@@ -45,6 +52,7 @@ export class PolicyBindingIndexObject implements DurableObject {
     try {
       if (path === "/http-continuations") return await (await this.responseStore()).continuation(request);
       if (path === "/responses-background") return await (await this.responseStore()).fetch(request);
+      if (path === "/authorization/snapshot") return json(this.authorizationSnapshot(await readJson<AuthorizationSnapshotRequest>(request)));
       if (path === "/resolve") return json({ initialized: this.hasMeta("bindings_global_initialized"), ...this.resolveBindings((await readJson<{ principals: Principal[] }>(request)).principals) });
       if (path === "/initialize") { this.initializeBindings(await readJson<Seed[]>(request)); return new Response("initialized"); }
       if (path === "/initialize-all") { this.initializeAllBindings(await readJson<PolicyBinding[]>(request)); return new Response("initialized"); }
@@ -291,8 +299,7 @@ export class PolicyBindingIndexObject implements DurableObject {
     if (operation === "rotate" && (!existing!.credential.enabled || !policy?.policy.enabled || existing!.credential.policyGeneration !== policy.policy.generation || !ownerEnabled)) return { outcome: "inactive" };
     if (operation !== "revoke") {
       if (scope === "personal") {
-        const principals: Principal[] = [{ principalType: "user", principalId: principalId! }, ...(user?.record.groups ?? []).map((group) => ({ principalType: "group" as const, principalId: group }))];
-        if (!policy?.policy.enabled || !this.resolveBindings(principals).bindings.some((binding) => binding.enabled && binding.policyId === policyId)) return { outcome: "policy_not_held" };
+        if (!this.holdsPolicy(user, policy)) return { outcome: "policy_not_held" };
       } else if (!policy) return { outcome: "unknown_policy" };
     }
     // Rotate and revoke mutate the latest row, never a caller's earlier snapshot.
@@ -323,6 +330,19 @@ export class PolicyBindingIndexObject implements DurableObject {
   private getCredential(id: string): ProxyCredentialEntry | null {
     const row = rows<{ credential_json: string }>(this.sql.exec("SELECT credential_json FROM proxy_credentials WHERE credential_id = ?", id))[0];
     return row ? { credentialId: id, credential: JSON.parse(row.credential_json) } : null;
+  }
+  private authorizationSnapshot(input: AuthorizationSnapshotRequest): AuthorizationSnapshot {
+    // No KV import or await: this is the authority admission point after a
+    // queued control's preparation, using current stored groups and bindings.
+    const credential = input.credentialId ? this.getCredential(input.credentialId)?.credential ?? null : null;
+    const policy = this.getPolicy(input.policyId), user = input.principalId ? this.getUser(input.principalId) : null;
+    return { credential, policy, principalEnabled: user ? user.record.enabled !== false : null, policyHeld: this.holdsPolicy(user, policy) };
+  }
+  private holdsPolicy(user: AccessControlUser | null, policy: AccessPolicyEntry | null): boolean {
+    if (!user || user.record.enabled === false || !policy?.policy.enabled) return false;
+    const principals: Principal[] = [{ principalType: "user", principalId: user.email },
+      ...(user.record.groups ?? []).map(principalId => ({ principalType: "group" as const, principalId }))];
+    return this.resolveBindings(principals).bindings.some(binding => binding.enabled && binding.policyId === policy.policyId);
   }
   private resolveCredentials(ids: string[]): { initialized: boolean; credentials: ProxyCredentialEntry[]; missingCredentialIds: string[] } {
     const credentials: ProxyCredentialEntry[] = [], missingCredentialIds: string[] = [];

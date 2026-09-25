@@ -19,6 +19,7 @@ async function fixture(t) {
   const records = new Map(), env = { OPENAI_API_KEY: "fixture-upstream-key", CLAWROUTER_LOCAL_AUTH: "enabled", POLICY_KV: {
     async get(key, type) { if (Array.isArray(key)) return new Map(key.map(item => [item, records.get(item) ?? null])); const value = records.get(key) ?? null; return value && type === "text" ? JSON.stringify(value) : structuredClone(value); },
     async put(key, value) { records.set(key, JSON.parse(value)); },
+    async delete(key) { return records.delete(key); },
     async list({ prefix }) { return { keys: [...records.keys()].filter(key => key.startsWith(prefix)).map(name => ({ name })), list_complete: true }; },
   } };
   const policy = { enabled: true, generation: "policy_v1", providers: ["openai"], tenantId: "tenant", monthlyBudgetMicros: 1000, requestCostMicros: 100, budgetScope: "principal", retainRequestContent: false };
@@ -65,6 +66,121 @@ async function fixture(t) {
     restart() { for (const state of scopes.objects.values()) state.restart(); usage = new UsageLedgerObject(usageState); },
   };
 }
+
+async function holdCredentialControl(t, f) {
+  const key = "oauth/maintainer_access/openai", owner = f.env.GRANT_CREDENTIALS.objects.get(key);
+  const entered = Promise.withResolvers(), release = Promise.withResolvers(), queuedControl = Promise.withResolvers();
+  const get = owner.state.storage.get, fetch = owner.object.fetch.bind(owner.object);
+  let held = false;
+  t.mock.method(owner.state.storage, "get", async name => {
+    if (name === "credential" && !held) { held = true; entered.resolve(); await release.promise; }
+    return get(name);
+  });
+  t.mock.method(owner.object, "fetch", request => {
+    const response = fetch(request);
+    if (new URL(request.url).pathname === "/responses/control") queuedControl.resolve();
+    return response;
+  });
+  const earlier = f.env.GRANT_CREDENTIALS.get(key).fetch("https://owner/reconcile", { method: "POST", body: JSON.stringify({ key }) });
+  await entered.promise;
+  return { queued: queuedControl.promise, release: async () => { release.resolve(); assert.equal((await earlier).status, 200); } };
+}
+
+async function adminMutation(f, path, body, method = "POST") {
+  f.env.CLAWROUTER_ADMIN_TOKEN_SHA256 = await sha256Hex("fixture-admin-token");
+  const response = await f.call(path, body, { method, headers: { authorization: "Bearer fixture-admin-token" } });
+  assert.ok(response.status === 200 || response.status === 201, await response.clone().text());
+  return response;
+}
+
+test("another independently valid key with the same policy and principal cannot control the original response", async t => {
+  const f = await fixture(t);
+  await adminMutation(f, "/v1/admin/credentials", { ...f.credential, credentialId: "second_key" });
+  const headers = { authorization: "Bearer clawrouter-live-second_key-abcdefgh" };
+  const inspected = await f.call("/v1/key/inspect", undefined, { headers });
+  assert.equal(inspected.status, 200); assert.equal((await inspected.json()).verified, true);
+  const response = await f.call("/v1/responses", { model: "openai/gpt-6-astra", background: true });
+  assert.equal(response.status, 200); await response.json();
+  const before = f.budgetCalls.length;
+  for (const [path, method] of [[`/v1/responses/${queued.id}`, "GET"], [`/v1/responses/${queued.id}/cancel`, "POST"]]) {
+    const denied = await f.call(path, undefined, { method, headers });
+    assert.equal(denied.status, 409); assert.equal(f.sent.length, 1); assert.equal(f.budgetCalls.length, before);
+  }
+  const allowed = await f.call(`/v1/responses/${queued.id}`); assert.equal(allowed.status, 200); await allowed.json();
+  assert.equal(f.sent.length, 2); assert.equal(f.budgetCalls.length, before);
+});
+
+for (const action of ["revoke", "rotate"]) test(`a canonical key ${action} committed while public control is queued denies its final admission`, { timeout: 5000 }, async t => {
+  const f = await fixture(t);
+  await putGrantCredentials(f.env, "oauth/maintainer_access/openai", { provider: "openai", kind: "api_key", enabled: true, credential: "fixture-api" });
+  const response = await f.call("/v1/responses", { model: "openai/gpt-6-astra", background: true });
+  assert.equal(response.status, 200); await response.json();
+  const state = f.state(response), original = state.job(), bindings = state.db.prepare("SELECT * FROM http_continuations").all(), before = f.budgetCalls.length;
+  const gate = await holdCredentialControl(t, f), pending = f.call(`/v1/responses/${queued.id}`);
+  await gate.queued;
+  await adminMutation(f, `/v1/admin/credentials/maintainer_key/${action}`, action === "rotate" ? { secretSha256: await sha256Hex("replacement-secret") } : {});
+  await gate.release(); const denied = await pending;
+  assert.equal(denied.status, 403); assert.equal(f.sent.length, 1); assert.equal(f.budgetCalls.length, before);
+  assert.deepEqual(state.job(), original); assert.deepEqual(state.db.prepare("SELECT * FROM http_continuations").all(), bindings);
+  // Accounting collection retains its admitted authority; caller revocation is
+  // not permission to abandon the original reservation or restart generation.
+  f.advance(5000); await state.object.alarm(); assert.equal(state.job().phase, "complete");
+  assert.equal(state.job().eventId, original.eventId); assert.equal(state.job().amount, 100);
+  assert.equal(f.sent.filter(request => request.method === "POST").length, 1);
+  for (const leg of original.legs) assert.equal(f.budgets.get(leg.intent.objectName).reservations()[0].reserved_micros, 100);
+});
+
+for (const change of ["unbind", "groups", "logout"]) test(`Access ${change} while a control is queued cannot borrow another enabled policy`, { timeout: 5000 }, async t => {
+  const f = await fixture(t), headers = { cookie: f.cookie, origin: "https://router.example" };
+  const principal = { principalType: "user", principalId: "owner@example.com" };
+  await f.authority("/policies/put", { policyId: "other_policy", policy: { ...f.policy, generation: "other_v1" } });
+  await f.authority("/mutate", { seed: { principal, bindings: [] }, binding: { ...principal, policyId: "other_policy", priority: 100, enabled: true } });
+  if (change === "groups") {
+    await f.authority("/mutate", { seed: { principal, bindings: [] }, binding: { ...principal, policyId: "maintainer_access", priority: 10, enabled: false } });
+    const group = { principalType: "group", principalId: "original_group" };
+    await f.authority("/mutate", { seed: { principal: group, bindings: [] }, binding: { ...group, policyId: "maintainer_access", priority: 10, enabled: true } });
+    await f.authority("/users/put", { email: principal.principalId, record: { enabled: true, role: "user", tenantId: "tenant", groups: ["original_group"] } });
+  }
+  await putGrantCredentials(f.env, "oauth/maintainer_access/openai", { provider: "openai", kind: "api_key", enabled: true, credential: "fixture-api" });
+  const response = await f.call("/v1/playground/v1/responses", { model: "openai/gpt-6-astra", background: true }, { headers });
+  assert.equal(response.status, 200); await response.json();
+  const state = f.state(response), original = state.job(), before = f.budgetCalls.length;
+  assert.equal(original.owner.grantKey, "oauth/maintainer_access/openai");
+  const gate = await holdCredentialControl(t, f), pending = f.call(`/v1/playground/v1/responses/${queued.id}`, undefined, { headers });
+  await gate.queued; f.authorityCalls.length = 0;
+  if (change === "unbind") await adminMutation(f, "/v1/admin/policy-bindings", { ...principal, policyId: "maintainer_access", priority: 10, enabled: false }, "PUT");
+  else if (change === "groups") await adminMutation(f, "/v1/admin/access-users/owner%40example.com", { groups: ["other_group"] }, "PUT");
+  else assert.equal((await f.call("/v1/session/logout", {}, { headers })).status, 200);
+  await gate.release(); const denied = await pending;
+  assert.equal(denied.status, 403); assert.equal(f.sent.length, 1); assert.equal(f.budgetCalls.length, before); assert.deepEqual(state.job(), original);
+  assert.equal(f.authorityCalls.some(call => ["/grant-pools/resolve", "/grant-pools/resolve-many"].includes(call.path)), false);
+  const other = await f.authority("/policies/resolve", { policyIds: ["other_policy"] });
+  assert.equal((await other.json()).policies[0].policy.enabled, true);
+});
+
+for (const revoked of [false, true]) test(`environment control rechecks caller after held connection preparation: revoked=${revoked}`, { timeout: 5000 }, async t => {
+  const f = await fixture(t), response = await f.call("/v1/responses", { model: "openai/gpt-6-astra", background: true });
+  assert.equal(response.status, 200); await response.json(); const state = f.state(response), original = state.job(), before = f.budgetCalls.length;
+  const entered = Promise.withResolvers(), release = Promise.withResolvers();
+  f.scopes.beforeFetch = async (_name, request) => { if (new URL(request.url).pathname === "/connections/resolve") { entered.resolve(); await release.promise; } };
+  const pending = f.call(`/v1/responses/${queued.id}`); await entered.promise;
+  if (revoked) await adminMutation(f, "/v1/admin/credentials/maintainer_key/revoke", {});
+  release.resolve(); const control = await pending;
+  assert.equal(control.status, revoked ? 403 : 200); await control.text();
+  assert.equal(f.sent.length, revoked ? 1 : 2); assert.equal(f.budgetCalls.length, before);
+  if (revoked) assert.deepEqual(state.job(), original);
+});
+
+test("a caller revoke after fetch admission does not retroactively discard the accepted control response", { timeout: 5000 }, async t => {
+  const f = await fixture(t), response = await f.call("/v1/responses", { model: "openai/gpt-6-astra", background: true });
+  await response.json(); const entered = Promise.withResolvers(), release = Promise.withResolvers();
+  f.hooks.upstream = () => { entered.resolve(); return release.promise; };
+  const pending = f.call(`/v1/responses/${queued.id}`); await entered.promise;
+  await adminMutation(f, "/v1/admin/credentials/maintainer_key/revoke", {});
+  release.resolve(Response.json(completed)); const accepted = await pending;
+  assert.equal(accepted.status, 200); assert.deepEqual(await accepted.json(), completed); assert.equal(f.sent.length, 2);
+  assert.equal((await f.call(`/v1/responses/${queued.id}`)).status, 403); assert.equal(f.sent.length, 2);
+});
 
 for (const carrier of ["unified", "native", "manifest"]) test(`${carrier} queued create and repeated controls retain one original two-ledger charge`, async t => {
   const f = await fixture(t), body = { model: "openai/gpt-6-astra", input: "fixture", background: true, stream: false, store: false };

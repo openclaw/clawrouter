@@ -119,6 +119,7 @@ export class GrantCredentialObject implements DurableObject {
         try {
           const input = await preparation.wait(readJson<ResponseControlDispatch>(request));
           const { prepareResponseControl, assertControlDeadline } = await import("./responses-control-dispatch.ts");
+          const { assertControlCallerLive, authorizeResponseControl } = await import("./response-control-authorization.ts");
           assertControlDeadline(input);
           if (input.deadline !== undefined) {
             preparation.stop("complete");
@@ -133,8 +134,10 @@ export class GrantCredentialObject implements DurableObject {
             throw new HttpError(409, "response_owner_unavailable", "the original response credential is unavailable or changed");
           }
           const outbound = await preparation.wait(prepareResponseControl(this.env, input, materializedGrant(metadataGrant(record), record)));
+          await preparation.wait(authorizeResponseControl(this.env, input.authorization, input.owner, preparation.signal));
           preparation.signal.throwIfAborted();
           assertControlDeadline(input);
+          assertControlCallerLive(input.authorization);
           if (record.expiresAt && Date.parse(record.expiresAt) <= Date.now()) {
             throw new HttpError(409, "response_owner_unavailable", "the original response credential has expired");
           }

@@ -1,10 +1,12 @@
 import { resolveConnection } from "./authority.ts";
 import type { BackgroundAdmission } from "./background-store.ts";
 import type { ContinuationOwner } from "./continuation-store.ts";
+import { HttpOperation } from "./http-operation.ts";
 import { applyTransportHeaders, assertOperationConfiguration, providerCredentialScheme } from "./provider-auth.ts";
 import { resolveTemplate } from "./provider-templates.ts";
 import { configuredUpstream, copyRequestHeaders, providerById, upstreamPath, type UpstreamAuth } from "./providers.ts";
 import { responseIdentity } from "./response-identities.ts";
+import { assertControlCallerLive, authorizeResponseControl, type ResponseControlAuthorization } from "./response-control-authorization.ts";
 import { responsesControlQuery, type ResponsesControlAction } from "./responses-lifecycle.ts";
 import type { CompiledProvider, Env, UpstreamGrant } from "./types.ts";
 import { HttpError, sha256Hex } from "./utils.ts";
@@ -17,6 +19,7 @@ export interface ResponseControlDispatch {
   query: string;
   stream: boolean;
   deadline?: number;
+  authorization: ResponseControlAuthorization;
 }
 
 export async function responseRouteDigest(provider: CompiledProvider, upstream: UpstreamAuth, url: URL, headers: Headers, grantKey: string | null): Promise<string> {
@@ -76,13 +79,19 @@ export async function dispatchResponseControl(env: Env, input: ResponseControlDi
     const stub = env.GRANT_CREDENTIALS.get(env.GRANT_CREDENTIALS.idFromName(input.owner.grantKey));
     return stub.fetch("https://clawrouter.internal/responses/control", { method: "POST", body: JSON.stringify(input), signal });
   }
-  const request = await prepareResponseControl(env, input, null);
-  signal.throwIfAborted();
-  assertControlDeadline(input);
-  return fetch(request, { signal });
+  const preparation = new HttpOperation(signal, 10_000);
+  try {
+    const request = await preparation.wait(prepareResponseControl(env, input, null));
+    await preparation.wait(authorizeResponseControl(env, input.authorization, input.owner, preparation.signal));
+    preparation.signal.throwIfAborted();
+    assertControlDeadline(input);
+    assertControlCallerLive(input.authorization);
+    return fetch(request, { signal });
+  } finally { preparation.stop("complete"); }
 }
 
 export function assertControlDeadline(input: ResponseControlDispatch): void {
+  if (input.authorization?.kind === "collection" && (input.action !== "retrieve" || input.query !== "" || input.deadline === undefined)) unavailable();
   if (input.deadline !== undefined && (!Number.isSafeInteger(input.deadline) || Date.now() >= input.deadline)) {
     throw new HttpError(409, "response_observation_expired", "automatic response observation has ended; authenticated controls remain available");
   }

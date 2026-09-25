@@ -8,6 +8,7 @@ import { assertProviderAccess, providerById } from "./providers.ts";
 import { authenticateProxyKey } from "./proxy-auth.ts";
 import { observeUsage, proxyResponseHeaders } from "./proxy-response.ts";
 import { responseIdentity } from "./response-identities.ts";
+import { publicControlAuthorization } from "./response-control-authorization.ts";
 import { dispatchResponseControl, retainedResponseRoute } from "./responses-control-dispatch.ts";
 import { responsesControlQuery, type ResponsesControlAction } from "./responses-lifecycle.ts";
 import type { AccessSession, AuthorizedIdentity, Env } from "./types.ts";
@@ -53,6 +54,7 @@ export async function proxyResponseControl(request: Request, env: Env, action: R
     response = await operation.wait(dispatchResponseControl(env, {
       owner: binding.owner, responseId, action, query: query.toString(), stream: binding.background?.stream === true,
       route: retainedResponseRoute({}, request.headers),
+      authorization: publicControlAuthorization(binding.auth),
     }, operation.signal), "upstream", late => { void late.body?.cancel().catch(() => undefined); });
     operation.retireDeadline();
     // A control response observes the existing generation only. Closed/evicted

@@ -12,7 +12,7 @@ export async function collectBackground(env: Env, job: BackgroundJob, accept: (f
   let reader: ReadableStreamDefaultReader<Uint8Array> | undefined;
   let inspector: Awaited<ReturnType<typeof import("./responses-usage.ts")["createResponsesUsageInspector"]>> | undefined;
   try {
-    const response = await operation.wait(dispatchResponseControl(env, { owner: job.owner, route: job.route, responseId: job.responseId, action: "retrieve", query: "", stream: job.stream, deadline: job.observeUntil }, operation.signal), "upstream", response => { void response.body?.cancel().catch(() => undefined); });
+    const response = await operation.wait(dispatchResponseControl(env, { owner: job.owner, route: job.route, responseId: job.responseId, action: "retrieve", query: "", stream: job.stream, deadline: job.observeUntil, authorization: { kind: "collection" } }, operation.signal), "upstream", response => { void response.body?.cancel().catch(() => undefined); });
     if (!response.ok || !response.body || !/^application\/json(?:\s*;|$)/i.test(response.headers.get("content-type") ?? "")) {
       void response.body?.cancel().catch(() => undefined); throw new Error("background observation unavailable");
     }
