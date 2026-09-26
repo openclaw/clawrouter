@@ -200,6 +200,16 @@ Store each temporary transport secret as
 the temporary GitHub secrets. `pnpm cf:secrets -- --dry-run` prints binding
 names only; the live command sends a JSON object to Wrangler over stdin.
 
+Lanseq is optional. To configure it in production, add the repository secret
+`CLAWROUTER_PROVIDER_LANSEQ_API_KEY` and dispatch `Deploy Cloudflare` on reviewed
+`main` with its full `expected_sha` and `configure_provider_secrets=true`.
+The workflow uploads it as the Worker binding `LANSEQ_API_KEY`. An absent or
+empty transport secret is skipped without affecting other providers. Without
+that Worker binding or a usable scoped grant, Lanseq has no executable offers
+and is omitted from the client catalog. Skipping an empty transport secret does
+not remove an existing Worker binding; use the provider connection kill switch
+when disabling an already configured provider.
+
 Provider configuration values are not included in that secret bulk operation.
 In particular, `AWS_REGION` is a non-secret Worker variable rendered under
 `[vars]`, not a Wrangler secret.
