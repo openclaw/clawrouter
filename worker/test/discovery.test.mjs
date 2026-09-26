@@ -7,6 +7,27 @@ const { sha256Hex } = await import("../utils.ts");
 const { default: worker } = await import("../index.ts");
 const { snapshot } = await import("../providers.ts");
 
+test("missing optional Lanseq credentials preserve health and other providers without advertising Lanseq", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.policy.providers.push("lanseq");
+  for (const value of [undefined, ""]) {
+    fixture.env.LANSEQ_API_KEY = value;
+    const health = await worker.fetch(new Request("https://router.example/v1/health"), fixture.env, {});
+    assert.equal(health.status, 200);
+    assert.equal((await health.json()).ok, true);
+    const catalog = await (await catalogResponse(fixture.request("key"), fixture.env)).json();
+    assert.equal(catalog.providers.some(({ id }) => id === "lanseq"), false);
+    assert.equal(catalog.providers.find(({ id }) => id === "openai").readiness.executable, true);
+    const models = await (await modelsResponse(fixture.request("key"), fixture.env)).json();
+    assert.equal(models.data.some(({ id }) => id.startsWith("lanseq/")), false);
+    const entitlements = await (await entitlementResponse(fixture.request("session"), fixture.env)).json();
+    const lanseq = entitlements.providers.find(({ provider }) => provider === "lanseq");
+    assert.equal(lanseq.readiness.status, "unconfigured");
+    assert.equal(lanseq.readiness.executable, false);
+    assert.deepEqual(lanseq.readiness.missingConfig, ["LANSEQ_API_KEY"]);
+  }
+});
+
 for (const mode of ["local", "cloudflare_access"]) test(`empty ${mode} discovery preserves authenticated scope without grants or budget activity`, async (t) => {
   const bindings = [], fixture = await fusionDiscoveryFixture(t, { bindings });
   let headers = fixture.request("session").headers, certificateUrl;

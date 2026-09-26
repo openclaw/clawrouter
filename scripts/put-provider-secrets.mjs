@@ -24,6 +24,7 @@ export const providerSecretNames = [
   "GOOGLE_API_KEY",
   "GROQ_API_KEY",
   "HUGGINGFACE_API_TOKEN",
+  "LANSEQ_API_KEY",
   "MINIMAX_API_KEY",
   "MISTRAL_API_KEY",
   "OPENAI_API_KEY",

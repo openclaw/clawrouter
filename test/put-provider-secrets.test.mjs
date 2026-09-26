@@ -1,6 +1,8 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { readFileSync } from "node:fs";
 import test from "node:test";
+import { parse } from "yaml";
 
 import {
   configuredProviderSecrets,
@@ -34,13 +36,26 @@ test("provider secret selection keeps only the declared non-empty bindings", () 
   assert.equal(providerSecretNames.includes("AWS_REGION"), false);
 });
 
+test("production deploy uploads Lanseq only when its transport secret is configured", () => {
+  const workflow = parse(readFileSync(".github/workflows/deploy-cloudflare.yml", "utf8"));
+  const upload = workflow.jobs.deploy.steps.find((step) => step.run === "pnpm cf:secrets");
+  assert.equal(upload.env.LANSEQ_API_KEY, "${{ secrets.CLAWROUTER_PROVIDER_LANSEQ_API_KEY }}");
+  for (const value of [undefined, "", "fixture-lanseq-secret"]) {
+    assert.deepEqual(
+      configuredProviderSecrets({ OPENAI_API_KEY: "fixture-openai-secret", LANSEQ_API_KEY: value }),
+      { OPENAI_API_KEY: "fixture-openai-secret", ...(value ? { LANSEQ_API_KEY: value } : {}) },
+    );
+  }
+});
+
 test("provider secret dry-run reports names without values", () => {
   const result = spawnSync("node", ["scripts/put-provider-secrets.mjs", "--dry-run"], {
     cwd: process.cwd(),
     encoding: "utf8",
-    env: { ...process.env, OPENAI_API_KEY: "must-not-be-printed" },
+    env: { ...process.env, OPENAI_API_KEY: "must-not-be-printed", LANSEQ_API_KEY: "lanseq-must-not-be-printed" },
   });
   assert.equal(result.status, 0, result.stderr);
   assert.match(result.stdout, /OPENAI_API_KEY/);
+  assert.match(result.stdout, /LANSEQ_API_KEY/);
   assert.doesNotMatch(result.stdout, /must-not-be-printed/);
 });
