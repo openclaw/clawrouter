@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Refresh the bundled autoreview skill from its canonical source so reviews no longer require TruffleHog.
+- Use one shared autoreview installation from `openclaw/agent-skills`; repository entrypoints now receive upstream fixes without copied helpers or test suites.
 
 - Upload an optional Lanseq API key through the production deployment workflow using `CLAWROUTER_PROVIDER_LANSEQ_API_KEY`; leave unconfigured Lanseq unavailable without blocking other providers.
 
