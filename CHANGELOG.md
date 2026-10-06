@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Use one shared autoreview installation from `openclaw/agent-skills`; repository entrypoints now receive upstream fixes without copied helpers or test suites. Install once with `python3 scripts/install-skills autoreview` from agent-skills, then run `python3 "$HOME/.agents/skills/autoreview/scripts/autoreview"` from this repository. Refresh copy installations with `--mode copy --force`. Canonical autoreview disables Kimi until it supports private prompt transport; use Codex or another supported engine instead.
+
 - Upload an optional Lanseq API key through the production deployment workflow using `CLAWROUTER_PROVIDER_LANSEQ_API_KEY`; leave unconfigured Lanseq unavailable without blocking other providers.
 
 - Add background Responses creation, retrieval, streamed resumption and cancellation for declared OpenAI API routes. Keep controls on the original authorized credential route without new reservations; recheck queued caller authority before dispatch. Add bounded usage collection, durable financial recovery and authenticated operator inspection/replay. Preserve creation-only transport admission and request-bound accounting; select durable recovery only for the actual full-capable transport. Keep pending-response polling separate from financial retry backoff. Recovery locators remain distinct from authentication and settlement receipts; unresolved durable obligations require a recovery-aware runtime, not a pre-recovery rollback.
