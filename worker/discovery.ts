@@ -1,4 +1,4 @@
-import type { CatalogOffer, ClientCatalog, ClientCatalogProvider, EntitlementsResponse, SessionResponse } from "../shared/contracts";
+import type { CatalogOffer, ClientCatalog, ClientCatalogProvider, EntitlementsResponse, FusionConfig, SessionResponse } from "../shared/contracts";
 import { fusionCatalogReadiness } from "./fusion-readiness";
 import { concreteOpenAiSelection, isSelectionFailure, type ProxySelection } from "./proxy-selection";
 import { resolveTemplate } from "./provider-templates.ts";
@@ -15,7 +15,7 @@ import { loadFusionConfig } from "./fusion-config";
 import { FUSION_MODEL_ID } from "./fusion";
 import { authenticateProxyKey } from "./proxy-auth";
 import { assertProviderAccess, listHealth, modelRoute, modelSupportsEndpoint, providerReadinessForState, snapshot, unifiedPathForEndpoint, type Readiness } from "./providers";
-import type { AccessSession, AuthorizedIdentity, CompiledModel, CompiledProvider, Env, ProviderConnection } from "./types";
+import type { AccessSession, AuthorizedIdentity, CompiledModel, CompiledProvider, Env } from "./types";
 import { errorResponse, HttpError, privateJson, sha256Hex } from "./utils";
 import { responsesControl } from "./responses-lifecycle.ts";
 
@@ -145,19 +145,17 @@ async function sessionEntitlements(session: AccessSession, env: Env): Promise<Cl
 
 async function entitlementRowsForEntries(identities: AuthorizedIdentity[], env: Env, scope: ClientEntitlements["scope"]): Promise<ClientEntitlements> {
   const observedAt = new Date().toISOString();
-  const connections = await listConnections(env, snapshot.providers.map((provider) => provider.id));
-  const inventory = await clientInventory(identities, env, connections);
+  const [inventory, fusionConfig] = await Promise.all([clientInventory(identities, env), loadFusionConfig(env)]);
   const rows = snapshot.providers.map((provider) => {
     const policies = identities.filter((entry) => entry.policy.enabled && (!entry.policy.providers.length || entry.policy.providers.includes(provider.id))).map((entry) => entry.policyId);
     return { provider: provider.id, displayName: provider.display_name, serviceKind: provider.service_kind, allowed: policies.length > 0, policies, readiness: inventory.get(provider.id)!.readiness };
   });
-  const fusion = await fusionEntitlement(rows, inventory, env);
+  const fusion = fusionEntitlement(rows, inventory, env, fusionConfig);
   // Authentication still identifies the caller after the last policy is removed.
   return { rows: fusion ? [...rows, fusion.row] : rows, fusionOffers: fusion?.offers ?? [], inventory, observedAt, scope };
 }
 
-async function fusionEntitlement(rows: EntitlementRow[], inventory: ClientInventory, env: Env): Promise<{ row: EntitlementRow; offers: CatalogOffer[] } | null> {
-  const config = await loadFusionConfig(env);
+function fusionEntitlement(rows: EntitlementRow[], inventory: ClientInventory, env: Env, config: FusionConfig): { row: EntitlementRow; offers: CatalogOffer[] } | null {
   if (!config.enabled) return null;
   const aggregator = modelRoute(config.aggregatorModel, "llm.chat");
   const aggregatorAccess = aggregator ? rows.find((row) => row.provider === aggregator.provider.id) : undefined;
@@ -230,15 +228,23 @@ async function clientEntitlements(request: Request, env: Env): Promise<ClientEnt
   return sessionEntitlements(session, env);
 }
 
-async function clientInventory(identities: AuthorizedIdentity[], env: Env, connections: ProviderConnection[]) {
-  const health = await listHealth(env);
+async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
+  // Authentication and policy resolution have finished. These independent,
+  // request-local observations must not serialize behind advisory KV health.
+  const [health, connections, providerPools] = await Promise.all([
+    listHealth(env),
+    listConnections(env, snapshot.providers.map((provider) => provider.id)),
+    Promise.all(snapshot.providers.map((provider) => {
+      const entries = identities.filter((entry) => entry.policy.enabled && (!entry.policy.providers.length || entry.policy.providers.includes(provider.id)));
+      return Promise.all(entries.map((entry) => policyGrantCandidates(entry, provider.id, env, provider.auth.schemes.find((scheme) => scheme.type === "oauth")?.tokenRef ?? provider.id)));
+    })),
+  ]);
   const policyBalances = new Map<string, ReturnType<typeof budgetStatus>>();
-  const views = await Promise.all(snapshot.providers.map(async (provider) => {
-    const entries = identities.filter((entry) => entry.policy.enabled && (!entry.policy.providers.length || entry.policy.providers.includes(provider.id)));
-    const pools = await Promise.all(entries.map((entry) => policyGrantCandidates(entry, provider.id, env, provider.auth.schemes.find((scheme) => scheme.type === "oauth")?.tokenRef ?? provider.id)));
+  const views = await Promise.all(snapshot.providers.map(async (provider, index) => {
+    const pools = providerPools[index];
     const savedConnection = connections.find((connection) => connection.providerId === provider.id);
     const connection = savedConnection ?? { providerId: provider.id, enabled: true };
-    const keyScope = entries[0]?.authType === "proxy_key";
+    const keyScope = pools[0]?.entry.authType === "proxy_key";
     let configured = !!savedConnection || pools.some((pool) => pool.candidates.hasConfiguredGrant)
       || provider.config_keys.some((key) => typeof env[key] === "string" && (env[key] as string).trim());
     let providerBalance: ReturnType<typeof providerBudgetStatus> | undefined;

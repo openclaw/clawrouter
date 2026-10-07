@@ -49,7 +49,7 @@ export async function fixture(t, entries = [], { held = true, legacy = false } =
     } }) },
     POLICY_KV: {
       async list({ prefix }) { return { list_complete: true, keys: [...store.keys()].filter(name => name.startsWith(prefix)).map(name => ({ name })) }; },
-      async get(key) { return structuredClone(store.get(key) ?? null); },
+      async get(key) { return structuredClone(Array.isArray(key) ? new Map(key.map((item) => [item, store.get(item) ?? null])) : store.get(key) ?? null); },
       async put(key, value) { store.set(key, JSON.parse(value)); },
       async delete(key) { store.delete(key); },
     },
