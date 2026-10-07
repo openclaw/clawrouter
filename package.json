@@ -34,18 +34,18 @@
     "cf:smoke": "node scripts/smoke-deployed.mjs"
   },
   "dependencies": {
-    "stream-chain": "4.2.5",
+    "stream-chain": "4.2.6",
     "stream-json": "3.7.0"
   },
   "devDependencies": {
     "@cfworker/json-schema": "^4.1.1",
-    "@cloudflare/workers-types": "^5.20260920.1",
+    "@cloudflare/workers-types": "^5.20261004.1",
     "toml-eslint-parser": "^1.0.3",
     "typescript": "^7.0.2",
-    "wrangler": "^4.135.0",
+    "wrangler": "^4.147.0",
     "yaml": "^2.9.1"
   },
-  "packageManager": "pnpm@11.27.0",
+  "packageManager": "pnpm@11.28.4",
   "engines": {
     "node": ">=24"
   }

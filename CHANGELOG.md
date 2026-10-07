@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Refresh the streaming parser, Cloudflare toolchain, admin icons and Vite, and pnpm within their current major versions; preserve Node.js 24 and the two-day dependency cooldown.
+
 - Use one shared autoreview installation from `openclaw/agent-skills`; repository entrypoints now receive upstream fixes without copied helpers or test suites. Install once with `python3 scripts/install-skills autoreview` from agent-skills, then run `python3 "$HOME/.agents/skills/autoreview/scripts/autoreview"` from this repository. Refresh copy installations with `--mode copy --force`. Canonical autoreview disables Kimi until it supports private prompt transport; use Codex or another supported engine instead.
 
 - Upload an optional Lanseq API key through the production deployment workflow using `CLAWROUTER_PROVIDER_LANSEQ_API_KEY`; leave unconfigured Lanseq unavailable without blocking other providers.
