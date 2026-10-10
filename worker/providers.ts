@@ -328,10 +328,12 @@ export async function listGrantRecords(env: Env): Promise<GrantRecord[]> {
 
 export async function listHealth(env: Env): Promise<Map<string, ProviderHealth>> {
   const result = new Map<string, ProviderHealth>();
-  const page = await env.POLICY_KV.list({ prefix: "health/providers/" });
-  for (const key of page.keys) {
-    const record = await env.POLICY_KV.get<ProviderHealth>(key.name, "json");
-    if (record) result.set(record.providerId, record);
+  // Health is advisory and only bundled providers can appear in readiness.
+  // KV bulk reads accept at most 100 keys; avoid a list + serial read per row.
+  const keys = snapshot.providers.map((provider) => `health/providers/${provider.id}`);
+  for (let offset = 0; offset < keys.length; offset += 100) {
+    const records = await env.POLICY_KV.get<ProviderHealth>(keys.slice(offset, offset + 100), "json");
+    for (const record of records.values()) if (record) result.set(record.providerId, record);
   }
   return result;
 }

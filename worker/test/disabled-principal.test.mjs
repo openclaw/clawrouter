@@ -93,7 +93,7 @@ async function authorityFixture(t, principalId = email) {
   const env = {
     CLAWROUTER_ADMIN_TOKEN_SHA256: await sha256Hex(adminToken),
     ACCESS_CONTROL: { idFromName: (name) => name, get: () => ({ fetch: (url, init) => authority.fetch(new Request(url, init)) }) },
-    POLICY_KV: { async get() { return null; }, async list() { return { keys: [], list_complete: true }; } },
+    POLICY_KV: { async get(key) { return Array.isArray(key) ? new Map(key.map((item) => [item, null])) : null; }, async list() { return { keys: [], list_complete: true }; } },
   };
   const setUser = (enabled) => authorityCall(env, "/users/put", { email, record: { enabled, contentRetentionDisabled: true } });
   await setUser(true);

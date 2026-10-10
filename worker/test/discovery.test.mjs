@@ -5,7 +5,94 @@ import test from "node:test";
 const { catalogResponse, modelsResponse, sessionResponse, entitlementResponse } = await import("../discovery.ts");
 const { sha256Hex } = await import("../utils.ts");
 const { default: worker } = await import("../index.ts");
-const { snapshot } = await import("../providers.ts");
+const { listHealth, snapshot } = await import("../providers.ts");
+
+test("Worker catalog reads known health in one bulk request without a KV listing", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  const keys = snapshot.providers.map(({ id }) => `health/providers/${id}`);
+  for (const { id } of snapshot.providers) fixture.records.set(`health/providers/${id}`, { providerId: id, status: "verified", checkedAt: new Date().toISOString(), latencyMs: 42 });
+  const calls = [], get = fixture.env.POLICY_KV.get, list = fixture.env.POLICY_KV.list;
+  const delay = () => new Promise((resolve) => setTimeout(resolve, 5));
+  fixture.env.POLICY_KV.get = async (key, type) => {
+    if ((Array.isArray(key) ? key : [key]).some((item) => item.startsWith("health/providers/"))) {
+      calls.push({ method: "get", key, type });
+      await delay();
+    }
+    return get(key, type);
+  };
+  fixture.env.POLICY_KV.list = async (options) => { calls.push({ method: "list" }); await delay(); return list(options); };
+  const start = performance.now();
+  const response = await worker.fetch(fixture.request("key"), fixture.env, {});
+  const catalog = await response.json();
+  t.diagnostic(JSON.stringify({ providers: keys.length, healthRequests: calls.length, syntheticDelayPerRequestMs: 5, elapsedMs: Math.round(performance.now() - start) }));
+  assert.equal(response.status, 200);
+  assert.equal(response.headers.get("cache-control"), "no-store");
+  assert.deepEqual(catalog.scope, { authType: "proxy_key", credentialId: "fixture", principalId: null });
+  assert.equal(catalog.providers.find(({ id }) => id === "openai").readiness.verified, true);
+  assert.deepEqual(calls, [{ method: "get", key: keys, type: "json" }]);
+});
+
+test("Worker catalog overlaps independent reads only after authentication", async (t) => {
+  const fixture = await fusionDiscoveryFixture(t);
+  const gate = Promise.withResolvers(), connectionsStarted = Promise.withResolvers(), started = new Set();
+  const getAuthority = fixture.env.ACCESS_CONTROL.get, get = fixture.env.POLICY_KV.get, list = fixture.env.POLICY_KV.list;
+  fixture.env.ACCESS_CONTROL.get = (...args) => {
+    const stub = getAuthority(...args);
+    return { fetch: async (url, init) => {
+      const path = new URL(url).pathname;
+      if (["/connections/resolve", "/grant-pools/resolve"].includes(path)) {
+        started.add(path);
+        if (path === "/connections/resolve") connectionsStarted.resolve();
+        await gate.promise;
+      }
+      return stub.fetch(url, init);
+    } };
+  };
+  fixture.env.POLICY_KV.get = async (key, type) => {
+    const keys = Array.isArray(key) ? key : [key];
+    if (keys.some((item) => item.startsWith("health/providers/"))) { started.add("health"); await gate.promise; }
+    if (key === "config/fusion") { started.add("fusion"); await gate.promise; }
+    return get(key, type);
+  };
+  fixture.env.POLICY_KV.list = async (options) => { started.add("health"); await gate.promise; return list(options); };
+  const pending = worker.fetch(fixture.request("key"), fixture.env, {});
+  try {
+    await connectionsStarted.promise;
+    // Drain microtasks, not a latency deadline: all independent reads must
+    // start while the connection snapshot is still held at the gate.
+    await new Promise((resolve) => setImmediate(resolve));
+    assert.deepEqual([...started].sort(), ["/connections/resolve", "/grant-pools/resolve", "fusion", "health"]);
+  } finally { gate.resolve(); await pending; }
+  assert.equal((await pending).status, 200);
+  for (const state of ["revoked", "stale", "disabled-owner"]) {
+    started.clear();
+    fixture.credential.enabled = state !== "revoked";
+    fixture.credential.policyGeneration = state === "stale" ? "old" : "g1";
+    fixture.credential.principalId = "fixture@example.com";
+    fixture.userRecord.enabled = state !== "disabled-owner";
+    assert.equal((await worker.fetch(fixture.request("key"), fixture.env, {})).status, 403);
+    assert.equal(started.size, 0, `${state}: no discovery reads before authorization`);
+  }
+});
+
+test("provider health bulk reads stay within the 100-key KV limit and ignore missing keys", async (t) => {
+  const original = [...snapshot.providers];
+  snapshot.providers.push(...Array.from({ length: 205 - original.length }, (_, index) => ({ id: `fixture-${index}` })));
+  t.after(() => { snapshot.providers.splice(0, snapshot.providers.length, ...original); });
+  const calls = [], record = { providerId: "openai", status: "verified" };
+  const health = await listHealth({ POLICY_KV: {
+    async get(keys, type) {
+      assert.ok(Array.isArray(keys) && keys.length <= 100 && keys.length > 0);
+      assert.equal(type, "json");
+      calls.push(keys);
+      return new Map(keys.map((key) => [key, key === "health/providers/openai" ? record : null]));
+    },
+    async list() { assert.fail("known provider health must not list KV"); },
+  } });
+  assert.deepEqual(calls.map((keys) => keys.length), [100, 100, 5]);
+  assert.deepEqual(calls.flat(), snapshot.providers.map(({ id }) => `health/providers/${id}`));
+  assert.deepEqual([...health], [["openai", record]]);
+});
 
 test("missing optional Lanseq credentials preserve health and other providers without advertising Lanseq", async (t) => {
   const fixture = await fusionDiscoveryFixture(t);
@@ -335,7 +422,7 @@ test("catalog and session preserve saved provider health independently of operat
         if (reasonCode) assert.ok(view.offers.every((offer) => !offer.eligible && offer.reasonCode === reasonCode));
         if (body.entitlements) assert.deepEqual(body.entitlements.providers.find(({ provider }) => provider === "openai").readiness, view.readiness);
         if (body.catalog) assert.deepEqual(body.providers.find(({ provider }) => provider === "openai").readiness, view.readiness);
-        assert.equal(fixture.calls.filter(({ path }) => path === "kv-list").length, 1);
+        assert.equal(fixture.calls.filter(({ path }) => path === "kv-list").length, 0);
       }
     }
   }
