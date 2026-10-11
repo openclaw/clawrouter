@@ -171,6 +171,7 @@ function normalizeQuota(value) {
       url: probe.url,
       method: probe.method ?? "GET",
       headers: probe.headers ?? {},
+      ...(probe.facts ? { facts: probe.facts } : {}),
       windows: (probe.windows ?? []).map((window) => normalizeQuotaWindow(window, true)),
     })),
   };
@@ -180,6 +181,8 @@ function normalizeQuotaWindow(window, probe) {
   const shared = { id: window.id, kind: window.kind, unit: window.unit ?? null, window: window.window ?? null, fixedLimit: window.fixedLimit ?? null, metricScale: window.metricScale ?? 1 };
   return probe ? {
     ...shared,
+    ...(window.models ? { models: window.models } : {}),
+    ...(window.collection ? { collection: window.collection } : {}),
     limitPointer: window.limitPointer ?? null,
     remainingPointer: window.remainingPointer ?? null,
     usedPointer: window.usedPointer ?? null,

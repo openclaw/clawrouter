@@ -1,8 +1,8 @@
 import snapshotJson from "./generated/provider-snapshot.json" with { type: "json" };
 import { authorityCall, type GrantAttachmentResult, type GrantAttachmentSnapshot, type GrantAttachmentStatus } from "./authority.ts";
-import { grantCoolingDown, grantQuotaRatio, observeGrantQuota, observeGrantQuotaProbe } from "./grant-quota.ts";
+import { grantCoolingDown, grantQuotaExhausted, grantQuotaRatio, observeGrantQuota, observeGrantQuotaProbe, quotaRuntime } from "./grant-quota.ts";
 import { grantUsable } from "./grant-selection.ts";
-import { applyProviderCredential, applyTransportHeaders, quotaProbeForGrant, requiredGrantTemplate, transformTransportBody, transportForGrant } from "./provider-auth.ts";
+import { applyProviderCredential, applyTransportHeaders, quotaProbeForGrant, quotaProbesForGrant, requiredGrantTemplate, transformTransportBody, transportForGrant } from "./provider-auth.ts";
 import type { CompiledGrantTransport, CompiledProvider, Env, GrantRuntimeState, ProviderSnapshot, RefreshConfig, UpstreamGrant } from "./types";
 import { errorResponse, HttpError, json, readJson } from "./utils.ts";
 import { applyTemplateHeaders, resolveTemplate } from "./provider-templates.ts";
@@ -43,6 +43,7 @@ interface CredentialRecord {
   nextKeepWarmAt?: string | null;
   nextRefreshAttemptAt?: string | null;
   quotaFailureCount?: number;
+  quotaRetryAt?: Record<string, string>;
   revokedAt?: string | null;
   poolSyncPending?: boolean;
   poolAdmissionRevision?: number;
@@ -211,6 +212,24 @@ export class GrantCredentialObject implements DurableObject {
         return json({ grant });
       }
       if (path === "/materialize") return json(await this.materialize(await readJson<MaterializeRequest>(request)));
+      if (path === "/quota-refresh") {
+        const { key } = await readJson<{ key: string }>(request);
+        await this.loadRecord(key, undefined, false);
+        const { record } = await this.reconcileAttachment(key);
+        if (!record || !record.providerId) throw new HttpError(404, "unknown_upstream_grant", "upstream grant is not registered");
+        const provider = snapshot.providers.find(provider => provider.id === record.providerId);
+        if (!provider) throw new HttpError(400, "unknown_provider", "upstream provider is not registered");
+        try {
+          const runtime = await probeQuota(this.env, provider, record);
+          const transport = transportForGrant(provider, materializedGrant(metadataGrant(record), record));
+          if (transport?.maintenance.quotaPoll) record.nextQuotaProbeAt = new Date(Date.now() + quotaInterval(transport, runtime)).toISOString();
+          return json({ refreshed: true });
+        } finally {
+          await this.state.storage.put("credential", record);
+          await this.schedule(record);
+          if (record.status === "reauth_required") await this.publishProjection(record);
+        }
+      }
       if (path === "/reconcile") {
         const { key } = await readJson<{ key: string }>(request);
         await this.loadRecord(key, undefined, false);
@@ -415,6 +434,12 @@ export class GrantCredentialObject implements DurableObject {
         record.nextQuotaProbeAt = new Date(now + Math.min(transport.maintenance.quotaPoll.exhaustedIntervalSeconds * 1_000, normal * 2 ** record.quotaFailureCount)).toISOString();
       }
     }
+    if ((record as CredentialRecord).status === "reauth_required") {
+      await this.state.storage.put("credential", record);
+      await this.publishProjection(record);
+      await this.state.storage.deleteAlarm();
+      return;
+    }
     if (record.maintenance?.keepWarm && due(record.nextKeepWarmAt, now) && transport.maintenance.keepWarm) {
       try { await keepWarm(this.env, provider, transport, record); }
       catch { /* the next regular interval retries without making alarm delivery hot-loop */ }
@@ -549,27 +574,63 @@ function revokedRecord(key: string, metadata: UpstreamGrant | null, generation =
 async function probeQuota(env: Env, provider: CompiledProvider, record: CredentialRecord): Promise<GrantRuntimeState> {
   assertCredentialEnabled(record);
   const grant = materializedGrant({ provider: provider.id, kind: record.kind, maintenance: record.maintenance }, record);
-  const probe = quotaProbeForGrant(provider, grant);
-  if (!probe) throw new HttpError(400, "grant_quota_probe_unavailable", `provider ${provider.id} has no quota probe for this grant kind`);
-  const headers = new Headers({ accept: "application/json" });
-  const url = new URL(probe.url);
-  applyProviderCredential(provider, grant, env, headers, url.searchParams);
-  for (const [name, value] of Object.entries(probe.headers)) headers.set(name, requiredGrantTemplate(value, grant, "grant_quota_probe_unavailable"));
-  let response: Response;
-  try { response = await fetch(url, { method: probe.method, headers, signal: AbortSignal.timeout(10_000) }); }
-  catch { throw new HttpError(502, "grant_quota_probe_failed", `provider ${provider.id} quota probe failed`); }
-  if (!response.ok) {
-    const failure = observeGrantQuota(response, { responseHeaders: [], probes: [] });
-    if (failure) await publishRuntime(env, record, { ...failure, source: "provider_probe" });
-    await response.body?.cancel().catch(() => undefined);
-    throw new HttpError(502, "grant_quota_probe_failed", `provider ${provider.id} quota probe returned ${response.status}`);
+  const probes = quotaProbesForGrant(provider, grant);
+  if (!probes.length) throw new HttpError(400, "grant_quota_probe_unavailable", `provider ${provider.id} has no quota probe for this grant kind`);
+  const states = await authorityCall<{ states: Record<string, GrantRuntimeState> }>(env, "/grant-pools/states", { keys: [record.grantKey] });
+  const stored = states.states[record.grantKey!];
+  const previous = stored?.grantRevision === record.updatedAt ? stored : undefined;
+  let windows = previous?.windows ?? [];
+  let facts = previous ? { account: previous.account, extraUsage: previous.extraUsage } : {};
+  let quotaUpdated = false;
+  let quotaObservedAt: string | undefined;
+  let successful = false;
+  for (const probe of probes) {
+    if (Date.parse(record.quotaRetryAt?.[probe.url] ?? "") > Date.now()) continue;
+    const headers = new Headers({ accept: "application/json" });
+    const url = new URL(probe.url);
+    applyProviderCredential(provider, grant, env, headers, url.searchParams);
+    for (const [name, value] of Object.entries(probe.headers)) headers.set(name, requiredGrantTemplate(value, grant, "grant_quota_probe_unavailable"));
+    const probeStartedAt = Date.now();
+    let response: Response;
+    try { response = await fetch(url, { method: probe.method, headers, signal: AbortSignal.timeout(10_000) }); }
+    catch { if (probe.windows.length) throw new HttpError(502, "grant_quota_probe_failed", `provider ${provider.id} quota probe failed`); else continue; }
+    if (response.status === 429) {
+      const retry = response.headers.get("retry-after");
+      const until = retry && /^\d+(?:\.\d+)?$/.test(retry) ? Date.now() + Number(retry) * 1000 : Date.parse(retry ?? "");
+      (record.quotaRetryAt ??= {})[probe.url] = new Date(Number.isFinite(until) ? Math.max(Date.now() + 1000, until) : Date.now() + 60_000).toISOString();
+      await response.body?.cancel().catch(() => undefined);
+      continue; // Poll throttling says nothing about inference quota; retain the reading.
+    }
+    if (!response.ok) {
+      const failure = observeGrantQuota(response, { responseHeaders: [], probes: [] });
+      if (failure) await publishRuntime(env, record, { ...failure, source: "provider_probe", windows });
+      await response.body?.cancel().catch(() => undefined);
+      if (response.status === 401) record.status = "reauth_required";
+      if (probe.windows.length || response.status === 401 || response.status === 403) throw new HttpError(502, "grant_quota_probe_failed", `provider ${provider.id} quota probe returned ${response.status}`);
+      continue;
+    }
+    let payload: unknown;
+    try { payload = await boundedResponseJson(response, MAX_REFRESH_RESPONSE_BYTES); }
+    catch (error) { if (probe.windows.length) throw error; else continue; }
+    const state = observeGrantQuotaProbe(payload, probe, probeStartedAt);
+    if (!state) { if (probe.windows.length) throw new HttpError(502, "grant_quota_probe_empty", `provider ${provider.id} quota probe returned no recognized windows`); else continue; }
+    successful = true;
+    delete record.quotaRetryAt?.[probe.url];
+    facts = { ...facts, ...(state.account ? { account: state.account } : {}), ...(state.extraUsage ? { extraUsage: state.extraUsage } : {}) };
+    if (state.windows.length) {
+      windows = [...windows.filter(window => !probe.windows.some(definition => definition.collection ? window.id.startsWith(`${definition.id}-`) : window.id === definition.id)), ...state.windows];
+      quotaUpdated = true;
+      quotaObservedAt = state.observedAt;
+    }
   }
-  const payload = await boundedResponseJson(response, MAX_REFRESH_RESPONSE_BYTES);
-  const state = observeGrantQuotaProbe(payload, probe);
-  if (!state) throw new HttpError(502, "grant_quota_probe_empty", `provider ${provider.id} quota probe returned no recognized windows`);
-  const observed = { ...state, grantRevision: record.updatedAt };
-  await publishRuntime(env, record, observed);
+  const observed = { ...quotaRuntime(windows.slice(0, 128), "provider_probe", quotaObservedAt ? Date.parse(quotaObservedAt) : Date.now()), ...facts, grantRevision: record.updatedAt };
+  if (!quotaUpdated && previous) Object.assign(observed, { observedAt: previous.observedAt, status: previous.status, cooldownUntil: previous.cooldownUntil, lastSignal: previous.lastSignal });
+  if (successful) await publishRuntime(env, record, observed);
   return observed;
+}
+
+export async function refreshGrantQuota(env: Env, key: string): Promise<void> {
+  await ownerCall(env, key, "/quota-refresh", { key });
 }
 
 async function keepWarm(env: Env, provider: CompiledProvider, transport: CompiledGrantTransport, record: CredentialRecord): Promise<void> {
@@ -578,7 +639,8 @@ async function keepWarm(env: Env, provider: CompiledProvider, transport: Compile
   if (!config || !record.grantKey) return;
   const states = await authorityCall<{ states: Record<string, GrantRuntimeState> }>(env, "/grant-pools/states", { keys: [record.grantKey] });
   const runtime = states.states[record.grantKey];
-  if (grantCoolingDown(runtime) || (grantQuotaRatio(runtime) ?? 1) <= 0.1) return;
+  const model = typeof config.body.model === "string" ? config.body.model : null;
+  if (grantCoolingDown(runtime) || grantQuotaExhausted(runtime, model) || (grantQuotaRatio(runtime, Date.now(), undefined, model) ?? 1) <= 0.1) return;
   const endpoint = provider.endpoints.find((candidate) => candidate.id === config.endpoint);
   if (!endpoint) throw new HttpError(500, "grant_maintenance_invalid", `provider ${provider.id} keep-warm endpoint is unavailable`);
   const grant = materializedGrant({ provider: provider.id, kind: record.kind, maintenance: record.maintenance }, record);

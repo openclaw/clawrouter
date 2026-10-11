@@ -333,6 +333,8 @@ export function policyFormFromPolicy(key: AccessPolicy): PolicyForm {
     grantStrategy: key.grantRouting.strategy,
     grantStickiness: key.grantRouting.stickiness,
     grantFailover: key.grantRouting.failover,
+    grantEnvironmentFallback: key.grantRouting.environmentFallback ?? false,
+    grantIncludedQuotaReservePercent: String(key.grantRouting.includedQuotaReservePercent ?? 0),
     grantStaleState: key.grantRouting.staleState,
     grantStaleAfterSeconds: String(key.grantRouting.staleAfterSeconds),
     grantSwitchAtUsedPercent: String(key.grantRouting.switchAtUsedPercent ?? 90),

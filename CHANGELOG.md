@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Make Claude subscription pools model-aware, retain scoped weekly quota and account facts, add an included-quota reserve and explicit paid environment fallback, and use the Claude Code 2.1.288 identity.
+
+- Attribute usage to the final upstream grant and lane with additive ledger storage, a bounded admin daily-model aggregation API, and a Subscriptions page for account headroom, extra usage and traffic.
+
 - Refresh the streaming parser, Cloudflare toolchain, admin icons and Vite, and pnpm within their current major versions; preserve Node.js 24 and the two-day dependency cooldown.
 
 - Use one shared autoreview installation from `openclaw/agent-skills`; repository entrypoints now receive upstream fixes without copied helpers or test suites. Install once with `python3 scripts/install-skills autoreview` from agent-skills, then run `python3 "$HOME/.agents/skills/autoreview/scripts/autoreview"` from this repository. Refresh copy installations with `--mode copy --force`. Canonical autoreview disables Kimi until it supports private prompt transport; use Codex or another supported engine instead.

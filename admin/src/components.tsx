@@ -61,7 +61,7 @@ export function ReadinessStatus({ readiness }: { readiness?: ProviderReadiness }
 }
 
 export function viewTitle(view: View) {
-  return ({ home: "Dashboard", catalog: "Catalog", playground: "Playground", policies: "Access", users: "Users", usage: "Usage" } as const)[view];
+  return ({ home: "Dashboard", catalog: "Catalog", playground: "Playground", policies: "Access", users: "Users", usage: "Usage", subscriptions: "Subscriptions" } as const)[view];
 }
 
 export function viewSubtitle(view: View) {
@@ -72,6 +72,7 @@ export function viewSubtitle(view: View) {
     policies: "Policies, credentials, and principal bindings",
     users: "Cloudflare Access identities",
     usage: "Request audit and policy budgets",
+    subscriptions: "Quota and traffic",
   }[view];
 }
 

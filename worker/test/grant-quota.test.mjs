@@ -89,6 +89,7 @@ test("provider-declared metric scaling normalizes fractional utilization", () =>
     kind: "subscription",
     unit: "percent",
     window: "five_hour",
+    observedAt: "2026-07-06T12:00:00.000Z",
     remaining: 9,
     limit: 100,
     resetAt: "2026-07-06T13:00:00.000Z",

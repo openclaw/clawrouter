@@ -1,10 +1,10 @@
 import snapshotJson from "./generated/provider-snapshot.json" with { type: "json" };
 import { listConnections, resolveConnection } from "./authority.ts";
-import { observeGrantQuota, observeGrantQuotaProbe } from "./grant-quota.ts";
-import { grantRevision, grantUsable as canonicalGrantUsable, recordGrantRuntime, resolveGrantSelection, type PinnedGrant } from "./grant-selection.ts";
+
+import { grantRevision, grantUsable as canonicalGrantUsable, resolveGrantSelection, type PinnedGrant } from "./grant-selection.ts";
 import { grantsVisibleToPolicies, type GrantRecord } from "./grant-scope.ts";
-import { materializeGrantCredentials } from "./grant-credentials.ts";
-import { applyProviderCredential, applyTransportHeaders, assertOperationConfiguration, quotaProbeForGrant, requiredGrantTemplate, transportForGrant, type GrantRequirement } from "./provider-auth.ts";
+import { materializeGrantCredentials, refreshGrantQuota } from "./grant-credentials.ts";
+import { applyProviderCredential, applyTransportHeaders, assertOperationConfiguration, transportForGrant, type GrantRequirement } from "./provider-auth.ts";
 import type {
   AccessPolicyEntry, AuthorizedIdentity, CompiledEndpoint, CompiledGrantTransport, CompiledModel, CompiledProvider, Env,
   ProviderConnection, ProviderHealth, ProviderSnapshot, UpstreamGrant,
@@ -42,6 +42,7 @@ export interface Readiness {
 export interface UpstreamAuth {
   grant: UpstreamGrant | null;
   grantKey: string | null;
+  grantLane: import("./types").GrantLane;
   grantRevision: string | null;
   baseUrl: string;
   headers: Headers;
@@ -213,7 +214,12 @@ export async function assertProviderAccess(provider: CompiledProvider, auth: Aut
 export async function upstreamAuth(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedGrantKeys: ReadonlySet<string> = new Set(), stickyHash: string | null = null, recordSelection = true, pinned?: PinnedGrant, requirement?: GrantRequirement): Promise<UpstreamAuth> {
   const resolution = await grantFor(provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, requirement);
   const selected = resolution.selected;
-  if (!selected && resolution.hasConfiguredGrant) throw new HttpError(503, "upstream_grant_pool_unavailable", `provider ${provider.id} has no available scoped upstream grant`);
+  if (!selected && resolution.hasConfiguredGrant) {
+    const unavailable = () => new HttpError(503, "upstream_grant_pool_unavailable", `provider ${provider.id} has no available scoped upstream grant`);
+    if (!auth.policy.grantRouting?.environmentFallback || pinned?.key != null) throw unavailable();
+    try { if (requirement) assertOperationConfiguration(requirement, null, env); configuredUpstream(provider, null, env); }
+    catch { throw unavailable(); }
+  }
   const grant = selected?.grant ?? null;
   if (pinned && ((selected?.key ?? null) !== pinned.key || ("lineage" in pinned ? grant?.credentialLineage !== pinned.lineage : (grant ? grantRevision(grant) : null) !== pinned.revision))) throw new HttpError(409, "upstream_grant_changed", "upstream authorization changed; open a new connection");
   if (requirement) assertOperationConfiguration(requirement, grant, env);
@@ -233,6 +239,7 @@ export function configuredUpstream(provider: CompiledProvider, grant: UpstreamGr
   return {
     grant,
     grantKey: null,
+    grantLane: !grant ? "environment" : grant.kind === "api_key" ? "api_key" : "subscription",
     grantRevision: grant ? grantRevision(grant) : null,
     baseUrl: transport?.baseUrl ?? resolveTemplate(provider, provider.base_urls.default, env),
     headers,
@@ -359,24 +366,7 @@ export async function refreshStoredGrantQuota(env: Env, key: string): Promise<vo
   const provider = providerById(grant.provider);
   if (!provider) throw new HttpError(400, "unknown_provider", "upstream grant provider is not registered");
   grant = await refreshGrant(key, grant, provider, env, false);
-  const probe = quotaProbeForGrant(provider, grant);
-  if (!probe) throw new HttpError(400, "grant_quota_probe_unavailable", `provider ${provider.id} has no quota probe for this grant kind`);
-  const headers = new Headers({ accept: "application/json" });
-  const url = new URL(probe.url);
-  applyProviderCredential(provider, grant, env, headers, url.searchParams);
-  for (const [name, value] of Object.entries(probe.headers)) headers.set(name, requiredGrantTemplate(value, grant, "grant_quota_probe_unavailable"));
-  let response: Response;
-  try { response = await fetch(url, { method: probe.method, headers, signal: AbortSignal.timeout(10_000) }); }
-  catch { throw new HttpError(502, "grant_quota_probe_failed", `provider ${provider.id} quota probe failed`); }
-  if (!response.ok) {
-    const failure = observeGrantQuota(response, { responseHeaders: [], probes: [] });
-    if (failure) await recordGrantRuntime(env, key, { ...failure, source: "provider_probe", grantRevision: grantRevision(grant) });
-    throw new HttpError(502, "grant_quota_probe_failed", `provider ${provider.id} quota probe returned ${response.status}`);
-  }
-  const payload = await boundedJson(response, 128 * 1024);
-  const state = observeGrantQuotaProbe(payload, probe);
-  if (!state) throw new HttpError(502, "grant_quota_probe_empty", `provider ${provider.id} quota probe returned no recognized windows`);
-  await recordGrantRuntime(env, key, { ...state, grantRevision: grantRevision(grant) });
+  await refreshGrantQuota(env, key);
 }
 
 async function refreshGrant(key: string, grant: UpstreamGrant, provider: CompiledProvider, env: Env, force: boolean): Promise<UpstreamGrant> {
@@ -426,26 +416,7 @@ function configuredList(provider: CompiledProvider, name: string, env: Env): str
   return key ? envValue(env, key)!.split(",").map((item) => item.trim()).filter(Boolean) : [];
 }
 
-async function boundedJson(response: Response, limit: number): Promise<unknown> {
-  const length = Number(response.headers.get("content-length"));
-  if (Number.isFinite(length) && length > limit) throw new HttpError(502, "grant_quota_probe_invalid", "provider quota response is too large");
-  const reader = response.body?.getReader();
-  if (!reader) return null;
-  const chunks: Uint8Array[] = [];
-  let size = 0;
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-    size += value.byteLength;
-    if (size > limit) { await reader.cancel(); throw new HttpError(502, "grant_quota_probe_invalid", "provider quota response is too large"); }
-    chunks.push(value);
-  }
-  const body = new Uint8Array(size);
-  let offset = 0;
-  for (const chunk of chunks) { body.set(chunk, offset); offset += chunk.byteLength; }
-  try { return JSON.parse(new TextDecoder().decode(body)); }
-  catch { throw new HttpError(502, "grant_quota_probe_invalid", "provider quota response is not valid JSON"); }
-}
+
 
 function encodePathParam(value: string, style: string): string {
   if (style === "opaque_segment") {

@@ -197,40 +197,198 @@
         }
       ]
     },
-    "quotaProbeWindow": {
-      "allOf": [
-        { "$ref": "#/$defs/quotaWindowBase" },
-        {
-          "type": "object",
-          "additionalProperties": false,
-          "properties": {
-            "id": true,
-            "kind": true,
-            "unit": true,
-            "window": true,
-            "fixedLimit": true,
-            "metricScale": true,
-            "limitPointer": { "type": "string", "pattern": "^/" },
-            "remainingPointer": { "type": "string", "pattern": "^/" },
-            "usedPointer": { "type": "string", "pattern": "^/" },
-            "resetPointer": { "type": "string", "pattern": "^/" }
+      "quotaProbeWindow": {
+        "allOf": [
+          {
+            "$ref": "#/$defs/quotaWindowBase"
+          },
+          {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "id": true,
+              "kind": true,
+              "unit": true,
+              "window": true,
+              "fixedLimit": true,
+              "metricScale": true,
+              "limitPointer": {
+                "type": "string",
+                "pattern": "^/"
+              },
+              "remainingPointer": {
+                "type": "string",
+                "pattern": "^/"
+              },
+              "usedPointer": {
+                "type": "string",
+                "pattern": "^/"
+              },
+              "resetPointer": {
+                "type": "string",
+                "pattern": "^/"
+              },
+              "models": {
+                "type": "array",
+                "minItems": 1,
+                "maxItems": 16,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z0-9][a-z0-9_-]{0,31}$"
+                }
+              },
+              "collection": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "pointer",
+                  "filter",
+                  "modelPointer"
+                ],
+                "properties": {
+                  "pointer": {
+                    "type": "string",
+                    "pattern": "^/"
+                  },
+                  "filter": {
+                    "type": "object",
+                    "additionalProperties": false,
+                    "required": [
+                      "pointer",
+                      "equals"
+                    ],
+                    "properties": {
+                      "pointer": {
+                        "type": "string",
+                        "pattern": "^/"
+                      },
+                      "equals": {
+                        "type": "string"
+                      }
+                    }
+                  },
+                  "modelPointer": {
+                    "type": "string",
+                    "pattern": "^/"
+                  }
+                }
+              }
+            }
+          }
+        ]
+      },
+      "quotaProbe": {
+        "type": "object",
+        "required": [
+          "grantKinds",
+          "url",
+          "windows"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "grantKinds": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "api_key",
+                "oauth",
+                "subscription"
+              ]
+            },
+            "minItems": 1
+          },
+          "requiresRefreshToken": {
+            "type": "boolean"
+          },
+          "url": {
+            "type": "string",
+            "pattern": "^https://"
+          },
+          "method": {
+            "enum": [
+              "GET",
+              "POST"
+            ]
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "windows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/quotaProbeWindow"
+            },
+            "minItems": 0,
+            "maxItems": 12
+          },
+          "facts": {
+            "type": "object",
+            "additionalProperties": false,
+            "properties": {
+              "account": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "email": {
+                    "type": "string",
+                    "pattern": "^/"
+                  },
+                  "displayName": {
+                    "type": "string",
+                    "pattern": "^/"
+                  },
+                  "rateLimitTier": {
+                    "type": "string",
+                    "pattern": "^/"
+                  },
+                  "subscriptionStatus": {
+                    "type": "string",
+                    "pattern": "^/"
+                  },
+                  "extraUsageEnabled": {
+                    "type": "string",
+                    "pattern": "^/"
+                  }
+                }
+              },
+              "extraUsage": {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "enabled": {
+                    "type": "string",
+                    "pattern": "^/"
+                  },
+                  "usedCredits": {
+                    "type": "string",
+                    "pattern": "^/"
+                  },
+                  "monthlyLimit": {
+                    "type": "string",
+                    "pattern": "^/"
+                  },
+                  "utilization": {
+                    "type": "string",
+                    "pattern": "^/"
+                  },
+                  "currency": {
+                    "type": "string",
+                    "pattern": "^/"
+                  },
+                  "spendLimitReached": {
+                    "type": "string",
+                    "pattern": "^/"
+                  }
+                }
+              }
+            }
           }
         }
-      ]
-    },
-    "quotaProbe": {
-      "type": "object",
-      "required": ["grantKinds", "url", "windows"],
-      "additionalProperties": false,
-      "properties": {
-        "grantKinds": { "type": "array", "items": { "enum": ["api_key", "oauth", "subscription"] }, "minItems": 1 },
-        "requiresRefreshToken": { "type": "boolean" },
-        "url": { "type": "string", "pattern": "^https://" },
-        "method": { "enum": ["GET", "POST"] },
-        "headers": { "type": "object", "additionalProperties": { "type": "string" } },
-        "windows": { "type": "array", "items": { "$ref": "#/$defs/quotaProbeWindow" }, "minItems": 1, "maxItems": 12 }
-      }
-    },
+      },
     "authAuthorization": {
       "type": "object",
       "required": ["authorizeUrl", "tokenUrl", "scopes"],

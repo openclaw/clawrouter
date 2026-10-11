@@ -42,7 +42,7 @@ test("unpriced SQL totals survive the recent-event limit and duplicate delivery 
   const db = new DatabaseSync(":memory:"); t.after(() => db.close());
   db.exec("CREATE TABLE usage_events (id TEXT PRIMARY KEY, occurred_at_ms INTEGER NOT NULL, tenant_id TEXT NOT NULL, policy_id TEXT NOT NULL, provider TEXT NOT NULL, status TEXT NOT NULL, status_code INTEGER, input_tokens INTEGER, output_tokens INTEGER, total_tokens INTEGER, actual_cost_micros INTEGER NOT NULL, event_json TEXT NOT NULL)");
   const sql = { exec(query, ...bindings) { const statement = db.prepare(query); if (statement.columns().length) return statement.all(...bindings); statement.run(...bindings); return []; } };
-  const ledger = new UsageLedgerObject({ storage: { sql, getAlarm: async () => 1 } });
+  const ledger = new UsageLedgerObject({ storage: { sql, transactionSync: fn => { db.exec("BEGIN"); try { const result = fn(); db.exec("COMMIT"); return result; } catch (error) { db.exec("ROLLBACK"); throw error; } }, getAlarm: async () => 1 } });
   const now = Date.now();
   const base = { type: "clawrouter.usage.v1", tenant_id: "tenant", policy_id: "policy", provider: "openai", status: "success", status_code: 200, input_tokens: 1, output_tokens: 1, total_tokens: 2, actual_cost_micros: 0 };
   const ingest = event => ledger.fetch(new Request("https://ledger/ingest", { method: "POST", body: JSON.stringify(event) }));
@@ -62,5 +62,5 @@ test("unpriced SQL totals survive the recent-event limit and duplicate delivery 
   assert.equal(oldDay.unpricedRequestCount, 1);
   assert.equal(oldDay.actualCostMicros, 0);
   assert.equal(snapshot.daily.reduce((total, day) => total + day.unpricedRequestCount, 0), 1);
-  assert.deepEqual(db.prepare("PRAGMA table_info(usage_events)").all().map(column => column.name), ["id", "occurred_at_ms", "tenant_id", "policy_id", "provider", "status", "status_code", "input_tokens", "output_tokens", "total_tokens", "actual_cost_micros", "event_json"]);
+  assert.deepEqual(db.prepare("PRAGMA table_info(usage_events)").all().map(column => column.name), ["id", "occurred_at_ms", "tenant_id", "policy_id", "provider", "status", "status_code", "input_tokens", "output_tokens", "total_tokens", "actual_cost_micros", "event_json", "grant_key", "grant_lane"]);
 });

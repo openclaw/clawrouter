@@ -33,7 +33,7 @@ export type {
   UsageSummary,
 } from "../../shared/contracts";
 
-export type View = "home" | "catalog" | "playground" | "policies" | "users" | "usage";
+export type View = "home" | "catalog" | "playground" | "policies" | "users" | "usage" | "subscriptions";
 export type Theme = "light" | "dark";
 export type RefreshOptions = { background?: boolean };
 export type IconComponent = React.ComponentType<React.SVGProps<SVGSVGElement>>;
@@ -73,6 +73,8 @@ export interface PolicyForm {
   grantStrategy: AccessPolicy["grantRouting"]["strategy"];
   grantStickiness: AccessPolicy["grantRouting"]["stickiness"];
   grantFailover: boolean;
+  grantEnvironmentFallback: boolean;
+  grantIncludedQuotaReservePercent: string;
   grantStaleState: AccessPolicy["grantRouting"]["staleState"];
   grantStaleAfterSeconds: string;
   grantSwitchAtUsedPercent: string;

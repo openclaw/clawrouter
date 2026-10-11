@@ -80,6 +80,8 @@ export interface GrantRoutingPolicy {
   strategy: GrantSelectionStrategy;
   stickiness: GrantStickiness;
   failover: boolean;
+  environmentFallback?: boolean;
+  includedQuotaReservePercent?: number;
   staleState: "allow" | "deny";
   staleAfterSeconds: number;
   switchAtUsedPercent: number;
@@ -187,7 +189,11 @@ export interface UpstreamGrant {
   cooldownUntil?: string | null;
   quotaSource?: "provider_response" | "provider_probe" | null;
   lastProviderSignal?: "quota" | "rate_limited" | "authentication" | null;
+  account?: GrantAccount | null;
+  extraUsage?: GrantExtraUsage | null;
   quotaWindows: Array<{
+    observedAt?: string;
+    models?: string[] | null;
     id: string;
     kind: "requests" | "tokens" | "input_tokens" | "output_tokens" | "credits" | "subscription" | "generic";
     unit: string | null;
@@ -349,4 +355,16 @@ export interface AdminBootstrapResponse {
   fusion: FusionConfig;
   overview: AdminOverview;
   tenants: AdminTenantSummary[];
+}
+
+export interface GrantAccount { email?: string; displayName?: string; rateLimitTier?: string; subscriptionStatus?: string; extraUsageEnabled?: boolean }
+export interface GrantExtraUsage { enabled?: boolean; usedCredits?: number; monthlyLimit?: number; utilization?: number; currency?: string; spendLimitReached?: boolean }
+export type GrantLane = "subscription" | "api_key" | "environment";
+export interface GrantUsageTotals { requests: number; inputTokens: number; outputTokens: number; cacheReadTokens: number; cacheWriteTokens: number; costMicros: number }
+export interface GrantUsageRow extends GrantUsageTotals { day: string; provider: string; grantKey: string | null; grantLane: GrantLane | null; model: string | null }
+export interface GrantUsageSnapshot {
+  days: number; since: number; until: number; retentionDays: number;
+  grants: Array<GrantUsageTotals & { provider: string; grantKey: string | null; grantLane: GrantLane | null }>;
+  lanes: Array<GrantUsageTotals & { provider: string; grantLane: GrantLane | null }>;
+  daily: GrantUsageRow[];
 }

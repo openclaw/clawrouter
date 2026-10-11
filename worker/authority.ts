@@ -1,3 +1,4 @@
+import { mergeGrantRuntimeState, normalizeGrantRuntimeState } from "./grant-runtime.ts";
 import type {
   AccessControlUser, AccessPolicyEntry, AccessUserRecord, Env, OAuthState, PolicyBinding,
   AssignmentState, GrantRoutingPolicy, GrantRuntimeState, ProviderConnection, ProxyCredentialEntry,
@@ -487,8 +488,9 @@ export class PolicyBindingIndexObject implements DurableObject {
   private putGrantRuntime(input: GrantRuntimeFeedbackRequest): void {
     const key = grantKey(input.key), state = normalizeGrantRuntimeState(input.state);
     const current = rows<{ state_json: string }>(this.sql.exec("SELECT state_json FROM upstream_grant_runtime WHERE grant_key = ?", key))[0];
-    if (current && Date.parse(normalizeGrantRuntimeState(JSON.parse(current.state_json)).observedAt) > Date.parse(state.observedAt)) return;
-    this.sql.exec("INSERT OR REPLACE INTO upstream_grant_runtime (grant_key, state_json) VALUES (?, ?)", key, JSON.stringify(state));
+    const previous = current ? normalizeGrantRuntimeState(JSON.parse(current.state_json)) : null;
+    const merged = mergeGrantRuntimeState(previous, state);
+    this.sql.exec("INSERT OR REPLACE INTO upstream_grant_runtime (grant_key, state_json) VALUES (?, ?)", key, JSON.stringify(merged));
   }
 
   private grantRuntimeStates(rawKeys: unknown): Record<string, GrantRuntimeState> {
@@ -741,28 +743,6 @@ function invalidAuthorityValue(message: string): never {
   invalidAuthorityRequest(message);
 }
 
-function normalizeGrantRuntimeState(value: unknown): GrantRuntimeState {
-  if (!value || typeof value !== "object" || Array.isArray(value)) invalidAuthorityRequest("grant runtime state is invalid");
-  const state = value as Partial<GrantRuntimeState>;
-  if (!state.observedAt || !Number.isFinite(Date.parse(state.observedAt)) || !["provider_response", "provider_probe"].includes(state.source ?? "")) invalidAuthorityRequest("grant runtime observation is invalid");
-  if (!state.status || !["available", "limited", "cooldown"].includes(state.status)) invalidAuthorityRequest("grant runtime status is invalid");
-  if (!state.lastSignal || !["quota", "rate_limited", "authentication"].includes(state.lastSignal)) invalidAuthorityRequest("grant runtime signal is invalid");
-  const grantRevision = state.grantRevision == null ? null : typeof state.grantRevision === "string" && state.grantRevision.length <= 64 && Number.isFinite(Date.parse(state.grantRevision)) ? state.grantRevision : null;
-  const cooldownUntil = state.cooldownUntil == null ? null : Number.isFinite(Date.parse(state.cooldownUntil)) ? state.cooldownUntil : null;
-  if (!Array.isArray(state.windows) || state.windows.length > 12) invalidAuthorityRequest("grant runtime windows are invalid");
-  const windows = state.windows.map((window) => {
-    if (!window || !["requests", "tokens", "input_tokens", "output_tokens", "credits", "subscription", "generic"].includes(window.kind)) invalidAuthorityRequest("grant runtime window is invalid");
-    const id = typeof window.id === "string" && /^[a-z0-9][a-z0-9_-]{0,63}$/.test(window.id) ? window.id : window.kind;
-    const unit = window.unit == null ? null : typeof window.unit === "string" && window.unit.length <= 32 ? window.unit : null;
-    const quotaWindow = window.window == null ? null : typeof window.window === "string" && window.window.length <= 64 ? window.window : null;
-    const metric = (input: unknown) => input == null ? null : typeof input === "number" && Number.isFinite(input) && input >= 0 && input <= Number.MAX_SAFE_INTEGER ? input : NaN;
-    const remaining = metric(window.remaining), limit = metric(window.limit);
-    if (Number.isNaN(remaining) || Number.isNaN(limit)) invalidAuthorityRequest("grant runtime window metric is invalid");
-    const resetAt = window.resetAt == null ? null : Number.isFinite(Date.parse(window.resetAt)) ? window.resetAt : null;
-    return { id, kind: window.kind, unit, window: quotaWindow, remaining, limit, resetAt };
-  });
-  return { status: state.status, observedAt: state.observedAt, source: state.source!, cooldownUntil, lastSignal: state.lastSignal, grantRevision, windows };
-}
 
 export async function authorityCall<T>(env: Env, path: string, body: unknown, objectName = "policy-bindings", signal?: AbortSignal): Promise<T> {
   const stub = env.ACCESS_CONTROL.get(env.ACCESS_CONTROL.idFromName(objectName));
@@ -942,6 +922,8 @@ function normalizeStoredGrantRouting(value: unknown): GrantRoutingPolicy {
     strategy,
     stickiness,
     failover: record.failover !== false,
+    environmentFallback: record.environmentFallback === true,
+    includedQuotaReservePercent: Number.isInteger(record.includedQuotaReservePercent) && (record.includedQuotaReservePercent as number) >= 0 && (record.includedQuotaReservePercent as number) <= 50 ? record.includedQuotaReservePercent as number : 0,
     staleState: record.staleState === "deny" ? "deny" : "allow",
     staleAfterSeconds,
     switchAtUsedPercent,

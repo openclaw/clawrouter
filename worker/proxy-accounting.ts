@@ -25,6 +25,8 @@ interface AccountingContext {
   request: Request;
   cost?: EstimatedCost;
   compound?: CompoundRequestContext;
+  grantKey?: string | null;
+  grantLane?: import("./types").GrantLane | null;
   // Cost is captured after preflight; duration still includes those awaits.
   startedAtMs?: number;
 }
@@ -89,6 +91,7 @@ export function createProxyAccounting(options: AccountingContext) {
     model: model ? { pricing: model.pricing } : null, fixed: auth.policy.requestCostMicros ?? null, cost, requestFormat: selection.endpoint.request_format, startedAtMs: started,
     event: {
       id: randomId("usage"), type: "clawrouter.usage.v1", occurred_at_ms: started, tenant_id: auth.policy.tenantId ?? "default",
+      grant_key: options.grantKey ?? null, grant_lane: options.grantLane ?? null,
       policy_id: auth.policyId, credential_id: auth.credentialId, principal_id: auth.principalId, auth_type: auth.authType,
       session_id: correlation.sessionId, agent_id: correlation.agentId, parent_agent_id: correlation.parentAgentId,
       project_id: correlation.projectId, client: correlation.client,
@@ -115,6 +118,7 @@ export function createProxyAccounting(options: AccountingContext) {
     cost,
     requestId,
     facts,
+    setGrant(key: string | null, lane: import("./types").GrantLane) { facts.event.grant_key = key; facts.event.grant_lane = lane; },
     fail(statusCode: number, status: UsageEvent["status"], reservation = emptyReservation(), contentRef: string | null = null, dispatched = false) {
       // Missing response headers cannot prove that dispatched upstream work was free.
       context.waitUntil(settle(statusCode, status, dispatched, null, reservation, contentRef));

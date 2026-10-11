@@ -1,3 +1,4 @@
+import { SubscriptionsScreen } from "./screens/subscriptions";
 import React from "react";
 import { Route } from "lucide-react";
 import { accessFormFromUser, playgroundServicePreset } from "./domain";
@@ -15,7 +16,7 @@ import type { AccessPolicy } from "./ui-types";
 export function AppShell() {
   const [theme, setTheme] = React.useState(readTheme);
   React.useEffect(() => { applyTheme(theme); }, [theme]);
-  const { session: shell, catalog, access, usage, selfServiceKeys, credentialOwner, playground: playgroundDomain, refresh } = useConsole();
+  const { session: shell, catalog, access, usage, subscriptions, selfServiceKeys, credentialOwner, playground: playgroundDomain, refresh } = useConsole();
   const { view, value: session, status, lastUpdatedAt, demoMode, busy, navigateTo } = shell;
   const refreshError = [shell.refreshError, usage.error].filter(Boolean).join("; ");
   const statusPresentation = consoleStatusPresentation(status, demoMode, Boolean(refreshError), shell.refreshing);
@@ -287,6 +288,8 @@ export function AppShell() {
             busy={busy}
           />
         ) : null}
+
+        {view === "subscriptions" && session.role === "admin" ? <SubscriptionsScreen data={subscriptions} policies={keys} grants={upstreamGrants} providers={providers} refreshQuota={refreshUpstreamGrantQuota} busy={upstream.busy} actionError={upstream.error} /> : null}
 
         {view === "usage" && session.role === "admin" ? <UsageScreen keys={keys} credentials={credentials} services={services} overview={adminOverview} tenants={tenantSummaries} usageRows={usageRows} usage={usageSnapshot} usageLoaded={usageLoaded} usageStale={usage.stale} usageError={usage.error} usageUpdatedAt={usage.updatedAt} /> : null}
       </section>

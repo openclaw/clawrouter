@@ -1,7 +1,8 @@
+import type { GrantUsageSnapshot, GrantUsageRow, GrantUsageTotals } from "../shared/contracts";
 import type { BudgetReserveRequest, BudgetSettleRequest, Env, QueueMessage, UsageEvent } from "./types";
 import { budgetLedgerAddress, providerBudgetLedgerAddress } from "./budget-scope.ts";
 import { mergeUsageSnapshots, usageCutoffs, usageDayMs, usageShardName, type UsageSnapshot } from "./usage-sharding.ts";
-import { errorResponse, json, normalizeEmail } from "./utils.ts";
+import { errorResponse, HttpError, json, normalizeEmail } from "./utils.ts";
 
 export type UsageEventScope = { kind: "admin" } | { kind: "principal" | "credential"; id: string };
 export interface UsageIngestReceipt {
@@ -141,6 +142,12 @@ export class UsageLedgerObject implements DurableObject {
       if (!(await this.state.storage.getAlarm())) await this.state.storage.setAlarm(Date.now() + 86_400_000);
       return json(receipt);
     }
+    if (request.method === "GET" && url.pathname === "/grant-usage") {
+      const days = Number(url.searchParams.get("days"));
+      const policyId = url.searchParams.get("policy_id");
+      if (!policyId || !Number.isInteger(days) || days < 1 || days > 31) return errorResponse("invalid_usage_range", "policy_id and days from 1 to 31 are required", 400);
+      return this.grantUsage(policyId, days);
+    }
     if (request.method === "GET" && url.pathname === "/snapshot") {
       const kind = url.searchParams.get("events"), id = url.searchParams.get("event_owner");
       if (kind !== "admin" && !(kind === "principal" && id !== null) && !(kind === "credential" && id)) return errorResponse("invalid_usage_scope", "an explicit usage event scope is required", 400);
@@ -163,12 +170,40 @@ export class UsageLedgerObject implements DurableObject {
     if (event.occurred_at_ms < cutoff) return { eventId: event.id, outcome: "expired_by_retention" };
     event.policy_id ||= event.key_id;
     const inserted = first<{ id: string }>(this.sql.exec(
-      "INSERT INTO usage_events (id, occurred_at_ms, tenant_id, policy_id, provider, status, status_code, input_tokens, output_tokens, total_tokens, actual_cost_micros, event_json) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING RETURNING id",
+      "INSERT INTO usage_events (id, occurred_at_ms, tenant_id, policy_id, provider, status, status_code, input_tokens, output_tokens, total_tokens, actual_cost_micros, event_json, grant_key, grant_lane) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(id) DO NOTHING RETURNING id",
       event.id, event.occurred_at_ms, event.tenant_id, event.policy_id, event.provider, event.status, event.status_code,
-      event.input_tokens, event.output_tokens, event.total_tokens, event.actual_cost_micros, JSON.stringify(event),
+      event.input_tokens, event.output_tokens, event.total_tokens, event.actual_cost_micros, JSON.stringify(event), event.grant_key ?? null, event.grant_lane ?? null,
     ));
     if (inserted?.id !== event.id) throw new Error("usage ledger did not confirm insertion");
     return { eventId: event.id, outcome: "stored" };
+  }
+
+  private grantUsage(policyId: string, days: number): Response {
+    this.cleanup();
+    const until = Date.now(), since = until - days * usageDayMs;
+    const daily = rows<GrantUsageRow>(this.sql.exec(`SELECT
+      strftime('%Y-%m-%d', occurred_at_ms / 1000, 'unixepoch') AS day,
+      provider, grant_key AS grantKey, grant_lane AS grantLane,
+      json_extract(event_json, '$.model') AS model,
+      COUNT(*) AS requests, COALESCE(SUM(input_tokens), 0) AS inputTokens,
+      COALESCE(SUM(output_tokens), 0) AS outputTokens,
+      COALESCE(SUM(json_extract(event_json, '$.cached_input_tokens')), 0) AS cacheReadTokens,
+      COALESCE(SUM(json_extract(event_json, '$.cache_write_input_tokens')), 0) AS cacheWriteTokens,
+      COALESCE(SUM(actual_cost_micros), 0) AS costMicros
+      FROM usage_events WHERE policy_id = ? AND occurred_at_ms >= ? AND occurred_at_ms <= ?
+      GROUP BY day, provider, grant_key, grant_lane, model ORDER BY day, provider, grant_key, grant_lane, model LIMIT 8193`, policyId, since, until) as unknown as Iterable<GrantUsageRow>);
+    if (daily.length > 8192) return errorResponse("usage_range_too_large", "choose a shorter range; grant usage exceeds 8192 groups", 422);
+    const grants = new Map<string, GrantUsageSnapshot["grants"][number]>();
+    const lanes = new Map<string, GrantUsageSnapshot["lanes"][number]>();
+    for (const row of daily) {
+      const grantId = JSON.stringify([row.provider, row.grantKey, row.grantLane]);
+      const laneId = JSON.stringify([row.provider, row.grantLane]);
+      const grant = grants.get(grantId) ?? { provider: row.provider, grantKey: row.grantKey, grantLane: row.grantLane, ...emptyGrantUsage() };
+      const lane = lanes.get(laneId) ?? { provider: row.provider, grantLane: row.grantLane, ...emptyGrantUsage() };
+      for (const key of grantUsageMetrics) { grant[key] += row[key]; lane[key] += row[key]; }
+      grants.set(grantId, grant); lanes.set(laneId, lane);
+    }
+    return json({ days, since, until, retentionDays: usageWindowDays, grants: [...grants.values()], lanes: [...lanes.values()], daily } satisfies GrantUsageSnapshot);
   }
 
   private snapshot(policyIds: string[], scope: UsageEventScope, limit: number) {
@@ -204,9 +239,25 @@ export class UsageLedgerObject implements DurableObject {
   private cleanup(cutoff = Date.now() - usageRetentionMs): void { this.sql.exec("DELETE FROM usage_events WHERE occurred_at_ms < ?", cutoff); }
   private ensureSchema(): void {
     this.sql.exec("CREATE TABLE IF NOT EXISTS usage_events (id TEXT PRIMARY KEY, occurred_at_ms INTEGER NOT NULL, tenant_id TEXT NOT NULL, policy_id TEXT NOT NULL, provider TEXT NOT NULL, status TEXT NOT NULL, status_code INTEGER, input_tokens INTEGER, output_tokens INTEGER, total_tokens INTEGER, actual_cost_micros INTEGER NOT NULL, event_json TEXT NOT NULL)");
+    this.state.storage.transactionSync(() => {
+      const columns = new Set(rows<{ name: string }>(this.sql.exec("PRAGMA table_info(usage_events)")).map(row => row.name));
+      if (!columns.has("grant_key")) this.sql.exec("ALTER TABLE usage_events ADD COLUMN grant_key TEXT");
+      if (!columns.has("grant_lane")) this.sql.exec("ALTER TABLE usage_events ADD COLUMN grant_lane TEXT");
+    });
     this.sql.exec("CREATE INDEX IF NOT EXISTS usage_events_occurred_at ON usage_events (occurred_at_ms DESC)");
     this.sql.exec("CREATE INDEX IF NOT EXISTS usage_events_policy ON usage_events (policy_id, occurred_at_ms DESC)");
   }
+}
+
+const grantUsageMetrics = ["requests", "inputTokens", "outputTokens", "cacheReadTokens", "cacheWriteTokens", "costMicros"] as const;
+function emptyGrantUsage(): GrantUsageTotals { return { requests: 0, inputTokens: 0, outputTokens: 0, cacheReadTokens: 0, cacheWriteTokens: 0, costMicros: 0 }; }
+
+export async function grantUsageSnapshot(env: Env, tenantId: string, policyId: string, days: number): Promise<GrantUsageSnapshot> {
+  const url = new URL("https://clawrouter.internal/grant-usage");
+  url.searchParams.set("policy_id", policyId); url.searchParams.set("days", String(days));
+  const response = await usageStub(env, tenantId, policyId).fetch(url);
+  if (!response.ok) throw new HttpError(response.status, "grant_usage_unavailable", response.status === 422 ? "choose a shorter usage range" : "grant usage is unavailable");
+  return response.json<GrantUsageSnapshot>();
 }
 
 export async function queue(batch: MessageBatch<QueueMessage>, env: Env): Promise<void> {

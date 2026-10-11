@@ -1,6 +1,6 @@
 import type {
   CompiledQuotaConfig, CompiledQuotaProbe, CompiledQuotaProbeWindow, CompiledQuotaWindow,
-  GrantQuotaWindow, GrantRuntimeState,
+  GrantQuotaWindow, GrantRuntimeState, GrantAccount, GrantExtraUsage,
 } from "./types";
 
 const AUTH_COOLDOWN_MS = 5 * 60_000;
@@ -39,23 +39,59 @@ export function observeGrantQuota(
 }
 
 export function observeGrantQuotaProbe(payload: unknown, probe: CompiledQuotaProbe, nowMs = Date.now()): GrantRuntimeState | null {
-  const windows = probe.windows.flatMap((definition) => quotaWindowFromPayload(payload, definition, nowMs));
-  return windows.length ? quotaRuntime(windows, "provider_probe", nowMs) : null;
+  const windows = [...new Map(probe.windows.flatMap((definition) => quotaWindowFromPayload(payload, definition, nowMs)).map(window => [window.id, window])).values()];
+  const facts = sanitizeGrantFacts(Object.fromEntries(Object.entries(probe.facts ?? {}).map(([group, fields]) => [group,
+    Object.fromEntries(Object.entries(fields).map(([name, pointer]) => [name, jsonPointer(payload, pointer)])),
+  ])));
+  return windows.length || facts.account || facts.extraUsage ? { ...quotaRuntime(windows, "provider_probe", nowMs), ...facts } : null;
 }
 
 export function shouldFailoverGrant(status: number, method: string, capability: string, grantKey: string | null, enabled = true): boolean {
   return enabled && !!grantKey && [401, 403, 429].includes(status) && (["GET", "HEAD"].includes(method.toUpperCase()) || capability.startsWith("llm."));
 }
 
-export function grantQuotaRatio(state: GrantRuntimeState | null | undefined, nowMs = Date.now(), staleAfterMs = DEFAULT_STALE_AFTER_MS): number | null {
-  if (!grantRuntimeFresh(state, staleAfterMs, nowMs)) return null;
-  const ratios = state?.windows.flatMap((window) => window.limit && window.remaining !== null && (!window.resetAt || Date.parse(window.resetAt) > nowMs) ? [Math.min(1, window.remaining / window.limit)] : []) ?? [];
+export function grantQuotaRatio(state: GrantRuntimeState | null | undefined, nowMs = Date.now(), staleAfterMs = DEFAULT_STALE_AFTER_MS, model?: string | null): number | null {
+  if (!grantRuntimeFresh(state, staleAfterMs, nowMs, model)) return null;
+  const ratios = state?.windows.flatMap((window) => windowApplies(window, model) && window.limit && window.remaining !== null && (!window.resetAt || Date.parse(window.resetAt) > nowMs) ? [Math.min(1, window.remaining / window.limit)] : []) ?? [];
   return ratios.length ? Math.min(...ratios) : null;
 }
 
-export function grantRuntimeFresh(state: GrantRuntimeState | null | undefined, staleAfterMs: number, nowMs = Date.now()): boolean {
-  const observedAt = state?.observedAt ? Date.parse(state.observedAt) : NaN;
-  return Number.isFinite(observedAt) && observedAt + staleAfterMs > nowMs;
+export function windowApplies(window: GrantQuotaWindow, model?: string | null): boolean {
+  return !window.models?.length || !!model && window.models.some(token => model.toLowerCase().includes(token));
+}
+
+export function grantQuotaExhausted(state: GrantRuntimeState | null | undefined, model: string | null | undefined, reserve = 0, includeUnscoped = true): boolean {
+  const now = Date.now();
+  // The admission check cannot prevent one already in-flight request crossing the reserve.
+  return state?.windows.some(window => (includeUnscoped || !!window.models?.length) && windowApplies(window, model)
+    && (!window.resetAt || Date.parse(window.resetAt) > now)
+    && (window.remaining === 0 || !!window.limit && window.remaining !== null && window.remaining / window.limit * 100 <= reserve)) ?? false;
+}
+
+// Only declared scalar account facts cross the credential-owner boundary.
+export function sanitizeGrantFacts(value: unknown): { account?: GrantAccount; extraUsage?: GrantExtraUsage } {
+  const result: Record<string, Record<string, string | number | boolean>> = {};
+  if (!value || typeof value !== "object") return result;
+  for (const [group, fields] of Object.entries({ account: { email: "string", displayName: "string", rateLimitTier: "string", subscriptionStatus: "string", extraUsageEnabled: "boolean" }, extraUsage: { enabled: "boolean", usedCredits: "number", monthlyLimit: "number", utilization: "number", currency: "string", spendLimitReached: "boolean" } })) {
+    const source = (value as Record<string, unknown>)[group];
+    if (!source || typeof source !== "object") continue;
+    const clean: Record<string, string | number | boolean> = {};
+    for (const [key, type] of Object.entries(fields)) {
+      const field = (source as Record<string, unknown>)[key];
+      if (type === "string" && typeof field === "string" && field.length <= 320 && !/[\u0000-\u001f\u007f]/.test(field)) clean[key] = field;
+      if (type === "number" && typeof field === "number" && Number.isFinite(field) && field >= 0 && field <= Number.MAX_SAFE_INTEGER) clean[key] = field;
+      if (type === "boolean" && typeof field === "boolean") clean[key] = field;
+    }
+    if (Object.keys(clean).length) result[group] = clean;
+  }
+  return result;
+}
+
+export function grantRuntimeFresh(state: GrantRuntimeState | null | undefined, staleAfterMs: number, nowMs = Date.now(), model?: string | null): boolean {
+  const fresh = (value: string | undefined) => !!value && Number.isFinite(Date.parse(value)) && Date.parse(value) + staleAfterMs > nowMs;
+  if (!state || !fresh(state.observedAt)) return false;
+  const applicable = state.windows.filter(window => windowApplies(window, model) && (!window.resetAt || Date.parse(window.resetAt) > nowMs));
+  return applicable.length > 0 && applicable.every(window => fresh(window.observedAt ?? state.observedAt));
 }
 
 export function grantCoolingDown(state: GrantRuntimeState | null | undefined, nowMs = Date.now()): boolean {
@@ -71,11 +107,23 @@ function quotaWindowsFromHeaders(headers: Headers, definitions: CompiledQuotaWin
     if (reportedLimit === null && remaining === null && used === null && resetAt === null) return [];
     const limit = definition.fixedLimit ?? reportedLimit;
     if (remaining === null && limit !== null && used !== null) remaining = Math.max(0, limit - used);
-    return [{ id: definition.id, kind: definition.kind, unit: definition.unit, window: definition.window, limit, remaining, resetAt }];
+    return [{ id: definition.id, kind: definition.kind, unit: definition.unit, window: definition.window, observedAt: new Date(nowMs).toISOString(), limit, remaining, resetAt }];
   });
 }
 
 function quotaWindowFromPayload(payload: unknown, definition: CompiledQuotaProbeWindow, nowMs: number): GrantQuotaWindow[] {
+  if (definition.collection) {
+    const collection = definition.collection;
+    const entries = jsonPointer(payload, collection.pointer);
+    if (!Array.isArray(entries)) return [];
+    return entries.slice(0, 64).flatMap(entry => {
+      if (jsonPointer(entry, collection.filter.pointer) !== collection.filter.equals) return [];
+      const name = jsonPointer(entry, collection.modelPointer);
+      const family = typeof name === "string" ? name.toLowerCase() : "";
+      if (!/^[a-z0-9][a-z0-9_-]{0,31}$/.test(family) || `${definition.id}-${family}`.length > 64) return [];
+      return quotaWindowFromPayload(entry, { ...definition, collection: null, id: `${definition.id}-${family}`, models: [family] }, nowMs);
+    });
+  }
   const reportedLimit = scaledMetric(pointerNumber(payload, definition.limitPointer), definition.metricScale);
   let remaining = scaledMetric(pointerNumber(payload, definition.remainingPointer), definition.metricScale);
   const used = scaledMetric(pointerNumber(payload, definition.usedPointer), definition.metricScale);
@@ -83,12 +131,12 @@ function quotaWindowFromPayload(payload: unknown, definition: CompiledQuotaProbe
   if (reportedLimit === null && remaining === null && used === null && resetAt === null) return [];
   const limit = definition.fixedLimit ?? reportedLimit;
   if (remaining === null && limit !== null && used !== null) remaining = Math.max(0, limit - used);
-  return [{ id: definition.id, kind: definition.kind, unit: definition.unit, window: definition.window, limit, remaining, resetAt }];
+  return [{ id: definition.id, kind: definition.kind, unit: definition.unit, window: definition.window, observedAt: new Date(nowMs).toISOString(), limit, remaining, resetAt, ...(definition.models ? { models: definition.models } : {}) }];
 }
 
-function quotaRuntime(windows: GrantQuotaWindow[], source: GrantRuntimeState["source"], nowMs: number): GrantRuntimeState {
+export function quotaRuntime(windows: GrantQuotaWindow[], source: GrantRuntimeState["source"], nowMs: number): GrantRuntimeState {
   const observedAt = new Date(nowMs).toISOString();
-  const exhausted = windows.filter((window) => window.remaining === 0 && (!window.resetAt || Date.parse(window.resetAt) > nowMs));
+  const exhausted = windows.filter((window) => !window.models?.length && window.remaining === 0 && (!window.resetAt || Date.parse(window.resetAt) > nowMs));
   const ratios = windows.flatMap((window) => window.limit && window.remaining !== null ? [window.remaining / window.limit] : []);
   return {
     status: exhausted.length ? "cooldown" : ratios.length && Math.min(...ratios) <= 0.1 ? "limited" : "available",

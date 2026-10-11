@@ -34,6 +34,8 @@ export interface CompiledQuotaWindow {
   metricScale: number;
 }
 export interface CompiledQuotaProbeWindow {
+  models?: string[] | null;
+  collection?: { pointer: string; filter: { pointer: string; equals: string }; modelPointer: string } | null;
   id: string;
   kind: GrantQuotaKind;
   unit: string | null;
@@ -52,6 +54,7 @@ export interface CompiledQuotaProbe {
   method: "GET" | "POST";
   headers: Record<string, string>;
   windows: CompiledQuotaProbeWindow[];
+  facts?: { account?: Partial<Record<keyof GrantAccount, string>>; extraUsage?: Partial<Record<keyof GrantExtraUsage, string>> };
 }
 export interface CompiledQuotaConfig { responseHeaders: CompiledQuotaWindow[]; probes: CompiledQuotaProbe[] }
 
@@ -134,6 +137,8 @@ export interface GrantRoutingPolicy {
   strategy: GrantSelectionStrategy;
   stickiness: GrantStickiness;
   failover: boolean;
+  environmentFallback?: boolean;
+  includedQuotaReservePercent?: number;
   staleState: "allow" | "deny";
   staleAfterSeconds: number;
   switchAtUsedPercent: number;
@@ -255,7 +260,13 @@ export interface UpstreamGrant {
   revokedAt?: string | null;
 }
 
+export interface GrantAccount { email?: string; displayName?: string; rateLimitTier?: string; subscriptionStatus?: string; extraUsageEnabled?: boolean }
+export interface GrantExtraUsage { enabled?: boolean; usedCredits?: number; monthlyLimit?: number; utilization?: number; currency?: string; spendLimitReached?: boolean }
+export type GrantLane = "subscription" | "api_key" | "environment";
+
 export interface GrantQuotaWindow {
+  observedAt?: string;
+  models?: string[] | null;
   id: string;
   kind: GrantQuotaKind;
   unit: string | null;
@@ -273,6 +284,8 @@ export interface GrantRuntimeState {
   lastSignal: "quota" | "rate_limited" | "authentication";
   grantRevision: string | null;
   windows: GrantQuotaWindow[];
+  account?: GrantAccount;
+  extraUsage?: GrantExtraUsage;
 }
 
 export interface AssignmentRule {
@@ -305,6 +318,8 @@ export interface UsageEvent {
   tenant_id: string;
   policy_id: string;
   credential_id: string | null;
+  grant_key: string | null;
+  grant_lane: GrantLane | null;
   principal_id: string | null;
   auth_type: string;
   session_id: string | null;

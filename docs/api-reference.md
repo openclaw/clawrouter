@@ -427,6 +427,7 @@ The Worker redirects `/` to `/dashboard`, and `/dashboard` to `/dashboard/home`.
 | `GET` | `/v1/admin/provider-status` | Policy-aware provider readiness |
 | `GET` | `/v1/admin/provider-health` | Persisted provider smoke status |
 | `GET` | `/v1/admin/upstream-grants` | Sanitized policy- and tenant-scoped upstream grants |
+| `GET` | `/v1/admin/upstream-grants/usage?scope=policies&scopeId=<policy-id>&days=<1..31>` | Per-grant/lane totals and daily model usage |
 | `GET` | `/v1/admin/assignment-rules` | Access identity assignment rules |
 | `GET` | `/v1/admin/fusion` | Fusion configuration |
 
@@ -482,6 +483,67 @@ an existing owner requires operator recovery instead of resetting ownership.
 When both the owner and KV record are missing, either PUT mode creates an account
 only after confirming an empty attachment index. Retained legacy membership or
 generation history returns HTTP 409, including generation-zero legacy rows.
+
+### Subscription routing and quota
+
+Policy `grantRouting` accepts two opt-in controls in addition to the existing
+strategy, stickiness, failover, priority and stale-state settings:
+
+| Field | Default | Contract |
+| --- | --- | --- |
+| `includedQuotaReservePercent` | `0` | Integer 0–50. A subscription is ineligible when any applicable, unexpired window has this percentage or less remaining. |
+| `environmentFallback` | `false` | If no scoped grant is eligible, allow the provider's configured environment credential with normal transport, pricing and budget enforcement. Missing environment credentials retain HTTP 503. |
+
+Scoped quota windows in `GET /v1/admin/upstream-grants` optionally carry
+`models: ["fable"]` (lowercase family tokens) and per-window `observedAt` timestamps. A scope applies when its token
+occurs in the requested upstream model ID; an absent scope applies to all
+models. Exhausted unscoped windows cool down the whole grant. Scoped exhaustion
+excludes only matching models. `most_remaining` and `threshold` compare only
+applicable live windows. Freshness uses each applicable window's own timestamp, so partial header updates cannot refresh an older model window. Concurrent feedback merges by window observation time and preserves active inference cooldowns. Reset-passed readings are unknown. A reserve protects
+against extra-usage billing but cannot prevent one in-flight request crossing the
+boundary. It does not turn polling into an atomic upstream quota reservation.
+
+Grant responses also expose optional sanitized `account` fields (`email`,
+`displayName`, `rateLimitTier`, `subscriptionStatus`, `extraUsageEnabled`) and
+`extraUsage` fields (`enabled`, `usedCredits`, `monthlyLimit`, `utilization`,
+`currency`, `spendLimitReached`). Credits are minor units, e.g. USD cents.
+Only manifest-declared scalar fields are retained. Tokens and raw provider
+payloads are excluded. A probe HTTP 429 keeps the last reading and honors
+`Retry-After` independently per endpoint; HTTP 401 marks reauthorization required.
+
+Proxied HTTP responses carry `x-clawrouter-grant-lane`: `subscription` for
+subscription/OAuth grants, `api_key` for scoped API-key grants, and `environment`
+for provider environment credentials. One-shot 401/403/429 failover can use the
+environment lane when explicitly enabled and no alternate grant remains.
+Continuation pins, provider authorization and budget limits remain authoritative.
+An existing environment pin can reuse that environment credential while fallback remains enabled; a scoped pin never switches lanes.
+Usage events carry nullable `grant_key` and `grant_lane` for the final attempt;
+events created before this change retain unknown attribution.
+
+### Upstream grant usage
+
+`GET /v1/admin/upstream-grants/usage?scope=policies&scopeId=<policy-id>&days=7`
+requires the same admin authorization as the grant inventory. `days` is an
+integer 1–31 (default 7). The policy must exist; tenant-only scopes are not
+accepted. The Worker resolves the policy's canonical tenant before addressing
+its usage shard, independent of the administrator's tenant.
+
+The response contains `days`, `since`/`until` epoch milliseconds, `retentionDays`
+(currently 30), `grants`, `lanes`, and `daily`. Each metrics row contains
+`requests`, `inputTokens`, `outputTokens`, `cacheReadTokens`, `cacheWriteTokens`,
+and `costMicros`. `grants` groups by `provider`, nullable `grantKey`, and nullable
+`grantLane`; `lanes` groups by `provider` and nullable `grantLane`. `daily` adds
+UTC `day` (`YYYY-MM-DD`) and nullable `model`, retaining the same grant/lane keys.
+Cost follows existing accounting prices (API-equivalent manifest value, or the
+policy's fixed tariff), not subscription invoice spend. Failed recorded requests
+also count; usage remains a single final-attempt event per request.
+
+Only retained events within the rolling requested range are read. A 31-day
+request cannot restore data beyond 30-day retention. Legacy null attribution
+remains a separate group. The response is bounded to 8,192 daily groups and
+returns HTTP 422 if exceeded; request a shorter range rather than relying on
+partial totals. Invalid scope/range returns HTTP 400; an unknown policy returns
+HTTP 404. The additive SQLite migration preserves every existing event.
 
 ### Credential creation, rotation, and revocation
 

@@ -246,7 +246,7 @@ async function smokeEnvironment(provider, t) {
       if (!ledgers.has(name)) {
         const db = new DatabaseSync(":memory:"); t.after(() => db.close());
         const sql = { exec(query, ...bindings) { const statement = db.prepare(query); if (statement.columns().length) return statement.all(...bindings); statement.run(...bindings); return []; } };
-        const ledger = new UsageLedgerObject({ storage: { sql, getAlarm: async () => 1 } });
+        const ledger = new UsageLedgerObject({ storage: { sql, transactionSync: fn => { db.exec("BEGIN"); try { const result = fn(); db.exec("COMMIT"); return result; } catch (error) { db.exec("ROLLBACK"); throw error; } }, getAlarm: async () => 1 } });
         ledgers.set(name, { fetch: (url, init) => ledger.fetch(new Request(url, init)) });
       }
       return ledgers.get(name);

@@ -16,7 +16,7 @@ import { assertFusionModels, loadFusionConfig, storeFusionConfig } from "./fusio
 import { fusionReadiness } from "./fusion-readiness";
 import { hasPrimaryCredential, putGrantCredentials, revokeGrantCredentials, type GrantRevokeMetadata } from "./grant-credentials.ts";
 import { normalizeFusionConfig } from "./fusion";
-import { budgetStatus as policyBudgetStatus, providerBudgetStatus, usageSnapshots } from "./ledgers";
+import { budgetStatus as policyBudgetStatus, providerBudgetStatus, usageSnapshots, grantUsageSnapshot } from "./ledgers";
 import { startOAuth } from "./oauth";
 import { normalizeConnectionMutation } from "./provider-connections.ts";
 import { endpointForPath, listGrantRecords, listHealth, modelRoute, providerReadiness, providerReadinessForPolicies, providerReadinessFromState, refreshStoredGrant, refreshStoredGrantQuota, snapshot } from "./providers";
@@ -44,6 +44,14 @@ export async function adminApi(request: Request, env: Env, path: string): Promis
     if (request.method === "GET" && path === "/v1/admin/policy-bindings") return privateJson({ bindings: await listBindings(env) });
     if (request.method === "GET" && path === "/v1/admin/provider-status") return privateJson({ providers: await providerReadiness(env) });
     if (request.method === "GET" && path === "/v1/admin/provider-health") return privateJson({ providers: [...(await listHealth(env)).values()] });
+    if (request.method === "GET" && path === "/v1/admin/upstream-grants/usage") {
+      const query = new URL(request.url).searchParams;
+      const policyId = query.get("scopeId"), days = Number(query.get("days") ?? "7");
+      if (query.get("scope") !== "policies" || !policyId || !Number.isInteger(days) || days < 1 || days > 31) throw new HttpError(400, "invalid_usage_range", "scope=policies, scopeId, and days from 1 to 31 are required");
+      const entry = (await listPolicies(env)).find(entry => entry.policyId === policyId);
+      if (!entry) throw new HttpError(404, "unknown_policy", "policy does not exist");
+      return privateJson(await grantUsageSnapshot(env, entry.policy.tenantId ?? "default", policyId, days));
+    }
     if (request.method === "GET" && path === "/v1/admin/upstream-grants") return privateJson({ grants: await upstreamGrantResponses(env, await listGrantRecords(env)) });
     if (request.method === "GET" && path === "/v1/admin/assignment-rules") return privateJson({ rules: await assignmentRules(env) });
     if (request.method === "GET" && path === "/v1/admin/fusion") return privateJson(await loadFusionConfig(env));
@@ -511,6 +519,9 @@ function normalizeGrantRouting(value: unknown, existing?: AccessPolicy["grantRou
   if (typeof stickiness !== "string" || !["none", "identity", "session"].includes(stickiness)) throw new HttpError(400, "invalid_policy", "grantRouting stickiness is invalid");
   if (strategy === "threshold" && stickiness !== "none") throw new HttpError(400, "invalid_policy", "threshold grant routing owns pool affinity and requires stickiness none");
   const failover = policyBoolean(body.failover, "grantRouting.failover", true);
+  const environmentFallback = policyBoolean(body.environmentFallback, "grantRouting.environmentFallback", false);
+  const includedQuotaReservePercent = body.includedQuotaReservePercent ?? 0;
+  if (!Number.isInteger(includedQuotaReservePercent) || (includedQuotaReservePercent as number) < 0 || (includedQuotaReservePercent as number) > 50) throw new HttpError(400, "invalid_policy", "grantRouting includedQuotaReservePercent must be an integer from 0 to 50");
   const staleState = body.staleState ?? "allow";
   if (staleState !== "allow" && staleState !== "deny") throw new HttpError(400, "invalid_policy", "grantRouting staleState must be allow or deny");
   const staleAfterSeconds = body.staleAfterSeconds ?? 300;
@@ -526,7 +537,7 @@ function normalizeGrantRouting(value: unknown, existing?: AccessPolicy["grantRou
     if (!snapshot.providers.some((provider) => provider.id === providerId) || !Array.isArray(rawRefs) || rawRefs.length > 32 || rawRefs.some((ref) => typeof ref !== "string" || !validGrantSegment(ref))) throw new HttpError(400, "invalid_policy", "grantRouting eligibleGrants contains an invalid provider or token reference");
     eligibleGrants[providerId] = [...new Set(rawRefs as string[])].sort();
   }
-  return { strategy: strategy as AccessPolicy["grantRouting"]["strategy"], stickiness: stickiness as AccessPolicy["grantRouting"]["stickiness"], failover, staleState, staleAfterSeconds: staleAfterSeconds as number, switchAtUsedPercent, hysteresisPercent, eligibleGrants };
+  return { strategy: strategy as AccessPolicy["grantRouting"]["strategy"], stickiness: stickiness as AccessPolicy["grantRouting"]["stickiness"], failover, environmentFallback, includedQuotaReservePercent: includedQuotaReservePercent as number, staleState, staleAfterSeconds: staleAfterSeconds as number, switchAtUsedPercent, hysteresisPercent, eligibleGrants };
 }
 
 function policyBoolean(value: unknown, field: string, fallback: boolean): boolean {
@@ -562,8 +573,8 @@ function validatedGrantResponse(key: string, grant: UpstreamGrant, runtime?: Gra
   const credentialFields = grant.credentialFields ?? (grant.credentials && validCredentialBundle(grant.credentials) ? Object.keys(grant.credentials).sort() : []);
   const accessFlag = grant.hasAccessToken ?? (typeof grant.accessToken === "string" && grant.accessToken.trim().length > 0), refreshFlag = grant.hasRefreshToken ?? (typeof grant.refreshToken === "string" && grant.refreshToken.trim().length > 0);
   const coolingDown = !!runtime?.cooldownUntil && Date.parse(runtime.cooldownUntil) > Date.now();
-  const quotaStatus: "unknown" | "available" | "limited" | "cooldown" = coolingDown ? "cooldown" : runtime?.status === "cooldown" ? "unknown" : runtime?.status ?? "unknown";
-  return { ...grantResponse(key, grant), priority: grantPriority(grant), weight: grantWeight(grant), hasCredential: grant.hasCredential ?? ((typeof grant.credential === "string" && grant.credential.trim().length > 0) || credentialFields.length > 0), credentialFields, ["hasAccess" + "Token"]: accessFlag, ["hasRefresh" + "Token"]: refreshFlag, usable: grant.enabled !== false && grantUsable(grant), selectedCount: stats?.selectedCount ?? 0, lastSelectedAt: stats?.lastSelectedAt ?? null, quotaStatus, quotaObservedAt: runtime?.observedAt ?? null, cooldownUntil: coolingDown ? runtime?.cooldownUntil ?? null : null, quotaSource: runtime?.source ?? null, lastProviderSignal: runtime?.lastSignal ?? null, quotaWindows: runtime?.windows ?? [] };
+  const quotaStatus: "unknown" | "available" | "limited" | "cooldown" = coolingDown ? "cooldown" : runtime?.status === "cooldown" || !runtime?.windows.length ? "unknown" : runtime.status;
+  return { ...grantResponse(key, grant), priority: grantPriority(grant), weight: grantWeight(grant), hasCredential: grant.hasCredential ?? ((typeof grant.credential === "string" && grant.credential.trim().length > 0) || credentialFields.length > 0), credentialFields, ["hasAccess" + "Token"]: accessFlag, ["hasRefresh" + "Token"]: refreshFlag, usable: grant.enabled !== false && grantUsable(grant), selectedCount: stats?.selectedCount ?? 0, lastSelectedAt: stats?.lastSelectedAt ?? null, quotaStatus, quotaObservedAt: runtime?.windows.length ? runtime.observedAt : null, cooldownUntil: coolingDown ? runtime?.cooldownUntil ?? null : null, quotaSource: runtime?.source ?? null, lastProviderSignal: runtime?.lastSignal ?? null, account: runtime?.account ?? null, extraUsage: runtime?.extraUsage ?? null, quotaWindows: runtime?.windows ?? [] };
 }
 
 function normalizeBinding(value: unknown): PolicyBinding {

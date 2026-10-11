@@ -26,14 +26,14 @@ auth:
       headers:
         accept: application/json
         anthropic-dangerous-direct-browser-access: "true"
-        user-agent: claude-cli/2.1.251
+        user-agent: claude-cli/2.1.288 (external, cli)
         x-app: cli
       appendHeaders:
         anthropic-beta: claude-code-20250219,oauth-2025-04-20
       requestTransforms:
         prependSystem:
           - type: text
-            text: "x-anthropic-billing-header: cc_version=2.1.251; cc_entrypoint=sdk-cli;"
+            text: "x-anthropic-billing-header: cc_version=2.1.288; cc_entrypoint=sdk-cli;"
           - type: text
             text: "You are Claude Code, Anthropic's official CLI for Claude."
       maintenance:
@@ -119,6 +119,14 @@ quota:
         User-Agent: openclaw
         anthropic-version: "2023-06-01"
         anthropic-beta: oauth-2025-04-20
+      facts:
+        extraUsage:
+          enabled: /extra_usage/is_enabled
+          usedCredits: /extra_usage/used_credits
+          monthlyLimit: /extra_usage/monthly_limit
+          utilization: /extra_usage/utilization
+          currency: /extra_usage/currency
+          spendLimitReached: /extra_usage/spend_limit_reached
       windows:
         - id: subscription-five-hour
           kind: subscription
@@ -137,6 +145,7 @@ quota:
         - id: subscription-seven-day-sonnet
           kind: subscription
           unit: percent
+          models: [sonnet]
           window: seven_day_sonnet
           fixedLimit: 100
           usedPointer: /seven_day_sonnet/utilization
@@ -144,10 +153,35 @@ quota:
         - id: subscription-seven-day-opus
           kind: subscription
           unit: percent
+          models: [opus]
           window: seven_day_opus
           fixedLimit: 100
           usedPointer: /seven_day_opus/utilization
           resetPointer: /seven_day_opus/resets_at
+        - id: subscription-seven-day
+          kind: subscription
+          unit: percent
+          window: seven_day_scoped
+          fixedLimit: 100
+          collection:
+            pointer: /limits
+            filter: { pointer: /kind, equals: weekly_scoped }
+            modelPointer: /scope/model/display_name
+          usedPointer: /percent
+          resetPointer: /resets_at
+    - grantKinds: [subscription]
+      requiresRefreshToken: true
+      url: https://api.anthropic.com/api/oauth/profile
+      headers:
+        anthropic-beta: oauth-2025-04-20
+      windows: []
+      facts:
+        account:
+          email: /account/email
+          displayName: /account/display_name
+          rateLimitTier: /organization/rate_limit_tier
+          subscriptionStatus: /organization/subscription_status
+          extraUsageEnabled: /organization/has_extra_usage_enabled
 capabilities:
   - id: llm.messages
     endpoint: messages

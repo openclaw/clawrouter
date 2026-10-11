@@ -80,6 +80,8 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
           strategy: policyForm.grantStrategy,
           stickiness: policyForm.grantStickiness,
           failover: policyForm.grantFailover,
+          environmentFallback: policyForm.grantEnvironmentFallback,
+          includedQuotaReservePercent: optionalNumber(policyForm.grantIncludedQuotaReservePercent) ?? 0,
           staleState: policyForm.grantStaleState,
           staleAfterSeconds: optionalNumber(policyForm.grantStaleAfterSeconds) ?? 300,
           switchAtUsedPercent: optionalNumber(policyForm.grantSwitchAtUsedPercent) ?? 90,

@@ -22,11 +22,11 @@ test("Claude subscription transport uses OAuth identity without changing API-key
   assert.equal(oauthHeaders.has("x-api-key"), false);
   assert.equal(oauthHeaders.get("anthropic-beta"), "interleaved-thinking-2025-05-14,claude-code-20250219,oauth-2025-04-20");
   assert.equal(oauthHeaders.get("x-app"), "cli");
-  assert.equal(oauthHeaders.get("user-agent"), "claude-cli/2.1.251");
+  assert.equal(oauthHeaders.get("user-agent"), "claude-cli/2.1.288 (external, cli)");
 
   const body = transformTransportBody(transport, { model: "claude-sonnet-5", messages: [{ role: "user", content: "fixture" }], system: "operator system" });
   assert.deepEqual(body.system.map((block) => block.text), [
-    "x-anthropic-billing-header: cc_version=2.1.251; cc_entrypoint=sdk-cli;",
+    "x-anthropic-billing-header: cc_version=2.1.288; cc_entrypoint=sdk-cli;",
     "You are Claude Code, Anthropic's official CLI for Claude.",
     "operator system",
   ]);
@@ -93,6 +93,7 @@ test("Claude credential alarms poll quota and keep warm only when explicitly ena
   let calls = 0;
   context.mock.method(globalThis, "fetch", async (input, init) => {
     calls += 1;
+    if (String(input).endsWith("/profile")) return Response.json({ account: { email: "pool@example.test" }, organization: { rate_limit_tier: "default_claude_max_20x" } });
     assert.equal(String(input), "https://api.anthropic.com/api/oauth/usage");
     const headers = new Headers(init.headers);
     assert.equal(headers.get("authorization"), "Bearer claude-alarm-fixture");
@@ -100,7 +101,7 @@ test("Claude credential alarms poll quota and keep warm only when explicitly ena
     return Response.json({ five_hour: { utilization: 40, resets_at: "2026-09-02T18:00:00Z" }, seven_day: { utilization: 20, resets_at: "2026-09-07T18:00:00Z" } });
   });
   await owner.object.alarm();
-  assert.equal(calls, 1, "disabled keep-warm never sends an inference request");
+  assert.equal(calls, 2, "disabled keep-warm never sends an inference request");
   assert.equal(feedback.length, 1);
   assert.deepEqual(feedback[0].state.windows.map(({ remaining }) => remaining), [60, 80]);
 
@@ -127,7 +128,7 @@ test("Claude credential alarms poll quota and keep warm only when explicitly ena
     assert.match(headers.get("anthropic-beta"), /oauth-2025-04-20/);
     const body = JSON.parse(init.body);
     assert.deepEqual(body.messages, [{ role: "user", content: "." }]);
-    assert.equal(body.system[0].text, "x-anthropic-billing-header: cc_version=2.1.251; cc_entrypoint=sdk-cli;");
+    assert.equal(body.system[0].text, "x-anthropic-billing-header: cc_version=2.1.288; cc_entrypoint=sdk-cli;");
     return Response.json({ content: [] });
   });
   await warmOwner.object.alarm();

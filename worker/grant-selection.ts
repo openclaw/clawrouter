@@ -1,7 +1,7 @@
 import { HttpError } from "./utils.ts";
 import { assertOperationConfiguration, grantSupports, type GrantRequirement } from "./provider-auth.ts";
 import { authorityCall } from "./authority.ts";
-import { grantCoolingDown, grantQuotaRatio, grantRuntimeFresh } from "./grant-quota.ts";
+import { grantCoolingDown, grantQuotaExhausted, grantQuotaRatio, grantRuntimeFresh } from "./grant-quota.ts";
 import type { AccessPolicyEntry, Env, GrantRoutingPolicy, GrantRuntimeState, UpstreamGrant } from "./types";
 
 const DEFAULT_GRANT_PRIORITY = 100;
@@ -10,6 +10,8 @@ export const DEFAULT_GRANT_ROUTING: GrantRoutingPolicy = {
   strategy: "most_remaining",
   stickiness: "none",
   failover: true,
+  environmentFallback: false,
+  includedQuotaReservePercent: 0,
   staleState: "allow",
   staleAfterSeconds: 300,
   switchAtUsedPercent: 90,
@@ -31,6 +33,8 @@ export function grantRoutingPolicy(value: GrantRoutingPolicy | null | undefined)
     strategy,
     stickiness: strategy === "threshold" ? "none" : ["none", "identity", "session"].includes(value.stickiness) ? value.stickiness : DEFAULT_GRANT_ROUTING.stickiness,
     failover: value.failover !== false,
+    environmentFallback: value.environmentFallback === true,
+    includedQuotaReservePercent: Number.isInteger(value.includedQuotaReservePercent) && value.includedQuotaReservePercent! >= 0 && value.includedQuotaReservePercent! <= 50 ? value.includedQuotaReservePercent : 0,
     staleState: value.staleState === "deny" ? "deny" : "allow",
     staleAfterSeconds: Number.isSafeInteger(value.staleAfterSeconds) && value.staleAfterSeconds >= 30 && value.staleAfterSeconds <= 86_400 ? value.staleAfterSeconds : DEFAULT_GRANT_ROUTING.staleAfterSeconds,
     switchAtUsedPercent: finitePercent(value.switchAtUsedPercent, DEFAULT_GRANT_ROUTING.switchAtUsedPercent),
@@ -76,16 +80,16 @@ export function selectPolicyCandidates<T extends AccessPolicyEntry>(pools: Array
   return compatible.find(({ candidates }) => candidates.available.length > 0) ?? compatible[0];
 }
 
-export async function policyGrantCandidates<T extends AccessPolicyEntry>(entry: T, providerId: string, env: Env, tokenRef = providerId) {
+export async function policyGrantCandidates<T extends AccessPolicyEntry>(entry: T, providerId: string, env: Env, tokenRef = providerId, requirement?: GrantRequirement) {
   // Dispatch and ledgers have always used default for a policy without a tenant.
-  const candidates = await resolveGrantCandidates(providerId, entry.policyId, entry.policy.tenantId ?? "default", tokenRef, env, new Set(), entry.policy.grantRouting);
+  const candidates = await resolveGrantCandidates(providerId, entry.policyId, entry.policy.tenantId ?? "default", tokenRef, env, new Set(), entry.policy.grantRouting, undefined, requirement);
   return { entry, candidates };
 }
 
 export async function selectProviderPolicy(entries: AccessPolicyEntry[], providerId: string, env: Env, requirement?: GrantRequirement): Promise<AccessPolicyEntry> {
   const tokenRef = requirement?.provider.auth.schemes.find((scheme) => scheme.type === "oauth")?.tokenRef ?? providerId;
   for (const entry of entries) {
-    const pool = await policyGrantCandidates(entry, providerId, env, tokenRef);
+    const pool = await policyGrantCandidates(entry, providerId, env, tokenRef, requirement);
     if (selectPolicyCandidates([pool], requirement)!.candidates.available.length) return entry;
   }
   return entries[0];
@@ -141,7 +145,7 @@ export async function resolveGrantSelection(
       stickyHash,
       switchAtUsedPercent: routing.switchAtUsedPercent,
       hysteresisPercent: routing.hysteresisPercent,
-      candidates: active.map((entry) => ({ key: entry.key, weight: grantWeight(entry.grant), remainingRatio: grantQuotaRatio(entry.runtimeState, nowMs, routing.staleAfterSeconds * 1_000) })),
+      candidates: active.map((entry) => ({ key: entry.key, weight: grantWeight(entry.grant), remainingRatio: grantQuotaRatio(entry.runtimeState, nowMs, routing.staleAfterSeconds * 1_000, requirement?.model) })),
     });
     selected = active.find((entry) => entry.key === choice.selectedKey) ?? null;
   }
@@ -174,9 +178,10 @@ export async function resolveGrantCandidates(
     if (requirement && !grantSupports(requirement, entry.grant)) return false;
     if (pinnedKey !== undefined && entry.key !== pinnedKey) return false;
     if (excludedKeys.has(entry.key) || grantCoolingDown(entry.runtimeState, nowMs)) return false;
+    if (grantQuotaExhausted(entry.runtimeState, requirement?.model, entry.grant.kind === "subscription" ? routing.includedQuotaReservePercent : 0, entry.grant.kind === "subscription")) return false;
     const scope = parseGrantScope(entry.key);
     if (eligibilityRestricted && (!scope || !eligibleRefs.includes(scope.tokenRef))) return false;
-    return routing.staleState !== "deny" || grantRuntimeFresh(entry.runtimeState, routing.staleAfterSeconds * 1_000, nowMs);
+    return routing.staleState !== "deny" || grantRuntimeFresh(entry.runtimeState, routing.staleAfterSeconds * 1_000, nowMs, requirement?.model);
   });
   // Transport filtering must not reopen environment auth for a configured pool.
   return { available, hasConfiguredGrant: configured.length > 0 || eligibilityRestricted || routing.staleState === "deny" || typeof pinnedKey === "string" };

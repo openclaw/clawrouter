@@ -55,6 +55,8 @@ export const pathViews: Record<string, View> = {
   "/routes": "catalog",
   "/account": "users",
   "/usage": "usage",
+  "/subscriptions": "subscriptions",
+  "/dashboard/subscriptions": "subscriptions",
   "/users": "users",
 };
 
@@ -65,6 +67,7 @@ export const viewPaths: Record<View, string> = {
   policies: "/dashboard/access",
   users: "/dashboard/users",
   usage: "/dashboard/usage",
+  subscriptions: "/dashboard/subscriptions",
 };
 
 export function initialViewFromPath(): View {
@@ -103,6 +106,8 @@ export const defaultPolicy: PolicyForm = {
   grantStrategy: "most_remaining",
   grantStickiness: "none",
   grantFailover: true,
+  grantEnvironmentFallback: false,
+  grantIncludedQuotaReservePercent: "0",
   grantStaleState: "allow",
   grantStaleAfterSeconds: "300",
   grantSwitchAtUsedPercent: "90",
@@ -148,6 +153,7 @@ export const navItems: Array<{ id: View; label: string; icon: IconComponent; sec
   { id: "playground", label: "Playground", icon: FlaskConical, section: "workspace" },
   { id: "policies", label: "Access", icon: KeyRound, section: "admin" },
   { id: "users", label: "Users", icon: Users, section: "admin" },
+  { id: "subscriptions", label: "Subscriptions", icon: Boxes, section: "admin" },
   { id: "usage", label: "Usage", icon: BarChart3, section: "admin" },
 ];
-export const adminViews = new Set<View>(["policies", "users", "usage"]);
+export const adminViews = new Set<View>(["policies", "users", "usage", "subscriptions"]);

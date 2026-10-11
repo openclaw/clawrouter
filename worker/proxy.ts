@@ -43,6 +43,7 @@ interface PreparedUpstream {
   url: URL;
   requestBody: string | undefined;
   grantKey: string | null;
+  grantLane: import("./types").GrantLane;
   grantRevision: string | null;
   connection: ProviderConnection;
   websocket: boolean;
@@ -241,7 +242,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     prepared = await prepareSelected(request, env, selection, queryInput, auth, new Set(), true, reservedBudget?.connection, continuation?.pinned, "http", true);
     if (prepared.continuation) continuation?.bind(prepared.continuation);
     const cost = estimateCost(selection.model, selection.body, auth.policy.requestCostMicros, selection.capability, selection.endpoint, continuation?.parentTools);
-    accounting = createProxyAccounting({ ...accountingContext, cost });
+    accounting = createProxyAccounting({ ...accountingContext, cost, grantKey: prepared.grantKey, grantLane: prepared.grantLane });
     if (reservedBudget && (reservedBudget.providerId !== selection.provider.id || reservedBudget.modelId !== selection.model?.id || reservedBudget.capability !== selection.capability || cost.reserveMicros > reservedBudget.cost.reserveMicros)) {
       accounting.fail(500, "provider_error", reservedBudget.reservation);
       return errorResponse("fusion_reservation_invalid", "fusion synthesizer reservation does not cover the final request", 500);
@@ -322,6 +323,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
         // must not inherit the discarded attempt's nonbillable rejection.
         response = undefined;
         prepared = retry;
+        accounting.setGrant(prepared.grantKey, prepared.grantLane);
         response = await operation.wait(fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal }), "upstream", discard);
         captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response);
         if (prepared.continuation) continuation?.bind(prepared.continuation);
@@ -368,6 +370,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   } else context.waitUntil(observed.result.then(result => accounting.complete(observed.response, result, reservation!, content, operation.status)));
   response = observed.response;
   const outputHeaders = proxyResponseHeaders(response, selection.provider.id);
+  outputHeaders.set("x-clawrouter-grant-lane", prepared.grantLane);
   if (grantFailover) outputHeaders.set("x-clawrouter-grant-failover", "1");
   outputHeaders.set("x-clawrouter-content-retention", retentionRequired(auth, selection.capability) ? "on; retention-days=30" : "off");
   return new Response(response.body, { status: response.status, statusText: response.statusText, headers: outputHeaders });
@@ -397,8 +400,12 @@ async function reserveSelected(request: Request, env: Env, context: ExecutionCon
   }
 }
 
+function selectionUpstreamModel(selection: ProxySelection): string | null {
+  return !Array.isArray(selection.body) && typeof selection.body.model === "string" ? selection.body.model : selection.pathParams.model ?? selection.pathParams.deployment ?? null;
+}
+
 async function selectedAuth(request: Request, env: Env, mode: AuthMode, selection: ProxySelection, preauthenticated: AuthorizedIdentity | null): Promise<AuthorizedIdentity | Response> {
-  return preauthenticated ?? (mode === "access" ? accessIdentity(request, env, selection.provider.id, { provider: selection.provider, endpoint: selection.endpoint, mode: "http" }) : authenticateProxyKey(request.headers, env));
+  return preauthenticated ?? (mode === "access" ? accessIdentity(request, env, selection.provider.id, { provider: selection.provider, endpoint: selection.endpoint, mode: "http", model: selectionUpstreamModel(selection) }) : authenticateProxyKey(request.headers, env));
 }
 
 export async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: Record<string, unknown>, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false): Promise<PreparedUpstream> {
@@ -407,7 +414,7 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "provider authorization failed"); }
   let upstream;
   const stickyHash = await grantStickyHash(request, auth);
-  try { upstream = await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, { provider: selection.provider, endpoint: selection.endpoint, mode: transport }); }
+  try { upstream = await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, { provider: selection.provider, endpoint: selection.endpoint, mode: transport, model: selectionUpstreamModel(selection) }); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_not_configured", "provider is not configured"); }
   try {
     const lifecycle = { provider: selection.provider, endpoint: selection.endpoint, mode: transport, responsesLifecycle: true };
@@ -440,7 +447,7 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
         policyGeneration: auth.policy.generation,
       };
     }
-    return { headers, url, requestBody, grantKey: upstream.grantKey, grantRevision: upstream.grantRevision, connection, websocket: selection.endpoint.websocket === "openai.responses" && upstream.transport === null, backgroundRecovery, continuation };
+    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: selection.endpoint.websocket === "openai.responses" && upstream.transport === null, backgroundRecovery, continuation };
   } catch (error) {
     throw error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
   }

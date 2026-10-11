@@ -7,7 +7,7 @@ export function transportForGrant(provider: CompiledProvider, grant: UpstreamGra
   return provider.auth.grantTransports[grant.kind] ?? null;
 }
 
-export interface GrantRequirement { provider: CompiledProvider; endpoint: CompiledEndpoint; mode: "http" | "websocket"; responsesLifecycle?: boolean }
+export interface GrantRequirement { provider: CompiledProvider; endpoint: CompiledEndpoint; mode: "http" | "websocket"; model?: string | null; responsesLifecycle?: boolean }
 
 export function grantSupports(requirement: GrantRequirement, grant: UpstreamGrant | null): boolean {
   const transport = transportForGrant(requirement.provider, grant);
@@ -49,7 +49,11 @@ export function assertOperationConfiguration(requirement: GrantRequirement, gran
 
 export function quotaProbeForGrant(provider: CompiledProvider, grant: UpstreamGrant | null): CompiledQuotaProbe | null {
   if (!grant?.kind) return null;
-  return provider.quota.probes.find((probe) => probe.grantKinds.includes(grant.kind!) && (!probe.requiresRefreshToken || !!grant.refreshToken)) ?? null;
+  return quotaProbesForGrant(provider, grant)[0] ?? null;
+}
+
+export function quotaProbesForGrant(provider: CompiledProvider, grant: UpstreamGrant): CompiledQuotaProbe[] {
+  return provider.quota.probes.filter(probe => probe.grantKinds.includes(grant.kind!) && (!probe.requiresRefreshToken || !!grant.refreshToken));
 }
 
 export function applyProviderCredential(

@@ -36,6 +36,7 @@ test("subscription quota probes authenticate, bound, and persist provider-neutra
       idFromName(name) { return name; },
       get() {
         return { async fetch(url, init) {
+          if (new URL(url).pathname === "/grant-pools/states") return Response.json({ states: {} });
           assert.equal(new URL(url).pathname, "/grant-pools/feedback");
           feedback.push(JSON.parse(init.body));
           return new Response("updated");

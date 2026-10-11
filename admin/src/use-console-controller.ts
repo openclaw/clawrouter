@@ -1,3 +1,4 @@
+import { useSubscriptions } from "./hooks/use-subscriptions";
 import { useCallback, useEffect, useRef } from "react";
 import { effectiveAccess, errorMessage, policyCoversProvider, policyUsageFallback } from "./domain";
 import { useAccessAdmin } from "./hooks/use-access-admin";
@@ -70,6 +71,9 @@ export function useConsoleController({ session, credentialOwner, request, scope,
     },
     syncDemoAdmin: usage.syncDemoAdmin,
   });
+  const subscriptions = useSubscriptions({ request, isCurrent: scope.isCurrent, gatewayOrigin: session.gatewayOrigin,
+    active: session.view === "subscriptions" && session.value.role === "admin", demoMode: session.demoMode,
+    policies: access.policies.items, grants: access.upstream.items });
   credentialOwner.observePresentation(session.view === "home" ? "personal" : session.view === "policies" && access.tab.value === "credentials" && session.value.role === "admin" ? "admin" : null);
   const playground = usePlayground({
     gatewayOrigin: session.gatewayOrigin,
@@ -321,7 +325,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
     session.navigateTo(...args);
   }
 
-  return { session: { ...session, navigateTo }, catalog, access, usage, selfServiceKeys, credentialOwner, playground, request, refresh, refreshMetadataAfterMutation };
+  return { session: { ...session, navigateTo }, catalog, access, usage, subscriptions, selfServiceKeys, credentialOwner, playground, request, refresh, refreshMetadataAfterMutation };
 }
 
 export type ConsoleController = ReturnType<typeof useConsoleController>;

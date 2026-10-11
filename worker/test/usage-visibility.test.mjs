@@ -269,7 +269,7 @@ async function fixture(t, budgetScope = "policy", upstream = () => assert.fail("
       if (!objects.has(name)) {
         const db = new DatabaseSync(":memory:"); t.after(() => db.close());
         const sql = { exec(query, ...bindings) { const s = db.prepare(query); if (s.columns().length) return s.all(...bindings); s.run(...bindings); return []; } };
-        const owner = new ObjectClass({ storage: { sql, getAlarm: async () => 1 } });
+        const owner = new ObjectClass({ storage: { sql, transactionSync: fn => { db.exec("BEGIN"); try { const result = fn(); db.exec("COMMIT"); return result; } catch (error) { db.exec("ROLLBACK"); throw error; } }, getAlarm: async () => 1 } });
         objects.set(name, { fetch: (url, init) => owner.fetch(new Request(url, init)) });
       }
       return objects.get(name);
