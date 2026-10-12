@@ -10,13 +10,13 @@ export async function startWorkerdFixture(temporary, routerScript, upstreamScrip
   return startBundledWorkerdFixture(temporary, bundle.outputFiles[0].text, upstreamScript, options);
 }
 
-export async function startBundledWorkerdFixture(temporary, routerScript, upstreamScript, { persistencePath, upstreamDurableObjects } = {}) {
+export async function startBundledWorkerdFixture(temporary, routerScript, upstreamScript, { persistencePath, upstreamDurableObjects, queueConsumer } = {}) {
   const mf = new Miniflare(convertV4MiniflareOptions({ resourceTmpPath: temporary, ...(persistencePath ? { resourcePersistencePath: persistencePath } : {}), workers: [{
     name: "router", modules: true, script: routerScript, compatibilityDate: "2026-06-05", compatibilityFlags: ["enable_request_signal"],
     bindings: { OPENAI_API_KEY: "fixture-upstream-key" },
     kvNamespaces: ["POLICY_KV"],
     durableObjects: Object.fromEntries([["ACCESS_CONTROL", "PolicyBindingIndexObject"], ["BUDGET_LEDGER", "BudgetLedgerObject"], ["USAGE_LEDGER", "UsageLedgerObject"], ["GRANT_CREDENTIALS", "GrantCredentialObject"]].map(([binding, className]) => [binding, { className, useSQLite: true }])),
-    queueProducers: { USAGE_QUEUE: "usage" }, queueConsumers: { usage: { maxBatchSize: 1, maxBatchTimeout: 0 } },
+    queueProducers: { USAGE_QUEUE: "usage" }, queueConsumers: { usage: queueConsumer ?? { maxBatchSize: 1, maxBatchTimeout: 0 } },
     outboundService: "upstream",
   }, { name: "upstream", modules: true, script: upstreamScript, durableObjects: upstreamDurableObjects, compatibilityDate: "2026-06-05", compatibilityFlags: ["enable_request_signal"] }] }));
   try {

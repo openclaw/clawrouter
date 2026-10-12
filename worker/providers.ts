@@ -272,7 +272,8 @@ export function copyRequestHeaders(incoming: Headers, provider: CompiledProvider
 }
 
 export function transformRequestBody(provider: CompiledProvider, path: string, model: string, body: Record<string, unknown>, env: Env): Record<string, unknown> {
-  const transformed = structuredClone(body);
+  // Renames only replace top-level fields; nested prompt/tool data is read-only.
+  const transformed = { ...body };
   for (const rename of provider.adapter.requestTransforms.renameFields) {
     if (rename.paths.length && !rename.paths.includes(path)) continue;
     const allowed = rename.upstreams.length === 0 || rename.upstreams.includes(model) || (!!rename.upstreamConfig && configuredList(provider, rename.upstreamConfig, env).includes(model));

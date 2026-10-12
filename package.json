@@ -4,6 +4,8 @@
   "private": true,
   "type": "module",
   "scripts": {
+    "loadtest": "node scripts/loadtest.mjs",
+    "loadtest:local": "node scripts/loadtest-local.mjs",
     "check": "pnpm worker:check && pnpm --dir admin check && pnpm --dir admin test && pnpm test:scripts",
     "build": "pnpm provider:compile -- --output worker/generated/provider-snapshot.json && pnpm --dir admin build && pnpm worker:check",
     "worker:check": "tsc -p worker/tsconfig.json --noEmit && node --test worker/test/*.test.mjs",

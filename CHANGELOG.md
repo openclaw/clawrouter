@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add a dependency-free load generator and synthetic local subscription-pool stress harness with latency, disconnect and accounting diagnostics; avoid deep-copying prompts and tools during top-level request-field renames.
+
 - Add optional policy model allowlists across discovery and inference, Claude Opus 5.5 pricing, and opt-in policy-scoped pool status with shared subscription eligibility and seven-day usage.
 
 - Make Claude subscription pools model-aware, retain scoped weekly quota and account facts, add an included-quota reserve and explicit paid environment fallback, and use the Claude Code 2.1.288 identity.
