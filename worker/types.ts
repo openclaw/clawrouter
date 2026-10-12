@@ -122,6 +122,8 @@ export interface AccessPolicy {
   enabled: boolean;
   generation: string;
   providers: string[];
+  models?: string[] | null;
+  poolStatus?: "hidden" | "visible";
   tenantId?: string | null;
   tokenRole?: string | null;
   monthlyBudgetMicros?: number | null;

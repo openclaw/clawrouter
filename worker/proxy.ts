@@ -1,3 +1,4 @@
+import { assertPolicyModel } from "./policy-models.ts";
 import { resolveTemplate } from "./provider-templates.ts";
 import { assessModelRequest } from "../shared/model-request-parameters.ts";
 import { createProxyAccounting, estimateCost, type CompoundRequestContext } from "./proxy-accounting";
@@ -194,7 +195,7 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
   const method = (envelope.method ?? endpoint.method).toUpperCase();
   if (!endpoint.methods.includes(method)) return errorResponse("method_not_allowed", `endpoint does not allow ${method}`, 405);
   const prepared = prepareManifestRequest(provider, endpoint, envelope.body, envelope.pathParams, env);
-  if (session) preauthenticated = await accessSessionIdentity(session, env, provider.id, { provider, endpoint, mode: "http" });
+  if (session) preauthenticated = await accessSessionIdentity(session, env, provider.id, { provider, endpoint, mode: "http", model: prepared.model?.id });
   if (preauthenticated instanceof Response) return preauthenticated;
   const capability = provider.capabilities.find((item) => item.endpoint === endpoint.id)?.id ?? endpoint.id;
   return proxySelected(request, env, context, mode, { provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method }, envelope.query, preauthenticated);
@@ -405,10 +406,11 @@ function selectionUpstreamModel(selection: ProxySelection): string | null {
 }
 
 async function selectedAuth(request: Request, env: Env, mode: AuthMode, selection: ProxySelection, preauthenticated: AuthorizedIdentity | null): Promise<AuthorizedIdentity | Response> {
-  return preauthenticated ?? (mode === "access" ? accessIdentity(request, env, selection.provider.id, { provider: selection.provider, endpoint: selection.endpoint, mode: "http", model: selectionUpstreamModel(selection) }) : authenticateProxyKey(request.headers, env));
+  return preauthenticated ?? (mode === "access" ? accessIdentity(request, env, selection.provider.id, { provider: selection.provider, endpoint: selection.endpoint, mode: "http", model: selection.model?.id ?? selectionUpstreamModel(selection) }) : authenticateProxyKey(request.headers, env));
 }
 
 export async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: Record<string, unknown>, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false): Promise<PreparedUpstream> {
+  assertPolicyModel(auth.policy, selection);
   let connection: ProviderConnection;
   try { connection = await assertProviderAccess(selection.provider, auth, env, resolvedConnection); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "provider authorization failed"); }

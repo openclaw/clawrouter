@@ -70,6 +70,8 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
         policyId: policyForm.policyId,
         enabled: policyForm.enabled,
         providers: policyForm.allProviders ? [] : policyProviders,
+        models: policyForm.allModels ? null : unique(policyForm.models.split(",").map(id => id.trim()).filter(Boolean)),
+        poolStatus: policyForm.poolStatus,
         tenantId: policyForm.tenantId || "default",
         tokenRole: policyForm.tokenRole || null,
         monthlyBudgetMicros: optionalCurrencyMicros(policyForm.monthlyBudgetMicros) ?? null,

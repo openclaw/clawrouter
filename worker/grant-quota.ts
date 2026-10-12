@@ -1,3 +1,4 @@
+export { grantQuotaRatio, windowApplies, grantQuotaExhausted, grantRuntimeFresh, grantCoolingDown } from "../shared/grant-quota.ts";
 import type {
   CompiledQuotaConfig, CompiledQuotaProbe, CompiledQuotaProbeWindow, CompiledQuotaWindow,
   GrantQuotaWindow, GrantRuntimeState, GrantAccount, GrantExtraUsage,
@@ -5,7 +6,6 @@ import type {
 
 const AUTH_COOLDOWN_MS = 5 * 60_000;
 const DEFAULT_RATE_LIMIT_COOLDOWN_MS = 60_000;
-const DEFAULT_STALE_AFTER_MS = 5 * 60_000;
 const MAX_COOLDOWN_MS = 24 * 60 * 60_000;
 
 const DEFAULT_QUOTA: CompiledQuotaConfig = {
@@ -50,24 +50,6 @@ export function shouldFailoverGrant(status: number, method: string, capability: 
   return enabled && !!grantKey && [401, 403, 429].includes(status) && (["GET", "HEAD"].includes(method.toUpperCase()) || capability.startsWith("llm."));
 }
 
-export function grantQuotaRatio(state: GrantRuntimeState | null | undefined, nowMs = Date.now(), staleAfterMs = DEFAULT_STALE_AFTER_MS, model?: string | null): number | null {
-  if (!grantRuntimeFresh(state, staleAfterMs, nowMs, model)) return null;
-  const ratios = state?.windows.flatMap((window) => windowApplies(window, model) && window.limit && window.remaining !== null && (!window.resetAt || Date.parse(window.resetAt) > nowMs) ? [Math.min(1, window.remaining / window.limit)] : []) ?? [];
-  return ratios.length ? Math.min(...ratios) : null;
-}
-
-export function windowApplies(window: GrantQuotaWindow, model?: string | null): boolean {
-  return !window.models?.length || !!model && window.models.some(token => model.toLowerCase().includes(token));
-}
-
-export function grantQuotaExhausted(state: GrantRuntimeState | null | undefined, model: string | null | undefined, reserve = 0, includeUnscoped = true): boolean {
-  const now = Date.now();
-  // The admission check cannot prevent one already in-flight request crossing the reserve.
-  return state?.windows.some(window => (includeUnscoped || !!window.models?.length) && windowApplies(window, model)
-    && (!window.resetAt || Date.parse(window.resetAt) > now)
-    && (window.remaining === 0 || !!window.limit && window.remaining !== null && window.remaining / window.limit * 100 <= reserve)) ?? false;
-}
-
 // Only declared scalar account facts cross the credential-owner boundary.
 export function sanitizeGrantFacts(value: unknown): { account?: GrantAccount; extraUsage?: GrantExtraUsage } {
   const result: Record<string, Record<string, string | number | boolean>> = {};
@@ -85,17 +67,6 @@ export function sanitizeGrantFacts(value: unknown): { account?: GrantAccount; ex
     if (Object.keys(clean).length) result[group] = clean;
   }
   return result;
-}
-
-export function grantRuntimeFresh(state: GrantRuntimeState | null | undefined, staleAfterMs: number, nowMs = Date.now(), model?: string | null): boolean {
-  const fresh = (value: string | undefined) => !!value && Number.isFinite(Date.parse(value)) && Date.parse(value) + staleAfterMs > nowMs;
-  if (!state || !fresh(state.observedAt)) return false;
-  const applicable = state.windows.filter(window => windowApplies(window, model) && (!window.resetAt || Date.parse(window.resetAt) > nowMs));
-  return applicable.length > 0 && applicable.every(window => fresh(window.observedAt ?? state.observedAt));
-}
-
-export function grantCoolingDown(state: GrantRuntimeState | null | undefined, nowMs = Date.now()): boolean {
-  return !!state?.cooldownUntil && Date.parse(state.cooldownUntil) > nowMs;
 }
 
 function quotaWindowsFromHeaders(headers: Headers, definitions: CompiledQuotaWindow[], nowMs: number): GrantQuotaWindow[] {

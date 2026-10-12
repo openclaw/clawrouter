@@ -142,7 +142,7 @@ one request's identity, correlation, pricing, and timing, then builds its final
 usage event and delegates independent settlement and delivery to `accounting.ts`.
 
 1. Authenticate the Access session or proxy credential against canonical state.
-2. Resolve the selected policy and provider-scoped readiness. Tenant grants are
+2. Resolve the selected policy, its catalog-model allowlist, and provider-scoped readiness. Tenant grants are
    visible only to policies in that tenant; policy grants are exact-scope.
 3. Reserve the conservative budget before provider work.
 4. Retain eligible LLM request content in R2 when policy requires it. Storage
@@ -261,3 +261,10 @@ Object bindings are unchanged.
   configured dead-letter queue.
 - Raw requests live only in the retention archive; usage ledgers contain metadata
   and content references, never prompts or completions.
+
+Policy model admission lives at `prepareSelected`, shared by native, manifest,
+unified HTTP, Fusion calls and WebSocket creates. Discovery uses the same model
+predicate. `shared/grant-quota.ts` owns quota applicability, freshness and reserve
+rules; `shared/subscription-pool.ts` owns pool presentation and model eligibility
+for both the admin Subscriptions page and opt-in `/v1/pool`. The latter exposes
+only explicitly projected fields from the caller's policy and tenant scopes.

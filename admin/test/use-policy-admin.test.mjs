@@ -838,3 +838,20 @@ function mount(demoMode = false) {
   };
   return fixture;
 }
+
+test("model allowlist and pool visibility round-trip and preserve later field edits", async () => {
+  const fixture = ready();
+  change(fixture, { allModels: false, models: "anthropic/claude-opus-5-5, anthropic/claude-opus-5-5", poolStatus: "visible" });
+  const save = fixture.render().policies.save(event);
+  const submitted = JSON.parse(fixture.requests[0].init.body);
+  assert.deepEqual(submitted.models, ["anthropic/claude-opus-5-5"]); assert.equal(submitted.poolStatus, "visible");
+  change(fixture, { models: "anthropic/claude-sonnet-5", poolStatus: "hidden" });
+  fixture.requests[0].resolve(submitted); await save;
+  assert.equal(fixture.render().policies.form.models, "anthropic/claude-sonnet-5");
+  assert.equal(fixture.render().policies.form.poolStatus, "hidden");
+  change(fixture, { allModels: true });
+  const reset = fixture.render().policies.save(event);
+  const next = JSON.parse(fixture.requests[1].init.body);
+  assert.equal(next.models, null); assert.equal(next.poolStatus, "hidden");
+  fixture.requests[1].resolve(next); await reset;
+});

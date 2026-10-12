@@ -23,6 +23,7 @@ The optional `/private/v1/{models,catalog,responses}` facade has its own pinned 
 | `GET` | `/v1/catalog` | Authorized configured providers and operation/model/transport offers |
 | `GET` | `/v1/me` | Proxy-credential identity and policy summary |
 | `GET` | `/v1/usage` | Caller policy or principal budget and usage summary |
+| `GET` | `/v1/pool` | Opt-in policy pool inventory, quota eligibility and seven-day grant/lane totals |
 | `GET` | `/v1/key/inspect` | Proxy-credential verification and readiness status |
 
 Usage summaries, provider totals, and daily totals remain shared across each
@@ -483,6 +484,67 @@ an existing owner requires operator recovery instead of resetting ownership.
 When both the owner and KV record are missing, either PUT mode creates an account
 only after confirming an empty attachment index. Retained legacy membership or
 generation history returns HTTP 409, including generation-zero legacy rows.
+
+### Policy model access
+
+Policies optionally set `models` to an array of full catalog IDs, for example
+`["anthropic/claude-opus-5-5"]`. Omitted or `null` preserves access to every
+model of the allowed providers; `[]` denies every model. Provider restrictions
+still apply. Writes accept at most 1,024 entries, reject unknown IDs, and
+normalize duplicates. Omitting either `models` or `poolStatus` from an update
+preserves the existing value.
+
+`/v1/catalog`, `/v1/models` (including Anthropic format), session entitlements,
+and Fusion offers honor these scopes. Access sessions can use models allowed by
+any held policy, with the normal ordered policy choice among matching policies.
+Every concrete inference call checks the resolved catalog ID before grant
+selection, budget reservation or upstream contact. A denied model returns HTTP
+403 `model_not_allowed` on native Messages and count_tokens, manifest routes,
+OpenAI chat/embeddings/speech, HTTP Responses, and each WebSocket response.create.
+Fusion checks its synthesizer and each adviser separately; denied advisers fail
+open like other unavailable advisers. Its virtual name does not grant access to
+underlying models. Restricted policies reject opaque universal gateway requests
+because their downstream model selections cannot be verified.
+
+### Policy pool status
+
+`GET /v1/pool` accepts a proxy key or verified Access session. Policy
+`poolStatus: "visible"` opts in; omitted or `"hidden"` returns HTTP 404
+`pool_status_hidden`. Responses use `Cache-Control: private, no-store`.
+A proxy key always selects its own policy, regardless of query parameters.
+An Access session may select one of its held policies with `?policyId=<id>`;
+without it, the first active policy is used. An unheld policy returns HTTP 403.
+
+The response contains `version: "clawrouter.pool.v1"`, ISO `observedAt`,
+`policyId`, `routing` (`strategy`, `includedQuotaReservePercent`,
+`environmentFallback`), allowed catalog `models`, `grants`, and `usage`.
+Each grant includes only its token-reference `key`, label, provider, kind,
+enabled and credential status, plan, account (`email`, `rateLimitTier`,
+`subscriptionStatus`), quota `windows` (`id`, `window`, `models`,
+`remainingPercent`, `resetAt`, `observedAt`), extra usage (`enabled`,
+`usedCredits`, `monthlyLimit`, `currency`, `spendLimitReached`), per-model
+`eligibility`, `lastSelectedAt`, and `selectedCount`. Unknown facts are null.
+Account emails are intentionally visible to holders when the administrator opts
+in. No access/refresh tokens, credential fields, raw provider payloads, or full
+storage keys are returned.
+
+Inventory includes the selected policy's grants and shared tenant grants,
+filtered by its provider and eligible-grant restrictions. It is bounded to
+1,024 scanned grant records (HTTP 422 `pool_too_large` beyond that limit).
+`usage` contains `days: 7` and the policy's aggregate `lanes` and `grants` from
+the existing grant usage ledger, with token references replacing storage keys;
+it contains no individual request events. These are policy-wide totals, including
+other credentials on the same policy, and retain historical attribution.
+
+Eligibility shares the Subscriptions page and dispatch quota rules: scoped
+windows match upstream model family names, reserve applies to subscriptions,
+active cooldown blocks selection, and stale observations block only under
+`staleState: "deny"`. Status is `eligible`, `exhausted`, `cooldown`, `stale`, or
+`reauth_required`. Models belonging to another provider use `exhausted` (no
+usable capacity); disabled grants are never eligible, and missing or invalid
+credentials use `reauth_required`. Eligibility reports quota/credential availability, not priority
+selection, transport readiness or a budget reservation. Observations and usage
+are advisory snapshots, not an atomic upstream quota guarantee.
 
 ### Subscription routing and quota
 

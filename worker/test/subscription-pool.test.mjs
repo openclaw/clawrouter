@@ -291,3 +291,103 @@ test("late feedback from an older credential revision cannot erase current quota
   assert.equal(retained.grantRevision, state.grantRevision);
   assert.equal(grantQuotaExhausted(retained, "claude-fable-5-1"), true);
 });
+
+async function clientKey(f) {
+  await authorityCall(f.env, "/credentials/mutate", { scope: "admin", operation: "put", actor: { auth: "admin_token", role: "admin", email: "synthetic@example.test" }, credentialId: "client", credential: { enabled: true, policyId: "pool", secretSha256: await sha256Hex("synthetic-client") } });
+  return { authorization: "Bearer clawrouter-live-client-synthetic-client", "content-type": "application/json" };
+}
+
+test("policy model admission denies native, manifest, OpenAI and Responses before budget or upstream", async t => {
+  const f = await fixture(t), headers = await clientKey(f);
+  Object.assign(f.auth.policy, { providers: ["anthropic", "openai"], models: ["anthropic/claude-opus-5-5"], monthlyBudgetMicros: 100 });
+  await authorityCall(f.env, "/policies/put", { policyId: "pool", policy: f.auth.policy });
+  f.env.BUDGET_LEDGER = { idFromName() { assert.fail("denied models cannot reserve budget"); } };
+  t.mock.method(globalThis, "fetch", () => assert.fail("denied models cannot contact upstream"));
+  for (const [path, body] of [
+    ["/v1/messages", { model: "claude-sonnet-5", max_tokens: 1, messages: [] }],
+    ["/v1/messages/count_tokens", { model: "anthropic/claude-sonnet-5", messages: [] }],
+    ["/v1/native/anthropic/v1/messages", { model: "claude-sonnet-5", max_tokens: 1, messages: [] }],
+    ["/v1/proxy/anthropic/messages", { body: { model: "claude-sonnet-5", max_tokens: 1, messages: [] } }],
+    ["/v1/chat/completions", { model: "openai/gpt-5.6", messages: [] }],
+    ["/v1/responses", { model: "openai/gpt-5.6", input: "synthetic" }],
+    ["/v1/native/openai/v1/responses", { model: "gpt-5.6", input: "synthetic" }],
+  ]) {
+    const response = await handler.fetch(new Request(`https://router.example${path}`, { method: "POST", headers, body: JSON.stringify(body) }), f.env, f.context);
+    assert.equal(response.status, 403, `${path}: ${await response.clone().text()}`);
+    assert.equal((await response.json()).error.code, "model_not_allowed", path);
+  }
+  f.values.set("config/fusion", { enabled: true, aggregatorModel: "openai/gpt-5.6", adviserModels: ["openai/gpt-5.5"] });
+  const fusion = await handler.fetch(new Request("https://router.example/v1/chat/completions", { method: "POST", headers, body: JSON.stringify({ model: "clawrouter/fusion", messages: [{ role: "user", content: "synthetic" }] }) }), f.env, f.context);
+  assert.equal(fusion.status, 403); assert.equal((await fusion.json()).error.code, "model_not_allowed");
+  const { prepareSelected } = await import("../proxy.ts");
+  const { concreteOpenAiSelection } = await import("../proxy-selection.ts");
+  const selection = concreteOpenAiSelection("/v1/responses", { model: "openai/gpt-5.6", input: "synthetic" }, f.env);
+  await assert.rejects(prepareSelected(new Request("https://router.example/v1/responses"), f.env, selection, {}, f.auth, new Set(), true, undefined, undefined, "websocket"), { status: 403, code: "model_not_allowed" });
+  while (f.pending.length) await Promise.all(f.pending.splice(0));
+});
+
+test("null allowlist preserves native inference and Opus 5.5 uses its compiled price", async t => {
+  const f = await fixture(t), headers = await clientKey(f);
+  f.auth.policy.models = null;
+  await authorityCall(f.env, "/policies/put", { policyId: "pool", policy: f.auth.policy });
+  t.mock.method(globalThis, "fetch", async (_url, init) => {
+    assert.equal(JSON.parse(init.body).model, "claude-opus-5-5");
+    return Response.json({ id: "synthetic", type: "message", content: [], usage: { input_tokens: 10, output_tokens: 1 } });
+  });
+  const response = await handler.fetch(new Request("https://router.example/v1/messages", { method: "POST", headers, body: JSON.stringify({ model: "anthropic/claude-opus-5-5", max_tokens: 1, messages: [] }) }), f.env, f.context);
+  assert.equal(response.status, 200, await response.clone().text()); await response.text();
+  while (f.pending.length) await Promise.all(f.pending.splice(0));
+  const model = provider.models.find(model => model.id === "anthropic/claude-opus-5-5");
+  assert.equal(model.pricing_ref, "anthropic-claude-opus-5-5-standard-2026-10-11");
+  assert.deepEqual(model.pricing, { effectiveAt: "2026-10-11", source: "https://platform.claude.com/docs/en/about-claude/pricing", inputMicrosPerMillion: 4000000, cachedInputMicrosPerMillion: 200000, cacheWrite5mInputMicrosPerMillion: 5000000, cacheWrite1hInputMicrosPerMillion: 8000000, outputMicrosPerMillion: 20000000, maxInputTokens: 1000000, defaultMaxOutputTokens: 128000, cacheWriteInputMicrosPerMillion: null, maxRequestInputTokens: null, inputTokenOverhead: 1024, longContext: null });
+});
+
+test("pool is opt-in, scope-bound, explicitly projected, and shares scoped reserve eligibility", async t => {
+  const f = await fixture(t), headers = await clientKey(f), queried = [];
+  f.env.USAGE_LEDGER = { idFromName(name) { queried.push(name); return name; }, get() { return { async fetch(url) {
+    assert.equal(new URL(url).searchParams.get("policy_id"), "pool");
+    return Response.json({ days: 7, lanes: [{ provider: "anthropic", grantLane: "subscription", requests: 2 }], grants: [{ provider: "anthropic", grantKey: key, grantLane: "subscription", requests: 2 }] });
+  } }; } };
+  const request = (query = "") => new Request(`https://router.example/v1/pool${query}`, { headers });
+  let response = await handler.fetch(request(), f.env, f.context);
+  assert.equal(response.status, 404); assert.equal((await response.json()).error.code, "pool_status_hidden"); assert.equal(queried.length, 0);
+  Object.assign(f.auth.policy, { poolStatus: "visible", models: ["anthropic/claude-opus-5-5", "anthropic/claude-fable-5-1"] });
+  f.auth.policy.grantRouting.includedQuotaReservePercent = 10;
+  await authorityCall(f.env, "/policies/put", { policyId: "pool", policy: f.auth.policy });
+  const state = await f.feedback();
+  state.account = { email: "pool@example.test", rateLimitTier: "default_claude_max_20x", subscriptionStatus: "active" };
+  state.extraUsage = { enabled: true, usedCredits: 12, monthlyLimit: 100, currency: "USD" };
+  await recordGrantRuntime(f.env, key, state);
+  await putGrantCredentials(f.env, "oauth/foreign/other", { enabled: true, kind: "subscription", provider: "anthropic", accessToken: "synthetic-foreign-secret" });
+  response = await handler.fetch(request("?policyId=foreign"), f.env, f.context);
+  assert.equal(response.status, 200, await response.clone().text());
+  assert.equal(response.headers.get("cache-control"), "private, no-store");
+  const body = await response.json();
+  assert.equal(body.version, "clawrouter.pool.v1"); assert.equal(body.policyId, "pool");
+  assert.deepEqual(body.models, ["anthropic/claude-opus-5-5", "anthropic/claude-fable-5-1"]);
+  assert.equal(body.grants.length, 1); assert.equal(body.grants[0].key, "claude");
+  assert.equal(body.grants[0].plan, "Max 20x"); assert.equal(body.grants[0].account.email, "pool@example.test");
+  assert.equal(body.grants[0].eligibility["anthropic/claude-opus-5-5"], "eligible");
+  assert.equal(body.grants[0].eligibility["anthropic/claude-fable-5-1"], "exhausted");
+  assert.equal(body.usage.grants[0].grantKey, "claude");
+  assert.deepEqual([...new Set(queried)], ["policy:tenant-pool:pool"]);
+  assert.doesNotMatch(JSON.stringify(body), /access.?token|refresh.?token|credentialFields|secret|synthetic|oauth\/|foreign|tokenType|clientId|accountId/i);
+  await f.feedback(usage(90));
+  const exhausted = await (await handler.fetch(request(), f.env, f.context)).json();
+  assert.equal(exhausted.grants[0].eligibility["anthropic/claude-opus-5-5"], "exhausted");
+});
+
+test("Access sessions can read only held policy pools", async t => {
+  const f = await fixture(t), token = "a".repeat(64), email = "pool-user@example.test";
+  f.values.set(`local/sessions/${await sha256Hex(token)}`, { email, role: "user", expiresAtMs: Date.now() + 60000 });
+  await authorityCall(f.env, "/users/put", { email, record: { enabled: true, role: "user", tenantId: "tenant-pool", groups: [] } });
+  await authorityCall(f.env, "/mutate", { seed: { principal: { principalType: "user", principalId: email }, bindings: [] }, binding: { principalType: "user", principalId: email, policyId: "pool", enabled: true, priority: 1 } });
+  f.auth.policy.poolStatus = "visible";
+  await authorityCall(f.env, "/policies/put", { policyId: "pool", policy: f.auth.policy });
+  f.env.USAGE_LEDGER = { idFromName: name => name, get: () => ({ fetch: async () => Response.json({ lanes: [], grants: [] }) }) };
+  for (const [query, expected] of [["", 200], ["?policyId=pool", 200], ["?policyId=foreign", 403]]) {
+    const response = await handler.fetch(new Request(`https://router.example/v1/pool${query}`, { headers: { cookie: `clawrouter_session=${token}` } }), f.env, f.context);
+    assert.equal(response.status, expected, await response.clone().text());
+    if (expected === 200) assert.equal((await response.json()).policyId, "pool");
+  }
+});

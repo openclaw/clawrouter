@@ -1,3 +1,4 @@
+import { poolResponse } from "./pool";
 import packageMetadata from "../package.json" with { type: "json" };
 import { publicSession, sessionPolicies, verifiedAccessSession } from "./access";
 import { adminApi } from "./admin";
@@ -78,6 +79,7 @@ async function route(request: Request, env: Env, context: ExecutionContext): Pro
   if (request.method === "GET" && path === "/v1/session/usage") return sessionUsage(request, env);
   if (path === "/v1/session/credentials" || path.startsWith("/v1/session/credentials/")) return sessionCredentialsApi(request, env, path);
   if (request.method === "GET" && path === "/v1/me") return meResponse(request, env);
+  if (request.method === "GET" && path === "/v1/pool") return poolResponse(request, env);
   if (request.method === "GET" && path === "/v1/usage") return userUsage(request, env);
   if (request.method === "GET" && path === "/v1/models") return modelsResponse(request, env);
   if (request.method === "GET" && path === "/v1/catalog") return catalogResponse(request, env);

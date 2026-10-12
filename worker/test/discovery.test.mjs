@@ -874,3 +874,76 @@ async function fusionDiscoveryFixture(t, { bindings } = {}) {
   t.mock.method(globalThis, "fetch", () => { throw new Error("discovery must not refresh credentials or probe upstream"); });
   return { env, credential, userRecord, policy, policies, connection: connections[0], connections, records, states, config, calls, request: (mode) => new Request("https://router.example/v1/catalog", { headers: mode === "key" ? { authorization: `Bearer clawrouter-live-fixture-${secret}` } : { cookie: `clawrouter_session=${session}` } }) };
 }
+
+test("catalog and OpenAI/Anthropic model lists filter model scopes; null preserves inventory", async t => {
+  const f = await fusionDiscoveryFixture(t), id = "openai/gpt-5.6";
+  f.policy.models = [id];
+  for (const anthropic of [false, true]) {
+    const request = f.request("key"); if (anthropic) request.headers.set("anthropic-version", "2023-06-01");
+    const body = await (await modelsResponse(request, f.env)).json();
+    assert.deepEqual(body.data.map(row => row.id), anthropic ? [] : [id]);
+  }
+  let catalog = await (await catalogResponse(f.request("key"), f.env)).json();
+  assert.deepEqual(catalog.providers.flatMap(row => row.models.map(model => model.id)), [id]);
+  assert.ok(catalog.providers.flatMap(row => row.offers).every(offer => !offer.modelId || offer.modelId === id));
+  f.policy.models = [];
+  assert.deepEqual((await (await modelsResponse(f.request("key"), f.env)).json()).data, []);
+  f.policy.models = null;
+  catalog = await (await catalogResponse(f.request("key"), f.env)).json();
+  assert.ok(catalog.providers.find(row => row.id === "openai").models.length > 1);
+});
+
+test("session discovery and admission can select a later policy that allows the model", async t => {
+  const f = await fusionDiscoveryFixture(t);
+  f.policy.models = ["openai/gpt-5.6"];
+  f.policies.push({ policyId: "later", policy: { ...f.policy, models: ["openai/gpt-5.5"] } });
+  const catalog = await (await catalogResponse(f.request("session"), f.env)).json();
+  const ids = catalog.providers.flatMap(row => row.models.map(model => model.id));
+  assert.ok(ids.includes("openai/gpt-5.6")); assert.ok(ids.includes("openai/gpt-5.5"));
+  const { accessSessionIdentity, verifiedAccessSession } = await import("../access.ts");
+  const selected = await accessSessionIdentity(await verifiedAccessSession(f.request("session"), f.env), f.env, "openai", { provider: snapshot.providers.find(p => p.id === "openai"), endpoint: snapshot.providers.find(p => p.id === "openai").endpoints.find(e => e.id === "responses"), mode: "http", model: "gpt-5.5" });
+  assert.equal(selected.policyId, "later");
+});
+
+test("overlapping allowlists cannot advertise a richer later policy for the same model", async t => {
+  const f = await fusionDiscoveryFixture(t), id = "openai/gpt-5.6";
+  f.policy.models = [id]; f.policy.monthlyBudgetMicros = 0;
+  f.policies.push({ policyId: "richer", policy: { ...f.policy, models: null, monthlyBudgetMicros: 100000 } });
+  const catalog = await (await catalogResponse(f.request("session"), f.env)).json();
+  const offers = catalog.providers.find(p => p.id === "openai").offers.filter(offer => offer.modelId === id);
+  assert.ok(offers.length > 0);
+  assert.ok(offers.every(offer => offer.policyId === "fixture" && !offer.eligible));
+  assert.equal(catalog.providers.flatMap(p => p.models).some(model => model.id === id), false);
+});
+
+test("restricted policies cannot advertise opaque gateway offers even with fixed pricing", async t => {
+  const f = await fusionDiscoveryFixture(t), id = "cloudflare-ai-gateway";
+  f.policy.providers = [id]; f.policy.models = [`${id}/auto`]; f.policy.requestCostMicros = 1;
+  Object.assign(f.env, { CLOUDFLARE_ACCOUNT_ID: "fixture-account", CLOUDFLARE_AI_GATEWAY_ID: "fixture-gateway", CLOUDFLARE_API_TOKEN: "synthetic-token" });
+  const catalog = await (await catalogResponse(f.request("key"), f.env)).json();
+  const provider = catalog.providers.find(provider => provider.id === id);
+  assert.ok(provider);
+  assert.ok(provider.offers.filter(offer => offer.endpoint === "universal").every(offer => !offer.eligible && offer.reasonCode === "model_not_allowed"));
+  const { prepareSelected } = await import("../proxy.ts");
+  const compiled = snapshot.providers.find(provider => provider.id === id);
+  const endpoint = compiled.endpoints.find(endpoint => endpoint.id === "universal");
+  await assert.rejects(prepareSelected(new Request("https://router.example"), f.env, { provider: compiled, endpoint, model: null, capability: "gateway.universal", body: [], pathParams: {}, method: "POST" }, {}, { policy: f.policy }), { status: 403, code: "model_not_allowed" });
+});
+
+test("mixed Access policies select the unrestricted owner for opaque and unknown models", async t => {
+  const f = await fusionDiscoveryFixture(t), id = "cloudflare-ai-gateway";
+  f.policy.providers = [id, "openai"]; f.policy.models = [`${id}/auto`, "openai/gpt-5.6"]; f.policy.requestCostMicros = 1;
+  f.policies.push({ policyId: "unrestricted", policy: { ...f.policy, models: null } });
+  Object.assign(f.env, { CLOUDFLARE_ACCOUNT_ID: "fixture-account", CLOUDFLARE_AI_GATEWAY_ID: "fixture-gateway", CLOUDFLARE_API_TOKEN: "synthetic-token" });
+  const { accessSessionIdentity, verifiedAccessSession } = await import("../access.ts");
+  const session = await verifiedAccessSession(f.request("session"), f.env);
+  const gateway = snapshot.providers.find(provider => provider.id === id);
+  const opaque = await accessSessionIdentity(session, f.env, id, { provider: gateway, endpoint: gateway.endpoints.find(endpoint => endpoint.id === "universal"), mode: "http" });
+  assert.equal(opaque.policyId, "unrestricted");
+  const openai = snapshot.providers.find(provider => provider.id === "openai");
+  const passthrough = await accessSessionIdentity(session, f.env, "openai", { provider: openai, endpoint: openai.endpoints.find(endpoint => endpoint.id === "responses"), mode: "http", model: "unknown-future-model" });
+  assert.equal(passthrough.policyId, "unrestricted");
+  const catalog = await (await catalogResponse(f.request("session"), f.env)).json();
+  const offers = catalog.providers.find(provider => provider.id === id).offers.filter(offer => offer.endpoint === "universal");
+  assert.ok(offers.length > 0); assert.ok(offers.every(offer => offer.eligible && offer.policyId === "unrestricted"));
+});

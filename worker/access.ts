@@ -1,3 +1,4 @@
+import { policyAllowsModel } from "./policy-models.ts";
 import { fetchTimeoutSignal } from "../shared/fetch-timeout.ts";
 import { authorityCall, resolveBindings, resolvePolicies, resolveUsers } from "./authority";
 import { assignmentEvidenceFromAccessIdentity } from "./assignment-evaluator";
@@ -68,7 +69,13 @@ export async function accessIdentity(request: Request, env: Env, providerId?: st
 export async function accessSessionIdentity(session: AccessSession, env: Env, providerId?: string, requirement?: import("./provider-auth").GrantRequirement): Promise<AuthorizedIdentity | Response> {
   const matching = (await sessionPolicies(session, env)).filter((entry) => !providerId || !entry.policy.providers.length || entry.policy.providers.includes(providerId));
   if (!matching.length) return errorResponse("access_policy_required", "this identity has no active access policy", 403);
-  const selected = providerId ? await selectProviderPolicy(matching, providerId, env, requirement) : matching[0];
+  const modelId = requirement?.model ? requirement.provider.models.find(model => model.id === requirement.model || model.upstream === requirement.model)?.id ?? requirement.model : null;
+  const requiresModel = requirement && (requirement.endpoint.request_format === "cloudflare_ai_gateway.universal"
+    || requirement.provider.capabilities.some(capability => capability.endpoint === requirement.endpoint.id && capability.id.startsWith("llm.")));
+  const eligible = modelId ? matching.filter(entry => policyAllowsModel(entry.policy, providerId!, modelId))
+    : requiresModel ? matching.filter(entry => entry.policy.models == null) : matching;
+  if (!eligible.length) return errorResponse("model_not_allowed", "model is not allowed by this identity's policies", 403);
+  const selected = providerId ? await selectProviderPolicy(eligible, providerId, env, requirement) : eligible[0];
   return sessionPolicyIdentity(session, selected);
 }
 

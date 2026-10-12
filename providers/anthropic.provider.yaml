@@ -207,6 +207,20 @@ endpoints:
     timeoutMs: 120000
 models:
   entries:
+    - id: anthropic/claude-opus-5-5
+      upstream: claude-opus-5-5
+      capabilities: [llm.messages, llm.count_tokens]
+      pricingRef: anthropic-claude-opus-5-5-standard-2026-10-11
+      pricing:
+        effectiveAt: "2026-10-11"
+        source: https://platform.claude.com/docs/en/about-claude/pricing
+        inputMicrosPerMillion: 4000000
+        cachedInputMicrosPerMillion: 200000
+        cacheWrite5mInputMicrosPerMillion: 5000000
+        cacheWrite1hInputMicrosPerMillion: 8000000
+        outputMicrosPerMillion: 20000000
+        maxInputTokens: 1000000
+        defaultMaxOutputTokens: 128000
     - id: anthropic/claude-opus-5
       upstream: claude-opus-5
       capabilities: [llm.messages, llm.count_tokens]

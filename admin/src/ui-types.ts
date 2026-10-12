@@ -69,6 +69,9 @@ export interface PolicyForm {
   budgetScope: NonNullable<AccessPolicy["budgetScope"]>;
   providers: string[];
   allProviders: boolean;
+  models: string;
+  allModels: boolean;
+  poolStatus: "hidden" | "visible";
   retainRequestContent: boolean;
   grantStrategy: AccessPolicy["grantRouting"]["strategy"];
   grantStickiness: AccessPolicy["grantRouting"]["stickiness"];

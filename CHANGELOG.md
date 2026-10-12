@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add optional policy model allowlists across discovery and inference, Claude Opus 5.5 pricing, and opt-in policy-scoped pool status with shared subscription eligibility and seven-day usage.
+
 - Make Claude subscription pools model-aware, retain scoped weekly quota and account facts, add an included-quota reserve and explicit paid environment fallback, and use the Claude Code 2.1.288 identity.
 
 - Attribute usage to the final upstream grant and lane with additive ledger storage, a bounded admin daily-model aggregation API, and a Subscriptions page for account headroom, extra usage and traffic.

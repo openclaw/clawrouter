@@ -1,3 +1,4 @@
+import { policyAllowsModel } from "./policy-models.ts";
 import type { CatalogOffer, ClientCatalog, ClientCatalogProvider, EntitlementsResponse, FusionConfig, SessionResponse } from "../shared/contracts";
 import { fusionCatalogReadiness } from "./fusion-readiness";
 import { concreteOpenAiSelection, isSelectionFailure, type ProxySelection } from "./proxy-selection";
@@ -248,9 +249,22 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
     let configured = !!savedConnection || pools.some((pool) => pool.candidates.hasConfiguredGrant)
       || provider.config_keys.some((key) => typeof env[key] === "string" && (env[key] as string).trim());
     let providerBalance: ReturnType<typeof providerBudgetStatus> | undefined;
-    const contexts = await Promise.all(provider.endpoints.filter((endpoint) => !responsesControl(provider, endpoint)).flatMap((endpoint) => (keyScope && endpoint.websocket ? ["http", "websocket"] as const : ["http"] as const).map(async (mode) => {
+    // Group models by their ordered eligible policies, not policies by allowlist.
+    // Each model gets one policy choice before affordability is observed.
+    const grouped = new Map<string, { pools: typeof pools; modelIds: Set<string | null>; passthrough: boolean }>();
+    for (const model of [...provider.models, null, undefined]) {
+      const matching = model === undefined ? pools.filter(pool => pool.entry.policy.models == null) : model ? pools.filter(pool => policyAllowsModel(pool.entry.policy, provider.id, model.id)) : pools;
+      const key = JSON.stringify(matching.map(pool => pool.entry.policyId));
+      const group = grouped.get(key) ?? { pools: matching, modelIds: new Set<string | null>(), passthrough: false };
+      if (model === undefined) group.passthrough = true;
+      else group.modelIds.add(model?.id ?? null);
+      grouped.set(key, group);
+    }
+    const poolGroups = [...grouped.values()];
+    const contexts = await Promise.all(provider.endpoints.filter((endpoint) => !responsesControl(provider, endpoint)).flatMap((endpoint) => (keyScope && endpoint.websocket ? ["http", "websocket"] as const : ["http"] as const).flatMap(mode => poolGroups.map(async group => {
       const requirement: GrantRequirement = { provider, endpoint, mode };
-      const selected = selectPolicyCandidates(pools, requirement);
+      const candidates = endpoint.request_format === "cloudflare_ai_gateway.universal" ? group.pools.filter(pool => pool.entry.policy.models == null) : group.pools;
+      const selected = selectPolicyCandidates(candidates, requirement);
       if (!selected) return null;
       const auth = selected.entry;
       let reasonCode: string | undefined;
@@ -274,10 +288,16 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
         const [policy, providerBudget] = await Promise.all([policyBalances.get(auth.policyId)!, providerBalance]);
         observation = { policyRemaining: policy.remainingMicros, providerRemaining: providerBudget?.remainingMicros ?? null };
       }
-      return { endpoint, mode, auth, reasonCode, observation };
-    })));
+      return { endpoint, mode, auth, reasonCode, observation, modelIds: group.modelIds, passthrough: group.passthrough };
+    }))));
     const effective = contexts.filter((context): context is NonNullable<typeof context> => context !== null);
+    const contextHasModel = (context: typeof effective[number], model: CompiledModel | null) => context.modelIds.has(model?.id ?? null)
+      || !!model && context.passthrough && !provider.models.some(candidate => candidate.id === model.id);
     const eligibility = (context: typeof effective[number], model: CompiledModel | null, capability: string) => {
+      if (!contextHasModel(context, model)) return { status: "exact-blocked" as const, reasonCode: "model_not_allowed" };
+      if (context.auth.policy.models != null && context.endpoint.request_format === "cloudflare_ai_gateway.universal") return { status: "exact-blocked" as const, reasonCode: "model_not_allowed" };
+      if (model && !policyAllowsModel(context.auth.policy, provider.id, model.id)) return { status: "exact-blocked" as const, reasonCode: "model_not_allowed" };
+      if (!model && context.auth.policy.models != null && (capability.startsWith("llm.") || context.endpoint.request_format === "cloudflare_ai_gateway.universal") && !provider.models.some(candidate => policyAllowsModel(context.auth.policy, provider.id, candidate.id))) return { status: "exact-blocked" as const, reasonCode: "model_not_allowed" };
       if (context.reasonCode) return { status: "exact-blocked" as const, reasonCode: context.reasonCode };
       if (model) {
         try { resolveTemplate(provider, model.upstream, env); }
@@ -285,17 +305,17 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
       }
       return operationAffordability(context.auth, connection, model, capability, context.endpoint, context.observation);
     };
-    const models = provider.models.flatMap((model) => {
+    const models = provider.models.filter(model => pools.some(pool => policyAllowsModel(pool.entry.policy, provider.id, model.id))).flatMap((model) => {
       const capabilities = model.capabilities.filter((capability) => effective.some((context) => provider.capabilities.some((item) => item.id === capability && item.endpoint === context.endpoint.id) && eligibility(context, model, capability).status !== "exact-blocked"));
       return capabilities.length ? [{ ...model, capabilities }] : [];
     });
     const offers: CatalogOffer[] = effective.flatMap((context) => {
       const { endpoint, mode, auth } = context;
-      const models = provider.models.filter((model) => modelSupportsEndpoint(provider, model, endpoint));
+      const models = provider.models.filter((model) => context.modelIds.has(model.id) && modelSupportsEndpoint(provider, model, endpoint));
       const capability = provider.capabilities.find((item) => item.endpoint === endpoint.id)?.id ?? endpoint.id;
       const assessed = (mode === "websocket" ? models : [...models, null]).map((model) => ({ model, availability: eligibility(context, model, capability) }));
       const selectableModel = assessed.some(({ model, availability }) => model && availability.status !== "exact-blocked");
-      return assessed.flatMap(({ model, availability: resolved }) => {
+      return assessed.filter(({ model }) => context.modelIds.has(model?.id ?? null) && (!model || policyAllowsModel(auth.policy, provider.id, model.id))).flatMap(({ model, availability: resolved }) => {
         // A form can defer model selection without declaring a model-less
         // request priced. Selected models still use their own admission facts.
         const availability: OperationAffordability = !model && resolved.reasonCode === "pricing_required" && selectableModel ? { status: "request-dependent" } : resolved;
@@ -315,7 +335,7 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
       reasons: [...new Set(offers.flatMap((offer) => offer.reasonCode ? [offer.reasonCode] : []))],
     });
     const operation = (selection: ProxySelection) => {
-      const context = effective.find(({ endpoint, mode }) => mode === "http" && endpoint.id === selection.endpoint.id);
+      const context = effective.find(context => context.mode === "http" && context.endpoint.id === selection.endpoint.id && !!selection.model && contextHasModel(context, selection.model));
       if (!context || !selection.model || Array.isArray(selection.body)) return null;
       return { ...context, providerId: provider.id, model: selection.model, body: selection.body, connection, availability: eligibility(context, selection.model, selection.capability) };
     };

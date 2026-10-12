@@ -885,6 +885,8 @@ function normalizePolicyRecord(
     enabled: value.enabled !== false,
     generation: typeof value.generation === "string" ? value.generation : "legacy",
     providers: Array.isArray(value.providers) ? value.providers.filter((item): item is string => typeof item === "string") : [],
+    models: Array.isArray(value.models) ? [...new Set(value.models.filter((item): item is string => typeof item === "string"))].slice(0, 1024) : value.models == null ? null : [],
+    poolStatus: value.poolStatus === "visible" ? "visible" : "hidden",
     tenantId: typeof value.tenantId === "string" ? value.tenantId : null,
     tokenRole: typeof value.tokenRole === "string" ? value.tokenRole : null,
     monthlyBudgetMicros: typeof value.monthlyBudgetMicros === "number" ? value.monthlyBudgetMicros : null,

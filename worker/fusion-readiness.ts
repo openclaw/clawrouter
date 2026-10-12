@@ -1,3 +1,4 @@
+import { policyAllowsModel } from "./policy-models.ts";
 import type { CatalogOffer, FusionConfig, FusionReadiness, FusionReadinessCall } from "../shared/contracts";
 import { buildAdviserBody, buildAggregatorBody, buildFusionReservationProposals, prepareAdviserBody } from "./fusion.ts";
 import { assessModelRequest } from "../shared/model-request-parameters.ts";
@@ -175,7 +176,7 @@ function block(call: FusionReadinessCall, reason: string): void {
 
 function readinessCall(stage: FusionReadinessCall["stage"], index: number | null, modelId: string, body: Record<string, unknown>, entry: AccessPolicyEntry, readiness: FusionProviderReadiness[], route: FusionReadinessRoute): FusionReadinessCall {
   const providerReadiness = readiness.find((candidate) => candidate.id === route.providerId);
-  const policyAllowed = entry.policy.enabled && (!entry.policy.providers.length || entry.policy.providers.includes(route.providerId));
+  const policyAllowed = entry.policy.enabled && policyAllowsModel(entry.policy, route.providerId, route.modelId);
   const parameters = assessModelRequest(route.model, route.endpoint, body);
   const executable = policyAllowed && providerReadiness?.executableEndpoints.includes(route.endpoint.id) === true && parameters.conflicts.length === 0;
   const reasons = [

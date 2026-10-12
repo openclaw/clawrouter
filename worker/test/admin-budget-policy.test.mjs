@@ -34,3 +34,16 @@ test("admin budget rows use the finite principals derived from loaded authority 
 
 function policy(overrides = {}) { return { enabled: true, generation: "policy_v1", providers: ["openai"], tenantId: "tenant", monthlyBudgetMicros: 100, retainRequestContent: true, ...overrides }; }
 function credential(credentialId, principalId) { return { credentialId, credential: { enabled: true, policyId: "maintainer_access", policyGeneration: "policy_v1", principalId } }; }
+
+test("policy model scopes validate known IDs, bound input, deduplicate and preserve defaults", () => {
+  const base = { providers: ["anthropic"] }, id = "anthropic/claude-opus-5-5";
+  assert.equal(normalizePolicy(base, undefined, false).models, null);
+  assert.equal(normalizePolicy(base, undefined, false).poolStatus, "hidden");
+  const selected = normalizePolicy({ ...base, models: [id, id], poolStatus: "visible" }, undefined, false);
+  assert.deepEqual(selected.models, [id]); assert.equal(selected.poolStatus, "visible");
+  assert.deepEqual(normalizePolicy(base, selected, false).models, [id]);
+  assert.equal(normalizePolicy({ ...base, models: null }, selected, false).models, null);
+  assert.deepEqual(normalizePolicy({ ...base, models: [] }, undefined, false).models, []);
+  for (const models of [["anthropic/unknown"], [42], "all", Array(1025).fill(id)]) assert.throws(() => normalizePolicy({ ...base, models }, undefined, false), { code: "invalid_policy" });
+  assert.throws(() => normalizePolicy({ ...base, poolStatus: "public" }, undefined, false), { code: "invalid_policy" });
+});

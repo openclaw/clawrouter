@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { canProbeGrant, modelHeadroom, planLabel, policyGrants, quotaFree, resetLabel, subscriptionFamilies } from "../src/subscriptions-data.ts";
+import { registerHooks } from "node:module";
+import { extname } from "node:path";
+registerHooks({ resolve(specifier, context, nextResolve) {
+  return nextResolve(specifier.startsWith(".") && context.parentURL && !extname(new URL(specifier, context.parentURL).pathname) ? `${specifier}.ts` : specifier, context);
+} });
+const { canProbeGrant, modelHeadroom, planLabel, policyGrants, quotaFree, resetLabel, subscriptionFamilies } = await import("../src/subscriptions-data.ts");
 
 const now = Date.parse("2026-10-11T12:00:00Z");
 const policy = { policyId: "pool", tenantId: "tenant", providers: ["anthropic"], grantRouting: { eligibleGrants: {}, staleAfterSeconds: 300, staleState: "allow", includedQuotaReservePercent: 10 } };
