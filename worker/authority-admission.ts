@@ -1,10 +1,17 @@
 import type { AccessControlUser, AccessPolicyEntry, AccessUserRecord, Env, GrantRuntimeState, ProviderConnection, ProxyCredentialEntry } from "./types";
+import type { GrantSelectionResult } from "./grant-eligibility.ts";
 import { normalizeEmail, safeEqual } from "./utils.ts";
 
 export interface AdmissionProvider { id: string; tokenRef: string }
-export interface AdmissionRequest { credentialId: string; secretSha256?: string; providers?: AdmissionProvider[]; allConnections?: boolean }
+export interface AdmissionSelection {
+  providerId: string; endpointId: string; mode: "http" | "websocket";
+  model?: string | null; catalogModelId?: string | null; capability: string;
+  sessionHash?: string; excludedKeys?: string[];
+}
+export interface AdmissionRequest { selection?: AdmissionSelection; credentialId: string; secretSha256?: string; providers?: AdmissionProvider[]; allConnections?: boolean }
 export interface AdmissionPool { keys: string[]; states: Record<string, GrantRuntimeState>; hasAttachment: boolean; unavailable?: true }
 export interface AdmissionResult {
+  selection?: GrantSelectionResult;
   credential: ProxyCredentialEntry | null;
   policy: AccessPolicyEntry | null;
   owner: AccessControlUser | null;
@@ -16,6 +23,7 @@ export interface AdmissionResult {
 }
 
 interface AdmissionStore {
+  finishSelection?(input: AdmissionRequest, result: AdmissionResult): Promise<AdmissionResult>;
   getCredential(id: string): ProxyCredentialEntry | null;
   getPolicy(id: string): AccessPolicyEntry | null;
   getUser(email: string): AccessControlUser | null;
@@ -97,7 +105,7 @@ export async function resolveAdmission(env: Env, input: AdmissionRequest, store:
     try { result.pools[provider.id] = store.resolveGrantPool({ providerId: provider.id, policyId, tenantId: policy.policy.tenantId ?? "default", defaultKeys: [`oauth/${policyId}/${provider.tokenRef}`, `oauth/tenants/${policy.policy.tenantId ?? "default"}/${provider.tokenRef}`] }); }
     catch { result.pools[provider.id] = { keys: [], states: {}, hasAttachment: false, unavailable: true }; }
   }
-  return result;
+  return input.selection && store.finishSelection ? store.finishSelection(input, result) : result;
 }
 
 export async function genuineLegacyKey(env: Env, id: string): Promise<Record<string, unknown> | null> {

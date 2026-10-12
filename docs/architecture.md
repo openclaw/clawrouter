@@ -19,7 +19,7 @@ and result ordering instead of duplicating those decisions in client-side maps.
 Assignment rules, scoped upstream-grant secrets, and provider
 health remain outside that global authority because they have separate lifecycle
 and consistency needs. `GRANT_CREDENTIALS` is the canonical raw-secret owner,
-sharded one Durable Object per grant. KV holds its redacted routing projection;
+sharded one Durable Object per grant. The authority and KV hold its redacted routing projection;
 a legacy secret-bearing KV grant is imported and scrubbed on first use.
 
 Public HTTP Responses affinity uses authorization-scoped `ACCESS_CONTROL`
@@ -147,11 +147,16 @@ usage event and delegates independent settlement and delivery to `accounting.ts`
 3. Reserve the conservative budget before provider work.
 4. Retain eligible LLM request content in R2 when policy requires it. Storage
    failure is fail-closed and prevents the upstream call.
-5. Filter grants by the policy's provider allowlist, explicit grant eligibility,
+5. For eligible proxy-key HTTP creates, admission filters and selects within one
+   synchronous authority transaction using owner-published routing projections.
+   Legacy projection rows retain the Worker KV/read-and-select path.
+   Filter grants by the policy's provider allowlist, explicit grant eligibility,
    cooldown, stale-state rule, and lowest active priority tier. The access
    authority atomically applies priority, round-robin, least-used, quota-aware,
    or weighted selection and records only counters and privacy-safe sticky input.
-6. Materialize the selected credential from its per-grant owner. Expiring OAuth
+6. Materialize the selected credential from its per-grant owner on every request.
+   Secret material is not cached: owner revocation must take effect even when
+   publication to the global authority fails. Expiring OAuth
    tokens refresh through that same serialized owner, which commits each rotated
    access/refresh pair and generation together.
 7. Sign and forward the provider request, then normalize manifest-declared quota

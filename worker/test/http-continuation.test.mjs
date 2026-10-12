@@ -178,7 +178,7 @@ test("failed alternate selection preserves the original rejection body and zero 
     let selections = 0, canceled = false;
     if (scenario === "unavailable") await revokeGrantCredentials(f.env, grantKeys[1]);
     f.env.ACCESS_CONTROL.beforeFetch = (_name, request) => {
-      if (new URL(request.url).pathname === "/grant-pools/select" && ++selections === 2 && scenario === "selection_error") throw new Error("fixture selection outage");
+      if (new URL(request.url).pathname === "/admission/resolve" && ++selections === 2 && scenario === "selection_error") throw new Error("fixture selection outage");
     };
     const body = '{"error":{"code":"fixture_rejection"}}';
     f.response = () => new Response(new ReadableStream({
@@ -213,7 +213,7 @@ for (const phase of ["selection", "body_cancel"]) {
     const caller = new AbortController();
     let selections = 0, canceled = false;
     f.env.ACCESS_CONTROL.beforeFetch = (_name, request) => {
-      if (new URL(request.url).pathname === "/grant-pools/select" && ++selections === 2 && phase === "selection") caller.abort();
+      if (new URL(request.url).pathname === "/admission/resolve" && ++selections === 2 && phase === "selection") caller.abort();
     };
     f.response = () => new Response(new ReadableStream({ cancel() { canceled = true; if (phase === "body_cancel") caller.abort(); } }, { highWaterMark: 0 }), { status: 429 });
     const response = await f.request({ max_output_tokens: 32 }, {}, "/v1/responses", caller.signal);
@@ -236,7 +236,7 @@ test("the request deadline during alternate selection prevents another dispatch"
     return setTimer(callback, delay, ...args);
   });
   f.env.ACCESS_CONTROL.beforeFetch = (_name, request) => {
-    if (new URL(request.url).pathname === "/grant-pools/select" && ++selections === 2) {
+    if (new URL(request.url).pathname === "/admission/resolve" && ++selections === 2) {
       assert.equal(typeof deadline, "function"); deadline();
     }
   };
@@ -802,7 +802,7 @@ test("rejection delivery retires the endpoint deadline while an earlier selectio
     const f = await fixture(t, phase === "selection", { limit: 1_000_000, fixedCost: 7 }), caller = new AbortController();
     let selects = 0, cancels = 0;
     if (phase === "selection") f.env.ACCESS_CONTROL.beforeFetch = (_name, request) => {
-      if (new URL(request.url).pathname === "/grant-pools/select" && ++selects === 2) { deadline(); throw new Error("fixture selection rejected"); }
+      if (new URL(request.url).pathname === "/admission/resolve" && ++selects === 2) { deadline(); throw new Error("fixture selection rejected"); }
     };
     f.response = () => new Response(new ReadableStream({ cancel() { cancels++; } }, { highWaterMark: 0 }), { status: 429 });
     const response = await f.request({}, {}, "/v1/responses", caller.signal);

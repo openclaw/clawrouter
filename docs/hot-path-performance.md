@@ -461,3 +461,152 @@ unrelated compilation and system activity. The configured fake upstream is only
 isolate a response-path cause. It retained exactly two foreground authority RPCs
 per request and reconciled all 400 selections and usage events. No live provider
 benchmark or deployment was performed.
+
+## Admit-and-select follow-up (2026-10-11)
+
+Implemented work-order parts 1–2 on `perf/single-hop-inference`. Ordinary
+proxy-key HTTP inference passes the prepared endpoint, transport, upstream model,
+catalog model, capability and hashed session into admission. After any cold
+imports, the authority rereads authentication, policy, connection and pool state,
+filters candidates and updates selection counters in one synchronous SQLite
+transaction. No network wait occurs in that transaction. The Worker consumes
+that result once, only for the matching operation. Failed-provider exclusions
+use a fresh combined admission, including current policy and connection checks.
+
+`worker/grant-eligibility.ts` is the shared owner of candidate filtering, routing
+normalization, priority, credential usability and revision matching. Both paths
+use the existing provider transport/configuration functions and the same
+stateful authority selector. Provider logic and selection strategies are not
+copied into a second implementation. The immutable bundled provider catalog
+resolves the endpoint facts; no request content enters the authority.
+
+The additive `upstream_grant_projections` table stores an allowlisted, secretless
+routing projection. The credential owner's existing attachment publication
+writes it in the same transaction as membership/version changes, before the
+existing KV publication. Generation and attachment revision accompany the
+selected grant. An overlapping old owner publication without a projection marks
+the row legacy, preventing a stale projection from surviving a version update.
+This revision is publication provenance, **not** permission to cache credentials.
+
+A missing row triggers at most one bounded bulk read for the two pools and two
+default keys (66 maximum). Each inserted row is its import marker, including
+known-absent defaults. Import rereads the marker and attachment revision inside
+a synchronous transaction, so concurrent owner publication, rotation or revoke
+wins over delayed KV. A version mismatch or raw legacy secret marks the row
+legacy and retains the old Worker KV + select path until owner publication
+repairs it. Failed KV reads and missing metadata for an attached/versioned owner create no
+marker and may retry; only an unowned default-key miss becomes a durable absent
+marker. Old writers that
+only change KV after the marker are not supported; use the credential owner.
+The upgrade is additive; do not remove markers or restore old projections over
+new owner versions.
+
+### Why materialization remains
+
+The credential cache escape hatch was taken. Revocation currently commits a
+secretless tombstone even if the global authority is unavailable. Pause and
+permanent OAuth-refresh rejection likewise commit owner state before repairing
+its derived index. During a publication outage, the authority may still return
+the old active generation. A cached token keyed by that generation would pass
+the proposed check and bypass revocation. Blocking secret deletion on a global
+index write would violate the existing owner safety contract.
+
+No secret cache was added. Every selected grant still reaches its credential
+owner, which rejects revoked/disabled/reauthorization-required state and handles
+near-expiry refresh. A successful rotation is visible in the next authority
+projection; a failed publication is repaired or rejected at materialization,
+never served from cached secret material. Policy and proxy-key disable are
+checked afresh at admission. Requests admitted before a concurrent mutation
+retain the existing in-flight semantics; already dispatched requests cannot be
+retroactively revoked.
+
+Completing part 3 requires a separately designed pre-mutation invalidation
+protocol, including index-unavailable revocation, recovery and overlapping old
+writers. A TTL or matching generation alone does not solve this boundary.
+
+| Foreground path (excluding budgets and upstream) | Before | After |
+| --- | --- | --- |
+| Warm proxy-key HTTP inference | 2 authority + 1 KV bulk read + 1 credential owner | 1 authority + 1 credential owner |
+| Cold authority projection, current owner metadata in KV | 2 authority + 1 Worker KV + 1 owner | 1 authority (internal bounded KV import) + 1 owner |
+| Legacy/unimportable projection | 2 authority + 1 Worker KV + 1 owner | Same fallback; first read may attempt bounded import |
+| Alternate after 401/403/429, projections ready | 2 authority + 1 KV + 1 owner | 1 fresh authority + 1 owner |
+| Environment fallback, projections ready | admission, optional select, KV | 1 authority; no credential owner |
+| Discovery, Access policy selection, pinned continuations, Fusion preflight, WebSocket creates | Existing paths | Existing paths |
+
+The full target of one authority call **plus upstream only is not claimed**.
+No authorization, policy, pool, runtime, selection or credential secret is cached
+between requests.
+
+The regression suite compares old and combined outcomes/counters across all six
+strategies, three stickiness modes, priority tiers, reserve, model-scoped
+exhaustion, cooldown, stale revisions/state, eligibility, exclusions and OpenAI
+HTTP/WebSocket transport requirements. It checks warm hop counts, fresh failover,
+legacy migration, bounded once-only backfill, concurrent revoke/rotation/tenant
+changes, generation publication and secret exclusion. The publication-outage
+regression explicitly observes an old active authority generation after owner
+revocation, then proves materialization rejects it.
+
+Validation on the final implementation:
+
+```text
+pnpm check                      exit 0
+Worker:  tests 1301, pass 1301, fail 0
+Admin:   tests 224,  pass 224,  fail 0
+Scripts: tests 361,  pass 343,  fail 0, skipped 18
+focused selection/continuation: tests 91, pass 91, fail 0
+
+pnpm worker:e2e                 exit 0
+local Worker smoke passed
+Responses WebSocket workerd fixture passed
+contentCleanup: ok
+
+autoreview (P0–P2): scoped-clean
+```
+
+The review caught and fixed two stale-input races on legacy failover (tenant
+scope and sticky input), plus a transient KV-miss import that could hide an
+attached grant. Regression tests cover each. Existing cancellation/deadline
+fault-injection hooks now target combined admission instead of the removed
+standalone select call. An early full run was stopped after those old hooks
+left a continuation test waiting forever; the corrected 43-test continuation
+file and final full check pass. E2e's intentional accounting and cleanup failure
+diagnostics remain expected. No live provider call or deployment was performed.
+
+The final synthetic load pass ran separately from tests:
+
+```sh
+pnpm loadtest:local --requests 100 --concurrency 10,30 --max-tokens 16 \
+  --out docs/performance/single-authority-selection-local.json \
+  --label single-authority-selection
+```
+
+All 1,000 requests completed with **zero unexpected errors**. The 800 inference
+requests had exactly 800 selections and 800 persisted usage events, including
+104 intentional aborts. Each cell recorded exactly one foreground admission
+RPC per request, with no standalone pool resolve/select RPC. Quota feedback is
+reported separately (one background observation per inference). All seven
+grants received quota updates; bounded recent-event checks found no session
+using multiple grants. Clean credential materialization is still one separate
+owner invocation, proved by the HTTP unit test; refresh/dirty-owner repair can
+add provider-token and owner-to-authority publication work.
+
+| Scenario | Concurrency | TTFB p50 ms | Total p50 ms | Requests/s |
+| --- | ---: | ---: | ---: | ---: |
+| catalog | 10 | 30.7 | 31.2 | 316.5 |
+| catalog | 30 | 75.8 | 76.3 | 342.6 |
+| count | 10 | 45.5 | 46.3 | 82.6 |
+| count | 30 | 74.3 | 76.6 | 196.0 |
+| messages | 10 | 64.5 | 68.0 | 113.4 |
+| messages | 30 | 314.6 | 315.1 | 63.4 |
+| stream | 10 | 52.2 | 102.7 | 71.1 |
+| stream | 30 | 146.1 | 221.6 | 124.3 |
+| abort | 10 | 102.4 | 99.0 | 58.4 |
+| abort | 30 | 87.1 | 92.7 | 237.6 |
+
+TTFB for streaming means first content delta. Abort latency samples include
+different completion subsets. The fake provider waits 20 ms before content;
+the same workerd process hosts the router and fixture. Host load averages near
+the final pass were 40.64 / 48.28 / 44.55. These are indicative local results,
+not an idle-host A/B or a production speedup claim. The coordinator should
+compare the saved [raw results](performance/single-authority-selection-local.json)
+against main on an idle host.

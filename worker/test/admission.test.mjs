@@ -1,35 +1,11 @@
 import './typescript-setup.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { createGrantAuthority } from './grant-authority-fixture.mjs';
-import { authorityCall, resolveCredentials, resolvePolicies, resolveUsers, resolveConnections } from '../authority.ts';
+import { resolveCredentials, resolvePolicies, resolveUsers, resolveConnections } from '../authority.ts';
 import { authenticateProxyKey, proxyCredentialFailure } from '../proxy-auth.ts';
-import { sha256Hex } from '../utils.ts';
 const { default: worker } = await import('../index.ts');
 
-const secret = 'synthetic-admission-secret';
-const headers = { authorization: `Bearer clawrouter-live-fixture-${secret}`, 'content-type': 'application/json' };
-const provider = { id: 'anthropic', tokenRef: 'anthropic' };
-async function fixture() {
-  const records = new Map(), calls = [], pending = [];
-  let beforeRead;
-  const env = {
-    ANTHROPIC_API_KEY: 'synthetic-environment',
-    POLICY_KV: { async get(key) { const action = beforeRead; beforeRead = null; await action?.(key); return structuredClone(Array.isArray(key) ? new Map(key.map(k => [k, records.get(k) ?? null])) : records.get(key) ?? null); } },
-    USAGE_QUEUE: { send: async () => {} },
-  };
-  const authority = createGrantAuthority(undefined, env);
-  env.ACCESS_CONTROL = { idFromName: name => name, get: () => ({ fetch(url, init) { calls.push(new URL(url).pathname); return authority.fetch(url, init); } }) };
-  const policy = { enabled: true, generation: 'v1', providers: ['anthropic'], models: ['anthropic/claude-sonnet-5'], tenantId: 'fixture', monthlyBudgetMicros: null, retainRequestContent: false };
-  const credential = { enabled: true, secretSha256: await sha256Hex(secret), policyId: 'fixture', policyGeneration: 'v1', principalId: 'owner@example.com' };
-  const call = (path, body) => authorityCall(env, path, body);
-  await call('/policies/initialize-all', [{ policyId: 'fixture', policy }]);
-  await call('/credentials/initialize-all', [{ credentialId: 'fixture', credential }]);
-  await call('/users/initialize-all', [{ email: credential.principalId, record: { enabled: true } }]);
-  await call('/connections/initialize-all', [{ providerId: provider.id, enabled: true }]);
-  calls.length = 0;
-  return { env, records, authority, calls, pending, policy, credential, call, beforeRead(action) { beforeRead = action; }, context: { waitUntil(promise) { pending.push(promise); } } };
-}
+import { admissionFixture as fixture, admissionHeaders as headers, admissionProvider as provider } from "./admission-fixture.mjs";
 
 for (const [name, change, expected] of [
   ['valid owner', () => {}, null],
@@ -102,7 +78,7 @@ for (const [name, setup, expected] of [
   assert.deepEqual(f.calls, ['/admission/resolve']);
 });
 
-test('warmed subscription inference makes two authority RPCs and streams JSON before EOF/accounting', async t => {
+test('legacy subscription inference retains two authority RPCs and streams JSON before EOF/accounting', async t => {
   const f = await fixture(), key = 'oauth/fixture/anthropic';
   f.records.set(key, { provider: provider.id, kind: 'subscription', enabled: true, credentialStore: 'durable_object', hasAccessToken: true, credentialStatus: 'active', updatedAt: '2026-01-01T00:00:00Z' });
   f.env.GRANT_CREDENTIALS = { idFromName: name => name, get: () => ({ fetch: async () => Response.json({ grant: { ...f.records.get(key), accessToken: 'synthetic-subscription' }, changed: false, migrated: false }) }) };

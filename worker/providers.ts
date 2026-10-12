@@ -1,6 +1,7 @@
+import { grantStickyInput } from "./grant-sticky.ts";
 import snapshotJson from "./generated/provider-snapshot.json" with { type: "json" };
 import { listConnections, resolveConnection } from "./authority.ts";
-import { proxyAdmission } from "./proxy-auth.ts";
+import { admittedGrantSelection, proxyAdmission, proxySessionHash } from "./proxy-auth.ts";
 
 import { grantRevision, grantUsable as canonicalGrantUsable, resolveGrantSelection, type PinnedGrant } from "./grant-selection.ts";
 import { grantsVisibleToPolicies, type GrantRecord } from "./grant-scope.ts";
@@ -351,8 +352,9 @@ export async function listHealth(env: Env): Promise<Map<string, ProviderHealth>>
 
 async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedKeys: ReadonlySet<string>, stickyHash: string | null, recordSelection: boolean, pinned?: PinnedGrant, requirement?: GrantRequirement): Promise<{ selected: { key: string; grant: UpstreamGrant } | null; hasConfiguredGrant: boolean }> {
   const tokenRef = provider.auth.schemes.find((scheme) => scheme.type === "oauth")?.tokenRef ?? provider.id;
-  const tenant = auth.policy.tenantId ?? "default";
-  const resolution = await resolveGrantSelection(provider.id, auth.policyId, tenant, tokenRef, env, excludedKeys, auth.policy.grantRouting, stickyHash, recordSelection, pinned?.key, requirement, excludedKeys.size ? undefined : proxyAdmission(auth)?.pools[provider.id]);
+  const admitted = recordSelection && !pinned && requirement ? await admittedGrantSelection(auth, env, requirement, excludedKeys) : undefined;
+  if (!admitted && excludedKeys.size && auth.authType === "proxy_key") stickyHash = await grantStickyInput(auth, proxySessionHash(auth));
+  const resolution = admitted ?? await resolveGrantSelection(provider.id, auth.policyId, auth.policy.tenantId ?? "default", tokenRef, env, excludedKeys, auth.policy.grantRouting, stickyHash, recordSelection, pinned?.key, requirement, excludedKeys.size ? undefined : proxyAdmission(auth)?.pools[provider.id]);
   return { selected: resolution.selected ? { key: resolution.selected.key, grant: await refreshGrant(resolution.selected.key, resolution.selected.grant, provider, env, false) } : null, hasConfiguredGrant: resolution.hasConfiguredGrant };
 }
 

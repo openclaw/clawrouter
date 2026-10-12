@@ -1,3 +1,4 @@
+import { grantStickyInput } from "./grant-sticky.ts";
 import { assertPolicyModel } from "./policy-models.ts";
 import { resolveTemplate } from "./provider-templates.ts";
 import { assessModelRequest } from "../shared/model-request-parameters.ts";
@@ -34,7 +35,7 @@ import { normalizePreStreamError, observeUsage, proxyResponseHeaders } from "./p
 import type { AuthorizedIdentity, CompiledQuotaConfig, Env, ProviderConnection } from "./types";
 import {
   decodePathSegment,
-  errorResponse, HttpError, randomId, readJson, sha256Hex,
+  errorResponse, HttpError, randomId, readJson,
 } from "./utils";
 
 type AuthMode = "proxy_key" | "access";
@@ -71,13 +72,15 @@ export async function proxyOpenAi(request: Request, env: Env, context: Execution
     throw error;
   }
   const modelId = typeof body.model === "string" ? body.model : "";
-  const preauthenticated = await preauthenticate(request, env, mode, mode === "proxy_key" ? modelRoute(modelId, capabilityForPath(path) ?? undefined)?.provider.id : undefined);
+  const earlySelection = concreteOpenAiSelection(path, body, env);
+  const preauthenticated = await preauthenticate(request, env, mode, mode === "proxy_key" ? modelRoute(modelId, capabilityForPath(path) ?? undefined)?.provider.id : undefined, undefined, isSelectionFailure(earlySelection) ? undefined : earlySelection);
   if (preauthenticated instanceof Response) return preauthenticated;
   if (!modelId) return errorResponse("model_required", "model is required", 400);
   if (modelId === FUSION_MODEL_ID) {
     if (path !== "/v1/chat/completions") return errorResponse("fusion_capability_unsupported", `${FUSION_MODEL_ID} supports only /v1/chat/completions`, 400);
     return proxyFusion(request, env, context, mode, body, preauthenticated);
   }
+  if (!isSelectionFailure(earlySelection)) return proxySelected(request, env, context, mode, earlySelection, {}, preauthenticated);
   return proxyConcreteOpenAi(request, env, context, path, mode, body, preauthenticated);
 }
 
@@ -176,10 +179,11 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
   if (!provider || !endpoint) return errorResponse("route_not_found", "manifest proxy route not found", 404);
   const session = mode === "access" ? await verifiedAccessSession(request, env) : null;
   if (mode === "access" && !session) return errorResponse("access_session_required", "a verified session is required", 401);
-  let preauthenticated = mode === "access" ? null : await preauthenticate(request, env, mode, provider.id, { provider, endpoint, mode: "http" });
-  if (preauthenticated instanceof Response) return preauthenticated;
+  let preauthenticated: AuthorizedIdentity | Response | null = null;
   const control = responsesControl(provider, endpoint);
   if (control) {
+    preauthenticated = await preauthenticate(request, env, mode, provider.id, { provider, endpoint, mode: "http" });
+    if (preauthenticated instanceof Response) return preauthenticated;
     if (request.method === "GET") {
       if (endpoint.method !== "GET") return errorResponse("method_not_allowed", "control method is not allowed", 405);
       await requireEmptyResponseControlBody(request);
@@ -195,12 +199,18 @@ export async function proxyManifest(request: Request, env: Env, context: Executi
   }
   // Controls resolve their original owner; creation keeps ordinary policy
   // selection, including transports that cannot provide durable recovery.
-  const envelope = request.method === "GET" || request.method === "HEAD"
-    ? directManifestEnvelope(request, endpoint)
-    : manifestEnvelope(await readJson<unknown>(request));
+  let envelope, prepared;
+  try {
+    envelope = request.method === "GET" || request.method === "HEAD" ? directManifestEnvelope(request, endpoint) : manifestEnvelope(await readJson<unknown>(request));
+    prepared = prepareManifestRequest(provider, endpoint, envelope.body, envelope.pathParams, env);
+  } catch (error) {
+    const auth = await preauthenticate(request, env, mode, provider.id);
+    if (auth instanceof Response) return auth;
+    throw error;
+  }
   const method = (envelope.method ?? endpoint.method).toUpperCase();
-  if (!endpoint.methods.includes(method)) return errorResponse("method_not_allowed", `endpoint does not allow ${method}`, 405);
-  const prepared = prepareManifestRequest(provider, endpoint, envelope.body, envelope.pathParams, env);
+  if (!endpoint.methods.includes(method)) { const auth = await preauthenticate(request, env, mode, provider.id); return auth instanceof Response ? auth : errorResponse("method_not_allowed", `endpoint does not allow ${method}`, 405); }
+  if (!session) preauthenticated = await preauthenticate(request, env, mode, provider.id, undefined, { provider, endpoint, model: prepared.model, capability: provider.capabilities.find(item => item.endpoint === endpoint.id)?.id ?? endpoint.id, body: prepared.body, pathParams: prepared.pathParams, method });
   if (session) preauthenticated = await accessSessionIdentity(session, env, provider.id, { provider, endpoint, mode: "http", model: prepared.model?.id });
   if (preauthenticated instanceof Response) return preauthenticated;
   const capability = provider.capabilities.find((item) => item.endpoint === endpoint.id)?.id ?? endpoint.id;
@@ -212,21 +222,31 @@ export async function proxyNative(request: Request, env: Env, context: Execution
   if (!match) return errorResponse("route_not_found", "native proxy route not found", 404);
   const provider = providerById(decodePathSegment(match[1]));
   if (!provider) return errorResponse("provider_not_found", "provider not found", 404);
-  const preauthenticated = await preauthenticate(request, env, "proxy_key", provider.id);
-  if (preauthenticated instanceof Response) return preauthenticated;
   const endpoint = provider.endpoints.find((candidate) => nativeMatch(candidate, match[2]));
-  if (!endpoint || !endpoint.native_proxy) return errorResponse("route_not_found", "native provider route not found", 404);
+  if (!endpoint || !endpoint.native_proxy) { const auth = await preauthenticate(request, env, "proxy_key", provider.id); return auth instanceof Response ? auth : errorResponse("route_not_found", "native provider route not found", 404); }
   const method = request.method.toUpperCase();
-  if (!endpoint.methods.includes(method)) return errorResponse("method_not_allowed", `endpoint does not allow ${method}`, 405);
+  if (!endpoint.methods.includes(method)) { const auth = await preauthenticate(request, env, "proxy_key", provider.id); return auth instanceof Response ? auth : errorResponse("method_not_allowed", `endpoint does not allow ${method}`, 405); }
   const control = responsesControl(provider, endpoint);
   if (control) {
+    const preauthenticated = await preauthenticate(request, env, "proxy_key", provider.id);
+    if (preauthenticated instanceof Response) return preauthenticated;
     await requireEmptyResponseControlBody(request);
     return proxyResponseControl(request, env, control.action, nativeParams(endpoint, match[2]).response_id, new URL(request.url).searchParams, "proxy_key", provider.id, control.create.id, preauthenticated ?? undefined);
   }
-  const body = request.method === "GET" || request.method === "HEAD" ? {} : await readJson<unknown>(request);
-  const prepared = prepareNativeRequest(provider, endpoint, body, match[2], env);
+  let prepared;
+  try {
+    const body = request.method === "GET" || request.method === "HEAD" ? {} : await readJson<unknown>(request);
+    prepared = prepareNativeRequest(provider, endpoint, body, match[2], env);
+  } catch (error) {
+    const auth = await preauthenticate(request, env, "proxy_key", provider.id);
+    if (auth instanceof Response) return auth;
+    throw error;
+  }
   const capability = provider.capabilities.find((item) => item.endpoint === endpoint.id)?.id ?? endpoint.id;
-  return proxySelected(request, env, context, "proxy_key", { provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method }, searchParamsRecord(new URL(request.url).searchParams), preauthenticated);
+  const selection = { provider, endpoint, model: prepared.model, capability, body: prepared.body, pathParams: prepared.pathParams, method };
+  const preauthenticated = await preauthenticate(request, env, "proxy_key", provider.id, undefined, selection);
+  if (preauthenticated instanceof Response) return preauthenticated;
+  return proxySelected(request, env, context, "proxy_key", selection, searchParamsRecord(new URL(request.url).searchParams), preauthenticated);
 }
 
 async function proxySelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, queryInput: Record<string, unknown> = {}, preauthenticated: AuthorizedIdentity | null = null, reservedBudget?: ReservedProxyBudget, compound?: CompoundRequestContext, auditAuth?: AuthorizedIdentity): Promise<Response> {
@@ -469,14 +489,8 @@ export function captureGrantRuntime(context: ExecutionContext, env: Env, key: st
   if (state) context.waitUntil(recordGrantRuntime(env, key, { ...state, grantRevision: revision }).catch(() => undefined));
 }
 
-async function grantStickyHash(request: Request, auth: AuthorizedIdentity): Promise<string | null> {
-  const routing = grantRoutingPolicy(auth.policy.grantRouting);
-  if (routing.stickiness === "none") return null;
-  const identity = auth.principalId ?? auth.credentialId ?? auth.policyId;
-  if (routing.stickiness === "identity") return sha256Hex(`identity:${identity}`);
-  const sessionId = correlationMetadata(request).sessionId;
-  if (sessionId && proxySessionHash(auth)) return proxySessionHash(auth)!;
-  return sha256Hex(`session:${sessionId ?? identity}`);
+function grantStickyHash(request: Request, auth: AuthorizedIdentity): Promise<string | null> {
+  return grantStickyInput(auth, proxySessionHash(auth), correlationMetadata(request).sessionId);
 }
 
 function selectedFailure(error: unknown): HttpError {
@@ -491,10 +505,17 @@ async function auditSelectionFailure(request: Request, env: Env, context: Execut
   createProxyAccounting({ context, env, auth, selection, request, compound }).fail(statusCode, status);
 }
 
-async function preauthenticate(request: Request, env: Env, mode: AuthMode, providerId?: string, requirement?: import("./provider-auth").GrantRequirement): Promise<AuthorizedIdentity | Response | null> {
+async function preauthenticate(request: Request, env: Env, mode: AuthMode, providerId?: string, requirement?: import("./provider-auth").GrantRequirement, selection?: ProxySelection): Promise<AuthorizedIdentity | Response | null> {
   if (mode === "proxy_key") {
+    // Continuations select their recorded owner later. Invalid operations must
+    // retain their existing error precedence without incrementing counters.
+    if (selection) {
+      try { validateSelectedInput(selection); }
+      catch { selection = undefined; }
+      if (selection?.capability === "llm.responses" && (request.headers.has("x-codex-turn-state") || !Array.isArray(selection.body) && selection.body.previous_response_id)) selection = undefined;
+    }
     const provider = providerId ? providerById(providerId) : null;
-    return authenticateProxyKey(request.headers, env, provider ? [{ id: provider.id, tokenRef: provider.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? provider.id }] : [], false, correlationMetadata(request).sessionId);
+    return authenticateProxyKey(request.headers, env, provider ? [{ id: provider.id, tokenRef: provider.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? provider.id }] : [], false, correlationMetadata(request).sessionId, selection ? { providerId: selection.provider.id, endpointId: selection.endpoint.id, mode: "http", model: selectionUpstreamModel(selection), catalogModelId: selection.model?.id ?? null, capability: selection.capability } : undefined);
   }
   return providerId ? accessIdentity(request, env, providerId, requirement) : null;
 }

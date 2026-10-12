@@ -1,3 +1,4 @@
+import { routingProjection } from "./grant-projection.ts";
 import snapshotJson from "./generated/provider-snapshot.json" with { type: "json" };
 import { authorityCall, type GrantAttachmentResult, type GrantAttachmentSnapshot, type GrantAttachmentStatus } from "./authority.ts";
 import { grantCoolingDown, grantQuotaExhausted, grantQuotaRatio, observeGrantQuota, observeGrantQuotaProbe, quotaRuntime } from "./grant-quota.ts";
@@ -464,7 +465,7 @@ export class GrantCredentialObject implements DurableObject {
     const record = await this.state.storage.get<CredentialRecord>("credential");
     const indexed = await authorityCall<GrantAttachmentSnapshot>(this.env, "/grant-pools/attachment", { key });
     const result = record
-      ? await authorityCall<GrantAttachmentResult>(this.env, "/grant-pools/publish", { key, generation: record.generation, revision: indexed.revision, admissionRevision: record.poolAdmissionRevision, provider: record.providerId ?? null, status: attachmentStatus(record) })
+      ? await authorityCall<GrantAttachmentResult>(this.env, "/grant-pools/publish", { key, generation: record.generation, revision: indexed.revision, admissionRevision: record.poolAdmissionRevision, provider: record.providerId ?? null, status: attachmentStatus(record), projection: routingProjection(metadataGrant(record)) })
       : await authorityCall<GrantAttachmentResult>(this.env, "/grant-pools/cancel-pending", { key, revision: indexed.revision });
     if (record?.poolSyncPending) {
       record.poolSyncPending = false;

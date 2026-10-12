@@ -1,3 +1,7 @@
+import { assertPolicyModel } from "./policy-models.ts";
+import type { AdmissionSelection } from "./authority-admission.ts";
+import type { GrantRequirement } from "./provider-auth.ts";
+import type { GrantSelectionResult } from "./grant-eligibility.ts";
 import type { AccessPolicyEntry, AuthorizedIdentity, Env, ProxyCredential } from "./types";
 import { authorityCall, type AdmissionProvider, type AdmissionResult } from "./authority.ts";
 import { errorResponse, HttpError, parseProxyKey, safeEqual, sha256Hex } from "./utils.ts";
@@ -12,14 +16,12 @@ export function proxyAdmission(identity: AuthorizedIdentity): AdmissionResult | 
 export function proxySessionHash(identity: AuthorizedIdentity): string | undefined { return sessionHashes.get(identity); }
 export function proxyKeyVerification(identity: AuthorizedIdentity): ProxyKeyVerification | undefined { return verifiedKeys.get(identity); }
 
-export async function authenticateProxyKey(headers: Headers, env: Env, providers: AdmissionProvider[] = [], allConnections = false, sessionId?: string | null): Promise<AuthorizedIdentity | Response> {
+export async function authenticateProxyKey(headers: Headers, env: Env, providers: AdmissionProvider[] = [], allConnections = false, sessionId?: string | null, selection?: AdmissionSelection): Promise<AuthorizedIdentity | Response> {
   const parsed = proxyKeyFromHeaders(headers);
   if (!parsed) return errorResponse("invalid_proxy_key", "a valid ClawRouter proxy key is required", 401);
   const secretSha256 = await sha256Hex(parsed.secret);
-  const [admission, sessionHash] = await Promise.all([
-    authorityCall<AdmissionResult>(env, "/admission/resolve", { credentialId: parsed.kid, secretSha256, providers, allConnections }),
-    sessionId ? sha256Hex(`session:${sessionId}`) : undefined,
-  ]);
+  const sessionHash = sessionId ? await sha256Hex(`session:${sessionId}`) : undefined;
+  const admission = await authorityCall<AdmissionResult>(env, "/admission/resolve", { credentialId: parsed.kid, secretSha256, providers, allConnections, selection: selection ? { ...selection, sessionHash } : undefined });
   const credentialEntry = admission.credential;
   if (!credentialEntry) return errorResponse("unknown_proxy_key", "proxy key is not registered", 401);
   if (!safeEqual(secretSha256, credentialEntry.credential.secretSha256.toLowerCase())) return errorResponse("invalid_proxy_key", "proxy key secret is invalid", 401);
@@ -43,8 +45,35 @@ export async function authenticateProxyKey(headers: Headers, env: Env, providers
   };
   verifiedKeys.set(identity, Object.freeze({ kind: "proxy_key", credentialId: parsed.kid, principalId: identity.principalId, secretSha256 }));
   admissions.set(identity, admission);
+  if (selection) admissionRequests.set(identity, selection);
+  if (selection && admission.selection) selections.set(identity, { request: selection, result: admission.selection });
   if (sessionHash) sessionHashes.set(identity, sessionHash);
   return identity;
+}
+
+const admissionRequests = new WeakMap<AuthorizedIdentity, AdmissionSelection>();
+const selections = new WeakMap<AuthorizedIdentity, { request: AdmissionSelection; result: GrantSelectionResult }>();
+
+export async function admittedGrantSelection(auth: AuthorizedIdentity, env: Env, requirement: GrantRequirement, excludedKeys: ReadonlySet<string>): Promise<GrantSelectionResult | undefined> {
+  const initial = selections.get(auth);
+  selections.delete(auth);
+  if (!excludedKeys.size) return initial && initial.request.providerId === requirement.provider.id && initial.request.endpointId === requirement.endpoint.id && initial.request.mode === requirement.mode && initial.request.model === requirement.model ? initial.result : undefined;
+  const verified = verifiedKeys.get(auth);
+  if (!verified) return undefined;
+  const request: AdmissionSelection = { providerId: requirement.provider.id, endpointId: requirement.endpoint.id, mode: requirement.mode, model: requirement.model, capability: requirement.provider.capabilities.find(item => item.endpoint === requirement.endpoint.id)?.id ?? requirement.endpoint.id, catalogModelId: admissionRequests.get(auth)?.catalogModelId ?? requirement.provider.models.find(item => item.upstream === requirement.model || item.id === requirement.model)?.id ?? null, excludedKeys: [...excludedKeys], sessionHash: sessionHashes.get(auth) };
+  const admission = await authorityCall<AdmissionResult>(env, "/admission/resolve", { credentialId: verified.credentialId, secretSha256: verified.secretSha256, providers: [{ id: requirement.provider.id, tokenRef: requirement.provider.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? requirement.provider.id }], selection: request });
+  if (!admission.credential || !safeEqual(verified.secretSha256, admission.credential.credential.secretSha256)) throw new HttpError(401, "invalid_proxy_key", "proxy key is no longer valid");
+  if (admission.policyUnavailable || admission.ownerUnavailable || admission.connectionsUnavailable) throw new Error("admission unavailable");
+  const failure = proxyCredentialFailure(admission.credential.credential, admission.policy, admission.owner?.record.enabled);
+  if (failure) throw failure;
+  if (admission.policy!.policy.providers.length && !admission.policy!.policy.providers.includes(requirement.provider.id)) throw new HttpError(403, "provider_not_allowed", "policy does not allow provider");
+  if (admission.connections.find(item => item.providerId === requirement.provider.id)?.enabled === false) throw new HttpError(503, "provider_disabled", "provider is disabled");
+  assertPolicyModel(admission.policy!.policy, { model: request.catalogModelId ? { id: request.catalogModelId } : null, endpoint: requirement.endpoint, capability: request.capability });
+  auth.principalId = admission.credential.credential.principalId ?? null;
+  auth.policyId = admission.policy!.policyId;
+  auth.policy = admission.policy!.policy;
+  admissions.set(auth, admission);
+  return admission.selection;
 }
 
 // Entry authentication and delayed control admission share these canonical

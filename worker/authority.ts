@@ -1,7 +1,8 @@
+import { finishAdmissionSelection } from "./authority-grant-selection.ts";
 import { mergeGrantRuntimeState, normalizeGrantRuntimeState } from "./grant-runtime.ts";
 import type {
   AccessControlUser, AccessPolicyEntry, AccessUserRecord, Env, OAuthState, PolicyBinding,
-  AssignmentState, GrantRoutingPolicy, GrantRuntimeState, ProviderConnection, ProxyCredentialEntry,
+  UpstreamGrant, AssignmentState, GrantRoutingPolicy, GrantRuntimeState, ProviderConnection, ProxyCredentialEntry,
 } from "./types";
 import { evaluateUserAssignments, withLegacyAssignmentState, type AssignmentEvidence, type AssignmentRuleEntry } from "./assignment-evaluator.ts";
 import type { AuthorizationSnapshot, AuthorizationSnapshotRequest, CredentialMutation, CredentialMutationResult } from "./authority-contracts.ts";
@@ -9,6 +10,7 @@ import { contentRetentionDefault } from "./content-retention.ts";
 import { normalizeConnectionMutation, type ProviderConnectionMutation } from "./provider-connections.ts";
 import type { ResponsesScopeStore } from "./responses-scope.ts";
 import { boundedPercent, selectThresholdGrantKey, stickyScore, weightedRandom } from "./grant-selection-strategies.ts";
+import { publishRoutingProjection } from "./grant-projection.ts";
 import { errorResponse, HttpError, json, normalizeEmail, readJson, safeEqual } from "./utils.ts";
 
 type Principal = { principalType: "user" | "group"; principalId: string };
@@ -44,7 +46,11 @@ export class PolicyBindingIndexObject implements DurableObject {
         seedCredential: (id, value) => this.initializeCredentials([{ credentialId: id, credential: normalizeCredentialRecord(value, id) }]),
         seedPolicy: (id, value) => this.initializePolicies([{ policyId: id, policy: normalizePolicyRecord(value, contentRetentionDefault(this.env)) }]),
         initializeUsers: users => this.initializeUsers(users), initializeConnections: connections => this.initializeConnections(connections),
-        resolveConnections: ids => this.resolveConnections(ids), putMeta: key => this.putMeta(key), resolveGrantPool: input => this.resolveGrantPool(input),
+        resolveConnections: ids => this.resolveConnections(ids), putMeta: key => this.putMeta(key), resolveGrantPool: input => this.resolveGrantPool(input), finishSelection: (input, result) => finishAdmissionSelection(this.env, this.storage, input, result, {
+          getCredential: id => this.getCredential(id), getPolicy: id => this.getPolicy(id), getUser: email => this.getUser(email),
+          resolveConnections: ids => this.resolveConnections(ids), resolveGrantPool: request => this.resolveGrantPool(request),
+          grantAttachment: key => this.grantAttachment(key), selectGrant: request => this.selectGrant(request),
+        }),
       }));
       if (path === "/resolve") return json({ initialized: this.hasMeta("bindings_global_initialized"), ...this.resolveBindings((await readJson<{ principals: Principal[] }>(request)).principals) });
       if (path === "/initialize") { this.initializeBindings(await readJson<Seed[]>(request)); return new Response("initialized"); }
@@ -121,6 +127,7 @@ export class PolicyBindingIndexObject implements DurableObject {
     // Detach retains this fence, so delayed publication cannot resurrect it.
     // Revision also fences admission/repair while owner generation is unchanged.
     this.sql.exec("CREATE TABLE IF NOT EXISTS upstream_grant_pool_versions (grant_key TEXT PRIMARY KEY, generation INTEGER NOT NULL, revision INTEGER NOT NULL)");
+    this.sql.exec("CREATE TABLE IF NOT EXISTS upstream_grant_projections (grant_key TEXT PRIMARY KEY, projection_json TEXT, legacy INTEGER NOT NULL DEFAULT 0)");
     this.sql.exec("CREATE TABLE IF NOT EXISTS upstream_grant_runtime (grant_key TEXT PRIMARY KEY, state_json TEXT NOT NULL)");
     this.sql.exec("CREATE TABLE IF NOT EXISTS upstream_grant_selection (pool_key TEXT NOT NULL, grant_key TEXT NOT NULL, selected_count INTEGER NOT NULL, last_selected_ms INTEGER NOT NULL, PRIMARY KEY (pool_key, grant_key))");
     this.sql.exec("CREATE TABLE IF NOT EXISTS upstream_grant_pool_cursors (pool_key TEXT PRIMARY KEY, grant_key TEXT NOT NULL)");
@@ -430,6 +437,7 @@ export class PolicyBindingIndexObject implements DurableObject {
         if (status ? !member || member.status === status && !others : !prepared.attached) {
           // Retire the consumed reservation even when owner state is unchanged.
           if (restored) this.storeAttachmentVersion(input.key, input.generation, current.revision + 1);
+          publishRoutingProjection(this.sql, input);
           return { ...this.grantAttachment(input.key), outcome };
         }
         throw new HttpError(409, "grant_attachment_changed", "same-generation attachment publication differs from its committed state");
@@ -442,6 +450,7 @@ export class PolicyBindingIndexObject implements DurableObject {
       } else this.sql.exec("DELETE FROM upstream_grant_pool_members WHERE scope = ? AND scope_id = ? AND token_ref = ? AND status IN ('pending', 'pending_inactive')", ...identity);
       if (status !== "active") this.sql.exec("DELETE FROM upstream_grant_runtime WHERE grant_key = ?", input.key);
       this.storeAttachmentVersion(input.key, input.generation, current.revision + 1);
+      publishRoutingProjection(this.sql, input);
       return { ...this.grantAttachment(input.key), outcome };
     });
   }
@@ -631,7 +640,7 @@ interface GrantPoolResolveRequest { policyId: string; tenantId: string; provider
 export type GrantAttachmentStatus = "active" | "paused" | "reauth_required";
 export interface GrantAttachmentSnapshot { generation: number; revision: number; pending: boolean; attached: boolean }
 export interface GrantAttachmentResult extends GrantAttachmentSnapshot { outcome: "attached" | "detached" | "unattached" | "pending_cancelled" | "unresolved" }
-interface GrantAttachmentMutation { key: string; generation: number; revision: number; admissionRevision?: number; provider: string | null; status: GrantAttachmentStatus | null }
+interface GrantAttachmentMutation { key: string; generation: number; revision: number; admissionRevision?: number; provider: string | null; status: GrantAttachmentStatus | null; projection?: UpstreamGrant }
 interface GrantRuntimeFeedbackRequest { key: string; state: GrantRuntimeState }
 interface GrantRuntimeStatesRequest { keys: string[] }
 interface GrantPoolSelectRequest {
