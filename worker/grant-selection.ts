@@ -1,6 +1,6 @@
 import { HttpError } from "./utils.ts";
 import { assertOperationConfiguration, grantSupports, type GrantRequirement } from "./provider-auth.ts";
-import { authorityCall } from "./authority.ts";
+import { authorityCall, type AdmissionPool } from "./authority.ts";
 import { grantCoolingDown, grantQuotaExhausted, grantQuotaRatio, grantRuntimeFresh } from "./grant-quota.ts";
 import type { AccessPolicyEntry, Env, GrantRoutingPolicy, GrantRuntimeState, UpstreamGrant } from "./types";
 
@@ -80,9 +80,9 @@ export function selectPolicyCandidates<T extends AccessPolicyEntry>(pools: Array
   return compatible.find(({ candidates }) => candidates.available.length > 0) ?? compatible[0];
 }
 
-export async function policyGrantCandidates<T extends AccessPolicyEntry>(entry: T, providerId: string, env: Env, tokenRef = providerId, requirement?: GrantRequirement) {
+export async function policyGrantCandidates<T extends AccessPolicyEntry>(entry: T, providerId: string, env: Env, tokenRef = providerId, requirement?: GrantRequirement, admittedPool?: AdmissionPool) {
   // Dispatch and ledgers have always used default for a policy without a tenant.
-  const candidates = await resolveGrantCandidates(providerId, entry.policyId, entry.policy.tenantId ?? "default", tokenRef, env, new Set(), entry.policy.grantRouting, undefined, requirement);
+  const candidates = await resolveGrantCandidates(providerId, entry.policyId, entry.policy.tenantId ?? "default", tokenRef, env, new Set(), entry.policy.grantRouting, undefined, requirement, admittedPool);
   return { entry, candidates };
 }
 
@@ -131,9 +131,10 @@ export async function resolveGrantSelection(
   recordSelection = true,
   pinnedKey?: string | null,
   requirement?: GrantRequirement,
+  admittedPool?: AdmissionPool,
 ): Promise<GrantSelectionResult> {
   routing = grantRoutingPolicy(routing);
-  const { available, hasConfiguredGrant } = await resolveGrantCandidates(providerId, policyId, tenantId, defaultTokenRef, env, excludedKeys, routing, pinnedKey, requirement);
+  const { available, hasConfiguredGrant } = await resolveGrantCandidates(providerId, policyId, tenantId, defaultTokenRef, env, excludedKeys, routing, pinnedKey, requirement, admittedPool);
   const nowMs = Date.now();
   const active = activeOperationCandidates(available, env, requirement);
   let selected: SelectedGrant | null = null;
@@ -156,13 +157,15 @@ export async function resolveGrantCandidates(
   providerId: string, policyId: string, tenantId: string, defaultTokenRef: string, env: Env,
   excludedKeys: ReadonlySet<string> = new Set(), routing: GrantRoutingPolicy = DEFAULT_GRANT_ROUTING,
   pinnedKey?: string | null, requirement?: GrantRequirement,
+  admittedPool?: AdmissionPool,
 ): Promise<GrantCandidates> {
   routing = grantRoutingPolicy(routing);
   const defaultKeys = [
     `oauth/${policyId}/${defaultTokenRef}`,
     `oauth/tenants/${tenantId}/${defaultTokenRef}`,
   ];
-  const pool = await authorityCall<{ keys: string[]; states?: Record<string, GrantRuntimeState> }>(env, "/grant-pools/resolve", { providerId, policyId, tenantId, defaultKeys });
+  const pool = admittedPool ?? await authorityCall<{ keys: string[]; states?: Record<string, GrantRuntimeState> }>(env, "/grant-pools/resolve", { providerId, policyId, tenantId, defaultKeys });
+  if (admittedPool?.unavailable) throw new Error("admission pool resolution failed");
   const keys = [...new Set([...defaultKeys, ...pool.keys])];
   const grants = keys.length ? await env.POLICY_KV.get<UpstreamGrant>(keys, "json") : new Map<string, UpstreamGrant | null>();
   const nowMs = Date.now();

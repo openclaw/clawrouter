@@ -2,7 +2,7 @@ import { DatabaseSync } from "node:sqlite";
 import { after } from "node:test";
 import { PolicyBindingIndexObject } from "../authority.ts";
 
-export function createGrantAuthority(initialize) {
+export function createGrantAuthority(initialize, env) {
   const db = new DatabaseSync(":memory:");
   after(() => db.close());
   const sql = { exec(query, ...bindings) {
@@ -20,7 +20,7 @@ export function createGrantAuthority(initialize) {
     },
   };
   initialize?.(sql);
-  const object = new PolicyBindingIndexObject({ storage });
+  const object = new PolicyBindingIndexObject({ storage }, env);
   return {
     sql, storage, object,
     fetch: (url, init) => object.fetch(new Request(url, init)),

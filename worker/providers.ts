@@ -1,5 +1,6 @@
 import snapshotJson from "./generated/provider-snapshot.json" with { type: "json" };
 import { listConnections, resolveConnection } from "./authority.ts";
+import { proxyAdmission } from "./proxy-auth.ts";
 
 import { grantRevision, grantUsable as canonicalGrantUsable, resolveGrantSelection, type PinnedGrant } from "./grant-selection.ts";
 import { grantsVisibleToPolicies, type GrantRecord } from "./grant-scope.ts";
@@ -206,7 +207,9 @@ export function providerReadinessForState(provider: CompiledProvider, env: Env, 
 
 export async function assertProviderAccess(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, resolvedConnection?: ProviderConnection): Promise<ProviderConnection> {
   if (auth.policy.providers.length && !auth.policy.providers.includes(provider.id)) throw new HttpError(403, "provider_not_allowed", `policy does not allow provider ${provider.id}`);
-  const connection = resolvedConnection ?? await connectionFor(env, provider.id);
+  const admission = proxyAdmission(auth);
+  if (!resolvedConnection && admission?.connectionsUnavailable) throw new Error("admission connection resolution failed");
+  const connection = resolvedConnection ?? (admission && Object.hasOwn(admission.pools, provider.id) ? admission.connections.find(item => item.providerId === provider.id) ?? { providerId: provider.id, enabled: true } : await connectionFor(env, provider.id));
   if (!connection.enabled) throw new HttpError(503, "provider_disabled", `provider ${provider.id} is disabled`);
   return connection;
 }
@@ -349,7 +352,7 @@ export async function listHealth(env: Env): Promise<Map<string, ProviderHealth>>
 async function grantFor(provider: CompiledProvider, auth: AuthorizedIdentity, env: Env, excludedKeys: ReadonlySet<string>, stickyHash: string | null, recordSelection: boolean, pinned?: PinnedGrant, requirement?: GrantRequirement): Promise<{ selected: { key: string; grant: UpstreamGrant } | null; hasConfiguredGrant: boolean }> {
   const tokenRef = provider.auth.schemes.find((scheme) => scheme.type === "oauth")?.tokenRef ?? provider.id;
   const tenant = auth.policy.tenantId ?? "default";
-  const resolution = await resolveGrantSelection(provider.id, auth.policyId, tenant, tokenRef, env, excludedKeys, auth.policy.grantRouting, stickyHash, recordSelection, pinned?.key, requirement);
+  const resolution = await resolveGrantSelection(provider.id, auth.policyId, tenant, tokenRef, env, excludedKeys, auth.policy.grantRouting, stickyHash, recordSelection, pinned?.key, requirement, excludedKeys.size ? undefined : proxyAdmission(auth)?.pools[provider.id]);
   return { selected: resolution.selected ? { key: resolution.selected.key, grant: await refreshGrant(resolution.selected.key, resolution.selected.grant, provider, env, false) } : null, hasConfiguredGrant: resolution.hasConfiguredGrant };
 }
 

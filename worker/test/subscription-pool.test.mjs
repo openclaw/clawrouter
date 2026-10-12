@@ -21,7 +21,8 @@ const routing = extra => ({ ...DEFAULT_GRANT_ROUTING, ...extra });
 const usage = (percent = 10) => ({ five_hour: { utilization: percent, resets_at: future }, seven_day: { utilization: 20, resets_at: future }, limits: [{ kind: "weekly_scoped", scope: { model: { display_name: "Fable" } }, percent: 100, resets_at: future }] });
 
 async function fixture(t) {
-  const authority = createGrantAuthority();
+  const authorityEnv = {};
+  const authority = createGrantAuthority(undefined, authorityEnv);
   const values = new Map();
   const env = attachGrantCredentialNamespace({
     ANTHROPIC_API_KEY: "synthetic-api-key", CLAWROUTER_LOCAL_AUTH: "enabled",
@@ -29,6 +30,7 @@ async function fixture(t) {
     ACCESS_CONTROL: { idFromName: name => name, get: () => ({ fetch: authority.fetch }) },
     POLICY_KV: { async get(requested) { return Array.isArray(requested) ? new Map(requested.map(name => [name, structuredClone(values.get(name) ?? null)])) : structuredClone(values.get(requested) ?? null); }, async put(name, value) { values.set(name, JSON.parse(value)); }, async list({ prefix }) { return { keys: [...values.keys()].filter(name => name.startsWith(prefix)).map(name => ({ name })), list_complete: true }; } },
   }, { useExistingAuthority: true });
+  Object.assign(authorityEnv, env);
   const auth = { policyId: "pool", credentialId: "client", principalId: null, authType: "proxy_key", policy: { enabled: true, generation: "g1", providers: ["anthropic"], tenantId: "tenant-pool", retainRequestContent: false, grantRouting: routing({ environmentFallback: true }) } };
   await authorityCall(env, "/policies/put", { policyId: "pool", policy: auth.policy });
   await putGrantCredentials(env, key, { enabled: true, kind: "subscription", provider: "anthropic", accessToken: "synthetic-access", refreshToken: "synthetic-refresh", expiresAt: future });

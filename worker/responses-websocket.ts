@@ -5,7 +5,7 @@ import { authenticateProxyKey } from "./proxy-auth";
 import { createProxyAccounting, estimateCost } from "./proxy-accounting";
 import { concreteOpenAiSelection, isSelectionFailure, nativeMatch, prepareNativeRequest, searchParamsRecord, type ProxySelection } from "./proxy-selection";
 import { captureGrantRuntime, prepareSelected } from "./proxy";
-import { assertProviderAccess, providerById } from "./providers";
+import { assertProviderAccess, modelRoute, providerById } from "./providers";
 import { ResponsesOperationAborted, ResponsesWebSocketSession, type AdmittedResponse, type ResponsesCloseCause } from "./responses-websocket-session";
 import { extractUsageTokens } from "./token-usage";
 import type { CompiledQuotaConfig, Env, UsageEvent } from "./types";
@@ -29,7 +29,8 @@ export async function proxyResponsesWebSocket(request: Request, env: Env, contex
   new ResponsesWebSocketSession(pair[1], {
     waitUntil: (promise) => context.waitUntil(promise),
     async admit(body, lane, requestId, _pin, signal) {
-      const auth = await authenticateProxyKey(request.headers, env);
+      const selectedProvider = provider ?? (typeof body.model === "string" ? modelRoute(body.model, "llm.responses")?.provider : null);
+      const auth = await authenticateProxyKey(request.headers, env, selectedProvider ? [{ id: selectedProvider.id, tokenRef: selectedProvider.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? selectedProvider.id }] : []);
       if (auth instanceof Response) throw await responseError(auth);
       if (typeof body.model !== "string" || !body.model) throw new HttpError(400, "model_required", "each response.create requires a model");
       let selection: ProxySelection;

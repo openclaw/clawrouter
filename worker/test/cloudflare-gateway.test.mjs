@@ -216,6 +216,7 @@ async function gatewayFixture(t) {
     } },
     ACCESS_CONTROL: { idFromName: (name) => name, get: () => ({ fetch: async (url) => {
       const path = new URL(url).pathname;
+      if (path === "/admission/resolve") return Response.json({ credential: { credentialId: "fixture", credential }, policy: { policyId: "fixture", policy }, owner: null, connections: [connection], pools: { [connection.providerId]: { keys: [], states: {} } } });
       if (path === "/credentials/resolve") return Response.json({ initialized: true, credentials: [{ credentialId: "fixture", credential }], missingCredentialIds: [] });
       if (path === "/policies/resolve") return Response.json({ initialized: true, policies: [{ policyId: "fixture", policy }], missingPolicyIds: [] });
       if (path === "/connections/resolve") return Response.json({ initialized: true, connections: [connection], missingProviderIds: [] });

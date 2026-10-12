@@ -2,7 +2,7 @@ import { assertPolicyModel } from "./policy-models.ts";
 import { resolveTemplate } from "./provider-templates.ts";
 import { assessModelRequest } from "../shared/model-request-parameters.ts";
 import { createProxyAccounting, estimateCost, type CompoundRequestContext } from "./proxy-accounting";
-import { authenticateProxyKey } from "./proxy-auth";
+import { authenticateProxyKey, proxySessionHash } from "./proxy-auth";
 import {
   concreteOpenAiSelection, directManifestEnvelope, isSelectionFailure, manifestEnvelope, nativeMatch, nativeParams,
   prepareManifestRequest, prepareNativeRequest, requestObject, searchParamsRecord, validateSelectedInput, type ProxySelection,
@@ -26,7 +26,7 @@ import { backgroundResponse, requireEmptyResponseControlBody, responsesControl }
 import { proxyResponseControl } from "./response-controls.ts";
 import { responseRouteDigest } from "./responses-control-dispatch.ts";
 import {
-  assertProviderAccess, copyRequestHeaders, providerById,
+  assertProviderAccess, capabilityForPath, copyRequestHeaders, modelRoute, providerById,
   signSigV4, upstreamAuth, upstreamPath,
 } from "./providers";
 import { applyTransportHeaders, assertOperationConfiguration, grantSupports, transformTransportBody } from "./provider-auth.ts";
@@ -63,10 +63,16 @@ interface ReservedProxyBudget {
 }
 
 export async function proxyOpenAi(request: Request, env: Env, context: ExecutionContext, path: string, mode: AuthMode): Promise<Response> {
-  const preauthenticated = await preauthenticate(request, env, mode);
-  if (preauthenticated instanceof Response) return preauthenticated;
-  const body = requestObject(await readJson<unknown>(request));
+  let body: Record<string, unknown>;
+  try { body = requestObject(await readJson<unknown>(request)); }
+  catch (error) {
+    const auth = await preauthenticate(request, env, mode);
+    if (auth instanceof Response) return auth;
+    throw error;
+  }
   const modelId = typeof body.model === "string" ? body.model : "";
+  const preauthenticated = await preauthenticate(request, env, mode, mode === "proxy_key" ? modelRoute(modelId, capabilityForPath(path) ?? undefined)?.provider.id : undefined);
+  if (preauthenticated instanceof Response) return preauthenticated;
   if (!modelId) return errorResponse("model_required", "model is required", 400);
   if (modelId === FUSION_MODEL_ID) {
     if (path !== "/v1/chat/completions") return errorResponse("fusion_capability_unsupported", `${FUSION_MODEL_ID} supports only /v1/chat/completions`, 400);
@@ -206,7 +212,7 @@ export async function proxyNative(request: Request, env: Env, context: Execution
   if (!match) return errorResponse("route_not_found", "native proxy route not found", 404);
   const provider = providerById(decodePathSegment(match[1]));
   if (!provider) return errorResponse("provider_not_found", "provider not found", 404);
-  const preauthenticated = await authenticateProxyKey(request.headers, env);
+  const preauthenticated = await preauthenticate(request, env, "proxy_key", provider.id);
   if (preauthenticated instanceof Response) return preauthenticated;
   const endpoint = provider.endpoints.find((candidate) => nativeMatch(candidate, match[2]));
   if (!endpoint || !endpoint.native_proxy) return errorResponse("route_not_found", "native provider route not found", 404);
@@ -215,7 +221,7 @@ export async function proxyNative(request: Request, env: Env, context: Execution
   const control = responsesControl(provider, endpoint);
   if (control) {
     await requireEmptyResponseControlBody(request);
-    return proxyResponseControl(request, env, control.action, nativeParams(endpoint, match[2]).response_id, new URL(request.url).searchParams, "proxy_key", provider.id, control.create.id, preauthenticated);
+    return proxyResponseControl(request, env, control.action, nativeParams(endpoint, match[2]).response_id, new URL(request.url).searchParams, "proxy_key", provider.id, control.create.id, preauthenticated ?? undefined);
   }
   const body = request.method === "GET" || request.method === "HEAD" ? {} : await readJson<unknown>(request);
   const prepared = prepareNativeRequest(provider, endpoint, body, match[2], env);
@@ -406,7 +412,9 @@ function selectionUpstreamModel(selection: ProxySelection): string | null {
 }
 
 async function selectedAuth(request: Request, env: Env, mode: AuthMode, selection: ProxySelection, preauthenticated: AuthorizedIdentity | null): Promise<AuthorizedIdentity | Response> {
-  return preauthenticated ?? (mode === "access" ? accessIdentity(request, env, selection.provider.id, { provider: selection.provider, endpoint: selection.endpoint, mode: "http", model: selection.model?.id ?? selectionUpstreamModel(selection) }) : authenticateProxyKey(request.headers, env));
+  if (preauthenticated) return preauthenticated;
+  if (mode === "access") return accessIdentity(request, env, selection.provider.id, { provider: selection.provider, endpoint: selection.endpoint, mode: "http", model: selection.model?.id ?? selectionUpstreamModel(selection) });
+  return (await preauthenticate(request, env, mode, selection.provider.id))!;
 }
 
 export async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: Record<string, unknown>, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false): Promise<PreparedUpstream> {
@@ -467,6 +475,7 @@ async function grantStickyHash(request: Request, auth: AuthorizedIdentity): Prom
   const identity = auth.principalId ?? auth.credentialId ?? auth.policyId;
   if (routing.stickiness === "identity") return sha256Hex(`identity:${identity}`);
   const sessionId = correlationMetadata(request).sessionId;
+  if (sessionId && proxySessionHash(auth)) return proxySessionHash(auth)!;
   return sha256Hex(`session:${sessionId ?? identity}`);
 }
 
@@ -483,6 +492,9 @@ async function auditSelectionFailure(request: Request, env: Env, context: Execut
 }
 
 async function preauthenticate(request: Request, env: Env, mode: AuthMode, providerId?: string, requirement?: import("./provider-auth").GrantRequirement): Promise<AuthorizedIdentity | Response | null> {
-  if (mode === "proxy_key") return authenticateProxyKey(request.headers, env);
+  if (mode === "proxy_key") {
+    const provider = providerId ? providerById(providerId) : null;
+    return authenticateProxyKey(request.headers, env, provider ? [{ id: provider.id, tokenRef: provider.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? provider.id }] : [], false, correlationMetadata(request).sessionId);
+  }
   return providerId ? accessIdentity(request, env, providerId, requirement) : null;
 }

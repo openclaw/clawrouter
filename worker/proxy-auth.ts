@@ -1,22 +1,34 @@
 import type { AccessPolicyEntry, AuthorizedIdentity, Env, ProxyCredential } from "./types";
-import { resolveCredentials, resolvePolicies, resolveUsers } from "./authority";
-import { errorResponse, HttpError, parseProxyKey, safeEqual, sha256Hex } from "./utils";
+import { authorityCall, type AdmissionProvider, type AdmissionResult } from "./authority.ts";
+import { errorResponse, HttpError, parseProxyKey, safeEqual, sha256Hex } from "./utils.ts";
 
 export interface ProxyKeyVerification { readonly kind: "proxy_key"; readonly credentialId: string; readonly principalId: string | null; readonly secretSha256: string }
 const verifiedKeys = new WeakMap<AuthorizedIdentity, ProxyKeyVerification>();
+// Scoped to this authenticated operation, never shared between requests or
+// WebSocket creates. The next admission always goes back to the authority.
+const admissions = new WeakMap<AuthorizedIdentity, AdmissionResult>();
+const sessionHashes = new WeakMap<AuthorizedIdentity, string>();
+export function proxyAdmission(identity: AuthorizedIdentity): AdmissionResult | undefined { return admissions.get(identity); }
+export function proxySessionHash(identity: AuthorizedIdentity): string | undefined { return sessionHashes.get(identity); }
 export function proxyKeyVerification(identity: AuthorizedIdentity): ProxyKeyVerification | undefined { return verifiedKeys.get(identity); }
 
-export async function authenticateProxyKey(headers: Headers, env: Env): Promise<AuthorizedIdentity | Response> {
+export async function authenticateProxyKey(headers: Headers, env: Env, providers: AdmissionProvider[] = [], allConnections = false, sessionId?: string | null): Promise<AuthorizedIdentity | Response> {
   const parsed = proxyKeyFromHeaders(headers);
   if (!parsed) return errorResponse("invalid_proxy_key", "a valid ClawRouter proxy key is required", 401);
-  const credentialEntry = (await resolveCredentials(env, [parsed.kid]))[0];
+  const [admission, secretSha256, sessionHash] = await Promise.all([
+    authorityCall<AdmissionResult>(env, "/admission/resolve", { credentialId: parsed.kid, providers, allConnections }),
+    sha256Hex(parsed.secret),
+    sessionId ? sha256Hex(`session:${sessionId}`) : undefined,
+  ]);
+  const credentialEntry = admission.credential;
   if (!credentialEntry) return errorResponse("unknown_proxy_key", "proxy key is not registered", 401);
-  const secretSha256 = await sha256Hex(parsed.secret);
   if (!safeEqual(secretSha256, credentialEntry.credential.secretSha256.toLowerCase())) return errorResponse("invalid_proxy_key", "proxy key secret is invalid", 401);
-  const policyEntry = (await resolvePolicies(env, [credentialEntry.credential.policyId]))[0];
+  if (admission.policyUnavailable) throw new Error("admission policy resolution failed");
+  const policyEntry = admission.policy;
   const failure = proxyCredentialFailure(credentialEntry.credential, policyEntry);
   if (failure) return errorResponse(failure.code, failure.message, failure.status);
-  const owner = credentialEntry.credential.principalId ? (await resolveUsers(env, [credentialEntry.credential.principalId]))[0] : undefined;
+  if (admission.ownerUnavailable) throw new Error("admission owner resolution failed");
+  const owner = admission.owner;
   // Unowned and unmaterialized service keys remain valid; explicit owner disable
   // blocks both new requests and subsequent admissions on existing WebSockets.
   const ownerFailure = proxyCredentialFailure(credentialEntry.credential, policyEntry, owner?.record.enabled);
@@ -30,6 +42,8 @@ export async function authenticateProxyKey(headers: Headers, env: Env): Promise<
     contentRetentionDisabled: owner?.record.contentRetentionDisabled ?? false,
   };
   verifiedKeys.set(identity, Object.freeze({ kind: "proxy_key", credentialId: parsed.kid, principalId: identity.principalId, secretSha256 }));
+  admissions.set(identity, admission);
+  if (sessionHash) sessionHashes.set(identity, sessionHash);
   return identity;
 }
 

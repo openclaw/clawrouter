@@ -89,12 +89,13 @@ async function authorityFixture(t, principalId = email) {
     statement.run(...bindings);
     return [];
   } };
-  const authority = new PolicyBindingIndexObject({ storage: { sql } });
+  let authority;
   const env = {
     CLAWROUTER_ADMIN_TOKEN_SHA256: await sha256Hex(adminToken),
     ACCESS_CONTROL: { idFromName: (name) => name, get: () => ({ fetch: (url, init) => authority.fetch(new Request(url, init)) }) },
     POLICY_KV: { async get(key) { return Array.isArray(key) ? new Map(key.map((item) => [item, null])) : null; }, async list() { return { keys: [], list_complete: true }; } },
   };
+  authority = new PolicyBindingIndexObject({ storage: { sql } }, env);
   const setUser = (enabled) => authorityCall(env, "/users/put", { email, record: { enabled, contentRetentionDisabled: true } });
   await setUser(true);
   await authorityCall(env, "/policies/put", { policyId: "fixture", policy: { enabled: true, generation: "g1", providers: ["openai"], tenantId: "default", monthlyBudgetMicros: null } });

@@ -233,6 +233,7 @@ async function fixture(aggregatorModel, adviserModels) {
     } }) },
     ACCESS_CONTROL: { idFromName: (name) => name, get: () => ({ fetch: async (url, init) => {
       const path = new URL(url).pathname;
+      if (path === "/admission/resolve") return Response.json({ credential: { credentialId: "fixture", credential }, policy: { policyId: "fixture", policy }, owner: null, connections: JSON.parse(init.body).providers.map(({ id }) => ({ providerId: id, enabled: true, monthlyBudgetMicros: null })), pools: Object.fromEntries(JSON.parse(init.body).providers.map(({ id }) => [id, { keys: [], states: {} }])) });
       if (path === "/credentials/resolve") return Response.json({ initialized: true, credentials: [{ credentialId: "fixture", credential }], missingCredentialIds: [] });
       if (path === "/policies/resolve") return Response.json({ initialized: true, policies: [{ policyId: "fixture", policy }], missingPolicyIds: [] });
       if (path === "/connections/resolve") return Response.json({ initialized: true, connections: JSON.parse(init.body).providerIds.map((providerId) => ({ providerId, enabled: true, monthlyBudgetMicros: null })), missingProviderIds: [] });

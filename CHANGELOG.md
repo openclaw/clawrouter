@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Collapse proxy-key admission into one canonical authority read and preserve atomic grant selection, migration fences and revocation checks; reuse compiled discovery metadata and instrument local authority RPC counts.
+
 - Add a dependency-free load generator and synthetic local subscription-pool stress harness with latency, disconnect and accounting diagnostics; avoid deep-copying prompts and tools during top-level request-field renames.
 
 - Add optional policy model allowlists across discovery and inference, Claude Opus 5.5 pricing, and opt-in policy-scoped pool status with shared subscription eligibility and seven-day usage.

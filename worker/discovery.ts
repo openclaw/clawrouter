@@ -14,11 +14,31 @@ import { publicSession, sessionPolicies, sessionPolicyIdentity, verifiedAccessSe
 import { contentRetentionDefault } from "./content-retention.ts";
 import { loadFusionConfig } from "./fusion-config";
 import { FUSION_MODEL_ID } from "./fusion";
-import { authenticateProxyKey } from "./proxy-auth";
+import { authenticateProxyKey, proxyAdmission } from "./proxy-auth";
 import { assertProviderAccess, listHealth, modelRoute, modelSupportsEndpoint, providerReadinessForState, snapshot, unifiedPathForEndpoint, type Readiness } from "./providers";
 import type { AccessSession, AuthorizedIdentity, CompiledModel, CompiledProvider, Env } from "./types";
 import { errorResponse, HttpError, privateJson, sha256Hex } from "./utils";
 import { responsesControl } from "./responses-lifecycle.ts";
+
+// Only compiled metadata lives across requests. Eligibility, health, balances
+// and policy projections are always rebuilt from this request's observations.
+function staticProviderProjection(provider: CompiledProvider) {
+  const models = new Map(provider.models.map(model => {
+    const display_name = `${provider.display_name} · ${model.id}`;
+    return [model.id, {
+      openai: Object.freeze({ id: model.id, object: "model", owned_by: provider.id, display_name }),
+      anthropic: Object.freeze({ id: model.id, type: "model", display_name, created_at: "1970-01-01T00:00:00Z", capabilities: null, max_input_tokens: model.pricing?.unit === "character" ? null : model.pricing?.maxInputTokens ?? null, max_tokens: model.pricing?.unit === "character" ? null : model.pricing?.defaultMaxOutputTokens ?? null }),
+    }];
+  }));
+  const routes = new Map(provider.endpoints.filter(endpoint => endpoint.native_proxy).map(endpoint => [endpoint.id, Object.freeze({ endpoint: endpoint.id, methods: Object.freeze([...endpoint.methods]) as unknown as string[], path: endpoint.path, requestFormat: endpoint.request_format, responseFormat: endpoint.response_format, streaming: endpoint.streaming })]));
+  return { models, routes, connectionTypes: Object.freeze(connectionTypes(provider)) as unknown as string[] };
+}
+const compiledProjections = new WeakMap(snapshot.providers.map(provider => [provider, staticProviderProjection(provider)]));
+function compiledProjection(provider: CompiledProvider) {
+  let projection = compiledProjections.get(provider);
+  if (!projection) { projection = staticProviderProjection(provider); compiledProjections.set(provider, projection); }
+  return projection;
+}
 
 export async function sessionResponse(request: Request, env: Env): Promise<Response> {
   const session = await verifiedAccessSession(request, env);
@@ -59,7 +79,7 @@ export async function modelsResponse(request: Request, env: Env): Promise<Respon
   const rows = entitlements.rows;
   const inventory = entitlements.inventory;
   if (request.headers.has("anthropic-version")) {
-    const data = snapshot.providers.flatMap((provider) => (inventory.get(provider.id)?.models ?? []).filter((model) => model.capabilities.includes("llm.messages")).map((model) => ({
+    const data = snapshot.providers.flatMap((provider) => (inventory.get(provider.id)?.models ?? []).filter((model) => model.capabilities.includes("llm.messages")).map((model) => compiledProjection(provider).models.get(model.id)?.anthropic ?? ({
       id: model.id, type: "model", display_name: `${provider.display_name} · ${model.id}`, created_at: "1970-01-01T00:00:00Z",
       capabilities: null, max_input_tokens: model.pricing?.unit === "character" ? null : model.pricing?.maxInputTokens ?? null, max_tokens: model.pricing?.unit === "character" ? null : model.pricing?.defaultMaxOutputTokens ?? null,
     })));
@@ -67,7 +87,8 @@ export async function modelsResponse(request: Request, env: Env): Promise<Respon
   }
   const data = snapshot.providers.flatMap((provider) => (inventory.get(provider.id)?.models ?? []).flatMap((model) => {
     const capabilities = model.capabilities;
-    return capabilities.length ? [{ id: model.id, object: "model", owned_by: provider.id, display_name: `${provider.display_name} · ${model.id}`, capabilities }] : [];
+    const compiled = compiledProjection(provider).models.get(model.id)?.openai;
+    return capabilities.length ? [{ ...(compiled ?? { id: model.id, object: "model", owned_by: provider.id, display_name: `${provider.display_name} · ${model.id}` }), capabilities }] : [];
   }));
   const fusion = rows.find((row) => row.provider === "clawrouter");
   if (fusion?.allowed && fusion.readiness.executable) data.unshift({
@@ -99,8 +120,8 @@ function catalogProjection(entitlements: ClientEntitlements): ClientCatalog {
     return [{
       id: provider.id, displayName: provider.display_name, allowed: true, executable,
       openaiCompatible: executable && provider.class === "openai_compatible", nativeBaseUrl: `/v1/native/${provider.id}`,
-      policies: row.policies, readiness: row.readiness, connectionTypes: connectionTypes(provider),
-      routes: provider.endpoints.filter((endpoint) => endpoint.native_proxy && (endpoints.includes(endpoint.id) || view.websockets.includes(endpoint.id))).map((endpoint) => ({ endpoint: endpoint.id, methods: endpoint.methods, path: endpoint.path, requestFormat: endpoint.request_format, responseFormat: endpoint.response_format, streaming: endpoint.streaming, ...(view.websockets.includes(endpoint.id) ? { websocket: endpoint.websocket } : {}) })),
+      policies: row.policies, readiness: row.readiness, connectionTypes: compiledProjection(provider).connectionTypes,
+      routes: provider.endpoints.filter((endpoint) => endpoint.native_proxy && (endpoints.includes(endpoint.id) || view.websockets.includes(endpoint.id))).map((endpoint) => ({ ...compiledProjection(provider).routes.get(endpoint.id)!, ...(view.websockets.includes(endpoint.id) ? { websocket: endpoint.websocket } : {}) })),
       models: view.models, offers: view.offers,
     }];
   });
@@ -220,7 +241,7 @@ interface ClientEntitlements {
 async function clientEntitlements(request: Request, env: Env): Promise<ClientEntitlements | Response> {
   const hasKey = ["authorization", "x-api-key", "x-goog-api-key", "api-key"].some((name) => request.headers.get(name)?.includes("clawrouter-") || request.headers.get(name)?.includes("ocpk_"));
   if (hasKey) {
-    const auth = await authenticateProxyKey(request.headers, env);
+    const auth = await authenticateProxyKey(request.headers, env, snapshot.providers.map(provider => ({ id: provider.id, tokenRef: provider.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? provider.id })), true);
     if (auth instanceof Response) return auth;
     return entitlementRowsForEntries([auth], env, { authType: auth.authType, credentialId: auth.credentialId, principalId: auth.principalId });
   }
@@ -232,12 +253,14 @@ async function clientEntitlements(request: Request, env: Env): Promise<ClientEnt
 async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
   // Authentication and policy resolution have finished. These independent,
   // request-local observations must not serialize behind advisory KV health.
+  const admission = identities.length === 1 ? proxyAdmission(identities[0]) : undefined;
+  if (admission?.connectionsUnavailable) throw new Error("admission connection resolution failed");
   const [health, connections, providerPools] = await Promise.all([
     listHealth(env),
-    listConnections(env, snapshot.providers.map((provider) => provider.id)),
+    admission ? Promise.resolve(admission.connections) : listConnections(env, snapshot.providers.map((provider) => provider.id)),
     Promise.all(snapshot.providers.map((provider) => {
       const entries = identities.filter((entry) => entry.policy.enabled && (!entry.policy.providers.length || entry.policy.providers.includes(provider.id)));
-      return Promise.all(entries.map((entry) => policyGrantCandidates(entry, provider.id, env, provider.auth.schemes.find((scheme) => scheme.type === "oauth")?.tokenRef ?? provider.id)));
+      return Promise.all(entries.map((entry) => policyGrantCandidates(entry, provider.id, env, provider.auth.schemes.find((scheme) => scheme.type === "oauth")?.tokenRef ?? provider.id, undefined, proxyAdmission(entry)?.pools[provider.id])));
     })),
   ]);
   const policyBalances = new Map<string, ReturnType<typeof budgetStatus>>();

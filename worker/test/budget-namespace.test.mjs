@@ -168,6 +168,7 @@ test("HTTP and native requests reserve 60 in each colliding budget and settle 25
       USAGE_LEDGER: { idFromName: value => value, get: () => ({ fetch: async () => Response.json(emptyUsageSnapshot()) }) },
       ACCESS_CONTROL: { idFromName: value => value, get: () => ({ fetch: async url => {
         const route = new URL(url).pathname;
+        if (route === "/admission/resolve") return Response.json({ credential: { credentialId: "fixture_key", credential: { enabled: true, secretSha256: digest, policyId: "openai", policyGeneration: policy.generation } }, policy: auth, owner: null, connections: [{ ...connection, enabled: true }], pools: { openai: { keys: [], states: {} } } });
         if (route === "/credentials/resolve") return Response.json({ initialized: true, credentials: [{ credentialId: "fixture_key", credential: { enabled: true, secretSha256: digest, policyId: "openai", policyGeneration: policy.generation } }], missingCredentialIds: [] });
         if (route === "/policies/resolve") return Response.json({ initialized: true, policies: [auth], missingPolicyIds: [] });
         if (route === "/connections/resolve") return Response.json({ initialized: true, connections: [{ ...connection, enabled: true }], missingProviderIds: [] });

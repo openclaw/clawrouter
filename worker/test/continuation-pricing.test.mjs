@@ -126,13 +126,14 @@ for (const phase of ["resolve", "prepare"]) test(`${phase} failure preserves the
   await consume(f, {});
   let now = Date.now(), delayed = false;
   t.mock.method(Date, "now", () => now);
-  f.env.ACCESS_CONTROL.beforeFetch = async (name, request) => {
-    const path = new URL(request.url).pathname;
-    if (delayed || (phase === "resolve" ? !name.startsWith("http-continuations:") : path !== "/connections/resolve")) return;
-    delayed = true; now += 1234; throw new Error("fixture preflight outage");
+  if (phase === "prepare") await f.authority("/connections/put", { providerId: "openai", enabled: false });
+  f.env.ACCESS_CONTROL.beforeFetch = async name => {
+    if (delayed || !name.startsWith("http-continuations:")) return;
+    delayed = true; now += 1234;
+    if (phase === "resolve") throw new Error("fixture preflight outage");
   };
   const before = rows(f), child = await consume(f, { previous_response_id: "response_1" }, 503);
-  assert.equal(child.error.code, phase === "resolve" ? "continuation_unavailable" : "provider_unavailable");
+  assert.equal(child.error.code, phase === "resolve" ? "continuation_unavailable" : "provider_disabled");
   assert.equal(delayed, true); assert.equal(f.sent.length, 1); assert.equal(f.events.length, 2);
   assert.equal(f.events[1].duration_ms, 1234);
   assert.deepEqual([f.events[1].actual_cost_micros, f.events[1].cost_basis], [0, "none"]);

@@ -183,6 +183,7 @@ async function environment() {
     },
     ACCESS_CONTROL: { idFromName: name => name, get: () => ({ fetch: async (url, init) => {
       const path = new URL(url).pathname, body = JSON.parse(init.body);
+      if (path === "/admission/resolve") return Response.json({ credential: { credentialId: "fixture", credential }, policy: { policyId: "fixture", policy }, owner: { email, record: { enabled: true } }, connections: body.providers.map(({ id }) => ({ providerId: id, enabled: true, monthlyBudgetMicros: null })), pools: Object.fromEntries(body.providers.map(({ id }) => [id, { keys: [], states: {} }])) });
       if (path === "/credentials/resolve") return Response.json({ initialized: true, credentials: [{ credentialId: "fixture", credential }], missingCredentialIds: [] });
       if (path === "/policies/resolve") return Response.json({ initialized: true, policies: [{ policyId: "fixture", policy }], missingPolicyIds: [] });
       if (path === "/users/resolve") return Response.json({ initialized: true, users: [{ email, record: { enabled: true, role: "user", tenantId: "default", groups: [] } }], missingEmails: [] });

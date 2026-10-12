@@ -10,6 +10,7 @@ export function usageEnv(objectNames, { provider = "openai", limit = 100, provid
     idFromName: (name) => name,
     get: () => ({ fetch: async (url) => {
       const path = new URL(url).pathname;
+      if (path === "/admission/resolve") return Response.json({ credential: { credentialId: "maintainer_key", credential }, policy: { policyId: "maintainer_access", policy }, owner: null, connections: [{ providerId: provider, enabled: true, monthlyBudgetMicros: providerLimit }], pools: { [provider]: { keys: [], states: {} } } });
       if (path === "/credentials/resolve") return Response.json({ initialized: true, credentials: [{ credentialId: "maintainer_key", credential }], missingCredentialIds: [] });
       if (path === "/policies/resolve") return Response.json({ initialized: true, policies: [{ policyId: "maintainer_access", policy }], missingPolicyIds: [] });
       if (path === "/users/resolve") return Response.json({ initialized: true, users: [], missingEmails: [] });

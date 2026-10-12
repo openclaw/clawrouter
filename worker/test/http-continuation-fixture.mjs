@@ -13,7 +13,7 @@ export async function fixture(t, pooled = true, { limit = null, fixedCost = 7 } 
   const policy = { enabled: true, generation: "g1", providers: ["openai"], tenantId: "default", monthlyBudgetMicros: limit, requestCostMicros: fixedCost, retainRequestContent: false, grantRouting: { strategy: "round_robin", stickiness: "none", failover: true } };
   const credential = { enabled: true, secretSha256: await sha256Hex("fixture-secret"), policyId: "fixture" };
   const env = attachGrantCredentialNamespace({
-    ACCESS_CONTROL: continuationAuthority(t),
+    ACCESS_CONTROL: null,
     BUDGET_LEDGER: sqlBudgetNamespace(t),
     POLICY_KV: {
       async get(key) { return Array.isArray(key) ? new Map(key.map(key => [key, structuredClone(values.get(key) ?? null)])) : structuredClone(values.get(key) ?? null); },
@@ -22,6 +22,7 @@ export async function fixture(t, pooled = true, { limit = null, fixedCost = 7 } 
     OPENAI_API_KEY: "synthetic-environment-key",
     USAGE_QUEUE: { async send(event) { events.push(event); } },
   }, { useExistingAuthority: true });
+  env.ACCESS_CONTROL = continuationAuthority(t, env);
   async function authority(path, value) {
     const response = await env.ACCESS_CONTROL.get("policy-bindings").fetch(`https://clawrouter.internal${path}`, { method: "POST", body: JSON.stringify(value) });
     assert.equal(response.status, 200, await response.clone().text());

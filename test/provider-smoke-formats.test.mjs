@@ -253,6 +253,10 @@ async function smokeEnvironment(provider, t) {
     } },
     ACCESS_CONTROL: { idFromName: name => name, get: () => ({ fetch: async (url, init) => {
       const path = new URL(url).pathname;
+      if (path === "/admission/resolve") {
+        const { credentialId, providers } = JSON.parse(init.body);
+        return Response.json({ credential: ["fixture", "observer"].includes(credentialId) ? { credentialId, credential } : null, policy: { policyId: "fixture", policy }, owner: null, connections: [{ providerId: provider.id, enabled: true }], pools: Object.fromEntries(providers.map(({ id }) => [id, { keys: [], states: {} }])) });
+      }
       if (path === "/credentials/resolve") return Response.json({ initialized: true, credentials: JSON.parse(init.body).credentialIds.filter(id => ["fixture", "observer"].includes(id)).map(credentialId => ({ credentialId, credential })), missingCredentialIds: [] });
       if (path === "/policies/resolve") return Response.json({ initialized: true, policies: [{ policyId: "fixture", policy }], missingPolicyIds: [] });
       if (path === "/connections/resolve") return Response.json({ initialized: true, connections: [{ providerId: provider.id, enabled: true }], missingProviderIds: [] });

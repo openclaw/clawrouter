@@ -32,46 +32,24 @@ test("Worker catalog reads known health in one bulk request without a KV listing
   assert.deepEqual(calls, [{ method: "get", key: keys, type: "json" }]);
 });
 
-test("Worker catalog overlaps independent reads only after authentication", async (t) => {
+test("Worker catalog uses one admission before independent health and config reads", async (t) => {
   const fixture = await fusionDiscoveryFixture(t);
-  const gate = Promise.withResolvers(), connectionsStarted = Promise.withResolvers(), started = new Set();
-  const getAuthority = fixture.env.ACCESS_CONTROL.get, get = fixture.env.POLICY_KV.get, list = fixture.env.POLICY_KV.list;
-  fixture.env.ACCESS_CONTROL.get = (...args) => {
-    const stub = getAuthority(...args);
-    return { fetch: async (url, init) => {
-      const path = new URL(url).pathname;
-      if (["/connections/resolve", "/grant-pools/resolve"].includes(path)) {
-        started.add(path);
-        if (path === "/connections/resolve") connectionsStarted.resolve();
-        await gate.promise;
-      }
-      return stub.fetch(url, init);
-    } };
-  };
-  fixture.env.POLICY_KV.get = async (key, type) => {
-    const keys = Array.isArray(key) ? key : [key];
-    if (keys.some((item) => item.startsWith("health/providers/"))) { started.add("health"); await gate.promise; }
-    if (key === "config/fusion") { started.add("fusion"); await gate.promise; }
-    return get(key, type);
-  };
-  fixture.env.POLICY_KV.list = async (options) => { started.add("health"); await gate.promise; return list(options); };
-  const pending = worker.fetch(fixture.request("key"), fixture.env, {});
-  try {
-    await connectionsStarted.promise;
-    // Drain microtasks, not a latency deadline: all independent reads must
-    // start while the connection snapshot is still held at the gate.
-    await new Promise((resolve) => setImmediate(resolve));
-    assert.deepEqual([...started].sort(), ["/connections/resolve", "/grant-pools/resolve", "fusion", "health"]);
-  } finally { gate.resolve(); await pending; }
-  assert.equal((await pending).status, 200);
+  const get = fixture.env.POLICY_KV.get, started = [];
+  fixture.env.POLICY_KV.get = async (key, type) => { started.push(key); return get(key, type); };
+  const response = await worker.fetch(fixture.request("key"), fixture.env, {});
+  assert.equal(response.status, 200);
+  assert.deepEqual(fixture.calls.map(call => call.path), ["/admission/resolve"]);
+  assert.ok(started.includes("config/fusion"));
+  assert.ok(started.some(key => Array.isArray(key) && key.some(item => item.startsWith("health/providers/"))));
   for (const state of ["revoked", "stale", "disabled-owner"]) {
-    started.clear();
+    started.length = 0; fixture.calls.length = 0;
     fixture.credential.enabled = state !== "revoked";
     fixture.credential.policyGeneration = state === "stale" ? "old" : "g1";
     fixture.credential.principalId = "fixture@example.com";
     fixture.userRecord.enabled = state !== "disabled-owner";
     assert.equal((await worker.fetch(fixture.request("key"), fixture.env, {})).status, 403);
-    assert.equal(started.size, 0, `${state}: no discovery reads before authorization`);
+    assert.deepEqual(fixture.calls.map(call => call.path), ["/admission/resolve"]);
+    assert.equal(started.length, 0, `${state}: no discovery KV reads before authorization`);
   }
 });
 
@@ -471,6 +449,7 @@ test("models and catalog share read-only grant eligibility, transport support, a
     },
     ACCESS_CONTROL: { idFromName: (name) => name, get: () => ({ fetch: async (url, init) => {
       const path = new URL(url).pathname; paths.push(path);
+      if (path === "/admission/resolve") return Response.json({ credential: { credentialId: "fixture", credential }, policy: policies[0], owner: null, connections: [connection], pools: Object.fromEntries(JSON.parse(init.body).providers.filter(({ id }) => !policy.providers.length || policy.providers.includes(id)).map(({ id }) => [id, { keys: [...grants.keys()].filter(key => key.startsWith("oauth/fixture/")), states }])) });
       if (path === "/credentials/resolve") return Response.json({ initialized: true, credentials: [{ credentialId: "fixture", credential }], missingCredentialIds: [] });
       if (path === "/policies/resolve") return Response.json({ initialized: true, policies, missingPolicyIds: [] });
       if (path === "/users/resolve") return Response.json({ initialized: true, users: [{ email: "fixture@example.com", record: { enabled: true, role: "user", tenantId: "default", groups: [] } }], missingEmails: [] });
@@ -599,6 +578,7 @@ test("Azure discovery keeps explicit native routes while hiding an unresolved de
     POLICY_KV: { async get(key) { return Array.isArray(key) ? new Map(key.map((item) => [item, null])) : null; }, async list() { return { keys: [], list_complete: true }; } },
     ACCESS_CONTROL: { idFromName: (name) => name, get: () => ({ fetch: async (url) => {
       const path = new URL(url).pathname;
+      if (path === "/admission/resolve") return Response.json({ credential: { credentialId: "fixture", credential }, policy: { policyId: "fixture", policy }, owner: null, connections: [{ providerId: "azure-openai", enabled: true, monthlyBudgetMicros: null }], pools: { "azure-openai": { keys: [], states: {} } } });
       if (path === "/credentials/resolve") return Response.json({ initialized: true, credentials: [{ credentialId: "fixture", credential }], missingCredentialIds: [] });
       if (path === "/policies/resolve") return Response.json({ initialized: true, policies: [{ policyId: "fixture", policy }], missingPolicyIds: [] });
       if (path === "/connections/resolve") return Response.json({ initialized: true, connections: [{ providerId: "azure-openai", enabled: true, monthlyBudgetMicros: null }], missingProviderIds: [] });
@@ -643,7 +623,12 @@ test("Fusion shares selected-policy model eligibility across key and session dis
         }
         // One connection snapshot and one read-only pool resolution per eligible
         // provider/policy serve both concrete rows and every Fusion participant.
-        assert.equal(calls.filter(({ path }) => path === "/connections/resolve").length, 1);
+        assert.equal(calls.filter(({ path }) => path === "/connections/resolve").length, mode === "key" ? 0 : 1);
+        if (mode === "key") {
+          assert.equal(calls.filter(({ path }) => path === "/admission/resolve").length, 1);
+          assert.equal(calls.filter(({ path }) => path === "/grant-pools/resolve").length, 0);
+          continue;
+        }
         const pools = calls.filter(({ path }) => path === "/grant-pools/resolve").map(({ body }) => `${body.policyId}/${body.providerId}`);
         assert.deepEqual(pools.sort(), (mode === "key" ? policies.slice(0, 1) : policies).flatMap(({ policyId, policy }) => policy.providers.map((provider) => `${policyId}/${provider}`)).sort());
       }
@@ -862,6 +847,7 @@ async function fusionDiscoveryFixture(t, { bindings } = {}) {
     } }) },
     ACCESS_CONTROL: { idFromName: (name) => name, get: () => ({ fetch: async (url, init) => {
       const path = new URL(url).pathname, body = JSON.parse(init.body); calls.push({ path, body });
+      if (path === "/admission/resolve") return Response.json({ credential: { credentialId: "fixture", credential }, policy: policies.find(entry => entry.policyId === credential.policyId), owner: { email: "fixture@example.com", record: userRecord }, connections, pools: Object.fromEntries(body.providers.filter(({ id }) => !policy.providers.length || policy.providers.includes(id)).map(({ id }) => [id, { keys: [...records.keys()].filter(key => key.startsWith(`oauth/${credential.policyId}/`) && records.get(key).provider === id), states }])) });
       if (path === "/credentials/resolve") return Response.json({ initialized: true, credentials: [{ credentialId: "fixture", credential }], missingCredentialIds: [] });
       if (path === "/policies/resolve") return Response.json({ initialized: true, policies: policies.filter(({ policyId }) => body.policyIds.includes(policyId)), missingPolicyIds: body.policyIds.filter((id) => !policies.some(({ policyId }) => policyId === id)) });
       if (path === "/users/resolve") return Response.json({ initialized: true, users: [{ email: "fixture@example.com", record: userRecord }], missingEmails: [] });

@@ -1,5 +1,10 @@
 # Hot-path review and local load evidence
 
+The [combined admission follow-up](#combined-admission-follow-up-2026-10-11)
+implements the first finding and part of findings 3/6. The original review and
+measurements below remain as historical evidence; the follow-up records current
+RPC counts, parity coverage and the new before/after measurements.
+
 Review base: `6e26587` (PR #267, following #266). No edge deployment or live
 provider traffic. The load fixture uses synthetic credentials and intercepts
 **all** outbound provider requests in a second workerd service.
@@ -316,3 +321,143 @@ No claim that removing any authority or budget call is safe follows from these
 numbers. The next useful live test is the same capped workload with per-stage
 spans, DO location/queue timing, isolate CPU and queue depth, against a dedicated
 synthetic edge deployment approved separately.
+
+## Combined admission follow-up (2026-10-11)
+
+The round-trip reduction is implemented on `perf/hot-path-load-harness` without
+partitioning the global authority. `/admission/resolve` reads the credential,
+policy, optional principal, requested provider connections, and scoped pool
+membership/runtime in one invocation of the existing `policy-bindings` object.
+The Worker still computes and compares the secret digest with `safeEqual`.
+Only the current authenticated operation holds the result; every HTTP request
+and WebSocket create resolves again. Nothing caches revocation, policy,
+budget, membership, runtime, or selection state across requests.
+
+Cold imports retain the existing family markers, normalization, guarded
+initialization and canonical reread. A disable or migration closure committed
+while KV is read wins over the stale KV value. Discovery retains the existing
+all-connections migration marker behavior. Policy/owner import failures are
+deferred until after secret verification; provider-read failures wait until
+after secret/policy/model checks, preserving their error precedence.
+Existing individual routes remain available to admin and migration callers.
+
+The selected provider is known before admission on native/manifest routes;
+unified requests parse their bounded JSON body before choosing admission's
+provider. Parse failures still authenticate before returning the parse error.
+Secret hashing and a supplied session's sticky hash overlap the RPC. Once
+admitted, the Worker bulk-reads the default/member grant keys, applies local
+filters, and calls `/grant-pools/select`. Selection remains atomic; its counter
+upsert now uses `RETURNING selected_count` rather than a second SQL read.
+Failover takes a fresh pool snapshot for the alternate attempt.
+
+Key-authenticated models/catalog requests include the requested provider
+connections and eligible pools in their one admission read. They never call
+`/grant-pools/select` or a separate pool-resolution RPC. Health and grant
+projections still come from KV and budget observations remain live ledger reads.
+Compiled model metadata, route metadata and connection types have immutable
+module-level projections; filtering, offers and affordability remain per request.
+
+| Warm path | Previous foreground global authority RPCs | Now |
+| --- | ---: | ---: |
+| Native Messages/count_tokens; registered unified/manifest inference, service key | 5 | 2 (admission + select) |
+| Same, principal-owned key | 6 | 2 |
+| Models/catalog with one eligible provider, service key | 4 | 1 |
+| Models/catalog with N eligible providers, service key | 3 + N | 1 |
+| Key inspect, me, usage authentication | 2 (+1 owner) | 1 |
+| Pool status authentication | 2 (+1 owner) | 1 |
+| WebSocket create (excluding handshake and continuation publication) | 5 (+1 owner) | 2 |
+| Alternate attempt after provider rejection | 2 (resolve + select) | 2 |
+
+Pool status still scans the caller's scopes and reads statistics/runtime and
+seven-day usage after authentication. Those reads are a different reporting
+operation, not the inference admission sequence. Cloudflare Access sessions
+still evaluate multiple policies and transport compatibility through their
+existing path. Fusion's multiple provider operations and durable continuation/
+background/control admissions retain their separate ownership and revocation
+checks. No budget or credential-owner RPCs were removed.
+
+The real-SQLite tests cover valid, revoked, stale, missing-policy, disabled-policy,
+disabled-owner, unmaterialized-owner and unowned keys; missing/incorrect keys;
+all four import-family closure/disable races; model denial; disabled/missing
+connections; unavailable pools; explicit environment fallback; and invalid-secret
+precedence during failed policy/owner imports. A warmed
+subscription HTTP test asserts exactly admission + select. Existing HTTP,
+manifest, discovery, lifecycle and real-workerd WebSocket tests remain in use.
+
+### Non-streaming investigation
+
+Ordinary Messages JSON delivery does not await accounting, settlement, quota
+feedback or complete-body JSON inspection before returning bytes. Inspection
+accumulates bounded text as the single backpressured reader forwards chunks;
+JSON parsing occurs only at EOF. Settlement and usage publication are registered
+with `waitUntil`; quota feedback was already background work. Responses has
+additional durable continuation/publication requirements that Messages does not.
+
+A regression test holds upstream EOF open, verifies the first JSON bytes arrive,
+then closes upstream while holding usage publication open and verifies the client
+still reaches EOF. This rules out those router waits for ordinary Messages. It
+does not establish why the supplied live non-streaming p50 was 3.6 s versus a
+streaming content-delta p50 of 1.6 s. Those measure different completion points;
+without upstream header/completion timing for matched requests, provider queueing
+or full-generation time cannot be separated from live router contention.
+
+### Instrumented local comparison
+
+Both bundles use the same instrumented harness: 200 requests per cell, seven
+subscription owners, 70 sessions, 20 ms synthetic provider delay, `max_tokens=16`,
+and production-style queue batching. Baseline is `b827638`; after is this admission
+change. Runs are sequential, with no other task-owned load or test run during the
+measurement cells. The harness counts actual authority-stub invocations; quota
+feedback is reported separately from foreground admission/selection.
+
+```sh
+pnpm loadtest:local --requests 200 --concurrency 50,100,200 \
+  --delay-ms 20 --max-tokens 16 --out /tmp/clawrouter-admission-after.json
+```
+
+All cells have zero unexpected errors and exact selection/usage reconciliation
+against synthetic upstream dispatches. All seven grants receive quota feedback;
+the bounded recent-event samples show no session selecting multiple grants.
+Latency is TTFB p50 / total p50 in milliseconds; throughput is completed req/s.
+Each entry is **before → after**.
+
+| Scenario | Concurrency | Foreground authority RPC/request | TTFB p50 | Total p50 | Throughput |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| catalog | 50 | 4 → 1 | 255.8 → 112.7 | 256.2 → 114.1 | 173.7 → 386.5 |
+| catalog | 100 | 4 → 1 | 604.5 → 273.6 | 604.6 → 275.5 | 81.7 → 351.7 |
+| catalog | 200 | 4 → 1 | 1499.7 → 1768.5 | 1503.2 → 1771.0 | 132.3 → 58.0 |
+| count | 50 | 5 → 2 | 196.5 → 438.5 | 197.7 → 439.8 | 220.9 → 109.9 |
+| count | 100 | 5 → 2 | 407.6 → 1107.4 | 412.0 → 1113.6 | 210.1 → 87.8 |
+| count | 200 | 5 → 2 | 1432.3 → 1144.8 | 1442.9 → 1149.7 | 130.3 → 173.4 |
+| messages | 50 | 5 → 2 | 633.6 → 815.7 | 635.7 → 818.2 | 64.5 → 52.9 |
+| messages | 100 | 5 → 2 | 708.0 → 3098.8 | 708.4 → 3099.0 | 75.0 → 21.6 |
+| messages | 200 | 5 → 2 | 851.2 → 3185.6 | 858.4 → 3191.3 | 204.9 → 37.0 |
+| stream | 50 | 5 → 2 | 253.7 → 667.2 | 382.1 → 886.7 | 120.4 → 43.5 |
+| stream | 100 | 5 → 2 | 535.5 → 403.5 | 620.9 → 458.6 | 130.5 → 112.9 |
+| stream | 200 | 5 → 2 | 1247.6 → 2198.2 | 1324.9 → 2269.2 | 135.5 → 58.4 |
+| abort | 50 | 5 → 2 | 327.3 → 2055.5 | 401.2 → 2312.3 | 95.5 → 13.7 |
+| abort | 100 | 5 → 2 | 820.7 → 1526.0 | 807.3 → 1879.4 | 105.3 → 46.6 |
+| abort | 200 | 5 → 2 | 1348.6 → 2535.7 | 1703.1 → 2683.6 | 107.5 → 66.9 |
+
+These short local sweeps do **not** establish a consistent latency or throughput
+improvement. Catalog improves at 50/100; most inference cells regress, while
+count at 200 and stream TTFB at 100 improve. The deterministic result is fewer
+network round trips, not a measured production speedup. Host/workerd scheduling,
+SQLite persistence and loopback client contention remain in the measurements.
+The baseline once again showed large run-to-run variation relative to the
+earlier exploratory sweep (which had 71 stream resets at concurrency 200).
+Do not extrapolate these local numbers to the supplied SJC cross-colo timings.
+
+A separate concurrency-30 run (200 requests each, `max_tokens=16`) observed:
+
+| Response | TTFB p50 (ms) | Total p50 (ms) | Throughput | Errors |
+| --- | ---: | ---: | ---: | ---: |
+| messages | 10248.8 | 10251.8 | 2.73 | 0 |
+| stream | 5415.1 | 6401.5 | 4.05 | 0 |
+
+Host load averages were 40.28 / 56.63 / 60.85 near the end of this run, with
+unrelated compilation and system activity. The configured fake upstream is only
+20 ms, so this comparison is confounded by shared-host contention and does not
+isolate a response-path cause. It retained exactly two foreground authority RPCs
+per request and reconciled all 400 selections and usage events. No live provider
+benchmark or deployment was performed.

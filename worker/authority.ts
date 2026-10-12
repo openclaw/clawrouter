@@ -16,6 +16,9 @@ type Seed = { principal: Principal; bindings: PolicyBinding[] };
 export const selfServiceCredentialLimit = 10;
 const selfServiceCredentialRetentionLimit = 100;
 
+export type { AdmissionProvider, AdmissionPool, AdmissionResult } from "./authority-admission.ts";
+import { genuineLegacyKey, resolveAdmission, type AdmissionRequest } from "./authority-admission.ts";
+
 export class PolicyBindingIndexObject implements DurableObject {
   private sql: SqlStorage;
   private storage: DurableObjectStorage;
@@ -36,6 +39,13 @@ export class PolicyBindingIndexObject implements DurableObject {
       if (path === "/http-continuations") return await (await this.responseStore()).continuation(request);
       if (path === "/responses-background") return await (await this.responseStore()).fetch(request);
       if (path === "/authorization/snapshot") return json(this.authorizationSnapshot(await readJson<AuthorizationSnapshotRequest>(request)));
+      if (path === "/admission/resolve") return json(await resolveAdmission(this.env, await readJson<AdmissionRequest>(request), {
+        getCredential: id => this.getCredential(id), getPolicy: id => this.getPolicy(id), getUser: id => this.getUser(id), hasMeta: key => this.hasMeta(key),
+        seedCredential: (id, value) => this.initializeCredentials([{ credentialId: id, credential: normalizeCredentialRecord(value, id) }]),
+        seedPolicy: (id, value) => this.initializePolicies([{ policyId: id, policy: normalizePolicyRecord(value, contentRetentionDefault(this.env)) }]),
+        initializeUsers: users => this.initializeUsers(users), initializeConnections: connections => this.initializeConnections(connections),
+        resolveConnections: ids => this.resolveConnections(ids), putMeta: key => this.putMeta(key), resolveGrantPool: input => this.resolveGrantPool(input),
+      }));
       if (path === "/resolve") return json({ initialized: this.hasMeta("bindings_global_initialized"), ...this.resolveBindings((await readJson<{ principals: Principal[] }>(request)).principals) });
       if (path === "/initialize") { this.initializeBindings(await readJson<Seed[]>(request)); return new Response("initialized"); }
       if (path === "/initialize-all") { this.initializeAllBindings(await readJson<PolicyBinding[]>(request)); return new Response("initialized"); }
@@ -532,9 +542,8 @@ export class PolicyBindingIndexObject implements DurableObject {
     }
     else if (strategy === "weighted_random") selected = weightedRandom(candidates);
     const nowMs = Date.now();
-    this.sql.exec("INSERT INTO upstream_grant_selection (pool_key, grant_key, selected_count, last_selected_ms) VALUES (?, ?, 1, ?) ON CONFLICT (pool_key, grant_key) DO UPDATE SET selected_count = selected_count + 1, last_selected_ms = excluded.last_selected_ms", poolKey, selected.key, nowMs);
-    const row = rows<{ selected_count: number }>(this.sql.exec("SELECT selected_count FROM upstream_grant_selection WHERE pool_key = ? AND grant_key = ?", poolKey, selected.key))[0];
-    return { selectedKey: selected.key, selectedCount: row?.selected_count ?? 1, lastSelectedAt: new Date(nowMs).toISOString() };
+    const row = rows<{ selected_count: number }>(this.sql.exec("INSERT INTO upstream_grant_selection (pool_key, grant_key, selected_count, last_selected_ms) VALUES (?, ?, 1, ?) ON CONFLICT (pool_key, grant_key) DO UPDATE SET selected_count = selected_count + 1, last_selected_ms = excluded.last_selected_ms RETURNING selected_count", poolKey, selected.key, nowMs))[0];
+    return { selectedKey: selected.key, selectedCount: row.selected_count, lastSelectedAt: new Date(nowMs).toISOString() };
   }
 
   private grantSelectionStats(rawKeys: unknown): Record<string, { selectedCount: number; lastSelectedAt: string | null }> {
@@ -863,11 +872,6 @@ async function listKvJson<T>(env: Env, prefix: string): Promise<Array<[string, T
     cursor = page.list_complete ? undefined : page.cursor;
   } while (cursor);
   return values;
-}
-
-async function genuineLegacyKey(env: Env, id: string): Promise<Record<string, unknown> | null> {
-  const value = await env.POLICY_KV.get<Record<string, unknown>>(`keys/${id}`, "json");
-  return value && (value.generation == null || value.generation === "legacy") ? value : null;
 }
 
 async function listGenuineLegacyKeys(env: Env): Promise<Array<[string, Record<string, unknown>]>> {
