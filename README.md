@@ -91,6 +91,8 @@ pnpm check
 
 `pnpm build` compiles the provider snapshot and admin UI, then typechecks the Worker. `pnpm check` runs Worker, admin, and script tests.
 
+Numbered GitHub source releases use the [release workflow](RELEASING.md), independently of service deployments.
+
 ## License
 
 MIT. See [LICENSE](LICENSE).
