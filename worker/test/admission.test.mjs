@@ -159,3 +159,19 @@ for (const family of ['policies', 'users']) test(`failed ${family} imports canno
     assert.equal(response.status, expected); assert.equal((await response.json()).error.code, code);
   }
 });
+
+test("admission stops before pool reads when the supplied secret digest does not match", async () => {
+  const { resolveAdmission } = await import("../authority-admission.ts");
+  const credential = { credentialId: "kid_one", credential: { enabled: true, secretSha256: "a".repeat(64), policyId: "pool", policyGeneration: "g1", principalId: null } };
+  let poolReads = 0, policyReads = 0;
+  const store = {
+    getCredential: () => credential, getPolicy: () => { policyReads++; return { policyId: "pool", policy: { enabled: true, generation: "g1", providers: ["anthropic"], tenantId: "default" } }; },
+    getUser: () => null, hasMeta: () => true, putMeta() {}, seedCredential() {}, seedPolicy() {}, initializeUsers() {}, initializeConnections() {},
+    resolveConnections: () => ({ initialized: true, connections: [], missingProviderIds: [] }),
+    resolveGrantPool: () => { poolReads++; return { keys: [], states: {}, hasAttachment: false }; },
+  };
+  const wrong = await resolveAdmission({}, { credentialId: "kid_one", secretSha256: "b".repeat(64), providers: [{ id: "anthropic", tokenRef: "anthropic" }] }, store);
+  assert.equal(wrong.policy, null); assert.equal(policyReads, 0); assert.equal(poolReads, 0);
+  const right = await resolveAdmission({}, { credentialId: "kid_one", secretSha256: "A".repeat(64), providers: [{ id: "anthropic", tokenRef: "anthropic" }] }, store);
+  assert.ok(right.policy); assert.equal(poolReads, 1);
+});

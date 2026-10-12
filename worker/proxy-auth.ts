@@ -15,9 +15,9 @@ export function proxyKeyVerification(identity: AuthorizedIdentity): ProxyKeyVeri
 export async function authenticateProxyKey(headers: Headers, env: Env, providers: AdmissionProvider[] = [], allConnections = false, sessionId?: string | null): Promise<AuthorizedIdentity | Response> {
   const parsed = proxyKeyFromHeaders(headers);
   if (!parsed) return errorResponse("invalid_proxy_key", "a valid ClawRouter proxy key is required", 401);
-  const [admission, secretSha256, sessionHash] = await Promise.all([
-    authorityCall<AdmissionResult>(env, "/admission/resolve", { credentialId: parsed.kid, providers, allConnections }),
-    sha256Hex(parsed.secret),
+  const secretSha256 = await sha256Hex(parsed.secret);
+  const [admission, sessionHash] = await Promise.all([
+    authorityCall<AdmissionResult>(env, "/admission/resolve", { credentialId: parsed.kid, secretSha256, providers, allConnections }),
     sessionId ? sha256Hex(`session:${sessionId}`) : undefined,
   ]);
   const credentialEntry = admission.credential;

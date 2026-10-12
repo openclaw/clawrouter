@@ -1,8 +1,8 @@
 import type { AccessControlUser, AccessPolicyEntry, AccessUserRecord, Env, GrantRuntimeState, ProviderConnection, ProxyCredentialEntry } from "./types";
-import { normalizeEmail } from "./utils.ts";
+import { normalizeEmail, safeEqual } from "./utils.ts";
 
 export interface AdmissionProvider { id: string; tokenRef: string }
-export interface AdmissionRequest { credentialId: string; providers?: AdmissionProvider[]; allConnections?: boolean }
+export interface AdmissionRequest { credentialId: string; secretSha256?: string; providers?: AdmissionProvider[]; allConnections?: boolean }
 export interface AdmissionPool { keys: string[]; states: Record<string, GrantRuntimeState>; hasAttachment: boolean; unavailable?: true }
 export interface AdmissionResult {
   credential: ProxyCredentialEntry | null;
@@ -40,6 +40,9 @@ export async function resolveAdmission(env: Env, input: AdmissionRequest, store:
   }
   const result: AdmissionResult = { credential, policy: null, owner: null, connections: [], pools: {} };
   if (!credential) return result;
+  // A wrong secret stops before policy, connection and pool reads, so a known key
+  // id cannot make the global authority do pool work. The Worker re-verifies.
+  if (typeof input.secretSha256 === "string" && !safeEqual(input.secretSha256.toLowerCase(), credential.credential.secretSha256.toLowerCase())) return result;
   const policyId = credential.credential.policyId;
   let policy: AccessPolicyEntry | null;
   try {
