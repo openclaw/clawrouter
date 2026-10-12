@@ -43,7 +43,9 @@ async function fixture(t) {
         server.closeAllConnections();
       });
     } catch (error) { errors.push(error); }
-    try { await rm(directory, { recursive: true, force: true }); }
+    // Native Codex can still be finishing its background plugin clone under the
+    // temp home when the process exits; retry ENOTEMPTY/EBUSY instead of failing.
+    try { await rm(directory, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 }); }
     catch (error) { errors.push(error); }
     if (errors.length === 1) throw errors[0];
     if (errors.length > 1) throw new AggregateError(errors, "fixture cleanup failed");
