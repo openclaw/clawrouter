@@ -50,10 +50,10 @@ function runWrangler(args, { allowExisting = false } = {}) {
 }
 
 export function assertContentLifecycle(output, bucket) {
-  // Wrangler 4 emits these ordered fields, padded to ten columns. Require full
+  // Wrangler 4 emits LF-separated fields, padded to ten columns. Require full
   // blocks: trimming values or ignoring continuation lines can change a prefix.
   // Colors are disabled at the producer so literal escape bytes stay significant.
-  const blocks = [...output.matchAll(/^name: {5}(.*)\r?\nenabled: {2}(.*)\r?\nprefix: {3}(.*)\r?\naction: {3}(.*)(?=\r?\n\r?\n|(?:\r?\n)?(?![\s\S]))/gmu)];
+  const blocks = [...output.matchAll(/^name: {5}(.*)\nenabled: {2}(.*)\nprefix: {3}(.*)\naction: {3}(.*)(?=\n\n|\n?(?![\s\S]))/gmu)];
   const rules = blocks.filter(([, name]) => name === "request-content-v1-30-days");
   if (blocks.length !== (output.match(/^name:/gmu) ?? []).length ||
     rules.length !== 1 || rules[0][2] !== "Yes" || rules[0][3] !== "v1/" ||

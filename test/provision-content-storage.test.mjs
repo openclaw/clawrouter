@@ -39,7 +39,6 @@ test("content lifecycle accepts the exact enabled prefix and age through Wrangle
     `Listing lifecycle rules for bucket 'archive'...\n${expectedRule}\n`,
     "archive",
   ));
-  assert.doesNotThrow(() => assertContentLifecycle(expectedRule.replaceAll("\n", "\r\n"), "archive"));
   assert.doesNotThrow(() => assertContentLifecycle(
     `${expectedRule}, Abort incomplete multipart uploads after 7 days`, "archive",
   ));
@@ -65,7 +64,7 @@ test("content lifecycle rejects missing, disabled, mistargeted, or misaged rules
 
 test("content lifecycle preserves significant whitespace in the prefix", () => {
   for (const prefix of [
-    "v1/ ", " v1/", "v1/\t", "\tv1/", "v1/\rhidden",
+    "v1/ ", " v1/", "v1/\t", "\tv1/", "v1/\r", "v1/\rhidden",
     // Wrangler indents multiline values and collapses whitespace-only lines.
     "v1/\n          extra", "v1/\n\n          extra", "\u001b[31mv1/\u001b[0m",
   ]) {
@@ -73,5 +72,7 @@ test("content lifecycle preserves significant whitespace in the prefix", () => {
       expectedRule.replace("prefix:   v1/", `prefix:   ${prefix}`), "archive",
     ), /verification failed/);
   }
+  // Wrangler emits LF: treating CRLF as formatting would erase a terminal CR.
+  assert.throws(() => assertContentLifecycle(expectedRule.replaceAll("\n", "\r\n"), "archive"), /verification failed/);
   assert.throws(() => assertContentLifecycle(`${expectedRule}\n          extra`, "archive"), /verification failed/);
 });
