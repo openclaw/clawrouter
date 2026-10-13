@@ -36,11 +36,15 @@ test("content provisioning verifies the applied rule after create or duplicate r
 
 test("content lifecycle accepts the exact enabled prefix and age through Wrangler formatting", () => {
   assert.doesNotThrow(() => assertContentLifecycle(
-    `Listing lifecycle rules for bucket 'archive'...\n\n\u001b[32m${expectedRule}\u001b[0m\n`,
+    `Listing lifecycle rules for bucket 'archive'...\n${expectedRule}\n`,
     "archive",
   ));
+  assert.doesNotThrow(() => assertContentLifecycle(expectedRule.replaceAll("\n", "\r\n"), "archive"));
   assert.doesNotThrow(() => assertContentLifecycle(
     `${expectedRule}, Abort incomplete multipart uploads after 7 days`, "archive",
+  ));
+  assert.doesNotThrow(() => assertContentLifecycle(
+    `${expectedRule.replace("request-content-v1-30-days", "other-rule")}\n\n${expectedRule}`, "archive",
   ));
 });
 
@@ -60,9 +64,14 @@ test("content lifecycle rejects missing, disabled, mistargeted, or misaged rules
 });
 
 test("content lifecycle preserves significant whitespace in the prefix", () => {
-  for (const prefix of ["v1/ ", " v1/", "v1/\t", "\tv1/"]) {
+  for (const prefix of [
+    "v1/ ", " v1/", "v1/\t", "\tv1/", "v1/\rhidden",
+    // Wrangler indents multiline values and collapses whitespace-only lines.
+    "v1/\n          extra", "v1/\n\n          extra", "\u001b[31mv1/\u001b[0m",
+  ]) {
     assert.throws(() => assertContentLifecycle(
       expectedRule.replace("prefix:   v1/", `prefix:   ${prefix}`), "archive",
     ), /verification failed/);
   }
+  assert.throws(() => assertContentLifecycle(`${expectedRule}\n          extra`, "archive"), /verification failed/);
 });

@@ -1,7 +1,6 @@
 import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { stripVTControlCharacters } from "node:util";
 import {
   assertDeploymentMutation,
   deploymentTarget,
@@ -36,6 +35,7 @@ export function provisionContentStorage(bucket, run = runWrangler) {
 function runWrangler(args, { allowExisting = false } = {}) {
   const result = spawnSync("pnpm", ["exec", "wrangler", ...args], {
     encoding: "utf8",
+    env: { ...process.env, FORCE_COLOR: "0" },
   });
   const output = `${result.stdout ?? ""}${result.stderr ?? ""}`;
   if (result.status === 0) {
@@ -50,14 +50,14 @@ function runWrangler(args, { allowExisting = false } = {}) {
 }
 
 export function assertContentLifecycle(output, bucket) {
-  // Wrangler 4 aligns values at column 10. Remove only that fixed padding;
-  // prefix whitespace is significant. Validate each rule in its own block.
-  const rules = stripVTControlCharacters(output).split(/\r?\n\s*\r?\n/u).map((block) =>
-    Object.fromEntries([...block.matchAll(/^(name: {5}|enabled: {2}|prefix: {3}|action: {3})(.*)$/gmu)]
-      .map(([, label, value]) => [label.split(":")[0], value]))
-  ).filter((rule) => rule.name === "request-content-v1-30-days");
-  if (rules.length !== 1 || rules[0].enabled !== "Yes" || rules[0].prefix !== "v1/" ||
-    !rules[0].action?.split(", ").includes("Expire objects after 30 days")) {
+  // Wrangler 4 emits these ordered fields, padded to ten columns. Require full
+  // blocks: trimming values or ignoring continuation lines can change a prefix.
+  // Colors are disabled at the producer so literal escape bytes stay significant.
+  const blocks = [...output.matchAll(/^name: {5}(.*)\r?\nenabled: {2}(.*)\r?\nprefix: {3}(.*)\r?\naction: {3}(.*)(?=\r?\n\r?\n|(?:\r?\n)?(?![\s\S]))/gmu)];
+  const rules = blocks.filter(([, name]) => name === "request-content-v1-30-days");
+  if (blocks.length !== (output.match(/^name:/gmu) ?? []).length ||
+    rules.length !== 1 || rules[0][2] !== "Yes" || rules[0][3] !== "v1/" ||
+    !rules[0][4].split(", ").includes("Expire objects after 30 days")) {
     throw new Error(`Content lifecycle verification failed for ${bucket}: expected one enabled request-content-v1-30-days rule for v1/ expiring after 30 days. Review the existing bucket rules; no rule was replaced.`);
   }
 }
