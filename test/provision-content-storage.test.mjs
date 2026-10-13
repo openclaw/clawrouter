@@ -58,3 +58,11 @@ test("content lifecycle rejects missing, disabled, mistargeted, or misaged rules
     assert.throws(() => assertContentLifecycle(output, "archive"), /verification failed/);
   }
 });
+
+test("content lifecycle preserves significant whitespace in the prefix", () => {
+  for (const prefix of ["v1/ ", " v1/", "v1/\t", "\tv1/"]) {
+    assert.throws(() => assertContentLifecycle(
+      expectedRule.replace("prefix:   v1/", `prefix:   ${prefix}`), "archive",
+    ), /verification failed/);
+  }
+});
