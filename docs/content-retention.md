@@ -25,6 +25,10 @@ metadata-only; request retention requires an explicit policy opt-in.
   schedules deletion under the dedicated `v1/` archive prefix after 30 days without
   affecting unrelated bucket content. Physical deletion is asynchronous. Usage
   metadata remains separate.
+- Content provisioning reads back the rule after creation, including when its ID
+  already exists. Deployment stops if that rule is disabled, targets another
+  prefix, or does not expire objects after 30 days. Review conflicting rules
+  explicitly; provisioning does not replace them.
 - Cloudflare AI Gateway universal requests retain their ordered provider queries
   and configuration, but omit each entry's entire `headers` map and `authorization` field.
   These fields can contain upstream credentials. The forwarded request is

@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Verify the enabled prefix and 30-day expiration of the request-content lifecycle rule before reporting content provisioning success; reject conflicting existing rules without replacing them.
+
 - Add verified, signed-tag GitHub source releases with a no-publish rehearsal; keep service deployment separately dispatched.
 
 - Select scoped inference grants in the admission transaction using fenced, secretless authority projections; keep credential-owner materialization authoritative for revocation and retain legacy projection fallback.
