@@ -4,7 +4,7 @@ import { estimateCost } from "./proxy-accounting";
 import type { AuthorizedIdentity, CompiledModel, ProviderConnection } from "./types";
 import { HttpError } from "./utils";
 
-export interface BudgetObservation { policyRemaining: number | null; dailyRemaining?: number | null; providerRemaining: number | null }
+export interface BudgetObservation { policyRemaining: number | null; dailyRemaining?: number | null; weeklyRemaining?: number | null; providerRemaining: number | null }
 export interface OperationAffordability {
   status: "exact-covered" | "exact-blocked" | "request-dependent";
   reasonCode?: string;
@@ -15,7 +15,7 @@ export function operationAffordability(auth: AuthorizedIdentity, connection: Pro
   // allowance is not a claim that every real request fits the observed balance.
   const cost = estimateCost(model, {}, auth.policy.requestCostMicros, capability, endpoint);
   try {
-    if (!validateBudgetReservation(capability, cost, auth.policy.monthlyBudgetMicros, connection, auth.policy.dailyBudgetMicros, auth.policy.limitHint)) return { status: "exact-covered" };
+    if (!validateBudgetReservation(capability, cost, auth.policy.monthlyBudgetMicros, connection, auth.policy.dailyBudgetMicros, auth.policy.limitHint, auth.policy.weeklyBudgetMicros)) return { status: "exact-covered" };
   } catch (error) {
     if (error instanceof HttpError) return { status: "exact-blocked", reasonCode: error.code };
     throw error;
@@ -30,12 +30,14 @@ export function operationAffordability(auth: AuthorizedIdentity, connection: Pro
   for (const [limit, remaining, reasonCode] of [
     [auth.policy.monthlyBudgetMicros, observation.policyRemaining, "budget_exhausted"],
     [auth.policy.dailyBudgetMicros, observation.dailyRemaining, "daily_budget_exhausted"],
+    [auth.policy.weeklyBudgetMicros, observation.weeklyRemaining, "weekly_budget_exhausted"],
     [connection.monthlyBudgetMicros, observation.providerRemaining, "provider_budget_exhausted"],
   ] as const) {
     if (limit != null && remaining != null && remaining < minimum) return { status: "exact-blocked", reasonCode };
   }
   const known = (auth.policy.monthlyBudgetMicros == null || observation.policyRemaining != null)
     && (auth.policy.dailyBudgetMicros == null || observation.dailyRemaining != null)
+    && (auth.policy.weeklyBudgetMicros == null || observation.weeklyRemaining != null)
     && (connection.monthlyBudgetMicros == null || observation.providerRemaining != null);
   return { status: exact != null && known ? "exact-covered" : "request-dependent", ...(!known ? { reasonCode: "budget_status_unavailable" } : {}) };
 }

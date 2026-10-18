@@ -66,6 +66,7 @@ export interface PolicyForm {
   enabled: boolean;
   monthlyBudgetMicros: string;
   dailyBudgetMicros: string;
+  weeklyBudgetMicros: string;
   serviceTierAllowed: string;
   serviceTierModels: string;
   limitHint: string;

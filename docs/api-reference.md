@@ -607,7 +607,7 @@ returns HTTP 422 if exceeded; request a shorter range rather than relying on
 partial totals. Invalid scope/range returns HTTP 400; an unknown policy returns
 HTTP 404. The additive SQLite migration preserves every existing event.
 
-### Credential expiry, daily budgets, and service tiers
+### Credential expiry, daily/weekly budgets, and service tiers
 
 New credentials accept `expiresAt` (future ISO-8601 UTC) and `serviceTiers`
 (canonical lowercase list or null to inherit). Expiry defaults to 180 days;
@@ -621,36 +621,40 @@ works for expired enabled keys under the other existing preconditions.
 Session/admin credential lists return `expiresAt`, `expired`, `serviceTiers`,
 and `active` (false when expired). Key inspect adds the same expiry fields,
 `serviceTiers`, `effectiveServiceTiers` keyed by visible catalog model ID,
-`dailyBudgetMicros`, `limitHint`, and `budget.daily`. An expired key still gets
+`dailyBudgetMicros`, `weeklyBudgetMicros`, `limitHint`, `budget.daily` and `budget.weekly`. An expired key still gets
 HTTP 401 on inspect, with `expiresAt`, `expired: true`, and `active: false` beside
 the error. Legacy absent/null expiry is accepted.
 
-Policies add nullable `dailyBudgetMicros` (nonnegative safe integer),
+Policies add nullable `dailyBudgetMicros` and `weeklyBudgetMicros` (nonnegative safe integers),
 `serviceTiers: {allowed: string[], models?: Record<string, string[]>}`, and
 `limitHint` (trimmed plain text, at most 300 characters, no controls). Tier lists
 are deduplicated, bounded to eight IDs, with at most 32 known catalog-model
 overrides. Overrides replace global tiers; credential tiers intersect them.
-Personal tier lists may only narrow the policy. Ultrafast grants are restricted
-to `team_server` on `openai/gpt-6.1-sol`. Without configuration, Default, Flex and
+Personal tier lists may only narrow the policy. The provisioning script can
+patch the team server and `openclaw_stable` policies to allow Ultrafast only on
+`openai/gpt-6.1-sol`. Without configuration, Default, Flex and
 Fast are allowed; Ultrafast/unknown tiers are denied, even without budgets.
 
 Existing monthly status fields remain unchanged. `/v1/usage`, session policy
-entitlements and admin usage rows add `budget.daily` with `configured`,
+entitlements and admin usage rows add `budget.daily` and `budget.weekly` with `configured`,
 `limitMicros`, `spentMicros`, `remainingMicros`, `windowKey`, and `resetsAt`
-(next midnight UTC). Principal scopes share daily and monthly balances across
+(next midnight UTC for daily; next Monday 00:00 UTC for weekly). Weekly window
+keys end in `/week/YYYY-Www` using the ISO week-year. The monthly status also
+includes `resetsAt`. Principal scopes share daily, weekly and monthly balances across
 that principal's keys. Unavailable status amounts remain null.
 
 | HTTP | Error code | Meaning |
 | --- | --- | --- |
 | 401 | `proxy_key_expired` | Key expired; message names its date and dashboard renewal path. |
 | 402 | `daily_budget_exhausted` | Daily capacity exhausted; message names the limit, next UTC reset and policy hint. |
+| 402 | `weekly_budget_exhausted` | Weekly capacity exhausted; message names the limit, next Monday 00:00 UTC reset and policy hint. |
 | 402 | `budget_exhausted` | Policy monthly capacity exhausted; includes policy hint. |
 | 400 | `service_tier_not_allowed` | Requested OpenAI tier not in the policy/model/key intersection; names tier, model, allowed tiers and hint. |
 | 403 | `model_not_allowed` | Model outside policy scope; includes policy hint. |
 
 OpenAI-format omitted/default/auto map to `default`, fast maps to `priority`,
 and other strings become lowercase for admission. Other request formats retain
-existing behavior. Pricing gaps under a daily-only budget return `pricing_required`
+existing behavior. Pricing gaps under a daily-only or weekly-only budget return `pricing_required`
 just as with monthly budgets. Dispatched work completes after key expiry;
 subsequent requests, WebSocket turns, background creations and continuations fail.
 

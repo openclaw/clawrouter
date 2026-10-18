@@ -32,6 +32,22 @@ test("admin budget rows use the finite principals derived from loaded authority 
   assert.deepEqual(objectNames.sort(), principals.map((principal) => `tenant:maintainer_access:${principal}`).sort());
 });
 
+test("weekly-only principal policies expose balances in their weekly administrator breakdown", async () => {
+  const windows = [];
+  const namespace = { idFromName: name => name, get: name => ({ fetch: async url => {
+    windows.push([name, new URL(url).searchParams.get("window_key")]);
+    return Response.json({ spentMicros: 20, remainingMicros: 80 });
+  } }) };
+  for (const dailyBudgetMicros of [null, 200]) {
+    windows.length = 0;
+    const status = await adminBudgetStatus({ BUDGET_LEDGER: namespace }, { policyId: "member_weekly", policy: policy({ monthlyBudgetMicros: null, dailyBudgetMicros, weeklyBudgetMicros: 100, budgetScope: "principal" }) }, ["one@example.com", "two@example.com"]);
+    assert.equal(status.weekly.ledger, "per_principal");
+    assert.deepEqual(status.weekly.breakdown.map(row => [row.principal, row.spentMicros, row.remainingMicros]), [["one@example.com", 20, 80], ["two@example.com", 20, 80]]);
+    assert.equal(status.breakdown[0].weekly.spentMicros, 20);
+    assert.equal(windows.filter(([, key]) => key.includes("/week/")).length, 2);
+  }
+});
+
 function policy(overrides = {}) { return { enabled: true, generation: "policy_v1", providers: ["openai"], tenantId: "tenant", monthlyBudgetMicros: 100, retainRequestContent: true, ...overrides }; }
 function credential(credentialId, principalId) { return { credentialId, credential: { enabled: true, policyId: "maintainer_access", policyGeneration: "policy_v1", principalId } }; }
 

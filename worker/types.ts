@@ -128,6 +128,7 @@ export interface AccessPolicy {
   tokenRole?: string | null;
   monthlyBudgetMicros?: number | null;
   dailyBudgetMicros?: number | null;
+  weeklyBudgetMicros?: number | null;
   limitHint?: string | null;
   serviceTiers?: import("../shared/service-tiers").PolicyServiceTiers | null;
   requestCostMicros?: number | null;

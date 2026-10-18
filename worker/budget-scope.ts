@@ -39,3 +39,13 @@ export function dailyBudgetLedgerAddress(policyId: string, policy: Pick<AccessPo
   const address = budgetLedgerAddress(policyId, policy, principal, at);
   return { ...address, windowKey: `${address.policyId}/day/${new Date(at).toISOString().slice(0, 10)}` };
 }
+
+export function weeklyBudgetLedgerAddress(policyId: string, policy: Pick<AccessPolicy, "tenantId" | "budgetScope">, principal?: string | null, at = Date.now()) {
+  const address = budgetLedgerAddress(policyId, policy, principal, at);
+  const thursday = new Date(at);
+  thursday.setUTCHours(0, 0, 0, 0);
+  thursday.setUTCDate(thursday.getUTCDate() + 4 - (thursday.getUTCDay() || 7));
+  const year = thursday.getUTCFullYear();
+  const week = Math.ceil(((thursday.getTime() - Date.UTC(year, 0, 1)) / 86_400_000 + 1) / 7);
+  return { ...address, windowKey: `${address.policyId}/week/${year}-W${String(week).padStart(2, "0")}` };
+}

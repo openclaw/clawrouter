@@ -40,6 +40,7 @@ export function fusionCatalogReadiness(config: FusionConfig, resolve: (body: Rec
       const reserved = synthesizer.auth.policy.requestCostMicros ?? 0;
       const observation = {
         dailyRemaining: remainingAfter(selection.observation.dailyRemaining ?? null, samePolicyLedger(selection, synthesizer) ? reserved : 0),
+        weeklyRemaining: remainingAfter(selection.observation.weeklyRemaining ?? null, samePolicyLedger(selection, synthesizer) ? reserved : 0),
         policyRemaining: remainingAfter(selection.observation.policyRemaining, samePolicyLedger(selection, synthesizer) ? reserved : 0),
         providerRemaining: remainingAfter(selection.observation.providerRemaining, selection.providerId === synthesizer.providerId ? reserved : 0),
       };
@@ -56,6 +57,7 @@ export function fusionCatalogReadiness(config: FusionConfig, resolve: (body: Rec
       const providerCost = calls.filter((other) => call.providerId === other.providerId).reduce((total, other) => total + (other.auth.policy.requestCostMicros ?? 0), 0);
       return (policyCost === 0 || call.auth.policy.monthlyBudgetMicros == null || (call.observation?.policyRemaining ?? -1) >= policyCost)
         && (policyCost === 0 || call.auth.policy.dailyBudgetMicros == null || (call.observation?.dailyRemaining ?? -1) >= policyCost)
+        && (policyCost === 0 || call.auth.policy.weeklyBudgetMicros == null || (call.observation?.weeklyRemaining ?? -1) >= policyCost)
         && (providerCost === 0 || call.connection.monthlyBudgetMicros == null || (call.observation?.providerRemaining ?? -1) >= providerCost);
     });
     if (!compoundCovered) availability = { status: "request-dependent" };
@@ -204,7 +206,7 @@ function readinessCall(stage: FusionReadinessCall["stage"], index: number | null
     estimatedReservationMicros: cost.reserveMicros,
     estimateBasis: cost.pricingGap ? "unpriced_request" : cost.basis === "policy_fixed" ? "policy_fixed" : cost.basis === "manifest_pricing" ? "manifest_pricing" : "flat_fallback",
   };
-  try { validateBudgetReservation("llm.chat", cost, entry.policy.monthlyBudgetMicros, route.connection, entry.policy.dailyBudgetMicros, entry.policy.limitHint); }
+  try { validateBudgetReservation("llm.chat", cost, entry.policy.monthlyBudgetMicros, route.connection, entry.policy.dailyBudgetMicros, entry.policy.limitHint, entry.policy.weeklyBudgetMicros); }
   catch (error) {
     if (!(error instanceof HttpError)) throw error;
     block(call, error.message);

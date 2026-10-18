@@ -309,7 +309,7 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
         if (!policyBalances.has(auth.policyId)) policyBalances.set(auth.policyId, budgetStatus(env, auth.policyId, auth.policy, budgetPrincipal(auth)));
         if (connection.monthlyBudgetMicros != null) providerBalance ??= providerBudgetStatus(env, provider.id, connection.monthlyBudgetMicros);
         const [policy, providerBudget] = await Promise.all([policyBalances.get(auth.policyId)!, providerBalance]);
-        observation = { policyRemaining: policy.remainingMicros, dailyRemaining: policy.daily.remainingMicros, providerRemaining: providerBudget?.remainingMicros ?? null };
+        observation = { policyRemaining: policy.remainingMicros, dailyRemaining: policy.daily.remainingMicros, weeklyRemaining: policy.weekly.remainingMicros, providerRemaining: providerBudget?.remainingMicros ?? null };
       }
       return { endpoint, mode, auth, reasonCode, observation, modelIds: group.modelIds, passthrough: group.passthrough };
     }))));
@@ -385,5 +385,5 @@ function connectionTypes(provider: CompiledProvider): string[] {
 }
 
 async function sessionPolicyLimits(session: AccessSession, env: Env) {
-  return Promise.all((await sessionPolicies(session, env)).map(async ({ policyId, policy }) => ({ policyId, models: policy.models ?? null, serviceTiers: policy.serviceTiers ?? null, limitHint: policy.limitHint ?? null, dailyBudgetMicros: policy.dailyBudgetMicros ?? null, budget: await budgetStatus(env, policyId, policy, policy.budgetScope === "principal" ? session.email : null) })));
+  return Promise.all((await sessionPolicies(session, env)).map(async ({ policyId, policy }) => ({ policyId, models: policy.models ?? null, serviceTiers: policy.serviceTiers ?? null, limitHint: policy.limitHint ?? null, dailyBudgetMicros: policy.dailyBudgetMicros ?? null, weeklyBudgetMicros: policy.weeklyBudgetMicros ?? null, budget: await budgetStatus(env, policyId, policy, policy.budgetScope === "principal" ? session.email : null) })));
 }

@@ -326,6 +326,7 @@ export function policyFormFromPolicy(key: AccessPolicy): PolicyForm {
     enabled: key.enabled,
     monthlyBudgetMicros: currencyInput(key.monthlyBudgetMicros),
     dailyBudgetMicros: currencyInput(key.dailyBudgetMicros),
+    weeklyBudgetMicros: currencyInput(key.weeklyBudgetMicros),
     serviceTierAllowed: (key.serviceTiers?.allowed ?? ["default", "flex", "priority"]).join(", "),
     serviceTierModels: key.serviceTiers?.models ? JSON.stringify(key.serviceTiers.models, null, 2) : "",
     limitHint: key.limitHint ?? "",

@@ -14,3 +14,12 @@ export function nextDailyReset(at = Date.now()): string {
 export function dailyBudgetMessage(limit: number, at = Date.now()): string {
   return `Daily budget of $${(limit / 1_000_000).toFixed(6)} exhausted; resets at ${nextDailyReset(at)} (00:00 UTC).`;
 }
+export function nextWeeklyReset(at = Date.now()): string {
+  const date = new Date(at);
+  date.setUTCHours(0, 0, 0, 0);
+  date.setUTCDate(date.getUTCDate() + 8 - (date.getUTCDay() || 7));
+  return date.toISOString();
+}
+export function weeklyBudgetMessage(limit: number, at = Date.now()): string {
+  return `Weekly budget of $${(limit / 1_000_000).toFixed(6)} exhausted; resets at ${nextWeeklyReset(at)} (Monday 00:00 UTC).`;
+}

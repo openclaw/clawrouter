@@ -76,6 +76,7 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
         tokenRole: policyForm.tokenRole || null,
         monthlyBudgetMicros: optionalCurrencyMicros(policyForm.monthlyBudgetMicros) ?? null,
         dailyBudgetMicros: optionalCurrencyMicros(policyForm.dailyBudgetMicros) ?? null,
+        weeklyBudgetMicros: optionalCurrencyMicros(policyForm.weeklyBudgetMicros) ?? null,
         serviceTiers: { allowed: unique(policyForm.serviceTierAllowed.split(",").map(tier => tier.trim()).filter(Boolean)), models: policyForm.serviceTierModels.trim() ? JSON.parse(policyForm.serviceTierModels) : {} },
         limitHint: policyForm.limitHint.trim() || null,
         requestCostMicros: optionalNumber(policyForm.requestCostMicros) ?? null,

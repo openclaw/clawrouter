@@ -3,8 +3,6 @@ import assert from "node:assert/strict";
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
 import { proxyKey, sse, usageEnv } from "./usage-budget-fixture.mjs";
 import test from "node:test";
-
-
 const { default: handler } = await import("../index.ts");
 const { providerBudgetStatus, queue } = await import("../ledgers.ts");
 
@@ -48,7 +46,9 @@ test("GET /v1/usage preserves the budget response contract while selecting the c
   const month = new Date().toISOString().slice(0, 7);
   assert.equal(body.budget.daily.configured, false);
   assert.ok(body.budget.daily.resetsAt.endsWith("T00:00:00.000Z"));
-  const { daily, ...monthly } = body.budget;
+  assert.equal(body.budget.weekly.configured, false);
+  const { daily, weekly, resetsAt, ...monthly } = body.budget;
+  assert.ok(resetsAt.endsWith("T00:00:00.000Z"));
   assert.deepEqual(monthly, {
     configured: true,
     ledger: "durable_object",
@@ -57,10 +57,9 @@ test("GET /v1/usage preserves the budget response contract while selecting the c
     spentMicros: 10,
     remainingMicros: 90,
   });
-  assert.deepEqual(Object.keys(body.budget), ["configured", "ledger", "windowKey", "limitMicros", "spentMicros", "remainingMicros", "daily"]);
+  assert.deepEqual(Object.keys(body.budget), ["configured", "ledger", "windowKey", "limitMicros", "spentMicros", "remainingMicros", "resetsAt", "daily", "weekly"]);
   assert.equal(objectNames[0], "tenant:maintainer_access:owner@example.com");
 });
-
 test("failed dispatch confirmation never reaches upstream and releases both real budgets", async (t) => {
   for (const failedOwner of ["tenant:maintainer_access:owner@example.com", "provider:openai"]) {
     const env = usageEnv([], { limit: 1_000_000, fixedCost: null, retainContent: false });

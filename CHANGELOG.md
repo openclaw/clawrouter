@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- Enforce independent ISO-week policy/principal budgets, show configured allowance windows, and provision members with $5,000/week by default; add a dry-run, field-preserving Ultrafast patch for existing team and Stable policies on GPT-6.1 Sol only.
+- Repair authentication browser tests for expiry row labels and credential renewal, preserving auth-loss/no-replay assertions; refresh dashboard baselines for the intended member controls using platform-native rendering.
+
 - Add OpenAI GPT-6.1 Sol with versioned Standard, Fast/Priority, Flex, and Ultrafast prices, cache and long-context rates, reasoning controls, and Chat token-limit normalization.
 - Expire new proxy keys by default, support renewal of expired enabled keys, and let administrators stamp legacy expiries.
 - Enforce independent UTC daily policy/principal budgets across keys with multi-leg reservation rollback and daily status.

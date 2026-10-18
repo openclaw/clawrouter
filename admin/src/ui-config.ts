@@ -98,7 +98,7 @@ export const defaultPolicy: PolicyForm = {
   tenantId: "default",
   enabled: true,
   monthlyBudgetMicros: "100",
-  dailyBudgetMicros: "", serviceTierAllowed: "default, flex, priority", serviceTierModels: "", limitHint: "",
+  dailyBudgetMicros: "", weeklyBudgetMicros: "", serviceTierAllowed: "default, flex, priority", serviceTierModels: "", limitHint: "",
   requestCostMicros: "1000",
   budgetScope: "policy",
   providers: ["openai", "tavily"],

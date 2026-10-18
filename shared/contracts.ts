@@ -70,7 +70,7 @@ export interface AccessPolicy {
   tenantId?: string | null;
   tokenRole?: string | null;
   monthlyBudgetMicros?: number | null;
-  dailyBudgetMicros?: number | null;
+  dailyBudgetMicros?: number | null; weeklyBudgetMicros?: number | null;
   limitHint?: string | null;
   serviceTiers?: import("./service-tiers").PolicyServiceTiers | null;
   requestCostMicros?: number | null;
@@ -269,7 +269,7 @@ export interface ProviderReadiness {
 }
 
 export interface ProviderAccess { provider: string; displayName: string; serviceKind: string; allowed: boolean; policies: string[]; readiness: ProviderReadiness }
-export interface SessionPolicyLimits { policyId: string; models?: string[] | null; serviceTiers?: import("./service-tiers").PolicyServiceTiers | null; limitHint?: string | null; dailyBudgetMicros?: number | null; budget: BudgetStatus }
+export interface SessionPolicyLimits { policyId: string; models?: string[] | null; serviceTiers?: import("./service-tiers").PolicyServiceTiers | null; limitHint?: string | null; dailyBudgetMicros?: number | null; weeklyBudgetMicros?: number | null; budget: BudgetStatus }
 export interface EntitlementsResponse { policies?: SessionPolicyLimits[]; session: SessionResponse; providers: ProviderAccess[]; catalog: ClientCatalog; contentRetention: ContentRetention }
 export interface AccessUser { email: string; role: AccessRole; tenantId: string; enabled: boolean; groups: string[]; contentRetentionDisabled: boolean }
 export interface PolicyBinding { policyId: string; principalType: "user" | "group"; principalId: string; enabled: boolean; priority: number }
@@ -300,8 +300,8 @@ export interface AdminTenantSummary {
 }
 
 export interface BudgetPrincipalStatus extends BudgetStatus { principal: string }
-export interface BudgetStatus { daily?: BudgetStatus & { resetsAt: string }; configured: boolean; ledger: string; windowKey?: string | null; limitMicros?: number | null; spentMicros?: number | null; remainingMicros?: number | null; breakdown?: BudgetPrincipalStatus[] }
-export interface AdminUsageRow { dailyBudgetMicros?: number | null; serviceTiers?: import("./service-tiers").PolicyServiceTiers | null; limitHint?: string | null; policyId?: string; kid: string; tenantId: string; enabled: boolean; providers: string[]; tokenRole?: string | null; monthlyBudgetMicros?: number | null; requestCostMicros?: number | null; budgetScope?: "policy" | "principal"; budget: BudgetStatus }
+export interface BudgetStatus { resetsAt?: string; weekly?: BudgetStatus & { resetsAt: string }; daily?: BudgetStatus & { resetsAt: string }; configured: boolean; ledger: string; windowKey?: string | null; limitMicros?: number | null; spentMicros?: number | null; remainingMicros?: number | null; breakdown?: BudgetPrincipalStatus[] }
+export interface AdminUsageRow { dailyBudgetMicros?: number | null; weeklyBudgetMicros?: number | null; serviceTiers?: import("./service-tiers").PolicyServiceTiers | null; limitHint?: string | null; policyId?: string; kid: string; tenantId: string; enabled: boolean; providers: string[]; tokenRole?: string | null; monthlyBudgetMicros?: number | null; requestCostMicros?: number | null; budgetScope?: "policy" | "principal"; budget: BudgetStatus }
 export interface UsageSummary { requestCount: number; successCount: number; errorCount: number; inputTokens: number; outputTokens: number; totalTokens: number; actualCostMicros: number; unpricedRequestCount?: number }
 export interface ProviderUsageSummary { provider: string; requestCount: number; successCount: number; errorCount: number; totalTokens: number; actualCostMicros: number; unpricedRequestCount?: number }
 export interface UsageDailySummary { dayStartMs: number; requestCount: number; successCount: number; errorCount: number; totalTokens: number; actualCostMicros: number; unpricedRequestCount?: number }

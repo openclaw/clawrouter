@@ -65,6 +65,13 @@ export function presentPolicyBudget(row: AdminUsageRow) {
   return presentBudget({ ...row.budget, limitMicros: row.budget.limitMicros ?? row.monthlyBudgetMicros }, row.budgetScope ?? "policy", row.enabled);
 }
 
+export function presentAllowanceWindows(budget: BudgetStatus) {
+  return ([
+    ["Today", budget.daily], ["This week", budget.weekly], ["This month", budget],
+  ] as const).filter((entry): entry is typeof entry & readonly [string, BudgetStatus] => entry[1]?.configured === true)
+    .map(([label, window]) => ({ label, text: `${label}: ${formatMicros(window.spentMicros)} used / ${formatMicros(window.limitMicros)} limit · ${formatMicros(window.remainingMicros)} remaining${window.resetsAt ? ` · resets ${window.resetsAt}` : ""}` }));
+}
+
 export function presentProviderBudget(connection: ProviderConnection) {
   return presentBudget({ ledger: "provider", limitMicros: connection.monthlyBudgetMicros, spentMicros: connection.spentMicros, remainingMicros: connection.remainingMicros }, "provider");
 }

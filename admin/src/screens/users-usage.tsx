@@ -5,7 +5,7 @@ import { EntityName, InlineError, InlineNote, InspectorHeader, MiniListItem, Sta
 import { ProviderUsageChart, TrafficAreaChart } from "../analytics-charts";
 import { useConsole } from "../console-controller-context";
 import { usageEventGroups, type UsageEventGroup } from "../usage-analytics";
-import { presentAccountedSpend, presentBudget, presentCost, presentPolicyBudget } from "../cost-presentation";
+import { presentAccountedSpend, presentAllowanceWindows, presentBudget, presentCost, presentPolicyBudget } from "../cost-presentation";
 import {
   effectiveProviderCount,
   formatCount,
@@ -239,7 +239,7 @@ export function UsageScreen({ keys, credentials, services, overview, tenants, us
       <section className="analyticsPanel usageTablePanel budgetTablePanel">
         <div className="tableSectionHeader secondaryTableHeader"><div><strong>Policy budgets</strong><span>{rows.length} configured policies</span></div><span>{usageLoaded ? usageStale ? "last known ledger" : "live ledger" : "policy limits only"}</span></div>
         <p className="panelIntro">UTC calendar month · Used includes reservations. Other policy or provider limits still apply.</p>
-        <EntityTable columns={["policy", "tenant", "budget usage", "services", "health"]} columnTemplate="minmax(210px, 1.15fr) minmax(120px, 0.7fr) minmax(250px, 1.45fr) 96px 120px" rows={rows.map((row) => ({ id: usagePolicyId(row), cells: [<EntityName icon={KeyRound} title={usagePolicyId(row)} subtitle={row.tokenRole ?? "custom"} />, row.tenantId, <BudgetUsage row={row} />, effectiveProviderCount(row.providers, services), <UsageHealth row={row} />], detail: row.budget.ledger === "per_principal" ? <BudgetBreakdown row={row} /> : undefined }))} />
+        <EntityTable columns={["policy", "tenant", "budget usage", "services", "health"]} columnTemplate="minmax(210px, 1.15fr) minmax(120px, 0.7fr) minmax(250px, 1.45fr) 96px 120px" rows={rows.map((row) => ({ id: usagePolicyId(row), cells: [<EntityName icon={KeyRound} title={usagePolicyId(row)} subtitle={row.tokenRole ?? "custom"} />, row.tenantId, <BudgetUsage row={row} />, effectiveProviderCount(row.providers, services), <UsageHealth row={row} />], detail: [row.budget, row.budget.daily, row.budget.weekly].some(window => window?.ledger === "per_principal") ? <BudgetBreakdown row={row} /> : undefined }))} />
       </section>
     </div>
   );
@@ -283,14 +283,16 @@ export function BudgetUsage({ row }: { row: AdminUsageRow }) {
     <span className="budgetUsage" title={budget.note}>
       <span><strong>{budget.used}</strong><small>{budget.limit}</small></span>
       <small>{budget.remaining} · {budget.scopeLabel}</small>
+      {presentAllowanceWindows(row.budget).filter(window => window.label !== "This month").map(window => <small key={window.label}>{window.text}</small>)}
       <span className={`budgetTrack${budget.exhausted ? " exhausted" : ""}`}><span style={{ width: `${budget.percent ?? 0}%` }} /></span>
     </span>
   );
 }
 
 function BudgetBreakdown({ row }: { row: AdminUsageRow }) {
-  const breakdown = row.budget.breakdown ?? [];
-  return <div className="budgetBreakdown"><strong>Per principal</strong>{breakdown.length ? breakdown.map((item) => { const budget = presentBudget(item, "principal"); return <div key={item.principal}><span>{item.principal}</span><span>{budget.used}</span><span>{budget.remaining}</span></div>; }) : <span>No principal balances reported</span>}</div>;
+  const windows = [["Monthly", row.budget], ["Daily", row.budget.daily], ["Weekly", row.budget.weekly]] as const;
+  const breakdown = windows.flatMap(([label, window]) => window?.configured ? (window.breakdown ?? []).map(item => ({ label, item })) : []);
+  return <div className="budgetBreakdown"><strong>Per principal</strong>{breakdown.length ? breakdown.map(({ label, item }) => { const budget = presentBudget(item, "principal"); return <div key={label + item.principal}><span>{item.principal} · {label}</span><span>{budget.used}</span><span>{budget.remaining}</span></div>; }) : <span>No principal balances reported</span>}</div>;
 }
 
 export function UsageHealth({ row }: { row: AdminUsageRow }) {

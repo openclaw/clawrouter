@@ -30,7 +30,7 @@ separate. No cap at one scope does not remove other policy or provider limits.
 Unavailable balances remain unknown; failed refreshes keep their last-known
 timestamp and stale warning.
 
-## Daily limits and service tiers
+## Daily and weekly limits and service tiers
 
 `dailyBudgetMicros` is an independent policy cap. `budgetScope: "principal"`
 shares it across all keys of a signed-in email (falling back to credential ID
@@ -44,6 +44,16 @@ use the same variable-length leg list. Status adds `budget.daily`, including
 reservations count as spent capacity. Daily-only caps require priced requests;
 zero blocks admission. Daily exhaustion returns 402 `daily_budget_exhausted`,
 naming the limit and next midnight UTC.
+
+`weeklyBudgetMicros` is an independent cap with the same scope and reservation
+rules. Its key is `<policy/principal path>/week/YYYY-Www` on the same shard;
+`YYYY-Www` uses the ISO week-year and resets Monday at 00:00 UTC. All configured
+monthly, daily, weekly and provider legs must reserve successfully or the
+earlier holds roll back. `budget.weekly` reports limit, spent, remaining and
+`resetsAt`; weekly-only budgets require priced requests and zero blocks.
+Exhaustion returns 402 `weekly_budget_exhausted` with the limit, next Monday
+reset and policy hint. Member provisioning defaults to $5,000/week with no
+daily or monthly cap.
 
 Policies may specify `serviceTiers: {allowed: ["default", "flex", "priority"],
 models: {"openai/gpt-6.1-sol": ["default", "flex", "priority", "ultrafast"]}}`.
@@ -64,9 +74,9 @@ Omitted or `auto` tiers on OpenAI API Chat Completions and Responses routes beco
 before reservation and forwarding; subscription transports and other providers
 retain their existing payloads.
 
-A policy's optional `limitHint` is appended to daily/monthly policy-budget,
+A policy's optional `limitHint` is appended to daily/weekly/monthly policy-budget,
 service-tier and model-allowlist refusals. Session entitlements also include it
-with per-policy daily status. See [member keys](member-keys.md) for rollout.
+with per-policy daily and weekly status. See [member keys](member-keys.md) for rollout.
 
 ## Enforcement contract
 
@@ -112,7 +122,7 @@ Explicit fixed policy prices still apply independently of upstream token billing
 successful fixed zero and positive tariffs retain `cost_basis: policy_fixed`.
 
 `requestCostMicros` on a policy is an explicit fixed-cost override. Routes
-without pricing use the legacy one-micro fallback only when no monthly or daily budget
+without pricing use the legacy one-micro fallback only when no monthly, daily or weekly budget
 is configured. Every budgeted call fails closed until its route has versioned
 manifest pricing or a fixed policy price. A zero-cost route, such as Anthropic
 token counting, skips reservation.

@@ -35,7 +35,7 @@ import {
   kindIcon,
   kindLabel,
 } from "../components";
-import { formatMicros, presentAccountedSpend, presentPolicyBudget, presentProviderBudget } from "../cost-presentation";
+import { presentAccountedSpend, presentAllowanceWindows, presentPolicyBudget, presentProviderBudget } from "../cost-presentation";
 import { ProviderUsageChart, TrafficAreaChart } from "../analytics-charts";
 import {
   effectiveProviderCount,
@@ -240,7 +240,7 @@ export function MyKeysCard({ policies, credentials, policyIds, feedback, onDraft
         <button type="button" disabled={!policyAvailable || busy} onClick={() => void onIssue(selectedPolicy, undefined, { days, serviceTiers: keyTierChoices(limits, fast, ultrafast) })}><Plus aria-hidden="true" /> Create key</button>
       </div>
       <div className="myKeysCreate"><label><span>Validity</span><select value={days} onChange={event => { onDraftChange(); setDays(Number(event.target.value)); }}>{[30, 90, 180].map(value => <option key={value} value={value}>{value} days</option>)}</select></label><KeyTierControls policy={limits} fast={fast} ultrafast={ultrafast} onFast={value => { onDraftChange(); setFast(value); }} onUltrafast={value => { onDraftChange(); setUltrafast(value); }} /></div>
-      {limits?.dailyBudgetMicros != null ? <p className="panelIntro">Today: {limits.budget.daily?.spentMicros == null ? "unavailable" : formatMicros(limits.budget.daily.spentMicros)} / {formatMicros(limits.dailyBudgetMicros)} · resets at 00:00 UTC</p> : null}
+      {limits ? presentAllowanceWindows(limits.budget).map(window => <p className="panelIntro" key={window.label}>{window.text}</p>) : null}
       {limits?.limitHint ? <p className="panelIntro">{limits.limitHint}</p> : null}
       <div className="myKeysList">
         {credentials.map((credential) => <article key={credential.credentialId}>

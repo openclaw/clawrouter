@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatMicros, presentAccountedSpend, presentBudget, presentCost, presentPolicyBudget, presentProviderBudget } from "../src/cost-presentation.ts";
+import { formatMicros, presentAccountedSpend, presentAllowanceWindows, presentBudget, presentCost, presentPolicyBudget, presentProviderBudget } from "../src/cost-presentation.ts";
+
+test("allowances show only configured windows including weekly capacity and reset", () => {
+  const weekly = { configured: true, ledger: "durable_object", spentMicros: 1_000_000, limitMicros: 5_000_000_000, remainingMicros: 4_999_000_000, resetsAt: "2026-10-19T00:00:00.000Z" };
+  const budget = { configured: false, ledger: "unmetered", daily: { configured: false, ledger: "unmetered" }, weekly };
+  assert.deepEqual(presentAllowanceWindows(budget), [{ label: "This week", text: "This week: $1.00 used / $5000.00 limit · $4999.00 remaining · resets 2026-10-19T00:00:00.000Z" }]);
+  assert.match(presentAllowanceWindows({ ...budget, weekly: { ...weekly, spentMicros: null, remainingMicros: null } })[0].text, /Unknown used.*Unknown remaining/);
+  assert.deepEqual(presentAllowanceWindows({ configured: false }), []);
+});
 
 test("zero amounts retain their recorded accounting basis", () => {
   const cases = [

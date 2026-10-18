@@ -16,7 +16,7 @@ Set `CLAWROUTER_URL` to the router's HTTPS origin and provide
 Preview without making network requests:
 
 ```sh
-pnpm cf:members -- --dry-run --daily-usd 20
+pnpm cf:members -- --dry-run --weekly-usd 5000
 ```
 
 The default assignment rule ID is `github_org_openclaw`, matching the existing
@@ -25,7 +25,7 @@ letters, digits, and underscores contract for assignment IDs.
 Inspect the planned policy and assignment requests. After the catalog and this
 Worker version are deployed, explicitly use `--apply` to upsert them. Repeating
 an identical apply makes no writes. `--policy-id`, `--rule-id`, `--github-org`,
-repeatable `--model`, `--monthly-usd`, and `--hint` customize the member setup.
+repeatable `--model`, `--weekly-usd`, optional `--daily-usd` / `--monthly-usd`, and `--hint` customize the member setup.
 The default hint directs heavy users to the OpenClaw team server without a
 personal cap. The script does not create keys or change Access configuration.
 
@@ -35,10 +35,31 @@ Ultrafast only on `openai/gpt-6.1-sol`; other models, including
 separately with the console or existing `cf:key:put` flow. Do not assign the
 team policy to the general members group.
 
-The member policy allows OpenAI `openai/gpt-6.1-sol`, a $20 UTC daily allowance
+The default `member_weekly` policy allows OpenAI `openai/gpt-6.1-sol`, a $5,000 weekly allowance
 per signed-in principal, Default/Flex/Fast, and no request-content retention.
 Every key for that principal under that policy shares the allowance. An optional
-monthly cap is enforced independently. The next daily reset is midnight UTC.
+daily or monthly cap is enforced independently; neither is configured by default.
+Weeks follow ISO week numbering and reset Monday at 00:00 UTC.
+
+### Patch existing team and Stable policies
+
+To preserve an existing policy's budget, routing, providers, models, and other
+settings, use the repeatable `--ultrafast-policy` option. The intended targets
+are the team server policy (normally `team_server`) and `openclaw_stable`:
+
+```sh
+pnpm cf:members -- --ultrafast-policy team_server --ultrafast-policy openclaw_stable
+# After reviewing the preview:
+pnpm cf:members -- --ultrafast-policy team_server --ultrafast-policy openclaw_stable --apply
+```
+
+This mode reads the admin API even for a dry run and requires the URL and token.
+It does not provision the member policy or assignment rule. It sets only the
+`openai/gpt-6.1-sol` model override to Default/Flex/Fast/Ultrafast, preserving
+every other policy field and all other tier entries. If tier configuration is
+absent, the global default remains Default/Flex/Fast. In particular, it never
+adds Ultrafast to `openai/gpt-6-astra`. Repeated apply makes no further writes;
+a missing target fails before any write.
 
 ## Client setup and limits
 
@@ -56,9 +77,9 @@ export OPENAI_API_KEY="<your-personal-clawrouter-key>"
 ```
 
 Set the client's model to `openai/gpt-6.1-sol`. For clients with an explicit API
-base setting, use the same `/v1` URL. Dashboard displays spent-today capacity,
+base setting, use the same `/v1` URL. Dashboard displays each configured allowance,
 including outstanding reservations, the reset time, and the policy's steering
-message. A 402 daily/monthly refusal or a tier/model refusal includes that hint.
+message. A 402 daily/weekly/monthly refusal or a tier/model refusal includes that hint.
 For sustained usage, use the OpenClaw team server.
 
 ## Renewal and legacy keys
