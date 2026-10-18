@@ -82,4 +82,3 @@ export async function finishAdmissionSelection(env: Env, storage: DurableObjectS
     return { ...fresh, selection: { selected: selected ? { ...selected, authorityRevision: store.grantAttachment(selected.key).revision } : null, hasConfiguredGrant } };
   });
 }
-

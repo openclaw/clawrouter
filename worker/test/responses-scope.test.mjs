@@ -296,3 +296,34 @@ test("a late collection attempt cannot replace a newer pending observation after
   assert.deepEqual((await f.call("get", { id: input.id })).body, newer);
   assert.deepEqual(gets, [5_000, 35_000]); assert.equal(f.calls.some(call => call.path === "/settle"), false);
 });
+
+test("daily and monthly legs share a shard and all three receipts recover after reconstruction", async t => {
+  const f = fixture(t), input = f.input();
+  const dailyAuth = { ...auth, policy: { ...auth.policy, dailyBudgetMicros: 5000 } };
+  input.plan = planBudgetReservation(dailyAuth, "llm.responses", cost, { providerId: "fixture", monthlyBudgetMicros: 5000 });
+  assert.deepEqual(input.plan.legs.map(leg => leg.kind), ["policy", "daily", "provider"]);
+  await f.admit(input); await f.dispatch(input.id); await f.bind(input);
+  const frozen = (await f.call("freeze", { id: input.id, outcome: terminal() })).body;
+  assert.deepEqual(frozen.settlements, ["pending", "pending", "pending"]);
+  f.restart(); await f.state.object.alarm();
+  const recovered = (await f.call("get", { id: input.id })).body;
+  assert.equal(recovered.phase, "complete");
+  assert.deepEqual(recovered.settlements, ["settled", "settled", "settled"]);
+  for (const leg of input.plan.legs) {
+    const receipt = f.budgets.get(leg.objectName).reservations().find(row => row.reservation_id === leg.request.reservationId);
+    assert.equal(receipt.reserved_micros, 25);
+    assert.equal(receipt.window_key, leg.request.windowKey);
+  }
+});
+
+test("durable daily denial releases the monthly receipt and never reserves the provider", async t => {
+  const f = fixture(t), input = f.input();
+  input.plan = planBudgetReservation({ ...auth, policy: { ...auth.policy, dailyBudgetMicros: 50 } }, "llm.responses", cost, { providerId: "fixture", monthlyBudgetMicros: 5000 });
+  const response = await f.call("admit", { admission: input });
+  assert.equal(response.status, 402);
+  assert.equal(response.body.error.code, "daily_budget_exhausted");
+  f.restart(); await f.state.object.alarm();
+  assert.equal((await f.call("get", { id: input.id })).body.phase, "complete");
+  assert.equal(f.budgets.get(input.plan.legs[0].objectName).reservations()[0].reserved_micros, 0);
+  assert.equal(f.calls.filter(call => call.path === "/reserve").length, 2);
+});

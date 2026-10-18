@@ -34,3 +34,8 @@ export function providerBudgetLedgerAddress(providerId: string, at = Date.now())
     windowKey: `provider/${providerId}/${month}`,
   };
 }
+
+export function dailyBudgetLedgerAddress(policyId: string, policy: Pick<AccessPolicy, "tenantId" | "budgetScope">, principal?: string | null, at = Date.now()) {
+  const address = budgetLedgerAddress(policyId, policy, principal, at);
+  return { ...address, windowKey: `${address.policyId}/day/${new Date(at).toISOString().slice(0, 10)}` };
+}

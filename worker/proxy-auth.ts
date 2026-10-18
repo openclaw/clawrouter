@@ -1,3 +1,5 @@
+import { budgetStatus } from "./ledgers.ts";
+import { budgetPrincipal } from "./budget-scope.ts";
 import { credentialExpired, credentialExpiryError } from "./credential-lifecycle.ts";
 import { assertPolicyModel } from "./policy-models.ts";
 import type { AdmissionSelection } from "./authority-admission.ts";
@@ -100,6 +102,8 @@ export async function inspectKey(headers: Headers, env: Env): Promise<Response> 
     kid: parsed.kid, mode: parsed.mode, syntaxValid: true, verified: true, verification: "verified",
     enabled: result.policy.enabled, active: true, expiresAt: proxyKeyVerification(result)?.expiresAt ?? null, expired: false, providers: result.policy.providers, tenantId: result.policy.tenantId ?? null,
     tokenRole: result.policy.tokenRole ?? null, monthlyBudgetMicros: result.policy.monthlyBudgetMicros ?? null,
+    dailyBudgetMicros: result.policy.dailyBudgetMicros ?? null,
+    budget: await budgetStatus(env, result.policyId, result.policy, budgetPrincipal(result)),
     requestCostMicros: result.policy.requestCostMicros ?? null, budgetScope: result.policy.budgetScope ?? "policy",
   });
 }

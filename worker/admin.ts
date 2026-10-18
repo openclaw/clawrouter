@@ -212,9 +212,9 @@ async function adminUsage(env: Env): Promise<Response> {
 
 export async function adminBudgetStatus(env: Env, entry: AccessPolicyEntry, principals: string[]) {
   const status = await policyBudgetStatus(env, entry.policyId, entry.policy);
-  if (status.ledger !== "per_principal") return status;
+  if (status.ledger !== "per_principal" && status.daily.ledger !== "per_principal") return status;
   const breakdown = await Promise.all(principals.map(async (principal) => ({ principal, ...await policyBudgetStatus(env, entry.policyId, entry.policy, principal) })));
-  return { ...status, breakdown };
+  return { ...status, breakdown, daily: { ...status.daily, breakdown: breakdown.map(({ principal, daily }) => ({ principal, ...daily })) } };
 }
 
 export function budgetPrincipalsByPolicy(credentialEntries: ProxyCredentialEntry[], users: AccessControlUser[], bindings: PolicyBinding[]): Map<string, string[]> {
@@ -508,11 +508,12 @@ export function normalizePolicy(
   const poolStatus = body.poolStatus === undefined ? existing?.poolStatus ?? "hidden" : body.poolStatus;
   if (poolStatus !== "hidden" && poolStatus !== "visible") throw new HttpError(400, "invalid_policy", "poolStatus must be hidden or visible");
   const monthlyBudgetMicros = normalizeBudgetValue(body.monthlyBudgetMicros, "monthlyBudgetMicros");
+  const dailyBudgetMicros = normalizeBudgetValue(body.dailyBudgetMicros, "dailyBudgetMicros");
   const requestCostMicros = normalizeBudgetValue(body.requestCostMicros, "requestCostMicros");
   const budgetScope = body.budgetScope ?? existing?.budgetScope ?? "policy";
   if (budgetScope !== "policy" && budgetScope !== "principal") throw new HttpError(400, "invalid_policy", "budgetScope must be policy or principal");
   const grantRouting = normalizeGrantRouting(body.grantRouting, existing?.grantRouting);
-  return { enabled: policyBoolean(body.enabled, "enabled", true), generation: existing?.generation ?? randomId("policy"), providers, models, poolStatus, tenantId: policyString(body.tenantId, "tenantId", "default"), tokenRole: policyString(body.tokenRole, "tokenRole", "service"), monthlyBudgetMicros, requestCostMicros, budgetScope, retainRequestContent: policyBoolean(body.retainRequestContent, "retainRequestContent", existing?.retainRequestContent ?? retainRequestContentDefault), grantRouting };
+  return { enabled: policyBoolean(body.enabled, "enabled", true), generation: existing?.generation ?? randomId("policy"), providers, models, poolStatus, tenantId: policyString(body.tenantId, "tenantId", "default"), tokenRole: policyString(body.tokenRole, "tokenRole", "service"), monthlyBudgetMicros, dailyBudgetMicros, requestCostMicros, budgetScope, retainRequestContent: policyBoolean(body.retainRequestContent, "retainRequestContent", existing?.retainRequestContent ?? retainRequestContentDefault), grantRouting };
 }
 
 function normalizeGrantRouting(value: unknown, existing?: AccessPolicy["grantRouting"]): AccessPolicy["grantRouting"] {
@@ -659,7 +660,7 @@ function normalizeGrantMaintenance(value: unknown, existing: UpstreamGrant["main
   return { keepWarm: body.keepWarm === true };
 }
 
-function policyResponse(entry: AccessPolicyEntry) { return { policyId: entry.policyId, enabled: entry.policy.enabled, providers: entry.policy.providers, models: entry.policy.models ?? null, poolStatus: entry.policy.poolStatus ?? "hidden", tenantId: entry.policy.tenantId ?? null, tokenRole: entry.policy.tokenRole ?? null, monthlyBudgetMicros: entry.policy.monthlyBudgetMicros ?? null, requestCostMicros: entry.policy.requestCostMicros ?? null, budgetScope: entry.policy.budgetScope ?? "policy", retainRequestContent: entry.policy.retainRequestContent !== false, grantRouting: grantRoutingPolicy(entry.policy.grantRouting) }; }
+function policyResponse(entry: AccessPolicyEntry) { return { policyId: entry.policyId, enabled: entry.policy.enabled, providers: entry.policy.providers, models: entry.policy.models ?? null, poolStatus: entry.policy.poolStatus ?? "hidden", tenantId: entry.policy.tenantId ?? null, tokenRole: entry.policy.tokenRole ?? null, monthlyBudgetMicros: entry.policy.monthlyBudgetMicros ?? null, dailyBudgetMicros: entry.policy.dailyBudgetMicros ?? null, requestCostMicros: entry.policy.requestCostMicros ?? null, budgetScope: entry.policy.budgetScope ?? "policy", retainRequestContent: entry.policy.retainRequestContent !== false, grantRouting: grantRoutingPolicy(entry.policy.grantRouting) }; }
 function legacyKeyResponse(entry: AccessPolicyEntry) { return { kid: entry.policyId, ...policyResponse(entry) }; }
 function userResponse(user: AccessControlUser) { return { email: user.email, role: "user" as const, tenantId: user.record.tenantId ?? "default", enabled: user.record.enabled ?? true, groups: user.record.groups ?? [], contentRetentionDisabled: user.record.contentRetentionDisabled ?? false }; }
 function grantResponse(key: string, grant: UpstreamGrant) {

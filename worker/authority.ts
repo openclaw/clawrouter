@@ -906,6 +906,7 @@ function normalizePolicyRecord(
     tenantId: typeof value.tenantId === "string" ? value.tenantId : null,
     tokenRole: typeof value.tokenRole === "string" ? value.tokenRole : null,
     monthlyBudgetMicros: typeof value.monthlyBudgetMicros === "number" ? value.monthlyBudgetMicros : null,
+    dailyBudgetMicros: typeof value.dailyBudgetMicros === "number" ? value.dailyBudgetMicros : null,
     requestCostMicros: typeof value.requestCostMicros === "number" ? value.requestCostMicros : null,
     budgetScope: value.budgetScope === "principal" ? "principal" : "policy",
     retainRequestContent:

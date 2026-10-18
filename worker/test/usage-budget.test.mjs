@@ -46,7 +46,10 @@ test("GET /v1/usage preserves the budget response contract while selecting the c
   assert.equal(response.status, 200);
   const body = await response.json();
   const month = new Date().toISOString().slice(0, 7);
-  assert.deepEqual(body.budget, {
+  assert.equal(body.budget.daily.configured, false);
+  assert.ok(body.budget.daily.resetsAt.endsWith("T00:00:00.000Z"));
+  const { daily, ...monthly } = body.budget;
+  assert.deepEqual(monthly, {
     configured: true,
     ledger: "durable_object",
     windowKey: `tenant/maintainer_access/owner@example.com/${month}`,
@@ -54,7 +57,7 @@ test("GET /v1/usage preserves the budget response contract while selecting the c
     spentMicros: 10,
     remainingMicros: 90,
   });
-  assert.deepEqual(Object.keys(body.budget), ["configured", "ledger", "windowKey", "limitMicros", "spentMicros", "remainingMicros"]);
+  assert.deepEqual(Object.keys(body.budget), ["configured", "ledger", "windowKey", "limitMicros", "spentMicros", "remainingMicros", "daily"]);
   assert.equal(objectNames[0], "tenant:maintainer_access:owner@example.com");
 });
 

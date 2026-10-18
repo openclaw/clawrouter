@@ -275,7 +275,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       return errorResponse("fusion_reservation_invalid", "fusion synthesizer reservation does not cover the final request", 500);
     }
     // Monetary coverage alone cannot prove that the final request remains priced.
-    if (reservedBudget) validateBudgetReservation(selection.capability, cost, auth.policy.monthlyBudgetMicros, reservedBudget.connection);
+    if (reservedBudget) validateBudgetReservation(selection.capability, cost, auth.policy.monthlyBudgetMicros, reservedBudget.connection, auth.policy.dailyBudgetMicros);
   }
   catch (error) {
     const failure = selectedFailure(continuation?.preflightError(error) ?? error);

@@ -127,6 +127,7 @@ export interface AccessPolicy {
   tenantId?: string | null;
   tokenRole?: string | null;
   monthlyBudgetMicros?: number | null;
+  dailyBudgetMicros?: number | null;
   requestCostMicros?: number | null;
   budgetScope?: "policy" | "principal";
   retainRequestContent: boolean;

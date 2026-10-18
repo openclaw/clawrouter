@@ -77,3 +77,36 @@ test("new HTTP keys expire; admin updates preserve expiry and secret, stamp lega
   }
 });
 
+test("daily leg uses same shard, preserves monthly key, settles both; UTC rollover and principal isolation", async t => {
+  t.mock.method(Date, "now", () => now);
+  const namespace = sqlBudgetNamespace(t), env = { BUDGET_LEDGER: namespace, USAGE_QUEUE: { send() { throw new Error("unexpected recovery"); } } };
+  const plan = planBudgetReservation(auth, "llm.chat", cost);
+  assert.deepEqual(plan.legs.map(leg => leg.kind), ["policy", "daily"]);
+  assert.equal(plan.legs[0].objectName, plan.legs[1].objectName);
+  assert.equal(plan.legs[0].request.windowKey, "default/member/member@example.com/2026-10");
+  assert.equal(plan.legs[1].request.windowKey, "default/member/member@example.com/day/2026-10-18");
+  const reserved = await reserveBudget(env, auth, "llm.chat", cost);
+  await assert.rejects(reserveBudget(env, { ...auth, credentialId: "second_key" }, "llm.chat", cost), error => error.code === "daily_budget_exhausted" && error.message.includes("2026-10-19T00:00:00.000Z"));
+  assert.equal((await budgetStatus(env, auth.policyId, auth.policy, auth.principalId)).spentMicros, 60, "daily denial releases the earlier monthly hold");
+  await markBudgetDispatched(env, reserved);
+  await settleBudget(env, reserved, 20);
+  const status = await budgetStatus(env, auth.policyId, auth.policy, auth.principalId);
+  assert.equal(status.spentMicros, 20);
+  assert.equal(status.daily.spentMicros, 20);
+  assert.equal(status.daily.remainingMicros, 80);
+  await reserveBudget(env, { ...auth, principalId: "another@example.com" }, "llm.chat", cost);
+  t.mock.method(Date, "now", () => Date.parse("2026-10-19T00:00:00Z"));
+  assert.equal((await budgetStatus(env, auth.policyId, auth.policy, auth.principalId)).daily.spentMicros, 0);
+  assert.notEqual(dailyBudgetLedgerAddress("member", auth.policy, auth.principalId, now).windowKey, dailyBudgetLedgerAddress("member", auth.policy, auth.principalId).windowKey);
+});
+
+test("daily rollback releases all prior legs on provider rejection or transport failure", async t => {
+  for (const failure of ["refuse", "throw"]) {
+    const namespace = sqlBudgetNamespace(t);
+    const env = { USAGE_QUEUE: { send() { throw new Error("unexpected recovery"); } }, BUDGET_LEDGER: { idFromName: name => name, get: name => name.startsWith("provider:") ? { fetch() { if (failure === "throw") throw new Error("synthetic unavailable"); return Response.json({ allowed: false }); } } : namespace.get(name) } };
+    await assert.rejects(reserveBudget(env, auth, "llm.chat", cost, { providerId: "openai", monthlyBudgetMicros: 100 }));
+    const status = await budgetStatus(env, auth.policyId, auth.policy, auth.principalId);
+    assert.equal(status.spentMicros, 0);
+    assert.equal(status.daily.spentMicros, 0);
+  }
+});

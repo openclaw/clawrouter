@@ -47,7 +47,7 @@ export async function sessionResponse(request: Request, env: Env): Promise<Respo
   let entitlementsError: string | undefined;
   try {
     const resolved = await sessionEntitlements(session, env);
-    entitlements = { providers: resolved.rows, catalog: catalogProjection(resolved) };
+    entitlements = { providers: resolved.rows, catalog: catalogProjection(resolved), policies: await sessionPolicyLimits(session, env) };
   }
   catch (error) { entitlementsError = error instanceof Error ? error.message : "entitlements unavailable"; }
   return privateJson({ ...publicSession(session), entitlements, entitlementsError, contentRetention: await retentionView(session, env) } satisfies SessionResponse);
@@ -57,7 +57,7 @@ export async function entitlementResponse(request: Request, env: Env): Promise<R
   const session = await verifiedAccessSession(request, env);
   if (!session) return errorResponse("access_session_required", "entitlements require a verified Cloudflare Access session", 401);
   const resolved = await sessionEntitlements(session, env);
-  return privateJson({ session: publicSession(session), providers: resolved.rows, catalog: catalogProjection(resolved), contentRetention: await retentionView(session, env) } satisfies EntitlementsResponse);
+  return privateJson({ session: publicSession(session), providers: resolved.rows, catalog: catalogProjection(resolved), policies: await sessionPolicyLimits(session, env), contentRetention: await retentionView(session, env) } satisfies EntitlementsResponse);
 }
 
 export async function avatarResponse(request: Request, env: Env): Promise<Response> {
@@ -309,7 +309,7 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
         if (!policyBalances.has(auth.policyId)) policyBalances.set(auth.policyId, budgetStatus(env, auth.policyId, auth.policy, budgetPrincipal(auth)));
         if (connection.monthlyBudgetMicros != null) providerBalance ??= providerBudgetStatus(env, provider.id, connection.monthlyBudgetMicros);
         const [policy, providerBudget] = await Promise.all([policyBalances.get(auth.policyId)!, providerBalance]);
-        observation = { policyRemaining: policy.remainingMicros, providerRemaining: providerBudget?.remainingMicros ?? null };
+        observation = { policyRemaining: policy.remainingMicros, dailyRemaining: policy.daily.remainingMicros, providerRemaining: providerBudget?.remainingMicros ?? null };
       }
       return { endpoint, mode, auth, reasonCode, observation, modelIds: group.modelIds, passthrough: group.passthrough };
     }))));
@@ -382,4 +382,8 @@ function connectionTypes(provider: CompiledProvider): string[] {
     else types.add("cloudflare_binding");
   }
   return [...types].sort();
+}
+
+async function sessionPolicyLimits(session: AccessSession, env: Env) {
+  return Promise.all((await sessionPolicies(session, env)).map(async ({ policyId, policy }) => ({ policyId, models: policy.models ?? null, dailyBudgetMicros: policy.dailyBudgetMicros ?? null, budget: await budgetStatus(env, policyId, policy, policy.budgetScope === "principal" ? session.email : null) })));
 }

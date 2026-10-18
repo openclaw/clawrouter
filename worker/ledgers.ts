@@ -1,6 +1,7 @@
+import { nextDailyReset } from "./policy-limits.ts";
 import type { GrantUsageSnapshot, GrantUsageRow, GrantUsageTotals } from "../shared/contracts";
 import type { BudgetReserveRequest, BudgetSettleRequest, Env, QueueMessage, UsageEvent } from "./types";
-import { budgetLedgerAddress, providerBudgetLedgerAddress } from "./budget-scope.ts";
+import { budgetLedgerAddress, dailyBudgetLedgerAddress, providerBudgetLedgerAddress } from "./budget-scope.ts";
 import { mergeUsageSnapshots, usageCutoffs, usageDayMs, usageShardName, type UsageSnapshot } from "./usage-sharding.ts";
 import { errorResponse, HttpError, json, normalizeEmail } from "./utils.ts";
 
@@ -321,11 +322,20 @@ async function currentUsageSnapshot(env: Env, tenantId: string, policyId: string
   return response.json<UsageSnapshot>();
 }
 
-export async function budgetStatus(env: Env, policyId: string, policy: { tenantId?: string | null; monthlyBudgetMicros?: number | null; budgetScope?: "policy" | "principal" }, principal?: string | null) {
+export async function budgetStatus(env: Env, policyId: string, policy: { tenantId?: string | null; monthlyBudgetMicros?: number | null; dailyBudgetMicros?: number | null; budgetScope?: "policy" | "principal" }, principal?: string | null) {
+  const at = Date.now();
+  const [monthly, daily] = await Promise.all([
+    budgetWindowStatus(env, policyId, policy, principal, false, at),
+    budgetWindowStatus(env, policyId, { ...policy, monthlyBudgetMicros: policy.dailyBudgetMicros }, principal, true, at),
+  ]);
+  return { ...monthly, daily: { ...daily, resetsAt: nextDailyReset(at) } };
+}
+
+async function budgetWindowStatus(env: Env, policyId: string, policy: { tenantId?: string | null; monthlyBudgetMicros?: number | null; budgetScope?: "policy" | "principal" }, principal?: string | null, daily = false, at = Date.now()) {
   const limit = policy.monthlyBudgetMicros;
   if (limit == null) return { configured: false, ledger: "unmetered", windowKey: null, limitMicros: null, spentMicros: null, remainingMicros: null };
   if (policy.budgetScope === "principal" && !principal) return { configured: true, ledger: "per_principal", windowKey: null, limitMicros: limit, spentMicros: null, remainingMicros: null };
-  const address = budgetLedgerAddress(policyId, policy, principal);
+  const address = (daily ? dailyBudgetLedgerAddress : budgetLedgerAddress)(policyId, policy, principal, at);
   if (limit === 0) return { configured: true, ledger: "blocked", windowKey: address.windowKey, limitMicros: 0, spentMicros: 0, remainingMicros: 0 };
   try {
     const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(address.objectName));
