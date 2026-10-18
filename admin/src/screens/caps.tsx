@@ -62,7 +62,7 @@ export function CapsView({ onBack }: { onBack: () => void }) {
           return <tr key={member.email}><th scope="row">{member.email}</th>{windows.map(window => {
             const key = field(window), inherited = override?.[key] === undefined, cap = inherited ? row.policy[key] : override[key];
             const budget = window === "monthly" ? member.budget : member.budget[window];
-            return <td key={window} data-label={`${window} spend / cap`}><p>{budget?.spentMicros == null ? "unknown" : dollars(budget.spentMicros)} / {dollars(cap)}{inherited ? " (inherited)" : " (override)"}</p><CapEditor key={`${override?.updatedAt}-${cap}-${inherited}`} label={`${member.email} ${window} cap`} value={inherited ? undefined : cap} inherit disabled={busy} onSave={value => save(window, value, member.email)} /></td>;
+            return <td key={window} data-label={`${window} spend / cap`}><p>{budget?.spentMicros == null ? "unknown" : dollars(budget.spentMicros)} / {dollars(cap)}{inherited ? " (inherited)" : " (override)"}</p><CapEditor key={`${row.policy.policyId}-${override?.updatedAt}-${cap}-${inherited}`} label={`${member.email} ${window} cap`} value={inherited ? undefined : cap} inherit disabled={busy} onSave={value => save(window, value, member.email)} /></td>;
           })}<td>{override ? `${override.updatedBy} · ${override.updatedAt}` : "Policy default"}</td></tr>;
         })}</tbody></table></div>
       </>}

@@ -37,3 +37,32 @@ test('Members do not see the Caps view', async ({ page }) => {
   await expect(page.getByRole('button', { name: 'Caps', exact: true })).toHaveCount(0);
   await expect(page.getByRole('region', { name: 'Caps', exact: true })).toHaveCount(0);
 });
+
+test('Switching policies resets unsaved member cap edits even when limits match', async ({ page }) => {
+  const policies = ['alpha', 'beta'].map(policyId => ({ policyId, enabled: true, providers: [], budgetScope: 'principal', monthlyBudgetMicros: 1_000_000, retainRequestContent: false }));
+  const user = { email: 'member@example.com', role: 'user', tenantId: 'synthetic', enabled: true, groups: [], contentRetentionDisabled: false };
+  let writes = 0;
+  await page.route('**/v1/**', async route => {
+    if (route.request().method() !== 'GET') writes++;
+    const responses: Record<string, unknown> = {
+      '/v1/session': { authenticated: true, auth: 'cloudflare_access', role: 'admin', email: 'admin@example.com', entitlements: { providers: [] } },
+      '/v1/providers': { providers: [] }, '/v1/routes': { openaiCompatible: [], manifestProxy: [] },
+      '/v1/session/credentials': { credentials: [] }, '/v1/session/usage': { policies: [] },
+      '/v1/admin/bootstrap': { policies, users: [user], credentials: [], bindings: [], grants: [], connections: [], rules: [], tenants: [], overview: {} },
+      '/v1/admin/caps': { users: [user], rows: policies.map(policy => ({ policy, members: [{ email: user.email, budget: { configured: true, ledger: 'durable_object', spentMicros: 0, limitMicros: 1_000_000, remainingMicros: 1_000_000 } }] })) },
+    };
+    await route.fulfill({ json: responses[new URL(route.request().url()).pathname] ?? {} });
+  });
+  await page.goto('/dashboard/users');
+  await page.getByRole('button', { name: 'Caps', exact: true }).click();
+  const mode = page.getByRole('combobox', { name: `${user.email} monthly cap mode`, exact: true });
+  await mode.selectOption('unlimited');
+  await page.getByLabel('Caps policy').selectOption('beta');
+  await expect(mode).toHaveValue('inherit');
+  await mode.selectOption('number');
+  await page.getByLabel(`${user.email} monthly cap USD`).fill('123');
+  await page.getByLabel('Caps policy').selectOption('alpha');
+  await expect(mode).toHaveValue('inherit');
+  await expect(page.getByLabel(`${user.email} monthly cap USD`)).toHaveCount(0);
+  expect(writes).toBe(0);
+});
