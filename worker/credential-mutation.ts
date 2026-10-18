@@ -1,3 +1,4 @@
+import { grantedServiceTiers } from "../shared/service-tiers.ts";
 import { credentialExpiry } from "./credential-lifecycle.ts";
 import type { CredentialMutation } from "./authority-contracts.ts";
 import type { ProxyCredential, AccessPolicy, Env } from "./types";
@@ -20,6 +21,10 @@ export function nextCredential(request: CredentialMutation, existing: ProxyCrede
     credential.expiresAt = scope === "admin" && existing && request.credential.expiresAt === undefined
       ? existing.expiresAt
       : credentialExpiry(request.credential.expiresAt, env, scope);
+  }
+  if (operation === "create" || operation === "put") {
+    if (scope === "admin" && existing && request.credential.serviceTiers === undefined) credential.serviceTiers = existing.serviceTiers;
+    if (scope === "personal" && credential.serviceTiers?.some(tier => !grantedServiceTiers(policy!).includes(tier))) throw new HttpError(400, "invalid_credential", "credential service tiers may only narrow policy access");
   }
   return credential;
 }

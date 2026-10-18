@@ -120,8 +120,8 @@ try {
     assert.equal(usage.usage.summary.actualCostMicros, spent);
   }
   await authorityObject.fetch("https://authority/policies/put", { method: "POST", body: JSON.stringify({ policyId: "fixture", policy }) });
-  // Unknown request tiers stay usable only with both budgets disabled.
-  await authorityObject.fetch("https://authority/policies/put", { method: "POST", body: JSON.stringify({ policyId: "fixture", policy: { ...policy, monthlyBudgetMicros: null } }) });
+  // An explicitly permitted unknown tier stays usable with both budgets disabled.
+  await authorityObject.fetch("https://authority/policies/put", { method: "POST", body: JSON.stringify({ policyId: "fixture", policy: { ...policy, monthlyBudgetMicros: null, serviceTiers: { allowed: ["default", "flex", "priority", "future-tier"] } } }) });
   await authorityObject.fetch("https://authority/connections/put", { method: "POST", body: JSON.stringify({ providerId: "openai", enabled: true, monthlyBudgetMicros: null }) });
   let unpriced = 0;
   for (const [scenario, basis, actual] of [

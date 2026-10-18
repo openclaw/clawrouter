@@ -578,7 +578,7 @@ test("settlement bases distinguish nonbillable work from tariffs, fallback charg
 test("either enforced budget rejects unsupported tiers while fixed policy tariffs remain explicit", async (t) => {
   for (const [limit, providerLimit, fixedCost] of [[1_000_000, null, null], [null, 1_000_000, null], [1_000_000, 1_000_000, null], [1_000_000, 1_000_000, 7]]) {
     const events = [], pending = [];
-    const env = usageEnv([], { limit, providerLimit, fixedCost, retainContent: false });
+    const env = usageEnv([], { limit, providerLimit, fixedCost, retainContent: false, serviceTiers: { allowed: ["default", "future"] } });
     env.OPENAI_API_KEY = "fixture-openai-key";
     env.BUDGET_LEDGER = sqlBudgetNamespace(t);
     env.USAGE_QUEUE = { send: async event => { events.push(event); } };
@@ -600,10 +600,10 @@ test("either enforced budget rejects unsupported tiers while fixed policy tariff
 });
 
 for (const existingUnmetered of [false, true]) {
-  test(`${existingUnmetered ? "existing stored" : "fresh"} unmetered policies forward unknown tiers and distinguish unavailable prices`, async (t) => {
+  test(`${existingUnmetered ? "existing stored" : "fresh"} unmetered policies explicitly allowing a future tier distinguish unavailable prices`, async (t) => {
     for (const [servedTier, status, expected, basis] of [["future", 200, 0, "unpriced_usage"], [undefined, 200, 0, "unpriced_usage"], ["priority", 200, 1_080, "manifest_pricing"], ["default", 200, 540, "manifest_pricing"], ["future", 400, 0, "none"], ["transport_failure", 502, 0, "unpriced_usage"], ["timeout", 502, 0, "unpriced_usage"], ["retention_failure", 503, 0, "none"]]) {
       const events = [], pending = [], ledgerCalls = [];
-      const env = usageEnv(ledgerCalls, { limit: null, providerLimit: null, fixedCost: null, retainContent: servedTier === "retention_failure", existingUnmetered });
+      const env = usageEnv(ledgerCalls, { limit: null, providerLimit: null, fixedCost: null, retainContent: servedTier === "retention_failure", existingUnmetered, serviceTiers: { allowed: ["default", "future"] } });
       env.OPENAI_API_KEY = "fixture-openai-key";
       env.USAGE_QUEUE = { send: async event => events.push(event) };
       env.CONTENT_ARCHIVE = { put: async () => { throw new Error("synthetic retention failure"); } };
@@ -979,4 +979,19 @@ test("DeepSeek invalid limits reserve the full bound before either budget, while
     else assert.equal(events[0].reserved_output_tokens, 393_216);
     upstream.mock.restore();
   }
+});
+
+for (const existingUnmetered of [false, true]) test(`default tier policy blocks unknown and ultrafast before upstream (${existingUnmetered})`, async t => {
+  const env = usageEnv([], { limit: null, providerLimit: null, fixedCost: null, retainContent: false, existingUnmetered });
+  env.OPENAI_API_KEY = "fixture-openai-key";
+  const upstream = t.mock.method(globalThis, "fetch", async () => { throw new Error("denied tiers must not dispatch"); });
+  const pending = [];
+  env.USAGE_QUEUE = { send: async () => {} };
+  for (const service_tier of ["future", "ultrafast"]) {
+    const response = await handler.fetch(new Request("https://clawrouter.example/v1/responses", { method: "POST", headers: { authorization: `Bearer ${proxyKey()}`, "content-type": "application/json" }, body: JSON.stringify({ model: "openai/gpt-6-astra", input: "synthetic", service_tier }) }), env, { waitUntil: task => pending.push(task) });
+    assert.equal(response.status, 400);
+    assert.equal((await response.json()).error.code, "service_tier_not_allowed");
+  }
+  await Promise.all(pending);
+  assert.equal(upstream.mock.callCount(), 0);
 });

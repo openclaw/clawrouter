@@ -1,3 +1,5 @@
+import { allowedServiceTiers } from "../shared/service-tiers.ts";
+import { snapshot } from "./providers.ts";
 import { budgetStatus } from "./ledgers.ts";
 import { budgetPrincipal } from "./budget-scope.ts";
 import { credentialExpired, credentialExpiryError } from "./credential-lifecycle.ts";
@@ -41,6 +43,7 @@ export async function authenticateProxyKey(headers: Headers, env: Env, providers
   const ownerFailure = proxyCredentialFailure(credentialEntry.credential, policyEntry, owner?.record.enabled);
   if (ownerFailure) return errorResponse(ownerFailure.code, ownerFailure.message, ownerFailure.status);
   const identity: AuthorizedIdentity = {
+    serviceTiers: credentialEntry.credential.serviceTiers,
     credentialId: parsed.kid,
     principalId: credentialEntry.credential.principalId ?? null,
     authType: "proxy_key",
@@ -74,6 +77,7 @@ export async function admittedGrantSelection(auth: AuthorizedIdentity, env: Env,
   if (admission.policy!.policy.providers.length && !admission.policy!.policy.providers.includes(requirement.provider.id)) throw new HttpError(403, "provider_not_allowed", "policy does not allow provider");
   if (admission.connections.find(item => item.providerId === requirement.provider.id)?.enabled === false) throw new HttpError(503, "provider_disabled", "provider is disabled");
   assertPolicyModel(admission.policy!.policy, { model: request.catalogModelId ? { id: request.catalogModelId } : null, endpoint: requirement.endpoint, capability: request.capability });
+  auth.serviceTiers = admission.credential.credential.serviceTiers;
   auth.principalId = admission.credential.credential.principalId ?? null;
   auth.policyId = admission.policy!.policyId;
   auth.policy = admission.policy!.policy;
@@ -102,6 +106,8 @@ export async function inspectKey(headers: Headers, env: Env): Promise<Response> 
     kid: parsed.kid, mode: parsed.mode, syntaxValid: true, verified: true, verification: "verified",
     enabled: result.policy.enabled, active: true, expiresAt: proxyKeyVerification(result)?.expiresAt ?? null, expired: false, providers: result.policy.providers, tenantId: result.policy.tenantId ?? null,
     tokenRole: result.policy.tokenRole ?? null, monthlyBudgetMicros: result.policy.monthlyBudgetMicros ?? null,
+    serviceTiers: result.serviceTiers ?? null,
+    effectiveServiceTiers: Object.fromEntries(snapshot.providers.filter(p => !result.policy.providers.length || result.policy.providers.includes(p.id)).flatMap(p => p.models.filter(m => result.policy.models == null || result.policy.models.includes(m.id)).map(m => [m.id, allowedServiceTiers(result.policy, m.id, result.serviceTiers)]))),
     dailyBudgetMicros: result.policy.dailyBudgetMicros ?? null,
     budget: await budgetStatus(env, result.policyId, result.policy, budgetPrincipal(result)),
     requestCostMicros: result.policy.requestCostMicros ?? null, budgetScope: result.policy.budgetScope ?? "policy",

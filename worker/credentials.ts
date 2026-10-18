@@ -1,3 +1,4 @@
+import { normalizeTierList } from "./service-tiers.ts";
 import { credentialExpired } from "./credential-lifecycle.ts";
 import { authorityCall, listBindings, listCredentials, listPolicies, listUsers, selfServiceCredentialLimit } from "./authority";
 import type { CredentialMutation, CredentialMutationResult } from "./authority-contracts.ts";
@@ -51,7 +52,7 @@ export function credentialResponsesFrom(policyEntries: AccessPolicyEntry[], cred
   return credentialEntries.map((entry) => {
     const policy = policies.get(entry.credential.policyId), generationMatches = !!policy && entry.credential.policyGeneration === policy.generation;
     const principalEnabled = !entry.credential.principalId || !disabled.has(normalizeEmail(entry.credential.principalId) ?? "");
-    return { credentialId: entry.credentialId, policyId: entry.credential.policyId, enabled: entry.credential.enabled, policyEnabled: policy?.enabled ?? false, generationMatches, principalEnabled, expiresAt: entry.credential.expiresAt ?? null, expired: credentialExpired(entry.credential), active: !credentialExpired(entry.credential) && entry.credential.enabled && !!policy?.enabled && generationMatches && principalEnabled, principalId: entry.credential.principalId ?? null };
+    return { credentialId: entry.credentialId, policyId: entry.credential.policyId, enabled: entry.credential.enabled, policyEnabled: policy?.enabled ?? false, generationMatches, principalEnabled, serviceTiers: entry.credential.serviceTiers ?? null, expiresAt: entry.credential.expiresAt ?? null, expired: credentialExpired(entry.credential), active: !credentialExpired(entry.credential) && entry.credential.enabled && !!policy?.enabled && generationMatches && principalEnabled, principalId: entry.credential.principalId ?? null };
   });
 }
 
@@ -72,7 +73,7 @@ export function normalizeCredential(value: unknown, allowMissingDigest = false):
       if (!principalId) throw new HttpError(400, "invalid_credential", "principalId must be a valid email");
     }
   }
-  return { enabled, secretSha256, policyId, principalId, ...(Object.hasOwn(body, "expiresAt") ? { expiresAt: body.expiresAt as string } : {}) };
+  return { enabled, secretSha256, policyId, principalId, ...(Object.hasOwn(body, "serviceTiers") ? { serviceTiers: body.serviceTiers == null ? null : normalizeTierList(body.serviceTiers, "invalid_credential") } : {}), ...(Object.hasOwn(body, "expiresAt") ? { expiresAt: body.expiresAt as string } : {}) };
 }
 
 function credentialDigest(value: unknown): string {

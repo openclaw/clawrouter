@@ -128,6 +128,7 @@ export interface AccessPolicy {
   tokenRole?: string | null;
   monthlyBudgetMicros?: number | null;
   dailyBudgetMicros?: number | null;
+  serviceTiers?: import("../shared/service-tiers").PolicyServiceTiers | null;
   requestCostMicros?: number | null;
   budgetScope?: "policy" | "principal";
   retainRequestContent: boolean;
@@ -158,6 +159,7 @@ export interface ProxyCredential {
   policyGeneration: string;
   principalId?: string | null;
   expiresAt?: string | null;
+  serviceTiers?: string[] | null;
 }
 
 export interface ProxyCredentialEntry { credentialId: string; credential: ProxyCredential }
@@ -307,6 +309,7 @@ export interface AssignmentRule {
 }
 
 export interface AuthorizedIdentity {
+  serviceTiers?: string[] | null;
   credentialId: string | null;
   principalId: string | null;
   authType: "proxy_key" | "access";

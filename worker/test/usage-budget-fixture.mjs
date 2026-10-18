@@ -1,8 +1,9 @@
 const keyMaterial = "abcdefgh";
 const keyDigest = await sha256(keyMaterial);
 
-export function usageEnv(objectNames, { provider = "openai", limit = 100, providerLimit = limit, fixedCost = 1, retainContent = true, existingUnmetered = false, dailyLimit } = {}) {
+export function usageEnv(objectNames, { provider = "openai", limit = 100, providerLimit = limit, fixedCost = 1, retainContent = true, existingUnmetered = false, serviceTiers, dailyLimit } = {}) {
   const policy = { enabled: true, generation: "policy_v1", providers: [provider], tenantId: "tenant", monthlyBudgetMicros: limit, requestCostMicros: fixedCost, budgetScope: "principal", retainRequestContent: retainContent };
+  if (serviceTiers !== undefined) policy.serviceTiers = serviceTiers;
   if (dailyLimit !== undefined) policy.dailyBudgetMicros = dailyLimit;
   // Existing stored policies can omit the optional limits; new policies use null.
   if (existingUnmetered) { delete policy.monthlyBudgetMicros; delete policy.requestCostMicros; }

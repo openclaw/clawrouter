@@ -9,6 +9,7 @@ const { planBudgetReservation, reserveBudget, markBudgetDispatched, settleBudget
 const { budgetStatus } = await import("../ledgers.ts");
 const { dailyBudgetLedgerAddress } = await import("../budget-scope.ts");
 import { sqlBudgetNamespace } from "./sql-budget-namespace.mjs";
+const { assertServiceTier, normalizePolicyTiers } = await import("../service-tiers.ts");
 const { assertPolicyModel } = await import("../policy-models.ts");
 const { normalizePolicy } = await import("../admin.ts");
 
@@ -108,5 +109,38 @@ test("daily rollback releases all prior legs on provider rejection or transport 
     const status = await budgetStatus(env, auth.policyId, auth.policy, auth.principalId);
     assert.equal(status.spentMicros, 0);
     assert.equal(status.daily.spentMicros, 0);
+  }
+});
+
+test("default tier admission, model override, per-key narrowing, non-OpenAI formats", () => {
+  for (const tier of [undefined, "default", "auto", "flex", "fast", "priority", "FAST"]) assert.doesNotThrow(() => assertServiceTier(auth, selection(tier)));
+  for (const tier of ["ultrafast", "unknown", 2]) assert.throws(() => assertServiceTier(auth, selection(tier)), error => error.status === 400 && error.code === "service_tier_not_allowed");
+  const team = { ...auth, policy: { ...auth.policy, serviceTiers: { allowed: ["default", "flex", "priority"], models: { "openai/gpt-6.1-sol": ["default", "flex", "priority", "ultrafast"] } } } };
+  assert.doesNotThrow(() => assertServiceTier(team, selection("ultrafast")));
+  assert.throws(() => assertServiceTier(team, selection("ultrafast", "openai/gpt-6-astra")));
+  for (const tier of ["fast", "priority"]) assert.throws(() => assertServiceTier({ ...auth, serviceTiers: ["default", "flex"] }, selection(tier)));
+  assert.doesNotThrow(() => assertServiceTier(auth, selection("ultrafast", "google/gemini", "google.generate_content")));
+  assert.deepEqual(normalizePolicyTiers({ allowed: ["default", "default"] }, new Set()), { allowed: ["default"], models: {} });
+  for (const value of [{ allowed: ["Priority"] }, { allowed: ["fast"] }, { allowed: [], models: { unknown: [] } }]) assert.throws(() => normalizePolicyTiers(value, new Set()));
+  for (const value of [-1, 1.5, "1"]) assert.throws(() => normalizePolicy({ providers: ["openai"], dailyBudgetMicros: value }, undefined, false));
+});
+
+test("session key creation cannot widen and inspect returns effective per-model tiers", async t => {
+  const env = await fixture(t);
+  const rejected = await env.http("/v1/session/credentials", "POST", { ...body, serviceTiers: ["ultrafast"] }, { auth: "session" });
+  assert.equal(rejected.status, 400);
+  const secret = "synthetic-member-tier-secret";
+  assert.equal((await env.http("/v1/session/credentials", "POST", { ...body, secretSha256: await sha256(secret), serviceTiers: ["default", "flex"] }, { auth: "session" })).status, 201);
+  const response = await env.http("/v1/key/inspect", "GET", undefined, { headers: { authorization: `Bearer clawrouter-live-member_key-${secret}` } });
+  assert.equal(response.status, 200);
+  const inspected = await response.json();
+  assert.deepEqual(inspected.serviceTiers, ["default", "flex"]);
+  assert.ok(Object.keys(inspected.effectiveServiceTiers).length);
+  assert.ok(Object.values(inspected.effectiveServiceTiers).every(tiers => !tiers.includes("priority")));
+  assert.equal(inspected.expired, false);
+  for (const tier of ["fast", "priority"]) {
+    const denied = await env.http("/v1/responses", "POST", { model: "openai/gpt-6-astra", service_tier: tier, input: "synthetic" }, { headers: { authorization: `Bearer clawrouter-live-member_key-${secret}` } });
+    assert.equal(denied.status, 400);
+    assert.equal((await denied.json()).error.code, "service_tier_not_allowed");
   }
 });

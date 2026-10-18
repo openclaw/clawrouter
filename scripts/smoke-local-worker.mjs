@@ -537,7 +537,7 @@ try {
   assert.equal(canonicalCredential.status, 200);
   const canonicalCredentialBody = await canonicalCredential.json();
   assert.ok(Date.parse(canonicalCredentialBody.expiresAt) > Date.now(), "new credentials have a finite future expiry");
-  const expectedCredential = { credentialId: "shape_credential", policyId: "migrate", enabled: false, policyEnabled: true, generationMatches: true, principalEnabled: true, active: false, principalId: "owner@example.com", expiresAt: canonicalCredentialBody.expiresAt, expired: false };
+  const expectedCredential = { credentialId: "shape_credential", policyId: "migrate", enabled: false, policyEnabled: true, generationMatches: true, principalEnabled: true, active: false, principalId: "owner@example.com", expiresAt: canonicalCredentialBody.expiresAt, expired: false, serviceTiers: null };
   assert.deepEqual(canonicalCredentialBody, expectedCredential);
   const credentialsAfterMutation = await fetch(`${base}/v1/admin/credentials`, { headers: userHeaders });
   assert.equal(credentialsAfterMutation.status, 200);

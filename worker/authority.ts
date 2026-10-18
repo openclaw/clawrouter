@@ -907,6 +907,7 @@ function normalizePolicyRecord(
     tokenRole: typeof value.tokenRole === "string" ? value.tokenRole : null,
     monthlyBudgetMicros: typeof value.monthlyBudgetMicros === "number" ? value.monthlyBudgetMicros : null,
     dailyBudgetMicros: typeof value.dailyBudgetMicros === "number" ? value.dailyBudgetMicros : null,
+    serviceTiers: value.serviceTiers as AccessPolicyEntry["policy"]["serviceTiers"] ?? null,
     requestCostMicros: typeof value.requestCostMicros === "number" ? value.requestCostMicros : null,
     budgetScope: value.budgetScope === "principal" ? "principal" : "policy",
     retainRequestContent:
@@ -962,6 +963,7 @@ function normalizeCredentialRecord(value: Record<string, unknown>, legacyPolicyI
     policyId: typeof value.policyId === "string" ? value.policyId : legacyPolicyId ?? "",
     policyGeneration: typeof value.policyGeneration === "string" ? value.policyGeneration : typeof value.generation === "string" ? value.generation : "legacy",
     principalId: typeof value.principalId === "string" ? value.principalId : null,
+    ...(Object.hasOwn(value, "serviceTiers") ? { serviceTiers: Array.isArray(value.serviceTiers) ? value.serviceTiers as string[] : null } : {}),
     ...(Object.hasOwn(value, "expiresAt") ? { expiresAt: typeof value.expiresAt === "string" ? value.expiresAt : null } : {}),
   };
 }
