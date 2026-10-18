@@ -76,6 +76,25 @@ test("admission is fresh at dispatch and a denied queued turn never reaches upst
   assert.equal(f.upstream.sent.length, 2);
 });
 
+test("expiry blocks queued WebSocket turns while the dispatched turn finishes", async t => {
+  const { proxyCredentialFailure } = await import("../proxy-auth.ts");
+  const deadline = Date.parse("2026-10-19T00:00:00Z");
+  let now = deadline - 1;
+  t.mock.method(Date, "now", () => now);
+  const key = { enabled: true, policyGeneration: "v1", expiresAt: new Date(deadline).toISOString() };
+  const entry = { policy: { enabled: true, generation: "v1" } };
+  const f = fixture(t, { admit: async () => { const error = proxyCredentialFailure(key, entry); if (error) throw error; } });
+  f.client.receive(create());
+  f.client.receive(create());
+  await tick();
+  now = deadline;
+  respond(f);
+  await tick();
+  assert.equal(f.upstream.sent.length, 1);
+  assert.equal(f.settled.length, 1);
+  assert.equal(JSON.parse(f.client.sent.at(-1)).error.code, "proxy_key_expired");
+});
+
 test("active responses, named lanes and aggregate queued bytes are independently bounded", async (t) => {
   const f = fixture(t, { limits: { active: 2, lanes: 3, bufferedBytes: 400, frameBytes: 300 } });
   f.client.receive(create("a")); f.client.receive(create("b")); f.client.receive(create("c"));

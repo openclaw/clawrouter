@@ -1,3 +1,4 @@
+import { credentialExpired } from "./credential-lifecycle.ts";
 import type { AccessControlUser, AccessPolicyEntry, AccessUserRecord, Env, GrantRuntimeState, ProviderConnection, ProxyCredentialEntry } from "./types";
 import type { GrantSelectionResult } from "./grant-eligibility.ts";
 import { normalizeEmail, safeEqual } from "./utils.ts";
@@ -64,7 +65,7 @@ export async function resolveAdmission(env: Env, input: AdmissionRequest, store:
     return { ...result, policyUnavailable: true };
   }
   result.policy = policy;
-  if (!policy || !credential.credential.enabled || !policy.policy.enabled || credential.credential.policyGeneration !== policy.policy.generation) return result;
+  if (!policy || !credential.credential.enabled || credentialExpired(credential.credential) || !policy.policy.enabled || credential.credential.policyGeneration !== policy.policy.generation) return result;
   const principalId = credential.credential.principalId;
   if (principalId) {
     const email = normalizeEmail(principalId);

@@ -18,7 +18,7 @@ export async function sessionCredentialsRequest(request: Request, env: Env, path
     if (request.method === "GET" && path === collection) {
       const [entries, policies] = await Promise.all([listCredentials(env), listPolicies(env)]);
       const own = entries.filter((entry) => normalizeEmail(entry.credential.principalId ?? "") === normalizeEmail(session.email));
-      const credentials = credentialResponsesFrom(policies, own).map(({ credentialId, policyId, enabled, active }) => ({ credentialId, policyId, enabled, active }));
+      const credentials = credentialResponsesFrom(policies, own).map(({ credentialId, policyId, enabled, active, expiresAt, expired }) => ({ credentialId, policyId, enabled, active, expiresAt, expired }));
       return privateJson({ credentials });
     }
     if (path !== collection && !path.startsWith(`${collection}/`)) throw new HttpError(404, "route_not_found", "session credential route not found");

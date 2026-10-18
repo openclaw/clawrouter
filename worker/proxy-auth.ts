@@ -1,3 +1,4 @@
+import { credentialExpired, credentialExpiryError } from "./credential-lifecycle.ts";
 import { assertPolicyModel } from "./policy-models.ts";
 import type { AdmissionSelection } from "./authority-admission.ts";
 import type { GrantRequirement } from "./provider-auth.ts";
@@ -6,7 +7,7 @@ import type { AccessPolicyEntry, AuthorizedIdentity, Env, ProxyCredential } from
 import { authorityCall, type AdmissionProvider, type AdmissionResult } from "./authority.ts";
 import { errorResponse, HttpError, parseProxyKey, safeEqual, sha256Hex } from "./utils.ts";
 
-export interface ProxyKeyVerification { readonly kind: "proxy_key"; readonly credentialId: string; readonly principalId: string | null; readonly secretSha256: string }
+export interface ProxyKeyVerification { readonly kind: "proxy_key"; readonly credentialId: string; readonly principalId: string | null; readonly secretSha256: string; readonly expiresAt?: string | null }
 const verifiedKeys = new WeakMap<AuthorizedIdentity, ProxyKeyVerification>();
 // Scoped to this authenticated operation, never shared between requests or
 // WebSocket creates. The next admission always goes back to the authority.
@@ -28,7 +29,9 @@ export async function authenticateProxyKey(headers: Headers, env: Env, providers
   if (admission.policyUnavailable) throw new Error("admission policy resolution failed");
   const policyEntry = admission.policy;
   const failure = proxyCredentialFailure(credentialEntry.credential, policyEntry);
-  if (failure) return errorResponse(failure.code, failure.message, failure.status);
+  if (failure) return failure.code === "proxy_key_expired"
+    ? Response.json({ error: { code: failure.code, message: failure.message }, expiresAt: credentialEntry.credential.expiresAt, expired: true, active: false }, { status: 401 })
+    : errorResponse(failure.code, failure.message, failure.status);
   if (admission.ownerUnavailable) throw new Error("admission owner resolution failed");
   const owner = admission.owner;
   // Unowned and unmaterialized service keys remain valid; explicit owner disable
@@ -43,7 +46,7 @@ export async function authenticateProxyKey(headers: Headers, env: Env, providers
     policy: policyEntry!.policy,
     contentRetentionDisabled: owner?.record.contentRetentionDisabled ?? false,
   };
-  verifiedKeys.set(identity, Object.freeze({ kind: "proxy_key", credentialId: parsed.kid, principalId: identity.principalId, secretSha256 }));
+  verifiedKeys.set(identity, Object.freeze({ kind: "proxy_key", credentialId: parsed.kid, principalId: identity.principalId, secretSha256, expiresAt: credentialEntry.credential.expiresAt }));
   admissions.set(identity, admission);
   if (selection) admissionRequests.set(identity, selection);
   if (selection && admission.selection) selections.set(identity, { request: selection, result: admission.selection });
@@ -79,6 +82,7 @@ export async function admittedGrantSelection(auth: AuthorizedIdentity, env: Env,
 // Entry authentication and delayed control admission share these canonical
 // lifecycle rules, including unowned/unmaterialized service-key semantics.
 export function proxyCredentialFailure(credential: ProxyCredential, entry: AccessPolicyEntry | null | undefined, principalEnabled?: boolean | null): HttpError | null {
+  if (credentialExpired(credential)) return credentialExpiryError(credential.expiresAt!);
   if (!entry) return new HttpError(403, "credential_policy_missing", "proxy credential references an unknown access policy");
   if (!credential.enabled) return new HttpError(403, "proxy_key_revoked", "proxy key is revoked");
   if (!entry.policy.enabled) return new HttpError(403, "policy_revoked", "access policy is revoked");
@@ -94,7 +98,7 @@ export async function inspectKey(headers: Headers, env: Env): Promise<Response> 
   if (result instanceof Response) return result;
   return Response.json({
     kid: parsed.kid, mode: parsed.mode, syntaxValid: true, verified: true, verification: "verified",
-    enabled: result.policy.enabled, providers: result.policy.providers, tenantId: result.policy.tenantId ?? null,
+    enabled: result.policy.enabled, active: true, expiresAt: proxyKeyVerification(result)?.expiresAt ?? null, expired: false, providers: result.policy.providers, tenantId: result.policy.tenantId ?? null,
     tokenRole: result.policy.tokenRole ?? null, monthlyBudgetMicros: result.policy.monthlyBudgetMicros ?? null,
     requestCostMicros: result.policy.requestCostMicros ?? null, budgetScope: result.policy.budgetScope ?? "policy",
   });

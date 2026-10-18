@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 import { adminActor, binding, credential, digest, fixture, policy, session, sha256 } from "./credential-fixture.mjs";
 
+const fixedNow = Date.parse("2026-10-18T12:00:00Z");
+const renewedExpiry = new Date(fixedNow + 180 * 86_400_000).toISOString();
 const nextDigest = "cd".repeat(32);
 const payload = { policyId: "maintainer_access", secretSha256: digest };
 const adminPath = "/v1/admin/credentials";
@@ -33,13 +35,14 @@ for (const scope of ["admin", "personal"]) {
     assert.equal(env.credentials.get("shared_key").secretSha256, [digest, nextDigest][winner]);
     assert.equal((await responses[1 - winner].json()).error.code, "credential_exists");
     const body = await responses[winner].json();
-    assert.deepEqual(Object.keys(body).sort(), ["active", "credentialId", "enabled", "generationMatches", "policyEnabled", "policyId", "principalEnabled", "principalId"]);
+    assert.deepEqual(Object.keys(body).sort(), ["active", "credentialId", "enabled", "expired", "expiresAt", "generationMatches", "policyEnabled", "policyId", "principalEnabled", "principalId"]);
     assert.equal(body.active, true);
     assert.equal(responses[winner].headers.get("cache-control"), "no-store");
     assert.equal(env.credentials.size, 1);
   });
 
   test(`${scope} HTTP rotation then delayed revocation preserves the rotated hash`, async t => {
+    t.mock.method(Date, "now", () => fixedNow);
     const env = await fixture(t, [["owned_key", credential()]]);
     const pending = holdMutation(env);
     const revoke = env.http(`${path}/owned_key/revoke`, "POST", undefined, options);
@@ -47,7 +50,7 @@ for (const scope of ["admin", "personal"]) {
     assert.equal((await env.http(`${path}/owned_key/rotate`, "POST", { secretSha256: nextDigest }, options)).status, 200);
     pending.release();
     assert.equal((await revoke).status, 200);
-    assert.deepEqual(env.credentials.get("owned_key"), { ...credential(), secretSha256: nextDigest, enabled: false });
+    assert.deepEqual(env.credentials.get("owned_key"), { ...credential(), secretSha256: nextDigest, enabled: false, expiresAt: renewedExpiry });
     assert.equal((await env.http(`${path}/owned_key/revoke`, "POST", undefined, options)).status, 200, "repeat revoke is idempotent");
   });
 
@@ -76,13 +79,14 @@ test("create imports all legacy credentials before collision checks and never pr
 });
 
 test("normalized migrated ownership governs listing, quota, rotation and revocation", async t => {
+  t.mock.method(Date, "now", () => fixedNow);
   const env = await fixture(t, Array.from({ length: 10 }, (_, index) => [`key_${index}`, credential(" OWNER@EXAMPLE.COM ")]), { legacy: true });
   const options = { auth: "session" };
   const listed = await env.http(personalPath, "GET", undefined, options);
   assert.equal((await listed.json()).credentials.length, 10);
   await error(await env.http(personalPath, "POST", { ...payload, credentialId: "new_key" }, options), 409, "credential_limit_reached");
   assert.equal((await env.http(`${personalPath}/key_0/rotate`, "POST", { secretSha256: nextDigest }, options)).status, 200, "rotation consumes no slot");
-  assert.deepEqual(env.credentials.get("key_0"), { ...credential(" OWNER@EXAMPLE.COM "), secretSha256: nextDigest }, "rotate changes only the hash, including on legacy rows");
+  assert.deepEqual(env.credentials.get("key_0"), { ...credential(" OWNER@EXAMPLE.COM "), secretSha256: nextDigest, expiresAt: renewedExpiry }, "rotate renews the legacy key and changes its hash");
   assert.equal((await env.http(`${personalPath}/key_0/revoke`, "POST", undefined, options)).status, 200);
 });
 
@@ -199,11 +203,12 @@ test("a successful HTTP response describes its own committed record, not a later
 });
 
 test("tagged PUT remains an upsert and can explicitly reenable and bind the current generation", async t => {
+  t.mock.method(Date, "now", () => fixedNow);
   const env = await fixture(t);
   assert.equal((await env.http(`${adminPath}/owned_key`, "PUT", { ...payload, enabled: false })).status, 200);
   await env.call("/policies/put", { policyId: "maintainer_access", policy: { ...policy, generation: "policy_v2" } });
   assert.equal((await env.http(`${adminPath}/owned_key`, "PUT", { ...payload, principalId: session.email, secretSha256: nextDigest })).status, 200);
-  assert.deepEqual(env.credentials.get("owned_key"), { ...credential(), secretSha256: nextDigest, policyGeneration: "policy_v2" });
+  assert.deepEqual(env.credentials.get("owned_key"), { ...credential(), secretSha256: nextDigest, policyGeneration: "policy_v2", expiresAt: renewedExpiry });
   await env.http(`${personalPath}/owned_key/revoke`, "POST", undefined, { auth: "session" });
   assert.equal((await env.http(`${personalPath}/owned_key`, "PUT", { ...payload, enabled: false }, { auth: "session" })).status, 200);
   assert.equal(env.credentials.get("owned_key").enabled, true, "personal PUT keeps its existing forced-enabled contract");

@@ -100,6 +100,8 @@ export interface ProxyCredential {
   active?: boolean;
   principalId?: string | null;
   principalEnabled?: boolean;
+  expiresAt?: string | null;
+  expired?: boolean;
 }
 
 export interface ProviderConnection {

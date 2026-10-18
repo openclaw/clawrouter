@@ -1,3 +1,4 @@
+import { credentialExpired } from "./credential-lifecycle.ts";
 import snapshotJson from "./generated/provider-snapshot.json" with { type: "json" };
 import type { AccessControlUser, AccessPolicyEntry, Env, ProviderConnection, ProviderSnapshot, ProxyCredentialEntry, UpstreamGrant } from "./types";
 import type { AdmissionPool, AdmissionRequest, AdmissionResult } from "./authority-admission.ts";
@@ -56,7 +57,7 @@ export async function finishAdmissionSelection(env: Env, storage: DurableObjectS
     const policy = credential ? store.getPolicy(credential.credential.policyId) : null;
     const owner = credential?.credential.principalId ? store.getUser(normalizeEmail(credential.credential.principalId) ?? credential.credential.principalId) : null;
     const fresh: AdmissionResult = { ...result, credential, policy, owner };
-    if (!credential || !policy || !credential.credential.enabled || !policy.policy.enabled || credential.credential.policyGeneration !== policy.policy.generation || owner?.record.enabled === false || !input.secretSha256 || !safeEqual(input.secretSha256, credential.credential.secretSha256)) return fresh;
+    if (!credential || !policy || !credential.credential.enabled || credentialExpired(credential.credential) || !policy.policy.enabled || credential.credential.policyGeneration !== policy.policy.generation || owner?.record.enabled === false || !input.secretSha256 || !safeEqual(input.secretSha256, credential.credential.secretSha256)) return fresh;
     if (credential.credential.principalId !== result.credential!.credential.principalId || policy.policyId !== poolInput.policyId || (policy.policy.tenantId ?? "default") !== poolInput.tenantId) return { ...fresh, pools: {} };
     fresh.connections = store.resolveConnections((input.providers ?? []).map(item => item.id)).connections;
     if (policy.policy.providers.length && !policy.policy.providers.includes(provider.id) || fresh.connections.find(item => item.providerId === provider.id)?.enabled === false) return fresh;

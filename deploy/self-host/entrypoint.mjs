@@ -42,6 +42,8 @@ export function selfHostVariableNames(providerSnapshot, env) {
     }
     names.add(trimmed);
   }
+  names.add("CLAWROUTER_CREDENTIAL_DEFAULT_TTL_DAYS");
+  names.add("CLAWROUTER_CREDENTIAL_MAX_TTL_DAYS");
   names.delete("CLAWROUTER_ADMIN_TOKEN_SHA256");
   names.delete("CLAWROUTER_LOCAL_AUTH");
   names.delete("CLAWROUTER_LOCAL_ADMIN_EMAIL");

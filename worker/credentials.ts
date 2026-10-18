@@ -1,3 +1,4 @@
+import { credentialExpired } from "./credential-lifecycle.ts";
 import { authorityCall, listBindings, listCredentials, listPolicies, listUsers, selfServiceCredentialLimit } from "./authority";
 import type { CredentialMutation, CredentialMutationResult } from "./authority-contracts.ts";
 import type { AccessControlUser, AccessPolicyEntry, AccessSession, Env, ProxyCredential, ProxyCredentialEntry } from "./types";
@@ -19,11 +20,12 @@ export async function credentialMutationResponse(request: Request, env: Env, res
   else if (operation === "rotate") {
     if (Object.keys(body).some((key) => key !== "secretSha256")) throw new HttpError(400, "invalid_credential", "rotation accepts only secretSha256");
     mutation = { ...target, operation, secretSha256: credentialDigest(body.secretSha256) };
-  } else mutation = { ...target, operation, credential: normalizeCredential(body) };
+  } else mutation = { ...target, operation, credential: normalizeCredential(body, scope === "admin" && operation === "put") };
   // Close legacy imports before the owner checks collisions, holdings and quotas.
   // Imported snapshots never overwrite writes made while these reads are pending.
   await Promise.all([listCredentials(env), listPolicies(env), listUsers(env), ...(scope === "personal" ? [listBindings(env)] : [])]);
   const result = await authorityCall<CredentialMutationResult>(env, "/credentials/mutate", mutation);
+  if (result.outcome === "invalid") throw new HttpError(result.status, result.code, result.message);
   if (result.outcome !== "updated") {
     const errors = {
       exists: [409, "credential_exists", "credential id already exists; choose another id"],
@@ -49,16 +51,16 @@ export function credentialResponsesFrom(policyEntries: AccessPolicyEntry[], cred
   return credentialEntries.map((entry) => {
     const policy = policies.get(entry.credential.policyId), generationMatches = !!policy && entry.credential.policyGeneration === policy.generation;
     const principalEnabled = !entry.credential.principalId || !disabled.has(normalizeEmail(entry.credential.principalId) ?? "");
-    return { credentialId: entry.credentialId, policyId: entry.credential.policyId, enabled: entry.credential.enabled, policyEnabled: policy?.enabled ?? false, generationMatches, principalEnabled, active: entry.credential.enabled && !!policy?.enabled && generationMatches && principalEnabled, principalId: entry.credential.principalId ?? null };
+    return { credentialId: entry.credentialId, policyId: entry.credential.policyId, enabled: entry.credential.enabled, policyEnabled: policy?.enabled ?? false, generationMatches, principalEnabled, expiresAt: entry.credential.expiresAt ?? null, expired: credentialExpired(entry.credential), active: !credentialExpired(entry.credential) && entry.credential.enabled && !!policy?.enabled && generationMatches && principalEnabled, principalId: entry.credential.principalId ?? null };
   });
 }
 
-export function normalizeCredential(value: unknown): Omit<ProxyCredential, "policyGeneration"> {
+export function normalizeCredential(value: unknown, allowMissingDigest = false): Omit<ProxyCredential, "policyGeneration"> {
   const body = mutationObject(value);
   if (typeof body.policyId !== "string") throw new HttpError(400, "invalid_credential", "policyId must be a string");
   const policyId = cleanId(body.policyId);
   if (!policyId) throw new HttpError(400, "invalid_credential", "policyId is invalid");
-  const secretSha256 = credentialDigest(body.secretSha256);
+  const secretSha256 = allowMissingDigest && body.secretSha256 === undefined ? "" : credentialDigest(body.secretSha256);
   const enabled = body.enabled === undefined ? true : body.enabled;
   if (typeof enabled !== "boolean") throw new HttpError(400, "invalid_credential", "enabled must be a boolean");
   let principalId: string | null = null;
@@ -70,7 +72,7 @@ export function normalizeCredential(value: unknown): Omit<ProxyCredential, "poli
       if (!principalId) throw new HttpError(400, "invalid_credential", "principalId must be a valid email");
     }
   }
-  return { enabled, secretSha256, policyId, principalId };
+  return { enabled, secretSha256, policyId, principalId, ...(Object.hasOwn(body, "expiresAt") ? { expiresAt: body.expiresAt as string } : {}) };
 }
 
 function credentialDigest(value: unknown): string {

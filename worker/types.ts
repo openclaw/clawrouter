@@ -156,6 +156,7 @@ export interface ProxyCredential {
   policyId: string;
   policyGeneration: string;
   principalId?: string | null;
+  expiresAt?: string | null;
 }
 
 export interface ProxyCredentialEntry { credentialId: string; credential: ProxyCredential }

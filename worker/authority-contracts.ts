@@ -10,6 +10,7 @@ export type CredentialMutation = {
   | { operation: "revoke" }
 );
 export type CredentialMutationResult =
+  | { outcome: "invalid"; status: number; code: string; message: string }
   | { outcome: "updated"; entry: ProxyCredentialEntry; policy: AccessPolicyEntry | null; principalEnabled: boolean }
   | { outcome: "exists" | "missing" | "owned_elsewhere" | "limit_reached" | "policy_not_held" | "unknown_policy" | "inactive" | "actor_disabled" | "admin_required" };
 

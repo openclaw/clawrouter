@@ -1,3 +1,4 @@
+import { nextCredential } from "./credential-mutation.ts";
 import { finishAdmissionSelection } from "./authority-grant-selection.ts";
 import { mergeGrantRuntimeState, normalizeGrantRuntimeState } from "./grant-runtime.ts";
 import type {
@@ -74,7 +75,13 @@ export class PolicyBindingIndexObject implements DurableObject {
       if (path === "/credentials/resolve") return json(this.resolveCredentials((await readJson<{ credentialIds: string[] }>(request)).credentialIds));
       if (path === "/credentials/initialize") { this.initializeCredentials(await readJson<ProxyCredentialEntry[]>(request)); return new Response("initialized"); }
       if (path === "/credentials/initialize-all") { this.initializeCredentials(await readJson<ProxyCredentialEntry[]>(request)); this.putMeta("credentials_global_initialized"); return new Response("initialized"); }
-      if (path === "/credentials/mutate") return json(this.mutateCredential(await readJson<CredentialMutation>(request)));
+      if (path === "/credentials/mutate") {
+        try { return json(this.mutateCredential(await readJson<CredentialMutation>(request))); }
+        catch (error) {
+          if (error instanceof HttpError) return json({ outcome: "invalid", status: error.status, code: error.code, message: error.message });
+          throw error;
+        }
+      }
       if (path === "/credentials/list") return json({ initialized: this.hasMeta("credentials_global_initialized"), credentials: this.listCredentials() });
       if (path === "/connections/resolve") return json(this.resolveConnections((await readJson<{ providerIds: string[] }>(request)).providerIds));
       if (path === "/connections/initialize") { this.initializeConnections(await readJson<ProviderConnection[]>(request)); return new Response("initialized"); }
@@ -302,11 +309,7 @@ export class PolicyBindingIndexObject implements DurableObject {
         if (!this.holdsPolicy(user, policy)) return { outcome: "policy_not_held" };
       } else if (!policy) return { outcome: "unknown_policy" };
     }
-    // Rotate and revoke mutate the latest row, never a caller's earlier snapshot.
-    // Only explicit PUT may rebind a key or renew its policy generation.
-    const credential = operation === "create" || operation === "put"
-      ? { ...request.credential, policyGeneration: policy!.policy.generation, ...(scope === "personal" ? { enabled: true, principalId } : {}) }
-      : { ...existing!.credential, ...(operation === "rotate" ? { secretSha256: request.secretSha256 } : { enabled: false }) };
+    const credential = nextCredential(request, existing?.credential, policy?.policy, principalId, this.env);
     const entry = { credentialId, credential };
     if (scope === "personal" && (operation === "create" || operation === "put")) {
       const owned = this.listCredentials().filter((candidate) => candidate.credentialId !== credentialId && normalizeEmail(candidate.credential.principalId ?? "") === principalId);
@@ -958,6 +961,7 @@ function normalizeCredentialRecord(value: Record<string, unknown>, legacyPolicyI
     policyId: typeof value.policyId === "string" ? value.policyId : legacyPolicyId ?? "",
     policyGeneration: typeof value.policyGeneration === "string" ? value.policyGeneration : typeof value.generation === "string" ? value.generation : "legacy",
     principalId: typeof value.principalId === "string" ? value.principalId : null,
+    ...(Object.hasOwn(value, "expiresAt") ? { expiresAt: typeof value.expiresAt === "string" ? value.expiresAt : null } : {}),
   };
 }
 

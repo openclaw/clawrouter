@@ -1,3 +1,4 @@
+import { credentialExpired, credentialExpiryError } from "./credential-lifecycle.ts";
 import { accessIdentityVerification, type AccessVerification } from "./access.ts";
 import { authorityCall } from "./authority.ts";
 import type { AuthorizationSnapshot } from "./authority-contracts.ts";
@@ -61,6 +62,7 @@ export function assertControlCallerLive(authorization: ResponseControlAuthorizat
   if (authorization?.kind === "collection") return;
   if (authorization?.kind !== "public" || !authorization.binding?.proof) denied();
   const proof = authorization.binding.proof;
+  if (proof.kind === "proxy_key" && credentialExpired(proof)) throw credentialExpiryError(proof.expiresAt!);
   if (proof.kind !== "proxy_key" && (!Number.isSafeInteger(proof.expiresAtMs) || Date.now() >= proof.expiresAtMs)) denied();
 }
 function denied(): never { throw new HttpError(403, "response_caller_unavailable", "the original response caller is no longer authorized"); }
