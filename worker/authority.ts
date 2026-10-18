@@ -908,6 +908,7 @@ function normalizePolicyRecord(
     monthlyBudgetMicros: typeof value.monthlyBudgetMicros === "number" ? value.monthlyBudgetMicros : null,
     dailyBudgetMicros: typeof value.dailyBudgetMicros === "number" ? value.dailyBudgetMicros : null,
     serviceTiers: value.serviceTiers as AccessPolicyEntry["policy"]["serviceTiers"] ?? null,
+    limitHint: typeof value.limitHint === "string" ? value.limitHint : null,
     requestCostMicros: typeof value.requestCostMicros === "number" ? value.requestCostMicros : null,
     budgetScope: value.budgetScope === "principal" ? "principal" : "policy",
     retainRequestContent:

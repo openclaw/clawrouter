@@ -15,7 +15,7 @@ export function operationAffordability(auth: AuthorizedIdentity, connection: Pro
   // allowance is not a claim that every real request fits the observed balance.
   const cost = estimateCost(model, {}, auth.policy.requestCostMicros, capability, endpoint);
   try {
-    if (!validateBudgetReservation(capability, cost, auth.policy.monthlyBudgetMicros, connection, auth.policy.dailyBudgetMicros)) return { status: "exact-covered" };
+    if (!validateBudgetReservation(capability, cost, auth.policy.monthlyBudgetMicros, connection, auth.policy.dailyBudgetMicros, auth.policy.limitHint)) return { status: "exact-covered" };
   } catch (error) {
     if (error instanceof HttpError) return { status: "exact-blocked", reasonCode: error.code };
     throw error;

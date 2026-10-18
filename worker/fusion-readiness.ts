@@ -204,7 +204,7 @@ function readinessCall(stage: FusionReadinessCall["stage"], index: number | null
     estimatedReservationMicros: cost.reserveMicros,
     estimateBasis: cost.pricingGap ? "unpriced_request" : cost.basis === "policy_fixed" ? "policy_fixed" : cost.basis === "manifest_pricing" ? "manifest_pricing" : "flat_fallback",
   };
-  try { validateBudgetReservation("llm.chat", cost, entry.policy.monthlyBudgetMicros, route.connection, entry.policy.dailyBudgetMicros); }
+  try { validateBudgetReservation("llm.chat", cost, entry.policy.monthlyBudgetMicros, route.connection, entry.policy.dailyBudgetMicros, entry.policy.limitHint); }
   catch (error) {
     if (!(error instanceof HttpError)) throw error;
     block(call, error.message);

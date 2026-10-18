@@ -1,3 +1,13 @@
+import { HttpError } from "./utils.ts";
+
+export function withLimitHint(message: string, policy: { limitHint?: string | null }): string {
+  return policy.limitHint ? `${message} ${policy.limitHint}` : message;
+}
+export function normalizeLimitHint(value: unknown): string | null {
+  if (value == null) return null;
+  if (typeof value !== "string" || value.trim().length > 300 || /[\u0000-\u001f\u007f-\u009f]/.test(value)) throw new HttpError(400, "invalid_policy", "limitHint must be plain text, at most 300 characters, without control characters");
+  return value.trim() || null;
+}
 export function nextDailyReset(at = Date.now()): string {
   return new Date(Date.parse(new Date(at).toISOString().slice(0, 10)) + 86_400_000).toISOString();
 }

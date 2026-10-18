@@ -385,5 +385,5 @@ function connectionTypes(provider: CompiledProvider): string[] {
 }
 
 async function sessionPolicyLimits(session: AccessSession, env: Env) {
-  return Promise.all((await sessionPolicies(session, env)).map(async ({ policyId, policy }) => ({ policyId, models: policy.models ?? null, serviceTiers: policy.serviceTiers ?? null, dailyBudgetMicros: policy.dailyBudgetMicros ?? null, budget: await budgetStatus(env, policyId, policy, policy.budgetScope === "principal" ? session.email : null) })));
+  return Promise.all((await sessionPolicies(session, env)).map(async ({ policyId, policy }) => ({ policyId, models: policy.models ?? null, serviceTiers: policy.serviceTiers ?? null, limitHint: policy.limitHint ?? null, dailyBudgetMicros: policy.dailyBudgetMicros ?? null, budget: await budgetStatus(env, policyId, policy, policy.budgetScope === "principal" ? session.email : null) })));
 }

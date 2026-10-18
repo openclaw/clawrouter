@@ -2,6 +2,7 @@ import { allowedServiceTiers, normalizeServiceTier, type PolicyServiceTiers } fr
 import type { AuthorizedIdentity } from "./types";
 import type { ProxySelection } from "./proxy-selection";
 import { extractServiceTier } from "./token-usage.ts";
+import { withLimitHint } from "./policy-limits.ts";
 import { HttpError } from "./utils.ts";
 
 export function normalizeTierList(value: unknown, code = "invalid_policy"): string[] {
@@ -33,5 +34,5 @@ export function assertServiceTier(auth: Pick<AuthorizedIdentity, "policy" | "ser
   const tier = pricing && pricing.unit !== "character" ? pricing.serviceTiers?.find(card => card.aliases.includes(normalized))?.id ?? normalized : normalized;
   const model = selection.model?.id ?? (typeof body.model === "string" ? body.model : "unknown");
   const allowed = allowedServiceTiers(auth.policy, model, auth.serviceTiers);
-  if (!allowed.includes(tier)) throw new HttpError(400, "service_tier_not_allowed", `Service tier ${tier} is not allowed for ${model} on this key; allowed tiers: ${allowed.join(", ") || "none"}.`);
+  if (!allowed.includes(tier)) throw new HttpError(400, "service_tier_not_allowed", withLimitHint(`Service tier ${tier} is not allowed for ${model} on this key; allowed tiers: ${allowed.join(", ") || "none"}.`, auth.policy));
 }

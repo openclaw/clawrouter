@@ -318,10 +318,11 @@ test("daily and monthly legs share a shard and all three receipts recover after 
 
 test("durable daily denial releases the monthly receipt and never reserves the provider", async t => {
   const f = fixture(t), input = f.input();
-  input.plan = planBudgetReservation({ ...auth, policy: { ...auth.policy, dailyBudgetMicros: 50 } }, "llm.responses", cost, { providerId: "fixture", monthlyBudgetMicros: 5000 });
+  input.plan = planBudgetReservation({ ...auth, policy: { ...auth.policy, dailyBudgetMicros: 50, limitHint: "Use team." } }, "llm.responses", cost, { providerId: "fixture", monthlyBudgetMicros: 5000 });
   const response = await f.call("admit", { admission: input });
   assert.equal(response.status, 402);
   assert.equal(response.body.error.code, "daily_budget_exhausted");
+  assert.match(response.body.error.message, /Use team/);
   f.restart(); await f.state.object.alarm();
   assert.equal((await f.call("get", { id: input.id })).body.phase, "complete");
   assert.equal(f.budgets.get(input.plan.legs[0].objectName).reservations()[0].reserved_micros, 0);

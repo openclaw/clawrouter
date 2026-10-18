@@ -87,7 +87,7 @@ test("daily leg uses same shard, preserves monthly key, settles both; UTC rollov
   assert.equal(plan.legs[0].request.windowKey, "default/member/member@example.com/2026-10");
   assert.equal(plan.legs[1].request.windowKey, "default/member/member@example.com/day/2026-10-18");
   const reserved = await reserveBudget(env, auth, "llm.chat", cost);
-  await assert.rejects(reserveBudget(env, { ...auth, credentialId: "second_key" }, "llm.chat", cost), error => error.code === "daily_budget_exhausted" && error.message.includes("2026-10-19T00:00:00.000Z"));
+  await assert.rejects(reserveBudget(env, { ...auth, credentialId: "second_key" }, "llm.chat", cost), error => error.code === "daily_budget_exhausted" && error.message.includes("2026-10-19T00:00:00.000Z") && error.message.includes("Use the team server."));
   assert.equal((await budgetStatus(env, auth.policyId, auth.policy, auth.principalId)).spentMicros, 60, "daily denial releases the earlier monthly hold");
   await markBudgetDispatched(env, reserved);
   await settleBudget(env, reserved, 20);
@@ -112,9 +112,17 @@ test("daily rollback releases all prior legs on provider rejection or transport 
   }
 });
 
+test("daily pricing guard blocks unpriced/gap requests and zero budget; policy hint reaches monthly/model failures", () => {
+  const dailyOnly = { ...auth, policy: { ...auth.policy, monthlyBudgetMicros: null } };
+  for (const bad of [{ ...cost, basis: "flat_fallback" }, { ...cost, pricingGap: "hosted_tool_fee" }]) assert.throws(() => planBudgetReservation(dailyOnly, "llm.chat", bad), error => error.code === "pricing_required");
+  assert.throws(() => planBudgetReservation({ ...dailyOnly, policy: { ...dailyOnly.policy, dailyBudgetMicros: 0 } }, "llm.chat", cost), error => error.code === "daily_budget_exhausted" && error.message.includes("Use the team server."));
+  assert.throws(() => planBudgetReservation({ ...auth, policy: { ...auth.policy, monthlyBudgetMicros: 0 } }, "llm.chat", cost), error => error.code === "budget_exhausted" && error.message.includes("Use the team server."));
+  assert.throws(() => assertPolicyModel({ ...auth.policy, models: [] }, selection()), error => error.code === "model_not_allowed" && error.message.includes("Use the team server."));
+});
+
 test("default tier admission, model override, per-key narrowing, non-OpenAI formats", () => {
   for (const tier of [undefined, "default", "auto", "flex", "fast", "priority", "FAST"]) assert.doesNotThrow(() => assertServiceTier(auth, selection(tier)));
-  for (const tier of ["ultrafast", "unknown", 2]) assert.throws(() => assertServiceTier(auth, selection(tier)), error => error.status === 400 && error.code === "service_tier_not_allowed");
+  for (const tier of ["ultrafast", "unknown", 2]) assert.throws(() => assertServiceTier(auth, selection(tier)), error => error.status === 400 && error.code === "service_tier_not_allowed" && error.message.includes("Use the team server."));
   const team = { ...auth, policy: { ...auth.policy, serviceTiers: { allowed: ["default", "flex", "priority"], models: { "openai/gpt-6.1-sol": ["default", "flex", "priority", "ultrafast"] } } } };
   assert.doesNotThrow(() => assertServiceTier(team, selection("ultrafast")));
   assert.throws(() => assertServiceTier(team, selection("ultrafast", "openai/gpt-6-astra")));
@@ -122,6 +130,7 @@ test("default tier admission, model override, per-key narrowing, non-OpenAI form
   assert.doesNotThrow(() => assertServiceTier(auth, selection("ultrafast", "google/gemini", "google.generate_content")));
   assert.deepEqual(normalizePolicyTiers({ allowed: ["default", "default"] }, new Set()), { allowed: ["default"], models: {} });
   for (const value of [{ allowed: ["Priority"] }, { allowed: ["fast"] }, { allowed: [], models: { unknown: [] } }]) assert.throws(() => normalizePolicyTiers(value, new Set()));
+  assert.equal(normalizePolicy({ providers: ["openai"], dailyBudgetMicros: 100, limitHint: "  Team  " }, undefined, false).limitHint, "Team");
   for (const value of [-1, 1.5, "1"]) assert.throws(() => normalizePolicy({ providers: ["openai"], dailyBudgetMicros: value }, undefined, false));
 });
 
