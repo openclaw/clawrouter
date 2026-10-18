@@ -34,8 +34,8 @@ for (const operation of ["create", "rotate", "revoke", "policy", "content"] as c
       await page.getByRole("button", { name: "Save policy", exact: true }).click();
     } else if (operation === "content") await page.getByRole("button", { name: "View", exact: true }).click();
     else {
-      await page.getByRole("button", { name: /owned_key.*proxy credential/ }).click();
-      await page.getByRole("button", { name: operation === "rotate" ? "Rotate credential" : "Revoke credential", exact: true }).click();
+      await page.getByRole("button", { name: /\bowned_key\b/ }).click();
+      await page.getByRole("button", { name: operation === "rotate" ? "Renew credential" : "Revoke credential", exact: true }).click();
     }
     await signedOut(page);
     state.replies.delete(path);
@@ -54,7 +54,7 @@ test("recovery has its own probe and a delayed old session cannot replace the ne
   await focus(page);
   await expect.poll(() => state.requests.filter((item) => item.path === "/v1/session").length).toBe(2);
   state.replies.set("/v1/admin/credentials/owned_key/revoke", authError("admin_unauthorized"));
-  await page.getByRole("button", { name: /owned_key.*proxy credential/ }).click();
+  await page.getByRole("button", { name: /\bowned_key\b/ }).click();
   await page.getByRole("button", { name: "Revoke credential", exact: true }).click();
   await signedOut(page);
   state.waits.delete("/v1/session");

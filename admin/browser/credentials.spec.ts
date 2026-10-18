@@ -660,7 +660,7 @@ async function fixture(page: Page) {
       "/v1": { endpoints: {} },
       "/v1/providers": { providers: [] },
       "/v1/routes": { openaiCompatible: [], manifestProxy: [] },
-      "/v1/session": { authenticated: true, auth: "cloudflare_access", role: state.role, email: state.email, tenantId: "default", ...(!state.omitEntitlements ? { entitlements: { providers: [], policies: [{ ...policy, budget: { configured: false, ledger: "unmetered", daily: { configured: policy.dailyBudgetMicros != null, limitMicros: policy.dailyBudgetMicros ?? null, spentMicros: 2_000_000, remainingMicros: 18_000_000, resetsAt: "2026-10-19T00:00:00Z" } } }] } } : {}) },
+      "/v1/session": { authenticated: true, auth: "cloudflare_access", role: state.role, email: state.email, tenantId: "default", ...(!state.omitEntitlements ? { entitlements: { providers: [], policies: [{ ...policy, budget: { configured: false, ledger: "unmetered", daily: { configured: policy.dailyBudgetMicros != null, limitMicros: policy.dailyBudgetMicros ?? null, spentMicros: 2_000_000, remainingMicros: 18_000_000, resetsAt: "2026-10-19T00:00:00Z" }, weekly: { configured: policy.weeklyBudgetMicros != null, limitMicros: policy.weeklyBudgetMicros ?? null, spentMicros: 2_000_000, remainingMicros: 4_998_000_000, resetsAt: "2026-10-19T00:00:00Z" } } }] } } : {}) },
       "/v1/entitlements": { session: { authenticated: true, auth: "cloudflare_access", role: state.role, email: state.email, tenantId: "default" }, providers: [], contentRetention: { enabled: false, retentionDays: 30, policyEnabled: false, userExempt: false } },
       "/v1/session/usage": { policies: policies.map((item) => ({ ...item, budget: { configured: false, ledger: "ready" } })), usage },
       "/v1/session/credentials": { credentials: state.credentials.filter((item) => item.principalId === state.email) },
@@ -688,7 +688,7 @@ test("personal validity, performance controls, allowance and expired renewal", a
   await page.goto("/");
   await connected(page);
   const card = page.locator(".myKeysPanel");
-  await expect(card).toContainText("Today: $2.00 / $20.00");
+  await expect(card).toContainText("Today: $2.00 used / $20.00 limit · $18.00 remaining");
   await expect(card).toContainText("Use the team server for heavier usage.");
   await expect(card.getByLabel("Validity")).toHaveValue("180");
   await expect(card.getByLabel("Fast (priority)")).toBeChecked();
@@ -711,6 +711,19 @@ test("personal validity, performance controls, allowance and expired renewal", a
   expect(accessibility.violations).toEqual([]);
 });
 
+
+test("members see their weekly allowance without an unconfigured daily or monthly cap", async ({ page }) => {
+  const state = await fixture(page);
+  state.role = "user";
+  state.policy.weeklyBudgetMicros = 5_000_000_000;
+  await page.goto("/");
+  await connected(page);
+  const card = page.locator(".myKeysPanel");
+  await expect(card).toContainText("This week: $2.00 used / $5000.00 limit · $4998.00 remaining · resets 2026-10-19T00:00:00Z");
+  await expect(card).not.toContainText("Today:");
+  await expect(card).not.toContainText("This month:");
+  expect((await new AxeBuilder({ page }).include(".myKeysPanel").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze()).violations).toEqual([]);
+});
 
 test("admin expiry update preserves revocation and tier restrictions", async ({ page }) => {
   const state = await fixture(page);
