@@ -1,3 +1,5 @@
+import { effectiveBudgetPolicy } from "./budget-overrides.ts";
+import { recordAdmissionDuration } from "./admission-timing.ts";
 import { policyAllowsModel } from "./policy-models.ts";
 import { fetchTimeoutSignal } from "../shared/fetch-timeout.ts";
 import { authorityCall, resolveBindings, resolvePolicies, resolveUsers } from "./authority";
@@ -55,18 +57,23 @@ async function cloudflareAccessSession(request: Request, env: Env): Promise<Acce
     tenantId: user.record.tenantId ?? env.CLAWROUTER_ACCESS_DEFAULT_TENANT ?? "default",
     groups: [...new Set(user.record.groups ?? [])].sort(),
     contentRetentionDisabled: user.record.contentRetentionDisabled ?? false,
+    budgetOverrides: user.record.budgetOverrides,
   };
   verifiedSessions.set(session, Object.freeze({ kind: "cloudflare_access", email, expiresAtMs: payload.exp! * 1000 }));
   return session;
 }
 
 export async function accessIdentity(request: Request, env: Env, providerId?: string, requirement?: import("./provider-auth").GrantRequirement): Promise<AuthorizedIdentity | Response> {
+  const started = performance.now();
   const session = await verifiedAccessSession(request, env);
   if (!session) return errorResponse("access_session_required", "a verified Cloudflare Access session is required", 401);
-  return accessSessionIdentity(session, env, providerId, requirement);
+  const identity = await accessSessionIdentity(session, env, providerId, requirement);
+  if (!(identity instanceof Response)) recordAdmissionDuration(identity, started);
+  return identity;
 }
 
 export async function accessSessionIdentity(session: AccessSession, env: Env, providerId?: string, requirement?: import("./provider-auth").GrantRequirement): Promise<AuthorizedIdentity | Response> {
+  const started = performance.now();
   const matching = (await sessionPolicies(session, env)).filter((entry) => !providerId || !entry.policy.providers.length || entry.policy.providers.includes(providerId));
   if (!matching.length) return errorResponse("access_policy_required", "this identity has no active access policy", 403);
   const modelId = requirement?.model ? requirement.provider.models.find(model => model.id === requirement.model || model.upstream === requirement.model)?.id ?? requirement.model : null;
@@ -76,7 +83,9 @@ export async function accessSessionIdentity(session: AccessSession, env: Env, pr
     : requiresModel ? matching.filter(entry => entry.policy.models == null) : matching;
   if (!eligible.length) return errorResponse("model_not_allowed", "model is not allowed by this identity's policies", 403);
   const selected = providerId ? await selectProviderPolicy(eligible, providerId, env, requirement) : eligible[0];
-  return sessionPolicyIdentity(session, selected);
+  const identity = sessionPolicyIdentity(session, selected);
+  recordAdmissionDuration(identity, started);
+  return identity;
 }
 
 export function sessionPolicyIdentity(session: AccessSession, entry: AccessPolicyEntry): AuthorizedIdentity {
@@ -95,7 +104,7 @@ export async function sessionPolicies(session: AccessSession, env: Env): Promise
   const byId = new Map(entries.map((entry) => [entry.policyId, entry]));
   return [...new Set(bindings.map((binding) => binding.policyId))].flatMap((id) => {
     const entry = byId.get(id);
-    return entry?.policy.enabled ? [entry] : [];
+    return entry?.policy.enabled ? [{ ...entry, policy: effectiveBudgetPolicy(id, entry.policy, session.budgetOverrides) }] : [];
   });
 }
 
@@ -122,7 +131,7 @@ export async function authorizeAdmin(request: Request, env: Env): Promise<Access
 }
 
 export function publicSession(session: AccessSession): Omit<AccessSession, "contentRetentionDisabled"> {
-  const { contentRetentionDisabled: _, ...visible } = session;
+  const { contentRetentionDisabled: _, budgetOverrides: _overrides, ...visible } = session;
   return visible;
 }
 

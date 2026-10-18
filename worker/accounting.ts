@@ -1,13 +1,14 @@
 import { dailyBudgetMessage, weeklyBudgetMessage, withLimitHint } from "./policy-limits.ts";
-import type { AuthorizedIdentity, BudgetReserveRequest, BudgetSettleRequest, Env, ProviderConnection, UsageEvent } from "./types";
+import type { AuthorizedIdentity, BudgetChargeRequest, BudgetReserveRequest, BudgetSettleRequest, Env, ProviderConnection, UsageEvent } from "./types";
 import { budgetLedgerAddress, dailyBudgetLedgerAddress, weeklyBudgetLedgerAddress, budgetPrincipal, providerBudgetLedgerAddress } from "./budget-scope.ts";
 import { logCorrelationError } from "./correlation.ts";
-import { ingestUsage, settleLedger } from "./ledgers.ts";
+import { chargeLedger, ingestUsage, settleLedger } from "./ledgers.ts";
 import { HttpError, randomId } from "./utils.ts";
 import type { PricingGap } from "./pricing.ts";
 
 export interface BudgetReservation {
   reservations: LedgerBudgetReservation[];
+  charges?: Array<{ objectName: string; request: Omit<BudgetChargeRequest, "amountMicros"> }>;
   reservedMicros: number;
 }
 
@@ -56,8 +57,8 @@ export function validateBudgetReservation(capability: string, cost: EstimatedCos
 
 // Construct before I/O so a durable caller can record the exact IDs, scopes and
 // month before an acknowledgment is lost. Physical shard aliases remain two legs.
-export function planBudgetReservation(auth: AuthorizedIdentity, capability: string, cost: EstimatedCost, connection?: ProviderConnection, at = Date.now()): BudgetReservationPlan {
-  if (!validateBudgetReservation(capability, cost, auth.policy.monthlyBudgetMicros, connection, auth.policy.dailyBudgetMicros, auth.policy.limitHint, auth.policy.weeklyBudgetMicros)) return { reservedMicros: 0, legs: [] };
+export function planBudgetReservation(auth: AuthorizedIdentity, capability: string, cost: EstimatedCost, connection?: ProviderConnection, at = Date.now(), soft = false): BudgetReservationPlan {
+  if (soft ? capability === "llm.count_tokens" : !validateBudgetReservation(capability, cost, auth.policy.monthlyBudgetMicros, connection, auth.policy.dailyBudgetMicros, auth.policy.limitHint, auth.policy.weeklyBudgetMicros)) return { reservedMicros: 0, legs: [] };
   const policyLimit = auth.policy.monthlyBudgetMicros;
   const providerLimit = connection?.monthlyBudgetMicros;
   const legs: BudgetReservationIntent[] = [];
@@ -105,7 +106,7 @@ export async function reserveLedgerIntent(env: Env, intent: BudgetReservationInt
 
 export async function finalizeAccounting(env: Env, reservation: BudgetReservation, actualCostMicros: number, event: UsageEvent): Promise<boolean> {
   const results = await Promise.allSettled([
-    settleBudget(env, reservation, actualCostMicros),
+    reservation.charges ? chargeBudget(env, reservation, actualCostMicros) : settleBudget(env, reservation, actualCostMicros),
     publishUsage(env, event),
   ]);
   for (const result of results) {
@@ -153,3 +154,13 @@ async function settleReservation(env: Env, reservation: LedgerBudgetReservation,
 }
 
 export function emptyReservation(): BudgetReservation { return { reservations: [], reservedMicros: 0 }; }
+
+async function chargeBudget(env: Env, reservation: BudgetReservation, amountMicros: number): Promise<void> {
+  const results = await Promise.allSettled((reservation.charges ?? []).map(async item => {
+    const request = { ...item.request, amountMicros };
+    try { await chargeLedger(env, item.objectName, request); }
+    catch { await env.USAGE_QUEUE.send({ kind: "budget_charge", ledger: { objectName: item.objectName }, request }); }
+  }));
+  const failed = results.find((result): result is PromiseRejectedResult => result.status === "rejected");
+  if (failed) throw failed.reason;
+}

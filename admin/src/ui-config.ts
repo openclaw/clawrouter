@@ -101,6 +101,7 @@ export const defaultPolicy: PolicyForm = {
   dailyBudgetMicros: "", weeklyBudgetMicros: "", serviceTierAllowed: "default, flex, priority", serviceTierModels: "", limitHint: "",
   requestCostMicros: "1000",
   budgetScope: "policy",
+  budgetMode: "reserve",
   providers: ["openai", "tavily"],
   allProviders: false,
   models: "",

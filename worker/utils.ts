@@ -15,7 +15,7 @@ const corsHeaders = {
     "x-stainless-helper",
   ].join(","),
   "access-control-expose-headers": [
-    "x-request-id", "x-clawrouter-content-retention", "x-clawrouter-upstream-provider", "x-clawrouter-fusion",
+    "server-timing", "x-request-id", "x-clawrouter-content-retention", "x-clawrouter-upstream-provider", "x-clawrouter-fusion",
     "x-clawrouter-fusion-aggregator", "x-clawrouter-fusion-adviser-count", "x-clawrouter-fusion-failed-count",
     "x-clawrouter-fusion-latency-ms", "x-clawrouter-fusion-advisers", "x-clawrouter-background-recovery",
   ].join(","),

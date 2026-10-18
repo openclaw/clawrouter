@@ -95,3 +95,16 @@ test("ultrafast patch fails closed for a missing policy or credentials", async (
   assert.equal(writes, 0);
   assert.throws(() => memberAccessRequests(["--ultrafast-policy", "bad/id"]), /invalid/);
 });
+
+test('GitHub teams work alongside or instead of org rules with stable underscore IDs', () => {
+  const team = 'openclaw/maintainers-openclaw-org';
+  const only = memberAccessRequests(['--github-team', team, '--github-team', team, '--team-server']).requests;
+  assert.equal(only.length, 3);
+  assert.ok(only.slice(0, 2).every(row => row.body.budgetMode === 'soft'));
+  assert.equal(only[2].path, '/v1/admin/assignment-rules/github_team_openclaw_maintainers_openclaw_org');
+  assert.equal(only[2].body.kind, 'github_team'); assert.equal(only[2].body.revokeOnLoss, true);
+  const both = memberAccessRequests(['--github-org', 'OpenClaw', '--github-team', team]).requests;
+  assert.equal(both.length, 3); assert.equal(both[1].body.kind, 'github_org');
+  assert.deepEqual(both[1].body.groups, both[2].body.groups); assert.deepEqual(both[1].body.policyIds, both[2].body.policyIds);
+  for (const bad of ['openclaw', 'org/team/extra', '../bad', 'org/']) assert.throws(() => memberAccessRequests(['--github-team', bad]));
+});

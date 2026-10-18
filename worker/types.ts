@@ -119,6 +119,7 @@ export interface Env {
 }
 
 export interface AccessPolicy {
+  budgetOverride?: BudgetOverride;
   enabled: boolean;
   generation: string;
   providers: string[];
@@ -133,6 +134,7 @@ export interface AccessPolicy {
   serviceTiers?: import("../shared/service-tiers").PolicyServiceTiers | null;
   requestCostMicros?: number | null;
   budgetScope?: "policy" | "principal";
+  budgetMode?: "reserve" | "soft";
   retainRequestContent: boolean;
   grantRouting: GrantRoutingPolicy;
 }
@@ -184,7 +186,16 @@ export interface ProviderHealth {
   error?: string | null;
 }
 
+export interface BudgetOverride {
+  dailyBudgetMicros?: number | null;
+  weeklyBudgetMicros?: number | null;
+  monthlyBudgetMicros?: number | null;
+  updatedBy: string;
+  updatedAt: string;
+}
+
 export interface AccessUserRecord {
+  budgetOverrides?: Record<string, BudgetOverride>;
   role?: "admin" | "user";
   tenantId?: string | null;
   enabled?: boolean | null;
@@ -199,6 +210,7 @@ export interface AssignmentState { version: 1; revision: string; assignments: Re
 export interface AccessControlUser { email: string; record: AccessUserRecord }
 
 export interface AccessSession {
+  budgetOverrides?: Record<string, BudgetOverride>;
   authenticated: true;
   auth: "cloudflare_access" | "local" | "admin_token";
   role: "admin" | "user";
@@ -369,7 +381,7 @@ export interface UsageEvent {
   status: "success" | "provider_error" | "client_error" | "denied" | "timeout";
 }
 
-export type QueueMessage = UsageEvent | ({ kind: "budget_settlement"; request: BudgetSettleRequest } & (
+export type QueueMessage = UsageEvent | { kind: "budget_charge"; ledger: { objectName: string }; request: BudgetChargeRequest } | ({ kind: "budget_settlement"; request: BudgetSettleRequest } & (
   { ledger: { objectName: string } }
   // Queued jobs from earlier deployments still carry their original scope.
   | { tenant_id: string; policy_id: string; principal_id?: string | null }
@@ -382,6 +394,15 @@ export interface BudgetReserveRequest {
   limitMicros: number;
   costMicros: number;
   reservationId: string;
+  capability: string;
+}
+
+export interface BudgetChargeRequest {
+  chargeId: string;
+  policyId: string;
+  windowKey: string;
+  scopeKey: string;
+  amountMicros: number;
   capability: string;
 }
 

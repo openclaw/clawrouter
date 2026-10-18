@@ -1,9 +1,99 @@
 # Agent spend control
 
-ClawRouter enforces centralized model budgets with pre-request reservation and
-post-response settlement. Provider credentials remain server-side; clients use
+ClawRouter supports centralized model budgets with default pre-request reservation
+and optional low-latency soft enforcement. Provider credentials remain server-side; clients use
 a ClawRouter credential and receive only the providers and models allowed by
 their policy.
+
+## Soft budgets and dynamic caps
+
+`budgetMode: "reserve"` is the default when omitted. Existing policies keep
+pre-dispatch reservation, pricing guards, dispatch receipts, and conservative
+settlement. The remaining reservation sections describe that default.
+
+`budgetMode: "soft"` forwards ordinary HTTP inference immediately after the
+existing authentication, selection, credential materialization and required
+retention checks. Revocation, expiry, model allowlists and service-tier controls
+remain authoritative. It starts all configured policy daily/weekly/monthly and
+provider monthly `/status` reads concurrently with upstream fetch, without
+reserve or dispatch RPCs. A window with spent >= limit (including zero) aborts
+the upstream before delivery and returns its existing 402 code, policy hint and
+reset time, recording a denied, no-charge usage event. Provider work may already
+have incurred an upstream cost; this denial does not claim a provider refund.
+
+When headers arrive first, the router waits **at most 50 ms more** for the budget
+check. Read errors and a check still pending after that grace period fail open;
+late results cannot retract an exposed response. Soft mode admits requests
+without a complete price, charges the priced portion of observed usage (or an
+explicit fixed tariff), and records `unpriced_usage` when any price is unknown.
+Missing usage has no invented reservation charge. It is deliberately unsuitable
+for strict spend enforcement or provider invoice caps.
+
+The existing backpressured delivery observer delivers actual charges through
+`ctx.waitUntil`, independently of usage publication. Each `/charge` writes an
+already-settled, dispatch-started `budget_reservations` receipt, so existing
+`effectiveSpent` includes it and reserve policies see the same debt. Receipts use
+the server-generated usage-event identity for the request plus the original
+window key and logical scope; caller-supplied correlation IDs cannot deduplicate separate calls.
+Retries reuse the frozen charge ID, address and amount. Conflicting duplicates
+are rejected; identical duplicates are acknowledged. Retention is 45 days,
+covering the longest monthly window. Failed delivery enqueues `budget_charge`
+through the same queue/retry/DLQ boundary as `budget_settlement`; a failure never
+blocks or fails the already-delivered response. Operators must recover exhausted
+queue retries from the DLQ. Queue acceptance is not proof of a ledger charge.
+
+Overshoot consists of requests already in flight when a window crosses its limit,
+plus observation/charge-delivery staleness. Fail-open outages or delayed retries
+can extend that staleness without a strict monetary bound.
+
+| Path | Soft policy behavior |
+| --- | --- |
+| HTTP JSON/SSE, native and manifest inference | Parallel check then observed charge |
+| HTTP Responses continuations | Same soft behavior; routing/identity publication invariants remain enforced |
+| Background create on creation-only transports | Ordinary HTTP soft behavior; no durable recovery job |
+| Fusion advisers | Ordinary HTTP soft behavior |
+| Fusion synthesizer | Reserve-only: its coverage is acquired before adviser work and verified against the final request |
+| Responses WebSocket turns, including continuations | Reserve-only: multiple active lanes share one upstream socket; a budget abort cannot safely terminate just one dispatched turn with today's session contract |
+| Durable background admission, collection, recovery and controls | Reserve-only: frozen financial outcome and original reserve/dispatch receipts remain owned by the durable scope; controls never add charges |
+
+WebSocket soft support needs a per-turn cancellation/publication contract that
+preserves other active lanes. Changing durable background recovery needs a
+versioned financial outcome protocol. Neither is enabled by this policy flag.
+
+Administrators from the existing configured Access admin model manage caps at
+**Users → Caps**. Policy defaults are edited inline; principal-scoped policies
+also show current-window member spend and effective daily/weekly/monthly limits.
+The override editor supports a USD amount (zero blocks), unlimited, and inherit,
+with the authenticated writer and authority timestamp displayed. Members see
+only their own effective allowance; this adds no in-app role promotion.
+
+`PUT /v1/admin/policies/{policyId}/budget-limits` patches only supplied window
+values on the latest policy inside `ACCESS_CONTROL`. `PUT
+/v1/admin/access-users/{email}/budget-overrides/{policyId}` replaces that policy's
+window overrides only, preserving the latest user profile, assignment state and
+other policy overrides atomically. The body contains daily/weekly/monthly
+`*BudgetMicros` fields: absent inherits, a nonnegative safe integer sets the cap,
+and null removes it. `{}` restores all inherited windows. The authority stamps
+`updatedBy` and `updatedAt`; caller-supplied audit fields are rejected. An optional `If-Match` header compares the previous `updatedAt` (or `absent`);
+the console uses it to reject stale saves with 409 `budget_override_changed`. Profile,
+login and assignment writes preserve overrides. Writes require administrator
+authentication and the existing browser same-origin protection.
+
+The admission result already contains the key owner's user record; Access
+sessions already read their own record. Effective limits use that record without
+another inference round trip and only affect principal-scoped budgets. Ledger
+addresses/window keys and accumulated debt stay unchanged. A lower limit applies
+to the next admission; raising it unblocks without resetting spend. Key inspect,
+`/v1/usage`, session entitlements and administrator usage report effective limits
+and per-window `override` provenance. Removing a cap stops new charges to that
+window; retained earlier spend remains visible, and reinstating it uses that
+same debt.
+
+Member provisioning sets both member and optional team-server policies to soft.
+Repeatable `--github-team org/team` creates underscore-only `github_team` rule
+IDs with the org rule's groups/policies and `revokeOnLoss: true`. Explicit
+`--github-org` can accompany teams; without either, `openclaw` remains the default
+org. Supplying only teams creates no implicit org rule.
 
 ## Reading costs and budgets
 

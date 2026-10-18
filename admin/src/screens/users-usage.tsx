@@ -1,3 +1,4 @@
+import { CapsView } from "./caps";
 import React, { type FormEvent, useEffect, useRef, useState } from "react";
 import { Activity, CalendarDays, KeyRound, Plus, Search, ServerCog, ShieldCheck, Users } from "lucide-react";
 import { bindingKey, effectiveAccess, errorMessage, policyUsageFallback, tenantSummaryFallback } from "../domain";
@@ -46,6 +47,7 @@ export function UsersScreen({ users, selected, policies, bindings, services, for
   busy: boolean;
 }) {
   const [userQuery, setUserQuery] = useState("");
+  const [caps, setCaps] = useState(false);
   const accessForUser = (user: AccessUser | undefined) => effectiveAccess(user, policies, bindings, services);
   const selectedAccess = accessForUser(selected);
   const selectedServices = selectedAccess.services.map((service) => ({ service, label: "granted" }));
@@ -53,11 +55,12 @@ export function UsersScreen({ users, selected, policies, bindings, services, for
   const selectedBindings = bindings
     .filter((binding) => binding.enabled && selected && (binding.principalType === "user" ? binding.principalId === selected.email : selectedGroups.has(binding.principalId)))
     .sort((a, b) => a.priority - b.priority || a.policyId.localeCompare(b.policyId));
+  if (caps) return <CapsView onBack={() => setCaps(false)} />;
   const visibleUsers = users.filter((user) => !userQuery.trim() || [user.email, user.tenantId, user.groups.join(" ")].join(" ").toLowerCase().includes(userQuery.trim().toLowerCase()));
   return (
     <div className="entityLayout">
       <section className="mainPane">
-        <div className="tableSectionHeader userListHeader"><label className="inputWithIcon"><Search aria-hidden="true" /><input value={userQuery} onChange={(event) => setUserQuery(event.target.value)} placeholder="search identities or groups" /></label><button type="button" onClick={onNew} disabled={busy}><Plus className="buttonIcon" aria-hidden="true" /><span>New identity</span></button></div>
+        <div className="tableSectionHeader userListHeader"><button type="button" onClick={() => setCaps(true)}>Caps</button><label className="inputWithIcon"><Search aria-hidden="true" /><input value={userQuery} onChange={(event) => setUserQuery(event.target.value)} placeholder="search identities or groups" /></label><button type="button" onClick={onNew} disabled={busy}><Plus className="buttonIcon" aria-hidden="true" /><span>New identity</span></button></div>
         <EntityTable columns={["identity", "role", "tenant", "policies", "services", "retention", "status"]} columnTemplate="minmax(240px, 1.5fr) 80px 110px 78px 78px 92px 104px" rows={visibleUsers.map((user) => {
           const access = accessForUser(user);
           return { id: user.email, active: selected?.email === user.email, onClick: () => onSelect(user), cells: [<EntityName icon={Users} title={user.email} subtitle="Cloudflare Access" />, user.role, user.tenantId, String(access.policies.length), String(access.services.length), <Status label={user.contentRetentionDisabled ? "exempt" : "policy"} tone={user.contentRetentionDisabled ? "neutral" : "active"} />, <Status label={user.enabled ? "enabled" : "disabled"} tone={user.enabled ? "active" : "revoked"} />] };

@@ -1,3 +1,4 @@
+import { softBudget } from "./soft-budget.ts";
 import { assertServiceTier } from "./service-tiers.ts";
 import { grantStickyInput } from "./grant-sticky.ts";
 import { assertPolicyModel } from "./policy-models.ts";
@@ -5,6 +6,7 @@ import { resolveTemplate } from "./provider-templates.ts";
 import { assessModelRequest } from "../shared/model-request-parameters.ts";
 import { createProxyAccounting, estimateCost, type CompoundRequestContext } from "./proxy-accounting";
 import { authenticateProxyKey, proxySessionHash } from "./proxy-auth";
+import { admissionDuration } from "./admission-timing.ts";
 import {
   concreteOpenAiSelection, directManifestEnvelope, isSelectionFailure, manifestEnvelope, nativeMatch, nativeParams,
   prepareManifestRequest, prepareNativeRequest, requestObject, searchParamsRecord, validateSelectedInput, type ProxySelection,
@@ -285,6 +287,11 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     return errorResponse(failure.code, failure.message, failure.status);
   }
   const { cost, requestId } = accounting;
+  const useSoft = auth.policy.budgetMode === "soft" && !prepared.backgroundRecovery && !reservedBudget && compound?.stage !== "fusion_synthesizer";
+  let soft: ReturnType<typeof softBudget> | undefined;
+  let budgetMs = 0;
+  let upstreamMs = 0;
+  const budgetStart = performance.now();
   let reservation = reservedBudget?.reservation;
   if (prepared.backgroundRecovery) {
     try {
@@ -299,7 +306,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       if (!background) accounting.fail(failure.status, failure.status === 402 ? "denied" : "provider_error");
       return errorResponse(failure.code, failure.message, failure.status);
     }
-  } else if (!reservation) {
+  } else if (!reservation && !useSoft) {
     try { reservation = await reserveBudget(env, auth, selection.capability, cost, prepared.connection); }
     catch (error) {
       const failure = error instanceof HttpError ? error : new HttpError(503, "budget_store_unavailable", "budget ledger is unavailable");
@@ -307,6 +314,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       return errorResponse(failure.code, failure.message, failure.status);
     }
   }
+  budgetMs = useSoft || !background && !reservation?.reservations.length ? 0 : performance.now() - budgetStart;
   let content: string | null;
   try { content = await retainRequestContent(env, auth, selection, requestId); }
   catch {
@@ -315,8 +323,10 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     return errorResponse("content_retention_unavailable", "required request-content retention is temporarily unavailable", 503);
   }
   try {
+    const dispatchStart = performance.now();
     if (background) await background.dispatch(content);
-    else await markBudgetDispatched(env, reservation!);
+    else if (!useSoft) await markBudgetDispatched(env, reservation!);
+    if (background || reservation?.reservations.length) budgetMs += performance.now() - dispatchStart;
   }
   catch {
     if (background) context.waitUntil(background.unsent(503, "provider_error", content));
@@ -334,7 +344,14 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     // A canceled preflight is known-unsent even if the ledger marks already landed.
     signal.throwIfAborted();
     dispatched = true;
-    response = await operation.wait(fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal }), "upstream", discard);
+    const upstreamStart = performance.now();
+    const pending = fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal });
+    if (useSoft) {
+      soft = softBudget(env, auth, selection.capability, prepared.connection, accounting.facts.event.id, error => operation.stop("upstream", error));
+      reservation = soft.reservation;
+      context.waitUntil(soft.check);
+    }
+    response = await operation.wait(pending, "upstream", discard);
     captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response);
     if (!background && !continuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
       let retry: PreparedUpstream | undefined;
@@ -358,12 +375,24 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
         grantFailover = true;
       }
     }
+    upstreamMs = performance.now() - upstreamStart;
+    if (soft) {
+      budgetMs = await soft.beforeDelivery();
+      if (soft.denial) throw soft.denial;
+    }
     if (!response.ok) operation.acceptRejection(response.status);
     const streaming = Array.isArray(selection.body)
       ? selection.body.some(({ query }) => !!query && typeof query === "object" && "stream" in query && query.stream === true)
       : selection.body.stream === true;
     response = await normalizePreStreamError(response, streaming && selection.endpoint.response_format !== "audio.binary", operation);
   } catch (error) {
+    soft?.close();
+    if (soft?.denial) {
+      operation.stop("upstream", soft.denial);
+      void response?.body?.cancel().catch(() => undefined);
+      accounting.fail(402, "denied", undefined, content);
+      return errorResponse(soft.denial.code, soft.denial.message, 402);
+    }
     operation.stop("upstream", error);
     void response?.body?.cancel().catch(() => undefined);
     // A fetch failure can incur cost; a received rejection stays nonbillable
@@ -398,6 +427,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   } else context.waitUntil(observed.result.then(result => accounting.complete(observed.response, result, reservation!, content, operation.status)));
   response = observed.response;
   const outputHeaders = proxyResponseHeaders(response, selection.provider.id);
+  outputHeaders.set("server-timing", `cr-admission;dur=${admissionDuration(auth).toFixed(1)}, cr-budget;dur=${budgetMs.toFixed(1)}, cr-upstream-ttfb;dur=${upstreamMs.toFixed(1)}`);
   outputHeaders.set("x-clawrouter-grant-lane", prepared.grantLane);
   if (grantFailover) outputHeaders.set("x-clawrouter-grant-failover", "1");
   outputHeaders.set("x-clawrouter-content-retention", retentionRequired(auth, selection.capability) ? "on; retention-days=30" : "off");

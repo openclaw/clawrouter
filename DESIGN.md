@@ -30,7 +30,8 @@ scoped traffic, budgets, readiness, and personal credentials. Catalog groups
 models under their provider service and pairs the service table with an
 inspector. Access owns policies, credentials, upstream grants, connections,
 assignment rules, and Fusion configuration. Users manages identity and direct
-policy bindings. Usage combines aggregate charts with request-level audit.
+policy bindings. Users → Caps lets administrators edit policy defaults and member
+overrides (amount, unlimited, inherit), with current-window spend and audit metadata. Usage combines aggregate charts with request-level audit.
 
 Playground is conversation-first, with a transcript, composer, model/service
 selection, and a request/response inspector. It exercises the same policy and

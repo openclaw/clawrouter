@@ -332,6 +332,7 @@ export function policyFormFromPolicy(key: AccessPolicy): PolicyForm {
     limitHint: key.limitHint ?? "",
     requestCostMicros: key.requestCostMicros?.toString() ?? "",
     budgetScope: key.budgetScope ?? "policy",
+    budgetMode: key.budgetMode ?? "reserve",
     providers: key.providers,
     allProviders: key.providers.length === 0,
     models: key.models?.join(", ") ?? "",

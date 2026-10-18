@@ -7,7 +7,8 @@ import { adminRequest } from "./admin-api.mjs";
 export const help = `Usage: pnpm cf:members [--dry-run | --apply] [options]
   --policy-id ID       member policy (default member_weekly)
   --rule-id ID         assignment (default github_org_openclaw)
-  --github-org ORG     GitHub organization (default openclaw)
+  --github-org ORG     GitHub organization (default openclaw unless teams supplied)
+  --github-team ORG/TEAM  repeatable GitHub team, alongside or instead of org
   --model ID          repeatable catalog model (default openai/gpt-6.1-sol)
   --weekly-usd USD     per-principal weekly limit (default 5000)
   --daily-usd USD      optional daily limit (default none)
@@ -23,7 +24,7 @@ Unknown catalog models fail closed. No credentials are created.
 export function memberAccessRequests(argv = []) {
   const { values } = parseArgs({ args: argv.filter(value => value !== "--"), strict: true, options: {
     "policy-id": { type: "string", default: "member_weekly" }, "rule-id": { type: "string", default: "github_org_openclaw" },
-    "github-org": { type: "string", default: "openclaw" }, model: { type: "string", multiple: true },
+    "github-org": { type: "string" }, "github-team": { type: "string", multiple: true }, model: { type: "string", multiple: true },
     "weekly-usd": { type: "string", default: "5000" }, "daily-usd": { type: "string" }, "monthly-usd": { type: "string" }, hint: { type: "string", default: "For heavier usage, use the OpenClaw team server, which has no personal cap." },
     "ultrafast-policy": { type: "string", multiple: true },
     "team-server": { type: "boolean" }, "dry-run": { type: "boolean" }, apply: { type: "boolean" }, help: { type: "boolean" },
@@ -39,15 +40,22 @@ export function memberAccessRequests(argv = []) {
   for (const key of ["policy-id", "rule-id"]) if (!/^[a-zA-Z0-9_]{1,128}$/.test(values[key])) throw new Error(`invalid --${key}`);
   const ultrafastPolicies = [...new Set(values["ultrafast-policy"] ?? [])];
   for (const id of ultrafastPolicies) if (!/^[a-zA-Z0-9_]{1,128}$/.test(id)) throw new Error("invalid --ultrafast-policy");
-  if (!/^[a-zA-Z0-9][a-zA-Z0-9-]{0,38}$/.test(values["github-org"])) throw new Error("invalid --github-org");
+  const teams = [...new Set((values["github-team"] ?? []).map(team => team.toLowerCase()))];
+  const teamRuleIds = teams.map(team => `github_team_${team.replaceAll(/[-/]/g, "_")}`);
+  if (new Set(teamRuleIds).size !== teams.length || teamRuleIds.some(id => id.length > 128)) throw new Error("GitHub teams produce conflicting or oversized rule IDs; provision these rules explicitly");
+  const org = values["github-org"] ?? (teams.length ? undefined : "openclaw");
+  for (const team of teams) if (!/^[a-z0-9][a-z0-9-]{0,38}\/[a-z0-9][a-z0-9-]{0,99}$/.test(team)) throw new Error("invalid --github-team");
+  if (org !== undefined && !/^[a-zA-Z0-9][a-zA-Z0-9-]{0,38}$/.test(org)) throw new Error("invalid --github-org");
   if (values.hint.length > 300 || /[\u0000-\u001f\u007f-\u009f]/.test(values.hint)) throw new Error("hint must be at most 300 plain-text characters");
   const allowed = ["default", "flex", "priority"];
-  const common = { enabled: true, providers: ["openai"], retainRequestContent: false, requestCostMicros: null, tenantId: "default", tokenRole: "member" };
+  const common = { budgetMode: "soft", enabled: true, providers: ["openai"], retainRequestContent: false, requestCostMicros: null, tenantId: "default", tokenRole: "member" };
   const policy = { ...common, models: [...new Set(values.model ?? ["openai/gpt-6.1-sol"])].sort(), serviceTiers: { allowed }, budgetScope: "principal", weeklyBudgetMicros: micros(values["weekly-usd"], "--weekly-usd"), dailyBudgetMicros: values["daily-usd"] === undefined ? null : micros(values["daily-usd"], "--daily-usd"), monthlyBudgetMicros: values["monthly-usd"] === undefined ? null : micros(values["monthly-usd"], "--monthly-usd"), limitHint: values.hint.trim() || null };
   const put = (path, body) => ({ method: "PUT", path, body });
   const requests = [put(`/v1/admin/policies/${values["policy-id"]}`, policy)];
   if (values["team-server"]) requests.push(put("/v1/admin/policies/team_server", { ...common, tokenRole: "team_server", models: null, budgetScope: "policy", dailyBudgetMicros: null, weeklyBudgetMicros: null, monthlyBudgetMicros: null, limitHint: null, serviceTiers: { allowed, models: { "openai/gpt-6.1-sol": [...allowed, "ultrafast"] } } }));
-  requests.push(put(`/v1/admin/assignment-rules/${values["rule-id"]}`, { enabled: true, kind: "github_org", subject: values["github-org"].toLowerCase(), groups: ["members"], policyIds: [values["policy-id"]], revokeOnLoss: true, priority: 100 }));
+  const assignment = { enabled: true, groups: ["members"], policyIds: [values["policy-id"]], revokeOnLoss: true, priority: 100 };
+  if (org) requests.push(put(`/v1/admin/assignment-rules/${values["rule-id"]}`, { ...assignment, kind: "github_org", subject: org.toLowerCase() }));
+  for (const team of teams) requests.push(put(`/v1/admin/assignment-rules/github_team_${team.replaceAll(/[-/]/g, "_")}`, { ...assignment, kind: "github_team", subject: team }));
   return { apply: values.apply === true, requests: ultrafastPolicies.length ? [] : requests, ultrafastPolicies };
 }
 export function ultrafastPolicyRequest(policy) {

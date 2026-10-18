@@ -59,13 +59,14 @@ export function accountingReceipt(facts: AccountingFacts, outcome: AccountingOut
   const { model, fixed, cost, requestFormat, event } = facts;
   const { tokens, billable, reservation, contentRef, characterEstimate = null } = outcome;
   // Token totals and a served tier cannot resolve omitted fees or hosted work.
-  const measured = cost.pricingGap ? null : tokens ? actualCost(model, tokens, fixed, requestFormat)
+  const soft = reservation.charges !== undefined;
+  const measured = cost.pricingGap && !soft ? null : tokens ? (soft && !model?.pricing && fixed == null ? null : actualCost(model, tokens, fixed, requestFormat))
     : characterEstimate === null ? null : fixed ?? characterEstimate;
-  const actual = billable ? measured ?? cost.reserveMicros : 0;
+  const actual = billable ? measured ?? (soft ? fixed ?? 0 : cost.reserveMicros) : 0;
   const knownNoCharge = !billable || (tokens?.billable === false && actual === 0 && cost.basis !== "policy_fixed");
   const measuredBasis = characterEstimate !== null ? "request_character_estimate"
     : model?.pricing?.unit !== "character" && model?.pricing?.settlementBasis === "published_upper_bound" ? "manifest_rate_upper_bound" : "manifest_pricing";
-  const basis = knownNoCharge ? "none" : cost.pricingGap ? "unpriced_usage" : cost.basis === "unpriced_service_tier"
+  const basis = soft && billable && measured == null && fixed == null ? "unpriced_usage" : knownNoCharge ? "none" : cost.pricingGap ? "unpriced_usage" : cost.basis === "unpriced_service_tier"
     ? measured == null ? "unpriced_usage" : measuredBasis
     : cost.basis === "manifest_pricing" ? measured == null ? "manifest_reservation" : measuredBasis : cost.basis;
   return { ...event, occurred_at_ms: outcome.occurredAtMs, status_code: outcome.statusCode, status: outcome.status,

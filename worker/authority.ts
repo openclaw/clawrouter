@@ -1,3 +1,5 @@
+import { normalizeUser, profileUpdate } from "./authority-users.ts";
+import { mutateBudgetCaps } from "./authority-budgets.ts";
 import { nextCredential } from "./credential-mutation.ts";
 import { finishAdmissionSelection } from "./authority-grant-selection.ts";
 import { mergeGrantRuntimeState, normalizeGrantRuntimeState } from "./grant-runtime.ts";
@@ -62,6 +64,9 @@ export class PolicyBindingIndexObject implements DurableObject {
       if (path === "/users/initialize") { this.initializeUsers(await readJson<AccessControlUser[]>(request)); return new Response("initialized"); }
       if (path === "/users/initialize-all") { this.initializeUsers(await readJson<AccessControlUser[]>(request)); this.putMeta("users_global_initialized"); return new Response("initialized"); }
       if (path === "/users/put") { this.putUser(await readJson<AccessControlUser>(request)); return new Response("updated"); }
+      if (path === "/policies/budget-limits" || path === "/users/budget-override") return await mutateBudgetCaps(path, request, {
+        user: email => this.getUser(email), policy: id => this.getPolicy(id), putUser: user => this.putUser(user), putPolicy: entry => this.putPolicy(entry),
+      });
       if (path === "/users/update-profile") return json(this.updateUserProfile(await readJson<AccessControlUser>(request)));
       if (path === "/users/create") return json(this.createUser(await readJson<AccessControlUser>(request)));
       if (path === "/users/reconcile-assignments") return json(this.reconcileUserAssignments(await readJson<AssignmentReconcileRequest>(request)));
@@ -207,10 +212,7 @@ export class PolicyBindingIndexObject implements DurableObject {
   }
 
   private updateUserProfile(raw: AccessControlUser): AccessControlUser {
-    // Profile edits do not own roles. Read the role at the write boundary so a
-    // delayed profile save cannot undo an intervening administrative demotion.
-    const role = this.getUser(raw.email)?.record.role ?? "user";
-    const user = normalizeUser({ ...raw, record: { ...raw.record, role } });
+    const user = profileUpdate(raw, this.getUser(raw.email)?.record);
     this.putUser(user);
     return user;
   }
@@ -912,6 +914,7 @@ function normalizePolicyRecord(
     limitHint: typeof value.limitHint === "string" ? value.limitHint : null,
     requestCostMicros: typeof value.requestCostMicros === "number" ? value.requestCostMicros : null,
     budgetScope: value.budgetScope === "principal" ? "principal" : "policy",
+    ...(value.budgetMode === "soft" || value.budgetMode === "reserve" ? { budgetMode: value.budgetMode } : {}),
     retainRequestContent:
       typeof value.retainRequestContent === "boolean"
         ? value.retainRequestContent
@@ -984,11 +987,6 @@ function normalizeBinding(value: PolicyBinding): PolicyBinding {
   const principal = normalizePrincipal(value);
   if (!value.policyId?.trim()) invalidAuthorityRequest("policyId is required");
   return { ...principal, policyId: value.policyId.trim(), enabled: value.enabled ?? true, priority: value.priority ?? 100 };
-}
-function normalizeUser(value: AccessControlUser): AccessControlUser {
-  const email = normalizeEmail(value.email);
-  if (!email) invalidAuthorityRequest("invalid access user email");
-  return { email, record: { role: value.record.role ?? "user", tenantId: value.record.tenantId ?? "default", enabled: value.record.enabled ?? true, groups: [...new Set(value.record.groups ?? [])].map((item) => item.trim().toLowerCase()).filter(Boolean).sort(), contentRetentionDisabled: value.record.contentRetentionDisabled ?? false, assignmentState: value.record.assignmentState } };
 }
 function sortBindings(values: PolicyBinding[]): PolicyBinding[] {
   return values.map(normalizeBinding).sort((a, b) => a.priority - b.priority || a.principalType.localeCompare(b.principalType) || a.principalId.localeCompare(b.principalId) || a.policyId.localeCompare(b.policyId));

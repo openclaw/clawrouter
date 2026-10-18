@@ -67,6 +67,7 @@ export interface PolicyForm {
   monthlyBudgetMicros: string;
   dailyBudgetMicros: string;
   weeklyBudgetMicros: string;
+  budgetMode: "reserve" | "soft";
   serviceTierAllowed: string;
   serviceTierModels: string;
   limitHint: string;

@@ -144,7 +144,10 @@ usage event and delegates independent settlement and delivery to `accounting.ts`
 1. Authenticate the Access session or proxy credential against canonical state.
 2. Resolve the selected policy, its catalog-model allowlist, and provider-scoped readiness. Tenant grants are
    visible only to policies in that tenant; policy grants are exact-scope.
-3. Reserve the conservative budget before provider work.
+3. Reserve the conservative budget before provider work by default. With an
+   explicit soft policy on supported HTTP paths, overlap concurrent window reads
+   with upstream fetch, gate delivery for at most 50 ms after headers, and charge
+   observed usage off the response path. See [soft budgets](agent-spend-control.md#soft-budgets-and-dynamic-caps).
 4. Retain eligible LLM request content in R2 when policy requires it. Storage
    failure is fail-closed and prevents the upstream call.
 5. For eligible proxy-key HTTP creates, admission filters and selects within one
@@ -242,7 +245,9 @@ Object bindings are unchanged.
 
 ## Failure boundaries
 
-- Revocation, provider connection state, and budget preflight fail closed.
+- Revocation and provider connection state fail closed. Default reserve budget
+  preflight fails closed; explicitly selected soft checks fail open on errors or
+  the 50 ms post-header deadline.
 - Required request retention fails closed before upstream traffic.
 - Rejected, nonbillable work releases reservations to zero. Received billable
   responses can still incur cost when generation or stream delivery fails:
@@ -259,7 +264,7 @@ Object bindings are unchanged.
   Immediate settlement and queued retries use that same address; neither
   reconstructs it from authentication or policy state. The queue consumer still
   accepts scope-addressed jobs left by earlier deployments.
-- Both budget ledgers confirm dispatch before upstream work starts. Expiry
+- In reserve mode, all budget ledgers confirm dispatch before upstream work starts. Expiry
   releases only undispatched reservations; dispatched work becomes a conservative
   receipt that late actual usage can settle once. Final receipts remain for 45 days.
 - Non-2xx or unconfirmed Durable Object settlements are retried and eventually reach the

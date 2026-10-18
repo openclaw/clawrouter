@@ -1,6 +1,6 @@
 import { nextDailyReset, nextWeeklyReset } from "./policy-limits.ts";
 import type { GrantUsageSnapshot, GrantUsageRow, GrantUsageTotals } from "../shared/contracts";
-import type { BudgetReserveRequest, BudgetSettleRequest, Env, QueueMessage, UsageEvent } from "./types";
+import type { BudgetChargeRequest, BudgetReserveRequest, BudgetSettleRequest, Env, QueueMessage, UsageEvent } from "./types";
 import { budgetLedgerAddress, dailyBudgetLedgerAddress, weeklyBudgetLedgerAddress, providerBudgetLedgerAddress } from "./budget-scope.ts";
 import { mergeUsageSnapshots, usageCutoffs, usageDayMs, usageShardName, type UsageSnapshot } from "./usage-sharding.ts";
 import { errorResponse, HttpError, json, normalizeEmail } from "./utils.ts";
@@ -35,6 +35,7 @@ export class BudgetLedgerObject implements DurableObject {
       const spent = this.effectiveSpent(windowKey, url.searchParams.get("scope_key"));
       return json({ policyId, windowKey, limitMicros: limit, spentMicros: spent, remainingMicros: Math.max(0, limit - spent) });
     }
+    if (request.method === "POST" && url.pathname === "/charge") return this.charge(await request.json<BudgetChargeRequest>());
     if (request.method === "POST" && url.pathname === "/reserve") return this.reserve(await request.json<BudgetReserveRequest>());
     if (request.method === "POST" && url.pathname === "/dispatch") return this.dispatch(await request.json<{ reservationId: string }>());
     if (request.method === "POST" && url.pathname === "/settle") return this.settle(await request.json<BudgetSettleRequest>());
@@ -44,6 +45,16 @@ export class BudgetLedgerObject implements DurableObject {
   async alarm(): Promise<void> {
     this.maintain();
     await this.scheduleAlarm();
+  }
+
+  private async charge(request: BudgetChargeRequest): Promise<Response> {
+    if (![request.chargeId, request.policyId, request.windowKey, request.scopeKey, request.capability].every(value => typeof value === "string" && value.length > 0)
+      || !Number.isSafeInteger(request.amountMicros) || request.amountMicros < 0) return errorResponse("invalid_budget_charge", "charge fields and non-negative safe integer amount are required", 400);
+    const existing = first<{ window_key: string; policy_id: string; reserved_micros: number; budget_scope_key: string | null; settled: number; dispatch_started: number }>(this.sql.exec("SELECT window_key, policy_id, reserved_micros, budget_scope_key, settled, dispatch_started FROM budget_reservations WHERE reservation_id = ?", request.chargeId));
+    if (existing && (existing.window_key !== request.windowKey || existing.policy_id !== request.policyId || existing.budget_scope_key !== request.scopeKey || existing.reserved_micros !== request.amountMicros || existing.settled !== 1 || existing.dispatch_started !== 1)) return errorResponse("budget_charge_conflict", "charge conflicts with its retained receipt", 409);
+    if (!existing) this.sql.exec("INSERT INTO budget_reservations (reservation_id, window_key, policy_id, reserved_micros, created_at_ms, settled, dispatch_started, budget_scope_key) VALUES (?, ?, ?, ?, ?, 1, 1, ?)", request.chargeId, request.windowKey, request.policyId, request.amountMicros, Date.now(), request.scopeKey);
+    await this.scheduleAlarm();
+    return json({ charged: true, chargeId: request.chargeId });
   }
 
   private reserve(request: BudgetReserveRequest): Response {
@@ -268,7 +279,8 @@ export async function queue(batch: MessageBatch<QueueMessage>, env: Env): Promis
       else {
         const job = message.body;
         const objectName = "ledger" in job ? job.ledger.objectName : `${job.tenant_id}:${job.policy_id}${job.principal_id ? `:${job.principal_id}` : ""}`;
-        await settleLedger(env, objectName, job.request);
+        if (job.kind === "budget_charge") await chargeLedger(env, objectName, job.request);
+        else await settleLedger(env, objectName, job.request);
       }
       message.ack();
     } catch { message.retry(); }
@@ -278,6 +290,12 @@ export async function queue(batch: MessageBatch<QueueMessage>, env: Env): Promis
 export class BudgetSettlementError extends Error {
   readonly disposition: "missing" | "conflict" | "unavailable";
   constructor(disposition: BudgetSettlementError["disposition"]) { super("budget ledger did not acknowledge settlement"); this.disposition = disposition; }
+}
+
+export async function chargeLedger(env: Env, objectName: string, request: BudgetChargeRequest): Promise<void> {
+  const response = await env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(objectName)).fetch("https://clawrouter.internal/charge", { method: "POST", body: JSON.stringify(request) });
+  const receipt = response.ok ? await response.json<{ charged?: boolean; chargeId?: string }>().catch(() => null) : null;
+  if (receipt?.charged !== true || receipt.chargeId !== request.chargeId) throw new Error("budget charge was not acknowledged");
 }
 
 export async function settleLedger(env: Env, objectName: string, request: BudgetSettleRequest, signal?: AbortSignal): Promise<void> {
@@ -322,34 +340,34 @@ async function currentUsageSnapshot(env: Env, tenantId: string, policyId: string
   return response.json<UsageSnapshot>();
 }
 
-export async function budgetStatus(env: Env, policyId: string, policy: { tenantId?: string | null; monthlyBudgetMicros?: number | null; dailyBudgetMicros?: number | null; weeklyBudgetMicros?: number | null; budgetScope?: "policy" | "principal" }, principal?: string | null) {
+export async function budgetStatus(env: Env, policyId: string, policy: { tenantId?: string | null; monthlyBudgetMicros?: number | null; dailyBudgetMicros?: number | null; weeklyBudgetMicros?: number | null; budgetScope?: "policy" | "principal"; budgetOverride?: import("./types").BudgetOverride }, principal?: string | null, override = policy.budgetOverride, observeUncapped = false) {
   const at = Date.now();
   const [monthly, daily, weekly] = await Promise.all([
-    budgetWindowStatus(env, policyId, policy, principal, "monthly", at),
-    budgetWindowStatus(env, policyId, { ...policy, monthlyBudgetMicros: policy.dailyBudgetMicros }, principal, "daily", at),
-    budgetWindowStatus(env, policyId, { ...policy, monthlyBudgetMicros: policy.weeklyBudgetMicros }, principal, "weekly", at),
+    budgetWindowStatus(env, policyId, policy, principal, "monthly", at, observeUncapped),
+    budgetWindowStatus(env, policyId, { ...policy, monthlyBudgetMicros: policy.dailyBudgetMicros }, principal, "daily", at, observeUncapped),
+    budgetWindowStatus(env, policyId, { ...policy, monthlyBudgetMicros: policy.weeklyBudgetMicros }, principal, "weekly", at, observeUncapped),
   ]);
   const date = new Date(at);
-  return { ...monthly, resetsAt: new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1)).toISOString(), daily: { ...daily, resetsAt: nextDailyReset(at) }, weekly: { ...weekly, resetsAt: nextWeeklyReset(at) } };
+  return { ...monthly, ...(override ? { override: Object.hasOwn(override, "monthlyBudgetMicros") } : {}), resetsAt: new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth() + 1, 1)).toISOString(), daily: { ...daily, ...(override ? { override: Object.hasOwn(override, "dailyBudgetMicros") } : {}), resetsAt: nextDailyReset(at) }, weekly: { ...weekly, ...(override ? { override: Object.hasOwn(override, "weeklyBudgetMicros") } : {}), resetsAt: nextWeeklyReset(at) } };
 }
 
-async function budgetWindowStatus(env: Env, policyId: string, policy: { tenantId?: string | null; monthlyBudgetMicros?: number | null; budgetScope?: "policy" | "principal" }, principal?: string | null, window: "monthly" | "daily" | "weekly" = "monthly", at = Date.now()) {
+async function budgetWindowStatus(env: Env, policyId: string, policy: { tenantId?: string | null; monthlyBudgetMicros?: number | null; budgetScope?: "policy" | "principal"; budgetOverride?: import("./types").BudgetOverride }, principal?: string | null, window: "monthly" | "daily" | "weekly" = "monthly", at = Date.now(), observeUncapped = false) {
   const limit = policy.monthlyBudgetMicros;
-  if (limit == null) return { configured: false, ledger: "unmetered", windowKey: null, limitMicros: null, spentMicros: null, remainingMicros: null };
+  if (limit == null && !policy.budgetOverride && !observeUncapped) return { configured: false, ledger: "unmetered", windowKey: null, limitMicros: null, spentMicros: null, remainingMicros: null };
   if (policy.budgetScope === "principal" && !principal) return { configured: true, ledger: "per_principal", windowKey: null, limitMicros: limit, spentMicros: null, remainingMicros: null };
   const address = (window === "weekly" ? weeklyBudgetLedgerAddress : window === "daily" ? dailyBudgetLedgerAddress : budgetLedgerAddress)(policyId, policy, principal, at);
-  if (limit === 0) return { configured: true, ledger: "blocked", windowKey: address.windowKey, limitMicros: 0, spentMicros: 0, remainingMicros: 0 };
+  if (limit === 0 && !policy.budgetOverride && !observeUncapped) return { configured: true, ledger: "blocked", windowKey: address.windowKey, limitMicros: 0, spentMicros: 0, remainingMicros: 0 };
   try {
     const stub = env.BUDGET_LEDGER.get(env.BUDGET_LEDGER.idFromName(address.objectName));
     const url = new URL("https://clawrouter.internal/status");
-    url.searchParams.set("policy_id", address.policyId); url.searchParams.set("window_key", address.windowKey); url.searchParams.set("limit_micros", String(limit));
+    url.searchParams.set("policy_id", address.policyId); url.searchParams.set("window_key", address.windowKey); url.searchParams.set("limit_micros", String(limit ?? Number.MAX_SAFE_INTEGER));
     url.searchParams.set("scope_key", address.scopeKey);
     const response = await stub.fetch(url);
     if (!response.ok) throw new Error(`budget status returned ${response.status}`);
     const status = await response.json<{ spentMicros: number; remainingMicros: number }>();
-    return { configured: true, ledger: "durable_object", windowKey: address.windowKey, limitMicros: limit, spentMicros: status.spentMicros, remainingMicros: status.remainingMicros };
+    return { configured: limit != null, ledger: limit == null ? "unmetered" : "durable_object", windowKey: address.windowKey, limitMicros: limit ?? null, spentMicros: status.spentMicros, remainingMicros: limit == null ? null : status.remainingMicros };
   } catch {
-    return { configured: true, ledger: "unavailable", windowKey: address.windowKey, limitMicros: limit, spentMicros: null, remainingMicros: null };
+    return { configured: limit != null, ledger: "unavailable", windowKey: address.windowKey, limitMicros: limit, spentMicros: null, remainingMicros: null };
   }
 }
 

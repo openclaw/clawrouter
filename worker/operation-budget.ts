@@ -15,7 +15,9 @@ export function operationAffordability(auth: AuthorizedIdentity, connection: Pro
   // allowance is not a claim that every real request fits the observed balance.
   const cost = estimateCost(model, {}, auth.policy.requestCostMicros, capability, endpoint);
   try {
-    if (!validateBudgetReservation(capability, cost, auth.policy.monthlyBudgetMicros, connection, auth.policy.dailyBudgetMicros, auth.policy.limitHint, auth.policy.weeklyBudgetMicros)) return { status: "exact-covered" };
+    if (auth.policy.budgetMode === "soft") {
+      if (capability === "llm.count_tokens") return { status: "exact-covered" };
+    } else if (!validateBudgetReservation(capability, cost, auth.policy.monthlyBudgetMicros, connection, auth.policy.dailyBudgetMicros, auth.policy.limitHint, auth.policy.weeklyBudgetMicros)) return { status: "exact-covered" };
   } catch (error) {
     if (error instanceof HttpError) return { status: "exact-blocked", reasonCode: error.code };
     throw error;
@@ -25,7 +27,7 @@ export function operationAffordability(auth: AuthorizedIdentity, connection: Pro
   const bounds = model?.pricing ? modelReservationBounds(model.pricing) : null;
   const exact = cost.basis === "policy_fixed" ? cost.reserveMicros : bounds?.zero ? 0 : null;
   const minimum = exact ?? bounds?.minimumMicros ?? 0;
-  if (exact === 0) return { status: "exact-covered" };
+  if (exact === 0 && auth.policy.budgetMode !== "soft") return { status: "exact-covered" };
   if (!observation) return { status: "request-dependent" };
   for (const [limit, remaining, reasonCode] of [
     [auth.policy.monthlyBudgetMicros, observation.policyRemaining, "budget_exhausted"],
@@ -33,7 +35,7 @@ export function operationAffordability(auth: AuthorizedIdentity, connection: Pro
     [auth.policy.weeklyBudgetMicros, observation.weeklyRemaining, "weekly_budget_exhausted"],
     [connection.monthlyBudgetMicros, observation.providerRemaining, "provider_budget_exhausted"],
   ] as const) {
-    if (limit != null && remaining != null && remaining < minimum) return { status: "exact-blocked", reasonCode };
+    if (limit != null && remaining != null && (auth.policy.budgetMode === "soft" ? remaining <= 0 : remaining < minimum)) return { status: "exact-blocked", reasonCode };
   }
   const known = (auth.policy.monthlyBudgetMicros == null || observation.policyRemaining != null)
     && (auth.policy.dailyBudgetMicros == null || observation.dailyRemaining != null)

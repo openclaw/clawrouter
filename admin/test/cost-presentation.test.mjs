@@ -1,6 +1,14 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { formatMicros, presentAccountedSpend, presentAllowanceWindows, presentBudget, presentCost, presentPolicyBudget, presentProviderBudget } from "../src/cost-presentation.ts";
+import { formatMicros, parseBudgetUsd, presentAccountedSpend, presentAllowanceWindows, presentBudget, presentCost, presentPolicyBudget, presentProviderBudget } from "../src/cost-presentation.ts";
+
+test("cap USD input preserves micro precision and rejects invalid or unsafe values", () => {
+  assert.equal(parseBudgetUsd("1.000001"), 1_000_001);
+  assert.equal(parseBudgetUsd("0"), 0);
+  assert.equal(parseBudgetUsd("0.000001"), 1);
+  assert.equal(parseBudgetUsd("9007199254.740991"), Number.MAX_SAFE_INTEGER);
+  for (const input of ["", "-1", "1e3", "0.0000001", "9007199254.740992"]) assert.ok(Number.isNaN(parseBudgetUsd(input)));
+});
 
 test("allowances show only configured windows including weekly capacity and reset", () => {
   const weekly = { configured: true, ledger: "durable_object", spentMicros: 1_000_000, limitMicros: 5_000_000_000, remainingMicros: 4_999_000_000, resetsAt: "2026-10-19T00:00:00.000Z" };

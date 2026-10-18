@@ -81,6 +81,7 @@ export function usePolicyAdmin({ request, allowDemo, gatewayOrigin, session, dem
         limitHint: policyForm.limitHint.trim() || null,
         requestCostMicros: optionalNumber(policyForm.requestCostMicros) ?? null,
         budgetScope: policyForm.budgetScope,
+        budgetMode: policyForm.budgetMode,
         retainRequestContent: policyForm.retainRequestContent,
         grantRouting: {
           strategy: policyForm.grantStrategy,

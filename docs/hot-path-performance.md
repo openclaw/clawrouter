@@ -1,5 +1,61 @@
 # Hot-path review and local load evidence
 
+## Soft-budget instrumentation (2026-10-18)
+
+Ordinary proxied HTTP inference exposes three `Server-Timing` durations in
+milliseconds, with no identities or request content:
+
+| Metric | Interval |
+| --- | --- |
+| `cr-admission` | Authentication/admission, including policy and owner resolution; Access sessions also include their existing policy selection |
+| `cr-budget` | Foreground budget wait: reserve/dispatch time in reserve mode; only the post-header wait in soft mode, normally zero |
+| `cr-upstream-ttfb` | Initial upstream dispatch to final selected upstream headers, including any rejected attempt and failover |
+
+Soft mode starts all configured ledger observations concurrently with upstream
+fetch. It waits at most **50 ms** after final upstream headers if those reads
+remain pending; errors and timeouts fail open. The timing does not include
+response-body generation or the later asynchronous charge. Credential
+materialization, required content retention and continuation publication retain
+their existing ordering; these metrics are not a complete partition of request
+time. See [soft-budget semantics and reserve-only paths](agent-spend-control.md#soft-budgets-and-dynamic-caps).
+
+### Measured local comparison
+
+Sequential cells on the same checkout, 100 measured Messages requests per cell,
+concurrency 1, seven subscription owners, 70 sessions, `max_tokens=16`, and a
+fixed **200 ms** artificial upstream TTFB. Seven warm-up requests precede each
+cell. Added latency is end-to-end total minus that 200 ms delay; it includes
+loopback transport, response processing, scheduling and local SQLite work.
+
+```sh
+pnpm loadtest:local --requests 100 --concurrency 1 --delay-ms 200 \
+  --max-tokens 16 --scenarios messages --budget-window weekly \
+  --budget-mode soft --out soft-budget-soft-local.json
+```
+
+Repeat with `--budget-mode none` and `--budget-mode reserve` for the other cells.
+
+| Policy | Added p50 (ms) | Added p95 (ms) | Ledger calls per measured request |
+| --- | ---: | ---: | --- |
+| Unbudgeted | 28.2 | 389.5 | None |
+| Reserve, weekly window | 47.9 | 485.2 | 1 reserve + 1 dispatch + 1 settle |
+| Soft, weekly window | 40.1 | 410.4 | 1 concurrent status + 1 off-response charge |
+
+All 300 requests returned 200 with zero unexpected errors. Each cell reconciled
+100 selections, 100 upstream requests and 100 persisted usage events, with one
+foreground admission per request. Soft had no reserve/dispatch calls. Raw
+reports: [unbudgeted](performance/soft-budget-none-local.json),
+[reserve](performance/soft-budget-reserve-local.json),
+[soft](performance/soft-budget-soft-local.json).
+
+Soft removed the foreground budget RPCs and its tail was close to unbudgeted
+in this sample. This is **not an idle-host or production speedup claim**:
+the shared host's load averages were 89.58 / 93.50 / 95.63 near completion,
+and the hundreds-of-milliseconds tail exceeds the budget protocol work itself.
+The task's browser suite was stopped before measurement; unrelated host work
+remained. Use the timing headers and repeat this fixture on a quiet host or an
+approved synthetic edge deployment to isolate the network savings.
+
 The [combined admission follow-up](#combined-admission-follow-up-2026-10-11)
 implements the first finding and part of findings 3/6. The original review and
 measurements below remain as historical evidence; the follow-up records current

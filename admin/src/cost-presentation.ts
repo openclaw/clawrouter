@@ -1,5 +1,12 @@
 import type { AdminUsageRow, BudgetStatus, ProviderConnection, UsageSummary } from "./ui-types";
 
+export function parseBudgetUsd(value: string): number {
+  const match = value.trim().match(/^(\d+)(?:\.(\d{0,6}))?$/);
+  if (!match) return NaN;
+  const micros = Number(match[1]) * 1_000_000 + Number((match[2] ?? "").padEnd(6, "0"));
+  return Number.isSafeInteger(micros) ? micros : NaN;
+}
+
 export function formatMicros(value: number | null | undefined): string {
   if (value == null) return "Unknown";
   if (value === 0) return "$0.00";
@@ -23,12 +30,12 @@ export function presentCost(micros: number, basis: string | null | undefined, re
     // Historical and future strings remain readable without inventing a basis.
     default: label = "Accounting basis unavailable";
   }
-  return { value: unavailable ? "Price unavailable" : formatMicros(micros), label, unavailable };
+  return { value: unavailable ? micros > 0 ? `${formatMicros(micros)} + unpriced usage` : "Price unavailable" : formatMicros(micros), label, unavailable };
 }
 
 export function presentAccountedSpend(summary: Pick<UsageSummary, "requestCount" | "actualCostMicros" | "unpricedRequestCount">, complete = true) {
   const { requestCount, actualCostMicros, unpricedRequestCount } = summary;
-  const allUnpriced = requestCount > 0 && unpricedRequestCount === requestCount;
+  const allUnpriced = actualCostMicros === 0 && requestCount > 0 && unpricedRequestCount === requestCount;
   const value = allUnpriced ? "Price unavailable" : `${complete ? "" : "≥"}${formatMicros(actualCostMicros)}${unpricedRequestCount ? ` accounted; ${unpricedRequestCount} unpriced` : ""}`;
   // Aggregates have no basis breakdown. The bounded event sample cannot supply one.
   const note = ["May include estimates", unpricedRequestCount == null ? "price coverage unavailable" : unpricedRequestCount ? `${unpricedRequestCount} unpriced calls excluded` : "", complete ? "" : "partial call history"].filter(Boolean).join(" · ");
@@ -68,8 +75,8 @@ export function presentPolicyBudget(row: AdminUsageRow) {
 export function presentAllowanceWindows(budget: BudgetStatus) {
   return ([
     ["Today", budget.daily], ["This week", budget.weekly], ["This month", budget],
-  ] as const).filter((entry): entry is typeof entry & readonly [string, BudgetStatus] => entry[1]?.configured === true)
-    .map(([label, window]) => ({ label, text: `${label}: ${formatMicros(window.spentMicros)} used / ${formatMicros(window.limitMicros)} limit · ${formatMicros(window.remainingMicros)} remaining${window.resetsAt ? ` · resets ${window.resetsAt}` : ""}` }));
+  ] as const).filter((entry): entry is typeof entry & readonly [string, BudgetStatus] => (entry[1]?.configured === true || entry[1]?.override === true))
+    .map(([label, window]) => ({ label, text: `${label}: ${formatMicros(window.spentMicros)} used / ${window.limitMicros == null ? "unlimited" : `${formatMicros(window.limitMicros)} limit`} · ${window.limitMicros == null ? "no cap" : `${formatMicros(window.remainingMicros)} remaining`}${window.override ? " · member override" : ""}${window.resetsAt ? ` · resets ${window.resetsAt}` : ""}` }));
 }
 
 export function presentProviderBudget(connection: ProviderConnection) {

@@ -1,3 +1,5 @@
+import { effectiveBudgetPolicy } from "./budget-overrides.ts";
+import { recordAdmissionDuration } from "./admission-timing.ts";
 import { allowedServiceTiers } from "../shared/service-tiers.ts";
 import { snapshot } from "./providers.ts";
 import { budgetStatus } from "./ledgers.ts";
@@ -22,6 +24,7 @@ export function proxySessionHash(identity: AuthorizedIdentity): string | undefin
 export function proxyKeyVerification(identity: AuthorizedIdentity): ProxyKeyVerification | undefined { return verifiedKeys.get(identity); }
 
 export async function authenticateProxyKey(headers: Headers, env: Env, providers: AdmissionProvider[] = [], allConnections = false, sessionId?: string | null, selection?: AdmissionSelection): Promise<AuthorizedIdentity | Response> {
+  const admissionStart = performance.now();
   const parsed = proxyKeyFromHeaders(headers);
   if (!parsed) return errorResponse("invalid_proxy_key", "a valid ClawRouter proxy key is required", 401);
   const secretSha256 = await sha256Hex(parsed.secret);
@@ -48,9 +51,10 @@ export async function authenticateProxyKey(headers: Headers, env: Env, providers
     principalId: credentialEntry.credential.principalId ?? null,
     authType: "proxy_key",
     policyId: credentialEntry.credential.policyId,
-    policy: policyEntry!.policy,
+    policy: effectiveBudgetPolicy(credentialEntry.credential.policyId, policyEntry!.policy, owner?.record.budgetOverrides),
     contentRetentionDisabled: owner?.record.contentRetentionDisabled ?? false,
   };
+  recordAdmissionDuration(identity, admissionStart);
   verifiedKeys.set(identity, Object.freeze({ kind: "proxy_key", credentialId: parsed.kid, principalId: identity.principalId, secretSha256, expiresAt: credentialEntry.credential.expiresAt }));
   admissions.set(identity, admission);
   if (selection) admissionRequests.set(identity, selection);
@@ -80,7 +84,7 @@ export async function admittedGrantSelection(auth: AuthorizedIdentity, env: Env,
   auth.serviceTiers = admission.credential.credential.serviceTiers;
   auth.principalId = admission.credential.credential.principalId ?? null;
   auth.policyId = admission.policy!.policyId;
-  auth.policy = admission.policy!.policy;
+  auth.policy = effectiveBudgetPolicy(auth.policyId, admission.policy!.policy, admission.owner?.record.budgetOverrides);
   admissions.set(auth, admission);
   return admission.selection;
 }

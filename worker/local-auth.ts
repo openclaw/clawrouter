@@ -105,6 +105,7 @@ function localAccessSession(record: LocalSessionRecord, user: AccessControlUser,
     tenantId: user.record.tenantId ?? env.CLAWROUTER_ACCESS_DEFAULT_TENANT ?? "default",
     groups: [...new Set(user.record.groups ?? [])].sort(),
     contentRetentionDisabled: user.record.contentRetentionDisabled ?? false,
+    budgetOverrides: user.record.budgetOverrides,
   };
 }
 

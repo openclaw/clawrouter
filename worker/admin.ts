@@ -1,3 +1,5 @@
+import { budgetCapsCall } from "./authority-budgets.ts";
+import { effectiveBudgetPolicy, normalizeBudgetOverride } from "./budget-overrides.ts";
 import { normalizePolicyTiers } from "./service-tiers.ts";
 import { normalizeLimitHint } from "./policy-limits.ts";
 import { authorizeAdmin } from "./access";
@@ -38,6 +40,20 @@ export async function adminApi(request: Request, env: Env, path: string): Promis
     if (request.method === "GET" && path === "/v1/admin/bootstrap") return privateJson(await adminBootstrap(env));
     if (request.method === "GET" && path === "/v1/admin/overview") return privateJson(await overview(env));
     if (request.method === "GET" && ["/v1/admin/tenants", "/v1/admin/users"].includes(path)) return privateJson({ tenants: await tenants(env) });
+    if (request.method === "GET" && path === "/v1/admin/caps") {
+      const [policies, users] = await Promise.all([listPolicies(env), listUsers(env)]);
+      // Show retained debt even when an administrator has removed or zeroed a cap.
+      const rows = await Promise.all(policies.map(async entry => ({ policy: policyResponse(entry), members: entry.policy.budgetScope === "principal" ? await Promise.all(users.map(async user => ({ email: user.email, budget: await policyBudgetStatus(env, entry.policyId, effectiveBudgetPolicy(entry.policyId, entry.policy, user.record.budgetOverrides), user.email, undefined, true) }))) : [] })));
+      return privateJson({ rows, users: users.map(userResponse) });
+    }
+    const capRoute = path.match(/^\/v1\/admin\/policies\/([^/]+)\/budget-limits$/);
+    if (capRoute && request.method === "PUT") {
+      const policyId = cleanId(decodePathSegment(capRoute[1]));
+      const limits = normalizeBudgetOverride(await readJson<unknown>(request));
+      await listPolicies(env);
+      const entry = await budgetCapsCall<AccessPolicyEntry>(env, "/policies/budget-limits", { policyId, limits });
+      return privateJson(policyResponse(entry));
+    }
     if (request.method === "GET" && path === "/v1/admin/usage") return adminUsage(env);
     if (request.method === "GET" && path === "/v1/admin/policies") return privateJson({ policies: (await listPolicies(env)).map(policyResponse) });
     if (request.method === "GET" && path === "/v1/admin/credentials") return privateJson({ credentials: await credentialResponses(env) });
@@ -65,6 +81,16 @@ export async function adminApi(request: Request, env: Env, path: string): Promis
     if (path === "/v1/admin/fusion" && request.method === "PUT") return privateJson(await storeFusionConfig(env, await readJson<unknown>(request)));
     if (path.startsWith("/v1/admin/assignment-rules/") && request.method === "PUT") return putAssignmentRule(request, env, path.slice("/v1/admin/assignment-rules/".length));
     if (path.startsWith("/v1/admin/access-user-grants/") && request.method === "PUT") return putUserGrants(request, env, path.slice("/v1/admin/access-user-grants/".length));
+    const overrideRoute = path.match(/^\/v1\/admin\/access-users\/([^/]+)\/budget-overrides\/([^/]+)$/);
+    if (overrideRoute && request.method === "PUT") {
+      const email = normalizeEmail(decodePathSegment(overrideRoute[1]));
+      const policyId = cleanId(decodePathSegment(overrideRoute[2]));
+      if (!email || !policyId) throw new HttpError(400, "invalid_budget_override", "valid user and policy are required");
+      await Promise.all([listUsers(env), listPolicies(env)]);
+      const limits = normalizeBudgetOverride(await readJson<unknown>(request));
+      const user = await budgetCapsCall<AccessControlUser>(env, "/users/budget-override", { email, policyId, limits, updatedBy: authorization.email, expectedUpdatedAt: request.headers.get("if-match") });
+      return privateJson(userResponse(user));
+    }
     if (path.startsWith("/v1/admin/access-users/") && request.method === "PUT") return putUser(request, env, path.slice("/v1/admin/access-users/".length));
     if (path.startsWith("/v1/admin/policies/")) return policyMutation(request, env, path.slice("/v1/admin/policies/".length));
     if (path === "/v1/admin/credentials" || path.startsWith("/v1/admin/credentials/")) return await credentialMutationResponse(request, env, path === "/v1/admin/credentials" ? null : path.slice("/v1/admin/credentials/".length), authorization, "admin");
@@ -208,14 +234,14 @@ function tenantsFrom(policies: AccessPolicyEntry[], credentials: ProxyCredential
 async function adminUsage(env: Env): Promise<Response> {
   const [policies, credentials, users, bindings] = await Promise.all([listPolicies(env), listCredentials(env), listUsers(env), listBindings(env)]);
   const principals = budgetPrincipalsByPolicy(credentials, users, bindings);
-  const rows = await Promise.all(policies.map(async (entry) => ({ ...legacyKeyResponse(entry), budget: await adminBudgetStatus(env, entry, principals.get(entry.policyId) ?? []) })));
+  const rows = await Promise.all(policies.map(async (entry) => ({ ...legacyKeyResponse(entry), budget: await adminBudgetStatus(env, entry, principals.get(entry.policyId) ?? [], users) })));
   return privateJson({ policies: rows, keys: rows, usage: await usageSnapshots(env, policies.map((entry) => ({ policyId: entry.policyId, tenantId: entry.policy.tenantId ?? "default" })), { kind: "admin" }) });
 }
 
-export async function adminBudgetStatus(env: Env, entry: AccessPolicyEntry, principals: string[]) {
+export async function adminBudgetStatus(env: Env, entry: AccessPolicyEntry, principals: string[], users: AccessControlUser[] = []) {
   const status = await policyBudgetStatus(env, entry.policyId, entry.policy);
-  if (status.ledger !== "per_principal" && status.daily.ledger !== "per_principal" && status.weekly.ledger !== "per_principal") return status;
-  const breakdown = await Promise.all(principals.map(async (principal) => ({ principal, ...await policyBudgetStatus(env, entry.policyId, entry.policy, principal) })));
+  if (entry.policy.budgetScope !== "principal") return status;
+  const breakdown = await Promise.all(principals.map(async (principal) => ({ principal, ...await policyBudgetStatus(env, entry.policyId, effectiveBudgetPolicy(entry.policyId, entry.policy, users.find(user => user.email === principal)?.record.budgetOverrides), principal, users.find(user => user.email === principal)?.record.budgetOverrides?.[entry.policyId]) })));
   return { ...status, breakdown, daily: { ...status.daily, breakdown: breakdown.map(({ principal, daily }) => ({ principal, ...daily })) }, weekly: { ...status.weekly, breakdown: breakdown.map(({ principal, weekly }) => ({ principal, ...weekly })) } };
 }
 
@@ -517,10 +543,12 @@ export function normalizePolicy(
   const weeklyBudgetMicros = normalizeBudgetValue(body.weeklyBudgetMicros, "weeklyBudgetMicros");
   const limitHint = normalizeLimitHint(body.limitHint === undefined ? existing?.limitHint : body.limitHint);
   const requestCostMicros = normalizeBudgetValue(body.requestCostMicros, "requestCostMicros");
+  const budgetMode = body.budgetMode === undefined ? existing?.budgetMode : body.budgetMode;
+  if (budgetMode !== undefined && budgetMode !== "reserve" && budgetMode !== "soft") throw new HttpError(400, "invalid_policy", "budgetMode must be reserve or soft");
   const budgetScope = body.budgetScope ?? existing?.budgetScope ?? "policy";
   if (budgetScope !== "policy" && budgetScope !== "principal") throw new HttpError(400, "invalid_policy", "budgetScope must be policy or principal");
   const grantRouting = normalizeGrantRouting(body.grantRouting, existing?.grantRouting);
-  return { enabled: policyBoolean(body.enabled, "enabled", true), generation: existing?.generation ?? randomId("policy"), providers, models, poolStatus, tenantId: policyString(body.tenantId, "tenantId", "default"), tokenRole: policyString(body.tokenRole, "tokenRole", "service"), monthlyBudgetMicros, dailyBudgetMicros, weeklyBudgetMicros, serviceTiers, limitHint, requestCostMicros, budgetScope, retainRequestContent: policyBoolean(body.retainRequestContent, "retainRequestContent", existing?.retainRequestContent ?? retainRequestContentDefault), grantRouting };
+  return { enabled: policyBoolean(body.enabled, "enabled", true), generation: existing?.generation ?? randomId("policy"), providers, models, poolStatus, tenantId: policyString(body.tenantId, "tenantId", "default"), tokenRole: policyString(body.tokenRole, "tokenRole", "service"), monthlyBudgetMicros, dailyBudgetMicros, weeklyBudgetMicros, serviceTiers, limitHint, requestCostMicros, budgetScope, ...(budgetMode === undefined ? {} : { budgetMode }), retainRequestContent: policyBoolean(body.retainRequestContent, "retainRequestContent", existing?.retainRequestContent ?? retainRequestContentDefault), grantRouting };
 }
 
 function normalizeGrantRouting(value: unknown, existing?: AccessPolicy["grantRouting"]): AccessPolicy["grantRouting"] {
@@ -667,9 +695,9 @@ function normalizeGrantMaintenance(value: unknown, existing: UpstreamGrant["main
   return { keepWarm: body.keepWarm === true };
 }
 
-function policyResponse(entry: AccessPolicyEntry) { return { policyId: entry.policyId, enabled: entry.policy.enabled, providers: entry.policy.providers, models: entry.policy.models ?? null, poolStatus: entry.policy.poolStatus ?? "hidden", tenantId: entry.policy.tenantId ?? null, tokenRole: entry.policy.tokenRole ?? null, monthlyBudgetMicros: entry.policy.monthlyBudgetMicros ?? null, dailyBudgetMicros: entry.policy.dailyBudgetMicros ?? null, weeklyBudgetMicros: entry.policy.weeklyBudgetMicros ?? null, serviceTiers: entry.policy.serviceTiers ?? null, limitHint: entry.policy.limitHint ?? null, requestCostMicros: entry.policy.requestCostMicros ?? null, budgetScope: entry.policy.budgetScope ?? "policy", retainRequestContent: entry.policy.retainRequestContent !== false, grantRouting: grantRoutingPolicy(entry.policy.grantRouting) }; }
+function policyResponse(entry: AccessPolicyEntry) { return { policyId: entry.policyId, enabled: entry.policy.enabled, providers: entry.policy.providers, models: entry.policy.models ?? null, poolStatus: entry.policy.poolStatus ?? "hidden", tenantId: entry.policy.tenantId ?? null, tokenRole: entry.policy.tokenRole ?? null, monthlyBudgetMicros: entry.policy.monthlyBudgetMicros ?? null, dailyBudgetMicros: entry.policy.dailyBudgetMicros ?? null, weeklyBudgetMicros: entry.policy.weeklyBudgetMicros ?? null, serviceTiers: entry.policy.serviceTiers ?? null, limitHint: entry.policy.limitHint ?? null, requestCostMicros: entry.policy.requestCostMicros ?? null, budgetScope: entry.policy.budgetScope ?? "policy", ...(entry.policy.budgetMode === undefined ? {} : { budgetMode: entry.policy.budgetMode }), retainRequestContent: entry.policy.retainRequestContent !== false, grantRouting: grantRoutingPolicy(entry.policy.grantRouting) }; }
 function legacyKeyResponse(entry: AccessPolicyEntry) { return { kid: entry.policyId, ...policyResponse(entry) }; }
-function userResponse(user: AccessControlUser) { return { email: user.email, role: "user" as const, tenantId: user.record.tenantId ?? "default", enabled: user.record.enabled ?? true, groups: user.record.groups ?? [], contentRetentionDisabled: user.record.contentRetentionDisabled ?? false }; }
+function userResponse(user: AccessControlUser) { return { ...(user.record.budgetOverrides ? { budgetOverrides: user.record.budgetOverrides } : {}), email: user.email, role: "user" as const, tenantId: user.record.tenantId ?? "default", enabled: user.record.enabled ?? true, groups: user.record.groups ?? [], contentRetentionDisabled: user.record.contentRetentionDisabled ?? false }; }
 function grantResponse(key: string, grant: UpstreamGrant) {
   const parts = key.split("/"), tenant = parts[1] === "tenants";
   const refresh = grant.refresh ?? snapshot.providers.find((provider) => provider.id === grant.provider)?.auth.refresh;
