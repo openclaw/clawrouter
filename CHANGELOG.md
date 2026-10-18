@@ -5,7 +5,7 @@
 - Add OpenAI GPT-6.1 Sol with versioned Standard, Fast/Priority, Flex, and Ultrafast prices, cache and long-context rates, reasoning controls, and Chat token-limit normalization.
 - Expire new proxy keys by default, support renewal of expired enabled keys, and let administrators stamp legacy expiries.
 - Enforce independent UTC daily policy/principal budgets across keys with multi-leg reservation rollback and daily status.
-- Allow Default/Flex/Fast by default and deny Ultrafast/unknown OpenAI tiers even without budgets; add policy/model/key tier controls.
+- Allow Default/Flex/Fast by default and deny Ultrafast/unknown OpenAI tiers even without budgets; add policy/model/key tier controls and explicitly request Default for omitted/auto OpenAI API tiers so reservations use Default rates.
 - Include policy steering hints in budget, tier and model refusals and session entitlements.
 - Add console validity/performance choices, expiry warnings, renewal, daily allowances and administrator limit controls.
 - Add dry-run-first `cf:members` provisioning for member policies and GitHub organization assignments.

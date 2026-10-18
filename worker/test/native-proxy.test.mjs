@@ -288,7 +288,7 @@ test("opaque OpenAI models route through the requested unified and native operat
       assert.equal(response.status, 200, `${path} unified=${unified}`);
       await response.text(); await fixture.drain();
       assert.equal(sent.at(-1).url.pathname, path);
-      assert.deepEqual(sent.at(-1).body, { ...input, model });
+      assert.deepEqual(sent.at(-1).body, { ...input, model, ...(path === "/v1/embeddings" ? {} : { service_tier: "default" }) });
     }
   }
   fixture.policy.monthlyBudgetMicros = 1_000_000;

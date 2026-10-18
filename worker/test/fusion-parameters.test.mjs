@@ -95,7 +95,7 @@ test("direct public, native and manifest requests keep explicit unsupported fiel
     const response = await f.callRaw(path, input);
     assert.equal(response.status, 200);
     await response.text(); await f.drain();
-    assert.deepEqual(sent.at(-1), { ...body, model: "gpt-6-astra" });
+    assert.deepEqual(sent.at(-1), { ...body, model: "gpt-6-astra", service_tier: "default" });
   }
 });
 

@@ -17,7 +17,7 @@ const now = Date.parse("2026-10-18T12:00:00Z"), day = 86_400_000;
 const body = { credentialId: "member_key", policyId: "maintainer_access", secretSha256: digest };
 const cost = { reserveMicros: 60, basis: "policy_fixed", inputTokens: null, outputTokens: null };
 const auth = { policyId: "member", credentialId: "first_key", principalId: "member@example.com", authType: "proxy_key", policy: { ...policy, monthlyBudgetMicros: 500, dailyBudgetMicros: 100, limitHint: "Use the team server." } };
-const selection = (tier, model = "openai/gpt-6.1-sol", format = "openai.responses") => ({ endpoint: { request_format: format }, model: { id: model }, body: tier === undefined ? {} : { service_tier: tier } });
+const selection = (tier, model = "openai/gpt-6.1-sol", format = "openai.responses") => ({ provider: { id: model.split("/")[0] }, endpoint: { request_format: format }, model: { id: model }, body: tier === undefined ? {} : { service_tier: tier } });
 
 test("TTL defaults, personal/admin bounds, configuration, and UTC syntax", () => {
   assert.equal(credentialExpiry(undefined, {}, "personal", now), new Date(now + 180 * day).toISOString());

@@ -15,6 +15,7 @@ test("Fusion settles the final body estimate while retaining both original reser
   const body = { model: "clawrouter/fusion", messages: [{ role: "user", content: "fixture" }], max_tokens: 32 };
   const route = modelRoute(config.aggregatorModel, "llm.chat");
   const prepared = concreteOpenAiSelection("/v1/chat/completions", buildAggregatorBody(body, config, buildFusionReservationProposals(config)), {});
+  prepared.body = { ...prepared.body, service_tier: "default" };
   const initial = estimateCost(route.model, prepared.body, null, "llm.chat", prepared.endpoint);
   const env = usageEnv([], { limit: 1_000_000, fixedCost: null, retainContent: false });
   env.OPENAI_API_KEY = "fixture-openai-key";

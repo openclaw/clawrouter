@@ -407,17 +407,17 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
 async function reserveSelected(request: Request, env: Env, context: ExecutionContext, mode: AuthMode, selection: ProxySelection, preauthenticated: AuthorizedIdentity | null, compound?: CompoundRequestContext): Promise<ReservedProxyBudget | Response> {
   const auth = await selectedAuth(request, env, mode, selection, preauthenticated);
   if (auth instanceof Response) return auth;
-  const accounting = createProxyAccounting({ context, env, auth, selection, request, compound });
-  const { cost } = accounting;
   let prepared: PreparedUpstream;
   try {
     prepared = await prepareSelected(request, env, selection, {}, auth, new Set(), false);
   } catch (error) {
     const failure = selectedFailure(error);
     const status = failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error";
-    accounting.fail(failure.status, status);
+    createProxyAccounting({ context, env, auth, selection, request, compound }).fail(failure.status, status);
     return errorResponse(failure.code, failure.message, failure.status);
   }
+  const accounting = createProxyAccounting({ context, env, auth, selection, request, compound });
+  const { cost } = accounting;
   try {
     const reservation = await reserveBudget(env, auth, selection.capability, cost, prepared.connection);
     return { auth, reservation, cost, providerId: selection.provider.id, modelId: selection.model?.id ?? null, capability: selection.capability, connection: prepared.connection };
@@ -450,7 +450,7 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_not_configured", "provider is not configured"); }
   try {
     assertPolicyModel(auth.policy, selection);
-    assertServiceTier(auth, selection);
+    assertServiceTier(auth, selection, upstream.transport);
     const lifecycle = { provider: selection.provider, endpoint: selection.endpoint, mode: transport, responsesLifecycle: true };
     // Decide once from the materialized transport, before reservation. An
     // ordinary failover cannot promote an already reserved request into a job.

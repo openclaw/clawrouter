@@ -1,5 +1,5 @@
 import { allowedServiceTiers, normalizeServiceTier, type PolicyServiceTiers } from "../shared/service-tiers.ts";
-import type { AuthorizedIdentity } from "./types";
+import type { AuthorizedIdentity, CompiledGrantTransport } from "./types";
 import type { ProxySelection } from "./proxy-selection";
 import { extractServiceTier } from "./token-usage.ts";
 import { withLimitHint } from "./policy-limits.ts";
@@ -24,7 +24,7 @@ export function normalizePolicyTiers(value: unknown, catalog: ReadonlySet<string
   }
   return { allowed, models };
 }
-export function assertServiceTier(auth: Pick<AuthorizedIdentity, "policy" | "serviceTiers">, selection: Pick<ProxySelection, "endpoint" | "model" | "body">): void {
+export function assertServiceTier(auth: Pick<AuthorizedIdentity, "policy" | "serviceTiers">, selection: Pick<ProxySelection, "provider" | "endpoint" | "model" | "body">, transport?: CompiledGrantTransport | null): void {
   if (!selection.endpoint.request_format.startsWith("openai.") || Array.isArray(selection.body)) return;
   const body = selection.body;
   const raw = body.service_tier;
@@ -35,4 +35,10 @@ export function assertServiceTier(auth: Pick<AuthorizedIdentity, "policy" | "ser
   const model = selection.model?.id ?? (typeof body.model === "string" ? body.model : "unknown");
   const allowed = allowedServiceTiers(auth.policy, model, auth.serviceTiers);
   if (!allowed.includes(tier)) throw new HttpError(400, "service_tier_not_allowed", withLimitHint(`Service tier ${tier} is not allowed for ${model} on this key; allowed tiers: ${allowed.join(", ") || "none"}.`, auth.policy));
+  // Only a resolved API transport can pin the project default; subscription
+  // transports and the preliminary allowlist check retain the caller's tier.
+  const supportsTier = selection.endpoint.request_format === "openai.responses" || selection.endpoint.request_format === "openai.chat_completions";
+  if (supportsTier && selection.provider.id === "openai" && transport === null && normalized === "default" && (raw == null || typeof raw === "string" && raw.toLowerCase() === "auto")) {
+    selection.body = { ...body, service_tier: "default" };
+  }
 }

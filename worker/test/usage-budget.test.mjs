@@ -302,8 +302,8 @@ for (const [name, route, requestedTier, payload, contentType, expected, servedTi
   ["syntax after late usage remains estimated", "/v1/responses", "priority", JSON.stringify({ output: largeResponsesOutput, service_tier: "priority", usage: astraUsage }) + "!", "application/json", null, null, "provider_error"],
   ["native fast alias", "/v1/native/openai/v1/responses", "fast", { service_tier: "fast", usage: astraUsage }, "application/json", 1_080, "fast"],
   ["JSON Flex", "/v1/responses", "flex", { service_tier: "flex", usage: astraUsage }, "application/json", 270, "flex"],
-  ["omitted inherits Fast", "/v1/responses", undefined, { service_tier: "priority", usage: astraUsage }, "application/json", 1_080, "priority"],
-  ["auto inherits Fast", "/v1/responses", "auto", { service_tier: "priority", usage: astraUsage }, "application/json", 1_080, "priority"],
+  ["omitted pins Default", "/v1/responses", undefined, { service_tier: "default", usage: astraUsage }, "application/json", 540, "default"],
+  ["auto pins Default", "/v1/responses", "auto", { service_tier: "default", usage: astraUsage }, "application/json", 540, "default"],
   ["Responses SSE downgrade", "/v1/responses", "priority", sse({ type: "response.created", response: { service_tier: "priority" } }, { type: "response.completed", response: { service_tier: "default", usage: astraUsage } }), "text/event-stream", 540, "default"],
   ["Responses SSE max-output incomplete", "/v1/responses", "priority", sse({ type: "response.incomplete", response: { status: "incomplete", incomplete_details: { reason: "max_output_tokens" }, service_tier: "priority", usage: astraUsage } }), "text/event-stream", 1_080, "priority"],
   ["Responses SSE failed with usage", "/v1/responses", "priority", sse({ type: "response.failed", response: { status: "failed", service_tier: "priority", usage: astraUsage } }), "text/event-stream", 1_080, "priority", "provider_error"],
@@ -323,7 +323,7 @@ for (const [name, route, requestedTier, payload, contentType, expected, servedTi
     env.USAGE_QUEUE = { send: async (event) => { events.push(event); } };
     const upstreamBody = typeof payload === "string" ? payload : JSON.stringify(payload);
     t.mock.method(globalThis, "fetch", async (_url, init) => {
-      assert.equal(JSON.parse(init.body).service_tier, requestedTier);
+      assert.equal(JSON.parse(init.body).service_tier, requestedTier == null || requestedTier === "auto" ? "default" : requestedTier);
       return new Response(upstreamBody, { headers: { "content-type": contentType } });
     });
     const response = await handler.fetch(new Request(`https://clawrouter.example${route}`, {
@@ -341,7 +341,7 @@ for (const [name, route, requestedTier, payload, contentType, expected, servedTi
     assert.equal(event.actual_cost_micros, charged);
     assert.equal(event.status, outcome);
     assert.equal(event.status_code, 200);
-    assert.equal(event.requested_service_tier, requestedTier ?? null);
+    assert.equal(event.requested_service_tier, requestedTier == null || requestedTier === "auto" ? "default" : requestedTier);
     assert.equal(event.served_service_tier, servedTier);
     assert.equal(event.cost_basis, fixedCost != null ? "policy_fixed" : expected == null ? "manifest_reservation" : "manifest_pricing");
     assert.equal(event.content_retained, false);
