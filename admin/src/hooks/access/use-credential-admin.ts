@@ -1,3 +1,4 @@
+import { keyTierChoices } from "../../member-key-controls";
 import { type FormEvent, useRef, useState } from "react";
 import { generateSecret } from "../../ui-helpers";
 import { defaultCredential } from "../../ui-config";
@@ -26,7 +27,7 @@ export function useCredentialAdmin(owner: CredentialOperations, policies: Access
     if (!policies.some((policy) => policy.policyId === form.policyId && policy.enabled)) return owner.reject("admin", "select an enabled policy for this credential");
     const principalId = form.principalId.trim().toLowerCase() || null;
     if (principalId && (principalId.length > 320 || !/^[^\s@]+@[^\s@]+$/.test(principalId))) return owner.reject("admin", "owner must be a valid user email");
-    const result = await owner.mutate({ surface: "admin", operation: "create", credentialId, policyId: form.policyId, principalId });
+    const result = await owner.mutate({ surface: "admin", operation: "create", credentialId, policyId: form.policyId, principalId, ...(form.expiresAt ? { expiresAt: new Date(`${form.expiresAt}Z`).toISOString() } : {}), serviceTiers: keyTierChoices(policies.find(policy => policy.policyId === form.policyId), form.fast, form.ultrafast) });
     // An owned completion may reset its own draft without dismissing its new reveal.
     if (result?.presented && draftRef.current === submitted) {
       draftRef.current = { ...submitted, form: { ...form, credentialId: "" }, selectedId: credentialId };
@@ -35,7 +36,7 @@ export function useCredentialAdmin(owner: CredentialOperations, policies: Access
   }
 
   async function rotate(credential: ProxyCredential) {
-    if (!credential.active) return owner.reject("admin", "only an active credential can be rotated");
+    if (!credential.active && !(credential.enabled && credential.expired && credential.policyEnabled !== false && credential.generationMatches !== false && credential.principalEnabled !== false)) return owner.reject("admin", "only an active credential can be rotated");
     await owner.mutate({ surface: "admin", operation: "rotate", ...credential });
   }
 
@@ -51,5 +52,6 @@ export function useCredentialAdmin(owner: CredentialOperations, policies: Access
     edit: (credential: ProxyCredential) => update(draftRef.current.form, credential.credentialId),
     startNew: () => update(draftRef.current.form, ""),
     issue, rotate, revoke,
+    setExpiry: async (credential: ProxyCredential, expiresAt: string) => { await owner.mutate({ surface: "admin", operation: "put", ...credential, expiresAt, serviceTiers: credential.serviceTiers }); },
   };
 }

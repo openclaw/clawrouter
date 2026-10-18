@@ -43,8 +43,8 @@ budget state distinct. An administrator's role alone grants no provider access.
 Do not reveal an issued credential after the one-time copy surface is cleared.
 
 Dashboard **My keys** creates keys for held policies. Access **Credentials**
-creates a new credential or selects an existing key to rotate or revoke. Rotation
-changes only the secret of an active key. A key whose policy is no longer held
+creates a new credential or selects an existing key to rotate or revoke. Renewal
+changes the secret and expiry of an enabled key, including an expired one. A key whose policy is no longer held
 can still be revoked. Copy a new secret before dismissing it or leaving the panel;
 the console cannot retrieve it later. If a request outcome is uncertain, refresh
 the key list before choosing another action. Creation drafts survive refreshes.

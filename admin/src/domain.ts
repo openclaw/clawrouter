@@ -25,6 +25,7 @@ export interface CredentialSummary {
 
 export function credentialOutcome(credential: ProxyCredential, policies: AccessPolicy[]): { label: string; tone: OutcomeTone; active: boolean } {
   const policy = policies.find((item) => item.policyId === credential.policyId);
+  if (credential.expired || credential.expiresAt && Date.parse(credential.expiresAt) <= Date.now()) return { label: "expired", tone: "revoked", active: false };
   if (!credential.enabled) return { label: "revoked", tone: "revoked", active: false };
   if (credential.principalEnabled === false) return { label: "owner disabled", tone: "revoked", active: false };
   if (!policy) return { label: "policy missing", tone: "revoked", active: false };

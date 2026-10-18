@@ -175,6 +175,7 @@ export function useConsoleController({ session, credentialOwner, request, scope,
           session: sessionData,
           providers: sessionData.entitlements.providers,
           catalog: sessionData.entitlements.catalog,
+          policies: sessionData.entitlements.policies,
           contentRetention: sessionData.contentRetention ?? { enabled: false, retentionDays: 30, policyEnabled: false, userExempt: false },
         }
         : null;

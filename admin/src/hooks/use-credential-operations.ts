@@ -6,7 +6,7 @@ import type { CapturedSessionScope } from "../session-scope";
 import type { ProxyCredential } from "../ui-types";
 
 type Surface = "admin" | "personal";
-type Intent = { surface: Surface; operation: "create" | "rotate" | "revoke"; credentialId: string; policyId: string; principalId?: string | null };
+type Intent = { surface: Surface; operation: "create" | "rotate" | "revoke" | "put"; enabled?: boolean; expiresAt?: string | null; serviceTiers?: string[] | null; credentialId: string; policyId: string; principalId?: string | null };
 type Reveal = { key: string; credentialId: string; policyId: string; operation: "create" | "rotate"; scope: number; presentation: number };
 type Feedback = { surface: Surface; error: string; notice: string; reveal: Reveal | null };
 const emptyFeedback: Feedback = { surface: "personal", error: "", notice: "", reveal: null };
@@ -66,9 +66,9 @@ export function useCredentialOperations(captureScope: () => CapturedSessionScope
     const request = requestForScope(scope);
     const ownsPresentation = () => ownsScope() && presentationRef.current.epoch === presentation && presentationRef.current.surface === intent.surface;
     let sent = false;
-    setStatus(`${intent.operation === "create" ? "issuing" : intent.operation === "rotate" ? "rotating" : "revoking"} credential`);
+    setStatus(`${intent.operation === "create" ? "issuing" : intent.operation === "rotate" ? "rotating" : intent.operation === "put" ? "updating" : "revoking"} credential`);
     try {
-      const secret = intent.operation === "revoke" ? "" : generateSecret(24);
+      const secret = (intent.operation === "revoke" || intent.operation === "put") ? "" : generateSecret(24);
       const digest = secret ? await sha256Hex(secret) : "";
       // Leaving and returning must not dispatch an intent admitted by the old panel.
       if (!ownsPresentation()) {
@@ -76,14 +76,14 @@ export function useCredentialOperations(captureScope: () => CapturedSessionScope
         return null;
       }
       const collection = `/v1/${intent.surface === "admin" ? "admin" : "session"}/credentials`;
-      const path = intent.operation === "create" ? collection : `${collection}/${encodeURIComponent(intent.credentialId)}/${intent.operation}`;
-      const body = intent.operation === "create"
-        ? { credentialId: intent.credentialId, policyId: intent.policyId, ...(intent.surface === "admin" ? { principalId: intent.principalId ?? null } : {}), secretSha256: digest }
+      const path = intent.operation === "create" ? collection : intent.operation === "put" ? `${collection}/${encodeURIComponent(intent.credentialId)}` : `${collection}/${encodeURIComponent(intent.credentialId)}/${intent.operation}`;
+      const body = intent.operation === "create" || intent.operation === "put"
+        ? { credentialId: intent.credentialId, policyId: intent.policyId, ...(intent.surface === "admin" ? { principalId: intent.principalId ?? null } : {}), ...(intent.operation === "create" ? { secretSha256: digest } : { enabled: intent.enabled }), ...(intent.expiresAt ? { expiresAt: intent.expiresAt } : {}), ...(intent.serviceTiers === undefined ? {} : { serviceTiers: intent.serviceTiers }) }
         : intent.operation === "rotate" ? { secretSha256: digest } : undefined;
       sent = true;
       const credential = scope.demo
         ? { credentialId: intent.credentialId, policyId: intent.policyId, principalId: intent.surface === "admin" ? intent.principalId ?? null : scope.session.email, enabled: intent.operation !== "revoke", active: intent.operation !== "revoke" }
-        : await request<ProxyCredential>(scope.origin, path, { method: "POST", ...(body ? { headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}) });
+        : await request<ProxyCredential>(scope.origin, path, { method: intent.operation === "put" ? "PUT" : "POST", ...(body ? { headers: { "content-type": "application/json" }, body: JSON.stringify(body) } : {}) });
       if (!credential || credential.credentialId !== intent.credentialId || typeof credential.policyId !== "string" || (intent.operation === "create" && credential.policyId !== intent.policyId) || typeof credential.enabled !== "boolean") throw new Error("invalid credential response");
       if (!ownsScope()) return null;
       const update = (items: ProxyCredential[]) => [...items.filter((item) => item.credentialId !== credential.credentialId), credential].sort((a, b) => a.credentialId.localeCompare(b.credentialId));
@@ -92,7 +92,7 @@ export function useCredentialOperations(captureScope: () => CapturedSessionScope
         admin: scope.session.role === "admin" ? update(current.admin) : [],
         personal: intent.surface === "personal" || (Boolean(scope.session.email) && credential.principalId?.trim().toLowerCase() === scope.session.email?.trim().toLowerCase()) ? update(current.personal) : current.personal.filter((item) => item.credentialId !== credential.credentialId),
       }));
-      const verb = intent.operation === "create" ? "Created" : intent.operation === "rotate" ? "Rotated" : "Revoked";
+      const verb = intent.operation === "create" ? "Created" : intent.operation === "rotate" ? "Rotated" : intent.operation === "put" ? "Updated" : "Revoked";
       const reveal = secret && ownsPresentation() ? { key: `clawrouter-live-${intent.credentialId}-${secret}`, credentialId: intent.credentialId, policyId: credential.policyId, operation: intent.operation as "create" | "rotate", scope: scope.epoch, presentation } : null;
       const notice = `${verb} ${intent.credentialId}.${secret && !reveal ? " The one-time secret was dismissed. Rotate the active key to obtain a new secret." : ""}`;
       setFeedback({ surface: intent.surface, error: "", notice, reveal });

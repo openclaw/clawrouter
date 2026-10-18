@@ -16,6 +16,7 @@
 .myKeysCreate {
   display: flex;
   align-items: end;
+  flex-wrap: wrap;
   gap: 10px;
   margin: 16px 0;
 }
@@ -570,3 +571,8 @@
   .dashboardService { border-right: 0; }
   .activityBar { grid-template-columns: minmax(110px, 1fr) 1fr 34px; }
 }
+
+.myKeysList article small.keyExpiryWarning { color: var(--warning, #a66b21); font-weight: 600; }
+
+.myKeysCreate label.keyTierControl { display: flex; min-width: 0; max-width: 100%; }
+.myKeysCreate label.keyTierControl > span { color: var(--ink); font-family: var(--font-sans); font-size: 11.5px; letter-spacing: 0; text-transform: none; }

@@ -13,7 +13,7 @@ test("admin creation is create-only, guarded synchronously, and survives a faile
   expect(state.writes[0]).toMatchObject({ path: "/v1/admin/credentials", method: "POST", body: { credentialId: "created_key", policyId: "team_policy", principalId: null } });
   expect(state.writes[0].body.secretSha256).toMatch(/^[0-9a-f]{64}$/);
   await expect(page.locator(".statusBar")).toContainText("Console data refresh failed");
-  await expect(page.getByRole("button", { name: "Rotate credential", exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Renew credential", exact: true })).toBeEnabled();
   await expect(page.locator(".facts")).toContainText("created_key");
 });
 
@@ -41,18 +41,18 @@ test("personal creation sends a create-only request without selecting an owner",
   await expect(page.locator(".issuedKey code")).toHaveText(/^clawrouter-live-key_[0-9a-f]{16}-[0-9a-f]{48}$/);
   expect(state.writes).toHaveLength(1);
   expect(state.writes[0].path).toBe("/v1/session/credentials");
-  expect(Object.keys(state.writes[0].body).sort()).toEqual(["credentialId", "policyId", "secretSha256"]);
+  expect(Object.keys(state.writes[0].body).sort()).toEqual(["credentialId", "expiresAt", "policyId", "secretSha256", "serviceTiers"]);
 });
 
 for (const operation of ["rotate", "revoke"] as const) {
   test(`admin ${operation} consumes the latest policy and evicts a reassigned personal key`, async ({ page }) => {
     const state = await fixture(page);
     await openAdmin(page);
-    await page.getByRole("button", { name: /owned_key.*proxy credential/ }).click();
+    await page.getByRole("button", { name: /owned_key.*Legacy key/ }).click();
     state.credentials[0].policyId = "another_policy";
     state.credentials[0].principalId = "other@example.com";
     state.failBootstrap = true;
-    await page.getByRole("button", { name: operation === "rotate" ? "Rotate credential" : "Revoke credential", exact: true }).click();
+    await page.getByRole("button", { name: operation === "rotate" ? "Renew credential" : "Revoke credential", exact: true }).click();
     await expect(page.locator(".facts")).toContainText("another_policy");
     await expect(page.locator(".inspector")).not.toContainText("could not be confirmed");
     if (operation === "rotate") {
@@ -71,14 +71,14 @@ test("personal and admin screens share admission, rotate only the hash, and sync
   await connected(page);
   const pending = deferred();
   state.holdMutation = pending.promise;
-  await page.locator(".myKeysPanel").getByRole("button", { name: "Rotate", exact: true }).click();
+  await page.locator(".myKeysPanel").getByRole("button", { name: "Renew", exact: true }).click();
   await expect.poll(() => state.writes.length).toBe(1);
   await page.getByRole("button", { name: "Access", exact: true }).click();
   await page.getByRole("tab", { name: /Credentials/ }).click();
-  await page.getByRole("button", { name: /owned_key.*proxy credential/ }).click();
-  await expect(page.getByRole("button", { name: "Rotate credential", exact: true })).toBeDisabled();
+  await page.getByRole("button", { name: /owned_key.*Legacy key/ }).click();
+  await expect(page.getByRole("button", { name: "Renew credential", exact: true })).toBeDisabled();
   pending.release();
-  await expect(page.getByRole("button", { name: "Rotate credential", exact: true })).toBeEnabled();
+  await expect(page.getByRole("button", { name: "Renew credential", exact: true })).toBeEnabled();
   expect(state.writes[0].path).toBe("/v1/session/credentials/owned_key/rotate");
   expect(Object.keys(state.writes[0].body)).toEqual(["secretSha256"]);
   await expect(page.locator(".issuedKey code")).toHaveCount(0);
@@ -88,7 +88,7 @@ test("personal and admin screens share admission, rotate only the hash, and sync
   await expect(page.getByRole("button", { name: "Revoke credential", exact: true })).toBeDisabled();
   await page.getByRole("button", { name: "Dashboard", exact: true }).click();
   await expect(page.locator(".myKeysList")).toContainText("revoked");
-  await expect(page.locator(".myKeysPanel").getByRole("button", { name: "Rotate", exact: true })).toBeDisabled();
+  await expect(page.locator(".myKeysPanel").getByRole("button", { name: "Renew", exact: true })).toBeDisabled();
 });
 
 test("a dismissed sent result updates rows without replacing the next draft or revealing a secret", async ({ page }) => {
@@ -105,7 +105,7 @@ test("a dismissed sent result updates rows without replacing the next draft or r
   await expect(page.locator(".inspector")).toContainText("one-time secret was dismissed");
   await expect(page.getByRole("textbox", { name: "credential id", exact: true })).toHaveValue("next_draft");
   await expect(page.locator(".issuedKey code")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: /first_key.*proxy credential/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /first_key.*Legacy key/ })).toBeVisible();
 });
 
 for (const phase of ["hashing", "dispatched", "revealed"] as const) {
@@ -208,7 +208,7 @@ test("resource activation after dispatch keeps the row but dismisses its one-tim
   pending.release();
   await expect(page.locator(".inspector")).toContainText("Created sent_tab_key.");
   await expect(page.locator(".inspector")).toContainText("one-time secret was dismissed");
-  await expect(page.getByRole("button", { name: /sent_tab_key.*proxy credential/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /sent_tab_key.*Legacy key/ })).toBeVisible();
   await expect(page.locator(".issuedKey code")).toHaveCount(0);
   expect(state.writes).toHaveLength(1);
 });
@@ -216,7 +216,7 @@ test("resource activation after dispatch keeps the row but dismisses its one-tim
 test("pre-mutation admin and personal snapshots cannot restore a revoked row", async ({ page }) => {
   const state = await fixture(page);
   await openAdmin(page);
-  await page.getByRole("button", { name: /owned_key.*proxy credential/ }).click();
+  await page.getByRole("button", { name: /owned_key.*Legacy key/ }).click();
   const reads = deferred();
   state.holdKeys = reads.promise;
   await focusRefresh(page);
@@ -249,7 +249,7 @@ test("an accepted identity change fences a pending mutation and clears old admin
   await expect(page.getByRole("textbox", { name: "credential id", exact: true })).toHaveValue("");
   mutation.release();
   await expect(page.locator(".issuedKey code")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: /owned_key.*proxy credential/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /owned_key.*Legacy key/ })).toHaveCount(0);
 });
 
 for (const completion of ["before", "after"] as const) {
@@ -343,7 +343,7 @@ test("a lost response is visibly uncertain and never retried or revealed automat
   await page.getByRole("button", { name: "Issue credential", exact: true }).click();
   await expect(page.locator(".inspector")).toContainText("could not be confirmed");
   await page.getByRole("button", { name: "Refresh keys", exact: true }).click();
-  await expect(page.getByRole("button", { name: /uncertain_key.*proxy credential/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /uncertain_key.*Legacy key/ })).toBeVisible();
   expect(state.writes).toHaveLength(1);
   await expect(page.locator(".issuedKey code")).toHaveCount(0);
 });
@@ -362,7 +362,7 @@ test("a secondary auth failure clears a reveal after bootstrap has already faile
   const reads = state.sessionReads;
   auth.release();
   await expect(page.locator(".issuedKey code")).toHaveCount(0);
-  await expect(page.getByRole("button", { name: /owned_key.*proxy credential/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /owned_key.*Legacy key/ })).toHaveCount(0);
   expect(state.sessionReads).toBe(reads);
 });
 
@@ -394,7 +394,7 @@ test("an entitlement wait cannot restore keys or freshness after its accepted sc
   await entitlementResponse;
   await page.evaluate(() => new Promise<void>((resolve) => requestAnimationFrame(() => resolve())));
   expect(state.keyReads).toBe(keyReads);
-  await expect(page.getByRole("button", { name: /owned_key.*proxy credential/ })).toHaveCount(0);
+  await expect(page.getByRole("button", { name: /owned_key.*Legacy key/ })).toHaveCount(0);
   await expect(page.locator(".connectionMeta time")).toHaveCount(0);
   await expect(page.locator(".loginShell")).toContainText("Sign-in required");
 });
@@ -447,7 +447,7 @@ test("a lost create response is reconciled by a fresh read after stale snapshots
   state.holdKeys = null;
   reads.release();
   await expect.poll(() => state.keyReads).toBe(6);
-  await expect(page.getByRole("button", { name: /recovered_key.*proxy credential/ })).toBeVisible();
+  await expect(page.getByRole("button", { name: /recovered_key.*Legacy key/ })).toBeVisible();
   await expect(page.locator(".issuedKey code")).toHaveCount(0);
   expect(state.writes).toHaveLength(1);
 });
@@ -514,7 +514,7 @@ for (const status of [401, 403]) {
     state.reject = status === 401 ? "access_session_required" : "credential_policy_not_held";
     state.rejectStatus = status;
     const card = page.locator(".myKeysPanel");
-    await card.getByRole("button", { name: "Rotate", exact: true }).click();
+    await card.getByRole("button", { name: "Renew", exact: true }).click();
     if (status === 401) await expect(page.locator(".loginShell")).toContainText("Sign-in required");
     else await expect(card).toContainText("credential_policy_not_held");
     await expect(card.locator(".myKeysList article")).toHaveCount(status === 401 ? 0 : 1);
@@ -534,9 +534,9 @@ test("binding loss keeps an active key revocable while rotation and the chosen p
   state.held = false;
   await focusRefresh(page);
   const card = page.locator(".myKeysPanel");
-  await expect(card.getByRole("combobox")).toHaveValue("team_policy");
+  await expect(card.getByRole("combobox", { name: "policy", exact: true })).toHaveValue("team_policy");
   await expect(card).toContainText("Policy no longer held: rotation unavailable");
-  await expect(card.getByRole("button", { name: "Rotate", exact: true })).toBeDisabled();
+  await expect(card.getByRole("button", { name: "Renew", exact: true })).toBeDisabled();
   await expect(card.getByRole("button", { name: "Revoke", exact: true })).toBeEnabled();
   await card.getByRole("button", { name: "Revoke", exact: true }).click();
   await expect(card.locator(".myKeysList")).toContainText("revoked");
@@ -550,8 +550,8 @@ for (const inactive of ["owner", "generation", "policy"] as const) {
     if (inactive === "generation") state.credentials[0].generationMatches = false;
     if (inactive === "policy") state.credentials[0].policyEnabled = false;
     await openAdmin(page);
-    await page.getByRole("button", { name: /owned_key.*proxy credential/ }).click();
-    await expect(page.getByRole("button", { name: "Rotate credential", exact: true })).toBeDisabled();
+    await page.getByRole("button", { name: /owned_key.*Legacy key/ }).click();
+    await expect(page.getByRole("button", { name: "Renew credential", exact: true })).toBeDisabled();
     await expect(page.getByRole("button", { name: "Revoke credential", exact: true })).toBeEnabled();
   });
 }
@@ -614,6 +614,7 @@ async function focusRefresh(page: Page) { await page.evaluate(() => window.dispa
 async function fixture(page: Page) {
   const policy: AccessPolicy = { policyId: "team_policy", enabled: true, providers: [], tenantId: "default", retainRequestContent: false, grantRouting: { strategy: "priority", stickiness: "none", failover: true, staleState: "allow", staleAfterSeconds: 300, switchAtUsedPercent: 90, hysteresisPercent: 10, eligibleGrants: {} } };
   const state = {
+    policy,
     credentials: [{ credentialId: "owned_key", policyId: policy.policyId, principalId: "admin@example.com", enabled: true, active: true }] as ProxyCredential[],
     writes: [] as { path: string; method: string; body: Record<string, string> }[],
     reject: "", rejectStatus: 409, failBootstrap: false, loseResponse: false, held: true, authLost: false, authLostPath: "", authLossReads: 0, omitEntitlements: false, holdReadPath: "", email: "admin@example.com", role: "admin", keyReads: 0, sessionReads: 0, loginReads: 0,
@@ -622,14 +623,14 @@ async function fixture(page: Page) {
   const usage = { ledger: "ready", providers: [], daily: [], events: [], summary: { requestCount: 0, successCount: 0, errorCount: 0, inputTokens: 0, outputTokens: 0, totalTokens: 0, actualCostMicros: 0 } };
   await page.route("**/v1**", async (route) => {
     const request = route.request(), path = new URL(request.url()).pathname;
-    if (request.method() === "POST") {
+    if (request.method() === "POST" || request.method() === "PUT") {
       const body = request.postData() ? request.postDataJSON() : {};
       state.writes.push({ path, method: request.method(), body });
       if (state.reject) { await route.fulfill({ status: state.rejectStatus, json: { error: { code: state.reject, message: state.reject } } }); return; }
       const create = path.endsWith("/credentials");
-      const credentialId = create ? body.credentialId : decodeURIComponent(path.split("/").at(-2)!);
+      const credentialId = create ? body.credentialId : decodeURIComponent(path.split("/").at(request.method() === "PUT" ? -1 : -2)!);
       const prior = state.credentials.find((item) => item.credentialId === credentialId);
-      const credential: ProxyCredential = { ...prior, credentialId, policyId: prior?.policyId ?? body.policyId, principalId: prior?.principalId ?? (path.includes("/session/") ? state.email : body.principalId), enabled: !path.endsWith("/revoke"), active: !path.endsWith("/revoke") };
+      const credential: ProxyCredential = { ...prior, credentialId, policyId: prior?.policyId ?? body.policyId, principalId: prior?.principalId ?? (path.includes("/session/") ? state.email : body.principalId), enabled: request.method() === "PUT" ? body.enabled : !path.endsWith("/revoke"), active: request.method() === "PUT" ? body.enabled : !path.endsWith("/revoke") };
       state.credentials = [...state.credentials.filter((item) => item.credentialId !== credentialId), credential];
       if (state.holdMutation) await state.holdMutation;
       if (state.loseResponse) { await route.abort("failed"); return; }
@@ -659,7 +660,7 @@ async function fixture(page: Page) {
       "/v1": { endpoints: {} },
       "/v1/providers": { providers: [] },
       "/v1/routes": { openaiCompatible: [], manifestProxy: [] },
-      "/v1/session": { authenticated: true, auth: "cloudflare_access", role: state.role, email: state.email, tenantId: "default", ...(!state.omitEntitlements ? { entitlements: { providers: [] } } : {}) },
+      "/v1/session": { authenticated: true, auth: "cloudflare_access", role: state.role, email: state.email, tenantId: "default", ...(!state.omitEntitlements ? { entitlements: { providers: [], policies: [{ ...policy, budget: { configured: false, ledger: "unmetered", daily: { configured: policy.dailyBudgetMicros != null, limitMicros: policy.dailyBudgetMicros ?? null, spentMicros: 2_000_000, remainingMicros: 18_000_000, resetsAt: "2026-10-19T00:00:00Z" } } }] } } : {}) },
       "/v1/entitlements": { session: { authenticated: true, auth: "cloudflare_access", role: state.role, email: state.email, tenantId: "default" }, providers: [], contentRetention: { enabled: false, retentionDays: 30, policyEnabled: false, userExempt: false } },
       "/v1/session/usage": { policies: policies.map((item) => ({ ...item, budget: { configured: false, ledger: "ready" } })), usage },
       "/v1/session/credentials": { credentials: state.credentials.filter((item) => item.principalId === state.email) },
@@ -676,3 +677,55 @@ async function fixture(page: Page) {
   });
   return state;
 }
+
+test("personal validity, performance controls, allowance and expired renewal", async ({ page }) => {
+  const state = await fixture(page);
+  state.role = "user";
+  state.policy.dailyBudgetMicros = 20_000_000;
+  state.policy.limitHint = "Use the team server for heavier usage.";
+  state.policy.serviceTiers = { allowed: ["default", "flex", "priority"], models: { "openai/gpt-6.1-sol": ["default", "flex", "priority", "ultrafast"] } };
+  Object.assign(state.credentials[0], { expiresAt: "2026-01-01T00:00:00Z", expired: true, active: false });
+  await page.goto("/");
+  await connected(page);
+  const card = page.locator(".myKeysPanel");
+  await expect(card).toContainText("Today: $2.00 / $20.00");
+  await expect(card).toContainText("Use the team server for heavier usage.");
+  await expect(card.getByLabel("Validity")).toHaveValue("180");
+  await expect(card.getByLabel("Fast (priority)")).toBeChecked();
+  await expect(card.getByLabel(/Ultrafast/)).not.toBeChecked();
+  await expect(card).toContainText("openai/gpt-6.1-sol");
+  await expect(card).toContainText("expired on 2026-01-01");
+  await expect(card.getByRole("button", { name: "Renew", exact: true })).toBeEnabled();
+  await card.getByRole("button", { name: "Renew", exact: true }).click();
+  await expect(page.locator(".issuedKey code")).toContainText("clawrouter-live-owned_key-");
+  expect(state.writes[0].path).toBe("/v1/session/credentials/owned_key/rotate");
+  expect(Object.keys(state.writes[0].body)).toEqual(["secretSha256"]);
+  await card.getByLabel("Validity").selectOption("30");
+  await card.getByLabel("Fast (priority)").uncheck();
+  await card.getByRole("button", { name: "Create key", exact: true }).click();
+  await expect.poll(() => state.writes.length).toBe(2);
+  expect(state.writes[1].body.serviceTiers).toEqual(["default", "flex"]);
+  expect(Date.parse(state.writes[1].body.expiresAt)).toBeGreaterThan(Date.now() + 29 * 86_400_000);
+  await expect(page.locator(".issuedKey code")).toBeVisible();
+  const accessibility = await new AxeBuilder({ page }).include(".myKeysPanel").withTags(["wcag2a", "wcag2aa", "wcag21aa"]).analyze();
+  expect(accessibility.violations).toEqual([]);
+});
+
+
+test("admin expiry update preserves revocation and tier restrictions", async ({ page }) => {
+  const state = await fixture(page);
+  Object.assign(state.credentials[0], { enabled: false, active: false, serviceTiers: ["default", "flex"] });
+  await page.goto("/");
+  await connected(page);
+  await page.getByRole("button", { name: "Access", exact: true }).click();
+  await page.getByRole("tab", { name: /^Credentials/ }).click();
+  await page.getByRole("button", { name: /owned_key/ }).click();
+  await page.getByLabel("Expiry (ISO-8601 UTC)").fill("2027-01-01T00:00:00Z");
+  await page.getByRole("button", { name: "Set expiry", exact: true }).click();
+  await expect.poll(() => state.writes.length).toBe(1);
+  expect(state.writes[0].method).toBe("PUT");
+  expect(state.writes[0].body.enabled).toBe(false);
+  expect(state.writes[0].body.serviceTiers).toEqual(["default", "flex"]);
+  expect(state.writes[0].body.secretSha256).toBeUndefined();
+  await expect(page.getByText("Updated owned_key.", { exact: true })).toBeVisible();
+});

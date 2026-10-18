@@ -98,6 +98,7 @@ export const defaultPolicy: PolicyForm = {
   tenantId: "default",
   enabled: true,
   monthlyBudgetMicros: "100",
+  dailyBudgetMicros: "", serviceTierAllowed: "default, flex, priority", serviceTierModels: "", limitHint: "",
   requestCostMicros: "1000",
   budgetScope: "policy",
   providers: ["openai", "tavily"],
@@ -126,7 +127,7 @@ export const defaultAccess: AccessForm = {
   policyIds: [],
   contentRetentionDisabled: false,
 };
-export const defaultCredential: CredentialForm = { credentialId: "", policyId: "", principalId: "" };
+export const defaultCredential: CredentialForm = { credentialId: "", policyId: "", principalId: "", expiresAt: "", fast: true, ultrafast: false };
 export const defaultBinding: BindingForm = { policyId: "", principalType: "group", principalId: "", enabled: true, priority: "100" };
 export const defaultUpstreamGrant: UpstreamGrantForm = { scope: "policies", scopeId: "", tokenRef: "", kind: "api_key", provider: "", label: "", enabled: true, priority: "100", weight: "1", credential: "", credentialBundle: "", accessToken: "", refreshToken: "", accountId: "", expiresAt: "", keepWarm: false };
 export const defaultAssignmentRule: AssignmentRuleForm = { ruleId: "", enabled: true, kind: "email_domain", subject: "", groups: "", policyIds: [], priority: "100", revokeOnLoss: true, provenance: "cloudflare_access" };

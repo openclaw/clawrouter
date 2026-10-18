@@ -1,3 +1,4 @@
+import { credentialExpiryLabel, KeyTierControls } from "../member-key-controls";
 import React, { type FormEvent, useEffect, useId, useRef, useState } from "react";
 import { CircleSlash2, KeyRound, LogIn, Plus, RefreshCw, Search, ServerCog, ShieldCheck, Users } from "lucide-react";
 import { bindingKey, type CatalogModel } from "../domain";
@@ -25,7 +26,7 @@ import type {
   UpstreamGrantForm,
 } from "../ui-types";
 
-export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selectedCredential, bindings, selectedBinding, upstreamGrants, selectedUpstreamGrant, upstreamBusy, upstreamReady, upstreamError, assignmentRules, selectedAssignmentRule, fusionConfig, fusionReadiness, fusionPolicyId, onSelectFusionPolicy, setFusionConfig, fusionModels, providers, form, setForm, credentialForm, setCredentialForm, bindingForm, setBindingForm, upstreamGrantForm, setUpstreamGrantForm, assignmentRuleForm, setAssignmentRuleForm, credentialFeedback, error, policyError, policyDirty, policyMissing, policyReady, policyBusy, onDiscardPolicy, fusionError, onSave, onIssueCredential, onRevokeCredential, onRotateCredential, onNewCredential, onSaveBinding, onSaveUpstreamGrant, onRevokeUpstreamGrant, onRefreshUpstreamGrant, onRefreshUpstreamGrantQuota, onAuthorizeUpstreamGrant, onSaveAssignmentRule, onReconcileAssignments, onSaveFusion, onCheckFusion, onNew, onEdit, onEditCredential, onEditBinding, onNewBinding, onEditUpstreamGrant, onNewUpstreamGrant, onEditAssignmentRule, onNewAssignmentRule, onRevoke, onPreset, onToggleProvider, onSetProviderGroup, busy }: {
+export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selectedCredential, bindings, selectedBinding, upstreamGrants, selectedUpstreamGrant, upstreamBusy, upstreamReady, upstreamError, assignmentRules, selectedAssignmentRule, fusionConfig, fusionReadiness, fusionPolicyId, onSelectFusionPolicy, setFusionConfig, fusionModels, providers, form, setForm, credentialForm, setCredentialForm, bindingForm, setBindingForm, upstreamGrantForm, setUpstreamGrantForm, assignmentRuleForm, setAssignmentRuleForm, credentialFeedback, error, policyError, policyDirty, policyMissing, policyReady, policyBusy, onDiscardPolicy, fusionError, onSave, onSetCredentialExpiry, onIssueCredential, onRevokeCredential, onRotateCredential, onNewCredential, onSaveBinding, onSaveUpstreamGrant, onRevokeUpstreamGrant, onRefreshUpstreamGrant, onRefreshUpstreamGrantQuota, onAuthorizeUpstreamGrant, onSaveAssignmentRule, onReconcileAssignments, onSaveFusion, onCheckFusion, onNew, onEdit, onEditCredential, onEditBinding, onNewBinding, onEditUpstreamGrant, onNewUpstreamGrant, onEditAssignmentRule, onNewAssignmentRule, onRevoke, onPreset, onToggleProvider, onSetProviderGroup, busy }: {
   tab: AccessTab;
   setTab: (tab: AccessTab) => void;
   keys: AccessPolicy[];
@@ -68,6 +69,7 @@ export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selec
   onDiscardPolicy: () => void;
   fusionError: string;
   onSave: (event: FormEvent) => void;
+  onSetCredentialExpiry: (credential: ProxyCredential, expiresAt: string) => Promise<void>;
   onIssueCredential: (event: FormEvent) => void;
   onRevokeCredential: (credential: ProxyCredential) => void;
   onRotateCredential: (credential: ProxyCredential) => void;
@@ -137,7 +139,7 @@ export function PoliciesScreen({ tab, setTab, keys, selected, credentials, selec
       {resources.map(({ id }) => <div key={id} id={`${resourceId}-panel-${id}`} className="accessPanel" role="tabpanel" aria-labelledby={`${resourceId}-tab-${id}`} tabIndex={0} hidden={tab !== id}>
         {tab === id ? <>
           {id === "policies" ? <PolicyPanel keys={keys} selected={selected} providers={providers} form={form} setForm={setForm} error={policyError} dirty={policyDirty} missing={policyMissing} ready={policyReady} onDiscard={onDiscardPolicy} onSave={onSave} onNew={onNew} onEdit={onEdit} onRevoke={onRevoke} onPreset={onPreset} onToggleProvider={onToggleProvider} onSetProviderGroup={onSetProviderGroup} busy={policyBusy} /> : null}
-          {id === "credentials" ? <CredentialPanel policies={keys} credentials={credentials} selected={selectedCredential} form={credentialForm} setForm={setCredentialForm} feedback={credentialFeedback} onIssue={onIssueCredential} onEdit={onEditCredential} onRevoke={onRevokeCredential} onRotate={onRotateCredential} onNew={onNewCredential} busy={busy || credentialFeedback.busy} /> : null}
+          {id === "credentials" ? <CredentialPanel policies={keys} credentials={credentials} selected={selectedCredential} form={credentialForm} setForm={setCredentialForm} feedback={credentialFeedback} onSetExpiry={onSetCredentialExpiry} onIssue={onIssueCredential} onEdit={onEditCredential} onRevoke={onRevokeCredential} onRotate={onRotateCredential} onNew={onNewCredential} busy={busy || credentialFeedback.busy} /> : null}
           {id === "bindings" ? <BindingPanel policies={keys} bindings={bindings} selected={selectedBinding} form={bindingForm} setForm={setBindingForm} error={error} onSave={onSaveBinding} onEdit={onEditBinding} onNew={onNewBinding} busy={busy} /> : null}
           {id === "upstream" ? <UpstreamGrantPanel policies={keys} providers={providers} grants={upstreamGrants} selected={selectedUpstreamGrant} form={upstreamGrantForm} setForm={setUpstreamGrantForm} error={upstreamError} onSave={onSaveUpstreamGrant} onEdit={onEditUpstreamGrant} onNew={onNewUpstreamGrant} onRefresh={onRefreshUpstreamGrant} onRefreshQuota={onRefreshUpstreamGrantQuota} onAuthorize={onAuthorizeUpstreamGrant} onRevoke={onRevokeUpstreamGrant} ready={upstreamReady} busy={upstreamBusy} authorizationBusy={busy} /> : null}
           {id === "assignments" ? <AssignmentRulePanel policies={keys} rules={assignmentRules} selected={selectedAssignmentRule} form={assignmentRuleForm} setForm={setAssignmentRuleForm} error={error} onSave={onSaveAssignmentRule} onEdit={onEditAssignmentRule} onNew={onNewAssignmentRule} onReconcile={onReconcileAssignments} busy={busy} /> : null}
@@ -392,13 +394,14 @@ export function AssignmentRulePanel({ policies, rules, selected, form, setForm, 
   );
 }
 
-export function CredentialPanel({ policies, credentials, selected, form, setForm, feedback, onIssue, onEdit, onRevoke, onRotate, onNew, busy }: {
+export function CredentialPanel({ policies, credentials, selected, form, setForm, feedback, onSetExpiry, onIssue, onEdit, onRevoke, onRotate, onNew, busy }: {
   policies: AccessPolicy[];
   credentials: ProxyCredential[];
   selected?: ProxyCredential;
   form: CredentialForm;
   setForm: (form: CredentialForm) => void;
   feedback: CredentialFeedback;
+  onSetExpiry: (credential: ProxyCredential, expiresAt: string) => Promise<void>;
   onIssue: (event: FormEvent) => void;
   onEdit: (credential: ProxyCredential) => void;
   onRevoke: (credential: ProxyCredential) => void;
@@ -418,19 +421,22 @@ export function CredentialPanel({ policies, credentials, selected, form, setForm
           <Metric label="inactive" value={String(Array.from(outcomes.values()).filter((outcome) => !outcome.active).length)} meta="revoked, stale, or policy-disabled" />
         </div>
         <div className="tableSectionHeader"><div><strong>Issued credentials</strong><span>Machine access bound to policies</span></div><button type="button" onClick={onNew}><Plus className="buttonIcon" aria-hidden="true" /><span>New credential</span></button></div>
-        <EntityTable columns={["credential", "policy", "owner", "state"]} columnTemplate="minmax(190px, 1.25fr) minmax(150px, .9fr) minmax(180px, 1fr) 110px" rows={credentials.map((credential) => { const outcome = outcomes.get(credential.credentialId)!; return { id: credential.credentialId, active: selected?.credentialId === credential.credentialId, onClick: () => onEdit(credential), cells: [<EntityName icon={KeyRound} title={credential.credentialId} subtitle="proxy credential" />, credential.policyId, credential.principalId ?? "unassigned", <Status label={outcome.label} tone={outcome.tone} />] }; })} />
+        <EntityTable columns={["credential", "policy", "owner", "state"]} columnTemplate="minmax(190px, 1.25fr) minmax(150px, .9fr) minmax(180px, 1fr) 110px" rows={credentials.map((credential) => { const outcome = outcomes.get(credential.credentialId)!; return { id: credential.credentialId, active: selected?.credentialId === credential.credentialId, onClick: () => onEdit(credential), cells: [<EntityName icon={KeyRound} title={credential.credentialId} subtitle={credentialExpiryLabel(credential.expiresAt).label} />, credential.policyId, credential.principalId ?? "unassigned", <Status label={outcome.label} tone={outcome.tone} />] }; })} />
       </section>
       <aside className="inspector">
         <InspectorHeader icon={KeyRound} title={selected ? "Selected credential" : "New credential"} subtitle={selected ? "rotate its secret or revoke access" : "creates a new secret for one policy"} />
         <CredentialNotice state={feedback} />
         {selected ? <>
-          <dl className="facts"><dt>id</dt><dd>{selected.credentialId}</dd><dt>policy</dt><dd>{selected.policyId}</dd><dt>owner</dt><dd>{selected.principalId ?? "unassigned"}</dd><dt>state</dt><dd>{selectedOutcome?.label ?? "inactive"}</dd></dl>
-          <InlineNote>Rotation replaces only the secret. The policy and owner stay the same; the previous secret stops working.</InlineNote>
-          <div className="inspectorActions"><button type="button" className="buttonSecondary" disabled={busy || !selected.active} onClick={() => onRotate(selected)}>Rotate credential</button><button type="button" className="buttonDanger" disabled={busy || !selected.enabled} onClick={() => onRevoke(selected)}><CircleSlash2 className="buttonIcon" aria-hidden="true" /><span>Revoke credential</span></button></div>
+          <dl className="facts"><dt>id</dt><dd>{selected.credentialId}</dd><dt>policy</dt><dd>{selected.policyId}</dd><dt>owner</dt><dd>{selected.principalId ?? "unassigned"}</dd><dt>state</dt><dd>{selectedOutcome?.label ?? "inactive"}</dd><dt>expiry</dt><dd>{selected.expiresAt ?? "Legacy · no expiry"}</dd><dt>service tiers</dt><dd>{selected.serviceTiers?.join(", ") ?? "inherit policy"}</dd></dl>
+          <CredentialExpiryEditor key={selected.credentialId + selected.expiresAt} credential={selected} busy={busy} onSave={onSetExpiry} />
+          <InlineNote>Renewal replaces the secret and resets its expiry. The policy and owner stay the same; the previous secret stops working.</InlineNote>
+          <div className="inspectorActions"><button type="button" className="buttonSecondary" disabled={busy || !selected.enabled || selected.policyEnabled === false || selected.generationMatches === false || selected.principalEnabled === false} onClick={() => onRotate(selected)}>Renew credential</button><button type="button" className="buttonDanger" disabled={busy || !selected.enabled} onClick={() => onRevoke(selected)}><CircleSlash2 className="buttonIcon" aria-hidden="true" /><span>Revoke credential</span></button></div>
         </> : <form onSubmit={onIssue}>
           <div className="formGrid compact">
             <label className="full"><span>credential id</span><input value={form.credentialId} maxLength={128} onChange={(event) => setForm({ ...form, credentialId: event.target.value })} placeholder="auto-generated when blank" /></label>
             <label className="full"><span>policy</span><select value={form.policyId} onChange={(event) => setForm({ ...form, policyId: event.target.value })}>{!policies.some((policy) => policy.policyId === form.policyId) ? <option value={form.policyId}>{form.policyId ? `${form.policyId} · unavailable` : "Select a policy"}</option> : null}{policies.map((policy) => <option key={policy.policyId} value={policy.policyId} disabled={!policy.enabled}>{policy.policyId}{policy.enabled ? "" : " · disabled"}</option>)}</select></label>
+            <label className="full"><span>Expires at (UTC)</span><input type="datetime-local" value={form.expiresAt} onChange={event => setForm({ ...form, expiresAt: event.target.value })} /></label>
+            <KeyTierControls policy={policies.find(policy => policy.policyId === form.policyId)} fast={form.fast} ultrafast={form.ultrafast} onFast={fast => setForm({ ...form, fast })} onUltrafast={ultrafast => setForm({ ...form, ultrafast })} />
             <label className="full"><span>owner email</span><input type="email" value={form.principalId} onChange={(event) => setForm({ ...form, principalId: event.target.value })} placeholder="required for per-user retention exemption" /></label>
           </div>
           {form.policyId && !policyAvailable ? <InlineNote>This policy is unavailable. Choose an enabled policy before issuing the credential.</InlineNote> : null}
@@ -551,6 +557,10 @@ export function PolicyPanel({ keys, selected, providers, form, setForm, error, d
             <label><span>tenant</span><input value={form.tenantId} onChange={(event) => setForm({ tenantId: event.target.value })} /></label>
             <label><span>role</span><input value={form.tokenRole} onChange={(event) => setForm({ tokenRole: event.target.value })} /></label>
             <label><span>status</span><select value={form.enabled ? "active" : "disabled"} onChange={(event) => setForm({ enabled: event.target.value === "active" })}><option value="active">active</option><option value="disabled">disabled</option></select></label>
+            <label><span>daily budget ($, UTC)</span><input inputMode="decimal" value={form.dailyBudgetMicros} onChange={event => setForm({ dailyBudgetMicros: event.target.value })} placeholder="unlimited" /></label>
+            <label className="full"><span>Allowed service tiers · comma separated</span><input value={form.serviceTierAllowed} onChange={event => setForm({ serviceTierAllowed: event.target.value })} /></label>
+            <label className="full"><span>Per-model service tiers · JSON object</span><textarea value={form.serviceTierModels} onChange={event => setForm({ serviceTierModels: event.target.value })} placeholder='{"openai/gpt-6.1-sol":["default","flex","priority","ultrafast"]}' /></label>
+            <label className="full"><span>Limit hint</span><textarea maxLength={300} value={form.limitHint} onChange={event => setForm({ limitHint: event.target.value })} /></label>
             <label><span>monthly budget ($)</span><input inputMode="decimal" value={form.monthlyBudgetMicros} onChange={(event) => setForm({ monthlyBudgetMicros: event.target.value })} placeholder="unlimited" /></label>
             <label><span>fixed request cost (micros)</span><input inputMode="decimal" value={form.requestCostMicros} onChange={(event) => setForm({ requestCostMicros: event.target.value })} placeholder="blank = manifest-priced routes only" title="Required for any budgeted route without manifest pricing; blank uses versioned list pricing where available." /></label>
             <label className="full"><span>model access</span><select value={form.allModels ? "all" : "selected"} onChange={event => setForm({ allModels: event.target.value === "all" })}><option value="all">all models of allowed services</option><option value="selected">selected catalog models only</option></select></label>
@@ -599,4 +609,9 @@ export function PolicyPanel({ keys, selected, providers, form, setForm, error, d
       </aside>
     </div>
   );
+}
+
+function CredentialExpiryEditor({ credential, busy, onSave }: { credential: ProxyCredential; busy: boolean; onSave: (credential: ProxyCredential, expiresAt: string) => Promise<void> }) {
+  const [value, setValue] = useState(credential.expiresAt ?? "");
+  return <form onSubmit={event => { event.preventDefault(); void onSave(credential, value); }}><label><span>Expiry (ISO-8601 UTC)</span><input required value={value} onChange={event => setValue(event.target.value)} placeholder="2027-01-01T00:00:00Z" /></label><button type="submit" disabled={busy || !value}>Set expiry</button></form>;
 }

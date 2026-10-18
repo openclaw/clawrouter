@@ -24,7 +24,7 @@ export function AppShell() {
   const { providers, providerReadiness, accessByProvider, services, models, serviceRoutes, query, setQuery, kind, setKind, kinds, filteredServices, selectedService, setSelectedServiceId } = catalog;
   const { policies, credentials: credentialState, connections: connectionState, bindings: bindingState, upstream, assignments, fusion, users: userState, tab } = access;
   const { items: keys, selected: selectedPolicy, form: policyForm, setForm: setPolicyForm, error: policyError, save: savePolicy, revoke, edit: editPolicy, startNew: startNewPolicy, applyPreset, toggleProvider: togglePolicyProvider, setProviderGroup: setPolicyProviderGroup } = policies;
-  const { items: credentials, selected: selectedCredential, form: credentialForm, setForm: setCredentialForm, issue: issueCredential, rotate: rotateCredential, revoke: revokeCredential, edit: editCredential, startNew: startNewCredential } = credentialState;
+  const { items: credentials, selected: selectedCredential, form: credentialForm, setForm: setCredentialForm, issue: issueCredential, rotate: rotateCredential, revoke: revokeCredential, edit: editCredential, startNew: startNewCredential, setExpiry: setCredentialExpiry } = credentialState;
   const { items: connections, pendingProviderIds, setEnabled: setProviderConnection, setBudget: setProviderBudget } = connectionState;
   const { items: bindings, selected: selectedBinding, form: bindingForm, setForm: setBindingForm, save: saveBinding, edit: editBinding, startNew: startNewBinding } = bindingState;
   const { items: upstreamGrants, selected: selectedUpstreamGrant, form: upstreamGrantForm, setForm: setUpstreamGrantForm, save: saveUpstreamGrant, revoke: revokeUpstreamGrant, refresh: refreshUpstreamGrant, refreshQuota: refreshUpstreamGrantQuota, authorize: authorizeUpstreamGrant, edit: editUpstreamGrant, startNew: startNewUpstreamGrant } = upstream;
@@ -120,6 +120,7 @@ export function AppShell() {
             usageError={usage.error}
             usageUpdatedAt={usage.updatedAt}
             myCredentials={selfServiceKeys.items}
+            myPolicyLimits={catalog.entitlements?.policies}
             myPolicyIds={selfServiceKeys.policyIds}
             myKeyFeedback={credentialOwner.forSurface("personal")}
             myKeyScope={credentialOwner.scopeEpoch}
@@ -237,6 +238,7 @@ export function AppShell() {
             onDiscardPolicy={policies.discard}
             fusionError={fusionError}
             onSave={savePolicy}
+            onSetCredentialExpiry={setCredentialExpiry}
             onIssueCredential={issueCredential}
             onRevokeCredential={revokeCredential}
             onRotateCredential={rotateCredential}
