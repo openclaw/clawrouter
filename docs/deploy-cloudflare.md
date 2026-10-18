@@ -510,6 +510,26 @@ policy provider allowlists, provider readiness, OAuth grants, and budget limits.
 
 ## Session credential API
 
+All newly minted keys expire. `expiresAt` accepts an ISO-8601 UTC timestamp;
+omission defaults to 180 days. Personal keys may live at most the smaller of
+`CLAWROUTER_CREDENTIAL_DEFAULT_TTL_DAYS` (180) and
+`CLAWROUTER_CREDENTIAL_MAX_TTL_DAYS` (366). Admin explicit expiries may use the
+configured maximum. Both optional vars pass through Cloudflare and self-host
+configuration rendering. Legacy absent/null expiries continue working.
+
+Lists return `expiresAt`, `expired`, and `serviceTiers`; expired keys have
+`active: false`. `POST /v1/session/credentials/<id>/rotate` renews an enabled
+key, including an expired one, with a fresh hash and default lifetime. Its body
+still accepts only `secretSha256`. Ownership, held policy and enabled-state
+checks remain in force. Expiry is checked at each admission, including
+WebSocket turns and continuation controls; dispatched work completes.
+
+Creation accepts `serviceTiers`, a list narrowing the policy's effective tiers;
+null inherits policy access. The dashboard offers 30/90/180-day validity, Fast
+on by default, and opt-in Ultrafast only for policies granting it. Daily policy
+allowance and `limitHint` appear beside My keys. See [member rollout](member-keys.md).
+
+
 A verified Cloudflare Access session can manage proxy credentials owned by its
 normalized email. These routes do not require the admin role:
 
@@ -532,6 +552,19 @@ secret bytes, sends only their SHA-256 digest, and reveals the complete
 `clawrouter-live-<credential-id>-<secret>` key once.
 
 ## Admin API
+
+Policies additionally accept `dailyBudgetMicros`, `serviceTiers: {allowed, models}`,
+and `limitHint`. Daily limits use UTC days and the policy's existing budget
+scope. `limitHint` is trimmed plain text, at most 300 characters, with no control
+characters. Tier lists use canonical lowercase IDs, at most eight per list and
+32 catalog-model overrides. Ultrafast is restricted to the `team_server` policy's
+`openai/gpt-6.1-sol` override.
+
+Credential create/PUT accepts `expiresAt` and `serviceTiers`. Admin PUT preserves
+an existing expiry and tier restriction when omitted; omission of `secretSha256`
+also preserves an existing secret, allowing operators to stamp legacy expiry
+without rotation. A new ID still requires the hash. Null expiry is rejected.
+
 
 Admin requests use either a verified Cloudflare Access admin session or
 `Authorization: Bearer <admin-token>`. For bearer auth, the Worker compares the

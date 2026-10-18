@@ -607,6 +607,53 @@ returns HTTP 422 if exceeded; request a shorter range rather than relying on
 partial totals. Invalid scope/range returns HTTP 400; an unknown policy returns
 HTTP 404. The additive SQLite migration preserves every existing event.
 
+### Credential expiry, daily budgets, and service tiers
+
+New credentials accept `expiresAt` (future ISO-8601 UTC) and `serviceTiers`
+(canonical lowercase list or null to inherit). Expiry defaults to 180 days;
+personal maximum is min(default TTL, max TTL), admin maximum 366 days. Configure
+these using `CLAWROUTER_CREDENTIAL_DEFAULT_TTL_DAYS` and
+`CLAWROUTER_CREDENTIAL_MAX_TTL_DAYS`. An admin PUT omitting expiry preserves it;
+new IDs always receive a finite expiry. Admin PUT may omit `secretSha256` to
+preserve an existing secret while updating expiry. Rotation resets expiry and
+works for expired enabled keys under the other existing preconditions.
+
+Session/admin credential lists return `expiresAt`, `expired`, `serviceTiers`,
+and `active` (false when expired). Key inspect adds the same expiry fields,
+`serviceTiers`, `effectiveServiceTiers` keyed by visible catalog model ID,
+`dailyBudgetMicros`, `limitHint`, and `budget.daily`. An expired key still gets
+HTTP 401 on inspect, with `expiresAt`, `expired: true`, and `active: false` beside
+the error. Legacy absent/null expiry is accepted.
+
+Policies add nullable `dailyBudgetMicros` (nonnegative safe integer),
+`serviceTiers: {allowed: string[], models?: Record<string, string[]>}`, and
+`limitHint` (trimmed plain text, at most 300 characters, no controls). Tier lists
+are deduplicated, bounded to eight IDs, with at most 32 known catalog-model
+overrides. Overrides replace global tiers; credential tiers intersect them.
+Personal tier lists may only narrow the policy. Ultrafast grants are restricted
+to `team_server` on `openai/gpt-6.1-sol`. Without configuration, Default, Flex and
+Fast are allowed; Ultrafast/unknown tiers are denied, even without budgets.
+
+Existing monthly status fields remain unchanged. `/v1/usage`, session policy
+entitlements and admin usage rows add `budget.daily` with `configured`,
+`limitMicros`, `spentMicros`, `remainingMicros`, `windowKey`, and `resetsAt`
+(next midnight UTC). Principal scopes share daily and monthly balances across
+that principal's keys. Unavailable status amounts remain null.
+
+| HTTP | Error code | Meaning |
+| --- | --- | --- |
+| 401 | `proxy_key_expired` | Key expired; message names its date and dashboard renewal path. |
+| 402 | `daily_budget_exhausted` | Daily capacity exhausted; message names the limit, next UTC reset and policy hint. |
+| 402 | `budget_exhausted` | Policy monthly capacity exhausted; includes policy hint. |
+| 400 | `service_tier_not_allowed` | Requested OpenAI tier not in the policy/model/key intersection; names tier, model, allowed tiers and hint. |
+| 403 | `model_not_allowed` | Model outside policy scope; includes policy hint. |
+
+OpenAI-format omitted/default/auto map to `default`, fast maps to `priority`,
+and other strings become lowercase for admission. Other request formats retain
+existing behavior. Pricing gaps under a daily-only budget return `pricing_required`
+just as with monthly budgets. Dispatched work completes after key expiry;
+subsequent requests, WebSocket turns, background creations and continuations fail.
+
 ### Credential creation, rotation, and revocation
 
 Use `POST /v1/admin/credentials` or `POST /v1/session/credentials` with
@@ -618,7 +665,7 @@ without replacing the key or pruning retained records. Admin creation also accep
 Personal creation always enables the key and assigns the signed-in user as owner.
 
 Use `POST .../credentials/<credential-id>/rotate` with only
-`{ "secretSha256": "<64 hex characters>" }` to replace a key's hash. Rotation preserves
+`{ "secretSha256": "<64 hex characters>" }` to replace a key's hash and reset its expiry. Rotation preserves
 its owner, policy, generation, and enabled state. It requires an enabled key, an
 enabled policy with the same generation, and an owner who is not disabled. An
 inactive key returns `409 credential_inactive`; a missing key returns `404`.

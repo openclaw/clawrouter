@@ -23,12 +23,47 @@ separately. Recent request rows label their recorded accounting basis:
 
 Fusion detail covers the calls visible in the recent-event window. Partial
 groups stay labeled partial; their sum does not replace the 30-day totals.
-Budget balances use the **UTC calendar month**. **Used** includes outstanding
+Budget balances use the **UTC calendar month**, with an optional independent **UTC calendar day** cap. **Used** includes outstanding
 reservations, and **remaining** is the capacity reported by that budget ledger.
 Shared policy pools, per-principal balances, and provider-wide budgets stay
 separate. No cap at one scope does not remove other policy or provider limits.
 Unavailable balances remain unknown; failed refreshes keep their last-known
 timestamp and stale warning.
+
+## Daily limits and service tiers
+
+`dailyBudgetMicros` is an independent policy cap. `budgetScope: "principal"`
+shares it across all keys of a signed-in email (falling back to credential ID
+for unowned keys); `"policy"` shares it policy-wide. Both monthly and daily legs
+reserve the full request bound. Daily keys append `/day/YYYY-MM-DD` to the
+policy/principal path on the existing shard; monthly keys and receipts are
+unchanged. Refusal or failure of a later leg releases all earlier reservations.
+Dispatch, settlement, Fusion, WebSocket turns, and durable background recovery
+use the same variable-length leg list. Status adds `budget.daily`, including
+`limitMicros`, `spentMicros`, `remainingMicros` and `resetsAt`. Outstanding
+reservations count as spent capacity. Daily-only caps require priced requests;
+zero blocks admission. Daily exhaustion returns 402 `daily_budget_exhausted`,
+naming the limit and next midnight UTC.
+
+Policies may specify `serviceTiers: {allowed: ["default", "flex", "priority"],
+models: {"openai/gpt-6.1-sol": ["default", "flex", "priority", "ultrafast"]}}`.
+A model override replaces the global list. The key's optional `serviceTiers`
+list intersects that selection; null inherits. Personal creation may only
+request tiers granted by the policy for at least one visible model. Built-in
+defaults allow Default, Flex and Fast (`priority`), and deny Ultrafast and unknown
+tiers, **including unbudgeted policies that previously forwarded them**.
+Only `team_server` may grant Ultrafast, only for `openai/gpt-6.1-sol`.
+
+OpenAI-format admission normalizes omitted/default/auto to `default`, `fast` to
+`priority`, and other strings to lowercase. This applies to native, manifest,
+unified HTTP, Fusion and Responses WebSocket creates at shared model admission.
+Non-OpenAI formats keep their existing tier behavior, including native Gemini
+pricing. Tier denial returns 400 `service_tier_not_allowed`, naming the model,
+requested tier and allowed list. Wire payloads retain their original spelling.
+
+A policy's optional `limitHint` is appended to daily/monthly policy-budget,
+service-tier and model-allowlist refusals. Session entitlements also include it
+with per-policy daily status. See [member keys](member-keys.md) for rollout.
 
 ## Enforcement contract
 
@@ -74,7 +109,7 @@ Explicit fixed policy prices still apply independently of upstream token billing
 successful fixed zero and positive tariffs retain `cost_basis: policy_fixed`.
 
 `requestCostMicros` on a policy is an explicit fixed-cost override. Routes
-without pricing use the legacy one-micro fallback only when no monthly budget
+without pricing use the legacy one-micro fallback only when no monthly or daily budget
 is configured. Every budgeted call fails closed until its route has versioned
 manifest pricing or a fixed policy price. A zero-cost route, such as Anthropic
 token counting, skips reservation.
@@ -357,8 +392,7 @@ ClawRouter forwards `service_tier` unchanged. Absent or `auto` can inherit the
 provider project's default, so admission reserves the highest applicable known
 rates. Explicit tiers reserve their card and Standard downgrade rates. Unknown
 requested tiers fail with `pricing_required` when either the policy or provider
-has a monthly budget. When both limits are disabled, existing and new policies
-continue forwarding the requested tier unchanged. Explicit fixed policy tariffs
+has a monthly budget. When budgets are disabled, requests still must pass the policy/key tier allowlist. Explicit fixed policy tariffs
 remain available. A short-only card stays in the reservation
 envelope when actual input may fit below its published limit.
 
