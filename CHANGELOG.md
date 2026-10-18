@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Add OpenAI GPT-6.1 Sol with versioned Standard, Fast/Priority, Flex, and Ultrafast prices, cache and long-context rates, reasoning controls, and Chat token-limit normalization.
+
 - Verify the enabled prefix and 30-day expiration of the request-content lifecycle rule before reporting content provisioning success; reject conflicting existing rules without replacing them.
 
 - Add verified, signed-tag GitHub source releases with a no-publish rehearsal; keep service deployment separately dispatched.

@@ -343,6 +343,16 @@ Flex rate cards in `pricing.serviceTiers`. Rates come from the
 Fast is not a universal multiplier. GPT-5.6 uses the Sol alias and its current
 promotional prices, published through at least November 21, 2026.
 
+The `openai/gpt-6.1-sol` price snapshot dated October 18, 2026 also declares
+Ultrafast (`ultrafast`, without aliases). It includes short- and long-context
+input, cached-input, cache-write, and output rates; Standard cached input costs
+$0.10 per million tokens up to 272K input. Above 272K input, long-context rates
+apply to the entire request. The model reserves up to 922,000 input and 128,000
+output tokens within its 1,050,000-token context. Reasoning efforts are `low`,
+`medium` (default), `high`, `xhigh`, and `max`; tool calling uses Responses,
+while Chat Completions is supported without tools. See the
+[model contract](https://developers.openai.com/api/docs/models/gpt-6.1-sol).
+
 ClawRouter forwards `service_tier` unchanged. Absent or `auto` can inherit the
 provider project's default, so admission reserves the highest applicable known
 rates. Explicit tiers reserve their card and Standard downgrade rates. Unknown
