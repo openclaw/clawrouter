@@ -471,6 +471,7 @@ async function selectedAuth(request: Request, env: Env, mode: AuthMode, selectio
 export async function prepareSelected(request: Request, env: Env, selection: ProxySelection, queryInput: Record<string, unknown>, auth: AuthorizedIdentity, excludedGrantKeys: ReadonlySet<string> = new Set(), recordSelection = true, resolvedConnection?: ProviderConnection, pinned?: PinnedGrant, transport: "http" | "websocket" = "http", recoverBackground = false): Promise<PreparedUpstream> {
   assertPolicyModel(auth.policy, selection);
   assertServiceTier(auth, selection);
+  if (selection.endpoint.request_format === "openai.images_generations" && (Object.keys(queryInput).length || new URL(request.url).search)) throw new HttpError(400, "invalid_image_generation", "image generation options must be in JSON, not query parameters");
   let connection: ProviderConnection;
   try { connection = await assertProviderAccess(selection.provider, auth, env, resolvedConnection); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "provider authorization failed"); }

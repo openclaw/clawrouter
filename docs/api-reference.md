@@ -751,3 +751,14 @@ Usage events are delivered through `USAGE_QUEUE` to tenant- and policy-sharded `
 Policies can retain LLM request bodies in the separate `CONTENT_ARCHIVE` R2 binding. Retention failure is fail-closed before upstream traffic. See [Request content retention](content-retention.md) for the policy and disclosure contract.
 
 Every Worker-owned response returns the canonical `X-Request-ID`, and CORS exposes it to clients. Valid W3C trace and span IDs are preserved in usage metadata. Agent attribution headers, pricing fields, and reservation semantics are documented in [Agent spend control](agent-spend-control.md).
+
+## Image generation
+
+POST /v1/images/generations supports the OpenAI SDK's images.generate call.
+Use an explicit registered model; there is no legacy DALL-E default. See
+[OpenAI image generation](openai-images.md) for models, bounded JSON options,
+modality-specific accounting and unsupported surfaces.
+
+The same contract is available at POST /v1/native/openai/v1/images/generations
+(native model slugs) and POST /v1/proxy/openai/images_generations (manifest JSON
+envelope). Generated base64 image bytes are forwarded unchanged and never archived.

@@ -1,6 +1,7 @@
 import { googleField, googleInt32, googleServiceTier } from "./google-protocol.ts";
 
 export interface UsageTokens {
+  image?: { textInput: number; imageInput: number; imageOutput: number };
   serviceTier?: string | null;
   input: number | null;
   output: number | null;

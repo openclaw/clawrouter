@@ -8,7 +8,7 @@ const empty = (): UsageInspection => ({ tokens: null, outcome: null });
 
 // Observe the declared Responses format without assembling output. Identity
 // publication and complete output/tool-history evidence have different owners.
-export function createResponsesUsageInspector(sse: boolean, tools?: Pick<ReturnType<typeof createResponsesToolEvidence>, "accept" | "invalid">, observe?: (fact: ResponsesObservation) => Promise<void>) {
+export function createResponsesUsageInspector(sse: boolean, tools?: Pick<ReturnType<typeof createResponsesToolEvidence>, "accept" | "invalid">, observe?: (fact: ResponsesObservation) => Promise<void>, usageExtractor = extractUsageTokens) {
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const accumulator = createSseUsageAccumulator();
   let document = metadataParser(!!tools, !!observe), json = empty(), stopped = false;
@@ -114,7 +114,7 @@ export function createResponsesUsageInspector(sse: boolean, tools?: Pick<ReturnT
         if (fact) await observe?.(fact);
       }
       else tools?.invalid();
-      json = evidence.kind === "data" ? { tokens: extractUsageTokens(evidence.value), outcome: responseOutcome(evidence.value) }
+      json = evidence.kind === "data" ? { tokens: usageExtractor(evidence.value), outcome: responseOutcome(evidence.value) }
         : { tokens: null, outcome: evidence.kind === "invalid" ? "provider_error" : null };
     },
     result(ended: boolean): UsageInspection {
@@ -178,7 +178,7 @@ type Context = "root" | "response" | "usage" | "details" | "creation";
 type Field = Context | "text" | "identity" | "number" | "error" | null;
 type Frame = { context: Context | null; value: Record<string, unknown> | null; key: string | null };
 const counters = new Set(["input_tokens", "prompt_tokens", "inputTokens", "output_tokens", "completion_tokens", "outputTokens", "total_tokens", "totalTokens", "cache_read_input_tokens", "cache_creation_input_tokens", "cache_creation_ephemeral_5m_input_tokens", "cache_creation_ephemeral_1h_input_tokens"]);
-const detailCounters = new Set(["cached_tokens", "cache_read_input_tokens", "cache_write_tokens"]);
+const detailCounters = new Set(["cached_tokens", "cache_read_input_tokens", "cache_write_tokens", "text_tokens", "image_tokens"]);
 const creationCounters = new Set(["ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"]);
 
 function metadataProjection(inspectIdentity: boolean) {
@@ -197,7 +197,7 @@ function metadataProjection(inspectIdentity: boolean) {
       return key === "usage" ? "usage" : null;
     }
     if (frame.context === "usage") {
-      if (key === "input_tokens_details" || key === "prompt_tokens_details") return "details";
+      if (key === "input_tokens_details" || key === "prompt_tokens_details" || key === "output_tokens_details") return "details";
       if (key === "cache_creation") return "creation";
       return counters.has(key) ? "number" : null;
     }

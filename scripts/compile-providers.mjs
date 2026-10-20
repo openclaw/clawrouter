@@ -197,6 +197,7 @@ function normalizeQuotaWindow(window, probe) {
 }
 
 function normalizePricing(pricing) {
+  if (pricing.unit === "image_token") return structuredClone(pricing);
   if (pricing.unit === "character") return { unit: pricing.unit, effectiveAt: pricing.effectiveAt, source: pricing.source, inputMicrosPerMillionCharacters: pricing.inputMicrosPerMillionCharacters, maxInputCharacters: pricing.maxInputCharacters };
   return {
     effectiveAt: pricing.effectiveAt,
@@ -223,6 +224,14 @@ function normalizeLongContext(value) {
 
 function validatePricing(pricing, modelId) {
   if (!pricing) return;
+  if (pricing.unit === "image_token") {
+    const g = pricing.generation, b = g.outputTokenBound;
+    const maxFactor = Math.max(...Object.values(b.qualityFactors));
+    const output = Math.ceil(maxFactor * maxFactor * (b.basePixels + g.maxPixels) / b.divisor) * g.maxImages;
+    const input = (g.maxPromptCharacters * 4 + 1024) * g.maxImages;
+    if (g.minPixels > g.maxPixels || g.maxEdge % g.dimensionMultiple || !Number.isSafeInteger(output * pricing.imageOutputMicrosPerMillion + input * pricing.textInputMicrosPerMillion)) throw new Error("image pricing has an invalid reservation envelope");
+    return;
+  }
   if (pricing.longContext && pricing.longContext.thresholdInputTokens >= pricing.maxInputTokens) throw new Error(`model ${modelId} has an invalid long-context threshold`);
   if (pricing.serviceTiers === undefined) return;
   const tiers = pricing.serviceTiers;
@@ -261,6 +270,11 @@ function validateManifest(manifest) {
       if (parameters.defaultReasoningEffort !== undefined && !model.supportedReasoningEfforts?.includes(parameters.defaultReasoningEffort)) throw new Error(`model ${model.id} requestParameters default effort must belong to supportedReasoningEfforts`);
     }
     validatePricing(model.pricing, model.id);
+    if (model.capabilities?.includes("image.generation") && model.pricing?.unit !== "image_token") throw new Error("image generation requires a qualified image pricing contract");
+    if (model.pricing?.unit === "image_token" && (!model.capabilities?.length || model.capabilities.some((id) => {
+      const endpoint = manifest.endpoints[manifest.capabilities.find((capability) => capability.id === id)?.endpoint];
+      return id !== "image.generation" || endpoint?.requestFormat !== "openai.images_generations" || endpoint.responseFormat !== "openai.images_generations" || endpoint.streaming;
+    }))) throw new Error("image pricing requires the JSON image generation contract");
     if (model.pricing?.unit === "character" && (!model.capabilities?.length || model.capabilities.some((id) => {
       const endpoint = manifest.endpoints[manifest.capabilities.find((capability) => capability.id === id)?.endpoint];
       return id !== "audio.speech" || endpoint?.requestFormat !== "openai.audio_speech" || endpoint.responseFormat !== "audio.binary";

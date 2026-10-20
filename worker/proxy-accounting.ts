@@ -62,15 +62,17 @@ export function accountingReceipt(facts: AccountingFacts, outcome: AccountingOut
   const soft = reservation.charges !== undefined;
   const measured = cost.pricingGap && !soft ? null : tokens ? (soft && !model?.pricing && fixed == null ? null : actualCost(model, tokens, fixed, requestFormat))
     : characterEstimate === null ? null : fixed ?? characterEstimate;
-  const actual = billable ? measured ?? (soft ? fixed ?? 0 : cost.reserveMicros) : 0;
+  const image = model?.pricing?.unit === "image_token";
+  const actual = billable ? measured ?? (soft && !image ? fixed ?? 0 : fixed ?? cost.reserveMicros) : 0;
   const knownNoCharge = !billable || (tokens?.billable === false && actual === 0 && cost.basis !== "policy_fixed");
   const measuredBasis = characterEstimate !== null ? "request_character_estimate"
-    : model?.pricing?.unit !== "character" && model?.pricing?.settlementBasis === "published_upper_bound" ? "manifest_rate_upper_bound" : "manifest_pricing";
-  const basis = soft && billable && measured == null && fixed == null ? "unpriced_usage" : knownNoCharge ? "none" : cost.pricingGap ? "unpriced_usage" : cost.basis === "unpriced_service_tier"
+    : model?.pricing?.unit == null && model?.pricing?.settlementBasis === "published_upper_bound" ? "manifest_rate_upper_bound" : "manifest_pricing";
+  const basis = soft && !image && billable && measured == null && fixed == null ? "unpriced_usage" : knownNoCharge ? "none" : cost.pricingGap ? "unpriced_usage" : cost.basis === "unpriced_service_tier"
     ? measured == null ? "unpriced_usage" : measuredBasis
     : cost.basis === "manifest_pricing" ? measured == null ? "manifest_reservation" : measuredBasis : cost.basis;
   return { ...event, occurred_at_ms: outcome.occurredAtMs, status_code: outcome.statusCode, status: outcome.status,
     input_tokens: tokens?.input ?? null, output_tokens: tokens?.output ?? null, total_tokens: tokens?.total ?? null,
+    ...(tokens?.image ? { image_usage: { text_input_tokens: tokens.image.textInput, image_input_tokens: tokens.image.imageInput, image_output_tokens: tokens.image.imageOutput } } : {}),
     cached_input_tokens: tokens?.cached ?? null, cache_write_input_tokens: tokens?.cacheWrite ?? null,
     reserved_cost_micros: reservation.reservedMicros, actual_cost_micros: actual, cost_basis: basis,
     served_service_tier: outcome.servedTier === undefined ? tokens?.serviceTier ?? null : outcome.servedTier,

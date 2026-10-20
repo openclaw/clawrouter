@@ -5,7 +5,15 @@ export interface LongContextPricing extends TokenRates { thresholdInputTokens: n
 export interface ServiceTierPricing extends TokenRates { id: string; aliases: string[]; maxInputTokens: number | null; longContext: LongContextPricing | null }
 export interface TokenPricing extends TokenRates { unit?: never; effectiveAt: string; source: string; maxInputTokens: number; maxRequestInputTokens: number | null; defaultMaxOutputTokens: number; inputTokenOverhead: number; longContext: LongContextPricing | null; serviceTiers?: ServiceTierPricing[]; unpricedCosts?: Array<"request_fee">; settlementBasis?: "published_upper_bound" }
 export interface CharacterPricing { unit: "character"; effectiveAt: string; source: string; inputMicrosPerMillionCharacters: number; maxInputCharacters: number }
-export type ModelPricing = TokenPricing | CharacterPricing;
+// Image generation uses modality-specific usage, not an ordinary chat token card.
+export interface ImageTokenPricing {
+  unit: "image_token"; effectiveAt: string; source: string;
+  textInputMicrosPerMillion: number; imageInputMicrosPerMillion: number; imageOutputMicrosPerMillion: number;
+  generation: { source: string; checkedAt: string; maxPromptCharacters: number; maxImages: number;
+    dimensionMultiple: number; minPixels: number; maxPixels: number; maxEdge: number; maxAspectRatio: number;
+    outputTokenBound: { basePixels: number; divisor: number; qualityFactors: Record<string, number> } };
+}
+export type ModelPricing = TokenPricing | CharacterPricing | ImageTokenPricing;
 export interface ClientCatalogModel { id: string; upstream: string; codexModel?: string; capabilities: string[]; supportedReasoningEfforts?: ProviderReasoningEffort[]; requestParameters?: Record<string, ModelRequestParameters>; pricing_ref: string | null; pricing: ModelPricing | null }
 export interface CatalogOffer {
   endpoint: string;
@@ -335,6 +343,7 @@ export interface UsageAuditEvent {
   input_tokens?: number | null;
   output_tokens?: number | null;
   total_tokens?: number | null;
+  image_usage?: { text_input_tokens: number; image_input_tokens: number; image_output_tokens: number };
   cached_input_tokens?: number | null;
   cache_write_input_tokens?: number | null;
   reserved_cost_micros: number;

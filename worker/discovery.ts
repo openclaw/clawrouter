@@ -27,7 +27,7 @@ function staticProviderProjection(provider: CompiledProvider) {
     const display_name = `${provider.display_name} · ${model.id}`;
     return [model.id, {
       openai: Object.freeze({ id: model.id, object: "model", owned_by: provider.id, display_name }),
-      anthropic: Object.freeze({ id: model.id, type: "model", display_name, created_at: "1970-01-01T00:00:00Z", capabilities: null, max_input_tokens: model.pricing?.unit === "character" ? null : model.pricing?.maxInputTokens ?? null, max_tokens: model.pricing?.unit === "character" ? null : model.pricing?.defaultMaxOutputTokens ?? null }),
+      anthropic: Object.freeze({ id: model.id, type: "model", display_name, created_at: "1970-01-01T00:00:00Z", capabilities: null, max_input_tokens: model.pricing?.unit != null ? null : model.pricing?.maxInputTokens ?? null, max_tokens: model.pricing?.unit != null ? null : model.pricing?.defaultMaxOutputTokens ?? null }),
     }];
   }));
   const routes = new Map(provider.endpoints.filter(endpoint => endpoint.native_proxy).map(endpoint => [endpoint.id, Object.freeze({ endpoint: endpoint.id, methods: Object.freeze([...endpoint.methods]) as unknown as string[], path: endpoint.path, requestFormat: endpoint.request_format, responseFormat: endpoint.response_format, streaming: endpoint.streaming })]));
@@ -81,7 +81,7 @@ export async function modelsResponse(request: Request, env: Env): Promise<Respon
   if (request.headers.has("anthropic-version")) {
     const data = snapshot.providers.flatMap((provider) => (inventory.get(provider.id)?.models ?? []).filter((model) => model.capabilities.includes("llm.messages")).map((model) => compiledProjection(provider).models.get(model.id)?.anthropic ?? ({
       id: model.id, type: "model", display_name: `${provider.display_name} · ${model.id}`, created_at: "1970-01-01T00:00:00Z",
-      capabilities: null, max_input_tokens: model.pricing?.unit === "character" ? null : model.pricing?.maxInputTokens ?? null, max_tokens: model.pricing?.unit === "character" ? null : model.pricing?.defaultMaxOutputTokens ?? null,
+      capabilities: null, max_input_tokens: model.pricing?.unit != null ? null : model.pricing?.maxInputTokens ?? null, max_tokens: model.pricing?.unit != null ? null : model.pricing?.defaultMaxOutputTokens ?? null,
     })));
     return privateJson({ data, first_id: data[0]?.id ?? null, has_more: false, last_id: data.at(-1)?.id ?? null });
   }

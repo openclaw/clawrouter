@@ -99,12 +99,12 @@ export function endpointForPath(provider: CompiledProvider, path: string): Compi
 }
 
 export function capabilityForPath(path: string): string | null {
-  return path === "/v1/chat/completions" ? "llm.chat" : path === "/v1/responses" ? "llm.responses" : path === "/v1/embeddings" ? "llm.embeddings" : path === "/v1/audio/speech" ? "audio.speech" : null;
+  return path === "/v1/chat/completions" ? "llm.chat" : path === "/v1/responses" ? "llm.responses" : path === "/v1/embeddings" ? "llm.embeddings" : path === "/v1/audio/speech" ? "audio.speech" : path === "/v1/images/generations" ? "image.generation" : null;
 }
 
 export function unifiedPathForEndpoint(provider: CompiledProvider, endpoint: CompiledEndpoint): string | null {
   const format = endpoint.request_format;
-  const path = format === "openai.chat_completions" ? "/v1/chat/completions" : format === "openai.responses" ? "/v1/responses" : format === "openai.embeddings" ? "/v1/embeddings" : format === "openai.audio_speech" ? "/v1/audio/speech" : null;
+  const path = format === "openai.chat_completions" ? "/v1/chat/completions" : format === "openai.responses" ? "/v1/responses" : format === "openai.embeddings" ? "/v1/embeddings" : format === "openai.audio_speech" ? "/v1/audio/speech" : format === "openai.images_generations" ? "/v1/images/generations" : null;
   const responseFormat = format === "openai.audio_speech" ? "audio.binary" : format;
   return path && endpoint.response_format === responseFormat && endpointForPath(provider, path)?.id === endpoint.id ? path : null;
 }
@@ -440,4 +440,4 @@ function encodePathParam(value: string, style: string): string {
 }
 
 function secretConfigKey(key: string): boolean { return /_(?:API_KEY|API_TOKEN|TOKEN)$/.test(key); }
-function unifiedPathForCapability(capability: string): string { return capability === "llm.chat" ? "/v1/chat/completions" : capability === "llm.responses" ? "/v1/responses" : capability === "llm.embeddings" ? "/v1/embeddings" : capability === "audio.speech" ? "/v1/audio/speech" : ""; }
+function unifiedPathForCapability(capability: string): string { return capability === "llm.chat" ? "/v1/chat/completions" : capability === "llm.responses" ? "/v1/responses" : capability === "llm.embeddings" ? "/v1/embeddings" : capability === "audio.speech" ? "/v1/audio/speech" : capability === "image.generation" ? "/v1/images/generations" : ""; }

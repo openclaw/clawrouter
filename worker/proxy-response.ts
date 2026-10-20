@@ -1,3 +1,4 @@
+import { extractImageUsageTokens } from "./image-generation.ts";
 import { createResponsesUsageInspector } from "./responses-usage.ts";
 import { createSseUsageInspector, extractUsageTokens, responseOutcome, usageInspectionLimit, type ResponsesObservation, type UsageInspection } from "./token-usage.ts";
 import { HttpOperation } from "./http-operation.ts";
@@ -29,9 +30,10 @@ export function observeUsage(response: Response, operation = new HttpOperation()
   const mime = contentType.split(";")[0].trim();
   const audio = /^audio\/[!#$%&'*+.^_`|~0-9a-z-]+$/.test(mime) || mime === "application/octet-stream";
   const eventStream = !speech && contentType.includes("text/event-stream"), json = !speech && contentType.includes("json");
-  const responses = responseFormat === "openai.responses" && (eventStream || json) ? createResponsesUsageInspector(eventStream, bodyInspection?.tools, bodyInspection?.observe) : null;
-  const sse = !responses && eventStream ? createSseUsageInspector() : null;
-  let inspect = !responses && !sse && json;
+  const images = responseFormat === "openai.images_generations";
+  const responses = images && json ? createResponsesUsageInspector(false, undefined, undefined, extractImageUsageTokens) : responseFormat === "openai.responses" && (eventStream || json) ? createResponsesUsageInspector(eventStream, bodyInspection?.tools, bodyInspection?.observe) : null;
+  const sse = !images && !responses && eventStream ? createSseUsageInspector() : null;
+  let inspect = !images && !responses && !sse && json;
   const decoder = new TextDecoder();
   const reader = response.body.getReader();
   let text = "", bytes = 0, nonempty = false, finished = false;

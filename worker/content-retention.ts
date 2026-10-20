@@ -12,7 +12,7 @@ interface RetainedSelection {
 }
 
 export function retentionRequired(auth: AuthorizedIdentity, capability: string): boolean {
-  return auth.policy.retainRequestContent !== false && !auth.contentRetentionDisabled && (capability.startsWith("llm.") || capability === "audio.speech");
+  return auth.policy.retainRequestContent !== false && !auth.contentRetentionDisabled && (capability.startsWith("llm.") || capability === "audio.speech" || capability === "image.generation");
 }
 
 export function contentRetentionDefault(env: Env): boolean {

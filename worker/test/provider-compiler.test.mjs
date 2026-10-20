@@ -477,3 +477,27 @@ test("request parameter facts validate endpoint compatibility, provenance, and r
     assert.ok(JSON.parse(compile(path)).providers[0].models.every((entry) => !("requestParameters" in entry)));
   });
 });
+
+test("image tariffs round-trip without chat rates and reject unqualified generation contracts", () => {
+  const valid=parse(readFileSync("providers/openai.provider.yaml","utf8"));
+  const index=valid.models.entries.findIndex(m=>m.id==="openai/gpt-image-2.5-flare");
+  withManifest(path=>{
+    writeFileSync(path,JSON.stringify(valid));
+    const provider=JSON.parse(compile(path)).providers[0],model=provider.models.find(m=>m.id==="openai/gpt-image-2.5-flare");
+    assert.deepEqual(model.pricing,valid.models.entries[index].pricing);
+    assert.equal(Object.hasOwn(model.pricing,"outputMicrosPerMillion"),false);
+    for(const [name,mutate] of [
+      ["negative rate",m=>{m.models.entries[index].pricing.textInputMicrosPerMillion=-1;}],
+      ["missing rate",m=>{delete m.models.entries[index].pricing.imageOutputMicrosPerMillion;}],
+      ["unpriced generation",m=>{delete m.models.entries[index].pricing;}],
+      ["missing provenance",m=>{delete m.models.entries[index].pricing.generation.source;}],
+      ["unbounded count",m=>{m.models.entries[index].pricing.generation.maxImages=11;}],
+      ["inverted pixels",m=>{m.models.entries[index].pricing.generation.minPixels=8294400;m.models.entries[index].pricing.generation.maxPixels=655360;}],
+      ["unsafe reservation",m=>{m.models.entries[index].pricing.imageOutputMicrosPerMillion=Number.MAX_SAFE_INTEGER;}],
+      ["chat tariff",m=>{m.models.entries[index].pricing.outputMicrosPerMillion=1;}],
+      ["wrong operation",m=>{m.models.entries[index].capabilities=["llm.chat"];}],
+      ["SSE",m=>{m.endpoints.images_generations.streaming="sse";}],
+      ["wrong response format",m=>{m.endpoints.images_generations.responseFormat="openai.responses";}],
+    ]){const manifest=structuredClone(valid);mutate(manifest);writeFileSync(path,JSON.stringify(manifest));assert.throws(()=>compile(path),/invalid manifest|image pricing|image generation requires/,name);}
+  });
+});

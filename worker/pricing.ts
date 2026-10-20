@@ -1,3 +1,4 @@
+import { actualImageCost, estimateImageCost } from "./image-generation.ts";
 import type { CharacterPricing, CompiledEndpoint, ModelPricing, ServiceTierPricing, TokenPricing, TokenRates } from "./types";
 import { googleField, googleInt32, googleRequestServiceTier, googleServiceTier } from "./google-protocol.ts";
 import type { ToolKnowledge } from "./responses-tool-evidence.ts";
@@ -10,6 +11,7 @@ export interface CostEstimate {
 }
 
 export interface PricedTokens {
+  image?: { textInput: number; imageInput: number; imageOutput: number };
   serviceTier?: string | null;
   billable?: false;
   input: number | null;
@@ -32,7 +34,7 @@ interface Rates {
 export type PricingGap = "model_request_fee" | "hosted_tool_fee" | "hosted_tool_usage" | "retained_tool_unknown";
 
 export function requestPricingGap(pricing: ModelPricing | null | undefined, body: Record<string, unknown>, requestFormat: string, parentTools?: ToolKnowledge): PricingGap | null {
-  if (pricing?.unit !== "character" && pricing?.unpricedCosts?.includes("request_fee")) return "model_request_fee";
+  if (pricing?.unit == null && pricing?.unpricedCosts?.includes("request_fee")) return "model_request_fee";
   if (requestFormat === "openai.chat_completions" && isObject(body.web_search_options)) return "hosted_tool_fee";
   // Saved Responses prompts retain tools; an opaque reference cannot prove
   // that the effective request has only the declared token charges.
@@ -91,6 +93,7 @@ export function hostedToolPricingGap(tools: readonly unknown[], requestFormat: s
 export type PricingEndpoint = Pick<CompiledEndpoint, "request_format" | "outputTokenLimit">;
 
 export function estimateModelCost(pricing: ModelPricing, body: Record<string, unknown>, endpoint?: PricingEndpoint): CostEstimate {
+  if (pricing.unit === "image_token") return estimateImageCost(pricing, body);
   if (pricing.unit === "character") {
     // UTF-8 bytes bound code points without assuming an upstream tokenizer.
     // Empty catalog probes retain the full bounded envelope; dispatch validates input.
@@ -130,6 +133,7 @@ export function estimateModelCost(pricing: ModelPricing, body: Record<string, un
 // Bounds without a request: inspect every declared tier/context, including cache
 // rates. A zero balance alone cannot exclude output-only or zero-price requests.
 export function modelReservationBounds(pricing: ModelPricing): { minimumMicros: number; zero: boolean } {
+  if (pricing.unit === "image_token") return { minimumMicros: pricing.imageOutputMicrosPerMillion > 0 ? 1 : 0, zero: pricing.textInputMicrosPerMillion === 0 && pricing.imageInputMicrosPerMillion === 0 && pricing.imageOutputMicrosPerMillion === 0 };
   if (pricing.unit === "character") return { minimumMicros: characterCost(1, pricing), zero: pricing.inputMicrosPerMillionCharacters === 0 };
   const cards = pricing.serviceTiers?.length ? pricing.serviceTiers : [pricing];
   const rates = cards.flatMap((card) => [card, ...(card.longContext ? [card.longContext] : [])]).map(ratesFromPricing);
@@ -138,6 +142,7 @@ export function modelReservationBounds(pricing: ModelPricing): { minimumMicros: 
 }
 
 export function actualModelCost(pricing: ModelPricing, tokens: PricedTokens, requestFormat?: string): number | null {
+  if (pricing.unit === "image_token") return requestFormat === "openai.images_generations" ? actualImageCost(pricing, tokens) : null;
   if (pricing.unit === "character") return null;
   if (tokens.billable === false) return 0;
   if (tokens.input == null) return null;

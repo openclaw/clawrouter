@@ -96,3 +96,6 @@ Numbered GitHub source releases use the [release workflow](RELEASING.md), indepe
 ## License
 
 MIT. See [LICENSE](LICENSE).
+
+OpenAI [image generation](docs/openai-images.md) is available through the standard
+Images API, native and manifest proxy routes with modality-specific accounting.

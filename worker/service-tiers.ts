@@ -31,7 +31,7 @@ export function assertServiceTier(auth: Pick<AuthorizedIdentity, "policy" | "ser
   // Invalid values must not become an omitted/default tier through extraction.
   const normalized = typeof raw === "string" ? normalizeServiceTier(extractServiceTier({ service_tier: raw.toLowerCase() }) ?? raw.toLowerCase()) : raw == null ? "default" : "invalid";
   const pricing = selection.model?.pricing;
-  const tier = pricing && pricing.unit !== "character" ? pricing.serviceTiers?.find(card => card.aliases.includes(normalized))?.id ?? normalized : normalized;
+  const tier = pricing && pricing.unit == null ? pricing.serviceTiers?.find(card => card.aliases.includes(normalized))?.id ?? normalized : normalized;
   const model = selection.model?.id ?? (typeof body.model === "string" ? body.model : "unknown");
   const allowed = allowedServiceTiers(auth.policy, model, auth.serviceTiers);
   if (!allowed.includes(tier)) throw new HttpError(400, "service_tier_not_allowed", withLimitHint(`Service tier ${tier} is not allowed for ${model} on this key; allowed tiers: ${allowed.join(", ") || "none"}.`, auth.policy));

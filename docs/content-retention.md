@@ -1,9 +1,9 @@
 # Request content retention
 
-ClawRouter access policies retain authorized LLM request bodies and speech input
-JSON for 30 days by default. This is an access condition for administrator-funded
+ClawRouter access policies retain authorized LLM request bodies, speech input
+and image-generation input JSON for 30 days by default. This is an access condition for administrator-funded
 credentials, not application logging. Provider completions, including generated
-audio, are not retained.
+audio and images, are not retained.
 
 The locked FakeCo staging profile overrides the environment default to off.
 New or migrated FakeCo policies without an explicit setting therefore remain
@@ -17,7 +17,8 @@ metadata-only; request retention requires an explicit policy opt-in.
   user's email.
 - Credentials should identify their owner with `principalId`. Legacy unowned
   credentials follow the policy setting and cannot use a per-user exemption.
-- Authorized LLM request content and speech input JSON are written to
+- Authorized LLM request content, speech input and image-generation input JSON
+  are written to
   `CONTENT_ARCHIVE` after access and budget checks, immediately before the upstream
   request. If required storage is unavailable, ClawRouter returns
   `503 content_retention_unavailable` and does not call the provider.

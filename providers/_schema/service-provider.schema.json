@@ -703,7 +703,168 @@
       }
     },
     "modelPricing": {
-      "oneOf": [{ "$ref": "#/$defs/tokenPricing" }, { "$ref": "#/$defs/characterPricing" }]
+      "oneOf": [{ "$ref": "#/$defs/tokenPricing" }, { "$ref": "#/$defs/characterPricing" }, { "$ref": "#/$defs/imageTokenPricing" }]
+    },
+    "imageTokenPricing": {
+      "type": "object",
+      "required": [
+        "unit",
+        "effectiveAt",
+        "source",
+        "textInputMicrosPerMillion",
+        "imageInputMicrosPerMillion",
+        "imageOutputMicrosPerMillion",
+        "generation"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "unit": {
+          "const": "image_token"
+        },
+        "effectiveAt": {
+          "type": "string",
+          "format": "date"
+        },
+        "source": {
+          "type": "string",
+          "pattern": "^https://"
+        },
+        "textInputMicrosPerMillion": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "imageInputMicrosPerMillion": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "imageOutputMicrosPerMillion": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "generation": {
+          "type": "object",
+          "required": [
+            "source",
+            "checkedAt",
+            "maxPromptCharacters",
+            "maxImages",
+            "dimensionMultiple",
+            "minPixels",
+            "maxPixels",
+            "maxEdge",
+            "maxAspectRatio",
+            "outputTokenBound"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "source": {
+              "type": "string",
+              "pattern": "^https://"
+            },
+            "checkedAt": {
+              "type": "string",
+              "format": "date"
+            },
+            "maxPromptCharacters": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 32000
+            },
+            "maxImages": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 10
+            },
+            "dimensionMultiple": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 64
+            },
+            "minPixels": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8294400
+            },
+            "maxPixels": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 8294400
+            },
+            "maxEdge": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3840
+            },
+            "maxAspectRatio": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 3
+            },
+            "outputTokenBound": {
+              "type": "object",
+              "required": [
+                "basePixels",
+                "divisor",
+                "qualityFactors"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "basePixels": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10000000
+                },
+                "divisor": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 10000000
+                },
+                "qualityFactors": {
+                  "type": "object",
+                  "required": [
+                    "low",
+                    "medium",
+                    "high",
+                    "xhigh",
+                    "max"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "low": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 1024
+                    },
+                    "medium": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 1024
+                    },
+                    "high": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 1024
+                    },
+                    "xhigh": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 1024
+                    },
+                    "max": {
+                      "type": "integer",
+                      "minimum": 1,
+                      "maximum": 1024
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
     },
     "characterPricing": {
       "type": "object",

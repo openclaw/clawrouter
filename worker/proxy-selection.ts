@@ -1,3 +1,4 @@
+import { validateImageGeneration } from "./image-generation.ts";
 import { resolveTemplate } from "./provider-templates.ts";
 import type { CompiledEndpoint, CompiledModel, CompiledProvider, Env, ProxyRequestBody } from "./types";
 import { capabilityForPath, endpointForPath, modelRoute, modelSupportsEndpoint, providerForModel, providerModel, transformRequestBody, unifiedPathForEndpoint } from "./providers";
@@ -15,6 +16,12 @@ export interface ProxySelection {
 }
 
 export function validateSelectedInput(selection: ProxySelection): void {
+  if (selection.endpoint.request_format === "openai.images_generations") {
+    const pricing = selection.model?.pricing;
+    if (pricing?.unit !== "image_token") throw new HttpError(400, "image_model_unqualified", "a registered image generation tariff is required");
+    validateImageGeneration(requestObject(selection.body), pricing);
+    return;
+  }
   if (selection.endpoint.request_format !== "openai.audio_speech") return;
   const body = requestObject(selection.body);
   if (!selection.model) throw new HttpError(400, "model_required", "a registered speech model is required");
