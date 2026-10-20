@@ -537,11 +537,36 @@ try {
   assert.equal(canonicalCredential.status, 200);
   const canonicalCredentialBody = await canonicalCredential.json();
   assert.ok(Date.parse(canonicalCredentialBody.expiresAt) > Date.now(), "new credentials have a finite future expiry");
-  const expectedCredential = { credentialId: "shape_credential", policyId: "migrate", enabled: false, policyEnabled: true, generationMatches: true, principalEnabled: true, active: false, principalId: "owner@example.com", expiresAt: canonicalCredentialBody.expiresAt, expired: false, serviceTiers: null };
+  const expectedCredential = { credentialId: "shape_credential", name: null, policyId: "migrate", enabled: false, policyEnabled: true, generationMatches: true, principalEnabled: true, active: false, principalId: "owner@example.com", expiresAt: canonicalCredentialBody.expiresAt, expired: false, serviceTiers: null };
   assert.deepEqual(canonicalCredentialBody, expectedCredential);
   const credentialsAfterMutation = await fetch(`${base}/v1/admin/credentials`, { headers: userHeaders });
   assert.equal(credentialsAfterMutation.status, 200);
   assert.deepEqual((await credentialsAfterMutation.json()).credentials.find((credential) => credential.credentialId === "shape_credential"), expectedCredential);
+  // Exercise naming through real workerd and its serialized credential authority.
+  // Exact response/list assertions also prove rename cannot restore a revoked key.
+  for (const [name, expected] of [["  Archived laptop  ", "Archived laptop"], ["   ", null], ["Again", "Again"], [null, null]]) {
+    const renamed = await fetch(`${base}/v1/admin/credentials/shape_credential/rename`, { method: "POST", headers: userHeaders, body: JSON.stringify({ name }) });
+    assert.equal(renamed.status, 200);
+    assert.equal(renamed.headers.get("cache-control"), "no-store");
+    assert.deepEqual(await renamed.json(), { ...expectedCredential, name: expected });
+    const listed = await fetch(`${base}/v1/admin/credentials`, { headers: userHeaders });
+    assert.equal(listed.status, 200);
+    assert.deepEqual((await listed.json()).credentials.find((credential) => credential.credentialId === "shape_credential"), { ...expectedCredential, name: expected });
+  }
+  const namedSecret = "local-named-key-secret";
+  const named = await fetch(`${base}/v1/admin/credentials`, { method: "POST", headers: userHeaders, body: JSON.stringify({ credentialId: "named_credential", policyId: "migrate", name: "  Work laptop  ", secretSha256: sha256(namedSecret), serviceTiers: ["default"] }) });
+  assert.equal(named.status, 201);
+  const namedBody = await named.json();
+  assert.deepEqual(namedBody, { ...expectedCredential, credentialId: "named_credential", name: "Work laptop", enabled: true, active: true, principalId: null, serviceTiers: ["default"], expiresAt: namedBody.expiresAt });
+  assert.ok(Date.parse(namedBody.expiresAt) > Date.now());
+  for (const name of ["Home laptop", null]) {
+    const renamed = await fetch(`${base}/v1/admin/credentials/named_credential/rename`, { method: "POST", headers: userHeaders, body: JSON.stringify({ name }) });
+    assert.equal(renamed.status, 200);
+    assert.deepEqual(await renamed.json(), { ...namedBody, name });
+    const inspected = await fetch(`${base}/v1/key/inspect`, { headers: { authorization: `Bearer clawrouter-live-named_credential-${namedSecret}` } });
+    assert.equal(inspected.status, 200, "rename and clear preserve the original secret");
+    assert.equal((await inspected.json()).verification, "verified");
+  }
   const policiesBeforeInvalidRoots = await fetch(`${base}/v1/admin/policies`, { headers: userHeaders });
   assert.equal(policiesBeforeInvalidRoots.status, 200);
   const migratePolicyBeforeInvalidRoots = (await policiesBeforeInvalidRoots.json()).policies.find((policy) => policy.policyId === "migrate");
