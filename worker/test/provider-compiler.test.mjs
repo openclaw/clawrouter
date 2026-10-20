@@ -45,6 +45,16 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.deepEqual(compiled.providers.find((provider) => provider.id === "aws-bedrock").optional_config_keys, ["AWS_SESSION_TOKEN"]);
   assert.deepEqual(compiled.providers.find((provider) => provider.id === "azure-openai").optional_config_keys, ["AZURE_OPENAI_COMPLETION_TOKEN_DEPLOYMENTS", "AZURE_OPENAI_API_VERSION", "AZURE_OPENAI_DEPLOYMENT"]);
   const openai = compiled.providers.find((provider) => provider.id === "openai");
+  const embedding = openai.models.find((model) => model.id === "openai/text-embedding-3-small");
+  assert.equal(embedding.upstream, "text-embedding-3-small");
+  assert.deepEqual(embedding.capabilities, ["llm.embeddings"]);
+  assert.equal(embedding.pricing_ref, "openai-text-embedding-3-small-standard-2026-10-20");
+  assert.equal(embedding.pricing.inputMicrosPerMillion, 20_000);
+  assert.equal(embedding.pricing.outputMicrosPerMillion, 0);
+  assert.equal(embedding.pricing.maxInputTokens, 8192);
+  assert.equal(embedding.pricing.maxRequestInputTokens, 300_000);
+  assert.equal(embedding.pricing.defaultMaxOutputTokens, 0);
+  assert.deepEqual(compiled.model_index[embedding.id], { provider: "openai", ...Object.fromEntries(Object.entries(embedding).filter(([key]) => key !== "id")) });
   assert.equal(openai.endpoints.find((endpoint) => endpoint.id === "responses").websocket, "openai.responses");
   assert.equal(compiled.providers.find((provider) => provider.id === "azure-openai").endpoints.find((endpoint) => endpoint.id === "responses").websocket, undefined);
   const astra = openai.models.find((model) => model.id === "openai/gpt-6-astra");
