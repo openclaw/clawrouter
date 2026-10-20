@@ -11,8 +11,8 @@ export function validateImageGeneration(body: Record<string, unknown>, pricing: 
   if (Object.keys(body).some(key => !fields.has(key))) fail("unsupported image generation option; streaming and partial_images are not supported");
   if (body.stream !== undefined && body.stream !== false) fail("image streaming is not supported; use JSON generation");
   const limits = pricing.generation;
-  if (typeof body.prompt !== "string" || !body.prompt.length || [...body.prompt].length > limits.maxPromptCharacters) fail("image prompt exceeds the qualified character limit or is empty");
-  if (body.n !== undefined && (!Number.isSafeInteger(body.n) || Number(body.n) < 1 || Number(body.n) > limits.maxImages)) fail("image count exceeds the qualified range");
+  if (typeof body.prompt !== "string" || !body.prompt.length || [...body.prompt].length > limits.maxPromptCharacters) fail("image prompt must be a nonempty string of at most " + limits.maxPromptCharacters + " Unicode code points");
+  if (body.n !== undefined && (!Number.isSafeInteger(body.n) || Number(body.n) < 1 || Number(body.n) > limits.maxImages)) fail("image n must be an integer from 1 to " + limits.maxImages);
   const option = (key: string, values: string[]) => { if (body[key] !== undefined && !values.includes(body[key] as string)) fail("unsupported image " + key); };
   option("quality", [...Object.keys(limits.outputTokenBound.qualityFactors), "auto"]);
   option("background", ["auto", "opaque", "transparent"]);

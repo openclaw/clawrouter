@@ -102,3 +102,25 @@ for (const scenario of ["cancel","abort","error","malformed","missing","sse"]) t
   assert.equal((await observed.result).tokens,null,"partial, malformed or non-JSON usage cannot discount the reservation");
   if(["cancel","abort","error"].includes(scenario))assert.equal(cancel,scenario==="error"?0:1);
 });
+
+test("prompt and n diagnostics name corrective manifest-derived limits without exposing caller content", () => {
+  const custom = { ...pricing, generation: { ...pricing.generation, maxPromptCharacters: 2, maxImages: 3 } };
+  for (const tariff of [pricing, custom]) {
+    const { maxPromptCharacters, maxImages } = tariff.generation;
+    const promptMessage = "image prompt must be a nonempty string of at most " + maxPromptCharacters + " Unicode code points";
+    const countMessage = "image n must be an integer from 1 to " + maxImages;
+    const privateIdentifier = "fixture-private-identifier";
+    const check = (body, message) => assert.throws(() => validateImageGeneration({ safety_identifier: privateIdentifier, ...body }, tariff), error => {
+      assert.equal(error.status, 400);
+      assert.equal(error.code, "invalid_image_generation");
+      assert.equal(error.message, message);
+      assert.ok(!error.message.includes(privateIdentifier));
+      return true;
+    });
+    for (const prompt of [undefined, null, 42, "", "😀".repeat(maxPromptCharacters + 1)]) check({ prompt }, promptMessage);
+    for (const n of [0, -1, 1.5, null, "1", maxImages + 1]) check({ prompt: "😀", n }, countMessage);
+    // Limits count Unicode code points, not UTF-16 code units. Omitted n stays valid.
+    validateImageGeneration({ prompt: "😀".repeat(maxPromptCharacters) }, tariff);
+    validateImageGeneration({ prompt: "😀", n: maxImages }, tariff);
+  }
+});

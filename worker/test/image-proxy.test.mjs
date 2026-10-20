@@ -119,3 +119,20 @@ test("manifest image rejects query options in the envelope",async t=>{
  const response=await handler.fetch(new Request("https://router.example/v1/proxy/openai/images_generations",{method:"POST",headers:{authorization:"Bearer "+proxyKey(),"content-type":"application/json"},body:JSON.stringify({query:{n:10},body:{model:model.id,prompt}})}),f.env,{waitUntil:p=>f.pending.push(p)});
  assert.equal(response.status,400);assert.equal((await response.json()).error.code,"invalid_image_generation");await Promise.all(f.pending);assert.equal(upstream.mock.callCount(),0);
 });
+
+for (const route of routes) test("image route " + route + " returns corrective prompt and n messages", async t => {
+  const f = fixture(t), limits = model.pricing.generation;
+  const upstream = t.mock.method(globalThis, "fetch", async () => { throw Error("invalid image dispatched"); });
+  for (const [body, message] of [
+    [{ prompt: "" }, "image prompt must be a nonempty string of at most " + limits.maxPromptCharacters + " Unicode code points"],
+    [{ prompt, n: limits.maxImages + 1 }, "image n must be an integer from 1 to " + limits.maxImages],
+  ]) {
+    const response = await f.call(route, body);
+    assert.equal(response.status, 400);
+    assert.deepEqual((await response.json()).error, { code: "invalid_image_generation", message });
+  }
+  await Promise.all(f.pending);
+  assert.equal(upstream.mock.callCount(), 0);
+  assert.equal(f.retained.length, 0);
+  for (const name of owners) assert.equal(f.ledger.get(name).reservations().length, 0);
+});
