@@ -131,6 +131,36 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.ok(compiled.capability_index["llm.chat"].length >= 10);
 });
 
+test("endpoint pricing is normalized, indexed, and limited to supported endpoints", () => {
+  const valid = parse(readFileSync("providers/openai.provider.yaml", "utf8"));
+  const model = manifest => manifest.models.entries.find(({ id }) => id === "openai/gpt-6-luna");
+  const card = manifest => model(manifest).endpointPricing.decisions;
+  withManifest(path => {
+    writeFileSync(path, JSON.stringify(valid));
+    const compiled = JSON.parse(compile(path));
+    const luna = compiled.providers[0].models.find(({ id }) => id === "openai/gpt-6-luna");
+    assert.deepEqual(compiled.model_index[luna.id].endpointPricing, luna.endpointPricing);
+    assert.equal(luna.endpointPricing.decisions.pricing.defaultMaxOutputTokens, 0);
+    assert.equal(luna.endpointPricing.decisions.pricing.inputTokenOverhead, 1024);
+    assert.equal(luna.endpointPricing.decisions.pricing_ref, card(valid).pricingRef);
+    assert.equal(luna.pricing.outputMicrosPerMillion, 500_000);
+    for (const [mutate, expected] of [
+      [manifest => { model(manifest).endpointPricing.missing = card(manifest); }, /supported endpoint/],
+      [manifest => { model(manifest).endpointPricing.embeddings = card(manifest); }, /supported endpoint/],
+      [manifest => { model(manifest).capabilities = ["llm.chat"]; delete model(manifest).requestParameters.responses; }, /supported endpoint/],
+      [manifest => { delete card(manifest).pricingRef; }, /invalid manifest/],
+      [manifest => { card(manifest).pricing.outputMicrosPerMillion = -1; }, /invalid manifest/],
+      [manifest => { card(manifest).pricing.longContext.thresholdInputTokens = 922_000; }, /long-context threshold/],
+      [manifest => { card(manifest).pricing.serviceTiers = [{ id: "flex", inputMicrosPerMillion: 1, outputMicrosPerMillion: 0 }]; }, /default card/],
+    ]) {
+      const manifest = structuredClone(valid);
+      mutate(manifest);
+      writeFileSync(path, JSON.stringify(manifest));
+      assert.throws(() => compile(path), expected);
+    }
+  });
+});
+
 test("endpoint output limits compile with closed, finite field and integer range contracts", () => {
   const valid = parse(readFileSync("providers/deepseek.provider.yaml", "utf8"));
   const expected = { field: "max_tokens", minimum: 1, maximum: 393_216 };

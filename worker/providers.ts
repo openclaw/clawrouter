@@ -1,4 +1,5 @@
 import { grantStickyInput } from "./grant-sticky.ts";
+import { modelForEndpoint } from "./model-pricing.ts";
 import snapshotJson from "./generated/provider-snapshot.json" with { type: "json" };
 import { listConnections, resolveConnection } from "./authority.ts";
 import { admittedGrantSelection, proxyAdmission, proxySessionHash } from "./proxy-auth.ts";
@@ -78,7 +79,7 @@ export function providerModel(provider: CompiledProvider, value: string, endpoin
   const prefix = provider.routing.modelPrefixes.find((candidate) => value.startsWith(candidate));
   const upstream = prefix && !native ? value.slice(prefix.length) : value;
   const known = provider.models.find((model) => model.id === value) ?? provider.models.find((model) => model.upstream === value || model.upstream === upstream);
-  if (known) return known;
+  if (known) return modelForEndpoint(known, endpoint?.id);
   if (!value || !endpoint?.modelPassthrough) return null;
   if (!upstream) return null;
   // Native opaque ids belong to the upstream namespace, even when they match
@@ -99,12 +100,12 @@ export function endpointForPath(provider: CompiledProvider, path: string): Compi
 }
 
 export function capabilityForPath(path: string): string | null {
-  return path === "/v1/chat/completions" ? "llm.chat" : path === "/v1/responses" ? "llm.responses" : path === "/v1/responses/compact" ? "llm.responses.compact" : path === "/v1/embeddings" ? "llm.embeddings" : path === "/v1/audio/speech" ? "audio.speech" : path === "/v1/audio/transcriptions" ? "audio.transcription" : path === "/v1/images/generations" ? "image.generation" : null;
+  return path === "/v1/chat/completions" ? "llm.chat" : path === "/v1/responses" ? "llm.responses" : path === "/v1/decisions" ? "llm.decisions" : path === "/v1/responses/compact" ? "llm.responses.compact" : path === "/v1/embeddings" ? "llm.embeddings" : path === "/v1/audio/speech" ? "audio.speech" : path === "/v1/audio/transcriptions" ? "audio.transcription" : path === "/v1/images/generations" ? "image.generation" : null;
 }
 
 export function unifiedPathForEndpoint(provider: CompiledProvider, endpoint: CompiledEndpoint): string | null {
   const format = endpoint.request_format;
-  const path = format === "openai.chat_completions" ? "/v1/chat/completions" : format === "openai.responses" ? "/v1/responses" : format === "openai.responses_compact" ? "/v1/responses/compact" : format === "openai.embeddings" ? "/v1/embeddings" : format === "openai.audio_speech" ? "/v1/audio/speech" : format === "openai.audio_transcriptions" ? "/v1/audio/transcriptions" : format === "openai.images_generations" ? "/v1/images/generations" : null;
+  const path = format === "openai.chat_completions" ? "/v1/chat/completions" : format === "openai.responses" ? "/v1/responses" : format === "openai.decisions" ? "/v1/decisions" : format === "openai.responses_compact" ? "/v1/responses/compact" : format === "openai.embeddings" ? "/v1/embeddings" : format === "openai.audio_speech" ? "/v1/audio/speech" : format === "openai.audio_transcriptions" ? "/v1/audio/transcriptions" : format === "openai.images_generations" ? "/v1/images/generations" : null;
   const responseFormat = format === "openai.audio_speech" ? "audio.binary" : format;
   return path && endpoint.response_format === responseFormat && endpointForPath(provider, path)?.id === endpoint.id ? path : null;
 }
@@ -449,4 +450,4 @@ function encodePathParam(value: string, style: string): string {
 }
 
 function secretConfigKey(key: string): boolean { return /_(?:API_KEY|API_TOKEN|TOKEN)$/.test(key); }
-function unifiedPathForCapability(capability: string): string { return capability === "llm.chat" ? "/v1/chat/completions" : capability === "llm.responses" ? "/v1/responses" : capability === "llm.responses.compact" ? "/v1/responses/compact" : capability === "llm.embeddings" ? "/v1/embeddings" : capability === "audio.speech" ? "/v1/audio/speech" : capability === "audio.transcription" ? "/v1/audio/transcriptions" : capability === "image.generation" ? "/v1/images/generations" : ""; }
+function unifiedPathForCapability(capability: string): string { return capability === "llm.chat" ? "/v1/chat/completions" : capability === "llm.responses" ? "/v1/responses" : capability === "llm.decisions" ? "/v1/decisions" : capability === "llm.responses.compact" ? "/v1/responses/compact" : capability === "llm.embeddings" ? "/v1/embeddings" : capability === "audio.speech" ? "/v1/audio/speech" : capability === "audio.transcription" ? "/v1/audio/transcriptions" : capability === "image.generation" ? "/v1/images/generations" : ""; }

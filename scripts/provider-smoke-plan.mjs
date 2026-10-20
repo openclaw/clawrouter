@@ -305,7 +305,7 @@ function smokeTarget(provider, env) {
   // which can themselves start with another provider's routing prefix.
   const model = manifestSmokeModelOverride(provider, endpoint, env)
     ?? modelsForEndpoint(provider, endpoint).find((model) => !model.upstream.includes("${"))?.id;
-  if (["openai.chat_completions", "openai.responses", "openai.embeddings", "anthropic.messages", "cohere.chat", "cohere.embed", "google.generate_content", "aws_bedrock.invoke"].includes(endpoint.request_format) && !model) return null;
+  if (["openai.chat_completions", "openai.responses", "openai.decisions", "openai.embeddings", "anthropic.messages", "cohere.chat", "cohere.embed", "google.generate_content", "aws_bedrock.invoke"].includes(endpoint.request_format) && !model) return null;
   const pathParams = Object.fromEntries(
     endpoint.path_params.map((param) => [param, samplePathParam(provider, param, model, env)]),
   );
@@ -385,6 +385,7 @@ function smokeEndpoint(provider) {
     ["aws_bedrock.invoke", "llm.invoke"],
     ["tavily.search", "web.search"],
     ["openai.responses", "llm.responses"],
+    ["openai.decisions", "llm.decisions"],
     ["openai.embeddings", "llm.embeddings"],
     ["cohere.embed", "llm.embeddings"],
     ["tavily.extract", "web.extract"],
@@ -624,6 +625,9 @@ function sampleBody(provider, endpoint, method, model, env) {
   }
   if (format === "openai.responses") {
     return { model, input: "reply with ok", max_output_tokens: 16 };
+  }
+  if (format === "openai.decisions") {
+    return { model, input: "The product is damaged.", questions: [{ type: "predicate", name: "damaged", instructions: "Is the product described as damaged?" }] };
   }
   if (format === "openai.embeddings") {
     return { model, input: "OpenClaw" };

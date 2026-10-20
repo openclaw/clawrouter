@@ -15,7 +15,7 @@ export interface ImageTokenPricing {
     outputTokenBound: { basePixels: number; divisor: number; qualityFactors: Record<string, number> } };
 }
 export type ModelPricing = TokenPricing | CharacterPricing | ImageTokenPricing;
-export interface ClientCatalogModel { id: string; upstream: string; codexModel?: string; capabilities: string[]; supportedReasoningEfforts?: ProviderReasoningEffort[]; requestParameters?: Record<string, ModelRequestParameters>; nativeCapabilities?: NativeModelCapabilities; pricing_ref: string | null; pricing: ModelPricing | null }
+export interface ClientCatalogModel { id: string; upstream: string; codexModel?: string; capabilities: string[]; supportedReasoningEfforts?: ProviderReasoningEffort[]; requestParameters?: Record<string, ModelRequestParameters>; nativeCapabilities?: NativeModelCapabilities; endpointPricing?: Record<string, { pricing_ref: string; pricing: ModelPricing }>; pricing_ref: string | null; pricing: ModelPricing | null }
 export interface CatalogOffer {
   endpoint: string;
   modelId: string | null;

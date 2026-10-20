@@ -1,4 +1,5 @@
 import { validateBudgetReservation } from "./accounting";
+import { modelForEndpoint } from "./model-pricing.ts";
 import { modelReservationBounds, type PricingEndpoint } from "./pricing";
 import { estimateCost } from "./proxy-accounting";
 import type { AuthorizedIdentity, CompiledModel, ProviderConnection, ProxyRequestBody } from "./types";
@@ -12,6 +13,7 @@ export interface OperationAffordability {
 }
 
 export function operationAffordability(auth: AuthorizedIdentity, connection: ProviderConnection, model: CompiledModel | null, capability: string, endpoint: PricingEndpoint, observation?: BudgetObservation, body: ProxyRequestBody = {}): OperationAffordability {
+  if (model) model = modelForEndpoint(model, endpoint.id);
   // Only the basis is used for variable prices; a representative body's default output
   // allowance is not a claim that every real request fits the observed balance.
   const realtime = endpoint.request_format === "openai.realtime";

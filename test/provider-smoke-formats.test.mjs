@@ -40,7 +40,7 @@ for (const [source, messagesOnly, manifestOnly, formatOnly, method, override] of
   ["anthropic", false, false], ["anthropic", true, false], ["cohere", false, false],
   ["google-gemini", false, false], ["tavily", false, false], ["firecrawl", false, false],
   ["openai", false, false], ["openai", false, true],
-  ["openai", false, false, "openai.responses"], ["openai", false, false, "openai.embeddings"],
+  ["openai", false, false, "openai.responses"], ["openai", false, false, "openai.decisions"], ["openai", false, false, "openai.embeddings"],
   ["cohere", false, false, "cohere.embed"], ["tavily", false, false, "tavily.extract"],
   ["firecrawl", false, false, "fixture.status", "GET"], ["firecrawl", false, false, "fixture.status", "HEAD"],
   ["firecrawl", false, false, "fixture.graphql", "POST"],
@@ -122,6 +122,8 @@ for (const [source, messagesOnly, manifestOnly, formatOnly, method, override] of
         assert.deepEqual(body, { urls: ["https://example.com"] });
       } else if (endpoint.request_format === "openai.responses") {
         assert.deepEqual(body, { model: expectedModel.upstream, input: "reply with ok", max_output_tokens: 16 });
+      } else if (endpoint.request_format === "openai.decisions") {
+        assert.deepEqual(body, { model: expectedModel.upstream, input: "The product is damaged.", questions: [{ type: "predicate", name: "damaged", instructions: "Is the product described as damaged?" }] });
       } else if (endpoint.request_format === "openai.embeddings") {
         assert.deepEqual(body, { model: expectedModel.upstream, input: "OpenClaw" });
       } else if (endpoint.request_format === "cohere.embed") {

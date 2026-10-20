@@ -40,7 +40,7 @@ for (const route of ["/v1/responses", "/v1/chat/completions", "/v1/native/openai
 
 test("tier admission pins only resolved OpenAI API transports and copies only changed bodies", t => {
   const model = realModel(), auth = { policy: {} };
-  for (const provider of ["openai", "openrouter"]) for (const format of ["openai.responses", "openai.chat_completions", "openai.audio_speech", "openai.embeddings", "google.generate_content"]) {
+  for (const provider of ["openai", "openrouter"]) for (const format of ["openai.responses", "openai.chat_completions", "openai.decisions", "openai.audio_speech", "openai.embeddings", "google.generate_content"]) {
     for (const transport of [undefined, null, { baseUrl: "https://chatgpt.com/backend-api/codex" }]) for (const tier of [undefined, null, "auto", "AUTO", "default", "DEFAULT", "fast"]) {
       const body = Object.freeze({ input: [{ content: "fixture" }], ...(tier === undefined ? {} : { service_tier: tier }) });
       const selection = { provider: { id: provider }, endpoint: { request_format: format }, model, body };

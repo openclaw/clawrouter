@@ -104,6 +104,7 @@ Semantic identifier and path validation still applies after decoding.
 | --- | --- | --- |
 | `POST` | `/v1/chat/completions` | OpenAI-compatible chat routing |
 | `POST` | `/v1/responses` | OpenAI Responses routing |
+| `POST` | `/v1/decisions` | OpenAI Decisions: predicates, choices, and rubric scores |
 | `GET` | `/v1/responses/<response-id>` | Retrieve or resume an originally authorized response |
 | `POST` | `/v1/responses/<response-id>/cancel` | Bodyless cancellation on the original response owner |
 | `GET` upgrade | `/v1/responses`, qualified native Responses paths | Authenticated, bounded [Responses WebSocket sessions](#websocket-contract) |
@@ -144,6 +145,46 @@ curl "$CLAWROUTER_BASE_URL/v1/proxy/tavily/search" \
 ```
 
 `clawrouter/fusion` is an optional virtual model on `/v1/chat/completions`. It fans a bounded text-only prompt out to configured adviser models and asks one configured synthesizer for the final response. Every subrequest uses normal policy, budget, readiness, retention, and usage-accounting paths. See [Fusion routing](fusion-router.md).
+
+## OpenAI Decisions
+
+Use `POST /v1/decisions` with `model: "openai/gpt-6-luna"` and an ordinary
+ClawRouter API key whose policy allows that model. With OpenAI JavaScript SDK
+7.30.0 or later, set `baseURL` to `https://<router-host>/v1` and call
+`client.decisions.create(...)`. Native clients may instead use base URL
+`https://<router-host>/v1/native/openai/v1` with upstream model `gpt-6-luna`.
+The manifest route is `POST /v1/proxy/openai/decisions` with the request in
+the usual `body` envelope.
+
+```json
+{
+  "model": "openai/gpt-6-luna",
+  "input": "The product arrived damaged.",
+  "questions": [{
+    "type": "predicate",
+    "name": "damaged",
+    "instructions": "Is the product described as damaged?"
+  }]
+}
+```
+
+The [upstream Decisions API](https://developers.openai.com/api/docs/guides/decisions)
+is a public beta for text/image input and named `predicate`, `choice`, or `score`
+questions. Answers, probabilities, confidence values, and per-question refusals
+pass through unchanged. It is a non-streaming JSON contract, not a Responses
+alias: no SSE, WebSocket, background lifecycle, or subscription/Codex transport
+is advertised. Only the declared Luna model is accepted.
+
+Decisions uses its own endpoint-specific price card: $0.10 per million input
+tokens, doubled for the entire request above 272,000 input tokens. Cache-read,
+cache-write, and output-token rates are zero. Ordinary Luna Chat/Responses
+pricing is unchanged. Reservations include the questions and conservatively
+bound opaque image input; completed JSON settles from upstream usage. Missing,
+oversized, malformed, or interrupted usage retains the reservation. Policy-fixed
+tariffs retain precedence. Existing authentication, revocation, model allowlists,
+budgets, and request-retention policy apply. The bundled route uses OpenAI's
+default global API endpoint; regional processing endpoints/premiums are not
+configured by this feature.
 
 ## Responses continuation contract
 

@@ -107,6 +107,9 @@ quota:
 capabilities:
   - {"id":"audio.realtime","endpoint":"realtime","methods":["GET"]}
   - { id: llm.responses.compact, endpoint: responses_compact, methods: [POST] }
+  - id: llm.decisions
+    endpoint: decisions
+    methods: [POST]
   - id: llm.responses
     endpoint: responses
     methods: [POST]
@@ -120,6 +123,11 @@ capabilities:
 endpoints:
   realtime: {"method":"GET","path":"/v1/realtime","requestFormat":"openai.realtime","responseFormat":"openai.realtime","websocket":"openai.realtime","timeoutMs":120000}
   responses_compact: { path: /v1/responses/compact, requestHeaders: [x-codex-turn-state], requestFormat: openai.responses_compact, responseFormat: openai.responses_compact, timeoutMs: 600000 }
+  decisions:
+    path: /v1/decisions
+    requestFormat: openai.decisions
+    responseFormat: openai.decisions
+    timeoutMs: 120000
   responses:
     modelPassthrough: {}
     path: /v1/responses
@@ -515,7 +523,7 @@ models:
               outputMicrosPerMillion: 7500000
     - id: openai/gpt-6-luna
       upstream: gpt-6-luna
-      capabilities: [llm.responses, llm.chat]
+      capabilities: [llm.responses, llm.chat, llm.decisions]
       nativeCapabilities:
         version: clawrouter.native-capabilities.v1
         endpoints:
@@ -529,6 +537,24 @@ models:
             supportedServiceTiers: [default, priority, flex]
             inference: {chat: true}
           responses: { checkedAt: "2026-10-20", input: [text, image], contextWindow: 1050000, contextTokens: 272000, maxOutputTokens: 128000, supportedServiceTiers: [default, priority, flex], inference: {chat: true}, sources: [https://github.com/openclaw/openclaw/blob/ffd5377099f76c2578a93da1a3fb8eedf71a2897/extensions/openai/openclaw.plugin.json, https://developers.openai.com/api/docs/pricing, https://developers.openai.com/api/docs/models/gpt-6-luna], hostedTools: [web_search] }
+      endpointPricing:
+        decisions:
+          pricingRef: openai-gpt-6-luna-decisions-2026-10-20
+          pricing:
+            effectiveAt: "2026-10-20"
+            source: https://developers.openai.com/api/docs/guides/decisions
+            inputMicrosPerMillion: 100000
+            cachedInputMicrosPerMillion: 0
+            cacheWriteInputMicrosPerMillion: 0
+            outputMicrosPerMillion: 0
+            maxInputTokens: 922000
+            defaultMaxOutputTokens: 0
+            longContext:
+              thresholdInputTokens: 272000
+              inputMicrosPerMillion: 200000
+              cachedInputMicrosPerMillion: 0
+              cacheWriteInputMicrosPerMillion: 0
+              outputMicrosPerMillion: 0
       supportedReasoningEfforts: [none, low, medium, high, xhigh, max]
       requestParameters:
         responses: {"sources":["https://developers.openai.com/api/docs/models/gpt-6-luna","https://developers.openai.com/api/docs/guides/latest-model"],"checkedAt":"2026-09-25","defaultReasoningEffort":"medium","temperature":"requires_reasoning_none","topP":"requires_reasoning_none","logprobs":"requires_reasoning_none","toolCalling":"supported"}

@@ -145,7 +145,7 @@ async function sessionUsage(request: Request, env: Env): Promise<Response> {
   return privateJson({ session: publicSession(session), policies: policyRows, usage });
 }
 
-function openAiPath(path: string): boolean { return ["/v1/chat/completions", "/v1/responses", "/v1/responses/compact", "/v1/embeddings", "/v1/audio/speech", "/v1/images/generations"].includes(path); }
+function openAiPath(path: string): boolean { return ["/v1/chat/completions", "/v1/responses", "/v1/decisions", "/v1/responses/compact", "/v1/embeddings", "/v1/audio/speech", "/v1/images/generations"].includes(path); }
 
 function responseControlPath(path: string, method: string): { id: string; action: "retrieve" | "cancel" } | null {
   const match = path.match(/^\/v1\/responses\/([^/]+)(\/cancel)?$/);
@@ -164,7 +164,7 @@ function serviceIndex(env: Env) {
       adminBootstrap: "/v1/admin/bootstrap", adminOverview: "/v1/admin/overview", adminUsers: "/v1/admin/users", adminUsage: "/v1/admin/usage", adminPolicies: "/v1/admin/policies",
       adminCredentials: "/v1/admin/credentials", adminConnections: "/v1/admin/connections", adminAccessUsers: "/v1/admin/access-users",
       adminAssignmentRules: "/v1/admin/assignment-rules", adminFusion: "/v1/admin/fusion", oauthCallback: "/v1/oauth/callback",
-      openaiCompatible: ["/v1/audio/transcriptions", "/v1/chat/completions", "/v1/responses", "/v1/responses/compact", "/v1/embeddings", "/v1/audio/speech", "/v1/images/generations"], manifestProxy: "/v1/proxy/{provider}/{endpoint}", nativeProxy: "/v1/native/{provider}/{provider-native-path}",
+      openaiCompatible: ["/v1/audio/transcriptions", "/v1/chat/completions", "/v1/responses", "/v1/decisions", "/v1/responses/compact", "/v1/embeddings", "/v1/audio/speech", "/v1/images/generations"], manifestProxy: "/v1/proxy/{provider}/{endpoint}", nativeProxy: "/v1/native/{provider}/{provider-native-path}",
     },
   };
   if (localAuthEnabled(env)) Object.assign(index.endpoints, { sessionLogin: "/v1/session/login", sessionLogout: "/v1/session/logout" });

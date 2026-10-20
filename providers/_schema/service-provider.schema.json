@@ -707,7 +707,20 @@
         },
         "nativeCapabilities": { "$ref": "#/$defs/nativeModelCapabilities" },
         "pricingRef": { "type": "string" },
-        "pricing": { "$ref": "#/$defs/modelPricing" }
+        "pricing": { "$ref": "#/$defs/modelPricing" },
+        "endpointPricing": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": {
+            "type": "object",
+            "required": ["pricingRef", "pricing"],
+            "additionalProperties": false,
+            "properties": {
+              "pricingRef": { "type": "string", "minLength": 1 },
+              "pricing": { "$ref": "#/$defs/tokenPricing" }
+            }
+          }
+        }
       }
     },
     "nativeModelCapabilities": {

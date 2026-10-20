@@ -46,6 +46,7 @@ export function compileProviderSnapshot(manifests) {
         ...(model.supportedReasoningEfforts ? { supportedReasoningEfforts: model.supportedReasoningEfforts } : {}),
         ...(model.requestParameters ? { requestParameters: model.requestParameters } : {}),
         ...(model.nativeCapabilities ? { nativeCapabilities: model.nativeCapabilities } : {}),
+        ...(model.endpointPricing ? { endpointPricing: model.endpointPricing } : {}),
         pricing_ref: model.pricing_ref,
         pricing: model.pricing,
       };
@@ -127,6 +128,7 @@ function compileProvider(manifest, ids) {
     ...(model.supportedReasoningEfforts ? { supportedReasoningEfforts: model.supportedReasoningEfforts } : {}),
     ...(model.requestParameters ? { requestParameters: model.requestParameters } : {}),
     ...(model.nativeCapabilities ? { nativeCapabilities: model.nativeCapabilities } : {}),
+    ...(model.endpointPricing ? { endpointPricing: Object.fromEntries(Object.entries(model.endpointPricing).map(([id, card]) => [id, { pricing_ref: card.pricingRef, pricing: normalizePricing(card.pricing) }])) } : {}),
     pricing_ref: model.pricingRef ?? null,
     pricing: model.pricing ? normalizePricing(model.pricing) : null,
   }));
@@ -278,6 +280,10 @@ function validateManifest(manifest) {
       const endpoint = manifest.endpoints[manifest.capabilities.find((capability) => capability.id === id)?.endpoint];
       return id !== "image.generation" || endpoint?.requestFormat !== "openai.images_generations" || endpoint.responseFormat !== "openai.images_generations" || endpoint.streaming;
     }))) throw new Error("image pricing requires the JSON image generation contract");
+    for (const [id, card] of Object.entries(model.endpointPricing ?? {})) {
+      if (!Object.hasOwn(manifest.endpoints, id) || !manifest.capabilities.some(capability => capability.endpoint === id && model.capabilities?.includes(capability.id))) throw new Error(`model ${model.id} endpointPricing must reference a supported endpoint`);
+      validatePricing(card.pricing, `${model.id}/${id}`);
+    }
     if (model.pricing?.unit === "character" && (!model.capabilities?.length || model.capabilities.some((id) => {
       const endpoint = manifest.endpoints[manifest.capabilities.find((capability) => capability.id === id)?.endpoint];
       return id !== "audio.speech" || endpoint?.requestFormat !== "openai.audio_speech" || endpoint.responseFormat !== "audio.binary";

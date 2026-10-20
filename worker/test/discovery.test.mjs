@@ -508,7 +508,7 @@ test("models and catalog share read-only grant eligibility, transport support, a
   await compare([], false);
 
   // A session's first policy owns subscription Responses, while its second
-  // owns Chat/embedding/speech API auth. Neither grants this session a WS route.
+  // owns Chat/Decisions/embedding/speech API auth. Neither grants a WS route.
   delete policy.grantRouting;
   grants.delete("oauth/fixture/api");
   policies.push({ policyId: "api", policy: { ...policy } });
@@ -525,13 +525,17 @@ test("models and catalog share read-only grant eligibility, transport support, a
     assert.equal(view.nativeBaseUrl, "/v1/native/openai");
     assert.ok(view.offers.every((offer) => offer.transport === "http" && ["playground", "unified"].includes(offer.routeKind)));
     assert.ok(view.offers.every((offer) => offer.route.startsWith("/v1/playground/")));
-    assert.deepEqual([...new Set(view.offers.filter((offer) => offer.routeKind === "unified").map((offer) => offer.route))].sort(), ["/v1/playground/v1/audio/speech", "/v1/playground/v1/audio/transcriptions", "/v1/playground/v1/chat/completions", "/v1/playground/v1/embeddings", "/v1/playground/v1/images/generations", "/v1/playground/v1/responses", "/v1/playground/v1/responses/compact"]);
+    assert.deepEqual([...new Set(view.offers.filter((offer) => offer.routeKind === "unified").map((offer) => offer.route))].sort(), ["/v1/playground/v1/audio/speech", "/v1/playground/v1/audio/transcriptions", "/v1/playground/v1/chat/completions", "/v1/playground/v1/decisions", "/v1/playground/v1/embeddings", "/v1/playground/v1/images/generations", "/v1/playground/v1/responses", "/v1/playground/v1/responses/compact"]);
     const imageOffers = view.offers.filter(({ modelId }) => modelId?.includes("gpt-image-2.5"));
     assert.ok(imageOffers.length > 0);
     assert.ok(imageOffers.every(({ eligible, policyId, transport }) => eligible && policyId === "api" && transport === "http"));
     const transcriptionOffers = view.offers.filter(({ modelId }) => modelId === "openai/gpt-4o-transcribe");
     assert.ok(transcriptionOffers.length > 0);
     assert.ok(transcriptionOffers.every(({ eligible, policyId, transport }) => eligible && policyId === "api" && transport === "http"));
+    const decisionOffers = view.offers.filter(({ endpoint, modelId }) => endpoint === "decisions" && modelId);
+    assert.ok(decisionOffers.length > 0);
+    assert.ok(decisionOffers.every(({ modelId, eligible, policyId }) => modelId === "openai/gpt-6-luna" && eligible && policyId === "api"));
+    assert.equal(view.models.find(({ id }) => id === "openai/gpt-6-luna").endpointPricing.decisions.pricing.outputMicrosPerMillion, 0);
     const speechOffers = view.offers.filter(({ modelId }) => modelId === "openai/tts-1");
     assert.ok(speechOffers.length > 0);
     assert.ok(speechOffers.every(({ eligible, policyId, transport }) => eligible && policyId === "api" && transport === "http"));
