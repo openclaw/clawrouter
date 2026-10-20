@@ -75,7 +75,7 @@ export function UserAvatar({ email }: { email?: string | null }) {
   );
 }
 
-export function DashboardScreen({ session, services, policies, credentials, users, tenants, overview, usageRows, usage, usageLoaded, usageStale, usageError, usageUpdatedAt, myCredentials, myPolicyLimits, myPolicyIds, myKeyFeedback, myKeyScope, myKeysBusy, onMyKeyDraftChange, onIssueMyKey, onRevokeMyKey, onOpenCatalog, onOpenPlayground, onOpenUsage, onOpenAccess }: {
+export function DashboardScreen({ session, services, policies, credentials, users, tenants, overview, usageRows, usage, usageLoaded, usageStale, usageError, usageUpdatedAt, myCredentials, myPolicyLimits, myPolicyIds, myKeyFeedback, myKeyScope, myKeysBusy, onMyKeyDraftChange, onIssueMyKey, onRevokeMyKey, onRenameMyKey, onOpenCatalog, onOpenPlayground, onOpenUsage, onOpenAccess }: {
   session: SessionResponse;
   services: ServiceItem[];
   policies: AccessPolicy[];
@@ -96,8 +96,9 @@ export function DashboardScreen({ session, services, policies, credentials, user
   onMyKeyDraftChange: () => void;
   myKeysBusy: boolean;
   myPolicyLimits?: SessionPolicyLimits[];
-  onIssueMyKey: (policyId: string, credentialId?: string, options?: { days: number; serviceTiers: string[] }) => Promise<void>;
+  onIssueMyKey: (policyId: string, credentialId?: string, options?: { days: number; serviceTiers: string[]; name?: string }) => Promise<void>;
   onRevokeMyKey: (credentialId: string) => Promise<void>;
+  onRenameMyKey: (credentialId: string, name: string) => Promise<boolean>;
   onOpenCatalog: () => void;
   onOpenPlayground: () => void;
   onOpenUsage: () => void;
@@ -154,7 +155,7 @@ export function DashboardScreen({ session, services, policies, credentials, user
       </div>
 
       <div className="dashboardGrid">
-        <MyKeysCard policies={myPolicyLimits ?? session.entitlements?.policies} key={myKeyScope} credentials={myCredentials} policyIds={myPolicyIds} feedback={myKeyFeedback} onDraftChange={onMyKeyDraftChange} busy={myKeysBusy} onIssue={onIssueMyKey} onRevoke={onRevokeMyKey} />
+        <MyKeysCard policies={myPolicyLimits ?? session.entitlements?.policies} key={myKeyScope} credentials={myCredentials} policyIds={myPolicyIds} feedback={myKeyFeedback} onDraftChange={onMyKeyDraftChange} busy={myKeysBusy} onIssue={onIssueMyKey} onRevoke={onRevokeMyKey} onRename={onRenameMyKey} />
         <section className="dashboardPanel servicePanel">
           <DashboardPanelHeader eyebrow={isAdmin ? "service estate" : "your access"} title={isAdmin ? "Provider readiness" : "Services you can use"} meta={`${isAdmin ? configuredServices.length : usableServices.length} ready`} action="View catalog" onAction={onOpenCatalog} />
           <div className="serviceSpectrum" role="img" aria-label={`${servicePercent}% of ${isAdmin ? "catalog services are configured" : "granted services are usable"}`}>
@@ -214,17 +215,20 @@ export function DashboardScreen({ session, services, policies, credentials, user
   );
 }
 
-export function MyKeysCard({ policies, credentials, policyIds, feedback, onDraftChange, busy, onIssue, onRevoke }: {
+export function MyKeysCard({ policies, credentials, policyIds, feedback, onDraftChange, busy, onIssue, onRevoke, onRename }: {
   credentials: ProxyCredential[];
   policyIds: string[];
   feedback: CredentialFeedback;
   onDraftChange: () => void;
   busy: boolean;
   policies?: SessionPolicyLimits[];
-  onIssue: (policyId: string, credentialId?: string, options?: { days: number; serviceTiers: string[] }) => Promise<void>;
+  onIssue: (policyId: string, credentialId?: string, options?: { days: number; serviceTiers: string[]; name?: string }) => Promise<void>;
   onRevoke: (credentialId: string) => Promise<void>;
+  onRename: (credentialId: string, name: string) => Promise<boolean>;
 }) {
   const [policyId, setPolicyId] = useState<string | null>(null);
+  const [name, setName] = useState("");
+  const [editing, setEditing] = useState<{ credentialId: string; name: string } | null>(null);
   const [days, setDays] = useState(180), [fast, setFast] = useState(true), [ultrafast, setUltrafast] = useState(false);
   const selectedPolicy = policyId ?? policyIds[0] ?? "";
   const policyAvailable = policyIds.includes(selectedPolicy);
@@ -237,15 +241,26 @@ export function MyKeysCard({ policies, credentials, policyIds, feedback, onDraft
       <CredentialNotice state={feedback} />
       <div className="myKeysCreate">
         <label><span>policy</span><select value={selectedPolicy} onChange={(event) => { onDraftChange(); setPolicyId(event.target.value); }} disabled={!policyIds.length}>{!policyAvailable ? <option value={selectedPolicy}>{selectedPolicy ? `${selectedPolicy} · unavailable` : "No policies available"}</option> : null}{policyIds.map((id) => <option key={id} value={id}>{id}</option>)}</select></label>
-        <button type="button" disabled={!policyAvailable || busy} onClick={() => void onIssue(selectedPolicy, undefined, { days, serviceTiers: keyTierChoices(limits, fast, ultrafast) })}><Plus aria-hidden="true" /> Create key</button>
+        <label><span>Name (optional)</span><input value={name} maxLength={80} placeholder="e.g. Studio or laptop" onChange={(event) => { onDraftChange(); setName(event.target.value); }} /></label>
+        <button type="button" disabled={!policyAvailable || busy} onClick={() => void onIssue(selectedPolicy, undefined, { days, serviceTiers: keyTierChoices(limits, fast, ultrafast), name })}><Plus aria-hidden="true" /> Create key</button>
       </div>
       <div className="myKeysCreate"><label><span>Validity</span><select value={days} onChange={event => { onDraftChange(); setDays(Number(event.target.value)); }}>{[30, 90, 180].map(value => <option key={value} value={value}>{value} days</option>)}</select></label><KeyTierControls policy={limits} fast={fast} ultrafast={ultrafast} onFast={value => { onDraftChange(); setFast(value); }} onUltrafast={value => { onDraftChange(); setUltrafast(value); }} /></div>
       {limits ? presentAllowanceWindows(limits.budget).map(window => <p className="panelIntro" key={window.label}>{window.text}</p>) : null}
       {limits?.limitHint ? <p className="panelIntro">{limits.limitHint}</p> : null}
       <div className="myKeysList">
         {credentials.map((credential) => <article key={credential.credentialId}>
-          <span><strong>{credential.credentialId}</strong><small className={credentialExpiryLabel(credential.expiresAt).warning ? "keyExpiryWarning" : undefined}>{credentialExpiryLabel(credential.expiresAt).label}</small><small>{credential.policyId} · {credential.active ? "active" : credential.enabled ? "inactive" : "revoked"}</small>{credential.active && !policyIds.includes(credential.policyId) ? <small>Policy no longer held: rotation unavailable. This key remains usable and can be revoked.</small> : null}</span>
-          <span><button type="button" className="buttonSecondary" disabled={busy || (!credential.active && !(credential.enabled && credential.expired)) || !policyIds.includes(credential.policyId)} title={!policyIds.includes(credential.policyId) ? "Policy no longer held; rotation unavailable. Existing active keys remain usable and can be revoked." : !credential.active ? "Only active keys can be rotated" : undefined} onClick={() => void onIssue(credential.policyId, credential.credentialId)}>Renew</button><button type="button" className="buttonDanger" disabled={busy || !credential.enabled} onClick={() => void onRevoke(credential.credentialId)}>Revoke</button></span>
+          <span><strong title={credential.name || credential.credentialId}>{credential.name || credential.credentialId}</strong>{credential.name ? <small title={credential.credentialId}>{credential.credentialId}</small> : null}<small className={credentialExpiryLabel(credential.expiresAt).warning ? "keyExpiryWarning" : undefined}>{credentialExpiryLabel(credential.expiresAt).label}</small><small>{credential.policyId} · {credential.active ? "active" : credential.enabled ? "inactive" : "revoked"}</small>{credential.active && !policyIds.includes(credential.policyId) ? <small>Policy no longer held: rotation unavailable. This key remains usable and can be revoked.</small> : null}</span>
+          {editing?.credentialId === credential.credentialId ? <form className="myKeyRename" onSubmit={(event) => {
+            event.preventDefault();
+            const draft = editing;
+            void onRename(draft.credentialId, draft.name).then((saved) => {
+              if (saved) setEditing((current) => current === draft ? null : current);
+            });
+          }}>
+            <label><span>Key name</span><input autoFocus value={editing.name} maxLength={80} disabled={busy} placeholder="Leave blank to use key ID" onChange={(event) => { onDraftChange(); setEditing({ credentialId: credential.credentialId, name: event.target.value }); }} /></label>
+            <button type="submit" disabled={busy}>Save name</button>
+            <button type="button" className="buttonSecondary" disabled={busy} onClick={() => { onDraftChange(); setEditing(null); }}>Cancel</button>
+          </form> : <span className="myKeyActions"><button type="button" className="buttonSecondary" disabled={busy} onClick={() => { onDraftChange(); setEditing({ credentialId: credential.credentialId, name: credential.name ?? "" }); }}>Rename</button><button type="button" className="buttonSecondary" disabled={busy || (!credential.active && !(credential.enabled && credential.expired)) || !policyIds.includes(credential.policyId)} title={!policyIds.includes(credential.policyId) ? "Policy no longer held; rotation unavailable. Existing active keys remain usable and can be revoked." : !credential.active ? "Only active keys can be rotated" : undefined} onClick={() => void onIssue(credential.policyId, credential.credentialId)}>Renew</button><button type="button" className="buttonDanger" disabled={busy || !credential.enabled} onClick={() => void onRevoke(credential.credentialId)}>Revoke</button></span>}
         </article>)}
         {!credentials.length ? <div className="dashboardEmpty"><KeyRound aria-hidden="true" /><strong>No personal keys</strong><p>Create one to use your policy from OpenClaw or another API client.</p></div> : null}
       </div>

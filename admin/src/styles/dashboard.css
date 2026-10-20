@@ -23,7 +23,8 @@
 
 .myKeysCreate label {
   display: grid;
-  min-width: 220px;
+  min-width: min(220px, 100%);
+  max-width: 100%;
   gap: 5px;
 }
 
@@ -62,6 +63,44 @@
 .myKeysList article > span:first-child {
   display: grid;
   min-width: 0;
+  flex: 1;
+}
+
+.myKeyActions,
+.myKeyRename {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: end;
+  gap: 7px;
+}
+
+.myKeyRename label {
+  display: grid;
+  gap: 5px;
+  min-width: 0;
+}
+
+.myKeyRename label > span {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+@media (max-width: 640px) {
+  .myKeysList article {
+    flex-wrap: wrap;
+  }
+
+  .myKeysList article > span:first-child {
+    flex-basis: 100%;
+  }
+
+  .myKeyRename {
+    width: 100%;
+  }
+
+  .myKeyRename label {
+    width: 100%;
+  }
 }
 
 .myKeysList article strong,

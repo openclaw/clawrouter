@@ -35,7 +35,7 @@ for (const scope of ["admin", "personal"]) {
     assert.equal(env.credentials.get("shared_key").secretSha256, [digest, nextDigest][winner]);
     assert.equal((await responses[1 - winner].json()).error.code, "credential_exists");
     const body = await responses[winner].json();
-    assert.deepEqual(Object.keys(body).sort(), ["active", "credentialId", "enabled", "expired", "expiresAt", "generationMatches", "policyEnabled", "policyId", "principalEnabled", "principalId", "serviceTiers"]);
+    assert.deepEqual(Object.keys(body).sort(), ["active", "credentialId", "enabled", "expired", "expiresAt", "generationMatches", "name", "policyEnabled", "policyId", "principalEnabled", "principalId", "serviceTiers"]);
     assert.equal(body.active, true);
     assert.equal(responses[winner].headers.get("cache-control"), "no-store");
     assert.equal(env.credentials.size, 1);

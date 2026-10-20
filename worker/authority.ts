@@ -1,6 +1,7 @@
 import { normalizeUser, profileUpdate } from "./authority-users.ts";
 import { mutateBudgetCaps } from "./authority-budgets.ts";
 import { nextCredential } from "./credential-mutation.ts";
+import { storedCredentialName } from "./credential-name.ts";
 import { finishAdmissionSelection } from "./authority-grant-selection.ts";
 import { mergeGrantRuntimeState, normalizeGrantRuntimeState } from "./grant-runtime.ts";
 import type {
@@ -300,13 +301,13 @@ export class PolicyBindingIndexObject implements DurableObject {
     const existing = this.getCredential(credentialId);
     // A create collision must not prune retained rows or replace any part of the key.
     if (operation === "create" && existing) return { outcome: "exists" };
-    if ((operation === "rotate" || operation === "revoke") && !existing) return { outcome: "missing" };
+    if ((operation === "rotate" || operation === "revoke" || operation === "rename") && !existing) return { outcome: "missing" };
     if (scope === "personal" && existing && normalizeEmail(existing.credential.principalId ?? "") !== principalId) return { outcome: "owned_elsewhere" };
     const policyId = operation === "create" || operation === "put" ? request.credential.policyId : existing!.credential.policyId;
     const policy = this.getPolicy(policyId);
     const ownerEnabled = !existing?.credential.principalId || this.getUser(existing.credential.principalId)?.record.enabled !== false;
     if (operation === "rotate" && (!existing!.credential.enabled || !policy?.policy.enabled || existing!.credential.policyGeneration !== policy.policy.generation || !ownerEnabled)) return { outcome: "inactive" };
-    if (operation !== "revoke") {
+    if (operation !== "revoke" && operation !== "rename") {
       if (scope === "personal") {
         if (!this.holdsPolicy(user, policy)) return { outcome: "policy_not_held" };
       } else if (!policy) return { outcome: "unknown_policy" };
@@ -968,6 +969,7 @@ function normalizeCredentialRecord(value: Record<string, unknown>, legacyPolicyI
     policyId: typeof value.policyId === "string" ? value.policyId : legacyPolicyId ?? "",
     policyGeneration: typeof value.policyGeneration === "string" ? value.policyGeneration : typeof value.generation === "string" ? value.generation : "legacy",
     principalId: typeof value.principalId === "string" ? value.principalId : null,
+    ...(Object.hasOwn(value, "name") ? { name: storedCredentialName(value.name) } : {}),
     ...(Object.hasOwn(value, "serviceTiers") ? { serviceTiers: Array.isArray(value.serviceTiers) ? value.serviceTiers as string[] : null } : {}),
     ...(Object.hasOwn(value, "expiresAt") ? { expiresAt: typeof value.expiresAt === "string" ? value.expiresAt : null } : {}),
   };

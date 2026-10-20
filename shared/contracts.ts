@@ -97,6 +97,7 @@ export interface GrantRoutingPolicy {
 
 export interface ProxyCredential {
   credentialId: string;
+  name?: string | null;
   policyId: string;
   enabled: boolean;
   policyEnabled?: boolean;

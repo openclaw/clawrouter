@@ -404,6 +404,7 @@ See the upstream [Responses WebSocket contract](https://developers.openai.com/ap
 | `POST` | `/v1/session/credentials` | Create a caller-owned credential; reject an existing ID |
 | `PUT` | `/v1/session/credentials/<credential-id>` | Create or rotate a caller-owned credential |
 | `POST` | `/v1/session/credentials/<credential-id>/rotate` | Replace only an active credential's secret hash |
+| `POST` | `/v1/session/credentials/<credential-id>/rename` | Change only a caller-owned credential's display name |
 | `POST` | `/v1/session/credentials/<credential-id>/revoke` | Revoke a caller-owned credential |
 | `POST` | `/v1/playground/<route>` | Run a console playground request through an allowed route |
 | `GET` | `/v1/playground/v1/responses/<response-id>` | Retrieve/resume the session's original response |
@@ -444,6 +445,7 @@ The Worker redirects `/` to `/dashboard`, and `/dashboard` to `/dashboard/home`.
 | `POST` | `/v1/admin/credentials` | Create an issued credential; reject an existing ID |
 | `PUT` | `/v1/admin/credentials/<credential-id>` | Create or update an issued credential |
 | `POST` | `/v1/admin/credentials/<credential-id>/rotate` | Replace only an active credential's secret hash |
+| `POST` | `/v1/admin/credentials/<credential-id>/rename` | Change only an existing credential's display name |
 | `POST` | `/v1/admin/credentials/<credential-id>/revoke` | Revoke one issued credential |
 | `PUT` | `/v1/admin/connections/<provider-id>` | Update a global provider connection |
 | `PATCH` | `/v1/admin/connections/<provider-id>` | Update only supplied connection fields |
@@ -658,7 +660,7 @@ existing behavior. Pricing gaps under a daily-only or weekly-only budget return 
 just as with monthly budgets. Dispatched work completes after key expiry;
 subsequent requests, WebSocket turns, background creations and continuations fail.
 
-### Credential creation, rotation, and revocation
+### Credential creation, naming, rotation, and revocation
 
 Use `POST /v1/admin/credentials` or `POST /v1/session/credentials` with
 `{ "credentialId": "my_key", "policyId": "my_policy", "secretSha256": "<64 hex characters>" }`
@@ -668,9 +670,25 @@ without replacing the key or pruning retained records. Admin creation also accep
 `enabled` (default `true`) and `principalId` (an email or `null`, default `null`).
 Personal creation always enables the key and assigns the signed-in user as owner.
 
+Creation also accepts optional `name` (string or null). Names are trimmed, at
+most 80 characters, and reject control characters. Empty or whitespace-only
+strings and null clear a name; other types are rejected. Session/admin
+credential lists and mutation responses return `name`, null when unnamed,
+without exposing secret hashes.
+
+Use `POST .../credentials/<credential-id>/rename` with exactly
+`{ "name": "Work laptop" }` or `{ "name": null }`. Other fields are rejected.
+Rename requires an existing credential and, for personal keys, the current
+enabled signed-in owner. It remains available for owned revoked or expired keys
+and after policy/group/binding access is removed. It changes only the latest
+stored name: no rotation, secret recovery, reactivation, owner/policy rebinding,
+expiry renewal, generation update, or tier changes. Missing keys return `404`;
+keys owned by another principal return `403`. Ownership and actor state are
+rechecked at the serialized write boundary, including after concurrent writes.
+
 Use `POST .../credentials/<credential-id>/rotate` with only
 `{ "secretSha256": "<64 hex characters>" }` to replace a key's hash and reset its expiry. Rotation preserves
-its owner, policy, generation, and enabled state. It requires an enabled key, an
+its name, owner, policy, generation, and enabled state. It requires an enabled key, an
 enabled policy with the same generation, and an owner who is not disabled. An
 inactive key returns `409 credential_inactive`; a missing key returns `404`.
 Rotation cannot reactivate a revoked key or renew a revoked policy generation.
@@ -678,6 +696,7 @@ Rotation cannot reactivate a revoked key or renew a revoked policy generation.
 The existing `PUT .../credentials/<credential-id>` remains an upsert: it can replace
 the owner or policy on an admin key, reenable a key, and bind the current policy
 generation. Personal PUT keeps its existing forced-enabled, caller-owned behavior.
+PUT omission preserves an existing name; an explicit null clears it.
 Use create and rotate for operations that must not overwrite an existing key or
 change its authorization. Secret hashes are lowercase SHA-256 hex; responses never
 include a raw secret or hash and describe the record committed by that operation.
@@ -690,7 +709,7 @@ idempotent for an existing key. Local administrator disable or demotion is also
 rechecked before credential writes; Cloudflare administrator status comes from
 the verified Access configuration. Personal keys remain limited to 10 enabled
 and 100 retained records; creating another key can prune revoked records in ID
-order at the retention limit. Rotation consumes no additional slot.
+order at the retention limit. Rotation and rename consume no additional slot.
 
 ## Pool contribution
 

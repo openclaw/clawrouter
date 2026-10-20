@@ -128,6 +128,7 @@ export function AppShell() {
             onMyKeyDraftChange={credentialOwner.invalidatePresentation}
             onIssueMyKey={selfServiceKeys.issue}
             onRevokeMyKey={selfServiceKeys.revoke}
+            onRenameMyKey={selfServiceKeys.rename}
             onOpenCatalog={() => navigateTo("catalog")}
             onOpenPlayground={() => navigateTo("playground")}
             onOpenUsage={() => navigateTo("usage")}

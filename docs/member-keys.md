@@ -69,6 +69,14 @@ when the policy grants it, starts unchecked, and names its permitted models.
 Key options can narrow the policy's permissions. An API request cannot override
 the effective tier or model allowlist.
 
+Optionally name each key for its device or purpose, for example `Work laptop`.
+Names are display metadata, not part of the key or its permissions. They are
+trimmed, limited to 80 characters, and cannot contain control characters; an
+empty name or null clears the name. You can rename an existing personal key
+without replacing its secret or updating any client configuration. Rename also
+works for your revoked or expired keys and after policy access is removed, but
+does not restore access or renew expiry.
+
 Configure an OpenAI-compatible client with the router URL and personal key:
 
 ```sh

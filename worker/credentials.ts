@@ -1,12 +1,13 @@
 import { normalizeTierList } from "./service-tiers.ts";
 import { credentialExpired } from "./credential-lifecycle.ts";
+import { normalizeCredentialName } from "./credential-name.ts";
 import { authorityCall, listBindings, listCredentials, listPolicies, listUsers, selfServiceCredentialLimit } from "./authority";
 import type { CredentialMutation, CredentialMutationResult } from "./authority-contracts.ts";
 import type { AccessControlUser, AccessPolicyEntry, AccessSession, Env, ProxyCredential, ProxyCredentialEntry } from "./types";
 import { cleanId, decodePathSegment, HttpError, normalizeEmail, privateJson, readJson } from "./utils";
 
 export async function credentialMutationResponse(request: Request, env: Env, rest: string | null, session: AccessSession, scope: CredentialMutation["scope"]): Promise<Response> {
-  const operation = rest === null ? "create" : rest.endsWith("/revoke") ? "revoke" : rest.endsWith("/rotate") ? "rotate" : "put";
+  const operation = rest === null ? "create" : rest.endsWith("/revoke") ? "revoke" : rest.endsWith("/rotate") ? "rotate" : rest.endsWith("/rename") ? "rename" : "put";
   if (request.method !== (operation === "put" ? "PUT" : "POST")) throw new HttpError(405, "method_not_allowed", "credential method is not allowed");
   const body: Record<string, unknown> = operation === "revoke" ? {} : mutationObject(await readJson<unknown>(request));
   const rawId = rest === null ? body.credentialId : decodePathSegment(operation === "put" ? rest : rest.slice(0, -7));
@@ -18,7 +19,10 @@ export async function credentialMutationResponse(request: Request, env: Env, res
   const target = { credentialId, actor, scope };
   let mutation: CredentialMutation;
   if (operation === "revoke") mutation = { ...target, operation };
-  else if (operation === "rotate") {
+  else if (operation === "rename") {
+    if (!Object.hasOwn(body, "name") || Object.keys(body).some((key) => key !== "name")) throw new HttpError(400, "invalid_credential", "rename accepts only name, a string or null");
+    mutation = { ...target, operation, name: normalizeCredentialName(body.name) };
+  } else if (operation === "rotate") {
     if (Object.keys(body).some((key) => key !== "secretSha256")) throw new HttpError(400, "invalid_credential", "rotation accepts only secretSha256");
     mutation = { ...target, operation, secretSha256: credentialDigest(body.secretSha256) };
   } else mutation = { ...target, operation, credential: normalizeCredential(body, scope === "admin" && operation === "put") };
@@ -52,7 +56,7 @@ export function credentialResponsesFrom(policyEntries: AccessPolicyEntry[], cred
   return credentialEntries.map((entry) => {
     const policy = policies.get(entry.credential.policyId), generationMatches = !!policy && entry.credential.policyGeneration === policy.generation;
     const principalEnabled = !entry.credential.principalId || !disabled.has(normalizeEmail(entry.credential.principalId) ?? "");
-    return { credentialId: entry.credentialId, policyId: entry.credential.policyId, enabled: entry.credential.enabled, policyEnabled: policy?.enabled ?? false, generationMatches, principalEnabled, serviceTiers: entry.credential.serviceTiers ?? null, expiresAt: entry.credential.expiresAt ?? null, expired: credentialExpired(entry.credential), active: !credentialExpired(entry.credential) && entry.credential.enabled && !!policy?.enabled && generationMatches && principalEnabled, principalId: entry.credential.principalId ?? null };
+    return { credentialId: entry.credentialId, name: entry.credential.name ?? null, policyId: entry.credential.policyId, enabled: entry.credential.enabled, policyEnabled: policy?.enabled ?? false, generationMatches, principalEnabled, serviceTiers: entry.credential.serviceTiers ?? null, expiresAt: entry.credential.expiresAt ?? null, expired: credentialExpired(entry.credential), active: !credentialExpired(entry.credential) && entry.credential.enabled && !!policy?.enabled && generationMatches && principalEnabled, principalId: entry.credential.principalId ?? null };
   });
 }
 
@@ -73,7 +77,7 @@ export function normalizeCredential(value: unknown, allowMissingDigest = false):
       if (!principalId) throw new HttpError(400, "invalid_credential", "principalId must be a valid email");
     }
   }
-  return { enabled, secretSha256, policyId, principalId, ...(Object.hasOwn(body, "serviceTiers") ? { serviceTiers: body.serviceTiers == null ? null : normalizeTierList(body.serviceTiers, "invalid_credential") } : {}), ...(Object.hasOwn(body, "expiresAt") ? { expiresAt: body.expiresAt as string } : {}) };
+  return { enabled, secretSha256, policyId, principalId, ...(Object.hasOwn(body, "name") ? { name: normalizeCredentialName(body.name) } : {}), ...(Object.hasOwn(body, "serviceTiers") ? { serviceTiers: body.serviceTiers == null ? null : normalizeTierList(body.serviceTiers, "invalid_credential") } : {}), ...(Object.hasOwn(body, "expiresAt") ? { expiresAt: body.expiresAt as string } : {}) };
 }
 
 function credentialDigest(value: unknown): string {

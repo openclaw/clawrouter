@@ -87,13 +87,13 @@ test("session credential list returns only the caller's public credential shape"
   ]);
   const response = await sessionCredentialsRequest(new Request("https://clawrouter.example/v1/session/credentials"), env, "/v1/session/credentials", session);
   assert.equal(response.status, 200);
-  assert.deepEqual(await response.json(), { credentials: [{ credentialId: "own_key", policyId: "maintainer_access", enabled: true, active: true, expiresAt: null, expired: false, serviceTiers: null }] });
+  assert.deepEqual(await response.json(), { credentials: [{ credentialId: "own_key", name: null, policyId: "maintainer_access", enabled: true, active: true, expiresAt: null, expired: false, serviceTiers: null }] });
 });
 
 test("session credential activity uses the canonical policy after a binding is removed", async t => {
   const env = await fixture(t, [["own_key", credential(session.email)]], { held: false });
   const response = await sessionCredentialsRequest(new Request("https://clawrouter.example/v1/session/credentials"), env, "/v1/session/credentials", session);
-  assert.deepEqual(await response.json(), { credentials: [{ credentialId: "own_key", policyId: "maintainer_access", enabled: true, active: true, expiresAt: null, expired: false, serviceTiers: null }] });
+  assert.deepEqual(await response.json(), { credentials: [{ credentialId: "own_key", name: null, policyId: "maintainer_access", enabled: true, active: true, expiresAt: null, expired: false, serviceTiers: null }] });
 });
 
 test("the revoke subresource rejects PUT without rotating the credential", async t => {

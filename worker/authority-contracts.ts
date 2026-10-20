@@ -7,6 +7,7 @@ export type CredentialMutation = {
 } & (
   | { operation: "create" | "put"; credential: Omit<ProxyCredential, "policyGeneration"> }
   | { operation: "rotate"; secretSha256: string }
+  | { operation: "rename"; name: string | null }
   | { operation: "revoke" }
 );
 export type CredentialMutationResult =

@@ -157,6 +157,7 @@ export interface GrantRoutingPolicy {
 export interface AccessPolicyEntry { policyId: string; policy: AccessPolicy }
 
 export interface ProxyCredential {
+  name?: string | null;
   enabled: boolean;
   secretSha256: string;
   policyId: string;
