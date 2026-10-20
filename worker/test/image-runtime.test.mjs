@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import { join } from "node:path";
 import test from "node:test";
 import { startWorkerdFixture } from "../../test/helpers/workerd.mjs";
@@ -35,7 +35,10 @@ const upstream = [
 ].join("\n");
 
 test("real workerd image routes deliver multi-megabyte base64 and settle both durable SQL ledgers",{timeout:60000},async()=>{
- const temporary=await mkdtemp(join(process.cwd(),".artifacts/image-runtime-"));let worker;
+ // Fresh checkouts do not contain the ignored evidence directory. Own its setup.
+ const scratch=join(process.cwd(),".artifacts");
+ await mkdir(scratch,{recursive:true});
+ const temporary=await mkdtemp(join(scratch,"image-runtime-"));let worker;
  try{
   worker=await startWorkerdFixture(temporary,router,upstream);
   assert.equal((await worker.dispatchFetch("https://router.example/fixture/setup")).status,200);
