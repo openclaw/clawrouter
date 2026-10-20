@@ -290,26 +290,23 @@ models:
     - id: openai/gpt-6-astra
       upstream: gpt-6-astra
       capabilities: [llm.responses, llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          responses: &nativeAstra
+            sources: [https://github.com/openclaw/openclaw/blob/ffd5377099f76c2578a93da1a3fb8eedf71a2897/extensions/openai/openclaw.plugin.json, https://developers.openai.com/api/docs/pricing]
+            checkedAt: "2026-10-20"
+            input: [text, image]
+            contextWindow: 1050000
+            contextTokens: 272000
+            maxOutputTokens: 128000
+            supportedServiceTiers: [default, priority, flex]
+            inference: {chat: true}
+          chat_completions: *nativeAstra
       supportedReasoningEfforts: [low, medium, high, xhigh, max]
       requestParameters:
-        responses:
-          sources:
-            - https://developers.openai.com/api/docs/models/gpt-6-astra
-            - https://developers.openai.com/api/docs/guides/latest-model
-          checkedAt: "2026-09-23"
-          temperature: unsupported
-          topP: unsupported
-          logprobs: unsupported
-          toolCalling: supported
-        chat_completions:
-          sources:
-            - https://developers.openai.com/api/docs/models/gpt-6-astra
-            - https://developers.openai.com/api/docs/guides/latest-model
-          checkedAt: "2026-09-23"
-          temperature: unsupported
-          topP: unsupported
-          logprobs: unsupported
-          toolCalling: unsupported
+        responses: {"sources":["https://developers.openai.com/api/docs/models/gpt-6-astra","https://developers.openai.com/api/docs/guides/latest-model"],"checkedAt":"2026-09-23","temperature":"unsupported","topP":"unsupported","logprobs":"unsupported","toolCalling":"supported"}
+        chat_completions: {"sources":["https://developers.openai.com/api/docs/models/gpt-6-astra","https://developers.openai.com/api/docs/guides/latest-model"],"checkedAt":"2026-09-23","temperature":"unsupported","topP":"unsupported","logprobs":"unsupported","toolCalling":"unsupported"}
       pricingRef: openai-gpt-6-astra-tiers-2026-09-22
       pricing:
         effectiveAt: "2026-09-22"
@@ -364,20 +361,23 @@ models:
     - id: openai/gpt-6.1-sol
       upstream: gpt-6.1-sol
       capabilities: [llm.responses, llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          responses: &nativeSol61
+            sources: [https://github.com/openclaw/openclaw/blob/ffd5377099f76c2578a93da1a3fb8eedf71a2897/extensions/openai/openclaw.plugin.json, https://developers.openai.com/api/docs/pricing]
+            checkedAt: "2026-10-20"
+            input: [text, image]
+            contextWindow: 1050000
+            contextTokens: 272000
+            maxOutputTokens: 128000
+            supportedServiceTiers: [default, priority, flex, ultrafast]
+            inference: {chat: true}
+          chat_completions: *nativeSol61
       supportedReasoningEfforts: [low, medium, high, xhigh, max]
       requestParameters:
-        responses:
-          sources:
-            - https://developers.openai.com/api/docs/models/gpt-6.1-sol
-          checkedAt: "2026-10-18"
-          defaultReasoningEffort: medium
-          toolCalling: supported
-        chat_completions:
-          sources:
-            - https://developers.openai.com/api/docs/models/gpt-6.1-sol
-          checkedAt: "2026-10-18"
-          defaultReasoningEffort: medium
-          toolCalling: unsupported
+        responses: {"sources":["https://developers.openai.com/api/docs/models/gpt-6.1-sol"],"checkedAt":"2026-10-18","defaultReasoningEffort":"medium","toolCalling":"supported"}
+        chat_completions: {"sources":["https://developers.openai.com/api/docs/models/gpt-6.1-sol"],"checkedAt":"2026-10-18","defaultReasoningEffort":"medium","toolCalling":"unsupported"}
       pricingRef: openai-gpt-6-1-sol-tiers-2026-10-18
       pricing:
         effectiveAt: "2026-10-18"
@@ -443,28 +443,23 @@ models:
     - id: openai/gpt-6-sol
       upstream: gpt-6-sol
       capabilities: [llm.responses, llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          responses: &nativeSol6
+            sources: [https://github.com/openclaw/openclaw/blob/ffd5377099f76c2578a93da1a3fb8eedf71a2897/extensions/openai/openclaw.plugin.json, https://developers.openai.com/api/docs/pricing]
+            checkedAt: "2026-10-20"
+            input: [text, image]
+            contextWindow: 1050000
+            contextTokens: 272000
+            maxOutputTokens: 128000
+            supportedServiceTiers: [default, priority, flex]
+            inference: {chat: true}
+          chat_completions: *nativeSol6
       supportedReasoningEfforts: [none, low, medium, high, xhigh, max]
       requestParameters:
-        responses:
-          sources:
-            - https://developers.openai.com/api/docs/models/gpt-6-sol
-            - https://developers.openai.com/api/docs/guides/latest-model
-          checkedAt: "2026-09-25"
-          defaultReasoningEffort: medium
-          temperature: requires_reasoning_none
-          topP: requires_reasoning_none
-          logprobs: requires_reasoning_none
-          toolCalling: supported
-        chat_completions:
-          sources:
-            - https://developers.openai.com/api/docs/models/gpt-6-sol
-            - https://developers.openai.com/api/docs/guides/latest-model
-          checkedAt: "2026-09-25"
-          defaultReasoningEffort: medium
-          temperature: requires_reasoning_none
-          topP: requires_reasoning_none
-          logprobs: requires_reasoning_none
-          toolCalling: requires_reasoning_none
+        responses: {"sources":["https://developers.openai.com/api/docs/models/gpt-6-sol","https://developers.openai.com/api/docs/guides/latest-model"],"checkedAt":"2026-09-25","defaultReasoningEffort":"medium","temperature":"requires_reasoning_none","topP":"requires_reasoning_none","logprobs":"requires_reasoning_none","toolCalling":"supported"}
+        chat_completions: {"sources":["https://developers.openai.com/api/docs/models/gpt-6-sol","https://developers.openai.com/api/docs/guides/latest-model"],"checkedAt":"2026-09-25","defaultReasoningEffort":"medium","temperature":"requires_reasoning_none","topP":"requires_reasoning_none","logprobs":"requires_reasoning_none","toolCalling":"requires_reasoning_none"}
       pricingRef: openai-gpt-6-sol-tiers-2026-09-25
       pricing:
         effectiveAt: "2026-09-25"
@@ -519,28 +514,23 @@ models:
     - id: openai/gpt-6-luna
       upstream: gpt-6-luna
       capabilities: [llm.responses, llm.chat]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          responses: &nativeLuna6
+            sources: [https://github.com/openclaw/openclaw/blob/ffd5377099f76c2578a93da1a3fb8eedf71a2897/extensions/openai/openclaw.plugin.json, https://developers.openai.com/api/docs/pricing]
+            checkedAt: "2026-10-20"
+            input: [text, image]
+            contextWindow: 1050000
+            contextTokens: 272000
+            maxOutputTokens: 128000
+            supportedServiceTiers: [default, priority, flex]
+            inference: {chat: true}
+          chat_completions: *nativeLuna6
       supportedReasoningEfforts: [none, low, medium, high, xhigh, max]
       requestParameters:
-        responses:
-          sources:
-            - https://developers.openai.com/api/docs/models/gpt-6-luna
-            - https://developers.openai.com/api/docs/guides/latest-model
-          checkedAt: "2026-09-25"
-          defaultReasoningEffort: medium
-          temperature: requires_reasoning_none
-          topP: requires_reasoning_none
-          logprobs: requires_reasoning_none
-          toolCalling: supported
-        chat_completions:
-          sources:
-            - https://developers.openai.com/api/docs/models/gpt-6-luna
-            - https://developers.openai.com/api/docs/guides/latest-model
-          checkedAt: "2026-09-25"
-          defaultReasoningEffort: medium
-          temperature: requires_reasoning_none
-          topP: requires_reasoning_none
-          logprobs: requires_reasoning_none
-          toolCalling: requires_reasoning_none
+        responses: {"sources":["https://developers.openai.com/api/docs/models/gpt-6-luna","https://developers.openai.com/api/docs/guides/latest-model"],"checkedAt":"2026-09-25","defaultReasoningEffort":"medium","temperature":"requires_reasoning_none","topP":"requires_reasoning_none","logprobs":"requires_reasoning_none","toolCalling":"supported"}
+        chat_completions: {"sources":["https://developers.openai.com/api/docs/models/gpt-6-luna","https://developers.openai.com/api/docs/guides/latest-model"],"checkedAt":"2026-09-25","defaultReasoningEffort":"medium","temperature":"requires_reasoning_none","topP":"requires_reasoning_none","logprobs":"requires_reasoning_none","toolCalling":"requires_reasoning_none"}
       pricingRef: openai-gpt-6-luna-tiers-2026-09-25
       pricing:
         effectiveAt: "2026-09-25"
@@ -975,6 +965,13 @@ models:
     - id: openai/tts-1
       upstream: tts-1
       capabilities: [audio.speech]
+      nativeCapabilities:
+        version: clawrouter.native-capabilities.v1
+        endpoints:
+          speech:
+            sources: [https://developers.openai.com/api/docs/models/tts-1]
+            checkedAt: "2026-10-20"
+            input: [text]
       pricingRef: openai-tts-1-characters-2026-09-24
       pricing:
         unit: character

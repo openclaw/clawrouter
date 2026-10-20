@@ -1,3 +1,4 @@
+import type { NativeModelCapabilities } from "./native-capabilities";
 import type { ModelRequestParameters, ProviderReasoningEffort } from "./model-request-parameters";
 
 export interface TokenRates { inputMicrosPerMillion: number; outputMicrosPerMillion: number; cachedInputMicrosPerMillion: number | null; cacheWriteInputMicrosPerMillion: number | null; cacheWrite5mInputMicrosPerMillion: number | null; cacheWrite1hInputMicrosPerMillion: number | null }
@@ -14,7 +15,7 @@ export interface ImageTokenPricing {
     outputTokenBound: { basePixels: number; divisor: number; qualityFactors: Record<string, number> } };
 }
 export type ModelPricing = TokenPricing | CharacterPricing | ImageTokenPricing;
-export interface ClientCatalogModel { id: string; upstream: string; codexModel?: string; capabilities: string[]; supportedReasoningEfforts?: ProviderReasoningEffort[]; requestParameters?: Record<string, ModelRequestParameters>; pricing_ref: string | null; pricing: ModelPricing | null }
+export interface ClientCatalogModel { id: string; upstream: string; codexModel?: string; capabilities: string[]; supportedReasoningEfforts?: ProviderReasoningEffort[]; requestParameters?: Record<string, ModelRequestParameters>; nativeCapabilities?: NativeModelCapabilities; pricing_ref: string | null; pricing: ModelPricing | null }
 export interface CatalogOffer {
   endpoint: string;
   modelId: string | null;
@@ -26,6 +27,9 @@ export interface CatalogOffer {
   eligible: boolean;
   affordability: "exact-covered" | "exact-blocked" | "request-dependent";
   reasonCode?: string;
+  // Declared support intersected with this selected identity’s tier allowlist.
+  // Not a tier-specific affordability promise or authorization for dispatch.
+  permittedServiceTiers?: string[];
 }
 export interface ClientCatalogProvider {
   id: string;

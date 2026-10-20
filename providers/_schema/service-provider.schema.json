@@ -683,8 +683,254 @@
           "minProperties": 1,
           "additionalProperties": { "$ref": "#/$defs/modelRequestParameters" }
         },
+        "nativeCapabilities": { "$ref": "#/$defs/nativeModelCapabilities" },
         "pricingRef": { "type": "string" },
         "pricing": { "$ref": "#/$defs/modelPricing" }
+      }
+    },
+    "nativeModelCapabilities": {
+      "type": "object",
+      "required": [
+        "version",
+        "endpoints"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "version": {
+          "const": "clawrouter.native-capabilities.v1"
+        },
+        "endpoints": {
+          "type": "object",
+          "minProperties": 1,
+          "maxProperties": 32,
+          "propertyNames": {
+            "type": "string",
+            "pattern": "^[a-z0-9][a-z0-9_-]{0,63}$"
+          },
+          "additionalProperties": {
+            "$ref": "#/$defs/nativeEndpointCapabilities"
+          }
+        }
+      }
+    },
+    "nativeEndpointCapabilities": {
+      "type": "object",
+      "required": [
+        "sources",
+        "checkedAt"
+      ],
+      "minProperties": 3,
+      "additionalProperties": false,
+      "properties": {
+        "sources": {
+          "$ref": "#/$defs/modelRequestParameters/properties/sources"
+        },
+        "checkedAt": {
+          "type": "string",
+          "format": "date"
+        },
+        "input": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 5,
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "text",
+              "image",
+              "audio",
+              "video",
+              "json"
+            ]
+          }
+        },
+        "contextWindow": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "contextTokens": {
+          "type": "integer",
+          "minimum": 1,
+          "maximum": 9007199254740991
+        },
+        "maxOutputTokens": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 9007199254740991
+        },
+        "supportedServiceTiers": {
+          "type": "array",
+          "minItems": 1,
+          "maxItems": 8,
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_-]{0,63}$"
+          }
+        },
+        "inference": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": false,
+          "properties": {
+            "chat": {
+              "type": "boolean"
+            },
+            "decision": {
+              "$ref": "#/$defs/nativeDecisionCapabilities"
+            }
+          }
+        }
+      }
+    },
+    "nativeDecisionCapabilities": {
+      "type": "object",
+      "required": [
+        "protocol",
+        "questions",
+        "limits"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "protocol": {
+          "const": "openai-decisions"
+        },
+        "reasoning": {
+          "type": "object",
+          "required": [
+            "modes"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "modes": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "const": "auto"
+              }
+            }
+          }
+        },
+        "questions": {
+          "type": "object",
+          "minProperties": 1,
+          "additionalProperties": false,
+          "properties": {
+            "boolean": {
+              "$ref": "#/$defs/nativeBooleanQuestion"
+            },
+            "choice": {
+              "type": "object",
+              "required": [
+                "probabilities",
+                "abstention",
+                "minOptions",
+                "maxOptions"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "probabilities": {
+                  "const": "categorical"
+                },
+                "abstention": {
+                  "type": "boolean"
+                },
+                "minOptions": {
+                  "type": "integer",
+                  "minimum": 2,
+                  "maximum": 255
+                },
+                "maxOptions": {
+                  "type": "integer",
+                  "minimum": 2,
+                  "maximum": 255
+                }
+              }
+            },
+            "score": {
+              "type": "object",
+              "required": [
+                "probabilities",
+                "abstention"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "probabilities": {
+                  "const": "categorical"
+                },
+                "abstention": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        },
+        "confidence": {
+          "const": "provider-specific"
+        },
+        "limits": {
+          "type": "object",
+          "required": [
+            "maxQuestions"
+          ],
+          "additionalProperties": false,
+          "properties": {
+            "maxQuestions": {
+              "type": "integer",
+              "minimum": 1,
+              "maximum": 200
+            },
+            "image": {
+              "type": "object",
+              "required": [
+                "maxBytes",
+                "mimeTypes",
+                "remoteUrls"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "maxBytes": {
+                  "type": "integer",
+                  "minimum": 1,
+                  "maximum": 4194304
+                },
+                "mimeTypes": {
+                  "type": "array",
+                  "minItems": 1,
+                  "uniqueItems": true,
+                  "items": {
+                    "enum": [
+                      "image/png",
+                      "image/jpeg",
+                      "image/webp"
+                    ]
+                  }
+                },
+                "remoteUrls": {
+                  "type": "boolean"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "nativeBooleanQuestion": {
+      "type": "object",
+      "required": [
+        "probabilities",
+        "abstention"
+      ],
+      "additionalProperties": false,
+      "properties": {
+        "probabilities": {
+          "const": "boolean"
+        },
+        "abstention": {
+          "type": "boolean"
+        }
       }
     },
     "parameterSupport": { "enum": ["supported", "unsupported", "requires_reasoning_none"] },

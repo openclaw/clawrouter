@@ -45,6 +45,7 @@ export function compileProviderSnapshot(manifests) {
         ...(model.codexModel ? { codexModel: model.codexModel } : {}),
         ...(model.supportedReasoningEfforts ? { supportedReasoningEfforts: model.supportedReasoningEfforts } : {}),
         ...(model.requestParameters ? { requestParameters: model.requestParameters } : {}),
+        ...(model.nativeCapabilities ? { nativeCapabilities: model.nativeCapabilities } : {}),
         pricing_ref: model.pricing_ref,
         pricing: model.pricing,
       };
@@ -124,6 +125,7 @@ function compileProvider(manifest, ids) {
     ...(model.codexModel ? { codexModel: model.codexModel } : {}),
     ...(model.supportedReasoningEfforts ? { supportedReasoningEfforts: model.supportedReasoningEfforts } : {}),
     ...(model.requestParameters ? { requestParameters: model.requestParameters } : {}),
+    ...(model.nativeCapabilities ? { nativeCapabilities: model.nativeCapabilities } : {}),
     pricing_ref: model.pricingRef ?? null,
     pricing: model.pricing ? normalizePricing(model.pricing) : null,
   }));
@@ -279,6 +281,23 @@ function validateManifest(manifest) {
       const endpoint = manifest.endpoints[manifest.capabilities.find((capability) => capability.id === id)?.endpoint];
       return id !== "audio.speech" || endpoint?.requestFormat !== "openai.audio_speech" || endpoint.responseFormat !== "audio.binary";
     }))) throw new Error(`model ${model.id} character pricing requires the binary speech contract`);
+    for (const [id, facts] of Object.entries(model.nativeCapabilities?.endpoints ?? {})) {
+      const endpoint = Object.hasOwn(manifest.endpoints, id) ? manifest.endpoints[id] : null;
+      const supported = manifest.capabilities.filter(capability => capability.endpoint === id && model.capabilities?.includes(capability.id));
+      const fail = message => { throw new Error("model " + model.id + " nativeCapabilities " + message); };
+      if (!endpoint || !supported.length) fail("must reference a supported endpoint");
+      if (facts.contextTokens !== undefined && (facts.contextWindow === undefined || facts.contextTokens > facts.contextWindow)) fail("contextTokens requires and cannot exceed contextWindow");
+      if (facts.maxOutputTokens !== undefined && facts.contextWindow !== undefined && facts.maxOutputTokens > facts.contextWindow) fail("maxOutputTokens cannot exceed contextWindow");
+      if (facts.inference?.chat === true && !supported.some(capability => ["llm.chat", "llm.responses", "llm.messages", "llm.generate"].includes(capability.id))) fail("chat requires a conversational capability");
+      if (facts.inference?.chat && facts.maxOutputTokens === 0) fail("chat cannot declare zero output tokens");
+      const decision = facts.inference?.decision;
+      if (decision && (endpoint.requestFormat !== "openai.decisions" || !supported.some(capability => capability.id === "llm.decisions"))) fail("decision requires the declared Decisions endpoint");
+      if (decision?.questions.choice && decision.questions.choice.minOptions > decision.questions.choice.maxOptions) fail("choice minOptions exceeds maxOptions");
+      if (facts.supportedServiceTiers) {
+        if (!["openai.responses", "openai.chat_completions"].includes(endpoint.requestFormat)) fail("service tiers require a supported tier wire format");
+        if (facts.supportedServiceTiers.some(tier => ["auto", "fast"].includes(tier) || !model.pricing?.serviceTiers?.some(card => card.id === tier))) fail("service tiers require canonical priced tier ids");
+      }
+    }
   }
   const responseControls = new Set();
   for (const [id, endpoint] of Object.entries(manifest.endpoints)) {

@@ -1,3 +1,4 @@
+import { allowedServiceTiers } from "../shared/service-tiers.ts";
 import { policyAllowsModel } from "./policy-models.ts";
 import type { CatalogOffer, ClientCatalog, ClientCatalogProvider, EntitlementsResponse, FusionConfig, SessionResponse } from "../shared/contracts";
 import { fusionCatalogReadiness } from "./fusion-readiness";
@@ -330,7 +331,17 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
     };
     const models = provider.models.filter(model => pools.some(pool => policyAllowsModel(pool.entry.policy, provider.id, model.id))).flatMap((model) => {
       const capabilities = model.capabilities.filter((capability) => effective.some((context) => provider.capabilities.some((item) => item.id === capability && item.endpoint === context.endpoint.id) && eligibility(context, model, capability).status !== "exact-blocked"));
-      return capabilities.length ? [{ ...model, capabilities }] : [];
+      if (!capabilities.length) return [];
+      const visibleEndpoints = new Set(effective.filter(context => modelSupportsEndpoint(provider, model, context.endpoint)
+        && provider.capabilities.some(item => item.endpoint === context.endpoint.id && capabilities.includes(item.id))
+        && eligibility(context, model, provider.capabilities.find(item => item.endpoint === context.endpoint.id)!.id).status !== "exact-blocked").map(context => context.endpoint.id));
+      const { nativeCapabilities, requestParameters, ...base } = model;
+      const nativeEndpoints = Object.fromEntries(Object.entries(nativeCapabilities?.endpoints ?? {}).filter(([id]) => visibleEndpoints.has(id)));
+      const parameters = Object.fromEntries(Object.entries(requestParameters ?? {}).filter(([id]) => visibleEndpoints.has(id)));
+      return [{ ...base, capabilities,
+        ...(nativeCapabilities && Object.keys(nativeEndpoints).length ? { nativeCapabilities: { version: nativeCapabilities.version, endpoints: nativeEndpoints } } : {}),
+        ...(Object.keys(parameters).length ? { requestParameters: parameters } : {}),
+      }];
     });
     const offers: CatalogOffer[] = effective.flatMap((context) => {
       const { endpoint, mode, auth } = context;
@@ -342,7 +353,9 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
         // A form can defer model selection without declaring a model-less
         // request priced. Selected models still use their own admission facts.
         const availability: OperationAffordability = !model && resolved.reasonCode === "pricing_required" && selectableModel ? { status: "request-dependent" } : resolved;
-        const common = { endpoint: endpoint.id, modelId: model?.id ?? null, transport: mode, policyId: auth.policyId, policyGeneration: auth.policy.generation, eligible: availability.status !== "exact-blocked", affordability: availability.status, ...(availability.reasonCode ? { reasonCode: availability.reasonCode } : {}) };
+        const supportedTiers = model?.nativeCapabilities?.endpoints[endpoint.id]?.supportedServiceTiers;
+        const permittedServiceTiers = supportedTiers?.filter(tier => availability.status !== "exact-blocked" && allowedServiceTiers(auth.policy, model!.id, auth.serviceTiers).includes(tier));
+        const common = { endpoint: endpoint.id, modelId: model?.id ?? null, transport: mode, policyId: auth.policyId, policyGeneration: auth.policy.generation, eligible: availability.status !== "exact-blocked", affordability: availability.status, ...(availability.reasonCode ? { reasonCode: availability.reasonCode } : {}), ...(permittedServiceTiers ? { permittedServiceTiers } : {}) };
         const native: CatalogOffer = { ...common, routeKind: keyScope ? endpoint.native_proxy ? "native" : "manifest" : "playground", route: keyScope && endpoint.native_proxy ? `/v1/native/${provider.id}${endpoint.path}` : `/v1/${keyScope ? "" : "playground/"}proxy/${provider.id}/${endpoint.id}` };
         const unified = model && unifiedPathForEndpoint(provider, endpoint);
         return [...(mode === "http" || endpoint.native_proxy ? [native] : []), ...(unified ? [{ ...common, routeKind: "unified" as const, route: keyScope ? unified : `/v1/playground${unified}` }] : [])];
