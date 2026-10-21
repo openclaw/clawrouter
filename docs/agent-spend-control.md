@@ -184,6 +184,17 @@ response, and stored-item inputs reserve the model's full declared input window
 because their billable token count cannot be inferred from the small serialized
 reference. Chat Completions output bounds are multiplied by `n`.
 
+One exception is qualified: on the Anthropic Messages wire, an inline `image`
+block with a `base64` PNG, JPEG, GIF or WebP source whose header matches its
+`media_type` reserves `ceil(width / 28) × ceil(height / 28)` visual tokens in
+place of its encoded bytes. Claude bills images by those 28-pixel patches and
+only downsizes them, so the original dimensions bound every model tier; the rest
+of the block still counts as serialized bytes. URL, Files API, malformed,
+mismatched or larger-than-8000-pixel images, documents, and images on other
+wires keep the full input window. For example, a 1920×1080 screenshot adds
+2,691 visual tokens instead of reserving the 1,000,000-token Claude Opus 5.5
+window. Settlement still uses the provider's reported usage.
+
 Input reservation includes the declared generic cache-write rate; duration-specific
 cache controls also select their declared write rates. After the response completes, ClawRouter settles reported input,
 cached-input, cache-write, and output tokens at the manifest rates and releases

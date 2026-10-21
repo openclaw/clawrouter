@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Reserve Claude base64 PNG/JPEG/GIF/WebP images at their documented visual-token bound from header dimensions instead of the full input window; other media keep the full bound and settlement still uses reported usage.
+
 - Add opt-in soft HTTP budgets with parallel fail-open checks, asynchronous idempotent charges and retry delivery, request timing headers, administrator-managed member caps, and GitHub team provisioning; keep reserve behavior as the default and preserve durable recovery ownership.
 
 - Enforce independent ISO-week policy/principal budgets, show configured allowance windows, and provision members with $5,000/week by default; add a dry-run, field-preserving Ultrafast patch for existing team and Stable policies on GPT-6.1 Sol only.

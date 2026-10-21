@@ -1,4 +1,5 @@
 import { actualImageCost, estimateImageCost } from "./image-generation.ts";
+import { claudeImageBound, type InlineImageBound } from "./image-input-bound.ts";
 import type { CharacterPricing, CompiledEndpoint, ModelPricing, ServiceTierPricing, TokenPricing, TokenRates } from "./types";
 import { googleField, googleInt32, googleRequestServiceTier, googleServiceTier } from "./google-protocol.ts";
 import { retainedToolBase, type ToolKnowledge } from "./responses-tool-evidence.ts";
@@ -144,9 +145,12 @@ export function estimateModelCost(pricing: ModelPricing, body: Record<string, un
   if (opaque && opaqueLimit == null) return { reserveMicros: 0, inputTokens: null, outputTokens: null, pricingAvailable: false };
   const bytes = new TextEncoder().encode(JSON.stringify(body)).byteLength;
   const inputLimit = opaqueLimit ?? pricing.maxRequestInputTokens ?? pricing.maxInputTokens;
-  const inputTokens = opaque || (google ? googleHasUnboundedInput(body) : requestHasUnboundedInput(body))
+  // Claude base64 images with a recognized header replace their encoded bytes
+  // with their visual-token ceiling. Every other media input stays unbounded.
+  const images: InlineImageBound | undefined = endpoint?.request_format === "anthropic.messages" ? { encodedBytes: 0, tokens: 0 } : undefined;
+  const inputTokens = opaque || (google ? googleHasUnboundedInput(body) : requestHasUnboundedInput(body, images))
     ? inputLimit
-    : Math.min(inputLimit, saturatingAdd(bytes, pricing.inputTokenOverhead));
+    : Math.min(inputLimit, saturatingAdd(saturatingAdd(bytes - (images?.encodedBytes ?? 0), images?.tokens ?? 0), pricing.inputTokenOverhead));
   const config = google ? googleField(body, "generationConfig", "generation_config") : undefined;
   // Native maxOutputTokens includes both thoughts and visible candidate tokens.
   // Only the selected wire format decides which caller limits are meaningful.
@@ -283,10 +287,10 @@ function opaqueInputLimit(pricing: ModelPricing | null | undefined): number | nu
   return typeof limit === "number" && Number.isSafeInteger(limit) && limit > 0 ? limit : null;
 }
 
-function requestHasUnboundedInput(body: Record<string, unknown>): boolean {
+function requestHasUnboundedInput(body: Record<string, unknown>, images?: InlineImageBound): boolean {
   if (["previous_response_id", "conversation", "prompt"].some((key) => body[key] != null)) return true;
-  if (body.input != null && contentHasUnboundedInput(body.input)) return true;
-  if (Array.isArray(body.messages) && body.messages.some((message) => isObject(message) && contentHasUnboundedInput(message.content))) return true;
+  if (body.input != null && contentHasUnboundedInput(body.input, images)) return true;
+  if (Array.isArray(body.messages) && body.messages.some((message) => isObject(message) && contentHasUnboundedInput(message.content, images))) return true;
   return Array.isArray(body.tools) && body.tools.some((tool) => isObject(tool) && providerAddedTool(tool.type));
 }
 
@@ -304,13 +308,20 @@ function googleContentHasMedia(value: unknown): boolean {
   ));
 }
 
-function contentHasUnboundedInput(value: unknown): boolean {
-  if (Array.isArray(value)) return value.some(contentHasUnboundedInput);
+// `images` accumulates qualified Claude image bounds; without it, any image is unbounded.
+function contentHasUnboundedInput(value: unknown, images?: InlineImageBound): boolean {
+  if (Array.isArray(value)) return value.some((item) => contentHasUnboundedInput(item, images));
   if (!isObject(value)) return false;
   const kind = typeof value.type === "string" ? value.type : "";
-  if (["image", "image_url", "document", "file", "input_image", "input_file", "item_reference", "computer_screenshot"].includes(kind)) return true;
   if ("image_url" in value || "file_id" in value) return true;
-  return Object.values(value).some(contentHasUnboundedInput);
+  const image = images && kind === "image" ? claudeImageBound(value.source) : null;
+  if (image && images) {
+    images.encodedBytes += image.encodedBytes;
+    images.tokens = saturatingAdd(images.tokens, image.tokens);
+    return Object.entries(value).some(([key, item]) => key !== "source" && contentHasUnboundedInput(item, images));
+  }
+  if (["image", "image_url", "document", "file", "input_image", "input_file", "item_reference", "computer_screenshot"].includes(kind)) return true;
+  return Object.values(value).some((item) => contentHasUnboundedInput(item, images));
 }
 
 function providerAddedTool(value: unknown): boolean {
