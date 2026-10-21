@@ -16,7 +16,10 @@ The proxy disables both vendor response-auto flags and idle timeout while
 retaining VAD speech/commit events. It creates and cancels responses itself,
 only after fresh caller/model/policy/grant/account authority and budget admission.
 Native partial VAD-flag updates are local transitions; effective ACKs truthfully
-report the vendor-disabled flags. Unknown billable events fail closed.
+report the effective proxy-owned flags, while upstream ACKs must confirm both
+vendor flags remain disabled. Partial patches merge with the effective policy;
+a pending full update excludes local toggles until its ACK. Unknown billable
+events fail closed.
 
 Barge-in cancellation retires the old response before another response is funded.
 Provisional function arguments do not authorize a tool result: only a completed
@@ -31,7 +34,11 @@ nonterminal invalid-request error; a subsequent explicit request is allowed.
 soft budget policy. Its own model must be allowed, not merely the Realtime model.
 Each input buffer owns a separate unit before its first byte leaves the proxy.
 Committed item IDs bind asynchronous ASR terminals, including out-of-order
-completion; identical terminals cannot charge twice.
+completion; identical terminals cannot charge twice. Delayed VAD commits consume
+only their audio-time boundary, retaining already-forwarded trailing media.
+Soft admission precedes every media append; per-item child receipts inherit the
+admitted media attribution and budget windows, with unique once-only charge IDs.
+These are soft reporting receipts, not new post-execution hard reservations.
 
 Input transcription is billed separately from the Realtime response. Its token
 usage is attributed to `audio.transcription`, model `openai/gpt-4o-mini-transcribe`,

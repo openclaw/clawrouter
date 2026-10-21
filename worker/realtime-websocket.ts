@@ -1,4 +1,4 @@
-import { fundRealtimeUnit } from './realtime-accounting';
+import { fundRealtimeUnit, type FundedInput } from './realtime-accounting';
 import { authenticateProxyKey, proxyKeyVerification } from './proxy-auth';
 import { prepareSelected } from './proxy';
 import { providerById } from './providers';
@@ -7,6 +7,7 @@ import type { AuthorizedIdentity, Env } from './types';
 import { HttpError, errorResponse } from './utils';
 import { REALTIME } from './realtime-protocol';
 import { RealtimeSession } from './realtime-session';
+import { softBudget } from './soft-budget';
 
 export async function proxyRealtimeWebSocket(request: Request, env: Env, context: ExecutionContext): Promise<Response> {
   const auth = await authenticateProxyKey(request.headers, env, [{ id: 'openai', tokenRef: 'openai' }]);
@@ -69,11 +70,25 @@ export async function proxyRealtimeWebSocket(request: Request, env: Env, context
     guard: async () => { await check(); },
     expiresAt: proxyKeyVerification(auth)?.expiresAt ? Date.parse(proxyKeyVerification(auth)!.expiresAt!) : undefined,
     allowTranscription: soft,
-    guardInput: async () => { await check(true); inputEnabled = true; },
+    guardInput: async (observeBudget = false) => {
+      const current = await check(true); inputEnabled = true;
+      if (observeBudget) {
+        // Continuing media is still egress: refresh the soft observation even
+        // when a previously admitted ASR unit retains the pending bytes.
+        const observation = softBudget(env, current.auth, 'audio.transcription', current.upstream.connection!, crypto.randomUUID(), () => undefined);
+        context.waitUntil(observation.check);
+        await observation.beforeDelivery(); observation.close();
+        if (observation.denial) throw observation.denial;
+      }
+    },
     async fundInput(unitId, signal) {
       const current = await check(true); signal.throwIfAborted();
       const unit = await fundRealtimeUnit({ request, env, context, auth: current.auth, selection: inputSelection!, connection: current.upstream.connection!, grantKey: pin.key!, grantLane: current.upstream.grantLane!, signal, unitId, outputCap: 0, input: true });
-      return { settle: (terminal, sent, itemId) => unit.settle(terminal, sent, false, itemId) };
+      const wrap = (owner: typeof unit): FundedInput => ({
+        settle: (terminal, sent, itemId) => owner.settle(terminal, sent, false, itemId),
+        fork: () => wrap(owner.forkInput()),
+      });
+      return wrap(unit);
     },
     async fund(unitId, outputCap, signal) {
       const current = await check(); signal.throwIfAborted();

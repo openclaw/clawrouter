@@ -8,7 +8,7 @@ export interface RealtimeSessionOptions {
   guard(): Promise<void>;
   fund(unitId: string, outputCap: number, signal: AbortSignal): Promise<FundedTurn>;
   allowTranscription?: boolean;
-  guardInput?(): Promise<void>;
+  guardInput?(observeBudget?: boolean): Promise<void>;
   fundInput?(unitId: string, signal: AbortSignal): Promise<FundedInput>;
   expiresAt?: number;
   // Timing injection for deterministic private tests, never an environment knob.
@@ -22,12 +22,14 @@ export class RealtimeSession {
   private tail = Promise.resolve();
   private count = 0; private queuedBytes = 0; private eventCount = 0;
   private inputBytes = 0; private outputBytes = 0; private bufferBytes = 0;
+  private forwardedBytes = 0; private consumedBytes = 0;
   private closed = false; private firstCause: string | null = null;
   private active?: Active; private policy?: Json; private pendingPolicy?: Json;
   private inputBuffer?: { unit: FundedInput; sent: boolean };
   private inputUnits = new Map<string, FundedInput>();
   private inputTerminals = new Map<string, string>();
-  private speech: { id: string; start: number; stopped: boolean } | null = null;
+  private speech: { id: string; start: number; end: number | null } | null = null;
+  private cancellations = new Map<string, { client: boolean; acknowledged: boolean }>();
   private autoPending = 0;
   private calls = new Map<string, { item: string; name: string; response: string; completed: boolean; returned: boolean }>();
   private commitPending = false; private commitReady = false; private clearPending = false;
@@ -115,11 +117,13 @@ export class RealtimeSession {
       // transition needs no vendor round trip and cannot race a second ACK.
       if (this.policy && Object.keys(patch).every(k => ['type', 'audio'].includes(k)) && patch.type === 'realtime') {
         fields(object(patch.audio), ['input']); fields(object(patch.audio.input), ['turn_detection']);
-        const next = vadPolicy(patch.audio.input.turn_detection), old = this.policy.audio.input.turn_detection;
+        if (this.pendingPolicy) fail('session_busy');
+        const old = this.policy.audio.input.turn_detection;
+        const next = vadPolicy({ ...old, ...object(patch.audio.input.turn_detection) });
         if (!old || !next || ['type', 'threshold', 'prefix_padding_ms', 'silence_duration_ms'].some(k => next[k] !== old[k])) fail('session_pinned');
         await this.options.guard(); if (this.closed) return;
         this.policy.audio.input.turn_detection = next;
-        this.send(this.client, { type: 'session.updated', session: wireSession(this.policy) }); return;
+        this.send(this.client, { type: 'session.updated', session: this.policy }); return;
       }
       if (this.pendingPolicy || this.active || this.bufferBytes || this.commitPending || this.commitReady || this.clearPending || this.inputUnits.size) fail('session_busy');
       const policy = sessionPolicy(e.session);
@@ -136,14 +140,14 @@ export class RealtimeSession {
         const bytes = audio(e.audio, this.policy.audio.input.format);
         // ASR is billable at automatic commit, not at response.create. Admit
         // its independent soft unit BEFORE the first byte can leave this owner.
-        if (this.policy.audio.input.transcription) await this.options.guardInput?.();
+        if (this.policy.audio.input.transcription) await this.options.guardInput?.(!!this.inputBuffer);
         await this.options.guard(); if (this.closed) return;
         if (this.policy.audio.input.transcription && !this.inputBuffer) {
           const unit = await this.options.fundInput!(crypto.randomUUID(), this.abort.signal);
           this.inputBuffer = { unit, sent: false };
           if (this.closed) return;
         }
-        this.bufferBytes += bytes;
+        this.forwardedBytes += bytes; this.bufferBytes = this.forwardedBytes - this.consumedBytes;
         if (this.bufferBytes > 960_000) fail('audio_buffer_limit');
         if (this.inputBuffer) this.inputBuffer.sent = true;
         this.send(this.upstream, { type: e.type, event_id: eventId, audio: e.audio }); return;
@@ -153,7 +157,7 @@ export class RealtimeSession {
         this.commitPending = true; this.send(this.upstream, { type: e.type, event_id: eventId }); return;
       case 'input_audio_buffer.clear':
         if (this.commitPending || this.commitReady || this.clearPending) fail('commit_pending');
-        this.clearPending = true; this.bufferBytes = 0; this.send(this.upstream, { type: e.type, event_id: eventId }); return;
+        this.clearPending = true; this.send(this.upstream, { type: e.type, event_id: eventId }); return;
       case 'conversation.item.create': {
         if (this.active) fail('turn_busy');
         const item = object(e.item);
@@ -181,7 +185,7 @@ export class RealtimeSession {
           this.send(this.client, { type: 'error', error: { type: 'invalid_request_error', code: 'response_cancel_not_active', event_id: eventId, message: 'Cancellation failed: no active response found' } }); return;
         }
         if (e.response_id !== undefined && e.response_id !== this.active.response) fail('unknown_response');
-        this.cancelResponse(eventId); return;
+        this.cancelResponse(eventId, true); return;
       case 'conversation.item.truncate': {
         const id = this.item(e.item_id), maxBytes = this.items.get(id)!;
         const bytesPerMs = this.policy.audio.output.format.type === 'audio/pcm' ? 48 : 8;
@@ -196,10 +200,11 @@ export class RealtimeSession {
     }
   }
 
-  private cancelResponse(eventId: string = crypto.randomUUID()): void {
+  private cancelResponse(eventId: string = crypto.randomUUID(), client = false): void {
     const a = this.active;
     if (!a?.sent || a.cancelSent) return;
-    a.cancelSent = true;
+    if (this.cancellations.size >= REALTIME.turns) fail('turn_limit');
+    this.cancellations.set(eventId, { client, acknowledged: false }); a.cancelSent = true;
     this.send(this.upstream, { type: 'response.cancel', event_id: eventId, ...(a.response ? { response_id: a.response } : {}) });
   }
   private async createResponse(eventId: string, value?: unknown): Promise<void> {
@@ -246,29 +251,42 @@ export class RealtimeSession {
     }
     if (e.type === 'session.updated') {
       if (!this.pendingPolicy || !effectiveSession(e.session, this.pendingPolicy)) fail('unsafe_ack');
-      this.policy = this.pendingPolicy; this.pendingPolicy = undefined; this.send(this.client, e); return;
+      // Validate the disabled vendor authority, then ACK the logical proxy-owned
+      // behavior. Clients must not mistake wire funding controls for their policy.
+      this.policy = this.pendingPolicy; this.pendingPolicy = undefined;
+      this.send(this.client, { ...e, session: { ...e.session, ...this.policy } }); return;
     }
     if (e.type === 'input_audio_buffer.speech_started' || e.type === 'input_audio_buffer.speech_stopped') {
       if (!this.policy?.audio.input.turn_detection || !this.bufferBytes) fail('unsolicited_vad');
       const id = identity(e.item_id);
       if (e.type.endsWith('speech_started')) {
-        if (this.speech || !Number.isSafeInteger(e.audio_start_ms) || e.audio_start_ms < 0 || this.items.has(id)) fail('vad_order');
-        this.speech = { id, start: e.audio_start_ms, stopped: false };
+        if (this.speech || !Number.isSafeInteger(e.audio_start_ms) || e.audio_start_ms < 0 || e.audio_start_ms > Math.ceil(this.forwardedBytes / this.inputBytesPerMs()) || this.items.has(id)) fail('vad_order');
+        this.speech = { id, start: e.audio_start_ms, end: null };
         if (this.policy.audio.input.turn_detection.interrupt_response) this.cancelResponse();
       } else {
-        if (!this.speech || this.speech.id !== id || this.speech.stopped || !Number.isSafeInteger(e.audio_end_ms) || e.audio_end_ms < this.speech.start) fail('vad_order');
-        this.speech.stopped = true;
+        if (!this.speech || this.speech.id !== id || this.speech.end !== null || !Number.isSafeInteger(e.audio_end_ms) || e.audio_end_ms < this.speech.start || e.audio_end_ms > Math.ceil(this.forwardedBytes / this.inputBytesPerMs()) || e.audio_end_ms * this.inputBytesPerMs() <= this.consumedBytes) fail('vad_order');
+        this.speech.end = e.audio_end_ms;
       }
       this.send(this.client, e); return;
     }
     if (e.type === 'input_audio_buffer.committed') {
-      const automatic = this.policy?.audio.input.turn_detection;
-      if (!this.commitPending && (!automatic || !this.speech?.stopped || this.speech.id !== e.item_id)) fail('unsolicited_commit');
+      const automatic = this.policy?.audio.input.turn_detection, explicit = this.commitPending;
+      if (!explicit && (!automatic || this.speech?.end == null || this.speech.id !== e.item_id)) fail('unsolicited_commit');
       const id = identity(e.item_id); if (this.items.has(id)) fail('reused_item');
-      if (this.inputBuffer) { this.inputUnits.set(id, this.inputBuffer.unit); this.inputBuffer = undefined; }
-      this.speech = null; this.commitPending = false; this.commitReady = true; this.bufferBytes = 0;
+      // VAD offsets are session audio time, not ACK receipt time. A delayed
+      // commit must not consume media already forwarded for a later utterance.
+      // Permit at most the sub-ms codec rounding at the end of sent audio.
+      this.consumedBytes = explicit ? this.forwardedBytes : Math.min(this.forwardedBytes, this.speech!.end! * this.inputBytesPerMs());
+      this.bufferBytes = this.forwardedBytes - this.consumedBytes;
+      if (this.inputBuffer) {
+        const { unit } = this.inputBuffer; this.inputUnits.set(id, unit);
+        // This is a child receipt for ALREADY admitted soft media, not a new
+        // post-execution admission and never a hard reservation or free refund.
+        this.inputBuffer = this.bufferBytes ? { unit: unit.fork(), sent: true } : undefined;
+      }
+      this.speech = null; this.commitPending = false; this.commitReady = true;
       this.addItem(id); this.send(this.client, e);
-      if (automatic?.create_response) { if (++this.autoPending > REALTIME.turns) fail('turn_limit'); await this.automaticResponse(); }
+      if (!explicit && automatic?.create_response) { if (++this.autoPending > REALTIME.turns) fail('turn_limit'); await this.automaticResponse(); }
       return;
     }
     if (e.type.startsWith('conversation.item.input_audio_transcription.')) {
@@ -287,7 +305,7 @@ export class RealtimeSession {
       // Clear owns its acknowledgement: never retire a later buffer using an
       // unsolicited or delayed ACK. New media waits for this unit to retire.
       if (!this.clearPending) fail('unsolicited_clear');
-      this.clearPending = false;
+      this.clearPending = false; this.consumedBytes = this.forwardedBytes; this.bufferBytes = 0;
       if (this.inputBuffer) { await this.inputBuffer.unit.settle(null, this.inputBuffer.sent, null); this.inputBuffer = undefined; }
       this.speech = null; this.send(this.client, e); return;
     }
@@ -295,6 +313,13 @@ export class RealtimeSession {
       // Only a correlated invalid create rejected before response.created proves
       // nonexecution. Never attach a global error to an arbitrary funded turn.
       const a = this.active, err = object(e.error);
+      const cancellation = this.cancellations.get(err.event_id);
+      // A late no-active error answers only its exact cancel request, never
+      // the response currently executing. Unknown correlations still close.
+      if (cancellation && err.type === 'invalid_request_error' && err.code === 'response_cancel_not_active') {
+        if (cancellation.client && !cancellation.acknowledged) this.send(this.client, e);
+        cancellation.acknowledged = true; return;
+      }
       if (a?.sent && !a.response && err.event_id === a.event && err.type === 'invalid_request_error' && ['invalid_value', 'invalid_type', 'unknown_parameter', 'missing_required_parameter'].includes(err.code)) {
         await this.settle(a, null, true); this.active = undefined; this.retireDeleted(); this.send(this.client, e); await this.automaticResponse(); return;
       }
@@ -364,6 +389,7 @@ export class RealtimeSession {
     fail('upstream_event_unsupported');
   }
 
+  private inputBytesPerMs(): number { return this.policy!.audio.input.format.type === 'audio/pcm' ? 48 : 8; }
   private retireDeleted(): void {
     // The delete ACK can race already-generated audio/item.done. Keep the
     // tombstone pending until response.done so terminal usage still settles.
