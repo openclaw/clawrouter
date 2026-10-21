@@ -335,19 +335,21 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     else accounting.fail(503, "provider_error", reservation, content);
     return errorResponse("accounting_unavailable", "Budget dispatch could not be recorded; no upstream request was sent.", 503);
   }
-  // Compact alone needs current single-account qualification after budget and
-  // retention awaits. A topology change here is known-unsent, so release once.
-  if (prepared.revalidateCompactAccount) {
-    try { await prepared.revalidateCompactAccount(); }
-    catch (error) {
-      const failure = selectedFailure(error);
-      accounting.fail(failure.status, failure.status < 500 ? "client_error" : "provider_error", reservation, content);
-      return errorResponse(failure.code, failure.message, failure.status);
-    }
-  }
   const endpointTimeout = selection.endpoint.timeout_ms ?? 120_000;
   const operation = new HttpOperation(request.signal, Math.min(selection.timeoutMs ?? endpointTimeout, endpointTimeout));
   const signal = operation.signal;
+  // Compact alone requalifies after budget/retention awaits, under the same
+  // cancellation/deadline owner as transport. Interrupted reads are known-unsent.
+  if (prepared.revalidateCompactAccount) {
+    try { signal.throwIfAborted(); await operation.wait(prepared.revalidateCompactAccount()); }
+    catch (error) {
+      const failure = signal.aborted ? new HttpError(502, "provider_unavailable", `upstream request to provider ${selection.provider.id} failed`) : selectedFailure(error);
+      const status = operation.status ?? (failure.status < 500 ? "client_error" : "provider_error");
+      operation.stop("upstream", error);
+      accounting.fail(failure.status, status, reservation, content);
+      return errorResponse(failure.code, failure.message, failure.status);
+    }
+  }
   const discard = (response: Response) => { void response.body?.cancel(signal.reason).catch(() => undefined); };
   let response: Response | undefined;
   let grantFailover = false;

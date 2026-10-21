@@ -445,3 +445,49 @@ for (const route of routes.slice(0, 2)) test("compact authority failure after re
     for (const path of ["/reserve", "/dispatch", "/settle"]) assert.equal(operations.filter(op => op.name === name && op.path === path).length, 1);
   }
 });
+
+for (const route of routes.slice(0, 2)) for (const source of ["kv", "authority"]) for (const cause of ["caller_abort", "deadline"]) test("compact stalled post-dispatch " + source + " honors " + cause + ": " + route, async t => {
+  const f = await ownedFixture(t, { pooled: true }), caller = new AbortController();
+  let dispatchStarted = false, entered, release;
+  const reached = new Promise(resolve => { entered = resolve; }), held = new Promise(resolve => { release = resolve; });
+  const operations = [], get = f.env.BUDGET_LEDGER.get;
+  f.env.BUDGET_LEDGER.get = name => ({ ...get(name), fetch: async (url, init) => {
+    const path = new URL(url).pathname; operations.push({ name, path });
+    const response = await get(name).fetch(url, init);
+    if (path === "/dispatch") dispatchStarted = true;
+    return response;
+  } });
+  if (source === "kv") {
+    const read = f.env.POLICY_KV.get;
+    f.env.POLICY_KV.get = async (key, type) => {
+      const value = await read(key, type);
+      if (dispatchStarted && Array.isArray(key)) { entered(); await held; }
+      return value;
+    };
+  } else f.env.ACCESS_CONTROL.beforeFetch = async (_name, request) => {
+    if (dispatchStarted && new URL(request.url).pathname === "/grant-pools/resolve") { entered(); await held; }
+  };
+  if (cause === "deadline") t.mock.timers.enable({ apis: ["setTimeout"] });
+  const pending = f.request({ model: route.includes("native") ? "gpt-6-astra" : "openai/gpt-6-astra", service_tier: "default" }, {}, route, caller.signal);
+  await reached;
+  if (cause === "caller_abort") caller.abort(new Error("fixture qualification canceled"));
+  else t.mock.timers.tick(600_000);
+  const outcome = await Promise.race([pending.then(response => ({ response })), new Promise(resolve => setImmediate(() => resolve({ stalled: true })))]);
+  if (outcome.stalled) {
+    // Release the fixture and collect its HTTP/SQL owner before failing the probe.
+    release(); await f.consume(await pending);
+    assert.fail("post-dispatch qualification ignored " + cause + " while " + source + " was stalled");
+  }
+  assert.equal(outcome.response.status, 502); assert.equal(JSON.parse(await f.consume(outcome.response)).error.code, "provider_unavailable");
+  const assertUnsentOnce = () => {
+    assert.equal(f.sent.length, 0); assert.equal(f.events.length, 1); assert.equal(f.events[0].actual_cost_micros, 0);
+    assert.equal(f.events[0].status, cause === "deadline" ? "timeout" : "client_error");
+    for (const name of ["default:fixture", "provider:openai"]) {
+      const rows = f.env.BUDGET_LEDGER.get(name).reservations(); assert.equal(rows.length, 1); assert.equal(rows[0].settled, 1); assert.equal(rows[0].reserved_micros, 0);
+      for (const path of ["/reserve", "/dispatch", "/settle"]) assert.equal(operations.filter(op => op.name === name && op.path === path).length, 1);
+    }
+  };
+  assertUnsentOnce();
+  // A late successful authority result cannot dispatch or settle a second time.
+  release(); await new Promise(resolve => setImmediate(resolve)); await f.drain(); assertUnsentOnce();
+});
