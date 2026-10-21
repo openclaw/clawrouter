@@ -2,7 +2,7 @@ import { grantSupports, type GrantRequirement } from "./provider-auth.ts";
 import { authorityCall, type AdmissionPool } from "./authority.ts";
 import { grantQuotaRatio } from "./grant-quota.ts";
 export * from "./grant-eligibility.ts";
-import { DEFAULT_GRANT_ROUTING, grantRoutingPolicy, activeOperationCandidates, filterGrantCandidates, currentGrantRuntime, grantWeight, type SelectedGrant, type GrantCandidates, type GrantSelectionResult } from "./grant-eligibility.ts";
+import { DEFAULT_GRANT_ROUTING, grantRoutingPolicy, activeOperationCandidates, filterGrantCandidates, currentGrantRuntime, grantWeight, poolRetryAt, type SelectedGrant, type GrantCandidates, type GrantSelectionResult } from "./grant-eligibility.ts";
 import type { AccessPolicyEntry, Env, GrantRoutingPolicy, GrantRuntimeState, UpstreamGrant } from "./types";
 
 export function selectPolicyCandidates<T extends AccessPolicyEntry>(pools: Array<{ entry: T; candidates: GrantCandidates }>, requirement?: GrantRequirement): { entry: T; candidates: GrantCandidates } | undefined {
@@ -57,7 +57,8 @@ export async function resolveGrantSelection(
   admittedPool?: AdmissionPool,
 ): Promise<GrantSelectionResult> {
   routing = grantRoutingPolicy(routing);
-  const { available, hasConfiguredGrant } = await resolveGrantCandidates(providerId, policyId, tenantId, defaultTokenRef, env, excludedKeys, routing, pinnedKey, requirement, admittedPool);
+  const candidates = await resolveGrantCandidates(providerId, policyId, tenantId, defaultTokenRef, env, excludedKeys, routing, pinnedKey, requirement, admittedPool);
+  const { available, hasConfiguredGrant } = candidates;
   const nowMs = Date.now();
   const active = activeOperationCandidates(available, env, requirement);
   let selected: SelectedGrant | null = null;
@@ -73,7 +74,8 @@ export async function resolveGrantSelection(
     });
     selected = active.find((entry) => entry.key === choice.selectedKey) ?? null;
   }
-  return { selected, hasConfiguredGrant };
+  const retryAt = selected ? undefined : poolRetryAt(candidates, env, requirement);
+  return { selected, hasConfiguredGrant, ...(retryAt ? { retryAt } : {}) };
 }
 
 export async function resolveGrantCandidates(

@@ -29,8 +29,8 @@ export function json(value: unknown, status = 200, headers: HeadersInit = {}): R
   });
 }
 
-export function errorResponse(code: string, message: string, status: number, detail?: unknown): Response {
-  return json({ error: { code, message, ...(detail === undefined ? {} : { detail }) } }, status);
+export function errorResponse(code: string, message: string, status: number, detail?: unknown, headers: HeadersInit = {}): Response {
+  return json({ error: { code, message, ...(detail === undefined ? {} : { detail }) } }, status, headers);
 }
 
 export function withCors(response: Response): Response {
@@ -171,11 +171,13 @@ export async function readJson<T>(request: Request, emptyValue?: T): Promise<T> 
 export class HttpError extends Error {
   status: number;
   code: string;
-  constructor(status: number, code: string, message: string) { super(message); this.status = status; this.code = code; }
+  // Protocol response headers only (for example Retry-After); never secrets.
+  headers?: Record<string, string>;
+  constructor(status: number, code: string, message: string, headers?: Record<string, string>) { super(message); this.status = status; this.code = code; if (headers) this.headers = headers; }
 }
 
 export function caughtResponse(error: unknown, requestId: string): Response {
-  if (error instanceof HttpError) return errorResponse(error.code, error.message, error.status);
+  if (error instanceof HttpError) return errorResponse(error.code, error.message, error.status, undefined, error.headers);
   logCorrelationError("unhandled request error", requestId);
   return errorResponse("internal_error", "internal server error", 500);
 }

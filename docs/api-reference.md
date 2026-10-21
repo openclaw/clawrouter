@@ -556,7 +556,7 @@ strategy, stickiness, failover, priority and stale-state settings:
 | Field | Default | Contract |
 | --- | --- | --- |
 | `includedQuotaReservePercent` | `0` | Integer 0–50. A subscription is ineligible when any applicable, unexpired window has this percentage or less remaining. |
-| `environmentFallback` | `false` | If no scoped grant is eligible, allow the provider's configured environment credential with normal transport, pricing and budget enforcement. Missing environment credentials retain HTTP 503. |
+| `environmentFallback` | `false` | If no scoped grant is eligible, allow the provider's configured environment credential with normal transport, pricing and budget enforcement. Missing environment credentials retain the pool-unavailable error. |
 
 Scoped quota windows in `GET /v1/admin/upstream-grants` optionally carry
 `models: ["fable"]` (lowercase family tokens) and per-window `observedAt` timestamps. A scope applies when its token
@@ -574,6 +574,15 @@ Grant responses also expose optional sanitized `account` fields (`email`,
 Only manifest-declared scalar fields are retained. Tokens and raw provider
 payloads are excluded. A probe HTTP 429 keeps the last reading and honors
 `Retry-After` independently per endpoint; HTTP 401 marks reauthorization required.
+
+When a configured pool has no eligible grant, HTTP requests fail with
+`upstream_grant_pool_unavailable`. If every grant that could serve the operation
+is excluded only by an active cooldown or by quota windows with published
+resets, the status is HTTP 429 with `Retry-After` set to the whole seconds until
+the earliest such grant becomes eligible. Otherwise (for example eligibility
+restrictions, unsupported transports, exhausted windows without a reset, or
+stale observations under `staleState: "deny"`) it remains HTTP 503 without
+`Retry-After`. The JSON error body is the same in both cases.
 
 Proxied HTTP responses carry `x-clawrouter-grant-lane`: `subscription` for
 subscription/OAuth grants, `api_key` for scoped API-key grants, and `environment`

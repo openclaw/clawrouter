@@ -134,7 +134,7 @@ export async function proxyTranscription(request: Request, env: Env, context: Ex
       }
       const rejected = response && response.status >= 400;
       await settle(failure.status, dispatched && !rejected, null, operation.status ?? (failure.status < 500 ? "client_error" : "provider_error"));
-      return errorResponse(failure.code, failure.message, failure.status);
+      return errorResponse(failure.code, failure.message, failure.status, undefined, failure.headers);
     } finally { soft?.close(); operation.stop("complete"); }
   })();
   // Extend real Worker request lifetime through dispatch and terminal cleanup,

@@ -1047,7 +1047,9 @@ admission; the existing stale-state default is `allow`.
 `environmentFallback` defaults to false. With it enabled, exhaustion, reserve,
 model-scoped quota exhaustion, or one-shot failover exclusion of the last grant can select
 `ANTHROPIC_API_KEY` using normal API-key transport and budget accounting. If that
-credential is absent the unavailable pool still returns HTTP 503. This setting
+credential is absent the unavailable pool still returns its pool error: HTTP 429
+with `Retry-After` while grants are only cooling down or awaiting a published
+quota reset, otherwise HTTP 503. This setting
 does not enable disabled providers, bypass budgets, or change pinned continuation
 ownership. An eligible grant always wins over the environment credential. If you
 also attach paid API-key grants, put those in a higher numeric priority tier than

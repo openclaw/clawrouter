@@ -286,7 +286,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     const failure = selectedFailure(continuation?.preflightError(error) ?? error);
     const status = failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error";
     (accounting ?? createProxyAccounting(accountingContext)).fail(failure.status, status, reservedBudget?.reservation);
-    return errorResponse(failure.code, failure.message, failure.status);
+    return errorResponse(failure.code, failure.message, failure.status, undefined, failure.headers);
   }
   const { cost, requestId } = accounting;
   const useSoft = auth.policy.budgetMode === "soft" && !prepared.backgroundRecovery && !reservedBudget && compound?.stage !== "fusion_synthesizer";
@@ -458,7 +458,7 @@ async function reserveSelected(request: Request, env: Env, context: ExecutionCon
     const failure = selectedFailure(error);
     const status = failure.status === 403 ? "denied" : failure.status < 500 ? "client_error" : "provider_error";
     createProxyAccounting({ context, env, auth, selection, request, compound }).fail(failure.status, status);
-    return errorResponse(failure.code, failure.message, failure.status);
+    return errorResponse(failure.code, failure.message, failure.status, undefined, failure.headers);
   }
   const accounting = createProxyAccounting({ context, env, auth, selection, request, compound });
   const { cost } = accounting;
