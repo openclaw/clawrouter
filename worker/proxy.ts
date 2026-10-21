@@ -430,7 +430,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       return errorResponse(failure.code, failure.message, failure.status);
     }
   }
-  const inspection = response.ok && selection.capability !== "llm.responses.compact" ? continuation?.inspect(response) : undefined;
+  const inspection = response.ok ? continuation?.inspect(response, selection.capability === "llm.responses.compact") : undefined;
   if (inspection && background) {
     const job = background;
     Object.assign(inspection, { observe: async (fact: import("./token-usage.ts").ResponsesObservation) => { await job.observe(fact, response!.status); } });

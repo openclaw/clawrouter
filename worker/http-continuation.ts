@@ -1,3 +1,4 @@
+import { CompactionWitnessProducer } from "./compaction-witness.ts";
 import { authorityCall } from "./authority.ts";
 import type { ContinuationOwner, EvidenceFinalization, PricingEvidence } from "./continuation-store.ts";
 import type { PinnedGrant } from "./grant-selection.ts";
@@ -27,6 +28,7 @@ export class HttpContinuation {
   private readonly tools: ReturnType<typeof createResponsesToolEvidence>;
   private claim: "owned" | "legacy_unknown" | undefined;
   private qualificationAttempted = false;
+  private witnesses?: CompactionWitnessProducer;
   private backgroundJobId?: string;
 
   private constructor(env: Env, scope: string, requested: boolean, owner: ContinuationOwner | null, parentTools: ToolKnowledge, base: ToolKnowledge, signal: AbortSignal) {
@@ -63,12 +65,16 @@ export class HttpContinuation {
       const previous = evidence?.[identities.findIndex(identity => identity.kind === "response")];
       if (previous?.state === "final") inherited = previous.knowledge;
     }
-    return new HttpContinuation(env, scope, identities.length > 0, owner, inherited, retainedToolBase(selection.body, inherited), request.signal);
+    const base = retainedToolBase(selection.body, inherited);
+    const continuation = new HttpContinuation(env, scope, identities.length > 0, owner, inherited, base, request.signal);
+    if (transport === "http" && selection.provider.id === "openai" && typeof selection.body.model === "string") continuation.witnesses = new CompactionWitnessProducer(env, scope, auth, selection.body.model, selection.body, base);
+    return continuation;
   }
 
   bind(owner: ContinuationOwner): void {
     if (this.previous && JSON.stringify(this.previous) !== JSON.stringify(owner)) throw continuationRestart();
     this.owner = owner;
+    this.witnesses?.bind(owner);
   }
 
   background(id: string): void { this.backgroundJobId = id; }
@@ -99,15 +105,16 @@ export class HttpContinuation {
     await this.qualify();
   }
 
-  inspect(response: Response) {
+  inspect(response: Response, compact = false) {
     const type = response.headers.get("content-type")?.toLowerCase() ?? "";
     if (!type.includes("json") && !type.includes("text/event-stream")) return undefined;
-    const scanner = createResponseIdentityInspector(type.includes("text/event-stream"), identity => this.remember(identity));
+    const scanner = createResponseIdentityInspector(type.includes("text/event-stream"), identity => { if (!compact) this.remember(identity); });
+    let ended = false;
     return {
       push: async (bytes: Uint8Array) => { scanner.push(bytes); await this.flush(); },
-      end: async () => { scanner.end(); await this.flush(); },
-      tools: this.tools,
-      qualify: () => this.qualify(),
+      end: async () => { scanner.end(); await this.flush(); ended = true; },
+      tools: { ...this.tools, ...(this.witnesses ? { witness: { accept: (value: unknown, sse: boolean) => this.witnesses!.observe(value, sse), invalid: () => this.witnesses!.invalidate() } } : {}) },
+      qualify: async () => { if (!compact) await this.qualify(); if (ended) await this.witnesses?.finish(this.signal); },
     };
   }
 

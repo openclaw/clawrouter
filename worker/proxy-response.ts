@@ -1,16 +1,15 @@
 import { extractImageUsageTokens } from "./image-generation.ts";
 import { extractCompactUsageTokens } from "./responses-compact.ts";
-import { createResponsesUsageInspector } from "./responses-usage.ts";
+import { createResponsesUsageInspector, type ResponsesInspectionTools } from "./responses-usage.ts";
 import { createSseUsageInspector, extractUsageTokens, responseOutcome, usageInspectionLimit, type ResponsesObservation, type UsageInspection } from "./token-usage.ts";
 import { HttpOperation } from "./http-operation.ts";
-import type { createResponsesToolEvidence } from "./responses-tool-evidence.ts";
 
 import type { HostedSearchUsage } from "./responses-hosted-usage.ts";
 
 export interface ObservedUsage extends UsageInspection { delivery: "complete" | "failed" | "canceled"; binaryComplete?: true; hostedSearch?: HostedSearchUsage }
 export interface ResponseBodyInspection {
   push(bytes: Uint8Array): Promise<void>; end(): Promise<void>;
-  tools?: Pick<ReturnType<typeof createResponsesToolEvidence>, "accept" | "invalid">;
+  tools?: ResponsesInspectionTools;
   qualify?(): Promise<void>;
   observe?(fact: ResponsesObservation): Promise<void>;
 }
@@ -35,7 +34,7 @@ export function observeUsage(response: Response, operation = new HttpOperation()
   const eventStream = !speech && contentType.includes("text/event-stream"), json = !speech && contentType.includes("json");
   const images = responseFormat === "openai.images_generations";
   const compact = responseFormat === "openai.responses_compact";
-  const responses = compact && json ? createResponsesUsageInspector(false, undefined, undefined, extractCompactUsageTokens) : images && json ? createResponsesUsageInspector(false, undefined, undefined, extractImageUsageTokens) : responseFormat === "openai.responses" && (eventStream || json) ? createResponsesUsageInspector(eventStream, bodyInspection?.tools, bodyInspection?.observe) : null;
+  const responses = compact && json ? createResponsesUsageInspector(false, bodyInspection?.tools, undefined, extractCompactUsageTokens) : images && json ? createResponsesUsageInspector(false, undefined, undefined, extractImageUsageTokens) : responseFormat === "openai.responses" && (eventStream || json) ? createResponsesUsageInspector(eventStream, bodyInspection?.tools, bodyInspection?.observe) : null;
   const sse = !compact && !images && !responses && eventStream ? createSseUsageInspector() : null;
   let inspect = !compact && !images && !responses && !sse && json;
   const decoder = new TextDecoder();
