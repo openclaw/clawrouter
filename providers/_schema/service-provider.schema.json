@@ -759,6 +759,7 @@
           "minimum": 0,
           "maximum": 9007199254740991
         },
+        "hostedTools": { "type": "array", "minItems": 1, "maxItems": 1, "uniqueItems": true, "items": { "const": "web_search" } },
         "supportedServiceTiers": {
           "type": "array",
           "minItems": 1,

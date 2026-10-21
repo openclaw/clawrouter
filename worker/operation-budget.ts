@@ -1,7 +1,7 @@
 import { validateBudgetReservation } from "./accounting";
 import { modelReservationBounds, type PricingEndpoint } from "./pricing";
 import { estimateCost } from "./proxy-accounting";
-import type { AuthorizedIdentity, CompiledModel, ProviderConnection } from "./types";
+import type { AuthorizedIdentity, CompiledModel, ProviderConnection, ProxyRequestBody } from "./types";
 import { HttpError } from "./utils";
 
 export interface BudgetObservation { policyRemaining: number | null; dailyRemaining?: number | null; weeklyRemaining?: number | null; providerRemaining: number | null }
@@ -10,10 +10,10 @@ export interface OperationAffordability {
   reasonCode?: string;
 }
 
-export function operationAffordability(auth: AuthorizedIdentity, connection: ProviderConnection, model: CompiledModel | null, capability: string, endpoint: PricingEndpoint, observation?: BudgetObservation): OperationAffordability {
-  // Only the basis is used for variable prices; an empty body's default output
+export function operationAffordability(auth: AuthorizedIdentity, connection: ProviderConnection, model: CompiledModel | null, capability: string, endpoint: PricingEndpoint, observation?: BudgetObservation, body: ProxyRequestBody = {}): OperationAffordability {
+  // Only the basis is used for variable prices; a representative body's default output
   // allowance is not a claim that every real request fits the observed balance.
-  const cost = estimateCost(model, {}, auth.policy.requestCostMicros, capability, endpoint);
+  const cost = estimateCost(model, body, auth.policy.requestCostMicros, capability, endpoint);
   try {
     if (auth.policy.budgetMode === "soft") {
       if (capability === "llm.count_tokens") return { status: "exact-covered" };

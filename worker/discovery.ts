@@ -107,6 +107,20 @@ export async function catalogResponse(request: Request, env: Env): Promise<Respo
   return entitlements instanceof Response ? entitlements : privateJson(catalogProjection(entitlements));
 }
 
+// The compiler validates declarations; retain a fail-closed projection for
+// unknown snapshot versions/tool values. Never infer from model names.
+function supportsHostedSearch(provider: CompiledProvider, model: CompiledModel, endpointId: string): boolean {
+  const endpoint = provider.endpoints.find(endpoint => endpoint.id === endpointId);
+  const facts = model.nativeCapabilities?.endpoints[endpointId];
+  return provider.id === "openai" && endpointId === "responses" && endpoint?.path === "/v1/responses"
+    && endpoint.method === "POST" && endpoint.request_format === "openai.responses" && endpoint.response_format === "openai.responses"
+    && model.capabilities.includes("llm.responses") && modelSupportsEndpoint(provider, model, endpoint)
+    && model.nativeCapabilities?.version === "clawrouter.native-capabilities.v1"
+    && Array.isArray(facts?.hostedTools) && facts.hostedTools.length === 1 && facts.hostedTools[0] === "web_search"
+    && Array.isArray(facts.sources) && facts.sources.length > 0 && facts.sources.every(source => typeof source === "string" && source.startsWith("https://"))
+    && typeof facts.checkedAt === "string" && /^[0-9]{4}-[0-9]{2}-[0-9]{2}$/.test(facts.checkedAt);
+}
+
 function catalogProjection(entitlements: ClientEntitlements): ClientCatalog {
   const rows = entitlements.rows;
   const inventory = entitlements.inventory;
@@ -336,7 +350,10 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
         && provider.capabilities.some(item => item.endpoint === context.endpoint.id && capabilities.includes(item.id))
         && eligibility(context, model, provider.capabilities.find(item => item.endpoint === context.endpoint.id)!.id).status !== "exact-blocked").map(context => context.endpoint.id));
       const { nativeCapabilities, requestParameters, ...base } = model;
-      const nativeEndpoints = Object.fromEntries(Object.entries(nativeCapabilities?.endpoints ?? {}).filter(([id]) => visibleEndpoints.has(id)));
+      const nativeEndpoints = Object.fromEntries(Object.entries(nativeCapabilities?.endpoints ?? {}).filter(([id]) => visibleEndpoints.has(id)).map(([id, facts]) => {
+        const { hostedTools, ...baseFacts } = facts;
+        return [id, { ...baseFacts, ...(supportsHostedSearch(provider, model, id) ? { hostedTools: ["web_search" as const] } : {}) }];
+      }));
       const parameters = Object.fromEntries(Object.entries(requestParameters ?? {}).filter(([id]) => visibleEndpoints.has(id)));
       return [{ ...base, capabilities,
         ...(nativeCapabilities && Object.keys(nativeEndpoints).length ? { nativeCapabilities: { version: nativeCapabilities.version, endpoints: nativeEndpoints } } : {}),
@@ -358,7 +375,14 @@ async function clientInventory(identities: AuthorizedIdentity[], env: Env) {
         const common = { endpoint: endpoint.id, modelId: model?.id ?? null, transport: mode, policyId: auth.policyId, policyGeneration: auth.policy.generation, eligible: availability.status !== "exact-blocked", affordability: availability.status, ...(availability.reasonCode ? { reasonCode: availability.reasonCode } : {}), ...(permittedServiceTiers ? { permittedServiceTiers } : {}) };
         const native: CatalogOffer = { ...common, routeKind: keyScope ? endpoint.native_proxy ? "native" : "manifest" : "playground", route: keyScope && endpoint.native_proxy ? `/v1/native/${provider.id}${endpoint.path}` : `/v1/${keyScope ? "" : "playground/"}proxy/${provider.id}/${endpoint.id}` };
         const unified = model && unifiedPathForEndpoint(provider, endpoint);
-        return [...(mode === "http" || endpoint.native_proxy ? [native] : []), ...(unified ? [{ ...common, routeKind: "unified" as const, route: keyScope ? unified : `/v1/playground${unified}` }] : [])];
+        let hostedToolAdmission: CatalogOffer["hostedToolAdmission"];
+        if (keyScope && mode === "http" && common.eligible && model && unified === "/v1/responses" && supportsHostedSearch(provider, model, endpoint.id)) {
+          const hosted = operationAffordability(auth, connection, model, capability, endpoint, context.observation, { tools: [{ type: "web_search" }] });
+          if (hosted.status !== "exact-blocked" || hosted.reasonCode === "pricing_required") hostedToolAdmission = {
+            version: "clawrouter.hosted-tool-admission.v1", web_search: hosted.reasonCode === "pricing_required" ? "pricing_required" : "admitted",
+          };
+        }
+        return [...(mode === "http" || endpoint.native_proxy ? [native] : []), ...(unified ? [{ ...common, ...(hostedToolAdmission ? { hostedToolAdmission } : {}), routeKind: "unified" as const, route: keyScope ? unified : `/v1/playground${unified}` }] : [])];
       });
     });
     const endpoints = [...new Set(offers.filter((offer) => offer.eligible && offer.transport === "http").map((offer) => offer.endpoint))];
