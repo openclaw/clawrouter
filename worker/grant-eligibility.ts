@@ -113,6 +113,8 @@ export function filterGrantCandidates(providerId: string, candidates: Array<{ ke
     if (!cooling && !exhausted) return true;
     // Only time-limited exclusions remain. Record when the last one lifts;
     // an exhausted window without a published reset has no known recovery.
+    // A failed credential (401/403) is not repaired by waiting out its cooldown.
+    if (cooling && entry.runtimeState!.lastSignal === "authentication") return false;
     const resetAt = exhausted ? grantQuotaResetAt(entry.runtimeState, requirement?.model, reserve, subscription, nowMs) : 0;
     const atMs = resetAt == null ? null : Math.max(resetAt, cooling ? Date.parse(entry.runtimeState!.cooldownUntil!) : 0);
     if (atMs != null && (routing.staleState !== "deny" || grantRuntimeFresh(entry.runtimeState, routing.staleAfterSeconds * 1_000, atMs, requirement?.model))) recovering.push({ entry, atMs });

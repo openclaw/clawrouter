@@ -19,6 +19,8 @@ const unavailableBody = { error: { code: 'upstream_grant_pool_unavailable', mess
 const now = Date.parse('2026-10-21T12:00:00.000Z');
 const at = seconds => new Date(now + seconds * 1_000).toISOString();
 const cooling = (seconds, revision) => ({ status: 'cooldown', observedAt: at(-1), source: 'provider_response', cooldownUntil: at(seconds), lastSignal: 'rate_limited', grantRevision: revision, windows: [] });
+// An upstream 401/403 also records a cooldown, but elapsed time does not repair a credential.
+const authFailed = (seconds, revision) => ({ ...cooling(seconds, revision), lastSignal: 'authentication' });
 const exhausted = (resetSeconds, revision, remaining = 0) => ({ status: 'cooldown', observedAt: at(-1), source: 'provider_response', cooldownUntil: null, lastSignal: 'quota', grantRevision: revision,
   windows: [{ id: 'week', kind: 'requests', remaining, limit: 100, resetAt: resetSeconds == null ? null : at(resetSeconds) }] });
 
@@ -38,7 +40,7 @@ async function fixture(t, { legacy = false, routing } = {}) {
     const response = await worker.fetch(new Request('https://fixture/v1/messages', { method: 'POST', headers: admissionHeaders, body: JSON.stringify({ model: 'anthropic/claude-sonnet-5', max_tokens: 16, messages: [{ role: 'user', content: 'hello' }] }) }), f.env, f.context);
     const body = await response.json();
     await Promise.all(f.pending);
-    return { status: response.status, retryAfter: response.headers.get('retry-after'), body };
+    return { status: response.status, retryAfter: response.headers.get('retry-after'), exposed: response.headers.get('access-control-expose-headers')?.split(',') ?? [], body };
   };
   return f;
 }
@@ -49,6 +51,8 @@ for (const legacy of [false, true]) for (const [name, stateA, stateB, retryAfter
   ['a quota window reset beats a later cooldown', r => cooling(200, r), r => exhausted(90, r), '90'],
   ['subscription reserve exhaustion waits for its reset', r => cooling(200, r), r => exhausted(45, r, 5), '45'],
   ['sub-second remainders round up', r => ({ ...cooling(0, r), cooldownUntil: new Date(now + 250).toISOString() }), r => cooling(30, r), '1'],
+  ['an earlier authentication cooldown is not a recovery', r => authFailed(30, r), r => cooling(120, r), '120'],
+  ['an authentication cooldown with a resettable window is not a recovery', r => ({ ...exhausted(10, r), cooldownUntil: at(20), lastSignal: 'authentication' }), r => exhausted(90, r), '90'],
   // After its only window resets, a stale-deny grant needs a new observation.
   ['stale-deny counts only grants still fresh when they recover', r => exhausted(20, r), r => freshCooling(40, r), '40', { staleState: 'deny' }],
 ]) test(`${legacy ? 'legacy' : 'combined'} pool cooldown returns 429 with the earliest recovery: ${name}`, async t => {
@@ -61,6 +65,7 @@ for (const legacy of [false, true]) for (const [name, stateA, stateB, retryAfter
   const response = await f.send();
   assert.equal(response.status, 429);
   assert.equal(response.retryAfter, retryAfter);
+  assert.ok(response.exposed.includes('retry-after'), 'browser clients can read the retry time');
   assert.deepEqual(response.body, unavailableBody, 'the error body shape and code are unchanged');
   assert.equal(upstream.mock.callCount(), 0);
   assert.deepEqual(f.calls, ['/admission/resolve']);
@@ -77,13 +82,15 @@ test('combined admission and worker-side selection report the same recovery time
   assert.equal(admitted.hasConfiguredGrant, expected.hasConfiguredGrant);
 });
 
-for (const [name, routing, stateB] of [
+for (const [name, routing, stateB, stateA = r => exhausted(null, r), legacy = false] of [
   ['an exhausted window without a reset time', undefined, r => exhausted(null, r)],
   ['an eligibility-restricted pool', { eligibleGrants: { anthropic: ['absent'] } }, r => cooling(30, r)],
   ['a stale-deny pool with no fresh observation', { staleState: 'deny' }, r => cooling(30, r)],
+  // Failed credentials are an operator problem, not a timed rate limit.
+  ...[false, true].map(legacy => [`${legacy ? 'legacy' : 'combined'} authentication cooldowns`, undefined, r => authFailed(300, r), r => authFailed(60, r), legacy]),
 ]) test(`a pool with no known recovery keeps 503 without Retry-After: ${name}`, async t => {
-  const f = await fixture(t, { routing });
-  await f.state(keyA, r => exhausted(null, r)); await f.state(keyB, stateB);
+  const f = await fixture(t, { routing, legacy });
+  await f.state(keyA, stateA); await f.state(keyB, stateB);
   const upstream = t.mock.method(globalThis, 'fetch', async () => { throw new Error('an unavailable pool must not dispatch'); });
   const response = await f.send();
   assert.equal(response.status, 503);

@@ -577,12 +577,21 @@ payloads are excluded. A probe HTTP 429 keeps the last reading and honors
 
 When a configured pool has no eligible grant, HTTP requests fail with
 `upstream_grant_pool_unavailable`. If every grant that could serve the operation
-is excluded only by an active cooldown or by quota windows with published
-resets, the status is HTTP 429 with `Retry-After` set to the whole seconds until
-the earliest such grant becomes eligible. Otherwise (for example eligibility
-restrictions, unsupported transports, exhausted windows without a reset, or
-stale observations under `staleState: "deny"`) it remains HTTP 503 without
+is excluded only by an active rate-limit or quota cooldown or by quota windows
+with published resets, the status is HTTP 429 with `Retry-After` set to the
+whole seconds until the earliest such grant becomes eligible. Otherwise (for
+example eligibility restrictions, unsupported transports, exhausted windows
+without a reset, stale observations under `staleState: "deny"`, or grants whose
+credentials failed with HTTP 401/403) it remains HTTP 503 without
 `Retry-After`. The JSON error body is the same in both cases.
+
+`Retry-After` is ClawRouter's own re-admission time, not a provider promise.
+A provider 429 without timing cools a grant for ClawRouter's 60-second
+default, observed cooldowns are capped at 24 hours, and published quota resets
+are used as reported without a cap. Clients should apply their own maximum
+wait and fail over beyond it. An authentication cooldown never yields a
+`Retry-After`, because waiting does not repair a credential. CORS responses
+expose `Retry-After` to browser clients.
 
 Proxied HTTP responses carry `x-clawrouter-grant-lane`: `subscription` for
 subscription/OAuth grants, `api_key` for scoped API-key grants, and `environment`

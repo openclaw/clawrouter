@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Return HTTP 429 with `Retry-After` from the earliest grant recovery when a configured pool is only cooling down or awaiting published quota resets; other unavailable pools keep HTTP 503 and the same error body.
+- Return HTTP 429 with `Retry-After` (exposed to browser clients) from the earliest grant recovery when a configured pool is only rate-limit cooling or awaiting published quota resets; failed-credential cooldowns and other unavailable pools keep HTTP 503 and the same error body.
 
 - Add opt-in soft HTTP budgets with parallel fail-open checks, asynchronous idempotent charges and retry delivery, request timing headers, administrator-managed member caps, and GitHub team provisioning; keep reserve behavior as the default and preserve durable recovery ownership.
 
