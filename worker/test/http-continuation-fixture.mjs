@@ -49,7 +49,7 @@ export async function fixture(t, pooled = true, { limit = null, fixedCost = 7 } 
     bindings() { return [...env.ACCESS_CONTROL.objects].filter(([name]) => name.startsWith("http-continuations:")); },
   };
   t.mock.method(globalThis, "fetch", async (url, init) => {
-    const request = { url: String(url), body: JSON.parse(init.body), headers: new Headers(init.headers), signal: init.signal };
+    const request = { url: String(url), body: JSON.parse(init.body), headers: new Headers(init.headers), signal: init.signal, redirect: init.redirect };
     sent.push(request); return f.response(request, sent.length);
   });
   return f;
