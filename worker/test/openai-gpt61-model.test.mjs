@@ -13,9 +13,9 @@ const chat = provider.endpoints.find(({ id }) => id === "chat_completions");
 const responses = provider.endpoints.find(({ id }) => id === "responses");
 const counts = { input: 272_000, output: 1_000, cached: 100_000, cacheWrite: 100_000, cacheWrite5m: null, cacheWrite1h: null };
 
-test("gpt-6.1-sol resolves Chat and Responses with versioned prices and its exact reasoning domain", () => {
+test("gpt-6.1-sol resolves Chat, Responses and unary compact with versioned prices and its exact reasoning domain", () => {
   assert.equal(model.upstream, upstream);
-  assert.deepEqual(model.capabilities, ["llm.responses", "llm.chat"]);
+  assert.deepEqual(model.capabilities, ["llm.responses", "llm.chat", "llm.responses.compact"]);
   assert.equal(model.pricing_ref, "openai-gpt-6-1-sol-tiers-2026-10-18");
   assert.equal(model.pricing.effectiveAt, "2026-10-18");
   assert.deepEqual(model.supportedReasoningEfforts, ["low", "medium", "high", "xhigh", "max"]);

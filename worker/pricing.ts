@@ -1,7 +1,7 @@
 import { actualImageCost, estimateImageCost } from "./image-generation.ts";
 import type { CharacterPricing, CompiledEndpoint, ModelPricing, ServiceTierPricing, TokenPricing, TokenRates } from "./types";
 import { googleField, googleInt32, googleRequestServiceTier, googleServiceTier } from "./google-protocol.ts";
-import type { ToolKnowledge } from "./responses-tool-evidence.ts";
+import { retainedToolBase, type ToolKnowledge } from "./responses-tool-evidence.ts";
 
 export interface CostEstimate {
   reserveMicros: number;
@@ -34,6 +34,8 @@ interface Rates {
 export type PricingGap = "audio_upload_bound" | "model_request_fee" | "hosted_tool_fee" | "hosted_tool_usage" | "retained_tool_unknown" | "opaque_input_bound";
 
 export function requestPricingGap(pricing: ModelPricing | null | undefined, body: Record<string, unknown>, requestFormat: string, parentTools?: ToolKnowledge): PricingGap | null {
+  const compact = requestFormat === "openai.responses_compact";
+  if (compact) requestFormat = "openai.responses";
   // File/context caps do not qualify a whole-upload billable token ceiling.
   if (requestFormat === "openai.audio_transcriptions") return "audio_upload_bound";
   if (pricing?.unit == null && pricing?.unpricedCosts?.includes("request_fee")) return "model_request_fee";
@@ -56,6 +58,11 @@ export function requestPricingGap(pricing: ModelPricing | null | undefined, body
   const current = hostedToolPricingGap((Array.isArray(body.tools) ? body.tools : []).concat(inputTools), requestFormat);
   if (current) return current;
   if (requestFormat === "openai.responses" && responsesHasOpaqueInput(body) && opaqueInputLimit(pricing) == null) return "opaque_input_bound";
+  // C-S1 has no durable opaque-ancestry witness. Ciphertext and references
+  // cannot prove that retained executable tools have only token charges.
+  if (compact && (retainedToolBase(body, "token_only") !== "token_only"
+    || body.tools !== undefined && retainedToolBase({ input: [{ type: "additional_tools", tools: body.tools }] }, "token_only") !== "token_only"
+    || Array.isArray(body.input) && body.input.some(item => isObject(item) && (item.type === "compaction" || item.type === "item_reference" || item.type === "reasoning" && item.encrypted_content != null)))) return "retained_tool_unknown";
   if (requestFormat !== "openai.responses" || typeof body.previous_response_id !== "string" || body.previous_response_id === "") return null;
   // A response ID can retain executable declarations omitted from this delta.
   // Only final parent knowledge proves ordinary token pricing; omission is unknown.
@@ -104,7 +111,8 @@ export function estimateModelCost(pricing: ModelPricing, body: Record<string, un
     return { reserveMicros: characterCost(bytes, pricing), inputTokens: null, outputTokens: null };
   }
   const google = endpoint?.request_format === "google.generate_content";
-  const opaque = (!endpoint || endpoint.request_format === "openai.responses") && responsesHasOpaqueInput(body);
+  const compact = endpoint?.request_format === "openai.responses_compact";
+  const opaque = (!endpoint || endpoint.request_format === "openai.responses" || compact) && responsesHasOpaqueInput(body);
   const opaqueLimit = opaque ? opaqueInputLimit(pricing) : null;
   if (opaque && opaqueLimit == null) return { reserveMicros: 0, inputTokens: null, outputTokens: null, pricingAvailable: false };
   const bytes = new TextEncoder().encode(JSON.stringify(body)).byteLength;
@@ -125,7 +133,9 @@ export function estimateModelCost(pricing: ModelPricing, body: Record<string, un
   // endpoint bound. This qualifies the estimate; the upstream body is unchanged.
   const output = limit ? declaredOutput != null && declaredOutput >= limit.minimum && declaredOutput <= limit.maximum ? declaredOutput : limit.maximum
     : requestedOutput.length ? Math.max(...requestedOutput) : pricing.defaultMaxOutputTokens;
-  const outputTokens = saturatingMultiply(output, choices);
+  // No caller output-limit contract exists for compact. Use the authoritative
+  // model maximum even if chat/ordinary-Responses-looking fields are present.
+  const outputTokens = compact ? pricing.defaultMaxOutputTokens : saturatingMultiply(output, choices);
   const rates = resolveRates(pricing, inputTokens, google ? googleRequestServiceTier(body) : body.service_tier, true, google);
   if (!rates) return { reserveMicros: 0, inputTokens, outputTokens, pricingAvailable: false };
   const inputRate = reservationInputRate(body, rates);

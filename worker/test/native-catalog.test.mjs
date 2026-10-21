@@ -112,7 +112,14 @@ test("subscription-only endpoint scope does not leak native or request-parameter
   assert.equal(model.pricing.defaultMaxOutputTokens, 128000);
   const denied = provider.offers.filter(offer => offer.endpoint !== "responses" && offer.modelId === sol);
   assert.ok(denied.length > 0, "denied endpoint offers remain inspectable");
-  assert.ok(denied.every(offer => !offer.eligible && offer.permittedServiceTiers?.length === 0));
+  assert.ok(denied.every(offer => !offer.eligible));
+  const chat = denied.filter(offer => offer.endpoint === "chat_completions");
+  assert.ok(chat.length > 0);
+  assert.ok(chat.every(offer => offer.permittedServiceTiers?.length === 0), "known blocked chat tier support stays empty");
+  const compact = denied.filter(offer => offer.endpoint === "responses_compact");
+  assert.ok(compact.length > 0, "subscription grants cannot use public API compaction");
+  assert.ok(compact.every(offer => offer.permittedServiceTiers === undefined && offer.hostedToolAdmission === undefined), "ordinary Responses facts never become compaction evidence");
+  assert.equal(model.nativeCapabilities.endpoints.responses_compact, undefined, "undeclared compact native facts remain unknown");
   assert.deepEqual(snapshot.providers.find(provider => provider.id === "openai").models.find(model => model.id === sol).nativeCapabilities.endpoints.chat_completions.input, ["text", "image"], "request projection never mutates the shared compiled source");
 });
 

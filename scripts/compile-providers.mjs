@@ -315,6 +315,12 @@ function validateManifest(manifest) {
         responseControls.add(controlId);
       }
     }
+    if (endpoint.requestFormat === "openai.responses_compact") {
+      if (manifest.capabilities.some(capability => capability.endpoint === id && capability.methods?.some(method => method !== "POST"))) throw new Error(`provider ${manifest.id} endpoint ${id} compact is POST-only`);
+      const capabilities = manifest.capabilities.filter(capability => capability.endpoint === id).map(capability => capability.id);
+      const models = (manifest.models?.entries ?? []).filter(model => model.capabilities?.some(capability => capabilities.includes(capability)));
+      if (!models.length || models.some(model => !model.pricing || model.pricing.unit != null || !Number.isSafeInteger(model.pricing.defaultMaxOutputTokens) || model.pricing.defaultMaxOutputTokens <= 0)) throw new Error(`provider ${manifest.id} endpoint ${id} compact requires registered token-priced models with authoritative output bounds`);
+    }
     if (endpoint.outputTokenLimit && endpoint.outputTokenLimit.minimum > endpoint.outputTokenLimit.maximum) throw new Error(`provider ${manifest.id} endpoint ${id} outputTokenLimit minimum exceeds maximum`);
     if (endpoint.modelPassthrough) {
       const capabilities = manifest.capabilities.filter((capability) => capability.endpoint === id).map((capability) => capability.id);

@@ -1,4 +1,5 @@
 import { softBudget } from "./soft-budget.ts";
+import { assertCompactAccount } from "./responses-compact.ts";
 import { assertServiceTier } from "./service-tiers.ts";
 import { grantStickyInput } from "./grant-sticky.ts";
 import { assertPolicyModel } from "./policy-models.ts";
@@ -54,6 +55,7 @@ interface PreparedUpstream {
   websocket: boolean;
   backgroundRecovery: boolean;
   continuation?: ContinuationOwner;
+  revalidateCompactAccount?: () => Promise<void>;
 }
 
 interface ReservedProxyBudget {
@@ -336,6 +338,18 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   const endpointTimeout = selection.endpoint.timeout_ms ?? 120_000;
   const operation = new HttpOperation(request.signal, Math.min(selection.timeoutMs ?? endpointTimeout, endpointTimeout));
   const signal = operation.signal;
+  // Compact alone requalifies after budget/retention awaits, under the same
+  // cancellation/deadline owner as transport. Interrupted reads are known-unsent.
+  if (prepared.revalidateCompactAccount) {
+    try { signal.throwIfAborted(); await operation.wait(prepared.revalidateCompactAccount()); }
+    catch (error) {
+      const failure = signal.aborted ? new HttpError(502, "provider_unavailable", `upstream request to provider ${selection.provider.id} failed`) : selectedFailure(error);
+      const status = operation.status ?? (failure.status < 500 ? "client_error" : "provider_error");
+      operation.stop("upstream", error);
+      accounting.fail(failure.status, status, reservation, content);
+      return errorResponse(failure.code, failure.message, failure.status);
+    }
+  }
   const discard = (response: Response) => { void response.body?.cancel(signal.reason).catch(() => undefined); };
   let response: Response | undefined;
   let grantFailover = false;
@@ -406,7 +420,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
   // Endpoint timeouts cover fetch and first-event normalization, not delivery.
   // Retire only the timer; the caller and first cause still own delivery through EOF.
   operation.retireDeadline();
-  if (continuation && response.ok) {
+  if (continuation && response.ok && selection.capability !== "llm.responses.compact") {
     try { await operation.wait(continuation.headers(response), "publication"); }
     catch (error) {
       operation.stop("publication", error);
@@ -416,7 +430,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
       return errorResponse(failure.code, failure.message, failure.status);
     }
   }
-  const inspection = response.ok ? continuation?.inspect(response) : undefined;
+  const inspection = response.ok && selection.capability !== "llm.responses.compact" ? continuation?.inspect(response) : undefined;
   if (inspection && background) {
     const job = background;
     Object.assign(inspection, { observe: async (fact: import("./token-usage.ts").ResponsesObservation) => { await job.observe(fact, response!.status); } });
@@ -472,6 +486,8 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
   assertPolicyModel(auth.policy, selection);
   assertServiceTier(auth, selection);
   if (selection.endpoint.request_format === "openai.images_generations" && (Object.keys(queryInput).length || new URL(request.url).search)) throw new HttpError(400, "invalid_image_generation", "image generation options must be in JSON, not query parameters");
+  const compact = selection.endpoint.request_format === "openai.responses_compact";
+  if (compact && (Object.keys(queryInput).length || new URL(request.url).search)) throw new HttpError(400, "invalid_compact_query", "compaction options must be in JSON, not query parameters");
   let connection: ProviderConnection;
   try { connection = await assertProviderAccess(selection.provider, auth, env, resolvedConnection); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_unavailable", "provider authorization failed"); }
@@ -480,6 +496,7 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
   try { upstream = await upstreamAuth(selection.provider, auth, env, excludedGrantKeys, stickyHash, recordSelection, pinned, { provider: selection.provider, endpoint: selection.endpoint, mode: transport, model: selectionUpstreamModel(selection) }); }
   catch (error) { throw error instanceof HttpError ? error : new HttpError(503, "provider_not_configured", "provider is not configured"); }
   try {
+    if (compact) await assertCompactAccount(auth, env, upstream);
     assertPolicyModel(auth.policy, selection);
     assertServiceTier(auth, selection, upstream.transport);
     const lifecycle = { provider: selection.provider, endpoint: selection.endpoint, mode: transport, responsesLifecycle: true };
@@ -501,18 +518,22 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
     const requestBody = ["GET", "HEAD"].includes(selection.method) ? undefined : JSON.stringify(transformTransportBody(upstream.transport, selection.body));
     await signSigV4(selection.provider, url, selection.method, requestBody, headers, env, upstream.grant);
     let continuation: ContinuationOwner | undefined;
-    if (selection.capability === "llm.responses") {
+    if (selection.capability === "llm.responses" || compact) {
       if (upstream.grantKey && !upstream.grant?.credentialLineage) throw new HttpError(503, "continuation_unavailable", "upstream credential ownership is unavailable");
+      const create = compact ? selection.provider.endpoints.find(endpoint => endpoint.id === selection.provider.capabilities.find(capability => capability.id === "llm.responses")?.endpoint) : selection.endpoint;
+      if (!create) throw new HttpError(503, "continuation_unavailable", "Responses creation ownership is unavailable");
+      const ownerUrl = compact ? new URL(upstream.baseUrl.replace(/\/$/, "") + upstreamPath(selection.provider, create, {}, env, upstream)) : url;
+      if (compact) upstream.query.forEach((value, name) => ownerUrl.searchParams.set(name, value));
       continuation = {
-        providerId: selection.provider.id, endpointId: selection.endpoint.id, grantKey: upstream.grantKey,
+        providerId: selection.provider.id, endpointId: create.id, grantKey: upstream.grantKey,
         lineage: upstream.grant?.credentialLineage ?? null,
         // A WebSocket GET is only the handshake; both transports execute the
         // same logical Responses POST and must share continuation ownership.
-        routeSha256: await responseRouteDigest(selection.provider, upstream, url, headers, upstream.grantKey),
+        routeSha256: await responseRouteDigest(selection.provider, upstream, ownerUrl, headers, upstream.grantKey),
         policyGeneration: auth.policy.generation,
       };
     }
-    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation };
+    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: ["openai.responses", "openai.realtime"].includes(selection.endpoint.websocket ?? "") && upstream.transport === null, backgroundRecovery, continuation, ...(compact ? { revalidateCompactAccount: () => assertCompactAccount(auth, env, upstream) } : {}) };
   } catch (error) {
     throw error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
   }
@@ -547,7 +568,7 @@ async function preauthenticate(request: Request, env: Env, mode: AuthMode, provi
     if (selection) {
       try { validateSelectedInput(selection); }
       catch { selection = undefined; }
-      if (selection?.capability === "llm.responses" && (request.headers.has("x-codex-turn-state") || !Array.isArray(selection.body) && selection.body.previous_response_id)) selection = undefined;
+      if (selection && ["llm.responses", "llm.responses.compact"].includes(selection.capability) && (request.headers.has("x-codex-turn-state") || !Array.isArray(selection.body) && selection.body.previous_response_id)) selection = undefined;
     }
     const provider = providerId ? providerById(providerId) : null;
     return authenticateProxyKey(request.headers, env, provider ? [{ id: provider.id, tokenRef: provider.auth.schemes.find(scheme => scheme.type === "oauth")?.tokenRef ?? provider.id }] : [], false, correlationMetadata(request).sessionId, selection ? { providerId: selection.provider.id, endpointId: selection.endpoint.id, mode: "http", model: selectionUpstreamModel(selection), catalogModelId: selection.model?.id ?? null, capability: selection.capability } : undefined);
