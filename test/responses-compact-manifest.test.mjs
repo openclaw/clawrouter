@@ -23,6 +23,24 @@ test("compiled compact is a distinct unary registered-model contract", t => {
   assert.deepEqual(provider.models.filter(model => model.capabilities.includes("llm.responses.compact")).map(model => model.id), ["openai/gpt-6-astra", "openai/gpt-6.1-sol"]);
   assert.deepEqual(snapshot.capability_index["llm.responses.compact"], [{ provider: "openai", endpoint: "responses_compact", methods: ["POST"] }]);
 });
+function removePricing(manifest) {
+  const model = manifest.models.entries.find(model => model.id === "openai/gpt-6-astra");
+  delete model.pricing;
+  // Isolate compact pricing from the independent native tier-pricing constraint.
+  delete model.nativeCapabilities;
+  return model;
+}
+test("ordinary unpriced models remain supported without compact capability", t => {
+  const result = compile(t, manifest => {
+    const model = removePricing(manifest);
+    model.capabilities = model.capabilities.filter(capability => capability !== "llm.responses.compact");
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const model = JSON.parse(result.stdout).providers[0].models.find(model => model.id === "openai/gpt-6-astra");
+  assert.ok(model.capabilities.includes("llm.responses"));
+  assert.ok(!model.capabilities.includes("llm.responses.compact"));
+  assert.equal(model.pricing, null);
+});
 const mutations = {
   wrong_response: manifest => { manifest.endpoints.responses_compact.responseFormat = "openai.responses"; },
   wrong_method: manifest => { manifest.endpoints.responses_compact.method = "GET"; },
@@ -32,10 +50,16 @@ const mutations = {
   passthrough: manifest => { manifest.endpoints.responses_compact.modelPassthrough = {}; },
   caller_limit: manifest => { manifest.endpoints.responses_compact.outputTokenLimit = { field: "max_output_tokens", minimum: 1, maximum: 128_000 }; },
   lifecycle: manifest => { manifest.endpoints.responses_compact.responsesLifecycle = { retrieve: "responses_retrieve", cancel: "responses_cancel" }; },
-  unpriced_model: manifest => { delete manifest.models.entries.find(model => model.id === "openai/gpt-6-astra").pricing; },
+  unpriced_model: removePricing,
   missing_bound: manifest => { delete manifest.models.entries.find(model => model.id === "openai/gpt-6-astra").pricing.defaultMaxOutputTokens; },
   no_registered_model: manifest => { for (const model of manifest.models.entries) model.capabilities = model.capabilities.filter(capability => capability !== "llm.responses.compact"); },
 };
 for (const [name, mutate] of Object.entries(mutations)) test("compiler refuses unqualified compact " + name, t => {
-  const result = compile(t, mutate); assert.notEqual(result.status, 0); assert.match(result.stderr, /invalid manifest|compact/); assert.equal(result.stdout, "");
+  const result = compile(t, mutate); assert.notEqual(result.status, 0);
+  const diagnostic = result.stderr.match(/^Error: (.*)$/m)?.[1];
+  assert.ok(diagnostic, result.stderr);
+  const expected = name === "extra_method" ? /^provider openai endpoint responses_compact compact is POST-only$/
+    : ["unpriced_model", "no_registered_model"].includes(name) ? /^provider openai endpoint responses_compact compact requires registered token-priced models with authoritative output bounds$/
+    : /^provider openai invalid manifest:/;
+  assert.match(diagnostic, expected); assert.equal(result.stdout, "");
 });
