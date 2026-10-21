@@ -49,6 +49,7 @@ export function validateBudgetReservation(capability: string, cost: EstimatedCos
   if (policyLimit === 0) throw new HttpError(402, "budget_exhausted", withLimitHint("proxy key budget is exhausted", { limitHint }));
   if (providerLimit === 0) throw new HttpError(402, "provider_budget_exhausted", `provider ${connection?.providerId ?? "unknown"} monthly budget is exhausted`);
   if (cost.basis === "unpriced_service_tier") throw new HttpError(400, "pricing_required", "requested service tier has no versioned manifest price; select a declared tier or configure a fixed policy request price");
+  if (cost.pricingGap === "audio_upload_bound") throw new HttpError(400, "pricing_required", "transcription uploads have no source-qualified whole-request token ceiling; enforced budgets require a qualified envelope or explicit fixed policy price");
   if (cost.pricingGap === "opaque_input_bound") throw new HttpError(400, "pricing_required", "opaque Responses input requires a valid manifest input bound or a fixed policy request price");
   if (cost.pricingGap === "retained_tool_unknown") throw new HttpError(400, "pricing_required", "retained response tools have no qualified bounded price; start a token-priced request without previous_response_id or configure a fixed policy request price");
   if (cost.pricingGap) throw new HttpError(400, "pricing_required", `${cost.pricingGap === "model_request_fee" ? "model request fees" : cost.pricingGap === "hosted_tool_fee" ? "hosted tool fees" : "hosted tool usage"} have no complete bounded price; choose a token-priced request or configure a fixed policy request price`);
@@ -77,13 +78,17 @@ export function planBudgetReservation(auth: AuthorizedIdentity, capability: stri
   return { reservedMicros: cost.reserveMicros, legs };
 }
 
-export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capability: string, cost: EstimatedCost, connection?: ProviderConnection): Promise<BudgetReservation> {
+export async function reserveBudget(env: Env, auth: AuthorizedIdentity, capability: string, cost: EstimatedCost, connection?: ProviderConnection, observe?: (intent: BudgetReservationIntent, state: "attempted" | "denied") => void): Promise<BudgetReservation> {
   const plan = planBudgetReservation(auth, capability, cost, connection);
   const reservation: BudgetReservation = { reservations: [], reservedMicros: plan.reservedMicros };
   for (const leg of plan.legs) {
+    // A caller owning cancellation can retain the exact attempted ID before
+    // I/O; a committed reservation can lose its acknowledgement.
+    observe?.(leg, "attempted");
     try {
       reservation.reservations.push(await reserveLedgerIntent(env, leg));
     } catch (error) {
+      if (error instanceof HttpError && error.status === 402) observe?.(leg, "denied");
       if (reservation.reservations.length) {
         try { await settleBudget(env, reservation, 0); }
         catch { throw new HttpError(503, "accounting_unavailable", "Budget reservation rollback could not finish; retry after accounting recovers."); }

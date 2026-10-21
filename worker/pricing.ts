@@ -31,9 +31,11 @@ interface Rates {
   cacheWrite1hInput: number | null;
 }
 
-export type PricingGap = "model_request_fee" | "hosted_tool_fee" | "hosted_tool_usage" | "retained_tool_unknown" | "opaque_input_bound";
+export type PricingGap = "audio_upload_bound" | "model_request_fee" | "hosted_tool_fee" | "hosted_tool_usage" | "retained_tool_unknown" | "opaque_input_bound";
 
 export function requestPricingGap(pricing: ModelPricing | null | undefined, body: Record<string, unknown>, requestFormat: string, parentTools?: ToolKnowledge): PricingGap | null {
+  // File/context caps do not qualify a whole-upload billable token ceiling.
+  if (requestFormat === "openai.audio_transcriptions") return "audio_upload_bound";
   if (pricing?.unit == null && pricing?.unpricedCosts?.includes("request_fee")) return "model_request_fee";
   if (requestFormat === "openai.chat_completions" && isObject(body.web_search_options)) return "hosted_tool_fee";
   // Saved Responses prompts retain tools; an opaque reference cannot prove

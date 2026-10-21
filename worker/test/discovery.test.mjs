@@ -489,6 +489,7 @@ test("models and catalog share read-only grant eligibility, transport support, a
   assert.equal(subscribed.readiness.upstreamGrantCount, 1);
   assert.equal(subscribed.readiness.oauthGrantRequired, false);
   assert.equal(subscribed.models.some(({ id }) => id === "openai/tts-1"), false);
+  assert.equal(subscribed.models.some(({ id }) => id === "openai/gpt-4o-transcribe"), false);
   assert.equal(subscribed.offers.some(({ modelId, eligible }) => modelId === "openai/tts-1" && eligible), false);
   assert.equal(subscribed.models.some(({ capabilities }) => capabilities.includes("image.generation")), false);
   assert.equal(subscribed.offers.some(({ modelId, eligible }) => modelId?.includes("gpt-image-2.5") && eligible), false);
@@ -524,10 +525,13 @@ test("models and catalog share read-only grant eligibility, transport support, a
     assert.equal(view.nativeBaseUrl, "/v1/native/openai");
     assert.ok(view.offers.every((offer) => offer.transport === "http" && ["playground", "unified"].includes(offer.routeKind)));
     assert.ok(view.offers.every((offer) => offer.route.startsWith("/v1/playground/")));
-    assert.deepEqual([...new Set(view.offers.filter((offer) => offer.routeKind === "unified").map((offer) => offer.route))].sort(), ["/v1/playground/v1/audio/speech", "/v1/playground/v1/chat/completions", "/v1/playground/v1/embeddings", "/v1/playground/v1/images/generations", "/v1/playground/v1/responses"]);
+    assert.deepEqual([...new Set(view.offers.filter((offer) => offer.routeKind === "unified").map((offer) => offer.route))].sort(), ["/v1/playground/v1/audio/speech", "/v1/playground/v1/audio/transcriptions", "/v1/playground/v1/chat/completions", "/v1/playground/v1/embeddings", "/v1/playground/v1/images/generations", "/v1/playground/v1/responses"]);
     const imageOffers = view.offers.filter(({ modelId }) => modelId?.includes("gpt-image-2.5"));
     assert.ok(imageOffers.length > 0);
     assert.ok(imageOffers.every(({ eligible, policyId, transport }) => eligible && policyId === "api" && transport === "http"));
+    const transcriptionOffers = view.offers.filter(({ modelId }) => modelId === "openai/gpt-4o-transcribe");
+    assert.ok(transcriptionOffers.length > 0);
+    assert.ok(transcriptionOffers.every(({ eligible, policyId, transport }) => eligible && policyId === "api" && transport === "http"));
     const speechOffers = view.offers.filter(({ modelId }) => modelId === "openai/tts-1");
     assert.ok(speechOffers.length > 0);
     assert.ok(speechOffers.every(({ eligible, policyId, transport }) => eligible && policyId === "api" && transport === "http"));
@@ -834,7 +838,7 @@ test("catalog and HTTP select only configured grants inside the already chosen p
   assert.equal(sent.length, 2, "the environment key never replaces the unusable selected pool");
 });
 
-test("merged hosted-search catalog keeps request-aware admission and exact Realtime capacity independent", async t => {
+test("merged transcription and hosted-search catalog preserve distinct admission and exact Realtime capacity", async t => {
   const fixture = await fusionDiscoveryFixture(t);
   fixture.config.enabled = false;
   fixture.policy.monthlyBudgetMicros = 10000000;
@@ -860,6 +864,12 @@ test("merged hosted-search catalog keeps request-aware admission and exact Realt
     assert.equal(realtime.affordability, realtimeEligible ? "exact-covered" : "exact-blocked");
     assert.equal(realtime.reasonCode, realtimeEligible ? undefined : mode === "soft" ? "realtime_hard_budget_required" : "budget_exhausted");
     assert.equal(realtime.hostedToolAdmission, undefined);
+    const transcription = provider.offers.find(row => row.modelId === "openai/gpt-4o-transcribe" && row.route === "/v1/audio/transcriptions" && row.transport === "http");
+    assert.ok(transcription, "manifest composition must retain the merged transcription endpoint and model");
+    assert.equal(transcription.eligible, mode === "soft");
+    assert.equal(transcription.affordability, mode === "soft" ? "request-dependent" : "exact-blocked");
+    assert.equal(transcription.reasonCode, mode === "soft" ? undefined : "pricing_required");
+    assert.equal(transcription.hostedToolAdmission, undefined);
     const search = provider.offers.find(row => row.modelId === "openai/gpt-6-astra" && row.route === "/v1/responses" && row.transport === "http");
     assert.ok(search); assert.equal(search.eligible, true);
     assert.deepEqual(search.hostedToolAdmission, { version: "clawrouter.hosted-tool-admission.v1", web_search: searchAdmission });
