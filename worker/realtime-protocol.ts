@@ -21,7 +21,7 @@ export function object(value: unknown): Json {
   if (!value || typeof value !== 'object' || Array.isArray(value)) fail('object_required');
   return value as Json;
 }
-export function fail(code: string): never { throw new HttpError(400, `realtime_${code}`, 'Realtime manual audio policy or protocol rejected this operation'); }
+export function fail(code: string): never { throw new HttpError(400, `realtime_${code}`, 'Realtime audio policy or protocol rejected this operation'); }
 export function fields(value: Json, allowed: string[]): void { if (Object.keys(value).some(k => !allowed.includes(k))) fail('unsupported_field'); }
 export function identity(value: unknown): string {
   if (typeof value !== 'string' || !/^[A-Za-z0-9_-]{1,128}$/.test(value)) fail('invalid_identity');
@@ -43,33 +43,89 @@ export function audio(value: unknown, codec: Json): number {
   if (btoa(decoded) !== value || (codec.type === 'audio/pcm' && decoded.length % 2)) fail('audio_alignment');
   return decoded.length;
 }
+// Server VAD is retained, but the proxy owns response creation/cancellation.
+// Both vendor auto flags MUST remain false on the wire: every response must be
+// admitted under current authority and capacity before provider egress.
+export function vadPolicy(value: unknown): Json | null {
+  if (value === null) return null;
+  const v = object(value); fields(v, ['type', 'threshold', 'prefix_padding_ms', 'silence_duration_ms', 'create_response', 'interrupt_response']);
+  if (v.type !== 'server_vad') fail('auto_stt_unsupported');
+  const threshold = v.threshold ?? .5, padding = v.prefix_padding_ms ?? 300, silence = v.silence_duration_ms ?? 500;
+  if (typeof threshold !== 'number' || !Number.isFinite(threshold) || threshold < 0 || threshold > 1
+    || !Number.isSafeInteger(padding) || padding < 0 || padding > 1000 || !Number.isSafeInteger(silence) || silence < 100 || silence > 2000
+    || ![undefined, true, false].includes(v.create_response) || ![undefined, true, false].includes(v.interrupt_response)) fail('vad');
+  return { type: 'server_vad', threshold, prefix_padding_ms: padding, silence_duration_ms: silence, create_response: v.create_response ?? true, interrupt_response: v.interrupt_response ?? true };
+}
+export function toolChoice(value: unknown, tools: Json[]): unknown {
+  if (['none', 'auto', 'required'].includes(value as string)) {
+    if (value !== 'none' && !tools.length) fail('tools_unsupported'); return value;
+  }
+  const t = object(value); fields(t, ['type', 'name']);
+  if (t.type !== 'function' || !tools.some(tool => tool.name === t.name)) fail('tools_unsupported');
+  return { type: 'function', name: t.name };
+}
 export function sessionPolicy(value: unknown): Json {
   const s = object(value); fields(s, ['type', 'model', 'instructions', 'output_modalities', 'max_output_tokens', 'audio', 'tools', 'tool_choice', 'tracing']);
   if (s.type !== 'realtime' || ![undefined, REALTIME.model, REALTIME.upstream].includes(s.model) || JSON.stringify(s.output_modalities) !== '["audio"]') fail('session');
   if (s.instructions !== undefined && (typeof s.instructions !== 'string' || s.instructions.length > 8192)) fail('instructions');
-  if (s.tools !== undefined && (!Array.isArray(s.tools) || s.tools.length)) fail('tools_unsupported');
-  if (s.tool_choice !== undefined && s.tool_choice !== 'none') fail('tools_unsupported');
+  const tools: Json[] = s.tools ?? [];
+  if (!Array.isArray(tools) || tools.length > 32 || JSON.stringify(tools).length > 32768) fail('tools_unsupported');
+  const names = new Set<string>();
+  for (const tool of tools) {
+    object(tool); fields(tool, ['type', 'name', 'description', 'parameters']);
+    if (tool.type !== 'function' || typeof tool.name !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(tool.name) || names.has(tool.name)
+      || tool.description !== undefined && (typeof tool.description !== 'string' || tool.description.length > 4096)) fail('tools_unsupported');
+    names.add(tool.name); if (tool.parameters !== undefined) object(tool.parameters);
+  }
+  const choice = toolChoice(s.tool_choice ?? (tools.length ? 'auto' : 'none'), tools);
   if (s.tracing !== undefined && s.tracing !== null) fail('tracing_unsupported');
   const a = object(s.audio); fields(a, ['input', 'output']);
   const i = object(a.input), o = object(a.output); fields(i, ['format', 'turn_detection', 'transcription', 'noise_reduction']); fields(o, ['format', 'voice']);
-  // Explicit null required: omission otherwise enables vendor defaults.
-  if (i.turn_detection !== null || i.transcription !== null || (i.noise_reduction !== undefined && i.noise_reduction !== null)) fail('auto_stt_unsupported');
+  // Omitted turn/transcription policy remains unsafe; no vendor default grants.
+  const vad = vadPolicy(i.turn_detection);
+  let transcription: Json | null = null;
+  if (i.transcription !== null) {
+    const t = object(i.transcription); fields(t, ['model', 'language']);
+    if (t.model !== 'gpt-4o-mini-transcribe' || t.language !== undefined && (typeof t.language !== 'string' || !/^[a-z]{2}$/.test(t.language))) fail('auto_stt_unsupported');
+    transcription = { model: t.model, ...(t.language ? { language: t.language } : {}) };
+  }
+  let noise = null;
+  if (i.noise_reduction != null) { const n = object(i.noise_reduction); fields(n, ['type']); if (!['near_field', 'far_field'].includes(n.type)) fail('noise_reduction'); noise = n; }
   const input = format(i.format), output = format(o.format);
   if (JSON.stringify(input) !== JSON.stringify(output)) fail('codec');
   if (!['alloy', 'ash', 'ballad', 'coral', 'echo', 'sage', 'shimmer', 'verse', 'marin', 'cedar'].includes(o.voice)) fail('voice');
-  return { type: 'realtime', model: REALTIME.upstream, instructions: s.instructions ?? '', output_modalities: ['audio'], max_output_tokens: cap(s.max_output_tokens ?? REALTIME.output), audio: { input: { format: input, turn_detection: null, transcription: null, noise_reduction: null }, output: { format: output, voice: o.voice } }, tools: [], tool_choice: 'none', tracing: null };
+  return { type: 'realtime', model: REALTIME.upstream, instructions: s.instructions ?? '', output_modalities: ['audio'], max_output_tokens: cap(s.max_output_tokens ?? REALTIME.output), audio: { input: { format: input, turn_detection: vad, transcription, noise_reduction: noise }, output: { format: output, voice: o.voice } }, tools, tool_choice: choice, tracing: null };
+}
+export function wireSession(policy: Json): Json {
+  const v = policy.audio.input.turn_detection;
+  const transcription = policy.audio.input.transcription;
+  return { ...policy, audio: { ...policy.audio, input: { ...policy.audio.input, transcription: transcription ? { ...transcription, prompt: '' } : null, turn_detection: v ? { ...v, create_response: false, interrupt_response: false, idle_timeout_ms: null } : null } } };
+}
+function effectiveVad(value: unknown): Json | null {
+  if (value === null) return null;
+  const v = object(value);
+  // SDK/server responses may materialize the documented nullable timeout. A
+  // non-null timeout can independently create billable work and is forbidden.
+  if (v.idle_timeout_ms != null) fail('unsafe_ack');
+  const { idle_timeout_ms, ...rest } = v; return vadPolicy(rest);
+}
+function effectiveTranscription(actual: unknown, expected: Json | null): boolean {
+  if (expected === null) return actual === null;
+  const t = object(actual); fields(t, ['model', 'language', 'prompt']);
+  return t.model === expected.model && (t.language ?? null) === (expected.language ?? null) && [undefined, null, ''].includes(t.prompt);
 }
 export function effectiveSession(actual: unknown, expected: Json): boolean {
   try {
-    const a = object(actual);
-    return a.type === 'realtime' && a.model === expected.model && a.max_output_tokens === expected.max_output_tokens
+    const a = object(actual), wire = wireSession(expected);
+    return a.type === 'realtime' && a.model === wire.model && a.max_output_tokens === wire.max_output_tokens
       && JSON.stringify(a.output_modalities) === '["audio"]'
-      && a.audio?.input?.turn_detection === null && a.audio?.input?.transcription === null
-      && JSON.stringify(format(a.audio.input.format)) === JSON.stringify(expected.audio.input.format)
-      && JSON.stringify(format(a.audio.output.format)) === JSON.stringify(expected.audio.output.format)
-      && a.audio.output.voice === expected.audio.output.voice && Array.isArray(a.tools) && !a.tools.length
-      && a.tool_choice === 'none' && a.tracing === null && a.instructions === expected.instructions
-      && (a.audio.input.noise_reduction === null || a.audio.input.noise_reduction === undefined);
+      && JSON.stringify(effectiveVad(a.audio?.input?.turn_detection)) === JSON.stringify(effectiveVad(wire.audio.input.turn_detection))
+      && effectiveTranscription(a.audio.input.transcription, wire.audio.input.transcription)
+      && JSON.stringify(format(a.audio.input.format)) === JSON.stringify(wire.audio.input.format)
+      && JSON.stringify(format(a.audio.output.format)) === JSON.stringify(wire.audio.output.format)
+      && a.audio.output.voice === wire.audio.output.voice && JSON.stringify(a.tools) === JSON.stringify(wire.tools)
+      && JSON.stringify(a.tool_choice) === JSON.stringify(wire.tool_choice) && a.tracing === null && a.instructions === wire.instructions
+      && JSON.stringify(a.audio.input.noise_reduction ?? null) === JSON.stringify(wire.audio.input.noise_reduction);
   } catch { return false; }
 }
 export function parseRealtimeUsage(value: unknown, outputCap: number): RealtimeUsage | null {

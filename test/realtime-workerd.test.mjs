@@ -170,9 +170,9 @@ test("manual Realtime owns real workerd audio turns and durable per-response cap
     await t.test("missing usage and disconnect retain bound; correlated preexecution rejection releases", async () => {
       for (const mode of ["absent", "malformed", "disconnect", "reject"]) { const c = await ready(mode); await turn(c); if (["absent", "malformed"].includes(mode)) await c.q.next("response.done"); else await c.q.next("error"); c.ws.close(1000); const u = await usage(++count); assert.equal(u.usage.events[0].actual_cost_micros, mode === "reject" ? 0 : BOUND); }
     });
-    await t.test("default VAD/transcription, unsafe ACK and invalid codec fail closed before audio", async () => {
+    await t.test("unsupported semantic VAD, unsafe ACK and invalid codec fail closed before audio", async () => {
       const before = (await stats()).appends;
-      for (const [mode, s] of [["normal", { ...policy, audio: { ...policy.audio, input: { ...policy.audio.input, turn_detection: { type: "server_vad", create_response: true } } } }], ["unsafe-ack", policy]]) { const c = await open(mode, s); await c.q.next("error"); c.ws.close(1000); }
+      for (const [mode, s] of [["normal", { ...policy, audio: { ...policy.audio, input: { ...policy.audio.input, turn_detection: { type: "semantic_vad", create_response: true } } } }], ["unsafe-ack", policy]]) { const c = await open(mode, s); await c.q.next("error"); c.ws.close(1000); }
       const c = await ready(); c.q.send({ type: "input_audio_buffer.append", audio: "AA==" }); assert.equal((await c.q.next("error")).error.code, "realtime_audio_alignment"); c.ws.close(1000); assert.equal((await stats()).appends, before);
     });
     await t.test("per-turn fresh capacity and credential checks deny before response.create egress", async () => {
