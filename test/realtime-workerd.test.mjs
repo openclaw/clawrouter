@@ -18,12 +18,12 @@ const router = [
   '}', 'export default { async fetch(request, env, ctx) { if (new URL(request.url).pathname === "/fixture-persist") { failPersistence = await request.text() === "on"; return new Response("ok"); } if (new URL(request.url).pathname === "/fixture-grant") { if (await request.text() === "revoke") await revokeGrantCredentials(env, "oauth/fixture/openai"); else await putGrantCredentials(env, "oauth/fixture/openai", { enabled: true, provider: "openai", kind: "api_key", credential: "fixture-upstream-key" }); return new Response("ok"); } return handler.fetch(request, failPersistence ? { ...env, USAGE_QUEUE: { async send() { throw Error("fixture queue unavailable"); } } } : env, ctx); }, queue: handler.queue };',
 ].join('\n');
 const upstream = [
-  'let mode = "normal", creates = 0, connects = 0, appends = 0, items = 0, lastSession;',
+  'let mode = "normal", creates = 0, connects = 0, appends = 0, items = 0, truncates = 0, lastSession;',
   'const usage = { input_tokens: 100, output_tokens: 12, total_tokens: 112, input_token_details: { text_tokens: 20, audio_tokens: 80, cached_tokens: 15, cached_tokens_details: { text_tokens: 5, audio_tokens: 10 } }, output_token_details: { text_tokens: 2, audio_tokens: 10 } };',
   'export default { async fetch(request) {',
   ' const url = new URL(request.url);',
   ' if (url.pathname === "/fixture-config") { mode = await request.text(); return new Response("ok"); }',
-  ' if (url.pathname === "/fixture-stats") return Response.json({ creates, connects, appends, items, lastSession });',
+  ' if (url.pathname === "/fixture-stats") return Response.json({ creates, connects, appends, items, truncates, lastSession });',
   ' connects++;',
   ' if (mode === "401" || mode === "429") return new Response("synthetic rejection", { status: Number(mode) });',
   ' if (url.pathname !== "/v1/realtime" || url.search !== "?model=gpt-realtime-2.1" || request.headers.get("authorization") !== "Bearer fixture-upstream-key" || request.headers.has("openai-beta")) throw Error("wrong model or authentication provenance");',
@@ -39,7 +39,7 @@ const upstream = [
   ' else if (e.type === "input_audio_buffer.commit") { send({ type: "input_audio_buffer.committed", item_id: "user_" + appends }); send({ type: "conversation.item.created", item: { type: "message", role: "user", id: "user_" + appends } }); }',
   ' else if (e.type === "input_audio_buffer.clear") send({ type: "input_audio_buffer.cleared" });',
   ' else if (e.type === "conversation.item.delete") { send({ type: "conversation.item.deleted", item_id: e.item_id }); if (mode === "delete-race") { send({ type: "response.output_audio.delta", response_id: active, item_id: e.item_id, delta: btoa(String.fromCharCode(...new Uint8Array(4800))) }); send({ type: "response.output_item.done", response_id: active, item: { type: "message", role: "assistant", id: e.item_id } }); terminal("completed"); } }',
-  ' else if (e.type === "conversation.item.truncate") send({ type: "conversation.item.truncated", item_id: e.item_id });',
+  ' else if (e.type === "conversation.item.truncate") { truncates++; send({ type: "conversation.item.truncated", item_id: e.item_id }); if (mode === "fragmented") terminal("completed"); }',
   ' else if (e.type === "response.create") {',
   '  creates++; active = "response_" + creates;',
   '  if (e.response.max_output_tokens > 4096 || e.response.output_modalities.join() !== "audio" || !e.response.metadata.clawrouter_unit) throw Error("missing finite owner");',
@@ -49,11 +49,11 @@ const upstream = [
   '  if (mode === "disconnect") { ws.close(1011, "synthetic disconnect"); return; }',
   '  const item_id = "assistant_" + creates;',
   '  send({ type: "response.output_item.added", response_id: active, item: { type: "message", role: "assistant", id: item_id } });',
-  '  const audio = btoa(String.fromCharCode(...new Uint8Array(codec.type === "audio/pcm" ? 4800 : 800)));',
-  '  send({ type: "response.output_audio.delta", response_id: active, item_id, delta: audio });',
+  '  const audio = btoa(String.fromCharCode(...new Uint8Array(mode === "fragmented" ? 1024 : codec.type === "audio/pcm" ? 4800 : 800)));',
+  '  for (let i = 0; i < (mode === "fragmented" ? 6 : 1); i++) send({ type: "response.output_audio.delta", response_id: active, item_id, delta: audio });',
   '  send({ type: "response.output_audio_transcript.delta", response_id: active, item_id, delta: "synthetic generated speech" });',
   '  if (mode === "burst") { for (let i = 0; i < 1500; i++) send({ type: "response.output_audio.delta", response_id: active, item_id, delta: audio }); return; }',
-  '  if (mode !== "cancel" && mode !== "hold" && mode !== "delete-race") terminal("completed");',
+  '  if (mode !== "cancel" && mode !== "hold" && mode !== "delete-race" && mode !== "fragmented") terminal("completed");',
   ' } else if (e.type === "response.cancel") terminal("cancelled");',
   ' });',
   ' return new Response(null, { status: 101, webSocket: pair[0] });',
@@ -150,6 +150,23 @@ test("manual Realtime owns real workerd audio turns and durable per-response cap
       await c.q.next("response.output_item.done"); assert.equal((await c.q.next("response.done")).response.status, "completed");
       c.ws.close(1000); assert.equal((await usage(++count)).usage.events[0].actual_cost_micros, 2994);
     });
+    await t.test("fragmented PCM and PCMU truncation admits exact duration but rejects the next millisecond", async () => {
+      const pcmu = { ...policy, audio: { input: { format: { type: "audio/pcmu" }, turn_detection: null, transcription: null }, output: { format: { type: "audio/pcmu" }, voice: "marin" } } };
+      for (const [session, end] of [[policy, 128], [pcmu, 768]]) {
+        for (const extra of [0, 1]) {
+          const c = await ready("fragmented", session), before = (await stats()).truncates; await turn(c);
+          let item;
+          for (let i = 0; i < 6; i++) { const delta = await c.q.next("response.output_audio.delta"); assert.equal(Buffer.from(delta.delta, "base64").length, 1024); item = delta.item_id; }
+          c.q.send({ type: "conversation.item.truncate", item_id: item, content_index: 0, audio_end_ms: end + extra });
+          if (extra) {
+            assert.equal((await c.q.next("error")).error.code, "realtime_truncate"); assert.equal((await stats()).truncates, before);
+          } else {
+            assert.equal((await c.q.next("conversation.item.truncated")).item_id, item); assert.equal((await c.q.next("response.done")).response.status, "completed"); assert.equal((await stats()).truncates, before + 1);
+          }
+          c.ws.close(1000); const event = (await usage(++count)).usage.events[0]; assert.equal(event.actual_cost_micros, extra ? BOUND : 2994); assert.equal(event.cost_basis, extra ? "realtime_full_context_bound" : "realtime_modality_usage");
+        }
+      }
+    });
     await t.test("missing usage and disconnect retain bound; correlated preexecution rejection releases", async () => {
       for (const mode of ["absent", "malformed", "disconnect", "reject"]) { const c = await ready(mode); await turn(c); if (["absent", "malformed"].includes(mode)) await c.q.next("response.done"); else await c.q.next("error"); c.ws.close(1000); const u = await usage(++count); assert.equal(u.usage.events[0].actual_cost_micros, mode === "reject" ? 0 : BOUND); }
     });
@@ -166,7 +183,7 @@ test("manual Realtime owns real workerd audio turns and durable per-response cap
     });
     await t.test("upgrade 401/429 remain HTTP failures and unknown terminal/burst closes", async () => {
       for (const status of [401, 429]) { await config(String(status)); const r = await mf.dispatchFetch("https://router/v1/realtime?model=openai/gpt-realtime-2.1", { headers: { ...headers, upgrade: "websocket" } }); assert.equal(r.status, status); }
-      for (const mode of ["outoforder", "conflict", "burst"]) { const c = await ready(mode); await turn(c); await c.q.next("error"); c.ws.close(1000); }
+      for (const mode of ["outoforder", "conflict", "burst"]) { const c = await ready(mode); await turn(c); await c.q.next("error"); c.ws.close(1000); assert.equal((await usage(++count)).usage.events[0].actual_cost_micros, mode === "conflict" ? 2994 : BOUND); }
     });
     await t.test("missing native usage retains qualified bound even under fixed-zero policy", async () => {
       await setPolicy({ requestCostMicros: 0 }); const c = await ready("absent"); await turn(c); await c.q.next("response.done"); c.ws.close(1000);

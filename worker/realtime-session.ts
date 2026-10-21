@@ -22,6 +22,8 @@ export class RealtimeSession {
   private commitPending = false; private commitReady = false;
   private turns = 0; private guardPending = false; private conversation: string | null = null;
   private ids = new Set<string>(); private terminals = new Map<string, string>();
+  // Cumulative decoded bytes, not fractional milliseconds: chunk boundaries
+  // must not round an exact native integer-ms truncation out of range.
   private items = new Map<string, number>(); private deleted = new Set<string>();
   private deletePending = new Set<string>(); private deleteAcknowledged = new Set<string>();
   private abort = new AbortController();
@@ -141,8 +143,9 @@ export class RealtimeSession {
         if (!this.active?.sent || e.response_id !== undefined && e.response_id !== this.active.response) fail('unknown_response');
         this.send(this.upstream, { type: e.type, event_id: eventId, ...(this.active.response ? { response_id: this.active.response } : {}) }); return;
       case 'conversation.item.truncate': {
-        const id = this.item(e.item_id), max = this.items.get(id)!;
-        if (e.content_index !== 0 || !Number.isSafeInteger(e.audio_end_ms) || e.audio_end_ms < 0 || e.audio_end_ms > max) fail('truncate');
+        const id = this.item(e.item_id), maxBytes = this.items.get(id)!;
+        const bytesPerMs = this.policy.audio.output.format.type === 'audio/pcm' ? 48 : 8;
+        if (e.content_index !== 0 || !Number.isSafeInteger(e.audio_end_ms) || e.audio_end_ms < 0 || e.audio_end_ms * bytesPerMs > maxBytes) fail('truncate');
         this.send(this.upstream, { type: e.type, event_id: eventId, item_id: id, content_index: 0, audio_end_ms: e.audio_end_ms }); return;
       }
       case 'conversation.item.delete': {
@@ -207,7 +210,7 @@ export class RealtimeSession {
       if (e.type === 'response.output_audio.delta') {
         const id = this.item(e.item_id, true);
         const n = audio(e.delta, this.policy!.audio.output.format);
-        this.items.set(id, this.items.get(id)! + n / (this.policy!.audio.output.format.type === 'audio/pcm' ? 48 : 8));
+        this.items.set(id, this.items.get(id)! + n);
       }
       this.send(this.client, e); return;
     }
