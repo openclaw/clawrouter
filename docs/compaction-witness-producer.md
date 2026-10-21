@@ -46,6 +46,41 @@ usage events. Only additive witness DDL appears, on first use. CI emulates the
 pre-producer store. `CLAWROUTER_UPGRADE_BASE=<extracted tree with node_modules>`
 runs the same case from an exact earlier source tree.
 
+The release case writes storage with the latest stable release, v0.4.0
+(`080831563e0a`). Its Worker and Durable Objects are bundled from that
+commit's own tree. Grants are stored with that release's OAuth-callback
+sequence. Head then opens the same persisted SQLite/KV storage.
+
+v0.4.0 persisted these, and all of them carry over:
+
+- Settings and proxy credentials: unchanged rows.
+- Grant pool membership and selection: members gain `status='legacy'` on open
+  and attach as `active` in place on first use. Release pool accounts are still
+  selected.
+- Grant owner records: unchanged on open. First use imports the release's
+  secretless KV metadata and issues a lineage. Account and secret are kept.
+- Budget reservations: they gain `dispatch_started=1` and
+  `budget_scope_key=NULL`. They keep counting, so the fourth request against a
+  release-written three-request budget gets 402.
+- Usage events: they gain null grant columns.
+- Refusals: a release-revoked key and a wrong secret are refused exactly as
+  before.
+
+Head tables with no v0.4.0 predecessor are created by head:
+
+- `upstream_grant_pool_versions` and `upstream_grant_projections` start empty.
+- `http_continuations`, `responses_background` and the witness tables exist
+  only in the per-scope continuation object, which v0.4.0 never created. They
+  hold only head-produced rows.
+- `content_cleanup` is not exercised.
+
+v0.4.0 stored no continuation owner, so a release response id given as
+`previous_response_id` fails closed with `continuation_restart_required`
+before egress.
+
+The case extracts the pinned commit from the local object store. Shallow
+checkouts, which CI uses, skip it with that reason.
+
 ## Qualification and next stage
 
 Before publication, bind the exact producer commit/tree, full source audit,

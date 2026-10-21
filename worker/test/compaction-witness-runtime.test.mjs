@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { execFileSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -13,13 +14,7 @@ const { build } = createRequire(import.meta.resolve("wrangler/package.json"))("e
 // Test-only wrappers expose generic storage dumps and closed internal calls.
 // Authentication, scope derivation, routing, delivery, witness production and
 // every Durable Object run unchanged in workerd with persistent SQLite storage.
-const router = `
-  import worker from "./worker/index.ts";
-  import { PolicyBindingIndexObject as Authority } from "./worker/authority.ts";
-  import { BudgetLedgerObject as Budget, UsageLedgerObject as Usage } from "./worker/ledgers.ts";
-  import { GrantCredentialObject as Grants, putGrantCredentials, revokeGrantCredentials } from "./worker/grant-credentials.ts";
-  import { authenticateProxyKey } from "./worker/proxy-auth.ts";
-  import { continuationScope } from "./worker/http-continuation.ts";
+const fixtureObjects = `
   async function dump(storage) {
     const schema = [...storage.sql.exec("SELECT type, name, tbl_name, sql FROM sqlite_master WHERE name NOT LIKE 'sqlite_%' AND name NOT LIKE '_cf_%' ORDER BY name")];
     const tables = Object.fromEntries(schema.filter(row => row.type === "table").map(({ name }) => [name, [...storage.sql.exec('SELECT * FROM "' + name + '"')].map(row => JSON.stringify(row)).sort()]));
@@ -30,7 +25,8 @@ const router = `
     async fetch(request) { return new URL(request.url).pathname === "/fixture/dump" ? dump(this.fixtureStorage) : super.fetch(request); }
   };
   export const PolicyBindingIndexObject = dumped(Authority), BudgetLedgerObject = dumped(Budget), UsageLedgerObject = dumped(Usage), GrantCredentialObject = dumped(Grants);
-  export default { ...worker, async fetch(request, env, context) {
+`;
+const fixtureRoutes = `
     const url = new URL(request.url);
     if (!url.pathname.startsWith("/fixture/")) return worker.fetch(request, env, context);
     if (url.pathname.startsWith("/fixture/upstream/")) return fetch("https://fixture.example" + url.pathname, { method: "POST", body: request.body, duplex: "half" });
@@ -39,6 +35,17 @@ const router = `
       const namespace = env[body.binding];
       return namespace.get(namespace.idFromName(body.name)).fetch("https://owner" + body.path, { method: "POST", body: JSON.stringify(body.value ?? {}) });
     }
+`;
+const router = `
+  import worker from "./worker/index.ts";
+  import { PolicyBindingIndexObject as Authority } from "./worker/authority.ts";
+  import { BudgetLedgerObject as Budget, UsageLedgerObject as Usage } from "./worker/ledgers.ts";
+  import { GrantCredentialObject as Grants, putGrantCredentials, revokeGrantCredentials } from "./worker/grant-credentials.ts";
+  import { authenticateProxyKey } from "./worker/proxy-auth.ts";
+  import { continuationScope } from "./worker/http-continuation.ts";
+  ${fixtureObjects}
+  export default { ...worker, async fetch(request, env, context) {
+    ${fixtureRoutes}
     if (url.pathname === "/fixture/grant") return Response.json(body.revoke ? await revokeGrantCredentials(env, body.key) : await putGrantCredentials(env, body.key, body.grant), { headers: { "x-fixture": "grant" } });
     if (url.pathname === "/fixture/scope") {
       const auth = await authenticateProxyKey(request.headers, env);
@@ -47,6 +54,38 @@ const router = `
     return new Response("unknown fixture", { status: 404 });
   } };
 `;
+// Latest stable release writer. It imports only that tree's own modules and
+// stores grants with the release's OAuth-callback sequence (worker/oauth.ts).
+const release = { tag: "v0.4.0", commit: "080831563e0adfcdc1b79cad14613249694d60c9" };
+const releaseRouter = `
+  import worker from "./worker/index.ts";
+  import { PolicyBindingIndexObject as Authority } from "./worker/authority.ts";
+  import { BudgetLedgerObject as Budget, UsageLedgerObject as Usage } from "./worker/ledgers.ts";
+  import { GrantCredentialObject as Grants, putGrantCredentials } from "./worker/grant-credentials.ts";
+  import { syncGrantPoolIndex } from "./worker/grant-selection.ts";
+  ${fixtureObjects}
+  export default { ...worker, async fetch(request, env, context) {
+    ${fixtureRoutes}
+    if (url.pathname === "/fixture/grant") {
+      await syncGrantPoolIndex(env, body.key, null, body.grant);
+      const grant = await putGrantCredentials(env, body.key, body.grant, true);
+      await env.POLICY_KV.put(body.key, JSON.stringify(grant));
+      return Response.json(grant, { headers: { "x-fixture": "grant" } });
+    }
+    return new Response("unknown fixture", { status: 404 });
+  } };
+`;
+// The pinned release commit is extracted from the local object store; shallow
+// checkouts (CI) lack it and skip with that reason rather than emulating it.
+async function releaseTree(t) {
+  try { execFileSync("git", ["cat-file", "-e", `${release.commit}^{commit}`], { stdio: "ignore" }); }
+  catch { t.skip(`${release.tag} commit ${release.commit} is not in this checkout; fetch the tag to run`); return null; }
+  const root = await mkdtemp(join(tmpdir(), `clawrouter-${release.tag}-`));
+  t.after(() => rm(root, { recursive: true, force: true }));
+  execFileSync("git", ["archive", "--output", join(root, "release.tar"), release.commit]);
+  execFileSync("tar", ["-xf", join(root, "release.tar"), "-C", root]);
+  return root;
+}
 const upstream = `
   export class Upstream {
     constructor(state) { this.storage = state.storage; }
@@ -78,7 +117,7 @@ const compaction = id => JSON.stringify({ id, object: "response.compaction", out
 const completed = id => JSON.stringify({ id, object: "response", status: "completed", output: [checkpoint], usage });
 const witnessKey = JSON.stringify([checkpoint.id, sha(checkpoint.encrypted_content)]);
 
-async function bundle(root, replaceWitnessStore = false) {
+async function bundle(root, replaceWitnessStore = false, script = router) {
   // Pre-producer storage emulation: the producer's only persistent change is
   // CompactionWitnessStore inside the existing continuation constructor.
   const plugins = replaceWitnessStore ? [{ name: "pre-producer-storage", setup(builder) {
@@ -93,7 +132,7 @@ async function bundle(root, replaceWitnessStore = false) {
         nextDeadline() { return undefined; }
       }` }));
   } }] : [];
-  const result = await build({ stdin: { contents: router, resolveDir: root, sourcefile: "compaction-witness-fixture.ts", loader: "ts" }, write: false, bundle: true, format: "esm", platform: "browser", target: "es2022", logLevel: "silent", plugins });
+  const result = await build({ stdin: { contents: script, resolveDir: root, sourcefile: "compaction-witness-fixture.ts", loader: "ts" }, write: false, bundle: true, format: "esm", platform: "browser", target: "es2022", logLevel: "silent", plugins });
   return result.outputFiles[0].text;
 }
 
@@ -321,4 +360,101 @@ test("real workerd upgrade preserves continuation, background, settings and acco
   for (const row of usageBefore.tables.usage_events) assert.ok(usageAfter.tables.usage_events.includes(row), "pre-upgrade usage event preserved");
   assert.equal(usageAfter.tables.usage_events.filter(row => JSON.parse(row).id === job.eventId).length, 1);
   assert.equal((await f.calls()).filter(call => call.method === "POST").length, 5);
+});
+
+test("real workerd v0.4.0 release storage opens and behaves unchanged on head", { timeout: 120_000 }, async t => {
+  // Writer: the pinned v0.4.0 tree's own Worker and Durable Objects. Reader: head
+  // on the same persisted SQLite/KV storage. v0.4.0 persisted settings, proxy
+  // credentials, grant pool membership/selection, grant credentials and the
+  // budget/usage ledgers. It had no continuation, background or witness store.
+  const root = await releaseTree(t);
+  if (!root) return;
+  const f = await fixture(t, await bundle(root, false, releaseRouter));
+  const grants = { policy: "oauth/fixture/openai", pool: "oauth/tenants/other/pool-a" };
+  const putGrant = (key, accountId) => f.call("/fixture/grant", { key, grant: { provider: "openai", kind: "subscription", enabled: true, accessToken: `synthetic-${accountId}`, accountId } });
+  assert.equal((await putGrant(grants.policy, "account-policy")).status, 200);
+  assert.equal((await putGrant(grants.pool, "account-pool")).status, 200);
+  const owner = (path, value) => f.call("/fixture/object", { binding: "ACCESS_CONTROL", name: "policy-bindings", path, value });
+  // A three-request monthly budget and a revoked key, both written by the release.
+  assert.equal(await (await owner("/policies/put", { ...policies[0], policy: { ...policies[0].policy, monthlyBudgetMicros: 300 } })).text(), "updated");
+  assert.deepEqual(await (await owner("/credentials/put", { credentialId: "retired", credential: { enabled: false, secretSha256: sha("retired-key"), policyId: "fixture", policyGeneration: "g1", principalId: null } })).json(), { outcome: "updated" });
+  const plain = id => JSON.stringify({ id, object: "response", status: "completed", output: [], usage });
+  const send = (id, authorization = keys.fixture, body = {}) => deliver(f, plain(id), "/v1/responses", authorization, { model: "openai/gpt-5.6", ...body });
+  for (const [id, authorization] of [["resp_release_a", keys.fixture], ["resp_release_b", keys.fixture], ["resp_release_pool", keys.foreign]]) assert.equal((await send(id, authorization)).status, 200);
+  const refused = () => Promise.all(["Bearer clawrouter-live-retired-retired-key", "Bearer clawrouter-live-fixture-wrong-key"].map(async key => { const result = await send("resp_refused", key); return [result.status, JSON.parse(result.text).error.code]; }));
+  const refusedByRelease = await refused();
+  assert.deepEqual(refusedByRelease, [[403, "proxy_key_revoked"], [401, "invalid_proxy_key"]]);
+
+  const legs = ["tenant:fixture", "provider:openai"], shards = ["policy:tenant:fixture", "policy:other:foreign"];
+  const budget = async () => Object.fromEntries(await Promise.all(legs.map(async name => [name, (await f.object("BUDGET_LEDGER", name, "/fixture/dump")).tables])));
+  const usageLedgers = async () => Object.fromEntries(await Promise.all(shards.map(async name => [name, (await f.object("USAGE_LEDGER", name, "/fixture/dump")).tables])));
+  const grantRecords = async () => Object.fromEntries(await Promise.all(Object.values(grants).map(async key => [key, (await f.object("GRANT_CREDENTIALS", key, "/fixture/dump")).kv.credential])));
+  const settled = (tables, count) => tables.budget_reservations?.filter(row => JSON.parse(row).settled === 1).length === count;
+  const ledgerBefore = await until(budget, value => settled(value["tenant:fixture"], 2) && settled(value["provider:openai"], 3));
+  const usageBefore = await until(usageLedgers, value => value[shards[0]].usage_events?.length === 2 && value[shards[1]].usage_events?.length === 1);
+  const settings = await f.dump("policy-bindings"), grantsBefore = await grantRecords();
+  const headOnlyAuthority = ["upstream_grant_pool_identity", "upstream_grant_pool_pending", "upstream_grant_pool_versions", "upstream_grant_projections"];
+  assert.deepEqual(settings.schema.map(row => row.name).filter(name => headOnlyAuthority.includes(name)), [], "release storage predates these");
+  assert.deepEqual(settings.tables.upstream_grant_pool_members.map(row => Object.keys(JSON.parse(row))), [["scope", "scope_id", "provider_id", "token_ref"], ["scope", "scope_id", "provider_id", "token_ref"]]);
+  assert.deepEqual(Object.values(grantsBefore).map(record => [record.accountId, record.lineage]), [["account-policy", undefined], ["account-pool", undefined]], "release grant records predate lineage");
+
+  await f.restart();
+  // Opening runs head's additive migrations; release rows keep every value and
+  // only gain the documented column defaults.
+  const withColumns = (rows, columns) => rows.map(row => JSON.stringify({ ...JSON.parse(row), ...columns })).sort();
+  const opened = await f.dump("policy-bindings");
+  for (const [table, rows] of Object.entries(settings.tables)) assert.deepEqual(opened.tables[table], table === "upstream_grant_pool_members" ? withColumns(rows, { status: "legacy", pending_previous_status: null }) : rows, table);
+  assert.deepEqual(opened.schema.map(row => row.name).sort(), [...settings.schema.map(row => row.name), ...headOnlyAuthority].sort());
+  assert.deepEqual([opened.tables.upstream_grant_pool_versions, opened.tables.upstream_grant_projections], [[], []], "head-only authority tables start empty");
+  assert.deepEqual(await grantRecords(), grantsBefore, "opening never rewrites a release grant record");
+  const openedLedgers = await budget();
+  for (const name of legs) {
+    assert.deepEqual(openedLedgers[name].budget_reservations, withColumns(ledgerBefore[name].budget_reservations, { dispatch_started: 1, budget_scope_key: null }), name);
+    assert.deepEqual(openedLedgers[name].budget_windows, ledgerBefore[name].budget_windows, name);
+  }
+  const openedUsage = await usageLedgers();
+  for (const name of shards) assert.deepEqual(openedUsage[name].usage_events, withColumns(usageBefore[name].usage_events, { grant_key: null, grant_lane: null }), name);
+
+  // Behavior: the same keys are refused, the release grants still route, and
+  // release spend still counts against the release-written monthly budget.
+  assert.deepEqual(await refused(), refusedByRelease);
+  const scope = await f.scope();
+  const compacted = await deliver(f, completed("resp_after_release"), "/v1/responses");
+  assert.equal(compacted.status, 200, compacted.text); assert.equal(compacted.text, completed("resp_after_release"));
+  const exhausted = await send("resp_over_budget");
+  assert.equal(exhausted.status, 402, exhausted.text); assert.equal(JSON.parse(exhausted.text).error.code, "budget_exhausted");
+  assert.equal((await send("resp_head_pool", keys.foreign)).status, 200);
+  // v0.4.0 kept no continuation owner, so its response ids fail closed before egress.
+  const orphan = await send("resp_orphan", keys.foreign, { previous_response_id: "resp_release_pool" });
+  assert.equal(orphan.status, 409, orphan.text); assert.equal(JSON.parse(orphan.text).error.code, "continuation_restart_required");
+  assert.deepEqual((await f.calls()).map(call => call.accountId), ["account-policy", "account-policy", "account-pool", "account-policy", "account-pool"]);
+
+  // Head-only continuation and witness state lives only in the new scope object.
+  const [witness] = await settledWitness(f, scope);
+  const stored = JSON.parse(witness.witness_json);
+  assert.deepEqual([stored.binding.tenantId, stored.binding.policyId, stored.binding.credentialId, stored.binding.owner.grantKey], ["tenant", "fixture", "fixture", grants.policy]);
+  const scoped = await f.dump(scope);
+  assert.equal(scoped.tables.http_continuations.length, 1); assert.deepEqual(scoped.tables.responses_background, []);
+  const used = await f.dump("policy-bindings");
+  for (const table of ["access_policies", "access_users", "policy_binding_entries", "policy_binding_meta", "policy_binding_principals", "provider_connections", "proxy_credentials"]) assert.deepEqual(used.tables[table], settings.tables[table], table);
+  for (const table of ["http_continuations", "responses_background", "compaction_witnesses"]) assert.equal(used.tables[table]?.length ?? 0, 0, `${table} never enters the settings object`);
+  // First head use attaches the legacy pool members in place and migrates each
+  // grant record without changing its account or secret.
+  assert.deepEqual(used.tables.upstream_grant_pool_members, withColumns(settings.tables.upstream_grant_pool_members, { status: "active", pending_previous_status: null }));
+  for (const [key, record] of Object.entries(await grantRecords())) {
+    assert.deepEqual([record.accountId, record.accessToken, record.generation], [grantsBefore[key].accountId, grantsBefore[key].accessToken, grantsBefore[key].generation], key);
+    assert.equal(typeof record.lineage, "string", key);
+    // The release's secretless KV metadata is imported once into the owner record.
+    assert.deepEqual([record.metadata.provider, record.metadata.kind, record.metadata.accountId, record.metadata.hasAccessToken, record.metadata.accessToken], ["openai", "subscription", grantsBefore[key].accountId, true, undefined], key);
+  }
+  const ledgerAfter = await until(budget, value => settled(value["tenant:fixture"], 3) && settled(value["provider:openai"], 5));
+  for (const name of legs) for (const row of openedLedgers[name].budget_reservations) assert.ok(ledgerAfter[name].budget_reservations.includes(row), `${name} release reservation preserved`);
+  assert.equal(ledgerAfter["tenant:fixture"].budget_reservations.reduce((sum, row) => sum + JSON.parse(row).reserved_micros, 0), 300);
+  const usageAfter = await until(usageLedgers, value => value[shards[0]].usage_events.length === 4 && value[shards[1]].usage_events.length === 3);
+  const appended = { [shards[0]]: [["denied", 402, "subscription"], ["success", 200, "subscription"]], [shards[1]]: [["client_error", 409, null], ["success", 200, "subscription"]] };
+  for (const name of shards) {
+    for (const row of openedUsage[name].usage_events) assert.ok(usageAfter[name].usage_events.includes(row), `${name} release usage event preserved`);
+    const added = usageAfter[name].usage_events.filter(row => !openedUsage[name].usage_events.includes(row)).map(row => JSON.parse(row));
+    assert.deepEqual(added.map(row => [row.status, row.status_code, row.grant_lane]).sort(), appended[name], name);
+  }
 });
