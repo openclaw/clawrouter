@@ -155,6 +155,39 @@ for (const [name, options, cost] of [['unmetered', { mode: 'reserve', limit: nul
   assert.equal(f.events[0].cost_basis, name === 'fixed' ? 'policy_fixed' : 'unpriced_usage');
 });
 
+test('#282 catalog admission composes with one hosted fee and two durable charge legs', async t => {
+  for (const mode of ['reserve', 'soft']) {
+    const f = setup(t, { mode, model: 'openai/gpt-6.1-sol' });
+    const catalog = await handler.fetch(new Request('https://clawrouter.example/v1/catalog', { headers: { authorization: 'Bearer ' + proxyKey() } }), f.env, { waitUntil: p => f.pending.push(p) });
+    assert.equal(catalog.status, 200);
+    const provider = (await catalog.json()).providers.find(p => p.id === 'openai');
+    const offer = provider.offers.find(o => o.modelId === 'openai/gpt-6.1-sol' && o.endpoint === 'responses' && o.transport === 'http' && o.route === '/v1/responses');
+    assert.deepEqual(offer.hostedToolAdmission, { version: 'clawrouter.hosted-tool-admission.v1', web_search: mode === 'reserve' ? 'pricing_required' : 'admitted' });
+    const mock = upstream(t, JSON.stringify(terminal([search()], { usage: { ...usage, input_tokens_details: { cached_tokens: 0, cache_write_tokens: 0 } } })));
+    const r = await f.request(); assert.equal(r.status, mode === 'reserve' ? 400 : 200);
+    if (mode === 'reserve') assert.equal((await r.json()).error.code, 'pricing_required');
+    else await r.text();
+    await f.drain();
+    assert.equal(mock.mock.callCount(), mode === 'reserve' ? 0 : 1); assert.equal(f.events.length, 1);
+    const charges = f.calls.filter(c => c.path === '/charge');
+    assert.equal(charges.length, mode === 'reserve' ? 0 : 2);
+    assert.ok(!f.calls.some(c => ['/reserve', '/settle', '/dispatch'].includes(c.path)));
+    if (mode === 'soft') {
+      assertAudit(f.events[0], 1, true, 10_300); assert.equal(f.events[0].hosted_tool_cost_micros, 10_000);
+      assert.deepEqual(charges.map(c => ({ name: c.name, amount: c.body.amountMicros })).sort((a, b) => a.name.localeCompare(b.name)), [
+        { name: 'provider:openai', amount: 10_300 }, { name: 'tenant:maintainer_access:owner@example.com', amount: 10_300 },
+      ]);
+      for (const charge of charges) {
+        assert.deepEqual(f.ledger.get(charge.name).reservations().map(row => ({ id: row.reservation_id, amount: row.reserved_micros })), [{ id: charge.body.chargeId, amount: 10_300 }]);
+        await queue({ messages: [{ body: { kind: 'budget_charge', ledger: { objectName: charge.name }, request: charge.body }, ack() {}, retry() { assert.fail('charge replay must succeed'); } }] }, f.env);
+      }
+    } else assert.equal(f.events[0].actual_cost_micros, 0);
+    assert.equal(await spent(f), mode === 'reserve' ? 0 : 10_300);
+    assert.equal((await providerBudgetStatus(f.env, 'openai', 1_000_000)).spentMicros, mode === 'reserve' ? 0 : 10_300);
+    mock.mock.restore();
+  }
+});
+
 test('reserve budgets retain pricing_required and zero upstream egress', async t => {
   const f = setup(t, { mode: 'reserve' }), mock = upstream(t, '{}');
   const r = await f.request(); assert.equal(r.status, 400); assert.equal((await r.json()).error.code, 'pricing_required');
