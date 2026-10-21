@@ -5,7 +5,9 @@ import { createSseUsageInspector, extractUsageTokens, responseOutcome, usageInsp
 import { HttpOperation } from "./http-operation.ts";
 import type { createResponsesToolEvidence } from "./responses-tool-evidence.ts";
 
-export interface ObservedUsage extends UsageInspection { delivery: "complete" | "failed" | "canceled"; binaryComplete?: true }
+import type { HostedSearchUsage } from "./responses-hosted-usage.ts";
+
+export interface ObservedUsage extends UsageInspection { delivery: "complete" | "failed" | "canceled"; binaryComplete?: true; hostedSearch?: HostedSearchUsage }
 export interface ResponseBodyInspection {
   push(bytes: Uint8Array): Promise<void>; end(): Promise<void>;
   tools?: Pick<ReturnType<typeof createResponsesToolEvidence>, "accept" | "invalid">;
@@ -61,7 +63,9 @@ export function observeUsage(response: Response, operation = new HttpOperation()
     // A partial, empty, or wrong-MIME response cannot discount the reservation.
     const binaryComplete = speech && response.ok && delivery === "complete" && audio && nonempty;
     if (speech && !binaryComplete) inspection.outcome = "provider_error";
-    resolve({ ...inspection, delivery, ...(binaryComplete ? { binaryComplete: true as const } : {}) });
+    const hostedSearch = responses && !images && !compact ? responses.hostedUsage(delivery === "complete") : undefined;
+    resolve({ ...inspection, delivery, ...(binaryComplete ? { binaryComplete: true as const } : {}),
+      ...(hostedSearch ? { hostedSearch } : {}) });
     // Claim completion before cancellation can resolve/reject a pending read.
     // The result owns accounting even if the transport's cancellation rejects.
     if (delivery !== "complete") void reader.cancel(reason).catch(() => undefined);

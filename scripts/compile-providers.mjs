@@ -81,6 +81,7 @@ function compileProvider(manifest, ids) {
     streaming: endpoint.streaming ?? null,
     ...(endpoint.responsesLifecycle ? { responsesLifecycle: endpoint.responsesLifecycle } : {}),
     ...(endpoint.outputTokenLimit ? { outputTokenLimit: endpoint.outputTokenLimit } : {}),
+    ...(endpoint.toolPricing ? { toolPricing: structuredClone(endpoint.toolPricing) } : {}),
     ...(endpoint.modelPassthrough ? { modelPassthrough: {
       pricing_ref: endpoint.modelPassthrough.pricingRef ?? null,
       pricing: endpoint.modelPassthrough.pricingRef ? normalizePricing(manifest.models.entries.find((model) => model.pricingRef === endpoint.modelPassthrough.pricingRef).pricing) : null,
@@ -320,6 +321,13 @@ function validateManifest(manifest) {
       const capabilities = manifest.capabilities.filter(capability => capability.endpoint === id).map(capability => capability.id);
       const models = (manifest.models?.entries ?? []).filter(model => model.capabilities?.some(capability => capabilities.includes(capability)));
       if (!models.length || models.some(model => !model.pricing || model.pricing.unit != null || !Number.isSafeInteger(model.pricing.defaultMaxOutputTokens) || model.pricing.defaultMaxOutputTokens <= 0)) throw new Error(`provider ${manifest.id} endpoint ${id} compact requires registered token-priced models with authoritative output bounds`);
+    }
+    if (endpoint.toolPricing) {
+      if ((endpoint.method ?? "POST") !== "POST" || endpoint.requestFormat !== "openai.responses" || endpoint.responseFormat !== "openai.responses"
+        || !manifest.capabilities.some(capability => capability.endpoint === id)) throw new Error(`provider ${manifest.id} endpoint ${id} toolPricing requires a Responses generation endpoint`);
+      for (const model of Object.keys(endpoint.toolPricing.previewMicrosPerCallByModel)) {
+        if (!manifest.models?.entries?.some(entry => entry.upstream === model && entry.capabilities?.some(capability => manifest.capabilities.some(item => item.id === capability && item.endpoint === id)))) throw new Error(`provider ${manifest.id} endpoint ${id} toolPricing references an unsupported preview model`);
+      }
     }
     if (endpoint.outputTokenLimit && endpoint.outputTokenLimit.minimum > endpoint.outputTokenLimit.maximum) throw new Error(`provider ${manifest.id} endpoint ${id} outputTokenLimit minimum exceeds maximum`);
     if (endpoint.modelPassthrough) {

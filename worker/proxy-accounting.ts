@@ -1,13 +1,14 @@
 import { emptyReservation, finalizeAccounting, type BudgetReservation, type EstimatedCost } from "./accounting";
 import { correlationMetadata } from "./correlation";
 import { googleField, googleRequestServiceTier, googleResponseServiceTier, googleServiceTier } from "./google-protocol.ts";
-import { actualCharacterCost, actualModelCost, estimateModelCost, requestPricingGap, type PricingEndpoint } from "./pricing";
+import { actualCharacterCost, actualModelCost, estimateModelCost, hostedSearchCost, hostedSearchPrice, requestPricingGap, type HostedSearchPrice, type PricingEndpoint } from "./pricing";
 import type { ProxySelection } from "./proxy-selection";
 import type { ObservedUsage } from "./proxy-response";
 import { extractServiceTier, type UsageTokens } from "./token-usage";
 import type { AuthorizedIdentity, CompiledModel, Env, ProxyRequestBody, UsageEvent } from "./types";
 import { randomId } from "./utils";
 import type { ToolKnowledge } from "./responses-tool-evidence.ts";
+import type { HostedSearchUsage } from "./responses-hosted-usage.ts";
 
 export interface CompoundRequestContext {
   id: string;
@@ -41,6 +42,7 @@ export interface AccountingFacts {
   cost: EstimatedCost;
   requestFormat: string;
   startedAtMs: number;
+  hostedSearchPrice?: HostedSearchPrice;
 }
 
 export interface AccountingOutcome {
@@ -53,6 +55,7 @@ export interface AccountingOutcome {
   contentRef: string | null;
   servedTier?: string | null;
   characterEstimate?: number | null;
+  hostedSearch?: HostedSearchUsage;
 }
 
 export function accountingReceipt(facts: AccountingFacts, outcome: AccountingOutcome): UsageEvent {
@@ -64,7 +67,13 @@ export function accountingReceipt(facts: AccountingFacts, outcome: AccountingOut
   const measured = cost.pricingGap && !soft && !audioUnbounded ? null : tokens ? (soft && !model?.pricing && fixed == null ? null : actualCost(model, tokens, fixed, requestFormat))
     : characterEstimate === null ? null : fixed ?? characterEstimate;
   const image = model?.pricing?.unit === "image_token";
-  const actual = billable ? measured ?? (audioUnbounded ? fixed ?? 0 : soft && !image ? fixed ?? 0 : fixed ?? cost.reserveMicros) : 0;
+  const hosted = outcome.hostedSearch;
+  const hostedEvent = hosted && (facts.hostedSearchPrice || hosted.webSearch > 0);
+  // Only an already-admitted SOFT budget consumes this observed component.
+  // Unknown content tokens remain a gap; fixed/unmetered prices are unchanged.
+  const toolFee = billable && soft && !!reservation.charges?.length && fixed == null && tokens && tokens.billable !== false && hosted?.complete
+    ? hostedSearchCost(facts.hostedSearchPrice, hosted.webSearch) : null;
+  const actual = Math.min(Number.MAX_SAFE_INTEGER, (billable ? measured ?? (audioUnbounded ? fixed ?? 0 : soft && !image ? fixed ?? 0 : fixed ?? cost.reserveMicros) : 0) + (toolFee ?? 0));
   const knownNoCharge = !billable || (tokens?.billable === false && actual === 0 && cost.basis !== "policy_fixed");
   const measuredBasis = characterEstimate !== null ? "request_character_estimate"
     : model?.pricing?.unit == null && model?.pricing?.settlementBasis === "published_upper_bound" ? "manifest_rate_upper_bound" : "manifest_pricing";
@@ -72,10 +81,12 @@ export function accountingReceipt(facts: AccountingFacts, outcome: AccountingOut
     ? measured == null ? "unpriced_usage" : measuredBasis
     : cost.basis === "manifest_pricing" ? measured == null ? "manifest_reservation" : measuredBasis : cost.basis;
   return { ...event, occurred_at_ms: outcome.occurredAtMs, status_code: outcome.statusCode, status: outcome.status,
+    ...(hostedEvent ? { hosted_tool_calls: { web_search: hosted.webSearch }, hosted_tool_calls_complete: hosted.complete,
+      hosted_tool_cost_micros: toolFee, hosted_tool_pricing_ref: facts.hostedSearchPrice?.version ?? null } : {}),
     input_tokens: tokens?.input ?? null, output_tokens: tokens?.output ?? null, total_tokens: tokens?.total ?? null,
     ...(tokens?.image ? { image_usage: { text_input_tokens: tokens.image.textInput, image_input_tokens: tokens.image.imageInput, image_output_tokens: tokens.image.imageOutput } } : {}),
     cached_input_tokens: tokens?.cached ?? null, cache_write_input_tokens: tokens?.cacheWrite ?? null,
-    reserved_cost_micros: reservation.reservedMicros, actual_cost_micros: actual, cost_basis: basis,
+    reserved_cost_micros: reservation.reservedMicros, actual_cost_micros: actual, cost_basis: billable && fixed == null && hostedEvent ? "unpriced_usage" : basis,
     served_service_tier: outcome.servedTier === undefined ? tokens?.serviceTier ?? null : outcome.servedTier,
     duration_ms: outcome.occurredAtMs - facts.startedAtMs, content_retained: !!contentRef, content_ref: contentRef };
 }
@@ -92,6 +103,7 @@ export function createProxyAccounting(options: AccountingContext) {
   const requestId = correlation.requestId;
   const started = options.startedAtMs ?? Date.now();
   const facts: AccountingFacts = {
+    hostedSearchPrice: hostedSearchPrice(selection.endpoint.toolPricing, selection.body, model?.upstream, request.headers.has("x-codex-turn-state")),
     model: model ? { pricing: model.pricing } : null, fixed: auth.policy.requestCostMicros ?? null, cost, requestFormat: selection.endpoint.request_format, startedAtMs: started,
     event: {
       id: randomId("usage"), type: "clawrouter.usage.v1", occurred_at_ms: started, tenant_id: auth.policy.tenantId ?? "default",
@@ -113,8 +125,8 @@ export function createProxyAccounting(options: AccountingContext) {
       duration_ms: null, content_retained: false, content_ref: null, status: "success",
     },
   };
-  function settle(statusCode: UsageEvent["status_code"], status: UsageEvent["status"], billable: boolean, tokens: UsageTokens | null, reservation: BudgetReservation, contentRef: string | null, characterEstimate: number | null = null) {
-    const event = accountingReceipt(facts, { occurredAtMs: Date.now(), statusCode, status, billable, tokens, reservation, contentRef, servedTier: responseTier, characterEstimate });
+  function settle(statusCode: UsageEvent["status_code"], status: UsageEvent["status"], billable: boolean, tokens: UsageTokens | null, reservation: BudgetReservation, contentRef: string | null, characterEstimate: number | null = null, hostedSearch?: HostedSearchUsage) {
+    const event = accountingReceipt(facts, { occurredAtMs: Date.now(), statusCode, status, billable, tokens, reservation, contentRef, servedTier: responseTier, characterEstimate, hostedSearch });
     return finalizeAccounting(env, reservation, event.actual_cost_micros, event);
   }
   return {
@@ -136,7 +148,7 @@ export function createProxyAccounting(options: AccountingContext) {
       const characterEstimate = observed.binaryComplete && observed.delivery === "complete" && response.ok && !termination
         && selection.endpoint.request_format === "openai.audio_speech" && selection.endpoint.response_format === "audio.binary" && !Array.isArray(selection.body)
         ? actualCharacterCost(model?.pricing, selection.body.input) : null;
-      return settle(response.status, status, response.ok, tokens, reservation, contentRef, characterEstimate);
+      return settle(response.status, status, response.ok, tokens, reservation, contentRef, characterEstimate, observed.hostedSearch);
     },
   };
 }

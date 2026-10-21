@@ -113,9 +113,7 @@ capabilities:
   - id: llm.chat
     endpoint: chat_completions
     methods: [POST]
-  - id: llm.embeddings
-    endpoint: embeddings
-    methods: [POST]
+  - {id: llm.embeddings, endpoint: embeddings, methods: [POST]}
   - {id: audio.transcription, endpoint: transcriptions, methods: [POST]}
   - {id: audio.speech, endpoint: speech, methods: [POST]}
   - {id: image.generation, endpoint: images_generations, methods: [POST]}
@@ -130,6 +128,7 @@ endpoints:
     responseFormat: openai.responses
     streaming: sse
     websocket: openai.responses
+    toolPricing: {"version": "openai-web-search-2026-10-20", "effectiveAt": "2026-10-20", "source": "https://developers.openai.com/api/docs/pricing#tools", "webSearchMicrosPerCall": 10000, "previewMicrosPerCallByModel": {"gpt-6-astra": 10000, "gpt-6.1-sol": 10000, "gpt-6-sol": 10000, "gpt-6-luna": 10000, "gpt-5.6": 10000, "gpt-5.6-sol": 10000, "gpt-5.6-terra": 10000, "gpt-5.6-luna": 10000, "gpt-5.5": 10000, "gpt-5.4": 10000, "gpt-4.1-mini": 25000}}
     responsesLifecycle:
       retrieve: responses_retrieve
       cancel: responses_cancel

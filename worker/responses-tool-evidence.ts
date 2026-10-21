@@ -177,7 +177,7 @@ export function createResponsesToolEvidence(base: ToolKnowledge) {
   };
 }
 
-type Context = "root" | "response" | "items" | "item" | "tools" | "tool" | "environment";
+type Context = "root" | "response" | "items" | "item" | "tools" | "tool" | "environment" | "action";
 type Field = Context | "text" | "number" | null;
 type Frame = { context: Context | null; value: Record<string, unknown> | unknown[] | null; key: string | null };
 
@@ -202,10 +202,11 @@ export function createToolEvidenceProjection() {
     if (frame.context === "item" || frame.context === "tool") {
       if (["type", "id", "name", "role", "execution", "status"].includes(key)) return "text";
       if (key === "tools") return "tools";
+      if (frame.context === "item" && key === "action") return "action";
       if (frame.context === "tool" && key === "environment") return "environment";
       if (frame.context === "tool" && (key === "display_height" || key === "display_width")) return "number";
     }
-    return frame.context === "environment" && key === "type" ? "text" : null;
+    return (frame.context === "environment" || frame.context === "action") && key === "type" ? "text" : null;
   }
   function assign(next: unknown) {
     // Charge every selected entry once, including malformed scalars and arrays.
