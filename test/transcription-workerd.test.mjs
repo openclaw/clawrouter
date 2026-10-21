@@ -1,0 +1,114 @@
+import assert from "node:assert/strict";
+import { createHash } from "node:crypto";
+import { mkdtemp, rm } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import test from "node:test";
+import { startWorkerdFixture } from "./helpers/workerd.mjs";
+
+// A real workerd multipart -> upstream Worker -> SQL Durable Object boundary.
+test("multipart transcription traverses workerd with exact bytes, authority and durable fixed accounting", { timeout: 30_000 }, async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "clawrouter-stt-"));
+  let mf;
+  try {
+    mf = await startWorkerdFixture(temporary, `
+import handler, { BudgetLedgerObject as RealBudgetLedger } from "./worker/index.ts";
+export * from "./worker/index.ts";
+export class BudgetLedgerObject extends RealBudgetLedger {
+  constructor(state) { super(state); this.sqlFixture = state.storage.sql; }
+  async fetch(request) {
+    if(new URL(request.url).pathname === "/fixture-reservations") return Response.json([...this.sqlFixture.exec("SELECT settled, dispatch_started, reserved_micros FROM budget_reservations")]);
+    return super.fetch(request);
+  }
+}
+export default handler;`, `
+export class Calls {
+  constructor(state) { this.state=state; }
+  async fetch(request) {
+    const calls=(await this.state.storage.get("calls")) ?? 0;
+    if(request.method === "POST") await this.state.storage.put("calls",calls+1);
+    return Response.json({calls:request.method === "POST" ? calls+1 : calls});
+  }
+}
+export default { async fetch(request,env) {
+  const counter=env.CALLS.get(env.CALLS.idFromName("calls"));
+  await counter.fetch("https://fixture/calls",{method:"POST"});
+  if(new URL(request.url).pathname !== "/v1/audio/transcriptions") throw new Error("wrong endpoint");
+  const credential=request.headers.get("authorization");
+  if(!["Bearer fixture-upstream-key","Bearer fixture-pool-upstream-key"].includes(credential) || request.headers.has("x-api-key")) throw new Error("wrong credential provenance");
+  const form = await request.formData(); const file = form.get("file");
+  if(form.get("model") !== "gpt-4o-transcribe" || form.get("language") !== "en" || form.get("prompt") !== "synthetic prompt é") throw new Error("wrong fields");
+  if(!(file instanceof File) || file.name !== "sample.wav" || file.type !== "audio/wav" || JSON.stringify([...new Uint8Array(await file.arrayBuffer())]) !== "[0,255,128,42]") throw new Error("file corrupted");
+  return Response.json({text:"synthetic transcript",credentialSource:credential === "Bearer fixture-pool-upstream-key" ? "pool" : "environment",usage:{type:"tokens",input_tokens:14,input_token_details:{audio_tokens:12,text_tokens:2},output_tokens:45,total_tokens:59}});
+} };`, {upstreamDurableObjects:{CALLS:{className:"Calls",useSQLite:true}}});
+    const kv = await mf.getKVNamespace("POLICY_KV", "router");
+    const secret = "stt-fixture-secret";
+    await kv.put("policies/fixture", JSON.stringify({ enabled:true, generation:"g1", providers:["openai"], monthlyBudgetMicros:1_000_000, requestCostMicros:200, retainRequestContent:false }));
+    await kv.put("credentials/fixture", JSON.stringify({ enabled:true, secretSha256:createHash("sha256").update(secret).digest("hex"), policyId:"fixture", policyGeneration:"g1" }));
+    await kv.put("connections/openai", JSON.stringify({ providerId:"openai", enabled:true, monthlyBudgetMicros:1_000_000 }));
+    await kv.put("policies/hard",JSON.stringify({enabled:true,generation:"g1",providers:["openai"],monthlyBudgetMicros:1_000_000,requestCostMicros:null,retainRequestContent:false}));
+    await kv.put("credentials/hard",JSON.stringify({enabled:true,secretSha256:createHash("sha256").update(secret).digest("hex"),policyId:"hard",policyGeneration:"g1"}));
+    for(const id of ["pool","subscription"]) {
+      await kv.put("policies/"+id,JSON.stringify({enabled:true,generation:"g1",providers:["openai"],monthlyBudgetMicros:1_000_000,requestCostMicros:200,retainRequestContent:false}));
+      await kv.put("credentials/"+id,JSON.stringify({enabled:true,secretSha256:createHash("sha256").update(secret).digest("hex"),policyId:id,policyGeneration:"g1"}));
+    }
+    await kv.put("oauth/pool/openai",JSON.stringify({provider:"openai",kind:"api_key",enabled:true,credential:"fixture-pool-upstream-key"}));
+    await kv.put("oauth/subscription/openai",JSON.stringify({provider:"openai",kind:"subscription",enabled:true,accessToken:"fixture-subscription-token",accountId:"fixture-account"}));
+    const hardHeaders={authorization:"Bearer clawrouter-live-hard-"+secret};
+    const headers = { authorization: "Bearer clawrouter-live-fixture-" + secret };
+    const origin = await mf.ready;
+    for (const path of ["/v1/audio/transcriptions", "/v1/native/openai/v1/audio/transcriptions", "/v1/proxy/openai/transcriptions"]) {
+      const body = new FormData();
+      body.set("file", new File([new Uint8Array([0,255,128,42])], "sample.wav", {type:"audio/wav"}));
+      body.set("model", path.includes("/native/") ? "gpt-4o-transcribe" : "openai/gpt-4o-transcribe");
+      body.set("language", "en"); body.set("prompt", "synthetic prompt é");
+      const response = await fetch(new URL(path, origin), {method:"POST",headers,body,signal:AbortSignal.timeout(10_000)});
+      assert.equal(response.status, 200, await response.clone().text());
+      assert.equal(response.headers.get("x-clawrouter-content-retention"), "off");
+      assert.equal((await response.json()).text, "synthetic transcript");
+    }
+    const calls = await mf.getDurableObjectNamespace("CALLS","upstream");
+    const count = async () => (await (await calls.get(calls.idFromName("calls")).fetch("https://fixture/calls")).json()).calls;
+    assert.equal(await count(),3);
+    const makeForm = () => {
+      const body=new FormData(); body.set("model","openai/gpt-4o-transcribe");
+      body.set("file",new File([new Uint8Array([0,255,128,42])],"sample.wav",{type:"audio/wav"}));
+      body.set("language","en");body.set("prompt","synthetic prompt é");return body;
+    };
+    const pooled=await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",headers:{authorization:"Bearer clawrouter-live-pool-"+secret},body:makeForm()});
+    assert.equal(pooled.status,200,await pooled.clone().text());assert.equal((await pooled.json()).credentialSource,"pool");assert.equal(pooled.headers.get("x-clawrouter-grant-lane"),"api_key");
+    const incompatible=await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",headers:{authorization:"Bearer clawrouter-live-subscription-"+secret},body:makeForm()});
+    assert.equal(incompatible.status,503);assert.equal((await incompatible.json()).error.code,"upstream_grant_pool_unavailable");
+    assert.equal(await count(),4,"scoped subscription cannot borrow environment auth");
+    for(const option of ["stream","chunking_strategy","known_speaker_names[]","timestamp_granularities[]"]) {
+      const body=makeForm();body.set(option,"true");
+      assert.equal((await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",headers,body})).status,400);
+    }
+    const duplicate=makeForm();duplicate.append("file",new File(["duplicate"],"second.wav",{type:"audio/wav"}));
+    assert.equal((await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",headers,body:duplicate})).status,400);
+    assert.equal((await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",body:makeForm()})).status,401);
+    // A separate isolated policy: hard reserve must not turn a one-context
+    // model card into an arbitrary-file ceiling. No mutable live/KV authority.
+    const blocked=await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",headers:hardHeaders,body:makeForm()});
+    assert.equal(blocked.status,400);assert.equal((await blocked.json()).error.code,"pricing_required");
+    assert.equal(await count(),4,"invalid/hard-unqualified requests never reached real upstream Worker");
+    const usageResponse = await fetch(new URL("/v1/usage",origin),{headers});
+    assert.equal(usageResponse.status,200);
+    const usage = await usageResponse.json();
+    assert.equal(usage.usage.events.length,3);
+    for(const event of usage.usage.events.filter(event=>event.status_code === 200)) {
+      assert.equal(event.actual_cost_micros,200); assert.equal(event.cost_basis,"policy_fixed");
+      assert.equal(event.total_tokens,59); assert.equal(event.content_retained,false);
+      assert.equal(event.model,"openai/gpt-4o-transcribe");
+      assert.ok(!JSON.stringify(event).includes("synthetic"));
+    }
+    const budgets = await mf.getDurableObjectNamespace("BUDGET_LEDGER","router");
+    for(const name of ["default:fixture","provider:openai"]) {
+      const stub=budgets.get(budgets.idFromName(name));
+      assert.deepEqual(await (await stub.fetch("https://budget/fixture-reservations")).json(),Array.from({length:name === "provider:openai" ? 4 : 3},()=>({settled:1,dispatch_started:1,reserved_micros:200})));
+    }
+  } finally {
+    await mf?.dispose();
+    await rm(temporary, { recursive:true, force:true });
+  }
+});

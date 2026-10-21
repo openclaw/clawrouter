@@ -116,6 +116,7 @@ capabilities:
   - id: llm.embeddings
     endpoint: embeddings
     methods: [POST]
+  - {id: audio.transcription, endpoint: transcriptions, methods: [POST]}
   - id: audio.speech
     endpoint: speech
     methods: [POST]
@@ -163,6 +164,7 @@ endpoints:
     requestFormat: openai.embeddings
     responseFormat: openai.embeddings
     timeoutMs: 120000
+  transcriptions: {path: /v1/audio/transcriptions, requestFormat: openai.audio_transcriptions, responseFormat: openai.audio_transcriptions, timeoutMs: 120000}
   speech:
     path: /v1/audio/speech
     requestFormat: openai.audio_speech
@@ -176,6 +178,7 @@ endpoints:
     timeoutMs: 600000
 models:
   entries:
+    - {"id":"openai/gpt-4o-transcribe","upstream":"gpt-4o-transcribe","capabilities":["audio.transcription"],"nativeCapabilities":{"version":"clawrouter.native-capabilities.v1","endpoints":{"transcriptions":{"sources":["https://developers.openai.com/api/docs/models/gpt-4o-transcribe","https://developers.openai.com/api/reference/resources/audio/subresources/transcriptions/methods/create"],"checkedAt":"2026-10-20","input":["audio"],"contextWindow":16000,"maxOutputTokens":2000}}},"pricingRef":"openai-gpt-4o-transcribe-tokens-2026-10-20","pricing":{"effectiveAt":"2026-10-20","source":"https://developers.openai.com/api/docs/models/gpt-4o-transcribe","inputMicrosPerMillion":2500000,"outputMicrosPerMillion":10000000,"maxInputTokens":16000,"defaultMaxOutputTokens":2000}} # Rates only; no whole-upload hard-budget ceiling.
     - id: openai/gpt-image-2.5-sunburst
       upstream: gpt-image-2.5-sunburst
       capabilities: [image.generation]

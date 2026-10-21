@@ -486,6 +486,7 @@ test("models and catalog share read-only grant eligibility, transport support, a
   assert.equal(subscribed.readiness.upstreamGrantCount, 1);
   assert.equal(subscribed.readiness.oauthGrantRequired, false);
   assert.equal(subscribed.models.some(({ id }) => id === "openai/tts-1"), false);
+  assert.equal(subscribed.models.some(({ id }) => id === "openai/gpt-4o-transcribe"), false);
   assert.equal(subscribed.offers.some(({ modelId, eligible }) => modelId === "openai/tts-1" && eligible), false);
   assert.equal(subscribed.models.some(({ capabilities }) => capabilities.includes("image.generation")), false);
   assert.equal(subscribed.offers.some(({ modelId, eligible }) => modelId?.includes("gpt-image-2.5") && eligible), false);
@@ -521,10 +522,13 @@ test("models and catalog share read-only grant eligibility, transport support, a
     assert.equal(view.nativeBaseUrl, "/v1/native/openai");
     assert.ok(view.offers.every((offer) => offer.transport === "http" && ["playground", "unified"].includes(offer.routeKind)));
     assert.ok(view.offers.every((offer) => offer.route.startsWith("/v1/playground/")));
-    assert.deepEqual([...new Set(view.offers.filter((offer) => offer.routeKind === "unified").map((offer) => offer.route))].sort(), ["/v1/playground/v1/audio/speech", "/v1/playground/v1/chat/completions", "/v1/playground/v1/embeddings", "/v1/playground/v1/images/generations", "/v1/playground/v1/responses"]);
+    assert.deepEqual([...new Set(view.offers.filter((offer) => offer.routeKind === "unified").map((offer) => offer.route))].sort(), ["/v1/playground/v1/audio/speech", "/v1/playground/v1/audio/transcriptions", "/v1/playground/v1/chat/completions", "/v1/playground/v1/embeddings", "/v1/playground/v1/images/generations", "/v1/playground/v1/responses"]);
     const imageOffers = view.offers.filter(({ modelId }) => modelId?.includes("gpt-image-2.5"));
     assert.ok(imageOffers.length > 0);
     assert.ok(imageOffers.every(({ eligible, policyId, transport }) => eligible && policyId === "api" && transport === "http"));
+    const transcriptionOffers = view.offers.filter(({ modelId }) => modelId === "openai/gpt-4o-transcribe");
+    assert.ok(transcriptionOffers.length > 0);
+    assert.ok(transcriptionOffers.every(({ eligible, policyId, transport }) => eligible && policyId === "api" && transport === "http"));
     const speechOffers = view.offers.filter(({ modelId }) => modelId === "openai/tts-1");
     assert.ok(speechOffers.length > 0);
     assert.ok(speechOffers.every(({ eligible, policyId, transport }) => eligible && policyId === "api" && transport === "http"));

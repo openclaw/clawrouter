@@ -1,3 +1,4 @@
+import { proxyTranscription, transcriptionPath } from "./transcription.ts";
 import { poolResponse } from "./pool";
 import packageMetadata from "../package.json" with { type: "json" };
 import { publicSession, sessionPolicies, verifiedAccessSession } from "./access";
@@ -91,6 +92,7 @@ async function route(request: Request, env: Env, context: ExecutionContext): Pro
   if (["GET", "POST"].includes(request.method) && path.startsWith("/v1/playground/")) {
     if (!sameOrigin(request, env)) return errorResponse("access_csrf_required", "same-origin playground request required", 403);
     const suffix = path.slice("/v1/playground".length);
+    if (transcriptionPath(suffix) || transcriptionPath(`/v1${suffix}`)) return proxyTranscription(request, env, context, "access");
     const control = responseControlPath(suffix, request.method);
     if (control) {
       await requireEmptyResponseControlBody(request);
@@ -99,6 +101,7 @@ async function route(request: Request, env: Env, context: ExecutionContext): Pro
     if (request.method === "POST" && openAiPath(suffix)) return proxyOpenAi(request, env, context, suffix, "access");
     if (suffix.startsWith("/proxy/")) return proxyManifest(request, env, context, `/v1${suffix}`, "access");
   }
+  if (transcriptionPath(path)) return proxyTranscription(request, env, context);
   const control = responseControlPath(path, request.method);
   if (control) {
     await requireEmptyResponseControlBody(request);
@@ -159,7 +162,7 @@ function serviceIndex(env: Env) {
       adminBootstrap: "/v1/admin/bootstrap", adminOverview: "/v1/admin/overview", adminUsers: "/v1/admin/users", adminUsage: "/v1/admin/usage", adminPolicies: "/v1/admin/policies",
       adminCredentials: "/v1/admin/credentials", adminConnections: "/v1/admin/connections", adminAccessUsers: "/v1/admin/access-users",
       adminAssignmentRules: "/v1/admin/assignment-rules", adminFusion: "/v1/admin/fusion", oauthCallback: "/v1/oauth/callback",
-      openaiCompatible: ["/v1/chat/completions", "/v1/responses", "/v1/embeddings", "/v1/audio/speech", "/v1/images/generations"], manifestProxy: "/v1/proxy/{provider}/{endpoint}", nativeProxy: "/v1/native/{provider}/{provider-native-path}",
+      openaiCompatible: ["/v1/audio/transcriptions", "/v1/chat/completions", "/v1/responses", "/v1/embeddings", "/v1/audio/speech", "/v1/images/generations"], manifestProxy: "/v1/proxy/{provider}/{endpoint}", nativeProxy: "/v1/native/{provider}/{provider-native-path}",
     },
   };
   if (localAuthEnabled(env)) Object.assign(index.endpoints, { sessionLogin: "/v1/session/login", sessionLogout: "/v1/session/logout" });
