@@ -22,11 +22,15 @@ export async function proxyRealtimeWebSocket(request: Request, env: Env, context
   initial.url.searchParams.set('model', REALTIME.upstream);
   if (auth.policy.budgetMode === 'soft' || [auth.policy.monthlyBudgetMicros, auth.policy.dailyBudgetMicros, auth.policy.weeklyBudgetMicros, initial.connection?.monthlyBudgetMicros].every(v => v == null)) throw new HttpError(400, 'realtime_hard_budget_required', 'Realtime requires a durable hard-budget capacity owner');
   if (!initial.websocket) throw new HttpError(400, 'realtime_grant_unsupported', 'Realtime requires a qualified API-key upstream');
+  // A retained conversation belongs to its original caller, not merely its
+  // policy and upstream grant. Admin PUT can reassign a key without rotation.
+  const caller = JSON.stringify([auth.authType, auth.credentialId, auth.principalId, auth.policy.tenantId ?? "default"]);
   const pin = { key: initial.grantKey, revision: initial.grantRevision };
   const fingerprint = JSON.stringify([initial.url.href, [...initial.headers.entries()]]);
   const inspect = async (): Promise<{ auth: AuthorizedIdentity; upstream: typeof initial }> => {
     const fresh = await authenticateProxyKey(request.headers, env, [{ id: 'openai', tokenRef: 'openai' }]);
     if (fresh instanceof Response) throw new HttpError(fresh.status, 'realtime_authority_revoked', 'Realtime authority is no longer valid');
+    if (JSON.stringify([fresh.authType, fresh.credentialId, fresh.principalId, fresh.policy.tenantId ?? "default"]) !== caller) throw new HttpError(403, 'realtime_caller_changed', 'open a fresh session');
     if (fresh.policyId !== auth.policyId || fresh.policy.generation !== auth.policy.generation) throw new HttpError(403, 'realtime_policy_changed', 'open a fresh session');
     const upstream = await prepareSelected(request, env, selection, { model: REALTIME.upstream }, fresh, new Set(), false, undefined, pin, 'websocket');
     upstream.url.searchParams.set('model', REALTIME.upstream);

@@ -211,5 +211,36 @@ test("manual Realtime owns real workerd audio turns and durable per-response cap
       const d = await ready("hold"); await turn(d); await d.q.next("response.created"); const admitted = await stats(); await grant("revoke");
       assert.equal((await d.q.next("error", 12000)).error.code, "authority_revoked"); assert.equal((await stats()).connects, admitted.connects); assert.equal((await stats()).creates, admitted.creates); d.ws.close(1000);
     });
+    await t.test("caller principal and tenant reassignment retires retained conversation before provider I/O or new SQL holds", async () => {
+      // Real authority admin PUT preserves key secret, policy ID and generation.
+      // Upstream provenance remains unchanged while caller ownership changes.
+      assert.equal((await mf.dispatchFetch("https://router/fixture-grant", { method: "POST", body: "put" })).status, 200);
+      const ns = await mf.getDurableObjectNamespace("BUDGET_LEDGER", "router");
+      const rows = async name => (await ns.get(ns.idFromName(name)).fetch("https://ledger/fixture-reservations")).json();
+      const names = ["default:fixture:alice@example.invalid", "default:fixture:bob@example.invalid", "other:fixture:alice@example.invalid", "provider:openai"];
+      for (const kind of ["principal", "tenant"]) {
+        let c;
+        try {
+          await setCredential({ ...credential, principalId: "alice@example.invalid" });
+          await setPolicy({ budgetScope: "principal", tenantId: null });
+          c = await ready();
+          // null and default are the SAME normalized tenant, not a revocation.
+          await setPolicy({ budgetScope: "principal", tenantId: "default" });
+          await turn(c); await c.q.next("response.done"); await usage(kind === "principal" ? 1 : 2);
+          const before = await stats(), baseline = await Promise.all(names.map(rows));
+          assert.ok(baseline[0].some(row => row.settled === 1 && row.reserved_micros === 2994));
+          if (kind === "principal") await setCredential({ ...credential, principalId: "bob@example.invalid" });
+          else await setPolicy({ budgetScope: "principal", tenantId: "other" });
+          c.q.send({ type: "response.create" });
+          assert.equal((await c.q.next("error")).error.code, "realtime_caller_changed");
+          const deadline = Date.now() + 2000;
+          while (!c.q.isClosed() && Date.now() < deadline) await new Promise(resolve => setTimeout(resolve, 5));
+          assert.equal(c.q.isClosed(), true);
+          const after = await stats(); assert.equal(after.creates, before.creates); assert.equal(after.connects, before.connects);
+          for (let i = 0; i < names.length; i++) assert.deepEqual(await rows(names[i]), baseline[i], "no new reservation or charge after " + kind + " reassignment: " + names[i]);
+          assert.equal((await rows(names[1])).length, 0); assert.equal((await rows(names[2])).length, 0);
+        } finally { c?.ws.close(1000); await setCredential(credential); await setPolicy(); }
+      }
+    });
   } finally { await mf?.dispose(); await rm(temporary, { recursive: true, force: true }); }
 });
