@@ -953,6 +953,18 @@ models:
               inputMicrosPerMillion: 2500000
               cachedInputMicrosPerMillion: 250000
               outputMicrosPerMillion: 11250000
+    - id: openai/text-embedding-3-small
+      upstream: text-embedding-3-small
+      capabilities: [llm.embeddings]
+      pricingRef: openai-text-embedding-3-small-standard-2026-10-21
+      pricing:
+        effectiveAt: "2026-10-21"
+        source: https://developers.openai.com/api/docs/models/text-embedding-3-small
+        inputMicrosPerMillion: 20000
+        outputMicrosPerMillion: 0
+        maxInputTokens: 8192
+        maxRequestInputTokens: 300000
+        defaultMaxOutputTokens: 0
     - id: openai/text-embedding-3-large
       upstream: text-embedding-3-large
       capabilities: [llm.embeddings]

@@ -270,6 +270,60 @@ test("native OpenRouter Chat preserves opaque upstream IDs matching its routing 
   }
 });
 
+test("OpenAI small embeddings are cataloged and route with budget pricing", async (t) => {
+  const modelId = "openai/text-embedding-3-small";
+  const route = modelRoute(modelId, "llm.embeddings");
+  assert.equal(route.provider.id, "openai");
+  assert.equal(route.model.upstream, "text-embedding-3-small");
+  assert.deepEqual(route.model.capabilities, ["llm.embeddings"]);
+  assert.equal(route.model.pricing.inputMicrosPerMillion, 20_000);
+  assert.equal(route.model.pricing.outputMicrosPerMillion, 0);
+  assert.equal(route.model.pricing.maxInputTokens, 8192);
+  assert.equal(route.model.pricing.maxRequestInputTokens, 300_000);
+  assert.equal(route.model.pricing.defaultMaxOutputTokens, 0);
+  const catalog = routeCatalog().manifestProxy.find((entry) => entry.provider === "openai" && entry.endpoint === "embeddings");
+  assert.ok(catalog.models.some((model) => model.id === modelId));
+  for (const id of ["chat_completions", "responses"]) {
+    const endpoint = route.provider.endpoints.find((entry) => entry.id === id);
+    assert.throws(() => prepareNativeRequest(route.provider, endpoint, { model: modelId }, endpoint.path, {}), (error) => error.code === "model_capability_unsupported");
+  }
+
+  const fixture = await nativeFixture("openai");
+  fixture.env.OPENAI_API_KEY = "fixture-openai-key";
+  fixture.policy.monthlyBudgetMicros = 1_000_000;
+  const ledgerCalls = [];
+  fixture.env.BUDGET_LEDGER = {
+    idFromName: (name) => name,
+    get: () => ({ fetch: async (url, init) => {
+      const path = new URL(url).pathname, body = JSON.parse(init.body);
+      ledgerCalls.push({ path, body });
+      if (path === "/reserve") return Response.json({ allowed: true, chargedMicros: body.costMicros });
+      if (path === "/dispatch") return Response.json({ dispatched: true });
+      if (path === "/settle") return Response.json({ settled: true });
+      throw new Error(`unexpected budget call ${path}`);
+    } }),
+  };
+  const sent = [];
+  const result = { data: [{ object: "embedding", index: 0, embedding: [0.1] }], usage: { prompt_tokens: 1, total_tokens: 1 } };
+  t.mock.method(globalThis, "fetch", async (url, init) => {
+    sent.push({ url: new URL(url), body: JSON.parse(init.body) });
+    return Response.json(result);
+  });
+  for (const unified of [false, true]) {
+    const response = await fixture.call("/v1/embeddings", {
+      model: unified ? modelId : "text-embedding-3-small", input: "fixture", dimensions: 256,
+    }, unified);
+    assert.equal(response.status, 200, await response.clone().text());
+    assert.deepEqual(await response.json(), result);
+    await fixture.drain();
+    assert.equal(sent.at(-1).url.href, "https://api.openai.com/v1/embeddings");
+    assert.deepEqual(sent.at(-1).body, { model: "text-embedding-3-small", input: "fixture", dimensions: 256 });
+  }
+  assert.equal(sent.length, 2);
+  assert.equal(ledgerCalls.filter((call) => call.path === "/reserve").length, 2);
+  assert.equal(ledgerCalls.filter((call) => call.path === "/settle").length, 2);
+});
+
 test("opaque OpenAI models route through the requested unified and native operation without inherited pricing", async (t) => {
   const fixture = await nativeFixture("openai");
   fixture.env.OPENAI_API_KEY = "fixture-openai-key";
@@ -279,7 +333,7 @@ test("opaque OpenAI models route through the requested unified and native operat
     return Response.json({ usage: { prompt_tokens: 1, total_tokens: 1 } });
   });
   for (const [path, model, input] of [
-    ["/v1/embeddings", "text-embedding-3-small", { input: "fixture" }],
+    ["/v1/embeddings", "fixture-embedding", { input: "fixture" }],
     ["/v1/chat/completions", "fixture-chat", { messages: [] }],
     ["/v1/responses", "fixture-responses", { input: "fixture" }],
   ]) {
@@ -292,7 +346,7 @@ test("opaque OpenAI models route through the requested unified and native operat
     }
   }
   fixture.policy.monthlyBudgetMicros = 1_000_000;
-  const denied = await fixture.call("/v1/embeddings", { model: "openai/text-embedding-3-small", input: "fixture" }, true);
+  const denied = await fixture.call("/v1/embeddings", { model: "openai/fixture-embedding", input: "fixture" }, true);
   assert.equal(denied.status, 400);
   assert.equal((await denied.json()).error.code, "pricing_required");
   await fixture.drain();
