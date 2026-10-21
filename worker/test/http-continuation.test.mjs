@@ -806,8 +806,10 @@ test("rejection delivery retires the endpoint deadline while an earlier selectio
     };
     f.response = () => new Response(new ReadableStream({ cancel() { cancels++; } }, { highWaterMark: 0 }), { status: 429 });
     const response = await f.request({}, {}, "/v1/responses", caller.signal);
-    assert.equal(response.status, 429);
-    const consumed = assert.rejects(response.text(), phase === "selection" ? /deadline/ : /fixture caller/);
+    assert.equal(response.status, phase === "selection" ? 502 : 429);
+    const consumed = phase === "selection"
+      ? response.json().then(body => assert.equal(body.error.code, "provider_unavailable"))
+      : assert.rejects(response.text(), /fixture caller/);
     if (phase === "delivery") {
       assert.equal(deadline(), false);
       caller.abort(new Error("fixture caller after endpoint deadline retirement"));
@@ -815,7 +817,7 @@ test("rejection delivery retires the endpoint deadline while an earlier selectio
     await consumed; await f.drain();
     assert.equal(cancels, 1); assert.equal(f.sent.length, 1); assert.equal(f.events.length, 1);
     assert.equal(f.events[0].status, phase === "selection" ? "timeout" : "client_error");
-    assert.equal(f.events[0].status_code, 429); assert.equal(f.events[0].actual_cost_micros, 0);
+    assert.equal(f.events[0].status_code, phase === "selection" ? 502 : 429); assert.equal(f.events[0].actual_cost_micros, 0);
     await assertBudgets(f, [0]);
   }
 });

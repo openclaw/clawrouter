@@ -370,8 +370,10 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     if (!background && !continuation?.requested && shouldFailoverGrant(response.status, selection.method, selection.capability, prepared.grantKey, grantRoutingPolicy(auth.policy.grantRouting).failover)) {
       let retry: PreparedUpstream | undefined;
       try {
-        retry = await prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]), true, prepared.connection);
+        retry = await operation.wait(prepareSelected(request, env, selection, queryInput, auth, new Set([prepared.grantKey!]), true, prepared.connection));
       } catch {
+        // Cancellation also bounds selection; a late result must never dispatch.
+        signal.throwIfAborted();
         // Selection failure leaves the original rejection available to the caller.
       }
       if (retry) {

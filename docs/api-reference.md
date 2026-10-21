@@ -754,6 +754,8 @@ Before forwarding a request, the Worker authenticates the credential, resolves i
 
 Provider grants can be scoped to a policy or tenant. When several token references are eligible, ClawRouter applies the policy strategy within the active priority tier. An upstream 401, 403, or 429 records sanitized grant state and can trigger one same-provider alternate when policy allows failover.
 
+Once HTTP dispatch begins, the endpoint deadline and observed caller cancellation also bound waiting for alternate-grant preparation. If interrupted there, the Worker cancels the original rejection body, returns `502 provider_unavailable`, and never dispatches a late alternate. An ordinary selection failure still returns the original rejection. Already-issued authority or credential operations may finish; this does not cancel them or extend the deadline to initial admission.
+
 Disable one credential to revoke one key, disable a policy to revoke every credential bound to it, or disable a provider connection to stop that provider globally. Policy and credential generations must match, so incomplete rotations and stale migration records fail closed.
 
 ## Budgets, usage, and retention
