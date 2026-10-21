@@ -49,69 +49,88 @@ export async function proxyTranscription(request: Request, env: Env, context: Ex
     // stops this request; there is no persistent operation or next queued unit.
     return accounting.settle(statusCode, status, billable, tokens, reservation, null);
   };
-  try {
-    operation.signal.throwIfAborted();
-    const prepared = await operation.wait(prepareSelected(request, env, selection, {}, auth));
-    accounting.setGrant(prepared.grantKey, prepared.grantLane);
-    const useSoft = auth.policy.budgetMode === "soft";
-    if (!useSoft) {
-      const pending = reserveBudget(env, auth, selection.capability, accounting.cost, prepared.connection);
-      // A late reservation ACK may outlive caller/deadline cancellation. Keep
-      // that result owned and refund via the existing durable recovery boundary.
-      context.waitUntil(pending.then(() => undefined, () => undefined));
-      reservation = await operation.wait(pending, undefined, late => {
-        context.waitUntil(settleBudget(env, late, 0));
-      });
-    }
-    operation.signal.throwIfAborted();
-    if (!useSoft) await operation.wait(markBudgetDispatched(env, reservation, operation.signal));
-    operation.signal.throwIfAborted();
-    const form = new FormData();
-    form.set("file", upload.file, upload.file.name);
-    for (const [name, value] of Object.entries(upload.fields)) form.set(name, name === "model" ? model.upstream : value);
-    // Reconstructed body owns its boundary. Incoming auth and key headers are
-    // never copied; prepareSelected owns the selected upstream credential.
-    prepared.headers.delete("content-type");
-    prepared.headers.delete("content-length");
-    dispatched = true;
-    const pending = fetch(prepared.url, { method: "POST", headers: prepared.headers, body: form, signal: operation.signal, redirect: "manual" });
-    if (useSoft) {
-      soft = softBudget(env, auth, selection.capability, prepared.connection, accounting.facts.event.id, error => operation.stop("upstream", error));
-      reservation = soft.reservation; context.waitUntil(soft.check);
-    }
-    response = await operation.wait(pending, "upstream", late => { void late.body?.cancel().catch(() => undefined); });
-    captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, provider.quota, response);
-    if (soft) { await soft.beforeDelivery(); if (soft.denial) throw soft.denial; }
-    // No provider failover or HTTP redirect replay, including 401/429/3xx.
-    if (!response.ok) operation.acceptRejection(response.status);
-    const bytes = await readBounded(response.body, transcriptionLimits.response, operation);
-    const declaredLength = response.headers.get("content-length");
-    if (!response.headers.has("content-encoding") && declaredLength !== null && (!/^\d+$/.test(declaredLength) || Number(declaredLength) !== bytes.length)) throw new HttpError(502, "transcription_response_invalid", "upstream transcription body was truncated");
-    if (response.status >= 300 && response.status < 400) throw new HttpError(502, "transcription_redirect_unsupported", "upstream transcription redirects are not replayed");
-    let tokens: ReturnType<typeof transcriptionUsage> = null;
-    if (response.ok) {
-      if (response.headers.get("content-type")?.split(";")[0].trim().toLowerCase() !== "application/json") throw new HttpError(502, "transcription_response_invalid", "upstream transcription did not return JSON");
-      let result: unknown;
-      try { result = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); }
-      catch { throw new HttpError(502, "transcription_response_invalid", "upstream transcription JSON is incomplete or invalid"); }
-      if (!result || typeof result !== "object" || !("text" in result) || typeof result.text !== "string" || "error" in result) throw new HttpError(502, "transcription_response_invalid", "upstream transcription text is missing");
-      tokens = transcriptionUsage(result);
-    }
-    const ok = await settle(response.status, response.ok || response.status >= 300 && response.status < 400, tokens, response.ok ? "success" : response.status < 500 ? "client_error" : "provider_error");
-    if (!ok) return errorResponse("accounting_unavailable", "transcription accounting could not be durably completed", 503);
-    operation.signal.throwIfAborted();
-    const headers = proxyResponseHeaders(response, provider.id);
-    headers.delete("content-length"); headers.delete("content-encoding"); headers.delete("location");
-    headers.set("cache-control", "no-store");
-    headers.set("x-clawrouter-content-retention", "off");
-    headers.set("x-clawrouter-grant-lane", prepared.grantLane);
-    headers.set("x-clawrouter-accounting", accounting.cost.basis === "policy_fixed" ? "policy-fixed" : tokens ? "measured" : "unpriced-usage");
-    return new Response(bytes, { status: response.status, headers });
-  } catch (error) {
-    const failure = error instanceof HttpError ? error : new HttpError(operation.status === "timeout" ? 504 : request.signal.aborted ? 499 : 502, "transcription_unavailable", "transcription request failed");
-    void response?.body?.cancel().catch(() => undefined);
-    const rejected = response && response.status >= 400;
-    await settle(failure.status, dispatched && !rejected, null, operation.status ?? (failure.status < 500 ? "client_error" : "provider_error"));
-    return errorResponse(failure.code, failure.message, failure.status);
-  } finally { soft?.close(); operation.stop("complete"); }
+  const pendingOperation = (async () => {
+    try {
+      operation.signal.throwIfAborted();
+      const prepared = await operation.wait(prepareSelected(request, env, selection, {}, auth));
+      accounting.setGrant(prepared.grantKey, prepared.grantLane);
+      const useSoft = auth.policy.budgetMode === "soft";
+      if (!useSoft) {
+        const pending = reserveBudget(env, auth, selection.capability, accounting.cost, prepared.connection, (intent, state) => {
+          if (state === "denied") {
+            reservation.reservations = reservation.reservations.filter(item => item.reservationId !== intent.request.reservationId);
+            return;
+          }
+          // Own even an uncertain committed leg, not only successful ACKs.
+          reservation.reservedMicros = accounting.cost.reserveMicros;
+          reservation.reservations.push({ reservationId: intent.request.reservationId, objectName: intent.objectName });
+        });
+        // Cancellation can precede later attempted legs, including a committed
+        // leg whose ACK is lost. Own both outcomes through terminal refund.
+        context.waitUntil(pending.then(
+          late => operation.signal.aborted ? settleBudget(env, late, 0) : undefined,
+          () => operation.signal.aborted ? settleBudget(env, reservation, 0) : undefined,
+        ));
+        reservation = await operation.wait(pending);
+      }
+      operation.signal.throwIfAborted();
+      if (!useSoft) await operation.wait(markBudgetDispatched(env, reservation, operation.signal));
+      operation.signal.throwIfAborted();
+      const form = new FormData();
+      form.set("file", upload.file, upload.file.name);
+      for (const [name, value] of Object.entries(upload.fields)) form.set(name, name === "model" ? model.upstream : value);
+      // Reconstructed body owns its boundary. Incoming auth and key headers are
+      // never copied; prepareSelected owns the selected upstream credential.
+      prepared.headers.delete("content-type");
+      prepared.headers.delete("content-length");
+      dispatched = true;
+      const pending = fetch(prepared.url, { method: "POST", headers: prepared.headers, body: form, signal: operation.signal, redirect: "manual" });
+      if (useSoft) {
+        soft = softBudget(env, auth, selection.capability, prepared.connection, accounting.facts.event.id, error => operation.stop("upstream", error));
+        reservation = soft.reservation; context.waitUntil(soft.check);
+      }
+      response = await operation.wait(pending, "upstream", late => { void late.body?.cancel().catch(() => undefined); });
+      captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, provider.quota, response);
+      if (soft) { await soft.beforeDelivery(); if (soft.denial) throw soft.denial; }
+      // No provider failover or HTTP redirect replay, including 401/429/3xx.
+      if (!response.ok) operation.acceptRejection(response.status);
+      const bytes = await readBounded(response.body, transcriptionLimits.response, operation);
+      const declaredLength = response.headers.get("content-length");
+      if (!response.headers.has("content-encoding") && declaredLength !== null && (!/^\d+$/.test(declaredLength) || Number(declaredLength) !== bytes.length)) throw new HttpError(502, "transcription_response_invalid", "upstream transcription body was truncated");
+      if (response.status >= 300 && response.status < 400) throw new HttpError(502, "transcription_redirect_unsupported", "upstream transcription redirects are not replayed");
+      let tokens: ReturnType<typeof transcriptionUsage> = null;
+      if (response.ok) {
+        if (response.headers.get("content-type")?.split(";")[0].trim().toLowerCase() !== "application/json") throw new HttpError(502, "transcription_response_invalid", "upstream transcription did not return JSON");
+        let result: unknown;
+        try { result = JSON.parse(new TextDecoder("utf-8", { fatal: true }).decode(bytes)); }
+        catch { throw new HttpError(502, "transcription_response_invalid", "upstream transcription JSON is incomplete or invalid"); }
+        if (!result || typeof result !== "object" || !("text" in result) || typeof result.text !== "string" || "error" in result) throw new HttpError(502, "transcription_response_invalid", "upstream transcription text is missing");
+        tokens = transcriptionUsage(result);
+      }
+      operation.signal.throwIfAborted();
+      // Complete bounded EOF wins the outcome before durable publication. Late
+      // caller/deadline signals must not turn a committed success into 499/504.
+      operation.stop("complete");
+      const ok = await settle(response.status, response.ok || response.status >= 300 && response.status < 400, tokens, response.ok ? "success" : response.status < 500 ? "client_error" : "provider_error");
+      if (!ok) return errorResponse("accounting_unavailable", "transcription accounting could not be durably completed", 503);
+      operation.signal.throwIfAborted();
+      const headers = proxyResponseHeaders(response, provider.id);
+      headers.delete("content-length"); headers.delete("content-encoding"); headers.delete("location");
+      headers.set("cache-control", "no-store");
+      headers.set("x-clawrouter-content-retention", "off");
+      headers.set("x-clawrouter-grant-lane", prepared.grantLane);
+      headers.set("x-clawrouter-accounting", accounting.cost.basis === "policy_fixed" ? "policy-fixed" : tokens ? "measured" : "unpriced-usage");
+      return new Response(bytes, { status: response.status, headers });
+    } catch (error) {
+      const failure = error instanceof HttpError ? error : new HttpError(operation.status === "timeout" ? 504 : request.signal.aborted ? 499 : 502, "transcription_unavailable", "transcription request failed");
+      void response?.body?.cancel().catch(() => undefined);
+      const rejected = response && response.status >= 400;
+      await settle(failure.status, dispatched && !rejected, null, operation.status ?? (failure.status < 500 ? "client_error" : "provider_error"));
+      return errorResponse(failure.code, failure.message, failure.status);
+    } finally { soft?.close(); operation.stop("complete"); }
+  })();
+  // Extend real Worker request lifetime through dispatch and terminal cleanup,
+  // including an actual client disconnect, not just a simulated AbortSignal.
+  context.waitUntil(pendingOperation.then(() => undefined, () => undefined));
+  return pendingOperation;
 }

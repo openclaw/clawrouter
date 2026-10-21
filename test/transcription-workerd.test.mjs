@@ -37,8 +37,9 @@ export default { async fetch(request,env) {
   const credential=request.headers.get("authorization");
   if(!["Bearer fixture-upstream-key","Bearer fixture-pool-upstream-key"].includes(credential) || request.headers.has("x-api-key")) throw new Error("wrong credential provenance");
   const form = await request.formData(); const file = form.get("file");
-  if(form.get("model") !== "gpt-4o-transcribe" || form.get("language") !== "en" || form.get("prompt") !== "synthetic prompt é") throw new Error("wrong fields");
-  if(!(file instanceof File) || file.name !== "sample.wav" || file.type !== "audio/wav" || JSON.stringify([...new Uint8Array(await file.arrayBuffer())]) !== "[0,255,128,42]") throw new Error("file corrupted");
+  if(form.get("model") !== "gpt-4o-transcribe" || form.get("language") !== "en" || !["synthetic prompt é","synthetic prompt é delayed"].includes(form.get("prompt"))) throw new Error("wrong fields");
+  if(!(file instanceof File) || !({"sample.wav":["audio/wav","application/octet-stream"],"voice.ogg":["audio/ogg"],"voice.flac":["audio/flac"]}[file.name] ?? []).includes(file.type) || JSON.stringify([...new Uint8Array(await file.arrayBuffer())]) !== "[0,255,128,42]") throw new Error("file corrupted");
+  if(form.get("prompt") === "synthetic prompt é delayed") await new Promise(resolve=>setTimeout(resolve,500));
   return Response.json({text:"synthetic transcript",credentialSource:credential === "Bearer fixture-pool-upstream-key" ? "pool" : "environment",usage:{type:"tokens",input_tokens:14,input_token_details:{audio_tokens:12,text_tokens:2},output_tokens:45,total_tokens:59}});
 } };`, {upstreamDurableObjects:{CALLS:{className:"Calls",useSQLite:true}}});
     const kv = await mf.getKVNamespace("POLICY_KV", "router");
@@ -75,11 +76,17 @@ export default { async fetch(request,env) {
       body.set("file",new File([new Uint8Array([0,255,128,42])],"sample.wav",{type:"audio/wav"}));
       body.set("language","en");body.set("prompt","synthetic prompt é");return body;
     };
+    for(const [filename,type] of [["sample.wav","application/octet-stream"],["voice.ogg","audio/ogg"],["voice.flac","audio/flac"]]) {
+      const body=makeForm();body.set("file",new File([new Uint8Array([0,255,128,42])],filename,{type}));
+      const response=await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",headers,body});
+      assert.equal(response.status,200,await response.clone().text());
+    }
+    assert.equal(await count(),6);
     const pooled=await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",headers:{authorization:"Bearer clawrouter-live-pool-"+secret},body:makeForm()});
     assert.equal(pooled.status,200,await pooled.clone().text());assert.equal((await pooled.json()).credentialSource,"pool");assert.equal(pooled.headers.get("x-clawrouter-grant-lane"),"api_key");
     const incompatible=await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",headers:{authorization:"Bearer clawrouter-live-subscription-"+secret},body:makeForm()});
     assert.equal(incompatible.status,503);assert.equal((await incompatible.json()).error.code,"upstream_grant_pool_unavailable");
-    assert.equal(await count(),4,"scoped subscription cannot borrow environment auth");
+    assert.equal(await count(),7,"scoped subscription cannot borrow environment auth");
     for(const option of ["stream","chunking_strategy","known_speaker_names[]","timestamp_granularities[]"]) {
       const body=makeForm();body.set(option,"true");
       assert.equal((await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",headers,body})).status,400);
@@ -91,12 +98,13 @@ export default { async fetch(request,env) {
     // model card into an arbitrary-file ceiling. No mutable live/KV authority.
     const blocked=await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",headers:hardHeaders,body:makeForm()});
     assert.equal(blocked.status,400);assert.equal((await blocked.json()).error.code,"pricing_required");
-    assert.equal(await count(),4,"invalid/hard-unqualified requests never reached real upstream Worker");
+    assert.equal(await count(),7,"invalid/hard-unqualified requests never reached real upstream Worker");
     const usageResponse = await fetch(new URL("/v1/usage",origin),{headers});
     assert.equal(usageResponse.status,200);
     const usage = await usageResponse.json();
-    assert.equal(usage.usage.events.length,3);
-    for(const event of usage.usage.events.filter(event=>event.status_code === 200)) {
+    assert.equal(usage.usage.events.length,6);
+    for(const event of usage.usage.events) {
+      assert.equal(event.status_code,200);assert.equal(event.status,"success");
       assert.equal(event.actual_cost_micros,200); assert.equal(event.cost_basis,"policy_fixed");
       assert.equal(event.total_tokens,59); assert.equal(event.content_retained,false);
       assert.equal(event.model,"openai/gpt-4o-transcribe");
@@ -105,8 +113,27 @@ export default { async fetch(request,env) {
     const budgets = await mf.getDurableObjectNamespace("BUDGET_LEDGER","router");
     for(const name of ["default:fixture","provider:openai"]) {
       const stub=budgets.get(budgets.idFromName(name));
-      assert.deepEqual(await (await stub.fetch("https://budget/fixture-reservations")).json(),Array.from({length:name === "provider:openai" ? 4 : 3},()=>({settled:1,dispatch_started:1,reserved_micros:200})));
+      assert.deepEqual(await (await stub.fetch("https://budget/fixture-reservations")).json(),Array.from({length:name === "provider:openai" ? 7 : 6},()=>({settled:1,dispatch_started:1,reserved_micros:200})));
     }
+    // Real TCP caller disconnect after confirmed upstream egress. The owned
+    // lifetime must still finish durable accounting without replaying upload.
+    const caller=new AbortController(), slow=makeForm();slow.set("prompt","synthetic prompt é delayed");
+    const disconnected=fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",headers,body:slow,signal:caller.signal});
+    const rejection=assert.rejects(disconnected,error=>error.name === "AbortError");
+    for(let i=0;i<100 && await count()<8;i++) await new Promise(resolve=>setTimeout(resolve,10));
+    assert.equal(await count(),8);caller.abort();await rejection;
+    let events=[];
+    for(let i=0;i<100;i++) {
+      events=(await (await fetch(new URL("/v1/usage",origin),{headers})).json()).usage.events;
+      if(events.length===7) break;
+      await new Promise(resolve=>setTimeout(resolve,20));
+    }
+    assert.equal(events.length,7,"disconnect must not abandon usage publication");
+    assert.ok(events.every(event=>event.actual_cost_micros===200 && event.cost_basis==="policy_fixed"));
+    const policyStub=budgets.get(budgets.idFromName("default:fixture"));
+    const rows=await (await policyStub.fetch("https://budget/fixture-reservations")).json();
+    assert.equal(rows.length,7);assert.ok(rows.every(row=>row.settled===1 && row.dispatch_started===1 && row.reserved_micros===200));
+    assert.equal(await count(),8,"disconnect never replays the upload");
   } finally {
     await mf?.dispose();
     await rm(temporary, { recursive:true, force:true });

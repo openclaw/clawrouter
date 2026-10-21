@@ -7,6 +7,7 @@ export const transcriptionLimits = { file: 25_000_000, raw: 25_032_768, response
 const encoder = new TextEncoder();
 const decoder = new TextDecoder("utf-8", { fatal: true });
 const formats: Record<string, string[]> = {
+  flac: ["audio/flac", "audio/x-flac"], ogg: ["audio/ogg", "application/ogg"],
   mp3: ["audio/mpeg", "audio/mp3"], mpeg: ["audio/mpeg"], mpga: ["audio/mpeg"],
   mp4: ["audio/mp4", "video/mp4"], m4a: ["audio/mp4", "audio/x-m4a"],
   wav: ["audio/wav", "audio/wave", "audio/x-wav"], webm: ["audio/webm", "video/webm"],
@@ -99,7 +100,9 @@ function parseMultipart(raw: Uint8Array<ArrayBuffer>, boundary: string): Transcr
       if (!/^[A-Za-z0-9][A-Za-z0-9 ._()-]{0,126}$/.test(filename) || filename.includes('..')) invalid("unsafe audio filename");
       const extension = filename.split('.').at(-1)?.toLowerCase() ?? "";
       const mime = headers.get("content-type")?.toLowerCase() ?? "";
-      if (!formats[extension]?.includes(mime)) invalid("unsupported audio filename/MIME pair");
+      // Official Node SDK streams default to octet-stream; the supported safe
+      // filename still identifies the format, and original MIME remains intact.
+      if (!formats[extension] || mime !== "application/octet-stream" && !formats[extension].includes(mime)) invalid("unsupported audio filename/MIME pair");
       file = new File([bytes], filename, { type: mime });
     } else {
       if (filename !== undefined || headers.has("content-type") || Object.hasOwn(fields, name)) invalid("duplicate or wrong-type multipart field");

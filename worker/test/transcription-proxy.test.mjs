@@ -253,6 +253,8 @@ test("fixed budget insufficiency rolls back all acknowledged earlier legs before
   const f=fixture(t,{limit:1_000_000,providerLimit:199});
   const upstream=t.mock.method(globalThis,"fetch",async()=>{throw new Error("over-budget upload escaped");});
   const response=await f.call();assert.equal(response.status,402);assert.equal(upstream.mock.callCount(),0);
+  assert.equal(f.events.length,1,"definitively denied legs must not enqueue missing-reservation recovery");
+  assert.equal(f.events[0].type,"clawrouter.usage.v1");
   const rows=f.ledger.get(owners[0]).reservations();assert.equal(rows.length,1);assert.equal(rows[0].settled,1);assert.equal(rows[0].reserved_micros,0);
 });
 
@@ -285,8 +287,6 @@ test("deadline while reserve ACK is pending owns the eventual refund and never d
   const pending=f.call();await reached;t.mock.timers.tick(120_000);
   const response=await pending;assert.equal(response.status,504);assert.equal(upstream.mock.callCount(),0);
   release();await Promise.all(f.pending);
-  // Cancellation callback appends the cleanup promise after the original ACK.
-  assert.equal(f.pending.length,2);await Promise.all(f.pending);
   for(const name of owners) {const row=get(name).reservations()[0];assert.equal(row.settled,1);assert.equal(row.reserved_micros,0);assert.equal(row.dispatch_started,0);}
 });
 
@@ -319,4 +319,63 @@ test("advertised Access playground multipart route authenticates session and pre
   assert.equal((await f.call(form(),{path,headers:{...headers,cookie:""}})).status,401);
   const response=await f.call(form(),{path,headers});assert.equal(response.status,200,await response.clone().text());
   assert.equal(upstream.mock.callCount(),1);assert.equal(f.events[0].auth_type,"access");assert.equal(f.events[0].principal_id,email);assert.equal(f.events[0].credential_id,null);
+});
+
+for(const [filename,type] of [["sdk.wav","application/octet-stream"],["voice.ogg","audio/ogg"],["voice.flac","audio/flac"]]) test("vendor/SDK multipart format fidelity: "+filename+" "+type,async t=>{
+  const f=fixture(t);const upstream=t.mock.method(globalThis,"fetch",async(_url,init)=>{
+    const file=init.body.get("file");assert.equal(file.name,filename);assert.equal(file.type,type);assert.deepEqual(new Uint8Array(await file.arrayBuffer()),audio);
+    return Response.json({text:"synthetic",usage:validUsage});
+  });
+  const response=await f.call(form({},new File([audio],filename,{type})));assert.equal(response.status,200,await response.clone().text());assert.equal(upstream.mock.callCount(),1);
+});
+
+test("committed reserve with lost ACK refunds every attempted SQL leg without egress",async t=>{
+  const f=fixture(t), get=f.ledger.get.bind(f.ledger);
+  f.env.BUDGET_LEDGER={idFromName:x=>x,get(name){const stub=get(name);return {fetch:async(url,init)=>{
+    const response=await stub.fetch(url,init);
+    if(name===owners[1] && new URL(url).pathname==="/reserve") throw new Error("synthetic committed ACK loss");
+    return response;
+  }}}};
+  const upstream=t.mock.method(globalThis,"fetch",async()=>{throw new Error("unacknowledged upload escaped");});
+  const response=await f.call();assert.ok(response.status>=500);assert.equal(upstream.mock.callCount(),0);await Promise.all(f.pending);
+  for(const name of owners) {const row=get(name).reservations()[0];assert.equal(row.settled,1);assert.equal(row.reserved_micros,0);assert.equal(row.dispatch_started,0);}
+});
+
+test("dispatch through terminal cleanup has an unsettled waitUntil lifetime owner",async t=>{
+  const f=fixture(t);t.mock.method(globalThis,"fetch",async()=>{
+    let completed=0;for(const p of f.pending) p.then(()=>completed++);await Promise.resolve();await Promise.resolve();
+    assert.ok(f.pending.length>completed,"a pending lifetime promise must already own dispatch/accounting, not only an earlier reserve ACK");
+    return Response.json({text:"synthetic",usage:validUsage});
+  });
+  const response=await f.call();assert.equal(response.status,200);await Promise.all(f.pending);
+});
+
+for(const cause of ["deadline","caller"]) test("complete response owns terminal outcome before delayed settlement ACK: "+cause,async t=>{
+  const f=fixture(t), get=f.ledger.get.bind(f.ledger), caller=new AbortController();let entered,release;
+  const reached=new Promise(resolve=>{entered=resolve;}), gate=new Promise(resolve=>{release=resolve;});
+  f.env.BUDGET_LEDGER={idFromName:x=>x,get(name){const stub=get(name);return {fetch:async(url,init)=>{
+    const response=await stub.fetch(url,init);if(new URL(url).pathname==="/settle") {entered();await gate;}return response;
+  }}}};
+  t.mock.timers.enable({apis:["setTimeout"]});
+  t.mock.method(globalThis,"fetch",async()=>Response.json({text:"synthetic",usage:validUsage}));
+  const pending=f.call(form(),{signal:caller.signal});await reached;
+  if(cause==="deadline") t.mock.timers.tick(120_000);else caller.abort(new Error("synthetic late disconnect"));
+  release();const response=await pending;assert.equal(response.status,200);assert.equal(f.events[0].status,"success");assert.equal(f.events[0].status_code,200);await Promise.all(f.pending);
+});
+
+test("canceled pending reserve owns later attempted legs even when their committed ACK is lost",async t=>{
+  const f=fixture(t), get=f.ledger.get.bind(f.ledger), caller=new AbortController();let entered,release;
+  const reached=new Promise(resolve=>{entered=resolve;}),gate=new Promise(resolve=>{release=resolve;});
+  f.env.BUDGET_LEDGER={idFromName:x=>x,get(name){const stub=get(name);return {fetch:async(url,init)=>{
+    const reserving=new URL(url).pathname==="/reserve";
+    if(reserving && name===owners[0]) {entered();await gate;}
+    const response=await stub.fetch(url,init);
+    if(reserving && name===owners[1]) throw new Error("synthetic late committed ACK loss");
+    return response;
+  }}}};
+  const upstream=t.mock.method(globalThis,"fetch",async()=>{throw new Error("canceled upload escaped");});
+  const pending=f.call(form(),{signal:caller.signal});await reached;caller.abort(new Error("synthetic cancel"));
+  assert.equal((await pending).status,499);release();await Promise.all(f.pending);
+  assert.equal(upstream.mock.callCount(),0);
+  for(const name of owners) {const rows=get(name).reservations();assert.equal(rows.length,1);assert.equal(rows[0].settled,1);assert.equal(rows[0].reserved_micros,0);assert.equal(rows[0].dispatch_started,0);}
 });
