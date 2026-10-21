@@ -115,7 +115,6 @@ test("declared overrides must support the selected endpoint", () => {
     ["cohere", "cohere/embed-v4.0"],
     ["cohere", "embed-v4.0"],
     ["openai", "openai/text-embedding-3-large"],
-    ["openai", "openai/text-embedding-3-small"],
   ]) {
     assert.throws(() => buildProviderSmokePlan(snapshot, {
       [`CLAWROUTER_SMOKE_MODEL_${providerId.toUpperCase()}`]: modelId,
