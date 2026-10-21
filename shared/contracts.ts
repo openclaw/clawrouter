@@ -325,6 +325,10 @@ export interface ProviderUsageSummary { provider: string; requestCount: number; 
 export interface UsageDailySummary { dayStartMs: number; requestCount: number; successCount: number; errorCount: number; totalTokens: number; actualCostMicros: number; unpricedRequestCount?: number }
 export interface UsageAuditEvent {
   realtime_usage?: { unit_id: string; response_id: string | null; output_cap: number; text_input_tokens?: number; audio_input_tokens?: number; cached_text_input_tokens?: number; cached_audio_input_tokens?: number; text_output_tokens?: number; audio_output_tokens?: number };
+  hosted_tool_calls?: { web_search: number };
+  hosted_tool_calls_complete?: boolean;
+  hosted_tool_cost_micros?: number | null;
+  hosted_tool_pricing_ref?: string | null;
   id: string;
   type: string;
   occurred_at_ms: number;

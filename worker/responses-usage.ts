@@ -3,6 +3,8 @@ import { fun, none } from "stream-chain/core";
 import { createSseUsageAccumulator, extractUsageTokens, responseOutcome, responsesObservation, type ResponsesObservation, type SseUsageEvidence, type UsageInspection } from "./token-usage.ts";
 import { createToolEvidenceProjection, type createResponsesToolEvidence } from "./responses-tool-evidence.ts";
 
+import { createHostedSearchUsage } from "./responses-hosted-usage.ts";
+
 const feedLimit = 4096, depthLimit = 128, scalarLimit = 64;
 const empty = (): UsageInspection => ({ tokens: null, outcome: null });
 
@@ -11,7 +13,8 @@ const empty = (): UsageInspection => ({ tokens: null, outcome: null });
 export function createResponsesUsageInspector(sse: boolean, tools?: Pick<ReturnType<typeof createResponsesToolEvidence>, "accept" | "invalid">, observe?: (fact: ResponsesObservation) => Promise<void>, usageExtractor = extractUsageTokens) {
   const decoder = new TextDecoder("utf-8", { fatal: true });
   const accumulator = createSseUsageAccumulator();
-  let document = metadataParser(!!tools, !!observe), json = empty(), stopped = false;
+  const hosted = createHostedSearchUsage();
+  let document = metadataParser(!!observe), json = empty(), stopped = false;
   let prefix = "", mode: "prefix" | "data" | "event" | "ignored" = "prefix";
   let lineNonempty = false, optionalSpace = false, skipLf = false;
   let hasData = false, hasContent = false, eventError = false;
@@ -48,7 +51,7 @@ export function createResponsesUsageInspector(sse: boolean, tools?: Pick<ReturnT
   }
   async function endLine() {
     if (!lineNonempty) {
-      if (eventError) { accumulator.accept({ kind: "error" }); tools?.invalid(); }
+      if (eventError) { accumulator.accept({ kind: "error" }); tools?.invalid(); hosted.invalid(); }
       else if (hasData && hasContent) {
         const evidence = done.matches() ? { kind: "done" } as const : await document.end();
         if (stopped) return;
@@ -56,13 +59,14 @@ export function createResponsesUsageInspector(sse: boolean, tools?: Pick<ReturnT
         if (evidence.kind === "data") {
           if (responseOutcome(evidence.value) === "provider_error") tools?.invalid();
           tools?.accept(document.tools(), true);
+          hosted.accept(document.tools(), true);
           const fact = responsesObservation(evidence.value);
           if (fact) await observe?.(fact);
         }
-        else if (evidence.kind !== "done") tools?.invalid();
+        else if (evidence.kind !== "done") { tools?.invalid(); hosted.invalid(); }
       }
       document.stop();
-      document = metadataParser(!!tools, !!observe); hasData = false; hasContent = false; eventError = false; done = literal("[DONE]", true);
+      document = metadataParser(!!observe); hasData = false; hasContent = false; eventError = false; done = literal("[DONE]", true);
     } else if (mode === "prefix" && prefix === "data") await beginData();
     else if (mode === "event" || mode === "prefix" && prefix === "event") eventError = mode === "event" && eventName.matches();
     prefix = ""; mode = "prefix"; lineNonempty = false; optionalSpace = false;
@@ -82,7 +86,7 @@ export function createResponsesUsageInspector(sse: boolean, tools?: Pick<ReturnT
     }
   }
   function invalidUtf8() {
-    tools?.invalid();
+    tools?.invalid(); hosted.invalid();
     document.stop();
     if (sse) accumulator.accept({ kind: "invalid" });
     else json = { tokens: null, outcome: "provider_error" };
@@ -110,16 +114,18 @@ export function createResponsesUsageInspector(sse: boolean, tools?: Pick<ReturnT
       if (evidence.kind === "data") {
         if (responseOutcome(evidence.value) === "provider_error") tools?.invalid();
         tools?.accept(document.tools(), false);
+        hosted.accept(document.tools(), false);
         const fact = responsesObservation(evidence.value);
         if (fact) await observe?.(fact);
       }
-      else tools?.invalid();
+      else { tools?.invalid(); hosted.invalid(); }
       json = evidence.kind === "data" ? { tokens: usageExtractor(evidence.value), outcome: responseOutcome(evidence.value) }
         : { tokens: null, outcome: evidence.kind === "invalid" ? "provider_error" : null };
     },
     result(ended: boolean): UsageInspection {
       return sse ? accumulator.result(ended, document.unavailable()) : ended ? json : empty();
     },
+    hostedUsage: (ended: boolean) => hosted.result(ended),
     stop() { stopped = true; document.stop(); },
   };
 }
@@ -142,9 +148,9 @@ function literal(expected: string, trim = false) {
 class InspectionLimit extends Error {}
 type MetadataEvidence = Extract<SseUsageEvidence, { kind: "data" }> | { kind: "invalid" | "unavailable" };
 
-function metadataParser(inspectTools: boolean, inspectIdentity: boolean) {
+function metadataParser(inspectIdentity: boolean) {
   const projection = metadataProjection(inspectIdentity);
-  const tools = inspectTools ? createToolEvidenceProjection() : null;
+  const tools = createToolEvidenceProjection();
   let failure: "invalid" | "unavailable" | null = null;
   const compose = () => fun(
     (input: string | typeof none): string | typeof none => input,

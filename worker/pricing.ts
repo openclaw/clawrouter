@@ -2,6 +2,28 @@ import { actualImageCost, estimateImageCost } from "./image-generation.ts";
 import type { CharacterPricing, CompiledEndpoint, ModelPricing, ServiceTierPricing, TokenPricing, TokenRates } from "./types";
 import { googleField, googleInt32, googleRequestServiceTier, googleServiceTier } from "./google-protocol.ts";
 import { retainedToolBase, type ToolKnowledge } from "./responses-tool-evidence.ts";
+import type { ToolPricing } from "./types";
+
+export interface HostedSearchPrice { version: string; microsPerCall: number | null }
+// Freeze the declared request tariff, not a guess from the response or model name.
+// An inherited/opaque or mixed search generation has no qualified unit rate.
+export function hostedSearchPrice(card: ToolPricing | undefined, body: unknown, upstream?: string, retained = false): HostedSearchPrice | undefined {
+  if (!card || !isObject(body)) return undefined;
+  const tagged = Array.isArray(body.input) ? body.input.flatMap(item => isObject(item) && ["additional_tools", "tool_search_output"].includes(item.type as string) && Array.isArray(item.tools) ? item.tools : []) : [];
+  const types = (Array.isArray(body.tools) ? body.tools : []).concat(tagged)
+    .flatMap(tool => isObject(tool) && typeof tool.type === "string" && /^web_search(?:_preview)?(?:_\d{4}_\d{2}_\d{2})?$/.test(tool.type) ? [tool.type] : []);
+  if (!types.length) return undefined;
+  // A current declaration cannot exclude a differently priced retained tool.
+  if (retained || body.previous_response_id != null || body.conversation != null || body.prompt != null
+    || isObject(body.multi_agent) && body.multi_agent.enabled === true
+    || (Array.isArray(body.tools) ? body.tools : []).concat(tagged).some(tool => isObject(tool) && (tool.type === "mcp" || tool.type === "programmatic_tool_calling" || tool.type === "tool_search" && tool.execution !== "client"))) return { version: card.version, microsPerCall: null };
+  const rates = types.map(type => type.startsWith("web_search_preview") ? upstream && Object.hasOwn(card.previewMicrosPerCallByModel, upstream) ? card.previewMicrosPerCallByModel[upstream] : null : card.webSearchMicrosPerCall);
+  return { version: card.version, microsPerCall: rates.every(rate => rate === rates[0]) ? rates[0] : null };
+}
+
+export function hostedSearchCost(price: HostedSearchPrice | undefined, count: number): number | null {
+  return price?.microsPerCall == null ? null : saturatingMultiply(price.microsPerCall, count);
+}
 
 export interface CostEstimate {
   reserveMicros: number;

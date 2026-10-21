@@ -89,7 +89,8 @@ export interface RefreshConfig { tokenUrl: string; clientId: string | null; clie
 export type { TokenRates, LongContextPricing, ServiceTierPricing, TokenPricing, CharacterPricing, ImageTokenPricing, ModelPricing } from "../shared/contracts";
 export type CompiledModel = ClientCatalogModel;
 export interface OutputTokenLimit { field: "max_tokens" | "max_completion_tokens" | "max_output_tokens"; minimum: number; maximum: number }
-export interface CompiledEndpoint { id: string; method: string; methods: string[]; path: string; native_proxy: boolean; auth: string | null; headers: Record<string, string>; request_headers: string[]; response_headers: string[]; query: Record<string, string>; path_params: string[]; path_param_styles: Record<string, string>; request_format: string; response_format: string; streaming: string | null; responsesLifecycle?: { retrieve: string; cancel: string }; outputTokenLimit?: OutputTokenLimit; modelPassthrough?: { pricing_ref: string | null; pricing: ModelPricing | null }; websocket?: "openai.responses" | "openai.realtime"; timeout_ms: number | null }
+export interface ToolPricing { version: string; effectiveAt: string; source: string; webSearchMicrosPerCall: number; previewMicrosPerCallByModel: Record<string, number> }
+export interface CompiledEndpoint { id: string; method: string; methods: string[]; path: string; native_proxy: boolean; auth: string | null; headers: Record<string, string>; request_headers: string[]; response_headers: string[]; query: Record<string, string>; path_params: string[]; path_param_styles: Record<string, string>; request_format: string; response_format: string; streaming: string | null; responsesLifecycle?: { retrieve: string; cancel: string }; outputTokenLimit?: OutputTokenLimit; toolPricing?: ToolPricing; modelPassthrough?: { pricing_ref: string | null; pricing: ModelPricing | null }; websocket?: "openai.responses" | "openai.realtime"; timeout_ms: number | null }
 
 export interface Env {
   // Object bindings, never generic provider environment strings or grant-pool entries.
@@ -335,6 +336,10 @@ export interface AuthorizedIdentity {
 
 export interface UsageEvent {
   realtime_usage?: { unit_id: string; response_id: string | null; output_cap: number; text_input_tokens?: number; audio_input_tokens?: number; cached_text_input_tokens?: number; cached_audio_input_tokens?: number; text_output_tokens?: number; audio_output_tokens?: number };
+  hosted_tool_calls?: { web_search: number };
+  hosted_tool_calls_complete?: boolean;
+  hosted_tool_cost_micros?: number | null;
+  hosted_tool_pricing_ref?: string | null;
   image_usage?: { text_input_tokens: number; image_input_tokens: number; image_output_tokens: number };
   id: string;
   type: "clawrouter.usage.v1";
