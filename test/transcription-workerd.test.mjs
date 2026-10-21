@@ -25,20 +25,22 @@ export default handler;`, `
 export class Calls {
   constructor(state) { this.state=state; }
   async fetch(request) {
-    const calls=(await this.state.storage.get("calls")) ?? 0;
-    if(request.method === "POST") await this.state.storage.put("calls",calls+1);
+    const key=new URL(request.url).pathname;
+    const calls=(await this.state.storage.get(key)) ?? 0;
+    if(request.method === "POST") await this.state.storage.put(key,calls+1);
     return Response.json({calls:request.method === "POST" ? calls+1 : calls});
   }
 }
 export default { async fetch(request,env) {
   const counter=env.CALLS.get(env.CALLS.idFromName("calls"));
-  await counter.fetch("https://fixture/calls",{method:"POST"});
   if(new URL(request.url).pathname !== "/v1/audio/transcriptions") throw new Error("wrong endpoint");
   const credential=request.headers.get("authorization");
   if(!["Bearer fixture-upstream-key","Bearer fixture-pool-upstream-key"].includes(credential) || request.headers.has("x-api-key")) throw new Error("wrong credential provenance");
   const form = await request.formData(); const file = form.get("file");
-  if(form.get("model") !== "gpt-4o-transcribe" || form.get("language") !== "en" || !["synthetic prompt é","synthetic prompt é delayed"].includes(form.get("prompt"))) throw new Error("wrong fields");
+  if(form.get("model") !== "gpt-4o-transcribe" || form.get("language") !== "en" || !["synthetic prompt é","synthetic prompt é delayed","synthetic prompt é soft"].includes(form.get("prompt"))) throw new Error("wrong fields");
   if(!(file instanceof File) || !({"sample.wav":["audio/wav","application/octet-stream"],"voice.ogg":["audio/ogg"],"voice.flac":["audio/flac"]}[file.name] ?? []).includes(file.type) || JSON.stringify([...new Uint8Array(await file.arrayBuffer())]) !== "[0,255,128,42]") throw new Error("file corrupted");
+  // Separate the racing soft request from the confirmed-disconnect receipt.
+  await counter.fetch("https://fixture/"+(form.get("prompt") === "synthetic prompt é soft" ? "soft-calls" : "calls"),{method:"POST"});
   if(form.get("prompt") === "synthetic prompt é delayed") await new Promise(resolve=>setTimeout(resolve,500));
   return Response.json({text:"synthetic transcript",credentialSource:credential === "Bearer fixture-pool-upstream-key" ? "pool" : "environment",usage:{type:"tokens",input_tokens:14,input_token_details:{audio_tokens:12,text_tokens:2},output_tokens:45,total_tokens:59}});
 } };`, {upstreamDurableObjects:{CALLS:{className:"Calls",useSQLite:true}}});
@@ -115,6 +117,24 @@ export default { async fetch(request,env) {
       const stub=budgets.get(budgets.idFromName(name));
       assert.deepEqual(await (await stub.fetch("https://budget/fixture-reservations")).json(),Array.from({length:name === "provider:openai" ? 7 : 6},()=>({settled:1,dispatch_started:1,reserved_micros:200})));
     }
+    // Explicit soft admission may dispatch before its observation, but a
+    // denial must publish nonbillable usage without a zero/fixed SQL charge.
+    await kv.put("policies/soft",JSON.stringify({enabled:true,generation:"g1",providers:["openai"],monthlyBudgetMicros:0,requestCostMicros:200,budgetMode:"soft",retainRequestContent:false}));
+    await kv.put("credentials/soft",JSON.stringify({enabled:true,secretSha256:createHash("sha256").update(secret).digest("hex"),policyId:"soft",policyGeneration:"g1"}));
+    const softHeaders={authorization:"Bearer clawrouter-live-soft-"+secret};
+    const softForm=makeForm();softForm.set("prompt","synthetic prompt é soft");
+    const denied=await fetch(new URL("/v1/audio/transcriptions",origin),{method:"POST",headers:softHeaders,body:softForm});
+    assert.equal(denied.status,402);assert.equal((await denied.json()).error.code,"budget_exhausted");
+    const softCount=async()=>(await (await calls.get(calls.idFromName("calls")).fetch("https://fixture/soft-calls")).json()).calls;
+    assert.ok(await softCount()<=1,"soft cancellation may beat upstream receipt but cannot replay the upload");
+    assert.equal(await count(),7,"soft receipts cannot satisfy the later disconnect dispatch gate");
+    const softEvents=(await (await fetch(new URL("/v1/usage",origin),{headers:softHeaders})).json()).usage.events;
+    assert.equal(softEvents.length,1);assert.equal(softEvents[0].actual_cost_micros,0);assert.equal(softEvents[0].cost_basis,"none");
+    assert.equal(softEvents[0].status,"denied");assert.equal(softEvents[0].status_code,402);assert.equal(softEvents[0].content_retained,false);
+    for(const [name,length] of [["default:soft",0],["provider:openai",7]]) {
+      const stub=budgets.get(budgets.idFromName(name));
+      assert.equal((await (await stub.fetch("https://budget/fixture-reservations")).json()).length,length,"soft denial creates no monetary row");
+    }
     // Real TCP caller disconnect after confirmed upstream egress. The owned
     // lifetime must still finish durable accounting without replaying upload.
     const caller=new AbortController(), slow=makeForm();slow.set("prompt","synthetic prompt é delayed");
@@ -134,6 +154,7 @@ export default { async fetch(request,env) {
     const rows=await (await policyStub.fetch("https://budget/fixture-reservations")).json();
     assert.equal(rows.length,7);assert.ok(rows.every(row=>row.settled===1 && row.dispatch_started===1 && row.reserved_micros===200));
     assert.equal(await count(),8,"disconnect never replays the upload");
+    assert.ok(await softCount()<=1,"denied soft upload is not replayed after terminal cleanup");
   } finally {
     await mf?.dispose();
     await rm(temporary, { recursive:true, force:true });

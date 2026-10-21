@@ -379,3 +379,46 @@ test("canceled pending reserve owns later attempted legs even when their committ
   assert.equal(upstream.mock.callCount(),0);
   for(const name of owners) {const rows=get(name).reservations();assert.equal(rows.length,1);assert.equal(rows[0].settled,1);assert.equal(rows[0].reserved_micros,0);assert.equal(rows[0].dispatch_started,0);}
 });
+
+
+for(const [bound,code] of [["policy","budget_exhausted"],["provider","provider_budget_exhausted"],["daily","daily_budget_exhausted"],["weekly","weekly_budget_exhausted"]])
+for(const limit of [0,200])
+for(const phase of ["before-headers","after-headers"]) test("soft denial is nonbillable with no SQL charge: "+bound+" "+limit+" "+phase,async t=>{
+  const options={limit:bound==="policy"?limit:null,providerLimit:bound==="provider"?limit:null,dailyLimit:bound==="daily"?limit:undefined,weeklyLimit:bound==="weekly"?limit:undefined};
+  const f=fixture(t,options,{budgetMode:"soft"}),get=f.ledger.get.bind(f.ledger),calls=[];
+  if(limit) {
+    const {reserveBudget,markBudgetDispatched,settleBudget}=await import("../accounting.ts");
+    const auth={policyId:"maintainer_access",principalId:"owner@example.com",policy:{tenantId:"tenant",budgetScope:"principal",monthlyBudgetMicros:options.limit,dailyBudgetMicros:options.dailyLimit,weeklyBudgetMicros:options.weeklyLimit}};
+    const held=await reserveBudget(f.env,auth,"audio.transcription",{reserveMicros:limit,basis:"policy_fixed",inputTokens:null,outputTokens:null},{providerId:"openai",monthlyBudgetMicros:options.providerLimit});
+    await markBudgetDispatched(f.env,held);
+    await settleBudget(f.env,held,limit);
+    assert.equal(f.events.length,0,"seed is a fully acknowledged SQL charge, not a queued recovery job");
+  }
+  const prior=owners.map(name=>get(name).reservations());
+  f.env.BUDGET_LEDGER={idFromName:x=>x,get(name){const stub=get(name);return {fetch:(url,init)=>{calls.push(new URL(url).pathname);return stub.fetch(url,init);}}}};
+  let signal,disposed=0;
+  const upstream=t.mock.method(globalThis,"fetch",async(_url,init)=>{
+    signal=init.signal;
+    if(phase==="before-headers") return new Promise((_resolve,reject)=>{signal.addEventListener("abort",()=>reject(signal.reason),{once:true});});
+    return new Response(new ReadableStream({pull(){},cancel(){disposed++;}},{highWaterMark:0}),{headers:{"content-type":"application/json"}});
+  });
+  const response=await f.call();assert.equal(response.status,402);assert.equal((await response.json()).error.code,code);
+  await Promise.all(f.pending);
+  assert.equal(upstream.mock.callCount(),1);assert.equal(signal.aborted,true);
+  if(phase==="after-headers") assert.equal(disposed,1);
+  assert.equal(f.events.length,1);assert.equal(f.events[0].actual_cost_micros,0);assert.equal(f.events[0].cost_basis,"none");assert.equal(f.events[0].status,"denied");assert.equal(f.events[0].status_code,402);
+  assert.ok(!calls.some(path=>["/reserve","/dispatch","/charge"].includes(path)),"soft denial cannot create a monetary charge, including zero-charge rows");
+  assert.deepEqual(owners.map(name=>get(name).reservations()),prior);assert.deepEqual(f.retained,[]);
+});
+
+test("soft denial waits for durable usage ACK and fails closed when publication and recovery fail",async t=>{
+  const f=fixture(t,{limit:0},{budgetMode:"soft"});
+  f.env.USAGE_QUEUE.send=async()=>{throw new Error("synthetic queue outage");};
+  f.env.USAGE_LEDGER={idFromName:x=>x,get:()=>({fetch:async()=>{throw new Error("synthetic usage outage");}})};
+  const upstream=t.mock.method(globalThis,"fetch",async(_url,init)=>new Promise((_resolve,reject)=>{
+    init.signal.addEventListener("abort",()=>reject(init.signal.reason),{once:true});
+  }));
+  const response=await f.call();assert.equal(response.status,503);assert.equal((await response.json()).error.code,"accounting_unavailable");
+  await Promise.all(f.pending);assert.equal(upstream.mock.callCount(),1);
+  for(const name of owners) assert.deepEqual(f.ledger.get(name).reservations(),[]);
+});

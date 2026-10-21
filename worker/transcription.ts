@@ -42,7 +42,7 @@ export async function proxyTranscription(request: Request, env: Env, context: Ex
   let reservation: BudgetReservation = emptyReservation(), dispatched = false, response: Response | undefined;
   let soft: ReturnType<typeof softBudget> | undefined;
   let settled = false;
-  const settle = async (statusCode: number, billable: boolean, tokens: ReturnType<typeof transcriptionUsage>, status: "success" | "client_error" | "provider_error" | "timeout") => {
+  const settle = async (statusCode: number, billable: boolean, tokens: ReturnType<typeof transcriptionUsage>, status: "success" | "client_error" | "provider_error" | "timeout" | "denied") => {
     if (settled) return true;
     settled = true;
     // Full JSON is small/bounded: finish accounting before delivery. A false ACK
@@ -124,6 +124,14 @@ export async function proxyTranscription(request: Request, env: Env, context: Ex
     } catch (error) {
       const failure = error instanceof HttpError ? error : new HttpError(operation.status === "timeout" ? 504 : request.signal.aborted ? 499 : 502, "transcription_unavailable", "transcription request failed");
       void response?.body?.cancel().catch(() => undefined);
+      if (soft?.denial) {
+        // Match the shared soft-budget owner: an observed denial is not a
+        // monetary charge, even when a fixed fee exists and egress has begun.
+        reservation = emptyReservation();
+        const ok = await settle(402, false, null, "denied");
+        if (!ok) return errorResponse("accounting_unavailable", "transcription accounting could not be durably completed", 503);
+        return errorResponse(soft.denial.code, soft.denial.message, 402);
+      }
       const rejected = response && response.status >= 400;
       await settle(failure.status, dispatched && !rejected, null, operation.status ?? (failure.status < 500 ? "client_error" : "provider_error"));
       return errorResponse(failure.code, failure.message, failure.status);
