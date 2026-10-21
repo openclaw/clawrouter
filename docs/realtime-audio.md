@@ -36,6 +36,9 @@ Each input buffer owns a separate unit before its first byte leaves the proxy.
 Committed item IDs bind asynchronous ASR terminals, including out-of-order
 completion; identical terminals cannot charge twice. Delayed VAD commits consume
 only their audio-time boundary, retaining already-forwarded trailing media.
+Manual responses and tool continuations use the committed conversation without
+consuming or blocking on that next VAD input buffer; no-VAD media still requires
+an explicit commit before a response. Every response retains fresh admission.
 Soft admission precedes every media append; per-item child receipts inherit the
 admitted media attribution and budget windows, with unique once-only charge IDs.
 These are soft reporting receipts, not new post-execution hard reservations.

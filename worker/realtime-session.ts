@@ -177,7 +177,11 @@ export class RealtimeSession {
         this.send(this.upstream, { type: e.type, event_id: eventId, item: { ...item, id } }); return;
       }
       case 'response.create': {
-        if (this.active || this.autoPending || this.commitPending || this.clearPending || this.bufferBytes) fail('turn_busy');
+        // Server VAD owns the next input buffer independently of the committed
+        // conversation. Trailing media must not block a manual response or its
+        // tool continuation, even after createResponse clears commitReady.
+        // No-VAD input still requires an explicit commit before a response.
+        if (this.active || this.autoPending || this.commitPending || this.clearPending || this.bufferBytes && !this.policy.audio.input.turn_detection) fail('turn_busy');
         await this.createResponse(eventId, e.response); return;
       }
       case 'response.cancel':
