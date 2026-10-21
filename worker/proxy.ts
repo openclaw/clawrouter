@@ -55,6 +55,7 @@ interface PreparedUpstream {
   websocket: boolean;
   backgroundRecovery: boolean;
   continuation?: ContinuationOwner;
+  revalidateCompactAccount?: () => Promise<void>;
 }
 
 interface ReservedProxyBudget {
@@ -334,6 +335,16 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     else accounting.fail(503, "provider_error", reservation, content);
     return errorResponse("accounting_unavailable", "Budget dispatch could not be recorded; no upstream request was sent.", 503);
   }
+  // Compact alone needs current single-account qualification after budget and
+  // retention awaits. A topology change here is known-unsent, so release once.
+  if (prepared.revalidateCompactAccount) {
+    try { await prepared.revalidateCompactAccount(); }
+    catch (error) {
+      const failure = selectedFailure(error);
+      accounting.fail(failure.status, failure.status < 500 ? "client_error" : "provider_error", reservation, content);
+      return errorResponse(failure.code, failure.message, failure.status);
+    }
+  }
   const endpointTimeout = selection.endpoint.timeout_ms ?? 120_000;
   const operation = new HttpOperation(request.signal, Math.min(selection.timeoutMs ?? endpointTimeout, endpointTimeout));
   const signal = operation.signal;
@@ -520,7 +531,7 @@ export async function prepareSelected(request: Request, env: Env, selection: Pro
         policyGeneration: auth.policy.generation,
       };
     }
-    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: selection.endpoint.websocket === "openai.responses" && upstream.transport === null, backgroundRecovery, continuation };
+    return { headers, url, requestBody, grantKey: upstream.grantKey, grantLane: upstream.grantLane, grantRevision: upstream.grantRevision, connection, websocket: selection.endpoint.websocket === "openai.responses" && upstream.transport === null, backgroundRecovery, continuation, ...(compact ? { revalidateCompactAccount: () => assertCompactAccount(auth, env, upstream) } : {}) };
   } catch (error) {
     throw error instanceof HttpError ? error : new HttpError(503, "provider_request_invalid", "provider request configuration is invalid");
   }

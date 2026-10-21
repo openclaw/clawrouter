@@ -1,5 +1,4 @@
 import { authorityCall } from "./authority.ts";
-import { proxyAdmission } from "./proxy-auth.ts";
 import type { UpstreamAuth } from "./providers.ts";
 import type { AuthorizedIdentity, Env, UpstreamGrant } from "./types.ts";
 import { extractUsageTokens, type UsageTokens } from "./token-usage.ts";
@@ -11,14 +10,15 @@ import { HttpError } from "./utils.ts";
 // inactive grants cannot route; a later activation is checked on the next request.
 export async function assertCompactAccount(auth: AuthorizedIdentity, env: Env, upstream: UpstreamAuth): Promise<void> {
   const defaultKeys = [`oauth/${auth.policyId}/openai`, `oauth/tenants/${auth.policy.tenantId ?? "default"}/openai`];
-  const pool = proxyAdmission(auth)?.pools.openai ?? await authorityCall<{ keys: string[]; unavailable?: boolean }>(env, "/grant-pools/resolve", { providerId: "openai", policyId: auth.policyId, tenantId: auth.policy.tenantId ?? "default", defaultKeys });
+  const records = await env.POLICY_KV.get<UpstreamGrant>(defaultKeys, "json");
+  const attachments = await Promise.all(defaultKeys.map(key => authorityCall<{ attached: boolean; pending: boolean }>(env, "/grant-pools/attachment", { key })));
+  // Read membership after projection/attachment awaits, never from admission.
+  // Empty defaultKeys excludes synthetic lookup keys: every returned key is
+  // actual active/legacy membership, including a default-named member.
+  const pool = await authorityCall<{ keys: string[]; unavailable?: boolean }>(env, "/grant-pools/resolve", { providerId: "openai", policyId: auth.policyId, tenantId: auth.policy.tenantId ?? "default", defaultKeys: [] });
   if (pool.unavailable) throw new HttpError(503, "compact_account_unavailable", "compaction account qualification is unavailable");
   const keys = [...new Set([...defaultKeys, ...pool.keys])];
-  const records = await env.POLICY_KV.get<UpstreamGrant>(keys, "json");
-  const attachments = await Promise.all(defaultKeys.map(key => authorityCall<{ attached: boolean; pending: boolean }>(env, "/grant-pools/attachment", { key })));
-  // Non-default keys came from the authoritative pool. A missing/stale KV
-  // projection cannot erase one of those accounts from this qualification.
-  const configured = keys.filter(key => !defaultKeys.includes(key) || records.get(key) != null || attachments[defaultKeys.indexOf(key)]?.attached || attachments[defaultKeys.indexOf(key)]?.pending);
+  const configured = keys.filter(key => pool.keys.includes(key) || records.get(key) != null && records.get(key)?.enabled !== false || attachments[defaultKeys.indexOf(key)]?.attached || attachments[defaultKeys.indexOf(key)]?.pending);
   const qualified = upstream.transport === null && (configured.length === 0 ? upstream.grantKey === null
     : configured.length === 1 && upstream.grantKey === configured[0] && upstream.grant?.kind === "api_key" && auth.policy.grantRouting?.environmentFallback !== true);
   if (!qualified) throw new HttpError(409, "compact_account_unqualified", "compaction currently requires one public OpenAI API account without account fallback; multi-account continuity is not supported");

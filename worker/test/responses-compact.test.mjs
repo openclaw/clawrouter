@@ -376,3 +376,72 @@ for (const route of routes.slice(0, 2)) for (const tier of ["priority", "fast"])
   assert.equal(response.status, 400); assert.equal(JSON.parse(await f.consume(response)).error.code, "service_tier_not_allowed"); assert.equal(f.sent.length, 0);
   for (const name of ["default:fixture", "provider:openai"]) assert.equal(f.env.BUDGET_LEDGER.get(name).reservations().length, 0);
 });
+
+// Regression probes exercise actual authority and SQL; only timing is controlled.
+for (const pooled of [false, true]) test("detached disabled default metadata does not add a compact account: " + pooled, async t => {
+  const f = await ownedFixture(t, { pooled });
+  f.values.set("oauth/tenants/default/openai", { provider: "openai", kind: "api_key", credential: "fixture-inactive-legacy", enabled: false });
+  const response = await f.request({ service_tier: "default" }, {}, routes[0]);
+  assert.equal(response.status, 200, await response.clone().text()); assert.equal(await f.consume(response), wire);
+  assert.equal(f.sent.length, 1); assert.equal(f.sent[0].headers.get("authorization"), "Bearer " + (pooled ? "fixture-account-key" : "synthetic-environment-key"));
+  assert.equal(f.events.length, 1); assert.equal(f.events[0].actual_cost_micros, 1665);
+});
+
+for (const phase of ["default_attachment_read", "budget_dispatch"]) test("compact requalifies membership after " + phase, async t => {
+  const f = await ownedFixture(t, { pooled: true });
+  const second = phase === "default_attachment_read" ? "oauth/tenants/default/openai" : "oauth/fixture/account-b";
+  let activated = false;
+  const operations = [], budgetGet = f.env.BUDGET_LEDGER.get;
+  f.env.BUDGET_LEDGER.get = name => ({ ...budgetGet(name), fetch: async (url, init) => {
+    const path = new URL(url).pathname; operations.push({ name, path });
+    const response = await budgetGet(name).fetch(url, init);
+    if (phase === "budget_dispatch" && path === "/dispatch") await activate();
+    return response;
+  } });
+  async function activate() {
+    if (activated) return; activated = true;
+    await putGrantCredentials(f.env, second, { provider: "openai", kind: "api_key", credential: "fixture-racing-second-key", enabled: true });
+  }
+  if (phase === "default_attachment_read") {
+    const get = f.env.ACCESS_CONTROL.get;
+    f.env.ACCESS_CONTROL.get = name => ({ fetch: async (url, init) => {
+      const response = await get(name).fetch(url, init);
+      if (new URL(url).pathname === "/grant-pools/attachment" && JSON.parse(init.body).key === second) await activate();
+      return response;
+    } });
+  }
+  const response = await f.request({ service_tier: "default" }, {}, routes[0]);
+  assert.equal(activated, true); assert.equal(response.status, 409, await response.clone().text());
+  assert.equal(JSON.parse(await f.consume(response)).error.code, "compact_account_unqualified"); assert.equal(f.sent.length, 0);
+  assert.equal(f.events.length, 1); assert.equal(f.events[0].actual_cost_micros, 0);
+  for (const name of ["default:fixture", "provider:openai"]) {
+    const rows = f.env.BUDGET_LEDGER.get(name).reservations();
+    assert.equal(rows.length, phase === "budget_dispatch" ? 1 : 0);
+    if (rows.length) {
+      assert.equal(rows[0].settled, 1); assert.equal(rows[0].reserved_micros, 0);
+      for (const path of ["/reserve", "/dispatch", "/settle"]) assert.equal(operations.filter(op => op.name === name && op.path === path).length, 1);
+    }
+  }
+});
+
+for (const route of routes.slice(0, 2)) test("compact authority failure after reserve stays unsent: " + route, async t => {
+  const f = await ownedFixture(t, { pooled: true });
+  let dispatchStarted = false;
+  const operations = [], get = f.env.BUDGET_LEDGER.get;
+  f.env.BUDGET_LEDGER.get = name => ({ ...get(name), fetch: async (url, init) => {
+    const path = new URL(url).pathname; operations.push({ name, path });
+    const response = await get(name).fetch(url, init);
+    if (path === "/dispatch") dispatchStarted = true;
+    return response;
+  } });
+  f.env.ACCESS_CONTROL.beforeFetch = (_name, request) => {
+    if (dispatchStarted && new URL(request.url).pathname === "/grant-pools/resolve") throw new Error("fixture authority unavailable");
+  };
+  const response = await f.request({ model: route.includes("native") ? "gpt-6-astra" : "openai/gpt-6-astra", service_tier: "default" }, {}, route);
+  assert.equal(response.status, 503); assert.equal(JSON.parse(await f.consume(response)).error.code, "provider_unavailable");
+  assert.equal(f.sent.length, 0); assert.equal(f.events.length, 1); assert.equal(f.events[0].actual_cost_micros, 0);
+  for (const name of ["default:fixture", "provider:openai"]) {
+    const rows = f.env.BUDGET_LEDGER.get(name).reservations(); assert.equal(rows.length, 1); assert.equal(rows[0].settled, 1); assert.equal(rows[0].reserved_micros, 0);
+    for (const path of ["/reserve", "/dispatch", "/settle"]) assert.equal(operations.filter(op => op.name === name && op.path === path).length, 1);
+  }
+});

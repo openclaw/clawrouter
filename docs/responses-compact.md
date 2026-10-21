@@ -45,8 +45,13 @@ single resolvable public API account: either environment authorization with no
 configured scoped grants, or one API-key grant without environment fallback.
 Multiple pool members remain unqualified even if one is temporarily unavailable.
 An inactive detached grant cannot route; activating another account causes the
-next compact request to fail closed. Missing pool projections are not evidence
-that an account disappeared. Unqualified routing receives
+next compact request to fail closed. Detached disabled default-key metadata does
+not add a routable account. Qualification refreshes authoritative membership after
+projection/attachment reads, and again after budget/retention awaits immediately
+before egress. A topology change caught there releases the known-unsent reservation
+once. This is a current authority decision, not a lease that prevents later
+operator changes. Missing pool projections are not evidence that an account
+disappeared. Unqualified routing receives
 `409 compact_account_unqualified` (or the existing upstream-grant-unavailable
 error when no compatible transport can be selected).
 
