@@ -83,6 +83,56 @@ for (const stream of [false, true]) test(`hosted search ${stream ? 'fragmented S
   assert.equal(await spent(f), 10_056);
 });
 
+for (const withReasoning of [false, true]) test('realistic mixed-item SSE search + message' + (withReasoning ? ' + reasoning summary' : '') + ' retains one component through production SQL', async t => {
+  const f = setup(t, { model: 'openai/gpt-5.4' });
+  // Responses streaming-event schema: content selectors belong to the message;
+  // reasoning-summary selectors belong to a separate reasoning output item.
+  // https://developers.openai.com/api/reference/resources/responses/streaming-events
+  const summary = { type: 'summary_text', text: 'synthetic private summary' };
+  const reasoning = { type: 'reasoning', id: 'rs_fixture', summary: [summary] };
+  const item = { type: 'web_search_call', id: 'ws_fixture', status: 'completed', action: { type: 'search', query: 'synthetic private query' } };
+  const annotation = { type: 'url_citation', start_index: 0, end_index: 23, title: 'synthetic private source', url: 'https://example.com/fixture' };
+  const part = { type: 'output_text', text: 'synthetic private answer', annotations: [annotation], logprobs: [] };
+  const message = { type: 'message', id: 'msg_fixture', status: 'completed', role: 'assistant', content: [part] };
+  const output = [...(withReasoning ? [reasoning] : []), item, message], searchIndex = withReasoning ? 1 : 0, messageIndex = searchIndex + 1;
+  const final = terminal(output, { model: 'gpt-5.4', reasoning: { effort: 'high', summary: 'auto' } });
+  const events = [{ type: 'response.created', response: { ...final, status: 'in_progress', output: [], usage: null } }];
+  if (withReasoning) events.push(
+    { type: 'response.output_item.added', output_index: 0, item: { ...reasoning, summary: [] } },
+    { type: 'response.reasoning_summary_part.added', output_index: 0, item_id: reasoning.id, summary_index: 0, part: { type: 'summary_text', text: '' } },
+    { type: 'response.reasoning_summary_text.delta', output_index: 0, item_id: reasoning.id, summary_index: 0, delta: summary.text },
+    { type: 'response.reasoning_summary_text.done', output_index: 0, item_id: reasoning.id, summary_index: 0, text: summary.text },
+    { type: 'response.reasoning_summary_part.done', output_index: 0, item_id: reasoning.id, summary_index: 0, part: summary },
+    { type: 'response.output_item.done', output_index: 0, item: reasoning });
+  events.push(
+    { type: 'response.output_item.added', output_index: searchIndex, item: { ...item, status: 'in_progress' } },
+    ...['in_progress', 'searching', 'completed'].map(status => ({ type: 'response.web_search_call.' + status, output_index: searchIndex, item_id: item.id })),
+    { type: 'response.output_item.done', output_index: searchIndex, item },
+    { type: 'response.output_item.added', output_index: messageIndex, item: { ...message, status: 'in_progress', content: [] } },
+    { type: 'response.content_part.added', output_index: messageIndex, item_id: message.id, content_index: 0, part: { ...part, text: '', annotations: [] } },
+    { type: 'response.output_text.delta', output_index: messageIndex, item_id: message.id, content_index: 0, delta: part.text, logprobs: [] },
+    { type: 'response.output_text.annotation.added', output_index: messageIndex, item_id: message.id, content_index: 0, annotation_index: 0, annotation },
+    { type: 'response.output_text.done', output_index: messageIndex, item_id: message.id, content_index: 0, text: part.text, logprobs: [] },
+    { type: 'response.content_part.done', output_index: messageIndex, item_id: message.id, content_index: 0, part },
+    { type: 'response.output_item.done', output_index: messageIndex, item: message }, frame(final));
+  const body = sse(...events.map((event, sequence_number) => ({ ...event, sequence_number })));
+  const mock = upstream(t, body, true), r = await f.request({ stream: true, reasoning: { effort: 'high', summary: 'auto' } });
+  assert.equal(r.status, 200); assert.equal(await r.text(), body); await f.drain();
+  assert.equal(mock.mock.callCount(), 1); assert.equal(f.events.length, 1);
+  assertAudit(f.events[0], 1, true, 10_400); assert.equal(f.events[0].status, 'success');
+  assert.equal(f.events[0].hosted_tool_cost_micros, 10_000);
+  assert.equal(f.events[0].hosted_tool_pricing_ref, 'openai-web-search-2026-10-20');
+  assert.equal(await spent(f), 10_400); assert.equal((await providerBudgetStatus(f.env, 'openai', 1_000_000)).spentMicros, 10_400);
+  const charges = f.calls.filter(c => c.path === '/charge');
+  assert.deepEqual(charges.map(c => ({ name: c.name, amount: c.body.amountMicros })).sort((a, b) => a.name.localeCompare(b.name)), [
+    { name: 'provider:openai', amount: 10_400 }, { name: 'tenant:maintainer_access:owner@example.com', amount: 10_400 },
+  ]);
+  // The existing owner allocates one replay-stable ID per budget leg.
+  assert.equal(new Set(charges.map(c => c.body.chargeId)).size, 2);
+  for (const charge of charges) assert.deepEqual(f.ledger.get(charge.name).reservations().map(row => ({ id: row.reservation_id, amount: row.reserved_micros })), [{ id: charge.body.chargeId, amount: 10_400 }]);
+  assert.ok(!f.calls.some(c => ['/reserve', '/settle', '/dispatch'].includes(c.path)));
+});
+
 for (const [action, count] of [['search', 1], [null, 1], ['future_action', 1], ['open_page', 0], ['find_in_page', 0]]) test(`final action ${action} is counted conservatively without retaining its content`, async t => {
   const f = setup(t); upstream(t, JSON.stringify(terminal([search('ws_fixture', action)])));
   const r = await f.request(); await r.text(); await f.drain();
