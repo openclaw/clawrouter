@@ -42,8 +42,11 @@ parallel parser, output buffer or eager tee.
   it incomplete. Done-only anonymous items defer to that terminal enumeration;
   they never acquire guessed stream positions or duplicate partial charges.
   Uncorroborated anonymous search cannot assert a complete zero count. Both
-  ID and index associations must agree; one selector cannot hide another
-  contradictory item. Qualification remains open until delivery EOF: bounded
+  ID and index associations must independently agree with the final item;
+  compatible separately observed aliases reconcile without duplicate fees.
+  Status/content-event selectors must also belong to that same enumeration,
+  before or after the terminal. One selector cannot hide another contradictory
+  item. Qualification remains open until delivery EOF: bounded
   terminal identities/counts reject later conflicting item, terminal or error
   facts without retaining content. Exact identifiable repeats remain idempotent;
   unresolvable late anonymous items cannot qualify a fee. Partial counts are

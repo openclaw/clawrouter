@@ -17,27 +17,38 @@ export function createHostedSearchUsage() {
   const items = new Set<Item>(), ids = new Map<string, Item>(), indices = new Map<number, Item>();
   let uncertain = false, terminal = false, complete = false, total = 0, observed = false, anonymousSearch = false;
   let snapshot: { id: string; status: string; output: Array<{ id?: string; count: number }> } | undefined;
+  function associate(id: unknown, index: unknown): Item | undefined {
+    if (id !== undefined && (typeof id !== "string" || !id.length || id.length > 256)
+      || index !== undefined && (!Number.isSafeInteger(index) || (index as number) < 0)) { uncertain = true; return; }
+    const byId = typeof id === "string" ? ids.get(id) : undefined, byIndex = typeof index === "number" ? indices.get(index) : undefined;
+    for (const item of [byId, byIndex]) if (item && (item.id !== undefined && id !== undefined && item.id !== id
+      || item.index !== undefined && index !== undefined && item.index !== index)) { uncertain = true; return; }
+    if (byId && byIndex && byId !== byIndex) {
+      if (byId.done && byIndex.done && byId.count !== byIndex.count) { uncertain = true; return; }
+      // A bridging selector can unite separately observed compatible aliases.
+      // Preserve completed evidence; contradictory counts can never be erased.
+      if (byIndex.done) { byId.count = byIndex.count; byId.done = true; }
+      items.delete(byIndex);
+    }
+    let item = byId ?? byIndex;
+    if (!item) {
+      if (items.size >= toolEvidenceLimit) { uncertain = true; return; }
+      item = { count: 0, done: false }; items.add(item);
+    }
+    if (typeof id === "string") { item.id = id; ids.set(id, item); }
+    if (typeof index === "number") { item.index = index; indices.set(index, item); }
+    return item;
+  }
   function observe(value: unknown, position: unknown, done: boolean) {
     if (!record(value)) { uncertain = true; return; }
     observed ||= value.type === "web_search_call";
     const count = call(value);
     if (count === null) { uncertain = true; return; }
-    const id = value.id, index = position;
-    if (id !== undefined && (typeof id !== "string" || !id.length || id.length > 256)
-      || index !== undefined && (!Number.isSafeInteger(index) || (index as number) < 0)) { uncertain = true; return; }
-    const byId = typeof id === "string" ? ids.get(id) : undefined, byIndex = typeof index === "number" ? indices.get(index) : undefined;
-    if (byId && byIndex && byId !== byIndex) { uncertain = true; return; }
     // Done-only anonymous items cannot be safely deduplicated in the stream.
     // Defer their count to the terminal snapshot, never infer stream positions.
-    if (id === undefined && index === undefined) { if (!done) uncertain = true; else anonymousSearch ||= count > 0; return; }
-    let item = byId ?? byIndex;
-    if (!item) {
-      if (items.size >= toolEvidenceLimit) { uncertain = true; return; }
-      item = { count, done: false }; items.add(item);
-    }
-    if (item.id !== undefined && id !== undefined && item.id !== id || item.index !== undefined && index !== undefined && item.index !== index) { uncertain = true; return; }
-    if (typeof id === "string") { item.id = id; ids.set(id, item); }
-    if (typeof index === "number") { item.index = index; indices.set(index, item); }
+    if (value.id === undefined && position === undefined) { if (!done) uncertain = true; else anonymousSearch ||= count > 0; return; }
+    const item = associate(value.id, position);
+    if (!item) return;
     if (item.done && done && item.count !== count) uncertain = true;
     if (done) { item.count = count; item.done = true; }
   }
@@ -51,13 +62,18 @@ export function createHostedSearchUsage() {
         // EOF, not the first terminal frame, closes hosted evidence. Keep only
         // bounded identities/counts to reject later contradictions, not content.
         if (value.response_id !== undefined && value.response_id !== final.id) uncertain = true;
-        if (sse && ["response.output_item.added", "response.output_item.done"].includes(value.type as string)) {
-          const item = record(value.item) ? value.item : null, index = value.output_index, id = item?.id;
-          const indexed = Number.isSafeInteger(index) && (index as number) >= 0 ? final.output[index as number] : undefined;
-          const named = typeof id === "string" ? final.output.find(item => item.id === id) : undefined;
+        const output = final.output;
+        function selected(index: unknown, id: unknown) {
+          const indexed = Number.isSafeInteger(index) && (index as number) >= 0 ? output[index as number] : undefined;
+          const named = typeof id === "string" ? output.find(item => item.id === id) : undefined;
           const match = indexed ?? named;
-          if (!item || !match || indexed && named && indexed !== named || index !== undefined && !indexed
-            || id !== undefined && id !== match.id || call(item) !== match.count) uncertain = true;
+          return !match || index !== undefined && !indexed || id !== undefined && id !== match.id ? undefined : match;
+        }
+        // Status/content events also prove an item exists, not just item.done.
+        if (sse && (value.output_index !== undefined || value.item_id !== undefined) && !selected(value.output_index, value.item_id)) uncertain = true;
+        if (sse && ["response.output_item.added", "response.output_item.done"].includes(value.type as string)) {
+          const item = record(value.item) ? value.item : null, match = selected(value.output_index, item?.id);
+          if (!item || !match || call(item) !== match.count) uncertain = true;
         } else if (sse && ["response.completed", "response.incomplete", "response.failed", "response.cancelled"].includes(value.type as string)) {
           const response = record(value.response) ? value.response : null;
           if (!response || response.id !== final.id || response.status !== final.status || value.type !== "response." + final.status
@@ -68,6 +84,11 @@ export function createHostedSearchUsage() {
       }
       if (sse && ["response.output_item.added", "response.output_item.done"].includes(value.type as string)) {
         observe(value.item, value.output_index, value.type === "response.output_item.done"); return;
+      }
+      if (sse && (value.output_index !== undefined || value.item_id !== undefined)) {
+        // The terminal snapshot must corroborate these bounded associations too.
+        associate(value.item_id, value.output_index);
+        observed ||= typeof value.type === "string" && value.type.startsWith("response.web_search_call.");
       }
       const response = sse ? record(value.response) ? value.response : null : value;
       const ended = sse ? ["response.completed", "response.incomplete", "response.failed", "response.cancelled"].includes(value.type as string)
@@ -86,9 +107,10 @@ export function createHostedSearchUsage() {
           seen.add(value.id);
         }
         const indexed = indices.get(index), named = typeof value.id === "string" ? ids.get(value.id) : undefined;
-        if (indexed && named && indexed !== named) uncertain = true;
-        const item = indexed ?? named;
-        if (item && (item.id !== undefined && value.id !== item.id || item.index !== undefined && item.index !== index || item.done && item.count !== next)) uncertain = true;
+        // Distinct objects may be compatible ID-only/index-only aliases. Both
+        // must independently agree with this authoritative terminal position.
+        for (const item of [indexed, named]) if (item && (item.id !== undefined && value.id !== item.id
+          || item.index !== undefined && item.index !== index || item.done && item.count !== next)) uncertain = true;
         count += next;
       }
       for (const item of items) if (item.index !== undefined ? item.index >= response.output.length : item.id !== undefined && !seen.has(item.id)) uncertain = true;
