@@ -6,8 +6,24 @@ const PATCH_PX = 28;
 const MAX_EDGE_PX = 8_000;
 const BASE64 = /^[A-Za-z0-9+/]*={0,2}$/;
 const SOURCE_KEYS = new Set(["type", "media_type", "data"]);
+// Documented image block keys; none of them can enlarge the billed image.
+const BLOCK_KEYS = new Set(["type", "source", "cache_control", "transformations"]);
+const OVERSIZED_IMAGE = new Set(["downsize", "error"]);
 
 export interface InlineImageBound { encodedBytes: number; tokens: number }
+
+// A content block Claude bills as an image. The caller decides position: only a
+// direct block of user content or of a user tool_result's content qualifies.
+export function claudeImageBlockBound(block: Record<string, unknown>): InlineImageBound | null {
+  if (block.type !== "image" || Object.keys(block).some(key => !BLOCK_KEYS.has(key))) return null;
+  const { transformations } = block;
+  if (transformations !== undefined) {
+    if (!transformations || typeof transformations !== "object" || Array.isArray(transformations)) return null;
+    const entries = Object.entries(transformations);
+    if (entries.some(([key, value]) => key !== "oversized_image" || typeof value !== "string" || !OVERSIZED_IMAGE.has(value))) return null;
+  }
+  return claudeImageBound(block.source);
+}
 
 // Null means no qualified ceiling: URL/file sources, malformed or unrecognized
 // data, a header that disagrees with media_type, or out-of-range dimensions.
@@ -53,28 +69,47 @@ function imageSize(at: ByteAt, mediaType: string): [number, number] | null {
   return null;
 }
 
+// Exactly one 13-byte IHDR, then chunks up to the first IDAT. Decoders differ on
+// a repeated IHDR (some keep the last), so any second one has no bound.
 function pngSize(at: ByteAt): [number, number] | null {
-  if (!matches(at, 0, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) || !matches(at, 12, ascii("IHDR"))) return null;
-  return pair(uint(at, 16, 4, false), uint(at, 20, 4, false));
+  if (!matches(at, 0, [0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]) || uint(at, 8, 4, false) !== 13 || !matches(at, 12, ascii("IHDR"))) return null;
+  const size = pair(uint(at, 16, 4, false), uint(at, 20, 4, false));
+  for (let offset = 33; size;) {
+    const length = uint(at, offset, 4, false);
+    if (length == null || length > 0x7fffffff) return null;
+    if (matches(at, offset + 4, ascii("IDAT"))) return size;
+    if (matches(at, offset + 4, ascii("IHDR")) || matches(at, offset + 4, ascii("IEND"))) return null;
+    offset += 12 + length;
+  }
+  return null;
 }
 
-// Walk marker segments to the frame header. Embedded EXIF thumbnails live inside
-// skipped APPn segments; scan data before any frame header has no dimensions.
+// Segments that may precede the frame or scan and carry a length: DHT, DAC, DQT,
+// DRI and COM, plus APP0-APP15 below. Frame headers are SOF0-SOF15 without these.
+const JPEG_TABLES = new Set([0xc4, 0xcc, 0xdb, 0xdd, 0xfe]);
+const isJpegFrame = (marker: number) => marker >= 0xc0 && marker <= 0xcf && marker !== 0xc4 && marker !== 0xc8 && marker !== 0xcc;
+
+// Walk marker segments to the start of scan and require exactly one frame header.
+// Real decoders skip FF00 stuffing and stray bytes while hunting for a marker, so
+// any marker this walk cannot classify (0x00, reserved 0x02-0xBF, RSTn/TEM, a
+// second SOI, EOI, DNL/DHP/EXP, JPGn) or any stray byte has no header bound.
+// Embedded EXIF thumbnails stay inside skipped APPn segments.
 function jpegSize(at: ByteAt): [number, number] | null {
   if (at(0) !== 0xff || at(1) !== 0xd8) return null;
-  let offset = 2;
+  let offset = 2, size: [number, number] | null = null;
   while (true) {
     if (at(offset) !== 0xff) return null;
     while (at(offset + 1) === 0xff) offset++;
-    const marker = at(offset + 1);
-    if (marker < 0 || marker === 0xd9 || marker === 0xda) return null;
-    if (marker === 0x01 || marker >= 0xd0 && marker <= 0xd8) { offset += 2; continue; }
-    const length = uint(at, offset + 2, 2, false);
+    const marker = at(offset + 1), length = uint(at, offset + 2, 2, false);
     if (length == null || length < 2) return null;
-    if (marker >= 0xc0 && marker <= 0xcf && ![0xc4, 0xc8, 0xcc].includes(marker)) {
-      // A zero height is defined later by DNL; no header bound exists.
-      return pair(uint(at, offset + 7, 2, false), uint(at, offset + 5, 2, false));
-    }
+    if (marker === 0xda) return size;
+    if (isJpegFrame(marker)) {
+      const components = at(offset + 9);
+      if (size || components < 1 || length !== 8 + 3 * components) return null;
+      // A zero height is defined later by DNL; claudeImageBound rejects it.
+      size = pair(uint(at, offset + 7, 2, false), uint(at, offset + 5, 2, false));
+      if (!size) return null;
+    } else if (!JPEG_TABLES.has(marker) && !(marker >= 0xe0 && marker <= 0xef)) return null;
     offset += 2 + length;
   }
 }

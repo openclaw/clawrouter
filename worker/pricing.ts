@@ -1,5 +1,5 @@
 import { actualImageCost, estimateImageCost } from "./image-generation.ts";
-import { claudeImageBound, type InlineImageBound } from "./image-input-bound.ts";
+import { claudeImageBlockBound, type InlineImageBound } from "./image-input-bound.ts";
 import type { CharacterPricing, CompiledEndpoint, ModelPricing, ServiceTierPricing, TokenPricing, TokenRates } from "./types";
 import { googleField, googleInt32, googleRequestServiceTier, googleServiceTier } from "./google-protocol.ts";
 import { retainedToolBase, type ToolKnowledge } from "./responses-tool-evidence.ts";
@@ -289,8 +289,10 @@ function opaqueInputLimit(pricing: ModelPricing | null | undefined): number | nu
 
 function requestHasUnboundedInput(body: Record<string, unknown>, images?: InlineImageBound): boolean {
   if (["previous_response_id", "conversation", "prompt"].some((key) => body[key] != null)) return true;
-  if (body.input != null && contentHasUnboundedInput(body.input, images)) return true;
-  if (Array.isArray(body.messages) && body.messages.some((message) => isObject(message) && contentHasUnboundedInput(message.content, images))) return true;
+  if (body.input != null && contentHasUnboundedInput(body.input)) return true;
+  if (Array.isArray(body.messages) && body.messages.some((message) => isObject(message) && (images && message.role === "user"
+    ? claudeUserContentHasUnboundedInput(message.content, images)
+    : contentHasUnboundedInput(message.content)))) return true;
   return Array.isArray(body.tools) && body.tools.some((tool) => isObject(tool) && providerAddedTool(tool.type));
 }
 
@@ -308,20 +310,37 @@ function googleContentHasMedia(value: unknown): boolean {
   ));
 }
 
-// `images` accumulates qualified Claude image bounds; without it, any image is unbounded.
-function contentHasUnboundedInput(value: unknown, images?: InlineImageBound): boolean {
-  if (Array.isArray(value)) return value.some((item) => contentHasUnboundedInput(item, images));
+// Claude bills an image block as visual tokens only as a direct block of user
+// content or of a user tool_result's content. Qualified blocks accumulate into
+// `images`; an image-shaped object anywhere else (tool_use input, unknown fields,
+// nested results) is billed as text or rejected and keeps the unbounded check.
+function claudeUserContentHasUnboundedInput(content: unknown, images: InlineImageBound): boolean {
+  if (!Array.isArray(content)) return contentHasUnboundedInput(content);
+  return content.some((block) => {
+    if (!isObject(block)) return false;
+    if (block.type === "tool_result" && Array.isArray(block.content)) {
+      return Object.entries(block).some(([key, item]) => key !== "content" && contentHasUnboundedInput(item))
+        || block.content.some((item) => !qualifiedClaudeImage(item, images) && contentHasUnboundedInput(item));
+    }
+    return !qualifiedClaudeImage(block, images) && contentHasUnboundedInput(block);
+  });
+}
+
+function qualifiedClaudeImage(block: unknown, images: InlineImageBound): boolean {
+  const image = isObject(block) ? claudeImageBlockBound(block) : null;
+  if (!image) return false;
+  images.encodedBytes += image.encodedBytes;
+  images.tokens = saturatingAdd(images.tokens, image.tokens);
+  return true;
+}
+
+function contentHasUnboundedInput(value: unknown): boolean {
+  if (Array.isArray(value)) return value.some(contentHasUnboundedInput);
   if (!isObject(value)) return false;
   const kind = typeof value.type === "string" ? value.type : "";
-  if ("image_url" in value || "file_id" in value) return true;
-  const image = images && kind === "image" ? claudeImageBound(value.source) : null;
-  if (image && images) {
-    images.encodedBytes += image.encodedBytes;
-    images.tokens = saturatingAdd(images.tokens, image.tokens);
-    return Object.entries(value).some(([key, item]) => key !== "source" && contentHasUnboundedInput(item, images));
-  }
   if (["image", "image_url", "document", "file", "input_image", "input_file", "item_reference", "computer_screenshot"].includes(kind)) return true;
-  return Object.values(value).some((item) => contentHasUnboundedInput(item, images));
+  if ("image_url" in value || "file_id" in value) return true;
+  return Object.values(value).some(contentHasUnboundedInput);
 }
 
 function providerAddedTool(value: unknown): boolean {

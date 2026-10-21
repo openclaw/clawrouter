@@ -145,6 +145,27 @@ for (const [name, source, extra = {}] of [
   assert.deepEqual(await spent(env, limit), [0, 0]);
 });
 
+test("an image-shaped object inside tool_use.input is billed as text and keeps the full-window 402", async (t) => {
+  // A valid 1x1 PNG header followed by 3.2M base64 characters of arbitrary data.
+  // Anthropic bills tool_use.input as text, so only a qualifying position may
+  // replace encoded bytes with a visual-token bound.
+  const filler = Buffer.concat([Buffer.from(png(1, 1), "base64"), Buffer.alloc(2_400_000, 0x41)]).toString("base64");
+  const smuggled = { type: "image", source: { type: "base64", media_type: "image/png", data: filler } };
+  const body = screenshotTurn(screenshot);
+  body.messages[1].content[0].input = { action: "screenshot", blob: smuggled };
+  const limit = 3_000_000;
+  const { env, events } = budgetEnv(t, limit);
+  // An answering upstream makes a wrongful admission visible as a served 200.
+  const upstream = t.mock.method(globalThis, "fetch", async () => Response.json({ type: "message", content: [], stop_reason: "end_turn", usage: { input_tokens: 10, output_tokens: 1 } }));
+  const response = await send(env, body);
+  assert.equal(response.status, 402, `reserved ${events[0]?.reserved_input_tokens} input tokens`);
+  assert.equal(response.body.error.code, "budget_exhausted");
+  assert.equal(upstream.mock.callCount(), 0);
+  assert.equal(events.length, 1);
+  assert.equal(events[0].reserved_input_tokens, opus.inputMax);
+  assert.deepEqual(await spent(env, limit), [0, 0]);
+});
+
 test("many large inline images still exhaust a small budget through their summed bound", async (t) => {
   const limit = 3_000_000;
   const { env, events } = budgetEnv(t, limit);

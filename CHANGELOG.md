@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Reserve Claude base64 PNG/JPEG/GIF/WebP images at their documented visual-token bound from header dimensions instead of the full input window; other media keep the full bound and settlement still uses reported usage.
+- Reserve Claude base64 PNG/JPEG/GIF/WebP images in user content or user tool results at their documented visual-token bound from strictly parsed header dimensions instead of the full input window; image-shaped objects elsewhere, undocumented block keys, ambiguous PNG/JPEG headers and other media keep the full bound, and settlement still uses reported usage.
 
 - Add opt-in soft HTTP budgets with parallel fail-open checks, asynchronous idempotent charges and retry delivery, request timing headers, administrator-managed member caps, and GitHub team provisioning; keep reserve behavior as the default and preserve durable recovery ownership.
 
