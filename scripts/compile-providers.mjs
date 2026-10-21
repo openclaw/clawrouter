@@ -293,6 +293,7 @@ function validateManifest(manifest) {
       const decision = facts.inference?.decision;
       if (decision && (endpoint.requestFormat !== "openai.decisions" || !supported.some(capability => capability.id === "llm.decisions"))) fail("decision requires the declared Decisions endpoint");
       if (decision?.questions.choice && decision.questions.choice.minOptions > decision.questions.choice.maxOptions) fail("choice minOptions exceeds maxOptions");
+      if (facts.hostedTools && (manifest.id !== "openai" || id !== "responses" || endpoint.path !== "/v1/responses" || (endpoint.method ?? "POST") !== "POST" || endpoint.requestFormat !== "openai.responses" || endpoint.responseFormat !== "openai.responses" || !supported.some(capability => capability.id === "llm.responses"))) fail("hosted tools require the OpenAI Responses endpoint");
       if (facts.supportedServiceTiers) {
         if (!["openai.responses", "openai.chat_completions"].includes(endpoint.requestFormat)) fail("service tiers require a supported tier wire format");
         if (facts.supportedServiceTiers.some(tier => ["auto", "fast"].includes(tier) || !model.pricing?.serviceTiers?.some(card => card.id === tier))) fail("service tiers require canonical priced tier ids");

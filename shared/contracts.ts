@@ -30,6 +30,9 @@ export interface CatalogOffer {
   // Declared support intersected with this selected identity’s tier allowlist.
   // Not a tier-specific affordability promise or authorization for dispatch.
   permittedServiceTiers?: string[];
+  // Fresh-request completeness under this key; advisory, not a grant or a
+  // reservation. Dispatch revalidates the actual request and current authority.
+  hostedToolAdmission?: { version: "clawrouter.hosted-tool-admission.v1"; web_search: "admitted" | "pricing_required" };
 }
 export interface ClientCatalogProvider {
   id: string;

@@ -1,7 +1,7 @@
 import { validateBudgetReservation } from "./accounting";
 import { modelReservationBounds, type PricingEndpoint } from "./pricing";
 import { estimateCost } from "./proxy-accounting";
-import type { AuthorizedIdentity, CompiledModel, ProviderConnection } from "./types";
+import type { AuthorizedIdentity, CompiledModel, ProviderConnection, ProxyRequestBody } from "./types";
 import { REALTIME } from "./realtime-protocol";
 import { HttpError } from "./utils";
 
@@ -11,12 +11,12 @@ export interface OperationAffordability {
   reasonCode?: string;
 }
 
-export function operationAffordability(auth: AuthorizedIdentity, connection: ProviderConnection, model: CompiledModel | null, capability: string, endpoint: PricingEndpoint, observation?: BudgetObservation): OperationAffordability {
-  // Only the basis is used for variable prices; an empty body's default output
+export function operationAffordability(auth: AuthorizedIdentity, connection: ProviderConnection, model: CompiledModel | null, capability: string, endpoint: PricingEndpoint, observation?: BudgetObservation, body: ProxyRequestBody = {}): OperationAffordability {
+  // Only the basis is used for variable prices; a representative body's default output
   // allowance is not a claim that every real request fits the observed balance.
   const realtime = endpoint.request_format === "openai.realtime";
   if (realtime && (auth.policy.budgetMode === "soft" || [auth.policy.monthlyBudgetMicros, auth.policy.dailyBudgetMicros, auth.policy.weeklyBudgetMicros, connection.monthlyBudgetMicros].every(v => v == null))) return { status: "exact-blocked", reasonCode: "realtime_hard_budget_required" };
-  const cost = realtime ? { reserveMicros: Math.max(REALTIME.reservation, auth.policy.requestCostMicros ?? 0), basis: "realtime_full_context_bound", inputTokens: REALTIME.context, outputTokens: REALTIME.output } : estimateCost(model, {}, auth.policy.requestCostMicros, capability, endpoint);
+  const cost = realtime ? { reserveMicros: Math.max(REALTIME.reservation, auth.policy.requestCostMicros ?? 0), basis: "realtime_full_context_bound", inputTokens: REALTIME.context, outputTokens: REALTIME.output } : estimateCost(model, body, auth.policy.requestCostMicros, capability, endpoint);
   try {
     if (auth.policy.budgetMode === "soft") {
       if (capability === "llm.count_tokens") return { status: "exact-covered" };

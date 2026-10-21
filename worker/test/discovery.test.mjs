@@ -834,6 +834,39 @@ test("catalog and HTTP select only configured grants inside the already chosen p
   assert.equal(sent.length, 2, "the environment key never replaces the unusable selected pool");
 });
 
+test("merged hosted-search catalog keeps request-aware admission and exact Realtime capacity independent", async t => {
+  const fixture = await fusionDiscoveryFixture(t);
+  fixture.config.enabled = false;
+  fixture.policy.monthlyBudgetMicros = 10000000;
+  let remaining = 4358143;
+  fixture.env.BUDGET_LEDGER.get = () => ({ fetch: async url => {
+    assert.equal(new URL(url).pathname, "/status", "catalog never reserves or dispatches");
+    return Response.json({ spentMicros: 0, remainingMicros: remaining });
+  } });
+  t.mock.method(globalThis, "fetch", () => assert.fail("catalog must not probe upstream"));
+  for (const [mode, balance, realtimeEligible, searchAdmission] of [
+    ["reserve", 4358143, false, "pricing_required"],
+    ["reserve", 4358144, true, "pricing_required"],
+    ["soft", 4358144, false, "admitted"],
+  ]) {
+    fixture.policy.budgetMode = mode; remaining = balance;
+    const response = await worker.fetch(fixture.request("key"), fixture.env, {});
+    assert.equal(response.status, 200);
+    const catalog = await response.json();
+    assert.equal(catalog.scope.credentialId, "fixture");
+    const provider = catalog.providers.find(row => row.id === "openai");
+    const realtime = provider.offers.find(row => row.modelId === "openai/gpt-realtime-2.1" && row.route === "/v1/native/openai/v1/realtime" && row.transport === "websocket");
+    assert.ok(realtime); assert.equal(realtime.eligible, realtimeEligible);
+    assert.equal(realtime.affordability, realtimeEligible ? "exact-covered" : "exact-blocked");
+    assert.equal(realtime.reasonCode, realtimeEligible ? undefined : mode === "soft" ? "realtime_hard_budget_required" : "budget_exhausted");
+    assert.equal(realtime.hostedToolAdmission, undefined);
+    const search = provider.offers.find(row => row.modelId === "openai/gpt-6-astra" && row.route === "/v1/responses" && row.transport === "http");
+    assert.ok(search); assert.equal(search.eligible, true);
+    assert.deepEqual(search.hostedToolAdmission, { version: "clawrouter.hosted-tool-admission.v1", web_search: searchAdmission });
+    assert.deepEqual(provider.models.find(model => model.id === "openai/gpt-6-astra").nativeCapabilities.endpoints.responses.hostedTools, ["web_search"]);
+  }
+});
+
 async function fusionDiscoveryFixture(t, { bindings } = {}) {
   const secret = "fixture-fusion-discovery", session = "b".repeat(64);
   const policy = { enabled: true, generation: "g1", providers: ["openai", "fireworks"], tenantId: "default", monthlyBudgetMicros: 100, requestCostMicros: null, retainRequestContent: false };

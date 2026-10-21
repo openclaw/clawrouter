@@ -31,7 +31,7 @@ interface Rates {
   cacheWrite1hInput: number | null;
 }
 
-export type PricingGap = "model_request_fee" | "hosted_tool_fee" | "hosted_tool_usage" | "retained_tool_unknown";
+export type PricingGap = "model_request_fee" | "hosted_tool_fee" | "hosted_tool_usage" | "retained_tool_unknown" | "opaque_input_bound";
 
 export function requestPricingGap(pricing: ModelPricing | null | undefined, body: Record<string, unknown>, requestFormat: string, parentTools?: ToolKnowledge): PricingGap | null {
   if (pricing?.unit == null && pricing?.unpricedCosts?.includes("request_fee")) return "model_request_fee";
@@ -53,6 +53,7 @@ export function requestPricingGap(pricing: ModelPricing | null | undefined, body
     ? body.input.flatMap((item) => isObject(item) && (item.type === "additional_tools" || item.type === "tool_search_output") && Array.isArray(item.tools) ? item.tools : []) : [];
   const current = hostedToolPricingGap((Array.isArray(body.tools) ? body.tools : []).concat(inputTools), requestFormat);
   if (current) return current;
+  if (requestFormat === "openai.responses" && responsesHasOpaqueInput(body) && opaqueInputLimit(pricing) == null) return "opaque_input_bound";
   if (requestFormat !== "openai.responses" || typeof body.previous_response_id !== "string" || body.previous_response_id === "") return null;
   // A response ID can retain executable declarations omitted from this delta.
   // Only final parent knowledge proves ordinary token pricing; omission is unknown.
@@ -101,9 +102,12 @@ export function estimateModelCost(pricing: ModelPricing, body: Record<string, un
     return { reserveMicros: characterCost(bytes, pricing), inputTokens: null, outputTokens: null };
   }
   const google = endpoint?.request_format === "google.generate_content";
+  const opaque = (!endpoint || endpoint.request_format === "openai.responses") && responsesHasOpaqueInput(body);
+  const opaqueLimit = opaque ? opaqueInputLimit(pricing) : null;
+  if (opaque && opaqueLimit == null) return { reserveMicros: 0, inputTokens: null, outputTokens: null, pricingAvailable: false };
   const bytes = new TextEncoder().encode(JSON.stringify(body)).byteLength;
-  const inputLimit = pricing.maxRequestInputTokens ?? pricing.maxInputTokens;
-  const inputTokens = (google ? googleHasUnboundedInput(body) : requestHasUnboundedInput(body))
+  const inputLimit = opaqueLimit ?? pricing.maxRequestInputTokens ?? pricing.maxInputTokens;
+  const inputTokens = opaque || (google ? googleHasUnboundedInput(body) : requestHasUnboundedInput(body))
     ? inputLimit
     : Math.min(inputLimit, saturatingAdd(bytes, pricing.inputTokenOverhead));
   const config = google ? googleField(body, "generationConfig", "generation_config") : undefined;
@@ -224,6 +228,20 @@ function reservationInputRate(body: unknown, rates: Rates): number {
 
 function ratesFromPricing(pricing: TokenRates): Rates {
   return { input: pricing.inputMicrosPerMillion, output: pricing.outputMicrosPerMillion, cachedInput: pricing.cachedInputMicrosPerMillion, cacheWriteInput: pricing.cacheWriteInputMicrosPerMillion, cacheWrite5mInput: pricing.cacheWrite5mInputMicrosPerMillion, cacheWrite1hInput: pricing.cacheWrite1hInputMicrosPerMillion };
+}
+
+// Only Responses protocol input items carry this state. Never search literal
+// text, function arguments, schemas, or compaction/output-request controls.
+// Ciphertext size (including malformed/empty state) cannot bound decoded input.
+function responsesHasOpaqueInput(body: Record<string, unknown>): boolean {
+  return Array.isArray(body.input) && body.input.some((item) => isObject(item)
+    && (item.type === "compaction" || item.type === "reasoning" && Object.hasOwn(item, "encrypted_content")));
+}
+
+function opaqueInputLimit(pricing: ModelPricing | null | undefined): number | null {
+  if (!pricing || pricing.unit != null) return null;
+  const limit = pricing.maxRequestInputTokens ?? pricing.maxInputTokens;
+  return typeof limit === "number" && Number.isSafeInteger(limit) && limit > 0 ? limit : null;
 }
 
 function requestHasUnboundedInput(body: Record<string, unknown>): boolean {
