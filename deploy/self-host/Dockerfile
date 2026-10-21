@@ -1,6 +1,6 @@
 # syntax=docker/dockerfile:1
 
-FROM node:24-slim AS build
+FROM node:24.22.1-slim AS build
 
 WORKDIR /app
 
@@ -14,7 +14,7 @@ COPY . .
 RUN pnpm provider:compile -- --output worker/generated/provider-snapshot.json \
   && pnpm --dir admin build
 
-FROM node:24-slim AS runtime
+FROM node:24.22.1-slim AS runtime
 
 ENV NODE_ENV=production \
   WRANGLER_SEND_METRICS=false
