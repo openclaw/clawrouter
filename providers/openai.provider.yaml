@@ -118,12 +118,8 @@ capabilities:
     endpoint: embeddings
     methods: [POST]
   - {id: audio.transcription, endpoint: transcriptions, methods: [POST]}
-  - id: audio.speech
-    endpoint: speech
-    methods: [POST]
-  - id: image.generation
-    endpoint: images_generations
-    methods: [POST]
+  - {id: audio.speech, endpoint: speech, methods: [POST]}
+  - {id: image.generation, endpoint: images_generations, methods: [POST]}
 endpoints:
   realtime: {"method":"GET","path":"/v1/realtime","requestFormat":"openai.realtime","responseFormat":"openai.realtime","websocket":"openai.realtime","timeoutMs":120000}
   responses:
