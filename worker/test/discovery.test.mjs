@@ -476,7 +476,7 @@ test("models and catalog share read-only grant eligibility, transport support, a
     assert.ok(!paths.includes("/grant-pools/select"));
     return view;
   }
-  await compare(["llm.responses", "llm.chat"], true);
+  await compare(["llm.responses", "llm.chat", "llm.responses.compact"], true);
   const key = "oauth/fixture/subscription";
   grants.set(key, { provider: "openai", kind: "subscription", enabled: true, accessToken: "fixture-subscription", accountId: "fixture-account" });
   delete env.OPENAI_API_KEY;
@@ -491,7 +491,7 @@ test("models and catalog share read-only grant eligibility, transport support, a
   assert.equal(subscribed.offers.some(({ modelId, eligible }) => modelId?.includes("gpt-image-2.5") && eligible), false);
   env.OPENAI_API_KEY = "fixture-environment-key";
   grants.set("oauth/fixture/api", { provider: "openai", kind: "api_key", enabled: true, credential: "fixture-api" });
-  await compare(["llm.responses", "llm.chat"], true);
+  await compare(["llm.responses", "llm.chat", "llm.responses.compact"], true);
   policy.grantRouting = { eligibleGrants: { openai: ["subscription"] } };
   await compare(["llm.responses"], false);
   policy.grantRouting.eligibleGrants.openai = [];
@@ -521,14 +521,14 @@ test("models and catalog share read-only grant eligibility, transport support, a
     assert.equal(view.nativeBaseUrl, "/v1/native/openai");
     assert.ok(view.offers.every((offer) => offer.transport === "http" && ["playground", "unified"].includes(offer.routeKind)));
     assert.ok(view.offers.every((offer) => offer.route.startsWith("/v1/playground/")));
-    assert.deepEqual([...new Set(view.offers.filter((offer) => offer.routeKind === "unified").map((offer) => offer.route))].sort(), ["/v1/playground/v1/audio/speech", "/v1/playground/v1/chat/completions", "/v1/playground/v1/embeddings", "/v1/playground/v1/images/generations", "/v1/playground/v1/responses"]);
+    assert.deepEqual([...new Set(view.offers.filter((offer) => offer.routeKind === "unified").map((offer) => offer.route))].sort(), ["/v1/playground/v1/audio/speech", "/v1/playground/v1/chat/completions", "/v1/playground/v1/embeddings", "/v1/playground/v1/images/generations", "/v1/playground/v1/responses", "/v1/playground/v1/responses/compact"]);
     const imageOffers = view.offers.filter(({ modelId }) => modelId?.includes("gpt-image-2.5"));
     assert.ok(imageOffers.length > 0);
     assert.ok(imageOffers.every(({ eligible, policyId, transport }) => eligible && policyId === "api" && transport === "http"));
     const speechOffers = view.offers.filter(({ modelId }) => modelId === "openai/tts-1");
     assert.ok(speechOffers.length > 0);
     assert.ok(speechOffers.every(({ eligible, policyId, transport }) => eligible && policyId === "api" && transport === "http"));
-    assert.deepEqual(view.models.find(({ id }) => id === "openai/gpt-6-astra").capabilities, ["llm.responses", "llm.chat"]);
+    assert.deepEqual(view.models.find(({ id }) => id === "openai/gpt-6-astra").capabilities, ["llm.responses", "llm.chat", "llm.responses.compact"]);
     assert.ok(!paths.includes("/grant-pools/select"));
   }
 });

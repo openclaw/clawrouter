@@ -614,6 +614,13 @@
       }
     },
     "endpoint": {
+      "allOf": [{
+        "if": { "properties": { "requestFormat": { "const": "openai.responses_compact" } }, "required": ["requestFormat"] },
+        "then": {
+          "properties": { "responseFormat": { "const": "openai.responses_compact" }, "method": { "const": "POST" } },
+          "not": { "anyOf": [{ "required": ["streaming"] }, { "required": ["websocket"] }, { "required": ["responsesLifecycle"] }, { "required": ["modelPassthrough"] }, { "required": ["outputTokenLimit"] }] }
+        }
+      }],
       "type": "object",
       "required": ["path", "requestFormat", "responseFormat"],
       "additionalProperties": false,

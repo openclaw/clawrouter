@@ -43,7 +43,7 @@ export class HttpContinuation {
   }
 
   static async resolve(request: Request, selection: ProxySelection, auth: AuthorizedIdentity, env: Env, transport: "http" | "websocket" = "http"): Promise<HttpContinuation | undefined> {
-    if (selection.capability !== "llm.responses" || Array.isArray(selection.body)) return undefined;
+    if (!["llm.responses", "llm.responses.compact"].includes(selection.capability) || Array.isArray(selection.body)) return undefined;
     const metadata = transport === "websocket" ? selection.body.client_metadata : null;
     const headerTurn = responseIdentity("turn", request.headers.get("x-codex-turn-state"));
     // Codex reconnects with full input and only this metadata token. Conflicting
@@ -58,7 +58,8 @@ export class HttpContinuation {
       const keys = await Promise.all(identities.map(identityKey));
       const { owners, evidence } = await call<{ owners: Array<ContinuationOwner | null>; evidence?: Array<PricingEvidence | null> }>(env, scope, { action: "resolve", keys });
       owner = owners[0] ?? null;
-      if (!owner || owners.some(value => !value || JSON.stringify(value) !== JSON.stringify(owner)) || owner.providerId !== selection.provider.id || owner.endpointId !== selection.endpoint.id || owner.policyGeneration !== auth.policy.generation) throw continuationRestart();
+      const endpointId = selection.capability === "llm.responses.compact" ? selection.provider.capabilities.find(capability => capability.id === "llm.responses")?.endpoint : selection.endpoint.id;
+      if (!owner || owners.some(value => !value || JSON.stringify(value) !== JSON.stringify(owner)) || owner.providerId !== selection.provider.id || owner.endpointId !== endpointId || owner.policyGeneration !== auth.policy.generation) throw continuationRestart();
       const previous = evidence?.[identities.findIndex(identity => identity.kind === "response")];
       if (previous?.state === "final") inherited = previous.knowledge;
     }

@@ -37,7 +37,7 @@ export function assertServiceTier(auth: Pick<AuthorizedIdentity, "policy" | "ser
   if (!allowed.includes(tier)) throw new HttpError(400, "service_tier_not_allowed", withLimitHint(`Service tier ${tier} is not allowed for ${model} on this key; allowed tiers: ${allowed.join(", ") || "none"}.`, auth.policy));
   // Only a resolved API transport can pin the project default; subscription
   // transports and the preliminary allowlist check retain the caller's tier.
-  const supportsTier = selection.endpoint.request_format === "openai.responses" || selection.endpoint.request_format === "openai.chat_completions";
+  const supportsTier = ["openai.responses", "openai.responses_compact", "openai.chat_completions"].includes(selection.endpoint.request_format);
   if (supportsTier && selection.provider.id === "openai" && transport === null && normalized === "default" && (raw == null || typeof raw === "string" && raw.toLowerCase() === "auto")) {
     selection.body = { ...body, service_tier: "default" };
   }

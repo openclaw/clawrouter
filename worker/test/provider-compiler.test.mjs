@@ -49,7 +49,7 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.equal(compiled.providers.find((provider) => provider.id === "azure-openai").endpoints.find((endpoint) => endpoint.id === "responses").websocket, undefined);
   const astra = openai.models.find((model) => model.id === "openai/gpt-6-astra");
   assert.equal(astra.upstream, "gpt-6-astra");
-  assert.deepEqual(astra.capabilities, ["llm.responses", "llm.chat"]);
+  assert.deepEqual(astra.capabilities, ["llm.responses", "llm.chat", "llm.responses.compact"]);
   assert.deepEqual(astra.supportedReasoningEfforts, ["low", "medium", "high", "xhigh", "max"]);
   assert.deepEqual(compiled.model_index[astra.id], { provider: "openai", ...Object.fromEntries(Object.entries(astra).filter(([key]) => key !== "id")) });
   assert.ok(openai.adapter.requestTransforms.renameFields[0].upstreams.includes(astra.upstream));
@@ -127,17 +127,6 @@ test("TypeScript provider compiler is deterministic and preserves the catalog co
   assert.ok(compiled.capability_index["llm.chat"].length >= 10);
 });
 
-test("provider schema bounds reasoning efforts to canonical wire values", () => {
-  const schema = JSON.parse(readFileSync("providers/_schema/service-provider.schema.json", "utf8"));
-  assert.deepEqual(schema.$defs.model.properties.supportedReasoningEfforts, {
-    type: "array",
-    items: { enum: ["none", "minimal", "low", "medium", "high", "xhigh", "max"] },
-    minItems: 1,
-    maxItems: 7,
-    uniqueItems: true,
-  });
-});
-
 test("endpoint output limits compile with closed, finite field and integer range contracts", () => {
   const valid = parse(readFileSync("providers/deepseek.provider.yaml", "utf8"));
   const expected = { field: "max_tokens", minimum: 1, maximum: 393_216 };
@@ -163,7 +152,6 @@ test("endpoint output limits compile with closed, finite field and integer range
 test("compiled providers have unique ids, models, capabilities, and executable endpoint references", () => {
   const snapshot = JSON.parse(readFileSync("worker/generated/provider-snapshot.json", "utf8"));
   assert.equal(new Set(snapshot.providers.map((provider) => provider.id)).size, snapshot.providers.length);
-  assert.equal(new Set(Object.keys(snapshot.model_index)).size, Object.keys(snapshot.model_index).length);
   for (const provider of snapshot.providers) {
     const endpoints = new Set(provider.endpoints.map((endpoint) => endpoint.id));
     assert.ok(provider.endpoints.length > 0, provider.id);

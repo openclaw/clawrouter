@@ -14,9 +14,7 @@ auth:
       header: Authorization
       format: "Bearer ${secret}"
       secretKind: api_key
-  # No bundled browser onboarding: see docs/openai-subscriptions.md.
-  # Retain refresh/transport for the released stored-grant contract.
-  refresh:
+  refresh: # No browser onboarding (docs/openai-subscriptions.md); retain released stored-grant refresh.
     tokenUrl: https://auth.openai.com/oauth/token
     clientId: app_EMoamEEZ73f0CkXaXp7hrann
   grantTransports:
@@ -107,6 +105,7 @@ quota:
           unit: credit
           remainingPointer: /credits/balance
 capabilities:
+  - { id: llm.responses.compact, endpoint: responses_compact, methods: [POST] }
   - id: llm.responses
     endpoint: responses
     methods: [POST]
@@ -123,6 +122,7 @@ capabilities:
     endpoint: images_generations
     methods: [POST]
 endpoints:
+  responses_compact: { path: /v1/responses/compact, requestHeaders: [x-codex-turn-state], requestFormat: openai.responses_compact, responseFormat: openai.responses_compact, timeoutMs: 600000 }
   responses:
     modelPassthrough: {}
     path: /v1/responses
@@ -289,7 +289,7 @@ models:
               outputMicrosPerMillion: 15000000
     - id: openai/gpt-6-astra
       upstream: gpt-6-astra
-      capabilities: [llm.responses, llm.chat]
+      capabilities: [llm.responses, llm.chat, llm.responses.compact]
       supportedReasoningEfforts: [low, medium, high, xhigh, max]
       requestParameters:
         responses:
@@ -363,7 +363,7 @@ models:
               outputMicrosPerMillion: 37500000
     - id: openai/gpt-6.1-sol
       upstream: gpt-6.1-sol
-      capabilities: [llm.responses, llm.chat]
+      capabilities: [llm.responses, llm.chat, llm.responses.compact]
       supportedReasoningEfforts: [low, medium, high, xhigh, max]
       requestParameters:
         responses:

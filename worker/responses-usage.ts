@@ -178,7 +178,7 @@ type Context = "root" | "response" | "usage" | "details" | "creation";
 type Field = Context | "text" | "identity" | "number" | "error" | null;
 type Frame = { context: Context | null; value: Record<string, unknown> | null; key: string | null };
 const counters = new Set(["input_tokens", "prompt_tokens", "inputTokens", "output_tokens", "completion_tokens", "outputTokens", "total_tokens", "totalTokens", "cache_read_input_tokens", "cache_creation_input_tokens", "cache_creation_ephemeral_5m_input_tokens", "cache_creation_ephemeral_1h_input_tokens"]);
-const detailCounters = new Set(["cached_tokens", "cache_read_input_tokens", "cache_write_tokens", "text_tokens", "image_tokens"]);
+const detailCounters = new Set(["cached_tokens", "cache_read_input_tokens", "cache_write_tokens", "text_tokens", "image_tokens", "reasoning_tokens"]);
 const creationCounters = new Set(["ephemeral_5m_input_tokens", "ephemeral_1h_input_tokens"]);
 
 function metadataProjection(inspectIdentity: boolean) {
