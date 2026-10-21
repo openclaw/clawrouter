@@ -9,6 +9,7 @@ export interface RealtimeSessionOptions {
   fund(unitId: string, outputCap: number, signal: AbortSignal): Promise<FundedTurn>;
   allowTranscription?: boolean;
   guardInput?(observeBudget?: boolean): Promise<void>;
+  guardMedia?(input: boolean, continuing: boolean): Promise<void>;
   fundInput?(unitId: string, signal: AbortSignal): Promise<FundedInput>;
   expiresAt?: number;
   // Timing injection for deterministic private tests, never an environment knob.
@@ -140,12 +141,20 @@ export class RealtimeSession {
         const bytes = audio(e.audio, this.policy.audio.input.format);
         // ASR is billable at automatic commit, not at response.create. Admit
         // its independent soft unit BEFORE the first byte can leave this owner.
-        if (this.policy.audio.input.transcription) await this.options.guardInput?.(!!this.inputBuffer);
-        await this.options.guard(); if (this.closed) return;
+        const input = !!this.policy.audio.input.transcription;
+        if (this.options.guardMedia) await this.options.guardMedia(input, !!this.inputBuffer);
+        else {
+          if (input) await this.options.guardInput?.(!!this.inputBuffer);
+          await this.options.guard();
+        }
+        if (this.closed) return;
         if (this.policy.audio.input.transcription && !this.inputBuffer) {
           const unit = await this.options.fundInput!(crypto.randomUUID(), this.abort.signal);
           this.inputBuffer = { unit, sent: false };
+          // Own the receipt before rechecking authority after the funding await.
+          // Failure/close retires this unsent unit exactly once on the tail.
           if (this.closed) return;
+          await this.options.guard(); if (this.closed) return;
         }
         this.forwardedBytes += bytes; this.bufferBytes = this.forwardedBytes - this.consumedBytes;
         if (this.bufferBytes > 960_000) fail('audio_buffer_limit');
@@ -221,6 +230,7 @@ export class RealtimeSession {
     const a: Active = { unit: crypto.randomUUID(), event: eventId, outputCap, response: null, sent: false, settled: false }; this.active = a;
     a.funded = await this.options.fund(a.unit, outputCap, this.abort.signal);
     if (this.closed) { await this.settle(a, null, false); return; }
+    await this.options.guard(); if (this.closed) return;
     a.sent = true;
     this.send(this.upstream, { type: 'response.create', event_id: eventId, response: { output_modalities: ['audio'], max_output_tokens: outputCap, ...(choice === undefined ? {} : { tool_choice: choice }), metadata: { clawrouter_unit: a.unit } } });
     this.commitReady = false;

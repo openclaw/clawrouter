@@ -92,8 +92,8 @@ test("native GA default VAD, input ASR and functions retain isolated ledger owne
       await policy(); const e = await open(); await policy({ models: ["openai/gpt-realtime-2.1"] }); const baseline = (await stats()).appends; append(e); assert.equal((await e.q.next("error")).error.code, "model_not_allowed"); assert.equal((await stats()).appends, baseline); e.ws.close(1000);
       await policy(); const f = await open(); await policy({ monthlyBudgetMicros: 0 }); append(f); assert.equal((await f.q.next("error")).error.code, "budget_exhausted"); assert.equal((await stats()).appends, baseline); f.ws.close(1000); await events(++count); await policy();
     });
-    await t.test("continuing admitted ASR media refreshes soft budget before each append", async () => {
-      const c = await open("stream"); append(c); await c.q.next("rate_limits.updated"); const before = (await stats()).appends; await policy({ monthlyBudgetMicros: 0 }); append(c); assert.equal((await c.q.next("error")).error.code, "budget_exhausted"); assert.equal((await stats()).appends, before); c.ws.close(1000); await events(++count); await policy();
+    await t.test("continuing admitted ASR media refreshes soft budget within bounded freshness", async () => {
+      const c = await open("stream"); append(c); await c.q.next("rate_limits.updated"); const before = (await stats()).appends; await policy({ monthlyBudgetMicros: 0 }); await new Promise(resolve => setTimeout(resolve, 110)); append(c); assert.equal((await c.q.next("error")).error.code, "budget_exhausted"); assert.equal((await stats()).appends, before); c.ws.close(1000); await events(++count); await policy();
     });
     await t.test("unknown tool output, cancelled-call result and conflicting ASR terminal cannot escape or double charge", async () => {
       const c = await open(), before = (await stats()).results; c.q.send({ type: "conversation.item.create", item: { type: "function_call_output", call_id: "not_owned", output: "{}" } }); assert.equal((await c.q.next("error")).error.code, "realtime_tool_result"); assert.equal((await stats()).results, before); c.ws.close(1000);

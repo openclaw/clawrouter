@@ -50,11 +50,20 @@ export async function proxyRealtimeWebSocket(request: Request, env: Env, context
     }
     return { auth: fresh, upstream };
   };
+  // Socket-local only. Measure freshness from observation START, not completion:
+  // a slow RPC cannot mint a new stale lease. Funders/config/periodic guards
+  // still check unconditionally; media alone may coalesce within 100ms (<5s).
+  const mediaFreshMs = Math.min(100, REALTIME.guardMs);
+  let authorityAt = -Infinity, budgetAt = -Infinity, mediaStarted = false;
   const check = async (input = false) => {
+    const started = performance.now();
     let timer: ReturnType<typeof setTimeout> | undefined;
     const observation = inspect(input);
     context.waitUntil(observation.catch(() => undefined));
-    try { return await Promise.race([observation, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new HttpError(503, 'realtime_authority_timeout', 'Realtime authority deadline exceeded')), REALTIME.guardMs); })]); }
+    try {
+      const current = await Promise.race([observation, new Promise<never>((_, reject) => { timer = setTimeout(() => reject(new HttpError(503, 'realtime_authority_timeout', 'Realtime authority deadline exceeded')), REALTIME.guardMs); })]);
+      authorityAt = Math.max(authorityAt, started); return current;
+    }
     finally { if (timer) clearTimeout(timer); }
   };
   const response = await connectRealtime(initial.url, initial.headers, request.signal, promise => context.waitUntil(promise));
@@ -70,20 +79,27 @@ export async function proxyRealtimeWebSocket(request: Request, env: Env, context
     guard: async () => { await check(); },
     expiresAt: proxyKeyVerification(auth)?.expiresAt ? Date.parse(proxyKeyVerification(auth)!.expiresAt!) : undefined,
     allowTranscription: soft,
-    guardInput: async (observeBudget = false) => {
-      const current = await check(true); inputEnabled = true;
-      if (observeBudget) {
-        // Continuing media is still egress: refresh the soft observation even
-        // when a previously admitted ASR unit retains the pending bytes.
+    guardInput: async () => { await check(true); inputEnabled = true; },
+    guardMedia: async (input, continuing) => {
+      // A new ASR buffer has a mandatory fresh fundInput admission below.
+      if (input && !continuing) { mediaStarted = true; return; }
+      const started = performance.now();
+      if (mediaStarted && started - authorityAt < mediaFreshMs && (!input || started - budgetAt < mediaFreshMs)) return;
+      const current = await check(input);
+      if (input) {
         const observation = softBudget(env, current.auth, 'audio.transcription', current.upstream.connection!, crypto.randomUUID(), () => undefined);
         context.waitUntil(observation.check);
         await observation.beforeDelivery(); observation.close();
         if (observation.denial) throw observation.denial;
+        budgetAt = started;
       }
+      mediaStarted = true;
     },
     async fundInput(unitId, signal) {
+      const started = performance.now();
       const current = await check(true); signal.throwIfAborted();
       const unit = await fundRealtimeUnit({ request, env, context, auth: current.auth, selection: inputSelection!, connection: current.upstream.connection!, grantKey: pin.key!, grantLane: current.upstream.grantLane!, signal, unitId, outputCap: 0, input: true });
+      budgetAt = started;
       const wrap = (owner: typeof unit): FundedInput => ({
         settle: (terminal, sent, itemId) => owner.settle(terminal, sent, false, itemId),
         fork: () => wrap(owner.forkInput()),

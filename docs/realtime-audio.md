@@ -39,8 +39,13 @@ only their audio-time boundary, retaining already-forwarded trailing media.
 Manual responses and tool continuations use the committed conversation without
 consuming or blocking on that next VAD input buffer; no-VAD media still requires
 an explicit commit before a response. Every response retains fresh admission.
-Soft admission precedes every media append; per-item child receipts inherit the
-admitted media attribution and budget windows, with unique once-only charge IDs.
+Fresh soft admission precedes the first ASR byte. Continuing media coalesces
+socket-local authority and soft-budget observations for at most 100ms, measured
+from observation start, not completion. Config changes, new response/input
+funders and the independent 5-second periodic guard always recheck authority;
+funded units are owned and rechecked after the funding await before egress.
+Per-item child receipts inherit the admitted media attribution and budget
+windows, with unique once-only charge IDs.
 These are soft reporting receipts, not new post-execution hard reservations.
 
 Input transcription is billed separately from the Realtime response. Its token
@@ -61,8 +66,11 @@ Missing hard response usage retains the bound, never a fixed-zero refund.
 Existing limits remain: 120-second sessions, 30-second idle, 64 response turns,
 256 retained identities, 4096 events, 64KiB frames, queue 16/256KiB, aggregate
 input 4MiB/output 8MiB and uncommitted decoded input 960000 bytes. Native 20ms
-media chunks do not each consume a retained control identity. No durable reconnect
-resumption, paid-provider integration or physical/native audio proof is claimed.
+media chunks do not each consume a retained control identity. The existing 4096
+bidirectional-event cap can terminate continuous 20ms duplex traffic well before
+120 seconds; the session duration is a ceiling, not a sustained-audio guarantee.
+No durable reconnect resumption, paid-provider integration or physical/native
+audio proof is claimed.
 
 Source-qualified on 2026-10-20 against OpenAI mini-transcribe model/pricing page,
 Realtime VAD/conversation and voice-cost guides, and the official openai-node
