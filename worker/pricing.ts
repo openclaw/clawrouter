@@ -1,4 +1,5 @@
 import { actualImageCost, estimateImageCost } from "./image-generation.ts";
+import { claudeImageBlockBound, type InlineImageBound } from "./image-input-bound.ts";
 import type { CharacterPricing, CompiledEndpoint, ModelPricing, ServiceTierPricing, TokenPricing, TokenRates } from "./types";
 import { googleField, googleInt32, googleRequestServiceTier, googleServiceTier } from "./google-protocol.ts";
 import { retainedToolBase, type ToolKnowledge } from "./responses-tool-evidence.ts";
@@ -144,9 +145,12 @@ export function estimateModelCost(pricing: ModelPricing, body: Record<string, un
   if (opaque && opaqueLimit == null) return { reserveMicros: 0, inputTokens: null, outputTokens: null, pricingAvailable: false };
   const bytes = new TextEncoder().encode(JSON.stringify(body)).byteLength;
   const inputLimit = opaqueLimit ?? pricing.maxRequestInputTokens ?? pricing.maxInputTokens;
-  const inputTokens = opaque || (google ? googleHasUnboundedInput(body) : requestHasUnboundedInput(body))
+  // Claude base64 images with a recognized header replace their encoded bytes
+  // with their visual-token ceiling. Every other media input stays unbounded.
+  const images: InlineImageBound | undefined = endpoint?.request_format === "anthropic.messages" ? { encodedBytes: 0, tokens: 0 } : undefined;
+  const inputTokens = opaque || (google ? googleHasUnboundedInput(body) : requestHasUnboundedInput(body, images))
     ? inputLimit
-    : Math.min(inputLimit, saturatingAdd(bytes, pricing.inputTokenOverhead));
+    : Math.min(inputLimit, saturatingAdd(saturatingAdd(bytes - (images?.encodedBytes ?? 0), images?.tokens ?? 0), pricing.inputTokenOverhead));
   const config = google ? googleField(body, "generationConfig", "generation_config") : undefined;
   // Native maxOutputTokens includes both thoughts and visible candidate tokens.
   // Only the selected wire format decides which caller limits are meaningful.
@@ -283,10 +287,12 @@ function opaqueInputLimit(pricing: ModelPricing | null | undefined): number | nu
   return typeof limit === "number" && Number.isSafeInteger(limit) && limit > 0 ? limit : null;
 }
 
-function requestHasUnboundedInput(body: Record<string, unknown>): boolean {
+function requestHasUnboundedInput(body: Record<string, unknown>, images?: InlineImageBound): boolean {
   if (["previous_response_id", "conversation", "prompt"].some((key) => body[key] != null)) return true;
   if (body.input != null && contentHasUnboundedInput(body.input)) return true;
-  if (Array.isArray(body.messages) && body.messages.some((message) => isObject(message) && contentHasUnboundedInput(message.content))) return true;
+  if (Array.isArray(body.messages) && body.messages.some((message) => isObject(message) && (images && message.role === "user"
+    ? claudeUserContentHasUnboundedInput(message.content, images)
+    : contentHasUnboundedInput(message.content)))) return true;
   return Array.isArray(body.tools) && body.tools.some((tool) => isObject(tool) && providerAddedTool(tool.type));
 }
 
@@ -302,6 +308,30 @@ function googleContentHasMedia(value: unknown): boolean {
     googleField(part, "fileData", "file_data") != null || googleField(part, "inlineData", "inline_data") != null
     || googleContentHasMedia(googleField(part, "functionResponse", "function_response"))
   ));
+}
+
+// Claude bills an image block as visual tokens only as a direct block of user
+// content or of a user tool_result's content. Qualified blocks accumulate into
+// `images`; an image-shaped object anywhere else (tool_use input, unknown fields,
+// nested results) is billed as text or rejected and keeps the unbounded check.
+function claudeUserContentHasUnboundedInput(content: unknown, images: InlineImageBound): boolean {
+  if (!Array.isArray(content)) return contentHasUnboundedInput(content);
+  return content.some((block) => {
+    if (!isObject(block)) return false;
+    if (block.type === "tool_result" && Array.isArray(block.content)) {
+      return Object.entries(block).some(([key, item]) => key !== "content" && contentHasUnboundedInput(item))
+        || block.content.some((item) => !qualifiedClaudeImage(item, images) && contentHasUnboundedInput(item));
+    }
+    return !qualifiedClaudeImage(block, images) && contentHasUnboundedInput(block);
+  });
+}
+
+function qualifiedClaudeImage(block: unknown, images: InlineImageBound): boolean {
+  const image = isObject(block) ? claudeImageBlockBound(block) : null;
+  if (!image) return false;
+  images.encodedBytes += image.encodedBytes;
+  images.tokens = saturatingAdd(images.tokens, image.tokens);
+  return true;
 }
 
 function contentHasUnboundedInput(value: unknown): boolean {
