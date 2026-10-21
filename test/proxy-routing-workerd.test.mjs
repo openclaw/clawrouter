@@ -93,3 +93,59 @@ for (const alternate of [false, true]) test(`workerd refuses ${alternate ? "alte
     assert.ok(calls.every(call => call.origin === "https://api.openai.com" && call.path === "/v1/chat/completions" && call.method === "POST" && call.credentialed));
   } finally { await mf?.dispose(); await rm(temporary, { recursive: true, force: true }); }
 });
+
+test("workerd endpoint deadline bounds stalled alternate admission without replay", { timeout: 15_000 }, async () => {
+  const temporary = await mkdtemp(join(tmpdir(), "clawrouter-failover-deadline-")); let mf;
+  try {
+    mf = await startWorkerdFixture(temporary, `
+      import handler from "./worker/index.ts";
+      import { providerById } from "./worker/providers.ts";
+      import { putGrantCredentials } from "./worker/grant-credentials.ts";
+      export * from "./worker/index.ts";
+      providerById("openai").endpoints.find(endpoint => endpoint.id === "chat_completions").timeout_ms = 100;
+      let entered = false, finished = false;
+      export default { async fetch(request, env, context) {
+        const path = new URL(request.url).pathname;
+        if (path === "/fixture-setup") {
+          for (const id of ["primary", "alternate"]) await putGrantCredentials(env, "oauth/fixture/" + id, { provider: "openai", kind: "api_key", enabled: true, credential: "synthetic-" + id });
+          return Response.json({ ok: true });
+        }
+        if (path === "/fixture-state") return Response.json({ entered, finished });
+        const authority = env.ACCESS_CONTROL;
+        const wrapped = { idFromName: name => authority.idFromName(name), get: id => {
+          const stub = authority.get(id);
+          return { async fetch(url, init) {
+            const call = new Request(url, init);
+            if (new URL(call.url).pathname === "/admission/resolve" && (await call.clone().json()).selection?.excludedKeys?.length) {
+              entered = true;
+              await new Promise(resolve => setTimeout(resolve, 1000));
+              finished = true;
+            }
+            return stub.fetch(call);
+          } };
+        } };
+        return handler.fetch(request, { ...env, ACCESS_CONTROL: wrapped }, context);
+      }, queue: handler.queue };
+    `, `
+      let calls = 0;
+      export default { async fetch(request) {
+        if (new URL(request.url).pathname === "/fixture-count") return Response.json(calls);
+        calls++;
+        return Response.json({ error: "synthetic rate limit" }, { status: 429 });
+      } };
+    `);
+    const kv = await mf.getKVNamespace("POLICY_KV", "router"), secret = "deadline-fixture-secret", origin = await mf.ready;
+    await kv.put("policies/fixture", JSON.stringify({ enabled: true, generation: "g1", providers: ["openai"], tenantId: "default", requestCostMicros: 1, retainRequestContent: false, grantRouting: { strategy: "round_robin", stickiness: "none", failover: true } }));
+    await kv.put("credentials/fixture", JSON.stringify({ enabled: true, secretSha256: createHash("sha256").update(secret).digest("hex"), policyId: "fixture", policyGeneration: "g1" }));
+    await kv.put("connections/openai", JSON.stringify({ providerId: "openai", enabled: true }));
+    const setup = await fetch(new URL("/fixture-setup", origin));
+    assert.equal(setup.status, 200, await setup.text());
+    const response = await fetch(new URL("/v1/chat/completions", origin), { method: "POST", headers: { authorization: "Bearer clawrouter-live-fixture-" + secret, "content-type": "application/json" }, body: JSON.stringify({ model: "openai/gpt-4.1-mini", messages: [] }), signal: AbortSignal.timeout(5_000) });
+    assert.equal(response.status, 502); assert.equal((await response.json()).error.code, "provider_unavailable");
+    assert.deepEqual(await (await fetch(new URL("/fixture-state", origin))).json(), { entered: true, finished: false }, "deadline returns before alternate admission finishes");
+    // A late preparation result still cannot replay the request.
+    await new Promise(resolve => setTimeout(resolve, 1100));
+    const upstream = await mf.getWorker("upstream");
+    assert.equal(await (await upstream.fetch("https://api.openai.com/fixture-count")).json(), 1);
+  } finally { await mf?.dispose(); await rm(temporary, { recursive: true, force: true }); }
+});
