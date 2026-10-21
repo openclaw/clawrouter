@@ -359,7 +359,7 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
     signal.throwIfAborted();
     dispatched = true;
     const upstreamStart = performance.now();
-    const pending = fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal });
+    const pending = fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" });
     if (useSoft) {
       soft = softBudget(env, auth, selection.capability, prepared.connection, accounting.facts.event.id, error => operation.stop("upstream", error));
       reservation = soft.reservation;
@@ -383,12 +383,15 @@ async function proxySelected(request: Request, env: Env, context: ExecutionConte
         response = undefined;
         prepared = retry;
         accounting.setGrant(prepared.grantKey, prepared.grantLane);
-        response = await operation.wait(fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal }), "upstream", discard);
+        response = await operation.wait(fetch(prepared.url, { method: selection.method, headers: prepared.headers, body: prepared.requestBody, signal, redirect: "manual" }), "upstream", discard);
         captureGrantRuntime(context, env, prepared.grantKey, prepared.grantRevision, selection.provider.quota, response);
         if (prepared.continuation) continuation?.bind(prepared.continuation);
         grantFailover = true;
       }
     }
+    // Redirects cannot select a new destination or replay a credentialed body.
+    // Do not pass Location downstream for the client to replay either.
+    if (response.status >= 300 && response.status < 400) throw new Error("upstream redirect refused");
     upstreamMs = performance.now() - upstreamStart;
     if (soft) {
       budgetMs = await soft.beforeDelivery();
