@@ -14,7 +14,10 @@ export function hostedSearchPrice(card: ToolPricing | undefined, body: unknown, 
     .flatMap(tool => isObject(tool) && typeof tool.type === "string" && /^web_search(?:_preview)?(?:_\d{4}_\d{2}_\d{2})?$/.test(tool.type) ? [tool.type] : []);
   if (!types.length) return undefined;
   // A current declaration cannot exclude a differently priced retained tool.
+  // A witness classifies ancestry, not the precise retained search tariff.
   if (retained || body.previous_response_id != null || body.conversation != null || body.prompt != null
+    || responsesHasOpaqueInput(body)
+    || Array.isArray(body.input) && body.input.some(item => isObject(item) && item.type === "item_reference")
     || isObject(body.multi_agent) && body.multi_agent.enabled === true
     || (Array.isArray(body.tools) ? body.tools : []).concat(tagged).some(tool => isObject(tool) && (tool.type === "mcp" || tool.type === "programmatic_tool_calling" || tool.type === "tool_search" && tool.execution !== "client"))) return { version: card.version, microsPerCall: null };
   const rates = types.map(type => type.startsWith("web_search_preview") ? upstream && Object.hasOwn(card.previewMicrosPerCallByModel, upstream) ? card.previewMicrosPerCallByModel[upstream] : null : card.webSearchMicrosPerCall);
